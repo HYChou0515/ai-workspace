@@ -23,7 +23,7 @@ from typing import Any
 
 import msgspec
 from fastapi import APIRouter, FastAPI, HTTPException, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
 
@@ -47,6 +47,22 @@ class _OwnerBody(BaseModel):
     owner: str
 
 
+class _RenameBody(BaseModel):
+    """The group's display name. Trimmed and required to be non-empty: the name is
+    the ONLY handle a human has on a group (it is what the share picker lists and
+    searches), so a blank one leaves an unaddressable row."""
+
+    name: str
+
+    @field_validator("name")
+    @classmethod
+    def _non_blank(cls, v: str) -> str:
+        trimmed = v.strip()
+        if not trimmed:
+            raise ValueError("name must not be blank")
+        return trimmed
+
+
 class GroupOut(BaseModel):
     """One group as the FE renders it. `owner` is the EFFECTIVE owner (the field,
     or the creator); `maintainers` are the delegated member-managers."""
@@ -57,6 +73,11 @@ class GroupOut(BaseModel):
     members: list[str]
     owner: str | None = None
     maintainers: list[str] = []
+    # Epoch MILLIseconds, matching every other timestamp the FE is handed. Read
+    # off specstar's own `info.updated_time` rather than a field of our own: a
+    # stored column is one more thing every write has to remember to touch, and
+    # whichever write forgot would go quietly stale.
+    updated_at: int = 0
 
 
 class PickableGroupOut(BaseModel):
@@ -130,6 +151,7 @@ def register_group_routes(
             members=data.members,
             owner=effective_owner(data, rev.info.created_by),
             maintainers=data.maintainers,
+            updated_at=int(rev.info.updated_time.timestamp() * 1000),
         )
 
     @app.post("/groups")
@@ -143,14 +165,10 @@ def register_group_routes(
         rev = rm.create(
             Group(name=body.name, description=body.description, members=members, owner=body.owner)
         )
-        return GroupOut(
-            resource_id=rev.resource_id,
-            name=body.name,
-            description=body.description,
-            members=members,
-            owner=owner,
-            maintainers=[],
-        )
+        # Read it back through `_out` rather than assembling a second GroupOut by
+        # hand: two construction paths drift, and this one had already stopped
+        # being able to report anything specstar owns (the timestamp).
+        return _out(rm.get(rev.resource_id))
 
     @app.get("/groups")
     async def list_groups() -> list[GroupOut]:
@@ -233,6 +251,18 @@ def register_group_routes(
                 ),
             )
         return Response(status_code=204)
+
+    @app.patch("/groups/{group_id}")
+    async def rename_group(group_id: str, body: _RenameBody) -> GroupOut:
+        """Rename a group. Owner-or-superuser, the same authority as the other
+        group-level edits (transfer / delete) — a maintainer manages MEMBERS, and
+        the name is what everyone ELSE finds the group by, so it is not theirs to
+        change. `msgspec.structs.replace` so the whole-record `rm.update` carries
+        members / maintainers / owner across untouched."""
+        group, _ = _require_owner(group_id)
+        if body.name != group.name:
+            rm.update(group_id, msgspec.structs.replace(group, name=body.name))
+        return _out(rm.get(group_id))
 
     @app.put("/groups/{group_id}/owner")
     async def transfer_owner(group_id: str, body: _OwnerBody) -> GroupOut:

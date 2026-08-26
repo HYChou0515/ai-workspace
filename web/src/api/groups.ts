@@ -16,6 +16,9 @@ export type Group = {
   members: string[];
   owner: string | null;
   maintainers: string[];
+  /** Epoch ms of the group's last write — specstar's own `info.updated_time`,
+   * not a column we maintain. */
+  updated_at: number;
 };
 
 /** A group as the share-dialog picker sees it — enough to grant to, never the
@@ -34,6 +37,8 @@ export type GroupsApi = {
   listPickableGroups(): Promise<PickableGroup[]>;
   /** superuser-only; designates `owner`. */
   createGroup(body: { name: string; description?: string; owner: string }): Promise<Group>;
+  /** Rename. Owner-or-superuser server-side; a blank name is a 422. */
+  renameGroup(groupId: string, name: string): Promise<Group>;
   addMembers(groupId: string, userIds: string[]): Promise<void>;
   removeMember(groupId: string, userId: string): Promise<void>;
   addMaintainers(groupId: string, userIds: string[]): Promise<void>;
@@ -63,6 +68,14 @@ export const groupsApi: GroupsApi = {
   },
   async createGroup(body) {
     return (await ok(await apiFetch("/groups", jsonInit("POST", body)), "create group")).json();
+  },
+  async renameGroup(groupId, name) {
+    return (
+      await ok(
+        await apiFetch(`/groups/${gid(groupId)}`, jsonInit("PATCH", { name })),
+        "rename group",
+      )
+    ).json();
   },
   async addMembers(groupId, userIds) {
     await ok(
@@ -124,6 +137,18 @@ export const mockGroupsApi: GroupsApi = {
       members: [],
       owner: body.owner,
       maintainers: [],
+      updated_at: 0,
+    };
+  },
+  async renameGroup(groupId, name) {
+    return {
+      resource_id: groupId,
+      name,
+      description: "",
+      members: [],
+      owner: null,
+      maintainers: [],
+      updated_at: 0,
     };
   },
   async addMembers() {},
@@ -131,7 +156,15 @@ export const mockGroupsApi: GroupsApi = {
   async addMaintainers() {},
   async removeMaintainer() {},
   async transferOwner(groupId, owner) {
-    return { resource_id: groupId, name: "", description: "", members: [], owner, maintainers: [] };
+    return {
+      resource_id: groupId,
+      name: "",
+      description: "",
+      members: [],
+      owner,
+      maintainers: [],
+      updated_at: 0,
+    };
   },
   async deleteGroup() {},
 };

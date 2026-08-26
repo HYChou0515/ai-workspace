@@ -20,6 +20,7 @@ import { pxToRem } from "../lib/pxToRem";
 import { Icon } from "./Icon";
 import { ModalShell } from "./ModalShell";
 import { UserChip } from "./UserChip";
+import { GroupPicker } from "./GroupPicker";
 import { UserPicker } from "./UserPicker";
 
 /** #310 — the generic sharing dialog. Presentational: it takes the CURRENT
@@ -167,25 +168,20 @@ export function PermissionDialog({
 
             {pickableGroups.length > 0 && (
               <div style={{ display: "grid", gap: 6 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span className="caps">Groups</span>
-                  <select
-                    data-testid="group-grant-select"
-                    aria-label="Add a group"
-                    value=""
-                    onChange={(e) => addGroup(e.target.value)}
-                    className="inline-edit"
-                    style={{ marginLeft: "auto", fontSize: pxToRem(12) }}
-                  >
-                    <option value="">+ Add a group…</option>
-                    {pickableGroups
-                      .filter((pg) => !groupGrants.some((x) => x.groupId === pg.resource_id))
-                      .map((pg) => (
-                        <option key={pg.resource_id} value={pg.resource_id}>
-                          {pg.name} · {pg.member_count}
-                        </option>
-                      ))}
-                  </select>
+                <span className="caps" id="group-grant-picker-label">
+                  Groups
+                </span>
+                <div
+                  data-testid="group-grant-select"
+                  style={{ maxHeight: "26vh", overflow: "auto" }}
+                >
+                  <GroupPicker
+                    groups={pickableGroups}
+                    exclude={groupGrants.map((x) => x.groupId)}
+                    onPick={addGroup}
+                    placeholder="Add a group…"
+                    labelledBy="group-grant-picker-label"
+                  />
                 </div>
                 {groupGrants.length > 0 && (
                   <ul

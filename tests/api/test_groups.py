@@ -303,3 +303,152 @@ def test_losing_group_membership_revokes_the_grant():
     client.delete(f"/groups/{gid}/members/alice")
     holder["id"] = "alice"
     assert client.get(f"/collection/{cid}").status_code == 404  # grant gone with membership
+
+
+# ── renaming a group ─────────────────────────────────────────────────────────
+# A group's name is the only thing a human identifies it by — it is what the
+# share picker lists and searches. A typo in it was permanent: every other field
+# had a route and this one did not.
+
+
+def test_owner_renames_the_group():
+    holder = {"id": "bob"}
+    client, _ = _client_and_spec(holder)
+    gid = _mk(client, holder, owner="bob", members=["alice"])
+
+    r = client.patch(f"/groups/{gid}", json={"name": "Reflow line"})
+    assert r.status_code == 200
+    assert r.json()["name"] == "Reflow line"
+    assert client.get(f"/groups/{gid}").json()["name"] == "Reflow line"
+
+
+def test_a_superuser_renames_any_group():
+    holder = {"id": "bob"}
+    client, _ = _client_and_spec(holder)
+    gid = _mk(client, holder, owner="bob", members=["alice"])
+
+    holder["id"] = "root"  # not owner, not member — the admin case
+    assert client.patch(f"/groups/{gid}", json={"name": "Renamed by admin"}).status_code == 200
+    assert client.get(f"/groups/{gid}").json()["name"] == "Renamed by admin"
+
+
+def test_rename_is_refused_to_a_maintainer_and_to_a_member():
+    # Renaming sits with the owner, not the member-management delegate: a
+    # maintainer manages MEMBERS only, and the name is how everyone else finds
+    # the group.
+    holder = {"id": "bob"}
+    client, _ = _client_and_spec(holder)
+    gid = _mk(client, holder, owner="bob", members=["alice"])
+    client.post(f"/groups/{gid}/maintainers", json={"user_ids": ["dave"]})
+
+    holder["id"] = "dave"
+    assert client.patch(f"/groups/{gid}", json={"name": "nope"}).status_code == 403
+    holder["id"] = "alice"
+    assert client.patch(f"/groups/{gid}", json={"name": "nope"}).status_code == 403
+    # …and a stranger gets 404, not 403 — the same no-existence-leak rule the
+    # other management routes follow.
+    holder["id"] = "mallory"
+    assert client.patch(f"/groups/{gid}", json={"name": "nope"}).status_code == 404
+
+    holder["id"] = "bob"
+    assert client.get(f"/groups/{gid}").json()["name"] == "eng"
+
+
+def test_rename_leaves_membership_untouched():
+    # `rm.update` writes the WHOLE record, so a rename that rebuilt the struct
+    # carelessly would drop members/maintainers/owner on the floor.
+    holder = {"id": "bob"}
+    client, _ = _client_and_spec(holder)
+    gid = _mk(client, holder, owner="bob", members=["alice", "carol"])
+    client.post(f"/groups/{gid}/maintainers", json={"user_ids": ["dave"]})
+
+    client.patch(f"/groups/{gid}", json={"name": "Renamed"})
+
+    body = client.get(f"/groups/{gid}").json()
+    assert set(body["members"]) == {"alice", "carol"}
+    assert body["maintainers"] == ["dave"]
+    assert body["owner"] == "bob"
+    assert body["description"] == ""
+
+
+def test_rename_rejects_a_blank_name():
+    # An empty name is unaddressable: the picker would list a blank row.
+    holder = {"id": "bob"}
+    client, _ = _client_and_spec(holder)
+    gid = _mk(client, holder, owner="bob", members=[])
+
+    assert client.patch(f"/groups/{gid}", json={"name": "   "}).status_code == 422
+    assert client.get(f"/groups/{gid}").json()["name"] == "eng"
+
+
+def test_rename_trims_surrounding_whitespace():
+    holder = {"id": "bob"}
+    client, _ = _client_and_spec(holder)
+    gid = _mk(client, holder, owner="bob", members=[])
+
+    assert client.patch(f"/groups/{gid}", json={"name": "  Padded  "}).status_code == 200
+    assert client.get(f"/groups/{gid}").json()["name"] == "Padded"
+
+
+def test_renaming_a_missing_group_is_404():
+    holder = {"id": "root"}
+    client, _ = _client_and_spec(holder)
+    assert client.patch("/groups/ghost", json={"name": "x"}).status_code == 404
+
+
+# ── when a group last changed ────────────────────────────────────────────────
+# Read off specstar's own `info.updated_time` rather than a field of our own: a
+# stored column would be one more thing every write has to remember to touch,
+# and the one that forgot would go quietly stale.
+
+
+def test_a_group_carries_when_it_last_changed():
+    holder = {"id": "bob"}
+    client, _ = _client_and_spec(holder)
+    gid = _mk(client, holder, owner="bob", members=[])
+
+    body = client.get(f"/groups/{gid}").json()
+    assert isinstance(body["updated_at"], int)
+    # Epoch MILLIseconds, like every other timestamp the FE is handed. A seconds
+    # value would be ~1e9 and render as 1970 after the FE multiplies nothing.
+    assert body["updated_at"] > 1_600_000_000_000
+
+
+def test_creating_a_group_reports_its_timestamp_too():
+    holder = {"id": "root"}
+    client, _ = _client_and_spec(holder)
+    created = client.post("/groups", json={"name": "eng", "owner": "root"}).json()
+
+    assert created["updated_at"] > 1_600_000_000_000
+    assert created == client.get(f"/groups/{created['resource_id']}").json()
+
+
+def test_the_timestamp_moves_when_the_group_changes():
+    import time
+
+    holder = {"id": "bob"}
+    client, _ = _client_and_spec(holder)
+    gid = _mk(client, holder, owner="bob", members=[])
+    first = client.get(f"/groups/{gid}").json()["updated_at"]
+
+    time.sleep(0.01)  # so the two writes cannot land in the same millisecond
+    client.patch(f"/groups/{gid}", json={"name": "renamed"})
+    after_rename = client.get(f"/groups/{gid}").json()["updated_at"]
+    # An implementation that reported the CREATED time would fail here — the
+    # only assertion that tells the two apart.
+    assert after_rename > first
+
+    time.sleep(0.01)
+    client.post(f"/groups/{gid}/members", json={"user_ids": ["carol"]})
+    assert client.get(f"/groups/{gid}").json()["updated_at"] > after_rename
+
+
+def test_the_list_carries_the_timestamp_as_well():
+    # The overview sorts on this column, so it has to arrive with the LIST, not
+    # only from a per-group fetch.
+    holder = {"id": "bob"}
+    client, _ = _client_and_spec(holder)
+    _mk(client, holder, owner="bob", members=[])
+
+    rows = client.get("/groups").json()
+    assert rows and all(r["updated_at"] > 1_600_000_000_000 for r in rows)
