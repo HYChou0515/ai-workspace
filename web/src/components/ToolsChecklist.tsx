@@ -99,11 +99,17 @@ export function ToolsChecklist({
           // Who to go to. A third-party tool names its author (or says nobody
           // claimed it — which is NOT the same as it being ours); everything
           // else is the platform's own.
-          const origin = !tool.external
-            ? t("tools.origin.builtin")
-            : tool.author
-              ? t("tools.origin.by", { author: tool.author })
-              : t("tools.origin.noAuthor");
+          //
+          // Nothing at all when it could not be resolved: there is no release
+          // and no author, so "no author published" would be describing a
+          // manifest nobody read. The reason line carries that row instead.
+          const origin = tool.unavailable
+            ? ""
+            : !tool.external
+              ? t("tools.origin.builtin")
+              : tool.author
+                ? t("tools.origin.by", { author: tool.author })
+                : t("tools.origin.noAuthor");
           return (
             <div
               key={tool.key}
@@ -136,21 +142,28 @@ export function ToolsChecklist({
                     ) : null}
                     {tool.label}
                   </div>
-                  <div
-                    title={tool.version ? `${tool.version} · ${origin}` : origin}
-                    style={{
-                      flex: "0 1 auto",
-                      minWidth: 0,
-                      fontSize: pxToRem(11),
-                      color: "var(--text-paper-d)",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {tool.version ? `${tool.version} · ` : ""}
-                    {origin}
-                  </div>
+                  {origin || tool.version ? (
+                    <div
+                      title={tool.version ? `${tool.version} · ${origin}` : origin}
+                      style={{
+                        // Yields first. The tool's own NAME is what a reader
+                        // scans for, so provenance clips before the label does
+                        // — `Wafer His… 1.4.2 · by Wafer Team` is the wrong way
+                        // round. Both stay shrinkable so a long label cannot
+                        // push the chip off the row entirely.
+                        flexShrink: 999,
+                        minWidth: 0,
+                        fontSize: pxToRem(11),
+                        color: "var(--text-paper-d)",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {tool.version ? `${tool.version} · ` : ""}
+                      {origin}
+                    </div>
+                  ) : null}
                 </div>
                 <div
                   title={tool.unavailable ?? detail}

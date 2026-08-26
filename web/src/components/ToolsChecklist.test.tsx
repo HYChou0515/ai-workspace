@@ -154,8 +154,11 @@ describe("ToolsChecklist", () => {
       />,
     );
 
-    expect(screen.getByTestId("tool-row-legacy-fetch")).toHaveTextContent(
-      "404 — the artifact expired",
-    );
+    const row = screen.getByTestId("tool-row-legacy-fetch");
+    expect(row).toHaveTextContent("404 — the artifact expired");
+    // And it claims nothing about a release or an author: nothing resolved,
+    // so "no author published" would describe a manifest nobody read.
+    expect(row).not.toHaveTextContent("未註明作者");
+    expect(row).not.toHaveTextContent("內建");
   });
 });
