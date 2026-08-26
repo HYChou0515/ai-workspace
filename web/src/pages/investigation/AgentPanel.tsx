@@ -80,6 +80,26 @@ const hdrBtn: React.CSSProperties = {
   whiteSpace: "nowrap",
 };
 
+/** How many image thumbnails the composer will draw. Attaching a folder hands it
+ * one chip per image with no natural ceiling; past a couple of rows the extra
+ * thumbnails are not telling anyone anything, and the strip is pushing the chat
+ * off the screen. The rest are counted, never dropped. */
+const CHIP_RENDER_BUDGET = 12;
+
+/** How many rejected files the composer names before switching to a count. Same
+ * failure, one surface over: a folder that is refused wholesale used to render
+ * one full path per file into a single line of text. */
+const PROBLEM_LIST_BUDGET = 5;
+
+/** "a — x；b — y；…及其他 N 個檔案" — examples, then the number. Naming every
+ * rejected file is what turned a bad folder attach into a wall of text under the
+ * composer. */
+function problemSummary(problems: string[]): string {
+  if (problems.length <= PROBLEM_LIST_BUDGET) return problems.join("；");
+  const shown = problems.slice(0, PROBLEM_LIST_BUDGET).join("；");
+  return `${shown}；…及其他 ${problems.length - PROBLEM_LIST_BUDGET} 個檔案`;
+}
+
 /** Which "out of space" line an attach rejection deserves. `workspace` keeps
  *  the pre-existing #245 message; the other two point somewhere else entirely. */
 function overQuotaKey(kind: QuotaKind) {
@@ -320,7 +340,7 @@ export function AgentPanel({
         ...res.tooLarge.map((p) => `${p} — 伺服器拒收（檔案過大，或代理設定的上限較低）`),
         ...res.failed.map((p) => `${p} — 上傳失敗`),
       ];
-      if (problems.length) setComposerHint(`部分檔案未附加：${problems.join("；")}`);
+      if (problems.length) setComposerHint(`部分檔案未附加：${problemSummary(problems)}`);
     } finally {
       setProgress(null);
       // #245: refresh the usage bar — a success grew `used`, a 507 left it full.
@@ -367,7 +387,7 @@ export function AgentPanel({
         ...res.tooLarge.map((p) => `${p} — 伺服器拒收（檔案過大，或代理設定的上限較低）`),
         ...res.failed.map((p) => `${p} — 上傳失敗`),
       ];
-      if (problems.length) setComposerHint(`部分檔案未附加：${problems.join("；")}`);
+      if (problems.length) setComposerHint(`部分檔案未附加：${problemSummary(problems)}`);
     } finally {
       setProgress(null);
       queryClient.invalidateQueries({ queryKey: qk.workspaceUsage(slug, investigationId) });
@@ -765,9 +785,20 @@ export function AgentPanel({
         {imageChips.length > 0 && (
           <div
             data-testid="image-chips"
-            style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "flex-start" }}
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 8,
+              alignItems: "flex-start",
+              // A folder attach hands this list however many images the folder
+              // held. Two rows' worth, then it scrolls — without a ceiling the
+              // strip grows until the composer, and the conversation above it,
+              // are off the screen.
+              maxHeight: 168,
+              overflowY: "auto",
+            }}
           >
-            {imageChips.map((c) => (
+            {imageChips.slice(0, CHIP_RENDER_BUDGET).map((c) => (
               <div
                 key={c.id}
                 data-testid="image-chip"
@@ -824,6 +855,22 @@ export function AgentPanel({
                 </button>
               </div>
             ))}
+            {imageChips.length > CHIP_RENDER_BUDGET && (
+              // The COUNT, not just a shortened strip: every one of these is
+              // attached and will be sent, so hiding some without saying so
+              // would misreport what the message carries.
+              <span
+                data-testid="image-chips-overflow"
+                style={{
+                  alignSelf: "center",
+                  fontSize: pxToRem(12),
+                  color: "var(--text-paper-d)",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                +{imageChips.length - CHIP_RENDER_BUDGET} more attached
+              </span>
+            )}
           </div>
         )}
         {appliedSkills.length > 0 && (
