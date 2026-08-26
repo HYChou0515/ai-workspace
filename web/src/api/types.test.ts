@@ -35,46 +35,53 @@ describe("summarize", () => {
 });
 
 describe("relativeTime", () => {
-  const NOW = new Date("2026-05-23T12:00:00Z");
+  // Built from LOCAL parts, not ISO strings: the rule is about the calendar day
+  // the reader is on, so a fixture pinned to UTC would mean something different
+  // in every timezone the suite runs in.
+  const at = (y: number, m: number, d: number, h: number, min = 0, sec = 0) =>
+    new Date(y, m, d, h, min, sec);
+  const NOW = at(2026, 4, 23, 12, 0); // 23 May 2026, midday
 
   it("returns 'just now' for <60s ago", () => {
-    expect(relativeTime("2026-05-23T11:59:30Z", NOW)).toBe("just now");
+    expect(relativeTime(at(2026, 4, 23, 11, 59, 30).toISOString(), NOW)).toBe("just now");
   });
 
   it("returns minutes for sub-hour", () => {
-    expect(relativeTime("2026-05-23T11:48:00Z", NOW)).toBe("12 min ago");
+    expect(relativeTime(at(2026, 4, 23, 11, 48).toISOString(), NOW)).toBe("12 min ago");
   });
 
-  it("returns hours for sub-day", () => {
-    expect(relativeTime("2026-05-23T07:00:00Z", NOW)).toBe("5 h ago");
-  });
-
-  it("returns days for >=24h", () => {
-    expect(relativeTime("2026-05-20T12:00:00Z", NOW)).toBe("3 d ago");
+  it("returns hours for earlier the same day", () => {
+    expect(relativeTime(at(2026, 4, 23, 7, 0).toISOString(), NOW)).toBe("5 h ago");
   });
 
   it("returns '—' for invalid timestamps", () => {
     expect(relativeTime("nonsense", NOW)).toBe("—");
   });
 
-  // Past a week "N d ago" stops being an answer: nobody converts "412 d ago"
-  // into a date in their head, and the further back it goes the more precision
-  // it claims and the less it tells you. A date is the useful form there.
-  it("switches to a date once it is more than a week old", () => {
-    expect(relativeTime("2026-05-16T12:00:00Z", NOW)).toBe("7 d ago");
-    expect(relativeTime("2026-05-15T12:00:00Z", NOW)).toBe("15 May");
+  // The crossover is the point of this function: an interval answers "is this
+  // current?" only while it is small. On any other day a date is the answer, and
+  // the boundary is the CALENDAR day rather than 24 hours — 13 hours ago can be
+  // "yesterday", which is a different answer to the person reading it.
+  it("shows a date as soon as it is a different day, however recent", () => {
+    expect(relativeTime(at(2026, 4, 22, 23, 0).toISOString(), NOW)).toBe("22 May");
+    expect(relativeTime(at(2026, 4, 20, 12, 0).toISOString(), NOW)).toBe("20 May");
+  });
+
+  it("stays relative right up to the start of today", () => {
+    expect(relativeTime(at(2026, 4, 23, 0, 5).toISOString(), NOW)).toBe("11 h ago");
   });
 
   it("keeps the year off a date in the current year, and on for an older one", () => {
     // The year is noise for the common case and essential for the rare one.
-    expect(relativeTime("2026-01-04T12:00:00Z", NOW)).toBe("4 Jan");
-    expect(relativeTime("2025-11-30T12:00:00Z", NOW)).toBe("30 Nov 2025");
+    expect(relativeTime(at(2026, 0, 4, 9, 0).toISOString(), NOW)).toBe("4 Jan");
+    expect(relativeTime(at(2025, 10, 30, 9, 0).toISOString(), NOW)).toBe("30 Nov 2025");
   });
 
   it("never shows a future timestamp as a date", () => {
     // Clock skew between the server that stamped it and the browser reading it
-    // is normal; "just now" is the honest reading, not a date in the future.
-    expect(relativeTime("2026-05-23T12:05:00Z", NOW)).toBe("just now");
+    // is normal; "just now" is the honest reading, not tomorrow's date.
+    expect(relativeTime(at(2026, 4, 23, 12, 5).toISOString(), NOW)).toBe("just now");
+    expect(relativeTime(at(2026, 4, 24, 9, 0).toISOString(), NOW)).toBe("just now");
   });
 });
 
