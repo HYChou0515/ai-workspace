@@ -2107,3 +2107,54 @@ def test_render_document_still_reads_the_blob_for_a_type_it_projects():
 
     assert "hello" in rd["markdown"]
     assert calls, "a projected type still needs its bytes"
+
+
+def test_render_document_resolves_crossref_siblings_in_one_query():
+    """#730: the same N+1 the card's attachments stopped doing on the client.
+
+    `rewrite_md_links` asks `resolve` one id at a time, and `resolve` answered
+    with a point-get each — so a report cross-referencing twelve siblings cost
+    thirteen `SourceDoc.get` calls, every one of them on the event loop, three
+    lines below the fix for the identical shape on the client.
+
+    Counted rather than timed: a latency assertion is a wall-clock assertion,
+    while "how many round trips does one render cost" is a number a test can
+    hold. Siblings are seeded through the zip upload because that is how the
+    other crossref tests make them — a direct POST of a PNG is silently dropped
+    by this harness (no image parser wired), which would leave the links
+    unresolved and the count meaningless.
+    """
+    import io
+    import zipfile
+    from unittest.mock import patch
+
+    client, spec = _client_and_spec()
+    cid = _new_collection(client)
+    siblings = 12
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        body = "# report\n\n" + "\n\n".join(f"See [fig {i}](./fig{i}.md)." for i in range(siblings))
+        z.writestr("report.md", body)
+        for i in range(siblings):
+            z.writestr(f"fig{i}.md", f"# figure {i}\n")
+    client.post(
+        f"/kb/collections/{cid}/documents",
+        files={"file": ("docs.zip", buf.getvalue(), "application/zip")},
+    )
+    doc_id = encode_doc_id(cid, "report.md")
+
+    rm = spec.get_resource_manager(SourceDoc)
+    real = type(rm).get
+    calls: list[str] = []
+
+    def counting(self, rid, *a, **k):
+        calls.append(rid)
+        return real(self, rid, *a, **k)
+
+    with patch.object(type(rm), "get", counting):
+        rd = client.get(f"/kb/documents?id={doc_id}").json()
+
+    # the rewrite still happened — every sibling link was resolved
+    assert rd["markdown"].count("kb://doc/") == siblings, rd["markdown"][:200]
+    # ...and it cost a bounded number of reads, not one per sibling
+    assert len(calls) <= 3, f"{siblings} siblings cost {len(calls)} SourceDoc.get calls"

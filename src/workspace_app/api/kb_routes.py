@@ -2510,22 +2510,49 @@ def register_kb_routes(
         if not text and doc.text:
             text = doc.text
 
-        def resolve(rid: str) -> str | None:
-            """Map a sibling SourceDoc id to the URL to embed in the
-            rendered markdown. Text → `kb://doc/{rid}` (FE turns into
-            in-app nav); image → specstar `/blobs/{file_id}` (browser
-            loads the bytes natively, specstar marks the
-            Content-Type stored at upload)."""
-            try:
-                sibling = rm.get(rid).data
-            except ResourceIDNotFoundError:
-                return None
-            assert isinstance(sibling, SourceDoc)
+        def _url_for(sibling: SourceDoc, rid: str) -> str:
+            """The URL to embed for a sibling: text → `kb://doc/{rid}` (the FE
+            turns it into in-app nav); image → specstar `/blobs/{file_id}` (the
+            browser loads the bytes natively, with the Content-Type specstar
+            stored at upload)."""
             ct = sibling.content.content_type
             file_id = sibling.content.file_id
             if isinstance(ct, str) and ct.startswith("image/") and isinstance(file_id, str):
                 return f"/blobs/{file_id}"
             return f"kb://doc/{rid}"
+
+        def _siblings_for(body: str) -> dict[str, SourceDoc]:
+            """Every sibling the markdown points at, in ONE query.
+
+            `rewrite_md_links` asks `resolve` one id at a time, and `resolve`
+            used to answer with a point-get each — so rendering a report with
+            twelve embedded figures cost fourteen `SourceDoc.get` calls, all of
+            them on the event loop. Measured, not assumed. That is the same N+1
+            the card's attachment metadata just stopped doing on the client, in
+            the same route, three lines below the fix for it.
+
+            The ids are collected by running the rewrite once with a `resolve`
+            that records and declines — pure regex over a string, no I/O — so
+            `rewrite_md_links` keeps its contract and the extension-fallback
+            candidates are gathered too. The second pass reads from the map.
+            """
+            wanted: set[str] = set()
+
+            def collect(rid: str) -> str | None:
+                wanted.add(rid)
+                return None  # decline, so every candidate is offered
+
+            rewrite_md_links(
+                body, doc_path=doc.path, collection_id=doc.collection_id, resolve=collect
+            )
+            if not wanted:
+                return {}
+            found: dict[str, SourceDoc] = {}
+            for row in rm.list_resources(QB.resource_id().in_(sorted(wanted)).build()):
+                data = row.data
+                if isinstance(data, SourceDoc):
+                    found[row.info.resource_id] = data  # ty: ignore[unresolved-attribute]
+            return found
 
         if is_structured_text(doc.path, ct_str):
             # #361: the FE renders these as a tree/grid from the verbatim text;
@@ -2533,9 +2560,21 @@ def register_kb_routes(
             # link-rewritten.
             markdown = text
         else:
-            markdown = rewrite_md_links(
-                text, doc_path=doc.path, collection_id=doc.collection_id, resolve=resolve
-            )
+
+            def _rewrite() -> str:
+                siblings = _siblings_for(text)
+                return rewrite_md_links(
+                    text,
+                    doc_path=doc.path,
+                    collection_id=doc.collection_id,
+                    resolve=lambda rid: (
+                        None if (sib := siblings.get(rid)) is None else _url_for(sib, rid)
+                    ),
+                )
+
+            # Off the loop for the same reason the preview is: the batched read
+            # is still blocking specstar I/O.
+            markdown = await asyncio.to_thread(_rewrite)
         assert isinstance(doc.content.size, int)
         assert isinstance(doc.content.file_id, str)
         return RenderedDoc(

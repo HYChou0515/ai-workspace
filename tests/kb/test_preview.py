@@ -17,6 +17,7 @@ The contract per type:
 
 from __future__ import annotations
 
+import contextlib
 import io
 
 from workspace_app.kb.preview import is_structured_text, once, preview_markdown
@@ -193,6 +194,38 @@ def test_once_calls_through_exactly_one_time():
     assert read() == b"payload"
     assert read() == b"payload"
     assert calls == [1], f"the expensive call was made {len(calls)} times"
+
+
+def test_once_caches_an_EMPTY_result_too():
+    """The classic memoisation bug: `if not cached: cached = fn()` re-fetches
+    forever when `fn` legitimately returns b"" — an empty file is a real
+    document, and it is the cheapest one to fetch twice by accident."""
+    calls = []
+
+    def fetch() -> bytes:
+        calls.append(1)
+        return b""
+
+    read = once(fetch)
+    assert read() == b""
+    assert read() == b""
+    assert calls == [1], "an empty result was re-fetched"
+
+
+def test_once_does_not_cache_a_failure():
+    """A raise is not a result. Caching one would turn a transient blob-store
+    error into a permanently broken document for the life of the call."""
+    calls = []
+
+    def fetch() -> bytes:
+        calls.append(1)
+        raise RuntimeError("blob store said no")
+
+    read = once(fetch)
+    for _ in range(2):
+        with contextlib.suppress(RuntimeError):
+            read()
+    assert calls == [1, 1], "a failure was cached instead of retried"
 
 
 def test_once_is_lazy_until_asked():
