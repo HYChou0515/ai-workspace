@@ -883,6 +883,25 @@ describe("AgentPanel attaching a large folder", () => {
     expect(opts.imagePaths).toHaveLength(40);
   });
 
+  it("acknowledges a pick from the FOLDER input, not only the file input", async () => {
+    // The folder button is a second `<input type="file">` with `webkitdirectory`,
+    // and a folder pick is the case this whole describe is about — so the budget
+    // is asserted through THAT input too, with `webkitRelativePath` set the way a
+    // real folder pick sets it (it becomes part of the staged path).
+    vi.spyOn(api, "uploadFile").mockResolvedValue();
+    renderBig();
+
+    const picked = pngs(120).map((f, i) => {
+      Object.defineProperty(f, "webkitRelativePath", { value: `big-folder/p${i}.png` });
+      return f;
+    });
+    const folderInput = document.querySelectorAll('input[type="file"]')[1] as HTMLInputElement;
+    fireEvent.change(folderInput, { target: { files: picked } });
+
+    await waitFor(() => expect(screen.getAllByTestId("image-chip").length).toBeGreaterThan(0));
+    expect(screen.getByTestId("image-chips-overflow").textContent).toMatch(/108/);
+  });
+
   it("keeps a rejected folder's report to a few names and a count", async () => {
     // Every refused file used to contribute its full path to ONE joined line, so
     // a folder the server refused wholesale printed a wall of text under the box.
