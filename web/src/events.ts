@@ -249,6 +249,18 @@ export function eventSeq(ev: AgentEvent): number | undefined {
   return (ev as { seq?: number }).seq;
 }
 
+/** The event's IDENTITY, minted where it was published and the same on every
+ * pod it reaches — so a viewer recognises a re-delivery however it arrived.
+ *
+ * `seq` cannot serve: each pod numbers its own broadcast, so one event is #7
+ * here and #3 there, and a reconnect that lands on another pod resumes in a
+ * numbering that was never its own. Like `seq`, this is transport, not domain —
+ * read here rather than widening every member of the union. `undefined` from a
+ * backend that predates it. */
+export function eventId(ev: AgentEvent): string | undefined {
+  return (ev as { id?: string }).id;
+}
+
 /** Terminal events close the SSE stream and re-enable the composer. */
 export function isTerminal(ev: AgentEvent): boolean {
   return (

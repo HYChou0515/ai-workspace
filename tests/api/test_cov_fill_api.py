@@ -16,6 +16,7 @@ All wiring uses ScriptedAgentRunner / MockSandbox / HashEmbedder — no real LLM
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator
 
 import pytest
@@ -290,5 +291,10 @@ async def test_subscribe_sse_encodes_a_published_event_frame():
     frame = await asyncio.wait_for(it.__anext__(), 3)
     await frames.aclose()
     # The live frame carries the broadcast seq (1 — first event on the session) so
-    # a reconnecting client can resume with `?since=`.
-    assert frame == to_sse(MessageDelta(text="hi"), seq=1)
+    # a reconnecting client can resume with `?since=`, AND the event's own id, so
+    # a viewer that is re-delivered it (a replay, or a reconnect onto a pod whose
+    # numbering differs) draws it once. The id is minted per publish, so the
+    # frame is compared against the id it actually carried.
+    body = json.loads(frame[len("data: ") :].strip())
+    assert body["id"]
+    assert frame == to_sse(MessageDelta(text="hi"), seq=1, event_id=body["id"])
