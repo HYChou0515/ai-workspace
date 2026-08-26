@@ -55,6 +55,29 @@ def is_structured_text(path: str, content_type: str) -> bool:
     return ext_match or content_type in _STRUCTURED_TEXT_MIMES
 
 
+def once(fn: Callable[[], bytes]) -> Callable[[], bytes]:
+    """Call `fn` at most once, then hand back what it returned.
+
+    Named and exported rather than inlined as a closure so it can be PROBED. As
+    a closure inside `preview_markdown` the memoisation was unreachable from any
+    test: no branch there calls it twice, so deleting the memoisation changed no
+    observable behaviour and the guard for it passed either way. A guarantee that
+    cannot fail a test is not a guarantee.
+
+    It earns its place because `preview_markdown`'s whole reason for taking a
+    callable is that fetching the bytes is expensive (#730): a future branch that
+    reads twice would silently pay twice, which is the defect that change removed.
+    """
+    cached: list[bytes] = []
+
+    def read() -> bytes:
+        if not cached:
+            cached.append(fn())
+        return cached[0]
+
+    return read
+
+
 def preview_markdown(*, path: str, content_type: str, raw: bytes | Callable[[], bytes]) -> str:
     """The body the doc viewer shows for this document, or "" when the FE
     should render (or refuse) the blob itself. Structured-data types return
@@ -80,17 +103,7 @@ def preview_markdown(*, path: str, content_type: str, raw: bytes | Callable[[], 
     # top callable whose signature is unknown, which a type checker cannot verify
     # at the call sites below.
     fetch: Callable[[], bytes] = (lambda data=raw: data) if isinstance(raw, bytes) else raw
-    cached: list[bytes] = []
-
-    def read() -> bytes:
-        # Memoised. Every branch below happens to call this once, so today it
-        # changes nothing — but the whole point of this function taking a
-        # callable is that fetching the bytes is expensive, and leaving a
-        # "call it twice, fetch it twice" edge in the middle of that fix is the
-        # defect it exists to remove, waiting for the next branch.
-        if not cached:
-            cached.append(fetch())
-        return cached[0]
+    read = once(fetch)
 
     if ct.startswith("image/"):
         return ""

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import io
 
-from workspace_app.kb.preview import is_structured_text, preview_markdown
+from workspace_app.kb.preview import is_structured_text, once, preview_markdown
 
 
 def _xlsx(sheets: dict[str, list[dict[str, object]]]) -> bytes:
@@ -175,13 +175,34 @@ def test_code_files_decode_by_extension_even_with_x_mime():
     assert py == "def f(): ..."
 
 
-def test_preview_markdown_fetches_a_lazy_blob_at_most_once():
-    """#730: the callable exists because fetching the bytes is expensive.
+def test_once_calls_through_exactly_one_time():
+    """#730: `preview_markdown` takes a callable because the fetch is expensive.
 
-    Every branch happens to read once today, so this guards the NEXT branch: a
-    second `read()` that quietly doubles the cost is the defect this whole change
-    removed, and it would leave no trace in any other test.
+    Probed HERE rather than through `preview_markdown`, because no branch there
+    reads twice — so deleting the memoisation changes nothing that function can
+    show, and the first version of this test passed with it removed.
     """
+    calls = []
+
+    def fetch() -> bytes:
+        calls.append(1)
+        return b"payload"
+
+    read = once(fetch)
+    assert read() == b"payload"
+    assert read() == b"payload"
+    assert read() == b"payload"
+    assert calls == [1], f"the expensive call was made {len(calls)} times"
+
+
+def test_once_is_lazy_until_asked():
+    """Never asked ⇒ never fetched. That is the half that saves the ten seconds."""
+    calls = []
+    once(lambda: (calls.append(1), b"x")[1])
+    assert calls == []
+
+
+def test_preview_markdown_fetches_a_lazy_blob_for_a_projected_type():
     calls = []
 
     def fetch() -> bytes:
