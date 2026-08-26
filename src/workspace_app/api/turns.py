@@ -464,23 +464,27 @@ class _WorkspaceSession:
     bus: IEventBus | None = None
     pod_id: str = ""
     _seq: int = 0
-    _buffer: deque[tuple[int, AgentEvent]] = field(default_factory=deque)
+    _buffer: deque[tuple[int, str, AgentEvent]] = field(default_factory=deque)
 
     def __post_init__(self) -> None:
         self._buffer = deque(maxlen=max(self.buffer_maxlen, 0))
 
-    def _fanout(self, event: AgentEvent) -> None:
+    def _fanout(self, event: AgentEvent, event_id: str) -> None:
         """Assign the seq (non-Presence), buffer it, and deliver to LOCAL subscribers
         — the shared core of `publish` (a turn on THIS pod) and `deliver_from_bus`
-        (an event that arrived from another pod)."""
+        (an event that arrived from another pod).
+
+        The seq is this POD's numbering; `event_id` is the event's own, minted
+        where it was published and passed through untouched. Only the id means
+        the same thing on both sides of the bus."""
         if isinstance(event, Presence):
             seq: int | None = None
         else:
             self._seq += 1
             seq = self._seq
-            self._buffer.append((seq, event))
+            self._buffer.append((seq, event_id, event))
         for q in self.subscribers:
-            q.put_nowait((seq, event))
+            q.put_nowait((seq, event_id, event))
 
     def publish(self, event: AgentEvent) -> None:
         """Fan one event to every LOCAL subscriber (#43 broadcast) AND, for a turn
@@ -488,22 +492,33 @@ class _WorkspaceSession:
 
         Every event except `Presence` takes the next monotonic `seq` and enters the
         replay ring. `Presence` is an ephemeral, pod-local roster snapshot — never
-        buffered, and never bussed (a viewer on another pod is not in this roster)."""
-        self._fanout(event)
-        if self.bus is not None and not isinstance(event, Presence):
-            self.bus.publish(self.key, self.pod_id, event)
+        buffered, and never bussed (a viewer on another pod is not in this roster).
 
-    def deliver_from_bus(self, event: AgentEvent) -> None:
+        This is where the event's id is minted: once, here, so every pod it
+        reaches hands its viewers the same one."""
+        event_id = uuid.uuid4().hex
+        self._fanout(event, event_id)
+        if self.bus is not None and not isinstance(event, Presence):
+            self.bus.publish(self.key, self.pod_id, event, event_id)
+
+    def deliver_from_bus(self, event: AgentEvent, event_id: str) -> None:
         """Deliver an event that arrived from ANOTHER pod's turn: the same local
         fan-out as `publish` but WITHOUT re-sending to the bus. That (plus skip-own
-        on the consumer) is what stops a fan-out loop/storm."""
-        self._fanout(event)
+        on the consumer) is what stops a fan-out loop/storm.
 
-    def replay_since(self, since: int) -> list[tuple[int, AgentEvent]]:
-        """The buffered `(seq, event)` a reconnecting `since`-client missed — those
-        with `seq > since`, oldest first. Empty when nothing newer was retained
-        (the client is current, or the gap outran the ring)."""
-        return [(s, e) for (s, e) in self._buffer if s > since]
+        The id comes from the envelope, never re-minted — a fresh one per pod
+        would leave a reconnecting viewer unable to tell a replay from a new
+        event, which is the whole failure this id exists to end."""
+        self._fanout(event, event_id)
+
+    def replay_since(self, since: int) -> list[tuple[int, str, AgentEvent]]:
+        """The buffered `(seq, id, event)` a reconnecting `since`-client missed —
+        those with `seq > since`, oldest first. Empty when nothing newer was
+        retained (the client is current, or the gap outran the ring).
+
+        Each keeps the id it was published with, so a client that already has one
+        of these drops it instead of drawing it twice."""
+        return [(s, i, e) for (s, i, e) in self._buffer if s > since]
 
     def close_subscribers(self) -> None:
         """End every live SSE response attached to this session.
@@ -513,7 +528,7 @@ class _WorkspaceSession:
         the one outcome that leaves it consistent with a conversation that was
         just closed or deleted."""
         for q in list(self.subscribers):
-            q.put_nowait((None, _CLOSE_STREAM))
+            q.put_nowait((None, "", _CLOSE_STREAM))
 
     def roster(self) -> list[str]:
         """The distinct, non-anonymous viewers currently subscribed (#455 presence)."""
@@ -605,7 +620,7 @@ class ChatTurnEngine:
             ),
         )
 
-    def _on_bus_event(self, key: str, origin: str, event: AgentEvent) -> None:
+    def _on_bus_event(self, key: str, origin: str, event: AgentEvent, event_id: str) -> None:
         """A cross-pod event arrived on the bus. Skip our own (already delivered
         locally); otherwise demux by key to this pod's local subscribers. No session
         or no subscribers ⇒ nobody here is listening for `key`, so discard."""
@@ -613,7 +628,7 @@ class ChatTurnEngine:
             return
         session = self._ws_sessions.get(key)
         if session is not None and session.subscribers:
-            session.deliver_from_bus(event)
+            session.deliver_from_bus(event, event_id)
 
     def close_streams(self, key: str) -> None:
         """End the live SSE responses for `key` without touching the turn itself.
@@ -839,7 +854,7 @@ class ChatTurnEngine:
         async def _gen() -> AsyncGenerator[AgentEvent, None]:
             try:
                 while True:
-                    _seq, event = await q.get()
+                    _seq, _event_id, event = await q.get()
                     yield cast("AgentEvent", event)
             finally:
                 session.subscribers.pop(q, None)
@@ -885,17 +900,17 @@ class ChatTurnEngine:
 
         async def _frames() -> AsyncGenerator[str, None]:
             try:
-                for s, e in replay:
-                    yield to_sse(e, s)
+                for s, i, e in replay:
+                    yield to_sse(e, s, i)
                 while True:
                     try:
-                        seq, ev = await asyncio.wait_for(q.get(), timeout=heartbeat_interval)
+                        seq, eid, ev = await asyncio.wait_for(q.get(), timeout=heartbeat_interval)
                     except TimeoutError:
                         yield ": heartbeat\n\n"  # SSE comment — keeps the stream warm
                         continue
                     if ev is _CLOSE_STREAM:
                         return  # the session went away — end the response, don't hang
-                    yield to_sse(cast("AgentEvent", ev), seq)
+                    yield to_sse(cast("AgentEvent", ev), seq, eid)
             finally:
                 session.subscribers.pop(q, None)
                 if user_id:

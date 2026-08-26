@@ -151,6 +151,60 @@ describe("useChatSession", () => {
 
   // An empty thread must leave an empty log rather than throwing — a brand-new
   // chat has nothing persisted yet.
+  // The bug: your own message drawn twice. It was delivered twice — each pod
+  // numbers its own broadcast, so a reconnect that lands elsewhere resumes
+  // `?since=` in a numbering that was never its own and replays what the
+  // viewer already has. Nothing downstream could tell: `user_message` folds
+  // with an unconditional push, and the persisted-thread reconcile treats a
+  // longer local log as "the store is behind" and keeps it. So the duplicate
+  // stuck until the chat was reopened.
+  it("draws an event once even when it is delivered twice", async () => {
+    const t = fakeTransport({
+      subscribe: async function* () {
+        yield { type: "user_message", author: "u", content: "hi", created_at: 1, id: "e1" } as AgentEvent;
+        yield { type: "user_message", author: "u", content: "hi", created_at: 1, id: "e1" } as AgentEvent;
+        await new Promise<void>(() => {});
+      },
+    });
+
+    const { result } = render(t);
+
+    await waitFor(() => expect(result.current.log.entries.length).toBeGreaterThan(0));
+    expect(result.current.log.entries).toHaveLength(1);
+  });
+
+  it("keeps two genuinely different events that happen to read the same", async () => {
+    // Saying the same thing twice is a thing people do, so the identity has to
+    // come from the id and never from the content.
+    const t = fakeTransport({
+      subscribe: async function* () {
+        yield { type: "user_message", author: "u", content: "hi", created_at: 1, id: "e1" } as AgentEvent;
+        yield { type: "user_message", author: "u", content: "hi", created_at: 1, id: "e2" } as AgentEvent;
+        await new Promise<void>(() => {});
+      },
+    });
+
+    const { result } = render(t);
+
+    await waitFor(() => expect(result.current.log.entries).toHaveLength(2));
+  });
+
+  it("still folds events from a backend that sends no id", async () => {
+    // A rolling upgrade serves both versions at once; dropping un-tagged events
+    // would blank the stream for the length of the rollout.
+    const t = fakeTransport({
+      subscribe: async function* () {
+        yield { type: "user_message", author: "u", content: "hi", created_at: 1 } as AgentEvent;
+        yield { type: "user_message", author: "u", content: "yo", created_at: 2 } as AgentEvent;
+        await new Promise<void>(() => {});
+      },
+    });
+
+    const { result } = render(t);
+
+    await waitFor(() => expect(result.current.log.entries).toHaveLength(2));
+  });
+
   it("tolerates a transport with no persisted thread", async () => {
     const { result } = render(fakeTransport({ getThread: vi.fn().mockResolvedValue(null) }));
     await waitFor(() => expect(result.current.log.entries).toHaveLength(0));

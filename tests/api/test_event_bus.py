@@ -113,10 +113,12 @@ class _CountingBus(InMemoryEventBus):
     def __init__(self) -> None:
         super().__init__()
         self.origins: list[str] = []
+        self.ids: list[str] = []
 
-    def publish(self, key: str, origin: str, event: Any) -> None:
+    def publish(self, key: str, origin: str, event: Any, event_id: str) -> None:
         self.origins.append(origin)
-        super().publish(key, origin, event)
+        self.ids.append(event_id)
+        super().publish(key, origin, event, event_id)
 
 
 async def test_a_bus_delivered_event_is_not_republished():
@@ -151,3 +153,78 @@ async def test_single_pod_bus_is_a_noop():
 
     await sub.aclose()
     await engine.forget(key)
+
+
+async def test_one_event_carries_the_same_id_on_every_pod():
+    """The identity a client dedupes on has to survive the crossing.
+
+    `seq` cannot: each pod numbers its own session (`_fanout`), so the same
+    logical event is #7 here and #3 there. A viewer that reconnects onto a
+    different pod resumes `?since=` in a foreign numbering — which replays what
+    it already has (the duplicate bubble) or skips what it does not. An id
+    minted once, at the origin, is the same on both sides of the bus, so the
+    client can recognise a repeat however it arrived.
+    """
+    bus = InMemoryEventBus()
+    pod_a = ChatTurnEngine(_Runner(), event_bus=bus, pod_id="A")  # ty: ignore[invalid-argument-type]
+    pod_b = ChatTurnEngine(_Runner(), event_bus=bus, pod_id="B")  # ty: ignore[invalid-argument-type]
+    key = "inv"
+
+    on_a = pod_a.subscribe_sse(key, heartbeat_interval=5.0)
+    on_b = pod_b.subscribe_sse(key, heartbeat_interval=5.0)
+    pod_a._ws_session(key).publish(MessageDelta(text="once"))
+
+    frame_a = await _read_frame(on_a)
+    frame_b = await _read_frame(on_b)
+
+    assert frame_a["text"] == frame_b["text"] == "once"
+    assert frame_a["id"], "every broadcast event needs an id to dedupe on"
+    assert frame_a["id"] == frame_b["id"]
+
+    await on_a.aclose()
+    await on_b.aclose()
+    await pod_a.forget(key)
+    await pod_b.forget(key)
+
+
+async def test_two_events_do_not_share_an_id():
+    """The obvious way to pass the test above is a constant."""
+    bus = InMemoryEventBus()
+    pod = ChatTurnEngine(_Runner(), event_bus=bus, pod_id="A")  # ty: ignore[invalid-argument-type]
+    key = "inv"
+
+    sub = pod.subscribe_sse(key, heartbeat_interval=5.0)
+    pod._ws_session(key).publish(MessageDelta(text="one"))
+    pod._ws_session(key).publish(MessageDelta(text="two"))
+
+    first = await _read_frame(sub)
+    second = await _read_frame(sub)
+
+    assert first["id"] != second["id"]
+
+    await sub.aclose()
+    await pod.forget(key)
+
+
+async def test_a_replayed_event_keeps_the_id_it_was_published_with():
+    """Replay is the path that re-delivers, so it is the path whose ids have to
+    match what the client already saw — a fresh id per delivery would defeat
+    the dedupe exactly where it is needed."""
+    bus = InMemoryEventBus()
+    pod = ChatTurnEngine(_Runner(), event_bus=bus, pod_id="A")  # ty: ignore[invalid-argument-type]
+    key = "inv"
+
+    live = pod.subscribe_sse(key, heartbeat_interval=5.0)
+    pod._ws_session(key).publish(MessageDelta(text="during the gap"))
+    seen = await _read_frame(live)
+    await live.aclose()
+
+    # A reconnect that resumes from BEFORE that event replays it.
+    resumed = pod.subscribe_sse(key, heartbeat_interval=5.0, since=seen["seq"] - 1)
+    replayed = await _read_frame(resumed)
+
+    assert replayed["text"] == "during the gap"
+    assert replayed["id"] == seen["id"]
+
+    await resumed.aclose()
+    await pod.forget(key)

@@ -63,12 +63,14 @@ class RabbitMQEventBus(IEventBus):
         self._on_event = on_event
         self._transport.start(self._on_message)
 
-    def publish(self, key: str, origin: str, event: AgentEvent) -> None:
+    def publish(self, key: str, origin: str, event: AgentEvent, event_id: str) -> None:
         # Fire-and-forget: serialize the envelope and hand it to the transport. A
         # failure here must NEVER propagate to (or block) the turn — local delivery
         # already happened; a dropped bus event degrades to the store-poll fallback.
         try:
-            body = json.dumps({"key": key, "origin": origin, "event": asdict(event)}).encode()
+            body = json.dumps(
+                {"key": key, "origin": origin, "id": event_id, "event": asdict(event)}
+            ).encode()
             self._transport.publish(body)
         except Exception:  # noqa: BLE001 — the bus is best-effort, never fails a turn
             logger.warning("event_bus: dropped a publish for key %s", key, exc_info=True)
@@ -86,7 +88,11 @@ class RabbitMQEventBus(IEventBus):
         # consumer unwired. The guard is a type-narrowing (`OnEvent | None`) formality;
         # its None side is unreachable by construction, hence no-branch.
         if self._on_event is not None:  # pragma: no branch
-            self._on_event(msg["key"], msg["origin"], event)
+            # `.get`, not `[]`: a frame published by a pod that has not been
+            # rolled yet has no id, and an exception here would drop a live
+            # event for the length of a rolling upgrade. No id simply means
+            # nothing to dedupe on — the old behaviour.
+            self._on_event(msg["key"], msg["origin"], event, msg.get("id") or "")
 
 
 class AioPikaTransport(IAmqpTransport):

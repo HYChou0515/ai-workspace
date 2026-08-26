@@ -2,7 +2,7 @@ import { useQueryClient, type QueryKey } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { AgentEvent } from "../events";
-import { eventSeq, isTerminal } from "../events";
+import { eventId, eventSeq, isTerminal } from "../events";
 import { type AgentLog, logFromMessages, reduceAgent } from "../pages/investigation/agentLog";
 import type { MsgKey } from "../lib/i18n";
 import { type QuotaDetail, type QuotaKind, quotaMessage } from "../lib/quotaFailure";
@@ -119,6 +119,14 @@ export type ChatSession = {
 
 /** Gateway/timeout statuses (and a bare network drop, 0) that mean "the request
  * was cut, but the turn may well be running" — never "the turn failed". */
+/** How many delivered event ids a viewer remembers, for the duplicate check.
+ *
+ * Matched to the server's replay ring (`turns.py` `replay_buffer_events`): what
+ * this guards against is a re-delivery of something the SERVER still holds, so
+ * remembering further back than the server can replay buys nothing — and a
+ * chat left open all day would grow without it. */
+const SEEN_IDS_MAX = 2000;
+
 const GATEWAY_CUT = new Set([0, 502, 503, 504]);
 
 const isAbort = (err: unknown) => (err as { name?: string } | null)?.name === "AbortError";
@@ -146,6 +154,19 @@ export function useChatSession(
   // the reconnect's first event decides if the replay filled the hole (remove) or
   // a real gap remains (keep).
   const gapBannerPendingRef = useRef(false);
+  // #43: the ids already drawn, so one event delivered twice is drawn once.
+  //
+  // Delivery is at-least-once and always was — a reconnect resumes `?since=`
+  // against whichever pod answers, and each pod numbers its own broadcast, so
+  // the same event can arrive again under a number this viewer never saw.
+  // Nothing downstream can catch it: the folds append, and `reconcileSnapshot`
+  // reads a longer local log as "the store is behind" and keeps it. Recognising
+  // the repeat here is what makes that harmless.
+  //
+  // Bounded, and by the same reasoning as the server's replay ring: what it
+  // protects against is a re-delivery of something recent, so remembering
+  // everything forever buys nothing and leaks on a long-lived chat.
+  const seenIdsRef = useRef<Set<string>>(new Set());
   const [connection, setConnection] = useState<ChatConnection>({
     state: "connecting",
     receiving: false,
@@ -163,6 +184,7 @@ export function useChatSession(
   // new thread's events (replaying nothing) forever.
   useEffect(() => {
     maxSeqRef.current = 0;
+    seenIdsRef.current = new Set();
   }, [transport.threadKey]);
 
   // The long-lived broadcast subscription (#43) with the #493 auto-reconnect:
@@ -195,6 +217,25 @@ export function useChatSession(
             // Track the highest broadcast seq so the next reconnect resumes here.
             const seq = eventSeq(ev);
             if (seq !== undefined && seq > maxSeqRef.current) maxSeqRef.current = seq;
+            // Already drawn — a replay of something this viewer has. Skipped
+            // BEFORE the gap-banner check, which reasons about seq and is
+            // unaffected, and before the fold, which is what would double it.
+            // An event with no id (a backend that predates them) is always
+            // folded: dropping those would blank the stream during a rollout.
+            const id = eventId(ev);
+            if (id !== undefined) {
+              if (seenIdsRef.current.has(id)) continue;
+              seenIdsRef.current.add(id);
+              if (seenIdsRef.current.size > SEEN_IDS_MAX) {
+                // Oldest-first: a Set iterates in insertion order.
+                const drop = seenIdsRef.current.size - SEEN_IDS_MAX;
+                let n = 0;
+                for (const old of seenIdsRef.current) {
+                  if (n++ >= drop) break;
+                  seenIdsRef.current.delete(old);
+                }
+              }
+            }
             // On the first event after a reconnect, decide the fate of the gap
             // banner: a contiguous replay (the very next seq) means the same-pod
             // buffer filled the hole, so drop the banner; a jump means a real gap

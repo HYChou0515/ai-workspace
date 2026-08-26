@@ -302,16 +302,29 @@ class CellDone:
 CellEvent = CellStream | CellDisplayData | CellError | CellDone
 
 
-def to_sse(event: AgentEvent | CellEvent, seq: int | None = None) -> str:
+def to_sse(
+    event: AgentEvent | CellEvent, seq: int | None = None, event_id: str | None = None
+) -> str:
     """Serialize one event as an SSE 'data:' line (with trailing blank line).
 
     `seq` (when given) is the per-session broadcast sequence number — injected
     into the JSON payload so a reconnecting client can resume with `?since=<seq>`
-    (the replay buffer in `turns.py`). It is a transport concern, carried in the
-    SSE JSON and never on the frozen event dataclasses."""
+    (the replay buffer in `turns.py`).
+
+    `event_id` is that event's IDENTITY, minted once where it was published and
+    the same on every pod it reaches. `seq` cannot serve: each pod numbers its
+    own session, so one event is #7 here and #3 there, and a viewer that
+    reconnects onto another pod resumes in a numbering that was never its own —
+    replaying what it already has, or skipping what it has not. The client
+    dedupes on the id, so a re-delivery from any cause is harmless.
+
+    Both are transport concerns, carried in the SSE JSON and never on the frozen
+    event dataclasses."""
     data = asdict(event)
     if seq is not None:
         data["seq"] = seq
+    if event_id is not None:
+        data["id"] = event_id
     return f"data: {json.dumps(data)}\n\n"
 
 

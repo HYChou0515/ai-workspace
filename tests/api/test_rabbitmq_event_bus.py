@@ -39,22 +39,24 @@ class _FakeTransport(IAmqpTransport):
 def test_an_event_round_trips_through_the_bus():
     t = _FakeTransport()
     bus = RabbitMQEventBus(url="", transport=t)
-    got: list[tuple[str, str, object]] = []
-    bus.start_consuming(lambda key, origin, event: got.append((key, origin, event)))
+    got: list[tuple[str, str, object, str]] = []
+    bus.start_consuming(lambda key, origin, event, eid: got.append((key, origin, event, eid)))
 
-    bus.publish("K", "podA", MessageDelta(text="hi"))
+    bus.publish("K", "podA", MessageDelta(text="hi"), "e1")
     assert t.published, "the envelope was serialized to the transport"
 
-    # A pod receiving that frame reconstructs (key, origin, the exact event).
+    # A pod receiving that frame reconstructs (key, origin, the exact event) —
+    # and the id it was published with, which is what the far-side viewer
+    # dedupes on after reconnecting across pods.
     t.deliver(t.published[0])
-    assert got == [("K", "podA", MessageDelta(text="hi"))]
+    assert got == [("K", "podA", MessageDelta(text="hi"), "e1")]
 
 
 def test_publish_is_fire_and_forget_when_the_broker_is_down():
     # A broker failure must never propagate to (or block) the turn.
     bus = RabbitMQEventBus(url="", transport=_FakeTransport(raise_on_publish=True))
     bus.start_consuming(lambda *_: None)
-    bus.publish("K", "podA", MessageDelta(text="hi"))  # must NOT raise
+    bus.publish("K", "podA", MessageDelta(text="hi"), "e1")  # must NOT raise
 
 
 def test_a_malformed_frame_is_dropped_not_fatal():
@@ -86,19 +88,39 @@ async def test_real_broker_cross_pod_round_trip():
     if not url:
         pytest.skip("no $AMQP_URL — needs a live RabbitMQ broker")
 
-    received: list[tuple[str, str, object]] = []
+    received: list[tuple[str, str, object, str]] = []
     got = asyncio.Event()
     bus_a = RabbitMQEventBus(url=url, exchange="rca_test_events")
     bus_b = RabbitMQEventBus(url=url, exchange="rca_test_events")
 
-    def on_event(key: str, origin: str, event: object) -> None:
-        received.append((key, origin, event))
+    def on_event(key: str, origin: str, event: object, event_id: str) -> None:
+        received.append((key, origin, event, event_id))
         got.set()
 
     bus_a.start_consuming(lambda *_: None)
     bus_b.start_consuming(on_event)
     await asyncio.sleep(1.0)  # let both queues bind to the exchange
 
-    bus_a.publish("K", "podA", MessageDelta(text="real"))
+    bus_a.publish("K", "podA", MessageDelta(text="real"), "e1")
     await asyncio.wait_for(got.wait(), 5)
-    assert received == [("K", "podA", MessageDelta(text="real"))]
+    assert received == [("K", "podA", MessageDelta(text="real"), "e1")]
+
+
+def test_a_frame_from_a_pod_that_predates_event_ids_still_delivers():
+    """A rolling upgrade runs both versions at once. An old pod publishes an
+    envelope with no `id`, and raising on it would drop LIVE events for the
+    length of the rollout — a worse fault than the duplicate bubble the id
+    exists to prevent. No id just means nothing to dedupe on."""
+    import json
+
+    t = _FakeTransport()
+    bus = RabbitMQEventBus(url="", transport=t)
+    got: list[tuple[str, str, object, str]] = []
+    bus.start_consuming(lambda key, origin, event, eid: got.append((key, origin, event, eid)))
+
+    old_frame = json.dumps(
+        {"key": "K", "origin": "podOld", "event": {"type": "message_delta", "text": "hi"}}
+    ).encode()
+    t.deliver(old_frame)
+
+    assert got == [("K", "podOld", MessageDelta(text="hi"), "")]

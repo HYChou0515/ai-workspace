@@ -20,8 +20,8 @@ class InMemoryEventBus(IEventBus):
     def start_consuming(self, on_event: OnEvent) -> None:
         self._consumers.append(on_event)
 
-    def publish(self, key: str, origin: str, event: AgentEvent) -> None:
+    def publish(self, key: str, origin: str, event: AgentEvent, event_id: str) -> None:
         # Fanout: invoke every registered consumer (each skips its own origin). Copy
         # the list so a consumer registering mid-dispatch can't mutate the iteration.
         for on_event in list(self._consumers):
-            on_event(key, origin, event)
+            on_event(key, origin, event, event_id)

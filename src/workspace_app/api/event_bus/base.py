@@ -18,7 +18,9 @@ from ..events import AgentEvent
 # A pod's consumer callback: (engine_key, origin_pod_id, event). The bus invokes it
 # for EVERY published event (fanout); the consumer skips its own origin and demuxes
 # by key to that pod's local subscribers.
-OnEvent = Callable[[str, str, AgentEvent], None]
+OnEvent = Callable[[str, str, AgentEvent, str], None]
+"""`(key, origin, event, event_id)`. The id is minted at the origin and travels
+unchanged, so a client dedupes the same event however many pods deliver it."""
 
 
 class IEventBus(abc.ABC):
@@ -27,10 +29,13 @@ class IEventBus(abc.ABC):
     always happens. Consuming is one callback per pod, invoked for every event."""
 
     @abc.abstractmethod
-    def publish(self, key: str, origin: str, event: AgentEvent) -> None:
+    def publish(self, key: str, origin: str, event: AgentEvent, event_id: str) -> None:
         """Fan `event` (for engine `key`) out to every pod, INCLUDING the publisher.
         `origin` is the publishing pod's id so a consumer can skip its own (it has
-        already delivered the event locally). Fire-and-forget: never raises to the
+        already delivered the event locally). `event_id` is the event's identity,
+        minted at the origin and carried unchanged so every pod hands its viewers
+        the SAME id — which is what lets a client recognise a re-delivery after
+        reconnecting onto a different pod. Fire-and-forget: never raises to the
         caller, never blocks the turn."""
 
     @abc.abstractmethod
