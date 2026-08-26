@@ -16,7 +16,7 @@ describe("KB api (mock client)", () => {
     const c = await kb.createCollection("kb");
     const file = new File(["# guide"], "guide.md", { type: "text/markdown" });
     const ids = await kb.uploadDocument(c.resource_id, file);
-    expect(ids).toEqual([`${c.resource_id}/me/guide.md`]);
+    expect(ids).toEqual([`${c.resource_id}\u2215guide.md`]); // encode_doc_id: no user segment, U+2215
 
     await kb.uploadDocument(c.resource_id, file); // same name → no duplicate row
     const docs = await kb.listDocuments(c.resource_id);
@@ -27,7 +27,7 @@ describe("KB api (mock client)", () => {
     const c = await kb.createCollection("kb");
     const file = new File(["x"], "a.md", { type: "text/markdown" });
     const ids = await kb.uploadDocument(c.resource_id, file, "manuals/reflow/a.md");
-    expect(ids).toEqual([`${c.resource_id}/me/manuals/reflow/a.md`]);
+    expect(ids).toEqual([`${c.resource_id}\u2215manuals\u2215reflow\u2215a.md`]); // every slash rewritten
     const docs = await kb.listDocuments(c.resource_id);
     expect(docs.items.map((d) => d.path)).toEqual(["manuals/reflow/a.md"]);
   });

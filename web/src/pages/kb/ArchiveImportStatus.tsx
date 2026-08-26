@@ -60,7 +60,7 @@ export function ArchiveImportStatus({
         </details>
       )}
       {run.finished && (
-        <button type="button" className="kb-btn kb-btn--ghost" onClick={onDismiss}>
+        <button type="button" className="kb-btn" onClick={onDismiss}>
           Dismiss
         </button>
       )}

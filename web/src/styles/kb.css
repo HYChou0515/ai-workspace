@@ -2608,25 +2608,131 @@
    The chips reuse the .kb-cards__chip idiom; the drop zone mirrors the dashed
    .kb-cards__new affordance so "drop a picture on the card" reads as a target,
    not plain text. Accent-soft on hover echoes the app's active-drop cue. */
-.kb-cards__attachments { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-start; }
-/* An image attachment renders as its own thumbnail rather than a filename pill.
-   The × detach sits as a small overlay in the corner; the whole tile is the
-   click-to-open target. */
-.kb-cards__thumb-wrap { position: relative; display: inline-flex; }
-.kb-cards__thumb-open { border: 0; padding: 0; background: transparent; cursor: pointer; display: block; }
-.kb-cards__thumb {
-  display: block; width: 72px; height: 72px; object-fit: cover;
+/* A GRID, not a wrapped row: tiles are one size, so a card with nine photos
+   reads as a contact sheet instead of a ragged line of squares. auto-fill means
+   the column count follows the width it is given rather than a number picked
+   here. */
+.kb-cards__attachments {
+  display: grid;
+  /* The slider value IS the tile width — no `minmax(…, 1fr)`.
+     With `1fr` the rendered width is container ÷ column count, so it can only
+     change when that integer changes: dragging the slider moved nothing, then
+     jumped. Tiles are the size you asked for, and when the next one does not
+     fit it wraps — which is what a contact sheet does, and what the control
+     looks like it promises. */
+  grid-template-columns: repeat(auto-fill, var(--kb-tile, 132px));
+  gap: 8px;
+  align-items: start;
+}
+/* The size control sits at the RIGHT of the row above the grid it scales, with
+   a small/large pair of squares to say what it does. Left-aligned and full
+   accent it read as a progress bar wedged under the card body — a coloured
+   horizontal rule where the eye expects prose to continue. */
+.kb-cards__attach-head {
+  display: flex;
+  align-items: center;
+  /* Pile to the RIGHT. The label pulls itself back left with `margin-right:
+     auto` when there is one — in preview there is not, and relying on the
+     label to do the pushing left the control stranded mid-row. */
+  justify-content: flex-end;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.kb-cards__attach-head .kb-cards__label {
+  margin-right: auto; /* keeps the control right-aligned with or without a label */
+}
+.kb-cards__attach-zoom {
+  flex: 0 0 108px;
+  height: 2px;
+  accent-color: var(--text-paper-d2, var(--text-paper-d));
+  cursor: pointer;
+  opacity: 0.75;
+}
+.kb-cards__attach-zoom:hover,
+.kb-cards__attach-zoom:focus-visible {
+  accent-color: var(--accent);
+  opacity: 1;
+}
+/* The current size, in the same tabular figures the rest of the app uses for
+   live numbers — a readout that reflows while you drag is worse than none. */
+.kb-cards__zoom-size {
+  flex: 0 0 auto;
+  min-width: 42px;
+  text-align: right;
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-paper-d);
+}
+/* S / M / L, styled as the search-mode chips beside them already are. */
+.kb-cards__zoom-presets { display: flex; gap: 3px; }
+.kb-cards__zoom-preset {
+  padding: 2px 6px; font-size: 0.6875rem; cursor: pointer;
   border: 1px solid var(--paper-3); border-radius: var(--radius-btn);
+  background: transparent; color: var(--text-paper-d);
+}
+.kb-cards__zoom-preset.is-active {
+  background: var(--paper-2); color: var(--text-paper);
+}
+
+.kb-cards__tile {
+  position: relative;
+  display: block;
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-btn);
+  background: var(--paper-2);
+  overflow: hidden;
+}
+.kb-cards__tile-open {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.kb-cards__tile:hover { border-color: var(--accent); }
+.kb-cards__tile-img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  /* NOT cover — see CardAttachments: cropping a defect photo hides the defect. */
+  object-fit: contain;
   background: var(--paper-2);
 }
-.kb-cards__thumb-open:hover .kb-cards__thumb { border-color: var(--accent); }
-.kb-cards__thumb-wrap > button:last-child {
-  position: absolute; top: 2px; right: 2px; width: 18px; height: 18px;
+.kb-cards__tile-file {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  padding: 8px;
+  color: var(--text-paper-d);
+}
+.kb-cards__tile-name {
+  font-size: 0.7rem;
+  line-height: 1.25;
+  text-align: center;
+  overflow-wrap: anywhere;
+  /* Two lines then ellipsis: a long path must not push the tile out of the grid. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* Targeted by NAME, never by position. As `button:last-child` this rule also
+   matched the OPEN button whenever there was no detach button — read-only
+   preview — so the tile's only content became an absolutely-positioned 18px
+   box: the picture rendered 18x14 inside a tile 2px tall. Measured, not
+   guessed; happy-dom reports neither number. */
+.kb-cards__tile-detach {
+  position: absolute; top: 4px; right: 4px; width: 18px; height: 18px;
   display: flex; align-items: center; justify-content: center; padding: 0;
   border: 0; border-radius: 50%; cursor: pointer; line-height: 1;
   background: rgba(20, 22, 28, 0.55); color: var(--white);
 }
-.kb-cards__thumb-wrap > button:last-child:hover { background: var(--accent); }
+.kb-cards__tile-detach:hover { background: var(--accent); }
 .kb-cards__attach-drop {
   display: block; text-align: center; padding: 10px 12px; font-size: 0.75rem;
   border: 1px dashed var(--paper-3); border-radius: var(--radius-btn);
@@ -3883,3 +3989,62 @@
 .gbr__page-btn:hover { border-color: var(--accent); color: var(--accent); }
 .rvw-page__browse-link { display: inline-block; margin-bottom: var(--space-12); font-size: var(--text-body-sm); color: var(--accent-h); text-decoration: none; }
 .rvw-page__browse-link:hover { text-decoration: underline; }
+
+/* #715 archive import progress. The component shipped naming these classes and
+   they did not exist, so the bar was two empty spans with no height and no
+   background — invisible — and the text sat unstyled in the header row. A class
+   name is a claim that something styles it. */
+.kb-import-status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  padding: 8px 12px;
+  border: 1px solid var(--paper-3);
+  border-radius: 8px;
+  background: var(--white);
+  font-size: var(--text-body-sm);
+  white-space: nowrap;
+}
+.kb-import-status[data-state="done"] {
+  border-color: color-mix(in srgb, var(--ok) 45%, var(--paper-3));
+  color: var(--ok);
+}
+.kb-import-status[data-state="partial"] {
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--paper-3));
+  color: var(--warn);
+}
+.kb-import-status__text {
+  font-variant-numeric: tabular-nums; /* the count must not jitter as it climbs */
+}
+.kb-import-status__bar {
+  flex: 0 0 96px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--paper-2, var(--paper-3));
+  overflow: hidden;
+}
+.kb-import-status__fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--ink);
+  transition: width 240ms ease-out;
+}
+.kb-import-status__errors summary {
+  cursor: pointer;
+  color: var(--warn);
+}
+.kb-import-status__errors ul {
+  position: absolute;
+  z-index: 40;
+  max-width: 420px;
+  max-height: 220px;
+  overflow: auto;
+  margin: 6px 0 0;
+  padding: 8px 12px 8px 26px;
+  background: var(--white);
+  border: 1px solid var(--paper-3);
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(20, 22, 28, 0.12);
+  white-space: normal;
+}

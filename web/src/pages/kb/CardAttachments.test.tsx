@@ -3,6 +3,20 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+/** Build a doc id the way the BACKEND does — `encode_doc_id(collection, path)`
+ * joins them with "/" and then rewrites EVERY ASCII slash to U+2215, so the id
+ * is slash-free and survives a URL untouched.
+ *
+ * These fixtures used to be `encodeURIComponent("collection/user/path")`, which
+ * is a format the backend has never emitted: it is path-keyed, so there is no
+ * user segment, and the separator is not an ASCII slash. The component's label
+ * parser agreed with the fixtures and disagreed with production, so every
+ * non-image attachment displayed its raw id — and the whole suite stayed green.
+ * A fixture that models the wrong world tests the wrong world. */
+function docId(naturalKey: string): string {
+  return naturalKey.replace(/\//g, "\u2215");
+}
+
 import { CardAttachments, docLabel } from "./CardAttachments";
 
 afterEach(cleanup);
@@ -10,7 +24,7 @@ afterEach(cleanup);
 describe("docLabel", () => {
   it("shows the document's filename, not the opaque token", () => {
     // encode_doc_id = percent-encoded collection/user/path.
-    const id = encodeURIComponent("coll-1/alice/reports/ring-defect.png");
+    const id = docId("coll-1/reports/ring-defect.png");
     expect(docLabel(id)).toBe("ring-defect.png");
   });
 
@@ -21,8 +35,8 @@ describe("docLabel", () => {
 
 describe("CardAttachments", () => {
   const ids = [
-    encodeURIComponent("c/u/a.png"),
-    encodeURIComponent("c/u/spec.pdf"),
+    docId("c/a.png"),
+    docId("c/spec.pdf"),
   ];
 
   it("lists every linked document by name", () => {
@@ -56,7 +70,7 @@ describe("CardAttachments", () => {
 });
 
 describe("CardAttachments — attach", () => {
-  const ids = [encodeURIComponent("c/u/a.png")];
+  const ids = [docId("c/a.png")];
 
   it("hands a picked file to onAttach so the card can link it", async () => {
     const onAttach = vi.fn();
@@ -89,7 +103,7 @@ describe("CardAttachments — attach", () => {
 });
 
 describe("CardAttachments — open", () => {
-  const ids = [encodeURIComponent("c/u/a.png")];
+  const ids = [docId("c/a.png")];
 
   it("opens a linked document when its name is clicked (a link that can't be opened is useless)", () => {
     const onOpen = vi.fn();
@@ -118,8 +132,8 @@ describe("CardAttachments — open", () => {
 });
 
 describe("CardAttachments — image thumbnails", () => {
-  const img = encodeURIComponent("c/u/diagram.png");
-  const pdf = encodeURIComponent("c/u/spec.pdf");
+  const img = docId("c/diagram.png");
+  const pdf = docId("c/spec.pdf");
 
   it("shows an image attachment as a real thumbnail, not a text pill", () => {
     render(
@@ -162,5 +176,39 @@ describe("CardAttachments — image thumbnails", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: /Detach diagram.png/ }));
     expect(onDetach).toHaveBeenCalledWith(img);
+  });
+});
+
+describe("attachments read as one grid, not two kinds of thing (#730)", () => {
+  const img = docId("c/annotated-01.png");
+  const pdf = docId("c/spec.pdf");
+
+  it("gives a file that cannot be previewed an icon, not a bare text pill", () => {
+    // "圖片就放圖片,不能 preview 就放 icon" — a card mixing photos and a spec
+    // sheet used to render two unrelated objects: cropped squares and text
+    // pills. One tile shape, differing only in its face.
+    const { container } = render(
+      <CardAttachments docIds={[pdf]} editable imageSrc={() => undefined} />,
+    );
+    expect(container.querySelector(".kb-cards__tile-file")).toBeTruthy();
+    // The Icon component renders an <svg>; assert on THAT rather than on a
+    // data attribute it does not promise.
+    expect(container.querySelector(".kb-cards__tile-file svg")).toBeTruthy();
+    // and the name is still there — an icon alone says nothing about WHICH file
+    expect(screen.getByText("spec.pdf")).toBeTruthy();
+  });
+
+  it("puts an image and a non-image in the SAME tile shape", () => {
+    const { container } = render(
+      <CardAttachments
+        docIds={[img, pdf]}
+        editable
+        imageSrc={(id) => (id === img ? "/api/blobs/h1" : undefined)}
+      />,
+    );
+    // Two tiles, same class — the grid lays them out as one set.
+    expect(container.querySelectorAll(".kb-cards__tile")).toHaveLength(2);
+    expect(container.querySelector(".kb-cards__tile-img")).toBeTruthy();
+    expect(container.querySelector(".kb-cards__tile-file")).toBeTruthy();
   });
 });

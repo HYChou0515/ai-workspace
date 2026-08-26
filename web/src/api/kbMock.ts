@@ -162,6 +162,19 @@ function startImport(collectionId: string): ArchiveImport {
   return { ...run };
 }
 
+/** Split a doc id the way `encode_doc_id` composed it: `{collection}/{path}`
+ * with every ASCII slash rewritten to U+2215. Six call sites used to split on
+ * "/", which the id never contains, so each resolved the collection to the WHOLE
+ * id and found no document. One helper, so the rule cannot drift again. */
+const DOC_ID_SLASH = "\u2215";
+function docIdParts(documentId: string): { collectionId: string; filename: string } {
+  const parts = documentId.split(DOC_ID_SLASH).filter(Boolean);
+  return {
+    collectionId: parts[0] ?? "",
+    filename: parts.length > 1 ? (parts[parts.length - 1] as string) : documentId,
+  };
+}
+
 export const mockKbApi: KbApi = {
   async getAgentConfig() {
     // Issue #32: array of picker entries. Single-entry default in the
@@ -281,7 +294,13 @@ export const mockKbApi: KbApi = {
   },
   async uploadDocument(collectionId, file, path) {
     const docPath = path ?? file.name;
-    const id = `${collectionId}/me/${docPath}`;
+    // `encode_doc_id(collection_id, path)`: the two joined by "/", then EVERY
+    // ASCII slash rewritten to U+2215 so the id is slash-free. It used to be
+    // `${collectionId}/me/${docPath}` — three segments, real slashes — which is
+    // a shape the backend has never produced (documents are path-keyed, not
+    // per-user). The FE's label parser matched the double and not production,
+    // so every non-image attachment showed a raw id while the suite stayed green.
+    const id = `${collectionId}/${docPath}`.replace(/\//g, "\u2215");
     const list = documents.get(collectionId) ?? [];
     if (!list.some((d) => d.resource_id === id)) {
       const body = await file.text();
@@ -290,7 +309,12 @@ export const mockKbApi: KbApi = {
       list.push({
         resource_id: id,
         path: docPath,
-        content_type: "text/markdown",
+        // The real backend sniffs the bytes; a double that answered
+        // "text/markdown" for a PNG made every uploaded picture a text
+        // attachment. `File.type` is what the browser already determined.
+        content_type: file.type || "text/markdown",
+        // Images need a blob to point at, exactly as the envelope carries one.
+        file_id: `mock-blob-${id}`,
         created_by: "me",
         status: "ready",
         chunks: chunks.length,
@@ -405,7 +429,7 @@ export const mockKbApi: KbApi = {
     yield { type: "done" };
   },
   async setDocumentGuidance(documentId, guidance) {
-    const collectionId = documentId.split("/")[0] ?? "";
+    const { collectionId } = docIdParts(documentId);
     const list = documents.get(collectionId) ?? [];
     documents.set(
       collectionId,
@@ -415,8 +439,8 @@ export const mockKbApi: KbApi = {
     );
   },
   async renderDocument(documentId): Promise<KbRenderedDoc> {
-    const filename = documentId.split("/").pop() ?? documentId;
-    const collection_id = documentId.split("/")[0] ?? "";
+    const { filename } = docIdParts(documentId);
+    const collection_id = docIdParts(documentId).collectionId;
     const doc = (documents.get(collection_id) ?? []).find((d) => d.resource_id === documentId);
     const chunks = docChunks.get(documentId) ?? [];
     return {
@@ -439,7 +463,7 @@ export const mockKbApi: KbApi = {
     };
   },
   async getSourceDocMeta(documentId) {
-    const collection_id = documentId.split("/")[0] ?? "";
+    const collection_id = docIdParts(documentId).collectionId;
     const doc = (documents.get(collection_id) ?? []).find((d) => d.resource_id === documentId);
     // The card thumbnails read content_type + file_id off the envelope (#518).
     // A card's attachment ids are the opaque encode_doc_id tokens (not in the
@@ -465,7 +489,7 @@ export const mockKbApi: KbApi = {
     return [...(docChunks.get(documentId) ?? [])].sort((a, b) => a.seq - b.seq);
   },
   async reindexDocument(documentId) {
-    const collectionId = documentId.split("/")[0] ?? "";
+    const { collectionId } = docIdParts(documentId);
     const list = documents.get(collectionId) ?? [];
     documents.set(
       collectionId,
@@ -473,7 +497,7 @@ export const mockKbApi: KbApi = {
     );
   },
   async deleteDocument(documentId) {
-    const collectionId = documentId.split("/")[0] ?? "";
+    const { collectionId } = docIdParts(documentId);
     documents.set(
       collectionId,
       (documents.get(collectionId) ?? []).filter((d) => d.resource_id !== documentId),
@@ -481,7 +505,7 @@ export const mockKbApi: KbApi = {
     docChunks.delete(documentId);
   },
   async moveDocument(documentId, to) {
-    const collectionId = documentId.split("/")[0] ?? "";
+    const { collectionId } = docIdParts(documentId);
     const list = documents.get(collectionId) ?? [];
     const doc = list.find((d) => d.resource_id === documentId);
     if (!doc) return;
@@ -946,7 +970,7 @@ export const mockKbApi: KbApi = {
         {
           marker: 1,
           collection_id: chat.collection_ids[0] ?? "col-1",
-          document_id: `${chat.collection_ids[0] ?? "col-1"}/me/reflow.md`,
+          document_id: `${chat.collection_ids[0] ?? "col-1"}\u2215reflow.md`,  // encode_doc_id shape
           filename: "reflow.md",
           start: 0,
           end: 16,

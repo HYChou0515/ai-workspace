@@ -6,6 +6,14 @@ import type { ReactElement } from "react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+/** A doc id as the BACKEND builds it (`encode_doc_id`): `{collection}/{path}`
+ * with every ASCII slash rewritten to U+2215. These fixtures used to be
+ * `encodeURIComponent("collection/user/path")` — a shape nothing emits, which
+ * is why the label parser could be wrong in production and right in here. */
+function docId(naturalKey: string): string {
+  return naturalKey.replace(/\//g, "\u2215");
+}
+
 import type { KbContextCard } from "../../api/kb";
 import { _resetKbMock, mockKbApi } from "../../api/kbMock";
 import { LocaleProvider } from "../../lib/i18n";
@@ -281,7 +289,7 @@ describe("ContextCardsTab (#106)", () => {
   it("preserves a card's linked documents when only its body is edited (#518)", async () => {
     // The whole reason the field is threaded through: before this, the editor
     // sent {keys,title,body} and an edit silently wiped the links.
-    const ref = encodeURIComponent("col-1/u/spec.pdf");
+    const ref = docId("col-1/spec.pdf");
     await mockKbApi.createContextCard({
       collection_id: "col-1",
       keys: ["M4"],
@@ -310,8 +318,8 @@ describe("ContextCardsTab (#106)", () => {
   });
 
   it("detaching a linked document drops it on save (#518, detach = unlink)", async () => {
-    const keep = encodeURIComponent("col-1/u/keep.pdf");
-    const drop = encodeURIComponent("col-1/u/drop.png");
+    const keep = docId("col-1/keep.pdf");
+    const drop = docId("col-1/drop.png");
     await mockKbApi.createContextCard({
       collection_id: "col-1",
       keys: ["M4"],
@@ -352,15 +360,18 @@ describe("ContextCardsTab (#106)", () => {
     const file = new File(["pixels"], "diagram.png", { type: "image/png" });
     fireEvent.change(input, { target: { files: [file] } });
 
-    // the resulting doc shows up as a linked chip (await the async upload)...
-    expect(await screen.findByText("diagram.png")).toBeInTheDocument();
+    // the resulting doc shows up as a linked attachment (await the async
+    // upload). It is a PICTURE — now that the mock records the file's real
+    // content type it renders as a thumbnail — so it is identified by its
+    // accessible name rather than by visible text.
+    expect(await screen.findByRole("img", { name: "diagram.png" })).toBeInTheDocument();
     // ...having gone through the normal ingest pipeline
     expect(uploadSpy).toHaveBeenCalledWith("col-1", file);
   });
 
   it("opens a linked document in the viewer when its chip is clicked (#518)", async () => {
     // The link is worthless if a human can't open what it points at.
-    const ref = encodeURIComponent("col-1/u/spec.pdf");
+    const ref = docId("col-1/spec.pdf");
     await mockKbApi.createContextCard({
       collection_id: "col-1",
       keys: ["M4"],
@@ -379,7 +390,7 @@ describe("ContextCardsTab (#106)", () => {
   });
 
   it("renders an image attachment as a thumbnail, not a pill (#518)", async () => {
-    const png = encodeURIComponent("col-1/u/diagram.png");
+    const png = docId("col-1/diagram.png");
     await mockKbApi.createContextCard({
       collection_id: "col-1",
       keys: ["M4"],

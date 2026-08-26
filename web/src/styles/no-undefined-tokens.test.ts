@@ -26,6 +26,9 @@ const RUNTIME_ASSIGNED = new Set([
   "--marp-scale",
   // fit-to-surface scale for the single slide shown in marp present mode (MarpDeck)
   "--present-scale",
+  // #730: attachment tile size, set inline from the card's zoom slider so the
+  // grid can be resized live. Not a design token — it is one reader's choice.
+  "--kb-tile",
 ]);
 
 /** Third-party custom-property namespaces we don't own (Mantine admin UI). */

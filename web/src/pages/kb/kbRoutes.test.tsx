@@ -244,7 +244,7 @@ describe("KB routes", () => {
   });
 
   it("opens the overlay from ?doc= and closing keeps the other params", async () => {
-    renderAt("/kb/collections?view=mine&doc=col-1/me/reflow.md&hl=zone");
+    renderAt("/kb/collections?view=mine&doc=col-1\u2215reflow.md&hl=zone");
     expect(await screen.findByRole("dialog", { name: "文件" })).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "關閉" }));

@@ -50,7 +50,7 @@ describe("AutoGenerateCards picker (#415)", () => {
     expect(gen).toHaveTextContent("自動生成（1）");
 
     await user.click(gen);
-    expect(spy).toHaveBeenCalledWith("col-1", ["col-1/me/reflow.md"]);
+    expect(spy).toHaveBeenCalledWith("col-1", ["col-1\u2215reflow.md"]);
     expect(await screen.findByTestId("cardgen-started")).toBeInTheDocument();
     // no review surface in the modal any more
     expect(screen.queryByTestId("cardgen-proposal")).not.toBeInTheDocument();
@@ -81,7 +81,7 @@ describe("AutoGenerateCards picker (#415)", () => {
 
     await user.click(screen.getByRole("button", { name: "全選" }));
     await user.click(screen.getByRole("button", { name: /自動生成/ }));
-    expect(spy).toHaveBeenCalledWith("col-1", ["col-1/me/reflow.md"]);
+    expect(spy).toHaveBeenCalledWith("col-1", ["col-1\u2215reflow.md"]);
   });
 
   it("invert flips the visible selection", async () => {

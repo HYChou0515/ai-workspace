@@ -19,9 +19,21 @@ import { useCallback, useState } from "react";
 import type { ArchiveImport, KbApi } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 
-/** How often to ask. Fast enough that a small archive looks immediate, slow
- * enough that a 4000-document one does not spend the whole import polling. */
-const POLL_MS = 800;
+/** How often to ask, as the run gets older.
+ *
+ * A flat fast interval is wrong in both directions: an import runs for MINUTES,
+ * so 800 ms is ~75 requests a minute for a number a person reads once every
+ * few seconds — and nobody watches a counter for ten minutes anyway. But the
+ * first few seconds are exactly when someone is still looking at the click they
+ * just made, so starting slow makes the whole thing feel broken.
+ *
+ * So: responsive at first, then back off to a heartbeat. */
+const POLL_FLOOR_MS = 1_000;
+const POLL_CEILING_MS = 8_000;
+
+function pollAfter(reads: number): number {
+  return Math.min(POLL_CEILING_MS, POLL_FLOOR_MS * 2 ** Math.floor(reads / 3));
+}
 
 export interface ArchiveImportState {
   /** The run in flight, or the last one that finished. `null` before any. */
@@ -69,10 +81,17 @@ export function useArchiveImport(
 
   const newMut = useMutation({
     mutationFn: (file: File) => client.startImportNew(file),
-    onSuccess: (run) => {
-      // The collection row already exists — list it now, empty and filling,
-      // rather than after the documents land.
-      void qc.invalidateQueries({ queryKey: qk.kb.collections });
+    onSuccess: async (run) => {
+      // AWAIT the refetch before handing the run over, because the caller's next
+      // move is to open the collection and the collection page BOUNCES an id its
+      // list does not contain. An invalidate alone does not make it contained: a
+      // background refetch leaves `isPending` false, so the page reads stale data,
+      // finds nothing, and redirects straight back to the grid — the import
+      // appears to have done nothing at all.
+      //
+      // A failed refetch must not strand the run either, so navigation proceeds
+      // regardless; the worst case is the bounce that used to happen always.
+      await qc.invalidateQueries({ queryKey: qk.kb.collections }).catch(() => {});
       begin(run);
     },
   });
@@ -98,7 +117,8 @@ export function useArchiveImport(
     },
     enabled: importId !== null,
     // Stop asking once it is done — a run that finished never changes again.
-    refetchInterval: (q) => (q.state.data?.finished ? false : POLL_MS),
+    refetchInterval: (q) =>
+      q.state.data?.finished ? false : pollAfter(q.state.dataUpdateCount ?? 0),
   });
 
   // `started` covers the gap before the first poll answers, so the progress
