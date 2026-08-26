@@ -50,8 +50,12 @@ describe("relativeTime", () => {
     expect(relativeTime(at(2026, 4, 23, 11, 48).toISOString(), NOW)).toBe("12 min ago");
   });
 
-  it("returns hours for earlier the same day", () => {
+  it("returns hours for sub-day", () => {
     expect(relativeTime(at(2026, 4, 23, 7, 0).toISOString(), NOW)).toBe("5 h ago");
+  });
+
+  it("returns days once a whole day has elapsed", () => {
+    expect(relativeTime(at(2026, 4, 20, 12, 0).toISOString(), NOW)).toBe("3 d ago");
   });
 
   it("returns '—' for invalid timestamps", () => {
@@ -59,16 +63,28 @@ describe("relativeTime", () => {
   });
 
   // The crossover is the point of this function: an interval answers "is this
-  // current?" only while it is small. On any other day a date is the answer, and
-  // the boundary is the CALENDAR day rather than 24 hours — 13 hours ago can be
-  // "yesterday", which is a different answer to the person reading it.
-  it("shows a date as soon as it is a different day, however recent", () => {
-    expect(relativeTime(at(2026, 4, 22, 23, 0).toISOString(), NOW)).toBe("22 May");
-    expect(relativeTime(at(2026, 4, 20, 12, 0).toISOString(), NOW)).toBe("20 May");
+  // current?" while the answer is still small. Past a week it stops answering
+  // anything — nobody converts "412 d ago" into a date in their head.
+  it("switches to a date once it is more than a week old", () => {
+    expect(relativeTime(at(2026, 4, 16, 12, 0).toISOString(), NOW)).toBe("7 d ago");
+    expect(relativeTime(at(2026, 4, 15, 12, 0).toISOString(), NOW)).toBe("15 May");
   });
 
-  it("stays relative right up to the start of today", () => {
-    expect(relativeTime(at(2026, 4, 23, 0, 5).toISOString(), NOW)).toBe("11 h ago");
+  it("formats the date in the reader's own timezone", () => {
+    // Early enough in the local morning that the UTC date is the PREVIOUS day
+    // east of Greenwich (and late enough in the evening that it is the NEXT one
+    // west of it) — formatting in UTC names the wrong day for both. Asserted
+    // against the local parts rather than a literal, because the ONLY machine
+    // where the two agree is one running in UTC, and there is nothing to catch
+    // there.
+    for (const when of [at(2026, 3, 3, 0, 30), at(2026, 3, 3, 23, 30)]) {
+      const expected = `${when.getDate()} ${
+        ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][
+          when.getMonth()
+        ]
+      }`;
+      expect(relativeTime(when.toISOString(), NOW)).toBe(expected);
+    }
   });
 
   it("keeps the year off a date in the current year, and on for an older one", () => {

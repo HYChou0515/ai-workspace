@@ -658,27 +658,22 @@ export function summarize(description: string): string {
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-/** Same CALENDAR day in the reader's own timezone — not "within 24 hours".
- * 13 hours ago can be yesterday, and "yesterday" is a different answer to the
- * person reading it than "13 h ago" is. */
-function sameLocalDay(a: Date, b: Date): boolean {
-  return (
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate()
-  );
-}
+/** How old something has to be before a date reads better than an interval. */
+const RELATIVE_WINDOW_DAYS = 7;
 
 /**
- * Coarse-grained "how long ago" while it is still today, and a DATE on any other
- * day.
+ * Coarse-grained "how long ago", good enough for table cells — and a DATE once
+ * it is more than a week old.
  *
  * The crossover is the point of this function. An interval answers "is this
- * current?" only while the answer is small; once it is a different day it stops
- * answering anything ("412 d ago" is not a date anybody converts in their head),
- * and the further back it goes the more precision it claims and the less it
- * says. The year is left off within the current year (noise for the common case)
- * and kept for anything older (essential for the rare one).
+ * current?" while the answer is still small; past a week it stops answering
+ * anything, because nobody converts "412 d ago" into a date in their head, and
+ * the further back it goes the more precision it claims and the less it says.
+ * The year is left off within the current year (noise for the common case) and
+ * kept for anything older (essential for the rare one).
+ *
+ * The date is formatted in the READER's timezone. Formatting it in UTC named the
+ * wrong day for anyone far enough east: 23:30 local on 2 April is 3 April in UTC.
  *
  * Callers rendering the interval form should also carry the exact timestamp in a
  * `title`, so the precision this deliberately drops is still one hover away.
@@ -693,13 +688,12 @@ export function relativeTime(iso: string, now: Date = new Date()): string {
   const diff = Math.max(0, now.getTime() - then);
   const minute = 60_000;
   const hour = 60 * minute;
-  // Ahead of the day check: a 30-second-old stamp that happens to fall the other
-  // side of midnight is "just now", not yesterday's date.
+  const day = 24 * hour;
   if (diff < minute) return "just now";
-  if (sameLocalDay(at, now)) {
-    if (diff < hour) return `${Math.floor(diff / minute)} min ago`;
-    return `${Math.floor(diff / hour)} h ago`;
-  }
+  if (diff < hour) return `${Math.floor(diff / minute)} min ago`;
+  if (diff < day) return `${Math.floor(diff / hour)} h ago`;
+  const days = Math.floor(diff / day);
+  if (days <= RELATIVE_WINDOW_DAYS) return `${days} d ago`;
   const date = `${at.getDate()} ${MONTHS[at.getMonth()]}`;
   return at.getFullYear() === now.getFullYear() ? date : `${date} ${at.getFullYear()}`;
 }
