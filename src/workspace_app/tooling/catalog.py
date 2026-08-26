@@ -36,6 +36,14 @@ class ToolMeta:
     name: str
     label: str
     description: str
+    package: str | None = None
+    """The label of the package this unit is ONE COMMAND of (a ``pkg:cmd``
+    entry), or ``None`` when the unit is the whole package or a built-in.
+
+    The picker grants at whichever granularity ``app.json`` chose, so two rows
+    side by side can mean "this whole bundle" and "this one command of that
+    bundle". Told only its command name, a reader cannot tell which — nor which
+    row's switch governs the tool they saw in a chat card."""
 
 
 def humanize_tool_label(name: str) -> str:
@@ -93,6 +101,7 @@ def picker_units(app_tools: Sequence[str], packages: Sequence[PackageInfo]) -> l
                     entry,
                     humanize_tool_label(cmd_name),
                     summarize_description(cmd.description if cmd else ""),
+                    package=humanize_tool_label(pkg_name),
                 )
             )
         elif entry in pkgs:

@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 
 import { api } from "../api";
 import { qk } from "../api/queryKeys";
-import type { ApiClient, ExternalToolState, ItemToolState } from "../api/types";
+import type { ApiClient, ItemToolState } from "../api/types";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 import { ModalShell } from "./ModalShell";
@@ -21,12 +21,10 @@ import { ToolsChecklist } from "./ToolsChecklist";
  * explicit Save — open reads fresh, Save overwrites the whole override map and
  * invalidates the picker read so reopening reflects it.
  *
- * Third-party tools (#674/#724) render below, read-only. They have no
- * per-item switch, so what they owe the reader is an account instead: which
- * release is running, who published it, and whether it came from the host's
- * cached copy. A declared one that could not be resolved is listed with its
- * reason rather than dropped — an absence reads as a configuration the reader
- * imagined (#480).
+ * Third-party tools (#674/#724) are rows here like any other — their
+ * `external_tools` key is an `app.json` `tools[]` entry, so they already have a
+ * switch. What they carry extra (release, author, cached-copy) rides on the row
+ * itself; a separate section listed the same tool twice.
  */
 export function ToolsPickerModal({
   slug,
@@ -56,14 +54,13 @@ export function ToolsPickerModal({
   // Seed the editable override once the resolved state has loaded.
   useEffect(() => {
     if (prefs === null && toolsQ.data) {
-      const seeded = overrideFromTools(toolsQ.data.tools);
+      const seeded = overrideFromTools(toolsQ.data);
       setPrefs(seeded);
       setInitial(seeded);
     }
   }, [prefs, toolsQ.data]);
 
   const ready = prefs !== null && initial !== null && toolsQ.data !== undefined;
-  const external = toolsQ.data?.external ?? [];
   const dirty = ready && !sameOverride(prefs!, initial!);
 
   const attemptClose = () => {
@@ -106,10 +103,8 @@ export function ToolsPickerModal({
             )}
           </div>
         ) : (
-          <ToolsChecklist tools={toolsQ.data!.tools} prefs={prefs!} onChange={setPrefs} />
+          <ToolsChecklist tools={toolsQ.data!} prefs={prefs!} onChange={setPrefs} />
         )}
-
-        {ready && external.length > 0 ? <ExternalTools rows={external} /> : null}
 
         {confirming ? (
           <div
@@ -164,51 +159,6 @@ export function ToolsPickerModal({
           </div>
         )}
     </ModalShell>
-  );
-}
-
-/** The read-only third-party section (#724). Not part of `ToolsChecklist`:
- * every row there is a control, and one that looked the same but could not be
- * pressed would be the worse lie. */
-function ExternalTools({ rows }: { rows: ExternalToolState[] }) {
-  const t = useT();
-  return (
-    <div data-testid="external-tools" style={{ borderTop: "1px solid var(--paper-3)", paddingTop: 10 }}>
-      <strong style={{ fontSize: pxToRem(12) }}>{t("tools.external.title")}</strong>
-      <p style={{ margin: "4px 0 8px", fontSize: pxToRem(11), color: "var(--text-paper-d)", lineHeight: 1.5 }}>
-        {t("tools.external.desc")}
-      </p>
-      <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 8 }}>
-        {rows.map((row) => (
-          <li key={row.key} data-testid={`external-tool-${row.key}`} style={{ fontSize: pxToRem(12) }}>
-            <span style={{ fontWeight: 600 }}>{row.key}</span>
-            {row.version ? (
-              <span style={{ marginLeft: 6, color: "var(--text-paper-d)" }}>{row.version}</span>
-            ) : null}
-            <div style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)", lineHeight: 1.5 }}>
-              {row.unavailable ? (
-                <span style={{ color: "var(--err)" }}>
-                  {t("tools.external.unavailable", { reason: row.unavailable })}
-                </span>
-              ) : (
-                <>
-                  <span>
-                    {row.author
-                      ? t("tools.external.by", { author: row.author })
-                      : t("tools.external.noAuthor")}
-                  </span>
-                  {row.stale ? (
-                    <span data-testid={`external-tool-${row.key}-stale`} style={{ marginLeft: 6 }}>
-                      · {t("tools.external.stale")}
-                    </span>
-                  ) : null}
-                </>
-              )}
-            </div>
-          </li>
-        ))}
-      </ul>
-    </div>
   );
 }
 

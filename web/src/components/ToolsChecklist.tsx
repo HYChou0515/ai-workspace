@@ -15,6 +15,12 @@ import { pxToRem } from "../lib/pxToRem";
  * A row in the Default state shows what the template currently resolves to, so
  * "follow" is never ambiguous. Search filters by label/key; "reset to defaults"
  * clears the override for the currently-visible rows.
+ *
+ * Every row states where it came from (#724): the platform, or the third party
+ * who published it and which release of theirs resolved. `app.json` grants at
+ * whichever granularity it chose, so a row that is ONE COMMAND of a bundle also
+ * names the bundle — otherwise two rows read as peers while one is part of the
+ * other, and a command seen in a chat card cannot be traced to its switch.
  */
 export function ToolsChecklist({
   tools,
@@ -90,6 +96,14 @@ export function ToolsChecklist({
                 ? t("tools.defaultOn")
                 : t("tools.defaultOff")
               : tool.description;
+          // Who to go to. A third-party tool names its author (or says nobody
+          // claimed it — which is NOT the same as it being ours); everything
+          // else is the platform's own.
+          const origin = !tool.external
+            ? t("tools.origin.builtin")
+            : tool.author
+              ? t("tools.origin.by", { author: tool.author })
+              : t("tools.origin.noAuthor");
           return (
             <div
               key={tool.key}
@@ -104,28 +118,59 @@ export function ToolsChecklist({
               }}
             >
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div
-                  title={tool.label}
-                  style={{
-                    fontWeight: 500,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {tool.label}
+                <div style={{ display: "flex", alignItems: "baseline", gap: 6, minWidth: 0 }}>
+                  <div
+                    title={tool.package ? `${tool.package} · ${tool.label}` : tool.label}
+                    style={{
+                      fontWeight: 500,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {tool.package ? (
+                      <span style={{ fontWeight: 400, color: "var(--text-paper-d)" }}>
+                        {tool.package}
+                        {" · "}
+                      </span>
+                    ) : null}
+                    {tool.label}
+                  </div>
+                  <div
+                    title={tool.version ? `${tool.version} · ${origin}` : origin}
+                    style={{
+                      flex: "0 1 auto",
+                      minWidth: 0,
+                      fontSize: pxToRem(11),
+                      color: "var(--text-paper-d)",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {tool.version ? `${tool.version} · ` : ""}
+                    {origin}
+                  </div>
                 </div>
                 <div
-                  title={detail}
+                  title={tool.unavailable ?? detail}
                   style={{
                     fontSize: pxToRem(11),
-                    color: "var(--text-paper-d)",
+                    color: tool.unavailable ? "var(--err)" : "var(--text-paper-d)",
                     overflow: "hidden",
                     textOverflow: "ellipsis",
                     whiteSpace: "nowrap",
                   }}
                 >
-                  {detail}
+                  {tool.unavailable
+                    ? t("tools.origin.unavailable", { reason: tool.unavailable })
+                    : detail}
+                  {tool.stale && !tool.unavailable ? (
+                    <span data-testid={`tool-${tool.key}-stale`}>
+                      {" · "}
+                      {t("tools.origin.stale")}
+                    </span>
+                  ) : null}
                 </div>
               </div>
               <div
