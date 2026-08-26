@@ -143,6 +143,11 @@ export const qk = {
     // collection — two imports into one collection are two runs, and the poll
     // must stop with the run it belongs to.
     archiveImport: (importId: string) => ["kb", "archive-import", importId] as const,
+    // #730: several documents' envelopes in one request. Keyed by the SORTED
+    // id set — the same attachments in another order are the same query, and a
+    // card that gains one is a different query rather than a stale hit.
+    docMetas: (ids: readonly string[]) =>
+      ["kb", "doc-metas", [...ids].sort().join("\u0000")] as const,
     chats: ["kb", "chats"] as const,
     chat: (id: string) => ["kb", "chat", id] as const,
     // #310: a collection's current access state (share dialog pre-fill).

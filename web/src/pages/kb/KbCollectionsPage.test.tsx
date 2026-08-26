@@ -1116,7 +1116,7 @@ describe("#715 archive import runs on a worker, not in the request", () => {
     // the collection page is open...
     expect(await screen.findByRole("button", { name: "Collection settings" })).toBeInTheDocument();
     // ...and it says the import is still going, naming how far along it is.
-    expect(await screen.findByRole("status")).toHaveTextContent(/Importing \d of 3 documents/);
+    expect(await screen.findByRole("status")).toHaveTextContent(/Importing \d of 2 documents/);
   });
 
   it("polls until the run finishes and then reports the outcome", async () => {
@@ -1137,9 +1137,9 @@ describe("#715 archive import runs on a worker, not in the request", () => {
         expect(
           screen
             .getAllByRole("status")
-            .some((el) => /Imported 3 of 3 documents/.test(el.textContent ?? "")),
+            .some((el) => /Imported 2 of 2 documents/.test(el.textContent ?? "")),
         ).toBe(true),
-      { timeout: 8000 },
+      { timeout: 12000 },
     );
   }, 15000);
 

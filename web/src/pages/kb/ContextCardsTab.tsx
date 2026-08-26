@@ -7,7 +7,7 @@
  * sends them. A new card opens straight into Edit.
  */
 
-import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
 import { CardAttachments } from "./CardAttachments";
@@ -111,19 +111,23 @@ export function ContextCardsTab({
     queryFn: () => client.listContextCards(collectionId),
   });
   const [draft, setDraft] = useState<Draft | null>(null);
-  // Resolve each linked doc's envelope (a cheap point-get) so an image
-  // attachment can show a real thumbnail instead of a filename pill. useQueries
-  // handles the dynamic list; content_type + file_id ride the envelope (#518).
+  // Resolve the linked docs' envelopes so an image attachment can show a real
+  // thumbnail instead of a filename pill (#518). ONE query for all of them
+  // (#730): it used to be a `useQueries` fan-out — a request per attachment,
+  // each only to learn a content type and a blob id. Those went out
+  // concurrently, so the win is not latency×N; it is N scoped queries (each
+  // resolving the caller's groups and applying an access predicate) collapsed
+  // into one.
   const refIds = draft?.reference_doc_ids ?? [];
-  const refMetas = useQueries({
-    queries: refIds.map((id) => ({
-      queryKey: qk.kb.docMeta(id),
-      queryFn: () => client.getSourceDocMeta(id),
-    })),
+  const { data: refMetas } = useQuery({
+    // Keyed by the SET of ids, so opening another card refetches and opening the
+    // same one again does not.
+    queryKey: qk.kb.docMetas(refIds),
+    queryFn: () => client.getSourceDocMetas(refIds),
+    enabled: refIds.length > 0,
   });
   const imageSrc = (docId: string): string | undefined => {
-    const i = refIds.indexOf(docId);
-    const meta = i >= 0 ? refMetas[i]?.data : undefined;
+    const meta = refMetas?.[docId];
     return meta?.content_type?.startsWith("image/") && meta.file_id
       ? blobHref(meta.file_id)
       : undefined;

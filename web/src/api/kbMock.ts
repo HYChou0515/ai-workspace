@@ -10,6 +10,7 @@ import type { CollectionPermission } from "../lib/permission";
 import type {
   ArchiveImport,
   KbApi,
+  KbDocMeta,
   KbCardGenStatus,
   KbChatDetail,
   KbChatMessage,
@@ -153,7 +154,9 @@ function startImport(collectionId: string): ArchiveImport {
     collection_id: collectionId,
     import_id: `import-run:mock${++importSeq}`,
     status: "queued",
-    members: 3,
+    // Two documents, so the run needs TWO polls to finish: enough to prove the
+    // UI asks again, without a third read's wait for a test to race.
+    members: 2,
     written: 0,
     errors: [],
     finished: false,
@@ -461,6 +464,12 @@ export const mockKbApi: KbApi = {
       quality_rationale: doc?.quality_rationale,
       parser_guidance_override: doc?.parser_guidance_override,
     };
+  },
+  async getSourceDocMetas(documentIds) {
+    if (documentIds.length === 0) return {};
+    const out: Record<string, KbDocMeta> = {};
+    for (const id of documentIds) out[id] = await this.getSourceDocMeta(id);
+    return out;
   },
   async getSourceDocMeta(documentId) {
     const collection_id = docIdParts(documentId).collectionId;
