@@ -22,6 +22,13 @@ import { Icon } from "../../components/Icon";
 import { MonacoEditor } from "../../components/MonacoEditor";
 import { Skeleton } from "../../components/Skeleton";
 import { useT } from "../../lib/i18n";
+import {
+  TILE_MAX,
+  TILE_MIN,
+  TILE_PRESETS,
+  TILE_STEP,
+  useAttachmentTileSize,
+} from "../../hooks/attachmentTileSize";
 import { AutoGenerateCards } from "./AutoGenerateCards";
 import { lookupByName, scanPassage } from "./cardSearch";
 
@@ -39,6 +46,47 @@ const BLANK: Draft = { id: null, keys: [], title: "", body: "", reference_doc_id
 const NEW_CARD = "new";
 
 const cardLabel = (c: KbContextCard) => c.title || c.keys[0] || "Untitled";
+
+/** The attachment-grid size control (#730).
+ *
+ * At module scope, NOT inside `ContextCardsTab`: a component declared inside
+ * another is a fresh type on every render, so React tears the input down and
+ * rebuilds it each time — which loses drag state mid-drag and does a pile of
+ * needless work. */
+function TileZoom({ value, onChange }: { value: number; onChange: (px: number) => void }) {
+  return (
+    <>
+      {/* The number, so the control says where it is rather than only how far
+          along it looks. Tabular figures — it must not jitter while dragging. */}
+      <span className="kb-cards__zoom-size">{value}px</span>
+      <span className="kb-cards__zoom-presets">
+        {TILE_PRESETS.map((preset) => (
+          <button
+            key={preset.label}
+            type="button"
+            className={`kb-cards__zoom-preset${value === preset.px ? " is-active" : ""}`}
+            aria-pressed={value === preset.px}
+            title={preset.title}
+            onClick={() => onChange(preset.px)}
+          >
+            {preset.label}
+          </button>
+        ))}
+      </span>
+      <input
+        type="range"
+        className="kb-cards__attach-zoom"
+        aria-label="Attachment size"
+        title="Attachment size"
+        min={TILE_MIN}
+        max={TILE_MAX}
+        step={TILE_STEP}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+      />
+    </>
+  );
+}
 
 export function ContextCardsTab({
   collectionId,
@@ -80,6 +128,11 @@ export function ContextCardsTab({
       ? blobHref(meta.file_id)
       : undefined;
   };
+  // #730: how big the attachment tiles are. Read HERE rather than inside
+  // CardAttachments so the editor and the preview move together — the same
+  // pictures at two sizes depending on which pane you are in would read as two
+  // different sets.
+  const [tileSize, setTileSize] = useAttachmentTileSize();
   const [editing, setEditing] = useState(false); // existing card → preview first; New → edit
   const [term, setTerm] = useState("");
   const [query, setQuery] = useState("");
@@ -363,8 +416,14 @@ export function ContextCardsTab({
                   />
                 </div>
                 <div className="kb-cards__attachments-field">
-                  <label className="kb-cards__label">Linked documents</label>
+                  <div className="kb-cards__attach-head">
+                    <label className="kb-cards__label">Linked documents</label>
+                    {draft.reference_doc_ids.length > 0 && (
+                      <TileZoom value={tileSize} onChange={setTileSize} />
+                    )}
+                  </div>
                   <CardAttachments
+                    tileSize={tileSize}
                     docIds={draft.reference_doc_ids}
                     editable
                     onDetach={(docId) =>
@@ -410,7 +469,13 @@ export function ContextCardsTab({
                     <p className="kb-cards__none">No explanation yet.</p>
                   )}
                 </article>
+                {draft.reference_doc_ids.length > 0 && (
+                  <div className="kb-cards__attach-head">
+                    <TileZoom value={tileSize} onChange={setTileSize} />
+                  </div>
+                )}
                 <CardAttachments
+                  tileSize={tileSize}
                   docIds={draft.reference_doc_ids}
                   editable={false}
                   imageSrc={imageSrc}

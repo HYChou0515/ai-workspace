@@ -178,3 +178,37 @@ describe("CardAttachments — image thumbnails", () => {
     expect(onDetach).toHaveBeenCalledWith(img);
   });
 });
+
+describe("attachments read as one grid, not two kinds of thing (#730)", () => {
+  const img = docId("c/annotated-01.png");
+  const pdf = docId("c/spec.pdf");
+
+  it("gives a file that cannot be previewed an icon, not a bare text pill", () => {
+    // "圖片就放圖片,不能 preview 就放 icon" — a card mixing photos and a spec
+    // sheet used to render two unrelated objects: cropped squares and text
+    // pills. One tile shape, differing only in its face.
+    const { container } = render(
+      <CardAttachments docIds={[pdf]} editable imageSrc={() => undefined} />,
+    );
+    expect(container.querySelector(".kb-cards__tile-file")).toBeTruthy();
+    // The Icon component renders an <svg>; assert on THAT rather than on a
+    // data attribute it does not promise.
+    expect(container.querySelector(".kb-cards__tile-file svg")).toBeTruthy();
+    // and the name is still there — an icon alone says nothing about WHICH file
+    expect(screen.getByText("spec.pdf")).toBeTruthy();
+  });
+
+  it("puts an image and a non-image in the SAME tile shape", () => {
+    const { container } = render(
+      <CardAttachments
+        docIds={[img, pdf]}
+        editable
+        imageSrc={(id) => (id === img ? "/api/blobs/h1" : undefined)}
+      />,
+    );
+    // Two tiles, same class — the grid lays them out as one set.
+    expect(container.querySelectorAll(".kb-cards__tile")).toHaveLength(2);
+    expect(container.querySelector(".kb-cards__tile-img")).toBeTruthy();
+    expect(container.querySelector(".kb-cards__tile-file")).toBeTruthy();
+  });
+});

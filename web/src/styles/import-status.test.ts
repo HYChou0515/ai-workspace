@@ -19,6 +19,18 @@ import { describe, expect, it } from "vitest";
 
 const CSS = readFileSync(join(__dirname, "kb.css"), "utf8");
 
+/** The declarations of one rule, with comments stripped.
+ *
+ * A rule's comment often NAMES the thing the rule exists not to do — this file
+ * asserts "no `minmax`" against a block whose comment explains why `minmax` was
+ * wrong. Matching the raw text makes the explanation fail the test. */
+function declarations(selector: string): string {
+  const from = CSS.indexOf(selector);
+  if (from < 0) return "";
+  const block = CSS.slice(from, CSS.indexOf("}", from));
+  return block.replace(/\/\*[\s\S]*?\*\//g, "");
+}
+
 const REQUIRED = [
   ".kb-import-status",
   ".kb-import-status__text",
@@ -73,5 +85,51 @@ describe("archive import progress (#715)", () => {
     // dropped documents reads as a clean import — the silence #715 removes.
     expect(hasRule('.kb-import-status[data-state="done"]')).toBe(true);
     expect(hasRule('.kb-import-status[data-state="partial"]')).toBe(true);
+  });
+});
+
+describe("card attachments (#730)", () => {
+  it("lays attachments out as a grid, not a wrapped row", () => {
+    const rule = CSS.slice(CSS.indexOf(".kb-cards__attachments"));
+    const block = rule.slice(0, rule.indexOf("}"));
+    expect(block).toMatch(/display:\s*grid/);
+    expect(block).toMatch(/grid-template-columns:/);
+  });
+
+  it("does not crop the picture", () => {
+    // `cover` on a defect photograph hides the defect: the mark is as often at
+    // an edge as in the middle, so every cropped thumbnail looks like the next
+    // one and a person has to open each in turn to tell them apart.
+    const rule = CSS.slice(CSS.indexOf(".kb-cards__tile-img"));
+    const block = rule.slice(0, rule.indexOf("}"));
+    expect(block).toMatch(/object-fit:\s*contain/);
+    expect(block).not.toMatch(/object-fit:\s*cover/);
+  });
+
+  it("leaves no styles behind for markup that no longer exists", () => {
+    // The old cropped-square rules had no elements left to style. Dead CSS is
+    // how the next reader concludes a thumbnail is still 72px.
+    expect(CSS).not.toContain(".kb-cards__thumb-wrap");
+    expect(CSS).not.toContain(".kb-cards__thumb-open");
+  });
+});
+
+describe("attachment size control (#730)", () => {
+  it("makes the slider value the tile WIDTH, not a minmax floor", () => {
+    // With `minmax(var(--kb-tile), 1fr)` the rendered width is container ÷
+    // column count — an integer — so dragging the slider did nothing until the
+    // count changed and then jumped a whole step. Measured in a real browser:
+    // 96 / 132 / 224px come out exactly, only because there is no `1fr`.
+    const block = declarations(".kb-cards__attachments");
+    expect(block).toMatch(/repeat\(auto-fill,\s*var\(--kb-tile/);
+    expect(block).not.toMatch(/minmax/);
+    expect(block).not.toMatch(/1fr/);
+  });
+
+  it("pins the control to the right of the row", () => {
+    // In preview there is no label to push against, so the row itself has to
+    // align — relying on the label left the control stranded mid-row.
+    const block = declarations(".kb-cards__attach-head");
+    expect(block).toMatch(/justify-content:\s*flex-end/);
   });
 });
