@@ -233,16 +233,6 @@ class WorkflowExecutor:
         await self._turn_engine.enqueue(enqueue_key, prompt, ctx, on_complete=persist)
         if lane is not None and lane != chat_key:  # transient sub-lane → drop its session
             await self._turn_engine.forget(lane)
-        # Reconcile the sandbox into the snapshot, exactly as the deterministic
-        # `run_sandbox` node does after its command. A turn's shell writes land in the
-        # SANDBOX; the snapshot is what `wf.glob` / `wf.read` see, and until now only
-        # the periodic mirror sweep bridged the two. That is a race for anything a node
-        # produced by running a script — a `produces` node globbed the snapshot the
-        # instant its turn ended and found nothing, so a step that had done its work
-        # failed its own gate. Same suppression as the sandbox node: a failed
-        # write-back must not lose the turn.
-        with contextlib.suppress(Exception):
-            await self._registry.flush(item_id)
         # A Stop that landed DURING this turn advanced the epoch past the baseline
         # (the watcher already cancelled the turn) → abort the run, don't step on.
         if await self._turn_engine.cancel_epoch(chat_key) > baseline:
@@ -428,6 +418,25 @@ class WorkflowExecutor:
         the send-once fingerprint — the store IS the ledger."""
         return notification_sent(self._spec, dedup_key)
 
+    async def _reconcile(self, item_id: str) -> None:
+        """Write the live sandbox back to the durable snapshot, for a node that is about
+        to read the snapshot for its own gate.
+
+        A turn's shell writes land in the SANDBOX; `wf.glob` reads the snapshot, and the
+        periodic mirror sweep is what normally bridges them. That is fine for durability
+        and wrong for a `produces` node, whose gate globs the instant the turn ends — it
+        found nothing and failed a step that had done its work.
+
+        On demand rather than after every turn, because the write-back walks the
+        workspace: measured on the real path, 20 agent map elements cost +50 ms each over
+        a 400-file workspace and +215 ms each over a 1600-file one. A map would pay one
+        walk per element for a refresh only one kind of node reads. Failure is suppressed
+        for the same reason the sandbox node suppresses it — a failed write-back must not
+        lose the turn; the gate then reports what it can see.
+        """
+        with contextlib.suppress(Exception):
+            await self._registry.flush(item_id)
+
     def wire_handle(
         self, wf: WorkflowHandle, run_id: str, item_id: str, captured_user: str, chat_key: str
     ) -> None:
@@ -441,6 +450,7 @@ class WorkflowExecutor:
         wf.drive_turn = lambda prompt, tools: self.drive_turn(
             item_id, chat_key, captured_user, prompt, tools, entity_write_origin=origin
         )
+        wf.reconcile = lambda: self._reconcile(item_id)
         # #429 P5: a per-element turn-lane factory — each map element drives its own
         # enqueue lane (real parallel) but persists to the run's chat. The effective
         # parallelism is min(map concurrency, turn_concurrency).

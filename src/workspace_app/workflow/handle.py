@@ -117,6 +117,7 @@ class WorkflowHandle:
         user: str = "",
         drive_turn: DriveTurn | None = None,
         run_sandbox: RunSandbox | None = None,
+        reconcile: Callable[[], Awaitable[None]] | None = None,
         emit: Callable[[object], None] | None = None,
         ingest: IngestCapability | None = None,
         convert: ConvertCapability | None = None,
@@ -152,6 +153,13 @@ class WorkflowHandle:
         self.user = user
         """The captured acting user (manual §15)."""
         self.drive_turn = drive_turn
+        # Write the live sandbox back to the durable snapshot. A turn's shell writes land
+        # in the SANDBOX while `glob`/`read` see the snapshot, so a node whose gate reads
+        # the snapshot the instant its turn ends has to ask for this first. Only such a
+        # node does: the write-back walks the workspace, so making every turn pay it costs
+        # a map one workspace walk per element. None ⇒ no reconcile is available (tests,
+        # and any handle with no sandbox behind it).
+        self.reconcile = reconcile
         """Wired by the orchestration driver — runs one agent turn (manual §5.1)."""
         self.run_sandbox = run_sandbox
         """Wired by the orchestration driver — runs a sandbox command (manual §5.2)."""

@@ -175,27 +175,7 @@ def test_a_node_that_misses_its_shape_is_asked_again():
     assert runner.turns == []  # the retry really happened — all three scripts were used
 
 
-def test_a_turn_reconciles_the_sandbox_before_the_next_gate_looks(monkeypatch):
-    """A turn's shell writes land in the SANDBOX; `wf.glob` / `wf.read` read the snapshot,
-    and only the periodic mirror sweep bridged the two. A `produces` node globbed the
-    snapshot the instant its turn ended and found nothing — a step that had done its work
-    failed its own gate, which is how the first live run failed. The deterministic sandbox
-    node already reconciles after its command (`run_sandbox` → `registry.flush`); the agent
-    turn has to as well.
-
-    Spying by replacing the bound method, the way `test_item_access_cache` counts reads."""
-    from workspace_app.api.registry import InvestigationRegistry
-
-    flushed: list[str] = []
-    original = InvestigationRegistry.flush
-
-    async def spy(self, investigation_id: str) -> None:
-        flushed.append(investigation_id)
-        await original(self, investigation_id)
-
-    monkeypatch.setattr(InvestigationRegistry, "flush", spy)
-
-    app, item_id = _app(ScriptedAgentRunner([MessageDelta(text=_ANSWER), RunDone()]))
-    with TestClient(app) as client:
-        _run_to(client, item_id, "done")
-    assert item_id in flushed
+# The write-back this file used to assert on every turn is now asked for only by the node
+# that needs it — see `test_produces_reconcile.py`, which pins both halves: a `produces`
+# node reconciles before it globs, and an ordinary turn does not pay for a workspace walk
+# it never reads.
