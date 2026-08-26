@@ -1,0 +1,217 @@
+diff --git a/web/src/pages/investigation/AgentPanel.test.tsx b/web/src/pages/investigation/AgentPanel.test.tsx
+index a7de09c5..d22468e4 100644
+--- a/web/src/pages/investigation/AgentPanel.test.tsx
++++ b/web/src/pages/investigation/AgentPanel.test.tsx
+@@ -808,3 +808,117 @@ describe("AgentPanel — a quota refusal is reachable, not just readable (#692)"
+     expect(screen.queryByRole("link", { name: "我的資源" })).not.toBeInTheDocument();
+   });
+ });
++
++/**
++ * Attaching a FOLDER hands the composer however many files the folder holds.
++ * The draft TEXT was bounded for this long ago — `attachPrompt` collapses more
++ * than ten paths into a one-line summary — but the two things rendered beside it
++ * were not: one thumbnail per image and one line per rejected file, both
++ * unbounded, in a container with no height limit. A few hundred files pushed the
++ * composer, and the conversation above it, off the screen.
++ */
++describe("AgentPanel attaching a large folder", () => {
++  function renderBig() {
++    const agent = stubAgent();
++    renderWithQuery(
++      <DialogProvider>
++        <AgentPanel
++          investigationId="it1"
++          agent={agent}
++          picker={[]}
++          suggestions={[]}
++          attachedPreset=""
++          onAttachPreset={() => {}}
++          uploadDir="uploads"
++        />
++      </DialogProvider>,
++    );
++    return agent;
++  }
++  const pngs = (n: number) =>
++    Array.from(
++      { length: n },
++      (_, i) => new File([new Uint8Array(4)], `p${i}.png`, { type: "image/png" }),
++    );
++  const selectFiles = (files: File[]) => {
++    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
++    fireEvent.change(input, { target: { files } });
++  };
++
++  beforeEach(() => {
++    Object.assign(URL, { createObjectURL: () => "blob:mock", revokeObjectURL: () => {} });
++  });
++
++  it("caps how many thumbnails it renders, and says how many it is holding back", async () => {
++    vi.spyOn(api, "uploadFile").mockResolvedValue();
++    renderBig();
++
++    selectFiles(pngs(200));
++
++    await screen.findByTestId("image-chips");
++    await waitFor(() => expect(screen.getAllByTestId("image-chip").length).toBeGreaterThan(0));
++    expect(screen.getAllByTestId("image-chip").length).toBeLessThanOrEqual(12);
++    // Capped, not silently truncated: the count has to stay visible or the
++    // composer is lying about what the message carries.
++    expect(screen.getByTestId("image-chips-overflow").textContent).toMatch(/188/);
++  });
++
++  it("still sends every attached path, not only the visible ones", async () => {
++    // The cap is a rendering budget. If it dropped attachments too it would be a
++    // data-loss bug wearing a layout fix's clothes.
++    vi.spyOn(api, "uploadFile").mockResolvedValue();
++    const agent = renderBig();
++
++    selectFiles(pngs(40));
++    await screen.findByTestId("image-chips");
++    await waitFor(() => expect(screen.getByTestId("image-chips-overflow")).toBeInTheDocument());
++    const composer = screen.getByPlaceholderText("Ask the agent…") as HTMLTextAreaElement;
++    fireEvent.change(composer, { target: { value: "look" } });
++    fireEvent.keyDown(composer, { key: "Enter" });
++
++    await waitFor(() => expect(agent.send).toHaveBeenCalled());
++    const opts = (agent.send as ReturnType<typeof vi.fn>).mock.calls[0]![1] as {
++      imagePaths?: string[];
++    };
++    expect(opts.imagePaths).toHaveLength(40);
++  });
++
++  it("acknowledges a pick from the FOLDER input, not only the file input", async () => {
++    // The folder button is a second `<input type="file">` with `webkitdirectory`,
++    // and a folder pick is the case this whole describe is about — so the budget
++    // is asserted through THAT input too, with `webkitRelativePath` set the way a
++    // real folder pick sets it (it becomes part of the staged path).
++    vi.spyOn(api, "uploadFile").mockResolvedValue();
++    renderBig();
++
++    const picked = pngs(120).map((f, i) => {
++      Object.defineProperty(f, "webkitRelativePath", { value: `big-folder/p${i}.png` });
++      return f;
++    });
++    const folderInput = document.querySelectorAll('input[type="file"]')[1] as HTMLInputElement;
++    fireEvent.change(folderInput, { target: { files: picked } });
++
++    await waitFor(() => expect(screen.getAllByTestId("image-chip").length).toBeGreaterThan(0));
++    expect(screen.getByTestId("image-chips-overflow").textContent).toMatch(/108/);
++  });
++
++  it("keeps a rejected folder's report to a few names and a count", async () => {
++    // Every refused file used to contribute its full path to ONE joined line, so
++    // a folder the server refused wholesale printed a wall of text under the box.
++    vi.spyOn(api, "uploadFile").mockRejectedValue(Object.assign(new Error("nope"), { status: 413 }));
++    renderBig();
++
++    selectFiles(
++      Array.from(
++        { length: 60 },
++        (_, i) => new File([new Uint8Array(4)], `doc${i}.txt`, { type: "text/plain" }),
++      ),
++    );
++
++    const hint = await screen.findByTestId("composer-hint");
++    await waitFor(() => expect(hint.textContent).toMatch(/未附加/));
++    expect(hint.textContent!.match(/doc\d+\.txt/g)!.length).toBeLessThanOrEqual(5);
++    // The ones it did not name are counted, not dropped from the report.
++    expect(hint.textContent).toMatch(/55/);
++  });
++});
+diff --git a/web/src/pages/investigation/AgentPanel.tsx b/web/src/pages/investigation/AgentPanel.tsx
+index 098e2bf9..8eaba210 100644
+--- a/web/src/pages/investigation/AgentPanel.tsx
++++ b/web/src/pages/investigation/AgentPanel.tsx
+@@ -80,6 +80,26 @@ const hdrBtn: React.CSSProperties = {
+   whiteSpace: "nowrap",
+ };
+ 
++/** How many image thumbnails the composer will draw. Attaching a folder hands it
++ * one chip per image with no natural ceiling; past a couple of rows the extra
++ * thumbnails are not telling anyone anything, and the strip is pushing the chat
++ * off the screen. The rest are counted, never dropped. */
++const CHIP_RENDER_BUDGET = 12;
++
++/** How many rejected files the composer names before switching to a count. Same
++ * failure, one surface over: a folder that is refused wholesale used to render
++ * one full path per file into a single line of text. */
++const PROBLEM_LIST_BUDGET = 5;
++
++/** "a — x；b — y；…及其他 N 個檔案" — examples, then the number. Naming every
++ * rejected file is what turned a bad folder attach into a wall of text under the
++ * composer. */
++function problemSummary(problems: string[]): string {
++  if (problems.length <= PROBLEM_LIST_BUDGET) return problems.join("；");
++  const shown = problems.slice(0, PROBLEM_LIST_BUDGET).join("；");
++  return `${shown}；…及其他 ${problems.length - PROBLEM_LIST_BUDGET} 個檔案`;
++}
++
+ /** Which "out of space" line an attach rejection deserves. `workspace` keeps
+  *  the pre-existing #245 message; the other two point somewhere else entirely. */
+ function overQuotaKey(kind: QuotaKind) {
+@@ -320,7 +340,7 @@ export function AgentPanel({
+         ...res.tooLarge.map((p) => `${p} — 伺服器拒收（檔案過大，或代理設定的上限較低）`),
+         ...res.failed.map((p) => `${p} — 上傳失敗`),
+       ];
+-      if (problems.length) setComposerHint(`部分檔案未附加：${problems.join("；")}`);
++      if (problems.length) setComposerHint(`部分檔案未附加：${problemSummary(problems)}`);
+     } finally {
+       setProgress(null);
+       // #245: refresh the usage bar — a success grew `used`, a 507 left it full.
+@@ -367,7 +387,7 @@ export function AgentPanel({
+         ...res.tooLarge.map((p) => `${p} — 伺服器拒收（檔案過大，或代理設定的上限較低）`),
+         ...res.failed.map((p) => `${p} — 上傳失敗`),
+       ];
+-      if (problems.length) setComposerHint(`部分檔案未附加：${problems.join("；")}`);
++      if (problems.length) setComposerHint(`部分檔案未附加：${problemSummary(problems)}`);
+     } finally {
+       setProgress(null);
+       queryClient.invalidateQueries({ queryKey: qk.workspaceUsage(slug, investigationId) });
+@@ -765,9 +785,20 @@ export function AgentPanel({
+         {imageChips.length > 0 && (
+           <div
+             data-testid="image-chips"
+-            style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "flex-start" }}
++            style={{
++              display: "flex",
++              flexWrap: "wrap",
++              gap: 8,
++              alignItems: "flex-start",
++              // A folder attach hands this list however many images the folder
++              // held. Two rows' worth, then it scrolls — without a ceiling the
++              // strip grows until the composer, and the conversation above it,
++              // are off the screen.
++              maxHeight: 168,
++              overflowY: "auto",
++            }}
+           >
+-            {imageChips.map((c) => (
++            {imageChips.slice(0, CHIP_RENDER_BUDGET).map((c) => (
+               <div
+                 key={c.id}
+                 data-testid="image-chip"
+@@ -824,6 +855,22 @@ export function AgentPanel({
+                 </button>
+               </div>
+             ))}
++            {imageChips.length > CHIP_RENDER_BUDGET && (
++              // The COUNT, not just a shortened strip: every one of these is
++              // attached and will be sent, so hiding some without saying so
++              // would misreport what the message carries.
++              <span
++                data-testid="image-chips-overflow"
++                style={{
++                  alignSelf: "center",
++                  fontSize: pxToRem(12),
++                  color: "var(--text-paper-d)",
++                  whiteSpace: "nowrap",
++                }}
++              >
++                +{imageChips.length - CHIP_RENDER_BUDGET} more attached
++              </span>
++            )}
+           </div>
+         )}
+         {appliedSkills.length > 0 && (
