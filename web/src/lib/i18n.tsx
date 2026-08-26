@@ -1284,18 +1284,14 @@ export const messages = {
   "tools.save": { "zh-TW": "儲存", en: "Save" },
   "tools.cancel": { "zh-TW": "取消", en: "Cancel" },
   "tools.loading": { "zh-TW": "載入工具中…", en: "Loading tools…" },
-  "tools.external.title": { "zh-TW": "第三方工具", en: "Third-party tools" },
-  "tools.external.desc": {
-    "zh-TW": "由外部作者發布、隨他們的版本更新，所以這裡沒有開關，只說明目前解析到的是哪一版。已經開著的工作區會沿用它啟動時掛上的那一版，直到重新建立。",
-    en: "Published by outside authors and updated on their own schedule, so this offers no switch — it names the release that resolves right now. A workspace already running keeps whatever it mounted at startup until it is rebuilt.",
-  },
-  "tools.external.by": { "zh-TW": "作者 {author}", en: "by {author}" },
-  "tools.external.noAuthor": { "zh-TW": "未註明作者", en: "No author published" },
-  "tools.external.stale": {
+  "tools.origin.builtin": { "zh-TW": "內建", en: "Built-in" },
+  "tools.origin.by": { "zh-TW": "作者 {author}", en: "by {author}" },
+  "tools.origin.noAuthor": { "zh-TW": "未註明作者", en: "No author published" },
+  "tools.origin.stale": {
     "zh-TW": "取自快取副本，可能不是最新版",
     en: "From the cached copy — may not be the latest",
   },
-  "tools.external.unavailable": { "zh-TW": "目前無法取得：{reason}", en: "Unavailable: {reason}" },
+  "tools.origin.unavailable": { "zh-TW": "目前無法取得：{reason}", en: "Unavailable: {reason}" },
   "tools.discard": {
     "zh-TW": "尚未儲存的變更會遺失，要關閉嗎？",
     en: "Discard unsaved changes?",

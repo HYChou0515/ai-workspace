@@ -11,12 +11,17 @@ per ``app.json`` ``tools[]`` entry with its human label, the profile default
 ``AppCatalog.resolve`` a real turn uses, so the picker can never drift from the
 toolset the agent actually runs.
 
-The same response carries the app's **third-party** tools (#674/#724) in a
-separate ``external`` list. Separate because they are not pickable: #674 P8
-settled that they stay out of the picker rows, there being no switch to press.
-What they need instead is disclosure — whose release this is and which one —
-because unlike an app tool they ship on somebody else's schedule and can change
-between two turns with nothing here edited.
+A third-party tool (#674/#724) is a row here like any other: its
+``external_tools`` key IS an ``app.json`` ``tools[]`` entry, so it already has a
+switch. What it carries in addition is provenance — which release resolved, who
+published it, whether it came from the host's cached copy — because unlike an
+app tool it ships on somebody else's schedule and can change between two turns
+with nothing here edited. Listing it a second time somewhere else described one
+tool twice, under the row that already governed it.
+
+Every row says where it came from, so the answer is never inferred from an
+absence: ``external`` separates "ours" from "a stranger's", which is not the
+same question as whether an author happened to fill their name in.
 """
 
 from __future__ import annotations
@@ -34,6 +39,7 @@ from ..apps.profiles import load_profile
 from ..apps.resolve import find_work_item
 from ..sandbox.protocol import Sandbox
 from ..tooling.catalog import flat_catalog, picker_units
+from ..tooling.external import ExternalTools
 from ..tooling.registry import PackageInfo
 from .locator import ItemLocator
 from .turn_context import resolve_item_tools
@@ -61,34 +67,38 @@ class ItemToolState(BaseModel):
     default_on: bool
     pref: Literal["follow", "on", "off"]
     effective: bool
+    package: str | None = None
+    """The package this row is ONE COMMAND of, when ``app.json`` granted at
+    command granularity (a ``pkg:cmd`` entry). ``None`` when the row IS the
+    package, or a built-in.
 
-
-class ExternalToolState(BaseModel):
-    """One third-party tool this App declares (#674/#724). Read-only: there is
-    no per-item switch for these, so every field here answers "what am I
-    actually running", not "what do I want".
-
-    ``version``/``author`` are ``None`` together with a non-null
-    ``unavailable`` — nothing resolved, so there is nothing to describe."""
-
-    key: str
+    Without it two rows can read as peers while one of them is a part of the
+    other, and a command seen in a chat card cannot be traced to the switch
+    that governs it."""
+    external: bool = False
+    """This tool's bytes come from a third-party artifact rather than the
+    platform's own image (#674). Carried explicitly because "who wrote this"
+    and "did its author fill their name in" are different questions, and
+    reading the first off the absence of the second would answer them the
+    same way."""
     version: str | None = None
+    """The release that resolved for this item, for a third-party tool."""
     author: str | None = None
     """Who published it, as they wrote it in their own ``pyproject``. Shown,
     never trusted: identity is the certificate the platform signed."""
     stale: bool = False
     """Served from the host's last-known-good copy. Usable, but not
     necessarily the latest — and a version number that might be a release
-    behind is worse than no version number if it does not say so."""
+    behind is worse than none if it does not say so."""
     unavailable: str | None = None
-    """Why it could not be resolved, or ``None``. Listed rather than dropped:
-    a declared tool that silently vanishes makes an outage look like a
-    configuration the reader imagined (#480)."""
+    """Why it could not be resolved, or ``None``. The row stays, because the
+    tool is still in ``tools[]`` and still has a switch; what it has lost is
+    the ability to run, and a row that looked ordinary would leave someone
+    toggling it and wondering (#480)."""
 
 
 class ItemTools(BaseModel):
     tools: list[ItemToolState]
-    external: list[ExternalToolState] = []
 
 
 def register_tools_routes(
@@ -123,55 +133,92 @@ def register_tools_routes(
         # Effective set from the very same resolve a turn uses (anti-drift).
         cfg = locator.resolve_agent_config(item_id)
         effective = set(cfg.allowed_tools or []) if cfg is not None else set()
+        declared = manifest.agent.external_tools
+        external = await _resolve_external(item_id, declared)
+        # Resolved third-party packages join the first-party ones so their rows
+        # get a real label and a description of what they bundle. Without them
+        # a declared tool falls through `picker_units`' unknown-entry branch and
+        # renders as a bare humanized key with nothing to say for itself.
+        units = picker_units(ceiling, [*pkgs, *external.packages])
         rows = [
-            ItemToolState(
-                key=unit.name,
-                label=unit.label,
-                description=unit.description,
+            _row(
+                unit,
                 default_on=unit.name in default_set,
                 pref=_pref_state(prefs.get(unit.name)),
                 effective=unit.name in effective,
+                declared=declared,
+                external=external,
             )
-            for unit in picker_units(ceiling, pkgs)
+            for unit in units
         ]
-        return ItemTools(
-            tools=rows,
-            external=await _external_rows(item_id, manifest.agent.external_tools),
-        )
+        _warn_undeclared(item_id, declared, {u.name for u in units})
+        return ItemTools(tools=rows)
 
-    async def _external_rows(item_id: str, declared: dict[str, str]) -> list[ExternalToolState]:
-        """Resolve the app's third-party declarations for this item.
+    async def _resolve_external(item_id: str, declared: dict[str, str]) -> ExternalTools:
+        """This item's third-party tools, or an empty answer.
 
         Costs a host round-trip, and nothing for the apps that declare none —
         `resolve_item_tools` answers an empty declaration without asking. The
         alternative, reading a record of what the last turn got, would answer a
         different question: an author can publish between that turn and this
-        read, and what the picker offers to describe is the release that
-        resolves now.
+        read, and what the picker describes is the release that resolves now.
 
-        A failure degrades to naming the declared tools with the reason. This
-        request is the tool PICKER, and the pickable App tools have nothing to
-        do with any artifact store — letting one unreachable host 500 the whole
-        modal would take away the switches someone came here to press."""
+        A failure degrades to a refusal per declared tool. This request is the
+        tool PICKER, and the pickable App tools have nothing to do with any
+        artifact store — letting one unreachable host 500 the whole modal would
+        take away the switches someone came here to press."""
+        if not declared:
+            return ExternalTools()
         try:
-            external = await resolve_item_tools(sandbox, locator, item_id)
+            return await resolve_item_tools(sandbox, locator, item_id)
         except Exception as exc:  # noqa: BLE001 - any failure degrades the same way
             logger.warning("item %s: third-party tools could not be resolved: %s", item_id, exc)
-            return [ExternalToolState(key=name, unavailable=str(exc)) for name in sorted(declared)]
-        rows = [
-            ExternalToolState(
-                key=name,
-                version=prov.version,
-                author=prov.author,
-                stale=prov.stale,
+            return ExternalTools(refused=dict.fromkeys(declared, str(exc)))
+
+    def _warn_undeclared(item_id: str, declared: dict[str, str], units: set[str]) -> None:
+        """An `external_tools` key that is not in `tools[]` reaches no row —
+        and no turn either, because `tools[]` is the ceiling every grant is
+        drawn from. Silently absent in both places is the worst of both, so it
+        is said once, here, where the mismatch is visible."""
+        for name in sorted(set(declared) - units):
+            logger.warning(
+                "item %s: %r is declared in external_tools but not in tools[] — "
+                "it is neither offered nor granted",
+                item_id,
+                name,
             )
-            for name, prov in external.provenance.items()
-        ]
-        rows += [
-            ExternalToolState(key=name, unavailable=reason)
-            for name, reason in external.refused.items()
-        ]
-        return sorted(rows, key=lambda r: r.key)
+
+
+def _row(
+    unit,
+    *,
+    default_on: bool,
+    pref: Literal["follow", "on", "off"],
+    effective: bool,
+    declared: dict[str, str],
+    external: ExternalTools,
+) -> ItemToolState:
+    """One picker row, with the provenance of whatever provides it.
+
+    A `pkg:cmd` entry is keyed by its package for provenance: the release and
+    the author belong to the bundle, and every command in it came from the same
+    artifact."""
+    provider = unit.name.partition(":")[0]
+    prov = external.provenance.get(provider)
+    return ItemToolState(
+        key=unit.name,
+        label=unit.label,
+        description=unit.description,
+        default_on=default_on,
+        pref=pref,
+        effective=effective,
+        package=unit.package,
+        external=provider in declared,
+        version=prov.version if prov else None,
+        author=prov.author if prov else None,
+        stale=bool(prov and prov.stale),
+        unavailable=external.refused.get(provider),
+    )
 
 
 def _pref_state(value: bool | None) -> Literal["follow", "on", "off"]:

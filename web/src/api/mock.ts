@@ -618,43 +618,52 @@ export const mockApi: ApiClient = {
 
   async getItemTools(_slug: string, _itemId: string) {
     await delay(10);
-    return {
-      tools: [
-        {
-          key: "exec",
-          label: "Exec",
-          description: "Run a shell command inside the workspace sandbox.",
-          default_on: true,
-          pref: "follow" as const,
-          effective: true,
-        },
-        {
-          key: "read_file",
-          label: "Read File",
-          description: "Read a file from the workspace.",
-          default_on: true,
-          pref: "on" as const,
-          effective: true,
-        },
-        {
-          key: "rca-tools",
-          label: "Rca Tools",
-          description: "Bundled tools: Spc, Pareto.",
-          default_on: true,
-          pref: "off" as const,
-          effective: false,
-        },
-      ],
-      external: [
-        {
-          key: "wafer-history",
-          version: "1.4.2",
-          author: "Wafer Team <wafer@example.com>",
-          stale: false,
-          unavailable: null,
-        },
-      ],
-    };
+    return [
+      {
+        key: "exec",
+        label: "Exec",
+        description: "Run a shell command inside the workspace sandbox.",
+        default_on: true,
+        pref: "follow" as const,
+        effective: true,
+      },
+      {
+        key: "read_file",
+        label: "Read File",
+        description: "Read a file from the workspace.",
+        default_on: true,
+        pref: "on" as const,
+        effective: true,
+      },
+      {
+        key: "rca-tools",
+        label: "Rca Tools",
+        description: "Bundled tools: Spc, Pareto.",
+        default_on: true,
+        pref: "off" as const,
+        effective: false,
+      },
+      {
+        key: "rca-tools:spc",
+        label: "Spc",
+        package: "Rca Tools",
+        description: "Control chart for one measurement.",
+        default_on: true,
+        pref: "follow" as const,
+        effective: true,
+      },
+      {
+        key: "wafer-history",
+        label: "Wafer History",
+        description: "Bundled tools: Trend.",
+        default_on: true,
+        pref: "follow" as const,
+        effective: true,
+        external: true,
+        version: "1.4.2",
+        author: "Wafer Team <wafer@example.com>",
+      },
+    ];
   },
 
   async getItemSkills(_slug: string, _itemId: string) {

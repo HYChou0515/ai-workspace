@@ -135,3 +135,34 @@ def test_load_rca_app_manifest():
     assert m.layout.list_ == ["severity", "status", "product"]  # JSON key "list"
     assert m.labels["severity"] == "Severity"
     assert m.default_profile == "default"
+
+
+def test_playground_demonstrates_command_granularity():
+    """#724: `tools[]` may grant a whole package or ONE of its commands, and
+    until now nothing shipped used the second form — so the picker row that
+    names its bundle existed with nothing to render it for, and an app author
+    reading our apps for an example would not have found one.
+
+    `csv-column-summary` is the reference multi-command package (its own CLI
+    docstring says so), and playground takes `summarise` without `plot`: the
+    difference between the two forms is visible in one picker, side by side
+    with the whole-package rows the same app already grants."""
+    tools = load_app_manifest("playground").agent.tools
+
+    assert "csv-column-summary:summarise" in tools
+    # The point of the demo is the CONTRAST, so the bare form has to stay too.
+    assert any(":" not in t for t in tools)
+    # And the other half of that package is deliberately NOT granted — a demo
+    # in which both commands are listed shows nothing the bare entry would not.
+    assert "csv-column-summary:plot" not in tools
+    assert "csv-column-summary" not in tools
+
+    # And it renders: the shipped ceiling through the real picker code, so the
+    # demo cannot quietly stop demonstrating anything.
+    from workspace_app.tooling.catalog import picker_units
+
+    by_key = {u.name: u for u in picker_units(tools, [])}
+    row = by_key["csv-column-summary:summarise"]
+    assert row.package == "Csv Column Summary"
+    assert row.label == "Summarise"
+    assert by_key["sci-plot"].package is None  # the contrast, in the same list

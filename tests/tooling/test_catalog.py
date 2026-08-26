@@ -54,6 +54,9 @@ def test_picker_unit_for_pkg_cmd_entry_resolves_the_command():
     assert units[0].name == "rca-tools:spc"
     assert units[0].label == "Spc"
     assert units[0].description.startswith("Run an SPC chart")
+    # #724: and which bundle it is one command OF. Without it this row and a
+    # whole-package row read as peers while one is part of the other.
+    assert units[0].package == "Rca Tools"
 
 
 def test_picker_unit_for_pkg_cmd_entry_without_built_package_degrades_cleanly():
@@ -63,6 +66,20 @@ def test_picker_unit_for_pkg_cmd_entry_without_built_package_degrades_cleanly():
     assert units[0].name == "data-fetch:grab"
     assert units[0].label == "Grab"
     assert units[0].description == ""
+    # The package is named from the entry, not from the build, so an
+    # un-deployed package still says what this row is part of.
+    assert units[0].package == "Data Fetch"
+
+
+def test_a_whole_package_row_is_not_a_command_of_anything():
+    """`package` marks a row as PART of a bundle. A row that IS the bundle,
+    or a built-in, must leave it empty or the distinction it exists to draw
+    disappears."""
+    units = picker_units(
+        ["rca-tools", "exec"], packages=[_pkg("rca-tools", _cmd("spc", "Chart it."))]
+    )
+
+    assert [u.package for u in units] == [None, None]
 
 
 def test_picker_unit_for_unknown_bare_entry_degrades_cleanly():
