@@ -2481,15 +2481,28 @@ def register_kb_routes(
         # latest revision's author.
         user = rm.get_meta(doc_id).created_by
         ct = doc.content.content_type
-        raw = rm.restore_binary(doc).content.data
-        assert isinstance(raw, bytes)  # restore_binary populates the blob bytes
+
+        def _blob() -> bytes:
+            # Called ONLY by the branches of `preview_markdown` that project
+            # from bytes. A browser-native type never calls it, so opening an
+            # image no longer pulls the whole picture out of the blob store to
+            # throw it away — the browser fetches it once, from /blobs (#730).
+            data = rm.restore_binary(doc).content.data
+            assert isinstance(data, bytes)  # restore_binary populates the bytes
+            return data
+
         # Issue #39/#361: per-type "file view" projection — text decodes,
         # structured types (json/jsonl/csv/tsv/yaml) return verbatim text the
         # FE renders as a tree/grid, xlsx/docx project into markdown,
         # browser-native types (image/pdf/html) ship "" and the FE renders the
         # blob itself. See kb.preview.
         ct_str = ct if isinstance(ct, str) else "application/octet-stream"
-        text = preview_markdown(path=doc.path, content_type=ct_str, raw=raw)
+        # Off the event loop: `restore_binary` is blocking blob I/O, and this
+        # route is `async def` — a 20 MB document read inline stalls every other
+        # request on the pod for as long as it takes (the shape #569 closed).
+        text = await asyncio.to_thread(
+            preview_markdown, path=doc.path, content_type=ct_str, raw=_blob
+        )
         # #114: browser-native types (image/pdf) project to "" — the FE shows the
         # blob itself. But for an image VLM-parsed at ingest, the extracted text
         # on `doc.text` is exactly what the retriever cited; surface it below the

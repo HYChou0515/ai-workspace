@@ -173,3 +173,34 @@ def test_markdown_and_plain_text_decode_as_before():
 def test_code_files_decode_by_extension_even_with_x_mime():
     py = preview_markdown(path="a.py", content_type="text/x-script.python", raw=b"def f(): ...")
     assert py == "def f(): ..."
+
+
+def test_preview_markdown_fetches_a_lazy_blob_at_most_once():
+    """#730: the callable exists because fetching the bytes is expensive.
+
+    Every branch happens to read once today, so this guards the NEXT branch: a
+    second `read()` that quietly doubles the cost is the defect this whole change
+    removed, and it would leave no trace in any other test.
+    """
+    calls = []
+
+    def fetch() -> bytes:
+        calls.append(1)
+        return b"# hi"
+
+    assert preview_markdown(path="a.md", content_type="text/markdown", raw=fetch) == "# hi"
+    assert calls == [1]
+
+
+def test_preview_markdown_never_fetches_for_a_type_the_browser_renders():
+    """The other half: an image must not touch the blob at all."""
+    calls = []
+
+    def fetch() -> bytes:  # pragma: no cover - must never run
+        calls.append(1)
+        return b""
+
+    assert preview_markdown(path="a.png", content_type="image/png", raw=fetch) == ""
+    assert preview_markdown(path="a.pdf", content_type="application/pdf", raw=fetch) == ""
+    assert preview_markdown(path="x.bin", content_type="application/octet-stream", raw=fetch) == ""
+    assert calls == [], "the bytes were fetched for a type that never reads them"

@@ -2031,3 +2031,79 @@ def test_the_reported_count_is_not_raced_down_by_a_fast_worker():
     body = client.post(f"/kb/collections/{cid}/reindex", params={"only": "failed"}).json()
     assert body["queued"] is True
     assert body["documents"] == 1  # counted before the worker could move it
+
+
+def test_render_document_does_not_read_the_blob_it_will_not_use():
+    """#730: opening an image took ten seconds because the bytes were fetched twice.
+
+    `preview_markdown` returns "" for a browser-native type — an image or a PDF
+    is rendered by the browser from `/blobs/{file_id}`, not projected to text —
+    so `raw` is never used for those, and `size` comes off `doc.content.size`
+    rather than `len(raw)`. Restoring the blob anyway means the backend pulls the
+    whole picture out of the blob store, drops it, answers `markdown=""`, and then
+    the browser fetches the SAME bytes: two reads, one of them pure waste, and
+    the waste is the one the person is waiting for.
+
+    Asserted by counting `restore_binary`, because "it is faster now" is not
+    something a test can hold — the read either happens or it does not.
+    """
+    from unittest.mock import patch
+
+    from specstar.types import Binary
+
+    client, spec = _client_and_spec()
+    cid = _new_collection(client)
+    rm = spec.get_resource_manager(SourceDoc)
+
+    png = b"\x89PNG\r\n\x1a\n" + b"0" * 4096
+    doc_id = encode_doc_id(cid, "shot.png")
+    rm.create(
+        SourceDoc(
+            collection_id=cid,
+            path="shot.png",
+            content=Binary(data=png, content_type="image/png"),
+            status="ready",
+        ),
+        resource_id=doc_id,
+    )
+
+    real = type(rm).restore_binary
+    calls: list[str] = []
+
+    def counting(self, obj):
+        calls.append(getattr(obj, "path", "?"))
+        return real(self, obj)
+
+    with patch.object(type(rm), "restore_binary", counting):
+        rd = client.get(f"/kb/documents?id={doc_id}").json()
+
+    assert rd["content_type"] == "image/png"
+    assert rd["markdown"] == ""  # the browser renders the blob; there is no projection
+    assert rd["size"] == len(png)  # ...and the size still comes back
+    assert calls == [], f"the blob was restored for a type that never reads it: {calls}"
+
+
+def test_render_document_still_reads_the_blob_for_a_type_it_projects():
+    """The other half: skipping the read must be decided by the TYPE, not by
+    skipping it everywhere. A markdown document has no text without its bytes."""
+    from unittest.mock import patch
+
+    client, spec = _client_and_spec()
+    cid = _new_collection(client)
+    _upload(client, cid, "a.md", b"# hello")
+    _drain(client)
+    doc_id = encode_doc_id(cid, "a.md")
+
+    rm = spec.get_resource_manager(SourceDoc)
+    real = type(rm).restore_binary
+    calls: list[str] = []
+
+    def counting(self, obj):
+        calls.append(getattr(obj, "path", "?"))
+        return real(self, obj)
+
+    with patch.object(type(rm), "restore_binary", counting):
+        rd = client.get(f"/kb/documents?id={doc_id}").json()
+
+    assert "hello" in rd["markdown"]
+    assert calls, "a projected type still needs its bytes"
