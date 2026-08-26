@@ -94,7 +94,7 @@ describe("ItemShareDialog — group grants (#608)", () => {
 
   it("adds a group grant from the picker", () => {
     const onSubmit = openG({ visibility: "restricted" });
-    fireEvent.change(screen.getByTestId("item-group-select"), { target: { value: "eng" } });
+    fireEvent.click(screen.getByTestId("group-picker-item-eng"));
     fireEvent.click(screen.getByTestId("item-share-save"));
     const saved = onSubmit.mock.calls[0][0] as ItemPermission;
     expect(saved.read_meta).toContain("group:eng");

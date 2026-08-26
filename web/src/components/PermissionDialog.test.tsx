@@ -207,7 +207,7 @@ describe("PermissionDialog — group grants (#608)", () => {
         onClose={() => {}}
       />,
     );
-    fireEvent.change(screen.getByTestId("group-grant-select"), { target: { value: "eng" } });
+    fireEvent.click(screen.getByTestId("group-picker-item-eng"));
     fireEvent.click(screen.getByTestId("permission-save"));
     const saved = onSubmit.mock.calls[0][0] as CollectionPermission;
     expect(saved.read_meta).toContain("group:eng");
