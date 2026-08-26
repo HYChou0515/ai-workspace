@@ -9,7 +9,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { type Group, type GroupsApi, groupsApi } from "../api/groups";
-import { relativeTime } from "../api/types";
+import { exactTime, relativeTime } from "../api/types";
 import { qk } from "../api/queryKeys";
 import { Icon } from "../components/Icon";
 import { UserChip } from "../components/UserChip";
@@ -290,9 +290,10 @@ function GroupRow({
         <td
           style={{ ...td, whiteSpace: "nowrap", color: "var(--text-paper-d)", fontSize: pxToRem(12) }}
           data-testid={`group-updated-${group.resource_id}`}
-          // The exact stamp on hover; the cell itself stays a relative time,
-          // which is what "is this current?" actually asks.
-          title={group.updated_at ? new Date(group.updated_at).toLocaleString() : ""}
+          // The exact stamp on hover. The cell drops precision on purpose —
+          // "3 d ago" answers "is this current?" better than a datetime does —
+          // so the precision it drops has to stay one hover away.
+          title={group.updated_at ? exactTime(new Date(group.updated_at).toISOString()) : ""}
         >
           {group.updated_at ? relativeTime(new Date(group.updated_at).toISOString()) : "—"}
         </td>

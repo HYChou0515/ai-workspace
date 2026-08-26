@@ -341,6 +341,19 @@ describe("GroupsPage last-updated column", () => {
     expect(cell.textContent?.trim()).toBeTruthy();
   });
 
+  it("carries the exact timestamp as a tooltip", async () => {
+    // The cell drops precision deliberately; hovering has to give it back, or
+    // the column can tell you something is old but never when.
+    renderDated();
+    await screen.findByRole("table");
+
+    const cell = screen.getByTestId("group-updated-g2");
+    const title = cell.getAttribute("title") ?? "";
+    expect(title).toBe(new Date(Date.parse("2026-08-25T00:00:00Z")).toLocaleString());
+    // …and it is not just the same text as the cell.
+    expect(title).not.toBe(cell.textContent?.trim());
+  });
+
   it("sorts by it, newest first on the first press", async () => {
     // Recency is the useful direction, so it leads rather than making everyone
     // click twice.

@@ -656,10 +656,32 @@ export function summarize(description: string): string {
   return "";
 }
 
-/** Coarse-grained relative time. Good enough for table cells. */
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** How old something has to be before a date reads better than an interval. */
+const RELATIVE_WINDOW_DAYS = 7;
+
+/**
+ * Coarse-grained "how long ago", good enough for table cells — and a DATE once
+ * it is more than a week old.
+ *
+ * The crossover is the point of this function. An interval answers "is this
+ * current?" while the answer is still small; past a week it stops answering
+ * anything, because nobody converts "412 d ago" into a date in their head, and
+ * the further back it goes the more precision it claims and the less it says.
+ * The year is left off within the current year (noise for the common case) and
+ * kept for anything older (essential for the rare one).
+ *
+ * Callers rendering the interval form should also carry the exact timestamp in a
+ * `title`, so the precision this deliberately drops is still one hover away.
+ */
 export function relativeTime(iso: string, now: Date = new Date()): string {
-  const then = new Date(iso).getTime();
+  const at = new Date(iso);
+  const then = at.getTime();
   if (Number.isNaN(then)) return "—";
+  // Clamped at 0: clock skew between the server that stamped this and the
+  // browser reading it is normal, and "just now" is the honest reading of a
+  // stamp slightly in the future — never a date ahead of today.
   const diff = Math.max(0, now.getTime() - then);
   const minute = 60_000;
   const hour = 60 * minute;
@@ -667,7 +689,16 @@ export function relativeTime(iso: string, now: Date = new Date()): string {
   if (diff < minute) return "just now";
   if (diff < hour) return `${Math.floor(diff / minute)} min ago`;
   if (diff < day) return `${Math.floor(diff / hour)} h ago`;
-  return `${Math.floor(diff / day)} d ago`;
+  const days = Math.floor(diff / day);
+  if (days <= RELATIVE_WINDOW_DAYS) return `${days} d ago`;
+  const date = `${at.getUTCDate()} ${MONTHS[at.getUTCMonth()]}`;
+  return at.getUTCFullYear() === now.getUTCFullYear() ? date : `${date} ${at.getUTCFullYear()}`;
+}
+
+/** The exact stamp, for the `title` beside a `relativeTime` cell. */
+export function exactTime(iso: string): string {
+  const at = new Date(iso);
+  return Number.isNaN(at.getTime()) ? "" : at.toLocaleString();
 }
 
 export function isCritical(sev: Severity): boolean {

@@ -56,6 +56,26 @@ describe("relativeTime", () => {
   it("returns '—' for invalid timestamps", () => {
     expect(relativeTime("nonsense", NOW)).toBe("—");
   });
+
+  // Past a week "N d ago" stops being an answer: nobody converts "412 d ago"
+  // into a date in their head, and the further back it goes the more precision
+  // it claims and the less it tells you. A date is the useful form there.
+  it("switches to a date once it is more than a week old", () => {
+    expect(relativeTime("2026-05-16T12:00:00Z", NOW)).toBe("7 d ago");
+    expect(relativeTime("2026-05-15T12:00:00Z", NOW)).toBe("15 May");
+  });
+
+  it("keeps the year off a date in the current year, and on for an older one", () => {
+    // The year is noise for the common case and essential for the rare one.
+    expect(relativeTime("2026-01-04T12:00:00Z", NOW)).toBe("4 Jan");
+    expect(relativeTime("2025-11-30T12:00:00Z", NOW)).toBe("30 Nov 2025");
+  });
+
+  it("never shows a future timestamp as a date", () => {
+    // Clock skew between the server that stamped it and the browser reading it
+    // is normal; "just now" is the honest reading, not a date in the future.
+    expect(relativeTime("2026-05-23T12:05:00Z", NOW)).toBe("just now");
+  });
 });
 
 describe("isCritical / isOpen", () => {
