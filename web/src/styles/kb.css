@@ -3883,3 +3883,62 @@
 .gbr__page-btn:hover { border-color: var(--accent); color: var(--accent); }
 .rvw-page__browse-link { display: inline-block; margin-bottom: var(--space-12); font-size: var(--text-body-sm); color: var(--accent-h); text-decoration: none; }
 .rvw-page__browse-link:hover { text-decoration: underline; }
+
+/* #715 archive import progress. The component shipped naming these classes and
+   they did not exist, so the bar was two empty spans with no height and no
+   background — invisible — and the text sat unstyled in the header row. A class
+   name is a claim that something styles it. */
+.kb-import-status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  padding: 8px 12px;
+  border: 1px solid var(--paper-3);
+  border-radius: 8px;
+  background: var(--white);
+  font-size: var(--text-body-sm);
+  white-space: nowrap;
+}
+.kb-import-status[data-state="done"] {
+  border-color: color-mix(in srgb, var(--ok) 45%, var(--paper-3));
+  color: var(--ok);
+}
+.kb-import-status[data-state="partial"] {
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--paper-3));
+  color: var(--warn);
+}
+.kb-import-status__text {
+  font-variant-numeric: tabular-nums; /* the count must not jitter as it climbs */
+}
+.kb-import-status__bar {
+  flex: 0 0 96px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--paper-2, var(--paper-3));
+  overflow: hidden;
+}
+.kb-import-status__fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--ink);
+  transition: width 240ms ease-out;
+}
+.kb-import-status__errors summary {
+  cursor: pointer;
+  color: var(--warn);
+}
+.kb-import-status__errors ul {
+  position: absolute;
+  z-index: 40;
+  max-width: 420px;
+  max-height: 220px;
+  overflow: auto;
+  margin: 6px 0 0;
+  padding: 8px 12px 8px 26px;
+  background: var(--white);
+  border: 1px solid var(--paper-3);
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(20, 22, 28, 0.12);
+  white-space: normal;
+}
