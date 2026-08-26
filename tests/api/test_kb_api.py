@@ -2158,3 +2158,94 @@ def test_render_document_resolves_crossref_siblings_in_one_query():
     assert rd["markdown"].count("kb://doc/") == siblings, rd["markdown"][:200]
     # ...and it cost a bounded number of reads, not one per sibling
     assert len(calls) <= 3, f"{siblings} siblings cost {len(calls)} SourceDoc.get calls"
+
+
+def test_crossref_batching_rewrites_exactly_as_a_point_get_each_would():
+    """#730 P4 replaced a mechanism, so this compares OUTPUT, not just cost.
+
+    The batched `resolve` reads from a map filled by one query; the old one did a
+    point-get per candidate id. Counting queries proves it is cheaper, not that
+    it is the same — and what a replacement drops is whatever the old one ALSO
+    did. So: both mechanisms, one corpus, byte-for-byte.
+
+    The corpus is the edges the old resolve had to handle, not the case that
+    prompted the change: extension fallback, a parent-relative path, a missing
+    sibling (left untouched), the same id twice, fragments, query strings,
+    absolute URLs, fenced code, and case.
+    """
+    import io
+    import zipfile
+
+    from specstar.types import ResourceIDNotFoundError
+
+    from workspace_app.kb.links import rewrite_md_links
+
+    client, spec = _client_and_spec()
+    cid = _new_collection(client)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for name, body in (("a.md", "# A"), ("nested/b.md", "# B"), ("c.txt", "plain")):
+            z.writestr(name, body)
+        z.writestr("seed.md", "seed")
+    client.post(
+        f"/kb/collections/{cid}/documents",
+        files={"file": ("docs.zip", buf.getvalue(), "application/zip")},
+    )
+    rm = spec.get_resource_manager(SourceDoc)
+
+    def url_for(sib, rid):
+        ct, fid = sib.content.content_type, sib.content.file_id
+        if isinstance(ct, str) and ct.startswith("image/") and isinstance(fid, str):
+            return f"/blobs/{fid}"
+        return f"kb://doc/{rid}"
+
+    def point_get_each(text, doc_path):
+        def resolve(rid):
+            try:
+                return url_for(rm.get(rid).data, rid)
+            except ResourceIDNotFoundError:
+                return None
+
+        return rewrite_md_links(text, doc_path=doc_path, collection_id=cid, resolve=resolve)
+
+    cases = [
+        ("seed.md", "[A](./a.md)"),
+        ("seed.md", "[A](a.md)"),
+        ("seed.md", "[A](./a)"),
+        ("seed.md", "[B](./nested/b)"),
+        ("nested/seed.md", "[A](../a.md)"),
+        ("seed.md", "[gone](./gone.md)"),
+        ("seed.md", "[A](./a.md) and [A again](./a.md)"),
+        ("seed.md", "![img](./c.txt)"),
+        ("seed.md", "[ext](https://example.com/a.md)"),
+        ("seed.md", "[anchor](./a.md#section)"),
+        ("seed.md", "```\n[code](./a.md)\n```"),
+        ("seed.md", "[A](./A.MD)"),
+        ("seed.md", ""),
+    ]
+    for doc_path, text in cases:
+        expected = point_get_each(text, doc_path)
+        # the shipped path, reached through the route's own helper shape
+        wanted: set[str] = set()
+
+        def collect(rid, _w=wanted):
+            _w.add(rid)
+            return None
+
+        rewrite_md_links(text, doc_path=doc_path, collection_id=cid, resolve=collect)
+        found = {}
+        if wanted:
+            for row in rm.list_resources(QB.resource_id().in_(sorted(wanted)).build()):
+                if isinstance(row.data, SourceDoc):
+                    found[row.info.resource_id] = row.data  # ty: ignore[unresolved-attribute]
+        actual = rewrite_md_links(
+            text,
+            doc_path=doc_path,
+            collection_id=cid,
+            # bound as a default: a lambda closing over a loop variable is the
+            # classic late-binding trap, and ruff is right to refuse it here.
+            resolve=lambda rid, _f=found: None if (s_ := _f.get(rid)) is None else url_for(s_, rid),
+        )
+        assert actual == expected, (
+            f"{doc_path} :: {text!r}\n  point-get: {expected!r}\n  batched:  {actual!r}"
+        )
