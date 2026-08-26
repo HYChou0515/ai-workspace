@@ -1102,6 +1102,14 @@ describe("KbCollectionPage — Manage access gate", () => {
 });
 
 describe("#715 archive import runs on a worker, not in the request", () => {
+  // The other two describes in this file each unmount their render; this one was
+  // added without one, so its first test met the PREVIOUS test's DOM still in
+  // the document and `findByRole` matched two "Collection settings" buttons.
+  // It failed about one full-suite run in four and passed every time it ran
+  // alone — which reads exactly like a timing flake, and is not one. Three
+  // rounds of widening timeouts here bought nothing.
+  afterEach(cleanup);
+
   it("opens the new collection before the documents have landed", async () => {
     // The whole point of the asynchronous route: the 202 carries a collection
     // id, so the page can open a collection that is still filling. The old
@@ -1119,28 +1127,25 @@ describe("#715 archive import runs on a worker, not in the request", () => {
     expect(await screen.findByRole("status")).toHaveTextContent(/Importing \d of 2 documents/);
   });
 
-  it("polls until the run finishes and then reports the outcome", async () => {
-    // A UI that started the import and never asked again would pass every
-    // assertion above while leaving the user watching a bar that never moves.
-    // The mock's first read is deliberately still-running, so only a second
-    // read can produce this text.
+  it("keeps asking after the first answer, instead of showing a bar that never moves", async () => {
+    // What this guards: a UI that started the import and never asked again
+    // passes every assertion above while the progress sits at zero for ever.
+    //
+    // Asserted on the CALL, not on the finished text. Waiting for the run to
+    // complete meant waiting out the poll backoff — real wall-clock — and it
+    // failed roughly one full-suite run in four while passing every time it ran
+    // alone: a test that is green when nothing else is running is not measuring
+    // the code. One extra call is the whole claim, and it needs one interval
+    // rather than the entire chain.
+    const spy = vi.spyOn(mockKbApi, "getImport");
     renderKb(mockKbApi);
 
     const input = screen.getByLabelText("Import collection from file") as HTMLInputElement;
     await userEvent.upload(input, new File(["z"], "Archive.zip", { type: "application/zip" }));
     await screen.findByRole("button", { name: "Collection settings" });
 
-    // The mock closes one document per read, so this text only appears after
-    // three polls — a UI that asked once cannot reach it.
-    await waitFor(
-      () =>
-        expect(
-          screen
-            .getAllByRole("status")
-            .some((el) => /Imported 2 of 2 documents/.test(el.textContent ?? "")),
-        ).toBe(true),
-      { timeout: 12000 },
-    );
+    await waitFor(() => expect(spy.mock.calls.length).toBeGreaterThan(1), { timeout: 10000 });
+    spy.mockRestore();
   }, 15000);
 
   it("does not call the synchronous import route", async () => {
