@@ -303,3 +303,94 @@ def test_losing_group_membership_revokes_the_grant():
     client.delete(f"/groups/{gid}/members/alice")
     holder["id"] = "alice"
     assert client.get(f"/collection/{cid}").status_code == 404  # grant gone with membership
+
+
+# ── renaming a group ─────────────────────────────────────────────────────────
+# A group's name is the only thing a human identifies it by — it is what the
+# share picker lists and searches. A typo in it was permanent: every other field
+# had a route and this one did not.
+
+
+def test_owner_renames_the_group():
+    holder = {"id": "bob"}
+    client, _ = _client_and_spec(holder)
+    gid = _mk(client, holder, owner="bob", members=["alice"])
+
+    r = client.patch(f"/groups/{gid}", json={"name": "Reflow line"})
+    assert r.status_code == 200
+    assert r.json()["name"] == "Reflow line"
+    assert client.get(f"/groups/{gid}").json()["name"] == "Reflow line"
+
+
+def test_a_superuser_renames_any_group():
+    holder = {"id": "bob"}
+    client, _ = _client_and_spec(holder)
+    gid = _mk(client, holder, owner="bob", members=["alice"])
+
+    holder["id"] = "root"  # not owner, not member — the admin case
+    assert client.patch(f"/groups/{gid}", json={"name": "Renamed by admin"}).status_code == 200
+    assert client.get(f"/groups/{gid}").json()["name"] == "Renamed by admin"
+
+
+def test_rename_is_refused_to_a_maintainer_and_to_a_member():
+    # Renaming sits with the owner, not the member-management delegate: a
+    # maintainer manages MEMBERS only, and the name is how everyone else finds
+    # the group.
+    holder = {"id": "bob"}
+    client, _ = _client_and_spec(holder)
+    gid = _mk(client, holder, owner="bob", members=["alice"])
+    client.post(f"/groups/{gid}/maintainers", json={"user_ids": ["dave"]})
+
+    holder["id"] = "dave"
+    assert client.patch(f"/groups/{gid}", json={"name": "nope"}).status_code == 403
+    holder["id"] = "alice"
+    assert client.patch(f"/groups/{gid}", json={"name": "nope"}).status_code == 403
+    # …and a stranger gets 404, not 403 — the same no-existence-leak rule the
+    # other management routes follow.
+    holder["id"] = "mallory"
+    assert client.patch(f"/groups/{gid}", json={"name": "nope"}).status_code == 404
+
+    holder["id"] = "bob"
+    assert client.get(f"/groups/{gid}").json()["name"] == "eng"
+
+
+def test_rename_leaves_membership_untouched():
+    # `rm.update` writes the WHOLE record, so a rename that rebuilt the struct
+    # carelessly would drop members/maintainers/owner on the floor.
+    holder = {"id": "bob"}
+    client, _ = _client_and_spec(holder)
+    gid = _mk(client, holder, owner="bob", members=["alice", "carol"])
+    client.post(f"/groups/{gid}/maintainers", json={"user_ids": ["dave"]})
+
+    client.patch(f"/groups/{gid}", json={"name": "Renamed"})
+
+    body = client.get(f"/groups/{gid}").json()
+    assert set(body["members"]) == {"alice", "carol"}
+    assert body["maintainers"] == ["dave"]
+    assert body["owner"] == "bob"
+    assert body["description"] == ""
+
+
+def test_rename_rejects_a_blank_name():
+    # An empty name is unaddressable: the picker would list a blank row.
+    holder = {"id": "bob"}
+    client, _ = _client_and_spec(holder)
+    gid = _mk(client, holder, owner="bob", members=[])
+
+    assert client.patch(f"/groups/{gid}", json={"name": "   "}).status_code == 422
+    assert client.get(f"/groups/{gid}").json()["name"] == "eng"
+
+
+def test_rename_trims_surrounding_whitespace():
+    holder = {"id": "bob"}
+    client, _ = _client_and_spec(holder)
+    gid = _mk(client, holder, owner="bob", members=[])
+
+    assert client.patch(f"/groups/{gid}", json={"name": "  Padded  "}).status_code == 200
+    assert client.get(f"/groups/{gid}").json()["name"] == "Padded"
+
+
+def test_renaming_a_missing_group_is_404():
+    holder = {"id": "root"}
+    client, _ = _client_and_spec(holder)
+    assert client.patch("/groups/ghost", json={"name": "x"}).status_code == 404

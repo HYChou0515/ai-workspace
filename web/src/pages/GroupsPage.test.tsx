@@ -232,3 +232,83 @@ describe("GroupsPage as a table", () => {
     expect(await screen.findByTestId("group-members-add")).toBeInTheDocument();
   });
 });
+
+/**
+ * The name is the only handle anyone has on a group — it is what the share
+ * picker lists and searches — and it was the one field with no way to correct
+ * it. Owner-or-admin, mirroring `_require_owner` on the server; a maintainer
+ * manages MEMBERS, so the name others find the group by is not theirs to change.
+ */
+describe("GroupsPage renaming", () => {
+  const renameFlow = async (name: string) => {
+    await userEvent.click(await screen.findByRole("button", { name: /Rename Engineering/i }));
+    const box = screen.getByRole("textbox", { name: /Group name/i });
+    await userEvent.clear(box);
+    await userEvent.type(box, name);
+    await userEvent.keyboard("{Enter}");
+  };
+
+  it("lets the owner rename from the row", async () => {
+    const renameGroup = vi.fn(async () => grp({ name: "Reflow" }));
+    render(<GroupsPage client={client({ listGroups: async () => [grp()], renameGroup })} />);
+
+    await renameFlow("Reflow");
+    await waitFor(() => expect(renameGroup).toHaveBeenCalledWith("g1", "Reflow"));
+  });
+
+  it("lets an admin rename a group they do not own", async () => {
+    me.mockReturnValue("zoe");
+    superuser.mockReturnValue(true);
+    const renameGroup = vi.fn(async () => grp({ name: "Reflow" }));
+    render(<GroupsPage client={client({ listGroups: async () => [grp()], renameGroup })} />);
+
+    await renameFlow("Reflow");
+    await waitFor(() => expect(renameGroup).toHaveBeenCalledWith("g1", "Reflow"));
+  });
+
+  it("offers it to nobody else — not even a maintainer", async () => {
+    me.mockReturnValue("dave");
+    render(
+      <GroupsPage client={client({ listGroups: async () => [grp({ maintainers: ["dave"] })] })} />,
+    );
+    await screen.findByText("Engineering");
+
+    // The maintainer still manages members, so this is not "no access" — it is
+    // this one action being out of reach.
+    expect(screen.getByRole("button", { name: /Edit Engineering/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Rename Engineering/i })).not.toBeInTheDocument();
+  });
+
+  it("does not call the API when the name comes back unchanged", async () => {
+    const renameGroup = vi.fn(async () => grp());
+    render(<GroupsPage client={client({ listGroups: async () => [grp()], renameGroup })} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /Rename Engineering/i }));
+    await userEvent.keyboard("{Enter}");
+    expect(renameGroup).not.toHaveBeenCalled();
+  });
+
+  it("refuses to send a blank name", async () => {
+    // The server rejects it with a 422; not sending it at all keeps the row from
+    // flickering through an error for something we can see is empty.
+    const renameGroup = vi.fn(async () => grp());
+    render(<GroupsPage client={client({ listGroups: async () => [grp()], renameGroup })} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /Rename Engineering/i }));
+    await userEvent.clear(screen.getByRole("textbox", { name: /Group name/i }));
+    await userEvent.keyboard("{Enter}");
+    expect(renameGroup).not.toHaveBeenCalled();
+  });
+
+  it("abandons the edit on Escape", async () => {
+    const renameGroup = vi.fn(async () => grp());
+    render(<GroupsPage client={client({ listGroups: async () => [grp()], renameGroup })} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /Rename Engineering/i }));
+    await userEvent.type(screen.getByRole("textbox", { name: /Group name/i }), "Whatever");
+    await userEvent.keyboard("{Escape}");
+
+    expect(renameGroup).not.toHaveBeenCalled();
+    expect(screen.getByText("Engineering")).toBeInTheDocument();
+  });
+});

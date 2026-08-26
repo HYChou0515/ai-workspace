@@ -23,7 +23,7 @@ from typing import Any
 
 import msgspec
 from fastapi import APIRouter, FastAPI, HTTPException, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
 
@@ -45,6 +45,22 @@ class _MembersBody(BaseModel):
 
 class _OwnerBody(BaseModel):
     owner: str
+
+
+class _RenameBody(BaseModel):
+    """The group's display name. Trimmed and required to be non-empty: the name is
+    the ONLY handle a human has on a group (it is what the share picker lists and
+    searches), so a blank one leaves an unaddressable row."""
+
+    name: str
+
+    @field_validator("name")
+    @classmethod
+    def _non_blank(cls, v: str) -> str:
+        trimmed = v.strip()
+        if not trimmed:
+            raise ValueError("name must not be blank")
+        return trimmed
 
 
 class GroupOut(BaseModel):
@@ -233,6 +249,18 @@ def register_group_routes(
                 ),
             )
         return Response(status_code=204)
+
+    @app.patch("/groups/{group_id}")
+    async def rename_group(group_id: str, body: _RenameBody) -> GroupOut:
+        """Rename a group. Owner-or-superuser, the same authority as the other
+        group-level edits (transfer / delete) — a maintainer manages MEMBERS, and
+        the name is what everyone ELSE finds the group by, so it is not theirs to
+        change. `msgspec.structs.replace` so the whole-record `rm.update` carries
+        members / maintainers / owner across untouched."""
+        group, _ = _require_owner(group_id)
+        if body.name != group.name:
+            rm.update(group_id, msgspec.structs.replace(group, name=body.name))
+        return _out(rm.get(group_id))
 
     @app.put("/groups/{group_id}/owner")
     async def transfer_owner(group_id: str, body: _OwnerBody) -> GroupOut:

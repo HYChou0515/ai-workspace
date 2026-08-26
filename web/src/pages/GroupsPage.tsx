@@ -224,6 +224,7 @@ function GroupRow({
   client: GroupsApi;
   onChanged: () => void;
 }) {
+  const [renaming, setRenaming] = useState(false);
   const caps = groupCapabilities(group, me, isSuperuser);
   const role = groupRoleLabel(group, me, isSuperuser);
   const n = group.members.length;
@@ -231,7 +232,31 @@ function GroupRow({
     <>
       <tr data-testid={`group-row-${group.resource_id}`} data-group-name={group.name}>
         <td style={{ ...td, minWidth: 0 }}>
-          <div style={{ fontWeight: 600 }}>{group.name}</div>
+          {renaming ? (
+            <GroupNameEditor
+              group={group}
+              client={client}
+              onDone={() => setRenaming(false)}
+              onChanged={onChanged}
+            />
+          ) : (
+            <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+              <span style={{ fontWeight: 600 }}>{group.name}</span>
+              {caps.canManageGroup && (
+                <button
+                  type="button"
+                  className="btn"
+                  data-variant="ghost"
+                  data-size="sm"
+                  data-testid={`group-rename-${group.resource_id}`}
+                  aria-label={`Rename ${group.name}`}
+                  onClick={() => setRenaming(true)}
+                >
+                  <Icon name="pencil" size={12} />
+                </button>
+              )}
+            </div>
+          )}
           {group.description && (
             <div style={{ color: "var(--text-paper-d)", fontSize: pxToRem(12) }}>
               {group.description}
@@ -274,6 +299,59 @@ function GroupRow({
         </tr>
       )}
     </>
+  );
+}
+
+/** Inline rename. Enter commits, Escape / blur abandons — the same shape the chat
+ * rail's rename uses, so the gesture is the one people already know here. */
+function GroupNameEditor({
+  group,
+  client,
+  onDone,
+  onChanged,
+}: {
+  group: Group;
+  client: GroupsApi;
+  onDone: () => void;
+  onChanged: () => void;
+}) {
+  const [draft, setDraft] = useState(group.name);
+  const rename = useMutation({
+    mutationFn: (name: string) => client.renameGroup(group.resource_id, name),
+    onSuccess: () => {
+      onChanged();
+      onDone();
+    },
+  });
+
+  const commit = () => {
+    const next = draft.trim();
+    // Blank is a 422 server-side and an unchanged name is a no-op write — neither
+    // is worth a round trip, and both would flash an error for nothing.
+    if (!next || next === group.name) {
+      onDone();
+      return;
+    }
+    rename.mutate(next);
+  };
+
+  return (
+    <input
+      // eslint-disable-next-line jsx-a11y/no-autofocus
+      autoFocus
+      className="inline-edit"
+      aria-label="Group name"
+      data-testid={`group-name-input-${group.resource_id}`}
+      value={draft}
+      disabled={rename.isPending}
+      onChange={(e) => setDraft(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") commit();
+        if (e.key === "Escape") onDone();
+      }}
+      onBlur={onDone}
+      style={{ fontWeight: 600, width: "100%" }}
+    />
   );
 }
 
