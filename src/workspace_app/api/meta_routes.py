@@ -6,15 +6,13 @@ cleanly out of ``create_app``.
 
 from __future__ import annotations
 
-import contextlib
 import math
 import time
 from collections.abc import Callable
-from importlib import resources
 
 import msgspec
 from fastapi import APIRouter, FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 from ..monitor import IMonitor
@@ -115,7 +113,12 @@ def register_meta_routes(
     @app.get("/apps/{slug}")
     async def get_app_manifest(slug: str) -> dict:
         """#89 P4a — the full App manifest the dashboard + workspace drive off.
-        A shipped ``icon.svg`` is inlined so the FE gets it in one fetch."""
+
+        ``icon`` is reported exactly as the App declared it — a named-icon key, an
+        emoji, or the NAME of a file the App ships. A file icon's bytes come from
+        ``GET /apps/{slug}/icon``; the manifest never carries a picture, so the
+        launcher list (which has no room to inline anything) and this endpoint
+        describe the same icon the same way."""
         from ..apps.catalog import discover_app_slugs
         from ..apps.manifest import load_app_manifest
         from ..apps.profiles import list_profiles, load_profile
@@ -146,12 +149,27 @@ def register_meta_routes(
                 }
             )
         data["profiles"] = app_profiles
-        if m.icon.endswith(".svg"):
-            with contextlib.suppress(FileNotFoundError, IsADirectoryError, OSError):
-                data["icon"] = (resources.files("workspace_app.apps") / slug / m.icon).read_text(
-                    "utf-8"
-                )
         return data
+
+    @app.get("/apps/{slug}/icon")
+    async def get_app_icon(slug: str) -> Response:
+        """The image an App ships as its ``icon`` (``icon.png``, ``icon.svg``, …).
+
+        A separate URL rather than bytes folded into the manifest: it serves the
+        raster forms a JSON field can't carry, both the list and the detail
+        surface reach the same picture, and the browser caches it. An App whose
+        icon is a named key or an emoji has no file here — that is a 404, and the
+        FE renders the name/emoji instead."""
+        from ..apps.catalog import discover_app_slugs
+        from ..apps.manifest import load_app_icon, load_app_manifest
+
+        if slug not in discover_app_slugs():
+            raise HTTPException(status_code=404, detail=f"unknown app: {slug!r}")
+        found = load_app_icon(slug, load_app_manifest(slug).icon)
+        if found is None:
+            raise HTTPException(status_code=404, detail=f"app {slug!r} ships no icon file")
+        blob, media_type = found
+        return Response(content=blob, media_type=media_type)
 
     @app.get("/activity")
     async def get_activity() -> list[dict]:
