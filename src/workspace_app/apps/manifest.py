@@ -180,7 +180,9 @@ class AppManifest(Struct):
     item: ItemNouns
     onboarding: Onboarding | None = None
     description: str = ""
-    icon: str = ""  # "icon.svg" (file) | emoji | named-icon key
+    # A file the App ships beside app.json ("icon.png", "icon.svg", … — served
+    # from GET /apps/{slug}/icon), an emoji, or a named-icon key.
+    icon: str = ""
     color: str = ""  # hex → --accent trio (full re-theme inside the App)
     function: FunctionToggles = field(default_factory=FunctionToggles)
     layout: Layout = field(default_factory=Layout)
