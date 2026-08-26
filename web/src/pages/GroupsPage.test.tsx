@@ -62,7 +62,9 @@ describe("GroupsPage", () => {
     render(<GroupsPage client={client({ listGroups: async () => [grp()] })} />);
     expect(await screen.findByText("Engineering")).toBeInTheDocument();
     expect(screen.getByText(/1 member/)).toBeInTheDocument();
-    expect(screen.getByText("Owner")).toBeInTheDocument();
+    // Scoped to the row: "Owner" is now also a column header, and an unscoped
+    // getByText matches both.
+    expect(within(screen.getByTestId("group-row-g1")).getByText("Owner")).toBeInTheDocument();
   });
 
   it("lets the owner add a member", async () => {
@@ -126,5 +128,107 @@ describe("GroupsPage", () => {
     await waitFor(() =>
       expect(createGroup).toHaveBeenCalledWith({ name: "Design", description: "", owner: "bob" }),
     );
+  });
+});
+
+/**
+ * The overview was an unordered `<ul>`: fine for the two or three groups you
+ * belong to, useless once an admin is looking at the org's. A table gives the
+ * columns something to be sorted BY, and the search box is what makes a long
+ * list navigable at all.
+ */
+describe("GroupsPage as a table", () => {
+  const three = [
+    grp({ resource_id: "g1", name: "Reflow", description: "solder line", owner: "alice", members: ["bob", "carol"] }),
+    grp({ resource_id: "g2", name: "applications", description: "field support", owner: "bob", members: ["carol"] }),
+    grp({ resource_id: "g3", name: "Manufacturing", description: "assembly", owner: "carol", members: [] }),
+  ];
+  const rows = () =>
+    screen.queryAllByTestId(/^group-row-/).map((el) => el.getAttribute("data-group-name"));
+  const renderThree = () => render(<GroupsPage client={client({ listGroups: async () => three })} />);
+
+  it("renders the groups as a table", async () => {
+    renderThree();
+    expect(await screen.findByRole("table")).toBeInTheDocument();
+    expect(rows()).toHaveLength(3);
+  });
+
+  it("sorts by name by default, case-insensitively", async () => {
+    renderThree();
+    await screen.findByRole("table");
+    expect(rows()).toEqual(["applications", "Manufacturing", "Reflow"]);
+  });
+
+  it("reverses that column when its header is pressed again", async () => {
+    renderThree();
+    await screen.findByRole("table");
+
+    await userEvent.click(screen.getByTestId("groups-sort-name"));
+    expect(rows()).toEqual(["Reflow", "Manufacturing", "applications"]);
+  });
+
+  it("sorts by member count as a number, not as text", async () => {
+    // "10" < "2" lexically, which is exactly the bug a count column invites.
+    render(
+      <GroupsPage
+        client={client({
+          listGroups: async () => [
+            grp({ resource_id: "a", name: "Ten", members: Array.from({ length: 10 }, (_, i) => `u${i}`) }),
+            grp({ resource_id: "b", name: "Two", members: ["x", "y"] }),
+          ],
+        })}
+      />,
+    );
+    await screen.findByRole("table");
+
+    await userEvent.click(screen.getByTestId("groups-sort-members"));
+    expect(rows()).toEqual(["Two", "Ten"]);
+  });
+
+  it("marks the sorted column for assistive tech", async () => {
+    renderThree();
+    await screen.findByRole("table");
+    const header = () => screen.getByRole("columnheader", { name: /Name/ });
+    expect(header()).toHaveAttribute("aria-sort", "ascending");
+
+    await userEvent.click(screen.getByTestId("groups-sort-name"));
+    expect(header()).toHaveAttribute("aria-sort", "descending");
+  });
+
+  it("filters by name as you type", async () => {
+    renderThree();
+    await screen.findByRole("table");
+
+    await userEvent.type(screen.getByTestId("groups-search"), "refl");
+    expect(rows()).toEqual(["Reflow"]);
+  });
+
+  it("filters by description and by owner too", async () => {
+    renderThree();
+    await screen.findByRole("table");
+
+    await userEvent.type(screen.getByTestId("groups-search"), "field");
+    expect(rows()).toEqual(["applications"]);
+
+    await userEvent.clear(screen.getByTestId("groups-search"));
+    await userEvent.type(screen.getByTestId("groups-search"), "carol");
+    expect(rows()).toEqual(["Manufacturing"]);
+  });
+
+  it("says nothing matched rather than showing an empty table", async () => {
+    renderThree();
+    await screen.findByRole("table");
+
+    await userEvent.type(screen.getByTestId("groups-search"), "zzz");
+    expect(rows()).toEqual([]);
+    expect(screen.getByText(/no groups match/i)).toBeInTheDocument();
+  });
+
+  it("still opens the editor from a row", async () => {
+    renderThree();
+    await screen.findByRole("table");
+
+    await userEvent.click(screen.getByRole("button", { name: /Edit Reflow/i }));
+    expect(await screen.findByTestId("group-members-add")).toBeInTheDocument();
   });
 });

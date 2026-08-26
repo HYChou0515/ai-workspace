@@ -18,6 +18,76 @@ import { useIsSuperuser } from "../hooks/useIsSuperuser";
 import { groupCapabilities, groupRoleLabel } from "../lib/groupRole";
 import { pxToRem } from "../lib/pxToRem";
 
+type SortKey = "name" | "owner" | "members";
+type SortState = { by: SortKey; dir: "asc" | "desc" };
+
+/** Does this group answer what was typed? Name, description and owner — the
+ * three things a person remembers a group by. */
+function matchesGroup(g: Group, q: string): boolean {
+  const needle = q.trim().toLowerCase();
+  if (needle === "") return true;
+  return (
+    g.name.toLowerCase().includes(needle) ||
+    g.description.toLowerCase().includes(needle) ||
+    (g.owner ?? "").toLowerCase().includes(needle)
+  );
+}
+
+/** Sort a copy — the query cache's array is shared, and sorting it in place
+ * mutates what every other consumer of `qk.groups` sees. Text compares with
+ * `localeCompare` (a code-point `<` puts every lowercase name last); the member
+ * count compares as a NUMBER, or "10" would sort before "2". */
+function sortGroups(groups: Group[], { by, dir }: SortState): Group[] {
+  const sign = dir === "asc" ? 1 : -1;
+  const text = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: "base" });
+  return groups.slice().sort((a, b) => {
+    const cmp =
+      by === "members"
+        ? a.members.length - b.members.length
+        : by === "owner"
+          ? text(a.owner ?? "", b.owner ?? "")
+          : text(a.name, b.name);
+    // Ties fall back to name, so the order is stable and reproducible rather
+    // than dependent on the input order.
+    return sign * (cmp || text(a.name, b.name));
+  });
+}
+
+function SortHeader({
+  id,
+  label,
+  sort,
+  onSort,
+  style,
+}: {
+  id: SortKey;
+  label: string;
+  sort: SortState;
+  onSort: (by: SortKey) => void;
+  style?: React.CSSProperties;
+}) {
+  const active = sort.by === id;
+  return (
+    <th
+      scope="col"
+      aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}
+      style={{ ...th, ...style }}
+    >
+      <button
+        type="button"
+        data-testid={`groups-sort-${id}`}
+        onClick={() => onSort(id)}
+        style={{ font: "inherit", color: "inherit", display: "inline-flex", gap: 4, alignItems: "center" }}
+      >
+        {label}
+        <span aria-hidden style={{ opacity: active ? 1 : 0.25 }}>
+          {active && sort.dir === "desc" ? "↓" : "↑"}
+        </span>
+      </button>
+    </th>
+  );
+}
+
 export function GroupsPage({ client = groupsApi }: { client?: GroupsApi }) {
   const me = useCurrentUser();
   const isSuperuser = useIsSuperuser();
@@ -25,11 +95,21 @@ export function GroupsPage({ client = groupsApi }: { client?: GroupsApi }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
 
+  const [q, setQ] = useState("");
+  const [sort, setSort] = useState<SortState>({ by: "name", dir: "asc" });
+
   const { data: groups = [], isPending } = useQuery({
     queryKey: qk.groups,
     queryFn: () => client.listGroups(),
   });
   const invalidate = () => void qc.invalidateQueries({ queryKey: qk.groups });
+
+  const toggleSort = (by: SortKey) =>
+    setSort((s) => ({ by, dir: s.by === by && s.dir === "asc" ? "desc" : "asc" }));
+  const shown = sortGroups(
+    groups.filter((g) => matchesGroup(g, q)),
+    sort,
+  );
 
   return (
     <div style={page}>
@@ -60,20 +140,57 @@ export function GroupsPage({ client = groupsApi }: { client?: GroupsApi }) {
           {isSuperuser ? "No groups yet — create one." : "You don't belong to any groups yet."}
         </div>
       ) : (
-        <ul style={list}>
-          {groups.map((g) => (
-            <GroupRow
-              key={g.resource_id}
-              group={g}
-              me={me}
-              isSuperuser={isSuperuser}
-              editing={editingId === g.resource_id}
-              onEdit={() => setEditingId(editingId === g.resource_id ? null : g.resource_id)}
-              client={client}
-              onChanged={invalidate}
-            />
-          ))}
-        </ul>
+        <>
+          <input
+            type="search"
+            data-testid="groups-search"
+            className="kb-input"
+            aria-label="Search groups"
+            placeholder="Search groups…"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+          />
+          {shown.length === 0 ? (
+            <div style={{ color: "var(--text-paper-d)" }}>No groups match “{q}”.</div>
+          ) : (
+            <table style={table}>
+              <thead>
+                <tr>
+                  <SortHeader
+                    id="name"
+                    label="Name"
+                    sort={sort}
+                    onSort={toggleSort}
+                    style={{ textAlign: "left" }}
+                  />
+                  <SortHeader id="owner" label="Owner" sort={sort} onSort={toggleSort} />
+                  <SortHeader
+                    id="members"
+                    label="Members"
+                    sort={sort}
+                    onSort={toggleSort}
+                    style={{ textAlign: "right" }}
+                  />
+                  <th style={{ ...th, width: 1 }} />
+                </tr>
+              </thead>
+              <tbody>
+                {shown.map((g) => (
+                  <GroupRow
+                    key={g.resource_id}
+                    group={g}
+                    me={me}
+                    isSuperuser={isSuperuser}
+                    editing={editingId === g.resource_id}
+                    onEdit={() => setEditingId(editingId === g.resource_id ? null : g.resource_id)}
+                    client={client}
+                    onChanged={invalidate}
+                  />
+                ))}
+              </tbody>
+            </table>
+          )}
+        </>
       )}
 
       {creating && (
@@ -111,42 +228,52 @@ function GroupRow({
   const role = groupRoleLabel(group, me, isSuperuser);
   const n = group.members.length;
   return (
-    <li style={rowStyle}>
-      <div style={rowHead}>
-        <div style={{ minWidth: 0 }}>
+    <>
+      <tr data-testid={`group-row-${group.resource_id}`} data-group-name={group.name}>
+        <td style={{ ...td, minWidth: 0 }}>
           <div style={{ fontWeight: 600 }}>{group.name}</div>
           {group.description && (
             <div style={{ color: "var(--text-paper-d)", fontSize: pxToRem(12) }}>
               {group.description}
             </div>
           )}
-          <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4 }}>
-            <span style={{ color: "var(--text-paper-d)", fontSize: pxToRem(12) }}>
-              owner {group.owner && <UserChip userId={group.owner} size={16} />}
-            </span>
-            <span style={{ color: "var(--text-paper-d)", fontSize: pxToRem(12) }}>
-              · {n} member{n === 1 ? "" : "s"}
-            </span>
-            {role && <span style={chip}>{role}</span>}
-          </div>
-        </div>
-        {caps.canManageMembers && (
-          <button
-            type="button"
-            className="btn"
-            data-variant="secondary"
-            data-size="sm"
-            aria-label={`Edit ${group.name}`}
-            onClick={onEdit}
-          >
-            Edit
-          </button>
-        )}
-      </div>
+          {role && (
+            <span style={{ ...chip, display: "inline-block", marginTop: 4 }}>{role}</span>
+          )}
+        </td>
+        <td style={{ ...td, whiteSpace: "nowrap" }}>
+          {group.owner && <UserChip userId={group.owner} size={16} />}
+        </td>
+        <td style={{ ...td, textAlign: "right", whiteSpace: "nowrap" }}>
+          <span style={{ color: "var(--text-paper-d)", fontSize: pxToRem(12) }}>
+            {n} member{n === 1 ? "" : "s"}
+          </span>
+        </td>
+        <td style={{ ...td, textAlign: "right" }}>
+          {caps.canManageMembers && (
+            <button
+              type="button"
+              className="btn"
+              data-variant="secondary"
+              data-size="sm"
+              aria-label={`Edit ${group.name}`}
+              onClick={onEdit}
+            >
+              Edit
+            </button>
+          )}
+        </td>
+      </tr>
       {editing && (
-        <GroupEditor group={group} caps={caps} client={client} onChanged={onChanged} />
+        <tr>
+          {/* The editor is wide — it spans the row rather than being crushed
+              into the name column. */}
+          <td colSpan={4} style={{ ...td, paddingTop: 0 }}>
+            <GroupEditor group={group} caps={caps} client={client} onChanged={onChanged} />
+          </td>
+        </tr>
       )}
-    </li>
+    </>
   );
 }
 
@@ -447,9 +574,21 @@ function CreateGroupModal({
 
 const page: React.CSSProperties = { maxWidth: 720, margin: "0 auto", padding: 24, display: "grid", gap: 16 };
 const headRow: React.CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 };
-const list: React.CSSProperties = { listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 10 };
-const rowStyle: React.CSSProperties = { border: "1px solid var(--paper-3)", borderRadius: 8, padding: 12 };
-const rowHead: React.CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 };
+const table: React.CSSProperties = { width: "100%", borderCollapse: "collapse" };
+const th: React.CSSProperties = {
+  textAlign: "right",
+  padding: "6px 8px",
+  borderBottom: "1px solid var(--paper-3)",
+  color: "var(--text-paper-d)",
+  fontSize: pxToRem(12),
+  fontWeight: 600,
+  whiteSpace: "nowrap",
+};
+const td: React.CSSProperties = {
+  padding: "8px",
+  borderBottom: "1px solid var(--paper-3)",
+  verticalAlign: "top",
+};
 const chip: React.CSSProperties = { fontSize: pxToRem(11), padding: "1px 8px", borderRadius: 999, background: "var(--paper-2)", color: "var(--text-paper-d)" };
 const editor: React.CSSProperties = { marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--paper-3)", display: "grid", gap: 14 };
 const pickerBox: React.CSSProperties = { border: "1px solid var(--paper-3)", borderRadius: 6, padding: 6 };
