@@ -179,6 +179,10 @@ async def agent_write_step(
             # The node's output is what it WROTE, so the reply is not parsed at all — the
             # model is free to narrate. Recorded as `fields` so the existing
             # `{steps.<name>.<field>}` lookup resolves it with no second mechanism.
+            # The turn's writes went to the sandbox; the glob reads the snapshot, so ask
+            # for the write-back FIRST or this node globs state from before its own turn.
+            if wf.reconcile is not None:
+                await wf.reconcile()
             result["fields"] = {"produces": sorted(await wf.glob(produces))}
         return result
 
@@ -252,6 +256,10 @@ async def sandbox_node(
         if outputs is not None:  # #428 §1.2: parse stdout JSON into result.fields
             result["fields"] = _parse_fields(stdout)
         if produces:  # the node's output is what it WROTE; stdout is not parsed at all
+            # No `wf.reconcile()` here, unlike the agent node: this command ran through
+            # the executor's `run_sandbox`, which writes the sandbox back to the snapshot
+            # before it returns. Adding one would walk the workspace a second time for
+            # state that is already fresh — and that walk is per map element.
             result["fields"] = {"produces": sorted(await wf.glob(produces))}
         return result
 
