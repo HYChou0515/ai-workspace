@@ -260,26 +260,24 @@ export type ItemToolState = {
   default_on: boolean;
   pref: ToolPref;
   effective: boolean;
-};
-
-/** #674/#724: one third-party tool the App declares, as the server resolved it
- * for this item (GET /a/{slug}/items/{id}/tools → `external`). Read-only —
- * these have no per-item switch — so every field answers "what am I actually
- * running": which release, whose, and whether it came from the host's cached
- * copy. `version`/`author` are null exactly when `unavailable` is set. */
-export type ExternalToolState = {
-  key: string;
-  version: string | null;
-  author: string | null;
-  stale: boolean;
-  unavailable: string | null;
-};
-
-/** The whole per-item tools response: the pickable App tools plus the
- * read-only third-party section. */
-export type ItemTools = {
-  tools: ItemToolState[];
-  external: ExternalToolState[];
+  /** #724: the package this row is ONE COMMAND of (a `pkg:cmd` entry), or null
+   * when the row IS the package, or a built-in. `app.json` grants at whichever
+   * granularity it chose, so without this two rows read as peers while one is
+   * part of the other. */
+  package?: string | null;
+  /** #674: this tool's bytes come from a third-party artifact, not our image.
+   * Distinct from `author` being null — "whose code is this" and "did they fill
+   * their name in" are different questions. */
+  external?: boolean;
+  /** The release that resolved for this item (third-party tools only). */
+  version?: string | null;
+  /** Who published it, as they wrote it themselves. Shown, never trusted. */
+  author?: string | null;
+  /** Served from the host's cached copy — usable, but maybe a release behind. */
+  stale?: boolean;
+  /** Why it could not be resolved. The row keeps its switch; what it lost is
+   * the ability to run (#480). */
+  unavailable?: string | null;
 };
 
 /** #380: one available skill's per-item picker state (GET
@@ -472,7 +470,7 @@ export interface ApiClient {
   getToolsCatalog(): Promise<ToolCatalogEntry[]>;
   /** GET /a/{slug}/items/{id}/tools — the per-item tool picker state (per-tool
    * tri-state, resolved server-side) the tool picker reads (#322). */
-  getItemTools(slug: string, itemId: string): Promise<ItemTools>;
+  getItemTools(slug: string, itemId: string): Promise<ItemToolState[]>;
   /** GET /a/{slug}/items/{id}/skills — the per-item skills picker state (per-skill
    * source + tri-state + effective), resolved server-side (#380). */
   getItemSkills(slug: string, itemId: string): Promise<ItemSkillState[]>;

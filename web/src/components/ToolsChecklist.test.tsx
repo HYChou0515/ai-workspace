@@ -57,4 +57,108 @@ describe("ToolsChecklist", () => {
       "Bundled tools: Spc, Pareto.",
     );
   });
+
+  // ── where a tool came from (#724) ──────────────────────────────────
+
+  it("names the package a command-granularity row belongs to", () => {
+    // `app.json` may grant a whole bundle or one command of it, so two rows
+    // can look like peers while one is part of the other. Told only "Spc", a
+    // reader cannot tell which row's switch governs the tool they saw in chat.
+    render(
+      <ToolsChecklist
+        tools={[{ ...TOOLS[0], key: "rca-tools:spc", label: "Spc", package: "Rca Tools" }]}
+        prefs={{}}
+        onChange={vi.fn()}
+      />,
+    );
+
+    const row = screen.getByTestId("tool-row-rca-tools:spc");
+    expect(row).toHaveTextContent("Rca Tools");
+    expect(row).toHaveTextContent("Spc");
+  });
+
+  it("shows a third-party tool's release and author on its own row", () => {
+    render(
+      <ToolsChecklist
+        tools={[
+          {
+            ...TOOLS[0],
+            key: "wafer-history",
+            label: "Wafer History",
+            external: true,
+            version: "1.4.2",
+            author: "Wafer Team <wafer@example.com>",
+          },
+        ]}
+        prefs={{}}
+        onChange={vi.fn()}
+      />,
+    );
+
+    const row = screen.getByTestId("tool-row-wafer-history");
+    expect(row).toHaveTextContent("1.4.2");
+    expect(row).toHaveTextContent("Wafer Team <wafer@example.com>");
+  });
+
+  it("says a first-party tool is the platform's own, rather than leaving it blank", () => {
+    // Every row answers "who do I go to". A blank where other rows name a
+    // person reads as missing information about the same kind of thing.
+    render(<ToolsChecklist tools={[TOOLS[0]]} prefs={{}} onChange={vi.fn()} />);
+
+    expect(screen.getByTestId("tool-row-exec")).toHaveTextContent("內建");
+  });
+
+  it("distinguishes a third-party tool whose author never filled their name in", () => {
+    // NOT the same as "ours". Reading one off the absence of the other would
+    // credit us with a stranger's code.
+    render(
+      <ToolsChecklist
+        tools={[{ ...TOOLS[0], key: "wafer-history", external: true, version: "1.4.2" }]}
+        prefs={{}}
+        onChange={vi.fn()}
+      />,
+    );
+
+    const row = screen.getByTestId("tool-row-wafer-history");
+    expect(row).toHaveTextContent("未註明作者");
+    expect(row).not.toHaveTextContent("內建");
+  });
+
+  it("marks a row served from the cached copy", () => {
+    render(
+      <ToolsChecklist
+        tools={[
+          { ...TOOLS[0], key: "wafer-history", external: true, version: "1.4.2", stale: true },
+        ]}
+        prefs={{}}
+        onChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId("tool-wafer-history-stale")).toBeInTheDocument();
+  });
+
+  it("says why a declared tool could not be resolved, on the row that still has its switch", () => {
+    render(
+      <ToolsChecklist
+        tools={[
+          {
+            ...TOOLS[0],
+            key: "legacy-fetch",
+            external: true,
+            unavailable: "404 — the artifact expired",
+          },
+        ]}
+        prefs={{}}
+        onChange={vi.fn()}
+      />,
+    );
+
+    const row = screen.getByTestId("tool-row-legacy-fetch");
+    expect(row).toHaveTextContent("404 — the artifact expired");
+    // And it claims nothing about a release or an author: nothing resolved,
+    // so "no author published" would describe a manifest nobody read.
+    expect(row).not.toHaveTextContent("未註明作者");
+    expect(row).not.toHaveTextContent("內建");
+  });
 });
