@@ -1,0 +1,1988 @@
+diff --git a/docs/adding-an-app.md b/docs/adding-an-app.md
+index 36050c21..a4285623 100644
+--- a/docs/adding-an-app.md
++++ b/docs/adding-an-app.md
+@@ -51,7 +51,7 @@ apps/<slug>/
+ |---|---|
+ | `slug` | App id——**必須等於目錄名稱** |
+ | `title` / `description` | launcher 卡片文字 |
+-| `icon` | `flame`(具名)、一個 emoji,或 `icon.svg`(同層檔案,內嵌) |
++| `icon` | `flame`(具名)、一個 emoji,或**與 `app.json` 同層的圖檔名稱**(`icon.png` / `icon.svg` / `.jpg` / `.webp` / `.gif`)。填檔名時瀏覽器會去 `GET /apps/{slug}/icon` 抓圖;檔案不存在或副檔名不支援就退回具名圖示的預設字符,不會壞掉 |
+ | `color` | 一個 hex → App 的 `--accent` 三色組(App 內整套重新配色) |
+ | `function.workspace` | file IDE(tree + editor + file tools)。`false` → 只有 chat 的 shell |
+ | `function.sandbox` | exec + package tools。不需要 terminal;控制 exec 相關功能的開啟 |
+diff --git a/docs/handoff-launcher-design.md b/docs/handoff-launcher-design.md
+index 41c7da76..f24cd1a1 100644
+--- a/docs/handoff-launcher-design.md
++++ b/docs/handoff-launcher-design.md
+@@ -40,7 +40,9 @@ fixed KB card. Each app card has exactly:
+ | `color` | string | hex, e.g. `#c0392b` — the app's accent/theme color |
+ 
+ `icon` is one of:
+-- **inline SVG** markup (the app shipped its own `icon.svg`) — most apps will use this,
++- the **name of an image file** the app ships beside its `app.json` (`icon.png`,
++  `icon.svg`, `.jpg`, `.webp`, `.gif`) — the card fetches it from
++  `GET /apps/{slug}/icon`; the manifest carries the name, never the picture,
+ - an **emoji** (e.g. `🔥`),
+ - a **named icon** key from the existing `Icon` component's 44-name set (e.g. `flame`).
+ 
+diff --git a/src/workspace_app/api/event_bus/base.py b/src/workspace_app/api/event_bus/base.py
+index 15d9afb0..7e34f113 100644
+--- a/src/workspace_app/api/event_bus/base.py
++++ b/src/workspace_app/api/event_bus/base.py
+@@ -18,7 +18,9 @@ from ..events import AgentEvent
+ # A pod's consumer callback: (engine_key, origin_pod_id, event). The bus invokes it
+ # for EVERY published event (fanout); the consumer skips its own origin and demuxes
+ # by key to that pod's local subscribers.
+-OnEvent = Callable[[str, str, AgentEvent], None]
++OnEvent = Callable[[str, str, AgentEvent, str], None]
++"""`(key, origin, event, event_id)`. The id is minted at the origin and travels
++unchanged, so a client dedupes the same event however many pods deliver it."""
+ 
+ 
+ class IEventBus(abc.ABC):
+@@ -27,10 +29,13 @@ class IEventBus(abc.ABC):
+     always happens. Consuming is one callback per pod, invoked for every event."""
+ 
+     @abc.abstractmethod
+-    def publish(self, key: str, origin: str, event: AgentEvent) -> None:
++    def publish(self, key: str, origin: str, event: AgentEvent, event_id: str) -> None:
+         """Fan `event` (for engine `key`) out to every pod, INCLUDING the publisher.
+         `origin` is the publishing pod's id so a consumer can skip its own (it has
+-        already delivered the event locally). Fire-and-forget: never raises to the
++        already delivered the event locally). `event_id` is the event's identity,
++        minted at the origin and carried unchanged so every pod hands its viewers
++        the SAME id — which is what lets a client recognise a re-delivery after
++        reconnecting onto a different pod. Fire-and-forget: never raises to the
+         caller, never blocks the turn."""
+ 
+     @abc.abstractmethod
+diff --git a/src/workspace_app/api/event_bus/memory.py b/src/workspace_app/api/event_bus/memory.py
+index fe01103a..e06f8d1f 100644
+--- a/src/workspace_app/api/event_bus/memory.py
++++ b/src/workspace_app/api/event_bus/memory.py
+@@ -20,8 +20,8 @@ class InMemoryEventBus(IEventBus):
+     def start_consuming(self, on_event: OnEvent) -> None:
+         self._consumers.append(on_event)
+ 
+-    def publish(self, key: str, origin: str, event: AgentEvent) -> None:
++    def publish(self, key: str, origin: str, event: AgentEvent, event_id: str) -> None:
+         # Fanout: invoke every registered consumer (each skips its own origin). Copy
+         # the list so a consumer registering mid-dispatch can't mutate the iteration.
+         for on_event in list(self._consumers):
+-            on_event(key, origin, event)
++            on_event(key, origin, event, event_id)
+diff --git a/src/workspace_app/api/event_bus/rabbitmq.py b/src/workspace_app/api/event_bus/rabbitmq.py
+index 79dd0e8d..19b5381e 100644
+--- a/src/workspace_app/api/event_bus/rabbitmq.py
++++ b/src/workspace_app/api/event_bus/rabbitmq.py
+@@ -63,12 +63,14 @@ class RabbitMQEventBus(IEventBus):
+         self._on_event = on_event
+         self._transport.start(self._on_message)
+ 
+-    def publish(self, key: str, origin: str, event: AgentEvent) -> None:
++    def publish(self, key: str, origin: str, event: AgentEvent, event_id: str) -> None:
+         # Fire-and-forget: serialize the envelope and hand it to the transport. A
+         # failure here must NEVER propagate to (or block) the turn — local delivery
+         # already happened; a dropped bus event degrades to the store-poll fallback.
+         try:
+-            body = json.dumps({"key": key, "origin": origin, "event": asdict(event)}).encode()
++            body = json.dumps(
++                {"key": key, "origin": origin, "id": event_id, "event": asdict(event)}
++            ).encode()
+             self._transport.publish(body)
+         except Exception:  # noqa: BLE001 — the bus is best-effort, never fails a turn
+             logger.warning("event_bus: dropped a publish for key %s", key, exc_info=True)
+@@ -86,7 +88,11 @@ class RabbitMQEventBus(IEventBus):
+         # consumer unwired. The guard is a type-narrowing (`OnEvent | None`) formality;
+         # its None side is unreachable by construction, hence no-branch.
+         if self._on_event is not None:  # pragma: no branch
+-            self._on_event(msg["key"], msg["origin"], event)
++            # `.get`, not `[]`: a frame published by a pod that has not been
++            # rolled yet has no id, and an exception here would drop a live
++            # event for the length of a rolling upgrade. No id simply means
++            # nothing to dedupe on — the old behaviour.
++            self._on_event(msg["key"], msg["origin"], event, msg.get("id") or "")
+ 
+ 
+ class AioPikaTransport(IAmqpTransport):
+diff --git a/src/workspace_app/api/events.py b/src/workspace_app/api/events.py
+index 479d2015..52c89cda 100644
+--- a/src/workspace_app/api/events.py
++++ b/src/workspace_app/api/events.py
+@@ -302,16 +302,29 @@ class CellDone:
+ CellEvent = CellStream | CellDisplayData | CellError | CellDone
+ 
+ 
+-def to_sse(event: AgentEvent | CellEvent, seq: int | None = None) -> str:
++def to_sse(
++    event: AgentEvent | CellEvent, seq: int | None = None, event_id: str | None = None
++) -> str:
+     """Serialize one event as an SSE 'data:' line (with trailing blank line).
+ 
+     `seq` (when given) is the per-session broadcast sequence number — injected
+     into the JSON payload so a reconnecting client can resume with `?since=<seq>`
+-    (the replay buffer in `turns.py`). It is a transport concern, carried in the
+-    SSE JSON and never on the frozen event dataclasses."""
++    (the replay buffer in `turns.py`).
++
++    `event_id` is that event's IDENTITY, minted once where it was published and
++    the same on every pod it reaches. `seq` cannot serve: each pod numbers its
++    own session, so one event is #7 here and #3 there, and a viewer that
++    reconnects onto another pod resumes in a numbering that was never its own —
++    replaying what it already has, or skipping what it has not. The client
++    dedupes on the id, so a re-delivery from any cause is harmless.
++
++    Both are transport concerns, carried in the SSE JSON and never on the frozen
++    event dataclasses."""
+     data = asdict(event)
+     if seq is not None:
+         data["seq"] = seq
++    if event_id is not None:
++        data["id"] = event_id
+     return f"data: {json.dumps(data)}\n\n"
+ 
+ 
+diff --git a/src/workspace_app/api/kb_routes.py b/src/workspace_app/api/kb_routes.py
+index 3272d059..24c93489 100644
+--- a/src/workspace_app/api/kb_routes.py
++++ b/src/workspace_app/api/kb_routes.py
+@@ -2481,15 +2481,28 @@ def register_kb_routes(
+         # latest revision's author.
+         user = rm.get_meta(doc_id).created_by
+         ct = doc.content.content_type
+-        raw = rm.restore_binary(doc).content.data
+-        assert isinstance(raw, bytes)  # restore_binary populates the blob bytes
++
++        def _blob() -> bytes:
++            # Called ONLY by the branches of `preview_markdown` that project
++            # from bytes. A browser-native type never calls it, so opening an
++            # image no longer pulls the whole picture out of the blob store to
++            # throw it away — the browser fetches it once, from /blobs (#730).
++            data = rm.restore_binary(doc).content.data
++            assert isinstance(data, bytes)  # restore_binary populates the bytes
++            return data
++
+         # Issue #39/#361: per-type "file view" projection — text decodes,
+         # structured types (json/jsonl/csv/tsv/yaml) return verbatim text the
+         # FE renders as a tree/grid, xlsx/docx project into markdown,
+         # browser-native types (image/pdf/html) ship "" and the FE renders the
+         # blob itself. See kb.preview.
+         ct_str = ct if isinstance(ct, str) else "application/octet-stream"
+-        text = preview_markdown(path=doc.path, content_type=ct_str, raw=raw)
++        # Off the event loop: `restore_binary` is blocking blob I/O, and this
++        # route is `async def` — a 20 MB document read inline stalls every other
++        # request on the pod for as long as it takes (the shape #569 closed).
++        text = await asyncio.to_thread(
++            preview_markdown, path=doc.path, content_type=ct_str, raw=_blob
++        )
+         # #114: browser-native types (image/pdf) project to "" — the FE shows the
+         # blob itself. But for an image VLM-parsed at ingest, the extracted text
+         # on `doc.text` is exactly what the retriever cited; surface it below the
+@@ -2497,32 +2510,71 @@ def register_kb_routes(
+         if not text and doc.text:
+             text = doc.text
+ 
+-        def resolve(rid: str) -> str | None:
+-            """Map a sibling SourceDoc id to the URL to embed in the
+-            rendered markdown. Text → `kb://doc/{rid}` (FE turns into
+-            in-app nav); image → specstar `/blobs/{file_id}` (browser
+-            loads the bytes natively, specstar marks the
+-            Content-Type stored at upload)."""
+-            try:
+-                sibling = rm.get(rid).data
+-            except ResourceIDNotFoundError:
+-                return None
+-            assert isinstance(sibling, SourceDoc)
++        def _url_for(sibling: SourceDoc, rid: str) -> str:
++            """The URL to embed for a sibling: text → `kb://doc/{rid}` (the FE
++            turns it into in-app nav); image → specstar `/blobs/{file_id}` (the
++            browser loads the bytes natively, with the Content-Type specstar
++            stored at upload)."""
+             ct = sibling.content.content_type
+             file_id = sibling.content.file_id
+             if isinstance(ct, str) and ct.startswith("image/") and isinstance(file_id, str):
+                 return f"/blobs/{file_id}"
+             return f"kb://doc/{rid}"
+ 
++        def _siblings_for(body: str) -> dict[str, SourceDoc]:
++            """Every sibling the markdown points at, in ONE query.
++
++            `rewrite_md_links` asks `resolve` one id at a time, and `resolve`
++            used to answer with a point-get each — so rendering a report with
++            twelve embedded figures cost fourteen `SourceDoc.get` calls, all of
++            them on the event loop. Measured, not assumed. That is the same N+1
++            the card's attachment metadata just stopped doing on the client, in
++            the same route, three lines below the fix for it.
++
++            The ids are collected by running the rewrite once with a `resolve`
++            that records and declines — pure regex over a string, no I/O — so
++            `rewrite_md_links` keeps its contract and the extension-fallback
++            candidates are gathered too. The second pass reads from the map.
++            """
++            wanted: set[str] = set()
++
++            def collect(rid: str) -> str | None:
++                wanted.add(rid)
++                return None  # decline, so every candidate is offered
++
++            rewrite_md_links(
++                body, doc_path=doc.path, collection_id=doc.collection_id, resolve=collect
++            )
++            if not wanted:
++                return {}
++            found: dict[str, SourceDoc] = {}
++            for row in rm.list_resources(QB.resource_id().in_(sorted(wanted)).build()):
++                data = row.data
++                if isinstance(data, SourceDoc):
++                    found[row.info.resource_id] = data  # ty: ignore[unresolved-attribute]
++            return found
++
+         if is_structured_text(doc.path, ct_str):
+             # #361: the FE renders these as a tree/grid from the verbatim text;
+             # it isn't markdown, so a `[..](..)`-looking JSON value must not be
+             # link-rewritten.
+             markdown = text
+         else:
+-            markdown = rewrite_md_links(
+-                text, doc_path=doc.path, collection_id=doc.collection_id, resolve=resolve
+-            )
++
++            def _rewrite() -> str:
++                siblings = _siblings_for(text)
++                return rewrite_md_links(
++                    text,
++                    doc_path=doc.path,
++                    collection_id=doc.collection_id,
++                    resolve=lambda rid: (
++                        None if (sib := siblings.get(rid)) is None else _url_for(sib, rid)
++                    ),
++                )
++
++            # Off the loop for the same reason the preview is: the batched read
++            # is still blocking specstar I/O.
++            markdown = await asyncio.to_thread(_rewrite)
+         assert isinstance(doc.content.size, int)
+         assert isinstance(doc.content.file_id, str)
+         return RenderedDoc(
+diff --git a/src/workspace_app/api/meta_routes.py b/src/workspace_app/api/meta_routes.py
+index 590452bd..833224bb 100644
+--- a/src/workspace_app/api/meta_routes.py
++++ b/src/workspace_app/api/meta_routes.py
+@@ -6,15 +6,13 @@ cleanly out of ``create_app``.
+ 
+ from __future__ import annotations
+ 
+-import contextlib
+ import math
+ import time
+ from collections.abc import Callable
+-from importlib import resources
+ 
+ import msgspec
+ from fastapi import APIRouter, FastAPI, HTTPException
+-from fastapi.responses import StreamingResponse
++from fastapi.responses import Response, StreamingResponse
+ from pydantic import BaseModel
+ 
+ from ..monitor import IMonitor
+@@ -115,7 +113,12 @@ def register_meta_routes(
+     @app.get("/apps/{slug}")
+     async def get_app_manifest(slug: str) -> dict:
+         """#89 P4a — the full App manifest the dashboard + workspace drive off.
+-        A shipped ``icon.svg`` is inlined so the FE gets it in one fetch."""
++
++        ``icon`` is reported exactly as the App declared it — a named-icon key, an
++        emoji, or the NAME of a file the App ships. A file icon's bytes come from
++        ``GET /apps/{slug}/icon``; the manifest never carries a picture, so the
++        launcher list (which has no room to inline anything) and this endpoint
++        describe the same icon the same way."""
+         from ..apps.catalog import discover_app_slugs
+         from ..apps.manifest import load_app_manifest
+         from ..apps.profiles import list_profiles, load_profile
+@@ -146,13 +149,28 @@ def register_meta_routes(
+                 }
+             )
+         data["profiles"] = app_profiles
+-        if m.icon.endswith(".svg"):
+-            with contextlib.suppress(FileNotFoundError, IsADirectoryError, OSError):
+-                data["icon"] = (resources.files("workspace_app.apps") / slug / m.icon).read_text(
+-                    "utf-8"
+-                )
+         return data
+ 
++    @app.get("/apps/{slug}/icon")
++    async def get_app_icon(slug: str) -> Response:
++        """The image an App ships as its ``icon`` (``icon.png``, ``icon.svg``, …).
++
++        A separate URL rather than bytes folded into the manifest: it serves the
++        raster forms a JSON field can't carry, both the list and the detail
++        surface reach the same picture, and the browser caches it. An App whose
++        icon is a named key or an emoji has no file here — that is a 404, and the
++        FE renders the name/emoji instead."""
++        from ..apps.catalog import discover_app_slugs
++        from ..apps.manifest import load_app_icon, load_app_manifest
++
++        if slug not in discover_app_slugs():
++            raise HTTPException(status_code=404, detail=f"unknown app: {slug!r}")
++        found = load_app_icon(slug, load_app_manifest(slug).icon)
++        if found is None:
++            raise HTTPException(status_code=404, detail=f"app {slug!r} ships no icon file")
++        blob, media_type = found
++        return Response(content=blob, media_type=media_type)
++
+     @app.get("/activity")
+     async def get_activity() -> list[dict]:
+         """Recent activity feed (newest first) for the notifications popover."""
+diff --git a/src/workspace_app/api/turns.py b/src/workspace_app/api/turns.py
+index 5441f64b..d3b479f3 100644
+--- a/src/workspace_app/api/turns.py
++++ b/src/workspace_app/api/turns.py
+@@ -464,23 +464,27 @@ class _WorkspaceSession:
+     bus: IEventBus | None = None
+     pod_id: str = ""
+     _seq: int = 0
+-    _buffer: deque[tuple[int, AgentEvent]] = field(default_factory=deque)
++    _buffer: deque[tuple[int, str, AgentEvent]] = field(default_factory=deque)
+ 
+     def __post_init__(self) -> None:
+         self._buffer = deque(maxlen=max(self.buffer_maxlen, 0))
+ 
+-    def _fanout(self, event: AgentEvent) -> None:
++    def _fanout(self, event: AgentEvent, event_id: str) -> None:
+         """Assign the seq (non-Presence), buffer it, and deliver to LOCAL subscribers
+         — the shared core of `publish` (a turn on THIS pod) and `deliver_from_bus`
+-        (an event that arrived from another pod)."""
++        (an event that arrived from another pod).
++
++        The seq is this POD's numbering; `event_id` is the event's own, minted
++        where it was published and passed through untouched. Only the id means
++        the same thing on both sides of the bus."""
+         if isinstance(event, Presence):
+             seq: int | None = None
+         else:
+             self._seq += 1
+             seq = self._seq
+-            self._buffer.append((seq, event))
++            self._buffer.append((seq, event_id, event))
+         for q in self.subscribers:
+-            q.put_nowait((seq, event))
++            q.put_nowait((seq, event_id, event))
+ 
+     def publish(self, event: AgentEvent) -> None:
+         """Fan one event to every LOCAL subscriber (#43 broadcast) AND, for a turn
+@@ -488,22 +492,33 @@ class _WorkspaceSession:
+ 
+         Every event except `Presence` takes the next monotonic `seq` and enters the
+         replay ring. `Presence` is an ephemeral, pod-local roster snapshot — never
+-        buffered, and never bussed (a viewer on another pod is not in this roster)."""
+-        self._fanout(event)
++        buffered, and never bussed (a viewer on another pod is not in this roster).
++
++        This is where the event's id is minted: once, here, so every pod it
++        reaches hands its viewers the same one."""
++        event_id = uuid.uuid4().hex
++        self._fanout(event, event_id)
+         if self.bus is not None and not isinstance(event, Presence):
+-            self.bus.publish(self.key, self.pod_id, event)
++            self.bus.publish(self.key, self.pod_id, event, event_id)
+ 
+-    def deliver_from_bus(self, event: AgentEvent) -> None:
++    def deliver_from_bus(self, event: AgentEvent, event_id: str) -> None:
+         """Deliver an event that arrived from ANOTHER pod's turn: the same local
+         fan-out as `publish` but WITHOUT re-sending to the bus. That (plus skip-own
+-        on the consumer) is what stops a fan-out loop/storm."""
+-        self._fanout(event)
++        on the consumer) is what stops a fan-out loop/storm.
++
++        The id comes from the envelope, never re-minted — a fresh one per pod
++        would leave a reconnecting viewer unable to tell a replay from a new
++        event, which is the whole failure this id exists to end."""
++        self._fanout(event, event_id)
++
++    def replay_since(self, since: int) -> list[tuple[int, str, AgentEvent]]:
++        """The buffered `(seq, id, event)` a reconnecting `since`-client missed —
++        those with `seq > since`, oldest first. Empty when nothing newer was
++        retained (the client is current, or the gap outran the ring).
+ 
+-    def replay_since(self, since: int) -> list[tuple[int, AgentEvent]]:
+-        """The buffered `(seq, event)` a reconnecting `since`-client missed — those
+-        with `seq > since`, oldest first. Empty when nothing newer was retained
+-        (the client is current, or the gap outran the ring)."""
+-        return [(s, e) for (s, e) in self._buffer if s > since]
++        Each keeps the id it was published with, so a client that already has one
++        of these drops it instead of drawing it twice."""
++        return [(s, i, e) for (s, i, e) in self._buffer if s > since]
+ 
+     def close_subscribers(self) -> None:
+         """End every live SSE response attached to this session.
+@@ -513,7 +528,7 @@ class _WorkspaceSession:
+         the one outcome that leaves it consistent with a conversation that was
+         just closed or deleted."""
+         for q in list(self.subscribers):
+-            q.put_nowait((None, _CLOSE_STREAM))
++            q.put_nowait((None, "", _CLOSE_STREAM))
+ 
+     def roster(self) -> list[str]:
+         """The distinct, non-anonymous viewers currently subscribed (#455 presence)."""
+@@ -605,7 +620,7 @@ class ChatTurnEngine:
+             ),
+         )
+ 
+-    def _on_bus_event(self, key: str, origin: str, event: AgentEvent) -> None:
++    def _on_bus_event(self, key: str, origin: str, event: AgentEvent, event_id: str) -> None:
+         """A cross-pod event arrived on the bus. Skip our own (already delivered
+         locally); otherwise demux by key to this pod's local subscribers. No session
+         or no subscribers ⇒ nobody here is listening for `key`, so discard."""
+@@ -613,7 +628,7 @@ class ChatTurnEngine:
+             return
+         session = self._ws_sessions.get(key)
+         if session is not None and session.subscribers:
+-            session.deliver_from_bus(event)
++            session.deliver_from_bus(event, event_id)
+ 
+     def close_streams(self, key: str) -> None:
+         """End the live SSE responses for `key` without touching the turn itself.
+@@ -839,7 +854,7 @@ class ChatTurnEngine:
+         async def _gen() -> AsyncGenerator[AgentEvent, None]:
+             try:
+                 while True:
+-                    _seq, event = await q.get()
++                    _seq, _event_id, event = await q.get()
+                     yield cast("AgentEvent", event)
+             finally:
+                 session.subscribers.pop(q, None)
+@@ -885,17 +900,17 @@ class ChatTurnEngine:
+ 
+         async def _frames() -> AsyncGenerator[str, None]:
+             try:
+-                for s, e in replay:
+-                    yield to_sse(e, s)
++                for s, i, e in replay:
++                    yield to_sse(e, s, i)
+                 while True:
+                     try:
+-                        seq, ev = await asyncio.wait_for(q.get(), timeout=heartbeat_interval)
++                        seq, eid, ev = await asyncio.wait_for(q.get(), timeout=heartbeat_interval)
+                     except TimeoutError:
+                         yield ": heartbeat\n\n"  # SSE comment — keeps the stream warm
+                         continue
+                     if ev is _CLOSE_STREAM:
+                         return  # the session went away — end the response, don't hang
+-                    yield to_sse(cast("AgentEvent", ev), seq)
++                    yield to_sse(cast("AgentEvent", ev), seq, eid)
+             finally:
+                 session.subscribers.pop(q, None)
+                 if user_id:
+diff --git a/src/workspace_app/apps/manifest.py b/src/workspace_app/apps/manifest.py
+index a4abbd88..482760e3 100644
+--- a/src/workspace_app/apps/manifest.py
++++ b/src/workspace_app/apps/manifest.py
+@@ -11,6 +11,7 @@ NOT restated here (decision 19).
+ from __future__ import annotations
+ 
+ from importlib import resources
++from importlib.resources.abc import Traversable
+ from typing import Literal
+ 
+ import msgspec
+@@ -179,7 +180,9 @@ class AppManifest(Struct):
+     item: ItemNouns
+     onboarding: Onboarding | None = None
+     description: str = ""
+-    icon: str = ""  # "icon.svg" (file) | emoji | named-icon key
++    # A file the App ships beside app.json ("icon.png", "icon.svg", … — served
++    # from GET /apps/{slug}/icon), an emoji, or a named-icon key.
++    icon: str = ""
+     color: str = ""  # hex → --accent trio (full re-theme inside the App)
+     function: FunctionToggles = field(default_factory=FunctionToggles)
+     layout: Layout = field(default_factory=Layout)
+@@ -196,7 +199,50 @@ class AppManifest(Struct):
+     resources: AppResources | None = None
+ 
+ 
++def apps_root() -> Traversable:
++    """Where the bundled Apps live. A function, not a constant, so a test can
++    point the loaders at a temp tree without touching the installed package."""
++    return resources.files(_APPS_PKG)
++
++
+ def load_app_manifest(slug: str) -> AppManifest:
+     """Decode ``apps/<slug>/app.json`` into a typed ``AppManifest``."""
+-    raw = (resources.files(_APPS_PKG) / slug / _MANIFEST_FILE).read_bytes()
++    raw = (apps_root() / slug / _MANIFEST_FILE).read_bytes()
+     return msgspec.json.decode(raw, type=AppManifest)
++
++
++# What an App may ship its `icon` as. The extension decides the media type, so
++# the browser gets a real `Content-Type` — SVG is served as a file like any
++# other image rather than inlined into the manifest JSON.
++ICON_MEDIA_TYPES = {
++    ".png": "image/png",
++    ".svg": "image/svg+xml",
++    ".jpg": "image/jpeg",
++    ".jpeg": "image/jpeg",
++    ".webp": "image/webp",
++    ".gif": "image/gif",
++}
++
++
++def load_app_icon(slug: str, icon: str) -> tuple[bytes, str] | None:
++    """The bytes + media type of an App's file-based ``icon``, or ``None`` when
++    there is no file to serve.
++
++    ``None`` covers every way an icon is not a shipped image — a named-icon key
++    or an emoji (the other two manifest forms), an extension we don't serve, and
++    a manifest naming a file that isn't there. The caller turns all of them into
++    one 404, so a mis-typed filename degrades to the FE's fallback glyph instead
++    of a 500.
++
++    An icon is a plain filename BESIDE ``app.json``: anything with a separator
++    is refused outright rather than resolved, so a manifest can never reach out
++    of its own App directory.
++    """
++    suffix = icon[icon.rfind(".") :].lower() if "." in icon else ""
++    media_type = ICON_MEDIA_TYPES.get(suffix)
++    if media_type is None or "/" in icon or "\\" in icon:
++        return None
++    path = apps_root() / slug / icon
++    if not path.is_file():
++        return None
++    return path.read_bytes(), media_type
+diff --git a/src/workspace_app/kb/preview.py b/src/workspace_app/kb/preview.py
+index ce0c2655..6f267af9 100644
+--- a/src/workspace_app/kb/preview.py
++++ b/src/workspace_app/kb/preview.py
+@@ -28,6 +28,7 @@ from __future__ import annotations
+ 
+ import io
+ import logging
++from collections.abc import Callable
+ 
+ from .code_lang import is_code_file
+ from .ingest import normalize_text
+@@ -54,26 +55,69 @@ def is_structured_text(path: str, content_type: str) -> bool:
+     return ext_match or content_type in _STRUCTURED_TEXT_MIMES
+ 
+ 
+-def preview_markdown(*, path: str, content_type: str, raw: bytes) -> str:
++def once(fn: Callable[[], bytes]) -> Callable[[], bytes]:
++    """Call `fn` at most once, then hand back what it returned.
++
++    Named and exported rather than inlined as a closure so it can be PROBED. As
++    a closure inside `preview_markdown` the memoisation was unreachable from any
++    test: no branch there calls it twice, so deleting the memoisation changed no
++    observable behaviour and the guard for it passed either way. A guarantee that
++    cannot fail a test is not a guarantee.
++
++    It earns its place because `preview_markdown`'s whole reason for taking a
++    callable is that fetching the bytes is expensive (#730): a future branch that
++    reads twice would silently pay twice, which is the defect that change removed.
++    """
++    cached: list[bytes] = []
++
++    def read() -> bytes:
++        if not cached:
++            cached.append(fn())
++        return cached[0]
++
++    return read
++
++
++def preview_markdown(*, path: str, content_type: str, raw: bytes | Callable[[], bytes]) -> str:
+     """The body the doc viewer shows for this document, or "" when the FE
+     should render (or refuse) the blob itself. Structured-data types return
+     verbatim decoded text (the FE builds the tree/grid); xlsx/docx are still
+-    projected to markdown here."""
++    projected to markdown here.
++
++    ``raw`` may be a CALLABLE, and a caller for whom fetching the bytes is
++    expensive should pass one: three of the branches below never look at them.
++    An image or a PDF is rendered by the browser from its own blob, and an
++    unrecognised binary gets a download notice — so restoring the blob to answer
++    "" meant the bytes were pulled once here, dropped, and then fetched again by
++    the browser. For a photograph that was the ten seconds a person spent
++    waiting (#730).
++
++    Deliberately NOT a second `needs_bytes(path, content_type)` predicate beside
++    this function: two copies of one branch table drift, and the copy that
++    decides whether to do the expensive thing would be the one nobody re-reads.
++    Asking for the bytes IS the condition.
++    """
+     p = path.lower()
+     ct = content_type
++    # `isinstance(bytes)` rather than `callable(...)`: the latter narrows to a
++    # top callable whose signature is unknown, which a type checker cannot verify
++    # at the call sites below.
++    fetch: Callable[[], bytes] = (lambda data=raw: data) if isinstance(raw, bytes) else raw
++    read = once(fetch)
++
+     if ct.startswith("image/"):
+         return ""
+     if ct in _BLOB_NATIVE_MIMES or p.endswith(_BLOB_NATIVE_EXTENSIONS):
+         return ""
+     if is_structured_text(path, content_type):
+         # FE renders the tree/grid from this — hand back the verbatim text.
+-        return normalize_text(raw.decode("utf-8", errors="replace"))
++        return normalize_text(read().decode("utf-8", errors="replace"))
+     if p.endswith(".xlsx"):
+-        return _xlsx_preview(raw)
++        return _xlsx_preview(read())
+     if p.endswith(".docx"):
+-        return _docx_preview(raw)
++        return _docx_preview(read())
+     if ct.startswith("text/") or is_code_file(p):
+-        return normalize_text(raw.decode("utf-8", errors="replace"))
++        return normalize_text(read().decode("utf-8", errors="replace"))
+     # Undisplayable binary (pptx, unknown) — FE shows the download notice.
+     return ""
+ 
+diff --git a/tests/api/test_apps_routes.py b/tests/api/test_apps_routes.py
+index 74087573..e1e38781 100644
+--- a/tests/api/test_apps_routes.py
++++ b/tests/api/test_apps_routes.py
+@@ -6,12 +6,16 @@ manifest. Pure reads off the on-disk app.json — no live behaviour change.
+ 
+ from __future__ import annotations
+ 
++import base64
+ from collections.abc import AsyncIterator
+ 
++import msgspec
++
+ from workspace_app.agent.config_catalog import AgentConfigCatalog
+ from workspace_app.agent.context import AgentToolContext
+ from workspace_app.api import RunDone, create_app
+ from workspace_app.api.events import AgentEvent
++from workspace_app.apps.manifest import load_app_manifest
+ from workspace_app.filestore.memory import MemoryFileStore
+ from workspace_app.resources import make_spec
+ from workspace_app.sandbox.mock import MockSandbox
+@@ -193,3 +197,110 @@ def test_post_app_item_still_creates_when_seeding_fails(monkeypatch):
+ 
+ def test_post_app_item_unknown_slug_404():
+     assert _client().post("/a/nope/items", json={"title": "x"}).status_code == 404
++
++
++# ── file-based App icons: a PNG, not just an inlined SVG ──────────────────────
++# A 1×1 transparent PNG — a real raster file, so the route is asserted on actual
++# bytes rather than on a stub no browser could decode.
++_PNG_1X1 = base64.b64decode(
++    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
++)
++
++
++def _ships_icon(tmp_path, monkeypatch, icon: str, blob: bytes | None = None) -> str:
++    """Re-point the App loaders at a temp tree in which the real ``rca`` App
++    declares `icon` in its manifest, shipping `blob` under that name when given.
++
++    A REAL slug, so the route's own unknown-app guard (and app startup, which
++    imports each App's model) still runs against the shipped package — only
++    where the icon is READ FROM moves."""
++    slug = "rca"
++    (tmp_path / slug).mkdir()
++    if blob is not None:
++        (tmp_path / slug / icon).write_bytes(blob)
++    declared = msgspec.structs.replace(load_app_manifest(slug), icon=icon)
++    monkeypatch.setattr("workspace_app.apps.manifest.load_app_manifest", lambda _s: declared)
++    monkeypatch.setattr("workspace_app.apps.manifest.apps_root", lambda: tmp_path)
++    return slug
++
++
++def test_get_app_icon_serves_a_shipped_png(tmp_path, monkeypatch):
++    """An App may ship its icon as a PNG; the route hands the browser the real
++    bytes with the right media type, so `<img>` can render it."""
++    client = _client()
++    slug = _ships_icon(tmp_path, monkeypatch, "icon.png", _PNG_1X1)
++
++    r = client.get(f"/apps/{slug}/icon")
++
++    assert r.status_code == 200
++    assert r.headers["content-type"].startswith("image/png")
++    assert r.content == _PNG_1X1
++
++
++def test_get_app_icon_serves_a_shipped_svg_as_a_file(tmp_path, monkeypatch):
++    """SVG travels the same road as PNG — a URL with an image media type, not
++    markup folded into the manifest JSON. One rule for every file icon."""
++    client = _client()
++    svg = b'<svg xmlns="http://www.w3.org/2000/svg"><circle r="1"/></svg>'
++    slug = _ships_icon(tmp_path, monkeypatch, "icon.svg", svg)
++
++    r = client.get(f"/apps/{slug}/icon")
++
++    assert r.status_code == 200
++    assert r.headers["content-type"].startswith("image/svg+xml")
++    assert r.content == svg
++
++
++def test_get_app_manifest_reports_a_file_icon_by_name_not_by_content(tmp_path, monkeypatch):
++    """The manifest keeps naming the FILE; it never carries the picture. That is
++    what lets the launcher list and the app detail show the same icon — the list
++    endpoint was never able to inline anything."""
++    client = _client()
++    slug = _ships_icon(tmp_path, monkeypatch, "icon.svg", b"<svg/>")
++
++    assert client.get(f"/apps/{slug}").json()["icon"] == "icon.svg"
++    assert next(a for a in client.get("/apps").json() if a["slug"] == slug)["icon"] == "icon.svg"
++
++
++def test_get_app_icon_404s_when_the_app_ships_no_file(tmp_path, monkeypatch):
++    """A named-icon key (`flame`) is not a file — the FE draws the named glyph,
++    so there is nothing to serve here."""
++    client = _client()
++    slug = _ships_icon(tmp_path, monkeypatch, "flame")
++
++    assert client.get(f"/apps/{slug}/icon").status_code == 404
++
++
++def test_get_app_icon_404s_when_the_named_file_is_missing(tmp_path, monkeypatch):
++    """A manifest naming a file that isn't shipped degrades to the FE's fallback
++    glyph — NOT a 500. This is the shape that used to break: a binary named
++    `.svg` was read as utf-8 text and took the whole manifest endpoint down."""
++    client = _client()
++    slug = _ships_icon(tmp_path, monkeypatch, "icon.png")  # declared, never written
++
++    assert client.get(f"/apps/{slug}/icon").status_code == 404
++    assert client.get(f"/apps/{slug}").status_code == 200  # manifest still serves
++
++
++def test_get_app_icon_404s_on_an_unservable_extension(tmp_path, monkeypatch):
++    """Only image types are served. An App cannot turn this route into a reader
++    for arbitrary files in its own directory."""
++    client = _client()
++    slug = _ships_icon(tmp_path, monkeypatch, "app.json", b'{"secret": true}')
++
++    assert client.get(f"/apps/{slug}/icon").status_code == 404
++
++
++def test_get_app_icon_refuses_to_leave_the_app_directory(tmp_path, monkeypatch):
++    """An icon is a plain filename beside app.json. A manifest carrying a path
++    is refused rather than resolved, so it can never reach a sibling App's (or
++    the deploy's) files."""
++    client = _client()
++    (tmp_path / "secret.png").write_bytes(_PNG_1X1)
++    slug = _ships_icon(tmp_path, monkeypatch, "../secret.png")
++
++    assert client.get(f"/apps/{slug}/icon").status_code == 404
++
++
++def test_get_app_icon_unknown_slug_404():
++    assert _client().get("/apps/nope/icon").status_code == 404
+diff --git a/tests/api/test_cov_fill_api.py b/tests/api/test_cov_fill_api.py
+index 8863f779..113c651e 100644
+--- a/tests/api/test_cov_fill_api.py
++++ b/tests/api/test_cov_fill_api.py
+@@ -16,6 +16,7 @@ All wiring uses ScriptedAgentRunner / MockSandbox / HashEmbedder — no real LLM
+ from __future__ import annotations
+ 
+ import asyncio
++import json
+ from collections.abc import AsyncIterator
+ 
+ import pytest
+@@ -290,5 +291,10 @@ async def test_subscribe_sse_encodes_a_published_event_frame():
+     frame = await asyncio.wait_for(it.__anext__(), 3)
+     await frames.aclose()
+     # The live frame carries the broadcast seq (1 — first event on the session) so
+-    # a reconnecting client can resume with `?since=`.
+-    assert frame == to_sse(MessageDelta(text="hi"), seq=1)
++    # a reconnecting client can resume with `?since=`, AND the event's own id, so
++    # a viewer that is re-delivered it (a replay, or a reconnect onto a pod whose
++    # numbering differs) draws it once. The id is minted per publish, so the
++    # frame is compared against the id it actually carried.
++    body = json.loads(frame[len("data: ") :].strip())
++    assert body["id"]
++    assert frame == to_sse(MessageDelta(text="hi"), seq=1, event_id=body["id"])
+diff --git a/tests/api/test_cov_fill_r2_routes.py b/tests/api/test_cov_fill_r2_routes.py
+index ae5b9487..ff1be787 100644
+--- a/tests/api/test_cov_fill_r2_routes.py
++++ b/tests/api/test_cov_fill_r2_routes.py
+@@ -1,6 +1,6 @@
+ """Cov-fill for the post-#54 split route modules.
+ 
+-Three reachable branches that the 100% gate flagged as missing once their only
++Two reachable branches that the 100% gate flagged as missing once their only
+ prior coverage came from flaky LLM-path integration tests:
+ 
+   - capability_routes.py: the invalid/forged ``X-Workflow-Token`` → 401 branch
+@@ -8,11 +8,11 @@ prior coverage came from flaky LLM-path integration tests:
+     (``claims is None`` ⇒ HTTPException(401)).
+   - item_routes.py: ``create_app_item`` wraps a ``msgspec.ValidationError`` from
+     ``msgspec.convert`` into a 422 (here a bad enum value for ``severity``).
+-  - meta_routes.py: ``get_app_manifest`` inlines a shipped ``icon.svg`` — the
+-    ``m.icon.endswith(".svg")`` + ``.read_text`` lines. No bundled app ships an
+-    ``.svg`` icon, so we monkeypatch ``load_app_manifest`` to return one whose
+-    icon ends in ``.svg``; the missing-file ``OSError`` is swallowed by the
+-    ``contextlib.suppress`` while the inlining LINES still execute.
++
++(A third case lived here — ``get_app_manifest`` inlining a shipped ``icon.svg``.
++A file icon is served from ``GET /apps/{slug}/icon`` now, so the manifest inlines
++nothing; the behaviour it stood in for is tested through that route in
++``test_apps_routes.py``.)
+ 
+ All wiring is deterministic: ScriptedAgentRunner / MockSandbox / MemoryFileStore /
+ HashEmbedder via ``create_app`` — no real LLM / docker.
+@@ -20,8 +20,6 @@ HashEmbedder via ``create_app`` — no real LLM / docker.
+ 
+ from __future__ import annotations
+ 
+-import msgspec
+-
+ from workspace_app.api import MessageDelta, RunDone, ScriptedAgentRunner, create_app
+ from workspace_app.filestore.memory import MemoryFileStore
+ from workspace_app.kb.embedder import HashEmbedder
+@@ -88,27 +86,3 @@ def test_create_app_item_bad_enum_is_422():
+     client = TestClient(app)
+     r = client.post("/a/rca/items", json={"title": "Oven drift", "severity": "NOPE"})
+     assert r.status_code == 422
+-
+-
+-# ── meta_routes.py: .svg icon inlining ───────────────────────────────
+-
+-
+-def test_get_app_manifest_inlines_svg_icon(monkeypatch):
+-    """The ``m.icon.endswith('.svg')`` + ``.read_text`` lines run when the
+-    manifest's icon ends in ``.svg``. There's no ``icon.svg`` file for rca, so
+-    the suppressed ``OSError`` keeps the response a clean 200 while the inlining
+-    lines still execute (and get covered)."""
+-    import workspace_app.apps.manifest as manifest_mod
+-
+-    # Build the app first so any boot-time manifest loads use the real loader.
+-    app, _spec = _app()
+-    client = TestClient(app)
+-
+-    real = manifest_mod.load_app_manifest("rca")
+-    svg_manifest = msgspec.structs.replace(real, icon="icon.svg")
+-    monkeypatch.setattr(manifest_mod, "load_app_manifest", lambda slug: svg_manifest)
+-
+-    r = client.get("/apps/rca")
+-    assert r.status_code == 200
+-    # The file is absent → suppressed OSError → icon stays the raw "icon.svg".
+-    assert r.json()["icon"] == "icon.svg"
+diff --git a/tests/api/test_event_bus.py b/tests/api/test_event_bus.py
+index 29a234e8..28e98a23 100644
+--- a/tests/api/test_event_bus.py
++++ b/tests/api/test_event_bus.py
+@@ -113,10 +113,12 @@ class _CountingBus(InMemoryEventBus):
+     def __init__(self) -> None:
+         super().__init__()
+         self.origins: list[str] = []
++        self.ids: list[str] = []
+ 
+-    def publish(self, key: str, origin: str, event: Any) -> None:
++    def publish(self, key: str, origin: str, event: Any, event_id: str) -> None:
+         self.origins.append(origin)
+-        super().publish(key, origin, event)
++        self.ids.append(event_id)
++        super().publish(key, origin, event, event_id)
+ 
+ 
+ async def test_a_bus_delivered_event_is_not_republished():
+@@ -151,3 +153,78 @@ async def test_single_pod_bus_is_a_noop():
+ 
+     await sub.aclose()
+     await engine.forget(key)
++
++
++async def test_one_event_carries_the_same_id_on_every_pod():
++    """The identity a client dedupes on has to survive the crossing.
++
++    `seq` cannot: each pod numbers its own session (`_fanout`), so the same
++    logical event is #7 here and #3 there. A viewer that reconnects onto a
++    different pod resumes `?since=` in a foreign numbering — which replays what
++    it already has (the duplicate bubble) or skips what it does not. An id
++    minted once, at the origin, is the same on both sides of the bus, so the
++    client can recognise a repeat however it arrived.
++    """
++    bus = InMemoryEventBus()
++    pod_a = ChatTurnEngine(_Runner(), event_bus=bus, pod_id="A")  # ty: ignore[invalid-argument-type]
++    pod_b = ChatTurnEngine(_Runner(), event_bus=bus, pod_id="B")  # ty: ignore[invalid-argument-type]
++    key = "inv"
++
++    on_a = pod_a.subscribe_sse(key, heartbeat_interval=5.0)
++    on_b = pod_b.subscribe_sse(key, heartbeat_interval=5.0)
++    pod_a._ws_session(key).publish(MessageDelta(text="once"))
++
++    frame_a = await _read_frame(on_a)
++    frame_b = await _read_frame(on_b)
++
++    assert frame_a["text"] == frame_b["text"] == "once"
++    assert frame_a["id"], "every broadcast event needs an id to dedupe on"
++    assert frame_a["id"] == frame_b["id"]
++
++    await on_a.aclose()
++    await on_b.aclose()
++    await pod_a.forget(key)
++    await pod_b.forget(key)
++
++
++async def test_two_events_do_not_share_an_id():
++    """The obvious way to pass the test above is a constant."""
++    bus = InMemoryEventBus()
++    pod = ChatTurnEngine(_Runner(), event_bus=bus, pod_id="A")  # ty: ignore[invalid-argument-type]
++    key = "inv"
++
++    sub = pod.subscribe_sse(key, heartbeat_interval=5.0)
++    pod._ws_session(key).publish(MessageDelta(text="one"))
++    pod._ws_session(key).publish(MessageDelta(text="two"))
++
++    first = await _read_frame(sub)
++    second = await _read_frame(sub)
++
++    assert first["id"] != second["id"]
++
++    await sub.aclose()
++    await pod.forget(key)
++
++
++async def test_a_replayed_event_keeps_the_id_it_was_published_with():
++    """Replay is the path that re-delivers, so it is the path whose ids have to
++    match what the client already saw — a fresh id per delivery would defeat
++    the dedupe exactly where it is needed."""
++    bus = InMemoryEventBus()
++    pod = ChatTurnEngine(_Runner(), event_bus=bus, pod_id="A")  # ty: ignore[invalid-argument-type]
++    key = "inv"
++
++    live = pod.subscribe_sse(key, heartbeat_interval=5.0)
++    pod._ws_session(key).publish(MessageDelta(text="during the gap"))
++    seen = await _read_frame(live)
++    await live.aclose()
++
++    # A reconnect that resumes from BEFORE that event replays it.
++    resumed = pod.subscribe_sse(key, heartbeat_interval=5.0, since=seen["seq"] - 1)
++    replayed = await _read_frame(resumed)
++
++    assert replayed["text"] == "during the gap"
++    assert replayed["id"] == seen["id"]
++
++    await resumed.aclose()
++    await pod.forget(key)
+diff --git a/tests/api/test_kb_api.py b/tests/api/test_kb_api.py
+index f17619f8..8ad5d1da 100644
+--- a/tests/api/test_kb_api.py
++++ b/tests/api/test_kb_api.py
+@@ -2031,3 +2031,221 @@ def test_the_reported_count_is_not_raced_down_by_a_fast_worker():
+     body = client.post(f"/kb/collections/{cid}/reindex", params={"only": "failed"}).json()
+     assert body["queued"] is True
+     assert body["documents"] == 1  # counted before the worker could move it
++
++
++def test_render_document_does_not_read_the_blob_it_will_not_use():
++    """#730: opening an image took ten seconds because the bytes were fetched twice.
++
++    `preview_markdown` returns "" for a browser-native type — an image or a PDF
++    is rendered by the browser from `/blobs/{file_id}`, not projected to text —
++    so `raw` is never used for those, and `size` comes off `doc.content.size`
++    rather than `len(raw)`. Restoring the blob anyway means the backend pulls the
++    whole picture out of the blob store, drops it, answers `markdown=""`, and then
++    the browser fetches the SAME bytes: two reads, one of them pure waste, and
++    the waste is the one the person is waiting for.
++
++    Asserted by counting `restore_binary`, because "it is faster now" is not
++    something a test can hold — the read either happens or it does not.
++    """
++    from unittest.mock import patch
++
++    from specstar.types import Binary
++
++    client, spec = _client_and_spec()
++    cid = _new_collection(client)
++    rm = spec.get_resource_manager(SourceDoc)
++
++    png = b"\x89PNG\r\n\x1a\n" + b"0" * 4096
++    doc_id = encode_doc_id(cid, "shot.png")
++    rm.create(
++        SourceDoc(
++            collection_id=cid,
++            path="shot.png",
++            content=Binary(data=png, content_type="image/png"),
++            status="ready",
++        ),
++        resource_id=doc_id,
++    )
++
++    real = type(rm).restore_binary
++    calls: list[str] = []
++
++    def counting(self, obj):
++        calls.append(getattr(obj, "path", "?"))
++        return real(self, obj)
++
++    with patch.object(type(rm), "restore_binary", counting):
++        rd = client.get(f"/kb/documents?id={doc_id}").json()
++
++    assert rd["content_type"] == "image/png"
++    assert rd["markdown"] == ""  # the browser renders the blob; there is no projection
++    assert rd["size"] == len(png)  # ...and the size still comes back
++    assert calls == [], f"the blob was restored for a type that never reads it: {calls}"
++
++
++def test_render_document_still_reads_the_blob_for_a_type_it_projects():
++    """The other half: skipping the read must be decided by the TYPE, not by
++    skipping it everywhere. A markdown document has no text without its bytes."""
++    from unittest.mock import patch
++
++    client, spec = _client_and_spec()
++    cid = _new_collection(client)
++    _upload(client, cid, "a.md", b"# hello")
++    _drain(client)
++    doc_id = encode_doc_id(cid, "a.md")
++
++    rm = spec.get_resource_manager(SourceDoc)
++    real = type(rm).restore_binary
++    calls: list[str] = []
++
++    def counting(self, obj):
++        calls.append(getattr(obj, "path", "?"))
++        return real(self, obj)
++
++    with patch.object(type(rm), "restore_binary", counting):
++        rd = client.get(f"/kb/documents?id={doc_id}").json()
++
++    assert "hello" in rd["markdown"]
++    assert calls, "a projected type still needs its bytes"
++
++
++def test_render_document_resolves_crossref_siblings_in_one_query():
++    """#730: the same N+1 the card's attachments stopped doing on the client.
++
++    `rewrite_md_links` asks `resolve` one id at a time, and `resolve` answered
++    with a point-get each — so a report cross-referencing twelve siblings cost
++    thirteen `SourceDoc.get` calls, every one of them on the event loop, three
++    lines below the fix for the identical shape on the client.
++
++    Counted rather than timed: a latency assertion is a wall-clock assertion,
++    while "how many round trips does one render cost" is a number a test can
++    hold. Siblings are seeded through the zip upload because that is how the
++    other crossref tests make them — a direct POST of a PNG is silently dropped
++    by this harness (no image parser wired), which would leave the links
++    unresolved and the count meaningless.
++    """
++    import io
++    import zipfile
++    from unittest.mock import patch
++
++    client, spec = _client_and_spec()
++    cid = _new_collection(client)
++    siblings = 12
++    buf = io.BytesIO()
++    with zipfile.ZipFile(buf, "w") as z:
++        body = "# report\n\n" + "\n\n".join(f"See [fig {i}](./fig{i}.md)." for i in range(siblings))
++        z.writestr("report.md", body)
++        for i in range(siblings):
++            z.writestr(f"fig{i}.md", f"# figure {i}\n")
++    client.post(
++        f"/kb/collections/{cid}/documents",
++        files={"file": ("docs.zip", buf.getvalue(), "application/zip")},
++    )
++    doc_id = encode_doc_id(cid, "report.md")
++
++    rm = spec.get_resource_manager(SourceDoc)
++    real = type(rm).get
++    calls: list[str] = []
++
++    def counting(self, rid, *a, **k):
++        calls.append(rid)
++        return real(self, rid, *a, **k)
++
++    with patch.object(type(rm), "get", counting):
++        rd = client.get(f"/kb/documents?id={doc_id}").json()
++
++    # the rewrite still happened — every sibling link was resolved
++    assert rd["markdown"].count("kb://doc/") == siblings, rd["markdown"][:200]
++    # ...and it cost a bounded number of reads, not one per sibling
++    assert len(calls) <= 3, f"{siblings} siblings cost {len(calls)} SourceDoc.get calls"
++
++
++def test_crossref_batching_rewrites_exactly_as_a_point_get_each_would():
++    """#730 P4 replaced a mechanism, so this compares OUTPUT, not just cost.
++
++    The batched `resolve` reads from a map filled by one query; the old one did a
++    point-get per candidate id. Counting queries proves it is cheaper, not that
++    it is the same — and what a replacement drops is whatever the old one ALSO
++    did. So: both mechanisms, one corpus, byte-for-byte.
++
++    The corpus is the edges the old resolve had to handle, not the case that
++    prompted the change: extension fallback, a parent-relative path, a missing
++    sibling (left untouched), the same id twice, fragments, query strings,
++    absolute URLs, fenced code, and case.
++    """
++    import io
++    import zipfile
++
++    from specstar.types import ResourceIDNotFoundError
++
++    from workspace_app.kb.links import rewrite_md_links
++
++    client, spec = _client_and_spec()
++    cid = _new_collection(client)
++    buf = io.BytesIO()
++    with zipfile.ZipFile(buf, "w") as z:
++        for name, body in (("a.md", "# A"), ("nested/b.md", "# B"), ("c.txt", "plain")):
++            z.writestr(name, body)
++        z.writestr("seed.md", "seed")
++    client.post(
++        f"/kb/collections/{cid}/documents",
++        files={"file": ("docs.zip", buf.getvalue(), "application/zip")},
++    )
++    rm = spec.get_resource_manager(SourceDoc)
++
++    def url_for(sib, rid):
++        ct, fid = sib.content.content_type, sib.content.file_id
++        if isinstance(ct, str) and ct.startswith("image/") and isinstance(fid, str):
++            return f"/blobs/{fid}"
++        return f"kb://doc/{rid}"
++
++    def point_get_each(text, doc_path):
++        def resolve(rid):
++            try:
++                return url_for(rm.get(rid).data, rid)
++            except ResourceIDNotFoundError:
++                return None
++
++        return rewrite_md_links(text, doc_path=doc_path, collection_id=cid, resolve=resolve)
++
++    cases = [
++        ("seed.md", "[A](./a.md)"),
++        ("seed.md", "[A](a.md)"),
++        ("seed.md", "[A](./a)"),
++        ("seed.md", "[B](./nested/b)"),
++        ("nested/seed.md", "[A](../a.md)"),
++        ("seed.md", "[gone](./gone.md)"),
++        ("seed.md", "[A](./a.md) and [A again](./a.md)"),
++        ("seed.md", "![img](./c.txt)"),
++        ("seed.md", "[ext](https://example.com/a.md)"),
++        ("seed.md", "[anchor](./a.md#section)"),
++        ("seed.md", "```\n[code](./a.md)\n```"),
++        ("seed.md", "[A](./A.MD)"),
++        ("seed.md", ""),
++    ]
++    for doc_path, text in cases:
++        expected = point_get_each(text, doc_path)
++        # the shipped path, reached through the route's own helper shape
++        wanted: set[str] = set()
++
++        def collect(rid, _w=wanted):
++            _w.add(rid)
++            return None
++
++        rewrite_md_links(text, doc_path=doc_path, collection_id=cid, resolve=collect)
++        found = {}
++        if wanted:
++            for row in rm.list_resources(QB.resource_id().in_(sorted(wanted)).build()):
++                if isinstance(row.data, SourceDoc):
++                    found[row.info.resource_id] = row.data  # ty: ignore[unresolved-attribute]
++        actual = rewrite_md_links(
++            text,
++            doc_path=doc_path,
++            collection_id=cid,
++            # bound as a default: a lambda closing over a loop variable is the
++            # classic late-binding trap, and ruff is right to refuse it here.
++            resolve=lambda rid, _f=found: None if (s_ := _f.get(rid)) is None else url_for(s_, rid),
++        )
++        assert actual == expected, (
++            f"{doc_path} :: {text!r}\n  point-get: {expected!r}\n  batched:  {actual!r}"
++        )
+diff --git a/tests/api/test_rabbitmq_event_bus.py b/tests/api/test_rabbitmq_event_bus.py
+index 14fc7c30..39f30ea7 100644
+--- a/tests/api/test_rabbitmq_event_bus.py
++++ b/tests/api/test_rabbitmq_event_bus.py
+@@ -39,22 +39,24 @@ class _FakeTransport(IAmqpTransport):
+ def test_an_event_round_trips_through_the_bus():
+     t = _FakeTransport()
+     bus = RabbitMQEventBus(url="", transport=t)
+-    got: list[tuple[str, str, object]] = []
+-    bus.start_consuming(lambda key, origin, event: got.append((key, origin, event)))
++    got: list[tuple[str, str, object, str]] = []
++    bus.start_consuming(lambda key, origin, event, eid: got.append((key, origin, event, eid)))
+ 
+-    bus.publish("K", "podA", MessageDelta(text="hi"))
++    bus.publish("K", "podA", MessageDelta(text="hi"), "e1")
+     assert t.published, "the envelope was serialized to the transport"
+ 
+-    # A pod receiving that frame reconstructs (key, origin, the exact event).
++    # A pod receiving that frame reconstructs (key, origin, the exact event) —
++    # and the id it was published with, which is what the far-side viewer
++    # dedupes on after reconnecting across pods.
+     t.deliver(t.published[0])
+-    assert got == [("K", "podA", MessageDelta(text="hi"))]
++    assert got == [("K", "podA", MessageDelta(text="hi"), "e1")]
+ 
+ 
+ def test_publish_is_fire_and_forget_when_the_broker_is_down():
+     # A broker failure must never propagate to (or block) the turn.
+     bus = RabbitMQEventBus(url="", transport=_FakeTransport(raise_on_publish=True))
+     bus.start_consuming(lambda *_: None)
+-    bus.publish("K", "podA", MessageDelta(text="hi"))  # must NOT raise
++    bus.publish("K", "podA", MessageDelta(text="hi"), "e1")  # must NOT raise
+ 
+ 
+ def test_a_malformed_frame_is_dropped_not_fatal():
+@@ -86,19 +88,39 @@ async def test_real_broker_cross_pod_round_trip():
+     if not url:
+         pytest.skip("no $AMQP_URL — needs a live RabbitMQ broker")
+ 
+-    received: list[tuple[str, str, object]] = []
++    received: list[tuple[str, str, object, str]] = []
+     got = asyncio.Event()
+     bus_a = RabbitMQEventBus(url=url, exchange="rca_test_events")
+     bus_b = RabbitMQEventBus(url=url, exchange="rca_test_events")
+ 
+-    def on_event(key: str, origin: str, event: object) -> None:
+-        received.append((key, origin, event))
++    def on_event(key: str, origin: str, event: object, event_id: str) -> None:
++        received.append((key, origin, event, event_id))
+         got.set()
+ 
+     bus_a.start_consuming(lambda *_: None)
+     bus_b.start_consuming(on_event)
+     await asyncio.sleep(1.0)  # let both queues bind to the exchange
+ 
+-    bus_a.publish("K", "podA", MessageDelta(text="real"))
++    bus_a.publish("K", "podA", MessageDelta(text="real"), "e1")
+     await asyncio.wait_for(got.wait(), 5)
+-    assert received == [("K", "podA", MessageDelta(text="real"))]
++    assert received == [("K", "podA", MessageDelta(text="real"), "e1")]
++
++
++def test_a_frame_from_a_pod_that_predates_event_ids_still_delivers():
++    """A rolling upgrade runs both versions at once. An old pod publishes an
++    envelope with no `id`, and raising on it would drop LIVE events for the
++    length of the rollout — a worse fault than the duplicate bubble the id
++    exists to prevent. No id just means nothing to dedupe on."""
++    import json
++
++    t = _FakeTransport()
++    bus = RabbitMQEventBus(url="", transport=t)
++    got: list[tuple[str, str, object, str]] = []
++    bus.start_consuming(lambda key, origin, event, eid: got.append((key, origin, event, eid)))
++
++    old_frame = json.dumps(
++        {"key": "K", "origin": "podOld", "event": {"type": "message_delta", "text": "hi"}}
++    ).encode()
++    t.deliver(old_frame)
++
++    assert got == [("K", "podOld", MessageDelta(text="hi"), "")]
+diff --git a/tests/kb/test_preview.py b/tests/kb/test_preview.py
+index 1d4fd5a6..93bf85ec 100644
+--- a/tests/kb/test_preview.py
++++ b/tests/kb/test_preview.py
+@@ -17,9 +17,10 @@ The contract per type:
+ 
+ from __future__ import annotations
+ 
++import contextlib
+ import io
+ 
+-from workspace_app.kb.preview import is_structured_text, preview_markdown
++from workspace_app.kb.preview import is_structured_text, once, preview_markdown
+ 
+ 
+ def _xlsx(sheets: dict[str, list[dict[str, object]]]) -> bytes:
+@@ -173,3 +174,87 @@ def test_markdown_and_plain_text_decode_as_before():
+ def test_code_files_decode_by_extension_even_with_x_mime():
+     py = preview_markdown(path="a.py", content_type="text/x-script.python", raw=b"def f(): ...")
+     assert py == "def f(): ..."
++
++
++def test_once_calls_through_exactly_one_time():
++    """#730: `preview_markdown` takes a callable because the fetch is expensive.
++
++    Probed HERE rather than through `preview_markdown`, because no branch there
++    reads twice — so deleting the memoisation changes nothing that function can
++    show, and the first version of this test passed with it removed.
++    """
++    calls = []
++
++    def fetch() -> bytes:
++        calls.append(1)
++        return b"payload"
++
++    read = once(fetch)
++    assert read() == b"payload"
++    assert read() == b"payload"
++    assert read() == b"payload"
++    assert calls == [1], f"the expensive call was made {len(calls)} times"
++
++
++def test_once_caches_an_EMPTY_result_too():
++    """The classic memoisation bug: `if not cached: cached = fn()` re-fetches
++    forever when `fn` legitimately returns b"" — an empty file is a real
++    document, and it is the cheapest one to fetch twice by accident."""
++    calls = []
++
++    def fetch() -> bytes:
++        calls.append(1)
++        return b""
++
++    read = once(fetch)
++    assert read() == b""
++    assert read() == b""
++    assert calls == [1], "an empty result was re-fetched"
++
++
++def test_once_does_not_cache_a_failure():
++    """A raise is not a result. Caching one would turn a transient blob-store
++    error into a permanently broken document for the life of the call."""
++    calls = []
++
++    def fetch() -> bytes:
++        calls.append(1)
++        raise RuntimeError("blob store said no")
++
++    read = once(fetch)
++    for _ in range(2):
++        with contextlib.suppress(RuntimeError):
++            read()
++    assert calls == [1, 1], "a failure was cached instead of retried"
++
++
++def test_once_is_lazy_until_asked():
++    """Never asked ⇒ never fetched. That is the half that saves the ten seconds."""
++    calls = []
++    once(lambda: (calls.append(1), b"x")[1])
++    assert calls == []
++
++
++def test_preview_markdown_fetches_a_lazy_blob_for_a_projected_type():
++    calls = []
++
++    def fetch() -> bytes:
++        calls.append(1)
++        return b"# hi"
++
++    assert preview_markdown(path="a.md", content_type="text/markdown", raw=fetch) == "# hi"
++    assert calls == [1]
++
++
++def test_preview_markdown_never_fetches_for_a_type_the_browser_renders():
++    """The other half: an image must not touch the blob at all."""
++    calls = []
++
++    def fetch() -> bytes:  # pragma: no cover - must never run
++        calls.append(1)
++        return b""
++
++    assert preview_markdown(path="a.png", content_type="image/png", raw=fetch) == ""
++    assert preview_markdown(path="a.pdf", content_type="application/pdf", raw=fetch) == ""
++    assert preview_markdown(path="x.bin", content_type="application/octet-stream", raw=fetch) == ""
++    assert calls == [], "the bytes were fetched for a type that never reads them"
+diff --git a/web/src/api/kb.batch.test.ts b/web/src/api/kb.batch.test.ts
+new file mode 100644
+index 00000000..5ad3506a
+--- /dev/null
++++ b/web/src/api/kb.batch.test.ts
+@@ -0,0 +1,77 @@
++/**
++ * #730: a card's attachments resolve in ONE request.
++ *
++ * Against `realKbApi`, not the mock. The first version of these assertions ran
++ * on `mockKbApi` — so mutating the shipped `getSourceDocMetas` (dropping the
++ * empty-set short circuit, keying the result by position instead of by id)
++ * changed nothing they could observe, and both mutations came back green. A
++ * test of the double is a test of the double.
++ */
++
++import { afterEach, describe, expect, it, vi } from "vitest";
++
++import { realKbApi } from "./kb";
++
++afterEach(() => vi.unstubAllGlobals());
++
++function envelope(id: string, contentType: string, fileId: string) {
++  return {
++    data: { content: { file_id: fileId, content_type: contentType } },
++    revision_info: { resource_id: id },
++  };
++}
++
++function jsonResponse(body: unknown): Response {
++  return new Response(JSON.stringify(body), {
++    status: 200,
++    headers: { "content-type": "application/json" },
++  });
++}
++
++describe("realKbApi.getSourceDocMetas (#730)", () => {
++  it("asks once for every id, and keys the answer by id", async () => {
++    const a = "c\u2215a.png";
++    const b = "c\u2215b.pdf";
++    const fetchMock = vi.fn(async () =>
++      // Deliberately the REVERSE of the requested order: the backend is free to
++      // return rows however it likes, and a positional mapping would put one
++      // card's picture on another's tile — wrong in a way that looks right.
++      jsonResponse([envelope(b, "application/pdf", "hb"), envelope(a, "image/png", "ha")]),
++    );
++    vi.stubGlobal("fetch", fetchMock);
++
++    const metas = await realKbApi.getSourceDocMetas([a, b]);
++
++    expect(fetchMock).toHaveBeenCalledTimes(1);
++    expect(metas[a]?.content_type).toBe("image/png");
++    expect(metas[a]?.file_id).toBe("ha");
++    expect(metas[b]?.content_type).toBe("application/pdf");
++  });
++
++  it("sends every id in the query", async () => {
++    const seen: string[] = [];
++    const fetchMock = vi.fn(async (input: unknown) => {
++      seen.push(String(input));
++      return jsonResponse([]);
++    });
++    vi.stubGlobal("fetch", fetchMock);
++
++    await realKbApi.getSourceDocMetas(["c\u2215a.png", "c\u2215b.pdf"]);
++
++    const url = seen[0] ?? "";
++    expect(decodeURIComponent(url)).toContain("QB.resource_id().in_(");
++    expect(decodeURIComponent(url)).toContain("a.png");
++    expect(decodeURIComponent(url)).toContain("b.pdf");
++  });
++
++  it("asks nothing when there is nothing to ask about", async () => {
++    // `in_([])` is not "no query" — it is a query the backend still answers,
++    // and a card with no attachments is the common case.
++    const fetchMock = vi.fn(async () => jsonResponse([]));
++    vi.stubGlobal("fetch", fetchMock);
++
++    expect(await realKbApi.getSourceDocMetas([])).toEqual({});
++
++    expect(fetchMock).not.toHaveBeenCalled();
++  });
++});
+diff --git a/web/src/api/kb.ts b/web/src/api/kb.ts
+index d71a670c..f7091ec3 100644
+--- a/web/src/api/kb.ts
++++ b/web/src/api/kb.ts
+@@ -833,6 +833,15 @@ export interface KbApi {
+    * parser_guidance_override} from the SourceDoc envelope (GET /source-doc/{id}),
+    * NOT the heavy renderDocument. */
+   getSourceDocMeta(documentId: string): Promise<KbDocMeta>;
++  /** #730: the envelopes for MANY documents, keyed by id, in one request.
++   *
++   * A card resolved its attachments one at a time — a request each, only to
++   * learn a content type and a blob id — and a picture could not start loading
++   * until its own request came back. One query answers for all of them.
++   *
++   * Keyed rather than positional: the caller has ids, and a backend free to
++   * return rows in any order would otherwise put the wrong picture on a tile. */
++  getSourceDocMetas(documentIds: readonly string[]): Promise<Record<string, KbDocMeta>>;
+   /** A document's indexed chunks + their cited counts (the chunks debug view). */
+   getDocChunks(documentId: string): Promise<KbDocChunk[]>;
+   /** Re-chunk + re-embed a single document (flips it back to `indexing`). */
+@@ -1166,6 +1175,35 @@ export const realKbApi: KbApi = {
+     const url = `/kb/documents?id=${encodeURIComponent(documentId)}`;
+     return (await ok(await apiFetch(url), "render document")).json();
+   },
++  async getSourceDocMetas(documentIds) {
++    // No ids ⇒ no request. An unfiltered `in_([])` is not "nothing", it is a
++    // query the backend still has to answer, and a card with no attachments is
++    // the common case.
++    if (documentIds.length === 0) return {};
++    // specstar's auto-CRUD list with a QB predicate — the same shape the card
++    // list already uses. A built-in beats a bespoke batch endpoint: nothing new
++    // to authorise, and the access scope applies exactly as it does per-id.
++    const qb = `QB.resource_id().in_(${JSON.stringify([...documentIds])})`;
++    const rows: {
++      data: { content?: { file_id?: string; content_type?: string } } & Partial<KbDocMeta>;
++      revision_info: { resource_id: string };
++    }[] = await (
++      await ok(await apiFetch(`/source-doc?qb=${encodeURIComponent(qb)}`), "read document metas")
++    ).json();
++    const out: Record<string, KbDocMeta> = {};
++    for (const r of rows) {
++      const d = r.data;
++      out[r.revision_info.resource_id] = {
++        quality_score: d.quality_score ?? null,
++        quality_rationale: d.quality_rationale ?? "",
++        quality_breakdown: d.quality_breakdown ?? {},
++        parser_guidance_override: d.parser_guidance_override ?? "",
++        file_id: d.content?.file_id,
++        content_type: d.content?.content_type,
++      };
++    }
++    return out;
++  },
+   async getSourceDocMeta(documentId) {
+     // The doc IDE only needs the quality rationale + parser-guidance override on
+     // open — both ride the SourceDoc envelope (metadata, no blob restore), so a
+diff --git a/web/src/api/kbMock.ts b/web/src/api/kbMock.ts
+index 6263da63..aee37972 100644
+--- a/web/src/api/kbMock.ts
++++ b/web/src/api/kbMock.ts
+@@ -10,6 +10,7 @@ import type { CollectionPermission } from "../lib/permission";
+ import type {
+   ArchiveImport,
+   KbApi,
++  KbDocMeta,
+   KbCardGenStatus,
+   KbChatDetail,
+   KbChatMessage,
+@@ -153,7 +154,9 @@ function startImport(collectionId: string): ArchiveImport {
+     collection_id: collectionId,
+     import_id: `import-run:mock${++importSeq}`,
+     status: "queued",
+-    members: 3,
++    // Two documents, so the run needs TWO polls to finish: enough to prove the
++    // UI asks again, without a third read's wait for a test to race.
++    members: 2,
+     written: 0,
+     errors: [],
+     finished: false,
+@@ -462,6 +465,12 @@ export const mockKbApi: KbApi = {
+       parser_guidance_override: doc?.parser_guidance_override,
+     };
+   },
++  async getSourceDocMetas(documentIds) {
++    if (documentIds.length === 0) return {};
++    const out: Record<string, KbDocMeta> = {};
++    for (const id of documentIds) out[id] = await this.getSourceDocMeta(id);
++    return out;
++  },
+   async getSourceDocMeta(documentId) {
+     const collection_id = docIdParts(documentId).collectionId;
+     const doc = (documents.get(collection_id) ?? []).find((d) => d.resource_id === documentId);
+diff --git a/web/src/api/queryKeys.ts b/web/src/api/queryKeys.ts
+index cba16d68..c2038307 100644
+--- a/web/src/api/queryKeys.ts
++++ b/web/src/api/queryKeys.ts
+@@ -143,6 +143,11 @@ export const qk = {
+     // collection — two imports into one collection are two runs, and the poll
+     // must stop with the run it belongs to.
+     archiveImport: (importId: string) => ["kb", "archive-import", importId] as const,
++    // #730: several documents' envelopes in one request. Keyed by the SORTED
++    // id set — the same attachments in another order are the same query, and a
++    // card that gains one is a different query rather than a stale hit.
++    docMetas: (ids: readonly string[]) =>
++      ["kb", "doc-metas", [...ids].sort().join("\u0000")] as const,
+     chats: ["kb", "chats"] as const,
+     chat: (id: string) => ["kb", "chat", id] as const,
+     // #310: a collection's current access state (share dialog pre-fill).
+diff --git a/web/src/components/AppIcon.test.tsx b/web/src/components/AppIcon.test.tsx
+index 74b223fa..e1826424 100644
+--- a/web/src/components/AppIcon.test.tsx
++++ b/web/src/components/AppIcon.test.tsx
+@@ -8,9 +8,13 @@ import { AppIcon } from "./AppIcon";
+ afterEach(cleanup);
+ 
+ describe("AppIcon", () => {
+-  it("renders inline svg markup as-is", () => {
+-    const { container } = render(<AppIcon icon='<svg data-testid="m"></svg>' />);
+-    expect(container.querySelector("svg")).toBeInTheDocument();
++  it("renders a file icon as an <img> pointing at the App's icon route", () => {
++    // The manifest names the FILE; the picture itself is fetched. That is what
++    // lets an App ship a PNG — a raster has no markup to inline.
++    const { container } = render(<AppIcon icon="icon.png" slug="rca" />);
++    const img = container.querySelector("img");
++    expect(img).toBeInTheDocument();
++    expect(img).toHaveAttribute("src", "/api/apps/rca/icon");
+   });
+ 
+   it("renders a short non-name grapheme as an emoji", () => {
+diff --git a/web/src/components/AppIcon.tsx b/web/src/components/AppIcon.tsx
+index 93a594e3..7ab52856 100644
+--- a/web/src/components/AppIcon.tsx
++++ b/web/src/components/AppIcon.tsx
+@@ -1,24 +1,52 @@
+ /**
+- * Renders an App's manifest `icon` in any of its three forms — inline `<svg>`
+- * markup, an emoji grapheme, or a named-icon key — at a consistent size (#89).
+- * Shared by the Launcher cards and the workspace shell's brand mark, so an App's
+- * identity is data (app.json), not hardcoded per surface.
++ * Renders an App's manifest `icon` in any of its three forms — the NAME of a
++ * file the App ships (`icon.png`, `icon.svg`, …), an emoji grapheme, or a
++ * named-icon key — at a consistent size (#89). Shared by the Launcher cards and
++ * the workspace shell's brand mark, so an App's identity is data (app.json),
++ * not hardcoded per surface.
++ *
++ * A file icon is FETCHED, never inlined: the manifest carries the file's name
++ * and the picture comes from `GET /apps/{slug}/icon`. That is what lets an App
++ * ship a PNG (a raster has no markup to fold into JSON), and it keeps every
++ * surface drawing the same mark — the launcher list endpoint has no room to
++ * inline anything, so an inlined icon was only ever visible on some screens.
+  */
+ 
++import { API_PREFIX } from "../api/http";
++
+ import { Icon, type IconName } from "./Icon";
+ 
++// The extensions the backend serves from the icon route. Kept in step with
++// `ICON_MEDIA_TYPES` in apps/manifest.py — a name this doesn't match falls
++// through to the named-icon path, where an unknown key draws the fallback
++// glyph rather than a broken image.
++const FILE_ICON = /\.(png|svg|jpe?g|webp|gif)$/i;
++
+ export function AppIcon({
+   icon,
++  slug,
+   color,
+   size = 24,
+ }: {
+   icon: string;
++  /** The App the icon belongs to — the icon route is per-App. Absent (or an
++   * icon that isn't a filename) keeps the emoji / named-icon paths. */
++  slug?: string;
+   color?: string;
+   size?: number;
+ }) {
+-  if (icon.includes("<svg")) {
++  if (slug && FILE_ICON.test(icon)) {
+     return (
+-      <span aria-hidden style={{ display: "inline-flex" }} dangerouslySetInnerHTML={{ __html: icon }} />
++      <img
++        src={`${API_PREFIX}/apps/${encodeURIComponent(slug)}/icon`}
++        alt=""
++        aria-hidden
++        width={size}
++        height={size}
++        // The manifest states a name, not a shape: constrain the box and let the
++        // image letterbox inside it, so a non-square file can't stretch the row.
++        style={{ width: size, height: size, objectFit: "contain", display: "block" }}
++      />
+     );
+   }
+   // A single grapheme that isn't a known icon name → treat as emoji.
+diff --git a/web/src/components/GlobalNav.tsx b/web/src/components/GlobalNav.tsx
+index 859382c3..855b6f6c 100644
+--- a/web/src/components/GlobalNav.tsx
++++ b/web/src/components/GlobalNav.tsx
+@@ -119,7 +119,7 @@ function Switcher() {
+         <div onClick={close} style={{ padding: "6px 0" }}>
+           {apps.map((app) => (
+             <MenuLink key={app.slug} to={`/a/${app.slug}`} active={isActive(pathname, `/a/${app.slug}`)}>
+-              <AppIcon icon={app.icon} color={app.color} size={22} />
++              <AppIcon icon={app.icon} slug={app.slug} color={app.color} size={22} />
+               {app.title}
+             </MenuLink>
+           ))}
+diff --git a/web/src/events.ts b/web/src/events.ts
+index 1bcf4b06..4d2968d1 100644
+--- a/web/src/events.ts
++++ b/web/src/events.ts
+@@ -249,6 +249,18 @@ export function eventSeq(ev: AgentEvent): number | undefined {
+   return (ev as { seq?: number }).seq;
+ }
+ 
++/** The event's IDENTITY, minted where it was published and the same on every
++ * pod it reaches — so a viewer recognises a re-delivery however it arrived.
++ *
++ * `seq` cannot serve: each pod numbers its own broadcast, so one event is #7
++ * here and #3 there, and a reconnect that lands on another pod resumes in a
++ * numbering that was never its own. Like `seq`, this is transport, not domain —
++ * read here rather than widening every member of the union. `undefined` from a
++ * backend that predates it. */
++export function eventId(ev: AgentEvent): string | undefined {
++  return (ev as { id?: string }).id;
++}
++
+ /** Terminal events close the SSE stream and re-enable the composer. */
+ export function isTerminal(ev: AgentEvent): boolean {
+   return (
+diff --git a/web/src/hooks/useChatSession.test.tsx b/web/src/hooks/useChatSession.test.tsx
+index ffb0f5ed..f777a7d5 100644
+--- a/web/src/hooks/useChatSession.test.tsx
++++ b/web/src/hooks/useChatSession.test.tsx
+@@ -151,6 +151,60 @@ describe("useChatSession", () => {
+ 
+   // An empty thread must leave an empty log rather than throwing — a brand-new
+   // chat has nothing persisted yet.
++  // The bug: your own message drawn twice. It was delivered twice — each pod
++  // numbers its own broadcast, so a reconnect that lands elsewhere resumes
++  // `?since=` in a numbering that was never its own and replays what the
++  // viewer already has. Nothing downstream could tell: `user_message` folds
++  // with an unconditional push, and the persisted-thread reconcile treats a
++  // longer local log as "the store is behind" and keeps it. So the duplicate
++  // stuck until the chat was reopened.
++  it("draws an event once even when it is delivered twice", async () => {
++    const t = fakeTransport({
++      subscribe: async function* () {
++        yield { type: "user_message", author: "u", content: "hi", created_at: 1, id: "e1" } as AgentEvent;
++        yield { type: "user_message", author: "u", content: "hi", created_at: 1, id: "e1" } as AgentEvent;
++        await new Promise<void>(() => {});
++      },
++    });
++
++    const { result } = render(t);
++
++    await waitFor(() => expect(result.current.log.entries.length).toBeGreaterThan(0));
++    expect(result.current.log.entries).toHaveLength(1);
++  });
++
++  it("keeps two genuinely different events that happen to read the same", async () => {
++    // Saying the same thing twice is a thing people do, so the identity has to
++    // come from the id and never from the content.
++    const t = fakeTransport({
++      subscribe: async function* () {
++        yield { type: "user_message", author: "u", content: "hi", created_at: 1, id: "e1" } as AgentEvent;
++        yield { type: "user_message", author: "u", content: "hi", created_at: 1, id: "e2" } as AgentEvent;
++        await new Promise<void>(() => {});
++      },
++    });
++
++    const { result } = render(t);
++
++    await waitFor(() => expect(result.current.log.entries).toHaveLength(2));
++  });
++
++  it("still folds events from a backend that sends no id", async () => {
++    // A rolling upgrade serves both versions at once; dropping un-tagged events
++    // would blank the stream for the length of the rollout.
++    const t = fakeTransport({
++      subscribe: async function* () {
++        yield { type: "user_message", author: "u", content: "hi", created_at: 1 } as AgentEvent;
++        yield { type: "user_message", author: "u", content: "yo", created_at: 2 } as AgentEvent;
++        await new Promise<void>(() => {});
++      },
++    });
++
++    const { result } = render(t);
++
++    await waitFor(() => expect(result.current.log.entries).toHaveLength(2));
++  });
++
+   it("tolerates a transport with no persisted thread", async () => {
+     const { result } = render(fakeTransport({ getThread: vi.fn().mockResolvedValue(null) }));
+     await waitFor(() => expect(result.current.log.entries).toHaveLength(0));
+diff --git a/web/src/hooks/useChatSession.tsx b/web/src/hooks/useChatSession.tsx
+index 38dcbad2..c9627913 100644
+--- a/web/src/hooks/useChatSession.tsx
++++ b/web/src/hooks/useChatSession.tsx
+@@ -2,7 +2,7 @@ import { useQueryClient, type QueryKey } from "@tanstack/react-query";
+ import { useCallback, useEffect, useRef, useState } from "react";
+ 
+ import type { AgentEvent } from "../events";
+-import { eventSeq, isTerminal } from "../events";
++import { eventId, eventSeq, isTerminal } from "../events";
+ import { type AgentLog, logFromMessages, reduceAgent } from "../pages/investigation/agentLog";
+ import type { MsgKey } from "../lib/i18n";
+ import { type QuotaDetail, type QuotaKind, quotaMessage } from "../lib/quotaFailure";
+@@ -119,6 +119,14 @@ export type ChatSession = {
+ 
+ /** Gateway/timeout statuses (and a bare network drop, 0) that mean "the request
+  * was cut, but the turn may well be running" — never "the turn failed". */
++/** How many delivered event ids a viewer remembers, for the duplicate check.
++ *
++ * Matched to the server's replay ring (`turns.py` `replay_buffer_events`): what
++ * this guards against is a re-delivery of something the SERVER still holds, so
++ * remembering further back than the server can replay buys nothing — and a
++ * chat left open all day would grow without it. */
++const SEEN_IDS_MAX = 2000;
++
+ const GATEWAY_CUT = new Set([0, 502, 503, 504]);
+ 
+ const isAbort = (err: unknown) => (err as { name?: string } | null)?.name === "AbortError";
+@@ -146,6 +154,19 @@ export function useChatSession(
+   // the reconnect's first event decides if the replay filled the hole (remove) or
+   // a real gap remains (keep).
+   const gapBannerPendingRef = useRef(false);
++  // #43: the ids already drawn, so one event delivered twice is drawn once.
++  //
++  // Delivery is at-least-once and always was — a reconnect resumes `?since=`
++  // against whichever pod answers, and each pod numbers its own broadcast, so
++  // the same event can arrive again under a number this viewer never saw.
++  // Nothing downstream can catch it: the folds append, and `reconcileSnapshot`
++  // reads a longer local log as "the store is behind" and keeps it. Recognising
++  // the repeat here is what makes that harmless.
++  //
++  // Bounded, and by the same reasoning as the server's replay ring: what it
++  // protects against is a re-delivery of something recent, so remembering
++  // everything forever buys nothing and leaks on a long-lived chat.
++  const seenIdsRef = useRef<Set<string>>(new Set());
+   const [connection, setConnection] = useState<ChatConnection>({
+     state: "connecting",
+     receiving: false,
+@@ -163,6 +184,7 @@ export function useChatSession(
+   // new thread's events (replaying nothing) forever.
+   useEffect(() => {
+     maxSeqRef.current = 0;
++    seenIdsRef.current = new Set();
+   }, [transport.threadKey]);
+ 
+   // The long-lived broadcast subscription (#43) with the #493 auto-reconnect:
+@@ -195,6 +217,25 @@ export function useChatSession(
+             // Track the highest broadcast seq so the next reconnect resumes here.
+             const seq = eventSeq(ev);
+             if (seq !== undefined && seq > maxSeqRef.current) maxSeqRef.current = seq;
++            // Already drawn — a replay of something this viewer has. Skipped
++            // BEFORE the gap-banner check, which reasons about seq and is
++            // unaffected, and before the fold, which is what would double it.
++            // An event with no id (a backend that predates them) is always
++            // folded: dropping those would blank the stream during a rollout.
++            const id = eventId(ev);
++            if (id !== undefined) {
++              if (seenIdsRef.current.has(id)) continue;
++              seenIdsRef.current.add(id);
++              if (seenIdsRef.current.size > SEEN_IDS_MAX) {
++                // Oldest-first: a Set iterates in insertion order.
++                const drop = seenIdsRef.current.size - SEEN_IDS_MAX;
++                let n = 0;
++                for (const old of seenIdsRef.current) {
++                  if (n++ >= drop) break;
++                  seenIdsRef.current.delete(old);
++                }
++              }
++            }
+             // On the first event after a reconnect, decide the fate of the gap
+             // banner: a contiguous replay (the very next seq) means the same-pod
+             // buffer filled the hole, so drop the banner; a jump means a real gap
+diff --git a/web/src/pages/AppDashboard.tsx b/web/src/pages/AppDashboard.tsx
+index c9335fa7..c4086fdd 100644
+--- a/web/src/pages/AppDashboard.tsx
++++ b/web/src/pages/AppDashboard.tsx
+@@ -245,7 +245,7 @@ export function AppDashboard() {
+       >
+         <div style={{ padding: "0 18px 16px", borderBottom: "1px solid var(--paper-3)" }}>
+           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+-            <AppIcon icon={manifest.icon} color={manifest.color} size={40} />
++            <AppIcon icon={manifest.icon} slug={manifest.slug} color={manifest.color} size={40} />
+             <div style={{ minWidth: 0 }}>
+               <div style={{ fontWeight: 800, fontSize: pxToRem(16), letterSpacing: "-0.02em", lineHeight: 1.1 }}>
+                 {manifest.title}
+@@ -345,7 +345,7 @@ export function AppDashboard() {
+                 padding: 28,
+               }}
+             >
+-              <AppIcon icon={manifest.icon} color={manifest.color} />
++              <AppIcon icon={manifest.icon} slug={manifest.slug} color={manifest.color} />
+               <h1 style={{ fontSize: pxToRem(28), fontWeight: 800, margin: 0, letterSpacing: "-0.02em" }}>
+                 No {noun.toLowerCase()} yet
+               </h1>
+diff --git a/web/src/pages/Launcher.tsx b/web/src/pages/Launcher.tsx
+index 1e97a858..149bac37 100644
+--- a/web/src/pages/Launcher.tsx
++++ b/web/src/pages/Launcher.tsx
+@@ -58,7 +58,7 @@ function AppCard({ app }: { app: AppSummary }) {
+             flexShrink: 0,
+           }}
+         >
+-          <AppIcon icon={app.icon} color={app.color} />
++          <AppIcon icon={app.icon} slug={app.slug} color={app.color} />
+         </span>
+         <span style={{ flex: 1 }}>
+           <span style={{ display: "block", fontWeight: 700, fontSize: pxToRem(18) }}>{app.title}</span>
+diff --git a/web/src/pages/investigation/AgentPanel.tsx b/web/src/pages/investigation/AgentPanel.tsx
+index 8eaba210..84ebfcf7 100644
+--- a/web/src/pages/investigation/AgentPanel.tsx
++++ b/web/src/pages/investigation/AgentPanel.tsx
+@@ -1216,7 +1216,7 @@ export function AgentHeader({
+           onClose={() => setShowTools(false)}
+         />
+       )}
+-      {appIcon ? <AppIcon icon={appIcon} color={appColor} size={20} /> : null}
++      {appIcon ? <AppIcon icon={appIcon} slug={slug} color={appColor} size={20} /> : null}
+       <div
+         data-testid="agent-header-identity"
+         // `flex: 1` (basis 0%) let this block collapse to ~21px while the action
+diff --git a/web/src/pages/kb/ContextCardsTab.tsx b/web/src/pages/kb/ContextCardsTab.tsx
+index 59073d00..75f51c19 100644
+--- a/web/src/pages/kb/ContextCardsTab.tsx
++++ b/web/src/pages/kb/ContextCardsTab.tsx
+@@ -7,7 +7,7 @@
+  * sends them. A new card opens straight into Edit.
+  */
+ 
+-import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
++import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+ import { useEffect, useState } from "react";
+ 
+ import { CardAttachments } from "./CardAttachments";
+@@ -111,19 +111,23 @@ export function ContextCardsTab({
+     queryFn: () => client.listContextCards(collectionId),
+   });
+   const [draft, setDraft] = useState<Draft | null>(null);
+-  // Resolve each linked doc's envelope (a cheap point-get) so an image
+-  // attachment can show a real thumbnail instead of a filename pill. useQueries
+-  // handles the dynamic list; content_type + file_id ride the envelope (#518).
++  // Resolve the linked docs' envelopes so an image attachment can show a real
++  // thumbnail instead of a filename pill (#518). ONE query for all of them
++  // (#730): it used to be a `useQueries` fan-out — a request per attachment,
++  // each only to learn a content type and a blob id. Those went out
++  // concurrently, so the win is not latency×N; it is N scoped queries (each
++  // resolving the caller's groups and applying an access predicate) collapsed
++  // into one.
+   const refIds = draft?.reference_doc_ids ?? [];
+-  const refMetas = useQueries({
+-    queries: refIds.map((id) => ({
+-      queryKey: qk.kb.docMeta(id),
+-      queryFn: () => client.getSourceDocMeta(id),
+-    })),
++  const { data: refMetas } = useQuery({
++    // Keyed by the SET of ids, so opening another card refetches and opening the
++    // same one again does not.
++    queryKey: qk.kb.docMetas(refIds),
++    queryFn: () => client.getSourceDocMetas(refIds),
++    enabled: refIds.length > 0,
+   });
+   const imageSrc = (docId: string): string | undefined => {
+-    const i = refIds.indexOf(docId);
+-    const meta = i >= 0 ? refMetas[i]?.data : undefined;
++    const meta = refMetas?.[docId];
+     return meta?.content_type?.startsWith("image/") && meta.file_id
+       ? blobHref(meta.file_id)
+       : undefined;
+diff --git a/web/src/pages/kb/KbCollectionsPage.test.tsx b/web/src/pages/kb/KbCollectionsPage.test.tsx
+index f5b22fc6..ee7f2230 100644
+--- a/web/src/pages/kb/KbCollectionsPage.test.tsx
++++ b/web/src/pages/kb/KbCollectionsPage.test.tsx
+@@ -1102,6 +1102,14 @@ describe("KbCollectionPage — Manage access gate", () => {
+ });
+ 
+ describe("#715 archive import runs on a worker, not in the request", () => {
++  // The other two describes in this file each unmount their render; this one was
++  // added without one, so its first test met the PREVIOUS test's DOM still in
++  // the document and `findByRole` matched two "Collection settings" buttons.
++  // It failed about one full-suite run in four and passed every time it ran
++  // alone — which reads exactly like a timing flake, and is not one. Three
++  // rounds of widening timeouts here bought nothing.
++  afterEach(cleanup);
++
+   it("opens the new collection before the documents have landed", async () => {
+     // The whole point of the asynchronous route: the 202 carries a collection
+     // id, so the page can open a collection that is still filling. The old
+@@ -1116,31 +1124,28 @@ describe("#715 archive import runs on a worker, not in the request", () => {
+     // the collection page is open...
+     expect(await screen.findByRole("button", { name: "Collection settings" })).toBeInTheDocument();
+     // ...and it says the import is still going, naming how far along it is.
+-    expect(await screen.findByRole("status")).toHaveTextContent(/Importing \d of 3 documents/);
++    expect(await screen.findByRole("status")).toHaveTextContent(/Importing \d of 2 documents/);
+   });
+ 
+-  it("polls until the run finishes and then reports the outcome", async () => {
+-    // A UI that started the import and never asked again would pass every
+-    // assertion above while leaving the user watching a bar that never moves.
+-    // The mock's first read is deliberately still-running, so only a second
+-    // read can produce this text.
++  it("keeps asking after the first answer, instead of showing a bar that never moves", async () => {
++    // What this guards: a UI that started the import and never asked again
++    // passes every assertion above while the progress sits at zero for ever.
++    //
++    // Asserted on the CALL, not on the finished text. Waiting for the run to
++    // complete meant waiting out the poll backoff — real wall-clock — and it
++    // failed roughly one full-suite run in four while passing every time it ran
++    // alone: a test that is green when nothing else is running is not measuring
++    // the code. One extra call is the whole claim, and it needs one interval
++    // rather than the entire chain.
++    const spy = vi.spyOn(mockKbApi, "getImport");
+     renderKb(mockKbApi);
+ 
+     const input = screen.getByLabelText("Import collection from file") as HTMLInputElement;
+     await userEvent.upload(input, new File(["z"], "Archive.zip", { type: "application/zip" }));
+     await screen.findByRole("button", { name: "Collection settings" });
+ 
+-    // The mock closes one document per read, so this text only appears after
+-    // three polls — a UI that asked once cannot reach it.
+-    await waitFor(
+-      () =>
+-        expect(
+-          screen
+-            .getAllByRole("status")
+-            .some((el) => /Imported 3 of 3 documents/.test(el.textContent ?? "")),
+-        ).toBe(true),
+-      { timeout: 8000 },
+-    );
++    await waitFor(() => expect(spy.mock.calls.length).toBeGreaterThan(1), { timeout: 10000 });
++    spy.mockRestore();
+   }, 15000);
+ 
+   it("does not call the synchronous import route", async () => {
