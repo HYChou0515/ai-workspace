@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from ..kb.retriever import Enhancements, Retriever
     from ..kb.vlm import IVlm, VlmDescriber
     from ..kb.wiki.sources import IWikiSources
+    from ..apps.subagents import SubagentDef
     from ..resources import AgentConfig
     from ..resources.conversation import Citation
     from ..resources.conversation_todos import TodoItem
@@ -407,6 +408,19 @@ class AgentToolContext:
     # KB. The type is `Callable[..., …]` because that override is keyword-default
     # (not expressible in a positional `Callable[[...], …]` signature).
     run_subagent: Callable[..., Awaitable[tuple[str, list[Citation]]]] | None = None
+    # The GENERIC delegation seam: hand a whole sub-task to one of this turn's
+    # sub-agent definitions and get back its report. Distinct from
+    # `run_subagent` above, which is the KB-purpose bridge — a sub-agent may
+    # still consult the KB through that, which is why both live here.
+    #
+    # `None` on a sub-agent's own turn (with `subagent_defs` emptied to match):
+    # that, and not a depth counter, is what stops a sub-agent spawning another.
+    # The `run_agent` tool is simply not built when the seam is absent.
+    run_agent: Callable[..., Awaitable[str]] | None = None
+    # The sub-agent definitions this turn may delegate to — an App profile's
+    # `.agent/` plus the workspace's, merged and tool-clamped. Also what the
+    # system prompt advertises, so the model knows which names are callable.
+    subagent_defs: tuple[SubagentDef, ...] = ()
     # #537: the KB agent's SECOND knowledge source — consult the wiki. Given a
     # question, a wiki reader navigates the wiki index-first (index → the pages the
     # index points at → the source documents behind them) and returns its answer

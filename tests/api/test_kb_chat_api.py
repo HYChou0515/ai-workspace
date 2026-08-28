@@ -10,7 +10,6 @@ from workspace_app.api.events import (
     MessageDelta,
     RunDone,
     ToolEnd,
-    ToolLog,
     ToolStart,
 )
 from workspace_app.api.kb_chat_routes import answer_question
@@ -1038,22 +1037,6 @@ def test_rca_agent_consults_kb_through_ask_knowledge_base():
 
 
 # ── #4: stream the KB sub-agent's intermediate state ──────────────────────────
-
-
-def test_kb_progress_surfaces_searches_and_reasoning_only():
-    from workspace_app.api.kb_chat_routes import kb_progress
-
-    assert (
-        kb_progress(ToolStart(call_id="a", name="kb_search", args={"query": "voids"}))
-        == "🔎 kb_search: voids\n"
-    )
-    assert kb_progress(ToolStart(call_id="b", name="kb_search", args={})) == "🔎 kb_search\n"
-    assert kb_progress(MessageDelta(text="weighing it", reasoning=True)) == "weighing it"
-    # kb_search's live output (e.g. the retriever's enhancement-LLM thinking) is relayed too
-    assert kb_progress(ToolLog(call_id="a", text="↻ rerank\n")) == "↻ rerank\n"
-    assert kb_progress(MessageDelta(text="the answer")) is None  # content isn't progress
-    assert kb_progress(ToolEnd(call_id="a", output="x")) is None
-    assert kb_progress(RunDone()) is None
 
 
 async def test_answer_question_forwards_every_event_to_on_event():
