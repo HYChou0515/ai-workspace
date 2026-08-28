@@ -52,6 +52,7 @@
 | `IWikiSources` | `src/workspace_app/kb/wiki/sources.py` | interface（`ctx.wiki_sources`；wiki tools） | 見 [知識庫:攝取與索引](kb-ingest-index.md)（impl 細節見原始碼） |
 | `wrap_with_args_recovery` | `src/workspace_app/agent/args_recovery.py` | SDK 與 `*_impl` 之間的 interposition 接縫 | `safer()` closure，透過 `dataclasses.replace` 重建 `FunctionTool` |
 | `run_subagent` bridge | `src/workspace_app/agent/context.py` | API 層注入的 `Callable`（RCA → sub-agent） | 在 api 的 turn builder / workflow 接線；由 `ask_knowledge_base_impl` + `infer_modules_impl` 消費 |
+| `run_agent` 委派接縫 | `src/workspace_app/agent/context.py` | API 層注入的 `Callable`（`(parent_ctx, defn, prompt, sink)` → 子代理報告） | `api/subagent_run.run_agent_task`,由 composition root 綁 runner;由 `run_agent_impl` 消費。子代理自己的 turn 上這個欄位是 `None`——防遞迴靠結構而非深度計數 |
 
 ## 運作方式 / 資料流
 
@@ -162,5 +163,7 @@ flowchart TD
 - `src/workspace_app/agent/arg_repair.py` — `make_backstop_sentinel` / `malformed_raw`（in-band backstop sentinel）。
 - `src/workspace_app/agent/tool_prompt.py` — `format_tools_for_prompt`。
 - `src/workspace_app/agent/reasoning.py` — `is_ollama` / `reasoning_off_kwargs`。
+- `src/workspace_app/apps/subagents.py` — 子代理定義(`.agent/<name>/AGENT.md`)的載入、雙來源合併、工具上限夾制與系統提示索引 `subagents_block`。
+- `src/workspace_app/api/subagent_run.py` — `run_agent_task`:以 `dataclasses.replace` 從父 context 導出子 context(保留 workspace 與身分,換掉 prompt/工具/history)。
 - `src/workspace_app/agent/config_catalog.py` — `AgentConfigCatalog.configs_for` / `default_for`。
 - `CONTEXT.md` — Preset / Usage entry / AgentConfig / AgentToolContext / args_recovery 的詞彙定義。
