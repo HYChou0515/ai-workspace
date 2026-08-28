@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..agent.context import AgentToolContext
 from ..apps.manifest import load_app_manifest
+from ..apps.subagents import SubagentDef, load_subagents
 from ..context_budget import ContextLimit, catalog_limit, estimate_tokens
 from ..entity.brief import entity_schema_brief
 from ..entity.catalog import discover_catalog
@@ -58,6 +59,10 @@ if TYPE_CHECKING:
 
 # The sub-agent bridge callable shape (purpose, payload, sink, origin_id, ...).
 RunSubagent = Callable[..., Awaitable[tuple[str, "list[Citation]"]]]
+# The generic delegation seam (parent_ctx, defn, prompt, sink) -> the sub-agent's
+# report. It takes the parent context rather than closing over one, so the same
+# callable serves every turn the composition root built it for.
+RunAgent = Callable[..., Awaitable[str]]
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +142,7 @@ class TurnContextBuilder:
         history_max_context_tokens: int,
         context_limit: int | None = None,
         wiki_coordinator: WikiMaintenanceCoordinator | None = None,
+        run_agent: RunAgent | None = None,
     ) -> None:
         self._sandbox = sandbox
         self._filestore = filestore
@@ -162,6 +168,11 @@ class TurnContextBuilder:
         # resolve per turn (catalog lookup), and `unknown` ⇒ do not trim at all.
         self._context_limit = context_limit
         self._wiki_coordinator = wiki_coordinator
+        # How a turn delegates to one of its sub-agents. A property of the
+        # deployment (which runner drives the sub-turn), not of the call — so it
+        # is wired once here rather than passed per turn shape. None ⇒ no
+        # delegation this deploy, and the tool is never built.
+        self._run_agent = run_agent
         # #429 P10: the event-dispatch sink stamped onto every agent turn's ctx so an
         # agent's entity write fires on_event workflows. Set after construction by the
         # composition root (the EventTriggerDispatcher is built later than this builder,
@@ -181,7 +192,9 @@ class TurnContextBuilder:
         self._catalog_cache: dict[str, int | None] = {}
         self._catalog_fn: Callable[[str], int | None] = catalog_limit
 
-    def _overhead_for(self, agent_config: AgentConfig | None, item_id: str) -> int:
+    def _overhead_for(
+        self, agent_config: AgentConfig | None, item_id: str, *, has_subagents: bool = False
+    ) -> int:
         """Tokens spent before any history: the system prompt + tool schemas."""
         if agent_config is None:
             return 0
@@ -189,6 +202,7 @@ class TurnContextBuilder:
             agent_config,
             app_slug=self._locator.slug_of(item_id),
             profile=self._locator.profile_of(item_id),
+            has_subagents=has_subagents,
         )
 
     def _context_window(self, agent_config: AgentConfig | None) -> ContextLimit:
@@ -288,7 +302,12 @@ class TurnContextBuilder:
         return max(1, budget)
 
     def _tools_tokens(
-        self, agent_config: AgentConfig, *, app_slug: str | None, profile: str | None
+        self,
+        agent_config: AgentConfig,
+        *,
+        app_slug: str | None,
+        profile: str | None,
+        has_subagents: bool = False,
     ) -> int:
         """Estimated cost of the tool schemas sent alongside the prompt. Built
         per turn (~12 ms) rather than guessed — a guess here is the same class of
@@ -308,6 +327,7 @@ class TurnContextBuilder:
                 agent_config.allowed_tools,
                 app_slug=app_slug,
                 profile=profile,
+                has_subagents=has_subagents,
             )
             payload = json.dumps(
                 [
@@ -322,6 +342,35 @@ class TurnContextBuilder:
         except Exception:  # noqa: BLE001 — sizing must never break a turn
             return 0
         return estimate_tokens(payload)
+
+    async def _subagent_defs(
+        self, item_id: str, agent_config: AgentConfig | None
+    ) -> tuple[SubagentDef, ...]:
+        """Who this turn may delegate to: the App profile's `.agent/` plus the
+        item's own workspace, clamped to what THIS turn is itself allowed to do.
+
+        The clamp is the resolved `allowed_tools` rather than the App ceiling
+        whenever there is one: a definition file is user-authored, and a
+        sub-agent that could reach past its parent would turn a per-item tool
+        toggle into a suggestion. Never breaks a turn — a workspace that cannot
+        be listed simply has no sub-agents."""
+        from ..agent.tools import _profile_tool_ceiling
+
+        app_slug = self._locator.slug_of(item_id)
+        profile = self._locator.profile_of(item_id)
+        if app_slug is None or profile is None:
+            return ()
+        ceiling: Any = (
+            agent_config.allowed_tools
+            if agent_config is not None and agent_config.allowed_tools is not None
+            else _profile_tool_ceiling(app_slug, profile)
+        )
+        try:
+            defs = await load_subagents(self._files, item_id, app_slug, profile, ceiling=ceiling)
+        except Exception:  # noqa: BLE001 — delegation is a capability, never a turn-breaker
+            logger.warning("turn-context: sub-agent defs skipped for %s", item_id, exc_info=True)
+            return ()
+        return tuple(defs)
 
     async def _external_tools(self, item_id: str, session: Any) -> ExternalTools:
         """#674: resolve this app's third-party tools, once, at the top of a turn.
@@ -347,6 +396,7 @@ class TurnContextBuilder:
         run_subagent: RunSubagent,
         history_messages: list[Message],
         external: ExternalTools,
+        subagent_defs: tuple[SubagentDef, ...] = (),
         request_env: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """The fields identical across every RCA turn shape (interactive + workflow)."""
@@ -358,7 +408,7 @@ class TurnContextBuilder:
         # the event loop) and this turn needs the same figure twice: to derive
         # the history budget, and as the ctx field the silent-truncation check
         # compares against.
-        overhead = self._overhead_for(agent_config, item_id)
+        overhead = self._overhead_for(agent_config, item_id, has_subagents=bool(subagent_defs))
         # #624: the same window the history budget below is derived from, carried
         # on the ctx so the runner can tell the endpoint to OPEN that much rather
         # than serve its own default and truncate the difference away in silence.
@@ -448,6 +498,11 @@ class TurnContextBuilder:
             # write. Identical across both turn shapes — the ambient ORIGIN differs (see
             # build_workflow_turn), the sink does not.
             entity_write_sink=self.entity_write_sink,
+            # Who this turn may delegate to, and how. Both or neither: the tool is
+            # only built when there are definitions, and definitions with no seam
+            # would advertise a capability the turn cannot perform.
+            subagent_defs=subagent_defs,
+            run_agent=self._run_agent,
         )
 
     async def _entity_schema_note(self, item_id: str) -> str:
@@ -502,6 +557,7 @@ class TurnContextBuilder:
                 session,
                 agent_config=agent_config,
                 run_subagent=run_subagent,
+                subagent_defs=await self._subagent_defs(item_id, agent_config),
                 history_messages=history_messages,
                 external=external,
                 request_env=request_env,
@@ -576,6 +632,7 @@ class TurnContextBuilder:
                 session,
                 agent_config=agent_config,
                 run_subagent=run_subagent,
+                subagent_defs=await self._subagent_defs(item_id, agent_config),
                 history_messages=history_messages,
                 external=external,
             ),

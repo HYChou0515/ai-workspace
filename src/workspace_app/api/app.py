@@ -17,6 +17,8 @@ from specstar import SpecStar
 from specstar.types import ResourceIsDeletedError
 
 from ..agent.config_catalog import AgentConfigCatalog
+from ..agent.context import AgentToolContext
+from ..apps.subagents import SubagentDef
 from ..config.schema import EnhancementSettings, OffHoursSettings, PerUserResources
 from ..files import WorkspaceFiles, WorkspaceFull
 from ..filestore.protocol import FileNotFound, FileStore
@@ -42,7 +44,7 @@ from ..resources import (
 )
 from ..resources.groups import groups_of
 from ..resources.kb import EMBED_DIM, Collection
-from ..sandbox.protocol import Sandbox, SandboxBusy, SandboxNotFound, SandboxSpec
+from ..sandbox.protocol import OutputSink, Sandbox, SandboxBusy, SandboxNotFound, SandboxSpec
 from ..sync import SandboxSync
 from ..tooling.external import prewarm_external_tools
 from ..tooling.registry import PackageInfo
@@ -56,6 +58,7 @@ from ..workflow.orchestrator import (
 )
 from . import perf_trace
 from .activity import ActivityLog
+from .agent_progress import progress_line
 from .capability_routes import register_capability_routes
 from .card_gen_routes import register_card_gen_routes
 from .chat_routes import register_chat_routes
@@ -65,6 +68,7 @@ from .doc_question_routes import register_doc_question_routes
 from .entity_broadcast import build_entity_write_sink
 from .entity_routes import register_entity_routes
 from .event_bus import IEventBus
+from .events import AgentEvent
 from .file_routes import register_file_routes
 from .health_routes import (
     register_health_routes,
@@ -91,6 +95,7 @@ from .sandbox_activity import IActivityStore, SpecstarActivityStore, register_sa
 from .sandbox_address import IAddressStore, SpecstarAddressStore
 from .spa import SpaStaticFiles
 from .subagent_bridge import SubagentBridge
+from .subagent_run import run_agent_task
 from .tools_routes import register_tools_routes
 from .turn_context import TurnContextBuilder, resolve_item_tools
 from .turn_gate import TurnRefused, quota_body
@@ -1326,6 +1331,24 @@ def create_app(
     )
     _run_subagent = subagent_bridge.run
 
+    async def _delegate(
+        parent_ctx: AgentToolContext,
+        defn: SubagentDef,
+        prompt: str,
+        emit: OutputSink | None = None,
+    ) -> str:
+        """Run one sub-agent for the `run_agent` tool, relaying its work into the
+        calling turn's tool card so a delegated task shows movement rather than a
+        card that sits there."""
+
+        def relay(ev: AgentEvent) -> None:
+            if emit is None:
+                return
+            if line := progress_line(ev):
+                emit(line.encode())
+
+        return await run_agent_task(runner, parent_ctx, defn, prompt, on_event=relay)
+
     # #506: close the card-gen loop — swap the coordinator's fallback (open-loop)
     # drafter for the AGENTIC one when card drafting is enabled. #506/#577 follow-up:
     # the agentic drafter consults ONLY the glossary of existing cards before drafting
@@ -1398,6 +1421,7 @@ def create_app(
         context_limit=context_limit,
         # #397: lets the request_wiki_update tool submit a user's wiki correction.
         wiki_coordinator=wiki_coordinator,
+        run_agent=_delegate,
     )
 
     # #624: let the budget consult what the RUNNER has learned about each

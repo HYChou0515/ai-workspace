@@ -10,6 +10,7 @@ between turns).
 from __future__ import annotations
 
 import importlib
+import json
 import sys
 from pathlib import Path
 
@@ -18,6 +19,7 @@ import pytest
 from workspace_app.apps.subagents import (
     SUBAGENT_BODY_CAP,
     load_subagents,
+    profile_subagent_defs,
     workspace_subagent_defs,
 )
 from workspace_app.files import WorkspaceFiles
@@ -143,3 +145,15 @@ async def test_an_oversized_body_is_skipped_rather_than_becoming_a_system_prompt
     huge = "x" * (SUBAGENT_BODY_CAP + 1)
     await _put(files, inv, "bloated", f"---\nname: bloated\ndescription: d\n---\n\n{huge}\n")
     assert [d.name for d in await workspace_subagent_defs(files, inv)] == ["good"]
+
+
+def test_rca_ships_a_working_sub_agent_out_of_the_box():
+    """A capability nobody can see is not delivered. An RCA item has someone to
+    delegate to on day one, without the user writing a definition first."""
+    defs = profile_subagent_defs("rca", "default")
+    digger = next(d for d in defs if d.name == "log-digger")
+    assert digger.description and digger.body
+    # Every tool it asks for is one the App actually grants.
+    assert set(digger.tools) <= set(
+        json.loads((Path("src/workspace_app/apps/rca/app.json")).read_text())["agent"]["tools"]
+    )

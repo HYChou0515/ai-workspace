@@ -4,7 +4,9 @@ Ports the old ``rca.templates.seed_investigation`` to the per-App ``apps/<slug>/
 profiles/<name>/`` layout, keyed on the opaque ``item_id`` (FileStore is
 domain-agnostic). ``.tpl`` files are ``string.Template`` substituted with the
 item's ``case`` and lose the ``.tpl`` suffix; everything else is copied verbatim.
-Profile metadata (``_profile.json`` / ``_prompt.md`` / ``.skill/``) is NOT seeded.
+Profile metadata (``_profile.json`` / ``_prompt.md`` / ``.skill/`` / ``.agent/``)
+is NOT seeded — those are read straight from the package, and a copy in the
+workspace would be a second definition of the same thing that then drifts.
 """
 
 from __future__ import annotations
@@ -24,7 +26,15 @@ _TPL_SUFFIX = ".tpl"
 # Profile metadata + package noise — never seeded into the workspace. ``run.py``
 # is the workflow's orchestration code (#100), not a starter file — it runs on the
 # host, never in the item's workspace.
-_SKIP = {"__init__.py", "__pycache__", "_profile.json", "_prompt.md", ".skill", "run.py"}
+_SKIP = {
+    "__init__.py",
+    "__pycache__",
+    "_profile.json",
+    "_prompt.md",
+    ".skill",
+    ".agent",
+    "run.py",
+}
 
 
 def case_from_item(item: Any) -> dict[str, str]:

@@ -33,10 +33,13 @@ async def _run_cap(tool: FunctionTool, output: object, *, cap: int = 100) -> obj
 
 def test_every_builtin_tool_carries_the_output_cap():
     """EVERY registered built-in, not just the default workspace dozen — the
-    claim is that a tool cannot be handed out without a ceiling."""
+    claim is that a tool cannot be handed out without a ceiling.
+
+    `has_subagents` opts in the one built-in that is conditional on the turn
+    (`run_agent`), so "every registered built-in" keeps meaning all of them."""
     from workspace_app.agent.tools import _IMPLS
 
-    tools = build_tools(sorted(_IMPLS))
+    tools = build_tools(sorted(_IMPLS), has_subagents=True)
     assert len(tools) == len(_IMPLS)
     for tool in tools:
         assert TOOL_OUTPUT_CAP_NAME in _guardrail_names(tool), tool.name

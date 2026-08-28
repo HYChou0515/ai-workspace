@@ -1181,7 +1181,7 @@ async def run_agent_impl(
         # a bare rejection leaves it guessing at what it misread.
         known = ", ".join(d.name for d in defs) or "none"
         return f"error: no sub-agent named {agent_type!r}. Available: {known}"
-    return await run(chosen, prompt, ctx.context.on_exec_output)
+    return await run(ctx.context, chosen, prompt, ctx.context.on_exec_output)
 
 
 async def ask_wiki_impl(ctx: RunContextWrapper[AgentToolContext], question: str) -> str:

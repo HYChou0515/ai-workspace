@@ -19,7 +19,7 @@ _REPORTER = SubagentDef(name="reporter", description="Writes it up", tools=[], b
 
 
 def _ctx(defs=(_DIGGER, _REPORTER), calls=None, sink=None) -> RunContextWrapper[AgentToolContext]:
-    async def run_agent(defn, prompt, emit=None):
+    async def run_agent(parent, defn, prompt, emit=None):
         if calls is not None:
             calls.append((defn.name, prompt))
         if emit is not None:

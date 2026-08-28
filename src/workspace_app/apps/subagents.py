@@ -13,6 +13,7 @@ workspace may add or override them), same tolerance for one bad hand-edit.
 from __future__ import annotations
 
 import logging
+from collections.abc import Collection
 from importlib import resources
 from importlib.resources.abc import Traversable
 
@@ -54,7 +55,7 @@ async def load_subagents(
     app_slug: str,
     profile: str,
     *,
-    ceiling: list[str] | None = None,
+    ceiling: Collection[str] | None = None,
 ) -> list[SubagentDef]:
     """The sub-agents this turn may delegate to: what the App profile ships,
     overridden by name by what the item's workspace defines, all clamped to
@@ -69,7 +70,7 @@ async def load_subagents(
 
 
 def profile_subagent_defs(
-    app_slug: str, profile: str, *, ceiling: list[str] | None = None
+    app_slug: str, profile: str, *, ceiling: Collection[str] | None = None
 ) -> list[SubagentDef]:
     """The sub-agents an App profile ships, sorted by name. Unknown profile / no
     `.agent/` dir → empty (a profile may ship none)."""
@@ -102,7 +103,7 @@ def _agent_root(app_slug: str, profile: str) -> Traversable | None:
 
 
 async def workspace_subagent_defs(
-    files: WorkspaceFiles, workspace_id: str, *, ceiling: list[str] | None = None
+    files: WorkspaceFiles, workspace_id: str, *, ceiling: Collection[str] | None = None
 ) -> list[SubagentDef]:
     """Every well-formed sub-agent under the workspace's `.agent/` dir, sorted by
     name. Read live (never cached) — the file IDE may have rewritten one since
@@ -147,7 +148,7 @@ def subagents_block(defs: list[SubagentDef] | tuple[SubagentDef, ...]) -> str:
     return "\n".join(lines)
 
 
-def clamp_tools(defn: SubagentDef, ceiling: list[str] | None) -> SubagentDef:
+def clamp_tools(defn: SubagentDef, ceiling: Collection[str] | None) -> SubagentDef:
     """`defn` with any tool outside `ceiling` dropped (logged). `None` ceiling ⇒
     unclamped, matching the tri-state `allowed_tools` convention."""
     if ceiling is None:
