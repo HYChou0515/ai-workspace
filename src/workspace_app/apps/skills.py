@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any
 
 import msgspec
 
+from .frontmatter import FrontmatterError, parse_frontmatter
 from .skill_payload import ORIGIN_FILE, SkillOrigin, SkillSource, origin_for, skill_payload
 
 if TYPE_CHECKING:
@@ -634,53 +635,10 @@ def _skill_root(app_slug: str, profile: str) -> Traversable | None:
 
 
 def _parse_frontmatter(raw: bytes) -> tuple[dict[str, object], str]:
-    """Split an `---` ... `---` YAML frontmatter from its body. Returns
-    `({}, raw_decoded)` when no frontmatter is present. Raises `SkillError` on
-    malformed YAML."""
-    text = raw.decode("utf-8", errors="replace")
-    if not text.startswith("---"):
-        return {}, text
-    rest = text[3:].lstrip("\n")
-    end = rest.find("\n---")
-    if end == -1:
-        return {}, text
-    front_text = rest[:end]
-    body_text = rest[end + 4 :].lstrip("\n")
+    """`frontmatter.parse_frontmatter` in skill flavour — the shared parser, with
+    its error retyped so every `except SkillError` in this module keeps catching
+    a malformed `---` block."""
     try:
-        front = _parse_yaml(front_text)
-    except ValueError as e:
-        raise SkillError(f"malformed frontmatter YAML: {e}") from e
-    if not isinstance(front, dict):  # pragma: no cover — _parse_yaml only returns dict
-        raise SkillError(f"frontmatter must be a YAML mapping, got {type(front).__name__}")
-    return {str(k): v for k, v in front.items()}, body_text
-
-
-def _parse_yaml(text: str) -> object:
-    """Minimal YAML loader: `name: value` lines with `#` comments + blank lines
-    tolerated. Avoids PyYAML — the frontmatter is tiny (name + description)."""
-    out: dict[str, str] = {}
-    for raw_line in text.splitlines():
-        line = raw_line.split("#", 1)[0].rstrip()
-        if not line.strip():
-            continue
-        if ":" not in line:
-            raise ValueError(f"line without `:`: {raw_line!r}")
-        key, _, value = line.partition(":")
-        value = value.strip()
-        if value.startswith(("[", "{")) and not _balanced(value):
-            raise ValueError(f"unbalanced delimiter in value: {value!r}")
-        out[key.strip()] = value
-    return out
-
-
-def _balanced(s: str) -> bool:
-    """Cheap `[]` / `{}` open-close balance check — flags `description: [unclosed`."""
-    depth = 0
-    for ch in s:
-        if ch in "[{":
-            depth += 1
-        elif ch in "]}":
-            depth -= 1
-            if depth < 0:
-                return False
-    return depth == 0
+        return parse_frontmatter(raw)
+    except FrontmatterError as e:
+        raise SkillError(str(e)) from e
