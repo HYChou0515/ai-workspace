@@ -44,6 +44,7 @@ from ..agent.context import AgentToolContext
 from ..agent.header_model import HeaderModel
 from ..agent.repairing_model import RepairingModel
 from ..agent.tools import build_tools
+from ..apps.subagents import subagents_block
 from ..context_budget import (
     ContextLimit,
     LimitLearner,
@@ -277,6 +278,7 @@ def _turn_instructions(ctx: AgentToolContext, feedback: str | None) -> str | Non
         s
         for s in (
             speaker_note(ctx.speaker),
+            subagents_block(ctx.subagent_defs),
             ctx.search_allowance_note,
             ctx.entity_schema_note,
             feedback,
@@ -297,6 +299,7 @@ def _agent_for(
     context_window: int | None = None,
     app_slug: str | None = None,
     template_profile: str | None = None,
+    has_subagents: bool = False,
     fallback_chains: FallbackChains | None = None,
     cooldown_registry: CooldownRegistry | None = None,
     on_failover_switch: Callable[[str, str], None] | None = None,
@@ -318,7 +321,14 @@ def _agent_for(
     # kb_search". The new behaviour: ``[]`` registers zero tools, and
     # the catalog-build validator separately rejects a kb_chat whose
     # resolved allowed_tools doesn't contain `kb_search`.
-    tools = list(build_tools(config.allowed_tools, app_slug=app_slug, profile=template_profile))
+    tools = list(
+        build_tools(
+            config.allowed_tools,
+            app_slug=app_slug,
+            profile=template_profile,
+            has_subagents=has_subagents,
+        )
+    )
     # Same tri-state for package tools (the colon-syntax expansion):
     # symmetric with build_tools above so bundled RCA presets
     # (allowed_tools=None) still expose every package command.
@@ -1268,6 +1278,7 @@ class LitellmAgentRunner:
             context_window=ctx.context_window,
             app_slug=ctx.app_slug,
             template_profile=ctx.template_profile,
+            has_subagents=bool(ctx.subagent_defs),
             fallback_chains=self._fallback_chains,
             cooldown_registry=self._cooldown_registry,
             on_failover_switch=_failover_emitter(queue),
@@ -1429,6 +1440,7 @@ class LitellmAgentRunner:
             context_window=ctx.context_window,
             app_slug=ctx.app_slug,
             template_profile=ctx.template_profile,
+            has_subagents=bool(ctx.subagent_defs),
             fallback_chains=self._fallback_chains,
             cooldown_registry=self._cooldown_registry,
             resolve_credential=resolve_credential,

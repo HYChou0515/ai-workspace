@@ -125,6 +125,28 @@ async def workspace_subagent_defs(
     return out
 
 
+def subagents_block(defs: list[SubagentDef] | tuple[SubagentDef, ...]) -> str:
+    """The per-turn "who you can delegate to" index, or `""` when there is
+    nobody. Rendered fresh each turn, like the workspace skill index — a
+    definition the user just wrote in the file IDE is callable on the next turn.
+
+    Descriptions are the whole point: the model picks by "when would I use
+    this", so a definition's `description` is written for the caller, not for
+    the sub-agent itself."""
+    if not defs:
+        return ""
+    lines = [
+        "## Sub-agents you can delegate to",
+        "",
+        "Call `run_agent(agent_type, prompt)` to hand one a whole sub-task. It "
+        "starts with an empty context and answers once, so the prompt must be "
+        "self-contained.",
+        "",
+    ]
+    lines += [f"- `{d.name}`: {d.description}" for d in defs]
+    return "\n".join(lines)
+
+
 def clamp_tools(defn: SubagentDef, ceiling: list[str] | None) -> SubagentDef:
     """`defn` with any tool outside `ceiling` dropped (logged). `None` ceiling ⇒
     unclamped, matching the tri-state `allowed_tools` convention."""

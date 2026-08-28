@@ -1152,6 +1152,38 @@ async def ask_knowledge_base_impl(
     return banner + answer
 
 
+async def run_agent_impl(
+    ctx: RunContextWrapper[AgentToolContext], agent_type: str, prompt: str
+) -> str:
+    """Delegate a whole sub-task to one of the sub-agents listed in your system
+    prompt, and get back its report.
+
+    The sub-agent starts with an EMPTY context and cannot see this conversation,
+    so `prompt` must be self-contained: say what to do, what it needs to know,
+    and what to report back. It runs on its own narrower tool set and answers
+    once — you cannot talk to it again, so ask for everything you need in one go.
+
+    Use this when a sub-task would otherwise fill this conversation with material
+    you do not need to keep — reading through long files or logs, trying several
+    approaches, surveying a directory. What comes back is the conclusion; the
+    work that produced it stays out of your context.
+
+    Do NOT use it for something you can just do yourself in a step or two, and do
+    not delegate a task whose result you cannot check.
+    """
+    run = ctx.context.run_agent
+    if run is None:
+        return "error: run_agent is only available in an App workspace turn"
+    defs = ctx.context.subagent_defs
+    chosen = next((d for d in defs if d.name == agent_type), None)
+    if chosen is None:
+        # Name the alternatives: the model picked from an index it was shown, so
+        # a bare rejection leaves it guessing at what it misread.
+        known = ", ".join(d.name for d in defs) or "none"
+        return f"error: no sub-agent named {agent_type!r}. Available: {known}"
+    return await run(chosen, prompt, ctx.context.on_exec_output)
+
+
 async def ask_wiki_impl(ctx: RunContextWrapper[AgentToolContext], question: str) -> str:
     """Ask the wiki what it knows about something.
 
@@ -2264,6 +2296,7 @@ _IMPLS = {
     # `read_skill` is opt-in (#29 / §A): only registered when the active
     # template profile has any skills. `build_tools(profile=)` handles
     # the conditional injection — never present in `_WORKSPACE_TOOLS`.
+    "run_agent": run_agent_impl,
     "read_skill": read_skill_impl,
     # `save_skill` (#298) is a normal opt-in tool — listed in an App's
     # `agent.tools` like any other (the workspace apps that ship the
@@ -2440,15 +2473,24 @@ def build_tools(
     *,
     app_slug: str | None = None,
     profile: str | None = None,
+    has_subagents: bool = False,
 ) -> list[FunctionTool]:
     """Build FunctionTool list for the Agent. If `allowed` is None, the
     workspace toolset (file/exec); otherwise exactly the named tools.
 
     When `app_slug` + `profile` are set and that App profile ships any skills,
     `read_skill` is appended (issue #29 / §A — "skill index + tool same flag
-    in/out"). Set per turn from the item's App + profile."""
+    in/out"). Set per turn from the item's App + profile.
+
+    `has_subagents` is the same "index + tool same flag in/out" rule for
+    `run_agent`: with no sub-agent definitions this turn there is nobody to
+    delegate to, and granting a tool that refuses every call reads to a model as
+    "stop trying" (#537). Whether definitions exist depends on the item's own
+    workspace, so it cannot be derived from `app_slug`/`profile` here."""
     names = allowed if allowed is not None else _WORKSPACE_TOOLS
     names = [_LEGACY_TOOL_RENAMES.get(n, n) for n in names]
+    if not has_subagents:
+        names = [n for n in names if n != "run_agent"]
     # Skip names that aren't built-ins — they may be provisioned tool-package
     # commands (#21, #25), which the runner adds separately via
     # `workspace_app.tooling.registry.build_function_tools`. The colon syntax

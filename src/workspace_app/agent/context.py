@@ -14,11 +14,11 @@ from ..tokens import CallLane
 if TYPE_CHECKING:
     from specstar import SpecStar
 
+    from ..apps.subagents import SubagentDef
     from ..entity.events import EntityOrigin, EntityWriteSink
     from ..kb.retriever import Enhancements, Retriever
     from ..kb.vlm import IVlm, VlmDescriber
     from ..kb.wiki.sources import IWikiSources
-    from ..apps.subagents import SubagentDef
     from ..resources import AgentConfig
     from ..resources.conversation import Citation
     from ..resources.conversation_todos import TodoItem
