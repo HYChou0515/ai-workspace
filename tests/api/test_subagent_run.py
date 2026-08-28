@@ -103,3 +103,21 @@ async def test_the_sub_agents_work_is_relayed_as_it_happens():
     await run_agent_task(runner, _parent(), defn, "go", on_event=lambda ev: seen.append(ev.type))
 
     assert seen == ["tool_start", "done"]
+
+
+async def test_a_sub_agents_kb_citations_do_not_get_attributed_to_the_parent():
+    """Citation buckets are paired with the PARENT's tool messages positionally
+    (`bubble_kb_citations`, most-recent-call-wins). A sub-agent consulting the KB
+    would otherwise append into the same accumulator and the parent's answer
+    would cite a lookup the user never saw it make."""
+    runner = _Recorder([RunDone()])
+    defn = SubagentDef(name="digger", description="d", tools=["ask_knowledge_base"], body="dig")
+    parent = _parent()
+    parent.subagent_citations.setdefault("ask_knowledge_base", []).append([])
+
+    await run_agent_task(runner, parent, defn, "go")
+
+    assert runner.ctx is not None
+    assert runner.ctx.subagent_citations == {}
+    runner.ctx.subagent_citations.setdefault("ask_knowledge_base", []).append([])
+    assert len(parent.subagent_citations["ask_knowledge_base"]) == 1

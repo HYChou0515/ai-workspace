@@ -9,88 +9,30 @@
     "title": "Welcome to Root Cause Analysis",
     "intro": "Investigate failures end to end — from raw evidence to a report you can share.",
     "points": [
-      {
-        "title": "Add your evidence",
-        "body": "Upload logs, datasets, and images, then ask the agent to dig into them."
-      },
-      {
-        "title": "Ask the agent",
-        "body": "Pull histories, rank suspect factors, and run SPC or Pareto from plain questions."
-      },
-      {
-        "title": "Draft the report",
-        "body": "Turn findings into a structured report you can export and hand off."
-      }
+      { "title": "Add your evidence", "body": "Upload logs, datasets, and images, then ask the agent to dig into them." },
+      { "title": "Ask the agent", "body": "Pull histories, rank suspect factors, and run SPC or Pareto from plain questions." },
+      { "title": "Draft the report", "body": "Turn findings into a structured report you can export and hand off." }
     ]
   },
-  "function": {
-    "workspace": true,
-    "sandbox": true,
-    "terminal": true
-  },
+  "function": { "workspace": true, "sandbox": true, "terminal": true },
   "agent": {
     "prompt_file": "prompts/system.md",
-    "context_files": [
-      "collections.json"
-    ],
+    "context_files": ["collections.json"],
     "tools": [
-      "exec",
-      "read_file",
-      "read_image",
-      "show_file",
-      "write_file",
-      "edit_file",
-      "list_files",
-      "exists",
-      "delete_file",
-      "ask_knowledge_base",
-      "run_agent",
-      "request_wiki_update",
-      "lookup_user",
-      "ask_user",
-      "update_todos",
-      "make_deck",
-      "data-fetch",
-      "csv-column-summary",
-      "sci-plot",
-      "rca-tools",
-      "python-stack",
-      "save_skill",
-      "save_workflow"
+      "exec", "read_file", "read_image", "show_file", "write_file", "edit_file", "list_files", "exists",
+      "delete_file", "ask_knowledge_base", "run_agent", "request_wiki_update", "lookup_user", "ask_user", "update_todos", "make_deck", "data-fetch",
+      "csv-column-summary", "sci-plot", "rca-tools", "python-stack", "save_skill", "save_workflow"
     ],
-    "skills": [
-      "author-skill",
-      "author-workflow",
-      "grill-me",
-      "verify-number"
-    ],
+    "skills": ["author-skill", "author-workflow", "grill-me", "verify-number"],
     "picker": [
-      {
-        "preset": "qwen3-local",
-        "name": "RCA · Qwen3 (local)"
-      },
-      {
-        "preset": "claude-opus",
-        "name": "RCA · Claude Opus"
-      },
-      {
-        "preset": "openai-mini",
-        "name": "RCA · GPT-4o-mini"
-      }
+      { "preset": "qwen3-local", "name": "RCA · Qwen3 (local)" },
+      { "preset": "claude-opus", "name": "RCA · Claude Opus" },
+      { "preset": "openai-mini", "name": "RCA · GPT-4o-mini" }
     ],
     "suggestions": [
-      {
-        "label": "SPC analysis",
-        "prompt": "Show the SPC analysis"
-      },
-      {
-        "label": "Pareto",
-        "prompt": "Run a Pareto of defect modes"
-      },
-      {
-        "label": "Draft report",
-        "prompt": "Draft the report"
-      }
+      { "label": "SPC analysis", "prompt": "Show the SPC analysis" },
+      { "label": "Pareto", "prompt": "Run a Pareto of defect modes" },
+      { "label": "Draft report", "prompt": "Draft the report" }
     ]
   },
   "item": {
@@ -99,58 +41,18 @@
     "create_label": "Start Investigation"
   },
   "layout": {
-    "breadcrumb": [
-      "severity",
-      "status"
-    ],
-    "statusbar": [
-      "severity",
-      "status",
-      "product"
-    ],
-    "list": [
-      "severity",
-      "status",
-      "product"
-    ],
-    "form": [
-      "severity",
-      "status",
-      "topics",
-      "product"
-    ],
-    "default_tabs": [
-      "/SOP.md",
-      "/brief.md"
-    ],
+    "breadcrumb": ["severity", "status"],
+    "statusbar": ["severity", "status", "product"],
+    "list": ["severity", "status", "product"],
+    "form": ["severity", "status", "topics", "product"],
+    "default_tabs": ["/SOP.md", "/brief.md"],
     "primary_surface": "ide"
   },
-  "lifecycle": {
-    "status_field": "status",
-    "closing_states": [
-      "resolved",
-      "abandoned"
-    ]
-  },
-  "labels": {
-    "severity": "Severity",
-    "status": "Status",
-    "product": "Product"
-  },
+  "lifecycle": { "status_field": "status", "closing_states": ["resolved", "abandoned"] },
+  "labels": { "severity": "Severity", "status": "Status", "product": "Product" },
   "field_styles": {
-    "severity": {
-      "P0": "err",
-      "P1": "err",
-      "P2": "warn",
-      "P3": "ok",
-      "P4": "ok"
-    },
-    "status": {
-      "triaging": "warn",
-      "awaiting_review": "info",
-      "resolved": "ok",
-      "abandoned": "muted"
-    }
+    "severity": { "P0": "err", "P1": "err", "P2": "warn", "P3": "ok", "P4": "ok" },
+    "status": { "triaging": "warn", "awaiting_review": "info", "resolved": "ok", "abandoned": "muted" }
   },
   "default_profile": "default"
 }

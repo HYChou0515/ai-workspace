@@ -76,4 +76,10 @@ def _child_context(parent_ctx: AgentToolContext, defn: SubagentDef) -> AgentTool
         history=[],
         run_agent=None,
         subagent_defs=(),
+        # A FRESH accumulator, not the parent's. Citation buckets are paired with
+        # the PARENT's tool messages positionally (`bubble_kb_citations`,
+        # most-recent-call-wins), so a sub-agent consulting the KB through the
+        # shared dict would make the parent's answer cite a lookup the user never
+        # saw it make. The sub-agent's own sources travel inside its report.
+        subagent_citations={},
     )

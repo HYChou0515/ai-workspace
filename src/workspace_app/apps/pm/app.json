@@ -9,80 +9,29 @@
     "title": "Welcome to Project Management",
     "intro": "Track work as plain-file issues and milestones — every record is a workspace file you (or the agent) can read, edit, and version.",
     "points": [
-      {
-        "title": "Create an issue",
-        "body": "Use the quick-create form (or ask the agent) — each issue becomes `issues/N.md` with typed fields."
-      },
-      {
-        "title": "See it your way",
-        "body": "The board groups issues by status, the gantt lays out their date spans, and the roadmap tracks milestones."
-      },
-      {
-        "title": "Roll up progress",
-        "body": "Milestones back-reference their issues and roll up progress automatically — no manual bookkeeping."
-      }
+      { "title": "Create an issue", "body": "Use the quick-create form (or ask the agent) — each issue becomes `issues/N.md` with typed fields." },
+      { "title": "See it your way", "body": "The board groups issues by status, the gantt lays out their date spans, and the roadmap tracks milestones." },
+      { "title": "Roll up progress", "body": "Milestones back-reference their issues and roll up progress automatically — no manual bookkeeping." }
     ]
   },
-  "function": {
-    "workspace": true,
-    "sandbox": true,
-    "terminal": true
-  },
+  "function": { "workspace": true, "sandbox": true, "terminal": true },
   "agent": {
     "prompt_file": "prompts/system.md",
     "tools": [
-      "exec",
-      "read_file",
-      "show_file",
-      "write_file",
-      "edit_file",
-      "list_files",
-      "exists",
-      "delete_file",
-      "create_entity",
-      "update_entity",
-      "query_entity",
-      "link_entity",
-      "ask_knowledge_base",
-      "run_agent",
-      "lookup_user",
-      "ask_user",
-      "update_todos",
-      "save_skill",
-      "save_workflow"
+      "exec", "read_file", "show_file", "write_file", "edit_file", "list_files", "exists",
+      "delete_file", "create_entity", "update_entity", "query_entity", "link_entity",
+      "ask_knowledge_base", "run_agent", "lookup_user", "ask_user", "update_todos", "save_skill", "save_workflow"
     ],
-    "skills": [
-      "author-skill",
-      "author-workflow",
-      "grill-me"
-    ],
+    "skills": ["author-skill", "author-workflow", "grill-me"],
     "picker": [
-      {
-        "preset": "qwen3-local",
-        "name": "PM · Qwen3 (local)"
-      },
-      {
-        "preset": "claude-opus",
-        "name": "PM · Claude Opus"
-      },
-      {
-        "preset": "openai-mini",
-        "name": "PM · GPT-4o-mini"
-      }
+      { "preset": "qwen3-local", "name": "PM · Qwen3 (local)" },
+      { "preset": "claude-opus", "name": "PM · Claude Opus" },
+      { "preset": "openai-mini", "name": "PM · GPT-4o-mini" }
     ],
     "suggestions": [
-      {
-        "label": "New issue",
-        "prompt": "Create an issue for "
-      },
-      {
-        "label": "This week",
-        "prompt": "Which issues are due this week?"
-      },
-      {
-        "label": "Milestone status",
-        "prompt": "How is the current milestone tracking?"
-      }
+      { "label": "New issue", "prompt": "Create an issue for " },
+      { "label": "This week", "prompt": "Which issues are due this week?" },
+      { "label": "Milestone status", "prompt": "How is the current milestone tracking?" }
     ]
   },
   "item": {
@@ -91,42 +40,20 @@
     "create_label": "New Project"
   },
   "layout": {
-    "breadcrumb": [
-      "status"
-    ],
-    "statusbar": [
-      "status"
-    ],
-    "list": [
-      "status"
-    ],
-    "form": [
-      "status"
-    ],
+    "breadcrumb": ["status"],
+    "statusbar": ["status"],
+    "list": ["status"],
+    "form": ["status"],
     "views": [
-      "/views/board.ai.yaml",
-      "/views/table.ai.yaml",
-      "/views/gantt.ai.yaml",
-      "/views/workload.ai.yaml",
-      "/views/roadmap.ai.yaml",
-      "/views/health.ai.yaml"
+      "/views/board.ai.yaml", "/views/table.ai.yaml", "/views/gantt.ai.yaml",
+      "/views/workload.ai.yaml", "/views/roadmap.ai.yaml", "/views/health.ai.yaml"
     ],
     "primary_surface": "views"
   },
-  "lifecycle": {
-    "status_field": "status",
-    "closing_states": [
-      "archived"
-    ]
-  },
-  "labels": {
-    "status": "Status"
-  },
+  "lifecycle": { "status_field": "status", "closing_states": ["archived"] },
+  "labels": { "status": "Status" },
   "field_styles": {
-    "status": {
-      "active": "ok",
-      "archived": "muted"
-    }
+    "status": { "active": "ok", "archived": "muted" }
   },
   "default_profile": "default"
 }

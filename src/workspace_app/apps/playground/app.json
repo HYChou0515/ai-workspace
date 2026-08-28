@@ -9,114 +9,39 @@
     "title": "Welcome to the Playground",
     "intro": "A clean scratch space to poke at files, the terminal, and the sandbox.",
     "points": [
-      {
-        "title": "Work with files",
-        "body": "Create and edit files in the workspace on the left."
-      },
-      {
-        "title": "Run things",
-        "body": "Open the terminal or ask the agent to run code in the sandbox."
-      },
-      {
-        "title": "Experiment freely",
-        "body": "Nothing here is precious — try things out."
-      }
+      { "title": "Work with files", "body": "Create and edit files in the workspace on the left." },
+      { "title": "Run things", "body": "Open the terminal or ask the agent to run code in the sandbox." },
+      { "title": "Experiment freely", "body": "Nothing here is precious — try things out." }
     ]
   },
-  "function": {
-    "workspace": true,
-    "sandbox": true,
-    "terminal": true
-  },
+  "function": { "workspace": true, "sandbox": true, "terminal": true },
   "agent": {
     "prompt_file": "prompts/system.md",
-    "tools": [
-      "ask_user",
-      "update_todos",
-      "exec",
-      "read_file",
-      "read_image",
-      "show_file",
-      "write_file",
-      "edit_file",
-      "list_files",
-      "exists",
-      "delete_file",
-      "ask_knowledge_base",
-      "run_agent",
-      "request_wiki_update",
-      "make_deck",
-      "sci-plot",
-      "python-stack",
-      "save_skill",
-      "save_workflow",
+    "tools": ["ask_user", "update_todos", 
+      "exec", "read_file", "read_image", "show_file", "write_file", "edit_file", "list_files", "exists",
+      "delete_file", "ask_knowledge_base", "run_agent", "request_wiki_update", "make_deck", "sci-plot", "python-stack", "save_skill", "save_workflow",
       "csv-column-summary:summarise"
     ],
-    "skills": [
-      "author-skill",
-      "author-workflow",
-      "grill-me"
-    ],
-    "picker": [
-      {
-        "preset": "qwen3-local",
-        "name": "Playground · Qwen3 (local)"
-      }
-    ],
+    "skills": ["author-skill", "author-workflow", "grill-me"],
+    "picker": [{ "preset": "qwen3-local", "name": "Playground · Qwen3 (local)" }],
     "suggestions": [
-      {
-        "label": "List files",
-        "prompt": "List the files in the workspace."
-      },
-      {
-        "label": "Working dir",
-        "prompt": "Run `pwd` and show me the working directory."
-      },
-      {
-        "label": "Hello, Python",
-        "prompt": "Write and run a short Python script that prints a greeting."
-      }
+      { "label": "List files", "prompt": "List the files in the workspace." },
+      { "label": "Working dir", "prompt": "Run `pwd` and show me the working directory." },
+      { "label": "Hello, Python", "prompt": "Write and run a short Python script that prints a greeting." }
     ]
   },
-  "item": {
-    "noun": "Scratch",
-    "noun_plural": "Scratches",
-    "create_label": "New scratch"
-  },
+  "item": { "noun": "Scratch", "noun_plural": "Scratches", "create_label": "New scratch" },
   "layout": {
-    "breadcrumb": [
-      "status"
-    ],
-    "statusbar": [
-      "status"
-    ],
-    "list": [
-      "status"
-    ],
-    "form": [
-      "status",
-      "topics"
-    ],
-    "default_tabs": [
-      "/notes.md"
-    ]
+    "breadcrumb": ["status"],
+    "statusbar": ["status"],
+    "list": ["status"],
+    "form": ["status", "topics"],
+    "default_tabs": ["/notes.md"]
   },
-  "lifecycle": {
-    "status_field": "status",
-    "closing_states": [
-      "done"
-    ]
-  },
-  "labels": {
-    "status": "Status",
-    "topics": "Tags"
-  },
+  "lifecycle": { "status_field": "status", "closing_states": ["done"] },
+  "labels": { "status": "Status", "topics": "Tags" },
   "field_styles": {
-    "status": {
-      "open": "info",
-      "in_progress": "warn",
-      "done": "ok"
-    }
+    "status": { "open": "info", "in_progress": "warn", "done": "ok" }
   },
   "default_profile": "default"
 }
