@@ -396,10 +396,12 @@ def test_the_turn_overhead_is_measured_once(monkeypatch):
     real = TurnContextBuilder._tools_tokens
     calls = 0
 
-    def _counting(self, agent_config, *, app_slug, profile):
+    def _counting(self, agent_config, *, app_slug, profile, has_subagents=False):
         nonlocal calls
         calls += 1
-        return real(self, agent_config, app_slug=app_slug, profile=profile)
+        return real(
+            self, agent_config, app_slug=app_slug, profile=profile, has_subagents=has_subagents
+        )
 
     monkeypatch.setattr(TurnContextBuilder, "_tools_tokens", _counting)
 
