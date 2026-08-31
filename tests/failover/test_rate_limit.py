@@ -12,10 +12,21 @@ the provider never sends.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterator
+
 import httpx
 import litellm
+import pytest
 
+from workspace_app.failover.cooldown import CooldownRegistry
+from workspace_app.failover.core import AllProvidersFailed, Provider, failover_stream
 from workspace_app.failover.rate_limit import is_rate_limited, retry_after_s
+from workspace_app.failover.retry import try_provider
+
+
+def _recording_sleep() -> tuple[list[float], Callable[[float], None]]:
+    slept: list[float] = []
+    return slept, slept.append
 
 
 def _rate_limited(headers: dict[str, str]) -> litellm.exceptions.RateLimitError:
@@ -111,3 +122,117 @@ def test_the_stated_wait_is_found_through_the_wrapper_too():
     but not for how long would leave us guessing at the one number the
     provider actually told us."""
     assert retry_after_s(_wrapped(_rate_limited({"retry-after": "3"}))) == 3.0
+
+
+# ── the same-endpoint retry actually waits ────────────────────────────────────
+
+
+def test_a_rate_limited_retry_waits_the_duration_the_provider_stated():
+    """Retrying a 429 after the ordinary 0.2s gap just spends an attempt to be
+    told "too fast" again. The provider said how long; wait that long."""
+    slept, sleep = _recording_sleep()
+    calls = {"n": 0}
+
+    def call():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise _rate_limited({"retry-after": "7"})
+        return "ok"
+
+    assert try_provider(call, m=5, gap=0.2, sleep=sleep) == "ok"
+    assert calls["n"] == 2
+    assert slept == [7.0]  # the stated wait, not the fixed gap
+
+
+def test_a_rate_limit_that_states_nothing_backs_off_instead_of_using_the_gap():
+    """ "Retry-After" is optional, so plenty of 429s say only "too fast". The
+    gap is tuned for a gateway blip — hammering a rate limiter every 0.2s is
+    what got us throttled. Fall back to the same doubling shape the chain
+    re-sweep uses (`failover.round_backoff_s`)."""
+    slept, sleep = _recording_sleep()
+
+    def call():
+        raise _rate_limited({})  # 429 with no Retry-After
+
+    with pytest.raises(litellm.exceptions.RateLimitError):
+        try_provider(call, m=4, gap=0.2, sleep=sleep)
+
+    assert slept == [1.0, 2.0, 4.0]
+
+
+# ── the chain must not walk away from a healthy endpoint ──────────────────────
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def _refusing(exc: BaseException) -> Callable[[], Iterator[str]]:
+    def start() -> Iterator[str]:
+        raise exc
+        yield ""  # pragma: no cover — unreachable; makes this a generator
+
+    return start
+
+
+def _one(start: Callable[[], Iterator[str]], *, num_retries: int = 0) -> Provider[str]:
+    return Provider(
+        key="a",
+        label="a",
+        start=start,
+        ttft_s=5.0,
+        idle_s=5.0,
+        cooldown_s=30.0,
+        num_retries=num_retries,
+    )
+
+
+def test_a_rate_limited_provider_is_parked_only_as_long_as_it_asked():
+    """``cooldown_s`` is the bench time for an endpoint that is *unwell*. A
+    rate-limited one is healthy and serves again the moment its window rolls,
+    so benching it the full 30s keeps us off a working endpoint far longer
+    than it asked for.
+
+    Parking it for exactly the stated wait says the same thing in the
+    mechanism that already exists — and because the registry is keyed by
+    ``(model, endpoint)`` and shared across roles, every other caller then
+    respects the same window instead of rediscovering it one 429 at a time."""
+    clock = _Clock()
+    registry = CooldownRegistry(clock=clock)
+    _, sleep = _recording_sleep()
+
+    with pytest.raises(AllProvidersFailed):
+        list(
+            failover_stream(
+                [_one(_refusing(_rate_limited({"retry-after": "1"})))],
+                registry,
+                sleep=sleep,
+            )
+        )
+
+    assert registry.is_cooling("a") is True  # the window it asked for
+    clock.now = 1.5
+    assert registry.is_cooling("a") is False  # a 30s bench would still hold
+
+
+def test_same_endpoint_retries_wait_the_stated_window_between_attempts():
+    """The same-endpoint retries exist to absorb a blip, so they fire back to
+    back. Against a rate limiter that is three refusals in a row inside a
+    millisecond — the retry budget is spent before the window could possibly
+    have rolled. Retrying in the same place only means anything if it waits."""
+    slept, sleep = _recording_sleep()
+
+    with pytest.raises(AllProvidersFailed):
+        list(
+            failover_stream(
+                [_one(_refusing(_rate_limited({"retry-after": "3"})), num_retries=2)],
+                CooldownRegistry(clock=_Clock()),
+                sleep=sleep,
+            )
+        )
+
+    assert slept == [3.0, 3.0]  # between the three attempts at the same endpoint

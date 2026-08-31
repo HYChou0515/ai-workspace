@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from typing import cast
 
 from .cooldown import CooldownRegistry
+from .rate_limit import is_rate_limited, retry_after_s
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +145,30 @@ def _wait_before_round(
     return True
 
 
+def _park_for[T](provider: Provider[T], cause: BaseException) -> float:
+    """How long to bench ``provider`` after it failed before its first item.
+
+    ``cooldown_s`` is the bench time for an endpoint that is *unwell*. A
+    rate-limited one is healthy — it serves again the moment its window rolls —
+    so when the 429 states a wait, that is the honest bench time. The registry
+    is keyed by ``(model, endpoint)`` and shared across roles, so parking for
+    exactly the stated window also tells every other caller to hold off,
+    instead of each rediscovering the limit one 429 at a time.
+    """
+    if is_rate_limited(cause):
+        stated = retry_after_s(cause)
+        if stated is not None:
+            return stated
+    return provider.cooldown_s
+
+
+def _retry_pause(cause: BaseException) -> float:
+    """How long to hold before retrying the SAME endpoint. Zero for an ordinary
+    pre-first failure (the retry is meant to be quick), the stated window when
+    the endpoint rate-limited us."""
+    return retry_after_s(cause) or 0.0 if is_rate_limited(cause) else 0.0
+
+
 def failover_stream[T](
     providers: Sequence[Provider[T]],
     cooldown: CooldownRegistry,
@@ -185,17 +210,26 @@ def failover_stream[T](
                     if attempt == provider.num_retries:
                         # same-endpoint retries exhausted → park it and switch; the
                         # loop then ends naturally and the next provider is tried.
-                        cooldown.mark(provider.key, provider.cooldown_s)
+                        parked = _park_for(provider, failure.cause)
+                        cooldown.mark(provider.key, parked)
                         logger.warning(
                             "failover: provider %s parked %.1fs after pre-first "
                             "failure (%r) — switching to next",
                             provider.label,
-                            provider.cooldown_s,
+                            parked,
                             failure.cause,
                         )
                         if on_switch is not None:
                             on_switch(provider, failure.cause)
-                    # else: a quick same-endpoint retry (pre-first only)
+                    else:
+                        # A quick same-endpoint retry (pre-first only) — quick
+                        # because it is meant to absorb a blip. A rate limit is
+                        # not a blip: firing the whole budget inside a
+                        # millisecond spends it before the window could have
+                        # rolled, so here we wait as long as the 429 asked.
+                        wait = _retry_pause(failure.cause)
+                        if wait > 0:
+                            sleep(wait)
                 else:
                     yield first
                     yield from stream  # mid-stream errors / idle stalls propagate

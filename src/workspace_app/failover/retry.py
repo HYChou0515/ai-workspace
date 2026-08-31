@@ -25,9 +25,10 @@ import time
 from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING
 
-from tenacity import Retrying, retry_if_exception, stop_after_attempt, wait_fixed
+from tenacity import Retrying, retry_if_exception, stop_after_attempt
 
 from .core import CallProvider
+from .rate_limit import is_rate_limited, retry_after_s
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,37 @@ def is_transient(exc: BaseException) -> bool:
     return type(exc).__name__ in _TRANSIENT_NAMES
 
 
+# A rate limit that states no Retry-After still must not be re-called at ``gap``
+# speed — that cadence is what earned the throttle. Same doubling shape as the
+# chain re-sweep default (`failover.round_backoff_s`), capped so one unlucky
+# turn cannot park for minutes.
+_RATE_LIMIT_BACKOFF_BASE_S = 1.0
+_RATE_LIMIT_BACKOFF_CAP_S = 16.0
+
+
+def _rate_limit_backoff(attempt_number: int) -> float:
+    """1s, 2s, 4s … capped — the wait for a 429 that didn't say how long."""
+    return min(
+        _RATE_LIMIT_BACKOFF_BASE_S * 2 ** max(0, attempt_number - 1),
+        _RATE_LIMIT_BACKOFF_CAP_S,
+    )
+
+
+def _wait_for(gap: float) -> Callable[[RetryCallState], float]:
+    """How long before the next same-endpoint attempt: ``gap`` for an ordinary
+    transient, the duration the provider stated when it rate-limited us, and a
+    doubling backoff when it rate-limited us without saying."""
+
+    def wait(state: RetryCallState) -> float:
+        exc = state.outcome.exception() if state.outcome is not None else None
+        if exc is not None and is_rate_limited(exc):
+            stated = retry_after_s(exc)
+            return stated if stated is not None else _rate_limit_backoff(state.attempt_number)
+        return gap
+
+    return wait
+
+
 def try_provider[R](
     call: Callable[[], R],
     *,
@@ -71,10 +103,14 @@ def try_provider[R](
     sleep: Callable[[float], None] = time.sleep,
 ) -> R:
     """Call ``call`` up to ``m`` times, ``gap`` seconds apart, retrying ONLY a
-    transient failure. A permanent error (or the m-th transient) propagates."""
+    transient failure. A permanent error (or the m-th transient) propagates.
+
+    A rate limit is the exception to ``gap``: the provider states how long it
+    wants us to wait, and re-calling before that just spends an attempt to be
+    told "too fast" again (see :func:`_wait_for`)."""
     for attempt in Retrying(
         stop=stop_after_attempt(m),
-        wait=wait_fixed(gap),
+        wait=_wait_for(gap),
         retry=retry_if_exception(is_transient),
         reraise=True,
         sleep=sleep,
