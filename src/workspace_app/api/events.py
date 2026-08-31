@@ -169,6 +169,22 @@ class FailoverSwitch:
 
 
 @dataclass(frozen=True)
+class RateLimited:
+    """The model endpoint asked us to slow down, so the turn is holding for
+    ``seconds`` before retrying the SAME endpoint. Ephemeral — a transient
+    status line like ``RestoreProgress``, never persisted to the transcript.
+
+    It exists because waiting is the only cure for a 429, and a minute of
+    silence is indistinguishable from a hung turn: without this the fix for
+    the rate limit would read as a new bug. ``seconds`` is what the provider
+    stated (or our backoff when it stated nothing) so the FE can say how long
+    rather than an open-ended "please wait"."""
+
+    seconds: float
+    type: Literal["rate_limited"] = "rate_limited"
+
+
+@dataclass(frozen=True)
 class RestoreProgress:
     """#492 P11: the item's sandbox was cold, so before the turn can run its
     durable snapshot is being restored file-by-file. `done`/`total` count files
@@ -245,6 +261,7 @@ AgentEvent = (
     | AgentMetrics
     | FailoverSwitch  # #249/#131: chat model switched mid-turn (ephemeral notice)
     | RestoreProgress  # #492 P11: cold-wake snapshot restore progress (ephemeral)
+    | RateLimited  # the turn is holding out a 429 before retrying (ephemeral)
     | TodosUpdated  # #613: the agent rewrote the conversation's todo checklist
     | ContextTrimmed  # #624: the request was too long; older history was dropped
     | GoalUpdated  # #613 P3: the chat's goal was set / cleared / advanced

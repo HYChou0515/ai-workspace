@@ -19,7 +19,13 @@ import litellm
 import pytest
 
 from workspace_app.failover.cooldown import CooldownRegistry
-from workspace_app.failover.core import AllProvidersFailed, Provider, failover_stream
+from workspace_app.failover.core import (
+    AllProvidersFailed,
+    CallProvider,
+    Provider,
+    failover_call,
+    failover_stream,
+)
 from workspace_app.failover.rate_limit import is_rate_limited, retry_after_s
 from workspace_app.failover.retry import try_provider
 
@@ -219,6 +225,29 @@ def test_a_rate_limited_provider_is_parked_only_as_long_as_it_asked():
     assert registry.is_cooling("a") is False  # a 30s bench would still hold
 
 
+def test_a_rate_limit_that_states_nothing_falls_back_to_the_normal_bench():
+    """With no window stated there is no better number than the configured
+    ``cooldown_s``. Parking for the short same-endpoint backoff instead would
+    put the chain straight back onto an endpoint we know is throttling."""
+    clock = _Clock()
+    registry = CooldownRegistry(clock=clock)
+    _, sleep = _recording_sleep()
+
+    with pytest.raises(AllProvidersFailed):
+        list(
+            failover_stream(
+                [_one(_refusing(_rate_limited({})))],  # 429, no Retry-After
+                registry,
+                sleep=sleep,
+            )
+        )
+
+    clock.now = 29.0
+    assert registry.is_cooling("a") is True  # the full cooldown_s, not a guess
+    clock.now = 31.0
+    assert registry.is_cooling("a") is False
+
+
 def test_same_endpoint_retries_wait_the_stated_window_between_attempts():
     """The same-endpoint retries exist to absorb a blip, so they fire back to
     back. Against a rate limiter that is three refusals in a row inside a
@@ -236,3 +265,27 @@ def test_same_endpoint_retries_wait_the_stated_window_between_attempts():
         )
 
     assert slept == [3.0, 3.0]  # between the three attempts at the same endpoint
+
+
+def test_the_non_streaming_chain_holds_the_same_way():
+    """`failover_call` is the same loop for requests that return in one piece
+    (embeddings, VLM describes). It benched a rate-limited endpoint for the
+    full `cooldown_s` and re-called it with no pause, exactly as the streaming
+    one did — the fix has to land on both or the defect just moves."""
+    clock = _Clock()
+    registry = CooldownRegistry(clock=clock)
+    slept, sleep = _recording_sleep()
+
+    def call():
+        raise _rate_limited({"retry-after": "2"})
+
+    with pytest.raises(AllProvidersFailed):
+        failover_call(
+            [CallProvider(key="a", label="a", call=call, cooldown_s=30.0, num_retries=1)],
+            registry,
+            sleep=sleep,
+        )
+
+    assert slept == [2.0]  # held between the two same-endpoint attempts
+    clock.now = 2.5
+    assert registry.is_cooling("a") is False  # parked 2s, not 30s

@@ -91,6 +91,10 @@ export type AgentLog = {
    * a transient "還原中 N/M" line instead of a blank running card. NEVER persisted
    * (cleared once the model starts / at each turn start); reset on reload. */
   restore: { done: number; total: number } | null;
+  /** Set while the turn is holding out a rate limit (429) before retrying the
+   * same endpoint. Ephemeral, like `restore` — it explains a silence, so it is
+   * cleared the moment real output arrives. */
+  rateLimited: { seconds: number } | null;
 };
 
 export const EMPTY_LOG: AgentLog = {
@@ -101,6 +105,7 @@ export const EMPTY_LOG: AgentLog = {
   metrics: null,
   failover: null,
   restore: null,
+  rateLimited: null,
 };
 
 /** How long after asking we still believe a reply is on its way.
@@ -188,6 +193,7 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
     metrics: null,
     failover: null,
     restore: null,
+    rateLimited: null,
   };
 }
 
@@ -376,6 +382,7 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
         // notice from the previous one so it can't bleed into this turn (#249/#492).
         failover: ev.phase === "up" ? null : log.failover,
         restore: ev.phase === "up" ? null : log.restore,
+        rateLimited: ev.phase === "up" ? null : log.rateLimited,
         metrics: {
           phase: ev.phase,
           promptTokens: ev.prompt_tokens,
@@ -389,6 +396,12 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
       // show a transient "model busy, switched" line while the next model warms
       // up. NOT pushed to `entries`: it never enters the transcript.
       return { ...log, failover: { at: now } };
+
+    case "rate_limited":
+      // Ephemeral — record how long the turn is holding so TurnStatus can say
+      // why it has gone quiet instead of looking hung. NOT pushed to `entries`:
+      // it never enters the transcript. Cleared once real output resumes.
+      return { ...log, rateLimited: { seconds: ev.seconds } };
 
     case "restore_progress":
       // #492 P11: ephemeral — record the cold-wake restore's (done, total) so
@@ -418,7 +431,7 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
         });
       }
       // #492 P11: the model is producing output ⇒ any cold-wake restore is over.
-      return { ...log, entries, restore: null };
+      return { ...log, entries, restore: null, rateLimited: null };
     }
 
     case "tool_start":
@@ -449,7 +462,7 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
         }
       }
       // #492 P11: the tool that woke the sandbox has finished ⇒ restore is over.
-      return { ...log, entries, restore: null };
+      return { ...log, entries, restore: null, rateLimited: null };
     }
 
     case "tool_log": {
@@ -464,7 +477,7 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
         }
       }
       // #492 P11: the woken tool is now streaming output ⇒ restore is over.
-      return { ...log, entries, restore: null };
+      return { ...log, entries, restore: null, rateLimited: null };
     }
 
     case "tool_call_parse_error": {

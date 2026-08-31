@@ -70,6 +70,7 @@ from .events import (
     FailoverSwitch,
     MaxTurnsExceeded,
     MessageDelta,
+    RateLimited,
     RestoreProgress,
     RunDone,
     RunError,
@@ -1129,6 +1130,7 @@ class LitellmAgentRunner:
                             held,
                             ctx.investigation_id,
                         )
+                        yield RateLimited(seconds=held)
                         await self._sleep(held)
                         continue
                     _LOGGER.warning(

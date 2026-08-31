@@ -17,6 +17,7 @@ const live = (over: Partial<AgentLog> = {}): AgentLog => ({
   metrics: null,
   failover: null,
   restore: null,
+  rateLimited: null,
   ...over,
 });
 

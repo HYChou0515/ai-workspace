@@ -1038,6 +1038,30 @@ async def test_a_turn_gives_up_readably_when_the_rate_limit_never_clears():
     assert type(events[-1]).__name__ == "RunDone"
 
 
+async def test_the_hold_is_announced_before_the_turn_goes_quiet():
+    """A 60-second hold with nothing on screen is indistinguishable from a hung
+    turn — and this change made the quiet part LONGER, so it has to say why.
+    The notice goes out BEFORE the sleep, not after it, or it arrives once the
+    silence it explains is already over."""
+    timeline: list[str] = []
+
+    async def sleep(seconds: float) -> None:
+        timeline.append(f"slept:{seconds}")
+
+    runner = _RecordingRunner(
+        scripts=[_rate_limited({"retry-after": "5"}), [MessageDelta(text="ok")]],
+        sleep=sleep,
+    )
+    events = []
+    async for ev in runner.run("p", _ctx()):
+        timeline.append(type(ev).__name__)
+        events.append(ev)
+
+    assert timeline[:2] == ["RateLimited", "slept:5.0"]
+    held = [e for e in events if type(e).__name__ == "RateLimited"]
+    assert [e.seconds for e in held] == [5.0]
+
+
 async def test_runner_emits_max_turns_exceeded_terminal():
     """When the underlying agents-SDK raises MaxTurnsExceeded, it's a
     hard ceiling — no retry, terminal event. The SDK exception only carries

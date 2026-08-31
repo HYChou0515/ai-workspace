@@ -108,6 +108,15 @@ describe("TurnStatus", () => {
     expect(screen.queryByText(/已自動切換/)).not.toBeInTheDocument(); // a token arrived → gone
   });
 
+  it("says the turn is waiting out a rate limit, and for how long", () => {
+    // Waiting is the only cure for a 429, so the turn deliberately goes quiet
+    // for as long as the provider asked. Without a line saying so, the fix
+    // reads as a hang — the user cannot tell it apart from a dead turn.
+    const log = fold([{ type: "rate_limited", seconds: 30 }]);
+    render(<TurnStatus log={{ ...log, streaming: true }} />);
+    expect(screen.getByText(/請求過於頻繁/)).toHaveTextContent("30");
+  });
+
   it("shows '還原工作區… N/M' while a cold sandbox restores, over the tool line (#492 P11)", () => {
     // The restore happens INSIDE the first tool's lazy wake, so a tool is
     // 'running' with metrics present — yet the restore line must take precedence.

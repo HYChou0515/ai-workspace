@@ -705,6 +705,24 @@ describe("failover switch (#249/#131)", () => {
   });
 });
 
+describe("rate-limit hold", () => {
+  const holding = (): AgentLog =>
+    reduceAgent({ ...EMPTY_LOG, streaming: true }, { type: "rate_limited", seconds: 30 });
+
+  it("records the hold as a transient field, NOT a transcript entry", () => {
+    const log = holding();
+    expect(log.rateLimited).toEqual({ seconds: 30 });
+    expect(log.entries).toHaveLength(0); // ephemeral — never enters the transcript
+  });
+
+  it("clears once the retried turn produces output", () => {
+    // The hold explains a silence. Once tokens arrive the silence is over, so
+    // leaving the notice up would describe a wait that already ended.
+    const log = reduceAgent(holding(), { type: "message_delta", text: "hi" });
+    expect(log.rateLimited).toBeNull();
+  });
+});
+
 describe("restore progress (#492 P11)", () => {
   const restoring = (): AgentLog =>
     reduceAgent({ ...EMPTY_LOG, streaming: true }, { type: "restore_progress", done: 3, total: 10 });
