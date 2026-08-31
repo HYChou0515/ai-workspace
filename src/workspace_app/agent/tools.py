@@ -1847,7 +1847,7 @@ def _subagent_tool_ceiling(ctx: AgentToolContext) -> set[str] | None:
     Derived from the TURN rather than from the App alone, because otherwise a
     per-item tool toggle becomes a suggestion: turning `exec` off for an item has
     to turn it off for the sub-agents that item's agent writes, too."""
-    from ..api.subagent_run import SUBAGENT_FORBIDDEN_TOOLS
+    from ..apps.subagents import SUBAGENT_FORBIDDEN_TOOLS
 
     profile_ceiling = _profile_tool_ceiling(ctx.app_slug, ctx.template_profile)
     held = ctx.agent_config.allowed_tools if ctx.agent_config is not None else None

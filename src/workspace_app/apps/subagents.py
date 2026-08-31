@@ -39,6 +39,23 @@ WORKSPACE_AGENT_DIR = ".agent"
 #: accidental paste of a log file would silently eat the turn's context window.
 SUBAGENT_BODY_CAP = 50_000
 
+#: Tools a sub-agent may never hold, and why each one: a sub-agent answers ONCE,
+#: from an empty context, to another agent rather than to a person.
+#:
+#: - `run_agent` / `save_subagent` — it has no seam to delegate through, and
+#:   nothing it created could be used before it finishes.
+#: - `update_todos` — a WHOLE-LIST replace on the parent conversation's pinned
+#:   checklist. A sub-agent has no idea what is on it, so "add my step" is
+#:   really "delete the user's plan", and the live event goes to the child's
+#:   queue, so the panel changes with nothing in the stream explaining it.
+#: - `ask_user` — it ends the turn to wait for a reply. In a sub-turn that means
+#:   stopping with a question nobody is shown and no report for the caller.
+#:
+#: Enforced twice on purpose: subtracted from what `save_subagent` will grant
+#: (so the agent is TOLD, per the refuse-don't-trim rule) and stripped again in
+#: the child context (so a hand-written `.agent/` file cannot slip one past).
+SUBAGENT_FORBIDDEN_TOOLS = frozenset({"run_agent", "save_subagent", "update_todos", "ask_user"})
+
 
 class SubagentDef(msgspec.Struct, frozen=True):
     """One sub-agent the main agent may delegate to. `body` is its system prompt;
