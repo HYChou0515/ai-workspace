@@ -13,6 +13,7 @@ workspace may add or override them), same tolerance for one bad hand-edit.
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Collection
 from importlib import resources
 from importlib.resources.abc import Traversable
@@ -201,3 +202,24 @@ def _parse_tools(value: object) -> list[str]:
     if text.startswith("[") and text.endswith("]"):
         text = text[1:-1]
     return [t.strip() for t in text.split(",") if t.strip()]
+
+
+def slugify_subagent_name(name: str) -> str:
+    """A display name → kebab-case slug (lowercase; non-alphanumeric runs become
+    a single ``-``; trimmed). `save_subagent` uses this so the frontmatter
+    ``name`` always equals the folder name and `_def_from` never silently skips
+    the file. ``""`` when nothing usable remains (the caller rejects)."""
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+
+
+def render_agent_md(slug: str, description: str, tools: Collection[str], body: str) -> str:
+    """Assemble a well-formed AGENT.md: `name` + `description` + `tools`
+    frontmatter, then the body.
+
+    The inverse of `_parse_tools` above, and deliberately next to it: the two
+    halves of one format drift the moment they live apart. ``description`` is
+    collapsed to a single line because the frontmatter parser is line-based — a
+    newline would truncate it."""
+    desc = " ".join(description.split())
+    listed = ", ".join(t.strip() for t in tools if t.strip())
+    return f"---\nname: {slug}\ndescription: {desc}\ntools: [{listed}]\n---\n\n{body.strip()}\n"

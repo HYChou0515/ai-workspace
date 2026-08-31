@@ -1,0 +1,148 @@
+"""`save_subagent(name, description, tools, body)` — the deterministic AGENT.md
+write.
+
+The agent could always write `.agent/<name>/AGENT.md` with `write_file`, but a
+hand-assembled file is silently skipped by the loader when the frontmatter is
+malformed or `name` disagrees with the folder — and nothing tells the agent, so
+it believes it saved something that does not exist. This tool owns the format
+(and the path, and the slug) so that failure mode is unreachable: the agent
+supplies fields, never syntax.
+"""
+
+from __future__ import annotations
+
+from agents import RunContextWrapper
+
+from workspace_app.agent.context import AgentToolContext
+from workspace_app.agent.tools import save_subagent_impl
+from workspace_app.apps.subagents import (
+    SUBAGENT_BODY_CAP,
+    SubagentDef,
+    workspace_subagent_defs,
+)
+from workspace_app.files import WorkspaceFiles
+from workspace_app.filestore.memory import MemoryFileStore
+from workspace_app.resources.agent_config import AgentConfig
+
+
+def _ctx() -> RunContextWrapper[AgentToolContext]:
+    files = WorkspaceFiles(MemoryFileStore())
+    return RunContextWrapper(AgentToolContext(investigation_id="inv-1", files=files))
+
+
+async def _defs(ctx: RunContextWrapper[AgentToolContext]) -> list[SubagentDef]:
+    """What the loader reads back for this ctx — the assert narrows the optional
+    workspace for `ty` (the tests above always wire one)."""
+    files = ctx.context.files
+    assert files is not None
+    return await workspace_subagent_defs(files, "inv-1")
+
+
+async def test_what_it_saves_is_what_the_loader_reads_back():
+    """The whole point of the tool: no round trip can be lost to formatting."""
+    ctx = _ctx()
+
+    out = await save_subagent_impl(
+        ctx,
+        "log-digger",
+        "Digs through long logs and reports the first real error.",
+        ["read_file", "list_files"],
+        "You read logs. Report the first real error with file and line.",
+    )
+
+    assert "log-digger" in out
+    defs = await _defs(ctx)
+    assert [d.name for d in defs] == ["log-digger"]
+    only = defs[0]
+    assert only.description == "Digs through long logs and reports the first real error."
+    assert only.tools == ["read_file", "list_files"]
+    assert only.body.startswith("You read logs.")
+
+
+async def test_asking_for_a_tool_the_turn_does_not_hold_is_refused_by_name():
+    """Silently trimming would hand back a sub-agent that believes it holds
+    `exec`; it then fails at its task in a way its caller cannot read. Being told
+    now is what lets the agent pick another approach."""
+    files = WorkspaceFiles(MemoryFileStore())
+    ctx = RunContextWrapper(
+        AgentToolContext(
+            investigation_id="inv-1",
+            files=files,
+            agent_config=AgentConfig(name="main", allowed_tools=["read_file", "list_files"]),
+        )
+    )
+
+    out = await save_subagent_impl(ctx, "digger", "d", ["read_file", "exec", "delete_file"], "b")
+
+    assert "error" in out
+    assert "exec" in out and "delete_file" in out  # says WHICH ones
+    assert "read_file" in out  # ...and what it may use instead
+    assert await workspace_subagent_defs(files, "inv-1") == []  # nothing written
+
+
+async def test_a_sub_agent_with_no_instructions_is_refused():
+    """The body IS the sub-agent's whole system prompt. Saving an empty one
+    produces something that loads, appears in the delegation index, and then
+    answers from nothing — the caller cannot tell that from a bad answer."""
+    ctx = _ctx()
+
+    out = await save_subagent_impl(ctx, "hollow", "d", ["read_file"], "   \n\n  ")
+
+    assert "error" in out
+    assert await _defs(ctx) == []
+
+
+async def test_a_messy_display_name_still_loads_back_under_its_slug():
+    """The guarantee in one test: whatever the agent types as a name, the file
+    that lands has frontmatter `name` equal to its folder, so `_def_from` cannot
+    skip it for a mismatch."""
+    ctx = _ctx()
+    out = await save_subagent_impl(ctx, "My Log Digger!", "d", [], "read the logs")
+    assert "my-log-digger" in out
+    defs = await _defs(ctx)
+    assert [d.name for d in defs] == ["my-log-digger"]
+
+
+async def test_a_multiline_description_is_collapsed_so_the_index_keeps_it():
+    """The frontmatter parser is line-based — a newline would truncate the
+    description, and the description is how the caller picks this sub-agent."""
+    ctx = _ctx()
+    await save_subagent_impl(ctx, "d1", "line one\nline two\n  line three", [], "body")
+    defs = await _defs(ctx)
+    assert [d.description for d in defs] == ["line one line two line three"]
+
+
+async def test_instructions_over_the_cap_are_refused_and_nothing_is_written():
+    ctx = _ctx()
+    out = await save_subagent_impl(ctx, "huge", "d", [], "x" * (SUBAGENT_BODY_CAP + 1))
+    assert "error" in out
+    assert await _defs(ctx) == []
+
+
+async def test_resaving_the_same_name_overwrites_so_it_can_be_refined():
+    ctx = _ctx()
+    await save_subagent_impl(ctx, "digger", "d", [], "first")
+    await save_subagent_impl(ctx, "digger", "d", ["read_file"], "second")
+    [only] = await _defs(ctx)
+    assert only.body.strip() == "second"
+    assert only.tools == ["read_file"]
+
+
+async def test_a_name_with_no_usable_characters_is_refused():
+    ctx = _ctx()
+    assert "error" in await save_subagent_impl(ctx, "!!!", "d", [], "body")
+
+
+async def test_no_workspace_on_this_turn_says_so_instead_of_raising():
+    ctx = RunContextWrapper(AgentToolContext())
+    assert "error" in await save_subagent_impl(ctx, "digger", "d", [], "body")
+
+
+async def test_the_confirmation_names_a_path_the_agent_can_actually_use():
+    """Same trap `save_skill` documents (#549): the store key starts with `/`,
+    but `exec` has no chroot, so echoing it teaches the agent a path that points
+    at the system root."""
+    ctx = _ctx()
+    out = await save_subagent_impl(ctx, "digger", "d", [], "body")
+    assert ".agent/digger/AGENT.md" in out
+    assert "/.agent/digger/AGENT.md" not in out

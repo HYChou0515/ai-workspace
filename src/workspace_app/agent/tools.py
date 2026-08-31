@@ -1711,6 +1711,92 @@ async def save_skill_impl(
     )
 
 
+async def save_subagent_impl(
+    ctx: RunContextWrapper[AgentToolContext],
+    name: str,
+    description: str,
+    tools: list[str],
+    body: str,
+) -> str:
+    """Save a sub-agent into THIS workspace so you can delegate to it with
+    `run_agent` — including later in this same reply.
+
+    Use this when a kind of sub-task keeps coming back: reading long logs,
+    surveying a directory, drafting something to a fixed shape. `name` is a short
+    title (slugified — "Log Digger" becomes `log-digger`); `description` is the
+    one-line "when would I use this" that the delegation index shows YOU, so
+    write it for the caller, not for the sub-agent; `tools` is the subset it may
+    use, and can only name tools you hold yourself; `body` is its system prompt —
+    say what to do and what to report back, because it starts with an EMPTY
+    context and answers once.
+
+    This owns the file format, so a sub-agent you save is always one you can
+    call — it cannot be silently dropped by malformed frontmatter. Re-saving the
+    same name overwrites, so refine freely. Returns a confirmation, or an
+    `error:` note naming exactly what to fix."""
+    from ..apps.subagents import (
+        SUBAGENT_BODY_CAP,
+        WORKSPACE_AGENT_DIR,
+        render_agent_md,
+        slugify_subagent_name,
+    )
+
+    files = ctx.context.files
+    inv = ctx.context.investigation_id
+    if files is None or inv is None:
+        return "error: save_subagent needs a workspace (none on this turn)"
+    slug = slugify_subagent_name(name)
+    if not slug:
+        return f"error: {name!r} has no letters or digits to make a sub-agent name from"
+    if not body.strip():
+        # An empty body still loads and still lists, so the failure surfaces as a
+        # sub-agent that answers from nothing — indistinguishable, to the caller,
+        # from one that simply answered badly.
+        return (
+            "error: a sub-agent needs instructions — `body` is its whole system prompt. "
+            "Say what it should do and what to report back."
+        )
+    if len(body) > SUBAGENT_BODY_CAP:
+        return (
+            f"error: the sub-agent's instructions are {len(body)} chars, over the "
+            f"{SUBAGENT_BODY_CAP} cap — it is a system prompt, not a document. State the "
+            "method and point at files for the detail."
+        )
+    # Tools outside the ceiling are REFUSED, not quietly trimmed. A sub-agent that
+    # starts out believing it holds `exec` and then finds it missing fails in a way
+    # its caller cannot read; being told now is what lets the agent pick another way.
+    if (allowed := _subagent_tool_ceiling(ctx.context)) is not None and (
+        outside := [t for t in tools if t not in allowed]
+    ):
+        return (
+            f"error: cannot grant {', '.join(sorted(outside))} to a sub-agent — it can only "
+            f"use tools you hold yourself. Available: {', '.join(sorted(allowed)) or 'none'}"
+        )
+    path = f"/{WORKSPACE_AGENT_DIR}/{slug}/AGENT.md"
+    await files.write(inv, path, render_agent_md(slug, description, tools, body).encode("utf-8"))
+    return (
+        f"saved sub-agent '{slug}' to {rel_path(path)}. Delegate to it with "
+        f"run_agent('{slug}', <a self-contained task>) — it is callable now, including "
+        "in this reply."
+    )
+
+
+def _subagent_tool_ceiling(ctx: AgentToolContext) -> set[str] | None:
+    """What a sub-agent saved on this turn may be granted: what THIS turn holds,
+    narrowed by the App/profile ceiling. ``None`` ⇒ nothing to check against (a
+    synthetic slug and a config that named no tools) — the load-time clamp in
+    ``apps.subagents.clamp_tools`` still applies either way.
+
+    Derived from the TURN rather than from the App alone, because otherwise a
+    per-item tool toggle becomes a suggestion: turning `exec` off for an item has
+    to turn it off for the sub-agents that item's agent writes, too."""
+    profile_ceiling = _profile_tool_ceiling(ctx.app_slug, ctx.template_profile)
+    held = ctx.agent_config.allowed_tools if ctx.agent_config is not None else None
+    if held is None:
+        return profile_ceiling
+    return set(held) if profile_ceiling is None else set(held) & profile_ceiling
+
+
 def _profile_tool_ceiling(app_slug: str | None, profile: str | None) -> set[str] | None:
     """The tools an agent in this App profile may hold — the App's ``agent.tools`` ceiling,
     narrowed by the profile's ``tools`` override (#323, Q4: a workflow's agent steps can't
@@ -2302,6 +2388,9 @@ _IMPLS = {
     # `agent.tools` like any other (the workspace apps that ship the
     # `author-skill` meta-skill grant it). Deterministic SKILL.md write.
     "save_skill": save_skill_impl,
+    # `save_subagent` (#738) — same shape again: an opt-in tool that owns the
+    # AGENT.md write, so a sub-agent the agent authors is always one it can call.
+    "save_subagent": save_subagent_impl,
     # `save_workflow` (#323) — same shape: an opt-in tool the apps that ship the
     # `author-workflow` meta-skill grant. Validates + writes a workspace workflow.json.
     "save_workflow": save_workflow_impl,
