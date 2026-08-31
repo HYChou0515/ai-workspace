@@ -80,6 +80,40 @@ async def test_a_definition_in_the_workspace_is_delegatable_on_the_next_turn(mon
     assert ctx.run_agent is not None
 
 
+async def test_a_turn_that_cannot_delegate_does_not_even_read_the_definitions(monkeypatch):
+    """An App that never opted into `run_agent` was paying one workspace listing
+    per turn for an answer it could not use — topic-hub grants neither delegation
+    tool, so the read was pure waste. Asserted through the builder rather than by
+    timing, so it stays true when the store gets faster."""
+    filestore, builder, item_id = _build(monkeypatch)
+    await filestore.write(item_id, "/.agent/log-digger/AGENT.md", _DEF.encode())
+
+    reads: list[str] = []
+    real_ls = builder._files.ls
+
+    async def counting_ls(workspace_id, prefix=""):
+        reads.append(prefix)
+        return await real_ls(workspace_id, prefix)
+
+    monkeypatch.setattr(builder._files, "ls", counting_ls)
+
+    ctx = await builder.build_chat_turn(
+        item_id,
+        agent_config=AgentConfig(name="no-delegation", allowed_tools=["read_file"]),
+        run_subagent=_dummy_subagent,
+        history_messages=[],
+        reasoning_effort=None,
+        kb_enhancements=None,
+        collection_ids=[],
+        collection_tiers=[],
+        acting_user="u",
+        speaker=None,
+    )
+
+    assert ctx.subagent_defs == ()
+    assert "/.agent/" not in reads
+
+
 async def test_turning_a_tool_off_for_this_item_also_takes_it_from_hand_written_definitions(
     monkeypatch,
 ):

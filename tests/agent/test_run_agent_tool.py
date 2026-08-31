@@ -154,6 +154,30 @@ def test_but_with_nothing_to_call_and_no_way_to_create_one_it_stays_unoffered():
     assert "run_agent" not in names
 
 
+def test_a_switch_that_would_do_nothing_is_not_offered_to_the_user():
+    """#480 offers OFF tools with "ask the user to turn this on". Turning
+    `run_agent` on alone, with no definitions, leaves the picker showing it ON
+    while `build_tools` still strips it — and it drops off this list too, so
+    nothing anywhere explains the dead switch. Found by a regression review."""
+    from workspace_app.api.litellm_runner import _agent_for
+    from workspace_app.resources import AgentConfig as Cfg
+
+    off_with_nothing_to_call = _agent_for(
+        Cfg(name="a", model="m", allowed_tools=["read_file"], disabled_tools=["run_agent", "exec"])
+    )
+    assert isinstance(off_with_nothing_to_call.instructions, str)
+    assert "run_agent" not in off_with_nothing_to_call.instructions
+    assert "exec" in off_with_nothing_to_call.instructions  # the section still works
+
+    # ...but when it WOULD work once enabled, the offer is real and stays.
+    worth_offering = _agent_for(
+        Cfg(name="a", model="m", allowed_tools=["read_file"], disabled_tools=["run_agent"]),
+        has_subagents=True,
+    )
+    assert isinstance(worth_offering.instructions, str)
+    assert "run_agent" in worth_offering.instructions
+
+
 async def test_with_nothing_defined_the_refusal_points_at_how_to_make_one():
     """The tool is only granted here because `save_subagent` is held, so the
     refusal has to hand the model its next move — otherwise granting it was the
