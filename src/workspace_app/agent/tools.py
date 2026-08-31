@@ -2446,10 +2446,12 @@ _IMPLS = {
     "read_new_source": read_new_source_impl,
     "list_sources": list_sources_impl,
     "read_source": read_source_impl,
-    # `read_skill` is opt-in (#29 / §A): only registered when the active
-    # template profile has any skills. `build_tools(profile=)` handles
-    # the conditional injection — never present in `_WORKSPACE_TOOLS`.
+    # Delegation: granted only when the turn HAS sub-agent definitions, which
+    # `build_tools(has_subagents=)` decides — never in `_WORKSPACE_TOOLS`.
     "run_agent": run_agent_impl,
+    # `read_skill` is opt-in (#29 / §A): granted when this turn can load any
+    # skill (`_grant_read_skill`) — never in `_WORKSPACE_TOOLS`. Listed here
+    # so a config may also name it outright; `build_tools` registers it once.
     "read_skill": read_skill_impl,
     # `save_skill` (#298) is a normal opt-in tool — listed in an App's
     # `agent.tools` like any other (the workspace apps that ship the
@@ -2630,23 +2632,33 @@ def build_tools(
     app_slug: str | None = None,
     profile: str | None = None,
     has_subagents: bool = False,
+    skills_reachable: bool | None = None,
 ) -> list[FunctionTool]:
     """Build FunctionTool list for the Agent. If `allowed` is None, the
     workspace toolset (file/exec); otherwise exactly the named tools.
 
-    When `app_slug` + `profile` are set and that App profile ships any skills,
-    `read_skill` is appended (issue #29 / §A — "skill index + tool same flag
-    in/out"). Set per turn from the item's App + profile.
+    `read_skill` rides in on whether this turn can load ANY skill — one decision,
+    `_grant_read_skill` below (issue #29 / §A: "skill index + tool same flag
+    in/out"). Naming it in `allowed` grants it too; a hand-written list is an
+    explicit request, and it is registered once either way.
 
-    `has_subagents` is the same "index + tool same flag in/out" rule for
-    `run_agent`: with no sub-agent definitions this turn there is nobody to
-    delegate to, and granting a tool that refuses every call reads to a model as
-    "stop trying" (#537). Whether definitions exist depends on the item's own
-    workspace, so it cannot be derived from `app_slug`/`profile` here."""
+    `skills_reachable` is tri-state: `None` = "nobody could answer, derive it
+    from the package", a bool = the caller answered. Only a caller holding the
+    item can answer it — the workspace's own `.skill/` and the per-item skill
+    toggles are both live state `app_slug`/`profile` cannot reach — so its answer
+    wins. `has_subagents` is the same rule for `run_agent`. Granting a tool that
+    refuses every call reads to a model as "stop trying" (#537); the mirror
+    image, advertising an index for a tool that was never registered, wastes the
+    turn on a call that cannot resolve."""
     names = allowed if allowed is not None else _WORKSPACE_TOOLS
     names = [_LEGACY_TOOL_RENAMES.get(n, n) for n in names]
     if not delegation_is_available(names, has_subagents):
         names = [n for n in names if n != "run_agent"]
+    # Not `append` unconditionally: a config that already names `read_skill`
+    # would then produce a duplicate this very function has to drop, and the
+    # de-dupe warning would fire every turn at a deployer who did nothing wrong.
+    if _grant_read_skill(app_slug, profile, skills_reachable) and "read_skill" not in names:
+        names.append("read_skill")
     # Skip names that aren't built-ins — they may be provisioned tool-package
     # commands (#21, #25), which the runner adds separately via
     # `workspace_app.tooling.registry.build_function_tools`. The colon syntax
@@ -2669,22 +2681,61 @@ def build_tools(
     # JSON Schema, and every provider accepts it — so flatten for all builtins.
     for t in tools:
         t.params_json_schema = _inline_schema_refs(t.params_json_schema)
-    if app_slug is not None and profile is not None:
-        from ..apps.skills import merged_profile_skills
-
-        # #298: read_skill is wired when the App ships ANY skill the agent might
-        # load — the profile's own package `.skill/` OR a declared shared skill
-        # (e.g. author-skill). Workspace skills also need it, and a workspace app
-        # that opts into author-skill always has at least that, so this covers
-        # the authoring entry point too.
-        if merged_profile_skills(app_slug, profile, _declared_shared_skills(app_slug)):
-            tools.append(
-                function_tool(
-                    _guard_workspace_full(_IMPLS["read_skill"]), name_override="read_skill"
-                )
-            )
     # Nothing leaves here without a ceiling on what it can put in the context.
-    return cap_tool_outputs(tools)
+    return cap_tool_outputs(dedupe_tools(tools))
+
+
+def _grant_read_skill(
+    app_slug: str | None, profile: str | None, skills_reachable: bool | None
+) -> bool:
+    """Whether this turn can load a skill at all — the ONE question `read_skill`
+    is granted on.
+
+    `read_skill` reads three sources (#298): the App's declared shared skills,
+    the profile's package `.skill/`, and the item's own workspace `.skill/` —
+    and #380 lets the user pin any of them off per item. Only two of those are
+    derivable here, and neither honours the toggles, so a caller that holds the
+    item answers instead (`skills_reachable`) and its answer is taken as final.
+    `None` is the fallback for callers with no item in hand (tests, a bare
+    `_agent_for`): what the package alone can prove. That is NOT a conservative
+    superset — it over-grants when every skill is pinned off (the tool is there
+    and refuses each call) and under-grants when only the workspace holds one
+    (the index names a tool that was never built, the bug this change exists to
+    close). So every live path answers; `None` means nobody could."""
+    if skills_reachable is not None:
+        return skills_reachable
+    if app_slug is None or profile is None:
+        return False
+    from ..apps.skills import merged_profile_skills
+
+    return bool(merged_profile_skills(app_slug, profile, _declared_shared_skills(app_slug)))
+
+
+def dedupe_tools(tools: list[FunctionTool]) -> list[FunctionTool]:
+    """`tools` with any repeat of a name dropped, first occurrence kept.
+
+    Two definitions sharing a name is not a cosmetic wart: the provider rejects
+    the whole payload, so one duplicated line in a config kills every turn that
+    config drives. Names converge from routes that cannot see each other — a
+    hand-written `allowed_tools` and the `read_skill` grant, `ls` and
+    `list_files` after the rename (#241), a tool package whose command matches a
+    built-in (`build_function_tools` checks collisions BETWEEN packages, never
+    against ours) — so the check belongs wherever a list is finalised, and above
+    all at the boundary the payload leaves through.
+
+    First-wins makes the built-ins authoritative: the platform's guardrails
+    (`_guard_workspace_full`, the output cap) are wrapped around those, so a
+    package must not be able to shadow one. Logged, never silent — a shadowed
+    tool is a config the deployer wants to know about."""
+    seen: set[str] = set()
+    out: list[FunctionTool] = []
+    for t in tools:
+        if t.name in seen:
+            _LOGGER.warning("tool %r is defined more than once — keeping the first", t.name)
+            continue
+        seen.add(t.name)
+        out.append(t)
+    return out
 
 
 def delegation_is_available(allowed: Collection[str] | None, has_subagents: bool) -> bool:

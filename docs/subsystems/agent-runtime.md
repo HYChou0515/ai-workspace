@@ -121,7 +121,10 @@ flowchart TD
     `build_tools` 默默略過不在 `_IMPLS` 的名字——它們可能是 provisioned tool-package 命令（`pkg` / `pkg:cmd` colon 語法），由 runner 另外加上。所以打錯一個 tool 名會**無聲消失**（不報錯）。
 
 !!! note "read_skill 永不在 _WORKSPACE_TOOLS"
-    `read_skill` 從不在 `_WORKSPACE_TOOLS`；只有當 App+profile 真的有 ship skill（`merged_profile_skills`）時，`build_tools` 才注入它。
+    `read_skill` 從不在 `_WORKSPACE_TOOLS`；由 `_grant_read_skill` 這**單一判斷**授予，問的是「這回合到底載不載得到任何 skill」。它讀三個來源(App 宣告的 shared、profile 的 package `.skill/`、item 自己 workspace 的 `.skill/`)、而且 #380 的 per-item 開關可以把任何一個關掉——這兩件事 `build_tools` 只憑 slug/profile 都構不到，所以由 `turn_context._skills_reachable` 用 **`effective_item_skills`**(picker 與 prompt index 共用的同一個 resolver)算出答案，經 `ctx.skills_reachable` 傳進來，**呼叫端的答案為準**。`skills_reachable=None` 是給手上沒有 item 的呼叫端(測試、裸 `_agent_for`)的退路：只證得出 package 那半邊。**它不是保守的超集**——per-item 開關全關時它會多給(工具在但每次呼叫被拒),只有 workspace 有 skill 時它會少給(索引列了、工具卻沒有,正是本次修掉的 bug)。所以線上的每一條路都必須把答案傳進來,`None` 只是「沒人答得出」的退路,不是可以接受的預設。config 也可以在 `allowed_tools` 直接點名 `read_skill`(手寫＝明確要求),只會註冊一次、也不會因此噴 de-dupe warning。
+
+!!! note "同名工具在送出前一定會被去重（`dedupe_tools`）"
+    兩份同名 function definition 會讓 provider 整包退回，整個 turn 死掉。名字會從互相看不見的來源匯流：手寫的 `allowed_tools`、`read_skill` 的授予、rename 後同時列 `ls` 與 `list_files`(#241)、以及 tool package 的命令撞到內建名（`build_function_tools` 只擋 package **之間**的撞名，不擋跟我們的）。所以 `build_tools` 回傳前與 `_agent_for` 交給 `Agent` 前都跑 `dedupe_tools`：**保留先出現的**（內建優先，package 不得遮蔽包著 guardrail 的內建工具），並記 warning，不靜默。
 
 !!! note "save_workflow 是 opt-in 工具，配 author-workflow meta-skill（#323）"
     `save_workflow` 在 `_IMPLS` 但**不在** `_WORKSPACE_TOOLS`——它是 opt-in 工具（形同 `save_skill`/`author-skill`），只有 ship `author-workflow` meta-skill 的 App 才在 `agent.tools` 授予（topic-hub 是首個採用者）。它把 `workflow_json` 經 `workspace_store.validate_workflow_json` 驗證（帶 `_profile_tool_ceiling` = App `agent.tools` ∩ profile `tools` override 的 clamp，#323 Q4：workflow 的 agent step 不能超過作者手動能用的工具集），通過才寫進 `<ws>/.workflows/<id>.json`；驗證失敗時把 problems 原樣回給模型自行修正。

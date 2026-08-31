@@ -86,3 +86,47 @@ async def test_turn_agent_exposes_read_skill_pointing_at_the_shared_impl(isolate
     assert "name" in read_skill_tool.params_json_schema["properties"]  # ty: ignore
     assert "read_skill" in {t.name for t in build_tools(app_slug="rca", profile="local-lab")}
     assert _IMPLS["read_skill"] is read_skill_impl
+
+
+def test_agent_for_exposes_read_skill_when_only_the_workspace_has_skills(
+    isolated_apps: Path, monkeypatch
+):
+    """`read_skill` reads THREE sources — the profile's package `.skill/`, the
+    App's declared shared skills, and the item's OWN workspace `.skill/`. The
+    grant asked about the first two only, so an item whose skills are all
+    workspace-authored got a system prompt with the "## Skills in this workspace
+    … call `read_skill(name)`" index (chat_send injects it every turn) and no such
+    tool in the payload.
+
+    The workspace and the per-item toggles are live state a slug and a profile
+    name cannot reach, so the turn context answers instead — `skills_reachable`,
+    the same shape `has_subagents` has for `run_agent` one argument away."""
+    import workspace_app.apps.shared_skills as shared
+    from workspace_app.api.litellm_runner import _agent_for
+    from workspace_app.resources.agent_config import AgentConfig
+
+    monkeypatch.setattr(shared, "SHARED_SKILLS", {})
+    _profile_without_skill(isolated_apps, "rca", "default")
+    agent = _agent_for(
+        AgentConfig(name="a"),
+        app_slug="rca",
+        template_profile="default",
+        skills_reachable=True,
+    )
+    assert "read_skill" in {t.name for t in agent.tools}
+
+
+def test_agent_for_registers_read_skill_once_when_the_config_also_names_it(isolated_apps: Path):
+    """A config that names `read_skill` by hand takes both routes into the tool
+    list — the `_IMPLS` lookup and the injection — and two definitions with one
+    name is a payload the provider rejects outright."""
+    from workspace_app.api.litellm_runner import _agent_for
+    from workspace_app.resources.agent_config import AgentConfig
+
+    _profile_with_skill(isolated_apps, "rca", "local-lab")
+    agent = _agent_for(
+        AgentConfig(name="a", allowed_tools=["read_file", "read_skill"]),
+        app_slug="rca",
+        template_profile="local-lab",
+    )
+    assert [t.name for t in agent.tools].count("read_skill") == 1

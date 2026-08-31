@@ -232,9 +232,10 @@ class AgentToolContext:
     infer_modules_parallelism: int = 16
 
     # The item's App slug + profile name (#29 / §A, #89). When both are set the
-    # runner exposes `read_skill` if the profile ships skills, and read_skill
-    # reads from `apps/<app_slug>/profiles/<template_profile>/.skill/...`. None
-    # for KB-flavour contexts (no App/profile).
+    # runner exposes `read_skill` if any skill is reachable (see
+    # `skills_reachable` below), and read_skill reads
+    # from `apps/<app_slug>/profiles/<template_profile>/.skill/...`. None for
+    # KB-flavour contexts (no App/profile).
     app_slug: str | None = None
     template_profile: str | None = None
 
@@ -244,6 +245,15 @@ class AgentToolContext:
     # skill follows its profile/App default. A skill applied THIS turn is loaded
     # regardless — apply overrides the off toggle (see `applied_skills`).
     skill_prefs: dict[str, bool] = field(default_factory=dict)
+
+    # Whether this turn can load ANY skill — the App's declared shared ones, the
+    # profile's package `.skill/`, or the item's own workspace `.skill/`, each
+    # after the #380 per-item toggles. The runner grants `read_skill` on exactly
+    # this, so the tool exists when something is advertised and not otherwise.
+    # Answered by the turn context (the only layer that can read the workspace
+    # and the toggles); `None` for contexts nobody answered it for, where the
+    # runner falls back to what the package alone proves.
+    skills_reachable: bool | None = None
 
     # #380: skills the user chose to APPLY this turn (per-message). Their bodies are
     # already preloaded into the turn; read_skill also exempts them from the toggle

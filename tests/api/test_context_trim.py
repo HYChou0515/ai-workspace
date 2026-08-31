@@ -396,12 +396,13 @@ def test_the_turn_overhead_is_measured_once(monkeypatch):
     real = TurnContextBuilder._tools_tokens
     calls = 0
 
-    def _counting(self, agent_config, *, app_slug, profile, has_subagents=False):
+    def _counting(self, agent_config, **kw):
+        # Pass through, never restate the signature: this double counts CALLS,
+        # and a copied parameter list makes every new keyword on the real method
+        # a TypeError here (it already did once, when `has_subagents` landed).
         nonlocal calls
         calls += 1
-        return real(
-            self, agent_config, app_slug=app_slug, profile=profile, has_subagents=has_subagents
-        )
+        return real(self, agent_config, **kw)
 
     monkeypatch.setattr(TurnContextBuilder, "_tools_tokens", _counting)
 
