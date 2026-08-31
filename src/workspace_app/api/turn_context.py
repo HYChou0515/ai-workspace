@@ -498,9 +498,11 @@ class TurnContextBuilder:
             # write. Identical across both turn shapes — the ambient ORIGIN differs (see
             # build_workflow_turn), the sink does not.
             entity_write_sink=self.entity_write_sink,
-            # Who this turn may delegate to, and how. Both or neither: the tool is
-            # only built when there are definitions, and definitions with no seam
-            # would advertise a capability the turn cannot perform.
+            # Who this turn may delegate to, and how. These are set independently
+            # — the composition root always wires the seam, so "definitions but no
+            # seam" does not arise here. What keeps the prompt honest is
+            # `agent.tools.delegation_is_available`, the one predicate both
+            # `build_tools` and the system-prompt index read.
             subagent_defs=subagent_defs,
             run_agent=self._run_agent,
         )

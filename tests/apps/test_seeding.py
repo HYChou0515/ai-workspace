@@ -21,6 +21,11 @@ async def test_seed_item_writes_substituted_profile_files():
     assert "/SOP.md" in written  # SOP.md.tpl → /SOP.md
     assert "/_prompt.md" not in written
     assert "/_profile.json" not in written
+    # `.agent/` (like `.skill/`) is read straight from the package. A copy in the
+    # workspace would be a SECOND definition of the same sub-agent, free to drift
+    # from the shipped one — and rca/default ships `log-digger`, so without the
+    # skip this profile really would seed one.
+    assert not [p for p in written if p.startswith("/.agent/")], written
 
     sop = (await fs.read("rca/abc", "/SOP.md")).decode()
     assert "Oven drift" in sop  # $title substituted

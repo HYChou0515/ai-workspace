@@ -10,11 +10,17 @@ from __future__ import annotations
 from agents import RunContextWrapper
 
 from workspace_app.agent.context import AgentToolContext
-from workspace_app.agent.tools import build_tools, run_agent_impl, save_subagent_impl
+from workspace_app.agent.tools import (
+    build_tools,
+    delegation_is_available,
+    run_agent_impl,
+    save_subagent_impl,
+)
 from workspace_app.api.litellm_runner import _turn_instructions
 from workspace_app.apps.subagents import SubagentDef, subagents_block
 from workspace_app.files import WorkspaceFiles
 from workspace_app.filestore.memory import MemoryFileStore
+from workspace_app.resources.agent_config import AgentConfig
 
 _DIGGER = SubagentDef(name="log-digger", description="Digs logs", tools=["read_file"], body="dig")
 _REPORTER = SubagentDef(name="reporter", description="Writes it up", tools=[], body="write")
@@ -80,9 +86,40 @@ def test_the_turn_tells_the_model_who_it_can_delegate_to():
     assert subagents_block([]) == ""
 
 
+def _ctx_with(tools: list[str], defs=(_DIGGER,)) -> AgentToolContext:
+    return AgentToolContext(
+        investigation_id="inv-1",
+        subagent_defs=defs,
+        agent_config=AgentConfig(name="main", allowed_tools=tools),
+    )
+
+
 def test_the_delegation_note_reaches_the_system_prompt():
-    ctx = AgentToolContext(investigation_id="inv-1", subagent_defs=(_DIGGER,))
-    assert "log-digger" in (_turn_instructions(ctx, None) or "")
+    note = _turn_instructions(_ctx_with(["read_file", "run_agent"]), None) or ""
+    assert "log-digger" in note
+
+
+def test_the_note_is_withheld_when_the_turn_has_no_tool_to_act_on_it():
+    """The mirror of #537, and the half that was missing: advertising an index
+    for a tool that was never built spends the model's next step on a call that
+    cannot resolve. Reachable today — an App that lists neither `run_agent` nor
+    `save_subagent` still loads `.agent/` files a user drops in the workspace."""
+    note = _turn_instructions(_ctx_with(["read_file"]), None) or ""
+    assert "log-digger" not in note
+    assert "run_agent" not in note
+
+
+def test_one_predicate_decides_both_the_tool_and_the_note():
+    """`build_tools` and the prompt read the SAME function, so the two cannot
+    drift into a prompt that names a tool the turn never got."""
+    assert delegation_is_available(["run_agent"], True) is True
+    assert delegation_is_available(["run_agent", "save_subagent"], False) is True
+    assert delegation_is_available(["run_agent"], False) is False  # nothing to call
+    assert delegation_is_available(["read_file"], True) is False  # App never listed it
+
+    for allowed, has in (["run_agent"], True), (["read_file"], True), (["run_agent"], False):
+        built = "run_agent" in [t.name for t in build_tools(allowed, has_subagents=has)]
+        assert built is delegation_is_available(allowed, has)
 
 
 async def test_a_sub_agent_saved_this_turn_is_callable_in_the_same_turn():
@@ -115,3 +152,29 @@ def test_but_with_nothing_to_call_and_no_way_to_create_one_it_stays_unoffered():
     every call would be refused, and a refusal reads to a model as "stop trying"."""
     names = [t.name for t in build_tools(["read_file", "run_agent"])]
     assert "run_agent" not in names
+
+
+async def test_with_nothing_defined_the_refusal_points_at_how_to_make_one():
+    """The tool is only granted here because `save_subagent` is held, so the
+    refusal has to hand the model its next move — otherwise granting it was the
+    dead end #537 warns about."""
+    ctx = _ctx(defs=())
+    ctx.context.agent_config = AgentConfig(
+        name="main", allowed_tools=["run_agent", "save_subagent"]
+    )
+    out = await run_agent_impl(ctx, "log-digger", "go")
+    assert "save_subagent" in out
+
+
+async def test_without_that_tool_the_refusal_just_says_there_are_none():
+    """...and it must not advertise a tool this turn does not hold."""
+    ctx = _ctx(defs=())
+    ctx.context.agent_config = AgentConfig(name="main", allowed_tools=["run_agent"])
+    out = await run_agent_impl(ctx, "log-digger", "go")
+    assert "save_subagent" not in out
+    assert "none are defined" in out
+
+
+async def test_no_seam_on_this_turn_is_reported_not_raised():
+    ctx = RunContextWrapper(AgentToolContext(investigation_id="inv-1"))
+    assert "error" in await run_agent_impl(ctx, "log-digger", "go")

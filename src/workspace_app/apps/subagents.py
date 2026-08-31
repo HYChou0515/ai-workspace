@@ -204,6 +204,46 @@ def _parse_tools(value: object) -> list[str]:
     return [t.strip() for t in text.split(",") if t.strip()]
 
 
+def unrenderable_reason(
+    slug: str, description: str, tools: Collection[str], body: str
+) -> str | None:
+    """`None` when `render_agent_md`'s output loads back as the SAME definition;
+    otherwise a plain sentence saying what could not be stored.
+
+    `save_subagent` promises that what it saves is always callable. Owning the
+    format is not enough to keep that promise: the frontmatter parser is a
+    line-based mini-YAML, so a `#` in the description truncates it, a value
+    opening with `[` or `{` fails to parse, and a body one character under the
+    cap crosses it once rendered. Each of those wrote a file the loader then
+    skipped — the exact failure this tool exists to make unreachable.
+
+    So the check is the round trip itself, not a blacklist of characters: render
+    it, parse it back with the loader that will read it for real, and compare.
+    A parser change can therefore never quietly reopen the hole."""
+    rendered = render_agent_md(slug, description, tools, body)
+    back = _def_from(rendered.encode("utf-8"), slug)
+    if back is None:
+        parsed_body = len(body.strip()) + 1  # render_agent_md ends the body with \n
+        if parsed_body > SUBAGENT_BODY_CAP:
+            return (
+                f"the instructions come to {parsed_body} chars once saved, over the "
+                f"{SUBAGENT_BODY_CAP} cap — it is a system prompt, not a document. State "
+                "the method and point at files for the detail."
+            )
+        return (
+            "the description could not be stored as written — a `#`, or an unclosed `[` "
+            "or `{`, confuses the file format. Rephrase it in plain words."
+        )
+    if back.description != " ".join(description.split()):
+        return (
+            f"the description would be saved as {back.description!r}, not what you wrote — "
+            "a `#` truncates it. Rephrase it without one."
+        )
+    if back.tools != [t.strip() for t in tools if t.strip()]:
+        return f"the tool list would be saved as {back.tools!r}, not what you asked for."
+    return None
+
+
 def slugify_subagent_name(name: str) -> str:
     """A display name → kebab-case slug (lowercase; non-alphanumeric runs become
     a single ``-``; trimmed). `save_subagent` uses this so the frontmatter

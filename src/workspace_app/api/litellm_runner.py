@@ -43,7 +43,7 @@ from ..agent.args_recovery import (
 from ..agent.context import AgentToolContext
 from ..agent.header_model import HeaderModel
 from ..agent.repairing_model import RepairingModel
-from ..agent.tools import build_tools
+from ..agent.tools import build_tools, delegation_is_available
 from ..apps.subagents import subagents_block
 from ..context_budget import (
     ContextLimit,
@@ -278,7 +278,15 @@ def _turn_instructions(ctx: AgentToolContext, feedback: str | None) -> str | Non
         s
         for s in (
             speaker_note(ctx.speaker),
-            subagents_block(ctx.subagent_defs),
+            # Only when the turn actually holds `run_agent` — advertising an
+            # index for a tool that was never built spends the model's next step
+            # on a call that cannot resolve.
+            subagents_block(ctx.subagent_defs)
+            if delegation_is_available(
+                ctx.agent_config.allowed_tools if ctx.agent_config else None,
+                bool(ctx.subagent_defs),
+            )
+            else "",
             ctx.search_allowance_note,
             ctx.entity_schema_note,
             feedback,

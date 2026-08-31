@@ -10,7 +10,7 @@ import io
 import json
 import logging
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 import magic
@@ -1156,8 +1156,9 @@ async def ask_knowledge_base_impl(
 async def run_agent_impl(
     ctx: RunContextWrapper[AgentToolContext], agent_type: str, prompt: str
 ) -> str:
-    """Delegate a whole sub-task to one of the sub-agents listed in your system
-    prompt, and get back its report.
+    """Delegate a whole sub-task to a named sub-agent and get back its report.
+    The ones you can call are listed in your system prompt — when none are
+    listed, `save_subagent` is how you create one, and it is callable at once.
 
     The sub-agent starts with an EMPTY context and cannot see this conversation,
     so `prompt` must be self-contained: say what to do, what it needs to know,
@@ -1781,10 +1782,10 @@ async def save_subagent_impl(
     same name overwrites, so refine freely. Returns a confirmation, or an
     `error:` note naming exactly what to fix."""
     from ..apps.subagents import (
-        SUBAGENT_BODY_CAP,
         WORKSPACE_AGENT_DIR,
         render_agent_md,
         slugify_subagent_name,
+        unrenderable_reason,
     )
 
     files = ctx.context.files
@@ -1802,12 +1803,6 @@ async def save_subagent_impl(
             "error: a sub-agent needs instructions — `body` is its whole system prompt. "
             "Say what it should do and what to report back."
         )
-    if len(body) > SUBAGENT_BODY_CAP:
-        return (
-            f"error: the sub-agent's instructions are {len(body)} chars, over the "
-            f"{SUBAGENT_BODY_CAP} cap — it is a system prompt, not a document. State the "
-            "method and point at files for the detail."
-        )
     # Tools outside the ceiling are REFUSED, not quietly trimmed. A sub-agent that
     # starts out believing it holds `exec` and then finds it missing fails in a way
     # its caller cannot read; being told now is what lets the agent pick another way.
@@ -1818,6 +1813,11 @@ async def save_subagent_impl(
             f"error: cannot grant {', '.join(sorted(outside))} to a sub-agent — it can only "
             f"use tools you hold yourself. Available: {', '.join(sorted(allowed)) or 'none'}"
         )
+    # The promise in this docstring, checked rather than asserted: render it and
+    # read it back with the real loader before anything is written. Owning the
+    # format is not the same as owning what the caller puts INTO it.
+    if (why := unrenderable_reason(slug, description, tools, body)) is not None:
+        return f"error: {why}"
     path = f"/{WORKSPACE_AGENT_DIR}/{slug}/AGENT.md"
     await files.write(inv, path, render_agent_md(slug, description, tools, body).encode("utf-8"))
     return (
@@ -2624,12 +2624,7 @@ def build_tools(
     workspace, so it cannot be derived from `app_slug`/`profile` here."""
     names = allowed if allowed is not None else _WORKSPACE_TOOLS
     names = [_LEGACY_TOOL_RENAMES.get(n, n) for n in names]
-    # `run_agent` rides on whether this turn could USE it — either sub-agents
-    # already exist, or the agent holds the tool that creates one (and a
-    # sub-agent saved mid-turn is callable immediately). #537 forbids granting a
-    # tool that can only ever refuse; an agent that can fill the list itself is
-    # not that case, and withholding the tool until the next turn would be.
-    if not (has_subagents or "save_subagent" in names):
+    if not delegation_is_available(names, has_subagents):
         names = [n for n in names if n != "run_agent"]
     # Skip names that aren't built-ins — they may be provisioned tool-package
     # commands (#21, #25), which the runner adds separately via
@@ -2669,6 +2664,27 @@ def build_tools(
             )
     # Nothing leaves here without a ceiling on what it can put in the context.
     return cap_tool_outputs(tools)
+
+
+def delegation_is_available(allowed: Collection[str] | None, has_subagents: bool) -> bool:
+    """Whether this turn ends up holding `run_agent`.
+
+    ONE function because two readers must never disagree: `build_tools` strips
+    the tool when this is false, and the system prompt's delegation index is
+    rendered only when it is true. Computed separately, they drifted — the block
+    was unconditional, so an App that lists neither `run_agent` nor
+    `save_subagent` (topic-hub) told the model to call a tool it did not have the
+    moment a user dropped an `.agent/` file into the workspace. That is #537's
+    failure inverted, and an adversarial review found it rather than a test.
+
+    `read_skill` cannot drift this way because it is APPENDED where the index is
+    decided; `run_agent` must stay opt-in per App, so it gets a shared predicate
+    instead. True when there is someone to delegate to, or the means to create
+    one — a sub-agent saved mid-turn is callable in the same turn."""
+    names = list(allowed) if allowed is not None else _WORKSPACE_TOOLS
+    if "run_agent" not in names:
+        return False
+    return has_subagents or "save_subagent" in names
 
 
 def _declared_shared_skills(app_slug: str) -> list[str]:

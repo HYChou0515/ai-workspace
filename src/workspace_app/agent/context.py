@@ -415,7 +415,12 @@ class AgentToolContext:
     #
     # `None` on a sub-agent's own turn (with `subagent_defs` emptied to match):
     # that, and not a depth counter, is what stops a sub-agent spawning another.
-    # The `run_agent` tool is simply not built when the seam is absent.
+    #
+    # Nulling the seam is what makes recursion impossible, but it does NOT decide
+    # what gets BUILT — `build_tools` reads names only. So `run_agent_task` also
+    # strips the delegation pair from the child's `allowed_tools`; without that,
+    # a definition naming `save_subagent` had `run_agent` built for a child that
+    # could only refuse it. Both halves are needed; neither implies the other.
     run_agent: Callable[..., Awaitable[str]] | None = None
     # The sub-agent definitions this turn may delegate to — an App profile's
     # `.agent/` plus the workspace's, merged and tool-clamped. Also what the

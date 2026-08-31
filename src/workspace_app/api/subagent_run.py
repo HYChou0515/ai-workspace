@@ -28,6 +28,11 @@ from .runner import AgentRunner
 
 logger = logging.getLogger(__name__)
 
+#: Never granted to a sub-agent: the tool that delegates, and the tool that
+#: creates something to delegate to. A sub-agent answers once, from an empty
+#: context — neither is anything it could finish using.
+_NO_DELEGATION = frozenset({"run_agent", "save_subagent"})
+
 
 async def run_agent_task(
     runner: AgentRunner,
@@ -71,7 +76,14 @@ def _child_context(parent_ctx: AgentToolContext, defn: SubagentDef) -> AgentTool
         agent_config=msgspec.structs.replace(
             parent_cfg,
             system_prompt=defn.body,
-            allowed_tools=list(defn.tools),
+            # The delegation pair is stripped rather than merely unwired. Nulling
+            # the seam stops recursion, but `build_tools` decides what to BUILD
+            # from the names alone — so a definition naming `save_subagent` (and
+            # all three apps let one) had `run_agent` built for the child, which
+            # could then only ever refuse: the #537 shape, aimed at a sub-agent.
+            # An adversarial review probe found this; the comment claiming "the
+            # tool is simply not built" was describing an intention.
+            allowed_tools=[t for t in defn.tools if t not in _NO_DELEGATION],
         ),
         history=[],
         run_agent=None,
@@ -80,6 +92,12 @@ def _child_context(parent_ctx: AgentToolContext, defn: SubagentDef) -> AgentTool
         # the PARENT's tool messages positionally (`bubble_kb_citations`,
         # most-recent-call-wins), so a sub-agent consulting the KB through the
         # shared dict would make the parent's answer cite a lookup the user never
-        # saw it make. The sub-agent's own sources travel inside its report.
+        # saw it make.
+        #
+        # The cost, stated because it is easy to miss: this dict dies with the
+        # child, so a sub-agent granted `ask_knowledge_base` returns prose whose
+        # `[n]` markers no longer resolve to anything. Its report reads fine; the
+        # numbers in it are inert. Fixing that means the sub-agent citing its
+        # sources in words, which is the definition's job — not this seam's.
         subagent_citations={},
     )

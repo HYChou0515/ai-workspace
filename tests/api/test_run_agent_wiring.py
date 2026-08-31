@@ -13,6 +13,7 @@ from workspace_app.api.runner import ScriptedAgentRunner
 from workspace_app.apps.playground.model import PlaygroundItem
 from workspace_app.filestore.specstar_impl import SpecstarFileStore
 from workspace_app.resources import make_spec
+from workspace_app.resources.agent_config import AgentConfig
 from workspace_app.sandbox.mock import MockSandbox
 
 _DEF = (
@@ -77,3 +78,35 @@ async def test_a_definition_in_the_workspace_is_delegatable_on_the_next_turn(mon
     # The App's ceiling still decides: playground grants no delete_file.
     assert ctx.subagent_defs[0].tools == ["read_file"]
     assert ctx.run_agent is not None
+
+
+async def test_turning_a_tool_off_for_this_item_also_takes_it_from_hand_written_definitions(
+    monkeypatch,
+):
+    """The per-item toggle has to reach a definition the USER wrote, or it is a
+    suggestion rather than a control.
+
+    This is the half that was unguarded: an adversarial review replaced the
+    turn-resolved ceiling with the App ceiling and 531 tests still passed,
+    because the only test reaching here passed `agent_config=None` — which takes
+    the other branch. So this one narrows the turn on purpose.
+    """
+    filestore, builder, item_id = _build(monkeypatch)
+    await filestore.write(item_id, "/.agent/log-digger/AGENT.md", _DEF.encode())
+
+    ctx = await builder.build_chat_turn(
+        item_id,
+        # The item's own toggles resolved down to this: no read_file this turn.
+        agent_config=AgentConfig(name="narrow", allowed_tools=["list_files", "run_agent"]),
+        run_subagent=_dummy_subagent,
+        history_messages=[],
+        reasoning_effort=None,
+        kb_enhancements=None,
+        collection_ids=[],
+        collection_tiers=[],
+        acting_user="u",
+        speaker=None,
+    )
+
+    [defn] = ctx.subagent_defs
+    assert defn.tools == [], "the definition asked for read_file, which this turn no longer holds"

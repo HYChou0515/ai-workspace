@@ -119,6 +119,42 @@ async def test_instructions_over_the_cap_are_refused_and_nothing_is_written():
     assert await _defs(ctx) == []
 
 
+async def test_anything_the_loader_would_skip_is_refused_before_it_is_written():
+    """The tool's promise is that what it saves is callable. Owning the file
+    format is not enough — each of these wrote a file the loader then dropped,
+    which is the exact failure this tool exists to make unreachable.
+
+    (Found by an adversarial review probe, not by design. A character blacklist
+    would have missed the cap case, so the check is the round trip itself.)
+    """
+    ctx = _ctx()
+    cases = {
+        "unclosed bracket": ("[WIP draft", ["read_file"], "body"),
+        "unclosed brace": ("{draft", ["read_file"], "body"),
+        # A `#` does not fail the parse — it silently truncates, which is worse.
+        "hash truncates": ("finds the #1 error cause", ["read_file"], "body"),
+        # render_agent_md ends the body with a newline, so exactly-at-cap crosses it.
+        "body at the cap": ("d", [], "x" * SUBAGENT_BODY_CAP),
+    }
+    for label, (desc, tools, body) in cases.items():
+        out = await save_subagent_impl(ctx, f"digger-{len(label)}", desc, tools, body)
+        assert "error" in out, f"{label}: expected a refusal, got {out!r}"
+
+    assert await _defs(ctx) == []  # and nothing was written
+
+
+async def test_a_description_that_survives_the_round_trip_is_still_accepted():
+    """Positive control for the refusal above — the check must not have become
+    "refuse anything interesting"."""
+    ctx = _ctx()
+    out = await save_subagent_impl(
+        ctx, "digger", "Finds the first real error (and says which line).", ["read_file"], "b"
+    )
+    assert "error" not in out
+    [only] = await _defs(ctx)
+    assert only.description == "Finds the first real error (and says which line)."
+
+
 async def test_resaving_the_same_name_overwrites_so_it_can_be_refined():
     ctx = _ctx()
     await save_subagent_impl(ctx, "digger", "d", [], "first")

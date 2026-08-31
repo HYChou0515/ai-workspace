@@ -81,6 +81,29 @@ async def test_a_sub_agent_cannot_delegate_again():
     assert runner.ctx.subagent_defs == ()
 
 
+async def test_the_delegation_tools_are_stripped_from_the_child_not_just_unwired():
+    """Nulling the seam stops recursion, but `build_tools` decides what to BUILD
+    from the tool NAMES — so a definition naming `save_subagent` (which all three
+    apps permit) got `run_agent` built for the child, where it could only ever
+    refuse. That is the #537 shape pointed at a sub-agent."""
+    runner = _Recorder([RunDone()])
+    greedy = SubagentDef(
+        name="digger",
+        description="d",
+        tools=["read_file", "run_agent", "save_subagent"],
+        body="dig",
+    )
+
+    await run_agent_task(runner, _parent(), greedy, "go")
+
+    assert runner.ctx is not None and runner.ctx.agent_config is not None
+    assert runner.ctx.agent_config.allowed_tools == ["read_file"]
+    from workspace_app.agent.tools import build_tools
+
+    built = [t.name for t in build_tools(runner.ctx.agent_config.allowed_tools)]
+    assert "run_agent" not in built and "save_subagent" not in built
+
+
 async def test_a_failed_sub_agent_reports_back_instead_of_killing_the_turn():
     """A sub-agent failing is information the main agent can act on (try another
     approach, do it itself). Raising would end the whole turn over one delegated
