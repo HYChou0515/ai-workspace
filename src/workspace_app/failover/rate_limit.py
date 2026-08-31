@@ -28,6 +28,26 @@ def _chain(exc: BaseException) -> Iterator[BaseException]:
         cur = cur.__cause__ or cur.__context__
 
 
+# A 429 that states no Retry-After still must not be re-sent at blip speed —
+# that cadence is what earned the throttle. Same doubling shape as the chain
+# re-sweep default (`failover.round_backoff_s`), capped so one unlucky turn
+# cannot park for minutes.
+_BACKOFF_BASE_S = 1.0
+_BACKOFF_CAP_S = 16.0
+
+
+def backoff_s(attempt: int) -> float:
+    """1s, 2s, 4s … capped — the wait for a 429 that didn't say how long."""
+    return min(_BACKOFF_BASE_S * 2 ** max(0, attempt - 1), _BACKOFF_CAP_S)
+
+
+def rate_limit_wait_s(exc: BaseException, *, attempt: int) -> float:
+    """How long to hold before re-sending after ``exc`` rate-limited us: the
+    window the provider stated, else a doubling backoff on ``attempt``."""
+    stated = retry_after_s(exc)
+    return stated if stated is not None else backoff_s(attempt)
+
+
 def is_rate_limited(exc: BaseException) -> bool:
     """Whether ``exc`` is the provider saying "too fast", as opposed to any
     other transient. The distinction decides the recovery: a rate limit is

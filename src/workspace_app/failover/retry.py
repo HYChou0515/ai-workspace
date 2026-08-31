@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING
 from tenacity import Retrying, retry_if_exception, stop_after_attempt
 
 from .core import CallProvider
-from .rate_limit import is_rate_limited, retry_after_s
+from .rate_limit import is_rate_limited, rate_limit_wait_s
 
 logger = logging.getLogger(__name__)
 
@@ -64,22 +64,6 @@ def is_transient(exc: BaseException) -> bool:
     return type(exc).__name__ in _TRANSIENT_NAMES
 
 
-# A rate limit that states no Retry-After still must not be re-called at ``gap``
-# speed — that cadence is what earned the throttle. Same doubling shape as the
-# chain re-sweep default (`failover.round_backoff_s`), capped so one unlucky
-# turn cannot park for minutes.
-_RATE_LIMIT_BACKOFF_BASE_S = 1.0
-_RATE_LIMIT_BACKOFF_CAP_S = 16.0
-
-
-def _rate_limit_backoff(attempt_number: int) -> float:
-    """1s, 2s, 4s … capped — the wait for a 429 that didn't say how long."""
-    return min(
-        _RATE_LIMIT_BACKOFF_BASE_S * 2 ** max(0, attempt_number - 1),
-        _RATE_LIMIT_BACKOFF_CAP_S,
-    )
-
-
 def _wait_for(gap: float) -> Callable[[RetryCallState], float]:
     """How long before the next same-endpoint attempt: ``gap`` for an ordinary
     transient, the duration the provider stated when it rate-limited us, and a
@@ -88,8 +72,7 @@ def _wait_for(gap: float) -> Callable[[RetryCallState], float]:
     def wait(state: RetryCallState) -> float:
         exc = state.outcome.exception() if state.outcome is not None else None
         if exc is not None and is_rate_limited(exc):
-            stated = retry_after_s(exc)
-            return stated if stated is not None else _rate_limit_backoff(state.attempt_number)
+            return rate_limit_wait_s(exc, attempt=state.attempt_number)
         return gap
 
     return wait
