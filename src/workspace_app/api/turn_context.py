@@ -360,6 +360,13 @@ class TurnContextBuilder:
         profile = self._locator.profile_of(item_id)
         if app_slug is None or profile is None:
             return ()
+        held = agent_config.allowed_tools if agent_config is not None else None
+        if held is not None and "run_agent" not in held:
+            # This turn cannot delegate, so the answer cannot be used: neither the
+            # tool nor the prompt index would appear. Listing `.agent/` anyway was
+            # one workspace read per turn for every App that never opted in —
+            # topic-hub pays it today and can never spend it.
+            return ()
         ceiling: Any = (
             agent_config.allowed_tools
             if agent_config is not None and agent_config.allowed_tools is not None

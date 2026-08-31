@@ -123,6 +123,11 @@ def _child_context(parent_ctx: AgentToolContext, defn: SubagentDef) -> AgentTool
         withheld_collection_ids=[],
         kb_passages=[],
         injected_card_ids=set(),
+        # NOT reset, and deliberately: `kb_search_budget` / `wiki_search_budget`
+        # stay shared, so a turn's search allowance is spent once however many
+        # sub-agents it delegates to. Resetting them would let an agent multiply
+        # the operator's per-turn cap by delegating. Listed here because it looks
+        # like an omission next to everything above.
         # A FRESH accumulator, not the parent's. Citation buckets are paired with
         # the PARENT's tool messages positionally (`bubble_kb_citations`,
         # most-recent-call-wins), so a sub-agent consulting the KB through the

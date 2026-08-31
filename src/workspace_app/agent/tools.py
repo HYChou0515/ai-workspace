@@ -2702,7 +2702,12 @@ def delegation_is_available(allowed: Collection[str] | None, has_subagents: bool
     decided; `run_agent` must stay opt-in per App, so it gets a shared predicate
     instead. True when there is someone to delegate to, or the means to create
     one — a sub-agent saved mid-turn is callable in the same turn."""
-    names = list(allowed) if allowed is not None else _WORKSPACE_TOOLS
+    raw = list(allowed) if allowed is not None else _WORKSPACE_TOOLS
+    # Normalised the same way `build_tools` does. The table is only `ls` today,
+    # so the two readers cannot disagree — but they read the SAME list through
+    # different paths, and the point of one predicate is that adding an alias
+    # cannot quietly split them.
+    names = [_LEGACY_TOOL_RENAMES.get(n, n) for n in raw]
     if "run_agent" not in names:
         return False
     return has_subagents or "save_subagent" in names

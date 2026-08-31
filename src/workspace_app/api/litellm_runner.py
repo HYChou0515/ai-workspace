@@ -360,14 +360,24 @@ def _agent_for(
     # `tools`. The agent learns they exist (so it avoids them by default) and can
     # ask the user to enable one in the tool picker. Metas come from the same
     # display catalog the picker uses, so built-in + package selectors both work.
-    if config.disabled_tools:
+    # `run_agent` is left out unless turning it on would actually do something.
+    # This section's promise is "ask the user to enable one" — but enabling
+    # `run_agent` alone, on an item with no `.agent/` files, leaves the picker
+    # showing it ON while `build_tools` still strips it, and it drops off this
+    # list too, so nothing anywhere explains the dead switch. Advertising a knob
+    # that silently does nothing is worse than not advertising it.
+    offerable = [
+        t
+        for t in config.disabled_tools
+        if t != "run_agent"
+        or delegation_is_available([*(config.allowed_tools or []), t], has_subagents)
+    ]
+    if offerable:
         from ..tooling.catalog import picker_units
 
         # `picker_units` yields one meta per name and the renderer is non-empty
         # for non-empty metas, so this is always a real section here.
-        disabled_section = format_disabled_tools_for_prompt(
-            picker_units(config.disabled_tools, packages or [])
-        )
+        disabled_section = format_disabled_tools_for_prompt(picker_units(offerable, packages or []))
         base = f"{base}\n\n{disabled_section}".strip() if base else disabled_section
     # #674: and the third-party tools that could not be loaded at all. Kept
     # separate from the section above: there is no switch for the user to

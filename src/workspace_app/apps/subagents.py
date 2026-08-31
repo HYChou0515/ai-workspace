@@ -241,16 +241,25 @@ def unrenderable_reason(
     """`None` when `render_agent_md`'s output loads back as the SAME definition;
     otherwise a plain sentence saying what could not be stored.
 
-    `save_subagent` promises that what it saves is always callable. Owning the
-    format is not enough to keep that promise: the frontmatter parser is a
-    line-based mini-YAML, so a `#` in the description truncates it, a value
-    opening with `[` or `{` fails to parse, and a body one character under the
-    cap crosses it once rendered. Each of those wrote a file the loader then
-    skipped — the exact failure this tool exists to make unreachable.
+    The guarantee is FAITHFUL storage, which is stronger than "it loads". Owning
+    the format is not enough for either: the frontmatter parser is a line-based
+    mini-YAML, so a value opening with `[` or `{` fails to parse, a body one
+    character under the cap crosses it once rendered — those wrote files the
+    loader then skipped — and a `#` anywhere in the description truncates it
+    there.
 
-    So the check is the round trip itself, not a blacklist of characters: render
-    it, parse it back with the loader that will read it for real, and compare.
-    A parser change can therefore never quietly reopen the hole."""
+    The `#` case is the one where the two guarantees differ: such a definition
+    still loads and still runs. It is refused anyway, because the description is
+    what the calling agent picks BY, so "handles #urgent tickets" silently stored
+    as "handles" is a sub-agent that will be chosen for the wrong jobs — a defect
+    that surfaces as bad judgement rather than as an error. The refusal names the
+    character and costs one retry; the truncation costs a wrong delegation nobody
+    traces back here. (An adversarial regression review flagged the strictness;
+    this is the answer, not an oversight.)
+
+    The check is the round trip itself rather than a blacklist of characters:
+    render it, parse it back with the loader that will read it for real, and
+    compare. A parser change can therefore never quietly reopen the hole."""
     rendered = render_agent_md(slug, description, tools, body)
     back = _def_from(rendered.encode("utf-8"), slug)
     if back is None:
