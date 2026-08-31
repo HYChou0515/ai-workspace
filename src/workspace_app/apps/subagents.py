@@ -104,8 +104,12 @@ def profile_subagent_defs(
 
 @cache
 def _shipped_subagent_defs(app_slug: str, profile: str) -> tuple[SubagentDef, ...]:
-    """The profile's definitions exactly as the package holds them. A tuple of
-    frozen structs, so a caller cannot mutate the cache."""
+    """The profile's definitions exactly as the package holds them.
+
+    Nothing here is handed out directly — `profile_subagent_defs` passes every
+    entry through `clamp_tools`, which always rebuilds. The structs are frozen
+    but their `tools` list is not, so returning one would have put a mutable
+    list belonging to the cache into a caller's hands."""
     root = _agent_root(app_slug, profile)
     if root is None:
         return ()
@@ -182,10 +186,15 @@ def subagents_block(defs: list[SubagentDef] | tuple[SubagentDef, ...]) -> str:
 
 def clamp_tools(defn: SubagentDef, ceiling: Collection[str] | None) -> SubagentDef:
     """`defn` with any tool outside `ceiling` dropped (logged). `None` ceiling ⇒
-    unclamped, matching the tri-state `allowed_tools` convention."""
+    unclamped, matching the tri-state `allowed_tools` convention.
+
+    Always rebuilds, even unclamped. `SubagentDef` is frozen but `tools` is a
+    plain list, and the unclamped path used to hand back the very object
+    `_shipped_subagent_defs` caches — so one `.tools.append(...)` anywhere would
+    have edited every later turn's copy of a shipped definition, process-wide."""
+    kept = list(defn.tools) if ceiling is None else [t for t in defn.tools if t in ceiling]
     if ceiling is None:
-        return defn
-    kept = [t for t in defn.tools if t in ceiling]
+        return msgspec.structs.replace(defn, tools=kept)
     if dropped := [t for t in defn.tools if t not in ceiling]:
         logger.warning("sub-agent %r: tools outside the ceiling, dropped: %s", defn.name, dropped)
     return msgspec.structs.replace(defn, tools=kept)
@@ -235,10 +244,22 @@ def _parse_tools(value: object) -> list[str]:
     return [t.strip() for t in text.split(",") if t.strip()]
 
 
-def unrenderable_reason(
-    slug: str, description: str, tools: Collection[str], body: str
-) -> str | None:
-    """`None` when `render_agent_md`'s output loads back as the SAME definition;
+class RoundTrip(msgspec.Struct, frozen=True):
+    """What `round_trip` found: the rendered file, the definition the real loader
+    read back out of it, and `reason` — `None` when the two agree, else a plain
+    sentence for the caller to relay.
+
+    `parsed` is handed back rather than re-derived, so a caller that needs the
+    definition (to splice it into the turn's index) does not re-parse and grow a
+    branch that can never be taken."""
+
+    rendered: str
+    parsed: SubagentDef
+    reason: str | None = None
+
+
+def round_trip(slug: str, description: str, tools: Collection[str], body: str) -> RoundTrip:
+    """`reason is None` when `render_agent_md`'s output loads back as the SAME definition;
     otherwise a plain sentence saying what could not be stored.
 
     The guarantee is FAITHFUL storage, which is stronger than "it loads". Owning
@@ -264,24 +285,35 @@ def unrenderable_reason(
     back = _def_from(rendered.encode("utf-8"), slug)
     if back is None:
         parsed_body = len(body.strip()) + 1  # render_agent_md ends the body with \n
+        placeholder = SubagentDef(name=slug, description=description, body=body)
         if parsed_body > SUBAGENT_BODY_CAP:
-            return (
+            return RoundTrip(
+                rendered,
+                placeholder,
                 f"the instructions come to {parsed_body} chars once saved, over the "
                 f"{SUBAGENT_BODY_CAP} cap — it is a system prompt, not a document. State "
-                "the method and point at files for the detail."
+                "the method and point at files for the detail.",
             )
-        return (
+        return RoundTrip(
+            rendered,
+            placeholder,
             "the description could not be stored as written — a `#`, or an unclosed `[` "
-            "or `{`, confuses the file format. Rephrase it in plain words."
+            "or `{`, confuses the file format. Rephrase it in plain words.",
         )
     if back.description != " ".join(description.split()):
-        return (
+        return RoundTrip(
+            rendered,
+            back,
             f"the description would be saved as {back.description!r}, not what you wrote — "
-            "a `#` truncates it. Rephrase it without one."
+            "a `#` truncates it. Rephrase it without one.",
         )
     if back.tools != [t.strip() for t in tools if t.strip()]:
-        return f"the tool list would be saved as {back.tools!r}, not what you asked for."
-    return None
+        return RoundTrip(
+            rendered,
+            back,
+            f"the tool list would be saved as {back.tools!r}, not what you asked for.",
+        )
+    return RoundTrip(rendered, back)
 
 
 def slugify_subagent_name(name: str) -> str:

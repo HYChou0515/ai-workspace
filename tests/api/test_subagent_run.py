@@ -16,6 +16,7 @@ from workspace_app.api.events import AgentEvent, MessageDelta, RunDone, RunError
 from workspace_app.api.subagent_run import run_agent_task
 from workspace_app.apps.subagents import SubagentDef
 from workspace_app.resources.agent_config import AgentConfig
+from workspace_app.resources.kb import RetrievedPassage
 
 
 class _Recorder:
@@ -32,6 +33,18 @@ class _Recorder:
         self.ctx = ctx
         for ev in self._events:
             yield ev
+
+
+def _passage() -> RetrievedPassage:
+    return RetrievedPassage(
+        collection_id="col",
+        document_id="doc",
+        filename="spec.md",
+        start=0,
+        end=1,
+        source_chunk_ids=["c1"],
+        text="x",
+    )
 
 
 def _parent() -> AgentToolContext:
@@ -93,12 +106,19 @@ async def test_nothing_belonging_to_the_parents_conversation_or_turn_is_inherite
     right away rather than in production."""
     runner = _Recorder([RunDone()])
     defn = SubagentDef(name="digger", description="d", tools=["read_file"], body="dig")
+    # Every field is given a NON-default value: asserting `child.x == []` against
+    # a parent that already had `[]` proves nothing, and two of these assertions
+    # were exactly that until a review deleted the resets and watched the test
+    # stay green.
     parent = dataclasses.replace(
         _parent(),
         conversation_id="conversation:abc",
         on_todos_updated=lambda _items: None,
         turn_image_urls=["data:image/png;base64,AAAA"],
         withheld_collection_ids=["col-x"],
+        kb_passages=[_passage()],
+        injected_card_ids={"card-1"},
+        subagent_citations={"ask_knowledge_base": [[]]},
     )
 
     await run_agent_task(runner, parent, defn, "go")
@@ -113,10 +133,13 @@ async def test_nothing_belonging_to_the_parents_conversation_or_turn_is_inherite
     # Accumulators the parent's assistant message is built from.
     assert child.withheld_collection_ids == []
     assert child.kb_passages == []
+    assert child.injected_card_ids == set()
     assert child.subagent_citations == {}
     # ...and none of it reached back into the parent.
     assert parent.withheld_collection_ids == ["col-x"]
     assert parent.turn_image_urls == ["data:image/png;base64,AAAA"]
+    assert len(parent.kb_passages) == 1
+    assert parent.injected_card_ids == {"card-1"}
 
 
 async def test_a_sub_agent_that_writes_no_report_says_so():

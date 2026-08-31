@@ -1783,10 +1783,8 @@ async def save_subagent_impl(
     `error:` note naming exactly what to fix."""
     from ..apps.subagents import (
         WORKSPACE_AGENT_DIR,
-        _def_from,
-        render_agent_md,
+        round_trip,
         slugify_subagent_name,
-        unrenderable_reason,
     )
 
     files = ctx.context.files
@@ -1796,6 +1794,14 @@ async def save_subagent_impl(
     slug = slugify_subagent_name(name)
     if not slug:
         return f"error: {name!r} has no letters or digits to make a sub-agent name from"
+    if not description.strip():
+        # The same argument as the empty body below, and it bites harder: the
+        # description is the ONLY thing the calling agent picks by, so an empty
+        # one is a sub-agent listed in the index that nobody can tell when to use.
+        return (
+            "error: a sub-agent needs a description — it is the one line the "
+            "delegation index shows, so write when you would use this one."
+        )
     if not body.strip():
         # An empty body still loads and still lists, so the failure surfaces as a
         # sub-agent that answers from nothing — indistinguishable, to the caller,
@@ -1817,20 +1823,22 @@ async def save_subagent_impl(
     # The promise in this docstring, checked rather than asserted: render it and
     # read it back with the real loader before anything is written. Owning the
     # format is not the same as owning what the caller puts INTO it.
-    if (why := unrenderable_reason(slug, description, tools, body)) is not None:
-        return f"error: {why}"
+    if (checked := round_trip(slug, description, tools, body)).reason is not None:
+        return f"error: {checked.reason}"
     path = f"/{WORKSPACE_AGENT_DIR}/{slug}/AGENT.md"
-    rendered = render_agent_md(slug, description, tools, body)
-    await files.write(inv, path, rendered.encode("utf-8"))
+    await files.write(inv, path, checked.rendered.encode("utf-8"))
     # Splice it into THIS turn's index. `run_agent` re-reads the workspace when a
     # name misses, which covers a brand-new sub-agent — but re-saving an existing
     # one is a HIT, so without this the turn would keep running the old body
     # while this tool says "re-saving overwrites, so refine freely". Delegating,
     # reading a poor report and refining is the obvious loop; silently discarding
     # the refinement is the worst way to lose it.
-    if (fresh := _def_from(rendered.encode("utf-8"), slug)) is not None:
-        others = tuple(d for d in ctx.context.subagent_defs if d.name != slug)
-        ctx.context.subagent_defs = tuple(sorted((*others, fresh), key=lambda d: d.name))
+    #
+    # `checked.parsed` is the definition the round-trip check already parsed —
+    # re-parsing here produced a branch that could never be false, which the
+    # 100% gate would have failed on.
+    others = tuple(d for d in ctx.context.subagent_defs if d.name != slug)
+    ctx.context.subagent_defs = tuple(sorted((*others, checked.parsed), key=lambda d: d.name))
     return (
         f"saved sub-agent '{slug}' to {rel_path(path)}. Delegate to it with "
         f"run_agent('{slug}', <a self-contained task>) — it is callable now, including "
@@ -1849,12 +1857,17 @@ def _subagent_tool_ceiling(ctx: AgentToolContext) -> set[str] | None:
     to turn it off for the sub-agents that item's agent writes, too."""
     from ..apps.subagents import SUBAGENT_FORBIDDEN_TOOLS
 
-    profile_ceiling = _profile_tool_ceiling(ctx.app_slug, ctx.template_profile)
     held = ctx.agent_config.allowed_tools if ctx.agent_config is not None else None
-    if held is None:
-        ceiling = profile_ceiling
-    else:
-        ceiling = set(held) if profile_ceiling is None else set(held) & profile_ceiling
+    # What the turn HOLDS, alone — not intersected with the profile. A per-item
+    # force-ON deliberately re-adds a tool the profile narrowed away
+    # (`_apply_tool_prefs` ceilings on the APP, not the profile), so intersecting
+    # refused `exec` to an agent that was holding `exec`, with a message reading
+    # "it can only use tools you hold yourself". The resolved list already IS the
+    # answer to "what may this turn do"; anything further is a second, wrong rule.
+    # Only when there is no resolved list does the profile stand in for it.
+    ceiling = (
+        set(held) if held is not None else _profile_tool_ceiling(ctx.app_slug, ctx.template_profile)
+    )
     if ceiling is None:
         return None
     # Minus what a sub-agent can never hold, so those are REFUSED by name like

@@ -11,6 +11,7 @@ from workspace_app.api import create_app
 from workspace_app.api.events import RunDone
 from workspace_app.api.runner import ScriptedAgentRunner
 from workspace_app.apps.playground.model import PlaygroundItem
+from workspace_app.apps.registry import app_model
 from workspace_app.filestore.specstar_impl import SpecstarFileStore
 from workspace_app.resources import make_spec
 from workspace_app.resources.agent_config import AgentConfig
@@ -57,6 +58,30 @@ def _build(monkeypatch):
     return filestore, captured["builder"], item_id
 
 
+def _build_bare(monkeypatch):
+    """The same app, but the caller creates the item — for the cases that need an
+    App which never listed `run_agent` at all (topic-hub), rather than one that
+    merely has it toggled off."""
+    spec = make_spec()
+    filestore = SpecstarFileStore(spec)
+    captured: dict[str, object] = {}
+    real = app_mod.TurnContextBuilder
+
+    def _capture(**kw):
+        b = real(**kw)
+        captured["builder"] = b
+        return b
+
+    monkeypatch.setattr(app_mod, "TurnContextBuilder", _capture)
+    create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=filestore,
+        runner=ScriptedAgentRunner([RunDone()]),
+    )
+    return filestore, captured["builder"], spec
+
+
 async def test_a_definition_in_the_workspace_is_delegatable_on_the_next_turn(monkeypatch):
     filestore, builder, item_id = _build(monkeypatch)
     await filestore.write(item_id, "/.agent/log-digger/AGENT.md", _DEF.encode())
@@ -80,12 +105,64 @@ async def test_a_definition_in_the_workspace_is_delegatable_on_the_next_turn(mon
     assert ctx.run_agent is not None
 
 
+async def test_the_one_switch_worth_offering_is_the_one_that_gets_offered(monkeypatch):
+    """The #480 section says "ask the user to enable one". `run_agent` belongs
+    there exactly when the item HAS definitions and the tool is merely toggled
+    off — and that was the one case it could never reach, because the two
+    round-3 fixes cancelled: the defs were skipped whenever `run_agent` was
+    absent from `allowed_tools`, which is precisely when it lands in
+    `disabled_tools`.
+
+    Driven through `build_chat_turn` → `_agent_for` rather than by handing
+    `has_subagents=True` to `_agent_for` directly: the earlier version of this
+    test asserted a state the real path cannot produce, which is how it passed
+    while the behaviour was broken."""
+    from workspace_app.api.litellm_runner import _agent_for, _turn_instructions
+
+    filestore, builder, item_id = _build(monkeypatch)
+    await filestore.write(item_id, "/.agent/log-digger/AGENT.md", _DEF.encode())
+
+    ctx = await builder.build_chat_turn(
+        item_id,
+        # `run_agent` toggled OFF for this item, so it is in disabled_tools.
+        agent_config=AgentConfig(
+            name="narrow",
+            allowed_tools=["read_file"],
+            disabled_tools=["run_agent", "save_subagent"],
+        ),
+        run_subagent=_dummy_subagent,
+        history_messages=[],
+        reasoning_effort=None,
+        kb_enhancements=None,
+        collection_ids=[],
+        collection_tiers=[],
+        acting_user="u",
+        speaker=None,
+    )
+
+    # The definitions are still found — being toggled off is not being opted out.
+    assert [d.name for d in ctx.subagent_defs] == ["log-digger"]
+    agent = _agent_for(
+        ctx.agent_config,
+        extra_instructions=_turn_instructions(ctx, None),
+        has_subagents=bool(ctx.subagent_defs),
+    )
+    assert isinstance(agent.instructions, str)
+    assert "run_agent" in agent.instructions  # offered, because enabling it would work
+
+
 async def test_a_turn_that_cannot_delegate_does_not_even_read_the_definitions(monkeypatch):
     """An App that never opted into `run_agent` was paying one workspace listing
     per turn for an answer it could not use — topic-hub grants neither delegation
     tool, so the read was pure waste. Asserted through the builder rather than by
     timing, so it stays true when the store gets faster."""
-    filestore, builder, item_id = _build(monkeypatch)
+    filestore, builder, spec = _build_bare(monkeypatch)
+    hub = app_model("topic-hub")  # hyphenated slug — the platform's own resolver
+    item_id = (
+        spec.get_resource_manager(hub)
+        .create(hub(title="t", owner="u", profile="default"))
+        .resource_id
+    )
     await filestore.write(item_id, "/.agent/log-digger/AGENT.md", _DEF.encode())
 
     reads: list[str] = []

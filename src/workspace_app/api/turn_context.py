@@ -369,12 +369,19 @@ class TurnContextBuilder:
         app_slug, profile = facts.slug, facts.profile
         if app_slug is None or profile is None:
             return ()
-        held = agent_config.allowed_tools if agent_config is not None else None
-        if held is not None and "run_agent" not in held:
-            # This turn cannot delegate, so the answer cannot be used: neither the
-            # tool nor the prompt index would appear. Listing `.agent/` anyway was
-            # one workspace read per turn for every App that never opted in —
-            # topic-hub pays it today and can never spend it.
+        # Skipped only when the APP never opted into delegation — not when this
+        # turn merely has it toggled off. Keying on the resolved `allowed_tools`
+        # looked equivalent and was not: `run_agent` lands in `disabled_tools`
+        # exactly when it is absent from `allowed_tools`, so this early return
+        # made `has_subagents` permanently False for the #480 "ask the user to
+        # enable one" filter — and the one switch worth offering, on an item that
+        # already has definitions, was the one it could never offer. Two fixes
+        # that each looked right cancelled each other; a review probe found it.
+        try:
+            app_grants_delegation = "run_agent" in load_app_manifest(app_slug).agent.tools
+        except (FileNotFoundError, ModuleNotFoundError, OSError):
+            app_grants_delegation = True  # unreadable manifest ⇒ load, don't lose the capability
+        if not app_grants_delegation:
             return ()
         ceiling: Any = (
             agent_config.allowed_tools

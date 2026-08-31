@@ -105,11 +105,17 @@ def _child_context(parent_ctx: AgentToolContext, defn: SubagentDef) -> AgentTool
         history=[],
         run_agent=None,
         subagent_defs=(),
-        # Conversation-scoped channels. Nulled so that a tool which slipped
-        # through anyway reports itself unavailable instead of acting on the
-        # PARENT's conversation — the todo panel is the sharp case: whole-list
-        # replace, and the live event would go to the child's queue, so the
-        # user's checklist changes with nothing in the stream explaining it.
+        # Conversation-scoped. `conversation_id` is what actually refuses:
+        # `update_todos` is a whole-list replace on the parent's pinned checklist
+        # and reads this to find it, so nulling it makes the tool report itself
+        # unavailable rather than acting on a conversation the sub-agent knows
+        # nothing about.
+        #
+        # `on_todos_updated` is nulled for tidiness only — say so rather than
+        # imply a guarantee: the runner re-binds it unconditionally on whatever
+        # context it is handed, the child included, so this value does not
+        # survive into the sub-turn. What holds the line is `conversation_id`
+        # above and `update_todos` being forbidden outright.
         conversation_id=None,
         on_todos_updated=None,
         # The parent turn's attached images. Sharing them contradicts this
