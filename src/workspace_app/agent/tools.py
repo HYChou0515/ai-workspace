@@ -29,6 +29,7 @@ from .shown_files import (
 from .tool_authz import authorize_tool
 
 if TYPE_CHECKING:
+    from ..apps.subagents import SubagentDef
     from ..resources.conversation import Citation
 
 _LOGGER = logging.getLogger(__name__)
@@ -1177,11 +1178,56 @@ async def run_agent_impl(
     defs = ctx.context.subagent_defs
     chosen = next((d for d in defs if d.name == agent_type), None)
     if chosen is None:
+        # The index was frozen when the turn began, so one saved DURING the turn
+        # is not in it. Read `.agent/` live before giving up — the same thing
+        # `read_skill` does — or "create one, then use it" would need the user to
+        # send a second message for no reason they could see. Costs one listing,
+        # and only on the miss.
+        #
+        # The two lists are UNIONed, not swapped: a live read that came back
+        # empty (no workspace on this turn, or a listing that failed) must not
+        # erase the names the turn actually advertised, or an ordinary typo would
+        # lose its suggestions.
+        names = {d.name: d for d in defs}
+        names.update({d.name: d for d in await _live_subagent_defs(ctx.context)})
+        defs = tuple(names[n] for n in sorted(names))
+        chosen = names.get(agent_type)
+    if chosen is None:
         # Name the alternatives: the model picked from an index it was shown, so
         # a bare rejection leaves it guessing at what it misread.
-        known = ", ".join(d.name for d in defs) or "none"
-        return f"error: no sub-agent named {agent_type!r}. Available: {known}"
+        if known := ", ".join(d.name for d in defs):
+            return f"error: no sub-agent named {agent_type!r}. Available: {known}"
+        cfg = ctx.context.agent_config
+        if cfg is not None and "save_subagent" in (cfg.allowed_tools or ()):
+            return (
+                f"error: no sub-agent named {agent_type!r} — none are defined yet. "
+                "Create one with save_subagent and it is callable right away."
+            )
+        return f"error: no sub-agent named {agent_type!r}, and none are defined."
     return await run(ctx.context, chosen, prompt, ctx.context.on_exec_output)
+
+
+async def _live_subagent_defs(ctx: AgentToolContext) -> tuple[SubagentDef, ...]:
+    """This item's sub-agents read fresh, clamped the same way the turn's frozen
+    index was. Never raises: a workspace that cannot be listed simply has none,
+    and delegation is a capability, not something that may break a turn."""
+    from ..apps.subagents import load_subagents, workspace_subagent_defs
+
+    files, inv = ctx.files, ctx.investigation_id
+    if files is None or inv is None:
+        return ()
+    ceiling = _subagent_tool_ceiling(ctx)
+    try:
+        if ctx.app_slug is None or ctx.template_profile is None:
+            # No App identity (a synthetic slug, a workflow-lean ctx): the package
+            # side cannot be resolved, but the workspace side still can.
+            return tuple(await workspace_subagent_defs(files, inv, ceiling=ceiling))
+        return tuple(
+            await load_subagents(files, inv, ctx.app_slug, ctx.template_profile, ceiling=ceiling)
+        )
+    except Exception:  # noqa: BLE001 — a re-read is best-effort, never a turn-breaker
+        _LOGGER.warning("run_agent: live sub-agent re-read failed for %s", inv, exc_info=True)
+        return ()
 
 
 async def ask_wiki_impl(ctx: RunContextWrapper[AgentToolContext], question: str) -> str:
@@ -2578,7 +2624,12 @@ def build_tools(
     workspace, so it cannot be derived from `app_slug`/`profile` here."""
     names = allowed if allowed is not None else _WORKSPACE_TOOLS
     names = [_LEGACY_TOOL_RENAMES.get(n, n) for n in names]
-    if not has_subagents:
+    # `run_agent` rides on whether this turn could USE it — either sub-agents
+    # already exist, or the agent holds the tool that creates one (and a
+    # sub-agent saved mid-turn is callable immediately). #537 forbids granting a
+    # tool that can only ever refuse; an agent that can fill the list itself is
+    # not that case, and withholding the tool until the next turn would be.
+    if not (has_subagents or "save_subagent" in names):
         names = [n for n in names if n != "run_agent"]
     # Skip names that aren't built-ins — they may be provisioned tool-package
     # commands (#21, #25), which the runner adds separately via
