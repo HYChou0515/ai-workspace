@@ -14,6 +14,7 @@ from ..tokens import CallLane
 if TYPE_CHECKING:
     from specstar import SpecStar
 
+    from ..apps.subagents import SubagentDef
     from ..entity.events import EntityOrigin, EntityWriteSink
     from ..kb.retriever import Enhancements, Retriever
     from ..kb.vlm import IVlm, VlmDescriber
@@ -231,9 +232,10 @@ class AgentToolContext:
     infer_modules_parallelism: int = 16
 
     # The item's App slug + profile name (#29 / §A, #89). When both are set the
-    # runner exposes `read_skill` if the profile ships skills, and read_skill
-    # reads from `apps/<app_slug>/profiles/<template_profile>/.skill/...`. None
-    # for KB-flavour contexts (no App/profile).
+    # runner exposes `read_skill` if any skill is reachable (see
+    # `skills_reachable` below), and read_skill reads
+    # from `apps/<app_slug>/profiles/<template_profile>/.skill/...`. None for
+    # KB-flavour contexts (no App/profile).
     app_slug: str | None = None
     template_profile: str | None = None
 
@@ -243,6 +245,15 @@ class AgentToolContext:
     # skill follows its profile/App default. A skill applied THIS turn is loaded
     # regardless — apply overrides the off toggle (see `applied_skills`).
     skill_prefs: dict[str, bool] = field(default_factory=dict)
+
+    # Whether this turn can load ANY skill — the App's declared shared ones, the
+    # profile's package `.skill/`, or the item's own workspace `.skill/`, each
+    # after the #380 per-item toggles. The runner grants `read_skill` on exactly
+    # this, so the tool exists when something is advertised and not otherwise.
+    # Answered by the turn context (the only layer that can read the workspace
+    # and the toggles); `None` for contexts nobody answered it for, where the
+    # runner falls back to what the package alone proves.
+    skills_reachable: bool | None = None
 
     # #380: skills the user chose to APPLY this turn (per-message). Their bodies are
     # already preloaded into the turn; read_skill also exempts them from the toggle
@@ -407,6 +418,19 @@ class AgentToolContext:
     # KB. The type is `Callable[..., …]` because that override is keyword-default
     # (not expressible in a positional `Callable[[...], …]` signature).
     run_subagent: Callable[..., Awaitable[tuple[str, list[Citation]]]] | None = None
+    # The GENERIC delegation seam: hand a whole sub-task to one of this turn's
+    # sub-agent definitions and get back its report. Distinct from
+    # `run_subagent` above, which is the KB-purpose bridge — a sub-agent may
+    # still consult the KB through that, which is why both live here.
+    #
+    # `None` on a sub-agent's own turn (with `subagent_defs` emptied to match):
+    # that, and not a depth counter, is what stops a sub-agent spawning another.
+    # The `run_agent` tool is simply not built when the seam is absent.
+    run_agent: Callable[..., Awaitable[str]] | None = None
+    # The sub-agent definitions this turn may delegate to — an App profile's
+    # `.agent/` plus the workspace's, merged and tool-clamped. Also what the
+    # system prompt advertises, so the model knows which names are callable.
+    subagent_defs: tuple[SubagentDef, ...] = ()
     # #537: the KB agent's SECOND knowledge source — consult the wiki. Given a
     # question, a wiki reader navigates the wiki index-first (index → the pages the
     # index points at → the source documents behind them) and returns its answer

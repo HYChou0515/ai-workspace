@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any
 
 import msgspec
 
+from .frontmatter import FrontmatterError, parse_frontmatter
 from .skill_payload import ORIGIN_FILE, SkillOrigin, SkillSource, origin_for, skill_payload
 
 if TYPE_CHECKING:
@@ -221,17 +222,29 @@ def workspace_skills_block(metas: list[SkillMeta]) -> str:
     return "\n".join(lines)
 
 
+async def advertised_workspace_skills(
+    files: WorkspaceFiles, workspace_id: str, prefs: Mapping[str, bool] | None = None
+) -> list[SkillMeta]:
+    """The workspace skills this turn tells the agent about: `.skill/` read live,
+    minus any the item toggled OFF (`prefs[name]` is False, #380 — workspace
+    skills are default-on, so only an explicit False hides one).
+
+    Deliberately NOT `effective_item_skills`: that resolver makes a copy of a
+    package skill answer as the skill it copied (#589), so a copy of a
+    default-off one is "not effective" while this block still lists it and
+    `read_skill` still loads it (it too refuses only an explicit off). Whoever
+    needs to know what the agent was told — the block below, and the
+    `read_skill` grant — must ask THIS rule, or the turn advertises a skill it
+    has no tool to load, or withdraws a tool for a skill it just advertised."""
+    metas = await workspace_skill_metas(files, workspace_id)
+    return [m for m in metas if prefs.get(m.name) is not False] if prefs else metas
+
+
 async def build_workspace_skills_block(
     files: WorkspaceFiles, workspace_id: str, prefs: Mapping[str, bool] | None = None
 ) -> str:
-    """Read the workspace's `.skill/` live and render the index block (or ``""``).
-    A workspace skill the item toggled OFF (`prefs[name]` is False, #380) is
-    dropped — the agent isn't told about a skill the user turned off (workspace
-    skills are default-on, so only an explicit False hides one)."""
-    metas = await workspace_skill_metas(files, workspace_id)
-    if prefs:
-        metas = [m for m in metas if prefs.get(m.name) is not False]
-    return workspace_skills_block(metas)
+    """Read the workspace's `.skill/` live and render the index block (or ``""``)."""
+    return workspace_skills_block(await advertised_workspace_skills(files, workspace_id, prefs))
 
 
 class SkillState(msgspec.Struct, frozen=True):
@@ -634,53 +647,10 @@ def _skill_root(app_slug: str, profile: str) -> Traversable | None:
 
 
 def _parse_frontmatter(raw: bytes) -> tuple[dict[str, object], str]:
-    """Split an `---` ... `---` YAML frontmatter from its body. Returns
-    `({}, raw_decoded)` when no frontmatter is present. Raises `SkillError` on
-    malformed YAML."""
-    text = raw.decode("utf-8", errors="replace")
-    if not text.startswith("---"):
-        return {}, text
-    rest = text[3:].lstrip("\n")
-    end = rest.find("\n---")
-    if end == -1:
-        return {}, text
-    front_text = rest[:end]
-    body_text = rest[end + 4 :].lstrip("\n")
+    """`frontmatter.parse_frontmatter` in skill flavour — the shared parser, with
+    its error retyped so every `except SkillError` in this module keeps catching
+    a malformed `---` block."""
     try:
-        front = _parse_yaml(front_text)
-    except ValueError as e:
-        raise SkillError(f"malformed frontmatter YAML: {e}") from e
-    if not isinstance(front, dict):  # pragma: no cover — _parse_yaml only returns dict
-        raise SkillError(f"frontmatter must be a YAML mapping, got {type(front).__name__}")
-    return {str(k): v for k, v in front.items()}, body_text
-
-
-def _parse_yaml(text: str) -> object:
-    """Minimal YAML loader: `name: value` lines with `#` comments + blank lines
-    tolerated. Avoids PyYAML — the frontmatter is tiny (name + description)."""
-    out: dict[str, str] = {}
-    for raw_line in text.splitlines():
-        line = raw_line.split("#", 1)[0].rstrip()
-        if not line.strip():
-            continue
-        if ":" not in line:
-            raise ValueError(f"line without `:`: {raw_line!r}")
-        key, _, value = line.partition(":")
-        value = value.strip()
-        if value.startswith(("[", "{")) and not _balanced(value):
-            raise ValueError(f"unbalanced delimiter in value: {value!r}")
-        out[key.strip()] = value
-    return out
-
-
-def _balanced(s: str) -> bool:
-    """Cheap `[]` / `{}` open-close balance check — flags `description: [unclosed`."""
-    depth = 0
-    for ch in s:
-        if ch in "[{":
-            depth += 1
-        elif ch in "]}":
-            depth -= 1
-            if depth < 0:
-                return False
-    return depth == 0
+        return parse_frontmatter(raw)
+    except FrontmatterError as e:
+        raise SkillError(str(e)) from e

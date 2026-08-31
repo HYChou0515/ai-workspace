@@ -67,7 +67,7 @@ from ..resources.kb import Citation, KbChat, KbMessage
 from ..tokens import CallLane
 from ..users.protocol import UserDirectory
 from .chat_naming import first_user_snippet
-from .events import AgentEvent, MessageDelta, RunError, ToolEnd, ToolLog, ToolStart
+from .events import AgentEvent, MessageDelta, RunError, ToolEnd, ToolStart
 from .notifications import notify
 from .permission_body import PermissionBody, PermissionOut, build_permission, granted_user_ids
 from .runner import AgentRunner
@@ -80,23 +80,6 @@ from .turns import (
     context_notice_text,
     history_items,
 )
-
-
-def kb_progress(ev: AgentEvent) -> str | None:
-    """Render a KB sub-agent event as a one-line progress note for the parent
-    (RCA) stream, so the user sees the KB agent's searches and reasoning live
-    while `ask_knowledge_base` runs. ``None`` ⇒ nothing worth surfacing."""
-    if isinstance(ev, ToolStart):
-        query = ev.args.get("query")
-        return f"🔎 {ev.name}: {query}\n" if query else f"🔎 {ev.name}\n"
-    if isinstance(ev, ToolLog):
-        # The kb_search tool's live output — e.g. the retriever's enhancement-LLM
-        # thinking (multi-query / HyDE / rerank) — relayed under the parent's
-        # ask_knowledge_base card (issue #10).
-        return ev.text
-    if isinstance(ev, MessageDelta) and ev.reasoning:
-        return ev.text
-    return None
 
 
 async def answer_question(

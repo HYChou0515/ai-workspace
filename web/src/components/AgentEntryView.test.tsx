@@ -931,3 +931,26 @@ describe("EntryView — workspace paths in an assistant answer", () => {
     expect(screen.queryByRole("img")).not.toBeInTheDocument();
   });
 });
+
+describe("EntryView — run_agent tool card", () => {
+  it("names the sub-agent that is running, not just that some tool is", () => {
+    // Delegation is the one tool call where WHICH sub-agent it is decides
+    // whether the user should be worried about the wait.
+    render(
+      <EntryView
+        entry={{
+          kind: "tool_call",
+          call: {
+            call_id: "c1",
+            name: "run_agent",
+            args: { agent_type: "log-digger", prompt: "find the first real error" },
+            status: "running",
+            liveOutput: "🔧 read_file: /app.log\n",
+          },
+        }}
+      />,
+    );
+    expect(screen.getByText(/log-digger/)).toBeInTheDocument();
+    expect(screen.getByText(/read_file/)).toBeInTheDocument();
+  });
+});

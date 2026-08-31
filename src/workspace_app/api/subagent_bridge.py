@@ -33,8 +33,9 @@ from ..resources.groups import groups_of
 from ..resources.kb import Citation, Collection
 from ..sandbox.protocol import OutputSink
 from ..tokens import CallLane
+from .agent_progress import progress_line
 from .events import AgentEvent
-from .kb_chat_routes import answer_question, kb_progress
+from .kb_chat_routes import answer_question
 from .runner import AgentRunner
 
 logger = logging.getLogger(__name__)
@@ -205,7 +206,7 @@ class SubagentBridge:
         def relay(ev: AgentEvent) -> None:
             if emit is None:
                 return
-            line = kb_progress(ev)
+            line = progress_line(ev)
             if line:
                 emit(line.encode())
 

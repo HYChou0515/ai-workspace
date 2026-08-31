@@ -206,6 +206,7 @@ export const messages = {
   "tool.list_sources": { "zh-TW": "列出文件", en: "List sources" },
   "tool.read_source": { "zh-TW": "讀取文件", en: "Read source" },
   "tool.read_skill": { "zh-TW": "讀取技能", en: "Read skill" },
+  "tool.run_agent": { "zh-TW": "委派子代理", en: "Delegate to sub-agent" },
   "tool.fallback": { "zh-TW": "使用工具", en: "Using a tool" },
   "tool.argSep": { "zh-TW": "：", en: ": " },
   "tool.result": { "zh-TW": "結果", en: "Result" },

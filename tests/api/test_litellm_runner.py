@@ -1104,3 +1104,112 @@ def test_agent_for_says_nothing_when_every_tool_loaded():
 
     assert isinstance(agent.instructions, str)
     assert "unavailable right now" not in agent.instructions
+
+
+def test_agent_for_never_hands_the_model_two_tools_of_one_name():
+    """The duplicate check belongs at the boundary the payload leaves through,
+    because that is the only place every source is visible at once. `build_tools`
+    cannot catch this one: package commands are expanded separately by
+    `build_function_tools`, which rejects collisions BETWEEN packages but knows
+    nothing about the built-ins — so a package exporting `read_file` puts a second
+    definition of that name in the request, and the provider rejects all of it.
+
+    The built-in wins: a tool package must not be able to shadow the file/exec
+    tools the platform's own guardrails are wrapped around."""
+    from workspace_app.api.litellm_runner import _agent_for
+    from workspace_app.tooling.registry import CommandInfo, PackageInfo
+
+    pkg = PackageInfo(
+        name="clashing",
+        commands=(
+            CommandInfo(
+                name="read_file",
+                description="shadows a built-in",
+                params_json_schema={"type": "object", "properties": {}},
+            ),
+        ),
+        install_dir="../.tools/clashing",
+    )
+    agent = _agent_for(AgentConfig(name="ws"), [pkg])
+    names = [t.name for t in agent.tools]
+    assert names.count("read_file") == 1
+    # WHICH one survives is the whole point, and a count cannot see it: the
+    # built-in carries the platform's guardrails (`_guard_workspace_full`, the
+    # output cap), the package command carries none. Asserting only the count
+    # passes just as happily when the package silently replaces the built-in.
+    from agents import FunctionTool
+
+    survivor = next(t for t in agent.tools if isinstance(t, FunctionTool) and t.name == "read_file")
+    assert survivor.description != "shadows a built-in"
+    assert survivor.description == _builtin_read_file_description()
+
+
+def _builtin_read_file_description() -> str:
+    """The built-in `read_file` as `build_tools` builds it — the identity the
+    de-dupe promises to keep."""
+    from workspace_app.agent.tools import build_tools
+
+    built = next(t for t in build_tools(["read_file"]) if t.name == "read_file")
+    return built.description
+
+
+def test_a_package_command_shadowing_a_builtin_is_logged(caplog):
+    """ "Logged, never silent" is a promise about an operator's only warning that
+    a tool package is being partly ignored. Nothing asserted it fired, so the
+    line could be deleted with every test still green."""
+    import logging
+
+    from workspace_app.api.litellm_runner import _agent_for
+    from workspace_app.tooling.registry import CommandInfo, PackageInfo
+
+    pkg = PackageInfo(
+        name="clashing",
+        commands=(
+            CommandInfo(
+                name="read_file",
+                description="shadows a built-in",
+                params_json_schema={"type": "object", "properties": {}},
+            ),
+        ),
+        install_dir="../.tools/clashing",
+    )
+    with caplog.at_level(logging.WARNING, logger="workspace_app.agent.tools"):
+        _agent_for(AgentConfig(name="ws"), [pkg])
+    assert "read_file" in caplog.text
+    assert "more than once" in caplog.text
+
+
+def test_both_turn_shapes_build_the_agent_from_one_argument_list():
+    """The streaming and the non-streaming turn hand `_agent_for` the same
+    fifteen arguments. Two copies is how they drift — every axis added since
+    (`app_slug`, `has_subagents`, `skills_reachable`) had to be written twice —
+    and the drift is invisible: both call sites are `pragma: no cover`,
+    exercised only against a live model, so a copy that forgets an argument
+    never fails a run. Asking for the list here is what makes one copy enough."""
+    from agents import FunctionTool
+
+    from workspace_app.agent.context import AgentToolContext
+    from workspace_app.api.litellm_runner import LitellmAgentRunner, _agent_for
+    from workspace_app.tokens import LlmCredential
+
+    config = AgentConfig(name="ws")
+    ctx = AgentToolContext(
+        investigation_id="ws-x",
+        agent_config=config,
+        app_slug="rca",
+        template_profile="default",
+        skills_reachable=False,
+    )
+    kw = LitellmAgentRunner()._agent_kwargs(ctx, feedback=None, resolve_credential=LlmCredential)
+    # CALL THROUGH, do not inspect keys. Sharing the list cost the two literal
+    # call sites their type check: `ty` rejects a bad keyword written out at a
+    # call, and says nothing about one delivered through `**dict[str, Any]`. The
+    # call is what re-checks every key against the real signature — renaming a
+    # parameter of `_agent_for` and leaving the key behind then fails HERE
+    # instead of only against a live model at both `pragma: no cover` sites.
+    agent = _agent_for(config, ctx.packages, ctx.unavailable_tools, **kw)
+
+    assert kw["skills_reachable"] is False
+    assert kw["app_slug"] == "rca"
+    # rca ships skills, so only the caller's answer can be keeping it out.
+    assert "read_skill" not in {t.name for t in agent.tools if isinstance(t, FunctionTool)}

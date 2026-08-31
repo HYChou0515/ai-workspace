@@ -124,6 +124,7 @@ const TOOL_LABEL: Record<string, MsgKey> = {
   list_sources: "tool.list_sources",
   read_source: "tool.read_source",
   read_skill: "tool.read_skill",
+  run_agent: "tool.run_agent",
 };
 
 // The single argument worth showing per tool (others stay in the expandable body).
@@ -143,6 +144,9 @@ const TOOL_ARG: Record<string, string> = {
   resolve_collection: "ref",
   update_context_card: "title",
   create_context_card: "title",
+  // The sub-agent's name, not the task: the name is what tells the user whether
+  // this wait is expected, and the task is one click away in the body.
+  run_agent: "agent_type",
 };
 
 /** A workspace-relative ref resolved against the item's file route, or the ref

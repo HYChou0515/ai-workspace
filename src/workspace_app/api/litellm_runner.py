@@ -43,7 +43,8 @@ from ..agent.args_recovery import (
 from ..agent.context import AgentToolContext
 from ..agent.header_model import HeaderModel
 from ..agent.repairing_model import RepairingModel
-from ..agent.tools import build_tools
+from ..agent.tools import build_tools, dedupe_tools
+from ..apps.subagents import subagents_block
 from ..context_budget import (
     ContextLimit,
     LimitLearner,
@@ -277,6 +278,7 @@ def _turn_instructions(ctx: AgentToolContext, feedback: str | None) -> str | Non
         s
         for s in (
             speaker_note(ctx.speaker),
+            subagents_block(ctx.subagent_defs),
             ctx.search_allowance_note,
             ctx.entity_schema_note,
             feedback,
@@ -297,6 +299,8 @@ def _agent_for(
     context_window: int | None = None,
     app_slug: str | None = None,
     template_profile: str | None = None,
+    has_subagents: bool = False,
+    skills_reachable: bool | None = None,
     fallback_chains: FallbackChains | None = None,
     cooldown_registry: CooldownRegistry | None = None,
     on_failover_switch: Callable[[str, str], None] | None = None,
@@ -306,8 +310,9 @@ def _agent_for(
     base = config.system_prompt or ""
     if extra_instructions:
         base = f"{base}\n\n{extra_instructions}".strip()
-    # `template_profile` opts in `read_skill` when the profile ships skills
-    # (issue #29 / §A). build_tools handles the conditional internally.
+    # `read_skill` is opted in by whether this turn can load any skill (issue
+    # #29 / §A) — `ctx.skills_reachable` when the turn context answered it,
+    # otherwise derived from the profile. build_tools decides once.
     #
     # Tri-state contract on `allowed_tools` (Q4-followup of the config
     # grill): ``None`` = "haven't specified" → defaults; ``[]`` =
@@ -318,12 +323,26 @@ def _agent_for(
     # kb_search". The new behaviour: ``[]`` registers zero tools, and
     # the catalog-build validator separately rejects a kb_chat whose
     # resolved allowed_tools doesn't contain `kb_search`.
-    tools = list(build_tools(config.allowed_tools, app_slug=app_slug, profile=template_profile))
+    tools = list(
+        build_tools(
+            config.allowed_tools,
+            app_slug=app_slug,
+            profile=template_profile,
+            has_subagents=has_subagents,
+            skills_reachable=skills_reachable,
+        )
+    )
     # Same tri-state for package tools (the colon-syntax expansion):
     # symmetric with build_tools above so bundled RCA presets
     # (allowed_tools=None) still expose every package command.
     if packages:
         tools.extend(build_function_tools(packages, allowed=config.allowed_tools))
+    # Last stop before the model sees them, and the only place every source is in
+    # one list: built-ins, the conditional grants, and the package commands —
+    # which `build_function_tools` rejects collisions AMONG, but not against
+    # ours. Two definitions of one name is a payload the provider refuses
+    # wholesale, so the turn dies for a reason nothing in it explains.
+    tools = dedupe_tools(tools)  # first-wins: the built-in outranks a package's copy
     # Append the resolved tool inventory (name + description + JSON args
     # schema) to the system prompt so small local LLMs don't confuse
     # provisioned function tools with shell binaries (see plan §B.10 /
@@ -1228,6 +1247,36 @@ class LitellmAgentRunner:
             self._limits.learn_exact(model, base_url, limit=probed)
         return self._limits.get(model, base_url)
 
+    def _agent_kwargs(
+        self,
+        ctx: AgentToolContext,
+        feedback: str | None,
+        resolve_credential: Callable[[str | None], LlmCredential],
+    ) -> dict[str, Any]:
+        """Everything both turn shapes hand `_agent_for` — the streamed turn adds
+        only its `on_failover_switch`.
+
+        One list, because two copies is how the shapes drift: every axis added
+        since (`app_slug`, `has_subagents`, `skills_reachable`) had to be written
+        twice, and a copy that forgets one never fails a run — both call sites are
+        `pragma: no cover`, exercised only against a live model. The turn that
+        then behaves differently is the one nobody watches."""
+        return {
+            "extra_instructions": _turn_instructions(ctx, feedback),
+            "base_url": self._base_url,
+            "api_key": self._api_key,
+            "reasoning_effort": ctx.reasoning_effort,
+            "context_window": ctx.context_window,
+            "app_slug": ctx.app_slug,
+            "template_profile": ctx.template_profile,
+            "has_subagents": bool(ctx.subagent_defs),
+            "skills_reachable": ctx.skills_reachable,
+            "fallback_chains": self._fallback_chains,
+            "cooldown_registry": self._cooldown_registry,
+            "resolve_credential": resolve_credential,
+            "stream_deadlines": self._stream_deadlines,
+        }
+
     async def _run_once(  # pragma: no cover — exercised only by the live Ollama test
         self, prompt: str, ctx: AgentToolContext, feedback: str | None
     ) -> AsyncIterator[AgentEvent]:
@@ -1261,18 +1310,8 @@ class LitellmAgentRunner:
             ctx.agent_config,
             ctx.packages,
             ctx.unavailable_tools,
-            extra_instructions=_turn_instructions(ctx, feedback),
-            base_url=self._base_url,
-            api_key=self._api_key,
-            reasoning_effort=ctx.reasoning_effort,
-            context_window=ctx.context_window,
-            app_slug=ctx.app_slug,
-            template_profile=ctx.template_profile,
-            fallback_chains=self._fallback_chains,
-            cooldown_registry=self._cooldown_registry,
             on_failover_switch=_failover_emitter(queue),
-            resolve_credential=resolve_credential,
-            stream_deadlines=self._stream_deadlines,
+            **self._agent_kwargs(ctx, feedback, resolve_credential),
         )
         t0 = time.monotonic()
         prompt_tok = _approx_tokens(len(prompt))
@@ -1422,17 +1461,7 @@ class LitellmAgentRunner:
             ctx.agent_config,
             ctx.packages,
             ctx.unavailable_tools,
-            extra_instructions=_turn_instructions(ctx, feedback),
-            base_url=self._base_url,
-            api_key=self._api_key,
-            reasoning_effort=ctx.reasoning_effort,
-            context_window=ctx.context_window,
-            app_slug=ctx.app_slug,
-            template_profile=ctx.template_profile,
-            fallback_chains=self._fallback_chains,
-            cooldown_registry=self._cooldown_registry,
-            resolve_credential=resolve_credential,
-            stream_deadlines=self._stream_deadlines,
+            **self._agent_kwargs(ctx, feedback, resolve_credential),
         )
         t0 = time.monotonic()
         prompt_tok = _approx_tokens(len(prompt))

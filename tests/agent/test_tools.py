@@ -383,6 +383,23 @@ def test_build_tools_normalizes_legacy_ls_name():
     assert names == {"list_files", "read_file"}
 
 
+def test_build_tools_registers_a_repeated_name_once():
+    """A name listed twice in `allowed_tools` must still produce ONE tool. Two
+    definitions sharing a name is not a cosmetic wart — the provider rejects the
+    whole tool payload, so a single duplicated line in a hand-written config
+    takes down every turn that config drives."""
+    names = [t.name for t in build_tools(allowed=["read_file", "read_file"])]
+    assert names.count("read_file") == 1
+
+
+def test_build_tools_collapses_a_legacy_alias_onto_its_current_name():
+    """`ls` normalises to `list_files` (#241), so a stored list carrying BOTH the
+    old and the new name collides after the rename — the same duplicate, arrived
+    at by a route nobody writes on purpose."""
+    names = [t.name for t in build_tools(allowed=["ls", "list_files"])]
+    assert names.count("list_files") == 1
+
+
 def test_kb_search_logs_underlying_exception_before_reraising(caplog):
     """When the retriever errors (e.g. Ollama down, LiteLLM HTTP failure),
     `kb_search_impl` previously let the exception go straight to the
