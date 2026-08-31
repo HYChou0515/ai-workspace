@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..agent.context import AgentToolContext
 from ..apps.manifest import load_app_manifest
+from ..apps.skills import advertised_workspace_skills, effective_item_skills
 from ..apps.subagents import SubagentDef, load_subagents
 from ..context_budget import ContextLimit, catalog_limit, estimate_tokens
 from ..entity.brief import entity_schema_brief
@@ -39,6 +40,7 @@ from ..sandbox.protocol import Sandbox, SandboxSpec
 from ..sync import SandboxSync
 from ..tokens import CallLane
 from ..tooling.external import ExternalTools, confine_to_mounted, resolve_external_tools
+from .locator import TurnFacts
 from .turns import history_items
 
 if TYPE_CHECKING:
@@ -193,16 +195,22 @@ class TurnContextBuilder:
         self._catalog_fn: Callable[[str], int | None] = catalog_limit
 
     def _overhead_for(
-        self, agent_config: AgentConfig | None, item_id: str, *, has_subagents: bool = False
+        self,
+        agent_config: AgentConfig | None,
+        facts: TurnFacts,
+        *,
+        has_subagents: bool = False,
+        skills_reachable: bool | None = None,
     ) -> int:
         """Tokens spent before any history: the system prompt + tool schemas."""
         if agent_config is None:
             return 0
         return estimate_tokens(agent_config.system_prompt or "") + self._tools_tokens(
             agent_config,
-            app_slug=self._locator.slug_of(item_id),
-            profile=self._locator.profile_of(item_id),
+            app_slug=facts.slug,
+            profile=facts.profile,
             has_subagents=has_subagents,
+            skills_reachable=skills_reachable,
         )
 
     def _context_window(self, agent_config: AgentConfig | None) -> ContextLimit:
@@ -308,6 +316,7 @@ class TurnContextBuilder:
         app_slug: str | None,
         profile: str | None,
         has_subagents: bool = False,
+        skills_reachable: bool | None = None,
     ) -> int:
         """Estimated cost of the tool schemas sent alongside the prompt. Built
         per turn (~12 ms) rather than guessed — a guess here is the same class of
@@ -328,6 +337,7 @@ class TurnContextBuilder:
                 app_slug=app_slug,
                 profile=profile,
                 has_subagents=has_subagents,
+                skills_reachable=skills_reachable,
             )
             payload = json.dumps(
                 [
@@ -344,7 +354,7 @@ class TurnContextBuilder:
         return estimate_tokens(payload)
 
     async def _subagent_defs(
-        self, item_id: str, agent_config: AgentConfig | None
+        self, item_id: str, agent_config: AgentConfig | None, facts: TurnFacts
     ) -> tuple[SubagentDef, ...]:
         """Who this turn may delegate to: the App profile's `.agent/` plus the
         item's own workspace, clamped to what THIS turn is itself allowed to do.
@@ -356,8 +366,7 @@ class TurnContextBuilder:
         be listed simply has no sub-agents."""
         from ..agent.tools import _profile_tool_ceiling
 
-        app_slug = self._locator.slug_of(item_id)
-        profile = self._locator.profile_of(item_id)
+        app_slug, profile = facts.slug, facts.profile
         if app_slug is None or profile is None:
             return ()
         ceiling: Any = (
@@ -371,6 +380,42 @@ class TurnContextBuilder:
             logger.warning("turn-context: sub-agent defs skipped for %s", item_id, exc_info=True)
             return ()
         return tuple(defs)
+
+    async def _skills_reachable(self, item_id: str, facts: TurnFacts) -> bool | None:
+        """Whether this turn can load ANY skill — what `read_skill` is granted on.
+
+        Asked of the two producers that actually render this turn's indexes, not
+        of a third opinion about them: `effective_item_skills` for the App's own
+        skills (the resolver the picker and the prompt index share) and
+        `advertised_workspace_skills` for the workspace's. They differ on one
+        case and the difference is load-bearing — a workspace COPY of a
+        default-off package skill is listed by the block and loadable by
+        `read_skill`, while the resolver calls it not-effective — so asking only
+        the resolver withdrew a tool the turn had just advertised.
+
+        This lives here and not in `build_tools` because both answers need the
+        item: its #380 toggles and its live `.skill/`, neither of which a slug and
+        a profile name can reach.
+
+        The workspace listing is SKIPPED when the App's own skills already answer
+        yes — the answer cannot change, and this runs on the turn path (the send
+        path separately reads `.skill/` to render the workspace index).
+
+        `None` on failure or on a non-App item: the runner then falls back to
+        what the package alone proves, which is what every caller got before.
+        A skill index is a capability, never a turn-breaker."""
+        slug, profile, prefs = facts.slug, facts.profile, facts.skill_prefs
+        if slug is None or profile is None:
+            return None
+        try:
+            if any(s.effective for s in effective_item_skills(slug, profile, prefs, [])):
+                return True
+            return bool(await advertised_workspace_skills(self._files, item_id, prefs))
+        except Exception:  # noqa: BLE001 — never break a turn over a skill index
+            logger.warning(
+                "turn-context: skill reachability unknown for %s", item_id, exc_info=True
+            )
+            return None
 
     async def _external_tools(self, item_id: str, session: Any) -> ExternalTools:
         """#674: resolve this app's third-party tools, once, at the top of a turn.
@@ -396,7 +441,9 @@ class TurnContextBuilder:
         run_subagent: RunSubagent,
         history_messages: list[Message],
         external: ExternalTools,
+        facts: TurnFacts,
         subagent_defs: tuple[SubagentDef, ...] = (),
+        skills_reachable: bool | None = None,
         request_env: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """The fields identical across every RCA turn shape (interactive + workflow)."""
@@ -408,7 +455,12 @@ class TurnContextBuilder:
         # the event loop) and this turn needs the same figure twice: to derive
         # the history budget, and as the ctx field the silent-truncation check
         # compares against.
-        overhead = self._overhead_for(agent_config, item_id, has_subagents=bool(subagent_defs))
+        overhead = self._overhead_for(
+            agent_config,
+            facts,
+            has_subagents=bool(subagent_defs),
+            skills_reachable=skills_reachable,
+        )
         # #624: the same window the history budget below is derived from, carried
         # on the ctx so the runner can tell the endpoint to OPEN that much rather
         # than serve its own default and truncate the difference away in silence.
@@ -456,7 +508,7 @@ class TurnContextBuilder:
             # for testing. `request_env` is empty for every turn with no request
             # behind it (a workflow step, the goal driver, a scheduled job),
             # which is the whole of what those turns inherit: nothing.
-            user_env={**(request_env or {}), **self._locator.env_vars_of(item_id)},
+            user_env={**(request_env or {}), **facts.env_vars},
             handle=session.handle,
             # Route lazy-create through the registry so session.handle is set
             # (so idle-kill/close_all can find it) and the restore-after-create
@@ -487,12 +539,12 @@ class TurnContextBuilder:
             packages=[*(self._packages or []), *external.packages],
             unavailable_tools=external.refused,
             prebuilt_dir=self._prebuilt_dir,
-            app_slug=self._locator.slug_of(item_id),
-            template_profile=self._locator.profile_of(item_id),
+            app_slug=facts.slug,
+            template_profile=facts.profile,
             # #380: the item's tri-state skill override, so read_skill's toggle gate
             # fires live (a skill turned off is unreadable) and the workspace-skill
             # block can drop the disabled ones.
-            skill_prefs=self._locator.skill_prefs_of(item_id),
+            skill_prefs=facts.skill_prefs,
             # #429 P10: the entity tools publish a post-commit write event through this,
             # so an AI-authored entity change fires on_event workflows like any other
             # write. Identical across both turn shapes — the ambient ORIGIN differs (see
@@ -503,6 +555,10 @@ class TurnContextBuilder:
             # would advertise a capability the turn cannot perform.
             subagent_defs=subagent_defs,
             run_agent=self._run_agent,
+            # #29 / §A: whether anything is loadable this turn — what decides
+            # `read_skill`. Carried rather than re-derived because only this
+            # layer can see the workspace and the per-item toggles.
+            skills_reachable=skills_reachable,
         )
 
     async def _entity_schema_note(self, item_id: str) -> str:
@@ -549,6 +605,7 @@ class TurnContextBuilder:
         It defaults to none, so the goal driver re-entering this path with nobody
         watching gets a turn carrying the item's env and nothing else."""
         session = await self._registry.session(item_id)
+        facts = self._locator.turn_facts(item_id)
         logger.debug("turn-context: build chat turn for %s", item_id)
         external = await self._external_tools(item_id, session)
         return AgentToolContext(
@@ -557,7 +614,9 @@ class TurnContextBuilder:
                 session,
                 agent_config=agent_config,
                 run_subagent=run_subagent,
-                subagent_defs=await self._subagent_defs(item_id, agent_config),
+                facts=facts,
+                subagent_defs=await self._subagent_defs(item_id, agent_config, facts),
+                skills_reachable=await self._skills_reachable(item_id, facts),
                 history_messages=history_messages,
                 external=external,
                 request_env=request_env,
@@ -614,8 +673,15 @@ class TurnContextBuilder:
         entity_write_origin: EntityOrigin | None = None,
     ) -> AgentToolContext:
         """The lean workflow agent-node turn context (`_wf_drive_turn`): the shared
-        core only — every interactive extra stays at its ``AgentToolContext`` default,
-        byte-for-byte what a workflow node saw before.
+        core only — every interactive extra stays at its ``AgentToolContext`` default.
+
+        "Byte-for-byte what a workflow node saw before" stopped being true when
+        `skills_reachable` joined the shared core: a workflow node's tool list now
+        follows the item's skills like a chat turn's does, gaining `read_skill`
+        when only the workspace holds one and losing it when every skill is pinned
+        off. That is the point — the node runs against the same item — but it IS a
+        difference, and a docstring that denied it would hide the one place a
+        workflow's tools can change without its own definition changing.
 
         ``entity_write_origin`` (#429 P10) is the running workflow's
         ``EntityOrigin(trigger, depth)`` when it was spawned by a trigger — passed in by
@@ -624,6 +690,7 @@ class TurnContextBuilder:
         dispatcher's self-trigger + depth-cap guards effective on the agent path. None
         for a human/schedule run (a first-level write)."""
         session = await self._registry.session(item_id)
+        facts = self._locator.turn_facts(item_id)
         logger.debug("turn-context: build workflow turn for %s", item_id)
         external = await self._external_tools(item_id, session)
         return AgentToolContext(
@@ -632,7 +699,9 @@ class TurnContextBuilder:
                 session,
                 agent_config=agent_config,
                 run_subagent=run_subagent,
-                subagent_defs=await self._subagent_defs(item_id, agent_config),
+                facts=facts,
+                subagent_defs=await self._subagent_defs(item_id, agent_config, facts),
+                skills_reachable=await self._skills_reachable(item_id, facts),
                 history_messages=history_messages,
                 external=external,
             ),

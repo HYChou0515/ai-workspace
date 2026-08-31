@@ -368,3 +368,84 @@ async def test_derived_reference_survives_a_workspace_copy():
 
     assert "purpose only" in out
     assert "machine-derived reference (always current)" in out
+
+
+def test_build_tools_registers_read_skill_once_when_also_named_explicitly(isolated_apps: Path):
+    """`read_skill` reaches `build_tools` by two independent routes — the
+    `_IMPLS` lookup over `allowed_tools`, and the injection that fires when the
+    profile ships skills. A config that names it by hand takes BOTH, and the
+    result is two function definitions with one name, which the provider rejects
+    for the whole turn.
+
+    Asserted on a list, not a set: every neighbouring test here compares
+    `{t.name for t in ...}`, and a set is exactly what hid this."""
+    from workspace_app.agent.tools import build_tools
+
+    _profile_with_skill(isolated_apps, "rca", "local-lab", "fmt", "x", "body")
+    names = [
+        t.name
+        for t in build_tools(["read_file", "read_skill"], app_slug="rca", profile="local-lab")
+    ]
+    assert names.count("read_skill") == 1
+
+
+def test_build_tools_grants_a_hand_written_read_skill_with_no_profile_skills(
+    isolated_apps: Path, monkeypatch
+):
+    """Naming `read_skill` in `allowed_tools` is an explicit request, so it is
+    granted even though the profile ships none: `merged_profile_skills` only sees
+    the PACKAGE's skills, and the item's own workspace `.skill/` — which the tool
+    also reads — is invisible to it. Dropping the hand-written name would leave
+    workspace skills with no way to be loaded at all."""
+    import workspace_app.apps.shared_skills as shared
+    from workspace_app.agent.tools import build_tools
+
+    monkeypatch.setattr(shared, "SHARED_SKILLS", {})
+    (isolated_apps / "rca" / "profiles" / "default").mkdir(parents=True)
+    names = [
+        t.name for t in build_tools(["read_file", "read_skill"], app_slug="rca", profile="default")
+    ]
+    assert names.count("read_skill") == 1
+
+
+def test_build_tools_grants_read_skill_for_workspace_skills_with_no_app_profile():
+    """No App/profile, but the caller says a skill is reachable: the tool reads a
+    workspace skill from the file facade (`load_workspace_skill`) without
+    touching a package, so it is worth granting — the "only available in an App
+    workspace turn" refusal is for a turn with neither source, not for this."""
+    from workspace_app.agent.tools import build_tools
+
+    names = [t.name for t in build_tools(skills_reachable=True)]
+    assert names.count("read_skill") == 1
+
+
+def test_build_tools_does_not_warn_when_the_config_names_read_skill(isolated_apps, caplog):
+    """The de-dupe warning names a config the deployer can act on — a package
+    shadowing a built-in. A `read_skill` the grant itself appended beside a
+    hand-written one is neither: nothing is shadowed, the deployer can do
+    nothing, and `build_tools` runs twice per turn (sizing, then the agent), so
+    the noise repeats forever and trains people to ignore the real case."""
+    import logging
+
+    from workspace_app.agent.tools import build_tools
+
+    _profile_with_skill(isolated_apps, "rca", "local-lab", "fmt", "x", "body")
+    with caplog.at_level(logging.WARNING, logger="workspace_app.agent.tools"):
+        build_tools(["read_file", "read_skill"], app_slug="rca", profile="local-lab")
+    assert "more than once" not in caplog.text
+
+
+def test_build_tools_lets_the_caller_answer_the_skill_question_outright(isolated_apps):
+    """`skills_reachable` is tri-state. The turn context can see the item's
+    workspace AND its per-item skill toggles, so when it answers, that answer
+    wins over what the package alone can prove: a profile that ships skills the
+    user has pinned OFF reaches nothing, and must not be handed the tool."""
+    from workspace_app.agent.tools import build_tools
+
+    _profile_with_skill(isolated_apps, "rca", "local-lab", "fmt", "x", "body")
+    granted = {t.name for t in build_tools(app_slug="rca", profile="local-lab")}
+    withheld = {
+        t.name for t in build_tools(app_slug="rca", profile="local-lab", skills_reachable=False)
+    }
+    assert "read_skill" in granted
+    assert "read_skill" not in withheld

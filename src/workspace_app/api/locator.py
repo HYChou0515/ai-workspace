@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from typing import NamedTuple
 
 from fastapi import HTTPException
 from specstar import SpecStar
@@ -40,6 +41,15 @@ from .item_conversation_perm import item_conversation_mirror
 # human one. Matches the other windows in this codebase (usage_window, the
 # facade's liveness memo) so there is one granularity to reason about.
 _ACCESS_WINDOW_S = 5.0
+
+
+class TurnFacts(NamedTuple):
+    """One item's turn-relevant fields, resolved together. See `ItemLocator.turn_facts`."""
+
+    slug: str | None
+    profile: str
+    skill_prefs: dict[str, bool]
+    env_vars: dict[str, str]
 
 
 class ItemLocator:
@@ -71,6 +81,28 @@ class ItemLocator:
         # hand-written file/chat/stream routes that go through this locator.
         self._get_user_id = get_user_id
         self._superusers = superusers
+
+    def turn_facts(self, item_id: str) -> TurnFacts:
+        """Everything a turn needs to know about its item, from ONE lookup.
+
+        The accessors below each resolve the item for themselves, which is right
+        for a caller that needs one answer and wrong for the turn path, which
+        needs four for the same item — `TurnContextBuilder` was making ten
+        synchronous specstar round trips per turn to collect them. `apps/resolve`
+        puts the cost plainly: the call count IS the latency.
+
+        Every fallback here is copied from the accessor it replaces, including
+        `profile_of`'s "default" for an unknown id, so the two can never answer
+        differently."""
+        found = find_work_item(self._spec, item_id)
+        if found is None:
+            return TurnFacts(slug=None, profile="default", skill_prefs={}, env_vars={})
+        return TurnFacts(
+            slug=found[0],
+            profile=found[1].profile,
+            skill_prefs=dict(found[1].attached_skill_prefs),
+            env_vars=dict(found[1].env_vars),
+        )
 
     def title_of(self, item_id: str) -> str | None:
         """Title of any App's WorkItem, resolved generically by id (the mention

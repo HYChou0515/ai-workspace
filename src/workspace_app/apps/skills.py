@@ -222,17 +222,29 @@ def workspace_skills_block(metas: list[SkillMeta]) -> str:
     return "\n".join(lines)
 
 
+async def advertised_workspace_skills(
+    files: WorkspaceFiles, workspace_id: str, prefs: Mapping[str, bool] | None = None
+) -> list[SkillMeta]:
+    """The workspace skills this turn tells the agent about: `.skill/` read live,
+    minus any the item toggled OFF (`prefs[name]` is False, #380 — workspace
+    skills are default-on, so only an explicit False hides one).
+
+    Deliberately NOT `effective_item_skills`: that resolver makes a copy of a
+    package skill answer as the skill it copied (#589), so a copy of a
+    default-off one is "not effective" while this block still lists it and
+    `read_skill` still loads it (it too refuses only an explicit off). Whoever
+    needs to know what the agent was told — the block below, and the
+    `read_skill` grant — must ask THIS rule, or the turn advertises a skill it
+    has no tool to load, or withdraws a tool for a skill it just advertised."""
+    metas = await workspace_skill_metas(files, workspace_id)
+    return [m for m in metas if prefs.get(m.name) is not False] if prefs else metas
+
+
 async def build_workspace_skills_block(
     files: WorkspaceFiles, workspace_id: str, prefs: Mapping[str, bool] | None = None
 ) -> str:
-    """Read the workspace's `.skill/` live and render the index block (or ``""``).
-    A workspace skill the item toggled OFF (`prefs[name]` is False, #380) is
-    dropped — the agent isn't told about a skill the user turned off (workspace
-    skills are default-on, so only an explicit False hides one)."""
-    metas = await workspace_skill_metas(files, workspace_id)
-    if prefs:
-        metas = [m for m in metas if prefs.get(m.name) is not False]
-    return workspace_skills_block(metas)
+    """Read the workspace's `.skill/` live and render the index block (or ``""``)."""
+    return workspace_skills_block(await advertised_workspace_skills(files, workspace_id, prefs))
 
 
 class SkillState(msgspec.Struct, frozen=True):
