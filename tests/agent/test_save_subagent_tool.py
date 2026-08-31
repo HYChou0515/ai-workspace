@@ -155,6 +155,49 @@ async def test_a_description_that_survives_the_round_trip_is_still_accepted():
     assert only.description == "Finds the first real error (and says which line)."
 
 
+async def test_refining_a_sub_agent_takes_effect_in_the_same_reply():
+    """`run_agent` re-reads the workspace when a name MISSES, which covers a new
+    sub-agent — but re-saving an existing one is a hit, so the turn kept running
+    the old body while this tool said "refine freely… callable now".
+
+    Delegate → the report is poor → refine the body → delegate again is the
+    obvious loop, and silently discarding the refinement is the worst way to lose
+    it. Found by an adversarial review probe."""
+    ctx = _ctx()
+    stale = SubagentDef(name="digger", description="old", tools=[], body="OLD INSTRUCTIONS")
+    ctx.context.subagent_defs = (stale,)
+
+    await save_subagent_impl(ctx, "digger", "new", ["read_file"], "NEW INSTRUCTIONS")
+
+    [live] = ctx.context.subagent_defs
+    assert live.body.strip() == "NEW INSTRUCTIONS"
+    assert live.tools == ["read_file"]
+
+
+async def test_a_tool_a_sub_agent_could_never_hold_is_refused_not_quietly_dropped():
+    """`update_todos` is a whole-list replace on the parent's pinned checklist and
+    `ask_user` ends the turn for a reply nobody will see, so a sub-agent cannot
+    hold either — nor the delegation pair. Accepting them and stripping them in
+    the child would be the quiet trim this tool's own rule forbids, and the
+    refusal's "Available:" line would have advertised them."""
+    files = WorkspaceFiles(MemoryFileStore())
+    ctx = RunContextWrapper(
+        AgentToolContext(
+            investigation_id="inv-1",
+            files=files,
+            agent_config=AgentConfig(
+                name="main", allowed_tools=["read_file", "update_todos", "save_subagent"]
+            ),
+        )
+    )
+
+    out = await save_subagent_impl(ctx, "digger", "d", ["read_file", "update_todos"], "b")
+
+    assert "error" in out and "update_todos" in out
+    assert "update_todos" not in out.split("Available:")[-1]
+    assert await workspace_subagent_defs(files, "inv-1") == []
+
+
 async def test_resaving_the_same_name_overwrites_so_it_can_be_refined():
     ctx = _ctx()
     await save_subagent_impl(ctx, "digger", "d", [], "first")

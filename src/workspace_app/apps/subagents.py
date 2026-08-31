@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Collection
+from functools import cache
 from importlib import resources
 from importlib.resources.abc import Traversable
 
@@ -74,10 +75,23 @@ def profile_subagent_defs(
     app_slug: str, profile: str, *, ceiling: Collection[str] | None = None
 ) -> list[SubagentDef]:
     """The sub-agents an App profile ships, sorted by name. Unknown profile / no
-    `.agent/` dir → empty (a profile may ship none)."""
+    `.agent/` dir → empty (a profile may ship none).
+
+    The package read is cached and the clamp is applied after it, because the
+    ceiling is per-turn while the shipped files are fixed for the process —
+    `list_skills` has the same split for the same reason. Without it this did
+    blocking package-filesystem I/O inside an `async def` on every turn of every
+    app, including apps that ship no `.agent/` dir at all."""
+    return [clamp_tools(d, ceiling) for d in _shipped_subagent_defs(app_slug, profile)]
+
+
+@cache
+def _shipped_subagent_defs(app_slug: str, profile: str) -> tuple[SubagentDef, ...]:
+    """The profile's definitions exactly as the package holds them. A tuple of
+    frozen structs, so a caller cannot mutate the cache."""
     root = _agent_root(app_slug, profile)
     if root is None:
-        return []
+        return ()
     out: list[SubagentDef] = []
     for sub in sorted(root.iterdir(), key=lambda t: t.name):
         agent_md = sub / "AGENT.md"
@@ -85,8 +99,8 @@ def profile_subagent_defs(
             continue
         defn = _def_from(agent_md.read_bytes(), sub.name)
         if defn is not None:
-            out.append(clamp_tools(defn, ceiling))
-    return out
+            out.append(defn)
+    return tuple(out)
 
 
 def _agent_root(app_slug: str, profile: str) -> Traversable | None:

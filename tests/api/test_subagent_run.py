@@ -81,6 +81,56 @@ async def test_a_sub_agent_cannot_delegate_again():
     assert runner.ctx.subagent_defs == ()
 
 
+async def test_nothing_belonging_to_the_parents_conversation_or_turn_is_inherited():
+    """`_child_context` is a `dataclasses.replace`, so every field it does not
+    name stays SHARED with the parent. The first version reset only the citation
+    buckets, which let a sub-agent rewrite the user's todo list, chip the
+    parent's answer with sources it never looked at, and re-send the parent's
+    attached image on every delegation.
+
+    Each assertion is one of those, so adding a conversation-scoped or
+    turn-accumulating field to `AgentToolContext` without handling it here fails
+    right away rather than in production."""
+    runner = _Recorder([RunDone()])
+    defn = SubagentDef(name="digger", description="d", tools=["read_file"], body="dig")
+    parent = dataclasses.replace(
+        _parent(),
+        conversation_id="conversation:abc",
+        on_todos_updated=lambda _items: None,
+        turn_image_urls=["data:image/png;base64,AAAA"],
+        withheld_collection_ids=["col-x"],
+    )
+
+    await run_agent_task(runner, parent, defn, "go")
+
+    child = runner.ctx
+    assert child is not None
+    # Conversation-scoped: a sub-agent must not be able to act on the parent's chat.
+    assert child.conversation_id is None
+    assert child.on_todos_updated is None
+    # The parent turn's own inputs — it "cannot see this conversation".
+    assert child.turn_image_urls == []
+    # Accumulators the parent's assistant message is built from.
+    assert child.withheld_collection_ids == []
+    assert child.kb_passages == []
+    assert child.subagent_citations == {}
+    # ...and none of it reached back into the parent.
+    assert parent.withheld_collection_ids == ["col-x"]
+    assert parent.turn_image_urls == ["data:image/png;base64,AAAA"]
+
+
+async def test_a_sub_agent_that_writes_no_report_says_so():
+    """A sub-turn can end without prose — it stopped on a tool call, or ran out
+    of steps. An empty string is indistinguishable, to the caller, from a
+    successful answer that had nothing to say."""
+    runner = _Recorder([RunDone()])  # no MessageDelta at all
+    defn = SubagentDef(name="digger", description="d", tools=[], body="dig")
+
+    answer = await run_agent_task(runner, _parent(), defn, "go")
+
+    assert "digger" in answer and "without writing a report" in answer
+
+
 async def test_the_delegation_tools_are_stripped_from_the_child_not_just_unwired():
     """Nulling the seam stops recursion, but `build_tools` decides what to BUILD
     from the tool NAMES — so a definition naming `save_subagent` (which all three
@@ -90,7 +140,7 @@ async def test_the_delegation_tools_are_stripped_from_the_child_not_just_unwired
     greedy = SubagentDef(
         name="digger",
         description="d",
-        tools=["read_file", "run_agent", "save_subagent"],
+        tools=["read_file", "run_agent", "save_subagent", "update_todos", "ask_user"],
         body="dig",
     )
 

@@ -97,7 +97,11 @@ def isolated_apps(tmp_path: Path, monkeypatch):
 
     importlib.reload(subagents)
     monkeypatch.setattr(subagents, "_APPS_PKG", "agentpkg")
+    # The package read is cached (it is fixed for the process in production), so
+    # clear it either side or one test's synthetic package answers the next.
+    subagents._shipped_subagent_defs.cache_clear()
     yield pkg
+    subagents._shipped_subagent_defs.cache_clear()
     sys.modules.pop("agentpkg", None)
 
 

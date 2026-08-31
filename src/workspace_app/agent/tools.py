@@ -1783,6 +1783,7 @@ async def save_subagent_impl(
     `error:` note naming exactly what to fix."""
     from ..apps.subagents import (
         WORKSPACE_AGENT_DIR,
+        _def_from,
         render_agent_md,
         slugify_subagent_name,
         unrenderable_reason,
@@ -1819,7 +1820,17 @@ async def save_subagent_impl(
     if (why := unrenderable_reason(slug, description, tools, body)) is not None:
         return f"error: {why}"
     path = f"/{WORKSPACE_AGENT_DIR}/{slug}/AGENT.md"
-    await files.write(inv, path, render_agent_md(slug, description, tools, body).encode("utf-8"))
+    rendered = render_agent_md(slug, description, tools, body)
+    await files.write(inv, path, rendered.encode("utf-8"))
+    # Splice it into THIS turn's index. `run_agent` re-reads the workspace when a
+    # name misses, which covers a brand-new sub-agent — but re-saving an existing
+    # one is a HIT, so without this the turn would keep running the old body
+    # while this tool says "re-saving overwrites, so refine freely". Delegating,
+    # reading a poor report and refining is the obvious loop; silently discarding
+    # the refinement is the worst way to lose it.
+    if (fresh := _def_from(rendered.encode("utf-8"), slug)) is not None:
+        others = tuple(d for d in ctx.context.subagent_defs if d.name != slug)
+        ctx.context.subagent_defs = tuple(sorted((*others, fresh), key=lambda d: d.name))
     return (
         f"saved sub-agent '{slug}' to {rel_path(path)}. Delegate to it with "
         f"run_agent('{slug}', <a self-contained task>) — it is callable now, including "
@@ -1836,11 +1847,21 @@ def _subagent_tool_ceiling(ctx: AgentToolContext) -> set[str] | None:
     Derived from the TURN rather than from the App alone, because otherwise a
     per-item tool toggle becomes a suggestion: turning `exec` off for an item has
     to turn it off for the sub-agents that item's agent writes, too."""
+    from ..api.subagent_run import SUBAGENT_FORBIDDEN_TOOLS
+
     profile_ceiling = _profile_tool_ceiling(ctx.app_slug, ctx.template_profile)
     held = ctx.agent_config.allowed_tools if ctx.agent_config is not None else None
     if held is None:
-        return profile_ceiling
-    return set(held) if profile_ceiling is None else set(held) & profile_ceiling
+        ceiling = profile_ceiling
+    else:
+        ceiling = set(held) if profile_ceiling is None else set(held) & profile_ceiling
+    if ceiling is None:
+        return None
+    # Minus what a sub-agent can never hold, so those are REFUSED by name like
+    # any other over-reach. Accepting them and stripping them later is the
+    # quiet trim this tool's own rule forbids — and the refusal's "Available:"
+    # line would otherwise advertise them.
+    return ceiling - SUBAGENT_FORBIDDEN_TOOLS
 
 
 def _profile_tool_ceiling(app_slug: str | None, profile: str | None) -> set[str] | None:
