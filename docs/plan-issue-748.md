@@ -14,7 +14,7 @@
 | 哪個 model 回的 | **從來沒記錄過** |
 | 用了多少 token | 有記,但真值和 `chars/4` 的估計值**混在同一個欄位**,記錄本身分不出來 |
 | 生成多快 | 分母是**整輪牆鐘**,含 TTFT、tool 執行、重試、rate-limit 等待 |
-| 生成中看得到嗎 | `thinking` 階段整行不渲染;tool 執行時刻意凍結 |
+| 生成中看得到嗎 | `thinking` 階段有狀態文字但**沒有數字**(那一行只在 `answering` / `toolRunning` 才渲染);tool 執行時 tok/s 與秒數刻意凍結 |
 
 ### 1.1 `_final_tokens` 靜默地退回估計值
 
@@ -48,7 +48,8 @@ m.completionTokens / (m.elapsedMs / 1000)
 
 ## 2. 定案的設計
 
-以下七條是 `/grill-me` 逐題問出來的結論,不是選項。
+§2.1–§2.7 是 `/grill-me` 逐題問出來的結論,不是選項。§2.8 與 §2.9 是實作與 review 過程中
+才發現、必須一起定案的兩條——它們推翻了前面的假設,所以寫在這裡而不是留在 commit 訊息裡。
 
 ### 2.1 沒量到就是沒量到
 
@@ -110,6 +111,12 @@ class MessageMetrics(Struct, frozen=True):
 - tooltip 用原生 `title=`,聊天區既有做法(`AgentEntryView` 的 replay / undo 都是),不引入新元件。
 - ⚠️ **tooltip 在觸控裝置上等於不存在。** 桌面優先是知情的取捨;真要支援觸控,model 得改成外層灰字,那會和「別太明顯」衝突,屆時要重新拍板。
 
+### 2.7 邊界:`↑` 不歸這裡管
+
+`phase="up"` 的 `prompt_tokens` 只算使用者那一則訊息的長度,和整個請求差一個數量級 —— 那是 #739 §1.3 的題目,`context_usage` 正在錨定真值。**本 issue 不碰 ↑**,只處理 ↓、tok/s、model、時間。
+
+兩邊都改同一個地方會漂移。
+
 ### 2.8 顯示與記錄不能共用同一個數字
 
 實作 2.1 時才發現:`_final_tokens` 有**兩個消費者**。
@@ -145,12 +152,6 @@ class AgentMetrics:
 `AgentMetrics`(含 `down`)都覆寫一次 —— 靠「final 剛好最後到」才對。那是巧合不是設計,
 而 `measured_*` 在 `up`/`down` 恆為 `None`,依賴巧合會讓記錄在串流過程中反覆被清空。
 
-### 2.7 邊界:`↑` 不歸這裡管
-
-`phase="up"` 的 `prompt_tokens` 只算使用者那一則訊息的長度,和整個請求差一個數量級 —— 那是 #739 §1.3 的題目,`context_usage` 正在錨定真值。**本 issue 不碰 ↑**,只處理 ↓、tok/s、model、時間。
-
-兩邊都改同一個地方會漂移。
-
 ### 2.9 光是不編造還不夠 —— 得先開口要
 
 **這條是把 P1–P5 跑起來才發現的,讀程式碼看不到。**
@@ -174,8 +175,10 @@ usage in resp:  {'completion_tokens': 80, 'prompt_tokens': 7282, ...}   ← lite
    一個披著「量到的」外衣的估計值。差一點就把它當真值記下來。
 
 所以 2.1 的「沒量到就存 None」單獨存在的話是誠實但無用的:這一欄會永遠是空的。
-**要讓它有東西,得先開口要。** `stream_options` 加在 `_agent_for` 的 extra_args,
-`litellm.drop_params` 已經是 `True`,所以不懂這個參數的端點會被丟掉而不是報錯。
+**要讓它有東西,得先開口要。** 用 SDK 自己的旋鈕 **`ModelSettings(include_usage=True)`**。
+⚠️ **不要手動把 `stream_options` 塞進 `extra_args`** —— agents SDK 自己就在傳,重複傳會讓
+**每一輪對話**死在 `got multiple values for keyword argument 'stream_options'`。我這樣做過,
+而且單元測試全綠(它斷言的是我組出來的 dict,不是真正發出去的呼叫)。
 
 這正是 live check 存在的理由:**「我們沒送出去的那個請求」從系統內部是看不見的**,
 任何單元測試都照不到 —— 替身只會回答被問到的問題。
