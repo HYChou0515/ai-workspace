@@ -375,7 +375,10 @@ def test_export_chat_downloads_the_round_trip_format():
     resp = client.get(f"/a/rca/items/{inv_id}/chats/{chat_id}/export-chat")
     assert resp.status_code == 200
     cd = resp.headers["content-disposition"]
-    assert cd.endswith('.chat.json"') and "MX-7" in cd
+    # RFC 6266: an ASCII `filename` plus the UTF-8 `filename*`; both end in the
+    # suffix the upload side dispatches on, and both name the chat.
+    assert cd.startswith('attachment; filename="MX-7-voids.chat.json"')
+    assert cd.endswith(".chat.json") and "filename*=UTF-8''" in cd
 
     title, messages = parse_chat_export(resp.content)
     assert title == "MX-7 voids"

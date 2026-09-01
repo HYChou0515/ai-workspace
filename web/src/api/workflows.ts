@@ -233,6 +233,25 @@ async function jsonOrThrow(r: Response, what: string): Promise<unknown> {
 const base = (slug: string, itemId: string) =>
   `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}`;
 
+/** The download name the server chose, from `Content-Disposition`.
+ *
+ * RFC 6266 sends two: an ASCII `filename` any client can read, and
+ * `filename*=UTF-8''…` for the real one. Reading only the ASCII half would save
+ * every Chinese-titled chat under the same placeholder — the naming defect this
+ * feature exists to remove, one hop further along. */
+function dispositionFilename(headers: Headers): string {
+  const cd = headers.get("content-disposition") ?? "";
+  const utf8 = /filename\*=UTF-8''([^;]+)/i.exec(cd);
+  if (utf8) {
+    try {
+      return decodeURIComponent(utf8[1]);
+    } catch {
+      // A malformed percent-escape is not worth failing a download over.
+    }
+  }
+  return /filename="([^"]+)"/.exec(cd)?.[1] || "chat.chat.json";
+}
+
 /** Fetch ONE chat as the re-ingestable `.chat.json` (issue #39), via the
  * app-scoped, chat-scoped route (#95). The chat id is not optional: without it
  * the server used to answer with the item's default chat, so whichever chat you
@@ -257,8 +276,7 @@ export async function fetchChatExport(
   if (!res.ok || !contentType.includes("application/json")) {
     throw new Error("匯出失敗：伺服器沒有回傳對話檔，請稍後再試或回報問題。");
   }
-  const match = /filename="([^"]+)"/.exec(res.headers.get("content-disposition") ?? "");
-  return { blob: await res.blob(), filename: match?.[1] || "chat.chat.json" };
+  return { blob: await res.blob(), filename: dispositionFilename(res.headers) };
 }
 
 /** Browser download wrapper around {@link fetchChatExport} — triggers the save

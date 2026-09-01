@@ -131,6 +131,28 @@ describe("fetchChatExport (#100 — export fail-loud)", () => {
     expect(url).not.toContain("/investigations/");
   });
 
+  it("saves under the chat's real name when the title is not ASCII", async () => {
+    // The server sends both halves of RFC 6266: an ASCII `filename` fallback and
+    // the UTF-8 `filename*`. Reading only the fallback would save every
+    // Chinese-titled chat as the same placeholder — which is the naming defect
+    // this change exists to remove, reintroduced one hop later.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response('{"title":"爐溫漂移檢討","messages":[]}', {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+            "content-disposition":
+              "attachment; filename=\"chat.chat.json\"; filename*=UTF-8''%E7%88%90%E6%BA%AB%E6%BC%82%E7%A7%BB%E6%AA%A2%E8%A8%8E.chat.json",
+          },
+        }),
+      ),
+    );
+    const { filename } = await fetchChatExport("rca", "rca:1", "conversation:c1");
+    expect(filename).toBe("爐溫漂移檢討.chat.json");
+  });
+
   it("throws (no silent HTML download) when the response is the SPA shell, not the chat", async () => {
     // The old bug: a misrouted GET falls through to the SPA → text/html 200,
     // which the browser saved as export-chat.html. Now it's a loud error.

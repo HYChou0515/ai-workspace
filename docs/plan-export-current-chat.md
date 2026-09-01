@@ -76,10 +76,15 @@ from that. That is the shape to copy — the product already contains its own an
   a chat-scoped route addresses whatever the caller can already read, and access stays
   gated by `read_chat` on the item. A conversation a person can read on screen is one they
   may download.
-- **The filename is derived from the chat title**, sanitised the way the KB export already
-  sanitises it (`name.replace(/[^\w.-]+/g, "-")`), so the file names the conversation. The
-  server owns that name and the browser takes it from `Content-Disposition` rather than
-  building a second one — one rule, so the two ends cannot drift apart.
+- **The filename is derived from the chat title**, and the server owns it: the browser
+  takes it from `Content-Disposition` rather than building a second one, so the two ends
+  cannot drift apart.
+- **The header follows RFC 6266.** A `Content-Disposition` is latin-1 on the wire, so a
+  Chinese chat title — the common case in this deployment — put into `filename="…"` raises
+  `UnicodeEncodeError` while the response is written: the export 500s rather than failing
+  politely. The header carries an ASCII `filename` plus `filename*=UTF-8''…`, and the
+  browser prefers the latter. (Found by review, after the first implementation shipped the
+  crash; the regression test names a chat 爐溫漂移檢討 and encodes the header to latin-1.)
 
 ## Phases
 
@@ -115,6 +120,10 @@ download follows the screen, and the file names itself.
 
 ## Not in scope
 
-- The KB chat's Export (already correct).
+- **Which** chat the KB chat's Export downloads — it was already right, and is where the
+  shape here was copied from. Its *filename* was not: JavaScript's `\w` is ASCII-only, so
+  it folded every Chinese-titled chat down to `-.chat.json`. That is the same class as the
+  header defect above, one file away, so it is fixed here rather than left as a lesson
+  applied halfway.
 - The `.chat.json` schema itself — same `{title, messages:[{role, content, tool_name}]}`.
 - Exporting several chats at once, or any format other than `.chat.json`.

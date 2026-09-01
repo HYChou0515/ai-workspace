@@ -497,13 +497,13 @@ def register_chat_routes(
         chat you had open, you downloaded the earliest one, under the ITEM's
         title and id. Nothing in the file disagreed with what you expected, which
         is what made it worth fixing rather than documenting."""
-        locator.require_access(slug, item_id, "read_chat")
-        from ..kb.chat_export import build_chat_export, chat_export_filename
+        investigation_id = locator.require_access(slug, item_id, "read_chat")
+        from ..kb.chat_export import build_chat_export, chat_export_disposition
 
         _rid, conv = locator.require_chat(slug, item_id, chat_id)
         # An unnamed chat has no title of its own; the item it belongs to is the
         # honest fallback — and it is what a single-chat item exported before.
-        title = conv.title or locator.title_of(locator.require_item(slug, item_id)) or "chat"
+        title = conv.title or locator.title_of(investigation_id) or "chat"
         payload = build_chat_export(
             title=title,
             messages=[
@@ -511,9 +511,8 @@ def register_chat_routes(
                 for m in conv.messages
             ],
         )
-        filename = chat_export_filename(title)
         return Response(
             content=payload,
             media_type="application/json",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            headers={"Content-Disposition": chat_export_disposition(title)},
         )

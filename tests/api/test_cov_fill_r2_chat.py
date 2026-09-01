@@ -203,4 +203,6 @@ def test_export_chat_still_downloads_when_the_item_has_no_title(_title_of_return
     assert r.status_code == 200, r.text
     title, _messages = parse_chat_export(r.content)
     assert title == "chat"
-    assert r.headers["content-disposition"] == 'attachment; filename="chat.chat.json"'
+    assert r.headers["content-disposition"] == (
+        "attachment; filename=\"chat.chat.json\"; filename*=UTF-8''chat.chat.json"
+    )

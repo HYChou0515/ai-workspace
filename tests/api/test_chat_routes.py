@@ -378,9 +378,25 @@ def test_export_chat_titles_the_file_after_the_chat():
     resp = client.get(f"/a/rca/items/{iid}/chats/{b}/export-chat")
     title, _messages = parse_chat_export(resp.content)
     assert title == "Second chat"
-    # The filename carries the same name, reduced to characters a header and a
-    # filesystem both accept — a space becomes a hyphen.
-    assert resp.headers["content-disposition"] == 'attachment; filename="Second-chat.chat.json"'
+    # RFC 6266: an ASCII `filename` every client understands, plus the UTF-8
+    # `filename*` current browsers prefer. Both name the chat.
+    assert resp.headers["content-disposition"] == (
+        "attachment; filename=\"Second-chat.chat.json\"; filename*=UTF-8''Second-chat.chat.json"
+    )
+
+
+def test_export_chat_survives_a_title_that_is_not_latin_1():
+    """A Content-Disposition header is latin-1 on the wire, and Python's `\\w`
+    keeps CJK — so naming the download after the chat turned a Chinese title into
+    a header the server cannot encode. The users of this deployment name chats in
+    Chinese, so this is the common case, not an edge one."""
+    client, _spec, iid = _client()
+    b = client.post(f"/a/rca/items/{iid}/chats", json={"title": "爐溫漂移檢討"}).json()["chat_id"]
+    client.post(f"/a/rca/items/{iid}/chats/{b}/messages", json={"content": "to-B"})
+
+    resp = client.get(f"/a/rca/items/{iid}/chats/{b}/export-chat")
+    assert resp.status_code == 200, resp.text
+    resp.headers["content-disposition"].encode("latin-1")  # must survive the wire
 
 
 def test_export_chat_404s_on_a_chat_from_another_item():

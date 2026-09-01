@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render as rtlRender, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
 
 import { QueryWrap } from "../../test/queryWrapper";
 
@@ -104,6 +104,26 @@ describe("KbChatView header", () => {
         { role: "assistant", content: "hello", tool_name: "" },
       ],
     });
+  });
+
+  it("keeps a Chinese title in the download name instead of reducing it to a hyphen", async () => {
+    // `\w` in JavaScript is ASCII-only, so the sanitiser folded every CJK title
+    // down to "-.chat.json" — every Chinese-named chat saved under one
+    // indistinguishable name. Separators still fold; letters stay.
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:x");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    let filename = "";
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      filename = this.download;
+    });
+    render(
+      <KbChatView chatId="chat:1" client={chatClient({ ...baseChat, title: "爐溫漂移 檢討" })} />,
+    );
+    await screen.findByText("爐溫漂移 檢討");
+    fireEvent.click(screen.getByRole("button", { name: /Export/ }));
+    expect(filename).toBe("爐溫漂移-檢討.chat.json");
   });
 });
 
