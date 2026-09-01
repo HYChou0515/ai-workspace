@@ -578,7 +578,9 @@ export function useChatSession(
             : err instanceof Error
               ? err.message
               : String(err));
-        setLog((prev) => ({ ...prev, streaming: false, error: msg }));
+        // Not the turn's error: no turn ran. It says which limit bound and
+        // links to it, and it must survive whatever the stream does next.
+        setLog((prev) => ({ ...prev, streaming: false, error: msg, errorFromTurn: false }));
       }
     },
     [transport, t],
@@ -594,7 +596,11 @@ export function useChatSession(
     // told them it stopped.
     void Promise.resolve(transport.requestCancel()).catch((err: unknown) => {
       const why = err instanceof Error ? err.message : String(err);
-      setLog((prev) => ({ ...prev, error: `停止失敗,這一輪可能仍在進行:${why}` }));
+      setLog((prev) => ({
+        ...prev,
+        error: `停止失敗,這一輪可能仍在進行:${why}`,
+        errorFromTurn: false,
+      }));
     });
     setLog((prev) => ({ ...prev, streaming: false }));
   }, [transport]);

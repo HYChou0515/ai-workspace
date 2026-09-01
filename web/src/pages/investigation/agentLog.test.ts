@@ -895,6 +895,23 @@ describe("a turn that recovers stops reporting the attempt that failed", () => {
     expect(closed.error).toBe("giving up after 3 attempts: APIConnectionError: refused");
   });
 
+  it("does not clear a message the STREAM never set", () => {
+    // `log.error` is one slot with several owners: the reducer's `error` event,
+    // and — set straight from the hook — a send failure, a quota refusal (whose
+    // whole point is the clickable link to the limit that bound), and a Stop
+    // that failed. Only the first belongs to a turn. On a shared item another
+    // participant's turn is streaming deltas at any moment, so "output arrived"
+    // must not be read as "your quota refusal stopped being true".
+    const refused = { ...EMPTY_LOG, error: "workspace is full — free some space" };
+
+    const other = reduceAgent(refused, {
+      type: "message_delta",
+      text: "someone else's turn, producing away",
+    } as AgentEvent);
+
+    expect(other.error).toBe("workspace is full — free some space");
+  });
+
   it("keeps a failure that produced partial output before dying", () => {
     // `progress_made` — output, then the failure, then `done`. The output came
     // BEFORE the error, so it is not evidence of recovery.

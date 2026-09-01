@@ -66,6 +66,12 @@ export function TurnStatus({
   // forever. Past the point where any real turn would have produced SOMETHING,
   // stop claiming to be waiting and say so. Visible output means the turn is
   // real; length alone is never the reason.
+  //
+  // What it says is the EVIDENCE, not a verdict. "This turn never started" is a
+  // claim about the server that this screen cannot make: a page reloaded during
+  // a long tool call has no metrics either (the stream does not replay them), so
+  // it looks identical to a send that was cut. The silence is what we can prove,
+  // and the retry is offered on that.
   // "No sign of life" is the real test, not the phase: a delta can arrive before
   // any metrics do, which still reads as `prep`. Any assistant text or tool call
   // means the turn is real and running.
@@ -87,7 +93,7 @@ export function TurnStatus({
   if (phase === "prep" && !producedSomething && elapsedSec >= ABANDONED_AFTER_S) {
     return (
       <div className={className} style={box} data-testid="turn-abandoned">
-        這一輪似乎沒有開始 — 可能在送出時就中斷了。
+        這一輪已經 {Math.floor(elapsedSec / 60)} 分鐘沒有任何動靜。
         {onRetry && (
           <button type="button" data-testid="turn-retry" onClick={onRetry} style={retryBtn}>
             重新問一次

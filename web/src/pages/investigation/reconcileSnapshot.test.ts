@@ -14,6 +14,7 @@ const live = (over: Partial<AgentLog> = {}): AgentLog => ({
   streaming: false,
   streamingBy: null,
   error: null,
+  errorFromTurn: false,
   metrics: null,
   failover: null,
   restore: null,

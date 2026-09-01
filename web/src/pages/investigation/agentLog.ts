@@ -81,6 +81,13 @@ export type AgentLog = {
   streamingBy: string | null;
   /** Non-null when the last terminal was an error. */
   error: string | null;
+  /** Whether `error` came from THIS turn's stream (an `error` event) rather than
+   * from the send path. One slot, several owners: a quota refusal names the limit
+   * that bound and links to it, a failed Stop says the turn may still be running,
+   * and neither stops being true because output arrived — on a shared item that
+   * output is often someone else's turn. Only a turn's own error is retracted by
+   * the turn carrying on. */
+  errorFromTurn: boolean;
   /** Live token telemetry for the current turn (null until first event). */
   metrics: AgentMetricsState | null;
   /** #249/#131: set when the model failed over mid-turn — a transient "switched"
@@ -102,6 +109,7 @@ export const EMPTY_LOG: AgentLog = {
   streaming: false,
   streamingBy: null,
   error: null,
+  errorFromTurn: false,
   metrics: null,
   failover: null,
   restore: null,
@@ -217,6 +225,8 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
     // one whose reply has not landed.
     streamingBy: awaitingReply ? (last?.author ?? null) : null,
     error: null,
+    // A snapshot carries no live error, so it owns none either.
+    errorFromTurn: false,
     metrics: null,
     failover: null,
     restore: null,
@@ -334,6 +344,9 @@ export function reconcileSnapshot(
     ...snap,
     entries: [...snap.entries, ...carried],
     error: prev.error ?? snap.error,
+    // …and with it, who owns it — or a re-hydrate would hand a send failure to
+    // the turn, which then retracts it on its next token.
+    errorFromTurn: prev.error !== null ? prev.errorFromTurn : snap.errorFromTurn,
   };
 }
 
@@ -544,7 +557,13 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
       // typed again. OUTPUT AFTER the notice is what says it recovered — not the
       // terminal event: the runner yields `RunError` and then `RunDone` on every
       // give-up, so clearing on `done` erased real failures instead.
-      return { ...log, entries, error: null, restore: null, rateLimited: null };
+      return {
+        ...log,
+        entries,
+        ...(log.errorFromTurn ? { error: null, errorFromTurn: false } : {}),
+        restore: null,
+        rateLimited: null,
+      };
     }
 
     case "tool_start":
@@ -648,7 +667,14 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
       return { ...log, entries, streaming: false, streamingBy: null };
 
     case "error":
-      return { ...log, entries, streaming: false, streamingBy: null, error: ev.message };
+      return {
+        ...log,
+        entries,
+        streaming: false,
+        streamingBy: null,
+        error: ev.message,
+        errorFromTurn: true,
+      };
 
     case "done":
       return { ...log, entries, streaming: false, streamingBy: null };
