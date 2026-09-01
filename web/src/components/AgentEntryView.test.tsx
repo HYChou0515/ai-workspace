@@ -954,3 +954,64 @@ describe("EntryView — run_agent tool card", () => {
     expect(screen.getByText(/read_file/)).toBeInTheDocument();
   });
 });
+
+describe("reply provenance (#748)", () => {
+  afterEach(cleanup);
+
+  const reply = (over = {}) =>
+    ({
+      kind: "message",
+      message: {
+        role: "assistant",
+        content: "here you go",
+        created_at: Date.UTC(2026, 8, 1, 6, 32, 7),
+        metrics: {
+          model: "qwen3:14b",
+          prompt_tokens: 8412,
+          completion_tokens: 356,
+          elapsed_ms: 61_000,
+          generation_ms: 5_000,
+        },
+        ...over,
+      },
+    }) as unknown as AgentEntry;
+
+  it("shows the reply time as quiet small text, to the minute", () => {
+    render(<EntryView entry={reply()} />);
+    // Seconds are log-grade precision; at chat cadence they are noise. They are
+    // not lost — the tooltip carries them.
+    expect(screen.getByText(/\d{2}:32/)).toBeInTheDocument();
+  });
+
+  it("puts the model and the counts in the tooltip, not on the surface", () => {
+    render(<EntryView entry={reply()} />);
+    const stamp = screen.getByText(/\d{2}:32/);
+    const tip = stamp.getAttribute("title") ?? "";
+
+    expect(tip).toContain("qwen3:14b");
+    expect(tip).toContain("8412");
+    expect(tip).toContain("356");
+    expect(tip).toContain("71 tok/s"); // 356 tokens / 5s of generation, not / 61s
+    expect(tip).toMatch(/:07/); // the precise second lives here
+    // "別太明顯": nothing but the time is readable without hovering.
+    expect(screen.queryByText(/qwen3/)).not.toBeInTheDocument();
+  });
+
+  it("says nothing where nothing was measured", () => {
+    render(
+      <EntryView
+        entry={reply({ metrics: { model: "qwen3:14b", elapsed_ms: 1200 } })}
+      />,
+    );
+    const tip = screen.getByText(/\d{2}:32/).getAttribute("title") ?? "";
+
+    expect(tip).toContain("qwen3:14b");
+    expect(tip).not.toContain("tok/s"); // no generation time ⇒ no rate invented
+    expect(tip).not.toContain("↑"); // no counts ⇒ no zeros stood in for them
+  });
+
+  it("shows no time at all for a message saved before the field existed", () => {
+    render(<EntryView entry={reply({ created_at: null, metrics: null })} />);
+    expect(screen.queryByText(/\d{2}:\d{2}/)).not.toBeInTheDocument();
+  });
+});

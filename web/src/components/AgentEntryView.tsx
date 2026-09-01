@@ -327,6 +327,56 @@ export function EntryView({
   );
 }
 
+/** #748: when a message was produced, and — on hover — what produced it.
+ *
+ * The visible half is the time alone, to the minute: seconds are log-grade
+ * precision and read as noise at chat cadence. Everything else (the model, the
+ * counts, the rate, the exact second) lives in the tooltip, because the ask was
+ * for provenance that is available without being on display.
+ *
+ * Every line is omitted when its number was not measured. A record that cannot
+ * distinguish "nothing was reported" from "it was zero" is the defect this
+ * whole issue exists to remove, and printing `↑0 ↓0 · 0 tok/s` here would put
+ * it straight back on the screen.
+ *
+ * Native `title` rather than a tooltip component — it is what the entry's other
+ * hover affordances already use. It does mean the detail is unreachable by
+ * touch; that trade-off is recorded in the plan.
+ */
+function ReplyStamp({ message }: { message: Message }) {
+  const at = message.created_at;
+  if (at == null) return null; // saved before the field existed — say nothing
+
+  const d = new Date(at);
+  const hhmm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+
+  const m = message.metrics;
+  const lines: string[] = [d.toLocaleString([], { hour12: false })];
+  if (m?.model) lines.push(m.model);
+  const counts: string[] = [];
+  if (m?.prompt_tokens != null) counts.push(`↑ ${m.prompt_tokens}`);
+  if (m?.completion_tokens != null) counts.push(`↓ ${m.completion_tokens}`);
+  if (counts.length > 0) lines.push(`${counts.join(" · ")} tok`);
+  if (m?.completion_tokens != null && m.generation_ms != null && m.generation_ms > 0) {
+    lines.push(`${Math.round(m.completion_tokens / (m.generation_ms / 1000))} tok/s`);
+  }
+
+  return (
+    <span
+      title={lines.join("\n")}
+      style={{
+        marginLeft: 6,
+        color: "var(--text-paper-d2)",
+        fontSize: pxToRem(10),
+        fontVariantNumeric: "tabular-nums",
+        cursor: "default",
+      }}
+    >
+      {hhmm}
+    </span>
+  );
+}
+
 /** Subtle per-entry trigger for the replay diagnostic (#51 P6). */
 function ReplayButton({ onReplay }: { onReplay: () => void }) {
   const t = useT();
@@ -636,6 +686,7 @@ function MessageBlock({
         >
           <UserAvatar userId={message.author ?? ""} size={20} />
           <span>{message.author ? author.name : "user"}</span>
+          <ReplyStamp message={message} />
           {onUndo && (
             <>
               <span style={{ flex: 1 }} />
@@ -693,6 +744,7 @@ function MessageBlock({
             <RcaMark size={14} color="var(--text-dark)" dot="var(--accent)" />
           </span>
           <span>{message.author ?? "Agent"}</span>
+          <ReplyStamp message={message} />
           {onReplay && <ReplayButton onReplay={onReplay} />}
           {onReportWiki && <ReportWikiButton onReport={onReportWiki} />}
         </div>
