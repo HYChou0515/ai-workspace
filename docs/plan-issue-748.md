@@ -157,11 +157,11 @@ class AgentMetrics:
 
 | Phase | 內容 | 狀態 |
 |---|---|---|
-| **P1** | 記錄不再說謊:`MessageMetrics` 欄位放寬 + 事件加 `measured_*` + `turns.py` 只在 `final` 寫真值(§2.8) | ⬜ |
-| **P2** | 生成時間:runner 累計首 token → 末 token 跨往返,事件加 `generation_ms` | ⬜ |
-| **P3** | model:`FallbackModel` 記下實際服務的 endpoint,事件加 `model`(順帶修好 #69 trace 的謊報) | ⬜ |
-| **P4** | 前端:`events.ts` 鏡像、tok/s 換分母、thinking / tool 期間都顯示那一行 | ⬜ |
-| **P5** | 聊天訊息的時間小字 + tooltip(app chat 與 KB chat 共用) | ⬜ |
+| **P1** | 記錄不再說謊:`MessageMetrics` 欄位放寬 + 事件加 `measured_*` + `turns.py` 只在 `final` 寫真值(§2.8) | ✅ |
+| **P2** | 生成時間:runner 累計首 token → 末 token 跨往返,事件加 `generation_ms` | ✅ |
+| **P3** | model:`FallbackModel` 記下實際服務的 endpoint,事件加 `model`(順帶修好 #69 trace 的謊報) | ✅ |
+| **P4** | 前端:`events.ts` 鏡像、tok/s 換分母、thinking / tool 期間都顯示那一行 | ✅ |
+| **P5** | 聊天訊息的時間小字 + tooltip(app chat 與 KB chat 共用) | ✅ |
 
 每個 phase 都讓事件的新欄位和它的生產者同時落地 —— 先加一個永遠是 `None` 的欄位,
 等於在 schema 裡放一個沒人填的洞,而它會被誤讀成「這個 provider 沒回報」。
