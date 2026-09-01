@@ -172,6 +172,57 @@ function toolArgHint(name: string, args: Record<string, unknown>): string {
   return s.length > 48 ? `${s.slice(0, 48)}…` : s;
 }
 
+/** #739: the line where the earlier conversation was summarised.
+ *
+ * It reads as a divider over the thread rather than as something a participant
+ * said, because that is what it is — and the messages it stands in for are
+ * still right above it, which is the whole point of compacting rather than
+ * dropping. Folded by default: it is long by construction (it replaces dozens
+ * of messages), so an open one would push the actual conversation off screen
+ * every time the thread loads.
+ *
+ * The copy says "摘要", never "context" or "token" — the user needs to know the
+ * earlier conversation was summarised and is still readable, not how our
+ * window accounting works. */
+function CompactionSummary({ text, replaced }: { text: string; replaced: number }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div
+      data-testid="compaction-summary"
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 4,
+        padding: "4px 8px",
+        fontSize: pxToRem(12),
+        color: "var(--text-paper-d)",
+        borderLeft: "2px solid var(--accent)",
+      }}
+    >
+      <button
+        type="button"
+        data-testid="compaction-summary-toggle"
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          alignSelf: "flex-start",
+          background: "none",
+          border: "none",
+          padding: 0,
+          cursor: "pointer",
+          font: "inherit",
+          color: "inherit",
+          textDecoration: "underline",
+        }}
+      >
+        {open
+          ? `以上 ${replaced} 則已整理成摘要 · 收合`
+          : `以上 ${replaced} 則已整理成摘要 · 展開`}
+      </button>
+      {open && <div style={{ whiteSpace: "pre-wrap" }}>{text}</div>}
+    </div>
+  );
+}
+
 export function EntryView({
   entry,
   onOpenCitation,
@@ -286,6 +337,9 @@ export function EntryView({
         <span>{entry.text}</span>
       </div>
     );
+  }
+  if (entry.kind === "summary") {
+    return <CompactionSummary text={entry.text} replaced={entry.replaced} />;
   }
   if (entry.kind === "goal_note") {
     // #613 P3: the goal driver's outcome marker — a quiet status line, like a

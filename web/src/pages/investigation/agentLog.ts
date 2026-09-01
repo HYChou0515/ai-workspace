@@ -63,6 +63,12 @@ export type AgentEntry =
   | { kind: "goal_note"; text: string; at?: number }
   // #624: a persisted system notice (history no longer reaches the model).
   | { kind: "notice"; text: string; at?: number }
+  // #739: the thread outgrew its window, so this span was replaced — for the
+  // MODEL — by a précis. `replaced` is how many messages sit behind it, derived
+  // from position rather than stored: the originals are still right there above
+  // it, so a stored count would be a second source of truth that a later edit
+  // could quietly turn into a lie.
+  | { kind: "summary"; text: string; replaced: number; at?: number }
   | { kind: "step"; step: StepView; at?: number }
   | { kind: "phase"; phase: string; at?: number }
   | { kind: "banner"; text: string; at?: number };
@@ -91,6 +97,10 @@ export type AgentLog = {
    * a transient "還原中 N/M" line instead of a blank running card. NEVER persisted
    * (cleared once the model starts / at each turn start); reset on reload. */
   restore: { done: number; total: number } | null;
+  // #739: set while the turn is summarising the span that no longer fits.
+  // Ephemeral, like `restore` — the durable record is the summary message the
+  // turn writes. It exists so the extra round trip does not read as a hang.
+  compacting: { replaced: number } | null;
   /** Set while the turn is holding out a rate limit (429) before retrying the
    * same endpoint. Ephemeral, like `restore` — it explains a silence, so it is
    * cleared the moment real output arrives. */
@@ -105,6 +115,7 @@ export const EMPTY_LOG: AgentLog = {
   metrics: null,
   failover: null,
   restore: null,
+  compacting: null,
   rateLimited: null,
 };
 
@@ -123,7 +134,26 @@ const isRecent = (at: number | null | undefined): boolean =>
 
 export function logFromMessages(messages: readonly Message[]): AgentLog {
   const entries: AgentEntry[] = [];
+  // #739: how many messages the next summary stands in for. Reset at each one,
+  // so a second compaction never claims credit for the span the first replaced.
+  let sinceLastSummary = 0;
   for (const m of messages) {
+    if (m.role === "summary") {
+      // First in the chain, and counted BEFORE the increment: a summary stands
+      // in for the messages behind it, never for itself. Without its own branch
+      // it would fall through to `message` and be drawn as a chat bubble
+      // attributed to nobody — read as something the assistant said, when it is
+      // a marker ABOUT the thread.
+      entries.push({
+        kind: "summary",
+        text: m.content,
+        replaced: sinceLastSummary,
+        at: m.created_at ?? undefined,
+      });
+      sinceLastSummary = 0;
+      continue;
+    }
+    sinceLastSummary++;
     if (m.role === "tool") {
       entries.push({
         kind: "tool_call",
@@ -193,6 +223,7 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
     metrics: null,
     failover: null,
     restore: null,
+    compacting: null,
     rateLimited: null,
   };
 }
@@ -382,6 +413,7 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
         // notice from the previous one so it can't bleed into this turn (#249/#492).
         failover: ev.phase === "up" ? null : log.failover,
         restore: ev.phase === "up" ? null : log.restore,
+        compacting: ev.phase === "up" ? null : log.compacting,
         rateLimited: ev.phase === "up" ? null : log.rateLimited,
         metrics: {
           phase: ev.phase,
@@ -402,6 +434,16 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
       // why it has gone quiet instead of looking hung. NOT pushed to `entries`:
       // it never enters the transcript. Cleared once real output resumes.
       return { ...log, rateLimited: { seconds: ev.seconds } };
+
+    case "compacting":
+      // #739: ephemeral — a summary is being written before the turn answers.
+      // NOT pushed to `entries`: the transcript gets the summary message itself.
+      //
+      // `done` is what switches it off. The manual path publishes this event and
+      // then nothing at all — no turn, no metrics, no terminal event — so
+      // without an explicit end the notice stayed pinned under the composer for
+      // every viewer until somebody started an unrelated turn.
+      return { ...log, compacting: ev.done ? null : { replaced: ev.replaced } };
 
     case "restore_progress":
       // #492 P11: ephemeral — record the cold-wake restore's (done, total) so
@@ -431,7 +473,7 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
         });
       }
       // #492 P11: the model is producing output ⇒ any cold-wake restore is over.
-      return { ...log, entries, restore: null, rateLimited: null };
+      return { ...log, entries, restore: null, rateLimited: null, compacting: null };
     }
 
     case "tool_start":
@@ -462,7 +504,7 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
         }
       }
       // #492 P11: the tool that woke the sandbox has finished ⇒ restore is over.
-      return { ...log, entries, restore: null, rateLimited: null };
+      return { ...log, entries, restore: null, rateLimited: null, compacting: null };
     }
 
     case "tool_log": {
@@ -477,7 +519,7 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
         }
       }
       // #492 P11: the woken tool is now streaming output ⇒ restore is over.
-      return { ...log, entries, restore: null, rateLimited: null };
+      return { ...log, entries, restore: null, rateLimited: null, compacting: null };
     }
 
     case "tool_call_parse_error": {
@@ -532,13 +574,47 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
 
     case "run_cancelled":
       entries.push({ kind: "banner", at: now, text: translate(initialLocale(), "banner.cancelled") });
-      return { ...log, entries, streaming: false, streamingBy: null };
+      // #739: an end is an end — never leave ANY waiting state standing. Each
+      // of these outranks something below it in `TurnStatus`, so a stale one
+      // does not merely linger, it shadows: the rate-limit hold survived its
+      // own turn and, because compaction runs BEFORE the next one, told the
+      // user the system was waiting on a 429 while it was rewriting their
+      // thread. Restore progress and the failover notice have the same shape.
+      return {
+        ...log,
+        entries,
+        streaming: false,
+        streamingBy: null,
+        compacting: null,
+        rateLimited: null,
+        restore: null,
+        failover: null,
+      };
 
     case "error":
-      return { ...log, entries, streaming: false, streamingBy: null, error: ev.message };
+      return {
+        ...log,
+        entries,
+        streaming: false,
+        streamingBy: null,
+        error: ev.message,
+        compacting: null,
+        rateLimited: null,
+        restore: null,
+        failover: null,
+      };
 
     case "done":
-      return { ...log, entries, streaming: false, streamingBy: null };
+      return {
+        ...log,
+        entries,
+        streaming: false,
+        streamingBy: null,
+        compacting: null,
+        rateLimited: null,
+        restore: null,
+        failover: null,
+      };
 
     case "user_message":
       // #43: a human message on the shared investigation, broadcast to every

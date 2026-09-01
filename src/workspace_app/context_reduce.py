@@ -42,6 +42,14 @@ class ReductionResult:
     messages: list[Any]
     summary: str = ""
     changed: bool = False
+    lossless: bool = False
+    """Whether the thread still says everything it said before.
+
+    Folding a bulky tool output is lossless — the message stays, only its body
+    is replaced by a marker. Dropping is not. The user-facing notice hangs its
+    advice on this: "start a new chat" is the right thing to tell someone whose
+    history was amputated and exactly the wrong thing to tell someone whose
+    thread was just SAVED by a fold (#739)."""
 
 
 class IContextReducer(abc.ABC):

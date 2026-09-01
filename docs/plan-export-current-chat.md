@@ -101,9 +101,13 @@ from that. That is the shape to copy — the product already contains its own an
 
 ### P2 — the button exports what the panel is showing
 
-- Thread the current chat id from the multi-chat shell into `AgentPanel`'s Export. The
-  prop is **required**, not optional: an optional one could go unpassed and quietly
-  reinstate "whichever chat is first".
+- Thread the current chat id from the multi-chat shell into `AgentPanel`'s Export.
+  Written as a required prop first, so a caller could not forget it. #739 landed the same
+  prop meanwhile, **optional**, for its context gauge — a surface can have no chat of its
+  own, and the gauge is simply absent there. That contract wins, and Export follows it the
+  same way: the button is drawn only when there is a chat to name. A button that cannot
+  name its chat could only ask the server to pick one, which is the defect this replaces;
+  drawing nothing says so honestly, and a rendered Export still always carries a real id.
 - `downloadChatExport(slug, itemId, chatId)`; the download takes its name from the
   server's `Content-Disposition`.
 - Tests (written first): the Export button requests the URL carrying the *displayed*

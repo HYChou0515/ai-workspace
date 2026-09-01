@@ -424,7 +424,13 @@ def test_export_carries_every_field_a_message_persists():
     assert m["reasoning"] == "the model's own thinking"
     assert m["created_at"] == 1788
     assert m["author"] == "agent"
-    assert m["metrics"] == {"prompt_tokens": 10, "completion_tokens": 7, "elapsed_ms": 1200}
+    # The values this test set, not the whole dict: pinning the exact key set
+    # would re-create the coupling this change removes — `MessageMetrics` grew an
+    # `exact` field in #739 and the export carried it without anyone editing the
+    # export, which is the entire point.
+    assert m["metrics"]["prompt_tokens"] == 10
+    assert m["metrics"]["completion_tokens"] == 7
+    assert m["metrics"]["elapsed_ms"] == 1200
     # Nothing is substituted for an absent value. The old export forced a
     # missing `tool_name` to "", and the same habit applied to the metrics #749
     # is about to widen would write a 0 for "not measured" — the invented number
@@ -455,3 +461,39 @@ def test_export_chat_404s_on_a_chat_from_another_item():
         "chat_id"
     ]
     assert client.get(f"/a/rca/items/{iid}/chats/{foreign}/export-chat").status_code == 404
+
+
+def test_the_chat_reports_what_it_is_costing_before_any_turn_runs():
+    """#739 P2: the usage bar hydrates on page load, like the todo panel — the
+    number must exist at rest, not only while a turn streams. It is anchored on
+    the provider's own reported count, so it includes the system prompt and tool
+    schemas the estimator cannot see."""
+    from workspace_app.resources.conversation import MessageMetrics
+
+    client, spec, iid = _client()
+    rm = spec.get_resource_manager(Conversation)
+    conv = rm.create(
+        Conversation(
+            item_id=iid,
+            created_ms=1,
+            messages=[
+                Message(role="user", content="問題"),
+                Message(
+                    role="assistant",
+                    content="回答",
+                    # `exact` says the PROVIDER reported these, which is what
+                    # makes them an anchor. Without it they are one of our own
+                    # substituted estimates and the gauge must not present them
+                    # as measured (#739 review).
+                    metrics=MessageMetrics(
+                        prompt_tokens=9_000, completion_tokens=400, elapsed_ms=10, exact=True
+                    ),
+                ),
+            ],
+        )
+    )
+    r = client.get(f"/a/rca/items/{iid}/chats/{conv.resource_id}/context")
+    assert r.status_code == 200, r.text
+    got = r.json()
+    assert got["used"] == 9_400
+    assert got["measured"] is True

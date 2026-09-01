@@ -4,7 +4,7 @@
  * user / agent / tool-call entries, with suggestion chips + composer.
  */
 
-import { useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useRef, useState } from "react";
 
 import { api } from "../../api";
@@ -22,6 +22,8 @@ import { EnvVarsModal } from "../../components/EnvVarsModal";
 import { ToolsPickerModal } from "../../components/ToolsPickerModal";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { UsageBar } from "./UsageBar";
+import { ContextBar } from "../../components/ContextBar";
+import { parseComposerCommand } from "../../components/composerCommand";
 import { ReplayDialog, type ReplayRequest } from "../../components/ReplayDialog";
 import { useDialog } from "../../components/Dialog";
 import { Popover } from "../../components/Popover";
@@ -39,6 +41,7 @@ import { ConnectionNotice } from "../../components/ConnectionNotice";
 import { ResourceLinkText } from "../../components/ResourceLinkText";
 import { TurnStatus } from "../../components/TurnStatus";
 import { turnsFromEntry } from "./agentLog";
+import type { CompactionReason } from "../../api/types";
 import type { QuotaKind } from "../../lib/quotaFailure";
 import { pxToRem } from "../../lib/pxToRem";
 import { useT } from "../../lib/i18n";
@@ -131,9 +134,12 @@ export function AgentPanel({
   uploadDir = "uploads",
 }: {
   investigationId: string;
-  /** The chat on screen — threaded through to the header's Export so it
-   * downloads this conversation rather than the item's first one. */
-  chatId: string;
+  /** The chat on screen. #739's context gauge reports its window; Export
+   * downloads it, rather than whichever chat happens to be the item's first.
+   * Absent on a surface with no chat of its own — neither renders then, which
+   * is why Export is guarded rather than required: a button that cannot name
+   * its chat should not be there at all, and could otherwise only guess. */
+  chatId?: string;
   /** Permission-disclosure: the current user may read the thread but lacks
    * `converse` — the composer is disabled with a hint (the backend also 403s a
    * send, this just makes the lock legible instead of a raw error). */
@@ -199,6 +205,34 @@ export function AgentPanel({
   // composer's own feedback channel (Enter during a turn, Stop). Cleared on the
   // next successful send.
   const [composerHint, setComposerHint] = useState<string | null>(null);
+  // #739: `/compact` and the button below are the SAME call — a slash command is
+  // invisible by nature, so the button is what makes it discoverable, and one
+  // route means the two can never drift apart.
+  const compact = useMutation({
+    mutationFn: () => api.compactChat(slug, investigationId, chatId ?? ""),
+    onSuccess: (r) => {
+      if (!r.compacted) {
+        // Two opposite diagnoses used to share one sentence. Only the second is
+        // something the reader can act on, and saying the first over a thread
+        // full of history sends them looking for something that is not there.
+        // Each refusal gets its own sentence. `failed` is the one that matters
+        // most: it is the DOMINANT outcome when the button is pressed on a very
+        // full thread (the span is largest exactly then), and it used to be
+        // reported as 「沒有需要壓縮的內容」 — the same lie, over a thread full
+        // of history, that this whole mechanism was built to stop telling.
+        const said: Partial<Record<CompactionReason, string>> = {
+          "no-room":
+              "這個環境的提示詞本身已經佔滿模型的可讀範圍,整理對話幫不上忙 —— 需要調大模型視窗或縮短提示詞。",
+          failed: "整理沒有成功,對話沒有更動。可以再試一次。",
+          unavailable: "這個環境沒有開啟整理功能。",
+        };
+        setComposerHint(said[r.reason] ?? "這段對話還沒有需要壓縮的內容。");
+        return;
+      }
+      void queryClient.invalidateQueries({ queryKey: qk.itemChat(slug, investigationId, chatId ?? "") });
+      void queryClient.invalidateQueries({ queryKey: qk.chatContext(slug, investigationId, chatId ?? "") });
+    },
+  });
   // Messages on a shared item SERIALIZE server-side; they do not cancel each
   // other (#43). So a turn started by SOMEONE ELSE is no reason to lock this
   // viewer out — the backend will happily queue behind it, and taking that away
@@ -432,6 +466,14 @@ export function AgentPanel({
       return;
     }
     setComposerHint(null);
+    // #739: a slash command is not a message. It never reaches the model and is
+    // never persisted as something the user said — the literal text "/compact"
+    // must not end up in the transcript the summariser is about to read.
+    if (chatId && parseComposerCommand(text) === "compact") {
+      setDraft("");
+      compact.mutate();
+      return;
+    }
     // #288: in a workflow run chat the composer steers the run — the text is a
     // free-text instruction, not an interactive turn. (Stop the run from the
     // progress bar above (#331); the composer is inert while a turn streams.)
@@ -743,6 +785,30 @@ export function AgentPanel({
         >
         {/* #245: persistent storage usage gauge so the user sees they're filling up. */}
         <UsageBar slug={slug} itemId={investigationId} />
+        {/* #739: and how full the CONTEXT window is — the other ceiling a
+            long session runs into, and the one that used to arrive as a
+            surprise rather than as a gauge. */}
+        {chatId && <ContextBar slug={slug} itemId={investigationId} chatId={chatId} />}
+        {chatId && (
+          <button
+            type="button"
+            data-testid="compact-chat"
+            onClick={() => compact.mutate()}
+            disabled={compact.isPending || log.streaming}
+            style={{
+              alignSelf: "flex-start",
+              background: "none",
+              border: "none",
+              padding: 0,
+              cursor: compact.isPending ? "default" : "pointer",
+              fontSize: pxToRem(11),
+              color: "var(--text-paper-d)",
+              textDecoration: "underline",
+            }}
+          >
+            {compact.isPending ? "整理中…" : "整理成摘要"}
+          </button>
+        )}
         {progress && (
           <div data-testid="attach-progress" style={{ display: "flex", flexDirection: "column", gap: 2 }}>
             <div
@@ -1136,10 +1202,13 @@ export function AgentHeader({
   investigationId: string;
   /** The current App's slug (#95) — the export targets the app-scoped route. */
   slug: string;
-  /** The chat this header belongs to. Required, and deliberately so: Export used
-   * to know only the item, which let the server fall back to the item's default
-   * chat and hand back the earliest conversation whatever was on screen. */
-  chatId: string;
+  /** The chat this header belongs to. Optional because a surface can have no
+   * chat of its own (#739's gauge is absent there for the same reason), and
+   * Export is then not drawn: it used to know only the item, which let the
+   * server fall back to the item's default chat and hand back the earliest
+   * conversation whatever was on screen. No button is better than one that has
+   * to guess which conversation it means. */
+  chatId?: string;
   /** App identity for the agent panel header (#89) — falls back to a generic
    * "Agent" mark when not provided (e.g. in isolated tests). */
   appTitle?: string;
@@ -1333,25 +1402,30 @@ export function AgentHeader({
       >
         <Icon name="workflow" size={13} /> {t("workflows.button")}
       </button>
-      <button
-        type="button"
-        // Downloads the `.chat.json` round-trip format (issue #39): re-uploadable
-        // to a KB collection, where the BE runs the same insight extraction the
-        // promote path does. Goes through the app-scoped route (#95) and validates
-        // the response, so a misroute surfaces an error instead of silently saving
-        // the SPA shell as `export-chat.html` (#100). Format details live in code.
-        onClick={() => {
-          setExportError(null);
-          downloadChatExport(slug, investigationId, chatId).catch((e) =>
-            setExportError(e instanceof Error ? e.message : "匯出失敗"),
-          );
-        }}
-        title="Export this conversation"
-        aria-label="Export conversation"
-        style={hdrBtn}
-      >
-        <Icon name="download" size={13} /> Export
-      </button>
+      {/* Only where there is a chat to name. Without one the button could only
+          ask the server to pick, and it used to pick the item's first — so the
+          absent case is drawn as absent, the way #739's gauge is. */}
+      {chatId && (
+        <button
+          type="button"
+          // Downloads the `.chat.json` round-trip format (issue #39): re-uploadable
+          // to a KB collection, where the BE runs the same insight extraction the
+          // promote path does. Goes through the app-scoped route (#95) and validates
+          // the response, so a misroute surfaces an error instead of silently saving
+          // the SPA shell as `export-chat.html` (#100). Format details live in code.
+          onClick={() => {
+            setExportError(null);
+            downloadChatExport(slug, investigationId, chatId).catch((e) =>
+              setExportError(e instanceof Error ? e.message : "匯出失敗"),
+            );
+          }}
+          title="Export this conversation"
+          aria-label="Export conversation"
+          style={hdrBtn}
+        >
+          <Icon name="download" size={13} /> Export
+        </button>
+      )}
       {exportError && (
         <span role="alert" style={{ fontSize: pxToRem(11), color: "var(--err)" }}>
           {exportError}

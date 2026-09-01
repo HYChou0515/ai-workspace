@@ -472,3 +472,26 @@ def test_history_items_user_without_an_author_is_not_prefixed():
     assert history_items(msgs, max_messages=100, users=directory) == [
         {"role": "user", "content": "anonymous"},
     ]
+
+
+def test_history_replays_from_the_newest_summary_not_the_whole_thread():
+    """#739: compaction is not deletion. The originals stay in the store — the
+    user can still scroll back to them — but the model is handed the summary in
+    their place, followed by everything that arrived after it.
+
+    The summary is replayed as a `user` item because a `system` item mid-thread
+    is rejected outright by providers (the real system prompt is prepended
+    separately), which is the same constraint the cancellation marker works
+    around."""
+    msgs = [
+        _UM("user", "很久以前的問題"),
+        _UM("assistant", "很久以前的回答"),
+        _UM("summary", "先前:使用者要修 X,已經試過 Y,失敗原因是 Z。"),
+        _UM("user", "那接下來呢"),
+    ]
+    items = history_items(msgs)
+    assert [i["content"] for i in items] == [
+        "先前:使用者要修 X,已經試過 Y,失敗原因是 Z。",
+        "那接下來呢",
+    ]
+    assert {i["role"] for i in items} == {"user"}

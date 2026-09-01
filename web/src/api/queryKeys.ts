@@ -35,6 +35,10 @@ export const qk = {
   // after any upload — success grows `used`, a 507 leaves it at the ceiling.
   workspaceUsage: (slug: string, itemId: string) =>
     ["workspaceUsage", slug, itemId] as const,
+  // #739: how full a chat's context window is. Invalidate after every turn —
+  // the number only changes when a turn actually reports its usage.
+  chatContext: (slug: string, itemId: string, chatId: string) =>
+    ["chatContext", slug, itemId, chatId] as const,
   file: (id: string, path: string) => ["file", id, path] as const,
   activity: ["activity"] as const,
   conversation: (id: string) => ["conversation", id] as const,

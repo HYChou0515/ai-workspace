@@ -65,6 +65,18 @@ describe("AgentHeader export", () => {
     );
   });
 
+  it("draws no Export at all on a surface that has no chat of its own", () => {
+    // #739 made `chatId` optional because such surfaces exist; its context gauge
+    // is simply absent there. Export follows: without a chat to name it could
+    // only ask the server to pick one, and picking is the defect this replaces.
+    renderWithQuery(
+      <MemoryRouter>
+        <AgentHeader streaming={false} investigationId="topic-hub:1" slug="topic-hub" />
+      </MemoryRouter>,
+    );
+    expect(screen.queryByRole("button", { name: /export/i })).not.toBeInTheDocument();
+  });
+
   it("surfaces an error instead of silently downloading the SPA shell", async () => {
     downloadChatExport.mockRejectedValue(new Error("匯出失敗：伺服器沒有回傳對話檔。"));
     renderWithQuery(
