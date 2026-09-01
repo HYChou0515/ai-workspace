@@ -99,7 +99,7 @@ describe("reconcileSnapshot", () => {
       entries: [
         msg("user", "q"),
         msg("assistant", "thinking"),
-        { kind: "banner", at: 1200, turn: 1, text: "parse error: the model sent bad JSON" },
+        { kind: "banner", at: 1200, text: "parse error: the model sent bad JSON" },
       ],
     });
 
@@ -130,7 +130,7 @@ describe("reconcileSnapshot", () => {
       entries: [
         msg("user", "q1"),
         msg("assistant", "half"),
-        { kind: "banner", at: 3, turn: 1, text: "已達回合上限（10），對話已停止。" },
+        { kind: "banner", at: 3, text: "已達回合上限（10），對話已停止。" },
       ],
     });
 
@@ -156,7 +156,7 @@ describe("reconcileSnapshot", () => {
     // turn's own later messages, which is exactly what a timestamp rule gets
     // wrong. Counting turns is indifferent to it.
     const prev = live({
-      entries: [msg("user", "q"), { kind: "banner", at: 1, turn: 1, text: "已取消。" }],
+      entries: [msg("user", "q"), { kind: "banner", at: 1, text: "已取消。" }],
     });
 
     const next = reconcileSnapshot(prev, {
@@ -167,6 +167,41 @@ describe("reconcileSnapshot", () => {
     });
 
     expect(next.entries.some((e) => e.kind === "banner" && e.text === "已取消。")).toBe(true);
+  });
+
+  it("dates a banner even when the store it first meets is behind", () => {
+    // The store-behind early return happens BEFORE the turn is assigned, and the
+    // race is documented, not hypothetical: the terminal event is published
+    // before the turn is persisted, so the refetch it triggers can legitimately
+    // arrive early. A banner that meets that snapshot stays undated, and then
+    // adopts whatever turn the thread has reached by its NEXT re-hydrate — one
+    // turn too late, which is the whole reported symptom again.
+    const prev = live({
+      entries: [
+        msg("user", "q1"),
+        msg("assistant", "half"),
+        { kind: "banner", at: 3, text: "已達回合上限（10），對話已停止。" },
+      ],
+    });
+
+    // First re-hydrate: the store has not caught up, so the screen is kept.
+    const behind = reconcileSnapshot(prev, {
+      messages: [{ role: "user", content: "q1", created_at: 1 }],
+    });
+    expect(behind.entries.some((e) => e.kind === "banner")).toBe(true);
+
+    // Second: a whole new turn has since been persisted. The banner is about the
+    // first one and must not follow the conversation down.
+    const later = reconcileSnapshot(behind, {
+      messages: [
+        { role: "user", content: "q1", created_at: 1 },
+        { role: "assistant", content: "half", created_at: 2 },
+        { role: "user", content: "q2", created_at: 4 },
+        { role: "assistant", content: "a proper answer", created_at: 5 },
+      ],
+    });
+
+    expect(later.entries.some((e) => e.kind === "banner")).toBe(false);
   });
 
   it("does not duplicate a banner the persisted thread already carries", () => {

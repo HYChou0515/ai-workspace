@@ -408,6 +408,10 @@ export function useChatSession(
         // coming, never took it back.
         const interruptedATurn = turnInFlightRef.current;
         turnInFlightRef.current = false;
+        // What the store held before the outage, so the re-hydrate below can tell
+        // "an answer landed while we were away" from "the thread is unchanged".
+        const persistedBefore =
+          qc.getQueryData<ChatThread | null>(transport.queryKey)?.messages.length ?? 0;
         setLog((prev) =>
           interruptedATurn
             ? {
@@ -439,8 +443,16 @@ export function useChatSession(
           // no subscriber buffers nothing, so a turn that finishes during the
           // outage never announces itself to the reconnected stream, and a banner
           // waiting for that announcement waits forever.
+          //
+          // The evidence has to be an ANSWER THAT ARRIVED: the thread grew while
+          // we were away AND now ends on an assistant message. "Ends on something
+          // other than a user message" is not the same thing and deletes live
+          // banners — a workflow chat never persists a user message at all (its
+          // tail is the previous node's reply while the next one streams), and a
+          // `notice` (#624) or a human `mention` can be the tail at any moment.
           const last = fresh.messages[fresh.messages.length - 1];
-          if (last !== undefined && last.role !== "user") {
+          const grew = fresh.messages.length > persistedBefore;
+          if (grew && last !== undefined && last.role === "assistant") {
             gapBannerPendingRef.current = false;
             setLog((prev) =>
               prev.entries.some((e) => e.kind === "banner" && e.text === GAP_BANNER)

@@ -281,10 +281,18 @@ export function eventId(ev: AgentEvent): string | undefined {
  * event type therefore defaults to "not turn progress": the cost of forgetting
  * to add one here is a warning we don't show, which is the cheaper mistake.
  *
- * Retry notices are excluded on purpose. `classify_retry_event` sends them as
- * `type: "error"` mid-turn, so they are neither progress nor an ending — they
- * must leave the flag exactly as they found it. */
+ * A retry notice arrives as either `tool_call_parse_error` (in this list, so it
+ * arms) or `RunError` — wire type `"error"`, which `isTerminal` treats as an
+ * ending even though the turn continues. That is pre-existing and unchanged
+ * here; stating it plainly because an earlier version of this comment claimed
+ * the opposite. */
 const TURN_PROGRESS: ReadonlySet<string> = new Set([
+  // A turn is starting: broadcast only after admission and after the message is
+  // persisted, so unlike `file_changed` it cannot fire without one. The window
+  // to the first delta is the model's time-to-first-token — seconds on a local
+  // model — and a stream lost inside it loses the whole answer, so this is the
+  // one non-output event where a hole is genuinely possible.
+  "user_message",
   "message_delta",
   "tool_start",
   "tool_end",

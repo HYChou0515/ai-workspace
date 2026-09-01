@@ -65,12 +65,7 @@ export type AgentEntry =
   | { kind: "notice"; text: string; at?: number }
   | { kind: "step"; step: StepView; at?: number }
   | { kind: "phase"; phase: string; at?: number }
-  /** `turn` = how many user messages the log held when this banner was raised,
-   * i.e. which turn it is about. A re-hydrate carries it only while the thread is
-   * still on that turn. Absent on a banner hydrated from a persisted message
-   * (those keep their own position and are never carried) and on anything written
-   * before the field existed. */
-  | { kind: "banner"; text: string; at?: number; turn?: number };
+  | { kind: "banner"; text: string; at?: number };
 
 export type AgentLog = {
   entries: AgentEntry[];
@@ -210,9 +205,9 @@ const CONTENT_KINDS = new Set(["message", "tool_call", "mention", "goal_note", "
 const contentCount = (entries: readonly AgentEntry[]) =>
   entries.filter((e) => CONTENT_KINDS.has(e.kind)).length;
 
-/** Which turn the log is on: one per user message. The unit a banner's lifetime
- * is measured in — see the carry rule in `reconcileSnapshot`. */
-export const userTurnCount = (entries: readonly AgentEntry[]) =>
+/** How many turns these entries hold: one per user message. A banner's lifetime
+ * is measured in these — see the carry rule in `reconcileSnapshot`. */
+const countUserMessages = (entries: readonly AgentEntry[]) =>
   entries.filter((e) => e.kind === "message" && e.message.role === "user").length;
 
 /**
@@ -267,21 +262,40 @@ export function reconcileSnapshot(
   // refetch that ends the turn it belongs to. Counting turns is indifferent to
   // ordering within one.
   //
-  // The turn is ASSIGNED HERE, on a banner's first re-hydrate, rather than
-  // recorded where it was raised: the live log can still be behind the store at
-  // that moment (the subscription opens before hydration resolves), and a count
-  // taken from a log missing its own user message brands the banner stale on
-  // sight. The snapshot is the authority, so let the snapshot say which turn it
-  // is — a banner seen for the first time belongs to the turn now in progress.
-  const snapTurns = userTurnCount(snap.entries);
-  const carried = prev.entries
-    .filter(
-      (e) =>
-        e.kind === "banner" &&
-        !snap.entries.some((s) => s.kind === "banner" && s.text === e.text),
-    )
-    .map((e) => (e.kind === "banner" && e.turn === undefined ? { ...e, turn: snapTurns } : e))
-    .filter((e) => e.kind !== "banner" || (e.turn ?? snapTurns) >= snapTurns);
+  // Which turn a banner is about is read off the LIVE LOG's own order: a user
+  // message sitting after it means the conversation has moved on to a turn the
+  // banner is not about. Nothing else can answer this reliably — a timestamp
+  // compares a browser clock to a server one AND loses to a turn stamping its
+  // own later messages after the banner; a count recorded when the banner was
+  // raised can be taken from a log still behind the store; and a count adopted
+  // on the first re-hydrate is adopted too late if that re-hydrate happens after
+  // the next turn began. The order is right there in `prev`, at every moment.
+  //
+  // This matters because a carried banner is re-attached at the END of the fresh
+  // snapshot: one that outlives its turn does not linger in place, it MOVES,
+  // landing under the newest answer and reading as a verdict on it.
+  // Two sources, because the next turn can reach us either way: its user message
+  // streams into the live log (a user message sitting after the banner), or it
+  // only ever appears in the store (the snapshot holding more turns than the
+  // banner had beneath it). Both are read HERE, from the two objects in hand — no
+  // stamp to take at the wrong moment, no clock to disagree with.
+  const snapTurns = countUserMessages(snap.entries);
+  const carried = prev.entries.filter((e, i) => {
+    if (e.kind !== "banner") return false;
+    const rest = prev.entries.slice(i + 1);
+    const movedOnLocally = rest.some((l) => l.kind === "message" && l.message.role === "user");
+    const turnsBeneath = countUserMessages(prev.entries.slice(0, i + 1));
+    // With no turn beneath it the banner cannot be placed at all: the log is
+    // behind the store, which happens when a banner is raised before hydration
+    // resolves. "I cannot tell" is not "it is stale", so keep it and let a later
+    // re-hydrate — by which point the log holds its turn — decide.
+    const placeable = turnsBeneath > 0;
+    return (
+      !movedOnLocally &&
+      (!placeable || snapTurns <= turnsBeneath) &&
+      !snap.entries.some((s) => s.kind === "banner" && s.text === e.text)
+    );
+  });
   return {
     ...snap,
     entries: [...snap.entries, ...carried],

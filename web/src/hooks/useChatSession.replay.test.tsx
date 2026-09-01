@@ -169,6 +169,33 @@ describe("useChatSession — reconnect replay", () => {
     });
   });
 
+  it("forgets a finished turn, so a later idle drop says nothing", async () => {
+    // The terminal branch clears the in-flight flag. Without that line the flag
+    // stays armed after a turn ends, and the NEXT drop — with nothing running —
+    // raises a banner about a turn that finished long ago. The store-based
+    // retraction hides this whenever the thread ends on a fresh answer, so this
+    // drives the case it cannot cover: the store never catches up, so nothing
+    // else can retract what the flag wrongly armed.
+    let attempt = 0;
+    const { result } = render(
+      transport({
+        subscribe: async function* (_signal: AbortSignal) {
+          attempt += 1;
+          if (attempt === 1) {
+            yield ev("the whole answer", 5);
+            yield { type: "done" } as AgentEvent;
+            return; // the server closes the stream — a drop, with the turn over
+          }
+          await new Promise<void>(() => {}); // reconnected, and quiet ever after
+        },
+      }),
+    );
+
+    await waitFor(() => expect(attempt).toBeGreaterThanOrEqual(1), { timeout: 4000 });
+    await new Promise((r) => setTimeout(r, 200));
+    expect(hasBanner(result.current.log.entries)).toBe(false);
+  });
+
   it("drops the banner when the store shows the turn ended during the gap", async () => {
     // The terminal event cannot be relied on to retract it: a pod with no
     // subscriber buffers nothing, so a turn that finishes while the viewer is
@@ -196,6 +223,41 @@ describe("useChatSession — reconnect replay", () => {
     await waitFor(() => expect(hasBanner(result.current.log.entries)).toBe(false), {
       timeout: 4000,
     });
+  });
+
+  it("keeps the banner when the thread merely ENDS on an answer", async () => {
+    // A tail that is not a user message does not mean the turn ended. A workflow
+    // chat never persists a user message at all — from the second node on, the
+    // tail is the previous node's reply while the next one streams — and a #624
+    // `notice` or a human `mention` can be the tail at any moment. Retracting on
+    // that shape deletes a banner about a hole that is still open, which is the
+    // opposite failure and the harder one to notice.
+    let attempt = 0;
+    const settled = {
+      messages: [
+        { role: "user" as const, content: "q", created_at: 1 },
+        { role: "assistant" as const, content: "node 1 replied", created_at: 2 },
+      ],
+    };
+    const { result } = render(
+      transport({
+        // The store is UNCHANGED across the outage: nothing new landed.
+        getThread: vi.fn(async () => settled),
+        subscribe: async function* (_signal: AbortSignal) {
+          attempt += 1;
+          if (attempt === 1) {
+            yield ev("node 2 is writing", 5);
+            throw new Error("stream failed: 504");
+          }
+          yield ev("resumed elsewhere", 99); // non-contiguous: the hole is real
+          await new Promise<void>(() => {});
+        },
+      }),
+    );
+
+    await waitFor(() => expect(attempt).toBeGreaterThanOrEqual(2), { timeout: 4000 });
+    await new Promise((r) => setTimeout(r, 200));
+    expect(hasBanner(result.current.log.entries)).toBe(true);
   });
 
   it("does not carry 'a turn was running' across a thread switch", async () => {
@@ -240,6 +302,33 @@ describe("useChatSession — reconnect replay", () => {
     await waitFor(() => expect(bAttempt).toBeGreaterThanOrEqual(2), { timeout: 4000 });
     await new Promise((r) => setTimeout(r, 200));
     expect(hasBanner(result.current.log.entries)).toBe(false);
+  });
+
+  it("arms on the question itself, not only on the first token", async () => {
+    // The window between "a turn was admitted" and its first delta is the model's
+    // time-to-first-token — seconds on a local model — and a stream lost inside it
+    // loses the whole answer with nothing yet on screen. `user_message` is
+    // broadcast only after admission and persistence, so unlike the other
+    // non-output events it cannot fire without a turn behind it.
+    let attempt = 0;
+    const { result } = render(
+      transport({
+        subscribe: async function* (_signal: AbortSignal) {
+          attempt += 1;
+          if (attempt === 1) {
+            yield { type: "user_message", content: "q", author: "tester" } as AgentEvent;
+            throw new Error("stream failed: 504"); // dropped before the first token
+          }
+          yield ev("resumed elsewhere", 99);
+          await new Promise<void>(() => {});
+        },
+      }),
+    );
+
+    await waitFor(() => expect(attempt).toBeGreaterThanOrEqual(2), { timeout: 4000 });
+    await waitFor(() => expect(hasBanner(result.current.log.entries)).toBe(true), {
+      timeout: 4000,
+    });
   });
 
   it("a broadcast that is not turn progress does not arm the banner", async () => {
