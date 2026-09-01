@@ -331,12 +331,29 @@ export function reconcileSnapshot(
  * turn is delimited by a user message; this matches the BE's turn-count
  * semantics so "undo to here" on a user turn drops it and all later turns. */
 export function turnsFromEntry(entries: readonly AgentEntry[], index: number): number {
-  let n = 0;
+  // Counted per QUESTION, not per drawing of one. This number is taken from what
+  // is on screen and then spent on what is stored — the backend deletes that
+  // many turns, irreversibly — so a message drawn twice used to cost a real turn
+  // of history: undo from the first copy rewound past the previous conversation.
+  // Two drawings of one message carry the same server timestamp, which is what
+  // separates them from two questions asked at different moments. An undated
+  // entry (older data, or a live one before the server stamped it) counts alone.
+  //
+  // Identity for DRAWING a message is the event id and never the content
+  // (#735) — saying the same thing twice is a thing people do. This is a
+  // different question: how many turns to destroy. Both errors are possible and
+  // they are not equal. Counting one question twice deletes a turn the user
+  // never asked to lose, irreversibly; counting two as one deletes less than
+  // asked, and they can press it again.
+  const seen = new Set<string>();
+  let undated = 0;
   for (let i = index; i < entries.length; i++) {
     const e = entries[i];
-    if (e && e.kind === "message" && e.message.role === "user") n++;
+    if (!e || e.kind !== "message" || e.message.role !== "user") continue;
+    if (e.at === undefined) undated++;
+    else seen.add(`${e.at} ${e.message.content}`);
   }
-  return n;
+  return seen.size + undated;
 }
 
 /** tok/s for the completion phase (0 until any time has elapsed). */

@@ -1,0 +1,1 @@
+{"ts": "2026-09-01T12:32:32.578403", "call_type": "acompletion", "model": "ollama_chat/qwen3:14b", "endpoint": "localhost:11434", "latency_ms": 600031, "outcome": "error", "litellm_call_id": null, "seq": 2, "file": "0002-acompletion-nocorr.json"}

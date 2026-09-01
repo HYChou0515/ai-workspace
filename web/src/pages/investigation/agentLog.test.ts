@@ -567,6 +567,30 @@ describe("turnsFromEntry — undo math (#38)", () => {
     // From a non-user entry (the tool at 3) it still counts later user turns.
     expect(turnsFromEntry(log.entries, 3)).toBe(1);
   });
+
+  it("counts one turn for a question that got drawn twice", () => {
+    // Reported: a sent message shows twice, and undoing from the FIRST copy
+    // rewinds one turn too far — back past the previous conversation.
+    //
+    // That is this number. The count is taken from what is ON SCREEN, while the
+    // deletion happens on what is STORED, and the dialog itself calls the
+    // operation destructive and irreversible. So a duplicate that is merely
+    // drawn — a re-delivery of one broadcast — costs a real turn of history.
+    // Two drawings of one message share the server timestamp they were sent
+    // with, which is what tells them apart from two questions that happen to
+    // read alike.
+    const at = 1_726_000_000_000;
+    const entries = [
+      ...logFromMessages([
+        { role: "user", content: "older", created_at: at - 5000 },
+        { role: "assistant", content: "older answer", created_at: at - 4000 },
+      ]).entries,
+      { kind: "message" as const, at, message: { role: "user" as const, content: "the question" } },
+      { kind: "message" as const, at, message: { role: "user" as const, content: "the question" } },
+    ];
+
+    expect(turnsFromEntry(entries, 2)).toBe(1);
+  });
 });
 
 describe("repetition stop (#113)", () => {

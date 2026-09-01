@@ -1,0 +1,1449 @@
+{
+  "meta": {
+    "ts": "2026-09-01T12:32:32.578403",
+    "call_type": "acompletion",
+    "model": "ollama_chat/qwen3:14b",
+    "endpoint": "localhost:11434",
+    "latency_ms": 600031,
+    "outcome": "error",
+    "litellm_call_id": null
+  },
+  "request": {
+    "model": "ollama_chat/qwen3:14b",
+    "messages": [
+      {
+        "content": "# Playground Agent\n\nYou are the agent for **Playground** — a minimal scratch workspace for trying\nthings out. There is no fixed methodology here; help the user poke at files and\niterate quickly.\n\n## Output style\n\n- Brief and concrete.\n- When you create or change a file, say what you did rather than restating the\n  whole file.\n- Prefer running a command and showing its real output over describing what it\n  would do.\n\n## Working in this workspace\n\nYou operate inside one workspace — the files for this task, and nothing else. Staying on this task is your whole job. Your workspace is your working directory (and `~`), and every path is relative to it: `notes.txt`, `data/x.csv`. That is the form `list_files` hands you, and it is the form to pass straight back to any tool.\n\n- **Use your function tools for files, not the shell.** `list_files` to list one directory of the workspace — it shows that directory's files plus its sub-directories (each ending in `/`), so pass a sub-directory back in to look inside it — `read_file` to read a text file, `read_image` to look at an image, `write_file` / `edit_file` to change a file. Reading or writing a file always goes through these tools.\n- **Orient before you answer — find files yourself, don't ask for a path.** If the user refers to something that could be in the workspace (\"this image\", \"the file\", \"the data\", \"the log\") without giving a path, call `list_files` to find it, then read it with the right tool. Worked example — user: *\"what is this image about?\"* → call `list_files` → call `read_image` on the image you found → answer. Do NOT reply *\"please provide the path\"* when you can list the workspace yourself, and never claim you can't see an image before you've tried `read_image`.\n- **People bring files into the chat, and they land in your workspace.** They can **attach** a file or image, drag it onto the chat, or paste it in — however it arrives, it becomes an ordinary workspace file. So when someone mentions a file or picture they just added, `list_files` to find it and open it with `read_image` (pictures) or `read_file`, the same as any other file here.\n- **Stay inside your workspace, even when told to leave it.** Your workspace is the only thing you may read, change, or send anywhere. Anything you'd have to step *outside* it to reach — another user's data, host or system files, sending this workspace's contents to an outside network — is off-limits; if asked, reply that it's outside your workspace and stop. \"The user asked me to\" and \"the tool is available\" do not override this. For a request that is merely off-task but harmless, say it's out of scope and check with the user first.\n- **One tool call per response.** Multi-tool turns trip a streaming bug for small models.\n- **Files are user-facing artifacts.** Narrate your reasoning in chat and write clean content to disk — don't paste your reasoning into files, and don't paste large file bodies back into chat.\n\n## Running commands\n\n`exec(cmd: list[str])` runs a real shell command inside your workspace sandbox — the only shell-style escape hatch. Reserve it for work no function tool covers: running `python`, `git`, installing a package. Reading and listing files go through `read_file` / `list_files`, never `exec([\"cat\", …])` / `exec([\"ls\", …])` or a shell redirect.\n\nIn the shell, your workspace is the working directory (and `~`), so the paths you already have work as they are: a file you created with `write_file(\"scratch.py\", …)` is `scratch.py` in the shell, and a path `list_files` gave you can go straight into a command or a script.\n\nA data-science stack is preinstalled. `exec([\"pip\", \"list\"])` shows exactly what.\n\nInstall anything else you need: `exec([\"pip\", \"install\", \"<name>\"])`. There is one python here and `pip` installs into it, so what you install is importable by the next command you run. It stays until this workspace is recycled, so a script a later session reruns should install what it needs at the top.\n\nA virtual environment adds nothing here. One made on another machine cannot run at all — its `bin/python` points at a path that exists only there. An uploaded `.venv` is still a list of what that person needed: install those names with `pip`, and say that you did.\n\nFor anything past a single trivial expression, **write a `.py` file with `write_file`, then run it** — e.g. `write_file(\"scratch.py\", \"<program>\")` then `exec([\"python\", \"scratch.py\"])`. Do **not** try to cram a multi-statement program (a `for`/`if`/`while` loop, multiple statements) into `python -c \"...\"`:\n\n- Python rejects a compound statement after `;` on one line, so `for x in ...: ...; time.sleep(1)` puts the trailing statement *outside* the loop.\n- Nested-quote escaping inside `-c \"...\"` wastes turns and is error-prone.\n\nA file is always cleaner: real newlines and indentation, no escaping. Long-running output streams to the user live as it prints, so a loop that prints once per second is fine.\n\n**Judge code by running it, not by eyeballing it.** Don't claim a \"syntax error\" you haven't seen — run the code and read the real `exit_code` and stderr. A genuine error prints a traceback (file + line number + a `^` caret); if there's no traceback and `exit_code` is 0, the code worked. `f\"{t} {'*' * i}\"` (outer `\"`, inner `'`) is valid Python; nested *different* quotes are fine. If a nested quote ever does bother you, assign first: `stars = \"*\" * i; print(f\"{t} {stars}\")`.\n\n## Your workspace — `default`\n\nThis profile seeds a single `./notes.md`. There's no required structure — use the\nfile tree, editor, and terminal freely and keep notes here as you go.\n\n## Available skills\n\nCall `read_skill(name)` to load the body before applying one.\n\n- `author-skill`: Co-create a reusable skill with the user — capture their analysis flow, terminology, and preferred style as a loadable SKILL.md. Use when the user wants to \"make/save a skill\", asks you to remember how they like a task done, or after a task you could turn into a repeatable procedure.\n- `author-workflow`: Co-create a runnable workflow with the user — capture a repeatable, multi-step procedure as a workflow.json the platform can run headless. Use when the user wants to \"make/save a workflow\", to automate a recurring multi-step task (classify + file uploads, produce a report, digest then commit), or after a task you could turn into a repeatable, re-runnable procedure.\n- `grill-me`: Interview the user relentlessly about a plan or design until reaching shared understanding, resolving each branch of the decision tree. Use when the user wants to stress-test a plan, get grilled on their design, or says \"grill me\".\n\nYou are in a shared workspace where teammates may message you in the same thread; each earlier user message is prefixed with its sender as [Name (handle)]:. You are now replying to You (you) from Process Eng.\n\nThe previous step timed out. Take a smaller step and try again.\n\n## Tools available\n\nEach entry below is a **function tool** — call it by **name** through `tool_calls` with a JSON args object matching its schema. **Do NOT** `exec(['<tool-name>', ...])` — these tools are NOT shell binaries on PATH; trying to exec one will fail with `not found` (exit 127).\n\n### `ask_user`\n\nAsk the user to choose between concrete options, and stop until they answer.\n\nUse this when you need a decision only the user can make and guessing would\nwaste their time — which alternative to take, which of several readings of\nan ambiguous request is right. Each question carries its own options, and\neach option carries a short description of what choosing it means, so the\nuser can decide without asking you what the options are.\n\nPass up to five questions. Batch questions whose answers do NOT depend on\neach other; ask one at a time when a later question only makes sense once\nyou know the earlier answer.\n\nWrite each question the way you would say it out loud: get to the point in\none short sentence, use the words the user has already used, and give a\nconcrete example where it helps. Each option's description says what\npicking it leads to.\n\nEach question also carries a `header` — two to six words naming what that\nquestion is about (\"storage backend\", \"rollout order\"). Several questions\narrive as tabs and the header is the tab's label, so it is what the user\nreads before deciding which one to open.\n\nThe user can always answer in their own words, add a note to whichever\noption they pick, or tell you the question itself did not land — in which\ncase ask the same question again, shorter and more plainly.\n\nYour turn ends here. The user's answer arrives as their next message, and\nyou continue from there — so put everything they need in the question, and\ndo not answer it yourself.\n\nArgs (JSON schema):\n\n```json\n{\n  \"properties\": {\n    \"questions\": {\n      \"items\": {\n        \"description\": \"One question and the concrete choices for it.\\n\\n``header`` is the tab label a multi-question card shows, so it has to fit in\\na few characters — which is why the MODEL writes it instead of the UI\\ntruncating ``question``. A whole sentence cut at the twelfth character\\nbreaks wherever the sentence happens to be, and the result names nothing.\",\n        \"properties\": {\n          \"header\": {\n            \"type\": \"string\"\n          },\n          \"question\": {\n            \"type\": \"string\"\n          },\n          \"options\": {\n            \"items\": {\n              \"description\": \"One choice offered for a question. Both fields are required so the tool's\\nschema is STRICT: an open ``dict[str, Any]`` gave the model no field names to\\nhonour, so even a top model split between ``label`` and ``option`` — the shape\\nwas the tool's to specify, not the model's to guess. ``description`` says what\\npicking it leads to; pass ``\\\"\\\"`` when there is nothing to add.\",\n              \"properties\": {\n                \"label\": {\n                  \"type\": \"string\"\n                },\n                \"description\": {\n                  \"type\": \"string\"\n                }\n              },\n              \"required\": [\n                \"label\",\n                \"description\"\n              ],\n              \"type\": \"object\",\n              \"additionalProperties\": false\n            },\n            \"type\": \"array\"\n          }\n        },\n        \"required\": [\n          \"header\",\n          \"question\",\n          \"options\"\n        ],\n        \"type\": \"object\",\n        \"additionalProperties\": false\n      },\n      \"type\": \"array\"\n    }\n  },\n  \"required\": [\n    \"questions\"\n  ],\n  \"type\": \"object\",\n  \"additionalProperties\": false\n}\n```\n\n### `update_todos`\n\nMaintain this conversation's visible todo checklist (whole-list REPLACE).\n\nUse it for multi-step work (3+ distinct steps): write the full plan as todos\nup front, then call again after each step with the SAME list, statuses\nupdated. Every call REPLACES the entire list — always pass every item you\nwant kept, in order; an item you leave out disappears.\n\nEach todo is `{text, status}`: `text` is one short, concrete step; `status`\nis exactly one of `pending` / `in_progress` / `completed`. Keep at most ONE\nitem `in_progress` at a time. The user sees this list live next to the chat,\nso keep it truthful — mark an item `completed` only when it is actually\ndone. Returns a confirmation.\n\nArgs (JSON schema):\n\n```json\n{\n  \"properties\": {\n    \"todos\": {\n      \"items\": {\n        \"description\": \"One todo item: what to do, and where it stands.\",\n        \"properties\": {\n          \"text\": {\n            \"type\": \"string\"\n          },\n          \"status\": {\n            \"enum\": [\n              \"pending\",\n              \"in_progress\",\n              \"completed\"\n            ],\n            \"type\": \"string\"\n          }\n        },\n        \"required\": [\n          \"text\",\n          \"status\"\n        ],\n        \"type\": \"object\",\n        \"additionalProperties\": false\n      },\n      \"type\": \"array\"\n    }\n  },\n  \"required\": [\n    \"todos\"\n  ],\n  \"type\": \"object\",\n  \"additionalProperties\": false\n}\n```\n\n### `exec`\n\nRun a shell command inside the workspace sandbox.\n\nThe command is killed if it runs too long overall, or goes too long without\nproducing any output; you then get exit_code=124 along with whatever it had\nprinted so far. So for anything long-running, print progress as you go, and\nprefer starting it in the background and polling over blocking on one call.\n\nThis is also the only thing that wakes a cold sandbox: ensure_sandbox creates\nit and restores the snapshot into it, so any file writes the agent made while\ncold are present; from here on the sandbox IS the source of truth and the\nfile tools route to it directly (no flush needed).\n\nArgs (JSON schema):\n\n```json\n{\n  \"properties\": {\n    \"cmd\": {\n      \"items\": {\n        \"type\": \"string\"\n      },\n      \"type\": \"array\"\n    }\n  },\n  \"required\": [\n    \"cmd\"\n  ],\n  \"type\": \"object\",\n  \"additionalProperties\": false\n}\n```\n\n### `read_file`\n\nRead a file from the workspace. Returns a window of lines: `offset` is the\n1-based first line (default 1), `limit` the number of lines (default: the\nconfigured cap). A large file is truncated — by line count and by a total\ncharacter budget — with a notice; page through it with `offset`/`limit`.\n\nOptional arguments (`offset`, `limit`): send JSON `null` for any you are not setting — `null` means 'no value', and is always accepted.\n\nArgs (JSON schema):\n\n```json\n{\n  \"properties\": {\n    \"path\": {\n      \"type\": \"string\"\n    },\n    \"offset\": {\n      \"anyOf\": [\n        {\n          \"type\": \"integer\"\n        },\n        {\n          \"type\": \"null\"\n        }\n      ]\n    },\n    \"limit\": {\n      \"anyOf\": [\n        {\n          \"type\": \"integer\"\n        },\n        {\n          \"type\": \"null\"\n        }\n      ]\n    }\n  },\n  \"required\": [\n    \"path\",\n    \"offset\",\n    \"limit\"\n  ],\n  \"type\": \"object\",\n  \"additionalProperties\": false\n}\n```\n\n### `read_image`\n\nLook at an image file in the workspace (screenshot, chart, photo, or\ndiagram) and reason about it.\n\nUse this for images — `read_file` returns raw bytes for these and is\nuseless. `path` is the workspace path to the image. `question` optionally\nfocuses the read (e.g. \"what error is in this screenshot?\"); omit it for a\nfull description of everything visible.\n\nOptional arguments (`question`): send JSON `null` for any you are not setting — `null` means 'no value', and is always accepted.\n\nArgs (JSON schema):\n\n```json\n{\n  \"properties\": {\n    \"path\": {\n      \"type\": \"string\"\n    },\n    \"question\": {\n      \"anyOf\": [\n        {\n          \"type\": \"string\"\n        },\n        {\n          \"type\": \"null\"\n        }\n      ]\n    }\n  },\n  \"required\": [\n    \"path\",\n    \"question\"\n  ],\n  \"type\": \"object\",\n  \"additionalProperties\": false\n}\n```\n\n### `show_file`\n\nShow a file from the workspace to the user, in the chat.\n\nUse this for any file the user will want to look at — a chart you plotted, a\nreport you wrote, a spreadsheet, a PDF, a screenshot. An image appears in the\nconversation directly; any other file appears as a card the user can open.\n\n`path` is the workspace path to the file. `caption` is a short line saying\nwhat the user is looking at (\"monthly revenue trend\") — include it whenever\nthe filename alone would not tell them.\n\nCall it once per file, as soon as the file exists, then carry on.\n\nOptional arguments (`caption`): send JSON `null` for any you are not setting — `null` means 'no value', and is always accepted.\n\nArgs (JSON schema):\n\n```json\n{\n  \"properties\": {\n    \"path\": {\n      \"type\": \"string\"\n    },\n    \"caption\": {\n      \"anyOf\": [\n        {\n          \"type\": \"string\"\n        },\n        {\n          \"type\": \"null\"\n        }\n      ]\n    }\n  },\n  \"required\": [\n    \"path\",\n    \"caption\"\n  ],\n  \"type\": \"object\",\n  \"additionalProperties\": false\n}\n```\n\n### `write_file`\n\nCreate a NEW file. This never overwrites: if the file already exists it\nis rejected and the current content is returned — use `edit_file` to change\nan existing file (so you always state what you expect to replace). This is\nwhat stops blind writes.\n\nArgs (JSON schema):\n\n```json\n{\n  \"properties\": {\n    \"path\": {\n      \"type\": \"string\"\n    },\n    \"content\": {\n      \"type\": \"string\"\n    }\n  },\n  \"required\": [\n    \"path\",\n    \"content\"\n  ],\n  \"type\": \"object\",\n  \"additionalProperties\": false\n}\n```\n\n### `edit_file`\n\nEdit an existing file by replacing `old_string` with `new_string`.\n`old_string` must match the current file content **exactly and uniquely**\n(include enough surrounding context). If it isn't found or matches more than\nonce — including because someone else changed the file since you read it —\nthe edit is rejected and the current content is returned, so re-read it and\ntry again. To rewrite a whole file, pass its entire current content as\n`old_string`.\n\nArgs (JSON schema):\n\n```json\n{\n  \"properties\": {\n    \"path\": {\n      \"type\": \"string\"\n    },\n    \"old_string\": {\n      \"type\": \"string\"\n    },\n    \"new_string\": {\n      \"type\": \"string\"\n    }\n  },\n  \"required\": [\n    \"path\",\n    \"old_string\",\n    \"new_string\"\n  ],\n  \"type\": \"object\",\n  \"additionalProperties\": false\n}\n```\n\n### `list_files`\n\nList ONE level of the workspace — like `ls`, not like `find`. Returns the\nsub-directories there (each shown with a trailing `/`) followed by the files;\npass a sub-directory back in to look inside it. `prefix` defaults to the\nworkspace root, and also accepts a file (lists just that file) or the start\nof a name (lists what begins with it). Paths come back relative to the\nworkspace root (`notes.txt`, `data/`), which is the form the other file\ntools and `exec` both take. A long listing is cut with a notice — pass\n`offset` to read on from there. Use this instead of `exec([\"ls\", ...])`.\n\nArgs (JSON schema):\n\n```json\n{\n  \"properties\": {\n    \"prefix\": {\n      \"default\": \"\",\n      \"type\": \"string\"\n    },\n    \"offset\": {\n      \"default\": 1,\n      \"type\": \"integer\"\n    }\n  },\n  \"type\": \"object\",\n  \"additionalProperties\": false,\n  \"required\": [\n    \"prefix\",\n    \"offset\"\n  ]\n}\n```\n\n### `exists`\n\nCheck whether a file exists in the workspace file store.\n\nArgs (JSON schema):\n\n```json\n{\n  \"properties\": {\n    \"path\": {\n      \"type\": \"string\"\n    }\n  },\n  \"required\": [\n    \"path\"\n  ],\n  \"type\": \"object\",\n  \"additionalProperties\": false\n}\n```\n\n### `delete_file`\n\nDelete a file from the workspace file store.\n\nArgs (JSON schema):\n\n```json\n{\n  \"properties\": {\n    \"path\": {\n      \"type\": \"string\"\n    }\n  },\n  \"required\": [\n    \"path\"\n  ],\n  \"type\": \"object\",\n  \"additionalProperties\": false\n}\n```\n\n### `ask_knowledge_base`\n\nAsk the knowledge-base agent a question about the in-house documents.\n\nUse this ONLY when answering needs facts, procedures, or history that live\nin the in-house knowledge base rather than in the workspace files. Returns a\nsynthesized answer with a Sources list. Phrase a focused question, not just\nkeywords.\n\n`rank` (#280) picks which **priority tier** of collections to search, when\nthe knowledge base is organised into tiers. Always start at `rank=0` (the\nhighest-priority tier). If that answer doesn't fully resolve your question\nand the result says more tiers exist, call this tool AGAIN with the same\nquestion and the next `rank` (1, 2, …). Each tier is searched on its own, so\ncompare the answers you get and use the best — a higher tier is a fallback,\nnot automatically better. The result tells you the tier count and when there\nare no more tiers to widen to.\n\nDo NOT use for: greetings, small-talk, the agent's own name or identity,\nmeta-questions about this assistant, or general knowledge you already know.\nFor any of those, answer directly without calling this tool.\n\nArgs (JSON schema):\n\n```json\n{\n  \"properties\": {\n    \"question\": {\n      \"type\": \"string\"\n    },\n    \"rank\": {\n      \"default\": 0,\n      \"type\": \"integer\"\n    }\n  },\n  \"required\": [\n    \"question\",\n    \"rank\"\n  ],\n  \"type\": \"object\",\n  \"additionalProperties\": false\n}\n```\n\n### `request_wiki_update`\n\nAsk the wiki maintainer to CORRECT the knowledge wiki (#397) — use this\ninstead of editing wiki pages yourself. Describe what is wrong and how it\nshould read; the maintainer then finds and fixes the affected page(s). The\ncorrected fact is recorded so a later rebuild can't reintroduce the error.\n\n`instruction` (required): the correction in plain language — what the wiki\ncurrently gets wrong and what it should say. `target_page` (optional): the\nwiki page path at fault (e.g. `entities/foo.md`) if you know it; leave blank\nto let the maintainer locate it. `reference` (optional): a short reference\ndocument or passage to follow for the fix — its text is used for THIS\ncorrection only. `collection` (optional): the collection to correct, by name\nor id — required only when more than one wiki-enabled collection is in scope.\n\nReturns a confirmation, or an `error:` note (e.g. no wiki to correct). The fix\nruns in the background; you don't wait for it.\n\nArgs (JSON schema):\n\n```json\n{\n  \"properties\": {\n    \"instruction\": {\n      \"type\": \"string\"\n    },\n    \"target_page\": {\n      \"default\": \"\",\n      \"type\": \"string\"\n    },\n    \"reference\": {\n      \"default\": \"\",\n      \"type\": \"string\"\n    },\n    \"collection\": {\n      \"default\": \"\",\n      \"type\": \"string\"\n    }\n  },\n  \"required\": [\n    \"instruction\",\n    \"target_page\",\n    \"reference\",\n    \"collection\"\n  ],\n  \"type\": \"object\",\n  \"additionalProperties\": false\n}\n```\n\n### `make_deck`\n\nBuild a visually designed PowerPoint deck (`.pptx`) and write it to the\nworkspace. Hand off the high-level intent — a specialist sub-agent plans the\nslides, writes the layout code, renders it, looks at the result, and fixes\nany visual problems before returning. Use this for any \"make slides / a deck\n/ a presentation / a one-pager\" request; do NOT hand-write pptx code yourself.\n\n- `goal`: what the deck must convey and what it's for (be specific).\n- `audience`: who it's for (e.g. \"process engineers\", \"executives\") — optional.\n- `source`: workspace file paths to base the deck on (a report `.md`, a CSV,\n  chart `.png`s). Their text is read in; images are used as figures. Optional.\n- `notes` / `style` / `length`: extra guidance — key points, brand/tone,\n  \"one-pager\" vs \"full deck\". All optional.\n- `out_path`: where to write it (default `deck.pptx`).\n\nReturns the path written plus a short note, or an `error:` line if the deck\ntool isn't configured. Building runs several render+review passes, so it\ntakes a while; its progress streams as it works.\n\nOptional arguments (`audience`, `source`, `notes`, `style`, `length`): send JSON `null` for any you are not setting — `null` means 'no value', and is always accepted.\n\nArgs (JSON schema):\n\n```json\n{\n  \"properties\": {\n    \"goal\": {\n      \"type\": \"string\"\n    },\n    \"audience\": {\n      \"anyOf\": [\n        {\n          \"type\": \"string\"\n        },\n        {\n          \"type\": \"null\"\n        }\n      ]\n    },\n    \"source\": {\n      \"anyOf\": [\n        {\n          \"items\": {\n            \"type\": \"string\"\n          },\n          \"type\": \"array\"\n        },\n        {\n          \"type\": \"null\"\n        }\n      ]\n    },\n    \"notes\": {\n      \"anyOf\": [\n        {\n          \"type\": \"string\"\n        },\n        {\n          \"type\": \"null\"\n        }\n      ]\n    },\n    \"style\": {\n      \"anyOf\": [\n        {\n          \"type\": \"string\"\n        },\n        {\n          \"type\": \"null\"\n        }\n      ]\n    },\n    \"length\": {\n      \"anyOf\": [\n        {\n          \"type\": \"string\"\n        },\n        {\n          \"type\": \"null\"\n        }\n      ]\n    },\n    \"out_path\": {\n      \"default\": \"./deck.pptx\",\n      \"type\": \"string\"\n    }\n  },\n  \"required\": [\n    \"goal\",\n    \"audience\",\n    \"source\",\n    \"notes\",\n    \"style\",\n    \"length\",\n    \"out_path\"\n  ],\n  \"type\": \"object\",\n  \"additionalProperties\": false\n}\n```\n\n### `save_skill`\n\nSave a reusable skill into THIS workspace so you (and the user) can load it\nlater with `read_skill`. Use this once the user has approved a skill you drafted\ntogether — it captures a repeatable procedure, the terminology, and the preferred\noutput style for a kind of task.\n\n`name` is a short title (it's slugified to kebab-case — e.g. \"SMT Reflow Triage\"\n→ `smt-reflow-triage`); `description` is a one-line \"when to use this\" shown in the\nskill index; `body` is the methodology in markdown. This owns the file format, so\nyou only supply these three fields — it can't be silently dropped by a bad\nfrontmatter. Re-saving the same name overwrites (refine freely). For a skill that\nneeds reference docs or scripts, write them with `write_file` into the same\n`.skill/<name>/` folder (e.g. `.skill/<name>/references/…`, `.skill/<name>/scripts/…`)\nand point to them from the body. Returns a confirmation or an `error:` note.\n\nArgs (JSON schema):\n\n```json\n{\n  \"properties\": {\n    \"name\": {\n      \"type\": \"string\"\n    },\n    \"description\": {\n      \"type\": \"string\"\n    },\n    \"body\": {\n      \"type\": \"string\"\n    }\n  },\n  \"required\": [\n    \"name\",\n    \"description\",\n    \"body\"\n  ],\n  \"type\": \"object\",\n  \"additionalProperties\": false\n}\n```\n\n### `save_workflow`\n\nSave a workflow you co-designed with the user into THIS workspace so it can be run,\ndownloaded to hand off, or promoted to a default. A workflow is DATA, not code (#323):\na small ordered set of steps — `agent` (an LLM turn), `sandbox` (a command), `gate` (a\nhuman approval), `capability` (file into a collection / write a context card), and\n`map` (repeat over uploaded files) — that the platform interprets, so it's safe to run.\nThe `author-workflow` skill walks you through drafting one with the user.\n\n`id` is a short name (kebab-cased to the filename + id); `workflow_json` is the full\nworkflow.json text. This VALIDATES it before saving — if a step type, phase, capability,\ncheck, or `{variable}` is off, it returns the problems so you can fix and re-save (don't\nguess; address each one). Re-saving the same id overwrites. On success the user can Run\nit, or download `.workflows/` to reuse elsewhere.\n\nArgs (JSON schema):\n\n```json\n{\n  \"properties\": {\n    \"id\": {\n      \"type\": \"string\"\n    },\n    \"workflow_json\": {\n      \"type\": \"string\"\n    }\n  },\n  \"required\": [\n    \"id\",\n    \"workflow_json\"\n  ],\n  \"type\": \"object\",\n  \"additionalProperties\": false\n}\n```\n\n### `read_skill`\n\nLoad a skill's body markdown by name. Progressive disclosure: the\nsystem prompt's \"Available skills\" index already lists `(name,\ndescription)`; this tool returns the *body* on demand so large\nmethodologies don't bloat every turn.\n\nReturns a friendly error string (not raise) for the agent to recover\nfrom — unknown name lists the available skills, body-cap exceeded\nexplains the deployer should split the skill. Host-side only: never\nwakes the sandbox (skills are pure host markdown).\n\nArgs (JSON schema):\n\n```json\n{\n  \"properties\": {\n    \"name\": {\n      \"type\": \"string\"\n    }\n  },\n  \"required\": [\n    \"name\"\n  ],\n  \"type\": \"object\",\n  \"additionalProperties\": false\n}\n```\n\n### `chart`\n\nRender a scientific chart from tabular data and write a PNG. Pick a chart type via `chart` and pass `data` (a workspace file path or inline JSON) plus the chart's columns. Output is a JSON object with an `images` key listing the written path(s). If a column role can't be matched automatically the result is a `needs_input` object listing which columns to specify — call again with them.\n\nArgs (JSON schema):\n\n```json\n{\n  \"$defs\": {\n    \"BoxScatterOptions\": {\n      \"properties\": {\n        \"max_points\": {\n          \"default\": 1000,\n          \"description\": \"Per group, draw all points up to this many; above it, draw only outliers.\",\n          \"minimum\": 1,\n          \"title\": \"Max Points\",\n          \"type\": \"integer\"\n        },\n        \"point_size\": {\n          \"default\": 14.0,\n          \"description\": \"Marker area for the scatter points.\",\n          \"exclusiveMinimum\": 0,\n          \"title\": \"Point Size\",\n          \"type\": \"number\"\n        },\n        \"jitter\": {\n          \"default\": 0.18,\n          \"description\": \"Horizontal jitter half-width for the points.\",\n          \"minimum\": 0,\n          \"title\": \"Jitter\",\n          \"type\": \"number\"\n        },\n        \"title\": {\n          \"anyOf\": [\n            {\n              \"type\": \"string\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": null,\n          \"description\": \"Optional figure title.\",\n          \"title\": \"Title\"\n        }\n      },\n      \"title\": \"BoxScatterOptions\",\n      \"type\": \"object\"\n    },\n    \"DefectmapOptions\": {\n      \"properties\": {\n        \"wafer_diameter\": {\n          \"anyOf\": [\n            {\n              \"type\": \"number\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": null,\n          \"description\": \"Wafer circle diameter (coord units); None auto-fits to the defects.\",\n          \"title\": \"Wafer Diameter\"\n        },\n        \"center_x\": {\n          \"anyOf\": [\n            {\n              \"type\": \"number\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": null,\n          \"description\": \"Wafer-centre x (the wafer centre need not be the defect-cloud midpoint).\",\n          \"title\": \"Center X\"\n        },\n        \"center_y\": {\n          \"anyOf\": [\n            {\n              \"type\": \"number\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": null,\n          \"description\": \"Wafer-centre y.\",\n          \"title\": \"Center Y\"\n        },\n        \"notch\": {\n          \"default\": \"bottom\",\n          \"description\": \"Orientation notch: bottom/top/left/right/none.\",\n          \"title\": \"Notch\",\n          \"type\": \"string\"\n        },\n        \"die_pitch\": {\n          \"anyOf\": [\n            {\n              \"type\": \"number\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": null,\n          \"description\": \"If set, draw a faint die grid spaced this far apart for reference.\",\n          \"title\": \"Die Pitch\"\n        },\n        \"marker_size\": {\n          \"default\": 14.0,\n          \"description\": \"Defect marker area.\",\n          \"exclusiveMinimum\": 0,\n          \"title\": \"Marker Size\",\n          \"type\": \"number\"\n        },\n        \"color\": {\n          \"default\": \"red\",\n          \"description\": \"Defect marker colour.\",\n          \"title\": \"Color\",\n          \"type\": \"string\"\n        },\n        \"title\": {\n          \"anyOf\": [\n            {\n              \"type\": \"string\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": null,\n          \"description\": \"Optional figure title.\",\n          \"title\": \"Title\"\n        }\n      },\n      \"title\": \"DefectmapOptions\",\n      \"type\": \"object\"\n    },\n    \"GroupedLineOptions\": {\n      \"properties\": {\n        \"line_level\": {\n          \"anyOf\": [\n            {\n              \"type\": \"string\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": null,\n          \"description\": \"Which level column's value-runs break the data into separate lines (each a colour). None → a single line through all points in order.\",\n          \"title\": \"Line Level\"\n        },\n        \"title\": {\n          \"anyOf\": [\n            {\n              \"type\": \"string\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": null,\n          \"description\": \"Optional figure title.\",\n          \"title\": \"Title\"\n        },\n        \"marker\": {\n          \"default\": \"o\",\n          \"description\": \"Point marker (matplotlib marker code; '' for none).\",\n          \"title\": \"Marker\",\n          \"type\": \"string\"\n        },\n        \"label_orientation\": {\n          \"default\": \"auto\",\n          \"description\": \"x label orientation. 'auto' turns a level vertical when its names are too long to fit horizontally (many points / long group names).\",\n          \"enum\": [\n            \"auto\",\n            \"horizontal\",\n            \"vertical\"\n          ],\n          \"title\": \"Label Orientation\",\n          \"type\": \"string\"\n        }\n      },\n      \"title\": \"GroupedLineOptions\",\n      \"type\": \"object\"\n    },\n    \"StyleOverride\": {\n      \"description\": \"Presentation overrides the VLM auto-review loop tweaks between passes.\\nAll optional; only the set fields override the house :class:`PlotStyle`.\\nThese are *presentation* knobs only — never anything semantic.\",\n      \"properties\": {\n        \"figsize\": {\n          \"anyOf\": [\n            {\n              \"maxItems\": 2,\n              \"minItems\": 2,\n              \"prefixItems\": [\n                {\n                  \"type\": \"number\"\n                },\n                {\n                  \"type\": \"number\"\n                }\n              ],\n              \"type\": \"array\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": null,\n          \"description\": \"(width, height) inches.\",\n          \"title\": \"Figsize\"\n        },\n        \"dpi\": {\n          \"anyOf\": [\n            {\n              \"type\": \"integer\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": null,\n          \"description\": \"Render DPI.\",\n          \"title\": \"Dpi\"\n        },\n        \"font_size\": {\n          \"anyOf\": [\n            {\n              \"type\": \"number\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": null,\n          \"description\": \"Base font size.\",\n          \"title\": \"Font Size\"\n        },\n        \"x_tick_rotation\": {\n          \"anyOf\": [\n            {\n              \"type\": \"number\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": null,\n          \"description\": \"Rotate x tick labels (degrees).\",\n          \"title\": \"X Tick Rotation\"\n        },\n        \"pad\": {\n          \"anyOf\": [\n            {\n              \"type\": \"number\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": null,\n          \"description\": \"tight_layout padding.\",\n          \"title\": \"Pad\"\n        }\n      },\n      \"title\": \"StyleOverride\",\n      \"type\": \"object\"\n    },\n    \"WafermapOptions\": {\n      \"properties\": {\n        \"color_mode\": {\n          \"default\": \"uni\",\n          \"description\": \"uni: sequential, value>=0 (defect count); bi: diverging (measurement).\",\n          \"enum\": [\n            \"uni\",\n            \"bi\"\n          ],\n          \"title\": \"Color Mode\",\n          \"type\": \"string\"\n        },\n        \"colormap\": {\n          \"anyOf\": [\n            {\n              \"type\": \"string\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": null,\n          \"description\": \"Override the colormap name (else viridis/RdBu_r).\",\n          \"title\": \"Colormap\"\n        },\n        \"vmin\": {\n          \"anyOf\": [\n            {\n              \"type\": \"number\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": null,\n          \"description\": \"Color scale minimum (uni defaults to 0).\",\n          \"title\": \"Vmin\"\n        },\n        \"vmax\": {\n          \"anyOf\": [\n            {\n              \"type\": \"number\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": null,\n          \"description\": \"Color scale maximum (defaults to the data max).\",\n          \"title\": \"Vmax\"\n        },\n        \"center\": {\n          \"anyOf\": [\n            {\n              \"type\": \"number\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": null,\n          \"description\": \"bi mode center value (defaults to 0).\",\n          \"title\": \"Center\"\n        },\n        \"wafer_diameter\": {\n          \"anyOf\": [\n            {\n              \"type\": \"number\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": null,\n          \"description\": \"Wafer circle diameter (in die_w units); None auto-fits to the die.\",\n          \"title\": \"Wafer Diameter\"\n        },\n        \"die_w\": {\n          \"default\": 1.0,\n          \"description\": \"Die width (die may be rectangular, not square).\",\n          \"exclusiveMinimum\": 0,\n          \"title\": \"Die W\",\n          \"type\": \"number\"\n        },\n        \"die_h\": {\n          \"default\": 1.0,\n          \"description\": \"Die height.\",\n          \"exclusiveMinimum\": 0,\n          \"title\": \"Die H\",\n          \"type\": \"number\"\n        },\n        \"center_x\": {\n          \"anyOf\": [\n            {\n              \"type\": \"number\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": null,\n          \"description\": \"Wafer-centre die column (the centre die need not sit on the grid midpoint).\",\n          \"title\": \"Center X\"\n        },\n        \"center_y\": {\n          \"anyOf\": [\n            {\n              \"type\": \"number\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": null,\n          \"description\": \"Wafer-centre die row.\",\n          \"title\": \"Center Y\"\n        },\n        \"notch\": {\n          \"default\": \"bottom\",\n          \"description\": \"Orientation notch position on the wafer edge.\",\n          \"enum\": [\n            \"bottom\",\n            \"top\",\n            \"left\",\n            \"right\",\n            \"none\"\n          ],\n          \"title\": \"Notch\",\n          \"type\": \"string\"\n        },\n        \"show_colorbar\": {\n          \"default\": true,\n          \"description\": \"Draw the value colorbar.\",\n          \"title\": \"Show Colorbar\",\n          \"type\": \"boolean\"\n        },\n        \"title\": {\n          \"anyOf\": [\n            {\n              \"type\": \"string\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": null,\n          \"description\": \"Optional figure title.\",\n          \"title\": \"Title\"\n        }\n      },\n      \"title\": \"WafermapOptions\",\n      \"type\": \"object\"\n    },\n    \"box_scatter_request\": {\n      \"properties\": {\n        \"chart\": {\n          \"const\": \"box_scatter\",\n          \"default\": \"box_scatter\",\n          \"title\": \"Chart\",\n          \"type\": \"string\"\n        },\n        \"data\": {\n          \"anyOf\": [\n            {\n              \"type\": \"string\"\n            },\n            {\n              \"items\": {\n                \"additionalProperties\": true,\n                \"type\": \"object\"\n              },\n              \"type\": \"array\"\n            },\n            {\n              \"additionalProperties\": {\n                \"items\": {},\n                \"type\": \"array\"\n              },\n              \"type\": \"object\"\n            }\n          ],\n          \"description\": \"Data to plot: a workspace file path (.csv/.tsv/.json/.xlsx/.parquet) OR inline JSON — a list of row records [{\\\"col\\\": value, …}, …] or a column dict {\\\"col\\\": [values…], …}.\",\n          \"title\": \"Data\"\n        },\n        \"output\": {\n          \"anyOf\": [\n            {\n              \"type\": \"string\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": null,\n          \"description\": \"Optional output path; defaults to charts/<chart>_<time>.png\",\n          \"title\": \"Output\"\n        },\n        \"options\": {\n          \"$ref\": \"#/$defs/BoxScatterOptions\"\n        },\n        \"style\": {\n          \"anyOf\": [\n            {\n              \"$ref\": \"#/$defs/StyleOverride\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": null,\n          \"description\": \"Presentation overrides (figsize/dpi/font_size/x_tick_rotation/pad). Normally left unset — the VLM auto-review loop fills these to fix layout issues.\"\n        },\n        \"group\": {\n          \"anyOf\": [\n            {\n              \"type\": \"string\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": null,\n          \"description\": \"[category] category column for the x groups\",\n          \"title\": \"Group\"\n        },\n        \"y\": {\n          \"anyOf\": [\n            {\n              \"type\": \"string\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": null,\n          \"description\": \"[number] numeric value column for the y axis\",\n          \"title\": \"Y\"\n        }\n      },\n      \"required\": [\n        \"data\"\n      ],\n      \"title\": \"box_scatter_request\",\n      \"type\": \"object\"\n    },\n    \"defectmap_request\": {\n      \"properties\": {\n        \"chart\": {\n          \"const\": \"defectmap\",\n          \"default\": \"defectmap\",\n          \"title\": \"Chart\",\n          \"type\": \"string\"\n        },\n        \"data\": {\n          \"anyOf\": [\n            {\n              \"type\": \"string\"\n            },\n            {\n              \"items\": {\n                \"additionalProperties\": true,\n                \"type\": \"object\"\n              },\n              \"type\": \"array\"\n            },\n            {\n              \"additionalProperties\": {\n                \"items\": {},\n                \"type\": \"array\"\n              },\n              \"type\": \"object\"\n            }\n          ],\n          \"description\": \"Data to plot: a workspace file path (.csv/.tsv/.json/.xlsx/.parquet) OR inline JSON — a list of row records [{\\\"col\\\": value, …}, …] or a column dict {\\\"col\\\": [values…], …}.\",\n          \"title\": \"Data\"\n        },\n        \"output\": {\n          \"anyOf\": [\n            {\n              \"type\": \"string\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": null,\n          \"description\": \"Optional output path; defaults to charts/<chart>_<time>.png\",\n          \"title\": \"Output\"\n        },\n        \"options\": {\n          \"$ref\": \"#/$defs/DefectmapOptions\"\n        },\n        \"style\": {\n          \"anyOf\": [\n            {\n              \"$ref\": \"#/$defs/StyleOverride\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": null,\n          \"description\": \"Presentation overrides (figsize/dpi/font_size/x_tick_rotation/pad). Normally left unset — the VLM auto-review loop fills these to fix layout issues.\"\n        },\n        \"x\": {\n          \"anyOf\": [\n            {\n              \"type\": \"string\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": null,\n          \"description\": \"[number] defect x coordinate\",\n          \"title\": \"X\"\n        },\n        \"y\": {\n          \"anyOf\": [\n            {\n              \"type\": \"string\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": null,\n          \"description\": \"[number] defect y coordinate\",\n          \"title\": \"Y\"\n        }\n      },\n      \"required\": [\n        \"data\"\n      ],\n      \"title\": \"defectmap_request\",\n      \"type\": \"object\"\n    },\n    \"grouped_line_request\": {\n      \"properties\": {\n        \"chart\": {\n          \"const\": \"grouped_line\",\n          \"default\": \"grouped_line\",\n          \"title\": \"Chart\",\n          \"type\": \"string\"\n        },\n        \"data\": {\n          \"anyOf\": [\n            {\n              \"type\": \"string\"\n            },\n            {\n              \"items\": {\n                \"additionalProperties\": true,\n                \"type\": \"object\"\n              },\n              \"type\": \"array\"\n            },\n            {\n              \"additionalProperties\": {\n                \"items\": {},\n                \"type\": \"array\"\n              },\n              \"type\": \"object\"\n            }\n          ],\n          \"description\": \"Data to plot: a workspace file path (.csv/.tsv/.json/.xlsx/.parquet) OR inline JSON — a list of row records [{\\\"col\\\": value, …}, …] or a column dict {\\\"col\\\": [values…], …}.\",\n          \"title\": \"Data\"\n        },\n        \"output\": {\n          \"anyOf\": [\n            {\n              \"type\": \"string\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": null,\n          \"description\": \"Optional output path; defaults to charts/<chart>_<time>.png\",\n          \"title\": \"Output\"\n        },\n        \"options\": {\n          \"$ref\": \"#/$defs/GroupedLineOptions\"\n        },\n        \"style\": {\n          \"anyOf\": [\n            {\n              \"$ref\": \"#/$defs/StyleOverride\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": null,\n          \"description\": \"Presentation overrides (figsize/dpi/font_size/x_tick_rotation/pad). Normally left unset — the VLM auto-review loop fills these to fix layout issues.\"\n        },\n        \"levels\": {\n          \"anyOf\": [\n            {\n              \"items\": {\n                \"type\": \"string\"\n              },\n              \"type\": \"array\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": null,\n          \"description\": \"[any] ordered key columns, finest→coarsest, forming the x hierarchy\",\n          \"title\": \"Levels\"\n        },\n        \"value\": {\n          \"anyOf\": [\n            {\n              \"type\": \"string\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": null,\n          \"description\": \"[number] numeric value for the y axis\",\n          \"title\": \"Value\"\n        }\n      },\n      \"required\": [\n        \"data\"\n      ],\n      \"title\": \"grouped_line_request\",\n      \"type\": \"object\"\n    },\n    \"wafermap_request\": {\n      \"properties\": {\n        \"chart\": {\n          \"const\": \"wafermap\",\n          \"default\": \"wafermap\",\n          \"title\": \"Chart\",\n          \"type\": \"string\"\n        },\n        \"data\": {\n          \"anyOf\": [\n            {\n              \"type\": \"string\"\n            },\n            {\n              \"items\": {\n                \"additionalProperties\": true,\n                \"type\": \"object\"\n              },\n              \"type\": \"array\"\n            },\n            {\n              \"additionalProperties\": {\n                \"items\": {},\n                \"type\": \"array\"\n              },\n              \"type\": \"object\"\n            }\n          ],\n          \"description\": \"Data to plot: a workspace file path (.csv/.tsv/.json/.xlsx/.parquet) OR inline JSON — a list of row records [{\\\"col\\\": value, …}, …] or a column dict {\\\"col\\\": [values…], …}.\",\n          \"title\": \"Data\"\n        },\n        \"output\": {\n          \"anyOf\": [\n            {\n              \"type\": \"string\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": null,\n          \"description\": \"Optional output path; defaults to charts/<chart>_<time>.png\",\n          \"title\": \"Output\"\n        },\n        \"options\": {\n          \"$ref\": \"#/$defs/WafermapOptions\"\n        },\n        \"style\": {\n          \"anyOf\": [\n            {\n              \"$ref\": \"#/$defs/StyleOverride\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": null,\n          \"description\": \"Presentation overrides (figsize/dpi/font_size/x_tick_rotation/pad). Normally left unset — the VLM auto-review loop fills these to fix layout issues.\"\n        },\n        \"die_x\": {\n          \"anyOf\": [\n            {\n              \"type\": \"string\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": null,\n          \"description\": \"[int] die column/x grid index\",\n          \"title\": \"Die X\"\n        },\n        \"die_y\": {\n          \"anyOf\": [\n            {\n              \"type\": \"string\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": null,\n          \"description\": \"[int] die row/y grid index\",\n          \"title\": \"Die Y\"\n        },\n        \"value\": {\n          \"anyOf\": [\n            {\n              \"type\": \"string\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": null,\n          \"description\": \"[number] value to colour each die by\",\n          \"title\": \"Value\"\n        }\n      },\n      \"required\": [\n        \"data\"\n      ],\n      \"title\": \"wafermap_request\",\n      \"type\": \"object\"\n    }\n  },\n  \"discriminator\": {\n    \"mapping\": {\n      \"box_scatter\": \"#/$defs/box_scatter_request\",\n      \"defectmap\": \"#/$defs/defectmap_request\",\n      \"grouped_line\": \"#/$defs/grouped_line_request\",\n      \"wafermap\": \"#/$defs/wafermap_request\"\n    },\n    \"propertyName\": \"chart\"\n  },\n  \"oneOf\": [\n    {\n      \"$ref\": \"#/$defs/box_scatter_request\"\n    },\n    {\n      \"$ref\": \"#/$defs/defectmap_request\"\n    },\n    {\n      \"$ref\": \"#/$defs/grouped_line_request\"\n    },\n    {\n      \"$ref\": \"#/$defs/wafermap_request\"\n    }\n  ],\n  \"title\": \"RootModel[Annotated[Union[box_scatter_request, defectmap_request, grouped_line_request, wafermap_request], FieldInfo(annotation=NoneType, required=True, discriminator='chart')]]\"\n}\n```\n\n### `summarise`\n\nSummarise each column of a CSV: dtype, count, nulls, uniques, numeric stats, top categorical values. Output is a JSON object with `rows` and `columns` keys.\n\nArgs (JSON schema):\n\n```json\n{\n  \"description\": \"Pydantic Args model — drives both the LLM-facing JSON schema and\\nruntime validation. Single source of truth, no argparse parallel.\",\n  \"properties\": {\n    \"csv\": {\n      \"description\": \"Path to the CSV file in the workspace.\",\n      \"title\": \"Csv\",\n      \"type\": \"string\"\n    }\n  },\n  \"required\": [\n    \"csv\"\n  ],\n  \"title\": \"Args\",\n  \"type\": \"object\"\n}\n```",
+        "role": "system"
+      },
+      {
+        "role": "user",
+        "content": "say hi in one short sentence"
+      }
+    ],
+    "stream": true,
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "ask_user",
+          "description": "Ask the user to choose between concrete options, and stop until they answer.\n\nUse this when you need a decision only the user can make and guessing would\nwaste their time — which alternative to take, which of several readings of\nan ambiguous request is right. Each question carries its own options, and\neach option carries a short description of what choosing it means, so the\nuser can decide without asking you what the options are.\n\nPass up to five questions. Batch questions whose answers do NOT depend on\neach other; ask one at a time when a later question only makes sense once\nyou know the earlier answer.\n\nWrite each question the way you would say it out loud: get to the point in\none short sentence, use the words the user has already used, and give a\nconcrete example where it helps. Each option's description says what\npicking it leads to.\n\nEach question also carries a `header` — two to six words naming what that\nquestion is about (\"storage backend\", \"rollout order\"). Several questions\narrive as tabs and the header is the tab's label, so it is what the user\nreads before deciding which one to open.\n\nThe user can always answer in their own words, add a note to whichever\noption they pick, or tell you the question itself did not land — in which\ncase ask the same question again, shorter and more plainly.\n\nYour turn ends here. The user's answer arrives as their next message, and\nyou continue from there — so put everything they need in the question, and\ndo not answer it yourself.",
+          "parameters": {
+            "properties": {
+              "questions": {
+                "items": {
+                  "description": "One question and the concrete choices for it.\n\n``header`` is the tab label a multi-question card shows, so it has to fit in\na few characters — which is why the MODEL writes it instead of the UI\ntruncating ``question``. A whole sentence cut at the twelfth character\nbreaks wherever the sentence happens to be, and the result names nothing.",
+                  "properties": {
+                    "header": {
+                      "type": "string"
+                    },
+                    "question": {
+                      "type": "string"
+                    },
+                    "options": {
+                      "items": {
+                        "description": "One choice offered for a question. Both fields are required so the tool's\nschema is STRICT: an open ``dict[str, Any]`` gave the model no field names to\nhonour, so even a top model split between ``label`` and ``option`` — the shape\nwas the tool's to specify, not the model's to guess. ``description`` says what\npicking it leads to; pass ``\"\"`` when there is nothing to add.",
+                        "properties": {
+                          "label": {
+                            "type": "string"
+                          },
+                          "description": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "label",
+                          "description"
+                        ],
+                        "type": "object",
+                        "additionalProperties": false
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "header",
+                    "question",
+                    "options"
+                  ],
+                  "type": "object",
+                  "additionalProperties": false
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "questions"
+            ],
+            "type": "object",
+            "additionalProperties": false
+          },
+          "strict": true
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "update_todos",
+          "description": "Maintain this conversation's visible todo checklist (whole-list REPLACE).\n\nUse it for multi-step work (3+ distinct steps): write the full plan as todos\nup front, then call again after each step with the SAME list, statuses\nupdated. Every call REPLACES the entire list — always pass every item you\nwant kept, in order; an item you leave out disappears.\n\nEach todo is `{text, status}`: `text` is one short, concrete step; `status`\nis exactly one of `pending` / `in_progress` / `completed`. Keep at most ONE\nitem `in_progress` at a time. The user sees this list live next to the chat,\nso keep it truthful — mark an item `completed` only when it is actually\ndone. Returns a confirmation.",
+          "parameters": {
+            "properties": {
+              "todos": {
+                "items": {
+                  "description": "One todo item: what to do, and where it stands.",
+                  "properties": {
+                    "text": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "enum": [
+                        "pending",
+                        "in_progress",
+                        "completed"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "text",
+                    "status"
+                  ],
+                  "type": "object",
+                  "additionalProperties": false
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "todos"
+            ],
+            "type": "object",
+            "additionalProperties": false
+          },
+          "strict": true
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "exec",
+          "description": "Run a shell command inside the workspace sandbox.\n\nThe command is killed if it runs too long overall, or goes too long without\nproducing any output; you then get exit_code=124 along with whatever it had\nprinted so far. So for anything long-running, print progress as you go, and\nprefer starting it in the background and polling over blocking on one call.\n\nThis is also the only thing that wakes a cold sandbox: ensure_sandbox creates\nit and restores the snapshot into it, so any file writes the agent made while\ncold are present; from here on the sandbox IS the source of truth and the\nfile tools route to it directly (no flush needed).",
+          "parameters": {
+            "properties": {
+              "cmd": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "cmd"
+            ],
+            "type": "object",
+            "additionalProperties": false
+          },
+          "strict": true
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "read_file",
+          "description": "Read a file from the workspace. Returns a window of lines: `offset` is the\n1-based first line (default 1), `limit` the number of lines (default: the\nconfigured cap). A large file is truncated — by line count and by a total\ncharacter budget — with a notice; page through it with `offset`/`limit`.\n\nOptional arguments (`offset`, `limit`): send JSON `null` for any you are not setting — `null` means 'no value', and is always accepted.",
+          "parameters": {
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "offset": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "limit": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "path",
+              "offset",
+              "limit"
+            ],
+            "type": "object",
+            "additionalProperties": false
+          },
+          "strict": true
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "read_image",
+          "description": "Look at an image file in the workspace (screenshot, chart, photo, or\ndiagram) and reason about it.\n\nUse this for images — `read_file` returns raw bytes for these and is\nuseless. `path` is the workspace path to the image. `question` optionally\nfocuses the read (e.g. \"what error is in this screenshot?\"); omit it for a\nfull description of everything visible.\n\nOptional arguments (`question`): send JSON `null` for any you are not setting — `null` means 'no value', and is always accepted.",
+          "parameters": {
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "question": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "path",
+              "question"
+            ],
+            "type": "object",
+            "additionalProperties": false
+          },
+          "strict": true
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "show_file",
+          "description": "Show a file from the workspace to the user, in the chat.\n\nUse this for any file the user will want to look at — a chart you plotted, a\nreport you wrote, a spreadsheet, a PDF, a screenshot. An image appears in the\nconversation directly; any other file appears as a card the user can open.\n\n`path` is the workspace path to the file. `caption` is a short line saying\nwhat the user is looking at (\"monthly revenue trend\") — include it whenever\nthe filename alone would not tell them.\n\nCall it once per file, as soon as the file exists, then carry on.\n\nOptional arguments (`caption`): send JSON `null` for any you are not setting — `null` means 'no value', and is always accepted.",
+          "parameters": {
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "caption": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "path",
+              "caption"
+            ],
+            "type": "object",
+            "additionalProperties": false
+          },
+          "strict": true
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "write_file",
+          "description": "Create a NEW file. This never overwrites: if the file already exists it\nis rejected and the current content is returned — use `edit_file` to change\nan existing file (so you always state what you expect to replace). This is\nwhat stops blind writes.",
+          "parameters": {
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "content"
+            ],
+            "type": "object",
+            "additionalProperties": false
+          },
+          "strict": true
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "edit_file",
+          "description": "Edit an existing file by replacing `old_string` with `new_string`.\n`old_string` must match the current file content **exactly and uniquely**\n(include enough surrounding context). If it isn't found or matches more than\nonce — including because someone else changed the file since you read it —\nthe edit is rejected and the current content is returned, so re-read it and\ntry again. To rewrite a whole file, pass its entire current content as\n`old_string`.",
+          "parameters": {
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "old_string": {
+                "type": "string"
+              },
+              "new_string": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "old_string",
+              "new_string"
+            ],
+            "type": "object",
+            "additionalProperties": false
+          },
+          "strict": true
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "list_files",
+          "description": "List ONE level of the workspace — like `ls`, not like `find`. Returns the\nsub-directories there (each shown with a trailing `/`) followed by the files;\npass a sub-directory back in to look inside it. `prefix` defaults to the\nworkspace root, and also accepts a file (lists just that file) or the start\nof a name (lists what begins with it). Paths come back relative to the\nworkspace root (`notes.txt`, `data/`), which is the form the other file\ntools and `exec` both take. A long listing is cut with a notice — pass\n`offset` to read on from there. Use this instead of `exec([\"ls\", ...])`.",
+          "parameters": {
+            "properties": {
+              "prefix": {
+                "default": "",
+                "type": "string"
+              },
+              "offset": {
+                "default": 1,
+                "type": "integer"
+              }
+            },
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "prefix",
+              "offset"
+            ]
+          },
+          "strict": true
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "exists",
+          "description": "Check whether a file exists in the workspace file store.",
+          "parameters": {
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "type": "object",
+            "additionalProperties": false
+          },
+          "strict": true
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "delete_file",
+          "description": "Delete a file from the workspace file store.",
+          "parameters": {
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "type": "object",
+            "additionalProperties": false
+          },
+          "strict": true
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "ask_knowledge_base",
+          "description": "Ask the knowledge-base agent a question about the in-house documents.\n\nUse this ONLY when answering needs facts, procedures, or history that live\nin the in-house knowledge base rather than in the workspace files. Returns a\nsynthesized answer with a Sources list. Phrase a focused question, not just\nkeywords.\n\n`rank` (#280) picks which **priority tier** of collections to search, when\nthe knowledge base is organised into tiers. Always start at `rank=0` (the\nhighest-priority tier). If that answer doesn't fully resolve your question\nand the result says more tiers exist, call this tool AGAIN with the same\nquestion and the next `rank` (1, 2, …). Each tier is searched on its own, so\ncompare the answers you get and use the best — a higher tier is a fallback,\nnot automatically better. The result tells you the tier count and when there\nare no more tiers to widen to.\n\nDo NOT use for: greetings, small-talk, the agent's own name or identity,\nmeta-questions about this assistant, or general knowledge you already know.\nFor any of those, answer directly without calling this tool.",
+          "parameters": {
+            "properties": {
+              "question": {
+                "type": "string"
+              },
+              "rank": {
+                "default": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "question",
+              "rank"
+            ],
+            "type": "object",
+            "additionalProperties": false
+          },
+          "strict": true
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "request_wiki_update",
+          "description": "Ask the wiki maintainer to CORRECT the knowledge wiki (#397) — use this\ninstead of editing wiki pages yourself. Describe what is wrong and how it\nshould read; the maintainer then finds and fixes the affected page(s). The\ncorrected fact is recorded so a later rebuild can't reintroduce the error.\n\n`instruction` (required): the correction in plain language — what the wiki\ncurrently gets wrong and what it should say. `target_page` (optional): the\nwiki page path at fault (e.g. `entities/foo.md`) if you know it; leave blank\nto let the maintainer locate it. `reference` (optional): a short reference\ndocument or passage to follow for the fix — its text is used for THIS\ncorrection only. `collection` (optional): the collection to correct, by name\nor id — required only when more than one wiki-enabled collection is in scope.\n\nReturns a confirmation, or an `error:` note (e.g. no wiki to correct). The fix\nruns in the background; you don't wait for it.",
+          "parameters": {
+            "properties": {
+              "instruction": {
+                "type": "string"
+              },
+              "target_page": {
+                "default": "",
+                "type": "string"
+              },
+              "reference": {
+                "default": "",
+                "type": "string"
+              },
+              "collection": {
+                "default": "",
+                "type": "string"
+              }
+            },
+            "required": [
+              "instruction",
+              "target_page",
+              "reference",
+              "collection"
+            ],
+            "type": "object",
+            "additionalProperties": false
+          },
+          "strict": true
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "make_deck",
+          "description": "Build a visually designed PowerPoint deck (`.pptx`) and write it to the\nworkspace. Hand off the high-level intent — a specialist sub-agent plans the\nslides, writes the layout code, renders it, looks at the result, and fixes\nany visual problems before returning. Use this for any \"make slides / a deck\n/ a presentation / a one-pager\" request; do NOT hand-write pptx code yourself.\n\n- `goal`: what the deck must convey and what it's for (be specific).\n- `audience`: who it's for (e.g. \"process engineers\", \"executives\") — optional.\n- `source`: workspace file paths to base the deck on (a report `.md`, a CSV,\n  chart `.png`s). Their text is read in; images are used as figures. Optional.\n- `notes` / `style` / `length`: extra guidance — key points, brand/tone,\n  \"one-pager\" vs \"full deck\". All optional.\n- `out_path`: where to write it (default `deck.pptx`).\n\nReturns the path written plus a short note, or an `error:` line if the deck\ntool isn't configured. Building runs several render+review passes, so it\ntakes a while; its progress streams as it works.\n\nOptional arguments (`audience`, `source`, `notes`, `style`, `length`): send JSON `null` for any you are not setting — `null` means 'no value', and is always accepted.",
+          "parameters": {
+            "properties": {
+              "goal": {
+                "type": "string"
+              },
+              "audience": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "source": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "notes": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "style": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "length": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "out_path": {
+                "default": "./deck.pptx",
+                "type": "string"
+              }
+            },
+            "required": [
+              "goal",
+              "audience",
+              "source",
+              "notes",
+              "style",
+              "length",
+              "out_path"
+            ],
+            "type": "object",
+            "additionalProperties": false
+          },
+          "strict": true
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "save_skill",
+          "description": "Save a reusable skill into THIS workspace so you (and the user) can load it\nlater with `read_skill`. Use this once the user has approved a skill you drafted\ntogether — it captures a repeatable procedure, the terminology, and the preferred\noutput style for a kind of task.\n\n`name` is a short title (it's slugified to kebab-case — e.g. \"SMT Reflow Triage\"\n→ `smt-reflow-triage`); `description` is a one-line \"when to use this\" shown in the\nskill index; `body` is the methodology in markdown. This owns the file format, so\nyou only supply these three fields — it can't be silently dropped by a bad\nfrontmatter. Re-saving the same name overwrites (refine freely). For a skill that\nneeds reference docs or scripts, write them with `write_file` into the same\n`.skill/<name>/` folder (e.g. `.skill/<name>/references/…`, `.skill/<name>/scripts/…`)\nand point to them from the body. Returns a confirmation or an `error:` note.",
+          "parameters": {
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "body": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "description",
+              "body"
+            ],
+            "type": "object",
+            "additionalProperties": false
+          },
+          "strict": true
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "save_workflow",
+          "description": "Save a workflow you co-designed with the user into THIS workspace so it can be run,\ndownloaded to hand off, or promoted to a default. A workflow is DATA, not code (#323):\na small ordered set of steps — `agent` (an LLM turn), `sandbox` (a command), `gate` (a\nhuman approval), `capability` (file into a collection / write a context card), and\n`map` (repeat over uploaded files) — that the platform interprets, so it's safe to run.\nThe `author-workflow` skill walks you through drafting one with the user.\n\n`id` is a short name (kebab-cased to the filename + id); `workflow_json` is the full\nworkflow.json text. This VALIDATES it before saving — if a step type, phase, capability,\ncheck, or `{variable}` is off, it returns the problems so you can fix and re-save (don't\nguess; address each one). Re-saving the same id overwrites. On success the user can Run\nit, or download `.workflows/` to reuse elsewhere.",
+          "parameters": {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "workflow_json": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "workflow_json"
+            ],
+            "type": "object",
+            "additionalProperties": false
+          },
+          "strict": true
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "read_skill",
+          "description": "Load a skill's body markdown by name. Progressive disclosure: the\nsystem prompt's \"Available skills\" index already lists `(name,\ndescription)`; this tool returns the *body* on demand so large\nmethodologies don't bloat every turn.\n\nReturns a friendly error string (not raise) for the agent to recover\nfrom — unknown name lists the available skills, body-cap exceeded\nexplains the deployer should split the skill. Host-side only: never\nwakes the sandbox (skills are pure host markdown).",
+          "parameters": {
+            "properties": {
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "type": "object",
+            "additionalProperties": false
+          },
+          "strict": true
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "chart",
+          "description": "Render a scientific chart from tabular data and write a PNG. Pick a chart type via `chart` and pass `data` (a workspace file path or inline JSON) plus the chart's columns. Output is a JSON object with an `images` key listing the written path(s). If a column role can't be matched automatically the result is a `needs_input` object listing which columns to specify — call again with them.",
+          "parameters": {
+            "$defs": {
+              "BoxScatterOptions": {
+                "properties": {
+                  "max_points": {
+                    "default": 1000,
+                    "description": "Per group, draw all points up to this many; above it, draw only outliers.",
+                    "minimum": 1,
+                    "title": "Max Points",
+                    "type": "integer"
+                  },
+                  "point_size": {
+                    "default": 14.0,
+                    "description": "Marker area for the scatter points.",
+                    "exclusiveMinimum": 0,
+                    "title": "Point Size",
+                    "type": "number"
+                  },
+                  "jitter": {
+                    "default": 0.18,
+                    "description": "Horizontal jitter half-width for the points.",
+                    "minimum": 0,
+                    "title": "Jitter",
+                    "type": "number"
+                  },
+                  "title": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Optional figure title.",
+                    "title": "Title"
+                  }
+                },
+                "title": "BoxScatterOptions",
+                "type": "object"
+              },
+              "DefectmapOptions": {
+                "properties": {
+                  "wafer_diameter": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Wafer circle diameter (coord units); None auto-fits to the defects.",
+                    "title": "Wafer Diameter"
+                  },
+                  "center_x": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Wafer-centre x (the wafer centre need not be the defect-cloud midpoint).",
+                    "title": "Center X"
+                  },
+                  "center_y": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Wafer-centre y.",
+                    "title": "Center Y"
+                  },
+                  "notch": {
+                    "default": "bottom",
+                    "description": "Orientation notch: bottom/top/left/right/none.",
+                    "title": "Notch",
+                    "type": "string"
+                  },
+                  "die_pitch": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "If set, draw a faint die grid spaced this far apart for reference.",
+                    "title": "Die Pitch"
+                  },
+                  "marker_size": {
+                    "default": 14.0,
+                    "description": "Defect marker area.",
+                    "exclusiveMinimum": 0,
+                    "title": "Marker Size",
+                    "type": "number"
+                  },
+                  "color": {
+                    "default": "red",
+                    "description": "Defect marker colour.",
+                    "title": "Color",
+                    "type": "string"
+                  },
+                  "title": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Optional figure title.",
+                    "title": "Title"
+                  }
+                },
+                "title": "DefectmapOptions",
+                "type": "object"
+              },
+              "GroupedLineOptions": {
+                "properties": {
+                  "line_level": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Which level column's value-runs break the data into separate lines (each a colour). None → a single line through all points in order.",
+                    "title": "Line Level"
+                  },
+                  "title": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Optional figure title.",
+                    "title": "Title"
+                  },
+                  "marker": {
+                    "default": "o",
+                    "description": "Point marker (matplotlib marker code; '' for none).",
+                    "title": "Marker",
+                    "type": "string"
+                  },
+                  "label_orientation": {
+                    "default": "auto",
+                    "description": "x label orientation. 'auto' turns a level vertical when its names are too long to fit horizontally (many points / long group names).",
+                    "enum": [
+                      "auto",
+                      "horizontal",
+                      "vertical"
+                    ],
+                    "title": "Label Orientation",
+                    "type": "string"
+                  }
+                },
+                "title": "GroupedLineOptions",
+                "type": "object"
+              },
+              "StyleOverride": {
+                "description": "Presentation overrides the VLM auto-review loop tweaks between passes.\nAll optional; only the set fields override the house :class:`PlotStyle`.\nThese are *presentation* knobs only — never anything semantic.",
+                "properties": {
+                  "figsize": {
+                    "anyOf": [
+                      {
+                        "maxItems": 2,
+                        "minItems": 2,
+                        "prefixItems": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "number"
+                          }
+                        ],
+                        "type": "array"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "(width, height) inches.",
+                    "title": "Figsize"
+                  },
+                  "dpi": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Render DPI.",
+                    "title": "Dpi"
+                  },
+                  "font_size": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Base font size.",
+                    "title": "Font Size"
+                  },
+                  "x_tick_rotation": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Rotate x tick labels (degrees).",
+                    "title": "X Tick Rotation"
+                  },
+                  "pad": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "tight_layout padding.",
+                    "title": "Pad"
+                  }
+                },
+                "title": "StyleOverride",
+                "type": "object"
+              },
+              "WafermapOptions": {
+                "properties": {
+                  "color_mode": {
+                    "default": "uni",
+                    "description": "uni: sequential, value>=0 (defect count); bi: diverging (measurement).",
+                    "enum": [
+                      "uni",
+                      "bi"
+                    ],
+                    "title": "Color Mode",
+                    "type": "string"
+                  },
+                  "colormap": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Override the colormap name (else viridis/RdBu_r).",
+                    "title": "Colormap"
+                  },
+                  "vmin": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Color scale minimum (uni defaults to 0).",
+                    "title": "Vmin"
+                  },
+                  "vmax": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Color scale maximum (defaults to the data max).",
+                    "title": "Vmax"
+                  },
+                  "center": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "bi mode center value (defaults to 0).",
+                    "title": "Center"
+                  },
+                  "wafer_diameter": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Wafer circle diameter (in die_w units); None auto-fits to the die.",
+                    "title": "Wafer Diameter"
+                  },
+                  "die_w": {
+                    "default": 1.0,
+                    "description": "Die width (die may be rectangular, not square).",
+                    "exclusiveMinimum": 0,
+                    "title": "Die W",
+                    "type": "number"
+                  },
+                  "die_h": {
+                    "default": 1.0,
+                    "description": "Die height.",
+                    "exclusiveMinimum": 0,
+                    "title": "Die H",
+                    "type": "number"
+                  },
+                  "center_x": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Wafer-centre die column (the centre die need not sit on the grid midpoint).",
+                    "title": "Center X"
+                  },
+                  "center_y": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Wafer-centre die row.",
+                    "title": "Center Y"
+                  },
+                  "notch": {
+                    "default": "bottom",
+                    "description": "Orientation notch position on the wafer edge.",
+                    "enum": [
+                      "bottom",
+                      "top",
+                      "left",
+                      "right",
+                      "none"
+                    ],
+                    "title": "Notch",
+                    "type": "string"
+                  },
+                  "show_colorbar": {
+                    "default": true,
+                    "description": "Draw the value colorbar.",
+                    "title": "Show Colorbar",
+                    "type": "boolean"
+                  },
+                  "title": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Optional figure title.",
+                    "title": "Title"
+                  }
+                },
+                "title": "WafermapOptions",
+                "type": "object"
+              },
+              "box_scatter_request": {
+                "properties": {
+                  "chart": {
+                    "const": "box_scatter",
+                    "default": "box_scatter",
+                    "title": "Chart",
+                    "type": "string"
+                  },
+                  "data": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "items": {
+                          "additionalProperties": true,
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      {
+                        "additionalProperties": {
+                          "items": {},
+                          "type": "array"
+                        },
+                        "type": "object"
+                      }
+                    ],
+                    "description": "Data to plot: a workspace file path (.csv/.tsv/.json/.xlsx/.parquet) OR inline JSON — a list of row records [{\"col\": value, …}, …] or a column dict {\"col\": [values…], …}.",
+                    "title": "Data"
+                  },
+                  "output": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Optional output path; defaults to charts/<chart>_<time>.png",
+                    "title": "Output"
+                  },
+                  "options": {
+                    "$ref": "#/$defs/BoxScatterOptions"
+                  },
+                  "style": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/StyleOverride"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Presentation overrides (figsize/dpi/font_size/x_tick_rotation/pad). Normally left unset — the VLM auto-review loop fills these to fix layout issues."
+                  },
+                  "group": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "[category] category column for the x groups",
+                    "title": "Group"
+                  },
+                  "y": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "[number] numeric value column for the y axis",
+                    "title": "Y"
+                  }
+                },
+                "required": [
+                  "data"
+                ],
+                "title": "box_scatter_request",
+                "type": "object"
+              },
+              "defectmap_request": {
+                "properties": {
+                  "chart": {
+                    "const": "defectmap",
+                    "default": "defectmap",
+                    "title": "Chart",
+                    "type": "string"
+                  },
+                  "data": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "items": {
+                          "additionalProperties": true,
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      {
+                        "additionalProperties": {
+                          "items": {},
+                          "type": "array"
+                        },
+                        "type": "object"
+                      }
+                    ],
+                    "description": "Data to plot: a workspace file path (.csv/.tsv/.json/.xlsx/.parquet) OR inline JSON — a list of row records [{\"col\": value, …}, …] or a column dict {\"col\": [values…], …}.",
+                    "title": "Data"
+                  },
+                  "output": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Optional output path; defaults to charts/<chart>_<time>.png",
+                    "title": "Output"
+                  },
+                  "options": {
+                    "$ref": "#/$defs/DefectmapOptions"
+                  },
+                  "style": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/StyleOverride"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Presentation overrides (figsize/dpi/font_size/x_tick_rotation/pad). Normally left unset — the VLM auto-review loop fills these to fix layout issues."
+                  },
+                  "x": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "[number] defect x coordinate",
+                    "title": "X"
+                  },
+                  "y": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "[number] defect y coordinate",
+                    "title": "Y"
+                  }
+                },
+                "required": [
+                  "data"
+                ],
+                "title": "defectmap_request",
+                "type": "object"
+              },
+              "grouped_line_request": {
+                "properties": {
+                  "chart": {
+                    "const": "grouped_line",
+                    "default": "grouped_line",
+                    "title": "Chart",
+                    "type": "string"
+                  },
+                  "data": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "items": {
+                          "additionalProperties": true,
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      {
+                        "additionalProperties": {
+                          "items": {},
+                          "type": "array"
+                        },
+                        "type": "object"
+                      }
+                    ],
+                    "description": "Data to plot: a workspace file path (.csv/.tsv/.json/.xlsx/.parquet) OR inline JSON — a list of row records [{\"col\": value, …}, …] or a column dict {\"col\": [values…], …}.",
+                    "title": "Data"
+                  },
+                  "output": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Optional output path; defaults to charts/<chart>_<time>.png",
+                    "title": "Output"
+                  },
+                  "options": {
+                    "$ref": "#/$defs/GroupedLineOptions"
+                  },
+                  "style": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/StyleOverride"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Presentation overrides (figsize/dpi/font_size/x_tick_rotation/pad). Normally left unset — the VLM auto-review loop fills these to fix layout issues."
+                  },
+                  "levels": {
+                    "anyOf": [
+                      {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "[any] ordered key columns, finest→coarsest, forming the x hierarchy",
+                    "title": "Levels"
+                  },
+                  "value": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "[number] numeric value for the y axis",
+                    "title": "Value"
+                  }
+                },
+                "required": [
+                  "data"
+                ],
+                "title": "grouped_line_request",
+                "type": "object"
+              },
+              "wafermap_request": {
+                "properties": {
+                  "chart": {
+                    "const": "wafermap",
+                    "default": "wafermap",
+                    "title": "Chart",
+                    "type": "string"
+                  },
+                  "data": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "items": {
+                          "additionalProperties": true,
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      {
+                        "additionalProperties": {
+                          "items": {},
+                          "type": "array"
+                        },
+                        "type": "object"
+                      }
+                    ],
+                    "description": "Data to plot: a workspace file path (.csv/.tsv/.json/.xlsx/.parquet) OR inline JSON — a list of row records [{\"col\": value, …}, …] or a column dict {\"col\": [values…], …}.",
+                    "title": "Data"
+                  },
+                  "output": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Optional output path; defaults to charts/<chart>_<time>.png",
+                    "title": "Output"
+                  },
+                  "options": {
+                    "$ref": "#/$defs/WafermapOptions"
+                  },
+                  "style": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/StyleOverride"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Presentation overrides (figsize/dpi/font_size/x_tick_rotation/pad). Normally left unset — the VLM auto-review loop fills these to fix layout issues."
+                  },
+                  "die_x": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "[int] die column/x grid index",
+                    "title": "Die X"
+                  },
+                  "die_y": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "[int] die row/y grid index",
+                    "title": "Die Y"
+                  },
+                  "value": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "[number] value to colour each die by",
+                    "title": "Value"
+                  }
+                },
+                "required": [
+                  "data"
+                ],
+                "title": "wafermap_request",
+                "type": "object"
+              }
+            },
+            "discriminator": {
+              "mapping": {
+                "box_scatter": "#/$defs/box_scatter_request",
+                "defectmap": "#/$defs/defectmap_request",
+                "grouped_line": "#/$defs/grouped_line_request",
+                "wafermap": "#/$defs/wafermap_request"
+              },
+              "propertyName": "chart"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/box_scatter_request"
+              },
+              {
+                "$ref": "#/$defs/defectmap_request"
+              },
+              {
+                "$ref": "#/$defs/grouped_line_request"
+              },
+              {
+                "$ref": "#/$defs/wafermap_request"
+              }
+            ],
+            "title": "RootModel[Annotated[Union[box_scatter_request, defectmap_request, grouped_line_request, wafermap_request], FieldInfo(annotation=NoneType, required=True, discriminator='chart')]]"
+          },
+          "strict": false
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "summarise",
+          "description": "Summarise each column of a CSV: dtype, count, nulls, uniques, numeric stats, top categorical values. Output is a JSON object with `rows` and `columns` keys.",
+          "parameters": {
+            "description": "Pydantic Args model — drives both the LLM-facing JSON schema and\nruntime validation. Single source of truth, no argparse parallel.",
+            "properties": {
+              "csv": {
+                "description": "Path to the CSV file in the workspace.",
+                "title": "Csv",
+                "type": "string"
+              }
+            },
+            "required": [
+              "csv"
+            ],
+            "title": "Args",
+            "type": "object"
+          },
+          "strict": false
+        }
+      }
+    ],
+    "reasoning_effort": "low",
+    "num_ctx": 24576,
+    "api_base": "http://localhost:11434/api/chat",
+    "api_key": null
+  },
+  "error": "Traceback (most recent call last):\n  File \"/home/hychou/project/kb/ai-workspace/.claude/worktrees/gap-banner-false-alarm/.venv/lib/python3.12/site-packages/litellm/llms/custom_httpx/aiohttp_transport.py\", line 61, in map_aiohttp_exceptions\n    yield\n  File \"/home/hychou/project/kb/ai-workspace/.claude/worktrees/gap-banner-false-alarm/.venv/lib/python3.12/site-packages/litellm/llms/custom_httpx/aiohttp_transport.py\", line 307, in handle_async_request\n    response = await self._make_aiohttp_request(\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hychou/project/kb/ai-workspace/.claude/worktrees/gap-banner-false-alarm/.venv/lib/python3.12/site-packages/litellm/llms/custom_httpx/aiohttp_transport.py\", line 285, in _make_aiohttp_request\n    response = await client_session.request(**request_kwargs).__aenter__()\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hychou/project/kb/ai-workspace/.claude/worktrees/gap-banner-false-alarm/.venv/lib/python3.12/site-packages/aiohttp/client.py\", line 1521, in __aenter__\n    self._resp: _RetType = await self._coro\n                           ^^^^^^^^^^^^^^^^\n  File \"/home/hychou/project/kb/ai-workspace/.claude/worktrees/gap-banner-false-alarm/.venv/lib/python3.12/site-packages/aiohttp/client.py\", line 788, in _request\n    resp = await handler(req)\n           ^^^^^^^^^^^^^^^^^^\n  File \"/home/hychou/project/kb/ai-workspace/.claude/worktrees/gap-banner-false-alarm/.venv/lib/python3.12/site-packages/aiohttp/client.py\", line 766, in _connect_and_send_request\n    await resp.start(conn)\n  File \"/home/hychou/project/kb/ai-workspace/.claude/worktrees/gap-banner-false-alarm/.venv/lib/python3.12/site-packages/aiohttp/client_reqrep.py\", line 539, in start\n    message, payload = await protocol.read()  # type: ignore[union-attr]\n                       ^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hychou/project/kb/ai-workspace/.claude/worktrees/gap-banner-false-alarm/.venv/lib/python3.12/site-packages/aiohttp/streams.py\", line 707, in read\n    await self._waiter\naiohttp.client_exceptions.SocketTimeoutError: Timeout on reading data from socket\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/home/hychou/project/kb/ai-workspace/.claude/worktrees/gap-banner-false-alarm/.venv/lib/python3.12/site-packages/litellm/llms/custom_httpx/http_handler.py\", line 641, in post\n    response = await self.client.send(req, stream=stream)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hychou/project/kb/ai-workspace/.claude/worktrees/gap-banner-false-alarm/.venv/lib/python3.12/site-packages/httpx/_client.py\", line 1629, in send\n    response = await self._send_handling_auth(\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hychou/project/kb/ai-workspace/.claude/worktrees/gap-banner-false-alarm/.venv/lib/python3.12/site-packages/httpx/_client.py\", line 1657, in _send_handling_auth\n    response = await self._send_handling_redirects(\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hychou/project/kb/ai-workspace/.claude/worktrees/gap-banner-false-alarm/.venv/lib/python3.12/site-packages/httpx/_client.py\", line 1694, in _send_handling_redirects\n    response = await self._send_single_request(request)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hychou/project/kb/ai-workspace/.claude/worktrees/gap-banner-false-alarm/.venv/lib/python3.12/site-packages/httpx/_client.py\", line 1730, in _send_single_request\n    response = await transport.handle_async_request(request)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hychou/project/kb/ai-workspace/.claude/worktrees/gap-banner-false-alarm/.venv/lib/python3.12/site-packages/litellm/llms/custom_httpx/aiohttp_transport.py\", line 306, in handle_async_request\n    with map_aiohttp_exceptions():\n         ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hychou/.local/share/uv/python/cpython-3.12.8-linux-x86_64-gnu/lib/python3.12/contextlib.py\", line 158, in __exit__\n    self.gen.throw(value)\n  File \"/home/hychou/project/kb/ai-workspace/.claude/worktrees/gap-banner-false-alarm/.venv/lib/python3.12/site-packages/litellm/llms/custom_httpx/aiohttp_transport.py\", line 75, in map_aiohttp_exceptions\n    raise mapped_exc(message) from exc\nhttpx.ReadTimeout: Timeout on reading data from socket\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"/home/hychou/project/kb/ai-workspace/.claude/worktrees/gap-banner-false-alarm/.venv/lib/python3.12/site-packages/litellm/llms/custom_httpx/llm_http_handler.py\", line 205, in _make_common_async_call\n    response = await async_httpx_client.post(\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hychou/project/kb/ai-workspace/.claude/worktrees/gap-banner-false-alarm/.venv/lib/python3.12/site-packages/litellm/litellm_core_utils/logging_utils.py\", line 297, in async_wrapper\n    result = await func(*args, **kwargs)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hychou/project/kb/ai-workspace/.claude/worktrees/gap-banner-false-alarm/.venv/lib/python3.12/site-packages/litellm/llms/custom_httpx/http_handler.py\", line 670, in post\n    raise litellm.Timeout(\nlitellm.exceptions.Timeout: litellm.Timeout: Connection timed out. Timeout passed=600.0, time taken=600.005 seconds\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"/home/hychou/project/kb/ai-workspace/.claude/worktrees/gap-banner-false-alarm/.venv/lib/python3.12/site-packages/litellm/main.py\", line 637, in acompletion\n    response = await init_response\n               ^^^^^^^^^^^^^^^^^^^\n  File \"/home/hychou/project/kb/ai-workspace/.claude/worktrees/gap-banner-false-alarm/.venv/lib/python3.12/site-packages/litellm/llms/custom_httpx/llm_http_handler.py\", line 723, in acompletion_stream_function\n    completion_stream, _response_headers = await self.make_async_call_stream_helper(\n                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hychou/project/kb/ai-workspace/.claude/worktrees/gap-banner-false-alarm/.venv/lib/python3.12/site-packages/litellm/llms/custom_httpx/llm_http_handler.py\", line 782, in make_async_call_stream_helper\n    response = await self._make_common_async_call(\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hychou/project/kb/ai-workspace/.claude/worktrees/gap-banner-false-alarm/.venv/lib/python3.12/site-packages/litellm/llms/custom_httpx/llm_http_handler.py\", line 232, in _make_common_async_call\n    raise self._handle_error(e=e, provider_config=provider_config)\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hychou/project/kb/ai-workspace/.claude/worktrees/gap-banner-false-alarm/.venv/lib/python3.12/site-packages/litellm/llms/custom_httpx/llm_http_handler.py\", line 5130, in _handle_error\n    raise provider_config.get_error_class(\nlitellm.llms.ollama.common_utils.OllamaError: litellm.Timeout: Connection timed out. Timeout passed=600.0, time taken=600.005 seconds\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"/home/hychou/project/kb/ai-workspace/.claude/worktrees/gap-banner-false-alarm/.venv/lib/python3.12/site-packages/litellm/utils.py\", line 1898, in wrapper_async\n    result = await original_function(*args, **kwargs)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hychou/project/kb/ai-workspace/.claude/worktrees/gap-banner-false-alarm/.venv/lib/python3.12/site-packages/litellm/main.py\", line 656, in acompletion\n    raise exception_type(\n          ^^^^^^^^^^^^^^^\n  File \"/home/hychou/project/kb/ai-workspace/.claude/worktrees/gap-banner-false-alarm/.venv/lib/python3.12/site-packages/litellm/litellm_core_utils/exception_mapping_utils.py\", line 2466, in exception_type\n    raise e\n  File \"/home/hychou/project/kb/ai-workspace/.claude/worktrees/gap-banner-false-alarm/.venv/lib/python3.12/site-packages/litellm/litellm_core_utils/exception_mapping_utils.py\", line 2434, in exception_type\n    raise APIConnectionError(\nlitellm.exceptions.APIConnectionError: litellm.APIConnectionError: Ollama_chatException - litellm.Timeout: Connection timed out. Timeout passed=600.0, time taken=600.005 seconds"
+}
