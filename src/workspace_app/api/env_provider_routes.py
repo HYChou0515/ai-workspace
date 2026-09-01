@@ -121,6 +121,28 @@ def register_env_provider_routes(
             )
             return None
 
+    def _find(providers: list[IEnvProvider], wanted: str) -> IEnvProvider | None:
+        """The provider with this id, skipping any that cannot say their own.
+
+        The obvious `next(p for p in … if p.id == wanted)` reads `.id` on every
+        implementation until it matches — so one whose `id` raises would fail
+        the exchange for a DIFFERENT, working button. The list route already
+        hides a broken provider, which makes that worse rather than better: the
+        good buttons are all still on screen, and pressing one reports the
+        failure against the login the person pressed.
+        """
+        for p in providers:
+            try:
+                if p.id == wanted:
+                    return p
+            except Exception:  # noqa: BLE001 — it cannot be the one we want
+                logger.warning(
+                    "env provider %s raised while being asked for its id; skipped",
+                    type(p).__name__,
+                    exc_info=True,
+                )
+        return None
+
     @app.get("/a/{slug}/items/{item_id}/env-providers")
     async def list_env_providers(slug: str, item_id: str, request: Request) -> EnvProviders:
         _gate(slug, item_id)
@@ -132,7 +154,7 @@ def register_env_provider_routes(
         slug: str, item_id: str, provider_id: str, body: ResolveBody, request: Request
     ) -> ResolvedEnv:
         _gate(slug, item_id)
-        provider = next((p for p in _providers(request) if p.id == provider_id), None)
+        provider = _find(_providers(request), provider_id)
         if provider is None:
             raise HTTPException(status_code=404, detail=f"unknown env provider: {provider_id!r}")
         try:

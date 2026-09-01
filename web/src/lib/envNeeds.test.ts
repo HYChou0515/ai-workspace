@@ -167,6 +167,33 @@ describe("deriveEnvNeeds", () => {
     expect(group.missing).toBe(1);
   });
 
+  it("shows one field when a declaration names the same variable twice", () => {
+    // Two TOOLS wanting one name is the designed-for case. The same name twice
+    // in ONE file is an author pasting a line — and it would give the panel two
+    // inputs backed by one stored value, so typing in the first and then the
+    // second silently discards what was typed in the first.
+    const view = deriveEnvNeeds(
+      [
+        tool({
+          key: "sloppy",
+          label: "Sloppy Tool",
+          env_needs: [
+            { name: "TOKEN", description: "the real one", required: true },
+            { name: "TOKEN", description: "pasted twice", required: true },
+          ],
+        }),
+      ],
+      {},
+    );
+
+    expect(view.groups[0].fields.map((f) => f.name)).toEqual(["TOKEN"]);
+    // And it is one thing to fill, not two.
+    expect(view.groups[0].missing).toBe(1);
+    expect(view.missingRequired).toEqual(["TOKEN"]);
+    // Nor does the tool end up listed as its own other user.
+    expect(view.groups[0].fields[0].wantedBy).toEqual(["Sloppy Tool"]);
+  });
+
   it("drops a declared name this panel could not actually store", () => {
     // The declaration comes from a third-party author, and a name carrying `=`
     // writes to a DIFFERENT variable than the field says: `A=B=v` reads back as

@@ -1222,13 +1222,24 @@ def get_env_providers(dotted: list[str]) -> list[IEnvProvider]:
     # cheapest possible version of that discovery.
     seen: dict[str, str] = {}
     for path, impl in zip(dotted, built, strict=True):
-        if impl.id in seen:
+        # Loud, unlike the request paths, and deliberately so: an env provider is
+        # the DEPLOY's own code and this is their own startup, so the person who
+        # can fix it is standing here. What they must not get is a bare
+        # exception from a property with no clue which entry produced it.
+        try:
+            impl_id = impl.id
+        except Exception as exc:
             raise ValueError(
-                f"server.env_providers: {path} and {seen[impl.id]} both claim the id "
-                f"{impl.id!r}. The id decides which implementation a login button runs, "
+                f"server.env_providers: {path} raised while being asked for its id — "
+                "an implementation that cannot name itself can never be dispatched to."
+            ) from exc
+        if impl_id in seen:
+            raise ValueError(
+                f"server.env_providers: {path} and {seen[impl_id]} both claim the id "
+                f"{impl_id!r}. The id decides which implementation a login button runs, "
                 "so a duplicate would send a credential to whichever was listed first."
             )
-        seen[impl.id] = path
+        seen[impl_id] = path
     return built
 
 

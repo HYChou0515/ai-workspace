@@ -205,6 +205,37 @@ def test_one_broken_implementation_does_not_remove_the_others(harness: Harness, 
     assert "rude" in caplog.text
 
 
+class _RudeId(_SapLogin):
+    """Broken in the one property the LOOKUP reads.  breaks in
+    , which the lookup never touches — a double that cannot reach the
+    path under test proves the path is fine when it is not."""
+
+    @property
+    def id(self) -> str:
+        raise RuntimeError("this impl cannot even say its own name")
+
+
+def test_a_broken_implementation_does_not_break_a_working_button(harness: Harness):
+    """The lesson has to reach the lookup too, not just the list.
+
+    Finding a provider by id reads `.id` on every one of them, so the same
+    property that costs a broken implementation its own button would fail the
+    exchange for a WORKING one. The panel then shows the good buttons, someone
+    presses one, and the failure is reported against the login they pressed —
+    a lesson applied halfway, which is worse than not applied, because the
+    surviving half makes the rest look handled."""
+    _with_providers(harness, _RudeId(), _SapLogin())
+    iid = register_rca_item(harness.spec)
+
+    resp = harness.client.post(
+        f"/a/rca/items/{iid}/env-providers/sap-login",
+        json={"values": {"user": "alice", "password": "hunter2"}},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["env"]["SAP_TOKEN"] == "tok-for-alice"
+
+
 def test_two_implementations_claiming_one_id_is_refused_at_startup():
     """A duplicate id is a config error, not a coin toss.
 

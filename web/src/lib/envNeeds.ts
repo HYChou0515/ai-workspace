@@ -72,8 +72,21 @@ export function deriveEnvNeeds(
   // DIFFERENT variable (`A=B=v` reads back as A="B=v"). Offering that is worse
   // than offering nothing, so it is left out — which gates no tool, only an
   // input that could never have worked.
-  const usable = (t: ItemToolState) =>
-    (t.env_needs ?? []).filter((n) => unstorable({ [n.name]: "x" }).length === 0);
+  const usable = (t: ItemToolState) => {
+    const seen = new Set<string>();
+    return (t.env_needs ?? []).filter((n) => {
+      if (unstorable({ [n.name]: "x" }).length > 0) return false;
+      // First mention wins. A declaration is hand-written, and the same name
+      // twice in one file is a pasted line — which would otherwise put TWO
+      // inputs on screen behind ONE stored value, so filling the second
+      // silently discards what was typed in the first. Exactly the fault the
+      // shared-variable design avoids across tools; it has to hold inside one
+      // as well.
+      if (seen.has(n.name)) return false;
+      seen.add(n.name);
+      return true;
+    });
+  };
 
   const wantedBy = new Map<string, string[]>();
   for (const t of live) {
