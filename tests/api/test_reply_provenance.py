@@ -150,3 +150,39 @@ def test_the_record_keeps_generation_time_apart_from_the_turn_clock():
     assert m.elapsed_ms == 61_000
     assert m.generation_ms == 5_000
     # 356/5s ≈ 71 tok/s, not 356/61s ≈ 6 — an order of magnitude apart.
+
+
+# ── which model wrote this ───────────────────────────────────────────────────
+
+
+def test_the_record_names_the_model_that_wrote_it():
+    r = _answered(AgentMetrics(phase="final", elapsed_ms=3400, model="qwen3:14b"))
+
+    m = r.produced[-1].metrics
+    assert m is not None
+    assert m.model == "qwen3:14b"
+
+
+def test_the_effective_model_is_the_one_that_served_not_the_one_configured():
+    """`_effective_model` is what the #69 trace already used, and it read the
+    model off the agent's model object with the config as a fallback. Under
+    failover that object is a FallbackModel, which had no `.model` — so it
+    silently returned the CONFIGURED name, i.e. it was wrong in exactly the case
+    where the two differ and the answer matters."""
+    from workspace_app.api.litellm_runner import _effective_model
+
+    class _Chain:
+        served_model = "backup"
+
+    class _Plain:
+        model = "qwen3:14b"
+
+    assert _effective_model(_Chain(), "primary") == "backup"  # served wins
+    assert _effective_model(_Plain(), "primary") == "qwen3:14b"  # single endpoint
+    assert _effective_model(None, "primary") == "primary"  # nothing else to go on
+
+    class _NotYet:
+        served_model = None
+
+    # A chain that has not answered yet must not be reported as the head.
+    assert _effective_model(_NotYet(), "primary") == "primary"

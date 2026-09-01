@@ -165,6 +165,10 @@ class AgentMetrics:
     # two fields: one field meaning both is the mistake #739 §1.3 records.
     # None when no token ever arrived.
     generation_ms: int | None = None
+    # #748: the model that actually WROTE this reply. Under failover that is not
+    # the configured one, and the configured one is what everything reported
+    # until now — wrong in precisely the case where the two differ.
+    model: str | None = None
     type: Literal["agent_metrics"] = "agent_metrics"
 
 

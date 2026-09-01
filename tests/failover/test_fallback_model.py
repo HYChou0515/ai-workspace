@@ -371,3 +371,53 @@ def test_get_response_total_deadline_gives_up():
         assert slept == []
 
     asyncio.run(run())
+
+
+# ── #748: which endpoint actually answered ───────────────────────────────────
+
+
+async def test_the_chain_remembers_which_endpoint_actually_answered():
+    """Nothing recorded this, so the only way to name a turn's model was to read
+    the CONFIGURED one — which is right until failover makes it wrong, i.e. it
+    is wrong in precisely the case the question is worth asking. The #69 trace
+    has been reporting the chain head this whole time."""
+    registry = CooldownRegistry(clock=_Clock())
+    chain = FallbackModel(
+        [_ep("primary"), _ep("backup")],
+        registry,
+        make_model=lambda e: (
+            _FakeModel(error=RuntimeError("busy"))
+            if e.model == "primary"
+            else _FakeModel(response="ok")
+        ),
+    )
+
+    assert await chain.get_response() == "ok"
+    assert chain.served_model == "backup"  # not "primary", the configured head
+
+
+async def test_the_streamed_path_remembers_it_too():
+    registry = CooldownRegistry(clock=_Clock())
+    chain = FallbackModel(
+        [_ep("primary"), _ep("backup")],
+        registry,
+        make_model=lambda e: (
+            _FakeModel(error=RuntimeError("busy"))
+            if e.model == "primary"
+            else _FakeModel(events=["a"])
+        ),
+    )
+
+    assert [ev async for ev in chain.stream_response()] == ["a"]
+    assert chain.served_model == "backup"
+
+
+async def test_nothing_is_claimed_before_anything_answers():
+    """A chain that has not served yet must not name a model. Defaulting to the
+    head would be the same lie, just earlier."""
+    registry = CooldownRegistry(clock=_Clock())
+    chain = FallbackModel(
+        [_ep("primary")], registry, make_model=lambda e: _FakeModel(response="ok")
+    )
+
+    assert chain.served_model is None

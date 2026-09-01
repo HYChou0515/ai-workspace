@@ -308,6 +308,23 @@ class _GenerationClock:
         return round(total * 1000)
 
 
+def _effective_model(model: Any, configured: str) -> str:
+    """The model that actually served, falling back to the configured name.
+
+    #748. A single-endpoint turn hands us a `LitellmModel`, which carries its
+    own `.model`. A failover turn hands us a `FallbackModel`, which does not —
+    so the previous form of this lookup (inline in the #69 trace) silently
+    returned the CONFIGURED name, making it wrong in exactly the case where the
+    two differ and the question is worth asking. `served_model` is that chain's
+    answer, and it is None until something has actually answered, which falls
+    through here rather than claiming the head.
+    """
+    served = getattr(model, "served_model", None)
+    if served:
+        return str(served)
+    return str(getattr(model, "model", "") or configured)
+
+
 def _measured_tokens(usage: tuple[int, int] | None) -> tuple[int | None, int | None]:
     """The provider's own counts for the RECORD, or None where it gave none.
 
@@ -882,7 +899,7 @@ def _emit_llm_trace(
     is swallowed to a debug line."""
     try:
         cfg = ctx.agent_config
-        model = getattr(getattr(agent, "model", None), "model", "") or (cfg.model if cfg else "")
+        model = _effective_model(getattr(agent, "model", None), cfg.model if cfg else "")
         endpoint = redact_endpoint((cfg.llm_base_url if cfg else "") or runner_base_url)
         tools = [t.name for t in agent.tools if isinstance(t, FunctionTool)]
         ms = agent.model_settings
@@ -1584,6 +1601,10 @@ class LitellmAgentRunner:
                         measured_prompt_tokens=measured_prompt,
                         measured_completion_tokens=measured_completion,
                         generation_ms=gen.elapsed_ms(),
+                        model=_effective_model(
+                            getattr(agent, "model", None),
+                            ctx.agent_config.model if ctx.agent_config else "",
+                        ),
                     )
                 )
             finally:
@@ -1690,4 +1711,8 @@ class LitellmAgentRunner:
             elapsed_ms=round((time.monotonic() - t0) * 1000),
             measured_prompt_tokens=measured_prompt,
             measured_completion_tokens=measured_completion,
+            model=_effective_model(
+                getattr(agent, "model", None),
+                ctx.agent_config.model if ctx.agent_config else "",
+            ),
         )

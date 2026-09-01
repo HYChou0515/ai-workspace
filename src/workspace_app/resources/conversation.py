@@ -17,6 +17,14 @@ class MessageMetrics(Struct, frozen=True):
     models, cost or anomalies was reading invented numbers and could not tell.
     """
 
+    model: str | None = None
+    """The model that produced THIS message's text — under failover, the endpoint
+    that actually served, not the configured head of the chain. A turn can span
+    several round trips and switch between them; this message holds one answer,
+    so it names whoever wrote it. That a switch happened at all is the
+    `FailoverSwitch` event's job, not this field's. None for messages written
+    before the field existed."""
+
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     elapsed_ms: int = 0
