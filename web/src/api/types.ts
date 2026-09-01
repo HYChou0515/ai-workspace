@@ -125,6 +125,18 @@ export type WorkspaceUsage = { used: number; quota: number };
  * says whether a provider's own count anchored the figure. */
 export type ChatContextUsage = { used: number; limit: number | null; measured: boolean };
 
+/** #739: why a compaction did or did not happen. A union rather than `string`,
+ * so renaming one of these cannot silently fall through to the wrong message —
+ * which is the failure the reasons exist to prevent. Mirrors
+ * `api/compaction.py: CompactionOutcome`. */
+export type CompactionReason =
+  | "compacted"
+  | "fits"
+  | "empty"
+  | "no-room"
+  | "failed"
+  | "unavailable";
+
 /** An agent profile the picker offers — model + prompt live BE-side; the
  * FE only needs enough to label the radio and PATCH the attachment.
  *
@@ -554,7 +566,7 @@ export interface ApiClient {
     slug: string,
     itemId: string,
     chatId: string,
-  ): Promise<{ compacted: boolean; reason: string }>;
+  ): Promise<{ compacted: boolean; reason: CompactionReason }>;
   /** POST /a/{slug}/items/{id}/files/refresh — force-mirror the live sandbox
    * to the snapshot (don't wait for the throttled sweep). Call this before a
    * read whenever the sandbox may have changed out-of-band (terminal `rm`,

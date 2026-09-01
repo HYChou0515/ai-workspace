@@ -41,6 +41,7 @@ import { ConnectionNotice } from "../../components/ConnectionNotice";
 import { ResourceLinkText } from "../../components/ResourceLinkText";
 import { TurnStatus } from "../../components/TurnStatus";
 import { turnsFromEntry } from "./agentLog";
+import type { CompactionReason } from "../../api/types";
 import type { QuotaKind } from "../../lib/quotaFailure";
 import { pxToRem } from "../../lib/pxToRem";
 import { useT } from "../../lib/i18n";
@@ -211,11 +212,18 @@ export function AgentPanel({
         // Two opposite diagnoses used to share one sentence. Only the second is
         // something the reader can act on, and saying the first over a thread
         // full of history sends them looking for something that is not there.
-        setComposerHint(
-          r.reason === "no-room"
-            ? "這個環境的提示詞本身已經佔滿模型的可讀範圍,整理對話幫不上忙 —— 需要調大模型視窗或縮短提示詞。"
-            : "這段對話還沒有需要壓縮的內容。",
-        );
+        // Each refusal gets its own sentence. `failed` is the one that matters
+        // most: it is the DOMINANT outcome when the button is pressed on a very
+        // full thread (the span is largest exactly then), and it used to be
+        // reported as 「沒有需要壓縮的內容」 — the same lie, over a thread full
+        // of history, that this whole mechanism was built to stop telling.
+        const said: Partial<Record<CompactionReason, string>> = {
+          "no-room":
+              "這個環境的提示詞本身已經佔滿模型的可讀範圍,整理對話幫不上忙 —— 需要調大模型視窗或縮短提示詞。",
+          failed: "整理沒有成功,對話沒有更動。可以再試一次。",
+          unavailable: "這個環境沒有開啟整理功能。",
+        };
+        setComposerHint(said[r.reason] ?? "這段對話還沒有需要壓縮的內容。");
         return;
       }
       void queryClient.invalidateQueries({ queryKey: qk.itemChat(slug, investigationId, chatId ?? "") });

@@ -34,6 +34,7 @@ import type {
   ToolCatalogEntry,
   WorkspaceUsage,
   ChatContextUsage,
+  CompactionReason,
   NotebookRef,
   NotificationItem,
   SearchOptions,
@@ -374,7 +375,7 @@ export const realApi: ApiClient = {
   },
 
   async compactChat(slug: string, itemId: string, chatId: string) {
-    return json<{ compacted: boolean; reason: string }>(
+    return json<{ compacted: boolean; reason: CompactionReason }>(
       await apiFetch(
         `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}/chats/${encodeURIComponent(chatId)}/compact`,
         { method: "POST" },

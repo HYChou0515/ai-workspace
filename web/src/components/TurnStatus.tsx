@@ -52,11 +52,14 @@ export function TurnStatus({
   const compactSec = compactStartRef.current
     ? Math.floor((Date.now() - compactStartRef.current) / 1000)
     : 0;
-  // A summariser that has not come back in this long has failed, whether or not
-  // its `finally` reached us. The manual path publishes no turn, so a lost
-  // `done` would otherwise pin the line for every spectator, with a 1 Hz timer
-  // and no way out.
-  const compactingLive = compacting && compactSec < COMPACTING_GIVE_UP_S;
+  // The bound binds only where nothing else can clear it. A turn always ends
+  // in a terminal event and every one of them clears `compacting`, so on the
+  // automatic path there is nothing to protect against — and applying it there
+  // dropped the status to 「還在準備」 (false: a compaction is running) and
+  // restored the retry button, whose premise is "this is stuck" and whose first
+  // act is to cancel. The manual path publishes no turn, so there a lost `done`
+  // really would pin the line for every spectator with no way out.
+  const compactingLive = compacting && (active || compactSec < COMPACTING_GIVE_UP_S);
 
   useEffect(() => {
     if (!active && !compactingLive) return;

@@ -336,3 +336,42 @@ describe("the compaction clock is its own (#739 review round 4)", () => {
     }
   });
 });
+
+describe("the give-up bound binds only where nothing can clear it (#739 round 5)", () => {
+  it("keeps saying so on the automatic path, however long it takes", async () => {
+    // A turn always ends in a terminal event, and every one of them clears
+    // `compacting`. So on the automatic path the bound has nothing to protect
+    // against — and applying it there dropped the status to 「還在準備」 (false:
+    // a compaction is running) and restored 重新問一次, a button whose premise
+    // is "this is stuck" and whose first act is to cancel.
+    vi.useFakeTimers();
+    try {
+      const log = { ...EMPTY_LOG, streaming: true, compacting: { replaced: 40 } };
+      const { rerender } = render(<TurnStatus log={log} onRetry={() => {}} />);
+      await act(async () => {
+        vi.advanceTimersByTime(301 * 1000);
+      });
+      rerender(<TurnStatus log={log} onRetry={() => {}} />);
+      expect(screen.queryByTestId("turn-compacting")).toBeTruthy();
+      expect(screen.queryByText(/重新問一次/)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still gives up when no turn will ever clear it", async () => {
+    // The manual path publishes no turn, so a lost `done` has no other exit.
+    vi.useFakeTimers();
+    try {
+      const log = { ...EMPTY_LOG, compacting: { replaced: 5 } };
+      const { rerender } = render(<TurnStatus log={log} />);
+      await act(async () => {
+        vi.advanceTimersByTime(301 * 1000);
+      });
+      rerender(<TurnStatus log={log} />);
+      expect(screen.queryByTestId("turn-compacting")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
