@@ -32,9 +32,14 @@
  * deliver no protection at all. If these should ever be secret FROM readers,
  * that is a backend change (redact on read), not a mask in this component.
  */
+import { useQuery } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 
+import { api as defaultApi } from "../api";
+import { qk } from "../api/queryKeys";
+import type { ApiClient } from "../api/types";
 import { mergeEnv, parseEnvText, toEnvText } from "../lib/envFile";
+import { deriveEnvNeeds } from "../lib/envNeeds";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 import { ModalShell } from "./ModalShell";
@@ -43,14 +48,49 @@ export function EnvVarsModal({
   envVars,
   onSave,
   onClose,
+  slug,
+  itemId,
+  client = defaultApi,
 }: {
   envVars: Record<string, string>;
   onSave: (next: Record<string, string>) => void | Promise<void>;
   onClose: () => void;
+  /** When given, the panel also offers a field per variable the item's current
+   * tools declared (#750). Optional so the box alone still works — the whole
+   * feature is a convenience over an editor that was already complete. */
+  slug?: string;
+  itemId?: string;
+  client?: Pick<ApiClient, "getItemTools">;
 }) {
   const t = useT();
   const [text, setText] = useState(() => toEnvText(envVars));
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // The picker's own query, by the same key: one answer to "which tools does
+  // this item run", shared with the tool picker rather than re-resolved here.
+  const toolsQ = useQuery({
+    queryKey: qk.itemTools(slug ?? "", itemId ?? ""),
+    queryFn: () => client.getItemTools(slug!, itemId!),
+    enabled: Boolean(slug && itemId),
+  });
+
+  // Derived from the TEXT BOX, not from the last saved state: the form and the
+  // box edit one value, and a field disagreeing with the text above it would
+  // leave the person to guess which one Save is going to use.
+  const values = parseEnvText(text);
+  const view = deriveEnvNeeds(toolsQ.data ?? [], values);
+
+  const setVar = (name: string, value: string) =>
+    setText(toEnvText({ ...values, [name]: value }));
+
+  // Which tool's variables are on screen. A FILTER over one set of values, not
+  // a form per tool: a variable two tools want is one stored name with one
+  // value, and per-tab copies would let it read differently depending on where
+  // you looked. Falls back to the first group so a tab for a tool switched off
+  // between renders cannot leave the panel showing nothing.
+  const [tab, setTab] = useState<string | null>(null);
+  const shownGroup =
+    view.groups.find((g) => g.key === tab) ?? view.groups[0] ?? { key: "", label: "", fields: [] };
 
   /** Import MERGES into what is in the BOX, not into the last saved state: the
    * box is what the user is looking at, and importing on top of something they
@@ -88,6 +128,96 @@ export function EnvVarsModal({
       <p style={{ margin: 0, fontSize: pxToRem(12), color: "var(--text-paper-d)", lineHeight: 1.5 }}>
         {t("env.desc")}
       </p>
+
+      {view.groups.length > 1 && (
+        <div role="tablist" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {view.groups.map((group) => (
+            <button
+              key={group.key}
+              type="button"
+              role="tab"
+              className="btn"
+              data-variant={group.key === shownGroup.key ? "primary" : "secondary"}
+              data-size="sm"
+              data-testid={`env-tab-${group.key}`}
+              aria-selected={group.key === shownGroup.key}
+              onClick={() => setTab(group.key)}
+            >
+              {group.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {view.groups.length > 0 && (
+        <section data-testid={`env-group-${shownGroup.key}`}>
+          {view.groups.length === 1 && (
+            <strong style={{ fontSize: pxToRem(12) }}>{shownGroup.label}</strong>
+          )}
+          {shownGroup.fields.map((field) => (
+            <label key={field.name} style={{ display: "block", marginTop: 8 }}>
+              <span
+                style={{
+                  fontFamily: "var(--font-mono, ui-monospace, monospace)",
+                  fontSize: pxToRem(12),
+                }}
+              >
+                {field.name}
+              </span>
+              {field.description && (
+                <span
+                  style={{
+                    display: "block",
+                    fontSize: pxToRem(11),
+                    color: "var(--text-paper-d)",
+                  }}
+                >
+                  {field.description}
+                </span>
+              )}
+              {field.wantedBy.length > 1 && (
+                <span
+                  data-testid={`env-shared-${field.name}`}
+                  style={{ display: "block", fontSize: pxToRem(11), color: "var(--text-paper-d)" }}
+                >
+                  {t("env.alsoUsedBy", { tools: field.wantedBy.join(", ") })}
+                </span>
+              )}
+              <input
+                data-testid={`env-field-${field.name}`}
+                value={values[field.name] ?? ""}
+                onChange={(e) => setVar(field.name, e.target.value)}
+                spellCheck={false}
+                // Never `true`. A required-but-empty field is NOT YET FILLED,
+                // not wrong: the declaration is a hint and Save is always
+                // available, so an error style would be a gate in disguise —
+                // the button works, the screen says it should not be pressed.
+                aria-invalid="false"
+                style={{
+                  width: "100%",
+                  boxSizing: "border-box",
+                  padding: "6px 8px",
+                  border: "1px solid var(--paper-3)",
+                  borderRadius: 6,
+                  background: "var(--paper)",
+                  color: "var(--text-paper)",
+                  fontFamily: "var(--font-mono, ui-monospace, monospace)",
+                  fontSize: pxToRem(12),
+                }}
+              />
+            </label>
+          ))}
+        </section>
+      )}
+
+      {view.undeclared.length > 0 && (
+        <p
+          data-testid="env-undeclared"
+          style={{ margin: 0, fontSize: pxToRem(11), color: "var(--text-paper-d)" }}
+        >
+          {t("env.undeclared", { tools: view.undeclared.join(", ") })}
+        </p>
+      )}
 
       <textarea
         data-testid="env-text"

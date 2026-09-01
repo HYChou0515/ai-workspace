@@ -1,0 +1,93 @@
+/**
+ * What the item's current toolset says it wants from the environment (#750).
+ *
+ * The panel renders this two ways at once — a tab per tool, and a field per
+ * variable — and both are derived here so they cannot drift apart. Storage is
+ * untouched: this describes the SAME flat `Record<string, string>` the text box
+ * edits, which is why a variable two tools want is one field with one value.
+ *
+ * A hint, never a gate. Nothing here refuses anything: a tool still receives
+ * every variable the item holds, whether or not it said so.
+ */
+import type { ItemToolState } from "../api/types";
+
+export type EnvField = {
+  name: string;
+  description: string;
+  required: boolean | null;
+  /** Every tool asking for this name, by label. Shown beside the field so
+   * clearing it is an informed act — the storage is flat, so a variable
+   * emptied under one tool's tab is emptied for all of them. */
+  wantedBy: string[];
+  filled: boolean;
+};
+
+export type ToolEnvGroup = {
+  key: string;
+  label: string;
+  fields: EnvField[];
+};
+
+export type EnvNeedsView = {
+  /** One per effective tool that declared at least one variable — the tabs. */
+  groups: ToolEnvGroup[];
+  /** Labels of effective tools that shipped no declaration. Named, not
+   * counted as needing nothing: almost every tool predates #750, and someone
+   * hunting a missing variable must not be told there is nothing to find. */
+  undeclared: string[];
+  /** Names still to fill, counting ONLY variables an author explicitly marked
+   * required. An unmarked variable is not "optional" — it is unstated — and
+   * treating unstated as required makes a panel that always complains, which
+   * is a panel nobody reads. */
+  missingRequired: string[];
+};
+
+export function deriveEnvNeeds(
+  tools: ItemToolState[],
+  values: Record<string, string>,
+): EnvNeedsView {
+  // Only what this item actually runs. A tool switched off has no bearing on
+  // what is missing, and listing it would ask for variables nothing will read.
+  const live = tools.filter((t) => t.effective);
+
+  const wantedBy = new Map<string, string[]>();
+  for (const t of live) {
+    for (const need of t.env_needs ?? []) {
+      wantedBy.set(need.name, [...(wantedBy.get(need.name) ?? []), t.label]);
+    }
+  }
+
+  const filled = (name: string) => (values[name] ?? "").trim() !== "";
+
+  const groups: ToolEnvGroup[] = live
+    .filter((t) => t.env_needs && t.env_needs.length > 0)
+    .map((t) => ({
+      key: t.key,
+      label: t.label,
+      fields: (t.env_needs ?? []).map((need) => ({
+        name: need.name,
+        description: need.description,
+        required: need.required ?? null,
+        wantedBy: wantedBy.get(need.name) ?? [t.label],
+        filled: filled(need.name),
+      })),
+    }));
+
+  const missingRequired = [
+    ...new Set(
+      live.flatMap((t) =>
+        (t.env_needs ?? [])
+          .filter((n) => n.required === true && !filled(n.name))
+          .map((n) => n.name),
+      ),
+    ),
+  ];
+
+  return {
+    groups,
+    // `null` only. A tool answering `[]` looked and needs nothing — that is a
+    // claim, and repeating it as a caveat would bury the tools that made none.
+    undeclared: live.filter((t) => t.env_needs == null).map((t) => t.label),
+    missingRequired,
+  };
+}

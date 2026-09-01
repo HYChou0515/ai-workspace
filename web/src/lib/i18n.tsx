@@ -1251,6 +1251,17 @@ export const messages = {
       "一行一個,`名稱=值`。這些會交給這個工作區的工具使用,常見用途是 API 金鑰。只影響這個工作區。",
     en: "One per line, `NAME=value`. Handed to the tools this workspace runs — API keys and the like. This workspace only.",
   },
+  // #750. Says what is true and no more: these tools SAID what they want.
+  // Never "this is everything you need" — an author may have left names out,
+  // and the panel has no way to know that they did.
+  "env.alsoUsedBy": { "zh-TW": "{tools} 也會用到", en: "Also used by {tools}" },
+  // The third state, spelled out. NOT "needs nothing": these tools shipped no
+  // list at all, and someone hunting a variable they are missing must not be
+  // told there is nothing left to find.
+  "env.undeclared": {
+    "zh-TW": "{tools} 沒有列出它需要哪些變數,不代表它不需要。",
+    en: "{tools} did not list what it needs — which is not the same as needing nothing.",
+  },
   "env.import": { "zh-TW": "載入 .env", en: "Import .env" },
   "env.export": { "zh-TW": "匯出 .env", en: "Export .env" },
   "env.save": { "zh-TW": "儲存", en: "Save" },

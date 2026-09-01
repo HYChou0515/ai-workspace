@@ -14,21 +14,149 @@
  */
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { ItemToolState } from "../api/types";
+import { renderWithQuery } from "../test/queryWrapper";
 import { EnvVarsModal } from "./EnvVarsModal";
 
 afterEach(cleanup);
 
+// Wrapped even without slug/itemId: the panel now reads the item's declared
+// tools through the same query the tool picker uses, and a hook needs its
+// provider whether or not it is enabled. Given no item, it asks for nothing —
+// which is the case these tests cover, the box on its own.
 const open = (envVars: Record<string, string>, onSave = vi.fn(), onClose = vi.fn()) => {
-  render(<EnvVarsModal envVars={envVars} onSave={onSave} onClose={onClose} />);
+  renderWithQuery(<EnvVarsModal envVars={envVars} onSave={onSave} onClose={onClose} />);
   return { onSave, onClose };
 };
 
 const box = () => screen.getByTestId("env-text") as HTMLTextAreaElement;
 const type = (text: string) => fireEvent.change(box(), { target: { value: text } });
 const save = () => fireEvent.click(screen.getByTestId("env-save"));
+
+describe("EnvVarsModal declared fields (#750)", () => {
+  const SAP: ItemToolState[] = [
+    {
+      key: "sap-tools",
+      label: "SAP Tools",
+      description: "",
+      default_on: true,
+      pref: "follow",
+      effective: true,
+      env_needs: [
+        { name: "SAP_HOST", description: "SAP server address", required: true },
+        { name: "SAP_PROXY", description: "", required: false },
+      ],
+    },
+    {
+      key: "legacy",
+      label: "Legacy Tool",
+      description: "",
+      default_on: true,
+      pref: "follow",
+      effective: true,
+      env_needs: null,
+    },
+  ];
+
+  const openWith = (tools: ItemToolState[], envVars: Record<string, string> = {}) => {
+    const onSave = vi.fn();
+    renderWithQuery(
+      <EnvVarsModal
+        envVars={envVars}
+        onSave={onSave}
+        onClose={vi.fn()}
+        slug="rca"
+        itemId="i1"
+        client={{ getItemTools: vi.fn(async () => tools) }}
+      />,
+    );
+    return { onSave };
+  };
+
+  it("offers a field per declared variable, with what the author said it is", async () => {
+    openWith(SAP);
+    const field = (await screen.findByTestId("env-field-SAP_HOST")) as HTMLInputElement;
+    expect(field.value).toBe("");
+    expect(screen.getByText("SAP server address")).toBeInTheDocument();
+  });
+
+  it("types a declared field straight into the same stored set", async () => {
+    const { onSave } = openWith(SAP, { EXISTING: "1" });
+    fireEvent.change(await screen.findByTestId("env-field-SAP_HOST"), {
+      target: { value: "sap.corp" },
+    });
+    save();
+    // One storage, one dict — the form is a second way to edit the text box,
+    // not a second place values live.
+    expect(onSave).toHaveBeenCalledWith({ EXISTING: "1", SAP_HOST: "sap.corp" });
+  });
+
+  it("shows one tool at a time, and the shared value is the same one", async () => {
+    // Someone who just switched a tool on wants that tool's variables, not a
+    // scroll past everything else. The tab is a FILTER over one set of values,
+    // never a second form: CORP_PROXY under either tab is one stored name with
+    // one value, so a tab that kept its own copy would let the same variable
+    // hold two different things depending on where you looked.
+    const shared = { name: "CORP_PROXY", description: "", required: null };
+    const tools: ItemToolState[] = [
+      {
+        key: "sap-tools",
+        label: "SAP Tools",
+        description: "",
+        default_on: true,
+        pref: "follow",
+        effective: true,
+        env_needs: [{ name: "SAP_HOST", description: "", required: true }, shared],
+      },
+      {
+        key: "wafer",
+        label: "Wafer History",
+        description: "",
+        default_on: true,
+        pref: "follow",
+        effective: true,
+        env_needs: [shared],
+      },
+    ];
+    openWith(tools);
+
+    // First tool's fields are what you land on.
+    await screen.findByTestId("env-field-SAP_HOST");
+    fireEvent.change(screen.getByTestId("env-field-CORP_PROXY"), {
+      target: { value: "proxy:3128" },
+    });
+
+    fireEvent.click(screen.getByTestId("env-tab-wafer"));
+
+    // The other tool's tab hides what belongs to the first…
+    expect(screen.queryByTestId("env-field-SAP_HOST")).not.toBeInTheDocument();
+    // …and the variable they share carries the value typed under the other tab.
+    expect((screen.getByTestId("env-field-CORP_PROXY") as HTMLInputElement).value).toBe(
+      "proxy:3128",
+    );
+    // And it says who else is relying on it, so clearing it is an informed act.
+    expect(screen.getByTestId("env-shared-CORP_PROXY")).toHaveTextContent("SAP Tools");
+  });
+
+  it("says a tool did not declare rather than showing it as satisfied", async () => {
+    openWith(SAP);
+    expect(await screen.findByTestId("env-undeclared")).toHaveTextContent("Legacy Tool");
+  });
+
+  it("leaves Save usable with a required field empty", async () => {
+    // The declaration is a hint, not a gate: nothing about it may stop someone
+    // storing what they have. A disabled Save (or a red field) would be a gate
+    // wearing a different coat — the button works, but the screen says it
+    // should not be pressed, so nobody presses it.
+    openWith(SAP);
+    await screen.findByTestId("env-field-SAP_HOST");
+    expect(screen.getByTestId("env-save")).not.toBeDisabled();
+    expect(screen.getByTestId("env-field-SAP_HOST")).toHaveAttribute("aria-invalid", "false");
+  });
+});
 
 describe("EnvVarsModal", () => {
   it("shows the whole set as one block of .env text", () => {

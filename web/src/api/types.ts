@@ -278,6 +278,21 @@ export type ItemToolState = {
   /** Why it could not be resolved. The row keeps its switch; what it lost is
    * the ability to run (#480). */
   unavailable?: string | null;
+  /** #750: what this tool says it wants from the item's environment, or `null`
+   * when nobody said. `null` and `[]` are different claims and the panel draws
+   * them differently — `[]` is "needs nothing", `null` is "did not say". Almost
+   * every tool predates the declaration, so reading silence as `[]` would tell
+   * someone hunting a missing variable that there is nothing to find. */
+  env_needs?: EnvNeedDecl[] | null;
+};
+
+/** #750: one environment variable a tool's author says it wants. A hint, not a
+ * rule — nothing refuses a name absent from here. `required: null` means the
+ * author did not mark it, which is neither required nor optional. */
+export type EnvNeedDecl = {
+  name: string;
+  description: string;
+  required: boolean | null;
 };
 
 /** #380: one available skill's per-item picker state (GET
