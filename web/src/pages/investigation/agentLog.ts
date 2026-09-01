@@ -736,11 +736,23 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
       // so the store is ahead by construction. The store-poll being gated on a
       // healthy stream is the only reason this stays invisible single-pod.
       //
-      // The timestamp is what makes this safe to dedupe on: the backend stamps
-      // it ONCE and gives the same value to the stored message and the broadcast,
-      // so asking the same thing twice differs and both still draw. Absent, it
-      // falls back to `now`, matches nothing, and the message is drawn — the
-      // right way round, since a duplicate bubble is cheaper than a lost one.
+      // Author and timestamp are both part of the key, and both for the same
+      // reason: the backend stamps each ONCE (`chat_send`) and hands the same
+      // value to the stored message and to the broadcast, so the two copies of
+      // one message agree while two genuinely different messages differ. Drop
+      // the author and a shared chat loses messages — two people saying "ok" in
+      // the same millisecond, and the stored one swallows the other's. Drop the
+      // timestamp and the same person cannot say the same thing twice.
+      //
+      // Every way of NOT matching draws the message, which is the right way
+      // round: a duplicate bubble is cheaper than one that never appears. So an
+      // absent `created_at` (falls back to `now`) or an author recorded as null
+      // on one side and undefined on the other both fail safe.
+      //
+      // One case this does not fix, and does not make worse: while the store is
+      // BEHIND — holding one of a colliding pair — its single row suppresses
+      // both broadcasts, because this is a scan and not a match-and-consume. It
+      // heals itself on the next reconcile, once the snapshot carries both.
       const askedAt = ev.created_at || now;
       const alreadyDrawn = entries.some(
         (e) =>
@@ -748,6 +760,7 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
           e.fromStore &&
           e.message.role === "user" &&
           e.message.content === ev.content &&
+          e.message.author === ev.author &&
           e.at === askedAt,
       );
       if (!alreadyDrawn) {

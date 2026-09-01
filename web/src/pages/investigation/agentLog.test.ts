@@ -976,7 +976,7 @@ describe("a question already on screen from the store is not drawn again", () =>
   // multi-pod deployment and never single-pod.
   it("does not redraw a message the poll already hydrated", () => {
     const polled = reconcileSnapshot(EMPTY_LOG, {
-      messages: [{ role: "user", content: "hello", created_at: 100 }],
+      messages: [{ role: "user", content: "hello", created_at: 100, author: "u" }],
     });
 
     const after = reduceAgent(polled, {
@@ -1004,7 +1004,7 @@ describe("a question already on screen from the store is not drawn again", () =>
     // and gives the same value to the stored copy and the broadcast, so a real
     // second ask differs.
     const first = reconcileSnapshot(EMPTY_LOG, {
-      messages: [{ role: "user", content: "again?", created_at: 100 }],
+      messages: [{ role: "user", content: "again?", created_at: 100, author: "u" }],
     });
 
     const after = reduceAgent(first, {
@@ -1012,6 +1012,51 @@ describe("a question already on screen from the store is not drawn again", () =>
       author: "u",
       content: "again?",
       created_at: 900,
+    } as never);
+
+    const asked = after.entries.filter(
+      (e) => e.kind === "message" && e.message.role === "user",
+    );
+    expect(asked).toHaveLength(2);
+  });
+
+  it("does not let one person's message swallow another's", () => {
+    // A shared item has no cross-viewer send lock, so two people can land in the
+    // same millisecond saying something short — "ok", "go", "1". Keyed without
+    // the author, the stored copy of the first matches the second's broadcast
+    // and that person's message never appears at all. Losing a message is worse
+    // than the duplicate this de-dupe exists to remove, so the author is part of
+    // the key for the same reason the timestamp is: the backend stamps both once
+    // and gives the same values to the stored row and the broadcast.
+    const stored = reconcileSnapshot(EMPTY_LOG, {
+      messages: [{ role: "user", content: "ok", created_at: 100, author: "alice" }],
+    });
+
+    const after = reduceAgent(stored, {
+      type: "user_message",
+      author: "bob",
+      content: "ok",
+      created_at: 100,
+    } as never);
+
+    const asked = after.entries.filter(
+      (e) => e.kind === "message" && e.message.role === "user",
+    );
+    expect(asked).toHaveLength(2);
+  });
+
+  it("does not let one message swallow a different one sent in the same millisecond", () => {
+    // The other half of the same hazard: same author, same instant, different
+    // words. Only the content tells them apart.
+    const stored = reconcileSnapshot(EMPTY_LOG, {
+      messages: [{ role: "user", content: "first", created_at: 100, author: "u" }],
+    });
+
+    const after = reduceAgent(stored, {
+      type: "user_message",
+      author: "u",
+      content: "second",
+      created_at: 100,
     } as never);
 
     const asked = after.entries.filter(
