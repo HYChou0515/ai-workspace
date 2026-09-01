@@ -334,23 +334,28 @@ def test_a_measurement_taken_after_the_summary_still_anchors():
     assert got.used == 9_400
 
 
-def test_an_estimate_stored_as_usage_is_not_an_anchor():
+def test_a_substituted_estimate_is_used_but_never_called_measured():
     """A provider that reports no usage does not leave a zero behind: the runner
-    substitutes our own estimate so the live ↑ line does not flip to 0, and
-    Ollama routinely takes that path. So `prompt_tokens > 0` cannot tell a
-    measurement from a guess — and the guard that refuses a reported 0 is
-    unreachable on exactly the deployment it was written for.
+    substitutes its own whole-request estimate so the live ↑ does not flip to 0,
+    and Ollama routinely takes that path. So `prompt_tokens > 0` cannot tell a
+    measurement from a guess.
 
-    `exact` is what the provider actually said. Without it the gauge reports a
-    guess as a fact, which is the #624 disease with a new coat of paint.
-    (Caught by review, by two lenses independently.)"""
+    But the substituted number is still the BEST one available — it counts the
+    system prompt and the tool schemas, which `estimate_messages` cannot see at
+    all. An earlier fix rejected the whole record and fell back to the
+    messages-only estimate; measured against a real 32k thread that moved the
+    figure from +500 off to −5,800 off, and the compaction trigger stopped
+    firing on a window that was full.
+
+    So: keep the number, fix the label. `measured` is the provider's word, and
+    only that."""
     msgs = [
         _Msg("問題", role="user"),
         _Msg("回答", role="assistant", metrics=_Metrics(9_000, 400, exact=False)),
     ]
     got = context_usage(msgs, limit=ContextLimit(tokens=40_960, source="catalog"))
-    assert got.measured is False
-    assert got.used == estimate_messages(msgs)
+    assert got.measured is False, "nobody measured it"
+    assert got.used == 9_400, "but it is still the closest thing to the truth"
 
 
 def test_a_message_written_before_exactness_was_recorded_is_not_trusted():
@@ -366,3 +371,4 @@ def test_a_message_written_before_exactness_was_recorded_is_not_trusted():
 
     got = context_usage([_Old()], limit=ContextLimit(tokens=40_960, source="catalog"))
     assert got.measured is False
+    assert got.used == 9_400, "the stored figure is still the best one available"

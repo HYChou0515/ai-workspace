@@ -132,6 +132,9 @@ class LayeredReducer(IContextReducer):
                 messages=folded,
                 summary=f"{n} 筆較早的工具輸出已摺疊(只留下摘要),對話內容完整保留。",
                 changed=True,
+                # Nothing was given up, and the notice must not advise as if it
+                # had — least of all right after a compaction saved the thread.
+                lossless=True,
             )
 
         # ── 2. drop from the middle, keeping the task ──────────────

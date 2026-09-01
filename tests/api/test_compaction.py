@@ -193,7 +193,15 @@ def test_an_overflowing_thread_compacts_and_keeps_a_tail():
     compaction — compacting again on the very next turn would cost a round trip
     every time."""
     msgs = [_Msg("user", f"訊息{i}") for i in range(20)]
-    at, span = plan_for_budget(msgs, used=5_000, budget=40, estimate=estimate_messages)
+    own = estimate_messages(msgs)
+    # The overhead has to be SMALLER than the budget, or there is no room for
+    # any history at all and declining is the right answer (its own spec). The
+    # original numbers here — used 5000 against a budget of 40 — described a
+    # deployment whose system prompt alone was 100x its history budget.
+    overhead = 200
+    at, span = plan_for_budget(
+        msgs, used=own + overhead, budget=overhead + own // 2, estimate=estimate_messages
+    )
     assert span, "over budget must produce a span to summarise"
     assert at == len(span), "no earlier summary here, so the index is the span length"
     assert len(span) < len(msgs), "something must survive for the model to answer"
@@ -452,3 +460,67 @@ async def test_the_summariser_is_offered_no_tools():
     assert base.agent_config.allowed_tools == ["exec", "read_file"], (
         "the caller's own config is untouched"
     )
+
+
+def test_the_fold_saving_is_measured_over_the_same_slice_as_the_usage():
+    """After the first compaction, automatic compaction died.
+
+    `used` comes from `context_usage`, which slices to the newest summary — it
+    counts the LIVE thread only. The fold saving was measured over the WHOLE
+    list, which still holds every pre-summary message, dumps and all. So the
+    guard subtracted savings from bytes `used` never counted, and since a thread
+    is compacted precisely because it was full of bulky output, that output is
+    always sitting behind the summary: `used - freed` came out small (sometimes
+    negative) forever after.
+
+    Both must be measured over the same slice."""
+    buried = _Msg("tool", "巨" * 20_000, tool_name="exec")
+    msgs = [
+        _Msg("user", "很久以前"),
+        buried,
+        _Msg("summary", "先前:已經處理過那份輸出。"),
+        *[_Msg("user", f"新的問題{i}" * 100) for i in range(6)],
+    ]
+    live = msgs[2:]
+    used = estimate_messages(live) + 1_000  # what context_usage would report
+    budget = estimate_messages(live) // 2
+
+    _at, span = plan_for_budget(msgs, used=used, budget=budget, estimate=estimate_messages)
+    assert span, "the live thread is over budget; the buried dump is not its saving"
+
+
+def test_a_thread_whose_overhead_alone_exceeds_the_budget_is_left_alone():
+    """When the fixed overhead — system prompt, tool schemas, skills index —
+    already exceeds the whole budget, there is no room for ANY history, and
+    compaction cannot make one. Sizing a tail against a negative room yields
+    `keep_tokens = 0`, so every turn razes the thread to its last message, pays
+    an LLM round trip, and recovers nothing that was ever the problem.
+
+    Declining is the honest answer: the operator has to raise the window or cut
+    the prompt. Amputating the user's conversation does not help either."""
+    msgs = [_Msg("user", f"訊息{i}") for i in range(5)]
+    own = estimate_messages(msgs)
+
+    _at, span = plan_for_budget(msgs, used=own + 19_000, budget=5_000, estimate=estimate_messages)
+    assert span == [], "compaction cannot fix an overhead larger than the budget"
+
+
+def test_a_thread_that_fits_is_decided_without_touching_the_estimator_twice():
+    """The fold is only interesting when the thread does NOT fit. Running it —
+    plus three full passes of the CJK estimator — on every send put a
+    measurable stall (~98 ms on a long Chinese thread) in front of the
+    overwhelming majority of turns, which need no compaction at all.
+
+    The cheap comparison decides first; the fold is the second question, asked
+    only of threads that failed the first."""
+    calls = 0
+
+    def _counting(messages):
+        nonlocal calls
+        calls += 1
+        return estimate_messages(messages)
+
+    msgs = [_Msg("user", f"訊息{i}") for i in range(20)]
+    _at, span = plan_for_budget(msgs, used=100, budget=10_000, estimate=_counting)
+    assert span == []
+    assert calls == 0, "a thread that fits should not be measured at all"

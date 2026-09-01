@@ -158,42 +158,54 @@ def plan_for_budget(
     send everything and learn the real limit from the response. A thread that is
     never trimmed must never be compacted either — spending a turn and losing
     detail for a limit nobody measured is the worse of the two mistakes."""
-    # The free stage first. `history_items` will fold bulky tool output at turn
-    # time anyway, so a thread pushed over the line by one `exec` dump is
-    # already saved — spending a round trip AND permanently replacing a span
-    # with a précis to reclaim what folding gives away is the expensive answer
-    # to a free question. This is the agreed order: 折疊 → 壓縮 → 丟棄.
-    folded = fold_bulky(list(messages))
-    freed = max(0, estimate(list(messages)) - estimate(folded))
-    if not force and (budget is None or used - freed <= budget):
+    # Nothing to measure on a thread that already fits — and most do. Folding
+    # plus three passes of the CJK estimator on every send put ~98 ms in front
+    # of the overwhelming majority of turns; this comparison is free.
+    if not force and (budget is None or used <= budget):
         return 0, []
-    # The tail must be sized in the unit it is SPENT in.
-    #
-    # `used` is the provider's count of the whole request, so it carries a fixed
-    # overhead — system prompt, tool schemas, skills index — of several thousand
-    # tokens the message estimator cannot see. Sizing the tail from it and then
-    # filling that tail with estimator-measured messages spends one unit against
-    # another: on a real thread, six short messages "fit" a budget meant to hold
-    # a fraction of the window, the span comes back empty, and compaction does
-    # nothing at all. (Found by pressing the button on a running app.)
-    #
-    # The overhead is recoverable: it is exactly what `used` has that the
-    # messages themselves do not.
-    # From here on the FOLDED thread is the subject. Folding preserves message
-    # count, so the insert index still addresses the caller's own list — but the
-    # span handed to the summariser carries markers instead of dumps, which is
-    # the only thing bounding that request. Nothing else does: the span grows the
-    # further over budget the thread is, it is sent as one prompt alongside the
-    # whole system prompt, and if it overflows the runner can only shrink
-    # `ctx.history` — which the compactor deliberately emptied. It would return
-    # nothing, and the thread would fall back to the amputation this exists to
-    # remove, most likely exactly when it is most needed.
-    _, live = _after_last_summary(folded)
-    own = estimate(live)
+
+    # Everything from here is scoped to the LIVE thread — the slice from the
+    # newest summary on. `used` is scoped that way too (`context_usage` cuts
+    # there), and mixing the two scopes is what killed automatic compaction
+    # after the first pass: the saving was measured over the whole store, which
+    # still holds every pre-summary dump, so `used - freed` came out small — and
+    # sometimes negative — forever after.
+    start, live = _after_last_summary(messages)
+    folded_live = fold_bulky(live)
+
+    # The free stage, second. `history_items` folds bulky tool output at turn
+    # time anyway, so a thread pushed over the line by one `exec` dump is
+    # already saved; spending a round trip AND permanently replacing a span to
+    # reclaim what folding gives away is the expensive answer to a free
+    # question. This is the agreed order: 折疊 → 壓縮 → 丟棄.
+    own = estimate(folded_live)
+    freed = max(0, estimate(live) - own)
+    if not force and budget is not None and used - freed <= budget:
+        return 0, []
+
     overhead = max(0, used - freed - own)
     room = own if budget is None else budget - overhead
+    if not force and room <= 0:
+        # The fixed overhead alone exceeds the budget, so there is no room for
+        # ANY history and compaction cannot make one. Left to run, it sizes the
+        # tail against a negative room, razes the thread to its last message
+        # every other turn, pays a round trip each time and recovers nothing
+        # that was ever the problem. The operator has to raise the window or cut
+        # the prompt; amputating the user's conversation does not help.
+        return 0, []
+
+    # From here the FOLDED live thread is the subject. Folding preserves message
+    # count and order, so the insert index still addresses the caller's own list
+    # — but the span handed to the summariser carries markers instead of dumps,
+    # which is the only thing bounding that request. Nothing else does: the span
+    # grows the further over budget the thread is, it goes out as one prompt
+    # beside the whole system prompt, and if it overflows the runner can only
+    # shrink `ctx.history` — which the compactor deliberately emptied. It would
+    # return nothing, and the thread would fall back to the amputation this
+    # exists to remove, most likely exactly when it is most needed.
     keep_tokens = int(max(0, min(room, own)) * KEEP_TAIL_RATIO)
-    return compaction_plan(folded, keep_tokens=keep_tokens, estimate=estimate)
+    span, kept = split_for_compaction(folded_live, keep_tokens=keep_tokens, estimate=estimate)
+    return start + len(span), span
 
 
 class IConversationCompactor(abc.ABC):

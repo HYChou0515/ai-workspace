@@ -167,6 +167,10 @@ class Compacting:
     pause the user has no way to anticipate."""
 
     replaced: int
+    #: The pass has finished — either way, including when it wrote nothing. The
+    #: manual path publishes no turn afterwards, so without this the live notice
+    #: would stay up forever.
+    done: bool = False
     type: Literal["compacting"] = "compacting"
 
 

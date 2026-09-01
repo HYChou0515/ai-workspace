@@ -905,3 +905,35 @@ describe("the compacting pause (#739)", () => {
     expect(spoke.compacting).toBeNull();
   });
 });
+
+describe("the compacting pause switches off (#739 review round 2)", () => {
+  it("clears when the compaction reports itself finished", () => {
+    // The manual path publishes this and then nothing else — no turn, no
+    // metrics, no terminal event — so without an explicit end the notice stayed
+    // pinned under the composer for every viewer, forever.
+    const busy = reduceAgent(EMPTY_LOG, {
+      type: "compacting",
+      replaced: 12,
+    } as AgentEvent);
+    expect(busy.compacting).toEqual({ replaced: 12 });
+    const done = reduceAgent(busy, {
+      type: "compacting",
+      replaced: 12,
+      done: true,
+    } as AgentEvent);
+    expect(done.compacting).toBeNull();
+  });
+
+  it("clears when a turn ends, whatever way it ends", () => {
+    // Belt and braces: an end event must never leave the flag standing, even if
+    // the finishing event went missing.
+    for (const ev of ["done", "error", "run_cancelled"]) {
+      const busy = reduceAgent(EMPTY_LOG, {
+        type: "compacting",
+        replaced: 3,
+      } as AgentEvent);
+      const ended = reduceAgent(busy, { type: ev } as AgentEvent);
+      expect(ended.compacting, `${ev} must clear it`).toBeNull();
+    }
+  });
+});

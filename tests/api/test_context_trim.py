@@ -76,7 +76,7 @@ def _app_with_limit(limit: int | None, *, mute: bool = False):
     summary; a mute one is how a spec reaches the fallback where the thread is
     trimmed and the user is told, exactly as before compaction existed."""
     from workspace_app.api import create_app
-    from workspace_app.api.events import MessageDelta, RunDone
+    from workspace_app.api.events import AgentMetrics, MessageDelta, RunDone
     from workspace_app.api.runner import ScriptedAgentRunner
     from workspace_app.filestore.memory import MemoryFileStore
     from workspace_app.resources import make_spec
@@ -91,7 +91,27 @@ def _app_with_limit(limit: int | None, *, mute: bool = False):
         spec=spec,
         sandbox=MockSandbox(),
         filestore=MemoryFileStore(),
-        runner=ScriptedAgentRunner([RunDone()] if mute else [MessageDelta(text="ok"), RunDone()]),
+        # #739: a runner that reports no usage leaves every turn unanchored, so
+        # the gauge falls back to a messages-only estimate that cannot see the
+        # system prompt or tool schemas — and the compaction trigger then
+        # compares that against a whole-request budget and fires far too late.
+        # Reporting usage is what a real provider does; without it these specs
+        # exercise the fallback rather than the path they are about.
+        runner=ScriptedAgentRunner(
+            [RunDone()]
+            if mute
+            else [
+                MessageDelta(text="ok"),
+                AgentMetrics(
+                    phase="final",
+                    prompt_tokens=13_000,
+                    completion_tokens=2,
+                    elapsed_ms=1,
+                    exact=True,
+                ),
+                RunDone(),
+            ]
+        ),
         get_user_id=lambda: "alice",
         context_limit=limit,
     )
@@ -116,8 +136,13 @@ def test_a_full_thread_is_compacted_rather_than_amputated():
     So the notice must NOT appear on the ordinary path: "開一個新對話" is advice
     the product no longer means, and printing it anyway would teach users to
     throw away threads that no longer need throwing away."""
-    client, spec, iid = _app_with_limit(1_000)  # tiny ceiling ⇒ cannot fit
-    for i in range(6):
+    # A ceiling that is small but WORKABLE: big enough that, after the reply
+    # reserve and the prompt overhead, there is still room for some history —
+    # otherwise compaction correctly declines (its own spec) because no amount
+    # of summarising can fit a thread into a window the system prompt already
+    # fills.
+    client, spec, iid = _app_with_limit(16_000)
+    for i in range(12):
         client.post(f"/a/rca/items/{iid}/messages", json={"content": "量測資料異常" * 200 + str(i)})
 
     thread = _thread(spec, iid)

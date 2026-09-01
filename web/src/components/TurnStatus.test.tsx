@@ -256,3 +256,34 @@ describe("the compaction pause is not only the presser's (#739 review)", () => {
     expect(screen.queryByTestId("turn-compacting")).toBeNull();
   });
 });
+
+describe("the compaction notice does not shadow what is above it (#739 review)", () => {
+  it("still lets an abandoned turn be reported, and offers the retry", async () => {
+    // An earlier fix hoisted this branch above every other one to reach the
+    // manual path. That made the abandoned-turn detector — and its 重新問一次
+    // button — unreachable for the whole compaction round trip, which is
+    // exactly the window in which a turn looks stuck. The idle guard was what
+    // needed relaxing, not this branch's position.
+    vi.useFakeTimers();
+    try {
+      const { rerender } = render(
+        <TurnStatus
+          log={{ ...EMPTY_LOG, streaming: true, compacting: { replaced: 5 } }}
+          onRetry={() => {}}
+        />,
+      );
+      await act(async () => {
+        vi.advanceTimersByTime(11 * 60 * 1000);
+      });
+      rerender(
+        <TurnStatus
+          log={{ ...EMPTY_LOG, streaming: true, compacting: { replaced: 5 } }}
+          onRetry={() => {}}
+        />,
+      );
+      expect(screen.queryByTestId("turn-abandoned")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

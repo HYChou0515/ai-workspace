@@ -436,10 +436,14 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
       return { ...log, rateLimited: { seconds: ev.seconds } };
 
     case "compacting":
-      // #739: ephemeral — the turn is spending a round trip on a summary before
-      // it answers. NOT pushed to `entries`: the transcript gets the summary
-      // message itself. Cleared as soon as real output resumes, below.
-      return { ...log, compacting: { replaced: ev.replaced } };
+      // #739: ephemeral — a summary is being written before the turn answers.
+      // NOT pushed to `entries`: the transcript gets the summary message itself.
+      //
+      // `done` is what switches it off. The manual path publishes this event and
+      // then nothing at all — no turn, no metrics, no terminal event — so
+      // without an explicit end the notice stayed pinned under the composer for
+      // every viewer until somebody started an unrelated turn.
+      return { ...log, compacting: ev.done ? null : { replaced: ev.replaced } };
 
     case "restore_progress":
       // #492 P11: ephemeral — record the cold-wake restore's (done, total) so
@@ -570,13 +574,22 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
 
     case "run_cancelled":
       entries.push({ kind: "banner", at: now, text: translate(initialLocale(), "banner.cancelled") });
-      return { ...log, entries, streaming: false, streamingBy: null };
+      // #739: an end is an end — never leave the compaction notice standing,
+      // even if its own finishing event went missing.
+      return { ...log, entries, streaming: false, streamingBy: null, compacting: null };
 
     case "error":
-      return { ...log, entries, streaming: false, streamingBy: null, error: ev.message };
+      return {
+        ...log,
+        entries,
+        streaming: false,
+        streamingBy: null,
+        error: ev.message,
+        compacting: null,
+      };
 
     case "done":
-      return { ...log, entries, streaming: false, streamingBy: null };
+      return { ...log, entries, streaming: false, streamingBy: null, compacting: null };
 
     case "user_message":
       // #43: a human message on the shared investigation, broadcast to every

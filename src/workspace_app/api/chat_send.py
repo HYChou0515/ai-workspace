@@ -50,7 +50,7 @@ from .notifications import notify
 from .rca_messages import bubble_kb_citations, to_rca_message
 from .timeutil import now_ms
 from .turn_gate import admit_turn
-from .turns import CONTEXT_NOTICE_ROLE, already_noticed, context_notice_text
+from .turns import CONTEXT_NOTICE_ROLE, already_noticed
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -300,23 +300,30 @@ class ChatSendService:
         if not span:
             return False
         # The turn is about to take a whole extra round trip. Say so, or the
-        # chat looks frozen for the one turn a user is least expecting it.
+        # chat looks frozen for the one turn a user is least expecting it — and
+        # say when it is OVER in a `finally`, because two of the three ways out
+        # of here write nothing at all. The manual path publishes no turn
+        # afterwards, so an unfinished notice would stay up for every viewer
+        # until somebody started something unrelated.
         self._turn_engine.publish(engine_key, Compacting(replaced=len(span)))
-        ctx = AgentToolContext(
-            investigation_id=item_id,
-            agent_config=self._locator.resolve_agent_config(item_id),
-        )
         try:
-            text = await self._compactor.summarise(span, ctx=ctx)
-        except Exception:  # noqa: BLE001 — a failed summary must not fail the turn
-            logger.warning("chat_send: compaction failed for item %s", item_id, exc_info=True)
-            return False
-        if not text.strip():
-            logger.warning("chat_send: compaction produced nothing for item %s", item_id)
-            return False
-        conv.messages.insert(at, Message(role=SUMMARY_ROLE, content=text, created_at=now_ms()))
-        self._conv_rm.update(rid, conv)
-        return True
+            ctx = AgentToolContext(
+                investigation_id=item_id,
+                agent_config=self._locator.resolve_agent_config(item_id),
+            )
+            try:
+                text = await self._compactor.summarise(span, ctx=ctx)
+            except Exception:  # noqa: BLE001 — a failed summary must not fail the turn
+                logger.warning("chat_send: compaction failed for item %s", item_id, exc_info=True)
+                return False
+            if not text.strip():
+                logger.warning("chat_send: compaction produced nothing for item %s", item_id)
+                return False
+            conv.messages.insert(at, Message(role=SUMMARY_ROLE, content=text, created_at=now_ms()))
+            self._conv_rm.update(rid, conv)
+            return True
+        finally:
+            self._turn_engine.publish(engine_key, Compacting(replaced=len(span), done=True))
 
     async def _resolve_request_env(
         self, request: Request | None, *, user_id: str, item_id: str
@@ -545,7 +552,9 @@ class ChatSendService:
         assert isinstance(conv, Conversation)
         if already_noticed(conv.messages):
             return  # already told, at the transition
-        text = context_notice_text(note)
+        # Already composed by `history_items`, which is the only place that
+        # knows whether the reduction lost anything (#739).
+        text = note
         conv.messages.append(Message(role=CONTEXT_NOTICE_ROLE, content=text, created_at=now_ms()))
         self._conv_rm.update(rid, conv)
         logger.info("chat_send: history reduced for chat %s — %s", rid, note)

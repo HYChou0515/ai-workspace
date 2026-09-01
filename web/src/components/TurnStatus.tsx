@@ -50,20 +50,11 @@ export function TurnStatus({
     padding: "2px 0 0 28px",
   } as const;
 
-  // #739: ABOVE the idle guard, deliberately. The manual path (the button and
-  // `/compact`) never sets `streaming`, so everything below that guard is
-  // unreachable for it — the event was published and dropped. The presser saw
-  // the button's own label; nobody else watching the item saw anything while
-  // the thread was rewritten under them.
-  if (log.compacting != null) {
-    return (
-      <div className={className} style={box} data-testid="turn-compacting">
-        整理較早的對話…
-      </div>
-    );
-  }
-
-  if (phase === "idle") return null;
+  // #739: an idle chat still has something to say while a summary is being
+  // written — the manual path (button, `/compact`) never sets `streaming`, so
+  // the notice would otherwise be published and dropped, and nobody but the
+  // presser would know the thread was being rewritten.
+  if (phase === "idle" && log.compacting == null) return null;
 
   const elapsedSec = startRef.current ? Math.floor((Date.now() - startRef.current) / 1000) : 0;
 
@@ -121,6 +112,19 @@ export function TurnStatus({
     return (
       <div className={className} style={box}>
         請求過於頻繁,{Math.ceil(log.rateLimited.seconds)} 秒後自動重試…
+        {elapsedSec >= 1 && <span style={{ opacity: 0.7 }}> · {elapsedSec}s</span>}
+      </div>
+    );
+  }
+
+  // #739: BELOW the branches above it, deliberately — hoisting it over them
+  // made the abandoned-turn detector (and its retry button) unreachable for the
+  // whole compaction round trip, which is exactly when a turn looks stuck. The
+  // idle guard is what needed relaxing, not this branch's position.
+  if (log.compacting != null) {
+    return (
+      <div className={className} style={box} data-testid="turn-compacting">
+        整理較早的對話…
         {elapsedSec >= 1 && <span style={{ opacity: 0.7 }}> · {elapsedSec}s</span>}
       </div>
     );

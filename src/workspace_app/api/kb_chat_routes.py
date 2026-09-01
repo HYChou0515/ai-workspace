@@ -77,7 +77,6 @@ from .turns import (
     ChatTurnEngine,
     TurnMessage,
     already_noticed,
-    context_notice_text,
     history_items,
 )
 
@@ -537,7 +536,7 @@ def register_kb_chat_routes(
         fresh.messages.append(
             KbMessage(
                 role=CONTEXT_NOTICE_ROLE,
-                content=context_notice_text(note),
+                content=note,  # composed in `history_items` (#739)
                 created_at=_now_ms(),
             )
         )

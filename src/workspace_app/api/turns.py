@@ -83,12 +83,13 @@ CONTEXT_NOTICE_ROLE = "notice"
 
 
 def context_notice_text(note: str) -> str:
-    """The user-facing wording for a reduction.
+    """The user-facing wording for a reduction that LOST something.
 
     The algorithm supplies the first half, because only it knows what it gave
     up ("N messages dropped" is false for the stage that folds and drops
     nothing). This adds the part that is the same either way: what to do about
-    it."""
+    it. A reduction that gave nothing up never reaches here — see
+    `history_items`."""
     return f"{note}需要它記得那些內容的話,請開一個新對話。"
 
 
@@ -213,10 +214,16 @@ def history_items(
 
         result = default_reducer().reduce(msgs, budget=max_tokens, estimate=estimate_messages)
         msgs = result.messages
-        if result.changed and on_reduce is not None:
-            # The notice describes what the policy actually gave up; "N messages
-            # dropped" is only true for one of them.
-            on_reduce(result.summary)
+        if result.changed and not result.lossless and on_reduce is not None:
+            # A LOSSLESS reduction says nothing. Folding a bulky tool output
+            # keeps every message — there is nothing the user needs to know or
+            # can act on, and after #739 the fold routinely runs right after a
+            # compaction has just saved the thread, so the notice would announce
+            # "start a new chat" at the exact moment that became unnecessary.
+            #
+            # Composed here rather than at the three surfaces that persist it:
+            # only the result knows what was given up.
+            on_reduce(context_notice_text(result.summary))
     # `0` caps mean "no ceiling known / declared" and nothing is given up — we
     # send it all and learn the real limit from the response (P3) or the
     # rejection (P4), rather than amputating on a guess.

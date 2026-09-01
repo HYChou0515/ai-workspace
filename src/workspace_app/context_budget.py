@@ -319,14 +319,26 @@ def context_usage(messages: Any, *, limit: ContextLimit) -> ContextUsage:
         # measurement from a guess, and the refuse-a-zero rule above is
         # unreachable on any deployment whose provider stays quiet. Absent
         # (threads older than the flag) counts as not exact.
-        exact = bool(getattr(metrics, "exact", False))
-        if getattr(msgs[i], "role", "") == "assistant" and reported > 0 and exact and not stale:
+        if getattr(msgs[i], "role", "") == "assistant" and reported > 0 and not stale:
             used = (
                 reported
                 + (getattr(metrics, "completion_tokens", 0) or 0)
                 + estimate_messages(_replayed(msgs[i + 1 :]))
             )
-            return ContextUsage(used=used, limit=limit.tokens, measured=True)
+            # #739: the figure is the best one available either way — when the
+            # provider reports nothing the runner substitutes its own
+            # WHOLE-REQUEST estimate, which still counts the system prompt and
+            # tool schemas that `estimate_messages` cannot see. Rejecting the
+            # record outright made the number worse (measured: from +500 off to
+            # −5,800 off on a 32k thread) and stopped the compaction trigger
+            # firing on a full window. So keep the number; only the label is in
+            # question. `exact` is the provider's word, and absent — a thread
+            # older than the field — is not a yes.
+            return ContextUsage(
+                used=used,
+                limit=limit.tokens,
+                measured=bool(getattr(metrics, "exact", False)),
+            )
     return ContextUsage(used=estimate_messages(_replayed(msgs)), limit=limit.tokens, measured=False)
 
 

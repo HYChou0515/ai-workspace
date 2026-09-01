@@ -1624,4 +1624,11 @@ class LitellmAgentRunner:
             prompt_tokens=prompt_final,
             completion_tokens=completion_final,
             elapsed_ms=round((time.monotonic() - t0) * 1000),
+            # #739: same as the streaming path. `_final_tokens` substitutes our
+            # estimate when the provider reports nothing, so the number alone
+            # cannot say which it is. Without this the gauge could never anchor
+            # on a non-streaming deployment — and compaction would then be
+            # decided by comparing message-only tokens against a whole-request
+            # budget, which is the very unit confusion this feature fixed.
+            exact=bool(usage and usage[0]),
         )

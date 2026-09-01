@@ -75,6 +75,11 @@ export type AgentMetrics = {
   prompt_tokens: number;
   completion_tokens: number;
   elapsed_ms: number;
+  /** #739: whether the provider itself reported these counts. False when we
+   * substituted an estimate — the runner does that whenever usage comes back
+   * absent or 0, so the number alone cannot tell the two apart. Mirrors
+   * api/events.py AgentMetrics. */
+  exact?: boolean;
 };
 
 /** #249/#131: the chat model was busy/blipped before its first token, so the turn
@@ -157,6 +162,10 @@ export type ContextTrimmed = {
 export type Compacting = {
   type: "compacting";
   replaced: number;
+  /** The pass has finished (either way — it may have written nothing). Switches
+   * the live notice off; without it the manual path, which publishes no turn
+   * afterwards, would leave it standing forever. */
+  done?: boolean;
 };
 
 /** #613 P3: the chat's goal changed — set / cleared / state or round moved.
