@@ -327,3 +327,17 @@ def test_a_sub_millisecond_span_is_not_a_measurement():
     c.token()
     c.pause()
     assert c.elapsed_ms() is None
+
+
+def test_an_up_tick_creates_no_record_at_all():
+    """The two guards on `up` do different jobs, and a probe that deleted only
+    the phase check stayed green because the other one covered the overlap. This
+    is the half only the phase check prevents: an `up` tick arriving before any
+    measurement would otherwise mint a record whose every field is absent and
+    whose elapsed is 0 — a message that claims to have been measured as nothing.
+    """
+    r = _TurnReducer()
+    r.add(MessageDelta(text="hi"))
+    r.add(AgentMetrics(phase="up", prompt_tokens=120, elapsed_ms=0))
+
+    assert r.produced[-1].metrics is None
