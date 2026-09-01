@@ -29,7 +29,17 @@ def _store() -> tuple[SpecstarTurnActivityStore, dict[str, int]]:
     register_turn_activity(spec)
     register_turn_activity(spec)  # idempotent — every pod calls it at startup
     clock = {"t": 1_000_000}
-    return SpecstarTurnActivityStore(spec, now_ms=lambda: clock["t"]), clock
+    store = SpecstarTurnActivityStore(spec, now_ms=lambda: clock["t"])
+    store._spec = spec  # noqa: SLF001 — `_delete_row` reaches the same backend
+    return store, clock
+
+
+def _delete_row(store: SpecstarTurnActivityStore, key: str) -> None:
+    """Soft-delete the beat row the way the model's auto-generated CRUD would.
+    The app itself never does this — liveness expires instead."""
+    from workspace_app.api.turn_activity import _TurnActivity
+
+    store._spec.get_resource_manager(_TurnActivity).delete(key)  # noqa: SLF001
 
 
 async def test_a_turn_is_alive_while_it_keeps_beating():
@@ -57,33 +67,27 @@ async def test_a_turn_whose_pod_died_stops_being_alive_on_its_own():
     assert await store.alive("chat-1", stale_after_ms=30_000) is False
 
 
-async def test_a_finished_turn_is_not_alive():
-    store, _clock = _store()
-    await store.bump("chat-1")
-    await store.finished("chat-1")
-
-    assert await store.alive("chat-1", stale_after_ms=30_000) is False
-    await store.finished("chat-1")  # idempotent — a turn can end more than once
-
-
 async def test_two_chats_do_not_answer_for_each_other():
-    store, _clock = _store()
+    store, clock = _store()
     await store.bump("chat-1")
 
     assert await store.alive("chat-2", stale_after_ms=30_000) is False
 
     await store.bump("chat-2")
-    await store.finished("chat-1")
+    clock["t"] += 31_000
+    await store.bump("chat-2")
     assert await store.alive("chat-1", stale_after_ms=30_000) is False
     assert await store.alive("chat-2", stale_after_ms=30_000) is True
 
 
-async def test_a_turn_that_starts_again_after_finishing_is_alive_again():
-    # `finished` soft-deletes the row; the next turn on the same chat has to
-    # bring it back, or a second question would look abandoned from the start.
+async def test_a_beat_brings_back_a_row_someone_deleted():
+    # Nothing in the app deletes this row — the turn's liveness expires on its
+    # own — but the model carries auto-generated CRUD, so it CAN be deleted from
+    # outside. A turn that is still running has to come back on its next beat,
+    # or it would read abandoned for the rest of its life.
     store, _clock = _store()
     await store.bump("chat-1")
-    await store.finished("chat-1")
+    _delete_row(store, "chat-1")
 
     await store.bump("chat-1")
 

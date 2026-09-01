@@ -22,10 +22,24 @@ that matters most is a turn that produces nothing for minutes — a long tool ca
 a slow first token — and an event-driven bump goes quiet at exactly the moment
 its answer is needed.
 
-Ageing out is the design, not a fallback. A pod that dies mid-turn cannot clear
-a flag, and nothing else knows it should: a row that had to be deleted to mean
-"finished" would say "running" forever after a crash, which is precisely the
-state this exists to end. A heartbeat stops on its own.
+Ageing out is the ONLY way a turn stops being alive here, and that is deliberate.
+A pod that dies mid-turn cannot clear a flag and nothing else knows it should, so
+a row that had to be deleted to mean "finished" would say "running" forever after
+a crash — precisely the state this exists to end. A heartbeat stops on its own.
+
+There WAS an explicit end signal beside it, deleting the row the moment a turn
+finished so the answer went stale in milliseconds instead of `TURN_STALE_AFTER_MS`.
+It is gone. Three review rounds found three genuine timing defects in it, each
+one introduced by the fix for the last: a stray beat resurrecting a row it had
+just cleared; a Stop losing the delete because the wait for that beat sat in the
+cancellation's path; and, once that wait was moved off the turn, one turn's
+delete landing on the NEXT turn's live row and reporting a running turn dead.
+Making it correct needs a generation stamp compared-and-swapped at delete time,
+on a store whose backend's etag is documented as non-atomic — three new pieces of
+machinery to shave at most thirty seconds off an answer that is only ever read
+after ten minutes of silence. The age-out has to be right regardless, because it
+is the only thing covering the case that actually loses a turn. So it is the
+whole mechanism now, and there is one less thing that can be wrong.
 """
 
 from __future__ import annotations
@@ -72,22 +86,17 @@ class ITurnActivityStore(abc.ABC):
         """Record that the turn on ``key`` is being driven, as of now."""
 
     @abc.abstractmethod
-    async def finished(self, key: str) -> None:
-        """The turn ended. Idempotent: a turn can end by answering, erroring or
-        being cancelled, and more than one of those can try."""
-
-    @abc.abstractmethod
     async def alive(self, key: str, *, stale_after_ms: int = TURN_STALE_AFTER_MS) -> bool:
         """Whether a turn on ``key`` has beaten within ``stale_after_ms``.
 
         `False` covers every way of having no evidence of life — never started,
-        finished, the pod driving it died, or the beats could not be written at
-        all — because to the person waiting the first three are one thing: nobody
-        is coming. The fourth is not: a running turn whose store is unwritable
-        also reads `False`, and the screen then offers to re-ask a turn that is
-        working. That is the behaviour this replaced, so a broken store costs the
-        improvement and nothing more — it never invents a turn that is not
-        there."""
+        ended more than `stale_after_ms` ago, the pod driving it died, or the
+        beats could not be written at all — because to the person waiting the
+        first three are one thing: nobody is coming. The fourth is not: a running
+        turn whose store is unwritable also reads `False`, and the screen then
+        offers to re-ask a turn that is working. That is the behaviour this
+        replaced, so a broken store costs the improvement and nothing more — it
+        never invents a turn that is not there."""
 
 
 class _TurnActivity(Struct):
@@ -145,15 +154,6 @@ class SpecstarTurnActivityStore(ITurnActivityStore):
         logger.debug("turn-activity: %s beat row absent, creating fresh", key)
         with contextlib.suppress(DuplicateResourceError):
             rm.create(rec, resource_id=key, status=RevisionStatus.draft)
-
-    async def finished(self, key: str) -> None:
-        await asyncio.to_thread(self._finished_sync, key)
-
-    def _finished_sync(self, key: str) -> None:
-        rm = self._spec.get_resource_manager(_TurnActivity)
-        logger.debug("turn-activity: %s finished", key)
-        with contextlib.suppress(ResourceIDNotFoundError, ResourceIsDeletedError):
-            rm.delete(key)
 
     async def alive(self, key: str, *, stale_after_ms: int = TURN_STALE_AFTER_MS) -> bool:
         return await asyncio.to_thread(self._alive_sync, key, stale_after_ms)

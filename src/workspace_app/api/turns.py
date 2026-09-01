@@ -536,12 +536,6 @@ class _WorkspaceSession:
         return sorted({u for u in self.subscribers.values() if u})
 
 
-"""How long a turn's teardown waits for the liveness beat to finish its current
-write. Generous next to a point write, and bounded so a wedged store delays a
-turn's end rather than holding it open (see `_with_heartbeat`)."""
-_BEAT_DRAIN_S = 2.0
-
-
 class ChatTurnEngine:
     """Runs one cancellable agent turn at a time per conversation key, streams
     its events over SSE, and reduces them into TurnMessages for the caller to
@@ -565,9 +559,6 @@ class ChatTurnEngine:
         # before, and the surfaces that ask fall back to their old guesswork.
         self._turn_activity = turn_activity
         self._heartbeat_s = heartbeat_s
-        # Detached "the turn ended" writers, held only so the loop cannot collect
-        # a task nobody awaits (see `_finish_when_beat_lands`).
-        self._finishers: set[asyncio.Task[None]] = set()
         self._sessions: dict[str, _TurnSession] = {}
         # #43 reconnect replay: how many recent broadcast events each session's ring
         # buffer keeps so a same-pod reconnect can replay the gap. 0 disables it.
@@ -777,13 +768,10 @@ class ChatTurnEngine:
         that cannot be written is not a reason to fail a turn: the write is
         best-effort and its failure leaves the turn alone.
 
-        Stopped by a FLAG, never by cancelling this task. The write is offloaded
-        to a worker thread, so cancelling the await abandons the WAIT and not the
-        WRITE: the abandoned write lands after `finished` has cleared the row and
-        restores it — `_bump_sync` restores by design, since that is how a second
-        turn on the same chat becomes alive again. The ended turn would then read
-        as running for a whole staleness window, which is the exact thing
-        `finished` is here to prevent."""
+        Stopped by a FLAG rather than by cancelling this task, so the loop can
+        finish whatever it is doing and return on its own. The write is offloaded
+        to a worker thread and so cannot be cancelled once it is running anyway;
+        with the flag, the beat is never left mid-await when its turn ends."""
         assert self._turn_activity is not None
         while not stop.is_set():
             with contextlib.suppress(Exception):
@@ -799,52 +787,22 @@ class ChatTurnEngine:
             await coro
             return
         stop = asyncio.Event()
-        beat = asyncio.create_task(self._beat(key, stop))
+        # Through the existing helper, so the task is strongly referenced (asyncio
+        # keeps only a weak one) AND lands in `aclose`'s drain for free. Rolling
+        # my own of these two lines is how the last version of this code ended up
+        # outside that drain.
+        self._spawn_detached(self._beat(key, stop))
         try:
             await coro
         finally:
+            # Setting the flag is the whole teardown. Nothing is awaited here, so
+            # there is nothing for the cancellation that ends most turns to
+            # interrupt; the beat exits at its next check, and a write already in
+            # flight simply lands, extending this turn's liveness by one write and
+            # nothing more. The row goes stale on its own after
+            # `TURN_STALE_AFTER_MS` — see that module for why there is no longer
+            # an explicit "this turn ended" write to get wrong.
             stop.set()
-            self._finish_when_beat_lands(key, beat)
-
-    def _finish_when_beat_lands(self, key: str, beat: asyncio.Task[None]) -> None:
-        """Record that the turn ended, once its last beat has landed — on a task
-        of its OWN, never the turn's.
-
-        Two things have to be true and on the turn's own task they pull against
-        each other. The end must be recorded AFTER any in-flight beat, or that
-        beat's write restores the row the end just cleared (`_bump_sync` restores
-        by design) and the finished turn reads as running for a whole staleness
-        window. And it must survive the turn being CANCELLED, which is how most
-        turns end and which interrupts every await on that task.
-
-        Waiting on the turn's task satisfied the first and lost the second:
-        measured, a Stop dropped the end in 5 of 5 runs whenever a beat write
-        outlasted `poll_interval` — #349's watcher fires its own cancel at the
-        turn, and a `CancelledError` is not something `suppress(Exception)`
-        catches or should swallow. It also held the turn's worker, and the POST
-        awaiting it, open for the length of the wait.
-
-        Detached, it does neither: the turn ends immediately and the cancellation
-        aimed at it cannot reach this. The wait is still bounded — a wedged store
-        must not keep a task alive indefinitely — and on timeout `wait_for` has
-        already cancelled the beat, which for a write still QUEUED means no write
-        ever happens, so there is nothing left to sequence behind. What survives a
-        lost `finished` is the age-out, which has to work anyway: it is the only
-        thing covering a pod that dies mid-turn.
-        """
-        assert self._turn_activity is not None
-        activity = self._turn_activity
-
-        async def _run() -> None:
-            with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(beat, _BEAT_DRAIN_S)
-            with contextlib.suppress(Exception):
-                await activity.finished(key)
-
-        task = asyncio.create_task(_run())
-        # Held only so the loop cannot garbage-collect a task nobody awaits.
-        self._finishers.add(task)
-        task.add_done_callback(self._finishers.discard)
 
     async def _run_turn(
         self,
