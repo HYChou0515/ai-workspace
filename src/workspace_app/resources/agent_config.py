@@ -72,6 +72,29 @@ class AgentConfig(Struct):
     """8 hours — per grill-me Q10 the RCA workflow expects long
     open-then-come-back sessions. Was 900 (15 min) for workspace-app."""
 
+    reports_usage: bool = False
+    """#748/#751: whether this endpoint answers a `stream_options.include_usage`
+    request with the PROVIDER's own token counts.
+
+    An operator declares it; it is not discoverable from the reply. A litellm
+    proxy answers the request either way — with the backend's real counts when it
+    has them, with its own tokenizer's when it does not — in an object of
+    identical shape, so nothing downstream can tell the two apart. Measured
+    against the real deployment: their proxy withholds usage entirely unless
+    asked and passes the backend's through when asked; local Ollama stays silent
+    and litellm fills the gap.
+
+    Default False on purpose: a wrong `True` persists a fabricated number as
+    though it were measured, a wrong `False` persists nothing. Blank is
+    recoverable.
+
+    Entry points and how each is controlled:
+      - app / KB turn  → `agents.presets.<name>.reports_usage` (config)
+      - a fallback in a chain → the chain HEAD's preset governs the request
+      - anything constructing AgentConfig directly (tests, workflows) → the
+        field's own default, i.e. off
+    """
+
     llm_base_url: str = ""
     """Per-config LLM endpoint base URL. ``""`` falls back to the
     runner's constructor default (set from top-level ``Settings.llm``)

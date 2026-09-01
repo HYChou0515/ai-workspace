@@ -315,6 +315,7 @@ class AppCatalog:
             env=dict(preset.env),
             sandbox_image=preset.sandbox_image,
             idle_timeout_seconds=preset.idle_timeout_seconds,
+            reports_usage=preset.reports_usage,
             llm_base_url=preset.llm.base_url,
             llm_api_key=preset.llm.api_key,
         )

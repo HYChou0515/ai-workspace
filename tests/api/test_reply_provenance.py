@@ -351,6 +351,35 @@ def test_an_up_tick_creates_no_record_at_all():
     assert r.produced[-1].metrics is None
 
 
+def test_usage_is_requested_only_where_an_operator_vouched_for_the_endpoint():
+    """Whether asking for usage is safe is a property of the ENDPOINT, and it is
+    not discoverable from the reply: a litellm proxy answers the request either
+    way — with the backend's real counts if it has them, with its own
+    tokenizer's if it does not, in an object of identical shape.
+
+    Measured against the real deployment (#748):
+
+      * their litellm proxy, streaming, WITHOUT the ask  → no usage at all
+      * their litellm proxy, streaming, WITH the ask     → prompt 69 / completion 16,
+        identical to the same prompt non-streamed, which does not pass through
+        the substituting chunk builder — so the numbers are the backend's
+      * local Ollama, either way                          → silence, and litellm
+        fills the gap from its own tokenizer
+
+    So it cannot be a global default; it is a declaration by whoever knows the
+    endpoint. Default off, because the failure of a wrong "on" is a fabricated
+    record and the failure of a wrong "off" is a blank one.
+    """
+    from workspace_app.api.litellm_runner import _agent_for
+    from workspace_app.resources import AgentConfig
+
+    vouched = _agent_for(AgentConfig(name="t", model="openai/x", reports_usage=True))
+    assert vouched.model_settings.include_usage is True
+
+    default = _agent_for(AgentConfig(name="t", model="openai/x"))
+    assert default.model_settings.include_usage is not True
+
+
 # ── the streaming loop itself, not its predicates ────────────────────────────
 
 

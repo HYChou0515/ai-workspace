@@ -610,6 +610,11 @@ def _agent_for(
             extra_body={**(off.get("extra_body") or {}), **rep_body} or None,
             frequency_penalty=freq,
             presence_penalty=pres,
+            # #748/#751: ask for usage ONLY where an operator has vouched for
+            # the endpoint. Asking everywhere lets litellm answer on a silent
+            # provider's behalf, and its tokenizer's guess is indistinguishable
+            # from a measurement once it lands in the record.
+            include_usage=True if config.reports_usage else None,
         )
     elif reasoning_effort:
         # effort is validated to low/medium/high by the request body.
@@ -619,6 +624,11 @@ def _agent_for(
             extra_body=rep_body or None,
             frequency_penalty=freq,
             presence_penalty=pres,
+            # #748/#751: ask for usage ONLY where an operator has vouched for
+            # the endpoint. Asking everywhere lets litellm answer on a silent
+            # provider's behalf, and its tokenizer's guess is indistinguishable
+            # from a measurement once it lands in the record.
+            include_usage=True if config.reports_usage else None,
         )
     else:
         model_settings = ModelSettings(
@@ -626,6 +636,11 @@ def _agent_for(
             extra_body=rep_body or None,
             frequency_penalty=freq,
             presence_penalty=pres,
+            # #748/#751: ask for usage ONLY where an operator has vouched for
+            # the endpoint. Asking everywhere lets litellm answer on a silent
+            # provider's behalf, and its tokenizer's guess is indistinguishable
+            # from a measurement once it lands in the record.
+            include_usage=True if config.reports_usage else None,
         )
     # Per-config LLM endpoint (new schema's agents.presets.<x>.llm) wins
     # over the runner's constructor default — empty strings mean

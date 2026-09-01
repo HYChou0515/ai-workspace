@@ -413,6 +413,27 @@
 # `read_image` (source B) — a VLM with no tool support only sees inline images.
 #     qwen-vl: { model: ollama_chat/qwen3-vl, vision: true }
 
+# `reports_usage: true` — this endpoint answers a `stream_options.include_usage`
+# request with the PROVIDER's own token counts, so the ↑/↓ numbers on a reply are
+# a measurement rather than a guess (#748/#751). Declarative for the same reason
+# as `vision`: it cannot be detected from the reply. A litellm proxy answers the
+# request either way — with the backend's real counts if it has them, with its
+# own tokenizer's if it does not — in an identically shaped object, so nothing
+# downstream can tell them apart.
+#
+# How to decide it for an endpoint, with two curls (same prompt):
+#   A) `stream: false`                                   → the backend's own usage
+#   B) `stream: true` + `stream_options.include_usage`   → what we would record
+# A ≈ B  ⇒ the stream carries real counts ⇒ set true.
+# B absent or clearly different from A ⇒ leave it off.
+#
+# Default (absent) = false = the reply records no token counts at all, which is
+# the honest answer when nobody has checked. A wrong `true` writes an invented
+# number into history as though it had been measured; a wrong `false` writes
+# nothing, and nothing is recoverable later.
+#     vllm-prod: { model: openai/glm-5, reports_usage: true }
+
+
 # ─── chat LLM endpoint (fallback when a preset omits llm.*) ── [OPT] ─
 # Per-preset `llm.base_url` / `llm.api_key` (under agents.presets.*)
 # win over this. Empty = LiteLLM's provider env defaults.

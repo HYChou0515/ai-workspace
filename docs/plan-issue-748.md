@@ -202,7 +202,7 @@ provider 沉默時,那個 `or` 後面的 tokenizer 估計值就會一路變成 `
 | **P3** | model:`FallbackModel` 記下實際服務的 endpoint,事件加 `model`(順帶修好 #69 trace 的謊報) | ✅ |
 | **P4** | 前端:`events.ts` 鏡像、tok/s 換分母、thinking / tool 期間都顯示那一行 | ✅ |
 | **P5** | 聊天訊息的時間小字 + tooltip(app chat 與 KB chat 共用) | ✅ |
-| **P6** | ~~送出 `include_usage`~~ → **撤回**:litellm 會替沉默的 provider 代答一個 tokenizer 估計值,而那會被存成真值(§2.9)。改為不開口要,追蹤在 #751 | ✅ |
+| **P6** | ~~全域送出 `include_usage`~~ → **改為 per-preset 宣告**(§2.9):litellm 會替沉默的 provider 代答一個 tokenizer 估計值。實測你們的 litellm proxy **要問才給、而給的是後端真值**,本機 Ollama 則不給 —— 所以由知道的人對 endpoint 宣告 `reports_usage`,預設關(#751) | ✅ |
 
 每個 phase 都讓事件的新欄位和它的生產者同時落地 —— 先加一個永遠是 `None` 的欄位,
 等於在 schema 裡放一個沒人填的洞,而它會被誤讀成「這個 provider 沒回報」。
