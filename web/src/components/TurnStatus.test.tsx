@@ -125,6 +125,21 @@ describe("TurnStatus", () => {
     expect(screen.getByText(/請求過於頻繁/)).toHaveTextContent("30");
   });
 
+  it("shows one elapsed figure while thinking, not two that disagree", () => {
+    // The shared line already prints this component's own FE-anchored clock.
+    // Appending formatMetrics whole added the BACKEND's elapsed beside it — and
+    // the wedged-server case, the reason the FE clock exists, is exactly when
+    // the two diverge. The counts belong there; the second clock does not.
+    const log = fold([
+      { type: "message_delta", text: "thinking", reasoning: true },
+      { type: "agent_metrics", phase: "down", prompt_tokens: 8412, completion_tokens: 120, elapsed_ms: 4000, generation_ms: 4000 },
+    ]);
+    render(<TurnStatus log={{ ...log, streaming: true }} />);
+    const line = screen.getByText(/思考中/).textContent ?? "";
+    expect(line).toContain("↓ 120 tok");
+    expect(line).not.toContain("4.0s"); // the backend's clock has no business here
+  });
+
   it("keeps the retry affordance and a moving clock while thinking (#748 review)", () => {
     // The thinking branch returned early, so it dropped both the retry button
     // and this component's own FE-anchored clock — and then printed the

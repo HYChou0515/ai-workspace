@@ -318,6 +318,15 @@ export function turnPhase(log: AgentLog): TurnPhase {
  * paused, so the elapsed is dropped and the tool is flagged instead — but the
  * rate is KEPT (#748): its denominator is generation time, so it holds its last
  * true value rather than decaying for as long as the tool takes. */
+/** The counts and the rate, with no clock. #748: a caller that already shows its
+ * own elapsed needs these WITHOUT the backend's — printing both puts two
+ * disagreeing numbers on one line, and they disagree most in the wedged-server
+ * case the FE clock exists to survive. */
+export function formatCounts(m: AgentMetricsState): string {
+  const rate = tokensPerSec(m);
+  return `↑ ${m.promptTokens} · ↓ ${m.completionTokens} tok${rate == null ? "" : ` · ${rate} tok/s`}`;
+}
+
 export function formatMetrics(m: AgentMetricsState, toolRunning = false): string {
   const secs = (m.elapsedMs / 1000).toFixed(1);
   const counts = `↑ ${m.promptTokens} · ↓ ${m.completionTokens} tok`;

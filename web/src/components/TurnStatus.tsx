@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 
-import { type AgentLog, type TurnPhase, formatMetrics, isToolRunning, turnPhase } from "../pages/investigation/agentLog";
+import {
+  type AgentLog,
+  type TurnPhase,
+  formatCounts,
+  formatMetrics,
+  isToolRunning,
+  turnPhase,
+} from "../pages/investigation/agentLog";
 import { pxToRem } from "../lib/pxToRem";
 
 /** The trailing status of an in-flight turn — replaces the opaque "working…"
@@ -159,7 +166,8 @@ export function TurnStatus({
           attempt returned early and lost both, printing the backend's elapsed,
           which is the very number this component exists to distrust. */}
       {phase === "thinking" && log.metrics && (
-        <span style={{ opacity: 0.7 }}> · {formatMetrics(log.metrics, toolRunning)}</span>
+        // Counts only: the elapsed on this line is the FE-anchored one below.
+        <span style={{ opacity: 0.7 }}> · {formatCounts(log.metrics)}</span>
       )}
       {elapsedSec >= 1 && <span style={{ opacity: 0.7 }}> · {elapsedSec}s</span>}
       {retry}

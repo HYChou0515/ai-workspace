@@ -373,7 +373,7 @@ class _TurnReducer:
                     tool_display=item.display,
                 )
             )
-        elif isinstance(item, AgentMetrics):
+        elif isinstance(item, AgentMetrics) and item.phase != "up":
             # Pin how this reply was produced onto the assistant answer so it
             # survives a reload (the stream is live-only).
             #
@@ -407,7 +407,11 @@ class _TurnReducer:
                             if item.measured_completion_tokens is not None
                             else (prev.completion_tokens if prev else None)
                         ),
-                        elapsed_ms=item.elapsed_ms,
+                        # `up` is excluded above because it carries elapsed_ms=0
+                        # by construction — it announces an attempt rather than
+                        # measuring one, and a retry re-emits it, which would
+                        # persist "this turn took 0ms" over a real reading.
+                        elapsed_ms=item.elapsed_ms or (prev.elapsed_ms if prev else 0),
                         generation_ms=(
                             item.generation_ms
                             if item.generation_ms is not None

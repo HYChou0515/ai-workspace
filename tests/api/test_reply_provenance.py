@@ -279,3 +279,51 @@ def test_one_token_is_not_a_measurable_generation_span():
     banked.token()
     banked.pause()
     assert banked.elapsed_ms() is None
+
+
+def test_the_rate_counts_the_same_tokens_at_the_top_and_the_bottom():
+    """The provider counts tool-call argument tokens in `completion_tokens`, so
+    the clock must count their time — but the char count has to move with it or
+    the mismatch just changes sign. The first fix moved only the clock, which
+    turned a rate that was too high into one that was too low.
+
+    `_delta_channel` is a catch-all `ignore`, so "everything not ignored" would
+    also sweep in audio deltas (base64 bytes, in no token count at all). The
+    predicate names what the provider bills for instead.
+    """
+    from workspace_app.api.litellm_runner import _is_generated_output
+
+    assert _is_generated_output("response.output_text.delta") is True
+    assert _is_generated_output("response.reasoning_text.delta") is True
+    assert _is_generated_output("response.function_call_arguments.delta") is True
+    # Not billed as completion tokens, and not text the model "wrote".
+    assert _is_generated_output("response.audio.delta") is False
+    assert _is_generated_output("response.completed") is False
+
+
+def test_an_up_tick_cannot_zero_a_measured_turn_clock():
+    """`phase="up"` carries `elapsed_ms=0` by construction — it is the START of
+    an attempt, not a measurement of one. A retry re-emits it, and the merge left
+    `elapsed_ms` unguarded, so a turn that had run 42s could be persisted as
+    having taken 0ms while still reporting 1.2s of generation."""
+    r = _answered(
+        AgentMetrics(phase="down", elapsed_ms=42_000, generation_ms=1_200),
+        AgentMetrics(phase="up", prompt_tokens=120, elapsed_ms=0),
+    )
+
+    m = r.produced[-1].metrics
+    assert m is not None
+    assert m.elapsed_ms == 42_000
+    assert m.generation_ms == 1_200
+
+
+def test_a_sub_millisecond_span_is_not_a_measurement():
+    """The guard was on seconds, so a span under half a millisecond rounded to
+    `0` — the exact value the record documents as impossible."""
+    from workspace_app.api.litellm_runner import _GenerationClock
+
+    c = _GenerationClock(now=iter([1.0, 1.0002]).__next__)
+    c.token()
+    c.token()
+    c.pause()
+    assert c.elapsed_ms() is None

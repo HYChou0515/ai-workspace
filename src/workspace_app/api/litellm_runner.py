@@ -170,6 +170,29 @@ def _build_input(
     return [*history, {"role": "user", "content": user_content}]
 
 
+# #748: the deltas that ARE the model's output — what the provider counts in
+# `completion_tokens`, and therefore what both sides of tok/s must agree on. This
+# is a whitelist rather than "anything `_delta_channel` does not ignore", because
+# that classifier ends in a catch-all: audio deltas carry base64 bytes that are
+# in no token count, and would inflate the denominator with nothing on top.
+_GENERATED_OUTPUT = frozenset(
+    {
+        "response.output_text.delta",
+        "response.refusal.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_text.delta",
+        # The model wrote these too, and the provider bills them; they are kept
+        # out of the answer TEXT (see `_delta_channel`) but not out of the count.
+        "response.function_call_arguments.delta",
+    }
+)
+
+
+def _is_generated_output(event_type: str) -> bool:
+    """Whether this delta is model output the provider counts as completion."""
+    return event_type in _GENERATED_OUTPUT
+
+
 def _delta_channel(event_type: str) -> Literal["content", "reasoning", "ignore"]:
     """Classify a raw Responses ``*.delta`` event by its type. FIVE event
     types carry a ``.delta`` string on the LiteLLM/Qwen path, so routing by
@@ -310,7 +333,10 @@ class _GenerationClock:
             else 0.0
         )
         total = self._closed_s + open_s
-        return round(total * 1000) if total > 0 else None
+        # Guard the ROUNDED value: a guard on seconds let a sub-millisecond span
+        # through as `0`, the one number this field documents as impossible.
+        ms = round(total * 1000)
+        return ms if ms > 0 else None
 
 
 def _effective_model(model: Any, configured: str) -> str | None:
@@ -1545,20 +1571,17 @@ class LitellmAgentRunner:
                     if getattr(event, "type", None) == "raw_response_event":
                         data = getattr(event, "data", None)
                         delta = getattr(data, "delta", None)
-                        channel = _delta_channel(getattr(data, "type", "") or "")
-                        if isinstance(delta, str) and delta:
-                            # #748: the clock counts EVERY delta, including the
-                            # tool-call argument JSON that `_delta_channel` marks
-                            # "ignore". Ignoring it is right for the answer TEXT
-                            # (the args must not leak into the reply) and wrong
-                            # for the clock: the provider counts those tokens in
-                            # `completion_tokens`, so leaving their time out made
-                            # the rate a ratio of two different populations — a
-                            # turn writing 200 words and 300 tokens of arguments
-                            # reported 250 tok/s for a model doing 100.
-                            gen.token()
-                        if isinstance(delta, str) and delta and channel != "ignore":
+                        event_type = getattr(data, "type", "") or ""
+                        channel = _delta_channel(event_type)
+                        if isinstance(delta, str) and delta and _is_generated_output(event_type):
+                            # #748: the count and the clock move TOGETHER. The
+                            # tool-call argument JSON is kept out of the answer
+                            # text but the provider bills it, so excluding it
+                            # from one side and not the other makes tok/s a ratio
+                            # of two different populations — first too high, then
+                            # (when only the clock was fixed) too low.
                             completion_chars += len(delta)
+                            gen.token()
                             if channel == "reasoning":
                                 queue.put_nowait(MessageDelta(text=delta, reasoning=True))
                             else:  # content — still split any inline <think> tags
