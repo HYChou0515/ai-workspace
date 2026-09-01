@@ -154,12 +154,24 @@ def plan_for_budget(
     detail for a limit nobody measured is the worse of the two mistakes."""
     if not force and (budget is None or used <= budget):
         return 0, []
-    # The tail is half of whichever is SMALLER: the budget, or what the thread
-    # actually costs. Sizing it from the budget alone makes a forced pass on a
-    # roomy window keep everything — a tail of half of 200k swallows a six
-    # message thread whole, and the button does nothing.
-    tail_of = used if budget is None else min(budget, used)
-    return compaction_plan(messages, keep_tokens=int(tail_of * KEEP_TAIL_RATIO), estimate=estimate)
+    # The tail must be sized in the unit it is SPENT in.
+    #
+    # `used` is the provider's count of the whole request, so it carries a fixed
+    # overhead — system prompt, tool schemas, skills index — of several thousand
+    # tokens the message estimator cannot see. Sizing the tail from it and then
+    # filling that tail with estimator-measured messages spends one unit against
+    # another: on a real thread, six short messages "fit" a budget meant to hold
+    # a fraction of the window, the span comes back empty, and compaction does
+    # nothing at all. (Found by pressing the button on a running app.)
+    #
+    # The overhead is recoverable: it is exactly what `used` has that the
+    # messages themselves do not.
+    _, live = _after_last_summary(messages)
+    own = estimate(live)
+    overhead = max(0, used - own)
+    room = own if budget is None else budget - overhead
+    keep_tokens = int(max(0, min(room, own)) * KEEP_TAIL_RATIO)
+    return compaction_plan(messages, keep_tokens=keep_tokens, estimate=estimate)
 
 
 class IConversationCompactor(abc.ABC):

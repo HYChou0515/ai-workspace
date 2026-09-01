@@ -289,6 +289,7 @@ def context_usage(messages: Any, *, limit: ContextLimit) -> ContextUsage:
     is input only, so the reply was not in the window it measured but will be in
     the next one."""
     msgs = list(messages)
+    summarised_at: int | None = None
     # #739: a summary is the new beginning of the thread. Everything behind it
     # was replaced by the précis, so it no longer occupies the window — and the
     # last reported `prompt_tokens` counted a request that still contained it,
@@ -297,12 +298,22 @@ def context_usage(messages: Any, *, limit: ContextLimit) -> ContextUsage:
     # an estimate, and `measured` says so, until the next turn reports a real one.
     for i in range(len(msgs) - 1, -1, -1):
         if getattr(msgs[i], "role", "") == SUMMARY_ROLE:
+            summarised_at = getattr(msgs[i], "created_at", None)
             msgs = msgs[i:]
             break
     for i in range(len(msgs) - 1, -1, -1):
         metrics = getattr(msgs[i], "metrics", None)
         reported = getattr(metrics, "prompt_tokens", 0) or 0
-        if getattr(msgs[i], "role", "") == "assistant" and reported > 0:
+        # A summary is INSERTED before the kept tail, so the messages after it
+        # are OLDER than it, and their counts were reported for requests that
+        # still contained the span it replaced. Anchoring on one reports the
+        # pre-compaction figure forever — the bar sits still and the feature
+        # reads as broken. (Found by pressing compact on a running app.)
+        stale = (
+            summarised_at is not None
+            and (getattr(msgs[i], "created_at", None) or 0) < summarised_at
+        )
+        if getattr(msgs[i], "role", "") == "assistant" and reported > 0 and not stale:
             used = (
                 reported
                 + (getattr(metrics, "completion_tokens", 0) or 0)

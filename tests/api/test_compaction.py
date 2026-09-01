@@ -330,3 +330,27 @@ def test_compacting_a_thread_with_nothing_to_compact_is_not_an_error():
     after = rm.get(conv.resource_id).data
     assert isinstance(after, Conversation)
     assert [m.role for m in after.messages] == ["user"]
+
+
+def test_the_tail_is_sized_in_the_unit_it_is_spent_in():
+    """Found by pressing the button on a running app, not by these tests.
+
+    `used` is the PROVIDER's count of the whole request, so it carries a fixed
+    overhead — system prompt, tool schemas, skills index — of several thousand
+    tokens that the message estimator cannot see. Sizing the kept tail from that
+    figure and then filling it with estimator-measured messages spends one unit
+    against another: six short messages "fit" a tail budget meant to hold a
+    fraction of the window, the span comes back empty, and compaction silently
+    does nothing at all.
+
+    The overhead is recoverable: it is exactly what `used` has that the messages
+    themselves do not."""
+    msgs = [_Msg("user", f"訊息{i}") for i in range(8)]
+    own = estimate_messages(msgs)
+    # A real request: the messages are small, the fixed overhead is not.
+    at, span = plan_for_budget(
+        msgs, used=own + 6_700, budget=8_800, estimate=estimate_messages, force=True
+    )
+    assert span, "a forced compaction must produce a span even on a small thread"
+    assert at == len(span)
+    assert len(span) < len(msgs), "and must leave a tail behind"

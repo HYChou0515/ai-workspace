@@ -40,12 +40,14 @@ class _Msg:
         role: str = "user",
         metrics: _Metrics | None = None,
         error_kind: str | None = None,
+        created_at: int | None = None,
     ) -> None:
         self.content = content
         self.tool_args = tool_args
         self.role = role
         self.metrics = metrics
         self.error_kind = error_kind
+        self.created_at = created_at
 
 
 # ── the limit ladder ────────────────────────────────────────────────
@@ -294,3 +296,38 @@ def test_a_compacted_thread_stops_counting_what_it_compacted_away():
     got = context_usage(msgs, limit=ContextLimit(tokens=40_960, source="catalog"))
     assert got.measured is False
     assert got.used == estimate_messages([_Msg("先前:要修 X,試過 Y。"), _Msg("接下來呢")])
+
+
+def test_a_measurement_taken_before_the_summary_is_not_an_anchor():
+    """Found by pressing compact on a running app: the gauge did not move.
+
+    The summary is INSERTED before the kept tail, so the messages after it are
+    older than it — and their `metrics` were reported for requests that still
+    contained the whole span the summary just replaced. Anchoring on one reports
+    the pre-compaction figure forever, so the bar sits still and the feature
+    reads as broken.
+
+    An anchor is only an answer to "how full is the window now" if it was
+    measured after the window changed."""
+    msgs = [
+        _Msg("舊問題", role="user", created_at=100),
+        _Msg("先前:要修 X。", role="summary", created_at=500),
+        _Msg("舊回答", role="assistant", metrics=_Metrics(30_000, 400), created_at=200),
+        _Msg("新問題", role="user", created_at=600),
+    ]
+    got = context_usage(msgs, limit=ContextLimit(tokens=40_960, source="catalog"))
+    assert got.measured is False, "the only metrics predate the compaction"
+    assert got.used < 30_000
+
+
+def test_a_measurement_taken_after_the_summary_still_anchors():
+    """The turn that ran AFTER compacting did measure the compacted thread, so
+    its count is exactly the number the gauge wants."""
+    msgs = [
+        _Msg("先前:要修 X。", role="summary", created_at=500),
+        _Msg("新問題", role="user", created_at=600),
+        _Msg("新回答", role="assistant", metrics=_Metrics(9_000, 400), created_at=700),
+    ]
+    got = context_usage(msgs, limit=ContextLimit(tokens=40_960, source="catalog"))
+    assert got.measured is True
+    assert got.used == 9_400
