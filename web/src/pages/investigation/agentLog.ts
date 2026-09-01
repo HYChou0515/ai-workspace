@@ -236,10 +236,24 @@ export function reconcileSnapshot(
   if (contentCount(snap.entries) < contentCount(prev.entries)) {
     return { ...prev, error: prev.error };
   }
-  // Re-attach stream-only banners the persisted thread has no way to hold.
+  // Re-attach stream-only banners the persisted thread has no way to hold — but
+  // only the ones still about the turn the thread ends on.
+  //
+  // A carried banner goes to the END of the fresh snapshot, so a leftover from an
+  // earlier turn does not merely linger in place: it MOVES, landing under the
+  // newest answer and reading as a verdict on it. That is how "已達回合上限,對話
+  // 已停止" ends up beneath a turn that finished perfectly well and looks like it
+  // never goes away.
+  //
+  // Both clocks are epoch ms (`now_ms()` persists a message, `Date.now()` stamps
+  // a banner), so "older than the newest persisted message" is exactly "about a
+  // turn that is over". An undated banner is kept: no timestamp is not evidence
+  // of staleness.
+  const newestPersisted = Math.max(0, ...thread.messages.map((m) => m.created_at ?? 0));
   const carried = prev.entries.filter(
     (e) =>
       e.kind === "banner" &&
+      (e.at === undefined || e.at >= newestPersisted) &&
       !snap.entries.some((s) => s.kind === "banner" && s.text === e.text),
   );
   return {

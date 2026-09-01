@@ -87,6 +87,56 @@ describe("reconcileSnapshot", () => {
     );
   });
 
+  it("stops carrying a banner once the conversation has moved past it", () => {
+    // A carried banner is re-attached at the END of the fresh snapshot, so one
+    // left over from an earlier turn does not merely linger — it MOVES, landing
+    // under the newest answer as if it were about that turn. "已達回合上限,對話
+    // 已停止" then shows beneath a turn that finished perfectly well, which is
+    // the report: it never goes away.
+    //
+    // Both timestamps are epoch ms (`now_ms()` on the backend, `Date.now()` for
+    // a banner), so "older than the newest persisted message" is exactly "about
+    // a turn that is over".
+    const prev = live({
+      entries: [
+        msg("user", "q1"),
+        msg("assistant", "half"),
+        { kind: "banner", at: 3, text: "已達回合上限（10），對話已停止。" },
+      ],
+    });
+
+    const next = reconcileSnapshot(prev, {
+      messages: [
+        { role: "user", content: "q1", created_at: 1 },
+        { role: "assistant", content: "half", created_at: 2 },
+        { role: "user", content: "q2", created_at: 4 },
+        { role: "assistant", content: "a proper answer", created_at: 5 },
+      ],
+    });
+
+    expect(next.entries.some((e) => e.kind === "banner")).toBe(false);
+    expect(
+      next.entries.some((e) => e.kind === "message" && e.message.content === "a proper answer"),
+    ).toBe(true);
+  });
+
+  it("still carries a banner about the turn the thread ends on", () => {
+    // The counterpart: a stop that IS the latest thing to have happened must
+    // survive the re-hydrate, or a stopped turn reads as merely finished.
+    const prev = live({
+      entries: [msg("user", "q"), { kind: "banner", at: 9, text: "已取消。" }],
+    });
+
+    const next = reconcileSnapshot(prev, {
+      messages: [
+        { role: "user", content: "q", created_at: 1 },
+        { role: "assistant", content: "partial", created_at: 2 },
+      ],
+    });
+
+    expect(next.entries.some((e) => e.kind === "banner" && e.text === "已取消。")).toBe(true);
+  });
+
   it("does not duplicate a banner the persisted thread already carries", () => {
     const prev = live({ entries: [{ kind: "banner", text: "turn failed" }] });
     // role:"error" hydrates as the same banner.
