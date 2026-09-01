@@ -349,3 +349,64 @@ def test_an_up_tick_creates_no_record_at_all():
     r.add(AgentMetrics(phase="up", prompt_tokens=120, elapsed_ms=0))
 
     assert r.produced[-1].metrics is None
+
+
+# ── the streaming loop itself, not its predicates ────────────────────────────
+
+
+class _RawDelta:
+    """One `raw_response_event` as the SDK delivers it."""
+
+    type = "raw_response_event"
+
+    def __init__(self, event_type: str, delta: str) -> None:
+        self.data = type("D", (), {"type": event_type, "delta": delta})()
+
+
+class _FakeStreamed:
+    def __init__(self, events):
+        self._events = events
+        self.context_wrapper = type("C", (), {"usage": type("U", (), {})()})()
+
+    async def stream_events(self):
+        for ev in self._events:
+            yield ev
+
+
+async def test_tool_call_arguments_are_counted_but_never_shown(monkeypatch):
+    """The two rules are only correct COMPOSED, and they were tested apart.
+
+    `_is_generated_output` says argument JSON is billed by the provider, so the
+    clock and the char count must include it. `_delta_channel` says it is not
+    answer text, so the reply must not. Replacing one predicate with the other
+    on a block that did BOTH jobs put `{"path": …}` straight into the chat
+    bubble — and both unit tests still passed, because neither one composes.
+
+    So this drives the real loop. It is the fake stream the earlier commit said
+    was needed and did not write; the defect it was meant to catch shipped in
+    that same commit.
+    """
+    from workspace_app.api import litellm_runner as lr
+
+    events = [
+        _RawDelta("response.output_text.delta", "Hello. "),
+        _RawDelta("response.function_call_arguments.delta", '{"path":"/etc/passwd"'),
+        _RawDelta("response.function_call_arguments.delta", ',"limit":50}'),
+        _RawDelta("response.reasoning_text.delta", "thinking"),
+    ]
+    monkeypatch.setattr(lr.Runner, "run_streamed", lambda *a, **k: _FakeStreamed(events))
+
+    # The same context the runner's own tests build — a real AgentToolContext,
+    # so nothing about the turn is faked except the model's stream.
+    from tests.api.test_litellm_runner import _ctx
+
+    runner = lr.LitellmAgentRunner()
+    ctx = _ctx()
+    shown = [
+        ev.text
+        async for ev in runner.run("p", ctx)
+        if isinstance(ev, MessageDelta) and not ev.reasoning
+    ]
+
+    assert "".join(shown) == "Hello. "
+    assert "/etc/passwd" not in "".join(shown)

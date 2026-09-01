@@ -1566,7 +1566,15 @@ class LitellmAgentRunner:
                             gen.token()
                             if channel == "reasoning":
                                 queue.put_nowait(MessageDelta(text=delta, reasoning=True))
-                            else:  # content — still split any inline <think> tags
+                            elif channel == "content":
+                                # Explicitly `content`, never a bare `else`. The
+                                # gate above answers "does the provider bill
+                                # this?", which is now TRUE for tool-call
+                                # argument JSON — and an `else` therefore routed
+                                # that JSON into the visible reply. Counting and
+                                # routing ask different questions; the `if` that
+                                # does both has to keep asking both.
+                                # (still split any inline <think> tags)
                                 content, reasoning = splitter.feed(delta)
                                 if reasoning:
                                     queue.put_nowait(MessageDelta(text=reasoning, reasoning=True))

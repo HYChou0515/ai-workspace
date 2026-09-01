@@ -197,7 +197,7 @@ provider 沉默時,那個 `or` 後面的 tokenizer 估計值就會一路變成 `
 
 | Phase | 內容 | 狀態 |
 |---|---|---|
-| **P1** | 記錄不再說謊:`MessageMetrics` 欄位放寬 + 事件加 `measured_*` + `turns.py` 只在 `final` 寫真值(§2.8) | ✅ |
+| **P1** | 記錄不再說謊:`MessageMetrics` 欄位放寬 + 事件加 `measured_*`;寫入是**逐欄合併**(§2.8 —— 一開始寫成「只在 `final` 寫」,那會讓取消的一輪丟掉真的量到的時間) | ✅ |
 | **P2** | 生成時間:runner 累計首 token → 末 token 跨往返,事件加 `generation_ms` | ✅ |
 | **P3** | model:`FallbackModel` 記下實際服務的 endpoint,事件加 `model`(順帶修好 #69 trace 的謊報) | ✅ |
 | **P4** | 前端:`events.ts` 鏡像、tok/s 換分母、thinking / tool 期間都顯示那一行 | ✅ |
