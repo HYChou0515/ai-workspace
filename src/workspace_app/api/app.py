@@ -1623,6 +1623,7 @@ def create_app(
         kb_chat_pipeline=kb_chat_pipeline,
         send_into=chat_send_svc.send,
         record_mention=mention_svc.record,
+        context_usage_for=turn_ctx.usage_of,
         goal_max_rounds=goal_max_rounds,
         goal_checker_enabled=goal_checker_llm is not None,
         goal_offhours_max_rounds=offhours.max_rounds,

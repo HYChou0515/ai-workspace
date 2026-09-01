@@ -30,6 +30,7 @@ from .promote import promote_chat_to_kb
 from .rca_messages import undo_cut_index
 from .schemas import (
     _ChatInfo,
+    _ContextOut,
     _CreateChatBody,
     _GoalBody,
     _GoalOut,
@@ -73,6 +74,13 @@ class SendInto(Protocol):
 RecordMention = Callable[..., None]
 
 
+class ContextUsageFor(Protocol):
+    """#739: what a chat currently costs. A narrow callable rather than the whole
+    turn-context builder — the routes need one number, not its surface."""
+
+    def __call__(self, item_id: str, messages: list[Any]) -> Any: ...
+
+
 def register_chat_routes(
     app: FastAPI | APIRouter,
     *,
@@ -87,6 +95,7 @@ def register_chat_routes(
     kb_chat_pipeline: object | None,
     send_into: SendInto,
     record_mention: RecordMention,
+    context_usage_for: ContextUsageFor,
     goal_max_rounds: int = 3,
     goal_checker_enabled: bool = True,
     # #615: the deployment's off-hours budget + whether a usable window is
@@ -307,6 +316,17 @@ def register_chat_routes(
             turn_engine.subscribe_sse(locator.engine_key(investigation_id, chat_id), since=since),
             media_type="text/event-stream",
         )
+
+    @app.get("/a/{slug}/items/{item_id}/chats/{chat_id}/context")
+    def get_chat_context(slug: str, item_id: str, chat_id: str) -> _ContextOut:
+        """#739: how much of the window this chat occupies — the usage bar's
+        initial hydration, the same shape as `/todos` (live updates ride the
+        stream). It exists at rest because the bar must be readable before a
+        turn runs, not only while one streams."""
+        investigation_id = locator.require_access(slug, item_id, "read_chat")
+        _rid, conv = locator.require_chat(slug, item_id, chat_id)
+        usage = context_usage_for(investigation_id, conv.messages)
+        return _ContextOut(used=usage.used, limit=usage.limit, measured=usage.measured)
 
     @app.get("/a/{slug}/items/{item_id}/chats/{chat_id}/todos")
     async def get_chat_todos(slug: str, item_id: str, chat_id: str) -> _TodosOut:

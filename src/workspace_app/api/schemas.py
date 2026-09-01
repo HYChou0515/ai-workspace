@@ -172,6 +172,19 @@ class _TodosOut(BaseModel):
     items: list[_TodoItemWire]
 
 
+class _ContextOut(BaseModel):
+    """#739: how much of the window this chat occupies.
+
+    `limit` is None when no ceiling could be resolved — the FE must then show the
+    usage with NO denominator rather than draw a bar against an invented one.
+    `measured` says whether a provider's own count anchored the figure or the
+    whole thing is an estimate, so the UI never presents a guess as a fact."""
+
+    used: int
+    limit: int | None
+    measured: bool
+
+
 class _GoalBody(BaseModel):
     # #613 P3: set the chat's completion condition (whole replace; one goal per
     # chat). Stripped and non-blank — a blank goal is a 422, not an empty row.

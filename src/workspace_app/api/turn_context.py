@@ -33,7 +33,7 @@ from ..agent.context import AgentToolContext
 from ..apps.manifest import load_app_manifest
 from ..apps.skills import advertised_workspace_skills, effective_item_skills
 from ..apps.subagents import SubagentDef, load_subagents
-from ..context_budget import ContextLimit, catalog_limit, estimate_tokens
+from ..context_budget import ContextLimit, ContextUsage, catalog_limit, estimate_tokens
 from ..entity.brief import entity_schema_brief
 from ..entity.catalog import discover_catalog
 from ..sandbox.protocol import Sandbox, SandboxSpec
@@ -256,6 +256,19 @@ class TurnContextBuilder:
             return fn(agent_config.model, agent_config.llm_base_url or None)
         except Exception:  # noqa: BLE001 — a cache read must not break a turn
             return None
+
+    def usage_of(self, item_id: str, messages: list[Message]) -> ContextUsage:
+        """#739: what this thread currently costs, against this item's window.
+
+        Lives on the builder because the window is resolved here and nowhere
+        else — a route computing its own ceiling would drift from the one the
+        turn actually budgets against, which is the exact failure #624 was
+        about."""
+        from ..context_budget import context_usage
+
+        return context_usage(
+            messages, limit=self._context_window(self._locator.resolve_agent_config(item_id))
+        )
 
     def _budget_for(
         self,

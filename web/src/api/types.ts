@@ -116,6 +116,12 @@ export type FileInfo = { path: string; size: number; read_only?: boolean };
  * `_WorkspaceUsage` model. */
 export type WorkspaceUsage = { used: number; quota: number };
 
+/** #739: how full a chat's context window is — mirrors the backend
+ * `_ContextOut`. `limit` is null when no ceiling could be resolved, and the UI
+ * must then show `used` with NO denominator rather than invent one. `measured`
+ * says whether a provider's own count anchored the figure. */
+export type ChatContextUsage = { used: number; limit: number | null; measured: boolean };
+
 /** An agent profile the picker offers — model + prompt live BE-side; the
  * FE only needs enough to label the radio and PATCH the attachment.
  *
@@ -535,6 +541,7 @@ export interface ApiClient {
   /** GET /a/{slug}/items/{id}/files/usage — the workspace's storage usage vs its
    * quota (#245), for the upload usage bar. `quota` 0 means unlimited. */
   getWorkspaceUsage(slug: string, investigationId: string): Promise<WorkspaceUsage>;
+  getChatContext(slug: string, itemId: string, chatId: string): Promise<ChatContextUsage>;
   /** POST /a/{slug}/items/{id}/files/refresh — force-mirror the live sandbox
    * to the snapshot (don't wait for the throttled sweep). Call this before a
    * read whenever the sandbox may have changed out-of-band (terminal `rm`,

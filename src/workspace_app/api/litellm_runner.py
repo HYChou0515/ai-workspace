@@ -267,6 +267,20 @@ def _final_tokens(
     return (usage[0] or prompt_tok, usage[1] or approx_completion)
 
 
+def _live_prompt_tokens(ctx: AgentToolContext, prompt: str) -> int:
+    """The ↑ figure while the request is still in flight (#739).
+
+    It used to be `len(prompt) / 4` — the user's own message, which is not the
+    context size and does not grow as the window fills. The final phase then
+    reported the provider's count of the WHOLE request, so the number jumped by
+    an order of magnitude the moment the turn ended and the bar meant two
+    different things within one turn.
+
+    Same figure the silent-truncation check compares against, deliberately: one
+    meaning, one arithmetic, two readers."""
+    return _sent_estimate(ctx, prompt)
+
+
 def _turn_instructions(ctx: AgentToolContext, feedback: str | None) -> str | None:
     """Per-turn additions to the system prompt: the #242 speaker note (who the
     agent is replying to in a shared workspace), the #537 knowledge-source
@@ -1393,7 +1407,7 @@ class LitellmAgentRunner:
             **self._agent_kwargs(ctx, feedback, resolve_credential),
         )
         t0 = time.monotonic()
-        prompt_tok = _approx_tokens(len(prompt))
+        prompt_tok = _live_prompt_tokens(ctx, prompt)
 
         # Tag the SDK trace with the run flavour (workflow_name) + the
         # investigation/collection id (group_id) so the live monitor can

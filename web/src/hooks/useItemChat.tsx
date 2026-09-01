@@ -57,6 +57,8 @@ export function useItemChat({
       todosKey: qk.itemChatTodos(slug, itemId, chatId),
       // #613 P3: this chat's goal — live `goal_updated` events land here.
       goalKey: qk.itemChatGoal(slug, itemId, chatId),
+      // #739: this chat's context gauge — refreshed at the end of every turn.
+      contextKey: qk.chatContext(slug, itemId, chatId),
       getThread: () => client.getChat(slug, itemId, chatId),
       subscribe: (signal, since) => client.subscribe(slug, itemId, chatId, signal, since),
       post: (content, opts) =>

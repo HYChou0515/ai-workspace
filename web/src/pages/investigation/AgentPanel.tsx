@@ -22,6 +22,7 @@ import { EnvVarsModal } from "../../components/EnvVarsModal";
 import { ToolsPickerModal } from "../../components/ToolsPickerModal";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { UsageBar } from "./UsageBar";
+import { ContextBar } from "../../components/ContextBar";
 import { ReplayDialog, type ReplayRequest } from "../../components/ReplayDialog";
 import { useDialog } from "../../components/Dialog";
 import { Popover } from "../../components/Popover";
@@ -110,6 +111,7 @@ function overQuotaKey(kind: QuotaKind) {
 
 export function AgentPanel({
   investigationId,
+  chatId,
   readOnly = false,
   agent: agentProp,
   width = 380,
@@ -130,6 +132,9 @@ export function AgentPanel({
   uploadDir = "uploads",
 }: {
   investigationId: string;
+  /** #739: the chat whose context window the gauge reports. Absent on a
+   * surface with no chat of its own — the gauge then does not render. */
+  chatId?: string;
   /** Permission-disclosure: the current user may read the thread but lacks
    * `converse` — the composer is disabled with a hint (the backend also 403s a
    * send, this just makes the lock legible instead of a raw error). */
@@ -738,6 +743,10 @@ export function AgentPanel({
         >
         {/* #245: persistent storage usage gauge so the user sees they're filling up. */}
         <UsageBar slug={slug} itemId={investigationId} />
+        {/* #739: and how full the CONTEXT window is — the other ceiling a
+            long session runs into, and the one that used to arrive as a
+            surprise rather than as a gauge. */}
+        {chatId && <ContextBar slug={slug} itemId={investigationId} chatId={chatId} />}
         {progress && (
           <div data-testid="attach-progress" style={{ display: "flex", flexDirection: "column", gap: 2 }}>
             <div
