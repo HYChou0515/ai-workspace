@@ -213,3 +213,66 @@ def test_a_streamed_turn_asks_the_provider_to_report_usage():
 
     agent = _agent_for(AgentConfig(name="t", model="openai/x"))
     assert agent.model_settings.include_usage is True
+
+
+# ── what the review found ────────────────────────────────────────────────────
+
+
+def test_a_turn_that_never_reaches_final_still_records_what_it_measured():
+    """Stop, MaxTurns, a provider error and the #113 repetition guard all end a
+    turn without a `final` event. Recording only on `final` therefore threw away
+    the elapsed and generation times of exactly the turns where "how long did it
+    run" is the question — and those numbers were real. Before #748 the record
+    survived; this keeps that."""
+    r = _answered(
+        AgentMetrics(
+            phase="down",
+            prompt_tokens=120,
+            completion_tokens=50,
+            elapsed_ms=42_000,
+            generation_ms=1_200,
+        )
+    )
+
+    m = r.produced[-1].metrics
+    assert m is not None
+    assert m.elapsed_ms == 42_000
+    assert m.generation_ms == 1_200
+    # Still no invented counts: a `down` tick carries no measurement.
+    assert (m.prompt_tokens, m.completion_tokens) == (None, None)
+
+
+def test_a_later_tick_never_erases_a_measurement_already_recorded():
+    """The final event carries the provider's counts; a tick after it carries
+    none. Overwriting wholesale would blank them."""
+    r = _answered(
+        AgentMetrics(
+            phase="final",
+            elapsed_ms=3400,
+            measured_prompt_tokens=8412,
+            measured_completion_tokens=356,
+        ),
+        AgentMetrics(phase="down", elapsed_ms=3600),
+    )
+
+    m = r.produced[-1].metrics
+    assert m is not None
+    assert (m.prompt_tokens, m.completion_tokens) == (8412, 356)
+    assert m.elapsed_ms == 3600  # the newer clock reading is still taken
+
+
+def test_one_token_is_not_a_measurable_generation_span():
+    """A single delta gives one timestamp and therefore no duration. The old
+    code answered that with `0` when the stretch was open and `None` when it had
+    been banked — two answers to one question, and `0` divides into an infinite
+    rate. Neither is a span, so both are None."""
+    from workspace_app.api.litellm_runner import _GenerationClock
+
+    open_stretch = _GenerationClock(now=iter([10.0]).__next__)
+    open_stretch.token()
+    assert open_stretch.elapsed_ms() is None
+
+    banked = _GenerationClock(now=iter([10.0]).__next__)
+    banked.token()
+    banked.pause()
+    assert banked.elapsed_ms() is None

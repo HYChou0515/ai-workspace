@@ -731,6 +731,22 @@ describe("failover switch (#249/#131)", () => {
   });
 });
 
+describe("the tool-running line survives the phase reorder (#748 review)", () => {
+  it("still flags a running tool when the turn is still in its `up` phase", () => {
+    // A model whose FIRST act is a tool call streams no text, so no `down` tick
+    // is ever emitted and the metrics stay `phase: "up"`. Master checked
+    // `toolRunning` before `up`; putting `up` first made that turn read
+    // "sending…" — claiming the prompt is still uploading while a tool runs, and
+    // losing the running indicator for the whole first tool call.
+    const line = formatMetrics(
+      { phase: "up", promptTokens: 256, completionTokens: 0, elapsedMs: 0, generationMs: null },
+      true,
+    );
+    expect(line).toContain("running");
+    expect(line).not.toContain("sending");
+  });
+});
+
 describe("tok/s measures generation, not the turn (#748)", () => {
   const withGen = (over: Partial<AgentMetricsState> = {}): AgentMetricsState => ({
     phase: "final",

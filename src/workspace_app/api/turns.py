@@ -373,7 +373,7 @@ class _TurnReducer:
                     tool_display=item.display,
                 )
             )
-        elif isinstance(item, AgentMetrics) and item.phase == "final":
+        elif isinstance(item, AgentMetrics):
             # Pin how this reply was produced onto the assistant answer so it
             # survives a reload (the stream is live-only).
             #
@@ -387,12 +387,33 @@ class _TurnReducer:
             # from a measurement.
             for msg in reversed(self.produced):
                 if msg.role == "assistant":
+                    # Merge rather than replace. Gating on `phase == "final"`
+                    # threw the record away for every turn that never gets one —
+                    # Stop, MaxTurns, a provider error, the #113 repetition guard
+                    # — and those turns HAD measured an elapsed and a generation
+                    # time. Replacing wholesale has the opposite failure: a tick
+                    # arriving after `final` carries no counts and would blank
+                    # the provider's. So each field keeps the last value that was
+                    # actually measured.
+                    prev = msg.metrics
                     msg.metrics = MessageMetrics(
-                        prompt_tokens=item.measured_prompt_tokens,
-                        completion_tokens=item.measured_completion_tokens,
+                        prompt_tokens=(
+                            item.measured_prompt_tokens
+                            if item.measured_prompt_tokens is not None
+                            else (prev.prompt_tokens if prev else None)
+                        ),
+                        completion_tokens=(
+                            item.measured_completion_tokens
+                            if item.measured_completion_tokens is not None
+                            else (prev.completion_tokens if prev else None)
+                        ),
                         elapsed_ms=item.elapsed_ms,
-                        generation_ms=item.generation_ms,
-                        model=item.model,
+                        generation_ms=(
+                            item.generation_ms
+                            if item.generation_ms is not None
+                            else (prev.generation_ms if prev else None)
+                        ),
+                        model=item.model or (prev.model if prev else None),
                     )
                     break
         elif isinstance(item, RepetitionStopped):

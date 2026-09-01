@@ -125,6 +125,48 @@ describe("TurnStatus", () => {
     expect(screen.getByText(/請求過於頻繁/)).toHaveTextContent("30");
   });
 
+  it("keeps the retry affordance and a moving clock while thinking (#748 review)", () => {
+    // The thinking branch returned early, so it dropped both the retry button
+    // and this component's own FE-anchored clock — and then printed the
+    // BACKEND's elapsed, which is exactly the number the component's docstring
+    // says stalls when the server wedges. A model that thinks for minutes and
+    // then hangs showed a frozen "· 4.0s" and offered no way out.
+    const log = fold([
+      { type: "message_delta", text: "thinking", reasoning: true },
+      { type: "agent_metrics", phase: "down", prompt_tokens: 8412, completion_tokens: 120, elapsed_ms: 4000, generation_ms: 4000 },
+    ]);
+    // `elapsedSec` comes from a ref the component sets on its first streaming
+    // render, so the 60s threshold is only reachable by moving the clock.
+    const real = Date.now;
+    const t0 = real();
+    const view = render(
+      <TurnStatus log={{ ...log, streaming: true }} onRetry={() => {}} />,
+    );
+    Date.now = () => t0 + 90_000;
+    try {
+      view.rerender(<TurnStatus log={{ ...log, streaming: true }} onRetry={() => {}} />);
+      expect(screen.getByTestId("turn-retry")).toBeInTheDocument();
+      // and the counts are on that same line, not in a branch of their own
+      expect(screen.getByText(/↓ 120 tok/)).toBeInTheDocument();
+    } finally {
+      Date.now = real;
+    }
+  });
+
+  it("does not relabel a running tool as thinking (#748 review)", () => {
+    // A reasoning model that thinks, emits no prose, then calls a tool is BOTH
+    // `thinking` and `toolRunning`. The new branch sat above the tool branch and
+    // called formatMetrics without the flag, so the ⏳ running… signal vanished
+    // for exactly the turns the phase was added to serve.
+    const log = fold([
+      { type: "message_delta", text: "thinking", reasoning: true },
+      { type: "agent_metrics", phase: "down", prompt_tokens: 8412, completion_tokens: 120, elapsed_ms: 4000, generation_ms: 4000 },
+      { type: "tool_start", call_id: "t1", name: "kb_search", args: {} },
+    ]);
+    render(<TurnStatus log={{ ...log, streaming: true }} />);
+    expect(screen.getByText(/running/)).toBeInTheDocument();
+  });
+
   it("keeps showing the numbers while the model is only thinking (#748)", () => {
     // A reasoning model can think for a long time before any visible content.
     // The backend pushes metrics throughout — `completion_chars` counts the

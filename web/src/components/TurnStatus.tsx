@@ -135,14 +135,6 @@ export function TurnStatus({
   // The counts go BESIDE 思考中 rather than replacing it: the words say what the
   // model is doing, the numbers say it is still doing it. Swapping one for the
   // other trades a known problem for its mirror image.
-  if (phase === "thinking" && log.metrics) {
-    return (
-      <div className={className} style={box}>
-        {statusText(phase, elapsedSec)} · {formatMetrics(log.metrics)}
-      </div>
-    );
-  }
-
   // The model has produced output and is answering (or is mid tool-call): the
   // token line (↑/↓ tok · tok/s) is the whole signal.
   if (phase === "answering" || toolRunning) {
@@ -160,6 +152,15 @@ export function TurnStatus({
   return (
     <div className={className} style={box}>
       {switched ? "模型忙線,已自動切換,稍候…" : statusText(phase, elapsedSec)}
+      {/* #748: a reasoning model can sit in `thinking` for minutes, and the
+          backend pushes counts throughout it — they simply had nowhere to go.
+          They are appended HERE rather than in a branch of their own, so this
+          line keeps the retry affordance and the FE-anchored clock; an earlier
+          attempt returned early and lost both, printing the backend's elapsed,
+          which is the very number this component exists to distrust. */}
+      {phase === "thinking" && log.metrics && (
+        <span style={{ opacity: 0.7 }}> · {formatMetrics(log.metrics, toolRunning)}</span>
+      )}
       {elapsedSec >= 1 && <span style={{ opacity: 0.7 }}> · {elapsedSec}s</span>}
       {retry}
     </div>

@@ -294,18 +294,23 @@ class _GenerationClock:
         self._last = None
 
     def elapsed_ms(self) -> int | None:
-        """Total generation time, or None when no token ever arrived — a turn
-        that died before the model spoke generated nothing, and reporting 0
-        would divide into an infinite rate."""
+        """Total generation time, or None when there is no span to report.
+
+        Two timestamps are the minimum: a single delta gives one, so a stretch
+        of one token has no duration. The earlier form inferred "nothing ever
+        arrived" from the accumulator being 0.0, which cannot tell that apart
+        from stretches that each measured exactly zero — so the same situation
+        answered `None` when the stretch had been banked and `0` when it was
+        still open. Zero is the worse of the two: it divides into an infinite
+        rate, and the record's own contract says a number means measured.
+        """
         open_s = (
             self._last - self._started
             if self._started is not None and self._last is not None
             else 0.0
         )
         total = self._closed_s + open_s
-        if self._started is None and self._closed_s == 0.0:
-            return None
-        return round(total * 1000)
+        return round(total * 1000) if total > 0 else None
 
 
 def _effective_model(model: Any, configured: str) -> str:
@@ -1535,9 +1540,19 @@ class LitellmAgentRunner:
                         data = getattr(event, "data", None)
                         delta = getattr(data, "delta", None)
                         channel = _delta_channel(getattr(data, "type", "") or "")
+                        if isinstance(delta, str) and delta:
+                            # #748: the clock counts EVERY delta, including the
+                            # tool-call argument JSON that `_delta_channel` marks
+                            # "ignore". Ignoring it is right for the answer TEXT
+                            # (the args must not leak into the reply) and wrong
+                            # for the clock: the provider counts those tokens in
+                            # `completion_tokens`, so leaving their time out made
+                            # the rate a ratio of two different populations — a
+                            # turn writing 200 words and 300 tokens of arguments
+                            # reported 250 tok/s for a model doing 100.
+                            gen.token()
                         if isinstance(delta, str) and delta and channel != "ignore":
                             completion_chars += len(delta)
-                            gen.token()
                             if channel == "reasoning":
                                 queue.put_nowait(MessageDelta(text=delta, reasoning=True))
                             else:  # content — still split any inline <think> tags

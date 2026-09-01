@@ -1053,9 +1053,16 @@ def _message_dict(m: KbMessage) -> dict:
         "stopped_reason": m.stopped_reason,  # #113
         "metrics": (
             {
+                # #748: KB chat hand-serializes this instead of riding specstar's
+                # auto-CRUD, so every field added to MessageMetrics has to be
+                # repeated here — and the two new ones were not, which left KB
+                # replies showing a time and counts but never a model or a rate.
+                # Keep this list in step with `resources.conversation.MessageMetrics`.
+                "model": m.metrics.model,
                 "prompt_tokens": m.metrics.prompt_tokens,
                 "completion_tokens": m.metrics.completion_tokens,
                 "elapsed_ms": m.metrics.elapsed_ms,
+                "generation_ms": m.metrics.generation_ms,
             }
             if m.metrics is not None
             else None
