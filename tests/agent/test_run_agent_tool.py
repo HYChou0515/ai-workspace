@@ -124,9 +124,12 @@ def test_one_predicate_decides_both_the_tool_and_the_note():
 
 async def test_a_sub_agent_saved_this_turn_is_callable_in_the_same_turn():
     """The delegation index is frozen when the turn starts, so one just written
-    is not in it. Resolving falls back to reading `.agent/` live — the same thing
-    `read_skill` has always done — or "create then use it" would need the user to
-    send a second message for no reason they could see."""
+    is not in it, and "create then use it" would otherwise need the user to send
+    a second message for no reason they could see.
+
+    This drives the `save_subagent` path, where the splice puts the definition
+    into the frozen index directly — it does NOT reach the live re-read, which
+    `test_a_definition_no_tool_of_ours_wrote_is_still_resolved_live` covers."""
     calls: list[tuple[str, str]] = []
     ctx = _ctx(defs=(), calls=calls)  # frozen index: empty, as at turn start
     ctx.context.files = WorkspaceFiles(MemoryFileStore())
@@ -202,3 +205,59 @@ async def test_without_that_tool_the_refusal_just_says_there_are_none():
 async def test_no_seam_on_this_turn_is_reported_not_raised():
     ctx = RunContextWrapper(AgentToolContext(investigation_id="inv-1"))
     assert "error" in await run_agent_impl(ctx, "log-digger", "go")
+
+
+def _live_ctx(calls=None) -> RunContextWrapper[AgentToolContext]:
+    """A turn whose frozen index is empty and whose workspace is real — the only
+    shape that reaches the live re-read."""
+    ctx = _ctx(defs=(), calls=calls)
+    ctx.context.files = WorkspaceFiles(MemoryFileStore())
+    return ctx
+
+
+_HAND_MADE = (
+    "---\n"
+    "name: hand-made\n"
+    "description: Written by hand, not by save_subagent\n"
+    "tools: [read_file]\n"
+    "---\n"
+    "\n"
+    "You were written with write_file.\n"
+)
+
+
+async def test_a_definition_no_tool_of_ours_wrote_is_still_resolved_live():
+    """The live re-read, which nothing guarded: every test that looked like it
+    covered this went through `save_subagent`, and round 2's splice resolves the
+    name out of the frozen index before the fallback can run. Delete
+    `_live_subagent_defs` and the entire suite stayed green.
+
+    An agent can write `.agent/<name>/AGENT.md` with a bare `write_file`, and a
+    user can drop one in; neither splices. The live read is the only thing that
+    makes those callable in the turn that created them."""
+    calls: list[tuple[str, str]] = []
+    ctx = _live_ctx(calls)
+    files = ctx.context.files
+    assert files is not None
+    await files.write("inv-1", "/.agent/hand-made/AGENT.md", _HAND_MADE.encode())
+
+    out = await run_agent_impl(ctx, "hand-made", "read app.log")
+
+    assert calls == [("hand-made", "read app.log")]
+    assert out == "[hand-made] report"
+
+
+async def test_a_typo_is_offered_the_names_that_exist_only_live():
+    """The suggestion list the plan asked for and nobody wrote. `run_agent`
+    unions the frozen index with the live read precisely so a typo made right
+    after creating something is answered with the name meant — reading only the
+    frozen list would say "none are defined" about a file on disk."""
+    ctx = _live_ctx()
+    files = ctx.context.files
+    assert files is not None
+    await files.write("inv-1", "/.agent/hand-made/AGENT.md", _HAND_MADE.encode())
+
+    out = await run_agent_impl(ctx, "hand-mad", "read app.log")
+
+    assert out.startswith("error:")
+    assert "hand-made" in out

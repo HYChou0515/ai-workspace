@@ -225,3 +225,120 @@ async def test_the_confirmation_names_a_path_the_agent_can_actually_use():
     out = await save_subagent_impl(ctx, "digger", "d", [], "body")
     assert ".agent/digger/AGENT.md" in out
     assert "/.agent/digger/AGENT.md" not in out
+
+
+async def test_a_sub_agent_with_no_description_is_refused():
+    """Round 4 added this refusal and nothing exercised it — deleting the guard
+    left the whole targeted suite green, and the line was the branch that would
+    have failed the repo's authoritative 100% coverage gate.
+
+    It is not cosmetic: the description is the ONLY line the delegation index
+    shows, so an empty one is a sub-agent the calling model cannot tell when to
+    use — it will either never pick it or always pick it."""
+    ctx = _ctx()
+
+    out = await save_subagent_impl(ctx, "digger", "   ", ["read_file"], "You dig.")
+
+    assert out.startswith("error:")
+    assert "description" in out
+    assert await _defs(ctx) == []
+
+
+async def test_a_tool_this_turn_holds_is_grantable_even_if_the_profile_narrowed_it():
+    """Round 4's second fix, which had no test either. A per-item force-ON
+    deliberately re-adds a tool the profile dropped (`_apply_tool_prefs` ceilings
+    on the APP, not the profile), so intersecting the ceiling with the profile
+    refused `exec` to an agent that was, right then, holding `exec` — with a
+    message reading "it can only use tools you hold yourself".
+
+    `playground/echo` narrows to read_file + write_file, so reverting the fix
+    makes this refuse."""
+    files = WorkspaceFiles(MemoryFileStore())
+    ctx = RunContextWrapper(
+        AgentToolContext(
+            investigation_id="inv-1",
+            files=files,
+            app_slug="playground",
+            template_profile="echo",
+            agent_config=AgentConfig(
+                name="forced-on",
+                allowed_tools=["read_file", "write_file", "exec", "save_subagent"],
+            ),
+        )
+    )
+
+    out = await save_subagent_impl(ctx, "digger", "Digs logs", ["exec"], "You dig.")
+
+    assert not out.startswith("error:"), out
+    defs = await workspace_subagent_defs(files, "inv-1")
+    assert [d.tools for d in defs] == [["exec"]]
+
+
+async def test_the_refusal_gives_the_right_reason_for_each_of_the_two_rules():
+    """The ceiling subtracts two sets for two different reasons, and one sentence
+    claimed both were "tools you hold yourself" — false for the four a sub-agent
+    may never hold, which the parent usually IS holding. A model can check that
+    reason, find it untrue, and retry the same call."""
+    files = WorkspaceFiles(MemoryFileStore())
+    ctx = RunContextWrapper(
+        AgentToolContext(
+            investigation_id="inv-1",
+            files=files,
+            agent_config=AgentConfig(
+                name="holds-todos", allowed_tools=["read_file", "update_todos"]
+            ),
+        )
+    )
+
+    out = await save_subagent_impl(ctx, "digger", "Digs logs", ["update_todos", "exec"], "You dig.")
+
+    assert out.startswith("error:")
+    # The one the parent holds: refused because no sub-agent may ever hold it...
+    assert "update_todos belongs to this conversation" in out
+    # ...the one it does not: refused for the entirely different reason.
+    assert "not holding exec yourself" in out
+    assert await workspace_subagent_defs(files, "inv-1") == []
+
+
+async def test_the_confirmation_does_not_promise_a_call_this_turn_cannot_make():
+    """A third reader of "can this turn delegate?" that guessed instead of asking
+    `delegation_is_available`. With `run_agent` toggled off for the item and this
+    tool left on, the confirmation told the model to call a tool absent from its
+    own payload — the dead-switch shape, on the LLM-facing side."""
+    files = WorkspaceFiles(MemoryFileStore())
+    ctx = RunContextWrapper(
+        AgentToolContext(
+            investigation_id="inv-1",
+            files=files,
+            agent_config=AgentConfig(
+                name="no-delegation", allowed_tools=["read_file", "save_subagent"]
+            ),
+        )
+    )
+
+    out = await save_subagent_impl(ctx, "digger", "Digs logs", ["read_file"], "You dig.")
+
+    assert not out.startswith("error:"), out
+    assert "saved sub-agent 'digger'" in out
+    assert "it is callable now" not in out
+    assert "not holding run_agent" in out
+
+
+async def test_the_confirmation_still_says_so_when_the_turn_can_delegate():
+    """The other half of the same predicate — without this, satisfying the test
+    above by never promising anything would look correct."""
+    files = WorkspaceFiles(MemoryFileStore())
+    ctx = RunContextWrapper(
+        AgentToolContext(
+            investigation_id="inv-1",
+            files=files,
+            agent_config=AgentConfig(
+                name="can-delegate",
+                allowed_tools=["read_file", "save_subagent", "run_agent"],
+            ),
+        )
+    )
+
+    out = await save_subagent_impl(ctx, "digger", "Digs logs", ["read_file"], "You dig.")
+
+    assert "it is callable now, including in this reply." in out

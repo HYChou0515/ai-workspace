@@ -1782,6 +1782,7 @@ async def save_subagent_impl(
     same name overwrites, so refine freely. Returns a confirmation, or an
     `error:` note naming exactly what to fix."""
     from ..apps.subagents import (
+        SUBAGENT_FORBIDDEN_TOOLS,
         WORKSPACE_AGENT_DIR,
         round_trip,
         slugify_subagent_name,
@@ -1814,11 +1815,27 @@ async def save_subagent_impl(
     # starts out believing it holds `exec` and then finds it missing fails in a way
     # its caller cannot read; being told now is what lets the agent pick another way.
     if (allowed := _subagent_tool_ceiling(ctx.context)) is not None and (
-        outside := [t for t in tools if t not in allowed]
+        outside := sorted(t for t in tools if t not in allowed)
     ):
+        # Two rules wearing one sentence. "it can only use tools you hold
+        # yourself" was said for the four a sub-agent may NEVER hold — which the
+        # parent is usually holding, so the agent can check the reason and find
+        # it false. A refusal whose stated cause is untrue invites a retry of the
+        # same call; the ceiling subtracts the two sets for different reasons, so
+        # the message has to as well.
+        never = [t for t in outside if t in SUBAGENT_FORBIDDEN_TOOLS]
+        unheld = [t for t in outside if t not in SUBAGENT_FORBIDDEN_TOOLS]
+        why = []
+        if never:
+            why.append(
+                f"{', '.join(never)} belongs to this conversation, not to a delegated task, "
+                "so no sub-agent may hold it"
+            )
+        if unheld:
+            why.append(f"you are not holding {', '.join(unheld)} yourself")
         return (
-            f"error: cannot grant {', '.join(sorted(outside))} to a sub-agent — it can only "
-            f"use tools you hold yourself. Available: {', '.join(sorted(allowed)) or 'none'}"
+            f"error: cannot grant {', '.join(outside)} to a sub-agent — {'; and '.join(why)}. "
+            f"Available: {', '.join(sorted(allowed)) or 'none'}"
         )
     # The promise in this docstring, checked rather than asserted: render it and
     # read it back with the real loader before anything is written. Owning the
@@ -1839,16 +1856,26 @@ async def save_subagent_impl(
     # 100% gate would have failed on.
     others = tuple(d for d in ctx.context.subagent_defs if d.name != slug)
     ctx.context.subagent_defs = tuple(sorted((*others, checked.parsed), key=lambda d: d.name))
+    saved = f"saved sub-agent '{slug}' to {rel_path(path)}."
+    # Through the SAME predicate `build_tools` and the delegation index use. This
+    # was a third reader that simply assumed, so a per-item toggle switching
+    # `run_agent` off while leaving this tool on made the confirmation walk the
+    # model into calling a tool absent from its own payload.
+    cfg = ctx.context.agent_config
+    if not delegation_is_available(cfg.allowed_tools if cfg is not None else None, True):
+        return (
+            f"{saved} You are not holding run_agent on this turn, so you cannot delegate to "
+            "it yourself — it is saved, and a turn that holds run_agent can call it."
+        )
     return (
-        f"saved sub-agent '{slug}' to {rel_path(path)}. Delegate to it with "
-        f"run_agent('{slug}', <a self-contained task>) — it is callable now, including "
-        "in this reply."
+        f"{saved} Delegate to it with run_agent('{slug}', <a self-contained task>) — "
+        "it is callable now, including in this reply."
     )
 
 
 def _subagent_tool_ceiling(ctx: AgentToolContext) -> set[str] | None:
     """What a sub-agent saved on this turn may be granted: what THIS turn holds,
-    narrowed by the App/profile ceiling. ``None`` ⇒ nothing to check against (a
+    minus what no sub-agent may ever hold. ``None`` ⇒ nothing to check against (a
     synthetic slug and a config that named no tools) — the load-time clamp in
     ``apps.subagents.clamp_tools`` still applies either way.
 
