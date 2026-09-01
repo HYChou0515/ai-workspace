@@ -65,7 +65,12 @@ export type AgentEntry =
   | { kind: "notice"; text: string; at?: number }
   | { kind: "step"; step: StepView; at?: number }
   | { kind: "phase"; phase: string; at?: number }
-  | { kind: "banner"; text: string; at?: number };
+  /** `turn` = how many user messages the log held when this banner was raised,
+   * i.e. which turn it is about. A re-hydrate carries it only while the thread is
+   * still on that turn. Absent on a banner hydrated from a persisted message
+   * (those keep their own position and are never carried) and on anything written
+   * before the field existed. */
+  | { kind: "banner"; text: string; at?: number; turn?: number };
 
 export type AgentLog = {
   entries: AgentEntry[];
@@ -205,6 +210,11 @@ const CONTENT_KINDS = new Set(["message", "tool_call", "mention", "goal_note", "
 const contentCount = (entries: readonly AgentEntry[]) =>
   entries.filter((e) => CONTENT_KINDS.has(e.kind)).length;
 
+/** Which turn the log is on: one per user message. The unit a banner's lifetime
+ * is measured in — see the carry rule in `reconcileSnapshot`. */
+export const userTurnCount = (entries: readonly AgentEntry[]) =>
+  entries.filter((e) => e.kind === "message" && e.message.role === "user").length;
+
 /**
  * Fold a persisted thread into the live log WITHOUT deleting what only the
  * stream knows.
@@ -245,17 +255,33 @@ export function reconcileSnapshot(
   // 已停止" ends up beneath a turn that finished perfectly well and looks like it
   // never goes away.
   //
-  // Both clocks are epoch ms (`now_ms()` persists a message, `Date.now()` stamps
-  // a banner), so "older than the newest persisted message" is exactly "about a
-  // turn that is over". An undated banner is kept: no timestamp is not evidence
-  // of staleness.
-  const newestPersisted = Math.max(0, ...thread.messages.map((m) => m.created_at ?? 0));
-  const carried = prev.entries.filter(
-    (e) =>
-      e.kind === "banner" &&
-      (e.at === undefined || e.at >= newestPersisted) &&
-      !snap.entries.some((s) => s.kind === "banner" && s.text === e.text),
-  );
+  // Staleness is measured in TURNS, not milliseconds. A banner records how many
+  // user messages the thread held when it was raised; the thread having gained
+  // one means the conversation moved on to a turn this banner is not about.
+  //
+  // Timestamps cannot answer this, and not only because one clock is the
+  // browser's and the other the server's. A turn stamps its messages AS THEY ARE
+  // PRODUCED — a fresh assistant message after every tool call — so a banner
+  // raised early in a turn is ALWAYS older than that turn's own later messages,
+  // and "older than the newest message" deletes `parse error: …` at the very
+  // refetch that ends the turn it belongs to. Counting turns is indifferent to
+  // ordering within one.
+  //
+  // The turn is ASSIGNED HERE, on a banner's first re-hydrate, rather than
+  // recorded where it was raised: the live log can still be behind the store at
+  // that moment (the subscription opens before hydration resolves), and a count
+  // taken from a log missing its own user message brands the banner stale on
+  // sight. The snapshot is the authority, so let the snapshot say which turn it
+  // is — a banner seen for the first time belongs to the turn now in progress.
+  const snapTurns = userTurnCount(snap.entries);
+  const carried = prev.entries
+    .filter(
+      (e) =>
+        e.kind === "banner" &&
+        !snap.entries.some((s) => s.kind === "banner" && s.text === e.text),
+    )
+    .map((e) => (e.kind === "banner" && e.turn === undefined ? { ...e, turn: snapTurns } : e))
+    .filter((e) => e.kind !== "banner" || (e.turn ?? snapTurns) >= snapTurns);
   return {
     ...snap,
     entries: [...snap.entries, ...carried],
@@ -569,8 +595,11 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
       // really did end the conversation. A goal now continues by itself, so
       // without this the standing box would keep saying the conversation had
       // stopped while the chat carried on in full view, and no reload would
-      // shift it. The BANNER stays in the transcript: that the turn ran out of
-      // room is still true, and still worth reading.
+      // shift it. The BANNER stays where it was raised — that the turn ran out of
+      // room is still true, and still worth reading in its place — but it stops
+      // being CARRIED past this turn: a re-hydrate re-attaches carried banners at
+      // the end of the thread, and one that keeps moving down lands under the
+      // next answer and reads as a verdict on it (see `reconcileSnapshot`).
       return { ...log, entries, streaming: true, streamingBy: ev.author ?? null, error: null };
 
     case "file_changed":

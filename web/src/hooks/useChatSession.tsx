@@ -2,7 +2,7 @@ import { useQueryClient, type QueryKey } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { AgentEvent } from "../events";
-import { eventId, eventSeq, isTerminal } from "../events";
+import { eventId, eventSeq, isTerminal, isTurnProgress } from "../events";
 import { type AgentLog, logFromMessages, reduceAgent } from "../pages/investigation/agentLog";
 import type { MsgKey } from "../lib/i18n";
 import { type QuotaDetail, type QuotaKind, quotaMessage } from "../lib/quotaFailure";
@@ -134,13 +134,19 @@ const isAbort = (err: unknown) => (err as { name?: string } | null)?.name === "A
 /** The transient "you may have missed a piece" notice, shown while a dropped
  * stream reconnects — and only when a turn was actually being written.
  *
- * It lives no longer than the turn it interrupted. Two things retract it: a
- * contiguous replay (the same-pod buffer filled the gap) and, failing that, the
- * turn's own terminal event, after which the thread is re-read and the answer on
- * screen is the stored one. Contiguity alone was too narrow a retraction to hang
- * it on — each pod numbers its own broadcast, so a reconnect to another pod can
- * never prove it — and a claim that outlives what it describes is read as "you
- * lost something" while the whole answer sits above it. */
+ * It lives no longer than the turn it interrupted, and three things retract it:
+ * a contiguous replay (the buffer filled the gap), the re-hydrate after the
+ * reconnect finding the turn already ended, and the turn's own terminal event.
+ *
+ * Contiguity alone was too narrow to hang it on. Each pod numbers its own
+ * broadcast, so a reconnect that lands elsewhere can resume in a numbering that
+ * was never this viewer's — not always (two pods that both kept a subscriber
+ * throughout do agree), but often enough that the test fails on a turn nothing
+ * was lost from. The terminal event alone is not enough either: a pod with no
+ * subscriber buffers nothing, so a turn that ends during the outage never
+ * announces itself. Hence the middle one, which asks the store instead of the
+ * stream. A claim that outlives what it describes is read as "you lost
+ * something" while the whole answer sits above it. */
 const GAP_BANNER = "連線中斷,這裡可能少了一段";
 
 export function useChatSession(
@@ -198,6 +204,10 @@ export function useChatSession(
   useEffect(() => {
     maxSeqRef.current = 0;
     seenIdsRef.current = new Set();
+    // Whether an answer was being written belongs to the thread we were watching.
+    // Carried across, it makes the NEXT thread's first drop claim a hole in a
+    // conversation that has never run anything.
+    turnInFlightRef.current = false;
   }, [transport.threadKey]);
 
   // The long-lived broadcast subscription (#43) with the #493 auto-reconnect:
@@ -286,10 +296,13 @@ export function useChatSession(
             // the poll exists for.
             if (ev.type !== "presence") lastEventAtRef.current = Date.now();
             // Is an answer being written right now? Only that makes a hole
-            // possible, and only a turn event can say so — the log's own shape
-            // cannot: "the last entry is an assistant message" is the resting
-            // state of every chat that has ever been answered.
-            if (ev.type !== "presence") turnInFlightRef.current = !isTerminal(ev);
+            // possible, and only a turn-progress event can say so — the log's own
+            // shape cannot ("the last entry is an assistant message" is the
+            // resting state of every answered chat), and neither can "not
+            // presence": `file_changed` fires on any editor save, with no turn
+            // anywhere. Terminal clears it in its own branch below; everything
+            // else — retry notices included — leaves it untouched.
+            if (isTurnProgress(ev)) turnInFlightRef.current = true;
             if (ev.type === "file_changed") {
               // A human edited a workspace file — refetch the tree. Not a turn
               // event, so it never folds into the log.
@@ -331,6 +344,7 @@ export function useChatSession(
               // confidence over: they are told they missed something while
               // looking at the whole answer.
               gapBannerPendingRef.current = false;
+              turnInFlightRef.current = false;
               setLog((prev) =>
                 prev.entries.some((e) => e.kind === "banner" && e.text === GAP_BANNER)
                   ? {
@@ -398,7 +412,10 @@ export function useChatSession(
           interruptedATurn
             ? {
                 ...prev,
-                entries: [...prev.entries, { kind: "banner", at: Date.now(), text: GAP_BANNER }],
+                entries: [
+                  ...prev.entries,
+                  { kind: "banner", at: Date.now(), text: GAP_BANNER },
+                ],
               }
             : prev,
         );
@@ -416,6 +433,26 @@ export function useChatSession(
           // answer being streamed — reconcile so reconnecting never costs the
           // user what they were reading.
           reconcile(fresh);
+          // …and if the store says the turn ENDED while we were away, the hole is
+          // closed by this very read: the whole answer is on screen, from the
+          // store. The terminal event cannot be relied on to say so — a pod with
+          // no subscriber buffers nothing, so a turn that finishes during the
+          // outage never announces itself to the reconnected stream, and a banner
+          // waiting for that announcement waits forever.
+          const last = fresh.messages[fresh.messages.length - 1];
+          if (last !== undefined && last.role !== "user") {
+            gapBannerPendingRef.current = false;
+            setLog((prev) =>
+              prev.entries.some((e) => e.kind === "banner" && e.text === GAP_BANNER)
+                ? {
+                    ...prev,
+                    entries: prev.entries.filter(
+                      (e) => !(e.kind === "banner" && e.text === GAP_BANNER),
+                    ),
+                  }
+                : prev,
+            );
+          }
         }
         backoff = Math.min(backoff * 2, 15000);
       }

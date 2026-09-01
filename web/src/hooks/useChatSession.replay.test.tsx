@@ -169,6 +169,105 @@ describe("useChatSession — reconnect replay", () => {
     });
   });
 
+  it("drops the banner when the store shows the turn ended during the gap", async () => {
+    // The terminal event cannot be relied on to retract it: a pod with no
+    // subscriber buffers nothing, so a turn that finishes while the viewer is
+    // away never announces itself to the reconnected stream. Without this the
+    // banner sits under the COMPLETE answer — the whole answer, pulled from the
+    // store by the reconnect's own re-hydrate — for the rest of the session.
+    let attempt = 0;
+    let finished = false;
+    const { result } = render(
+      transport({
+        getThread: persistingThread(() => finished, "first half and the rest of it"),
+        subscribe: async function* (_signal: AbortSignal) {
+          attempt += 1;
+          if (attempt === 1) {
+            yield ev("first half", 5);
+            finished = true; // the turn completes server-side during the outage
+            throw new Error("stream failed: 504");
+          }
+          await new Promise<void>(() => {}); // the reconnect hears nothing at all
+        },
+      }),
+    );
+
+    await waitFor(() => expect(attempt).toBeGreaterThanOrEqual(2), { timeout: 4000 });
+    await waitFor(() => expect(hasBanner(result.current.log.entries)).toBe(false), {
+      timeout: 4000,
+    });
+  });
+
+  it("does not carry 'a turn was running' across a thread switch", async () => {
+    // The sibling refs (`maxSeqRef`, `seenIdsRef`) are reset when the thread
+    // changes, for the same reason: a value about the chat you just left is
+    // poison in the one you just opened. Left behind, chat A's running turn makes
+    // chat B's first drop claim a hole in a conversation that never ran anything
+    // — and with no turn in B, nothing will ever retract it.
+    const idle = transport({ threadKey: "B", queryKey: ["chat", "B"] });
+    let attempt = 0;
+    const busy = transport({
+      threadKey: "A",
+      queryKey: ["chat", "A"],
+      subscribe: async function* (_signal: AbortSignal) {
+        attempt += 1;
+        yield ev("mid answer", 1); // a turn IS running on A
+        await new Promise<void>(() => {});
+      },
+    });
+
+    const { result, rerender } = renderHook(({ t }) => useChatSession(t, 60_000), {
+      wrapper: QueryWrap,
+      initialProps: { t: busy },
+    });
+    await waitFor(() => expect(attempt).toBeGreaterThanOrEqual(1), { timeout: 4000 });
+
+    // Switch to B, whose stream then drops without ever delivering a turn event.
+    let bAttempt = 0;
+    rerender({
+      t: transport({
+        threadKey: "B",
+        queryKey: ["chat", "B"],
+        subscribe: async function* (_signal: AbortSignal) {
+          bAttempt += 1;
+          if (bAttempt === 1) throw new Error("stream failed: 504");
+          await new Promise<void>(() => {});
+        },
+        getThread: idle.getThread,
+      }),
+    });
+
+    await waitFor(() => expect(bAttempt).toBeGreaterThanOrEqual(2), { timeout: 4000 });
+    await new Promise((r) => setTimeout(r, 200));
+    expect(hasBanner(result.current.log.entries)).toBe(false);
+  });
+
+  it("a broadcast that is not turn progress does not arm the banner", async () => {
+    // `file_changed` is published on any workspace write — a person saving a file
+    // in the editor, an entity commit — on the item's own engine key, with no turn
+    // anywhere. Treating "not presence" as "a turn is running" let an idle window
+    // that blinked claim a missing piece, and since no turn is running, no
+    // terminal event ever comes to take it back. The same door as the original
+    // bug, one event type over. `todos_updated` and `goal_updated` are the same.
+    let attempt = 0;
+    const { result } = render(
+      transport({
+        subscribe: async function* (_signal: AbortSignal) {
+          attempt += 1;
+          if (attempt === 1) {
+            yield { type: "file_changed", path: "/notes.md" } as unknown as AgentEvent;
+            throw new Error("stream failed: 504");
+          }
+          await new Promise<void>(() => {});
+        },
+      }),
+    );
+
+    await waitFor(() => expect(attempt).toBeGreaterThanOrEqual(2), { timeout: 4000 });
+    await new Promise((r) => setTimeout(r, 200));
+    expect(hasBanner(result.current.log.entries)).toBe(false);
+  });
+
   it("says nothing when the drop caught no turn in flight", async () => {
     // A finished chat that blips. Nothing was being written, so nothing can be
     // missing — and no further event will ever arrive, so a banner added here is

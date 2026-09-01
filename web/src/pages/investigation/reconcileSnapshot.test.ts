@@ -87,6 +87,34 @@ describe("reconcileSnapshot", () => {
     );
   });
 
+  it("keeps a banner raised mid-turn when that same turn ends", () => {
+    // A turn's messages are stamped AS THEY ARE PRODUCED — `_TurnReducer` opens a
+    // fresh assistant message after every tool call — so a banner raised early in
+    // a turn is necessarily older than that turn's own later messages. Anything
+    // that decides staleness by comparing timestamps therefore deletes it at the
+    // turn's own terminal refetch. `parse error: …` is #76 transparency and its
+    // emitter says "ALWAYS push a banner — never silently drop, or the retry is
+    // invisible"; it has to survive the turn it belongs to.
+    const prev = live({
+      entries: [
+        msg("user", "q"),
+        msg("assistant", "thinking"),
+        { kind: "banner", at: 1200, turn: 1, text: "parse error: the model sent bad JSON" },
+      ],
+    });
+
+    const next = reconcileSnapshot(prev, {
+      messages: [
+        { role: "user", content: "q", created_at: 1000 },
+        { role: "assistant", content: "thinking", created_at: 1100 },
+        // …the turn continued after the banner and persisted more of itself.
+        { role: "assistant", content: "the answer", created_at: 1400 },
+      ],
+    });
+
+    expect(next.entries.some((e) => e.kind === "banner")).toBe(true);
+  });
+
   it("stops carrying a banner once the conversation has moved past it", () => {
     // A carried banner is re-attached at the END of the fresh snapshot, so one
     // left over from an earlier turn does not merely linger — it MOVES, landing
@@ -94,14 +122,15 @@ describe("reconcileSnapshot", () => {
     // 已停止" then shows beneath a turn that finished perfectly well, which is
     // the report: it never goes away.
     //
-    // Both timestamps are epoch ms (`now_ms()` on the backend, `Date.now()` for
-    // a banner), so "older than the newest persisted message" is exactly "about
-    // a turn that is over".
+    // Staleness is measured in TURNS, not milliseconds: the banner records how
+    // many user messages the thread had when it was raised, and a thread that has
+    // gained one has moved on to a turn the banner is not about. No clocks — the
+    // banner's would be the browser's and the messages' the server's.
     const prev = live({
       entries: [
         msg("user", "q1"),
         msg("assistant", "half"),
-        { kind: "banner", at: 3, text: "已達回合上限（10），對話已停止。" },
+        { kind: "banner", at: 3, turn: 1, text: "已達回合上限（10），對話已停止。" },
       ],
     });
 
@@ -123,8 +152,11 @@ describe("reconcileSnapshot", () => {
   it("still carries a banner about the turn the thread ends on", () => {
     // The counterpart: a stop that IS the latest thing to have happened must
     // survive the re-hydrate, or a stopped turn reads as merely finished.
+    // Note the ordering a real turn produces: the banner is stamped BEFORE the
+    // turn's own later messages, which is exactly what a timestamp rule gets
+    // wrong. Counting turns is indifferent to it.
     const prev = live({
-      entries: [msg("user", "q"), { kind: "banner", at: 9, text: "已取消。" }],
+      entries: [msg("user", "q"), { kind: "banner", at: 1, turn: 1, text: "已取消。" }],
     });
 
     const next = reconcileSnapshot(prev, {
