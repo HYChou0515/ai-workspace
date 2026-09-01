@@ -1,4 +1,5 @@
-import { beforeEach, vi } from "vitest";
+import { cleanup } from "@testing-library/react";
+import { afterEach, beforeEach, vi } from "vitest";
 
 /**
  * No test may open a socket.
@@ -35,3 +36,24 @@ beforeEach(() => {
     ),
   );
 });
+
+/**
+ * No test may leave React mounted.
+ *
+ * Testing Library auto-registers this cleanup only when vitest runs with
+ * `globals: true`, and this project does not — so every `render` / `renderHook`
+ * stayed mounted after its test, and 27 files never unmounted at all. React then
+ * schedules work that lands after happy-dom has torn the document down, and
+ * `window is not defined` arrives with no owner.
+ *
+ * That is the same failure the fetch guard above exists for, in a second
+ * disguise: vitest counts an unowned error and exits 1 with every test passing,
+ * intermittently, depending on whether the straggler beats the reporter. On this
+ * machine `useChatSession.connection.test.tsx` alone reddened 4 runs in 5 while
+ * its 9 tests passed every time.
+ *
+ * Registered once here rather than per file, because "remember afterEach(cleanup)
+ * in every new test file" is the rule that produced the 27.
+ */
+afterEach(cleanup);
+
