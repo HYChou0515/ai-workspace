@@ -55,15 +55,27 @@ jobs:
   # the whole CI wall clock was that one step. Each shard runs a slice.
   #
   # Two shard flavours:
-  #   * `paths`     — an explicit set of dirs/args handed to pytest.
-  #   * `split_dir` — a single heavy dir whose SORTED test files are round-robined
-  #     across `split_total` runners (this file's slice = position % total). tests/api
-  #     is the outlier (~700 app-building tests, ~30 min alone even sharded off), so it
-  #     is split across 3 runners here.
+  #   * `paths`      — an explicit set of dirs/args handed to pytest.
+  #   * `split_paths` — targets whose COLLECTED TESTS are round-robined across
+  #     `split_total` runners (this test's slice = collection position % total).
+  #
+  # The split unit is the TEST, not the test FILE (#CI-balance). File-level
+  # round-robin balanced file COUNT while cost varies by an order of magnitude
+  # BETWEEN files, so the three heaviest files (test_kb_api / test_litellm_runner
+  # / test_registry) could all land in one slice: measured 47.7 min on api-1 while
+  # api-2 ran 34.1, then — after a branch added a few test files, which shifts
+  # every later file's position and reshuffles the WHOLE assignment — 50.9 min on
+  # api-2 while api-1 ran 23.4. Which shard blew up was effectively random per
+  # commit. Slicing collected tests instead gives every shard 1/N of EVERY file,
+  # so between-file cost differences cancel by construction rather than by luck.
+  # This is only free because tests/api has NO module/session-scoped fixtures —
+  # splitting a file across shards duplicates no setup. Check that before
+  # split_paths-ing a new dir.
+  #
   # The `rest` shard runs EVERYTHING the named shards don't cover — via --ignore,
   # NOT an allowlist — so a newly added test dir is never silently dropped from CI;
-  # likewise split_dir slices by `position % total`, so a new file in a split dir is
-  # auto-distributed, never dropped. Coverage is uploaded per shard under the same
+  # likewise a new test in a split dir just appears in the collection and lands in
+  # some slice, never dropped. Coverage is uploaded per shard under the same
   # `backend` flag; Codecov merges the shards' partial reports for the badge.
   backend-test:
     name: backend-test (${{ matrix.name }})
@@ -72,18 +84,30 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # tests/api is ~110 runner-min of unit tests; 5 slices puts each shard
+          # at ~22 min, which is where workflow-agent-apps (~23 min) takes over as
+          # the critical path — more slices would not shorten the run. Setup is
+          # 0.3 min of a shard, so an extra runner is nearly free.
           - name: api-1
-            split_dir: tests/api
+            split_paths: tests/api
             split_index: "0"
-            split_total: "3"
+            split_total: "5"
           - name: api-2
-            split_dir: tests/api
+            split_paths: tests/api
             split_index: "1"
-            split_total: "3"
+            split_total: "5"
           - name: api-3
-            split_dir: tests/api
+            split_paths: tests/api
             split_index: "2"
-            split_total: "3"
+            split_total: "5"
+          - name: api-4
+            split_paths: tests/api
+            split_index: "3"
+            split_total: "5"
+          - name: api-5
+            split_paths: tests/api
+            split_index: "4"
+            split_total: "5"
           - name: kb
             paths: tests/kb
           - name: workflow-agent-apps
@@ -130,16 +154,44 @@ jobs:
           COVERAGE_PROCESS_START: pyproject.toml
           PYTHONPATH: .
         run: |
-          # A shard either names explicit paths, or round-robin-slices a heavy
-          # dir's SORTED test files across N runners (this slice = file position
-          # % N). Every file lands in exactly one slice, so a newly added file is
-          # auto-distributed and never dropped.
-          if [ -n "${{ matrix.split_dir }}" ]; then
-            target=$(ls ${{ matrix.split_dir }}/test_*.py | sort | awk "NR % ${{ matrix.split_total }} == ${{ matrix.split_index }}")
+          set -o pipefail
+          # A shard either names explicit paths, or round-robin-slices its
+          # targets' COLLECTED TESTS across N runners (this slice = collection
+          # position % N). Slicing tests rather than files is what keeps the
+          # shards balanced — see the matrix comment above. Every collected test
+          # lands in exactly one slice, so a newly added test is auto-distributed
+          # and never dropped.
+          if [ -n "${{ matrix.split_paths }}" ]; then
+            # Collect first (~15 s for tests/api). A collection error must fail
+            # the job here rather than silently yield a short id list, so the
+            # exit status is checked before the ids are used.
+            collected="$RUNNER_TEMP/collected.txt"
+            slice="$RUNNER_TEMP/slice.txt"
+            uv run pytest -m "not integration" --collect-only -q \
+              ${{ matrix.split_paths }} > "$collected"
+            # Anchored to a real node id (`path.py::…`) so a warning line that
+            # happens to contain '::' can never be handed to pytest as a target.
+            # `|| true`: the step runs under `bash -e` + pipefail, and grep
+            # exits 1 on no-match — which would kill the step before the empty
+            # -slice check below could say WHY. A real grep failure also lands
+            # on that check, since it too leaves the slice empty.
+            grep -E '^[^ ]+\.py::' "$collected" \
+              | awk "NR % ${{ matrix.split_total }} == ${{ matrix.split_index }}" \
+              > "$slice" || true
+            # An empty slice would leave pytest with no positional args, and it
+            # would then run `testpaths` — the WHOLE suite — on every shard.
+            if [ ! -s "$slice" ]; then
+              echo "::error::slice ${{ matrix.split_index }}/${{ matrix.split_total }} of '${{ matrix.split_paths }}' collected 0 tests"
+              exit 1
+            fi
+            echo "shard ${{ matrix.name }}: $(wc -l < "$slice") of $(grep -cE '^[^ ]+\.py::' "$collected") collected tests"
+            # mapfile + array expansion, not word splitting: a parametrised test
+            # id may contain spaces.
+            mapfile -t ids < "$slice"
+            uv run pytest -m "not integration" -n auto "${ids[@]}"
           else
-            target="${{ matrix.paths }}"
+            uv run pytest -m "not integration" -n auto ${{ matrix.paths }}
           fi
-          uv run pytest -m "not integration" -n auto $target
           uv run coverage combine
           uv run coverage report
           uv run coverage xml
