@@ -149,6 +149,16 @@ export type ContextTrimmed = {
   dropped: number;
 };
 
+/** #739: the thread outgrew the window, so this turn first spends a round trip
+ * summarising the part that no longer fits. Live-only — the durable record is
+ * the `summary` message. It exists so the chat does not look frozen during the
+ * one pause a user has no way to anticipate. `replaced` is how many messages
+ * the summary stands in for. Mirrors api/events.py Compacting. */
+export type Compacting = {
+  type: "compacting";
+  replaced: number;
+};
+
 /** #613 P3: the chat's goal changed — set / cleared / state or round moved.
  * `goal` is the panel's whole new state, or null when cleared. Mirrors
  * api/events.py GoalUpdated. */
@@ -247,6 +257,7 @@ export type AgentEvent =
   | TodosUpdated
   | GoalUpdated
   | ContextTrimmed
+  | Compacting
   | UserMessage
   | FileChanged
   | Presence

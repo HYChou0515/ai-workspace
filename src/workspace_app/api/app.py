@@ -63,6 +63,7 @@ from .capability_routes import register_capability_routes
 from .card_gen_routes import register_card_gen_routes
 from .chat_routes import register_chat_routes
 from .chat_send import ChatSendService
+from .compaction import AgentCompactor
 from .context_card_routes import register_context_card_actions, register_context_card_routes
 from .doc_question_routes import register_doc_question_routes
 from .entity_broadcast import build_entity_write_sink
@@ -1579,6 +1580,9 @@ def create_app(
         # decide which budget a continuation spends and when to stop.
         offhours=goal_offhours,
         turn_ctx=turn_ctx,
+        # #739: the same runner the turn uses, so the précis is written by
+        # the model the conversation is already running on.
+        compactor=AgentCompactor(runner),
         subagent_bridge=subagent_bridge,
         filestore=filestore,
         files=files,

@@ -270,6 +270,43 @@ class TurnContextBuilder:
             messages, limit=self._context_window(self._locator.resolve_agent_config(item_id))
         )
 
+    def compaction_plan_for(
+        self, item_id: str, messages: list[Message]
+    ) -> tuple[int, list[Message]]:
+        """#739: ``(insert_at, span)`` for a thread that no longer fits — an
+        empty span when it does.
+
+        Here rather than in the send path because the ceiling and the history
+        budget are resolved here and nowhere else. A caller deriving its own
+        would compact against one number while the turn is budgeted against
+        another, which is the #624 failure in a new costume."""
+        from ..context_budget import (
+            DEFAULT_MARGIN_RATIO,
+            DEFAULT_REPLY_RESERVE,
+            estimate_messages,
+        )
+        from .compaction import plan_for_budget
+
+        cfg = self._locator.resolve_agent_config(item_id)
+        window = self._context_window(cfg)
+        usage = self.usage_of(item_id, messages)
+        # Deliberately NOT `_budget_for`. That budget is for HISTORY alone, so it
+        # subtracts the system prompt and the tool schemas — and measuring those
+        # means building them, ~28 ms on the event loop, which the turn already
+        # pays once (#624). `usage.used` is the provider's own count of the WHOLE
+        # request, overhead included, so the honest comparison is against the raw
+        # window less the same two allowances the history budget keeps back:
+        # headroom for estimator error, and room for the model to reply.
+        budget = (
+            None
+            if window.tokens is None
+            else max(
+                0,
+                int(window.tokens * (1.0 - DEFAULT_MARGIN_RATIO)) - DEFAULT_REPLY_RESERVE,
+            )
+        )
+        return plan_for_budget(messages, used=usage.used, budget=budget, estimate=estimate_messages)
+
     def _budget_for(
         self,
         agent_config: AgentConfig | None,

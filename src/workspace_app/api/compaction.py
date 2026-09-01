@@ -26,6 +26,7 @@ from typing import Any
 
 from ..agent.context import AgentToolContext
 from ..context_budget import SUMMARY_ROLE
+from ..context_reduce import Estimator
 from .events import MessageDelta
 from .runner import AgentRunner
 
@@ -63,34 +64,87 @@ def compaction_prompt(messages: Sequence[Any]) -> str:
     return f"{_INSTRUCTIONS}{body}\n--- 對話紀錄結束 ---"
 
 
-def split_for_compaction(
-    messages: Sequence[Any], *, keep_recent: int
-) -> tuple[list[Any], list[Any]]:
-    """Split a thread into ``(to_summarise, to_keep)``.
+def _after_last_summary(messages: Sequence[Any]) -> tuple[int, list[Any]]:
+    """The slice starting at the newest summary, and where it starts.
 
-    Two rules, both about not making things worse:
-
-    The newest ``keep_recent`` messages are never touched. The user's next
-    message almost always refers to the last few turns, and a précis of "what we
-    just said" is the least useful summary and the most costly to blur. It also
-    BOUNDS the summariser's input — the span is everything except that tail, so
-    it can never be a whole window, which is what makes a single pass enough.
-
-    And the span never reaches back past an earlier summary. A second compaction
-    covers what happened SINCE the first; re-reading past it would summarise a
-    summary, each pass copying a copy until the original request has quietly
-    decayed into nothing.
-
-    An empty first element means there is nothing worth compacting — the caller
-    checks that BEFORE spending an LLM call.
-    """
+    A second compaction covers what happened SINCE the first one. Reading back
+    past it would summarise a summary — each pass a copy of a copy, with the
+    user's original request decaying a little every time."""
     msgs = list(messages)
     for i in range(len(msgs) - 1, -1, -1):
         if getattr(msgs[i], "role", "") == SUMMARY_ROLE:
-            msgs = msgs[i:]
+            return i, msgs[i:]
+    return 0, msgs
+
+
+def split_for_compaction(
+    messages: Sequence[Any], *, keep_tokens: int, estimate: Estimator
+) -> tuple[list[Any], list[Any]]:
+    """Split a thread into ``(to_summarise, to_keep)``.
+
+    The tail is bounded in TOKENS, not in messages. "Keep the last three" sounds
+    modest until three `exec` dumps arrive — the tail alone would then overflow
+    the window, so compaction would run, cost a turn and change nothing. At
+    least one message always survives regardless: a summary with no conversation
+    after it is not a conversation.
+
+    The span never reaches back past an earlier summary (see
+    ``_after_last_summary``), and an empty first element means there is nothing
+    worth compacting — the caller checks that BEFORE spending an LLM call."""
+    _, msgs = _after_last_summary(messages)
+    kept: list[Any] = []
+    total = 0
+    for m in reversed(msgs):
+        cost = estimate([m])
+        if kept and total + cost > max(0, keep_tokens):
             break
-    cut = max(0, len(msgs) - max(0, keep_recent))
-    return msgs[:cut], msgs[cut:]
+        kept.append(m)
+        total += cost
+    kept.reverse()
+    return msgs[: len(msgs) - len(kept)], kept
+
+
+def compaction_plan(
+    messages: Sequence[Any], *, keep_tokens: int, estimate: Estimator
+) -> tuple[int, list[Any]]:
+    """``(insert_at, span)`` — where the summary goes, and what it replaces.
+
+    The summary is INSERTED before the kept tail, never appended: appended, it
+    would sit after the newest messages, and `history_items` would replay it as
+    the latest thing said while dropping the very turns it was meant to precede.
+
+    ``insert_at`` is an index into the list the caller passed, because that is
+    the list the caller mutates."""
+    start, _ = _after_last_summary(messages)
+    span, kept = split_for_compaction(messages, keep_tokens=keep_tokens, estimate=estimate)
+    return start + len(span), span
+
+
+#: Share of the history budget the kept tail may occupy.
+#:
+#: Not a knob. Too large and the thread is over budget again on the next turn,
+#: paying a round trip every time; too small and we throw away the recent
+#: exchange the user's next message is about. Half leaves room for the summary
+#: itself and somewhere for the conversation to grow before the next pass.
+KEEP_TAIL_RATIO = 0.5
+
+
+def plan_for_budget(
+    messages: Sequence[Any], *, used: int, budget: int | None, estimate: Estimator
+) -> tuple[int, list[Any]]:
+    """``(insert_at, span)`` for a thread that no longer fits — empty when it does.
+
+    The trigger is deliberately not a new threshold: it is the moment the
+    reducer would otherwise start throwing things away. One number to get wrong
+    instead of two, and it cannot drift from what actually happens.
+
+    ``budget is None`` means no ceiling is known, and #624's rule there is to
+    send everything and learn the real limit from the response. A thread that is
+    never trimmed must never be compacted either — spending a turn and losing
+    detail for a limit nobody measured is the worse of the two mistakes."""
+    if budget is None or used <= budget:
+        return 0, []
+    return compaction_plan(messages, keep_tokens=int(budget * KEEP_TAIL_RATIO), estimate=estimate)
 
 
 class IConversationCompactor(abc.ABC):

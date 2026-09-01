@@ -155,6 +155,19 @@ class AgentMetrics:
 
 
 @dataclass(frozen=True)
+class Compacting:
+    """#739: the thread outgrew the window, so this turn first spends a round
+    trip summarising the part that no longer fits.
+
+    Ephemeral, like `FailoverSwitch` — the persisted summary message is the
+    durable record. It exists so the chat does not look frozen during the one
+    pause the user has no way to anticipate."""
+
+    replaced: int
+    type: Literal["compacting"] = "compacting"
+
+
+@dataclass(frozen=True)
 class FailoverSwitch:
     """#249/#131: the chat model was busy/blipped before its first token, so the
     turn switched to the next model in the preset's failover chain. Ephemeral —
@@ -264,6 +277,7 @@ AgentEvent = (
     | RateLimited  # the turn is holding out a 429 before retrying (ephemeral)
     | TodosUpdated  # #613: the agent rewrote the conversation's todo checklist
     | ContextTrimmed  # #624: the request was too long; older history was dropped
+    | Compacting  # #739: the thread outgrew the window; this turn summarises first
     | GoalUpdated  # #613 P3: the chat's goal was set / cleared / advanced
     | UserMessage  # #43: broadcast-only (a human's message on the shared stream)
     | FileChanged  # #43: broadcast-only (a workspace file changed)

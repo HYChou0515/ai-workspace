@@ -66,12 +66,17 @@ if TYPE_CHECKING:
     from ..resources.kb import Citation
     from ..users import UserDirectory
     from .activity import ActivityLog
+    from .compaction import IConversationCompactor
     from .locator import ItemLocator
     from .request_env import IRequestEnv
     from .schemas import _MessageBody
     from .subagent_bridge import SubagentBridge
     from .turn_context import TurnContextBuilder
     from .turns import ChatTurnEngine, TurnMessage
+
+from ..agent.context import AgentToolContext
+from ..context_budget import SUMMARY_ROLE
+from .events import Compacting
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +143,9 @@ class ChatSendService:
         spec: SpecStar,
         locator: ItemLocator,
         turn_ctx: TurnContextBuilder,
+        # #739: writes the précis that replaces a span too large to send.
+        # None ⇒ compaction off, and the old drop-the-oldest behaviour stands.
+        compactor: IConversationCompactor | None = None,
         subagent_bridge: SubagentBridge,
         filestore: FileStore,
         files: WorkspaceFiles,
@@ -161,6 +169,7 @@ class ChatSendService:
         self._spec = spec
         self._locator = locator
         self._turn_ctx = turn_ctx
+        self._compactor = compactor
         self._subagent_bridge = subagent_bridge
         self._filestore = filestore
         self._files = files
@@ -268,6 +277,39 @@ class ChatSendService:
         self._inflight.add(task)
         task.add_done_callback(self._inflight.discard)
         await asyncio.shield(task)
+
+    async def _maybe_compact(
+        self, item_id: str, rid: str, conv: Conversation, engine_key: str
+    ) -> None:
+        """Replace the span that no longer fits with a précis of it (#739).
+
+        Three refusals, all cheaper than the alternative:
+        no compactor wired, nothing worth compacting, or a summariser that came
+        back empty. In the last case we leave the thread alone and let the
+        reducer do what it always did — replacing a span with NOTHING is worse
+        than the truncation this exists to avoid."""
+        if self._compactor is None:
+            return
+        at, span = self._turn_ctx.compaction_plan_for(item_id, conv.messages)
+        if not span:
+            return
+        # The turn is about to take a whole extra round trip. Say so, or the
+        # chat looks frozen for the one turn a user is least expecting it.
+        self._turn_engine.publish(engine_key, Compacting(replaced=len(span)))
+        ctx = AgentToolContext(
+            investigation_id=item_id,
+            agent_config=self._locator.resolve_agent_config(item_id),
+        )
+        try:
+            text = await self._compactor.summarise(span, ctx=ctx)
+        except Exception:  # noqa: BLE001 — a failed summary must not fail the turn
+            logger.warning("chat_send: compaction failed for item %s", item_id, exc_info=True)
+            return
+        if not text.strip():
+            logger.warning("chat_send: compaction produced nothing for item %s", item_id)
+            return
+        conv.messages.insert(at, Message(role=SUMMARY_ROLE, content=text, created_at=now_ms()))
+        self._conv_rm.update(rid, conv)
 
     async def _resolve_request_env(
         self, request: Request | None, *, user_id: str, item_id: str
@@ -645,6 +687,11 @@ class ChatSendService:
             )
         )
         self._conv_rm.update(rid, conv)
+        # #739: compact BEFORE the turn is built. Here because the thread is
+        # final for this turn (the user's message is in), and because `_send`
+        # already runs in a shielded background task — so the extra round trip
+        # cannot hold the POST open.
+        await self._maybe_compact(investigation_id, rid, conv, engine_key)
         logger.info(
             "chat_send: user %s sent message to item %s (chat %s)",
             author,
