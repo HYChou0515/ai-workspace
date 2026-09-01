@@ -222,10 +222,19 @@ raises at prebuild and degrades at discovery (see the edge-case table). Both
 build paths copy it, and both assertions exist: coverage said the second call
 site ran while deleting it left the suite green. No UI.
 
-**Phase 2** — the backend answers "what does this item's toolset want". One
-read-only endpoint returning declared needs for the item's enabled tools, each
-with the tools that asked for it, plus the tools that declared nothing. Pure
-computation over existing state.
+**Phase 2** — the backend answers "what does this item's toolset want", as a
+field on the EXISTING `GET /a/{slug}/items/{item_id}/tools` row rather than a
+route of its own. That endpoint already resolves the item's effective toolset
+through the same `AppCatalog.resolve` a turn makes — the anti-drift it was built
+around — so a second endpoint would be a second answer to "which tools does this
+item run", and the two would disagree the moment one changed.
+
+Per tool, not pre-aggregated: the panel's two views (a tab per tool, and one
+field per variable labelled with everyone using it) are both derived from the
+per-tool shape, whereas an aggregate can only produce the second. `null` (no
+declaration) and `[]` (needs nothing) stay distinct on the wire; a built-in is
+`[]` on our own authority, since `_exec_tool` is the only path `user_env` takes
+and it launches a package bundle.
 
 **Phase 3** — the panel grows the form. Tabs as a filter, name-keyed state,
 shared-variable labels, three states rendered distinctly, `required` informing
