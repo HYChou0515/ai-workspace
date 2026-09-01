@@ -255,6 +255,59 @@ def _exact_usage(streamed: Any) -> tuple[int, int] | None:
         return None
 
 
+class _GenerationClock:
+    """How long the model spent GENERATING this turn (#748) — the denominator
+    tok/s needs, which is not the turn's wall clock.
+
+    The wall clock also carries TTFT, every tool call, every retry and every
+    rate-limit hold. TTFT is the damaging one: it grows with the prompt, so
+    dividing by it makes the SAME model look slower as the conversation gets
+    longer — the misreading a person is most likely to make. llama.cpp and vLLM
+    report prompt-eval and generation separately for this reason.
+
+    So the clock runs from the first token to the last, and a turn with several
+    round trips sums its stretches. Where a stretch ENDS is told to it via
+    :meth:`pause` rather than inferred from how big a gap looks: the runner
+    already knows when the model stopped to call a tool, and a duration
+    threshold would be a rule invented here that nothing else agrees with.
+    """
+
+    def __init__(self, now: Callable[[], float] = time.monotonic) -> None:
+        self._now = now
+        self._started: float | None = None  # first token of the open stretch
+        self._last: float | None = None  # most recent token of it
+        self._closed_s = 0.0  # stretches already ended
+
+    def token(self) -> None:
+        """A token arrived. Opens a stretch if none is open."""
+        t = self._now()
+        if self._started is None:
+            self._started = t
+        self._last = t
+
+    def pause(self) -> None:
+        """Generation stopped (the model went off to call a tool). Banks the
+        open stretch so the gap that follows is not counted."""
+        if self._started is not None and self._last is not None:
+            self._closed_s += self._last - self._started
+        self._started = None
+        self._last = None
+
+    def elapsed_ms(self) -> int | None:
+        """Total generation time, or None when no token ever arrived — a turn
+        that died before the model spoke generated nothing, and reporting 0
+        would divide into an infinite rate."""
+        open_s = (
+            self._last - self._started
+            if self._started is not None and self._last is not None
+            else 0.0
+        )
+        total = self._closed_s + open_s
+        if self._started is None and self._closed_s == 0.0:
+            return None
+        return round(total * 1000)
+
+
 def _measured_tokens(usage: tuple[int, int] | None) -> tuple[int | None, int | None]:
     """The provider's own counts for the RECORD, or None where it gave none.
 
@@ -1435,6 +1488,7 @@ class LitellmAgentRunner:
                 queue.put_nowait(AgentMetrics(phase="up", prompt_tokens=prompt_tok, elapsed_ms=0))
                 completion_chars = 0
                 last_emit = 0.0
+                gen = _GenerationClock()
                 splitter = ThinkSplitter()
                 # #69 trace: accumulate the visible content + count tool
                 # starts so we can label the turn's outcome (a real tool
@@ -1448,6 +1502,7 @@ class LitellmAgentRunner:
                         channel = _delta_channel(getattr(data, "type", "") or "")
                         if isinstance(delta, str) and delta and channel != "ignore":
                             completion_chars += len(delta)
+                            gen.token()
                             if channel == "reasoning":
                                 queue.put_nowait(MessageDelta(text=delta, reasoning=True))
                             else:  # content — still split any inline <think> tags
@@ -1466,6 +1521,7 @@ class LitellmAgentRunner:
                                         prompt_tokens=prompt_tok,
                                         completion_tokens=_approx_tokens(completion_chars),
                                         elapsed_ms=round((now - t0) * 1000),
+                                        generation_ms=gen.elapsed_ms(),
                                     )
                                 )
                         continue
@@ -1473,6 +1529,9 @@ class LitellmAgentRunner:
                     if mapped is not None:
                         if isinstance(mapped, ToolStart):
                             tool_calls_seen += 1
+                            # The model went quiet to call this tool; the gap
+                            # that follows is the tool's time, not generation.
+                            gen.pause()
                         if isinstance(mapped, ToolEnd):
                             # #62: attach the full display result (success-stderr
                             # kept) the exec tool stashed under its cleaned output,
@@ -1524,6 +1583,7 @@ class LitellmAgentRunner:
                         elapsed_ms=round((time.monotonic() - t0) * 1000),
                         measured_prompt_tokens=measured_prompt,
                         measured_completion_tokens=measured_completion,
+                        generation_ms=gen.elapsed_ms(),
                     )
                 )
             finally:

@@ -24,6 +24,16 @@ class MessageMetrics(Struct, frozen=True):
     denominator for tok/s: see `generation_ms`. Keeping both in one field is the
     mistake #739 §1.3 records, where one number silently changed meaning."""
 
+    generation_ms: int | None = None
+    """Time the model spent GENERATING — first token to last, summed over the
+    turn's round trips, excluding TTFT and the gaps where a tool was running.
+
+    This is the denominator tok/s needs. Dividing by `elapsed_ms` instead
+    measured the turn, not the model: one 60s tool call drags the figure down by
+    an order of magnitude, and TTFT grows with the prompt, so the same model
+    reads as slower the longer the conversation gets. None when no token ever
+    arrived, or on the non-streaming path, which cannot see token timings."""
+
 
 class Citation(Struct):
     """A parsed ``[n]`` marker in an answer, resolved to its source. Lives on a

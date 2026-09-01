@@ -159,6 +159,12 @@ class AgentMetrics:
     # Only ever set on `final`.
     measured_prompt_tokens: int | None = None
     measured_completion_tokens: int | None = None
+    # #748: time the model spent GENERATING — first token to last, summed over
+    # the turn's round trips. `elapsed_ms` above is the whole turn and stays the
+    # "· 12.3s" the UI shows; this is the denominator for tok/s. Two quantities,
+    # two fields: one field meaning both is the mistake #739 §1.3 records.
+    # None when no token ever arrived.
+    generation_ms: int | None = None
     type: Literal["agent_metrics"] = "agent_metrics"
 
 

@@ -92,3 +92,61 @@ def test_a_reported_zero_is_not_a_measurement():
     assert _measured_tokens((0, 0)) == (None, None)
     assert _measured_tokens((8412, 356)) == (8412, 356)
     assert _measured_tokens((8412, 0)) == (8412, None)  # per field, not all-or-nothing
+
+
+# ── generation time: the denominator tok/s actually needs ─────────────────────
+
+
+def test_generation_time_starts_at_the_first_token_not_at_the_request():
+    """tok/s divided by the whole turn's wall clock is not a generation speed:
+    it also carries TTFT, every tool call, every retry and every rate-limit
+    hold. The worst part is TTFT — it grows with the prompt, so the SAME model
+    looks slower as the conversation gets longer, which is exactly the reading
+    a person is most likely to get wrong.
+
+    The clock therefore runs from the first token to the last, and a turn with
+    several round trips adds its stretches together. Where a stretch ends is
+    TOLD to it, not guessed from the gap size — the runner already knows when
+    the model stopped to call a tool, and a duration threshold would be a rule
+    invented here that nothing else in the system agrees with.
+    """
+    from workspace_app.api.litellm_runner import _GenerationClock
+
+    c = _GenerationClock(now=iter([10.0, 12.0, 20.0, 23.0]).__next__)
+    c.token()  # first token at 10.0 — the 10s before it is TTFT, excluded
+    c.token()  # 12.0
+    c.pause()  # the model stopped to call a tool; the stretch closes here
+    c.token()  # 20.0 — a new stretch; the 8s gap was the tool, not generation
+    c.token()  # 23.0
+
+    assert c.elapsed_ms() == 5000  # (12-10) + (23-20)
+
+
+def test_generation_time_is_none_before_any_token_arrives():
+    """A turn that fails before the model says anything generated nothing.
+    Reporting 0 ms would divide into an infinite rate; `None` says what happened."""
+    from workspace_app.api.litellm_runner import _GenerationClock
+
+    assert _GenerationClock(now=lambda: 1.0).elapsed_ms() is None
+
+
+def test_the_record_keeps_generation_time_apart_from_the_turn_clock():
+    """Both numbers are real and they are not the same number. `elapsed_ms` is
+    what the turn took (the UI's "· 12.3s"); `generation_ms` is what the model
+    spent producing text, and only the second one is a sane denominator for
+    tok/s. Storing one and deriving the other is how a field comes to mean two
+    things (#739 §1.3)."""
+    r = _answered(
+        AgentMetrics(
+            phase="final",
+            elapsed_ms=61_000,  # a 60s tool ran in this turn
+            generation_ms=5_000,
+            measured_completion_tokens=356,
+        )
+    )
+
+    m = r.produced[-1].metrics
+    assert m is not None
+    assert m.elapsed_ms == 61_000
+    assert m.generation_ms == 5_000
+    # 356/5s ≈ 71 tok/s, not 356/61s ≈ 6 — an order of magnitude apart.

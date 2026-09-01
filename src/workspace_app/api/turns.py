@@ -391,6 +391,7 @@ class _TurnReducer:
                         prompt_tokens=item.measured_prompt_tokens,
                         completion_tokens=item.measured_completion_tokens,
                         elapsed_ms=item.elapsed_ms,
+                        generation_ms=item.generation_ms,
                     )
                     break
         elif isinstance(item, RepetitionStopped):
