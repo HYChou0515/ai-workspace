@@ -29,6 +29,11 @@ build/
 # faithful LLM call log. Both are local runtime artifacts, never committed.
 config.resolved.yaml
 /logs/
+# The LLM call log the app writes wherever it is started from — a run artifact,
+# never source. `/logs/` only covers a backend started at the repo root; one
+# started from `web/` (or any subdir) puts it there instead, and it reached a
+# commit that way.
+logs/llm/
 
 # mkdocs build output
 /site/
