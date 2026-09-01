@@ -33,7 +33,7 @@ from ..agent.context import AgentToolContext
 from ..apps.manifest import load_app_manifest
 from ..apps.skills import advertised_workspace_skills, effective_item_skills
 from ..apps.subagents import SubagentDef, load_subagents
-from ..context_budget import ContextLimit, catalog_limit, estimate_tokens
+from ..context_budget import ContextLimit, ContextUsage, catalog_limit, estimate_tokens
 from ..entity.brief import entity_schema_brief
 from ..entity.catalog import discover_catalog
 from ..sandbox.protocol import Sandbox, SandboxSpec
@@ -56,6 +56,7 @@ if TYPE_CHECKING:
     from ..resources.kb import Citation
     from ..tooling.registry import PackageInfo
     from ..users import User, UserDirectory
+    from .compaction import CompactionPlan
     from .locator import ItemLocator
     from .registry import InvestigationRegistry
 
@@ -256,6 +257,66 @@ class TurnContextBuilder:
             return fn(agent_config.model, agent_config.llm_base_url or None)
         except Exception:  # noqa: BLE001 — a cache read must not break a turn
             return None
+
+    def usage_of(self, item_id: str, messages: list[Message]) -> ContextUsage:
+        """#739: what this thread currently costs, against this item's window.
+
+        Lives on the builder because the window is resolved here and nowhere
+        else — a route computing its own ceiling would drift from the one the
+        turn actually budgets against, which is the exact failure #624 was
+        about."""
+        from ..context_budget import context_usage
+
+        return context_usage(
+            messages, limit=self._context_window(self._locator.resolve_agent_config(item_id))
+        )
+
+    def compaction_plan_for(
+        self, item_id: str, messages: list[Message], *, force: bool = False
+    ) -> CompactionPlan:
+        """#739: what to compact in this thread, or why not.
+
+        Here rather than in the send path because the ceiling and the history
+        budget are resolved here and nowhere else. A caller deriving its own
+        would compact against one number while the turn is budgeted against
+        another, which is the #624 failure in a new costume."""
+        from ..context_budget import (
+            DEFAULT_MARGIN_RATIO,
+            DEFAULT_REPLY_RESERVE,
+            estimate_messages,
+        )
+        from .compaction import plan_for_budget
+
+        cfg = self._locator.resolve_agent_config(item_id)
+        window = self._context_window(cfg)
+        usage = self.usage_of(item_id, messages)
+        # Deliberately NOT `_budget_for`. That budget is for HISTORY alone, so it
+        # subtracts the system prompt and the tool schemas — and measuring those
+        # means building them, ~28 ms on the event loop, which the turn already
+        # pays once (#624). `usage.used` is the provider's own count of the WHOLE
+        # request, overhead included, so the honest comparison is against the raw
+        # window less the same two allowances the history budget keeps back:
+        # headroom for estimator error, and room for the model to reply.
+        budget = (
+            None
+            if window.tokens is None
+            else max(
+                0,
+                int(window.tokens * (1.0 - DEFAULT_MARGIN_RATIO)) - DEFAULT_REPLY_RESERVE,
+            )
+        )
+        # `force` is a person pressing compact. They have a reason we do not:
+        # the last hour of debugging is finished and they want the window back
+        # BEFORE the next question, not after it stops fitting. So the budget
+        # gates the automatic path only — but the no-room refusal binds both,
+        # because that one is about whether compaction can help at all.
+        return plan_for_budget(
+            messages,
+            used=usage.used,
+            budget=budget,
+            estimate=estimate_messages,
+            force=force,
+        )
 
     def _budget_for(
         self,

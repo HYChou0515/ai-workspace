@@ -35,7 +35,7 @@ from .notifications import notification_sent, notify
 from .rca_messages import to_rca_message
 from .timeutil import now_ms
 from .turn_gate import admit_turn
-from .turns import CONTEXT_NOTICE_ROLE, already_noticed, context_notice_text
+from .turns import CONTEXT_NOTICE_ROLE, already_noticed
 
 if TYPE_CHECKING:
     from ..entity.events import EntityOrigin
@@ -254,7 +254,7 @@ class WorkflowExecutor:
         conv.messages.append(
             Message(
                 role=CONTEXT_NOTICE_ROLE,
-                content=context_notice_text(note),
+                content=note,  # composed in `history_items` (#739)
                 created_at=now_ms(),
             )
         )

@@ -3025,6 +3025,19 @@ function PanelBody({
           // #624: the context horizon moved.
           return <LogLine key={i} ts={fmtTs(e.at)} kind="warn" text={e.text} />;
         }
+        if (e.kind === "summary") {
+          // #739: the earlier span was summarised. The log view is a flat
+          // transcript, so it states the fact on one line — the originals are
+          // still above it, and the précis itself is readable in the chat view.
+          return (
+            <LogLine
+              key={i}
+              ts={fmtTs(e.at)}
+              kind="muted"
+              text={`— 以上 ${e.replaced} 則已整理成摘要 —`}
+            />
+          );
+        }
         if (e.kind === "goal_note") {
           // #613 P3: the goal driver's outcome marker (met / exhausted).
           // #615: an overnight ending carries a written hand-over under it.

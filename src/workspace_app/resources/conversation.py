@@ -13,6 +13,17 @@ class MessageMetrics(Struct, frozen=True):
     prompt_tokens: int
     completion_tokens: int
     elapsed_ms: int
+    exact: bool = False
+    """#739: whether the provider itself reported these counts.
+
+    `prompt_tokens > 0` cannot answer that. When a provider reports no usage —
+    Ollama routinely does — the runner substitutes our own estimate so the live
+    ↑ line does not flip to 0, so a stored count may be a guess. The context
+    gauge anchors only on an exact one; without this flag it would present a
+    guess as a fact, which is #624 in a new coat of paint.
+
+    Defaults False so threads written before the field are not retroactively
+    trusted."""
 
 
 class Citation(Struct):
