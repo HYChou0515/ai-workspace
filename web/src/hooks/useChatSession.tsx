@@ -410,8 +410,14 @@ export function useChatSession(
         turnInFlightRef.current = false;
         // What the store held before the outage, so the re-hydrate below can tell
         // "an answer landed while we were away" from "the thread is unchanged".
-        const persistedBefore =
-          qc.getQueryData<ChatThread | null>(transport.queryKey)?.messages.length ?? 0;
+        //
+        // `undefined` is the only real absence of a baseline — hydration had not
+        // resolved. An EMPTY thread is a baseline of zero, and every chat's first
+        // turn starts there; reading that as "cannot tell" withheld the
+        // retraction exactly where a brand-new conversation lives.
+        const cachedBefore = qc.getQueryData<ChatThread | null>(transport.queryKey);
+        const hadBaseline = cachedBefore !== undefined;
+        const persistedBefore = cachedBefore?.messages.length ?? 0;
         setLog((prev) =>
           interruptedATurn
             ? {
@@ -451,11 +457,10 @@ export function useChatSession(
           // tail is the previous node's reply while the next one streams), and a
           // `notice` (#624) or a human `mention` can be the tail at any moment.
           const last = fresh.messages[fresh.messages.length - 1];
-          // `persistedBefore === 0` means the cache had nothing to compare
-          // against — hydration had not resolved when the stream dropped — and
-          // then "it grew" is true of every non-empty thread, collapsing this
-          // back into the over-broad rule it replaced. No baseline, no verdict.
-          const grew = persistedBefore > 0 && fresh.messages.length > persistedBefore;
+          // With nothing to compare against, "it grew" is true of every non-empty
+          // thread and this collapses back into the over-broad rule it replaced.
+          // No baseline, no verdict — but an empty thread IS a baseline.
+          const grew = hadBaseline && fresh.messages.length > persistedBefore;
           if (grew && last !== undefined && last.role === "assistant") {
             gapBannerPendingRef.current = false;
             setLog((prev) =>
@@ -495,15 +500,19 @@ export function useChatSession(
       const last = msgs[msgs.length - 1];
       const done = last !== undefined && last.role !== "user";
       if (done) {
-        // The store has told us the turn is over — the same conclusion the
-        // terminal event carries, and for a CROSS-POD viewer the only one that
-        // will ever arrive. So it must also end the turn for the gap banner, or
-        // the flag stays armed over a finished turn and the next idle drop
-        // raises a hole that nothing can retract: no terminal event is coming,
-        // and the store-based retraction below reads THIS cache, which the line
-        // beneath already advanced. This is the same "done" the whole hook
-        // already trusts to unlock the composer.
-        turnInFlightRef.current = false;
+        // The store has told us the turn is over — for a CROSS-POD viewer the
+        // only such word that will ever arrive, since no terminal event is
+        // coming and the retraction below reads the cache the line beneath
+        // advances. So it ends the turn for the gap banner too.
+        //
+        // But on the STRICT reading, not this `done`. "The tail is not a user
+        // message" is true mid-turn twice over: a human `mention` lands at any
+        // moment, and the #624 `notice` is persisted before the model is even
+        // called, so it stands through the whole time-to-first-token window.
+        // Disarming there means a real hole later in that turn raises nothing —
+        // silence, which is the failure nobody reports. Only an assistant answer
+        // says a turn produced its result.
+        if (last.role === "assistant") turnInFlightRef.current = false;
         qc.setQueryData(transport.queryKey, thread);
         reconcile(thread);
         return;

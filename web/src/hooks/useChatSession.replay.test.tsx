@@ -267,6 +267,83 @@ describe("useChatSession — reconnect replay", () => {
     expect(hasBanner(result.current.log.entries)).toBe(false);
   });
 
+  it("does not let a mid-turn notice convince the poll the turn is over", async () => {
+    // The poll's `done` is "the tail is not a user message", and two persisted
+    // tails occur INSIDE a running turn: a human `mention`, and the #624
+    // `notice`, which is written before the model is even called and so stands
+    // for the whole time-to-first-token window. Disarming on that shape means a
+    // genuine mid-turn drop raises nothing at all — the opposite failure, and
+    // the one nobody reports because it is invisible.
+    let attempt = 0;
+    const midTurn = {
+      messages: [
+        { role: "user" as const, content: "q", created_at: 1 },
+        { role: "notice" as const, content: "較早的訊息不會被讀到", created_at: 2 },
+      ],
+    };
+    const { result } = render(
+      transport({
+        getThread: vi.fn(async () => midTurn),
+        subscribe: async function* (_signal: AbortSignal) {
+          attempt += 1;
+          if (attempt === 1) {
+            await new Promise((r) => setTimeout(r, 50)); // hydration first
+            yield { type: "user_message", content: "q", author: "tester" } as AgentEvent;
+            yield ev("thinking out loud", 5);
+            await new Promise((r) => setTimeout(r, 400)); // the poll runs in here
+            throw new Error("stream failed: 504");
+          }
+          yield ev("resumed elsewhere", 99); // non-contiguous: the hole is real
+          await new Promise<void>(() => {});
+        },
+      }),
+      60,
+    );
+
+    await waitFor(() => expect(attempt).toBeGreaterThanOrEqual(2), { timeout: 4000 });
+    await waitFor(() => expect(hasBanner(result.current.log.entries)).toBe(true), {
+      timeout: 4000,
+    });
+  });
+
+  it("retracts on the FIRST turn of a chat, where the store starts empty", async () => {
+    // An empty store is a real baseline of zero, not a missing one. Treating it
+    // as "no baseline" withholds the retraction for every chat's first turn —
+    // which is where a brand-new conversation lives, and leaves the banner
+    // standing under the complete answer for good.
+    let attempt = 0;
+    let finished = false;
+    const { result } = render(
+      transport({
+        getThread: vi.fn(async () =>
+          finished
+            ? {
+                messages: [
+                  { role: "user" as const, content: "q", created_at: 1 },
+                  { role: "assistant" as const, content: "the whole answer", created_at: 2 },
+                ],
+              }
+            : { messages: [] },
+        ),
+        subscribe: async function* (_signal: AbortSignal) {
+          attempt += 1;
+          if (attempt === 1) {
+            await new Promise((r) => setTimeout(r, 50)); // hydration: an EMPTY thread
+            yield ev("the whole ans", 5);
+            finished = true; // the turn completes during the outage
+            throw new Error("stream failed: 504");
+          }
+          await new Promise<void>(() => {});
+        },
+      }),
+    );
+
+    await waitFor(() => expect(attempt).toBeGreaterThanOrEqual(2), { timeout: 4000 });
+    await waitFor(() => expect(hasBanner(result.current.log.entries)).toBe(false), {
+      timeout: 4000,
+    });
+  });
+
   it("keeps the banner when the thread merely ENDS on an answer", async () => {
     // A tail that is not a user message does not mean the turn ended. A workflow
     // chat never persists a user message at all — from the second node on, the
