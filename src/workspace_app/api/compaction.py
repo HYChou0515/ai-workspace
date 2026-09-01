@@ -21,8 +21,8 @@ from __future__ import annotations
 
 import abc
 from collections.abc import Sequence
-from dataclasses import replace
-from typing import Any
+from dataclasses import dataclass, replace
+from typing import Any, Literal
 
 import msgspec.structs
 
@@ -123,6 +123,41 @@ def compaction_plan(
     return start + len(span), span
 
 
+#: What a compaction attempt did. Not a boolean, because "nothing to compact"
+#: and "compaction cannot help this deployment" are opposite diagnoses and only
+#: the second is actionable — collapsing them told a user with eleven thousand
+#: tokens of history that there was nothing to compact.
+CompactionOutcome = Literal["compacted", "fits", "empty", "no-room", "failed", "unavailable"]
+
+
+@dataclass(frozen=True)
+class CompactionPlan:
+    """What to compact, or why not.
+
+    `refusal` exists because "empty span" had grown two meanings and the user
+    was shown the wrong one: since the no-room refusal began binding the button
+    too, 「這段對話還沒有需要壓縮的內容。」 was being said over a thread holding
+    eleven thousand tokens of exactly that. The real diagnosis is actionable —
+    the prompt overhead alone exceeds the window — and the reported one sends
+    the user looking for a thread that is not there.
+
+    Kept on the same function that makes the decision, deliberately: a separate
+    "explain the refusal" helper is a second copy of the arithmetic, and the two
+    would disagree the first time either changed."""
+
+    #: Index in the caller's own list where the summary goes. Meaningless when
+    #: `span` is empty — there is nothing to insert.
+    at: int
+    #: The messages the summary stands in for. Empty means no compaction.
+    span: list[Any]
+    #: Why the span is empty. `None` when it is not.
+    #:   "fits"    — the thread is within budget (folding included)
+    #:   "empty"   — nothing behind the recent turns
+    #:   "no-room" — the fixed overhead alone exceeds the budget, so no amount
+    #:               of summarising can make this thread fit
+    refusal: Literal["fits", "empty", "no-room"] | None = None
+
+
 #: Share of the room actually available that the kept tail may occupy —
 #: `min(budget - overhead, what the thread's own messages cost)`, not the
 #: whole budget. The `min` is what makes a forced pass on a roomy window do
@@ -142,7 +177,7 @@ def plan_for_budget(
     budget: int | None,
     estimate: Estimator,
     force: bool = False,
-) -> tuple[int, list[Any]]:
+) -> CompactionPlan:
     """``(insert_at, span)`` for a thread that no longer fits — empty when it does.
 
     The trigger is deliberately not a new threshold: it is the moment the
@@ -152,7 +187,11 @@ def plan_for_budget(
     ``force`` is a person pressing compact. They have a reason we do not: the
     last hour of debugging is finished and they want the window back BEFORE the
     next question rather than after it stops fitting. So the budget gates the
-    automatic path only — asking is the whole trigger.
+    automatic path only.
+
+    It does NOT lift the no-room refusal below. Asking is a trigger, not a
+    licence to trade a whole conversation for a summary that provably cannot
+    make it fit.
 
     ``budget is None`` means no ceiling is known, and #624's rule there is to
     send everything and learn the real limit from the response. A thread that is
@@ -162,7 +201,7 @@ def plan_for_budget(
     # plus three passes of the CJK estimator on every send put ~98 ms in front
     # of the overwhelming majority of turns; this comparison is free.
     if not force and (budget is None or used <= budget):
-        return 0, []
+        return CompactionPlan(0, [], refusal="fits")
 
     # Everything from here is scoped to the LIVE thread — the slice from the
     # newest summary on. `used` is scoped that way too (`context_usage` cuts
@@ -181,7 +220,7 @@ def plan_for_budget(
     own = estimate(folded_live)
     freed = max(0, estimate(live) - own)
     if not force and budget is not None and used - freed <= budget:
-        return 0, []
+        return CompactionPlan(0, [], refusal="fits")
 
     overhead = max(0, used - freed - own)
     room = own if budget is None else budget - overhead
@@ -197,7 +236,7 @@ def plan_for_budget(
         # licence to do harm — and with the automatic path silent here, the
         # button would otherwise be the only thing still acting, trading the
         # whole conversation for a summary that provably cannot make it fit.
-        return 0, []
+        return CompactionPlan(0, [], refusal="no-room")
 
     # From here the FOLDED live thread is the subject. Folding preserves message
     # count and order, so the insert index still addresses the caller's own list
@@ -209,8 +248,8 @@ def plan_for_budget(
     # return nothing, and the thread would fall back to the amputation this
     # exists to remove, most likely exactly when it is most needed.
     keep_tokens = int(max(0, min(room, own)) * KEEP_TAIL_RATIO)
-    span, kept = split_for_compaction(folded_live, keep_tokens=keep_tokens, estimate=estimate)
-    return start + len(span), span
+    span, _kept = split_for_compaction(folded_live, keep_tokens=keep_tokens, estimate=estimate)
+    return CompactionPlan(start + len(span), span, refusal=None if span else "empty")
 
 
 class IConversationCompactor(abc.ABC):

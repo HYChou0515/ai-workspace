@@ -170,19 +170,21 @@ def test_an_unknown_ceiling_never_compacts():
     fact a different rule already guarantees, and passes with this guard deleted.
     (Caught by review: the double agreed with the code for the wrong reason.)"""
     msgs = [_Msg("user", f"很長的訊息{i}" * 50) for i in range(5)]
-    _at, span = plan_for_budget(msgs, used=999_999, budget=None, estimate=estimate_messages)
+    _plan = plan_for_budget(msgs, used=999_999, budget=None, estimate=estimate_messages)
+    _at, span = _plan.at, _plan.span
     assert span == []
 
 
 def test_a_thread_that_still_fits_is_left_alone():
     """The trigger is the moment the reducer would otherwise start throwing
     things away — not a separate threshold anyone has to tune."""
-    _at, span = plan_for_budget(
+    _plan = plan_for_budget(
         [_Msg("user", f"訊息{i}") for i in range(20)],
         used=100,
         budget=1_000,
         estimate=estimate_messages,
     )
+    _at, span = _plan.at, _plan.span
     assert span == []
 
 
@@ -199,9 +201,10 @@ def test_an_overflowing_thread_compacts_and_keeps_a_tail():
     # original numbers here — used 5000 against a budget of 40 — described a
     # deployment whose system prompt alone was 100x its history budget.
     overhead = 200
-    at, span = plan_for_budget(
+    _plan = plan_for_budget(
         msgs, used=own + overhead, budget=overhead + own // 2, estimate=estimate_messages
     )
+    at, span = _plan.at, _plan.span
     assert span, "over budget must produce a span to summarise"
     assert at == len(span), "no earlier summary here, so the index is the span length"
     assert len(span) < len(msgs), "something must survive for the model to answer"
@@ -260,7 +263,9 @@ def test_the_user_can_compact_a_thread_that_still_fits():
     have — they know the last hour of debugging is over and want the window back
     before the next question, not after it stops fitting.
 
-    So the budget check that gates the automatic path must NOT gate this one."""
+    So the budget check that gates the automatic path must NOT gate this one.
+    (The no-room refusal still does — that one is about whether compaction can
+    help at all, and it has its own spec.)"""
     from workspace_app.api import create_app
     from workspace_app.api.runner import ScriptedAgentRunner
     from workspace_app.filestore.memory import MemoryFileStore
@@ -358,9 +363,10 @@ def test_the_tail_is_sized_in_the_unit_it_is_spent_in():
     msgs = [_Msg("user", f"訊息{i}") for i in range(8)]
     own = estimate_messages(msgs)
     # A real request: the messages are small, the fixed overhead is not.
-    at, span = plan_for_budget(
+    _plan = plan_for_budget(
         msgs, used=own + 6_700, budget=8_800, estimate=estimate_messages, force=True
     )
+    at, span = _plan.at, _plan.span
     assert span, "a forced compaction must produce a span even on a small thread"
     assert at == len(span)
     assert len(span) < len(msgs), "and must leave a tail behind"
@@ -383,9 +389,8 @@ def test_the_overhead_is_subtracted_on_the_path_that_actually_uses_it():
     budget = 8_000
     assert own > budget - overhead, "the fixture must exercise the subtraction"
 
-    _at, span = plan_for_budget(
-        msgs, used=own + overhead, budget=budget, estimate=estimate_messages
-    )
+    _plan = plan_for_budget(msgs, used=own + overhead, budget=budget, estimate=estimate_messages)
+    _at, span = _plan.at, _plan.span
     kept = msgs[len(span) :]
     assert estimate_messages(kept) <= budget - overhead, (
         "the tail must fit the room the overhead leaves, not the whole budget"
@@ -409,9 +414,8 @@ def test_folding_alone_gets_its_free_pass_before_any_model_is_called():
     # Over budget by a margin far smaller than the dump itself.
     budget = own + overhead - 5_000
 
-    _at, span = plan_for_budget(
-        msgs, used=own + overhead, budget=budget, estimate=estimate_messages
-    )
+    _plan = plan_for_budget(msgs, used=own + overhead, budget=budget, estimate=estimate_messages)
+    _at, span = _plan.at, _plan.span
     assert span == [], "folding the dump alone brings this under budget"
 
 
@@ -429,7 +433,8 @@ def test_the_summariser_is_handed_the_folded_span_not_the_raw_one():
     msgs = [dump, *[_Msg("user", f"訊息{i}" * 100) for i in range(6)]]
     own = estimate_messages(msgs)
 
-    _at, span = plan_for_budget(msgs, used=own + 1_000, budget=2_000, estimate=estimate_messages)
+    _plan = plan_for_budget(msgs, used=own + 1_000, budget=2_000, estimate=estimate_messages)
+    _at, span = _plan.at, _plan.span
     assert span, "this one really is too big to fold away"
     bodies = "".join(getattr(m, "content", "") for m in span)
     assert "巨" * 100 not in bodies, "the dump must reach the summariser folded"
@@ -485,7 +490,8 @@ def test_the_fold_saving_is_measured_over_the_same_slice_as_the_usage():
     used = estimate_messages(live) + 1_000  # what context_usage would report
     budget = estimate_messages(live) // 2
 
-    _at, span = plan_for_budget(msgs, used=used, budget=budget, estimate=estimate_messages)
+    _plan = plan_for_budget(msgs, used=used, budget=budget, estimate=estimate_messages)
+    _at, span = _plan.at, _plan.span
     assert span, "the live thread is over budget; the buried dump is not its saving"
 
 
@@ -501,7 +507,8 @@ def test_a_thread_whose_overhead_alone_exceeds_the_budget_is_left_alone():
     msgs = [_Msg("user", f"訊息{i}") for i in range(5)]
     own = estimate_messages(msgs)
 
-    _at, span = plan_for_budget(msgs, used=own + 19_000, budget=5_000, estimate=estimate_messages)
+    _plan = plan_for_budget(msgs, used=own + 19_000, budget=5_000, estimate=estimate_messages)
+    _at, span = _plan.at, _plan.span
     assert span == [], "compaction cannot fix an overhead larger than the budget"
 
 
@@ -521,7 +528,8 @@ def test_a_thread_that_fits_is_decided_without_touching_the_estimator_twice():
         return estimate_messages(messages)
 
     msgs = [_Msg("user", f"訊息{i}") for i in range(20)]
-    _at, span = plan_for_budget(msgs, used=100, budget=10_000, estimate=_counting)
+    _plan = plan_for_budget(msgs, used=100, budget=10_000, estimate=_counting)
+    _at, span = _plan.at, _plan.span
     assert span == []
     assert calls == 0, "a thread that fits should not be measured at all"
 
@@ -537,7 +545,37 @@ def test_pressing_compact_cannot_raze_a_thread_it_could_never_save():
     msgs = [_Msg("user", f"訊息{i}") for i in range(20)]
     own = estimate_messages(msgs)
 
-    _at, span = plan_for_budget(
+    _plan = plan_for_budget(
         msgs, used=own + 19_000, budget=5_000, estimate=estimate_messages, force=True
     )
+    _at, span = _plan.at, _plan.span
     assert span == [], "the button must decline what the automatic path declines"
+
+
+def test_the_two_refusals_are_not_reported_as_the_same_thing():
+    """`compacted: false` used to mean exactly one thing: nothing behind the
+    recent turns. Once the no-room refusal began binding the button too, it also
+    meant "the prompt overhead alone exceeds the window" — and the composer said
+    「這段對話還沒有需要壓縮的內容。」 over a thread holding thousands of tokens
+    of exactly that.
+
+    Only the second diagnosis is actionable (raise the window, cut the prompt),
+    and telling the user the opposite sends them looking for a thread that is
+    not there."""
+    msgs = [_Msg("user", f"訊息{i}") for i in range(20)]
+    own = estimate_messages(msgs)
+
+    nothing = plan_for_budget(
+        [_Msg("user", "只有一句")], used=10, budget=90_000, estimate=estimate_messages, force=True
+    )
+    assert nothing.span == [] and nothing.refusal == "empty"
+
+    cannot_help = plan_for_budget(
+        msgs, used=own + 19_000, budget=5_000, estimate=estimate_messages, force=True
+    )
+    assert cannot_help.span == [] and cannot_help.refusal == "no-room"
+
+    works = plan_for_budget(
+        msgs, used=own + 200, budget=200 + own // 2, estimate=estimate_messages, force=True
+    )
+    assert works.span and works.refusal is None

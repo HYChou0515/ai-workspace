@@ -76,6 +76,7 @@ if TYPE_CHECKING:
 
 from ..agent.context import AgentToolContext
 from ..context_budget import SUMMARY_ROLE
+from .compaction import CompactionOutcome
 from .events import Compacting
 
 logger = logging.getLogger(__name__)
@@ -286,19 +287,21 @@ class ChatSendService:
         engine_key: str,
         *,
         force: bool = False,
-    ) -> bool:
+    ) -> CompactionOutcome:
         """Replace the span that no longer fits with a précis of it (#739).
 
-        Three refusals, all cheaper than the alternative:
-        no compactor wired, nothing worth compacting, or a summariser that came
-        back empty. In the last case we leave the thread alone and let the
-        reducer do what it always did — replacing a span with NOTHING is worse
-        than the truncation this exists to avoid."""
+        Returns what happened, not merely whether it happened. "Nothing to
+        compact" and "compaction cannot help this deployment" are opposite
+        diagnoses — the second one is actionable (raise the window, cut the
+        prompt) — and collapsing them into one `False` had the composer telling
+        a user with eleven thousand tokens of history that there was nothing to
+        compact."""
         if self._compactor is None:
-            return False
-        at, span = self._turn_ctx.compaction_plan_for(item_id, conv.messages, force=force)
+            return "unavailable"
+        plan = self._turn_ctx.compaction_plan_for(item_id, conv.messages, force=force)
+        at, span = plan.at, plan.span
         if not span:
-            return False
+            return plan.refusal or "empty"
         # The turn is about to take a whole extra round trip. Say so, or the
         # chat looks frozen for the one turn a user is least expecting it — and
         # say when it is OVER in a `finally`, because two of the three ways out
@@ -315,13 +318,13 @@ class ChatSendService:
                 text = await self._compactor.summarise(span, ctx=ctx)
             except Exception:  # noqa: BLE001 — a failed summary must not fail the turn
                 logger.warning("chat_send: compaction failed for item %s", item_id, exc_info=True)
-                return False
+                return "failed"
             if not text.strip():
                 logger.warning("chat_send: compaction produced nothing for item %s", item_id)
-                return False
+                return "failed"
             conv.messages.insert(at, Message(role=SUMMARY_ROLE, content=text, created_at=now_ms()))
             self._conv_rm.update(rid, conv)
-            return True
+            return "compacted"
         finally:
             self._turn_engine.publish(engine_key, Compacting(replaced=len(span), done=True))
 

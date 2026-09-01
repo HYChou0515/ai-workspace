@@ -56,6 +56,7 @@ if TYPE_CHECKING:
     from ..resources.kb import Citation
     from ..tooling.registry import PackageInfo
     from ..users import User, UserDirectory
+    from .compaction import CompactionPlan
     from .locator import ItemLocator
     from .registry import InvestigationRegistry
 
@@ -272,9 +273,8 @@ class TurnContextBuilder:
 
     def compaction_plan_for(
         self, item_id: str, messages: list[Message], *, force: bool = False
-    ) -> tuple[int, list[Message]]:
-        """#739: ``(insert_at, span)`` for a thread that no longer fits — an
-        empty span when it does.
+    ) -> CompactionPlan:
+        """#739: what to compact in this thread, or why not.
 
         Here rather than in the send path because the ceiling and the history
         budget are resolved here and nowhere else. A caller deriving its own
@@ -308,7 +308,8 @@ class TurnContextBuilder:
         # `force` is a person pressing compact. They have a reason we do not:
         # the last hour of debugging is finished and they want the window back
         # BEFORE the next question, not after it stops fitting. So the budget
-        # gates the automatic path only — asking is the whole trigger.
+        # gates the automatic path only — but the no-room refusal binds both,
+        # because that one is about whether compaction can help at all.
         return plan_for_budget(
             messages,
             used=usage.used,

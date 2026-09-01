@@ -374,7 +374,7 @@ export const realApi: ApiClient = {
   },
 
   async compactChat(slug: string, itemId: string, chatId: string) {
-    return json<{ compacted: boolean }>(
+    return json<{ compacted: boolean; reason: string }>(
       await apiFetch(
         `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}/chats/${encodeURIComponent(chatId)}/compact`,
         { method: "POST" },

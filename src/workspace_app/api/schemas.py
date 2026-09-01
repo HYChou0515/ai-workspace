@@ -186,13 +186,18 @@ class _ContextOut(BaseModel):
 
 
 class _CompactOut(BaseModel):
-    """#739: whether pressing compact actually replaced anything.
+    """#739: what pressing compact actually did.
 
-    `False` is a normal answer, not an error — a thread with nothing behind its
-    recent turns has nothing to summarise, and refusing with a 4xx would make
-    the button look broken instead of merely idle."""
+    Not compacting is a normal answer, not an error — refusing with a 4xx would
+    make the button look broken instead of merely idle. But WHICH answer matters
+    to the person who pressed: "nothing behind your recent turns" and "this
+    deployment's prompt overhead alone exceeds the window" are opposite
+    diagnoses, and only the second is actionable. Collapsing them into one
+    boolean had the composer telling a user with eleven thousand tokens of
+    history that there was nothing to compact."""
 
     compacted: bool
+    reason: str
 
 
 class _GoalBody(BaseModel):

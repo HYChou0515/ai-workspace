@@ -13,6 +13,11 @@ import { pxToRem } from "../lib/pxToRem";
  *  - waiting:   等候模型回應…       (prompt is with the model, no token yet → LLM slow)
  *  - thinking:  思考中…            (reasoning is streaming; the content shows below)
  *  - answering / a running tool → defer to the existing ↑/↓ token metrics line. */
+/** #739: how long a compaction may claim to be running before we stop
+ * believing it. Generous — a large span on a slow model is legitimately
+ * minutes — but finite, because the alternative is a line nobody can clear. */
+const COMPACTING_GIVE_UP_S = 300;
+
 export function TurnStatus({
   log,
   className,
@@ -26,10 +31,7 @@ export function TurnStatus({
 }) {
   const phase = turnPhase(log);
   const toolRunning = isToolRunning(log);
-  // #739: writing a summary is activity too. Without this the manual path
-  // (button, `/compact`) leaves `startRef` null, so the counter on the
-  // compaction line — the one signal that never freezes — never ticks.
-  const active = phase !== "idle" || log.compacting != null;
+  const active = phase !== "idle";
 
   // Never-freeze clock: seconds since this turn started streaming. Anchored on
   // the FE (not the backend's elapsed_ms, which is 0 until the first token and
@@ -38,11 +40,29 @@ export function TurnStatus({
   const [, tick] = useState(0);
   if (active && startRef.current === null) startRef.current = Date.now();
   if (!active) startRef.current = null;
+
+  // #739: the compaction runs BEFORE the turn and gets its own clock. Folding
+  // it into the turn's would lend the turn its elapsed time whenever the two
+  // events land in one render — a two-second-old turn presenting as ten minutes
+  // stuck, offering a retry button whose first act is to cancel it.
+  const compacting = log.compacting != null;
+  const compactStartRef = useRef<number | null>(null);
+  if (compacting && compactStartRef.current === null) compactStartRef.current = Date.now();
+  if (!compacting) compactStartRef.current = null;
+  const compactSec = compactStartRef.current
+    ? Math.floor((Date.now() - compactStartRef.current) / 1000)
+    : 0;
+  // A summariser that has not come back in this long has failed, whether or not
+  // its `finally` reached us. The manual path publishes no turn, so a lost
+  // `done` would otherwise pin the line for every spectator, with a 1 Hz timer
+  // and no way out.
+  const compactingLive = compacting && compactSec < COMPACTING_GIVE_UP_S;
+
   useEffect(() => {
-    if (!active) return;
+    if (!active && !compactingLive) return;
     const id = setInterval(() => tick((n) => n + 1), 1000);
     return () => clearInterval(id);
-  }, [active]);
+  }, [active, compactingLive]);
 
   // Self-contained styling so both chat surfaces (KB + RCA) look identical —
   // mono, accent, indented to sit under the speaker avatar.
@@ -57,7 +77,7 @@ export function TurnStatus({
   // written — the manual path (button, `/compact`) never sets `streaming`, so
   // the notice would otherwise be published and dropped, and nobody but the
   // presser would know the thread was being rewritten.
-  if (phase === "idle" && log.compacting == null) return null;
+  if (phase === "idle" && !compactingLive) return null;
 
   const elapsedSec = startRef.current ? Math.floor((Date.now() - startRef.current) / 1000) : 0;
 
@@ -124,11 +144,11 @@ export function TurnStatus({
   // made the abandoned-turn detector (and its retry button) unreachable for the
   // whole compaction round trip, which is exactly when a turn looks stuck. The
   // idle guard is what needed relaxing, not this branch's position.
-  if (log.compacting != null) {
+  if (compactingLive) {
     return (
       <div className={className} style={box} data-testid="turn-compacting">
         整理較早的對話…
-        {elapsedSec >= 1 && <span style={{ opacity: 0.7 }}> · {elapsedSec}s</span>}
+        {compactSec >= 1 && <span style={{ opacity: 0.7 }}> · {compactSec}s</span>}
       </div>
     );
   }

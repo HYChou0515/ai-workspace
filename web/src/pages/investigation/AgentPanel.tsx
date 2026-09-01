@@ -208,7 +208,14 @@ export function AgentPanel({
     mutationFn: () => api.compactChat(slug, investigationId, chatId ?? ""),
     onSuccess: (r) => {
       if (!r.compacted) {
-        setComposerHint("這段對話還沒有需要壓縮的內容。");
+        // Two opposite diagnoses used to share one sentence. Only the second is
+        // something the reader can act on, and saying the first over a thread
+        // full of history sends them looking for something that is not there.
+        setComposerHint(
+          r.reason === "no-room"
+            ? "這個環境的提示詞本身已經佔滿模型的可讀範圍,整理對話幫不上忙 —— 需要調大模型視窗或縮短提示詞。"
+            : "這段對話還沒有需要壓縮的內容。",
+        );
         return;
       }
       void queryClient.invalidateQueries({ queryKey: qk.itemChat(slug, investigationId, chatId ?? "") });

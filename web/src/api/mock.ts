@@ -827,7 +827,7 @@ export const mockApi: ApiClient = {
 
   async compactChat(_slug: string, _itemId: string, _chatId: string) {
     await delay(10);
-    return { compacted: true };
+    return { compacted: true, reason: "compacted" };
   },
 
   async refreshFiles(_slug: string, _investigationId) {

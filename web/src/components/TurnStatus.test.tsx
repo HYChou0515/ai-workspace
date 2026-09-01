@@ -287,3 +287,52 @@ describe("the compaction notice does not shadow what is above it (#739 review)",
     }
   });
 });
+
+describe("the compaction clock is its own (#739 review round 4)", () => {
+  it("does not lend its elapsed time to the turn that follows", async () => {
+    // `Compacting`, `Compacting(done)` and the turn's first event can arrive in
+    // one render — a buffering proxy, a backgrounded tab. The turn then
+    // inherited the compaction's elapsed seconds, so a two-second-old turn
+    // could present as ten minutes stuck and offer 重新問一次, a button whose
+    // premise is "this is stuck" and whose first act is to cancel.
+    vi.useFakeTimers();
+    try {
+      const { rerender } = render(
+        <TurnStatus log={{ ...EMPTY_LOG, compacting: { replaced: 5 } }} />,
+      );
+      await act(async () => {
+        vi.advanceTimersByTime(90 * 1000);
+      });
+      // the compaction ends and the turn begins, in one render
+      rerender(<TurnStatus log={{ ...EMPTY_LOG, streaming: true }} onRetry={() => {}} />);
+      await act(async () => {
+        vi.advanceTimersByTime(2000);
+      });
+      rerender(<TurnStatus log={{ ...EMPTY_LOG, streaming: true }} onRetry={() => {}} />);
+      expect(screen.queryByTestId("turn-abandoned")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives up on a compaction that never reported back", async () => {
+    // The manual path publishes no turn, so a lost `done` leaves the notice with
+    // no terminal event to clear it — a line pinned for every spectator and a
+    // 1 Hz timer with no exit. A summariser that has not returned in minutes has
+    // failed, whether or not its `finally` reached us.
+    vi.useFakeTimers();
+    try {
+      const { rerender } = render(
+        <TurnStatus log={{ ...EMPTY_LOG, compacting: { replaced: 5 } }} />,
+      );
+      expect(screen.queryByTestId("turn-compacting")).toBeTruthy();
+      await act(async () => {
+        vi.advanceTimersByTime(10 * 60 * 1000);
+      });
+      rerender(<TurnStatus log={{ ...EMPTY_LOG, compacting: { replaced: 5 } }} />);
+      expect(screen.queryByTestId("turn-compacting")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

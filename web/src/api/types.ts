@@ -545,9 +545,16 @@ export interface ApiClient {
    * quota (#245), for the upload usage bar. `quota` 0 means unlimited. */
   getWorkspaceUsage(slug: string, investigationId: string): Promise<WorkspaceUsage>;
   getChatContext(slug: string, itemId: string, chatId: string): Promise<ChatContextUsage>;
-  /** #739: summarise this chat's older span on request. `compacted:false`
-   * means there was nothing behind the recent turns — idle, not an error. */
-  compactChat(slug: string, itemId: string, chatId: string): Promise<{ compacted: boolean }>;
+  /** #739: summarise this chat's older span on request. `compacted:false` is
+   * idle, not an error — but WHICH idle matters: `reason` is "empty" (nothing
+   * behind the recent turns) or "no-room" (this deployment's prompt overhead
+   * alone exceeds the window, so no summary can make the thread fit). Only the
+   * second is actionable, and they used to be reported identically. */
+  compactChat(
+    slug: string,
+    itemId: string,
+    chatId: string,
+  ): Promise<{ compacted: boolean; reason: string }>;
   /** POST /a/{slug}/items/{id}/files/refresh — force-mirror the live sandbox
    * to the snapshot (don't wait for the throttled sweep). Call this before a
    * read whenever the sandbox may have changed out-of-band (terminal `rm`,

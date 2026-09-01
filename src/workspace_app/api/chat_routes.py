@@ -78,11 +78,12 @@ RecordMention = Callable[..., None]
 class CompactInto(Protocol):
     """#739: replace this chat's older span with a précis of it. Same callable
     the automatic path uses — the user pressing compact differs only in `force`,
-    which skips the budget check because asking IS the trigger."""
+    which skips the budget CHECK because asking IS the trigger — but not the
+    no-room refusal, which is about whether compaction can help at all."""
 
     async def __call__(
         self, item_id: str, rid: str, conv: Any, engine_key: str, *, force: bool = False
-    ) -> bool: ...
+    ) -> str: ...
 
 
 class ContextUsageFor(Protocol):
@@ -337,17 +338,19 @@ def register_chat_routes(
         a model call, so a reader who may only watch must not be able to spend
         one. Same call the automatic path makes — the only difference is that
         this one skips the budget check, because a person asking has a reason we
-        cannot see from the token count."""
+        cannot see from the token count. It does NOT skip the no-room refusal:
+        asking is a trigger, not a licence to trade a whole conversation for a
+        summary that provably cannot make it fit."""
         investigation_id = locator.require_access(slug, item_id, "converse")
         rid, conv = locator.require_chat(slug, item_id, chat_id)
-        did = await compact_into(
+        outcome = await compact_into(
             investigation_id,
             rid,
             conv,
             locator.engine_key(investigation_id, rid),
             force=True,
         )
-        return _CompactOut(compacted=did)
+        return _CompactOut(compacted=outcome == "compacted", reason=outcome)
 
     @app.get("/a/{slug}/items/{item_id}/chats/{chat_id}/context")
     def get_chat_context(slug: str, item_id: str, chat_id: str) -> _ContextOut:
