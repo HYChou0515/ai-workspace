@@ -41,6 +41,10 @@ describe("deriveEnvNeeds", () => {
       {
         key: "sap-tools",
         label: "SAP Tools",
+        // First-party: nobody else published it, so there is nothing to say.
+        author: null,
+        version: null,
+        missing: 1,
         fields: [
           {
             name: "SAP_HOST",
@@ -130,6 +134,37 @@ describe("deriveEnvNeeds", () => {
     expect(view.groups).toEqual([]);
     expect(view.missingRequired).toEqual([]);
     expect(view.undeclared).toEqual([]);
+  });
+
+  it("carries who published a tool and how many of its variables are unset", () => {
+    // With more than a handful of tools the picker is how you find yours, so a
+    // row has to say enough to pick by: two bundles can carry the same name and
+    // differ only in who published them (#724), and "still needs 2" is the
+    // reason someone opened this panel at all.
+    const view = deriveEnvNeeds(
+      [
+        tool({
+          key: "wafer-history",
+          label: "Wafer History",
+          external: true,
+          author: "Wafer Team <wafer@example.com>",
+          version: "1.4.2",
+          env_needs: [
+            { name: "WAFER_API", description: "", required: true },
+            { name: "WAFER_CACHE", description: "", required: true },
+            { name: "WAFER_DEBUG", description: "", required: false },
+          ],
+        }),
+      ],
+      { WAFER_API: "https://w" },
+    );
+
+    const [group] = view.groups;
+    expect(group.author).toBe("Wafer Team <wafer@example.com>");
+    expect(group.version).toBe("1.4.2");
+    // One of its two required variables is set, so one is left. The optional
+    // one is not counted — nobody is missing something marked optional.
+    expect(group.missing).toBe(1);
   });
 
   it("drops a declared name this panel could not actually store", () => {

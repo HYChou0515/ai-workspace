@@ -98,12 +98,61 @@ describe("EnvVarsModal declared fields (#750)", () => {
     expect(onSave).toHaveBeenCalledWith({ EXISTING: "1", SAP_HOST: "sap.corp" });
   });
 
+  it("finds a tool by typing, and says who published which release", async () => {
+    // A row of tabs is fine for three tools and unusable for twenty — they wrap,
+    // and the only way to find yours is to read every one. Same conclusion
+    // `GroupPicker` reached: a list you can type into. And a row has to say
+    // enough to pick BY, which for a third-party bundle means who shipped it
+    // and which release resolved (#724) — two bundles can share a name.
+    const many: ItemToolState[] = [
+      {
+        key: "wafer-history",
+        label: "Wafer History",
+        description: "",
+        default_on: true,
+        pref: "follow",
+        effective: true,
+        external: true,
+        author: "Wafer Team <wafer@example.com>",
+        version: "1.4.2",
+        env_needs: [{ name: "WAFER_API", description: "", required: true }],
+      },
+      {
+        key: "sap-tools",
+        label: "SAP Tools",
+        description: "",
+        default_on: true,
+        pref: "follow",
+        effective: true,
+        env_needs: [{ name: "SAP_HOST", description: "", required: true }],
+      },
+    ];
+    openWith(many);
+
+    const option = await screen.findByTestId("env-tool-wafer-history");
+    expect(option).toHaveTextContent("Wafer Team");
+    expect(option).toHaveTextContent("1.4.2");
+    // What someone scanning a long list is looking for: which ones still need
+    // something.
+    expect(option).toHaveTextContent("1");
+
+    // Typing narrows it, so a long list stays usable.
+    fireEvent.change(screen.getByTestId("env-tool-search"), { target: { value: "wafer" } });
+    expect(screen.queryByTestId("env-tool-sap-tools")).not.toBeInTheDocument();
+    expect(screen.getByTestId("env-tool-wafer-history")).toBeInTheDocument();
+
+    // And picking one shows its variables.
+    fireEvent.click(screen.getByTestId("env-tool-wafer-history"));
+    expect(screen.getByTestId("env-field-WAFER_API")).toBeInTheDocument();
+    expect(screen.queryByTestId("env-field-SAP_HOST")).not.toBeInTheDocument();
+  });
+
   it("shows one tool at a time, and the shared value is the same one", async () => {
     // Someone who just switched a tool on wants that tool's variables, not a
-    // scroll past everything else. The tab is a FILTER over one set of values,
-    // never a second form: CORP_PROXY under either tab is one stored name with
-    // one value, so a tab that kept its own copy would let the same variable
-    // hold two different things depending on where you looked.
+    // scroll past everything else. The picker is a FILTER over one set of
+    // values, never a second form: CORP_PROXY under either tool is one stored
+    // name with one value, so a per-tool copy would let the same variable hold
+    // two different things depending on where you looked.
     const shared = { name: "CORP_PROXY", description: "", required: null };
     const tools: ItemToolState[] = [
       {
@@ -133,9 +182,9 @@ describe("EnvVarsModal declared fields (#750)", () => {
       target: { value: "proxy:3128" },
     });
 
-    fireEvent.click(screen.getByTestId("env-tab-wafer"));
+    fireEvent.click(screen.getByTestId("env-tool-wafer"));
 
-    // The other tool's tab hides what belongs to the first…
+    // Picking the other tool hides what belongs to the first…
     expect(screen.queryByTestId("env-field-SAP_HOST")).not.toBeInTheDocument();
     // …and the variable they share carries the value typed under the other tab.
     expect((screen.getByTestId("env-field-CORP_PROXY") as HTMLInputElement).value).toBe(

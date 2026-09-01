@@ -27,6 +27,16 @@ export type ToolEnvGroup = {
   key: string;
   label: string;
   fields: EnvField[];
+  /** Who published it and which release resolved, for a third-party tool
+   * (#724). Carried into the picker because two bundles can share a name and
+   * differ only in who shipped them, and picking the wrong one is not an error
+   * anything downstream can catch. `null` for a first-party tool. */
+  author: string | null;
+  version: string | null;
+  /** How many of THIS tool's variables are marked required and still unset —
+   * the number someone scanning a long list is actually looking for. Counts
+   * only what an author marked required, like `missingRequired`. */
+  missing: number;
 };
 
 export type EnvNeedsView = {
@@ -79,6 +89,9 @@ export function deriveEnvNeeds(
     .map((t) => ({
       key: t.key,
       label: t.label,
+      author: t.author ?? null,
+      version: t.version ?? null,
+      missing: usable(t).filter((n) => n.required === true && !filled(n.name)).length,
       fields: usable(t).map((need) => ({
         name: need.name,
         description: need.description,

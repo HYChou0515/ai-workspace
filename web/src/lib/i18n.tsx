@@ -1259,6 +1259,11 @@ export const messages = {
   // #750. Says what is true and no more: these tools SAID what they want.
   // Never "this is everything you need" — an author may have left names out,
   // and the panel has no way to know that they did.
+  "env.searchTools": { "zh-TW": "搜尋工具…", en: "Search tools…" },
+  // A count, not a list: the list is the fields right below it.
+  "env.toolStillNeeds": { "zh-TW": "還缺 {count} 個", en: "{count} to fill" },
+  "env.toolReady": { "zh-TW": "齊了", en: "ready" },
+  "env.noToolMatches": { "zh-TW": "沒有符合的工具", en: "No tool matches" },
   "env.alsoUsedBy": { "zh-TW": "{tools} 也會用到", en: "Also used by {tools}" },
   // The third state, spelled out. NOT "needs nothing": these tools shipped no
   // list at all, and someone hunting a variable they are missing must not be

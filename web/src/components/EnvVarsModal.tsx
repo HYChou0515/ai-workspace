@@ -51,6 +51,7 @@ import { qk } from "../api/queryKeys";
 import type { ApiClient } from "../api/types";
 import { mergeEnv, parseEnvText, setEnvValue, toEnvText, unstorable } from "../lib/envFile";
 import { deriveEnvNeeds } from "../lib/envNeeds";
+import { fuzzyFilter } from "../lib/fuzzy";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 import { ModalShell } from "./ModalShell";
@@ -170,8 +171,15 @@ export function EnvVarsModal({
   };
 
   const [tab, setTab] = useState<string | null>(null);
-  const shownGroup =
-    view.groups.find((g) => g.key === tab) ?? view.groups[0] ?? { key: "", label: "", fields: [] };
+  const [toolQuery, setToolQuery] = useState("");
+  const shownGroup = view.groups.find((g) => g.key === tab) ??
+    view.groups[0] ?? { key: "", label: "", fields: [], author: null, version: null, missing: 0 };
+  // Narrowed on what someone would type: the tool's name or the publisher's.
+  const offeredGroups = fuzzyFilter(
+    toolQuery,
+    view.groups,
+    (g) => `${g.label} ${g.author ?? ""}`,
+  );
 
   /** Import MERGES into what is in the BOX, not into the last saved state: the
    * box is what the user is looking at, and importing on top of something they
@@ -222,30 +230,94 @@ export function EnvVarsModal({
       )}
 
       {view.groups.length > 1 && (
-        <div role="tablist" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          {view.groups.map((group) => (
-            <button
-              key={group.key}
-              type="button"
-              role="tab"
-              className="btn"
-              data-variant={group.key === shownGroup.key ? "primary" : "secondary"}
-              data-size="sm"
-              data-testid={`env-tab-${group.key}`}
-              aria-selected={group.key === shownGroup.key}
-              onClick={() => setTab(group.key)}
-            >
-              {group.label}
-            </button>
-          ))}
+        <div style={{ display: "grid", gap: 4 }}>
+          {/* A list you can type into, not a row of tabs: tabs wrap past a
+              handful and then the only way to find yours is to read every one.
+              Same conclusion `GroupPicker` reached for the same reason. */}
+          <input
+            data-testid="env-tool-search"
+            value={toolQuery}
+            onChange={(e) => setToolQuery(e.target.value)}
+            placeholder={t("env.searchTools")}
+            aria-label={t("env.searchTools")}
+            style={{
+              width: "100%",
+              boxSizing: "border-box",
+              padding: "6px 8px",
+              border: "1px solid var(--paper-3)",
+              borderRadius: 6,
+              background: "var(--paper)",
+              color: "var(--text-paper)",
+              fontSize: pxToRem(12),
+            }}
+          />
+          <div
+            role="listbox"
+            aria-label={t("env.searchTools")}
+            style={{ maxHeight: 132, overflowY: "auto", display: "grid", gap: 2 }}
+          >
+            {offeredGroups.map((group) => (
+              <button
+                key={group.key}
+                type="button"
+                role="option"
+                aria-selected={group.key === shownGroup.key}
+                data-testid={`env-tool-${group.key}`}
+                onClick={() => setTab(group.key)}
+                style={{
+                  display: "flex",
+                  alignItems: "baseline",
+                  gap: 8,
+                  width: "100%",
+                  textAlign: "left",
+                  padding: "5px 8px",
+                  borderRadius: 6,
+                  border: "1px solid transparent",
+                  background:
+                    group.key === shownGroup.key ? "var(--paper-2)" : "transparent",
+                  borderColor:
+                    group.key === shownGroup.key ? "var(--paper-3)" : "transparent",
+                  color: "var(--text-paper)",
+                  cursor: "pointer",
+                  fontSize: pxToRem(12),
+                }}
+              >
+                <span style={{ fontWeight: 500 }}>{group.label}</span>
+                {/* Who shipped it and which release resolved. Two bundles can
+                    carry the same name and differ only in this (#724). */}
+                {(group.author || group.version) && (
+                  <span style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
+                    {[group.author, group.version].filter(Boolean).join(" · ")}
+                  </span>
+                )}
+                <span
+                  style={{
+                    marginLeft: "auto",
+                    fontSize: pxToRem(11),
+                    color: group.missing > 0 ? "var(--text-paper)" : "var(--text-paper-d)",
+                  }}
+                >
+                  {group.missing > 0
+                    ? t("env.toolStillNeeds", { count: String(group.missing) })
+                    : t("env.toolReady")}
+                </span>
+              </button>
+            ))}
+            {offeredGroups.length === 0 && (
+              <p
+                data-testid="env-tool-none"
+                style={{ margin: 0, fontSize: pxToRem(11), color: "var(--text-paper-d)" }}
+              >
+                {t("env.noToolMatches")}
+              </p>
+            )}
+          </div>
         </div>
       )}
 
       {view.groups.length > 0 && (
         <section data-testid={`env-group-${shownGroup.key}`}>
-          {view.groups.length === 1 && (
-            <strong style={{ fontSize: pxToRem(12) }}>{shownGroup.label}</strong>
-          )}
+          <strong style={{ fontSize: pxToRem(12) }}>{shownGroup.label}</strong>
           {shownGroup.fields.map((field) => (
             <label key={field.name} style={{ display: "block", marginTop: 8 }}>
               <span
