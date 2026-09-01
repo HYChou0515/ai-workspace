@@ -245,6 +245,53 @@ describe("EnvVarsModal declared fields (#750)", () => {
     });
   });
 
+  it("refuses a value the box cannot hold instead of storing half of it", async () => {
+    // `.env` text is one line per variable, so a value with a newline — a PEM
+    // certificate, which the seam names as a thing a provider might mint —
+    // reads back as its first line and nothing else. Silently. The person then
+    // saves a credential that is 30 characters of header and fails somewhere
+    // with no connection to here.
+    //
+    // So it is refused, whole, and named. This panel cannot express such a
+    // value; being told that is recoverable, and being handed a truncated
+    // certificate is not.
+    renderWithQuery(
+      <EnvVarsModal
+        envVars={{}}
+        onSave={vi.fn()}
+        onClose={vi.fn()}
+        slug="rca"
+        itemId="i1"
+        client={{
+          getItemTools: vi.fn(async () => SAP),
+          getEnvProviders: vi.fn(async () => [
+            {
+              id: "sap-login",
+              label: "SAP production login",
+              produces: ["SAP_HOST"],
+              inputs: [{ name: "password", label: "Password", secret: true }],
+            },
+          ]),
+          resolveEnvProvider: vi.fn(async () => ({
+            SAP_HOST: "sap.corp",
+            CLIENT_CERT: "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----",
+          })),
+        }}
+      />,
+    );
+
+    fireEvent.click(await screen.findByTestId("env-provider-sap-login"));
+    fireEvent.change(screen.getByTestId("env-cred-password"), { target: { value: "x" } });
+    fireEvent.click(screen.getByTestId("env-cred-submit"));
+
+    // Named, so the person knows which one and can go and ask for it another way.
+    expect(await screen.findByTestId("env-cred-error")).toHaveTextContent("CLIENT_CERT");
+    // Nothing merged — not even the variable that WOULD have fitted. Half an
+    // exchange applied is a state nobody asked for and nobody can see.
+    expect(box().value).not.toContain("BEGIN CERTIFICATE");
+    expect(box().value).not.toContain("sap.corp");
+  });
+
   it("keeps the panel untouched when the exchange fails, and says so", async () => {
     renderWithQuery(
       <EnvVarsModal

@@ -107,4 +107,12 @@ class IEnvProvider(abc.ABC):
         declaration most needs to keep.
 
         ``values`` holds the credential. Do not log it, do not persist it, and
-        do not put it in the exception you raise."""
+        do not put it in the exception you raise.
+
+        ⚠️ **A returned value may not contain a newline.** The panel edits these
+        as ``.env`` text, one line per variable, so a multi-line value would
+        read back as its first line — silently, leaving someone with 30
+        characters of certificate header saved as their credential. The panel
+        refuses such a result whole and names the variable rather than storing
+        part of it. If what you mint is a PEM, this seam cannot deliver it; give
+        it to the tool some other way."""

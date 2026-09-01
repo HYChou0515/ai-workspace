@@ -1268,6 +1268,13 @@ export const messages = {
   // The answer the panel exists to give. Names the variables rather than
   // counting them: a count sends someone hunting for which, and the names are
   // what they will type.
+  // Says WHICH variable and WHY, because the person's next move depends on it:
+  // this is not a failure of their password, it is a shape this panel cannot
+  // store, and they need to get that value in some other way.
+  "env.providerValueTooComplex": {
+    "zh-TW": "{names} 的內容含有換行,這個面板存不了。請改用其他方式設定它。",
+    en: "{names} came back with line breaks, which this panel cannot store. Set it another way.",
+  },
   "env.stillMissing": {
     "zh-TW": "還沒填:{names}",
     en: "Not filled yet: {names}",

@@ -132,6 +132,17 @@ export function EnvVarsModal({
     setCredError(null);
     try {
       const env = await client.resolveEnvProvider(slug!, itemId!, openProvider.id, creds);
+      // `.env` text is one line per variable, so a value carrying a newline —
+      // a PEM certificate, say — reads back as its first line and nothing
+      // else. Refused WHOLE and by name rather than merged: being told this
+      // panel cannot hold the value is recoverable, being handed 30 characters
+      // of certificate header is not, and applying only the variables that
+      // happened to fit leaves a half-exchange nobody asked for.
+      const unrepresentable = Object.keys(env).filter((k) => /[\r\n]/.test(env[k]));
+      if (unrepresentable.length > 0) {
+        setCredError(t("env.providerValueTooComplex", { names: unrepresentable.join(", ") }));
+        return;
+      }
       // Merged, not replaced, and unfiltered: a provider may legitimately
       // return a name no tool declared, and dropping it would discard exactly
       // what an incomplete declaration most needs to keep. Applied name by name
