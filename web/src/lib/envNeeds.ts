@@ -1,8 +1,9 @@
 /**
  * What the item's current toolset says it wants from the environment (#750).
  *
- * The panel renders this two ways at once — a tab per tool, and a field per
- * variable — and both are derived here so they cannot drift apart. Storage is
+ * The panel renders this two ways at once — a dropdown of the tools that
+ * declared, and the fields of whichever is picked — and both are derived here
+ * so they cannot drift apart. Storage is
  * untouched: this describes the SAME flat `Record<string, string>` the text box
  * edits, which is why a variable two tools want is one field with one value.
  *
@@ -18,7 +19,7 @@ export type EnvField = {
   required: boolean | null;
   /** Every tool asking for this name, by label. Shown beside the field so
    * clearing it is an informed act — the storage is flat, so a variable
-   * emptied under one tool's tab is emptied for all of them. */
+   * emptied while one tool is showing is emptied for all of them. */
   wantedBy: string[];
   filled: boolean;
 };
@@ -40,7 +41,8 @@ export type ToolEnvGroup = {
 };
 
 export type EnvNeedsView = {
-  /** One per effective tool that declared at least one variable — the tabs. */
+  /** One per effective tool that declared at least one variable — the rows
+   * the picker offers, in the order the toolset resolved. */
   groups: ToolEnvGroup[];
   /** Labels of effective tools that shipped no declaration. Named, not
    * counted as needing nothing: almost every tool predates #750, and someone

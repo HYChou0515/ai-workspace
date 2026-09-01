@@ -94,12 +94,18 @@ always complains is a panel nobody reads.
 Same modal, same `env_vars`, same `.env` parsing, **no schema change**. The
 free-text box stays; the form grows above it.
 
-Tabs are a **filter**, not separate forms — someone who just enabled one tool
-wants to fill that tool's variables without scrolling past everything else. The
-state behind a field is keyed by **variable name**, so a variable two tools share
-is one value: editing it under either tab edits the same thing, and both tabs
+The tool picker is a **filter**, not separate forms — someone who just enabled
+one tool wants to fill that tool's variables without scrolling past everything
+else. The state behind a field is keyed by **variable name**, so a variable two
+tools share is one value: editing it under either edits the same thing, and both
 label it with who else uses it. Without that label, clearing a variable under
 tool A silently breaks tool B.
+
+A searchable dropdown, not a row of tabs (review round 4). Tabs wrap past a
+handful of tools and then the only way to find yours is to read every one — the
+conclusion `GroupPicker` had already reached for the same reason. Each row names
+the publisher and release for a third-party bundle (#724), since two bundles can
+share a name, and how many of that tool's variables are still unset.
 
 Which tools appear follows the item's current toolset (the tri-state picker).
 
@@ -195,7 +201,7 @@ per-tool scoping of `user_env`, which decision "absent is not empty" forecloses
 | two providers produce one name | both buttons, each with its own label. Never auto-pick |
 | `resolve` raises | the dialog reports it; nothing is filled; the panel is untouched. **Not a 502/503/504** — the FE's `GATEWAY_CUT` reads those as a cut connection and waits forever (#714's trap) |
 | `resolve` returns a name nobody declared | written anyway |
-| user disables a tool | its tab goes; its exclusive variables leave the form; shared ones stay, still labelled |
+| user disables a tool | it leaves the picker; its exclusive variables leave the form; shared ones stay, still labelled |
 
 ## Definition of Done
 
@@ -208,7 +214,8 @@ per-tool scoping of `user_env`, which decision "absent is not empty" forecloses
       that works (proved by a mutant: renaming a member in the doc goes red).
 - [x] A tool with no declaration is visibly "did not say", not "needs nothing".
 - [x] A variable declared by two tools shows once, labelled with both, and
-      editing it under either tab changes one value.
+      editing it under either changes one value. (Also within ONE tool: a name
+      declared twice in one file is one field — review round 6.)
 - [x] A required-and-empty field: Save enabled, no red, tool still dispatches.
 - [x] A sample `IEnvProvider` fills its variables into the form; the panel is
       still dirty afterwards and nothing is stored until Save.
@@ -229,7 +236,7 @@ per-tool scoping of `user_env`, which decision "absent is not empty" forecloses
       | opened | `Not filled yet: DEMO_HOST, DEMO_TOKEN` |
       | undeclared | `Csv Column Summary, Sci Plot, Python Stack did not list what it needs — which is not the same as needing nothing.` |
       | shared name | `Also used by Data Fetch, Rca Tools` |
-      | other tab | the first tool's own variable is gone; the shared one keeps its value |
+      | other tool picked | the first tool's own variable is gone; the shared one keeps its value |
       | wrong password | `帳號或密碼不正確` — the provider's own sentence |
       | logged in | field filled, summary flips to `Everything marked required is set.` |
       | cancel, reopen | field is EMPTY — nothing was stored |
@@ -256,9 +263,11 @@ through the same `AppCatalog.resolve` a turn makes — the anti-drift it was bui
 around — so a second endpoint would be a second answer to "which tools does this
 item run", and the two would disagree the moment one changed.
 
-Per tool, not pre-aggregated: the panel's two views (a tab per tool, and one
-field per variable labelled with everyone using it) are both derived from the
-per-tool shape, whereas an aggregate can only produce the second. `null` (no
+Per tool, not pre-aggregated: the panel's two views (a picker of the tools that
+declared, and one field per variable labelled with everyone using it) are both
+derived from the per-tool shape, whereas an aggregate can only produce the
+second — and the picker rows need each tool's own publisher, release and
+outstanding count, which an aggregate has thrown away. `null` (no
 declaration) and `[]` (needs nothing) stay distinct on the wire; a built-in is
 `[]` on our own authority, since `_exec_tool` is the only path `user_env` takes
 and it launches a package bundle.

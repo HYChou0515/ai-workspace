@@ -100,9 +100,9 @@ export function EnvVarsModal({
 
   // Which tool's variables are on screen. A FILTER over one set of values, not
   // a form per tool: a variable two tools want is one stored name with one
-  // value, and per-tab copies would let it read differently depending on where
-  // you looked. Falls back to the first group so a tab for a tool switched off
-  // between renders cannot leave the panel showing nothing.
+  // value, and a per-tool copy would let it read differently depending on which
+  // one was showing. Falls back to the first group so picking a tool that is
+  // switched off between renders cannot leave the panel showing nothing.
   // What this deploy can obtain from something a person types. Empty is the
   // ordinary case, and the panel is complete without it — the button only ever
   // saves typing.
@@ -171,9 +171,9 @@ export function EnvVarsModal({
     }
   };
 
-  const [tab, setTab] = useState<string | null>(null);
+  const [picked, setPicked] = useState<string | null>(null);
   const [toolQuery, setToolQuery] = useState("");
-  const shownGroup = view.groups.find((g) => g.key === tab) ??
+  const shownGroup = view.groups.find((g) => g.key === picked) ??
     view.groups[0] ?? { key: "", label: "", fields: [], author: null, version: null, missing: 0 };
   // Narrowed on what someone would type: the tool's name or the publisher's.
   const offeredGroups = fuzzyFilter(
@@ -280,7 +280,7 @@ export function EnvVarsModal({
                     testId={`env-tool-${group.key}`}
                     selected={group.key === shownGroup.key}
                     onClick={() => {
-                      setTab(group.key);
+                      setPicked(group.key);
                       close();
                     }}
                   >

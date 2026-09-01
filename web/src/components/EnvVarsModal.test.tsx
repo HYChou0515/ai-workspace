@@ -165,7 +165,7 @@ describe("EnvVarsModal declared fields (#750)", () => {
     // scroll past everything else. The picker is a FILTER over one set of
     // values, never a second form: CORP_PROXY under either tool is one stored
     // name with one value, so a per-tool copy would let the same variable hold
-    // two different things depending on where you looked.
+    // two different things depending on which one was showing.
     const shared = { name: "CORP_PROXY", description: "", required: null };
     const tools: ItemToolState[] = [
       {
