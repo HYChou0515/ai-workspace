@@ -541,3 +541,45 @@ def test_a_vouched_head_may_not_fall_back_to_an_unvouched_endpoint(tmp_path):
     )
     with pytest.raises(ValueError, match="reports_usage"):
         load_with_provenance(config_path=cfg)
+
+
+def test_a_role_cannot_vouch_for_an_endpoint_the_preset_did_not(tmp_path):
+    """`reports_usage` is a claim about an ENDPOINT, so a per-role usage block
+    has no standing to make it. `resolve_usage` merges preset-then-usage, which
+    let `agents.kb_chat: {reports_usage: true}` switch it on for a preset that
+    never declared it — the same endpoint then vouched for in one role and not
+    another, which cannot both be true.
+
+    Refused at load rather than ignored: silently dropping a key an operator
+    wrote is exactly the failure this flag already suffered once.
+    """
+    from textwrap import dedent
+
+    import pytest
+
+    from workspace_app.config.catalog_build import resolve_usage
+    from workspace_app.config.loader import load_with_provenance
+    from workspace_app.config.schema import Preset
+
+    prompt = "pkg:workspace_app.kb.prompts/system.md"
+    plain = Preset(model="ollama_chat/y", prompt_file=prompt)
+    cfg = resolve_usage(
+        {"preset": "plain", "reports_usage": True}, {"plain": plain}, config_dir=None
+    )
+    assert cfg.reports_usage is False  # the endpoint's answer, not the role's
+
+    path = pathlib.Path(tmp_path) / "config.yaml"
+    path.write_text(
+        dedent("""
+            agents:
+              presets:
+                plain:
+                  model: ollama_chat/y
+                  prompt_file: "pkg:workspace_app.kb.prompts/system.md"
+              kb_chat:
+                preset: plain
+                reports_usage: true
+        """)
+    )
+    with pytest.raises(ValueError, match="reports_usage"):
+        load_with_provenance(config_path=path)

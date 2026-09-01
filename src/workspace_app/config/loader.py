@@ -650,9 +650,30 @@ def _check_reports_usage_chain(merged: dict[str, Any], *, source: str) -> None:
     and the inconsistency is visible right here, at load, rather than in a
     record weeks later.
     """
-    presets = ((merged.get("agents") or {}).get("presets") or {}) if merged else {}
+    agents = (merged.get("agents") or {}) if merged else {}
+    presets = agents.get("presets") or {}
     if not isinstance(presets, dict):
         return
+
+    # A usage block (agents.kb_chat, agents.<purpose>, workspace_chat entries)
+    # may override most preset fields, but not this one: it is a claim about the
+    # ENDPOINT, and a role has no standing to make it — the same endpoint would
+    # be vouched for in one role and not another. Refused rather than ignored,
+    # because silently dropping a key the operator wrote is the failure this
+    # flag already suffered once.
+    for key, block in agents.items():
+        if key == "presets":
+            continue
+        blocks = block if isinstance(block, list) else [block]
+        for entry in blocks:
+            if isinstance(entry, dict) and "reports_usage" in entry:
+                raise ValueError(
+                    f"{source}: agents.{key} sets reports_usage. It belongs on the preset "
+                    f"(agents.presets.<name>.reports_usage) because it describes what an "
+                    f"ENDPOINT reports, not what a role wants. Declaring it here would vouch "
+                    f"for that endpoint in this role only."
+                )
+
     for name, preset in presets.items():
         if not isinstance(preset, dict) or not preset.get("reports_usage"):
             continue
