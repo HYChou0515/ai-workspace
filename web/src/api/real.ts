@@ -18,27 +18,28 @@ import { API_PREFIX, apiFetch, HttpError, errorCode, errorInfo } from "./http";
 import { parseSseStream } from "./sse";
 import type {
   ActivityEntry,
+  ApiClient,
   AppItem,
   AppManifest,
   AppSummary,
-  ApiClient,
   CellRef,
   CloseStatus,
   Conversation,
+  EnvProvider,
   ExecResult,
-  SearchParams,
   ExecuteCellArgs,
   FileInfo,
   ItemSkillState,
   ItemToolState,
-  ToolCatalogEntry,
-  WorkspaceUsage,
   NotebookRef,
   NotificationItem,
   SearchOptions,
+  SearchParams,
   SearchResult,
   SendMessageArgs,
+  ToolCatalogEntry,
   User,
+  WorkspaceUsage,
 } from "./types";
 
 type SpecstarRevisionInfo = {
@@ -155,6 +156,30 @@ export const realApi: ApiClient = {
       ),
     );
     return r.tools;
+  },
+
+  async getEnvProviders(slug: string, itemId: string) {
+    const r = await json<{ providers: EnvProvider[] }>(
+      await apiFetch(
+        `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}/env-providers`,
+      ),
+    );
+    return r.providers;
+  },
+
+  async resolveEnvProvider(
+    slug: string,
+    itemId: string,
+    providerId: string,
+    values: Record<string, string>,
+  ) {
+    const r = await json<{ env: Record<string, string> }>(
+      await apiFetch(
+        `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}/env-providers/${encodeURIComponent(providerId)}`,
+        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ values }) },
+      ),
+    );
+    return r.env;
   },
 
   async getItemSkills(slug: string, itemId: string) {

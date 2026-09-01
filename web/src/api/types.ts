@@ -295,6 +295,25 @@ export type EnvNeedDecl = {
   required: boolean | null;
 };
 
+/** #750: one thing a provider's dialog asks for. `secret` renders it masked —
+ * a courtesy to the person typing, not a security property. */
+export type EnvProviderInput = {
+  name: string;
+  label: string;
+  secret: boolean;
+};
+
+/** #750: one of this deploy's ways to obtain environment variables from
+ * something a person types. `produces` is the ONLY join with a tool: the panel
+ * matches these names against what the item's tools declared, so a tool never
+ * names — and can never choose — which credential the dialog asks for. */
+export type EnvProvider = {
+  id: string;
+  label: string;
+  produces: string[];
+  inputs: EnvProviderInput[];
+};
+
 /** #380: one available skill's per-item picker state (GET
  * /a/{slug}/items/{id}/skills), the skill sibling of ItemToolState. `source` is
  * where it comes from (`shared` / `profile` / `workspace`); the tri-state toggle
@@ -486,6 +505,19 @@ export interface ApiClient {
   /** GET /a/{slug}/items/{id}/tools — the per-item tool picker state (per-tool
    * tri-state, resolved server-side) the tool picker reads (#322). */
   getItemTools(slug: string, itemId: string): Promise<ItemToolState[]>;
+  /** #750: GET /a/{slug}/items/{id}/env-providers — this deploy's ways of
+   * turning something a person types into environment variables. Empty is the
+   * ordinary case: no buttons, and every variable is still typeable by hand. */
+  getEnvProviders(slug: string, itemId: string): Promise<EnvProvider[]>;
+  /** #750: POST /a/{slug}/items/{id}/env-providers/{providerId} — run one
+   * exchange. `values` carries the credential and is never stored; what comes
+   * back goes into the FORM, and the person still presses Save. */
+  resolveEnvProvider(
+    slug: string,
+    itemId: string,
+    providerId: string,
+    values: Record<string, string>,
+  ): Promise<Record<string, string>>;
   /** GET /a/{slug}/items/{id}/skills — the per-item skills picker state (per-skill
    * source + tri-state + effective), resolved server-side (#380). */
   getItemSkills(slug: string, itemId: string): Promise<ItemSkillState[]>;

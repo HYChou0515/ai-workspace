@@ -14,7 +14,7 @@
  */
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ItemToolState } from "../api/types";
@@ -70,7 +70,11 @@ describe("EnvVarsModal declared fields (#750)", () => {
         onClose={vi.fn()}
         slug="rca"
         itemId="i1"
-        client={{ getItemTools: vi.fn(async () => tools) }}
+        client={{
+          getItemTools: vi.fn(async () => tools),
+          getEnvProviders: vi.fn(async () => []),
+          resolveEnvProvider: vi.fn(),
+        }}
       />,
     );
     return { onSave };
@@ -144,6 +148,122 @@ describe("EnvVarsModal declared fields (#750)", () => {
   it("says a tool did not declare rather than showing it as satisfied", async () => {
     openWith(SAP);
     expect(await screen.findByTestId("env-undeclared")).toHaveTextContent("Legacy Tool");
+  });
+
+  it("offers a login for the variables it can fill, and fills them without saving", async () => {
+    // The join is the variable NAME: SAP Tools asked for SAP_HOST, this deploy
+    // can produce SAP_HOST, so the button appears. The tool never named the
+    // provider — it could not, and that is the point.
+    const onSave = vi.fn();
+    const resolveEnvProvider = vi.fn(async () => ({ SAP_HOST: "sap.corp", SAP_TOKEN: "tok" }));
+    renderWithQuery(
+      <EnvVarsModal
+        envVars={{}}
+        onSave={onSave}
+        onClose={vi.fn()}
+        slug="rca"
+        itemId="i1"
+        client={{
+          getItemTools: vi.fn(async () => SAP),
+          getEnvProviders: vi.fn(async () => [
+            {
+              id: "sap-login",
+              label: "SAP production login",
+              produces: ["SAP_HOST", "SAP_TOKEN"],
+              inputs: [
+                { name: "user", label: "Account", secret: false },
+                { name: "password", label: "Password", secret: true },
+              ],
+            },
+          ]),
+          resolveEnvProvider,
+        }}
+      />,
+    );
+
+    fireEvent.click(await screen.findByTestId("env-provider-sap-login"));
+
+    // The dialog is described by the provider — only it knows what its own
+    // system needs collected.
+    fireEvent.change(screen.getByTestId("env-cred-user"), { target: { value: "alice" } });
+    const secret = screen.getByTestId("env-cred-password") as HTMLInputElement;
+    expect(secret.type).toBe("password");
+    fireEvent.change(secret, { target: { value: "hunter2" } });
+    fireEvent.click(screen.getByTestId("env-cred-submit"));
+
+    // Everything it returned lands in the form, including SAP_TOKEN, which the
+    // declaration never mentioned — filtering to declared names would drop
+    // exactly what an incomplete declaration most needs to keep.
+    await waitFor(() =>
+      expect((screen.getByTestId("env-field-SAP_HOST") as HTMLInputElement).value).toBe("sap.corp"),
+    );
+    expect(box().value).toContain("SAP_TOKEN=tok");
+
+    // And NOTHING was stored. The panel is a draft surface: Import merges into
+    // the box too, and one dialog must not have two save semantics.
+    expect(onSave).not.toHaveBeenCalled();
+    expect(resolveEnvProvider).toHaveBeenCalledWith("rca", "i1", "sap-login", {
+      user: "alice",
+      password: "hunter2",
+    });
+  });
+
+  it("keeps the panel untouched when the exchange fails, and says so", async () => {
+    renderWithQuery(
+      <EnvVarsModal
+        envVars={{ KEEP: "me" }}
+        onSave={vi.fn()}
+        onClose={vi.fn()}
+        slug="rca"
+        itemId="i1"
+        client={{
+          getItemTools: vi.fn(async () => SAP),
+          getEnvProviders: vi.fn(async () => [
+            {
+              id: "sap-login",
+              label: "SAP production login",
+              produces: ["SAP_HOST"],
+              inputs: [{ name: "password", label: "Password", secret: true }],
+            },
+          ]),
+          resolveEnvProvider: vi.fn(async () => {
+            throw new Error("the gateway said no");
+          }),
+        }}
+      />,
+    );
+
+    fireEvent.click(await screen.findByTestId("env-provider-sap-login"));
+    fireEvent.change(screen.getByTestId("env-cred-password"), { target: { value: "wrong" } });
+    fireEvent.click(screen.getByTestId("env-cred-submit"));
+
+    // Told, not silently ignored — a dialog that closes on a bad password looks
+    // exactly like one that worked.
+    expect(await screen.findByTestId("env-cred-error")).toBeInTheDocument();
+    // And what was already typed survives: a failed exchange must not cost
+    // someone the rest of their edits.
+    expect(box().value).toContain("KEEP=me");
+  });
+
+  it("offers no login when this deploy has none", async () => {
+    renderWithQuery(
+      <EnvVarsModal
+        envVars={{}}
+        onSave={vi.fn()}
+        onClose={vi.fn()}
+        slug="rca"
+        itemId="i1"
+        client={{
+          getItemTools: vi.fn(async () => SAP),
+          getEnvProviders: vi.fn(async () => []),
+          resolveEnvProvider: vi.fn(),
+        }}
+      />,
+    );
+    await screen.findByTestId("env-field-SAP_HOST");
+    // No implementations is the absence of the feature, not a broken one: the
+    // field is still there and typing into it still works.
+    expect(screen.queryByTestId("env-provider-sap-login")).not.toBeInTheDocument();
   });
 
   it("leaves Save usable with a required field empty", async () => {

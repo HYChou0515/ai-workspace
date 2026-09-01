@@ -1262,6 +1262,11 @@ export const messages = {
     "zh-TW": "{tools} 沒有列出它需要哪些變數,不代表它不需要。",
     en: "{tools} did not list what it needs — which is not the same as needing nothing.",
   },
+  // Says what the button will FILL, beside it. Two systems can look alike,
+  // and someone about to type a production password has to see which one
+  // this is before typing, not after.
+  "env.providerFills": { "zh-TW": "會填入 {names}", en: "Fills {names}" },
+  "env.providerRun": { "zh-TW": "取得並填入", en: "Fetch and fill" },
   "env.import": { "zh-TW": "載入 .env", en: "Import .env" },
   "env.export": { "zh-TW": "匯出 .env", en: "Export .env" },
   "env.save": { "zh-TW": "儲存", en: "Save" },

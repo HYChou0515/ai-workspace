@@ -60,7 +60,7 @@ export function EnvVarsModal({
    * feature is a convenience over an editor that was already complete. */
   slug?: string;
   itemId?: string;
-  client?: Pick<ApiClient, "getItemTools">;
+  client?: Pick<ApiClient, "getItemTools" | "getEnvProviders" | "resolveEnvProvider">;
 }) {
   const t = useT();
   const [text, setText] = useState(() => toEnvText(envVars));
@@ -88,6 +88,53 @@ export function EnvVarsModal({
   // value, and per-tab copies would let it read differently depending on where
   // you looked. Falls back to the first group so a tab for a tool switched off
   // between renders cannot leave the panel showing nothing.
+  // What this deploy can obtain from something a person types. Empty is the
+  // ordinary case, and the panel is complete without it — the button only ever
+  // saves typing.
+  const providersQ = useQuery({
+    queryKey: qk.envProviders(slug ?? "", itemId ?? ""),
+    queryFn: () => client.getEnvProviders(slug!, itemId!),
+    enabled: Boolean(slug && itemId),
+  });
+
+  // A provider is offered when it produces a name some tool asked for. That
+  // name is the ONLY join: the tool never named the provider, so a third-party
+  // author cannot choose which credential this dialog asks for.
+  const declaredNames = new Set(view.groups.flatMap((g) => g.fields.map((f) => f.name)));
+  const offered = (providersQ.data ?? []).filter((p) =>
+    p.produces.some((name) => declaredNames.has(name)),
+  );
+
+  const [dialog, setDialog] = useState<string | null>(null);
+  const [creds, setCreds] = useState<Record<string, string>>({});
+  const [credError, setCredError] = useState<string | null>(null);
+  const [exchanging, setExchanging] = useState(false);
+  const openProvider = offered.find((p) => p.id === dialog);
+
+  /** Run the exchange and put the result in the FORM. Nothing is stored: the
+   * person still presses Save, the same as after an Import. */
+  const runExchange = async () => {
+    if (!openProvider) return;
+    setExchanging(true);
+    setCredError(null);
+    try {
+      const env = await client.resolveEnvProvider(slug!, itemId!, openProvider.id, creds);
+      // Merged, not replaced, and unfiltered: a provider may legitimately
+      // return a name no tool declared, and dropping it would discard exactly
+      // what an incomplete declaration most needs to keep.
+      setText(toEnvText({ ...parseEnvText(text), ...env }));
+      setDialog(null);
+      setCreds({});
+    } catch (err) {
+      // Said out loud. A dialog that just closes on a bad password looks
+      // exactly like one that worked, and the panel keeps whatever was already
+      // typed — a failed exchange must not cost someone the rest of their edits.
+      setCredError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setExchanging(false);
+    }
+  };
+
   const [tab, setTab] = useState<string | null>(null);
   const shownGroup =
     view.groups.find((g) => g.key === tab) ?? view.groups[0] ?? { key: "", label: "", fields: [] };
@@ -208,6 +255,91 @@ export function EnvVarsModal({
             </label>
           ))}
         </section>
+      )}
+
+      {offered.map((provider) => (
+        <div key={provider.id}>
+          <button
+            type="button"
+            className="btn"
+            data-variant="secondary"
+            data-size="sm"
+            data-testid={`env-provider-${provider.id}`}
+            onClick={() => {
+              setDialog(provider.id);
+              setCreds({});
+              setCredError(null);
+            }}
+          >
+            {provider.label}
+          </button>
+          {/* Which variables it will fill, next to the button. Two systems can
+              look alike; a person about to type a production password needs to
+              see what they are about to do BEFORE typing it, not after. */}
+          <span style={{ marginLeft: 8, fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
+            {t("env.providerFills", { names: provider.produces.join(", ") })}
+          </span>
+        </div>
+      ))}
+
+      {openProvider && (
+        <div data-testid="env-cred-dialog" style={{ display: "grid", gap: 6 }}>
+          {openProvider.inputs.map((field) => (
+            <label key={field.name} style={{ display: "block", fontSize: pxToRem(12) }}>
+              {field.label}
+              <input
+                data-testid={`env-cred-${field.name}`}
+                type={field.secret ? "password" : "text"}
+                value={creds[field.name] ?? ""}
+                onChange={(e) => setCreds({ ...creds, [field.name]: e.target.value })}
+                style={{
+                  width: "100%",
+                  boxSizing: "border-box",
+                  padding: "6px 8px",
+                  border: "1px solid var(--paper-3)",
+                  borderRadius: 6,
+                  background: "var(--paper)",
+                  color: "var(--text-paper)",
+                }}
+              />
+            </label>
+          ))}
+          {credError && (
+            <p
+              data-testid="env-cred-error"
+              style={{ margin: 0, fontSize: pxToRem(11), color: "var(--err)" }}
+            >
+              {credError}
+            </p>
+          )}
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              type="button"
+              className="btn"
+              data-variant="primary"
+              data-size="sm"
+              data-testid="env-cred-submit"
+              disabled={exchanging}
+              onClick={() => void runExchange()}
+            >
+              {t("env.providerRun")}
+            </button>
+            <button
+              type="button"
+              className="btn"
+              data-variant="secondary"
+              data-size="sm"
+              data-testid="env-cred-cancel"
+              onClick={() => {
+                setDialog(null);
+                setCreds({});
+                setCredError(null);
+              }}
+            >
+              {t("env.cancel")}
+            </button>
+          </div>
+        </div>
       )}
 
       {view.undeclared.length > 0 && (

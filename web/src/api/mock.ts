@@ -666,6 +666,22 @@ export const mockApi: ApiClient = {
     ];
   },
 
+  // #750. A deploy with no credential->variable implementations is the
+  // ordinary case, and it is what the mock models: no buttons, every
+  // variable still typeable by hand.
+  async getEnvProviders(_slug: string, _itemId: string) {
+    return [];
+  },
+
+  async resolveEnvProvider(
+    _slug: string,
+    _itemId: string,
+    providerId: string,
+    _values: Record<string, string>,
+  ): Promise<Record<string, string>> {
+    throw new Error(`no env provider in the mock backend: ${providerId}`);
+  },
+
   async getItemSkills(_slug: string, _itemId: string) {
     await delay(10);
     return [
