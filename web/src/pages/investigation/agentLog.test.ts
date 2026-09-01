@@ -821,3 +821,87 @@ describe("a new turn clears the previous turn's error (#721)", () => {
     expect(rehydrated.entries.some((e) => e.kind === "banner" && e.text.includes("30"))).toBe(true);
   });
 });
+
+
+describe("compaction summaries (#739)", () => {
+  const msg = (role: string, content: string): Message =>
+    ({ role, content, created_at: 1 }) as unknown as Message;
+
+  it("renders a summary as its own entry, not as somebody's chat bubble", () => {
+    // Without a branch of its own an unknown role falls through to `message`,
+    // so the précis would appear as a bubble attributed to nobody — read as
+    // something the assistant said, when it is a marker about the thread.
+    const log = logFromMessages([
+      msg("user", "很久以前"),
+      msg("assistant", "回答"),
+      msg("summary", "先前:要修 X,試過 Y。"),
+      msg("user", "接下來"),
+    ]);
+    const summary = log.entries.find((e) => e.kind === "summary");
+    expect(summary).toBeTruthy();
+    expect(summary && "text" in summary ? summary.text : "").toContain("要修 X");
+  });
+
+  it("counts how many messages the summary stands in for", () => {
+    // The count is DERIVED from position, not stored: the messages it replaces
+    // are still right there above it. Storing a count would be a second source
+    // of truth that a later edit could make a lie.
+    const log = logFromMessages([
+      msg("user", "一"),
+      msg("assistant", "二"),
+      msg("user", "三"),
+      msg("summary", "摘要"),
+      msg("user", "四"),
+    ]);
+    const summary = log.entries.find((e) => e.kind === "summary");
+    expect(summary && "replaced" in summary ? summary.replaced : 0).toBe(3);
+  });
+
+  it("counts only back to the previous summary", () => {
+    // A second compaction covers what happened since the first, so its card
+    // must not claim credit for the span the first one already replaced.
+    const log = logFromMessages([
+      msg("user", "一"),
+      msg("summary", "第一份摘要"),
+      msg("user", "二"),
+      msg("assistant", "三"),
+      msg("summary", "第二份摘要"),
+    ]);
+    const second = log.entries.filter((e) => e.kind === "summary").at(-1);
+    expect(second && "replaced" in second ? second.replaced : 0).toBe(2);
+  });
+
+  it("keeps the originals in the log above it", () => {
+    // Compaction is not deletion — that is the whole design. The user must be
+    // able to scroll back through everything the model can no longer see.
+    const log = logFromMessages([
+      msg("user", "很久以前"),
+      msg("summary", "摘要"),
+      msg("user", "接下來"),
+    ]);
+    const texts = log.entries.map((e) =>
+      e.kind === "message" ? e.message.content : e.kind === "summary" ? e.text : "",
+    );
+    expect(texts).toContain("很久以前");
+  });
+});
+
+
+describe("the compacting pause (#739)", () => {
+  it("records that the turn is summarising, without putting it in the transcript", () => {
+    // The compacting turn spends a whole extra round trip before it says
+    // anything. Without a live state the chat sits blank for it — the one pause
+    // a user has no way to anticipate. Ephemeral, like the restore progress:
+    // the durable record is the summary message the turn writes.
+    const log = reduceAgent(EMPTY_LOG, { type: "compacting", replaced: 42 } as AgentEvent);
+    expect(log.compacting).toEqual({ replaced: 42 });
+    expect(log.entries).toHaveLength(0);
+  });
+
+  it("clears once the turn actually says something", () => {
+    // Otherwise the chat claims to be summarising for the rest of the turn.
+    const busy = reduceAgent(EMPTY_LOG, { type: "compacting", replaced: 3 } as AgentEvent);
+    const spoke = reduceAgent(busy, { type: "message_delta", text: "好" } as AgentEvent);
+    expect(spoke.compacting).toBeNull();
+  });
+});

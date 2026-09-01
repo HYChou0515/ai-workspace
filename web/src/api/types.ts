@@ -32,6 +32,9 @@ export type MessageRole =
   | "goal"
   // #624: `notice` = 系統告知(例如較早訊息已超出模型可讀範圍)— FE-only。
   | "notice"
+  // #739: `summary` = 這一則取代了它上面那一段,送給模型的是它;原文並未刪除,
+  // 使用者往上捲仍然看得到。與 `notice` 相反,這一則**會**進入模型的 context。
+  | "summary"
   | "error";
 
 export type Message = {

@@ -113,6 +113,19 @@ export function TurnStatus({
     );
   }
 
+  // #739: the thread outgrew its window, so this turn is summarising the part
+  // that no longer fits before it answers. A whole extra round trip, and the one
+  // pause a user cannot anticipate — so it says so rather than sitting blank.
+  // Above the restore branch because compaction happens first, before any tool.
+  if (log.compacting != null) {
+    return (
+      <div className={className} style={box} data-testid="turn-compacting">
+        整理較早的對話…
+        {elapsedSec >= 1 && <span style={{ opacity: 0.7 }}> · {elapsedSec}s</span>}
+      </div>
+    );
+  }
+
   // #492 P11: a cold sandbox is being restored from its durable snapshot before
   // the turn can run — show "還原工作區… N/M" instead of a blank running card.
   // Takes precedence over the tool-running metrics line below because the restore
