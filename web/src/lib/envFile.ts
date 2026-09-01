@@ -58,3 +58,43 @@ export function mergeEnv(
 ): Record<string, string> {
   return { ...current, ...imported };
 }
+
+/** Set one variable in `.env`-shaped text, keeping everything else verbatim.
+ *
+ * The obvious implementation — `toEnvText({ ...parseEnvText(text), [name]: v })`
+ * — is lossy by construction: a trip through the map keeps only what the map
+ * can hold, so comments, blank lines and any line still being typed vanish.
+ * That is a fair trade when somebody deliberately Imports a file over their
+ * work. It is not one on the path a FORM FIELD takes (#750), where it would
+ * mean touching one input silently deletes the notes above it, on a keystroke,
+ * while they are looking at it.
+ *
+ * So the text is edited in place. The LAST line assigning `name` is rewritten —
+ * last because that is the one `parseEnvText` keeps, and rewriting any other
+ * would leave the panel showing a value the stored set disagrees with. A name
+ * not present yet is appended. Everything else comes back exactly as it went in.
+ *
+ * Line recognition mirrors `parseEnvText` deliberately: same comment rule, same
+ * `export ` prefix, same "first `=` wins". If the two ever disagree, this writes
+ * to a line the parser does not read, and the panel and the stored set drift
+ * apart with nothing on screen to show it. */
+export function setEnvValue(text: string, name: string, value: string): string {
+  const assigns = (raw: string): boolean => {
+    const trimmed = raw.replace(/\r$/, "").trim();
+    if (!trimmed || trimmed.startsWith("#")) return false;
+    const body = trimmed.startsWith("export ") ? trimmed.slice("export ".length) : trimmed;
+    const eq = body.indexOf("=");
+    return eq > 0 && body.slice(0, eq).trim() === name;
+  };
+  const lines = text.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (assigns(lines[i])) {
+      lines[i] = `${name}=${value}`;
+      return lines.join("\n");
+    }
+  }
+  // Appended, with the existing trailing newline kept where it was so the first
+  // variable added does not read differently from the ones already there.
+  const body = text === "" || text.endsWith("\n") ? text : `${text}\n`;
+  return `${body}${name}=${value}\n`;
+}

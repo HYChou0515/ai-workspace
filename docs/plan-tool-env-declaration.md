@@ -214,7 +214,12 @@ per-tool scoping of `user_env`, which decision "absent is not empty" forecloses
       still dirty afterwards and nothing is stored until Save.
 - [ ] Credentials appear in no DB row, no SSE frame, no log line (probe each,
       each probe proven by a mutant first).
-- [ ] With the knob unset, OpenAPI and the panel are unchanged from master.
+- [x] With no providers configured, the panel offers no buttons and every
+      variable is still typeable by hand. **OpenAPI is NOT unchanged** — the two
+      provider routes register unconditionally, so they appear whether or not a
+      deploy configures an implementation. The original wording was copied from
+      #714, where the seam genuinely added no route, and was false here from the
+      moment it was written.
 - [ ] **Driven in a real browser by hand**: fill a form, press the login button,
       cancel it, press it again, save, reopen. A screenshot per step.
 

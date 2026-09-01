@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { mergeEnv, parseEnvText, toEnvText } from "./envFile";
+import { mergeEnv, parseEnvText, setEnvValue, toEnvText } from "./envFile";
 
 describe("parseEnvText", () => {
   it("reads one variable per line", () => {
@@ -91,5 +91,51 @@ describe("mergeEnv", () => {
 
   it("importing nothing changes nothing", () => {
     expect(mergeEnv({ A: "1" }, {})).toEqual({ A: "1" });
+  });
+});
+
+describe("setEnvValue", () => {
+  it("keeps the comments and blank lines around what it changed", () => {
+    // The reason this exists rather than a round trip through the map (#750).
+    // A form field writes through here on every keystroke, and a round trip
+    // keeps only what the map can hold — so typing into one field would
+    // silently delete the notes someone wrote above it.
+    const typed = "# prod keys\nAPI_KEY=old\n\n# ask ops before changing\nREGION=tw\n";
+    expect(setEnvValue(typed, "API_KEY", "new")).toBe(
+      "# prod keys\nAPI_KEY=new\n\n# ask ops before changing\nREGION=tw\n",
+    );
+  });
+
+  it("keeps a line that is still being typed", () => {
+    // A name with no `=` yet is what half-typed looks like. It is not
+    // something the map can carry, so a round trip drops it — mid-sentence,
+    // while the person is still looking at it.
+    expect(setEnvValue("API_KEY=1\nHALF_TYPED", "REGION", "tw")).toBe(
+      "API_KEY=1\nHALF_TYPED\nREGION=tw\n",
+    );
+  });
+
+  it("appends a name that is not there yet", () => {
+    expect(setEnvValue("A=1\n", "B", "2")).toBe("A=1\nB=2\n");
+  });
+
+  it("starts a file that was empty", () => {
+    expect(setEnvValue("", "A", "1")).toBe("A=1\n");
+  });
+
+  it("rewrites the LAST assignment, which is the one that counts", () => {
+    // dotenv keeps the last of a repeated name, and so does `parseEnvText`.
+    // Rewriting the first would leave the panel showing one value while the
+    // stored set took the other.
+    expect(setEnvValue("A=1\nA=2\n", "A", "3")).toBe("A=1\nA=3\n");
+    expect(parseEnvText(setEnvValue("A=1\nA=2\n", "A", "3")).A).toBe("3");
+  });
+
+  it("does not mistake a commented-out name for the real one", () => {
+    expect(setEnvValue("#A=old\nA=live\n", "A", "new")).toBe("#A=old\nA=new\n");
+  });
+
+  it("matches a name written with `export`, the way the parser does", () => {
+    expect(setEnvValue("export A=1\n", "A", "2")).toBe("A=2\n");
   });
 });

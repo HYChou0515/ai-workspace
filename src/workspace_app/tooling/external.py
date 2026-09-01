@@ -23,7 +23,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
-from .registry import CommandInfo, PackageInfo
+from .registry import CommandInfo, EnvNeed, PackageInfo
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +89,23 @@ def _package(name: str, described: dict[str, Any]) -> PackageInfo:
                 params_json_schema=c["params_json_schema"],
             )
             for c in described["commands"]
+        ),
+        # #750. Absent stays absent: an artifact published before the
+        # declaration existed says nothing, and turning that into "needs
+        # nothing" here would be the same lie as inside a bundle — except
+        # applied to every third-party tool at once, which is the population
+        # the feature was written for.
+        env_needs=(
+            tuple(
+                EnvNeed(
+                    name=e["name"],
+                    description=e.get("description", ""),
+                    required=e.get("required"),
+                )
+                for e in described["env"]
+            )
+            if isinstance(described.get("env"), list)
+            else None
         ),
     )
 

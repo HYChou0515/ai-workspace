@@ -1265,6 +1265,21 @@ export const messages = {
   // Says what the button will FILL, beside it. Two systems can look alike,
   // and someone about to type a production password has to see which one
   // this is before typing, not after.
+  // The answer the panel exists to give. Names the variables rather than
+  // counting them: a count sends someone hunting for which, and the names are
+  // what they will type.
+  "env.stillMissing": {
+    "zh-TW": "還沒填:{names}",
+    en: "Not filled yet: {names}",
+  },
+  // Deliberately NOT "you are all set". What is true is narrower: every
+  // variable a tool MARKED required has a value. A tool that declared nothing,
+  // or an author who left something off the list, is invisible to this
+  // sentence — so it claims only what it can see.
+  "env.nothingMissing": {
+    "zh-TW": "有標示必填的變數都填好了。",
+    en: "Everything marked required is set.",
+  },
   "env.providerFills": { "zh-TW": "會填入 {names}", en: "Fills {names}" },
   "env.providerRun": { "zh-TW": "取得並填入", en: "Fetch and fill" },
   "env.import": { "zh-TW": "載入 .env", en: "Import .env" },

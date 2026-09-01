@@ -47,7 +47,7 @@ sandbox。
 | `POST /sandboxes/{rid}/mkdir` | `{path}` | `204` | mkdir |
 | `DELETE /sandboxes/{rid}/dir?path=` | — | `204` | rmdir |
 | `POST /sandboxes/{rid}/rename` | `{src, dst}` | `204` | rename |
-| `POST /tools/resolve` | `{tools: {名稱: manifest 網址}}` | `200 {tools: {名稱: {sha, version, stale, commands}}, refused: {名稱: 原因}}` | 第三方工具:抓→驗→裝,並回傳要掛的 sha 與要給模型的 schema(#674) |
+| `POST /tools/resolve` | `{tools: {名稱: manifest 網址}}` | `200 {tools: {名稱: {sha, version, stale, commands, author?, env?}}, refused: {名稱: 原因}}` | 第三方工具:抓→驗→裝,並回傳要掛的 sha、要給模型的 schema(#674)、發布者(#724)與它說自己需要的環境變數(#750) |
 
 **`GET /sandboxes` —— app 唯一能問「現在到底有什麼」的地方**:回
 `{sandboxes: [{remote_id, item_id, pod_url}]}`。`item_id` 是 app 唯一認得的名字
@@ -93,6 +93,16 @@ client 因此照舊可用。
 回應**刻意不是全有全無**:每個工具各自成功或被拒(`refused` 逐項給原因),
 app 收到後把失敗的那支拿掉、turn 照跑。若整個請求 500,一個作者過期的 artifact
 就會**連帶讓同一個 workspace 裡其他所有工具消失**——那是營運上最糟的失敗形狀。
+
+**`author` 與 `env` 是選填的,而且「沒有這個鍵」和「空的」意思不同。** app **永遠不會自己讀
+manifest**(那是這條路存在的理由),所以這個回應丟掉什麼,app 就永遠拿不到什麼。
+
+- `author`(#724):發布者字串,沒有就是這份 bundle 建於該欄位存在之前。
+- `env`(#750):作者宣告這支工具需要哪些環境變數,`[{name, description, required}]`。
+  **鍵不存在 = 作者沒講**(#750 之前發布的 artifact 都是這樣);**空陣列 = 作者看過而且不需要**。
+  兩者必須都能過線:平台把前者顯示成「這個工具沒有列出它需要什麼」,把後者顯示成「不需要」,
+  而使用者打開那個面板正是為了知道自己還缺什麼——把沉默講成「不需要」是它最不該說的一句話。
+  `required` 同樣是三態,`null` 代表作者沒標,既不是必填也不是選填。
 
 回應同時帶 `sha`(sandbox 要掛哪一份)與 `commands`(要告訴模型這支工具吃什麼參數)。
 **兩者出自同一次 resolve**,所以 app 眼中的介面與 sandbox 裡實際跑的 bundle 不可能對不上;

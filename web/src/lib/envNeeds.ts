@@ -38,7 +38,13 @@ export type EnvNeedsView = {
   /** Names still to fill, counting ONLY variables an author explicitly marked
    * required. An unmarked variable is not "optional" — it is unstated — and
    * treating unstated as required makes a panel that always complains, which
-   * is a panel nobody reads. */
+   * is a panel nobody reads.
+   *
+   * Rendered as the panel's summary line, which is the whole reason this
+   * feature exists: "I do not know what I am still missing". When it is empty
+   * the panel says every variable MARKED required is set — deliberately not
+   * "you are ready", because a tool that declared nothing, or an author who
+   * left a name off, is invisible to this list. */
   missingRequired: string[];
 };
 

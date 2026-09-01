@@ -1,12 +1,12 @@
 /**
  * The per-item environment variables panel.
  *
- * ONE text box holding the whole set as `.env` text, not a row per variable.
- * The thing people actually do with these is paste a block in from somewhere
- * else — a colleague, a password manager, another project's `.env` — and a row
- * editor turns that into one Add and two clicks per line.
+ * A text box for the whole set as `.env` text — the thing people actually do
+ * with these is paste a block in from somewhere else — plus, since #750, a
+ * field for each variable the item's tools said they want.
  *
- * Storage is unchanged (`dict[str, str]`); the text is just how it is edited.
+ * Storage is unchanged (`dict[str, str]`) and there is only ever one copy of a
+ * value: the fields edit the box's text, the box is what Save parses.
  *
  * Values are shown in plain text rather than masked: anyone who can talk to the
  * agent on this item can have it read the delivery file anyway, so masking here
@@ -143,6 +143,43 @@ describe("EnvVarsModal declared fields (#750)", () => {
     );
     // And it says who else is relying on it, so clearing it is an informed act.
     expect(screen.getByTestId("env-shared-CORP_PROXY")).toHaveTextContent("SAP Tools");
+  });
+
+  it("typing in a field does not eat what is written in the box", async () => {
+    // Asserted HERE, not only over `setEnvValue`, because this is where a
+    // person meets it: they annotate the box, reach for a field, and the notes
+    // must still be there. A unit test on the helper cannot see the modal
+    // choosing to rebuild the text some other way.
+    openWith(SAP);
+    await screen.findByTestId("env-field-SAP_HOST");
+    type("# ask ops first\nEXISTING=1\n\nHALF_TYPED");
+
+    fireEvent.change(screen.getByTestId("env-field-SAP_HOST"), { target: { value: "sap.corp" } });
+
+    expect(box().value).toContain("# ask ops first");
+    expect(box().value).toContain("HALF_TYPED");
+    expect(box().value).toContain("SAP_HOST=sap.corp");
+  });
+
+  it("says what is still missing, and stops saying it once it is filled", async () => {
+    // The whole reason this feature exists: "I do not know what I am still
+    // missing". Deriving the answer and not putting it on screen would leave
+    // the panel exactly as unhelpful as before, with more code behind it.
+    openWith(SAP);
+    const summary = await screen.findByTestId("env-missing");
+    expect(summary).toHaveTextContent("SAP_HOST");
+    // SAP_PROXY is explicitly optional, so it is not something you are missing.
+    expect(summary).not.toHaveTextContent("SAP_PROXY");
+
+    fireEvent.change(screen.getByTestId("env-field-SAP_HOST"), { target: { value: "sap.corp" } });
+
+    // And it must be able to say the good news, or it only ever nags.
+    // Asserted by what it stops naming rather than by the wording: the copy is
+    // localized, and CI runs this under a different locale than a laptop does,
+    // so matching a phrase would pass here and fail there for no real reason.
+    await waitFor(() =>
+      expect(screen.getByTestId("env-missing")).not.toHaveTextContent("SAP_HOST"),
+    );
   });
 
   it("says a tool did not declare rather than showing it as satisfied", async () => {

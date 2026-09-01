@@ -10,12 +10,23 @@
  * it. Before that, every Participant was offered this panel and answered 403 by
  * a request no one was reading.
  *
- * ONE text box holding the whole set as `.env` text, not a row per variable.
- * What people actually do with these is paste a block in from somewhere else —
- * a colleague, a password manager, another project's `.env` — and a row editor
- * turns that into one Add plus two clicks per line. It also makes the format
- * the same one they already have on their disk, so Import is a convenience
- * rather than the only way in.
+ * A text box holding the whole set as `.env` text, and — for the variables the
+ * item's own tools DECLARED (#750) — a field apiece above it. The box came
+ * first and stays first for a reason: what people actually do with these is
+ * paste a block in from somewhere else (a colleague, a password manager,
+ * another project's `.env`), and a pure row editor turns that into one Add plus
+ * two clicks per line. It also makes the format the same one they already have
+ * on their disk, so Import is a convenience rather than the only way in.
+ *
+ * The fields do not replace that; they answer a different question. The box is
+ * how you enter values you already have. The fields are how you find out WHICH
+ * values this workspace's tools are waiting for — which, before #750, nothing
+ * anywhere could tell you.
+ *
+ * Both edit ONE value. The fields read and write the box's text (through
+ * `setEnvValue`, in place, so a keystroke in a field cannot cost the reader the
+ * comments they wrote), and Save stores what the box parses to. Nothing here
+ * holds a second copy of anything.
  *
  * Storage is unchanged: the text is parsed into `dict[str, str]` on save
  * (`lib/envFile.ts`). Two consequences worth knowing rather than hiding:
@@ -38,7 +49,7 @@ import { useRef, useState } from "react";
 import { api as defaultApi } from "../api";
 import { qk } from "../api/queryKeys";
 import type { ApiClient } from "../api/types";
-import { mergeEnv, parseEnvText, toEnvText } from "../lib/envFile";
+import { mergeEnv, parseEnvText, setEnvValue, toEnvText } from "../lib/envFile";
 import { deriveEnvNeeds } from "../lib/envNeeds";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
@@ -80,8 +91,10 @@ export function EnvVarsModal({
   const values = parseEnvText(text);
   const view = deriveEnvNeeds(toolsQ.data ?? [], values);
 
-  const setVar = (name: string, value: string) =>
-    setText(toEnvText({ ...values, [name]: value }));
+  // In place, not a round trip through the map: this runs on every keystroke
+  // in a declared field, and rebuilding the text from the parsed map would
+  // silently delete the reader's comments and any line still being typed.
+  const setVar = (name: string, value: string) => setText(setEnvValue(text, name, value));
 
   // Which tool's variables are on screen. A FILTER over one set of values, not
   // a form per tool: a variable two tools want is one stored name with one
@@ -121,8 +134,12 @@ export function EnvVarsModal({
       const env = await client.resolveEnvProvider(slug!, itemId!, openProvider.id, creds);
       // Merged, not replaced, and unfiltered: a provider may legitimately
       // return a name no tool declared, and dropping it would discard exactly
-      // what an incomplete declaration most needs to keep.
-      setText(toEnvText({ ...parseEnvText(text), ...env }));
+      // what an incomplete declaration most needs to keep. Applied name by name
+      // through the same in-place writer the fields use, so a login does not
+      // cost someone the comments they had written either.
+      setText((prev) =>
+        Object.entries(env).reduce((acc, [name, v]) => setEnvValue(acc, name, v), prev),
+      );
       setDialog(null);
       setCreds({});
     } catch (err) {
@@ -175,6 +192,17 @@ export function EnvVarsModal({
       <p style={{ margin: 0, fontSize: pxToRem(12), color: "var(--text-paper-d)", lineHeight: 1.5 }}>
         {t("env.desc")}
       </p>
+
+      {(view.groups.length > 0 || view.undeclared.length > 0) && (
+        <p
+          data-testid="env-missing"
+          style={{ margin: 0, fontSize: pxToRem(12), color: "var(--text-paper-d)" }}
+        >
+          {view.missingRequired.length > 0
+            ? t("env.stillMissing", { names: view.missingRequired.join(", ") })
+            : t("env.nothingMissing")}
+        </p>
+      )}
 
       {view.groups.length > 1 && (
         <div role="tablist" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
