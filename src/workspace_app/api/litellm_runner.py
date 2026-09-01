@@ -14,7 +14,7 @@ import json
 import logging
 import os
 import time
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -58,6 +58,7 @@ from ..context_budget import (
     parse_limit_from_error,
 )
 from ..context_probe import probe_context_limit
+from ..failover.rate_limit import is_rate_limited, rate_limit_wait_s
 from ..resources import AgentConfig
 from ..tokens import ITokenService, LlmCredential
 from ..tooling.registry import PackageInfo, build_function_tools
@@ -69,6 +70,7 @@ from .events import (
     FailoverSwitch,
     MaxTurnsExceeded,
     MessageDelta,
+    RateLimited,
     RestoreProgress,
     RunDone,
     RunError,
@@ -958,6 +960,8 @@ class LitellmAgentRunner:
         cooldown_registry: CooldownRegistry | None = None,
         token_service: ITokenService | None = None,
         stream_deadlines: tuple[float, float] | None = None,
+        sleep: Callable[[float], Awaitable[None]] | None = None,
+        rate_limit_budget_s: float = 120.0,
     ) -> None:
         # #94: no runner-level default config. Every turn's config arrives on
         # ctx.agent_config (resolved per-item via the AppCatalog / KB / wiki
@@ -997,6 +1001,17 @@ class LitellmAgentRunner:
         # at the wiring site. The failover path carries its own bounds. None = no
         # bound (what every deploy without `fallbacks:` used to get).
         self._stream_deadlines = stream_deadlines
+        # How the turn waits out a rate limit. `asyncio.sleep`, never
+        # `time.sleep` — this runs on the loop that serves every other request,
+        # and parking it here would stall the whole pod for the whole window.
+        # Injectable so the suite never actually waits.
+        self._sleep: Callable[[float], Awaitable[None]] = sleep or asyncio.sleep
+        # Total time one turn may spend waiting out rate limits before it gives
+        # up and says so. A COUNT would be the wrong bound — three holds mean
+        # 3s against one provider and 3 minutes against another — and without
+        # any bound a throttled endpoint parks the turn forever. Matches the
+        # chain-level `failover.total_deadline_s` default.
+        self._rate_limit_budget_s = rate_limit_budget_s
 
     async def _credential_resolver(
         self, ctx: AgentToolContext
@@ -1052,6 +1067,10 @@ class LitellmAgentRunner:
             return
         feedback: str | None = None
         attempt = 0
+        # Rate limits are held out separately from `attempt` — see the branch in
+        # the handler below for why the two budgets must not be one.
+        rate_limited = 0
+        waited_s = 0.0
         while True:
             # Tracks whether anything user-visible has streamed this attempt.
             # If yes, a restart on failure would clobber it (the SDK can't
@@ -1086,6 +1105,48 @@ class LitellmAgentRunner:
                 yield RunDone()
                 return
             except Exception as exc:  # noqa: BLE001 — every other failure becomes a hint or final error
+                if is_rate_limited(exc) and not progress_made:
+                    # The endpoint is healthy and told us to slow down, so this is
+                    # the one failure the loop must WAIT out rather than re-send.
+                    # A single-endpoint deploy has no chain to absorb it — this is
+                    # the only guard it gets.
+                    #
+                    # It is charged to its OWN budget, not `attempt`: `max_retries`
+                    # exists for a small model garbling its tool call (#76), a
+                    # different failure on a different timescale, and spending it
+                    # here gives up on a limit that would have cleared. The bound
+                    # is total time held rather than a count, because that is what
+                    # the caller actually cares about — and `progress_made` still
+                    # blocks the retry above, since a stream already seen cannot be
+                    # restarted (#26).
+                    held = rate_limit_wait_s(exc, attempt=rate_limited + 1)
+                    if waited_s + held <= self._rate_limit_budget_s:
+                        rate_limited += 1
+                        waited_s += held
+                        _LOGGER.warning(
+                            "litellm_runner: rate-limited (hold %d) — waiting %.1fs "
+                            "before retrying the same endpoint (investigation=%s)",
+                            rate_limited,
+                            held,
+                            ctx.investigation_id,
+                        )
+                        yield RateLimited(seconds=held)
+                        await self._sleep(held)
+                        continue
+                    _LOGGER.warning(
+                        "litellm_runner: still rate-limited after %.1fs — giving up "
+                        "(investigation=%s)",
+                        waited_s,
+                        ctx.investigation_id,
+                    )
+                    yield RunError(
+                        message=(
+                            "這一輪送不出去:模型服務持續回報請求過於頻繁,"
+                            f"已等待約 {int(waited_s)} 秒仍未恢復。請稍後再試一次。"
+                        )
+                    )
+                    yield RunDone()
+                    return
                 attempt += 1
                 # #624: an over-long request is the one failure with a productive
                 # answer — send less. Repeating it unchanged cannot work, and

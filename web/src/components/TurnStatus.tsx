@@ -99,6 +99,20 @@ export function TurnStatus({
       </button>
     ) : null;
 
+  // The model endpoint asked us to slow down and the turn is holding before it
+  // retries. Waiting is the only cure for a 429, so this silence is deliberate
+  // and can run for a minute — without a line saying so it reads as a hang.
+  // Takes precedence over the metrics line for the same reason the restore
+  // does: what the user needs to know is why nothing is happening.
+  if (log.rateLimited != null) {
+    return (
+      <div className={className} style={box}>
+        請求過於頻繁,{Math.ceil(log.rateLimited.seconds)} 秒後自動重試…
+        {elapsedSec >= 1 && <span style={{ opacity: 0.7 }}> · {elapsedSec}s</span>}
+      </div>
+    );
+  }
+
   // #492 P11: a cold sandbox is being restored from its durable snapshot before
   // the turn can run — show "還原工作區… N/M" instead of a blank running card.
   // Takes precedence over the tool-running metrics line below because the restore

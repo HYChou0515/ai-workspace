@@ -25,9 +25,10 @@ import time
 from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING
 
-from tenacity import Retrying, retry_if_exception, stop_after_attempt, wait_fixed
+from tenacity import Retrying, retry_if_exception, stop_after_attempt
 
 from .core import CallProvider
+from .rate_limit import is_rate_limited, rate_limit_wait_s
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,20 @@ def is_transient(exc: BaseException) -> bool:
     return type(exc).__name__ in _TRANSIENT_NAMES
 
 
+def _wait_for(gap: float) -> Callable[[RetryCallState], float]:
+    """How long before the next same-endpoint attempt: ``gap`` for an ordinary
+    transient, the duration the provider stated when it rate-limited us, and a
+    doubling backoff when it rate-limited us without saying."""
+
+    def wait(state: RetryCallState) -> float:
+        exc = state.outcome.exception() if state.outcome is not None else None
+        if exc is not None and is_rate_limited(exc):
+            return rate_limit_wait_s(exc, attempt=state.attempt_number)
+        return gap
+
+    return wait
+
+
 def try_provider[R](
     call: Callable[[], R],
     *,
@@ -71,10 +86,14 @@ def try_provider[R](
     sleep: Callable[[float], None] = time.sleep,
 ) -> R:
     """Call ``call`` up to ``m`` times, ``gap`` seconds apart, retrying ONLY a
-    transient failure. A permanent error (or the m-th transient) propagates."""
+    transient failure. A permanent error (or the m-th transient) propagates.
+
+    A rate limit is the exception to ``gap``: the provider states how long it
+    wants us to wait, and re-calling before that just spends an attempt to be
+    told "too fast" again (see :func:`_wait_for`)."""
     for attempt in Retrying(
         stop=stop_after_attempt(m),
-        wait=wait_fixed(gap),
+        wait=_wait_for(gap),
         retry=retry_if_exception(is_transient),
         reraise=True,
         sleep=sleep,

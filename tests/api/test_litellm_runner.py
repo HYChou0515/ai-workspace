@@ -944,6 +944,124 @@ async def test_runner_gives_up_after_max_retries():
     assert len(done) == 1
 
 
+def _rate_limited(headers: dict[str, str]):
+    """A 429 exactly as litellm raises one — the wait rides in the response
+    headers, never in the message text."""
+    import litellm
+
+    return litellm.exceptions.RateLimitError(
+        message="rate limit exceeded",
+        llm_provider="openai",
+        model="gpt",
+        response=httpx.Response(
+            429,
+            headers=headers,
+            request=httpx.Request("POST", "http://x/v1/chat/completions"),
+        ),
+    )
+
+
+async def test_runner_waits_the_window_a_429_stated_before_retrying():
+    """The single-endpoint path has no failover chain to fall back on, so this
+    loop is the ONLY thing standing between a rate limit and a dead turn — and
+    it re-sent immediately, burning the whole budget inside a millisecond
+    against a limiter that needed seconds. The sleep must be awaited, not
+    `time.sleep`: this runs on the event loop that serves every other request.
+    """
+    slept: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    runner = _RecordingRunner(
+        scripts=[_rate_limited({"retry-after": "5"}), [MessageDelta(text="ok")]],
+        sleep=sleep,
+    )
+    events = [ev async for ev in runner.run("p", _ctx())]
+
+    assert slept == [5.0]
+    assert [type(e).__name__ for e in events][-2:] == ["MessageDelta", "RunDone"]
+
+
+async def test_a_rate_limit_does_not_spend_the_small_model_retry_budget():
+    """`max_retries` is the #76 budget for a model garbling its own tool call —
+    a different failure, with a different cure, on a different timescale.
+    Charging 429s to it means a limit that clears on the third window is given
+    up on because two JSON glitches' worth of attempts was the whole allowance.
+    """
+    slept: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    runner = _RecordingRunner(
+        scripts=[
+            _rate_limited({"retry-after": "5"}),
+            _rate_limited({"retry-after": "5"}),
+            _rate_limited({"retry-after": "5"}),
+            [MessageDelta(text="ok")],
+        ],
+        max_retries=2,
+        sleep=sleep,
+    )
+    events = [ev async for ev in runner.run("p", _ctx())]
+
+    assert slept == [5.0, 5.0, 5.0]
+    assert [type(e).__name__ for e in events][-2:] == ["MessageDelta", "RunDone"]
+
+
+async def test_a_turn_gives_up_readably_when_the_rate_limit_never_clears():
+    """The hold needs a bound or a throttled endpoint parks the turn forever.
+    The bound is time HELD, not a number of holds: three holds is three seconds
+    against one provider and three minutes against another. When it runs out
+    the user gets a sentence about what happened, not a raw provider string."""
+    slept: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    runner = _RecordingRunner(
+        scripts=[
+            _rate_limited({"retry-after": "60"}),
+            _rate_limited({"retry-after": "60"}),
+            _rate_limited({"retry-after": "60"}),
+        ],
+        rate_limit_budget_s=100.0,
+        sleep=sleep,
+    )
+    events = [ev async for ev in runner.run("p", _ctx())]
+
+    assert slept == [60.0]  # one hold fits; a second would overrun the budget
+    errors = [e for e in events if isinstance(e, RunError)]
+    assert len(errors) == 1
+    assert "過於頻繁" in errors[0].message
+    assert type(events[-1]).__name__ == "RunDone"
+
+
+async def test_the_hold_is_announced_before_the_turn_goes_quiet():
+    """A 60-second hold with nothing on screen is indistinguishable from a hung
+    turn — and this change made the quiet part LONGER, so it has to say why.
+    The notice goes out BEFORE the sleep, not after it, or it arrives once the
+    silence it explains is already over."""
+    timeline: list[str] = []
+
+    async def sleep(seconds: float) -> None:
+        timeline.append(f"slept:{seconds}")
+
+    runner = _RecordingRunner(
+        scripts=[_rate_limited({"retry-after": "5"}), [MessageDelta(text="ok")]],
+        sleep=sleep,
+    )
+    events = []
+    async for ev in runner.run("p", _ctx()):
+        timeline.append(type(ev).__name__)
+        events.append(ev)
+
+    assert timeline[:2] == ["RateLimited", "slept:5.0"]
+    held = [e for e in events if type(e).__name__ == "RateLimited"]
+    assert [e.seconds for e in held] == [5.0]
+
+
 async def test_runner_emits_max_turns_exceeded_terminal():
     """When the underlying agents-SDK raises MaxTurnsExceeded, it's a
     hard ceiling — no retry, terminal event. The SDK exception only carries

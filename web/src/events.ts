@@ -87,6 +87,15 @@ export type FailoverSwitch = {
   reason?: string;
 };
 
+/** The model endpoint asked us to slow down, so the turn is holding for
+ * `seconds` before retrying the SAME endpoint. Ephemeral — a transient status
+ * line, NEVER added to the transcript. Waiting is the only cure for a 429, and
+ * a minute of silence reads as a hung turn, so the hold has to be visible. */
+export type RateLimited = {
+  type: "rate_limited";
+  seconds: number;
+};
+
 /** #492 P11: the item's sandbox was cold, so its durable snapshot is being
  * restored file-by-file before the turn runs. Ephemeral — a transient "還原中 N/M"
  * status line while a slow cold wake completes, NEVER added to the transcript. */
@@ -234,6 +243,7 @@ export type AgentEvent =
   | AgentMetrics
   | FailoverSwitch
   | RestoreProgress
+  | RateLimited
   | TodosUpdated
   | GoalUpdated
   | ContextTrimmed
