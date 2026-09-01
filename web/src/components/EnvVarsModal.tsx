@@ -157,10 +157,13 @@ export function EnvVarsModal({
       setDialog(null);
       setCreds({});
     } catch (err) {
-      // Said out loud. A dialog that just closes on a bad password looks
-      // exactly like one that worked, and the panel keeps whatever was already
-      // typed — a failed exchange must not cost someone the rest of their edits.
-      setCredError(err instanceof Error ? err.message : String(err));
+      // The implementation's own sentence, when it sent one — it is the only
+      // party that knows why its login said no, and "帳號或密碼不正確" is what
+      // the person needs. Falling back to a generic line rather than to
+      // `err.message`, which is a status line with a JSON envelope stapled to
+      // it: internals, in front of someone who was only trying to log in.
+      const why = (err as { detail?: { why?: unknown } })?.detail?.why;
+      setCredError(typeof why === "string" && why ? why : t("env.providerFailed"));
     } finally {
       setExchanging(false);
     }

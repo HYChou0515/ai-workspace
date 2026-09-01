@@ -1246,10 +1246,15 @@ export const messages = {
   },
   "env.button": { "zh-TW": "環境變數", en: "Env" },
   "env.title": { "zh-TW": "工具用的環境變數", en: "Environment variables for tools" },
+  // Read top to bottom, this is the first sentence — and until #750 it
+  // described a text box, which is now the SECOND thing on screen. Seen by
+  // opening the panel: someone is told they are looking at an editor, then
+  // shown a form. Says what the panel is now, and keeps "this workspace only",
+  // which is the part people actually need to know before typing a key in.
   "env.desc": {
     "zh-TW":
-      "一行一個,`名稱=值`。這些會交給這個工作區的工具使用,常見用途是 API 金鑰。只影響這個工作區。",
-    en: "One per line, `NAME=value`. Handed to the tools this workspace runs — API keys and the like. This workspace only.",
+      "這些值會交給這個工作區的工具使用,常見用途是 API 金鑰。有列出需求的工具會直接顯示欄位;其餘的可以在下方以「名稱=值」自行增減。只影響這個工作區。",
+    en: "These are handed to the tools this workspace runs — API keys and the like. Tools that said what they need get a field; anything else can be added below as `NAME=value`. This workspace only.",
   },
   // #750. Says what is true and no more: these tools SAID what they want.
   // Never "this is everything you need" — an author may have left names out,
@@ -1271,6 +1276,13 @@ export const messages = {
   // Says WHICH variable and WHY, because the person's next move depends on it:
   // this is not a failure of their password, it is a shape this panel cannot
   // store, and they need to get that value in some other way.
+  // Used only when the implementation said nothing usable. Says what failed and
+  // what to do, never a status code — the person did not make an HTTP request,
+  // they pressed a button.
+  "env.providerFailed": {
+    "zh-TW": "取得失敗,請確認輸入的內容後再試一次。",
+    en: "Could not fetch those values. Check what you entered and try again.",
+  },
   "env.providerValueTooComplex": {
     "zh-TW": "{names} 的內容含有換行,這個面板存不了。請改用其他方式設定它。",
     en: "{names} came back with line breaks, which this panel cannot store. Set it another way.",

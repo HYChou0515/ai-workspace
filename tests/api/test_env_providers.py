@@ -11,6 +11,8 @@ back to the panel, which puts them in the form — the person still presses Save
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 from fastapi import FastAPI
 
@@ -144,6 +146,31 @@ def test_a_failed_exchange_is_reported_without_a_gateway_status(harness: Harness
 
     assert resp.status_code not in (502, 503, 504)
     assert resp.status_code >= 400
+
+
+def test_a_failure_does_not_write_the_credential_into_the_log(harness: Harness, caplog):
+    """A refused exchange logs which provider and why. Not what was typed.
+
+    The failure path is the one that reaches for context, and a log line is the
+    easiest place for a password to end up somewhere it will be kept for
+    ninety days and read by people who were never given it. Asserted rather
+    than intended: the route logs the exception's text, and an implementation
+    that put the credential in its message would carry it here — which is why
+    the seam's docstring says not to, and why this checks the platform's own
+    half regardless."""
+    _with_providers(harness, _Broken())
+    iid = register_rca_item(harness.spec)
+
+    with caplog.at_level(logging.DEBUG):
+        harness.client.post(
+            f"/a/rca/items/{iid}/env-providers/broken",
+            json={"values": {"user": "alice", "password": "hunter2"}},
+        )
+
+    assert "hunter2" not in caplog.text
+    # And it did say something — a silent failure is its own defect, so this
+    # cannot pass by logging nothing at all.
+    assert "broken" in caplog.text
 
 
 def test_an_unknown_provider_is_a_404(harness: Harness):

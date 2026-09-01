@@ -94,7 +94,12 @@ class ServerSettings:
     # The implementations belong to the deploy on purpose. A tool declares only
     # variable NAMES and is joined to a provider by name, so a third-party tool
     # author can never name — or choose — which credential the UI asks for.
-    env_providers: tuple[str, ...] = ()
+    # `list`, like `superusers` above, because that is what the loader actually
+    # produces: `_build` passes the parsed YAML through as-is, so a `tuple`
+    # annotation here would simply be false at runtime — and invisible, since
+    # `_build` takes `**dict[str, Any]` and the type checker never sees the
+    # field it is filling.
+    env_providers: list[str] = field(default_factory=list)
 
 
 # ─── sandbox ────────────────────────────────────────────────────────────

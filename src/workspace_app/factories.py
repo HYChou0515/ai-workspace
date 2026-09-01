@@ -1203,7 +1203,7 @@ def get_request_env(dotted: str) -> IRequestEnv | None:
     return _construct_dotted(dotted, IRequestEnv, config_key="server.request_env")
 
 
-def get_env_providers(dotted: tuple[str, ...] | list[str]) -> list[IEnvProvider]:
+def get_env_providers(dotted: list[str]) -> list[IEnvProvider]:
     """The deploy's "log in, get the variables" implementations (#750).
 
     Empty is the ordinary case and not a degraded one: with no providers the

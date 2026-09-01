@@ -206,13 +206,13 @@ per-tool scoping of `user_env`, which decision "absent is not empty" forecloses
       examples in `extending-the-platform.md` are parsed and executed by the
       real reader and the real ABC, so the block an author copies first is one
       that works (proved by a mutant: renaming a member in the doc goes red).
-- [ ] A tool with no declaration is visibly "did not say", not "needs nothing".
-- [ ] A variable declared by two tools shows once, labelled with both, and
+- [x] A tool with no declaration is visibly "did not say", not "needs nothing".
+- [x] A variable declared by two tools shows once, labelled with both, and
       editing it under either tab changes one value.
-- [ ] A required-and-empty field: Save enabled, no red, tool still dispatches.
-- [ ] A sample `IEnvProvider` fills its variables into the form; the panel is
+- [x] A required-and-empty field: Save enabled, no red, tool still dispatches.
+- [x] A sample `IEnvProvider` fills its variables into the form; the panel is
       still dirty afterwards and nothing is stored until Save.
-- [ ] Credentials appear in no DB row, no SSE frame, no log line (probe each,
+- [x] Credentials appear in no DB row, no SSE frame, no log line (probe each,
       each probe proven by a mutant first).
 - [x] With no providers configured, the panel offers no buttons and every
       variable is still typeable by hand. **OpenAPI is NOT unchanged** — the two
@@ -220,8 +220,25 @@ per-tool scoping of `user_env`, which decision "absent is not empty" forecloses
       deploy configures an implementation. The original wording was copied from
       #714, where the seam genuinely added no route, and was false here from the
       moment it was written.
-- [ ] **Driven in a real browser by hand**: fill a form, press the login button,
-      cancel it, press it again, save, reopen. A screenshot per step.
+- [x] **Driven in a real browser by hand** — a deploy configured with one
+      provider, three tool bundles (two declaring, one silent), Chromium, and a
+      screenshot per step. What the panel actually said:
+
+      | step | on screen |
+      |---|---|
+      | opened | `Not filled yet: DEMO_HOST, DEMO_TOKEN` |
+      | undeclared | `Csv Column Summary, Sci Plot, Python Stack did not list what it needs — which is not the same as needing nothing.` |
+      | shared name | `Also used by Data Fetch, Rca Tools` |
+      | other tab | the first tool's own variable is gone; the shared one keeps its value |
+      | wrong password | `帳號或密碼不正確` — the provider's own sentence |
+      | logged in | field filled, summary flips to `Everything marked required is set.` |
+      | cancel, reopen | field is EMPTY — nothing was stored |
+      | save, reopen | value is there |
+
+      Two defects only this step could find, both since fixed: the refusal was
+      rendering the raw HTTP envelope (`400 Bad Request: {"detail":…}`) at
+      someone who had mistyped a password, and the panel's opening sentence
+      still described a text box as though the fields were not there.
 
 ## TDD phases (flat integer; one commit per phase)
 

@@ -310,8 +310,16 @@ describe("EnvVarsModal declared fields (#750)", () => {
               inputs: [{ name: "password", label: "Password", secret: true }],
             },
           ]),
+          // Shaped like the real client's failure — an HttpError carrying the
+          // envelope in  and the implementation's sentence in
+          // . A double whose message was already the sentence is
+          // what let the raw envelope reach a real screen unnoticed.
           resolveEnvProvider: vi.fn(async () => {
-            throw new Error("the gateway said no");
+            const err = new Error(
+              '400 Bad Request: {"detail":{"error":"env_provider_failed","why":"wrong password"}}',
+            ) as Error & { detail?: unknown };
+            err.detail = { error: "env_provider_failed", why: "wrong password" };
+            throw err;
           }),
         }}
       />,
@@ -324,6 +332,12 @@ describe("EnvVarsModal declared fields (#750)", () => {
     // Told, not silently ignored — a dialog that closes on a bad password looks
     // exactly like one that worked.
     expect(await screen.findByTestId("env-cred-error")).toBeInTheDocument();
+    // And told in words. Driving this in a real browser showed the panel
+    // printing `400 Bad Request: {"detail":{"error":"env_provider_failed",...}}`
+    // at someone who had only mistyped a password: every test until now handed
+    // it an Error whose message was already a sentence, so nothing saw it.
+    const shown = screen.getByTestId("env-cred-error").textContent ?? "";
+    expect(shown).not.toMatch(/\d{3} |detail|env_provider_failed|\{/);
     // And what was already typed survives: a failed exchange must not cost
     // someone the rest of their edits.
     expect(box().value).toContain("KEEP=me");
