@@ -131,9 +131,16 @@ const GATEWAY_CUT = new Set([0, 502, 503, 504]);
 
 const isAbort = (err: unknown) => (err as { name?: string } | null)?.name === "AbortError";
 
-/** The transient "you may have missed a piece" notice shown while a dropped
- * stream reconnects. Removed again if the reconnect's replay turns out contiguous
- * (the same-pod buffer filled the gap), so it only stays for a real hole. */
+/** The transient "you may have missed a piece" notice, shown while a dropped
+ * stream reconnects — and only when a turn was actually being written.
+ *
+ * It lives no longer than the turn it interrupted. Two things retract it: a
+ * contiguous replay (the same-pod buffer filled the gap) and, failing that, the
+ * turn's own terminal event, after which the thread is re-read and the answer on
+ * screen is the stored one. Contiguity alone was too narrow a retraction to hang
+ * it on — each pod numbers its own broadcast, so a reconnect to another pod can
+ * never prove it — and a claim that outlives what it describes is read as "you
+ * lost something" while the whole answer sits above it. */
 const GAP_BANNER = "連線中斷,這裡可能少了一段";
 
 export function useChatSession(
@@ -154,6 +161,12 @@ export function useChatSession(
   // the reconnect's first event decides if the replay filled the hole (remove) or
   // a real gap remains (keep).
   const gapBannerPendingRef = useRef(false);
+  // Whether an answer was actually being written when the connection dropped.
+  // Set from turn events, cleared by the terminal one — the only evidence that a
+  // hole is even possible. Without it the banner was gated on "the last entry is
+  // an assistant message", which is true of every chat that has ever been
+  // answered, so an idle window that blinked claimed a missing piece.
+  const turnInFlightRef = useRef(false);
   // #43: the ids already drawn, so one event delivered twice is drawn once.
   //
   // Delivery is at-least-once and always was — a reconnect resumes `?since=`
@@ -217,9 +230,11 @@ export function useChatSession(
             // Track the highest broadcast seq so the next reconnect resumes here.
             const seq = eventSeq(ev);
             if (seq !== undefined && seq > maxSeqRef.current) maxSeqRef.current = seq;
-            // Already drawn — a replay of something this viewer has. Skipped
-            // BEFORE the gap-banner check, which reasons about seq and is
-            // unaffected, and before the fold, which is what would double it.
+            // Already drawn — a replay of something this viewer has. `continue`
+            // skips the rest of this iteration, the gap-banner check below
+            // INCLUDED (an earlier comment here claimed otherwise); that is why
+            // the banner no longer hangs on the seq test alone — the turn's own
+            // terminal event retracts it.
             // An event with no id (a backend that predates them) is always
             // folded: dropping those would blank the stream during a rollout.
             const id = eventId(ev);
@@ -270,6 +285,11 @@ export function useChatSession(
             // it kept the #202 store-poll dormant in exactly the cross-pod case
             // the poll exists for.
             if (ev.type !== "presence") lastEventAtRef.current = Date.now();
+            // Is an answer being written right now? Only that makes a hole
+            // possible, and only a turn event can say so — the log's own shape
+            // cannot: "the last entry is an assistant message" is the resting
+            // state of every chat that has ever been answered.
+            if (ev.type !== "presence") turnInFlightRef.current = !isTerminal(ev);
             if (ev.type === "file_changed") {
               // A human edited a workspace file — refetch the tree. Not a turn
               // event, so it never folds into the log.
@@ -304,6 +324,23 @@ export function useChatSession(
             }
             setLog((prev) => reduceAgent(prev, ev));
             if (isTerminal(ev)) {
+              // The gap banner was a claim about THIS turn. The turn is over and
+              // the thread is re-read below, so the answer on screen is the
+              // stored one and the claim describes nothing — whatever the seq
+              // numbers said. Leaving it is the false alarm users lose
+              // confidence over: they are told they missed something while
+              // looking at the whole answer.
+              gapBannerPendingRef.current = false;
+              setLog((prev) =>
+                prev.entries.some((e) => e.kind === "banner" && e.text === GAP_BANNER)
+                  ? {
+                      ...prev,
+                      entries: prev.entries.filter(
+                        (e) => !(e.kind === "banner" && e.text === GAP_BANNER),
+                      ),
+                    }
+                  : prev,
+              );
               // #613: catch up on todo updates missed while disconnected — the
               // stream has no replay across pods, but the turn just ended, so
               // one refetch reconciles the panel cheaply.
@@ -347,23 +384,29 @@ export function useChatSession(
         // replayed, so an answer that resumes after this gap is missing a piece
         // and rejoins mid-sentence. Splicing the two halves together silently
         // presents a mutilated answer as a whole one — say where the hole is.
-        // Gate on "an answer was being written", not on `streaming`: the
-        // subscription starts before hydration resolves, so the flag can still
-        // be false while text is visibly arriving. A hole only matters where
-        // there was something to interrupt.
-        setLog((prev) => {
-          const last = prev.entries[prev.entries.length - 1];
-          const midAnswer = last?.kind === "message" && last.message.role === "assistant";
-          return midAnswer
+        // A hole only matters where there was something to interrupt, and the
+        // only witness to that is a turn event seen on this connection —
+        // `turnInFlightRef`. Not `streaming` (the subscription starts before
+        // hydration resolves, so it can be false while text is visibly
+        // arriving), and no longer "the last entry is an assistant message":
+        // that is the resting state of every answered chat, so an idle window
+        // that blinked announced a missing piece and, with no further event
+        // coming, never took it back.
+        const interruptedATurn = turnInFlightRef.current;
+        turnInFlightRef.current = false;
+        setLog((prev) =>
+          interruptedATurn
             ? {
                 ...prev,
                 entries: [...prev.entries, { kind: "banner", at: Date.now(), text: GAP_BANNER }],
               }
-            : prev;
-        });
+            : prev,
+        );
         // Let the reconnect's first event confirm whether the replay filled the
-        // gap (remove the banner) or a real hole remains (keep it).
-        gapBannerPendingRef.current = true;
+        // gap (remove the banner) or a real hole remains (keep it). Only when
+        // one was actually added — a pending flag with no banner behind it would
+        // spend the retraction on nothing.
+        gapBannerPendingRef.current = interruptedATurn;
         await sleep(backoff);
         if (stopped) return;
         const fresh = await transport.getThread().catch(() => null);

@@ -121,4 +121,80 @@ describe("useChatSession — reconnect replay", () => {
 
     await waitFor(() => expect(hasBanner(result.current.log.entries)).toBe(true), { timeout: 4000 });
   });
+
+  /** A store that behaves like the real one: once the turn is done, the thread
+   * it hands back CONTAINS the answer. The static thread the tests above share
+   * never grows, which is not a backend this product has — and against it the
+   * hook's own hydration wipes the streamed answer, so `midAnswer` reads false
+   * and the gap banner is never even added. A double that cannot reproduce the
+   * bug reports the fix as already done. */
+  const persistingThread = (finished: () => boolean, answer: string) =>
+    vi.fn(async () => ({
+      messages: finished()
+        ? [
+            ...THREAD.messages,
+            { role: "assistant" as const, content: answer, created_at: 2 },
+          ]
+        : THREAD.messages,
+    }));
+
+  it("drops the banner when the turn it interrupted finishes", async () => {
+    // The hole is a claim about ONE turn. When that turn ends the thread is
+    // re-read and what is on screen is the stored answer, so the claim describes
+    // nothing — whatever the seq numbers said. A banner that outlives the thing
+    // it was about is the false alarm: the user is told they lost something
+    // while looking at the complete answer.
+    let attempt = 0;
+    let finished = false;
+    const { result } = render(
+      transport({
+        getThread: persistingThread(() => finished, "first half second half"),
+        subscribe: async function* (_signal: AbortSignal) {
+          attempt += 1;
+          if (attempt === 1) {
+            yield ev("first half", 5);
+            throw new Error("stream failed: 504");
+          }
+          yield ev(" second half", 99); // NOT contiguous — another pod's numbering
+          finished = true;
+          yield { type: "done" } as AgentEvent;
+          await new Promise<void>(() => {});
+        },
+      }),
+    );
+
+    await waitFor(() => expect(attempt).toBeGreaterThanOrEqual(2), { timeout: 4000 });
+    await waitFor(() => expect(hasBanner(result.current.log.entries)).toBe(false), {
+      timeout: 4000,
+    });
+  });
+
+  it("says nothing when the drop caught no turn in flight", async () => {
+    // A finished chat that blips. Nothing was being written, so nothing can be
+    // missing — and no further event will ever arrive, so a banner added here is
+    // permanent: the retraction only ever runs inside the event loop. This is the
+    // common case, because "the last entry is an assistant message" is the
+    // resting state of every chat that has ever been answered.
+    let attempt = 0;
+    let finished = false;
+    const { result } = render(
+      transport({
+        getThread: persistingThread(() => finished, "the whole answer"),
+        subscribe: async function* (_signal: AbortSignal) {
+          attempt += 1;
+          if (attempt === 1) {
+            yield ev("the whole answer", 5);
+            finished = true;
+            yield { type: "done" } as AgentEvent; // the turn ENDED before the drop
+            throw new Error("stream failed: 504");
+          }
+          await new Promise<void>(() => {}); // reconnected, and quiet ever after
+        },
+      }),
+    );
+
+    await waitFor(() => expect(attempt).toBeGreaterThanOrEqual(2), { timeout: 4000 });
+    await new Promise((r) => setTimeout(r, 200)); // let any late banner land
+    expect(hasBanner(result.current.log.entries)).toBe(false);
+  });
 });
