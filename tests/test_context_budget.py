@@ -12,6 +12,7 @@ from __future__ import annotations
 from workspace_app.context_budget import (
     ContextLimit,
     catalog_limit,
+    context_usage,
     estimate_messages,
     estimate_tokens,
     history_budget,
@@ -19,12 +20,32 @@ from workspace_app.context_budget import (
 )
 
 
-class _Msg:
-    """Duck-typed stand-in for `resources.Message` (content + tool_args)."""
+class _Metrics:
+    """Duck-typed stand-in for `resources.MessageMetrics` — the token counts the
+    provider itself reported for one turn."""
 
-    def __init__(self, content: str = "", tool_args: dict | None = None) -> None:
+    def __init__(self, prompt_tokens: int, completion_tokens: int = 0) -> None:
+        self.prompt_tokens = prompt_tokens
+        self.completion_tokens = completion_tokens
+
+
+class _Msg:
+    """Duck-typed stand-in for `resources.Message`."""
+
+    def __init__(
+        self,
+        content: str = "",
+        tool_args: dict | None = None,
+        *,
+        role: str = "user",
+        metrics: _Metrics | None = None,
+        error_kind: str | None = None,
+    ) -> None:
         self.content = content
         self.tool_args = tool_args
+        self.role = role
+        self.metrics = metrics
+        self.error_kind = error_kind
 
 
 # ── the limit ladder ────────────────────────────────────────────────
@@ -160,3 +181,96 @@ def test_overhead_larger_than_the_limit_yields_zero_not_negative():
         ContextLimit(4_096, "learned"), overhead_tokens=18_000, reply_reserve=2_000
     )
     assert budget == 0
+
+
+# ── what the thread is actually costing (#739 P1) ───────────────────
+
+
+def test_usage_is_anchored_on_what_the_provider_reported():
+    """The estimate is blind to the system prompt, the tool schemas and the
+    skills index — every one of which the provider DID read. So the newest
+    turn the provider measured is the baseline, and only what arrived after it
+    is estimated.
+
+    Its own answer is added from `completion_tokens`, because `prompt_tokens`
+    is input only: the assistant's reply was not in the window it measured, but
+    it will be in the next one."""
+    msgs = [
+        _Msg("舊的問題", role="user"),
+        _Msg("舊的回答", role="assistant", metrics=_Metrics(9_000, completion_tokens=400)),
+        _Msg("新的問題", role="user"),
+    ]
+    got = context_usage(msgs, limit=ContextLimit(tokens=40_960, source="catalog"))
+    assert got.measured is True
+    assert got.used == 9_000 + 400 + estimate_messages([_Msg("新的問題")])
+
+
+def test_a_notice_costs_the_window_nothing():
+    """`CONTEXT_NOTICE_ROLE` markers are user-facing only — `history_items`
+    never replays them — so counting them would charge the user for text the
+    model never receives, and the bar would creep up on its own."""
+    msgs = [
+        _Msg("回答", role="assistant", metrics=_Metrics(9_000, completion_tokens=400)),
+        _Msg("這串對話有一段已經不再送給模型了。", role="notice"),
+    ]
+    got = context_usage(msgs, limit=ContextLimit(tokens=40_960, source="catalog"))
+    assert got.used == 9_400
+
+
+def test_a_failed_turn_costs_the_window_nothing():
+    """Issue #37 markers (`error`) are human-only diagnostics — `history_items`
+    keeps them OUT of the model's context by kind, so a thread full of
+    connection failures must not read as a full window."""
+    msgs = [
+        _Msg("回答", role="assistant", metrics=_Metrics(9_000, completion_tokens=400)),
+        _Msg("上游連線失敗", role="error", error_kind="error"),
+    ]
+    got = context_usage(msgs, limit=ContextLimit(tokens=40_960, source="catalog"))
+    assert got.used == 9_400
+
+
+def test_an_unknown_ceiling_has_no_denominator():
+    """`resolve_context_limit` says `unknown` when nothing credible declared a
+    ceiling. Rendering "9k / 40k" against a made-up 40k is exactly the disease
+    #624 diagnosed: a number nobody measured, believed by everyone. The bar has
+    to show the usage alone."""
+    got = context_usage(
+        [_Msg("回答", role="assistant", metrics=_Metrics(9_000))],
+        limit=ContextLimit(tokens=None, source="unknown"),
+    )
+    assert got.used == 9_000
+    assert got.limit is None
+    assert got.ratio is None
+
+
+def test_a_known_ceiling_gives_the_fraction_of_the_window_in_use():
+    """What the bar fills to."""
+    got = context_usage(
+        [_Msg("回答", role="assistant", metrics=_Metrics(20_480))],
+        limit=ContextLimit(tokens=40_960, source="catalog"),
+    )
+    assert got.ratio == 0.5
+
+
+def test_a_turn_the_provider_never_measured_is_not_an_anchor():
+    """Not every endpoint reports usage. A `prompt_tokens` of 0 is an ABSENT
+    measurement, not a measured zero — anchoring on it would report a window
+    that empties itself the moment one provider goes quiet."""
+    msgs = [
+        _Msg("回答", role="assistant", metrics=_Metrics(9_000, completion_tokens=400)),
+        _Msg("再問", role="user"),
+        _Msg("再答", role="assistant", metrics=_Metrics(0)),
+    ]
+    got = context_usage(msgs, limit=ContextLimit(tokens=40_960, source="catalog"))
+    assert got.measured is True
+    assert got.used == 9_400 + estimate_messages([_Msg("再問"), _Msg("再答")])
+
+
+def test_a_thread_nobody_measured_yet_falls_back_to_the_estimate():
+    """The first turn of a new chat has no reported usage to anchor on. It still
+    needs a number — and `measured` says out loud that this one is a guess, so a
+    caller never mistakes it for the provider's own count."""
+    msgs = [_Msg("第一個問題", role="user")]
+    got = context_usage(msgs, limit=ContextLimit(tokens=40_960, source="catalog"))
+    assert got.measured is False
+    assert got.used == estimate_messages(msgs)
