@@ -132,6 +132,31 @@ describe("deriveEnvNeeds", () => {
     expect(view.undeclared).toEqual([]);
   });
 
+  it("drops a declared name this panel could not actually store", () => {
+    // The declaration comes from a third-party author, and a name carrying `=`
+    // writes to a DIFFERENT variable than the field says: `A=B=v` reads back as
+    // A="B=v". Offering a field that quietly stores something else is worse
+    // than offering no field, so the unusable one is left out — the tool is not
+    // gated by this, only the input that could not have worked.
+    const view = deriveEnvNeeds(
+      [
+        tool({
+          key: "sloppy",
+          label: "Sloppy Tool",
+          env_needs: [
+            { name: "GOOD_NAME", description: "", required: true },
+            { name: "BAD=NAME", description: "", required: true },
+          ],
+        }),
+      ],
+      {},
+    );
+
+    expect(view.groups[0].fields.map((f) => f.name)).toEqual(["GOOD_NAME"]);
+    // And it is not counted as missing either: nobody could ever fill it.
+    expect(view.missingRequired).toEqual(["GOOD_NAME"]);
+  });
+
   it("treats a whitespace-only value as unfilled", () => {
     // A stray space is what a paste leaves behind, and it reaches the tool as
     // an empty string — so reporting it as set would be agreeing with the bug.

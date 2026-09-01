@@ -59,6 +59,29 @@ export function mergeEnv(
   return { ...current, ...imported };
 }
 
+/** The names in `entries` that this text format cannot carry unchanged.
+ *
+ * Asked as a ROUND TRIP, not as a list of forbidden characters: write the pair
+ * out, read it back, and see whether it is still the same pair. A blocklist
+ * only knows what its author remembered — the first version of this guard
+ * tested for newlines, which let a name like `A=B` through, and that stores a
+ * DIFFERENT variable than the one on screen with nothing to show for it.
+ *
+ * The cases this actually catches, none of which were enumerated here: a value
+ * carrying a newline (a PEM keeps only its first line), a name containing `=`
+ * (silently becomes another variable), a name starting with `#` (vanishes), a
+ * value with edge whitespace (trimmed). Adding a rule to the parser adds it
+ * here for free.
+ *
+ * Matters because values now arrive from an `IEnvProvider` rather than only
+ * from someone typing (#750): a person can see that a certificate does not fit
+ * in a one-line field, and an exchange cannot. */
+export function unstorable(entries: Record<string, string>): string[] {
+  return Object.entries(entries)
+    .filter(([name, value]) => parseEnvText(`${name}=${value}\n`)[name] !== value)
+    .map(([name]) => name);
+}
+
 /** Set one variable in `.env`-shaped text, keeping everything else verbatim.
  *
  * The obvious implementation — `toEnvText({ ...parseEnvText(text), [name]: v })`

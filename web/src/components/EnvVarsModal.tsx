@@ -49,7 +49,7 @@ import { useRef, useState } from "react";
 import { api as defaultApi } from "../api";
 import { qk } from "../api/queryKeys";
 import type { ApiClient } from "../api/types";
-import { mergeEnv, parseEnvText, setEnvValue, toEnvText } from "../lib/envFile";
+import { mergeEnv, parseEnvText, setEnvValue, toEnvText, unstorable } from "../lib/envFile";
 import { deriveEnvNeeds } from "../lib/envNeeds";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
@@ -132,15 +132,18 @@ export function EnvVarsModal({
     setCredError(null);
     try {
       const env = await client.resolveEnvProvider(slug!, itemId!, openProvider.id, creds);
-      // `.env` text is one line per variable, so a value carrying a newline —
-      // a PEM certificate, say — reads back as its first line and nothing
-      // else. Refused WHOLE and by name rather than merged: being told this
-      // panel cannot hold the value is recoverable, being handed 30 characters
-      // of certificate header is not, and applying only the variables that
+      // Refused WHOLE and by name when a pair cannot survive this panel's text
+      // format: being told the value does not fit is recoverable, being handed
+      // a truncated certificate is not, and applying only the pairs that
       // happened to fit leaves a half-exchange nobody asked for.
-      const unrepresentable = Object.keys(env).filter((k) => /[\r\n]/.test(env[k]));
-      if (unrepresentable.length > 0) {
-        setCredError(t("env.providerValueTooComplex", { names: unrepresentable.join(", ") }));
+      //
+      // `unstorable` asks by round trip rather than by forbidden characters.
+      // The first version of this check tested for newlines, which was the case
+      // in front of me — and let a NAME containing `=` through, which stores a
+      // different variable than the one on screen.
+      const cannotStore = unstorable(env);
+      if (cannotStore.length > 0) {
+        setCredError(t("env.providerValueTooComplex", { names: cannotStore.join(", ") }));
         return;
       }
       // Merged, not replaced, and unfiltered: a provider may legitimately

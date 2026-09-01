@@ -10,6 +10,7 @@
  * every variable the item holds, whether or not it said so.
  */
 import type { ItemToolState } from "../api/types";
+import { unstorable } from "./envFile";
 
 export type EnvField = {
   name: string;
@@ -56,9 +57,17 @@ export function deriveEnvNeeds(
   // what is missing, and listing it would ask for variables nothing will read.
   const live = tools.filter((t) => t.effective);
 
+  // A declaration is written by hand, by a third party, and a name this text
+  // format cannot carry would give someone a field that quietly writes a
+  // DIFFERENT variable (`A=B=v` reads back as A="B=v"). Offering that is worse
+  // than offering nothing, so it is left out — which gates no tool, only an
+  // input that could never have worked.
+  const usable = (t: ItemToolState) =>
+    (t.env_needs ?? []).filter((n) => unstorable({ [n.name]: "x" }).length === 0);
+
   const wantedBy = new Map<string, string[]>();
   for (const t of live) {
-    for (const need of t.env_needs ?? []) {
+    for (const need of usable(t)) {
       wantedBy.set(need.name, [...(wantedBy.get(need.name) ?? []), t.label]);
     }
   }
@@ -66,11 +75,11 @@ export function deriveEnvNeeds(
   const filled = (name: string) => (values[name] ?? "").trim() !== "";
 
   const groups: ToolEnvGroup[] = live
-    .filter((t) => t.env_needs && t.env_needs.length > 0)
+    .filter((t) => t.env_needs && usable(t).length > 0)
     .map((t) => ({
       key: t.key,
       label: t.label,
-      fields: (t.env_needs ?? []).map((need) => ({
+      fields: usable(t).map((need) => ({
         name: need.name,
         description: need.description,
         required: need.required ?? null,
@@ -82,7 +91,7 @@ export function deriveEnvNeeds(
   const missingRequired = [
     ...new Set(
       live.flatMap((t) =>
-        (t.env_needs ?? [])
+        usable(t)
           .filter((n) => n.required === true && !filled(n.name))
           .map((n) => n.name),
       ),
