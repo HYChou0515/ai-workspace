@@ -173,6 +173,63 @@ def test_a_failure_does_not_write_the_credential_into_the_log(harness: Harness, 
     assert "broken" in caplog.text
 
 
+class _Rude(_SapLogin):
+    """A second-party implementation that raises while merely describing itself."""
+
+    @property
+    def id(self) -> str:
+        return "rude"
+
+    @property
+    def produces(self) -> frozenset[str]:
+        raise RuntimeError("this deploy's impl has a bug in a property")
+
+
+def test_one_broken_implementation_does_not_remove_the_others(harness: Harness, caplog):
+    """A deploy's own bug costs its own button, not everyone else's.
+
+    Describing a provider runs second-party code — four properties of it — and
+    an exception in any of them would otherwise 500 the list. The panel reads
+    that as an empty list and draws no buttons at all: a deploy with three
+    working logins loses all three because a fourth has a typo, with nothing
+    on screen and nothing in the response to say why. Same posture as
+    `discover_packages`, which degrades rather than taking a startup down."""
+    _with_providers(harness, _Rude(), _SapLogin())
+    iid = register_rca_item(harness.spec)
+
+    body = harness.client.get(f"/a/rca/items/{iid}/env-providers")
+
+    assert body.status_code == 200, body.text
+    assert [p["id"] for p in body.json()["providers"]] == ["sap-login"]
+    # And the operator is told which one, or the loss is undiagnosable.
+    assert "rude" in caplog.text
+
+
+def test_two_implementations_claiming_one_id_is_refused_at_startup():
+    """A duplicate id is a config error, not a coin toss.
+
+    The whole design rests on the id being the DEPLOY's own unambiguous name —
+    it is the one identifier a third party can never write. Two implementations
+    claiming it would make the dispatch pick whichever came first in the config
+    file, silently, and a person would type a password into a form belonging to
+    the other one."""
+    import pytest
+
+    from workspace_app.factories import get_env_providers
+
+    with pytest.raises(ValueError, match="sap-login"):
+        get_env_providers(
+            [
+                "tests.api.test_env_providers._SapLogin",
+                "tests.api.test_env_providers._SapLoginTwin",
+            ]
+        )
+
+
+class _SapLoginTwin(_SapLogin):
+    """A second implementation that claims the same id — the collision."""
+
+
 def test_an_unknown_provider_is_a_404(harness: Harness):
     _with_providers(harness, _SapLogin())
     iid = register_rca_item(harness.spec)

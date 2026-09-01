@@ -1213,7 +1213,23 @@ def get_env_providers(dotted: list[str]) -> list[IEnvProvider]:
     ``get_request_env`` does — ``tests/config/test_server_settings_are_wired``
     looks for the composition root reading ``settings.server.env_providers`` in
     plain sight, and a factory handed ``Settings`` hides it."""
-    return [_construct_dotted(d, IEnvProvider, config_key="server.env_providers") for d in dotted]
+    built = [_construct_dotted(d, IEnvProvider, config_key="server.env_providers") for d in dotted]
+    # Refused here rather than resolved later. The id is the one identifier a
+    # third party can never write — the whole point of the design — so two
+    # implementations claiming it would make dispatch pick whichever came first
+    # in the config file, silently, and someone would type a password into a
+    # form belonging to the other system. A startup failure naming the id is the
+    # cheapest possible version of that discovery.
+    seen: dict[str, str] = {}
+    for path, impl in zip(dotted, built, strict=True):
+        if impl.id in seen:
+            raise ValueError(
+                f"server.env_providers: {path} and {seen[impl.id]} both claim the id "
+                f"{impl.id!r}. The id decides which implementation a login button runs, "
+                "so a duplicate would send a credential to whichever was listed first."
+            )
+        seen[impl.id] = path
+    return built
 
 
 def _tool_check_kwargs(settings: Settings, purpose: str) -> dict:

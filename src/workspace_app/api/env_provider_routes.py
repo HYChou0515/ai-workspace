@@ -83,22 +83,49 @@ def register_env_provider_routes(
             spec, slug, item_id, "write_meta", user=get_user_id(), superusers=superusers
         )
 
+    def _describe(provider: IEnvProvider) -> EnvProviderOut | None:
+        """One offer, or ``None`` when the implementation could not describe
+        itself.
+
+        Every line here runs SECOND-PARTY code — four of its properties — and
+        an exception in any one would otherwise fail the whole response. The
+        panel reads that as "no providers" and draws no buttons at all, so a
+        deploy with three working logins would lose all three to a typo in a
+        fourth, with nothing on screen and nothing in the answer to say why.
+        Same posture as ``discover_packages``: degrade, name the offender, and
+        let everything that still works keep working."""
+        try:
+            return EnvProviderOut(
+                id=provider.id,
+                label=provider.label,
+                produces=sorted(provider.produces),
+                inputs=[
+                    InputFieldOut(name=f.name, label=f.label, secret=f.secret)
+                    for f in provider.inputs
+                ],
+            )
+        except Exception:  # noqa: BLE001 — any failure costs this one button
+            # Named by its ID first: that is the string an operator can find in
+            # their own config, whereas a class name means nothing until they go
+            # looking for it. Reading the id can itself be the thing that failed,
+            # so it falls back to the class rather than raising inside the
+            # handler for a raise.
+            try:
+                who = provider.id
+            except Exception:  # noqa: BLE001 — the id is what broke
+                who = type(provider).__name__
+            logger.warning(
+                "env provider %r could not describe itself; its button is not offered",
+                who,
+                exc_info=True,
+            )
+            return None
+
     @app.get("/a/{slug}/items/{item_id}/env-providers")
     async def list_env_providers(slug: str, item_id: str, request: Request) -> EnvProviders:
         _gate(slug, item_id)
-        return EnvProviders(
-            providers=[
-                EnvProviderOut(
-                    id=p.id,
-                    label=p.label,
-                    produces=sorted(p.produces),
-                    inputs=[
-                        InputFieldOut(name=f.name, label=f.label, secret=f.secret) for f in p.inputs
-                    ],
-                )
-                for p in _providers(request)
-            ]
-        )
+        described = (_describe(p) for p in _providers(request))
+        return EnvProviders(providers=[d for d in described if d is not None])
 
     @app.post("/a/{slug}/items/{item_id}/env-providers/{provider_id}")
     async def resolve_env_provider(
