@@ -499,6 +499,7 @@ function ItemChatPanel({
 
       <AgentPanel
         investigationId={itemId}
+        chatId={chat.chat_id}
         readOnly={readOnly}
         agent={agent}
         fill

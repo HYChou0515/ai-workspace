@@ -23,7 +23,9 @@ import type {
   AppManifest,
   AppSummary,
   CellRef,
+  ChatContextUsage,
   CloseStatus,
+  CompactionReason,
   Conversation,
   EnvProvider,
   ExecResult,
@@ -396,6 +398,23 @@ export const realApi: ApiClient = {
     return json<WorkspaceUsage>(
       await apiFetch(
         `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/files/usage`,
+      ),
+    );
+  },
+
+  async getChatContext(slug: string, itemId: string, chatId: string) {
+    return json<ChatContextUsage>(
+      await apiFetch(
+        `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}/chats/${encodeURIComponent(chatId)}/context`,
+      ),
+    );
+  },
+
+  async compactChat(slug: string, itemId: string, chatId: string) {
+    return json<{ compacted: boolean; reason: CompactionReason }>(
+      await apiFetch(
+        `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}/chats/${encodeURIComponent(chatId)}/compact`,
+        { method: "POST" },
       ),
     );
   },

@@ -32,6 +32,9 @@ export type MessageRole =
   | "goal"
   // #624: `notice` = 系統告知(例如較早訊息已超出模型可讀範圍)— FE-only。
   | "notice"
+  // #739: `summary` = 這一則取代了它上面那一段,送給模型的是它;原文並未刪除,
+  // 使用者往上捲仍然看得到。與 `notice` 相反,這一則**會**進入模型的 context。
+  | "summary"
   | "error";
 
 export type Message = {
@@ -115,6 +118,24 @@ export type FileInfo = { path: string; size: number; read_only?: boolean };
  * `quota` of 0 means unlimited (the bar is hidden). Mirrors the backend
  * `_WorkspaceUsage` model. */
 export type WorkspaceUsage = { used: number; quota: number };
+
+/** #739: how full a chat's context window is — mirrors the backend
+ * `_ContextOut`. `limit` is null when no ceiling could be resolved, and the UI
+ * must then show `used` with NO denominator rather than invent one. `measured`
+ * says whether a provider's own count anchored the figure. */
+export type ChatContextUsage = { used: number; limit: number | null; measured: boolean };
+
+/** #739: why a compaction did or did not happen. A union rather than `string`,
+ * so renaming one of these cannot silently fall through to the wrong message —
+ * which is the failure the reasons exist to prevent. Mirrors
+ * `api/compaction.py: CompactionOutcome`. */
+export type CompactionReason =
+  | "compacted"
+  | "fits"
+  | "empty"
+  | "no-room"
+  | "failed"
+  | "unavailable";
 
 /** An agent profile the picker offers — model + prompt live BE-side; the
  * FE only needs enough to label the radio and PATCH the attachment.
@@ -582,6 +603,17 @@ export interface ApiClient {
   /** GET /a/{slug}/items/{id}/files/usage — the workspace's storage usage vs its
    * quota (#245), for the upload usage bar. `quota` 0 means unlimited. */
   getWorkspaceUsage(slug: string, investigationId: string): Promise<WorkspaceUsage>;
+  getChatContext(slug: string, itemId: string, chatId: string): Promise<ChatContextUsage>;
+  /** #739: summarise this chat's older span on request. `compacted:false` is
+   * idle, not an error — but WHICH idle matters: `reason` is "empty" (nothing
+   * behind the recent turns) or "no-room" (this deployment's prompt overhead
+   * alone exceeds the window, so no summary can make the thread fit). Only the
+   * second is actionable, and they used to be reported identically. */
+  compactChat(
+    slug: string,
+    itemId: string,
+    chatId: string,
+  ): Promise<{ compacted: boolean; reason: CompactionReason }>;
   /** POST /a/{slug}/items/{id}/files/refresh — force-mirror the live sandbox
    * to the snapshot (don't wait for the throttled sweep). Call this before a
    * read whenever the sandbox may have changed out-of-band (terminal `rm`,

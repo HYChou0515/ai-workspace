@@ -10,6 +10,8 @@ Respond to the user in **Traditional Taiwanese Chinese (繁體中文 / 台灣用
 
 - **New feature requests and bug reports**: start with **`/grill-me`** to stress-test the plan and resolve open questions before any code is written.
 - **Implementation**: once the plan is clear, use **`/tdd`** to drive the work through the red-green-refactor loop rather than writing implementation first.
+- **Verifying a change**: run the **targeted** tests for what you touched, plus `ruff check` / `ruff format --check` / `ty check`. That is the whole of the per-change gate — **do not run the full suite locally**, not even CI's `-m "not integration"` subset. The 100% `coverage` gate in Commands below is a **release / on-request** gate, not a per-change one.
+- **Let CI start early**: the moment the seconds-long gates pass and **only read-only work remains** — review, reading code, writing the PR description or docs, running analysis — **commit, push and open a draft PR** so CI (20–30 min) runs *while* you do that work. None of those steps can change the code, so there is nothing for CI to wait for. Pushing a branch alone schedules **nothing** (`ci.yml` triggers on `push: master` and `pull_request:` only) — the PR is what starts it. Never report CI green while you still have unpushed work: a green light answers "is it ready", so it must describe the final state.
 - **Phase numbering**: plans use a **flat integer sequence** — `Phase 1`, `Phase 2`, … (`P1`, `P2`, …). **Never** sub-phases like `Phase 1a` / `Phase 1b`. "Phase 1" means Phase 1 is to be *completed*; if work is split off, it becomes the next integer (`Phase 2`), not a letter suffix.
 
 ## Commands
@@ -22,7 +24,7 @@ Backend (Python 3.12, uv-managed):
   - `coverage` runs in **`parallel` mode** (so CI's xdist workers each record their own data), which means a `coverage combine` step is now **required** before `report` — even for a serial local run.
   - **CI runs UNIT tests only** — `pytest -m "not integration" -n auto` (parallel), ~97% coverage, **not** gated at 100%. **integration** tests (real docker / subprocess sandbox / jupyter kernel / uv / ollama; tagged `@pytest.mark.integration`) fill a CI runner's disk and take ~90 min, so they only run in the **full local suite** above — which is where the 100% gate lives.
 - Run a single test: `uv run pytest tests/path/to/test_file.py::test_name`
-- Run the fast unit subset locally (what CI runs): `COVERAGE_PROCESS_START=pyproject.toml PYTHONPATH=. uv run pytest -m "not integration" -n auto && uv run coverage combine && uv run coverage report`
+- Reproduce a CI failure locally (NOT a per-change gate — see `## Workflow`; run it when CI is red and you need the same subset it ran): `COVERAGE_PROCESS_START=pyproject.toml PYTHONPATH=. uv run pytest -m "not integration" -n auto && uv run coverage combine && uv run coverage report`
 - Lint + format: `uv run ruff check && uv run ruff format --check`
 - Type check: `uv run ty check`
 - Run the app: `uv run python -m workspace_app` (serves API + SPA on 127.0.0.1:8000)

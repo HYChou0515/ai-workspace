@@ -67,11 +67,16 @@ def test_message_count_cap_is_off_by_default_but_still_honoured_when_set():
     assert len(history_items(msgs, max_messages=10, max_tokens=0)) == 10
 
 
-def _app_with_limit(limit: int | None):
+def _app_with_limit(limit: int | None, *, mute: bool = False):
     """create_app with an operator-declared context ceiling, a scripted runner
-    and one rca item — the send path under test."""
+    and one rca item — the send path under test.
+
+    ``mute`` scripts a runner that streams no text. #739 routes an over-budget
+    thread through compaction first, so a talking runner always produces a
+    summary; a mute one is how a spec reaches the fallback where the thread is
+    trimmed and the user is told, exactly as before compaction existed."""
     from workspace_app.api import create_app
-    from workspace_app.api.events import MessageDelta, RunDone
+    from workspace_app.api.events import AgentMetrics, MessageDelta, RunDone
     from workspace_app.api.runner import ScriptedAgentRunner
     from workspace_app.filestore.memory import MemoryFileStore
     from workspace_app.resources import make_spec
@@ -86,7 +91,27 @@ def _app_with_limit(limit: int | None):
         spec=spec,
         sandbox=MockSandbox(),
         filestore=MemoryFileStore(),
-        runner=ScriptedAgentRunner([MessageDelta(text="ok"), RunDone()]),
+        # #739: a runner that reports no usage leaves every turn unanchored, so
+        # the gauge falls back to a messages-only estimate that cannot see the
+        # system prompt or tool schemas — and the compaction trigger then
+        # compares that against a whole-request budget and fires far too late.
+        # Reporting usage is what a real provider does; without it these specs
+        # exercise the fallback rather than the path they are about.
+        runner=ScriptedAgentRunner(
+            [RunDone()]
+            if mute
+            else [
+                MessageDelta(text="ok"),
+                AgentMetrics(
+                    phase="final",
+                    prompt_tokens=13_000,
+                    completion_tokens=2,
+                    elapsed_ms=1,
+                    exact=True,
+                ),
+                RunDone(),
+            ]
+        ),
         get_user_id=lambda: "alice",
         context_limit=limit,
     )
@@ -103,16 +128,43 @@ def _thread(spec, iid):
     return rows[0].data.messages if rows else []
 
 
-def test_a_trimmed_turn_says_so_in_the_thread():
-    """The cut must be visible. A silent drop is indistinguishable from the
-    model simply being forgetful — which is exactly how #624 stayed hidden."""
-    client, spec, iid = _app_with_limit(1_000)  # tiny ceiling ⇒ everything trims
+def test_a_full_thread_is_compacted_rather_than_amputated():
+    """#739 changed the answer to a full window. It used to be: drop the oldest
+    messages — the user's opening request among them — and tell them to start a
+    new chat. Now the span is summarised and the conversation continues.
+
+    So the notice must NOT appear on the ordinary path: "開一個新對話" is advice
+    the product no longer means, and printing it anyway would teach users to
+    throw away threads that no longer need throwing away."""
+    # A ceiling that is small but WORKABLE: big enough that, after the reply
+    # reserve and the prompt overhead, there is still room for some history —
+    # otherwise compaction correctly declines (its own spec) because no amount
+    # of summarising can fit a thread into a window the system prompt already
+    # fills.
+    client, spec, iid = _app_with_limit(16_000)
+    for i in range(12):
+        client.post(f"/a/rca/items/{iid}/messages", json={"content": "量測資料異常" * 200 + str(i)})
+
+    thread = _thread(spec, iid)
+    assert [m for m in thread if m.role == "summary"], "the span must be summarised"
+    assert not [m for m in thread if m.role == "notice"], (
+        "the start-a-new-chat notice is the old policy's voice"
+    )
+
+
+def test_a_summariser_that_returns_nothing_falls_back_to_the_old_cut():
+    """Compaction is not allowed to make things worse. A model that answers with
+    nothing must leave the thread alone — replacing a span with an empty summary
+    loses everything the truncation would have kept — so the turn falls back to
+    dropping the oldest messages, and says so, exactly as it did before."""
+    client, spec, iid = _app_with_limit(1_000, mute=True)
     for i in range(6):
         client.post(f"/a/rca/items/{iid}/messages", json={"content": "量測資料異常" * 200 + str(i)})
 
-    notices = [m for m in _thread(spec, iid) if m.role == "notice"]
-    assert notices, "a trimmed turn must leave a visible notice"
-    # The notice must state the consequence and the way out, in the user's words.
+    thread = _thread(spec, iid)
+    assert not [m for m in thread if m.role == "summary"], "an empty summary is not written"
+    notices = [m for m in thread if m.role == "notice"]
+    assert notices, "a trimmed turn must still leave a visible notice"
     assert "不會被讀到" in notices[0].content
     assert "新對話" in notices[0].content
 
@@ -120,7 +172,7 @@ def test_a_trimmed_turn_says_so_in_the_thread():
 def test_the_notice_is_not_repeated_every_turn():
     """Announce at the transition, not on every turn — a notice that fires each
     round becomes wallpaper and stops being read."""
-    client, spec, iid = _app_with_limit(1_000)
+    client, spec, iid = _app_with_limit(1_000, mute=True)
     for i in range(6):
         client.post(f"/a/rca/items/{iid}/messages", json={"content": "量測資料異常" * 200 + str(i)})
 
