@@ -185,13 +185,18 @@ def plan_for_budget(
 
     overhead = max(0, used - freed - own)
     room = own if budget is None else budget - overhead
-    if not force and room <= 0:
+    if room <= 0:
         # The fixed overhead alone exceeds the budget, so there is no room for
         # ANY history and compaction cannot make one. Left to run, it sizes the
-        # tail against a negative room, razes the thread to its last message
-        # every other turn, pays a round trip each time and recovers nothing
-        # that was ever the problem. The operator has to raise the window or cut
-        # the prompt; amputating the user's conversation does not help.
+        # tail against a negative room, razes the thread to its last message,
+        # pays a round trip and recovers nothing that was ever the problem. The
+        # operator has to raise the window or cut the prompt; amputating the
+        # user's conversation does not help.
+        #
+        # This binds `force` as well. Asking is the trigger, but it is not a
+        # licence to do harm — and with the automatic path silent here, the
+        # button would otherwise be the only thing still acting, trading the
+        # whole conversation for a summary that provably cannot make it fit.
         return 0, []
 
     # From here the FOLDED live thread is the subject. Folding preserves message

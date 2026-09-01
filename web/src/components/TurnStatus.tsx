@@ -26,7 +26,10 @@ export function TurnStatus({
 }) {
   const phase = turnPhase(log);
   const toolRunning = isToolRunning(log);
-  const active = phase !== "idle";
+  // #739: writing a summary is activity too. Without this the manual path
+  // (button, `/compact`) leaves `startRef` null, so the counter on the
+  // compaction line — the one signal that never freezes — never ticks.
+  const active = phase !== "idle" || log.compacting != null;
 
   // Never-freeze clock: seconds since this turn started streaming. Anchored on
   // the FE (not the backend's elapsed_ms, which is 0 until the first token and

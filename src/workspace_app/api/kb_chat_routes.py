@@ -887,9 +887,10 @@ def register_kb_chat_routes(
             users=users,
             on_reduce=_reduced.append,
         )
-        # #624: announcing a reduction is unconditional. This is the surface most
-        # likely to need it — retrieved passages and whole wiki pages land in
-        # this thread — and it was the one cutting in silence.
+        # #624: announcing a reduction is unconditional — except a LOSSLESS one,
+        # which keeps every message and so has nothing to announce (#739). This
+        # is the surface most likely to need it — retrieved passages and whole
+        # wiki pages land in this thread — and it was the one cutting in silence.
         if _reduced:
             _note_kb_reduction(chat_id, owner, _reduced[0])
         ctx = AgentToolContext(

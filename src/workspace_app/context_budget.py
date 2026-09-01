@@ -334,6 +334,14 @@ def context_usage(messages: Any, *, limit: ContextLimit) -> ContextUsage:
             # firing on a full window. So keep the number; only the label is in
             # question. `exact` is the provider's word, and absent — a thread
             # older than the field — is not a yes.
+            #
+            # One consequence worth naming: on a provider that reports nothing,
+            # the substituted figure describes the request that was actually
+            # SENT, which the reducer may already have cut to fit. So `used`
+            # then tracks one turn's overshoot rather than the stored thread's
+            # full size. The trigger still fires (the estimator's own ~5% spread
+            # keeps the difference positive), but it is carried by that spread
+            # rather than by the reducer, which is thinner than it looks.
             return ContextUsage(
                 used=used,
                 limit=limit.tokens,

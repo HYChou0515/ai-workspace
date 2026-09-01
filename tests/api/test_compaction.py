@@ -524,3 +524,20 @@ def test_a_thread_that_fits_is_decided_without_touching_the_estimator_twice():
     _at, span = plan_for_budget(msgs, used=100, budget=10_000, estimate=_counting)
     assert span == []
     assert calls == 0, "a thread that fits should not be measured at all"
+
+
+def test_pressing_compact_cannot_raze_a_thread_it_could_never_save():
+    """The `room <= 0` refusal was wired to the automatic path only, so on a
+    deployment whose prompt overhead already exceeds the budget the button
+    became the ONLY thing that still acted — and what it did was trade the whole
+    conversation for a summary that provably cannot make it fit.
+
+    Asking is the trigger, but it is not a licence to do harm: when compaction
+    cannot help, it declines on both paths. (Caught by review round 3.)"""
+    msgs = [_Msg("user", f"訊息{i}") for i in range(20)]
+    own = estimate_messages(msgs)
+
+    _at, span = plan_for_budget(
+        msgs, used=own + 19_000, budget=5_000, estimate=estimate_messages, force=True
+    )
+    assert span == [], "the button must decline what the automatic path declines"

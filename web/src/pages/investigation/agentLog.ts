@@ -574,9 +574,19 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
 
     case "run_cancelled":
       entries.push({ kind: "banner", at: now, text: translate(initialLocale(), "banner.cancelled") });
-      // #739: an end is an end — never leave the compaction notice standing,
-      // even if its own finishing event went missing.
-      return { ...log, entries, streaming: false, streamingBy: null, compacting: null };
+      // #739: an end is an end — never leave a waiting state standing. The
+      // rate-limit hold used to survive its own turn, and since compaction
+      // runs BEFORE the next one, that stale line outranked the compaction
+      // notice: the user was told the system was waiting on a 429 while it
+      // was in fact rewriting their thread.
+      return {
+        ...log,
+        entries,
+        streaming: false,
+        streamingBy: null,
+        compacting: null,
+        rateLimited: null,
+      };
 
     case "error":
       return {
@@ -586,10 +596,18 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
         streamingBy: null,
         error: ev.message,
         compacting: null,
+        rateLimited: null,
       };
 
     case "done":
-      return { ...log, entries, streaming: false, streamingBy: null, compacting: null };
+      return {
+        ...log,
+        entries,
+        streaming: false,
+        streamingBy: null,
+        compacting: null,
+        rateLimited: null,
+      };
 
     case "user_message":
       // #43: a human message on the shared investigation, broadcast to every
