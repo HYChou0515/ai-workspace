@@ -118,6 +118,17 @@ export const EMPTY_LOG: AgentLog = {
  * definition — the timestamp predates the field — so it never counts as live. */
 const AWAITING_REPLY_MAX_MS = 30 * 60_000;
 
+/** Wording for a persisted terminal failure, by the `error_kind` the backend
+ * stamps on it. Only kinds whose live counterpart says the same thing belong
+ * here — sharing the wording is what lets the de-dupe recognise the live banner
+ * and the stored message as one event instead of two. `max_turns` is absent on
+ * purpose: its persisted text carries the step count inline, and digging a
+ * number back out of an English sentence to re-render it is a parser nobody
+ * should have to maintain. */
+const PERSISTED_ERROR_TEXT: Record<string, string | undefined> = {
+  cancelled: translate(initialLocale(), "banner.cancelled"),
+};
+
 const isRecent = (at: number | null | undefined): boolean =>
   at != null && Date.now() - at < AWAITING_REPLY_MAX_MS;
 
@@ -162,7 +173,19 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
       // #37: a persisted terminal failure — rendered as a banner so a
       // reloaded thread shows the turn died (matching the live error
       // banners), rather than the message silently vanishing.
-      entries.push({ kind: "banner", text: m.content, at: m.created_at ?? undefined });
+      //
+      // Worded from `error_kind` where we have wording for it: the backend says
+      // WHAT happened, the UI says how to put it. Its `content` is written in
+      // English for the log, so rendering that verbatim put an English sentence
+      // in a zh-TW transcript — and, because it reads differently from the live
+      // banner for the same event, the de-dupe below never collapsed the two.
+      // One press of Stop showed the stop twice. An unknown kind still falls
+      // back to the content: better the backend's words than none.
+      entries.push({
+        kind: "banner",
+        text: PERSISTED_ERROR_TEXT[m.error_kind ?? ""] ?? m.content,
+        at: m.created_at ?? undefined,
+      });
     } else {
       entries.push({ kind: "message", message: m, at: m.created_at ?? undefined });
     }
@@ -592,7 +615,14 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
       return { ...log, entries, streaming: false, streamingBy: null, error: ev.message };
 
     case "done":
-      return { ...log, entries, streaming: false, streamingBy: null };
+      // …and any error raised DURING this turn stops describing anything: the
+      // turn just ended, and it ended normally. A retry notice arrives as a
+      // `RunError` mid-flight (`classify_retry_event`), so without this a turn
+      // that stumbled and then answered perfectly well left "the previous
+      // attempt failed — all agent models failed or were cooling" standing over
+      // its own good answer until the user typed again. A turn that really
+      // fails ends on `error`, never on `done`, so its box is untouched.
+      return { ...log, entries, streaming: false, streamingBy: null, error: null };
 
     case "user_message":
       // #43: a human message on the shared investigation, broadcast to every

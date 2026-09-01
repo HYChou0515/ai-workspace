@@ -526,7 +526,12 @@ describe("AgentPanel — the composer always answers back", () => {
     fireEvent.click(screen.getByRole("button", { name: "Stop" }));
 
     expect(agent.cancel).toHaveBeenCalled();
-    expect(await screen.findByTestId("composer-hint")).toHaveTextContent("已中止");
+    // The hint names the ACTION, not the outcome. It used to restate the
+    // outcome — and so did the transcript's own 「已取消。」 banner, and so did
+    // the backend's persisted message, so one press of Stop printed the same
+    // news three times (verified in the running app). The transcript owns the
+    // record; this line only tells you your click landed.
+    expect(await screen.findByTestId("composer-hint")).toHaveTextContent("正在停止");
   });
 });
 

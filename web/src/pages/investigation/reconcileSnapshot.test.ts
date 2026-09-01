@@ -231,6 +231,36 @@ describe("reconcileSnapshot", () => {
     expect(next.entries.some((e) => e.kind === "banner")).toBe(false);
   });
 
+  it("says a stop ONCE, not once live and again from the store", () => {
+    // Reproduced in the running app: one press of Stop rendered three lines —
+    // the live 「已取消。」 banner, the backend's persisted `role:"error"`
+    // message ("The previous response was interrupted.", English, in a zh-TW
+    // UI), and a composer hint saying it a third time. The de-dupe here compares
+    // TEXT, so two wordings of one event never collapse.
+    //
+    // The persisted message carries `error_kind`, which is the machine-readable
+    // half: the backend says WHAT happened, the UI says how to word it. Worded
+    // from the same source, the two are the same banner and one of them goes.
+    const prev = live({
+      entries: [msg("user", "q"), { kind: "banner", at: 5, text: "已取消。" }],
+    });
+
+    const next = reconcileSnapshot(prev, {
+      messages: [
+        { role: "user", content: "q", created_at: 1 },
+        {
+          role: "error",
+          content: "The previous response was interrupted.",
+          error_kind: "cancelled",
+          created_at: 6,
+        },
+      ],
+    });
+
+    expect(next.entries.filter((e) => e.kind === "banner")).toHaveLength(1);
+    expect(next.entries.some((e) => e.kind === "banner" && e.text === "已取消。")).toBe(true);
+  });
+
   it("does not duplicate a banner the persisted thread already carries", () => {
     const prev = live({ entries: [{ kind: "banner", text: "turn failed" }] });
     // role:"error" hydrates as the same banner.

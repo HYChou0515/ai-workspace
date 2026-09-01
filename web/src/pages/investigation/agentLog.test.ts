@@ -821,3 +821,41 @@ describe("a new turn clears the previous turn's error (#721)", () => {
     expect(rehydrated.entries.some((e) => e.kind === "banner" && e.text.includes("30"))).toBe(true);
   });
 });
+
+describe("a turn that recovers stops reporting the attempt that failed", () => {
+  /**
+   * A retry notice is not the end of a turn. `classify_retry_event` sends it as
+   * a `RunError` mid-flight — "retry: … all agent models failed or were
+   * cooling" — and the turn carries on and can finish perfectly well. But the
+   * reducer treats every `error` as terminal, and `error` is sticky: only the
+   * NEXT question cleared it (#721). So a turn that stumbled and then succeeded
+   * left the red box standing over its own good answer until the user typed
+   * again — reported as "the warning is still there when everything is fine".
+   *
+   * `done` is the moment that sentence stops describing anything: this turn
+   * ended, and it ended normally. A turn that really fails ends on `error`, not
+   * on `done`, so its box is untouched.
+   */
+  const retried = (): AgentLog =>
+    reduceAgent(EMPTY_LOG, {
+      type: "error",
+      message: "retry: the previous attempt failed — all agent models failed or were cooling",
+    } as AgentEvent);
+
+  it("keeps the notice while the turn is still unresolved", () => {
+    expect(retried().error).toContain("retry");
+  });
+
+  it("drops it once the turn finishes normally", () => {
+    const finished = reduceAgent(retried(), { type: "done" } as AgentEvent);
+    expect(finished.error).toBeNull();
+  });
+
+  it("leaves a real failure's box alone", () => {
+    const failed = reduceAgent(EMPTY_LOG, {
+      type: "error",
+      message: "provider refused the request",
+    } as AgentEvent);
+    expect(failed.error).toBe("provider refused the request");
+  });
+});

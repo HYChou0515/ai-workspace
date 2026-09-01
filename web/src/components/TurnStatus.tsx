@@ -69,11 +69,21 @@ export function TurnStatus({
   // "No sign of life" is the real test, not the phase: a delta can arrive before
   // any metrics do, which still reads as `prep`. Any assistant text or tool call
   // means the turn is real and running.
-  const producedSomething = log.entries.some(
-    (e) =>
-      e.kind === "tool_call" ||
-      (e.kind === "message" && e.message.role === "assistant" && !!e.message.content),
-  );
+  // …by THIS turn, which is everything after the question that started it. Asked
+  // of the whole log, the answer is "yes" forever in any chat that has ever been
+  // answered — so the give-up notice below could never appear in a real
+  // conversation, and 「還在準備,稍等一下」 was still on screen at 1300 seconds
+  // with nobody coming.
+  const lastAsk = log.entries
+    .map((e) => e.kind === "message" && e.message.role === "user")
+    .lastIndexOf(true);
+  const producedSomething = log.entries
+    .slice(lastAsk + 1)
+    .some(
+      (e) =>
+        e.kind === "tool_call" ||
+        (e.kind === "message" && e.message.role === "assistant" && !!e.message.content),
+    );
   if (phase === "prep" && !producedSomething && elapsedSec >= ABANDONED_AFTER_S) {
     return (
       <div className={className} style={box} data-testid="turn-abandoned">

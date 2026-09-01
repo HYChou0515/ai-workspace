@@ -1068,8 +1068,12 @@ export function AgentPanel({
               onClick={() => {
                 cancel();
                 // Stop's ENTIRE feedback used to be the spinner disappearing,
-                // which reads the same as the turn finishing on its own.
-                setComposerHint("已中止這一輪。已產生的內容保留在上面。");
+                // which reads the same as the turn finishing on its own. So the
+                // click still says something — but about the CLICK, not the
+                // outcome: the transcript already gets a 「已取消。」 banner when
+                // the turn actually stops, and saying it here too is how one
+                // press of Stop came to print the same news twice.
+                setComposerHint("正在停止這一輪…");
               }}
               style={{
                 padding: "6px 14px",

@@ -221,6 +221,29 @@ describe("TurnStatus — a wait that gave up", () => {
     expect(screen.getByTestId("turn-abandoned")).toBeInTheDocument();
   });
 
+  it("gives up on THIS turn even in a chat that has answered before", async () => {
+    // Reported from the running product: 「還在準備,稍等一下」 still showing at
+    // 1300 seconds. The give-up test asked whether the LOG holds any output —
+    // and any chat that has ever been answered holds some, forever. So in the
+    // only chats people actually use, the notice could never appear, and the
+    // wait went on claiming to be a wait with nobody coming.
+    //
+    // "Has this turn produced anything" is a question about this turn: what
+    // came after the question that started it.
+    vi.useFakeTimers();
+    const answeredBefore = fold([
+      { type: "user_message", author: "u", content: "first question" } as AgentEvent,
+      { type: "message_delta", text: "a complete earlier answer" } as AgentEvent,
+      { type: "done" } as AgentEvent,
+      { type: "user_message", author: "u", content: "second question" } as AgentEvent,
+    ]);
+    render(<TurnStatus log={answeredBefore} />);
+    await act(async () => {
+      vi.advanceTimersByTime(11 * 60_000);
+    });
+    expect(screen.getByTestId("turn-abandoned")).toBeInTheDocument();
+  });
+
   // Output means the turn is real and running; length is not a reason to
   // declare it lost.
   it("does not give up on a turn that is visibly producing output", async () => {
