@@ -261,6 +261,36 @@ describe("reconcileSnapshot", () => {
     expect(next.entries.some((e) => e.kind === "banner" && e.text === "已取消。")).toBe(true);
   });
 
+  it("KNOWN GAP: a step-limited turn still says it twice, once in English", () => {
+    // The cancel case above is fixed by wording the stored message from its
+    // `error_kind`. `max_turns` is not, and this pins what that costs rather
+    // than leaving it for someone to rediscover: its persisted text carries the
+    // step count inline, so re-rendering it in the user's language would mean
+    // parsing a number back out of an English sentence, and the alternatives
+    // are dropping the count from both sides or adding a field to the stored
+    // message. Neither was reported, so neither was chosen here.
+    const prev = live({
+      entries: [
+        msg("user", "q"),
+        { kind: "banner", at: 5, text: "已達回合上限（12），對話已停止。" },
+      ],
+    });
+
+    const next = reconcileSnapshot(prev, {
+      messages: [
+        { role: "user", content: "q", created_at: 1 },
+        {
+          role: "error",
+          content: "The agent stopped after reaching its step limit (12).",
+          error_kind: "max_turns",
+          created_at: 6,
+        },
+      ],
+    });
+
+    expect(next.entries.filter((e) => e.kind === "banner")).toHaveLength(2);
+  });
+
   it("does not duplicate a banner the persisted thread already carries", () => {
     const prev = live({ entries: [{ kind: "banner", text: "turn failed" }] });
     // role:"error" hydrates as the same banner.

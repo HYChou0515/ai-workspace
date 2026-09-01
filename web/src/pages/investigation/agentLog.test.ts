@@ -870,16 +870,38 @@ describe("a turn that recovers stops reporting the attempt that failed", () => {
     expect(retried().error).toContain("retry");
   });
 
-  it("drops it once the turn finishes normally", () => {
-    const finished = reduceAgent(retried(), { type: "done" } as AgentEvent);
-    expect(finished.error).toBeNull();
+  it("drops it once the turn goes on producing", () => {
+    // Recovery is the turn CONTINUING, and that is the only thing that
+    // distinguishes it: output after the notice.
+    const recovered = reduceAgent(retried(), {
+      type: "message_delta",
+      text: "here is the answer after all",
+    } as AgentEvent);
+    expect(recovered.error).toBeNull();
   });
 
-  it("leaves a real failure's box alone", () => {
+  it("leaves a real failure's box alone — including the `done` that follows it", () => {
+    // The sequence the backend actually emits. `litellm_runner` yields
+    // `RunError` and then `RunDone` on a give-up (its own test pins
+    // ["MessageDelta", "RunError", "RunDone"]), so "a failed turn never ends on
+    // done" — which an earlier version of this file asserted — is false, and
+    // hanging the clear on `done` wiped the message explaining the failure.
     const failed = reduceAgent(EMPTY_LOG, {
       type: "error",
-      message: "provider refused the request",
+      message: "giving up after 3 attempts: APIConnectionError: refused",
     } as AgentEvent);
-    expect(failed.error).toBe("provider refused the request");
+    const closed = reduceAgent(failed, { type: "done" } as AgentEvent);
+
+    expect(closed.error).toBe("giving up after 3 attempts: APIConnectionError: refused");
+  });
+
+  it("keeps a failure that produced partial output before dying", () => {
+    // `progress_made` — output, then the failure, then `done`. The output came
+    // BEFORE the error, so it is not evidence of recovery.
+    let log = reduceAgent(EMPTY_LOG, { type: "message_delta", text: "half an answer" });
+    log = reduceAgent(log, { type: "error", message: "APIConnectionError: refused" });
+    log = reduceAgent(log, { type: "done" } as AgentEvent);
+
+    expect(log.error).toBe("APIConnectionError: refused");
   });
 });

@@ -5,7 +5,7 @@
  */
 
 import { useQueryClient } from "@tanstack/react-query";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "../../api";
 import { investigationFileService } from "../../api/fileService";
@@ -195,6 +195,13 @@ export function AgentPanel({
   // composer's own feedback channel (Enter during a turn, Stop). Cleared on the
   // next successful send.
   const [composerHint, setComposerHint] = useState<string | null>(null);
+  // …and when the turn ends, because every hint this channel carries is about a
+  // turn that was running: 「正在停止這一輪…」 and 「回覆還在進行中…」 both describe
+  // a state that is over, and both used to sit there until the next send. A
+  // present-tense line that never resolves reads as a stop that never finished.
+  useEffect(() => {
+    if (!log.streaming) setComposerHint(null);
+  }, [log.streaming]);
   // Messages on a shared item SERIALIZE server-side; they do not cancel each
   // other (#43). So a turn started by SOMEONE ELSE is no reason to lock this
   // viewer out — the backend will happily queue behind it, and taking that away

@@ -124,10 +124,14 @@ const AWAITING_REPLY_MAX_MS = 30 * 60_000;
  * and the stored message as one event instead of two. `max_turns` is absent on
  * purpose: its persisted text carries the step count inline, and digging a
  * number back out of an English sentence to re-render it is a parser nobody
- * should have to maintain. */
-const PERSISTED_ERROR_TEXT: Record<string, string | undefined> = {
-  cancelled: translate(initialLocale(), "banner.cancelled"),
-};
+ * should have to maintain.
+ *
+ * Translated per CALL, like the live banner beside it. Held in a module-level
+ * const it froze the language at import, so switching language mid-session left
+ * the stored copy in the old one — different text, de-dupe blind again, and the
+ * doubled banner back in two languages at once. */
+const persistedErrorText = (kind: string | null | undefined): string | undefined =>
+  kind === "cancelled" ? translate(initialLocale(), "banner.cancelled") : undefined;
 
 const isRecent = (at: number | null | undefined): boolean =>
   at != null && Date.now() - at < AWAITING_REPLY_MAX_MS;
@@ -183,7 +187,7 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
       // back to the content: better the backend's words than none.
       entries.push({
         kind: "banner",
-        text: PERSISTED_ERROR_TEXT[m.error_kind ?? ""] ?? m.content,
+        text: persistedErrorText(m.error_kind) ?? m.content,
         at: m.created_at ?? undefined,
       });
     } else {
@@ -303,6 +307,13 @@ export function reconcileSnapshot(
   // banner had beneath it). Both are read HERE, from the two objects in hand — no
   // stamp to take at the wrong moment, no clock to disagree with.
   const snapTurns = countUserMessages(snap.entries);
+  // "The store already holds this banner" has to mean THIS turn's, not an
+  // identically worded one from an earlier turn. Since a stop now reads the same
+  // live as it does once persisted, a thread with two cancelled turns had the
+  // second one — the press the user is watching for — swallowed by the first.
+  const snapTail = snap.entries.slice(
+    snap.entries.map((s) => s.kind === "message" && s.message.role === "user").lastIndexOf(true) + 1,
+  );
   const carried = prev.entries.filter((e, i) => {
     if (e.kind !== "banner") return false;
     const rest = prev.entries.slice(i + 1);
@@ -316,7 +327,7 @@ export function reconcileSnapshot(
     return (
       !movedOnLocally &&
       (!placeable || snapTurns <= turnsBeneath) &&
-      !snap.entries.some((s) => s.kind === "banner" && s.text === e.text)
+      !snapTail.some((s) => s.kind === "banner" && s.text === e.text)
     );
   });
   return {
@@ -351,7 +362,7 @@ export function turnsFromEntry(entries: readonly AgentEntry[], index: number): n
     const e = entries[i];
     if (!e || e.kind !== "message" || e.message.role !== "user") continue;
     if (e.at === undefined) undated++;
-    else seen.add(`${e.at} ${e.message.content}`);
+    else seen.add(JSON.stringify([e.at, e.message.content]));
   }
   return seen.size + undated;
 }
@@ -525,7 +536,15 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
         });
       }
       // #492 P11: the model is producing output ⇒ any cold-wake restore is over.
-      return { ...log, entries, restore: null, rateLimited: null };
+      //
+      // …and so is any error raised earlier in this turn. A retry notice arrives
+      // as a `RunError` mid-flight (`classify_retry_event`), and `error` is
+      // sticky, so a turn that stumbled and then answered left "all agent models
+      // failed or were cooling" standing over its own good answer until the user
+      // typed again. OUTPUT AFTER the notice is what says it recovered — not the
+      // terminal event: the runner yields `RunError` and then `RunDone` on every
+      // give-up, so clearing on `done` erased real failures instead.
+      return { ...log, entries, error: null, restore: null, rateLimited: null };
     }
 
     case "tool_start":
@@ -632,14 +651,7 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
       return { ...log, entries, streaming: false, streamingBy: null, error: ev.message };
 
     case "done":
-      // …and any error raised DURING this turn stops describing anything: the
-      // turn just ended, and it ended normally. A retry notice arrives as a
-      // `RunError` mid-flight (`classify_retry_event`), so without this a turn
-      // that stumbled and then answered perfectly well left "the previous
-      // attempt failed — all agent models failed or were cooling" standing over
-      // its own good answer until the user typed again. A turn that really
-      // fails ends on `error`, never on `done`, so its box is untouched.
-      return { ...log, entries, streaming: false, streamingBy: null, error: null };
+      return { ...log, entries, streaming: false, streamingBy: null };
 
     case "user_message":
       // #43: a human message on the shared investigation, broadcast to every
