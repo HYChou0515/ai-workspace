@@ -66,15 +66,20 @@ from that. That is the shape to copy — the product already contains its own an
   shim. The only caller in the repo is our own front end (plus its tests); no doc, workflow
   or third party references it. Two rules for one behaviour is how this drifted in the first
   place.
-- **The payload's title becomes the chat's title**, with the KB fallback chain
-  (`title → name_hint → "chat"`). The `.chat.json` format is re-uploadable to a KB
-  collection, so this also stops every export from one item arriving under the same name.
+- **The payload's title becomes the chat's title**, falling back to the item's title for
+  an unnamed chat — which is exactly what a single-chat item exported before, so the
+  common case does not move. (The KB chat falls back to its first user message; an app
+  chat has an owning item to name it after, and "Oven drift" beats "hi".) The `.chat.json`
+  format is re-uploadable to a KB collection, so this also stops every export from one
+  item arriving under the same name.
 - **Workflow chats become exportable.** `conversation_for` deliberately never returned one;
   a chat-scoped route addresses whatever the caller can already read, and access stays
   gated by `read_chat` on the item. A conversation a person can read on screen is one they
   may download.
 - **The filename is derived from the chat title**, sanitised the way the KB export already
-  sanitises it (`name.replace(/[^\w.-]+/g, "-")`), so the file names the conversation.
+  sanitises it (`name.replace(/[^\w.-]+/g, "-")`), so the file names the conversation. The
+  server owns that name and the browser takes it from `Content-Disposition` rather than
+  building a second one — one rule, so the two ends cannot drift apart.
 
 ## Phases
 
@@ -91,13 +96,22 @@ from that. That is the shape to copy — the product already contains its own an
 
 ### P2 — the button exports what the panel is showing
 
-- Thread the current chat id from the multi-chat shell into `AgentPanel`'s Export.
-- `downloadChatExport(slug, itemId, chatId)`; filename from the chat title.
+- Thread the current chat id from the multi-chat shell into `AgentPanel`'s Export. The
+  prop is **required**, not optional: an optional one could go unpassed and quietly
+  reinstate "whichever chat is first".
+- `downloadChatExport(slug, itemId, chatId)`; the download takes its name from the
+  server's `Content-Disposition`.
 - Tests (written first): the Export button requests the URL carrying the *displayed*
   chat's id — the assertion that would have caught this in the first place.
 - Definition of done includes a live check in a real browser: two chats, export from the
   second, open the file and see the second chat's messages. Unit tests cannot see a wrong
   id that is still a valid request.
+
+**Result of that live check** (built bundle, real backend, Chromium driving the UI):
+screen on "Solder paste question" → `Solder-paste-question.chat.json`, titled
+`Solder paste question`, holding that chat's message; switch the switcher to
+"Oven drift review" → `Oven-drift-review.chat.json` with that chat's message. The
+download follows the screen, and the file names itself.
 
 ## Not in scope
 

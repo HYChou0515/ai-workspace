@@ -33,6 +33,7 @@ function renderPanel(uploadDir = "uploads", agent: AgentState = stubAgent()) {
       <DialogProvider>
         <AgentPanel
           investigationId="it1"
+          chatId="chat-1"
           agent={agent}
           picker={[]}
           suggestions={[]}
@@ -146,6 +147,7 @@ describe("AgentPanel image chip (#364)", () => {
       <DialogProvider>
         <AgentPanel
           investigationId="it1"
+          chatId="chat-1"
           agent={agent}
           picker={[]}
           suggestions={[]}
@@ -295,6 +297,7 @@ describe("AgentPanel applied skills (#380)", () => {
       <DialogProvider>
         <AgentPanel
           investigationId="it1"
+          chatId="chat-1"
           agent={agent}
           picker={[]}
           suggestions={[]}
@@ -359,6 +362,7 @@ describe("AgentPanel steer (#288)", () => {
       <DialogProvider>
         <AgentPanel
           investigationId="it1"
+          chatId="chat-1"
           agent={agent}
           picker={[]}
           suggestions={[]}
@@ -391,6 +395,7 @@ describe("AgentPanel undo restores draft (#370)", () => {
       <DialogProvider>
         <AgentPanel
           investigationId="it1"
+          chatId="chat-1"
           agent={agent}
           picker={[]}
           suggestions={[]}
@@ -459,6 +464,7 @@ describe("AgentPanel — permission-disclosure readOnly composer", () => {
       <DialogProvider>
         <AgentPanel
           investigationId="it1"
+          chatId="chat-1"
           readOnly
           agent={stubAgent()}
           picker={[]}
@@ -493,6 +499,7 @@ describe("AgentPanel — the composer always answers back", () => {
         <DialogProvider>
           <AgentPanel
             investigationId="it1"
+            chatId="chat-1"
             agent={agent}
             picker={[]}
             suggestions={[{ label: "chip", prompt: "hello" }]}
@@ -543,6 +550,7 @@ describe("AgentPanel — a shared item queues, so a spectator is not locked out"
         <DialogProvider>
           <AgentPanel
             investigationId="it1"
+            chatId="chat-1"
             agent={agent}
             picker={[]}
             suggestions={[]}
@@ -597,6 +605,7 @@ describe("AgentPanel — my own messages sit on the right", () => {
       <DialogProvider>
         <AgentPanel
           investigationId="it1"
+          chatId="chat-1"
           agent={agent}
           picker={[]}
           suggestions={[]}
@@ -633,6 +642,7 @@ describe("AgentPanel ask_user (grill-me)", () => {
       <DialogProvider>
         <AgentPanel
           investigationId="it1"
+          chatId="chat-1"
           agent={agent}
           picker={[]}
           suggestions={[]}
@@ -714,6 +724,7 @@ describe("AgentPanel env vars", () => {
       <DialogProvider>
         <AgentPanel
           investigationId="it1"
+          chatId="chat-1"
           agent={stubAgent()}
           picker={[]}
           suggestions={[]}
@@ -739,6 +750,7 @@ describe("AgentPanel env vars", () => {
       <DialogProvider>
         <AgentPanel
           investigationId="it1"
+          chatId="chat-1"
           agent={stubAgent()}
           picker={[]}
           suggestions={[]}
@@ -824,6 +836,7 @@ describe("AgentPanel attaching a large folder", () => {
       <DialogProvider>
         <AgentPanel
           investigationId="it1"
+          chatId="chat-1"
           agent={agent}
           picker={[]}
           suggestions={[]}

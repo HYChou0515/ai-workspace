@@ -110,6 +110,7 @@ function overQuotaKey(kind: QuotaKind) {
 
 export function AgentPanel({
   investigationId,
+  chatId,
   readOnly = false,
   agent: agentProp,
   width = 380,
@@ -130,6 +131,9 @@ export function AgentPanel({
   uploadDir = "uploads",
 }: {
   investigationId: string;
+  /** The chat on screen — threaded through to the header's Export so it
+   * downloads this conversation rather than the item's first one. */
+  chatId: string;
   /** Permission-disclosure: the current user may read the thread but lacks
    * `converse` — the composer is disabled with a hint (the backend also 403s a
    * send, this just makes the lock legible instead of a raw error). */
@@ -515,6 +519,7 @@ export function AgentPanel({
       <AgentHeader
         streaming={log.streaming}
         investigationId={investigationId}
+        chatId={chatId}
         slug={slug}
         appTitle={appTitle}
         appIcon={appIcon}
@@ -1115,6 +1120,7 @@ export function AgentHeader({
   streaming,
   investigationId,
   slug,
+  chatId,
   appTitle = "Agent",
   appIcon,
   appColor,
@@ -1130,6 +1136,10 @@ export function AgentHeader({
   investigationId: string;
   /** The current App's slug (#95) — the export targets the app-scoped route. */
   slug: string;
+  /** The chat this header belongs to. Required, and deliberately so: Export used
+   * to know only the item, which let the server fall back to the item's default
+   * chat and hand back the earliest conversation whatever was on screen. */
+  chatId: string;
   /** App identity for the agent panel header (#89) — falls back to a generic
    * "Agent" mark when not provided (e.g. in isolated tests). */
   appTitle?: string;
@@ -1332,7 +1342,7 @@ export function AgentHeader({
         // the SPA shell as `export-chat.html` (#100). Format details live in code.
         onClick={() => {
           setExportError(null);
-          downloadChatExport(slug, investigationId).catch((e) =>
+          downloadChatExport(slug, investigationId, chatId).catch((e) =>
             setExportError(e instanceof Error ? e.message : "匯出失敗"),
           );
         }}

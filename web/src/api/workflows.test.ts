@@ -121,9 +121,13 @@ describe("fetchChatExport (#100 — export fail-loud)", () => {
         }),
     );
     vi.stubGlobal("fetch", fetchMock);
-    await fetchChatExport("topic-hub", "topic-hub:1");
+    await fetchChatExport("topic-hub", "topic-hub:1", "conversation:c1");
     const url = fetchMock.mock.calls[0][0];
-    expect(url).toContain("/a/topic-hub/items/topic-hub%3A1/export-chat");
+    // Chat-scoped: the id of the conversation being exported is IN the URL, so
+    // the server cannot fall back to the item's first chat.
+    expect(url).toContain(
+      "/a/topic-hub/items/topic-hub%3A1/chats/conversation%3Ac1/export-chat",
+    );
     expect(url).not.toContain("/investigations/");
   });
 
@@ -139,7 +143,9 @@ describe("fetchChatExport (#100 — export fail-loud)", () => {
         }),
       ),
     );
-    await expect(fetchChatExport("topic-hub", "topic-hub:1")).rejects.toThrow(/匯出/);
+    await expect(fetchChatExport("topic-hub", "topic-hub:1", "conversation:c1")).rejects.toThrow(
+      /匯出/,
+    );
   });
 });
 
