@@ -369,6 +369,20 @@ class TurnContextBuilder:
         app_slug, profile = facts.slug, facts.profile
         if app_slug is None or profile is None:
             return ()
+        # Skipped only when the APP never opted into delegation — not when this
+        # turn merely has it toggled off. Keying on the resolved `allowed_tools`
+        # looked equivalent and was not: `run_agent` lands in `disabled_tools`
+        # exactly when it is absent from `allowed_tools`, so this early return
+        # made `has_subagents` permanently False for the #480 "ask the user to
+        # enable one" filter — and the one switch worth offering, on an item that
+        # already has definitions, was the one it could never offer. Two fixes
+        # that each looked right cancelled each other; a review probe found it.
+        try:
+            app_grants_delegation = "run_agent" in load_app_manifest(app_slug).agent.tools
+        except (FileNotFoundError, ModuleNotFoundError, OSError):
+            app_grants_delegation = True  # unreadable manifest ⇒ load, don't lose the capability
+        if not app_grants_delegation:
+            return ()
         ceiling: Any = (
             agent_config.allowed_tools
             if agent_config is not None and agent_config.allowed_tools is not None
@@ -550,9 +564,11 @@ class TurnContextBuilder:
             # write. Identical across both turn shapes — the ambient ORIGIN differs (see
             # build_workflow_turn), the sink does not.
             entity_write_sink=self.entity_write_sink,
-            # Who this turn may delegate to, and how. Both or neither: the tool is
-            # only built when there are definitions, and definitions with no seam
-            # would advertise a capability the turn cannot perform.
+            # Who this turn may delegate to, and how. These are set independently
+            # — the composition root always wires the seam, so "definitions but no
+            # seam" does not arise here. What keeps the prompt honest is
+            # `agent.tools.delegation_is_available`, the one predicate both
+            # `build_tools` and the system-prompt index read.
             subagent_defs=subagent_defs,
             run_agent=self._run_agent,
             # #29 / §A: whether anything is loadable this turn — what decides

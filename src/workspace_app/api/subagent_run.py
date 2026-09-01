@@ -22,7 +22,7 @@ from collections.abc import Callable
 import msgspec
 
 from ..agent.context import AgentToolContext
-from ..apps.subagents import SubagentDef
+from ..apps.subagents import SUBAGENT_FORBIDDEN_TOOLS, SubagentDef
 from .events import AgentEvent, MessageDelta, RunError
 from .runner import AgentRunner
 
@@ -59,27 +59,91 @@ async def run_agent_task(
         return f"sub-agent {defn.name!r} failed: {failure}" + (
             f"\n\nIt had said, before failing:\n{answer}" if answer else ""
         )
+    if not answer:
+        # A sub-agent can end a turn without ever writing prose (it stopped on a
+        # tool call, or burned its steps). Returning "" hands the caller a blank
+        # tool result it cannot tell from a successful empty answer, so it says so.
+        logger.warning("sub-agent %r produced no report", defn.name)
+        return (
+            f"sub-agent {defn.name!r} finished without writing a report — it may have "
+            "run out of steps, or stopped on a tool call. Try a narrower task, or do "
+            "this one yourself."
+        )
     return answer
 
 
 def _child_context(parent_ctx: AgentToolContext, defn: SubagentDef) -> AgentToolContext:
+    """The parent's context with everything a sub-agent must not inherit removed.
+
+    `dataclasses.replace` copies the reference for every field NOT named here,
+    which is the trap this function exists to manage: the first version reset
+    only `subagent_citations` and thereby let a sub-agent rewrite the user's todo
+    list, chip the parent's answer with sources it never looked at, and re-send
+    the parent's attached image on every delegation. So the rule, rather than a
+    list of past bugs: a sub-agent inherits the WORKSPACE (files, sandbox,
+    identity, ceilings — it is working in this item) and inherits NOTHING that
+    belongs to the parent's conversation or accumulates across the parent's turn.
+    Anything added to `AgentToolContext` in either of those two categories
+    belongs here.
+    """
     parent_cfg = parent_ctx.agent_config
-    if parent_cfg is None:  # pragma: no cover — the tool guards this first
+    if parent_cfg is None:  # pragma: no cover — `_agent_for` needs a config too
         raise ValueError("run_agent_task needs the parent turn's AgentConfig")
     return dataclasses.replace(
         parent_ctx,
         agent_config=msgspec.structs.replace(
             parent_cfg,
             system_prompt=defn.body,
-            allowed_tools=list(defn.tools),
+            # Stripped, not merely unwired: nulling a seam stops the tool WORKING,
+            # but `build_tools` decides what to BUILD from names alone. A
+            # hand-written definition naming one of these would otherwise be
+            # handed a tool that can only refuse — the #537 shape, aimed at a
+            # sub-agent. `save_subagent` refuses these up front; this is the
+            # backstop for files it never saw.
+            allowed_tools=[t for t in defn.tools if t not in SUBAGENT_FORBIDDEN_TOOLS],
         ),
         history=[],
         run_agent=None,
         subagent_defs=(),
+        # Conversation-scoped. `conversation_id` is what actually refuses:
+        # `update_todos` is a whole-list replace on the parent's pinned checklist
+        # and reads this to find it, so nulling it makes the tool report itself
+        # unavailable rather than acting on a conversation the sub-agent knows
+        # nothing about.
+        #
+        # `on_todos_updated` is nulled for tidiness only — say so rather than
+        # imply a guarantee: the runner re-binds it unconditionally on whatever
+        # context it is handed, the child included, so this value does not
+        # survive into the sub-turn. What holds the line is `conversation_id`
+        # above and `update_todos` being forbidden outright.
+        conversation_id=None,
+        on_todos_updated=None,
+        # The parent turn's attached images. Sharing them contradicts this
+        # feature's whole contract ("starts with an EMPTY context and cannot see
+        # this conversation") and re-pays their token cost on every delegation.
+        turn_image_urls=[],
+        # Accumulators the parent's ASSISTANT MESSAGE is built from. Anything a
+        # sub-agent appends here is attributed to the parent: withheld-source
+        # chips for a lookup the user never saw it make, and the same for the
+        # citation buckets below.
+        withheld_collection_ids=[],
+        kb_passages=[],
+        injected_card_ids=set(),
+        # NOT reset, and deliberately: `kb_search_budget` / `wiki_search_budget`
+        # stay shared, so a turn's search allowance is spent once however many
+        # sub-agents it delegates to. Resetting them would let an agent multiply
+        # the operator's per-turn cap by delegating. Listed here because it looks
+        # like an omission next to everything above.
         # A FRESH accumulator, not the parent's. Citation buckets are paired with
         # the PARENT's tool messages positionally (`bubble_kb_citations`,
         # most-recent-call-wins), so a sub-agent consulting the KB through the
         # shared dict would make the parent's answer cite a lookup the user never
-        # saw it make. The sub-agent's own sources travel inside its report.
+        # saw it make.
+        #
+        # The cost, stated because it is easy to miss: this dict dies with the
+        # child, so a sub-agent granted `ask_knowledge_base` returns prose whose
+        # `[n]` markers no longer resolve to anything. Its report reads fine; the
+        # numbers in it are inert. Fixing that means the sub-agent citing its
+        # sources in words, which is the definition's job — not this seam's.
         subagent_citations={},
     )

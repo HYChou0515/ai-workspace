@@ -71,6 +71,7 @@
 - **KB agent** — 與 RCA 同一個 `AgentRunner`，搭 KB flavour 的 `AgentToolContext`（retriever ＋ collection_ids、無 sandbox）＋ `kb_search` 工具，跑真正的 agent loop。歸 [知識庫：檢索與 Agent](subsystems/kb-retrieval-agent.md)。
 - **kb_search** — KB agent 自己的檢索**葉子**工具（向量搜尋 → 編號 `[n]` 段落）；只授予「本身就是 KB agent」者。歸 [知識庫：檢索與 Agent](subsystems/kb-retrieval-agent.md)。
 - **run_agent** — 主 agent 把一整段子任務委派給一個具名子代理的工具:子代理有自己的 prompt 與被縮小的工具集、context 從空的開始、只回一份報告。定義檔是 `.agent/<name>/AGENT.md`(app profile 出貨 + item workspace 可覆寫,使用者用檔案編輯器就能改)。歸 [Agent 執行層](subsystems/agent-runtime.md)。
+- **save_subagent** — agent 自己造子代理用的存檔工具:只填「名字/用途/工具/指示」,檔案格式由工具自己組,所以存進去的一定讀得回來(裸 `write_file` 手寫的會被靜默跳過)。要的工具超出本輪自己能用的範圍會**當場報錯並列出名字**,不靜默夾掉。存完同一輪就能 `run_agent` 叫它。歸 [Agent 執行層](subsystems/agent-runtime.md)。
 - **ask_knowledge_base** — 給每個*其他* app agent（RCA／playground／topic-hub）的 consumer 介面工具：把整個問題委派給 `kb_chat` sub-agent（context 隔離），回傳已合成、附引用的答案；**絕不**改授 `kb_search`。歸 [知識庫：檢索與 Agent](subsystems/kb-retrieval-agent.md)。
 - **lookup_glossary** — 便宜、確定性、精確 key 的 context-card 查詢（無 LLM、無 retriever），任何 app 可直接授予。歸 [知識庫：檢索與 Agent](subsystems/kb-retrieval-agent.md)。
 - **ContextCard** — 掛在 Collection 上的輕量確定性詞彙卡（specstar Struct，多對多 keys；`norm_keys.contains` 精確查詢），與 `kb_search` 並存。歸 [知識庫：檢索與 Agent](subsystems/kb-retrieval-agent.md)。
