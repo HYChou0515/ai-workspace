@@ -33,7 +33,7 @@ from ..agent.context import AgentToolContext
 from ..apps.manifest import load_app_manifest
 from ..apps.skills import advertised_workspace_skills, effective_item_skills
 from ..apps.subagents import SubagentDef, load_subagents
-from ..context_budget import ContextLimit, catalog_limit, estimate_tokens
+from ..context_budget import ContextLimit, ContextUsage, catalog_limit, estimate_tokens
 from ..entity.brief import entity_schema_brief
 from ..entity.catalog import discover_catalog
 from ..sandbox.protocol import Sandbox, SandboxSpec
@@ -56,6 +56,7 @@ if TYPE_CHECKING:
     from ..resources.kb import Citation
     from ..tooling.registry import PackageInfo
     from ..users import User, UserDirectory
+    from .compaction import CompactionPlan
     from .locator import ItemLocator
     from .registry import InvestigationRegistry
 
@@ -257,6 +258,66 @@ class TurnContextBuilder:
         except Exception:  # noqa: BLE001 — a cache read must not break a turn
             return None
 
+    def usage_of(self, item_id: str, messages: list[Message]) -> ContextUsage:
+        """#739: what this thread currently costs, against this item's window.
+
+        Lives on the builder because the window is resolved here and nowhere
+        else — a route computing its own ceiling would drift from the one the
+        turn actually budgets against, which is the exact failure #624 was
+        about."""
+        from ..context_budget import context_usage
+
+        return context_usage(
+            messages, limit=self._context_window(self._locator.resolve_agent_config(item_id))
+        )
+
+    def compaction_plan_for(
+        self, item_id: str, messages: list[Message], *, force: bool = False
+    ) -> CompactionPlan:
+        """#739: what to compact in this thread, or why not.
+
+        Here rather than in the send path because the ceiling and the history
+        budget are resolved here and nowhere else. A caller deriving its own
+        would compact against one number while the turn is budgeted against
+        another, which is the #624 failure in a new costume."""
+        from ..context_budget import (
+            DEFAULT_MARGIN_RATIO,
+            DEFAULT_REPLY_RESERVE,
+            estimate_messages,
+        )
+        from .compaction import plan_for_budget
+
+        cfg = self._locator.resolve_agent_config(item_id)
+        window = self._context_window(cfg)
+        usage = self.usage_of(item_id, messages)
+        # Deliberately NOT `_budget_for`. That budget is for HISTORY alone, so it
+        # subtracts the system prompt and the tool schemas — and measuring those
+        # means building them, ~28 ms on the event loop, which the turn already
+        # pays once (#624). `usage.used` is the provider's own count of the WHOLE
+        # request, overhead included, so the honest comparison is against the raw
+        # window less the same two allowances the history budget keeps back:
+        # headroom for estimator error, and room for the model to reply.
+        budget = (
+            None
+            if window.tokens is None
+            else max(
+                0,
+                int(window.tokens * (1.0 - DEFAULT_MARGIN_RATIO)) - DEFAULT_REPLY_RESERVE,
+            )
+        )
+        # `force` is a person pressing compact. They have a reason we do not:
+        # the last hour of debugging is finished and they want the window back
+        # BEFORE the next question, not after it stops fitting. So the budget
+        # gates the automatic path only — but the no-room refusal binds both,
+        # because that one is about whether compaction can help at all.
+        return plan_for_budget(
+            messages,
+            used=usage.used,
+            budget=budget,
+            estimate=estimate_messages,
+            force=force,
+        )
+
     def _budget_for(
         self,
         agent_config: AgentConfig | None,
@@ -368,6 +429,20 @@ class TurnContextBuilder:
 
         app_slug, profile = facts.slug, facts.profile
         if app_slug is None or profile is None:
+            return ()
+        # Skipped only when the APP never opted into delegation — not when this
+        # turn merely has it toggled off. Keying on the resolved `allowed_tools`
+        # looked equivalent and was not: `run_agent` lands in `disabled_tools`
+        # exactly when it is absent from `allowed_tools`, so this early return
+        # made `has_subagents` permanently False for the #480 "ask the user to
+        # enable one" filter — and the one switch worth offering, on an item that
+        # already has definitions, was the one it could never offer. Two fixes
+        # that each looked right cancelled each other; a review probe found it.
+        try:
+            app_grants_delegation = "run_agent" in load_app_manifest(app_slug).agent.tools
+        except (FileNotFoundError, ModuleNotFoundError, OSError):
+            app_grants_delegation = True  # unreadable manifest ⇒ load, don't lose the capability
+        if not app_grants_delegation:
             return ()
         ceiling: Any = (
             agent_config.allowed_tools
@@ -550,9 +625,11 @@ class TurnContextBuilder:
             # write. Identical across both turn shapes — the ambient ORIGIN differs (see
             # build_workflow_turn), the sink does not.
             entity_write_sink=self.entity_write_sink,
-            # Who this turn may delegate to, and how. Both or neither: the tool is
-            # only built when there are definitions, and definitions with no seam
-            # would advertise a capability the turn cannot perform.
+            # Who this turn may delegate to, and how. These are set independently
+            # — the composition root always wires the seam, so "definitions but no
+            # seam" does not arise here. What keeps the prompt honest is
+            # `agent.tools.delegation_is_available`, the one predicate both
+            # `build_tools` and the system-prompt index read.
             subagent_defs=subagent_defs,
             run_agent=self._run_agent,
             # #29 / §A: whether anything is loadable this turn — what decides

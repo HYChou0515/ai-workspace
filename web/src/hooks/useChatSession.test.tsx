@@ -296,4 +296,28 @@ describe("useChatSession", () => {
     expect(t.addMention).toHaveBeenCalledWith(["bob"], "look");
     expect(result.current.log.entries.some((e) => e.kind === "mention")).toBe(true);
   });
+
+  // #739: the context gauge hydrates once on mount, so without a refetch at the
+  // end of a turn it would keep showing what the window held BEFORE the turn
+  // ran — a bar that never moves is worse than no bar, because it is believed.
+  it("refreshes the context gauge when a turn ends", async () => {
+    const { QueryClientProvider } = await import("@tanstack/react-query");
+    const { makeTestQueryClient } = await import("../test/queryWrapper");
+    const qc = makeTestQueryClient();
+    qc.setQueryData(["ctx", "c1"], { used: 1, limit: 100, measured: true });
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+    );
+    const t = fakeTransport({
+      contextKey: ["ctx", "c1"],
+      subscribe: async function* () {
+        yield { type: "done" } as AgentEvent;
+        await new Promise<void>(() => {});
+      },
+    });
+    renderHook(() => useChatSession(t, 60_000), { wrapper });
+    await waitFor(() =>
+      expect(qc.getQueryState(["ctx", "c1"])?.isInvalidated).toBe(true),
+    );
+  });
 });

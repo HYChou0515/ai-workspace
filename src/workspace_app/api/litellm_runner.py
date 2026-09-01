@@ -43,7 +43,7 @@ from ..agent.args_recovery import (
 from ..agent.context import AgentToolContext
 from ..agent.header_model import HeaderModel
 from ..agent.repairing_model import RepairingModel
-from ..agent.tools import build_tools, dedupe_tools
+from ..agent.tools import build_tools, dedupe_tools, delegation_is_available
 from ..apps.subagents import subagents_block
 from ..context_budget import (
     ContextLimit,
@@ -267,6 +267,20 @@ def _final_tokens(
     return (usage[0] or prompt_tok, usage[1] or approx_completion)
 
 
+def _live_prompt_tokens(ctx: AgentToolContext, prompt: str) -> int:
+    """The ↑ figure while the request is still in flight (#739).
+
+    It used to be `len(prompt) / 4` — the user's own message, which is not the
+    context size and does not grow as the window fills. The final phase then
+    reported the provider's count of the WHOLE request, so the number jumped by
+    an order of magnitude the moment the turn ended and the bar meant two
+    different things within one turn.
+
+    Same figure the silent-truncation check compares against, deliberately: one
+    meaning, one arithmetic, two readers."""
+    return _sent_estimate(ctx, prompt)
+
+
 def _turn_instructions(ctx: AgentToolContext, feedback: str | None) -> str | None:
     """Per-turn additions to the system prompt: the #242 speaker note (who the
     agent is replying to in a shared workspace), the #537 knowledge-source
@@ -280,7 +294,15 @@ def _turn_instructions(ctx: AgentToolContext, feedback: str | None) -> str | Non
         s
         for s in (
             speaker_note(ctx.speaker),
-            subagents_block(ctx.subagent_defs),
+            # Only when the turn actually holds `run_agent` — advertising an
+            # index for a tool that was never built spends the model's next step
+            # on a call that cannot resolve.
+            subagents_block(ctx.subagent_defs)
+            if delegation_is_available(
+                ctx.agent_config.allowed_tools if ctx.agent_config else None,
+                bool(ctx.subagent_defs),
+            )
+            else "",
             ctx.search_allowance_note,
             ctx.entity_schema_note,
             feedback,
@@ -363,14 +385,24 @@ def _agent_for(
     # `tools`. The agent learns they exist (so it avoids them by default) and can
     # ask the user to enable one in the tool picker. Metas come from the same
     # display catalog the picker uses, so built-in + package selectors both work.
-    if config.disabled_tools:
+    # `run_agent` is left out unless turning it on would actually do something.
+    # This section's promise is "ask the user to enable one" — but enabling
+    # `run_agent` alone, on an item with no `.agent/` files, leaves the picker
+    # showing it ON while `build_tools` still strips it, and it drops off this
+    # list too, so nothing anywhere explains the dead switch. Advertising a knob
+    # that silently does nothing is worse than not advertising it.
+    offerable = [
+        t
+        for t in config.disabled_tools
+        if t != "run_agent"
+        or delegation_is_available([*(config.allowed_tools or []), t], has_subagents)
+    ]
+    if offerable:
         from ..tooling.catalog import picker_units
 
         # `picker_units` yields one meta per name and the renderer is non-empty
         # for non-empty metas, so this is always a real section here.
-        disabled_section = format_disabled_tools_for_prompt(
-            picker_units(config.disabled_tools, packages or [])
-        )
+        disabled_section = format_disabled_tools_for_prompt(picker_units(offerable, packages or []))
         base = f"{base}\n\n{disabled_section}".strip() if base else disabled_section
     # #674: and the third-party tools that could not be loaded at all. Kept
     # separate from the section above: there is no switch for the user to
@@ -1375,7 +1407,7 @@ class LitellmAgentRunner:
             **self._agent_kwargs(ctx, feedback, resolve_credential),
         )
         t0 = time.monotonic()
-        prompt_tok = _approx_tokens(len(prompt))
+        prompt_tok = _live_prompt_tokens(ctx, prompt)
 
         # Tag the SDK trace with the run flavour (workflow_name) + the
         # investigation/collection id (group_id) so the live monitor can
@@ -1484,6 +1516,11 @@ class LitellmAgentRunner:
                         prompt_tokens=prompt_final,
                         completion_tokens=completion_final,
                         elapsed_ms=round((time.monotonic() - t0) * 1000),
+                        # #739: `_final_tokens` falls back to our estimate when
+                        # the provider reports nothing or 0, so the number alone
+                        # cannot say which it is. Say it here, once, at the only
+                        # place that knows.
+                        exact=bool(usage and usage[0]),
                     )
                 )
             finally:
@@ -1525,7 +1562,7 @@ class LitellmAgentRunner:
             **self._agent_kwargs(ctx, feedback, resolve_credential),
         )
         t0 = time.monotonic()
-        prompt_tok = _approx_tokens(len(prompt))
+        prompt_tok = _live_prompt_tokens(ctx, prompt)
         # No stream → exec stdout can't interleave live; it still lands in the
         # tool's result. Swallow mid-turn pushes so a long exec doesn't error.
         ctx.on_exec_output = lambda b: None
@@ -1587,4 +1624,11 @@ class LitellmAgentRunner:
             prompt_tokens=prompt_final,
             completion_tokens=completion_final,
             elapsed_ms=round((time.monotonic() - t0) * 1000),
+            # #739: same as the streaming path. `_final_tokens` substitutes our
+            # estimate when the provider reports nothing, so the number alone
+            # cannot say which it is. Without this the gauge could never anchor
+            # on a non-streaming deployment — and compaction would then be
+            # decided by comparing message-only tokens against a whole-request
+            # budget, which is the very unit confusion this feature fixed.
+            exact=bool(usage and usage[0]),
         )

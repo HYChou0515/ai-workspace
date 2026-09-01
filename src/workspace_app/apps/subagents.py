@@ -13,7 +13,9 @@ workspace may add or override them), same tolerance for one bad hand-edit.
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Collection
+from functools import cache
 from importlib import resources
 from importlib.resources.abc import Traversable
 
@@ -36,6 +38,23 @@ WORKSPACE_AGENT_DIR = ".agent"
 #: Hard cap on a body. The body IS the sub-agent's system prompt, so an
 #: accidental paste of a log file would silently eat the turn's context window.
 SUBAGENT_BODY_CAP = 50_000
+
+#: Tools a sub-agent may never hold, and why each one: a sub-agent answers ONCE,
+#: from an empty context, to another agent rather than to a person.
+#:
+#: - `run_agent` / `save_subagent` — it has no seam to delegate through, and
+#:   nothing it created could be used before it finishes.
+#: - `update_todos` — a WHOLE-LIST replace on the parent conversation's pinned
+#:   checklist. A sub-agent has no idea what is on it, so "add my step" is
+#:   really "delete the user's plan", and the live event goes to the child's
+#:   queue, so the panel changes with nothing in the stream explaining it.
+#: - `ask_user` — it ends the turn to wait for a reply. In a sub-turn that means
+#:   stopping with a question nobody is shown and no report for the caller.
+#:
+#: Enforced twice on purpose: subtracted from what `save_subagent` will grant
+#: (so the agent is TOLD, per the refuse-don't-trim rule) and stripped again in
+#: the child context (so a hand-written `.agent/` file cannot slip one past).
+SUBAGENT_FORBIDDEN_TOOLS = frozenset({"run_agent", "save_subagent", "update_todos", "ask_user"})
 
 
 class SubagentDef(msgspec.Struct, frozen=True):
@@ -73,10 +92,27 @@ def profile_subagent_defs(
     app_slug: str, profile: str, *, ceiling: Collection[str] | None = None
 ) -> list[SubagentDef]:
     """The sub-agents an App profile ships, sorted by name. Unknown profile / no
-    `.agent/` dir → empty (a profile may ship none)."""
+    `.agent/` dir → empty (a profile may ship none).
+
+    The package read is cached and the clamp is applied after it, because the
+    ceiling is per-turn while the shipped files are fixed for the process —
+    `list_skills` has the same split for the same reason. Without it this did
+    blocking package-filesystem I/O inside an `async def` on every turn of every
+    app, including apps that ship no `.agent/` dir at all."""
+    return [clamp_tools(d, ceiling) for d in _shipped_subagent_defs(app_slug, profile)]
+
+
+@cache
+def _shipped_subagent_defs(app_slug: str, profile: str) -> tuple[SubagentDef, ...]:
+    """The profile's definitions exactly as the package holds them.
+
+    Nothing here is handed out directly — `profile_subagent_defs` passes every
+    entry through `clamp_tools`, which always rebuilds. The structs are frozen
+    but their `tools` list is not, so returning one would have put a mutable
+    list belonging to the cache into a caller's hands."""
     root = _agent_root(app_slug, profile)
     if root is None:
-        return []
+        return ()
     out: list[SubagentDef] = []
     for sub in sorted(root.iterdir(), key=lambda t: t.name):
         agent_md = sub / "AGENT.md"
@@ -84,8 +120,8 @@ def profile_subagent_defs(
             continue
         defn = _def_from(agent_md.read_bytes(), sub.name)
         if defn is not None:
-            out.append(clamp_tools(defn, ceiling))
-    return out
+            out.append(defn)
+    return tuple(out)
 
 
 def _agent_root(app_slug: str, profile: str) -> Traversable | None:
@@ -150,10 +186,15 @@ def subagents_block(defs: list[SubagentDef] | tuple[SubagentDef, ...]) -> str:
 
 def clamp_tools(defn: SubagentDef, ceiling: Collection[str] | None) -> SubagentDef:
     """`defn` with any tool outside `ceiling` dropped (logged). `None` ceiling ⇒
-    unclamped, matching the tri-state `allowed_tools` convention."""
+    unclamped, matching the tri-state `allowed_tools` convention.
+
+    Always rebuilds, even unclamped. `SubagentDef` is frozen but `tools` is a
+    plain list, and the unclamped path used to hand back the very object
+    `_shipped_subagent_defs` caches — so one `.tools.append(...)` anywhere would
+    have edited every later turn's copy of a shipped definition, process-wide."""
+    kept = list(defn.tools) if ceiling is None else [t for t in defn.tools if t in ceiling]
     if ceiling is None:
-        return defn
-    kept = [t for t in defn.tools if t in ceiling]
+        return msgspec.structs.replace(defn, tools=kept)
     if dropped := [t for t in defn.tools if t not in ceiling]:
         logger.warning("sub-agent %r: tools outside the ceiling, dropped: %s", defn.name, dropped)
     return msgspec.structs.replace(defn, tools=kept)
@@ -201,3 +242,96 @@ def _parse_tools(value: object) -> list[str]:
     if text.startswith("[") and text.endswith("]"):
         text = text[1:-1]
     return [t.strip() for t in text.split(",") if t.strip()]
+
+
+class RoundTrip(msgspec.Struct, frozen=True):
+    """What `round_trip` found: the rendered file, the definition the real loader
+    read back out of it, and `reason` — `None` when the two agree, else a plain
+    sentence for the caller to relay.
+
+    `parsed` is handed back rather than re-derived, so a caller that needs the
+    definition (to splice it into the turn's index) does not re-parse and grow a
+    branch that can never be taken."""
+
+    rendered: str
+    parsed: SubagentDef
+    reason: str | None = None
+
+
+def round_trip(slug: str, description: str, tools: Collection[str], body: str) -> RoundTrip:
+    """`reason is None` when `render_agent_md`'s output loads back as the SAME definition;
+    otherwise a plain sentence saying what could not be stored.
+
+    The guarantee is FAITHFUL storage, which is stronger than "it loads". Owning
+    the format is not enough for either: the frontmatter parser is a line-based
+    mini-YAML, so a value opening with `[` or `{` fails to parse, a body one
+    character under the cap crosses it once rendered — those wrote files the
+    loader then skipped — and a `#` anywhere in the description truncates it
+    there.
+
+    The `#` case is the one where the two guarantees differ: such a definition
+    still loads and still runs. It is refused anyway, because the description is
+    what the calling agent picks BY, so "handles #urgent tickets" silently stored
+    as "handles" is a sub-agent that will be chosen for the wrong jobs — a defect
+    that surfaces as bad judgement rather than as an error. The refusal names the
+    character and costs one retry; the truncation costs a wrong delegation nobody
+    traces back here. (An adversarial regression review flagged the strictness;
+    this is the answer, not an oversight.)
+
+    The check is the round trip itself rather than a blacklist of characters:
+    render it, parse it back with the loader that will read it for real, and
+    compare. A parser change can therefore never quietly reopen the hole."""
+    rendered = render_agent_md(slug, description, tools, body)
+    back = _def_from(rendered.encode("utf-8"), slug)
+    if back is None:
+        parsed_body = len(body.strip()) + 1  # render_agent_md ends the body with \n
+        placeholder = SubagentDef(name=slug, description=description, body=body)
+        if parsed_body > SUBAGENT_BODY_CAP:
+            return RoundTrip(
+                rendered,
+                placeholder,
+                f"the instructions come to {parsed_body} chars once saved, over the "
+                f"{SUBAGENT_BODY_CAP} cap — it is a system prompt, not a document. State "
+                "the method and point at files for the detail.",
+            )
+        return RoundTrip(
+            rendered,
+            placeholder,
+            "the description could not be stored as written — a `#`, or an unclosed `[` "
+            "or `{`, confuses the file format. Rephrase it in plain words.",
+        )
+    if back.description != " ".join(description.split()):
+        return RoundTrip(
+            rendered,
+            back,
+            f"the description would be saved as {back.description!r}, not what you wrote — "
+            "a `#` truncates it. Rephrase it without one.",
+        )
+    if back.tools != [t.strip() for t in tools if t.strip()]:
+        return RoundTrip(
+            rendered,
+            back,
+            f"the tool list would be saved as {back.tools!r}, not what you asked for.",
+        )
+    return RoundTrip(rendered, back)
+
+
+def slugify_subagent_name(name: str) -> str:
+    """A display name → kebab-case slug (lowercase; non-alphanumeric runs become
+    a single ``-``; trimmed). `save_subagent` uses this so the frontmatter
+    ``name`` always equals the folder name and `_def_from` never silently skips
+    the file. ``""`` when nothing usable remains (the caller rejects)."""
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+
+
+def render_agent_md(slug: str, description: str, tools: Collection[str], body: str) -> str:
+    """Assemble a well-formed AGENT.md: `name` + `description` + `tools`
+    frontmatter, then the body.
+
+    The inverse of `_parse_tools` above, and deliberately next to it: the two
+    halves of one format drift the moment they live apart. ``description`` is
+    collapsed to a single line because the frontmatter parser is line-based — a
+    newline would truncate it."""
+    desc = " ".join(description.split())
+    listed = ", ".join(t.strip() for t in tools if t.strip())
+    return f"---\nname: {slug}\ndescription: {desc}\ntools: [{listed}]\n---\n\n{body.strip()}\n"

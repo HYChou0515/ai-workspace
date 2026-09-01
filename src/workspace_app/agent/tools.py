@@ -10,7 +10,7 @@ import io
 import json
 import logging
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 import magic
@@ -29,6 +29,7 @@ from .shown_files import (
 from .tool_authz import authorize_tool
 
 if TYPE_CHECKING:
+    from ..apps.subagents import SubagentDef
     from ..resources.conversation import Citation
 
 _LOGGER = logging.getLogger(__name__)
@@ -1155,8 +1156,9 @@ async def ask_knowledge_base_impl(
 async def run_agent_impl(
     ctx: RunContextWrapper[AgentToolContext], agent_type: str, prompt: str
 ) -> str:
-    """Delegate a whole sub-task to one of the sub-agents listed in your system
-    prompt, and get back its report.
+    """Delegate a whole sub-task to a named sub-agent and get back its report.
+    The ones you can call are listed in your system prompt — when none are
+    listed, `save_subagent` is how you create one, and it is callable at once.
 
     The sub-agent starts with an EMPTY context and cannot see this conversation,
     so `prompt` must be self-contained: say what to do, what it needs to know,
@@ -1177,11 +1179,56 @@ async def run_agent_impl(
     defs = ctx.context.subagent_defs
     chosen = next((d for d in defs if d.name == agent_type), None)
     if chosen is None:
+        # The index was frozen when the turn began, so one saved DURING the turn
+        # is not in it. Read `.agent/` live before giving up — the same thing
+        # `read_skill` does — or "create one, then use it" would need the user to
+        # send a second message for no reason they could see. Costs one listing,
+        # and only on the miss.
+        #
+        # The two lists are UNIONed, not swapped: a live read that came back
+        # empty (no workspace on this turn, or a listing that failed) must not
+        # erase the names the turn actually advertised, or an ordinary typo would
+        # lose its suggestions.
+        names = {d.name: d for d in defs}
+        names.update({d.name: d for d in await _live_subagent_defs(ctx.context)})
+        defs = tuple(names[n] for n in sorted(names))
+        chosen = names.get(agent_type)
+    if chosen is None:
         # Name the alternatives: the model picked from an index it was shown, so
         # a bare rejection leaves it guessing at what it misread.
-        known = ", ".join(d.name for d in defs) or "none"
-        return f"error: no sub-agent named {agent_type!r}. Available: {known}"
+        if known := ", ".join(d.name for d in defs):
+            return f"error: no sub-agent named {agent_type!r}. Available: {known}"
+        cfg = ctx.context.agent_config
+        if cfg is not None and "save_subagent" in (cfg.allowed_tools or ()):
+            return (
+                f"error: no sub-agent named {agent_type!r} — none are defined yet. "
+                "Create one with save_subagent and it is callable right away."
+            )
+        return f"error: no sub-agent named {agent_type!r}, and none are defined."
     return await run(ctx.context, chosen, prompt, ctx.context.on_exec_output)
+
+
+async def _live_subagent_defs(ctx: AgentToolContext) -> tuple[SubagentDef, ...]:
+    """This item's sub-agents read fresh, clamped the same way the turn's frozen
+    index was. Never raises: a workspace that cannot be listed simply has none,
+    and delegation is a capability, not something that may break a turn."""
+    from ..apps.subagents import load_subagents, workspace_subagent_defs
+
+    files, inv = ctx.files, ctx.investigation_id
+    if files is None or inv is None:
+        return ()
+    ceiling = _subagent_tool_ceiling(ctx)
+    try:
+        if ctx.app_slug is None or ctx.template_profile is None:
+            # No App identity (a synthetic slug, a workflow-lean ctx): the package
+            # side cannot be resolved, but the workspace side still can.
+            return tuple(await workspace_subagent_defs(files, inv, ceiling=ceiling))
+        return tuple(
+            await load_subagents(files, inv, ctx.app_slug, ctx.template_profile, ceiling=ceiling)
+        )
+    except Exception:  # noqa: BLE001 — a re-read is best-effort, never a turn-breaker
+        _LOGGER.warning("run_agent: live sub-agent re-read failed for %s", inv, exc_info=True)
+        return ()
 
 
 async def ask_wiki_impl(ctx: RunContextWrapper[AgentToolContext], question: str) -> str:
@@ -1709,6 +1756,152 @@ async def save_skill_impl(
         f"read_skill('{slug}'). "
         "To reuse it elsewhere, download the .skill folder from the Skills panel."
     )
+
+
+async def save_subagent_impl(
+    ctx: RunContextWrapper[AgentToolContext],
+    name: str,
+    description: str,
+    tools: list[str],
+    body: str,
+) -> str:
+    """Save a sub-agent into THIS workspace so you can delegate to it with
+    `run_agent` — including later in this same reply.
+
+    Use this when a kind of sub-task keeps coming back: reading long logs,
+    surveying a directory, drafting something to a fixed shape. `name` is a short
+    title (slugified — "Log Digger" becomes `log-digger`); `description` is the
+    one-line "when would I use this" that the delegation index shows YOU, so
+    write it for the caller, not for the sub-agent; `tools` is the subset it may
+    use, and can only name tools you hold yourself; `body` is its system prompt —
+    say what to do and what to report back, because it starts with an EMPTY
+    context and answers once.
+
+    This owns the file format, so a sub-agent you save is always one you can
+    call — it cannot be silently dropped by malformed frontmatter. Re-saving the
+    same name overwrites, so refine freely. Returns a confirmation, or an
+    `error:` note naming exactly what to fix."""
+    from ..apps.subagents import (
+        SUBAGENT_FORBIDDEN_TOOLS,
+        WORKSPACE_AGENT_DIR,
+        round_trip,
+        slugify_subagent_name,
+    )
+
+    files = ctx.context.files
+    inv = ctx.context.investigation_id
+    if files is None or inv is None:
+        return "error: save_subagent needs a workspace (none on this turn)"
+    slug = slugify_subagent_name(name)
+    if not slug:
+        return f"error: {name!r} has no letters or digits to make a sub-agent name from"
+    if not description.strip():
+        # The same argument as the empty body below, and it bites harder: the
+        # description is the ONLY thing the calling agent picks by, so an empty
+        # one is a sub-agent listed in the index that nobody can tell when to use.
+        return (
+            "error: a sub-agent needs a description — it is the one line the "
+            "delegation index shows, so write when you would use this one."
+        )
+    if not body.strip():
+        # An empty body still loads and still lists, so the failure surfaces as a
+        # sub-agent that answers from nothing — indistinguishable, to the caller,
+        # from one that simply answered badly.
+        return (
+            "error: a sub-agent needs instructions — `body` is its whole system prompt. "
+            "Say what it should do and what to report back."
+        )
+    # Tools outside the ceiling are REFUSED, not quietly trimmed. A sub-agent that
+    # starts out believing it holds `exec` and then finds it missing fails in a way
+    # its caller cannot read; being told now is what lets the agent pick another way.
+    if (allowed := _subagent_tool_ceiling(ctx.context)) is not None and (
+        outside := sorted(t for t in tools if t not in allowed)
+    ):
+        # Two rules wearing one sentence. "it can only use tools you hold
+        # yourself" was said for the four a sub-agent may NEVER hold — which the
+        # parent is usually holding, so the agent can check the reason and find
+        # it false. A refusal whose stated cause is untrue invites a retry of the
+        # same call; the ceiling subtracts the two sets for different reasons, so
+        # the message has to as well.
+        never = [t for t in outside if t in SUBAGENT_FORBIDDEN_TOOLS]
+        unheld = [t for t in outside if t not in SUBAGENT_FORBIDDEN_TOOLS]
+        why = []
+        if never:
+            why.append(
+                f"{', '.join(never)} belongs to this conversation, not to a delegated task, "
+                "so no sub-agent may hold it"
+            )
+        if unheld:
+            why.append(f"you are not holding {', '.join(unheld)} yourself")
+        return (
+            f"error: cannot grant {', '.join(outside)} to a sub-agent — {'; and '.join(why)}. "
+            f"Available: {', '.join(sorted(allowed)) or 'none'}"
+        )
+    # The promise in this docstring, checked rather than asserted: render it and
+    # read it back with the real loader before anything is written. Owning the
+    # format is not the same as owning what the caller puts INTO it.
+    if (checked := round_trip(slug, description, tools, body)).reason is not None:
+        return f"error: {checked.reason}"
+    path = f"/{WORKSPACE_AGENT_DIR}/{slug}/AGENT.md"
+    await files.write(inv, path, checked.rendered.encode("utf-8"))
+    # Splice it into THIS turn's index. `run_agent` re-reads the workspace when a
+    # name misses, which covers a brand-new sub-agent — but re-saving an existing
+    # one is a HIT, so without this the turn would keep running the old body
+    # while this tool says "re-saving overwrites, so refine freely". Delegating,
+    # reading a poor report and refining is the obvious loop; silently discarding
+    # the refinement is the worst way to lose it.
+    #
+    # `checked.parsed` is the definition the round-trip check already parsed —
+    # re-parsing here produced a branch that could never be false, which the
+    # 100% gate would have failed on.
+    others = tuple(d for d in ctx.context.subagent_defs if d.name != slug)
+    ctx.context.subagent_defs = tuple(sorted((*others, checked.parsed), key=lambda d: d.name))
+    saved = f"saved sub-agent '{slug}' to {rel_path(path)}."
+    # Through the SAME predicate `build_tools` and the delegation index use. This
+    # was a third reader that simply assumed, so a per-item toggle switching
+    # `run_agent` off while leaving this tool on made the confirmation walk the
+    # model into calling a tool absent from its own payload.
+    cfg = ctx.context.agent_config
+    if not delegation_is_available(cfg.allowed_tools if cfg is not None else None, True):
+        return (
+            f"{saved} You are not holding run_agent on this turn, so you cannot delegate to "
+            "it yourself — it is saved, and a turn that holds run_agent can call it."
+        )
+    return (
+        f"{saved} Delegate to it with run_agent('{slug}', <a self-contained task>) — "
+        "it is callable now, including in this reply."
+    )
+
+
+def _subagent_tool_ceiling(ctx: AgentToolContext) -> set[str] | None:
+    """What a sub-agent saved on this turn may be granted: what THIS turn holds,
+    minus what no sub-agent may ever hold. ``None`` ⇒ nothing to check against (a
+    synthetic slug and a config that named no tools) — the load-time clamp in
+    ``apps.subagents.clamp_tools`` still applies either way.
+
+    Derived from the TURN rather than from the App alone, because otherwise a
+    per-item tool toggle becomes a suggestion: turning `exec` off for an item has
+    to turn it off for the sub-agents that item's agent writes, too."""
+    from ..apps.subagents import SUBAGENT_FORBIDDEN_TOOLS
+
+    held = ctx.agent_config.allowed_tools if ctx.agent_config is not None else None
+    # What the turn HOLDS, alone — not intersected with the profile. A per-item
+    # force-ON deliberately re-adds a tool the profile narrowed away
+    # (`_apply_tool_prefs` ceilings on the APP, not the profile), so intersecting
+    # refused `exec` to an agent that was holding `exec`, with a message reading
+    # "it can only use tools you hold yourself". The resolved list already IS the
+    # answer to "what may this turn do"; anything further is a second, wrong rule.
+    # Only when there is no resolved list does the profile stand in for it.
+    ceiling = (
+        set(held) if held is not None else _profile_tool_ceiling(ctx.app_slug, ctx.template_profile)
+    )
+    if ceiling is None:
+        return None
+    # Minus what a sub-agent can never hold, so those are REFUSED by name like
+    # any other over-reach. Accepting them and stripping them later is the
+    # quiet trim this tool's own rule forbids — and the refusal's "Available:"
+    # line would otherwise advertise them.
+    return ceiling - SUBAGENT_FORBIDDEN_TOOLS
 
 
 def _profile_tool_ceiling(app_slug: str | None, profile: str | None) -> set[str] | None:
@@ -2304,6 +2497,9 @@ _IMPLS = {
     # `agent.tools` like any other (the workspace apps that ship the
     # `author-skill` meta-skill grant it). Deterministic SKILL.md write.
     "save_skill": save_skill_impl,
+    # `save_subagent` (#738) — same shape again: an opt-in tool that owns the
+    # AGENT.md write, so a sub-agent the agent authors is always one it can call.
+    "save_subagent": save_subagent_impl,
     # `save_workflow` (#323) — same shape: an opt-in tool the apps that ship the
     # `author-workflow` meta-skill grant. Validates + writes a workspace workflow.json.
     "save_workflow": save_workflow_impl,
@@ -2496,7 +2692,7 @@ def build_tools(
     turn on a call that cannot resolve."""
     names = allowed if allowed is not None else _WORKSPACE_TOOLS
     names = [_LEGACY_TOOL_RENAMES.get(n, n) for n in names]
-    if not has_subagents:
+    if not delegation_is_available(names, has_subagents):
         names = [n for n in names if n != "run_agent"]
     # Not `append` unconditionally: a config that already names `read_skill`
     # would then produce a duplicate this very function has to drop, and the
@@ -2580,6 +2776,32 @@ def dedupe_tools(tools: list[FunctionTool]) -> list[FunctionTool]:
         seen.add(t.name)
         out.append(t)
     return out
+
+
+def delegation_is_available(allowed: Collection[str] | None, has_subagents: bool) -> bool:
+    """Whether this turn ends up holding `run_agent`.
+
+    ONE function because two readers must never disagree: `build_tools` strips
+    the tool when this is false, and the system prompt's delegation index is
+    rendered only when it is true. Computed separately, they drifted — the block
+    was unconditional, so an App that lists neither `run_agent` nor
+    `save_subagent` (topic-hub) told the model to call a tool it did not have the
+    moment a user dropped an `.agent/` file into the workspace. That is #537's
+    failure inverted, and an adversarial review found it rather than a test.
+
+    `read_skill` cannot drift this way because it is APPENDED where the index is
+    decided; `run_agent` must stay opt-in per App, so it gets a shared predicate
+    instead. True when there is someone to delegate to, or the means to create
+    one — a sub-agent saved mid-turn is callable in the same turn."""
+    raw = list(allowed) if allowed is not None else _WORKSPACE_TOOLS
+    # Normalised the same way `build_tools` does. The table is only `ls` today,
+    # so the two readers cannot disagree — but they read the SAME list through
+    # different paths, and the point of one predicate is that adding an alias
+    # cannot quietly split them.
+    names = [_LEGACY_TOOL_RENAMES.get(n, n) for n in raw]
+    if "run_agent" not in names:
+        return False
+    return has_subagents or "save_subagent" in names
 
 
 def _declared_shared_skills(app_slug: str) -> list[str]:

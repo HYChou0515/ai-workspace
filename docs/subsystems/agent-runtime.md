@@ -166,7 +166,8 @@ flowchart TD
 - `src/workspace_app/agent/arg_repair.py` — `make_backstop_sentinel` / `malformed_raw`（in-band backstop sentinel）。
 - `src/workspace_app/agent/tool_prompt.py` — `format_tools_for_prompt`。
 - `src/workspace_app/agent/reasoning.py` — `is_ollama` / `reasoning_off_kwargs`。
-- `src/workspace_app/apps/subagents.py` — 子代理定義(`.agent/<name>/AGENT.md`)的載入、雙來源合併、工具上限夾制與系統提示索引 `subagents_block`。
+- `src/workspace_app/apps/subagents.py` — 子代理定義(`.agent/<name>/AGENT.md`)的載入、雙來源合併、工具上限夾制與系統提示索引 `subagents_block`;`slugify_subagent_name` / `render_agent_md` 是 `save_subagent` 寫檔用的那一半,刻意緊鄰 `_parse_tools`(同一個格式的兩半分開住就會漂移)。
+- `src/workspace_app/agent/tools.py` 的 `save_subagent_impl` / `_subagent_tool_ceiling` / `_live_subagent_defs` — agent 自己造子代理那條路:存檔工具擁有格式(所以存了一定叫得到)、上限取自**本輪**而非只有 App(否則 per-item 的工具開關會變成建議)、以及找不到名字時的即時重讀(所以同一輪就叫得到)。
 - `src/workspace_app/api/subagent_run.py` — `run_agent_task`:以 `dataclasses.replace` 從父 context 導出子 context(保留 workspace 與身分,換掉 prompt/工具/history)。
 - `src/workspace_app/agent/config_catalog.py` — `AgentConfigCatalog.configs_for` / `default_for`。
 - `CONTEXT.md` — Preset / Usage entry / AgentConfig / AgentToolContext / args_recovery 的詞彙定義。

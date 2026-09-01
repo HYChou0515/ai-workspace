@@ -30,6 +30,8 @@ from .promote import promote_chat_to_kb
 from .rca_messages import undo_cut_index
 from .schemas import (
     _ChatInfo,
+    _CompactOut,
+    _ContextOut,
     _CreateChatBody,
     _GoalBody,
     _GoalOut,
@@ -73,6 +75,24 @@ class SendInto(Protocol):
 RecordMention = Callable[..., None]
 
 
+class CompactInto(Protocol):
+    """#739: replace this chat's older span with a précis of it. Same callable
+    the automatic path uses — the user pressing compact differs only in `force`,
+    which skips the budget CHECK because asking IS the trigger — but not the
+    no-room refusal, which is about whether compaction can help at all."""
+
+    async def __call__(
+        self, item_id: str, rid: str, conv: Any, engine_key: str, *, force: bool = False
+    ) -> str: ...
+
+
+class ContextUsageFor(Protocol):
+    """#739: what a chat currently costs. A narrow callable rather than the whole
+    turn-context builder — the routes need one number, not its surface."""
+
+    def __call__(self, item_id: str, messages: list[Any]) -> Any: ...
+
+
 def register_chat_routes(
     app: FastAPI | APIRouter,
     *,
@@ -87,6 +107,8 @@ def register_chat_routes(
     kb_chat_pipeline: object | None,
     send_into: SendInto,
     record_mention: RecordMention,
+    context_usage_for: ContextUsageFor,
+    compact_into: CompactInto,
     goal_max_rounds: int = 3,
     goal_checker_enabled: bool = True,
     # #615: the deployment's off-hours budget + whether a usable window is
@@ -348,6 +370,43 @@ def register_chat_routes(
         locator.require_chat(slug, item_id, chat_id)
         key = locator.engine_key(investigation_id, chat_id)
         return {"alive": await turn_engine.turn_alive(key)}
+
+    @app.post("/a/{slug}/items/{item_id}/chats/{chat_id}/compact")
+    async def compact_chat(slug: str, item_id: str, chat_id: str) -> _CompactOut:
+        """#739: summarise the older part of this chat, on request.
+
+        `converse` rather than `read_chat`: this WRITES to the thread and costs
+        a model call, so a reader who may only watch must not be able to spend
+        one. Same call the automatic path makes — the only difference is that
+        this one skips the budget check, because a person asking has a reason we
+        cannot see from the token count. It does NOT skip the no-room refusal:
+        asking is a trigger, not a licence to trade a whole conversation for a
+        summary that provably cannot make it fit."""
+        investigation_id = locator.require_access(slug, item_id, "converse")
+        rid, conv = locator.require_chat(slug, item_id, chat_id)
+        outcome = await compact_into(
+            investigation_id,
+            rid,
+            conv,
+            locator.engine_key(investigation_id, rid),
+            force=True,
+        )
+        return _CompactOut(compacted=outcome == "compacted", reason=outcome)
+
+    @app.get("/a/{slug}/items/{item_id}/chats/{chat_id}/context")
+    def get_chat_context(slug: str, item_id: str, chat_id: str) -> _ContextOut:
+        """#739: how much of the window this chat occupies — the usage bar's
+        initial hydration. It exists at rest because the bar must be readable
+        before a turn runs, not only while one streams.
+
+        Unlike `/todos`, there is no matching event carrying the new state: the
+        gauge is refreshed by refetching this route when a turn ends. Cheaper,
+        because the number only changes when a turn reports its usage — but it
+        is a different shape, and an earlier comment here claimed otherwise."""
+        investigation_id = locator.require_access(slug, item_id, "read_chat")
+        _rid, conv = locator.require_chat(slug, item_id, chat_id)
+        usage = context_usage_for(investigation_id, conv.messages)
+        return _ContextOut(used=usage.used, limit=usage.limit, measured=usage.measured)
 
     @app.get("/a/{slug}/items/{item_id}/chats/{chat_id}/todos")
     async def get_chat_todos(slug: str, item_id: str, chat_id: str) -> _TodosOut:

@@ -345,3 +345,39 @@ async def test_chat_scoped_stream_is_per_chat():
     assert "UserMessage" in names and "MessageDelta" in names
     um = next(e for e in seen if type(e).__name__ == "UserMessage")
     assert um.content == "hi-B"
+
+
+def test_the_chat_reports_what_it_is_costing_before_any_turn_runs():
+    """#739 P2: the usage bar hydrates on page load, like the todo panel — the
+    number must exist at rest, not only while a turn streams. It is anchored on
+    the provider's own reported count, so it includes the system prompt and tool
+    schemas the estimator cannot see."""
+    from workspace_app.resources.conversation import MessageMetrics
+
+    client, spec, iid = _client()
+    rm = spec.get_resource_manager(Conversation)
+    conv = rm.create(
+        Conversation(
+            item_id=iid,
+            created_ms=1,
+            messages=[
+                Message(role="user", content="問題"),
+                Message(
+                    role="assistant",
+                    content="回答",
+                    # `exact` says the PROVIDER reported these, which is what
+                    # makes them an anchor. Without it they are one of our own
+                    # substituted estimates and the gauge must not present them
+                    # as measured (#739 review).
+                    metrics=MessageMetrics(
+                        prompt_tokens=9_000, completion_tokens=400, elapsed_ms=10, exact=True
+                    ),
+                ),
+            ],
+        )
+    )
+    r = client.get(f"/a/rca/items/{iid}/chats/{conv.resource_id}/context")
+    assert r.status_code == 200, r.text
+    got = r.json()
+    assert got["used"] == 9_400
+    assert got["measured"] is True

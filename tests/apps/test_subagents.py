@@ -97,7 +97,11 @@ def isolated_apps(tmp_path: Path, monkeypatch):
 
     importlib.reload(subagents)
     monkeypatch.setattr(subagents, "_APPS_PKG", "agentpkg")
+    # The package read is cached (it is fixed for the process in production), so
+    # clear it either side or one test's synthetic package answers the next.
+    subagents._shipped_subagent_defs.cache_clear()
     yield pkg
+    subagents._shipped_subagent_defs.cache_clear()
     sys.modules.pop("agentpkg", None)
 
 
@@ -157,3 +161,39 @@ def test_rca_ships_a_working_sub_agent_out_of_the_box():
     assert set(digger.tools) <= set(
         json.loads((Path("src/workspace_app/apps/rca/app.json")).read_text())["agent"]["tools"]
     )
+
+
+def test_a_tool_list_that_would_not_survive_the_file_is_refused():
+    """`round_trip`'s third arm. The first two (unparseable, truncated
+    description) had tests; this one had none and no caller in the repo, so the
+    100% gate would have failed on it while the branch read as fully covered.
+
+    A comma inside one entry renders as `[a,b]` and reads back as two tools, so
+    the definition would silently hold something other than what was asked for —
+    the exact class this whole check exists to make impossible."""
+    from workspace_app.apps.subagents import round_trip
+
+    checked = round_trip("s", "Digs logs", ["read_file,list_files"], "body")
+
+    assert checked.reason is not None
+    assert "not what you asked for" in checked.reason
+    assert "read_file" in checked.reason
+
+
+def test_an_unclamped_definition_is_still_a_fresh_object():
+    """`_shipped_subagent_defs` is `@cache`d and `SubagentDef.tools` is a plain
+    mutable list, so the unclamped path returning `defn` itself handed every
+    later turn the cache's own object. One `.tools` mutation anywhere would then
+    have edited a shipped definition process-wide.
+
+    The probe is the mutation the comment describes, not the identity check: an
+    identity assert would pass on a copy that still shared the list."""
+    from workspace_app.apps.subagents import SubagentDef, clamp_tools
+
+    shipped = SubagentDef(name="d", description="d", tools=["read_file"], body="b")
+
+    handed_out = clamp_tools(shipped, None)
+    handed_out.tools.append("exec")
+
+    assert shipped.tools == ["read_file"]
+    assert clamp_tools(shipped, None).tools == ["read_file"]

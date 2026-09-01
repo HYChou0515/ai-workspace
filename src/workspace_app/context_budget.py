@@ -227,6 +227,129 @@ def history_budget(
     return max(0, usable - max(0, overhead_tokens) - max(0, reply_reserve))
 
 
+#: Role of a compaction summary (#739). Defined here, not in `api.turns`, so the
+#: arithmetic and the replay agree by construction: this module is imported BY
+#: the API and must never import back from it, and a role string spelled in two
+#: places is a rule that will hold in one of them.
+SUMMARY_ROLE = "summary"
+
+
+# ── what the thread is actually costing (#739 P1) ────────────────────
+
+
+@dataclass(frozen=True)
+class ContextUsage:
+    """How much of the window this thread occupies, and how much of that we
+    actually KNOW rather than guess."""
+
+    used: int
+    limit: int | None
+    measured: bool
+
+    @property
+    def ratio(self) -> float | None:
+        """How full the window is, or ``None`` when no ceiling is known.
+
+        ``None`` means *show no denominator*, not "assume a default". A bar
+        drawn against an invented ceiling is a number nobody measured that
+        everybody believes — the #624 disease."""
+        if not self.limit:
+            return None
+        return self.used / self.limit
+
+
+def _replayed(messages: list[Any]) -> list[Any]:
+    """The subset that actually reaches the model. A marker the FE renders but
+    `history_items` never replays costs the window nothing, and charging for it
+    would make the bar creep up on its own."""
+    kept: list[Any] = []
+    for m in messages:
+        role = getattr(m, "role", "")
+        if role == "notice":
+            continue
+        # #37: a terminal failure is a human-only diagnostic and never re-enters
+        # the model's context — EXCEPT a user cancellation, which is replayed as
+        # a short marker folded onto the preceding assistant turn (#199).
+        if role == "error" and getattr(m, "error_kind", None) != "cancelled":
+            continue
+        kept.append(m)
+    return kept
+
+
+def context_usage(messages: Any, *, limit: ContextLimit) -> ContextUsage:
+    """The thread's current context cost.
+
+    Anchored on the newest turn the provider itself measured: its reported
+    ``prompt_tokens`` is what the endpoint actually read, including the system
+    prompt, the tool schemas and the skills index — none of which the estimator
+    can see. Only what arrived after that turn is estimated, so the error is
+    bounded by one turn's worth of new messages instead of the whole history.
+
+    The anchor's own answer is added from ``completion_tokens``: ``prompt_tokens``
+    is input only, so the reply was not in the window it measured but will be in
+    the next one."""
+    msgs = list(messages)
+    summarised_at: int | None = None
+    # #739: a summary is the new beginning of the thread. Everything behind it
+    # was replaced by the précis, so it no longer occupies the window — and the
+    # last reported `prompt_tokens` counted a request that still contained it,
+    # which makes that measurement an answer to a question no longer being
+    # asked. Dropping the anchor is the honest outcome: the figure goes back to
+    # an estimate, and `measured` says so, until the next turn reports a real one.
+    for i in range(len(msgs) - 1, -1, -1):
+        if getattr(msgs[i], "role", "") == SUMMARY_ROLE:
+            summarised_at = getattr(msgs[i], "created_at", None)
+            msgs = msgs[i:]
+            break
+    for i in range(len(msgs) - 1, -1, -1):
+        metrics = getattr(msgs[i], "metrics", None)
+        reported = getattr(metrics, "prompt_tokens", 0) or 0
+        # A summary is INSERTED before the kept tail, so the messages after it
+        # are OLDER than it, and their counts were reported for requests that
+        # still contained the span it replaced. Anchoring on one reports the
+        # pre-compaction figure forever — the bar sits still and the feature
+        # reads as broken. (Found by pressing compact on a running app.)
+        stale = (
+            summarised_at is not None
+            and (getattr(msgs[i], "created_at", None) or 0) < summarised_at
+        )
+        # #739: and it has to be the provider's number, not ours. A reported 0
+        # never reaches the store — the runner substitutes our estimate so the
+        # live ↑ does not flip to 0 — so `reported > 0` cannot tell a
+        # measurement from a guess, and the refuse-a-zero rule above is
+        # unreachable on any deployment whose provider stays quiet. Absent
+        # (threads older than the flag) counts as not exact.
+        if getattr(msgs[i], "role", "") == "assistant" and reported > 0 and not stale:
+            used = (
+                reported
+                + (getattr(metrics, "completion_tokens", 0) or 0)
+                + estimate_messages(_replayed(msgs[i + 1 :]))
+            )
+            # #739: the figure is the best one available either way — when the
+            # provider reports nothing the runner substitutes its own
+            # WHOLE-REQUEST estimate, which still counts the system prompt and
+            # tool schemas that `estimate_messages` cannot see. Rejecting the
+            # record outright made the number worse (measured: from +500 off to
+            # −5,800 off on a 32k thread) and stopped the compaction trigger
+            # firing on a full window. So keep the number; only the label is in
+            # question. `exact` is the provider's word, and absent — a thread
+            # older than the field — is not a yes.
+            #
+            # One consequence worth naming: on a provider that reports nothing,
+            # the substituted figure describes the request that was actually
+            # SENT, which the reducer may already have cut to fit. So `used`
+            # then tracks one turn's overshoot rather than the stored thread's
+            # full size. The trigger still fires (the estimator's own ~5% spread
+            # keeps the difference positive), but it is carried by that spread
+            # rather than by the reducer, which is thinner than it looks.
+            return ContextUsage(
+                used=used,
+                limit=limit.tokens,
+                measured=bool(getattr(metrics, "exact", False)),
+            )
+    return ContextUsage(used=estimate_messages(_replayed(msgs)), limit=limit.tokens, measured=False)
+
+
 # ── learning the ceiling from the traffic (#624 P3) ──────────────────
 #
 # A provider that truncates instead of rejecting tells us nothing on the way in.
