@@ -244,6 +244,40 @@ describe("TurnStatus — a wait that gave up", () => {
     expect(screen.getByTestId("turn-abandoned")).toBeInTheDocument();
   });
 
+  it("says it is still working when the server says someone is driving it", async () => {
+    // The whole point of the heartbeat: a long silence is no longer a verdict.
+    // A turn on a pod this viewer is not subscribed to looks exactly like an
+    // abandoned one until something authoritative says otherwise.
+    vi.useFakeTimers();
+    render(<TurnStatus log={streaming()} alive />);
+    await act(async () => {
+      vi.advanceTimersByTime(11 * 60_000);
+    });
+    expect(screen.queryByTestId("turn-abandoned")).not.toBeInTheDocument();
+    expect(screen.getByTestId("turn-still-working")).toBeInTheDocument();
+  });
+
+  it("still reports the silence when nobody is driving it", async () => {
+    vi.useFakeTimers();
+    render(<TurnStatus log={streaming()} alive={false} />);
+    await act(async () => {
+      vi.advanceTimersByTime(11 * 60_000);
+    });
+    expect(screen.getByTestId("turn-abandoned")).toBeInTheDocument();
+  });
+
+  it("falls back to reporting the silence when it could not find out", async () => {
+    // `null` is "could not ask" — a failed request, an older backend. It must
+    // not be read as "alive", or an unreachable answer would silently restore
+    // the endless wait this replaced.
+    vi.useFakeTimers();
+    render(<TurnStatus log={streaming()} alive={null} />);
+    await act(async () => {
+      vi.advanceTimersByTime(11 * 60_000);
+    });
+    expect(screen.getByTestId("turn-abandoned")).toBeInTheDocument();
+  });
+
   // Output means the turn is real and running; length is not a reason to
   // declare it lost.
   it("does not give up on a turn that is visibly producing output", async () => {

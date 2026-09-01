@@ -56,6 +56,7 @@ from .events import (
 )
 from .repetition_guard import guard_repetition
 from .runner import AgentRunner
+from .turn_activity import TURN_HEARTBEAT_MS, ITurnActivityStore
 
 logger = logging.getLogger(__name__)
 
@@ -549,8 +550,15 @@ class ChatTurnEngine:
         replay_buffer_events: int = 2000,
         event_bus: IEventBus | None = None,
         pod_id: str | None = None,
+        turn_activity: ITurnActivityStore | None = None,
+        heartbeat_s: float = TURN_HEARTBEAT_MS / 1000,
     ) -> None:
         self._runner = runner
+        # Whether anyone is driving a turn, recorded where every pod can read it.
+        # `None` = no signal: single-pod deploys and tests behave exactly as
+        # before, and the surfaces that ask fall back to their old guesswork.
+        self._turn_activity = turn_activity
+        self._heartbeat_s = heartbeat_s
         self._sessions: dict[str, _TurnSession] = {}
         # #43 reconnect replay: how many recent broadcast events each session's ring
         # buffer keeps so a same-pod reconnect can replay the gap. 0 disables it.
@@ -709,7 +717,10 @@ class ChatTurnEngine:
             # already-bumped value, and the watcher's `> my_epoch` never trips, so
             # the Stop is silently lost (the intermittent "Stop does nothing").
             turn = asyncio.create_task(
-                self._run_turn(content, ctx, on_complete, on_turn_end, session.publish)
+                self._with_heartbeat(
+                    key,
+                    self._run_turn(content, ctx, on_complete, on_turn_end, session.publish),
+                )
             )
             session.current_turn = turn
             # #349: stamp the CURRENT epoch without bumping — a new collaborative
@@ -737,6 +748,50 @@ class ChatTurnEngine:
                     fut.set_result(None)
                 session.queue.task_done()
             logger.debug("turns: worker %s turn finished", key)
+
+    async def turn_alive(self, key: str) -> bool:
+        """Whether a turn on `key` is being driven, on ANY pod.
+
+        `False` when no store is configured: a single-pod deploy has no second
+        opinion to offer, and a caller that treats "no signal" as "alive" would
+        be back to the guess this exists to replace."""
+        if self._turn_activity is None:
+            return False
+        return await self._turn_activity.alive(key)
+
+    async def _beat(self, key: str) -> None:
+        """Say "still here" on a timer for as long as the turn runs.
+
+        On a timer and not on the turn's events, because the turns worth asking
+        about are the silent ones — a long tool call, a slow first token — and an
+        event-driven beat stops exactly when the question gets asked. A store
+        that cannot be written is not a reason to fail a turn: the signal
+        degrades to "unknown", which is where every caller started."""
+        assert self._turn_activity is not None
+        while True:
+            with contextlib.suppress(Exception):
+                await self._turn_activity.bump(key)
+            await asyncio.sleep(self._heartbeat_s)
+
+    async def _with_heartbeat(self, key: str, coro: Coroutine[Any, Any, None]) -> None:
+        """Run one turn with its liveness recorded. Both turn shapes go through
+        here — the queued workspace turn and the streamed KB one — because a
+        signal that covers one surface is a signal a caller cannot trust."""
+        if self._turn_activity is None:
+            await coro
+            return
+        beat = asyncio.create_task(self._beat(key))
+        try:
+            await coro
+        finally:
+            beat.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await beat
+            # Say so explicitly rather than letting it age out: the person is
+            # waiting on this answer, and thirty seconds of "maybe" after a turn
+            # that has already ended is thirty seconds of the old problem.
+            with contextlib.suppress(Exception):
+                await self._turn_activity.finished(key)
 
     async def _run_turn(
         self,
@@ -969,7 +1024,7 @@ class ChatTurnEngine:
             # turn running on a peer pod (sticky routing failed) sees the advance
             # and aborts. `_cancel_prior_turn` above is the same-pod fast path.
             my_epoch = await self._turn_control.advance(key)
-            task = asyncio.create_task(self._drive(content, ctx, queue))
+            task = asyncio.create_task(self._with_heartbeat(key, self._drive(content, ctx, queue)))
             session.current_turn = task
             self._spawn_watcher(key, my_epoch, task)
             logger.info("turns: stream turn started for %s (epoch %d)", key, my_epoch)

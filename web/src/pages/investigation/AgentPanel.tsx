@@ -86,6 +86,12 @@ const hdrBtn: React.CSSProperties = {
  * off the screen. The rest are counted, never dropped. */
 const CHIP_RENDER_BUDGET = 12;
 
+/** How long a wait goes on before the panel ASKS whether anyone is driving the
+ * turn. Comfortably inside the give-up notice's own threshold, so the answer is
+ * in hand before the screen would have to say anything — and late enough that a
+ * healthy turn never costs the request at all. */
+const TURN_ALIVE_ASK_AFTER_MS = 60_000;
+
 /** How many rejected files the composer names before switching to a count. Same
  * failure, one surface over: a folder that is refused wholesale used to render
  * one full path per file into a single line of text. */
@@ -202,6 +208,28 @@ export function AgentPanel({
   useEffect(() => {
     if (!log.streaming) setComposerHint(null);
   }, [log.streaming]);
+  // Whether any pod is driving this turn. Asked ONCE, and only when the wait has
+  // gone on long enough that the screen would otherwise have to guess: for a
+  // healthy turn this question never gets asked at all. `null` while unasked or
+  // unanswerable — which `TurnStatus` reads as "still cannot tell", not as "no".
+  const [turnAlive, setTurnAlive] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!log.streaming) {
+      setTurnAlive(null);
+      return;
+    }
+    let cancelled = false;
+    const id = setTimeout(() => {
+      void api
+        .turnAlive(slug, investigationId)
+        .then((v) => !cancelled && setTurnAlive(v))
+        .catch(() => undefined);
+    }, TURN_ALIVE_ASK_AFTER_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(id);
+    };
+  }, [log.streaming, slug, investigationId]);
   // Messages on a shared item SERIALIZE server-side; they do not cancel each
   // other (#43). So a turn started by SOMEONE ELSE is no reason to lock this
   // viewer out — the backend will happily queue behind it, and taking that away
@@ -613,7 +641,7 @@ export function AgentPanel({
           />
         ))}
         <ConnectionNotice connection={connection} />
-        <TurnStatus log={log} onRetry={othersTurn ? undefined : retryTurn} />
+        <TurnStatus log={log} onRetry={othersTurn ? undefined : retryTurn} alive={turnAlive} />
         {log.error && (
           <div
             style={{

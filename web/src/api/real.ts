@@ -496,6 +496,22 @@ export const realApi: ApiClient = {
     }
   },
 
+  async turnAlive(slug: string, investigationId: string): Promise<boolean | null> {
+    // `null` = could not find out. The caller must not read that as "nobody is
+    // coming": being unable to ask is not evidence, and treating it as one puts
+    // back the guess this whole signal replaces.
+    try {
+      const resp = await apiFetch(
+        `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/turn-alive`,
+      );
+      if (!resp.ok) return null;
+      const body = (await resp.json()) as { alive?: boolean };
+      return body.alive ?? null;
+    } catch {
+      return null;
+    }
+  },
+
   async cancelMessage(slug: string, investigationId: string) {
     // Idempotent on the BE; swallow network/404 noise so a double-click
     // on Stop doesn't surface a scary toast.

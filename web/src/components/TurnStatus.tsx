@@ -17,12 +17,18 @@ export function TurnStatus({
   log,
   className,
   onRetry,
+  alive,
 }: {
   log: AgentLog;
   className?: string;
   /** Ask the same question again, abandoning the stalled attempt. Omitted when
    * the running turn is not this viewer's to restart. */
   onRetry?: () => void;
+  /** Whether any pod is driving this turn, asked of the server once the silence
+   * gets long. `null`/absent = nobody could tell us, which is NOT "alive": being
+   * unable to ask is not evidence, and reading it as one restores the endless
+   * wait this exists to end. */
+  alive?: boolean | null;
 }) {
   const phase = turnPhase(log);
   const toolRunning = isToolRunning(log);
@@ -91,6 +97,17 @@ export function TurnStatus({
         (e.kind === "message" && e.message.role === "assistant" && !!e.message.content),
     );
   if (phase === "prep" && !producedSomething && elapsedSec >= ABANDONED_AFTER_S) {
+    // …unless the server says someone is driving it. Then the silence is a slow
+    // turn on a pod this viewer is not subscribed to — the case that made every
+    // time-based verdict here wrong, and the reason there is now a fact to ask
+    // for instead of a clock to interpret.
+    if (alive === true) {
+      return (
+        <div className={className} style={box} data-testid="turn-still-working">
+          還在跑,只是這段時間沒有輸出。
+        </div>
+      );
+    }
     return (
       <div className={className} style={box} data-testid="turn-abandoned">
         這一輪已經 {Math.floor(elapsedSec / 60)} 分鐘沒有任何動靜。

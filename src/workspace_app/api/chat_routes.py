@@ -145,6 +145,26 @@ def register_chat_routes(
             media_type="text/event-stream",
         )
 
+    @app.get("/a/{slug}/items/{item_id}/turn-alive")
+    async def turn_alive(slug: str, item_id: str) -> dict[str, bool]:
+        """Is anyone driving a turn on this chat right now?
+
+        Asked once, at the moment the screen would otherwise have to guess: after
+        a long silence, is this a turn working quietly on a pod this viewer is
+        not subscribed to, or is nobody coming? Neither the live stream (per-pod,
+        so silence proves nothing) nor the persisted thread (written at turn END,
+        so mid-turn it looks exactly like an abandoned one) can tell them apart.
+
+        A GET rather than a field on the thread read, because the question is
+        rare — only a wait long enough to be suspicious asks it — and folding it
+        into the 2.5s store-poll would pay for it on every cycle of every turn.
+
+        `False` is every way of not being alive at once: never started, already
+        finished, or the pod that was driving it died. To the person waiting they
+        are one thing."""
+        investigation_id = locator.require_access(slug, item_id, "read_chat")
+        return {"alive": await turn_engine.turn_alive(investigation_id)}
+
     @app.delete(
         "/a/{slug}/items/{item_id}/messages/current",
         status_code=status.HTTP_204_NO_CONTENT,
