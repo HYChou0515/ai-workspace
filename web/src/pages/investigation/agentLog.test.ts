@@ -18,6 +18,7 @@ import {
   isToolRunning,
   logFromMessages,
   turnsFromEntry,
+  turnLooksSilent,
   turnPhase,
   reconcileSnapshot,
   reduceAgent,
@@ -920,5 +921,39 @@ describe("a turn that recovers stops reporting the attempt that failed", () => {
     log = reduceAgent(log, { type: "done" } as AgentEvent);
 
     expect(log.error).toBe("APIConnectionError: refused");
+  });
+});
+
+
+describe("a broadcast question starts a new turn for everyone, not just its sender", () => {
+  // The sender's own `send()` clears `metrics`; the `user_message` broadcast did
+  // not — so for anyone who did NOT send (a spectator on a shared item, or any
+  // turn a workflow or goal-continuation started on an already-open panel) the
+  // previous answer's metrics stayed, and `turnPhase` never returned to "prep".
+  //
+  // Everything that reports on a wait that has produced nothing is gated on that
+  // phase: the give-up notice and the question to the server about whether anyone
+  // is driving the turn. So the two people watching one turn saw different
+  // things, and the one who could not act was the one shown less.
+  const answered: AgentLog = {
+    ...EMPTY_LOG,
+    streaming: true,
+    metrics: { phase: "down", promptTokens: 40, completionTokens: 12, elapsedMs: 800 },
+    entries: [
+      { kind: "message", message: { role: "user", content: "first" } },
+      { kind: "message", message: { role: "assistant", content: "an answer" } },
+    ],
+  };
+
+  it("puts the turn back in prep when someone else's question arrives", () => {
+    const next = reduceAgent(answered, {
+      type: "user_message",
+      author: "someone-else",
+      content: "second",
+      created_at: 200,
+    } as never);
+
+    expect(turnPhase(next)).toBe("prep");
+    expect(turnLooksSilent(next)).toBe(true);
   });
 });

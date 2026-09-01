@@ -565,6 +565,9 @@ class ChatTurnEngine:
         # before, and the surfaces that ask fall back to their old guesswork.
         self._turn_activity = turn_activity
         self._heartbeat_s = heartbeat_s
+        # Detached "the turn ended" writers, held only so the loop cannot collect
+        # a task nobody awaits (see `_finish_when_beat_lands`).
+        self._finishers: set[asyncio.Task[None]] = set()
         self._sessions: dict[str, _TurnSession] = {}
         # #43 reconnect replay: how many recent broadcast events each session's ring
         # buffer keeps so a same-pod reconnect can replay the gap. 0 disables it.
@@ -801,28 +804,47 @@ class ChatTurnEngine:
             await coro
         finally:
             stop.set()
-            # Let an in-flight write land BEFORE the turn is declared over, so it
-            # cannot undo that (see `_beat`) — but never let a wedged store hold a
-            # turn's teardown open. On timeout `wait_for` has already cancelled
-            # and awaited the beat, and the stray-write window is back for that
-            # turn; a store that slow will have missed its beats anyway, so the
-            # age-out is what answers there.
+            self._finish_when_beat_lands(key, beat)
+
+    def _finish_when_beat_lands(self, key: str, beat: asyncio.Task[None]) -> None:
+        """Record that the turn ended, once its last beat has landed — on a task
+        of its OWN, never the turn's.
+
+        Two things have to be true and on the turn's own task they pull against
+        each other. The end must be recorded AFTER any in-flight beat, or that
+        beat's write restores the row the end just cleared (`_bump_sync` restores
+        by design) and the finished turn reads as running for a whole staleness
+        window. And it must survive the turn being CANCELLED, which is how most
+        turns end and which interrupts every await on that task.
+
+        Waiting on the turn's task satisfied the first and lost the second:
+        measured, a Stop dropped the end in 5 of 5 runs whenever a beat write
+        outlasted `poll_interval` — #349's watcher fires its own cancel at the
+        turn, and a `CancelledError` is not something `suppress(Exception)`
+        catches or should swallow. It also held the turn's worker, and the POST
+        awaiting it, open for the length of the wait.
+
+        Detached, it does neither: the turn ends immediately and the cancellation
+        aimed at it cannot reach this. The wait is still bounded — a wedged store
+        must not keep a task alive indefinitely — and on timeout `wait_for` has
+        already cancelled the beat, which for a write still QUEUED means no write
+        ever happens, so there is nothing left to sequence behind. What survives a
+        lost `finished` is the age-out, which has to work anyway: it is the only
+        thing covering a pod that dies mid-turn.
+        """
+        assert self._turn_activity is not None
+        activity = self._turn_activity
+
+        async def _run() -> None:
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(beat, _BEAT_DRAIN_S)
-            # Say so explicitly rather than letting it age out: the person is
-            # waiting on this answer, and thirty seconds of "maybe" after a turn
-            # that has already ended is thirty seconds of the old problem.
-            #
-            # It is best-effort, and deliberately so. This runs on Stop too — the
-            # cancellation is delivered at `await coro`, so the `finally` may
-            # await freely — but a SECOND cancel arriving here (the #349 epoch
-            # watcher re-fires until the task is done) is a `CancelledError`,
-            # which no `suppress(Exception)` catches and which must not be
-            # swallowed anyway. Then the write is skipped and the row ages out
-            # instead. That is the designed fallback, not a hole: ageing out is
-            # what covers the pod that dies mid-turn, and it has to work.
             with contextlib.suppress(Exception):
-                await self._turn_activity.finished(key)
+                await activity.finished(key)
+
+        task = asyncio.create_task(_run())
+        # Held only so the loop cannot garbage-collect a task nobody awaits.
+        self._finishers.add(task)
+        task.add_done_callback(self._finishers.discard)
 
     async def _run_turn(
         self,

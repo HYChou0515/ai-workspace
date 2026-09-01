@@ -724,7 +724,23 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
       // being CARRIED past this turn: a re-hydrate re-attaches carried banners at
       // the end of the thread, and one that keeps moving down lands under the
       // next answer and reads as a verdict on it (see `reconcileSnapshot`).
-      return { ...log, entries, streaming: true, streamingBy: ev.author ?? null, error: null };
+      // …and the previous turn's METRICS stop describing anything either. The
+      // sender's own `send()` already clears them; this is the same reset for
+      // everyone else, and without it the two people watching one turn are in
+      // different states. `turnPhase` reads "answering" off stale metrics, so a
+      // spectator — or any turn a workflow or goal-continuation started on an
+      // already-open panel — never returns to "prep", and everything gated on
+      // that phase (the give-up notice, the question to the server about whether
+      // anyone is driving this) is unreachable for them. The person who could
+      // not act was the one being shown less.
+      return {
+        ...log,
+        entries,
+        streaming: true,
+        streamingBy: ev.author ?? null,
+        error: null,
+        metrics: null,
+      };
 
     case "file_changed":
       // #43: a workspace file changed — a side effect handled in the hook

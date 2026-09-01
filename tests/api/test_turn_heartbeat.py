@@ -234,3 +234,57 @@ async def test_the_streamed_kb_turn_beats_too():
     assert len(activity.beats) >= 3, activity.beats
     assert set(activity.beats) == {"kbchat-1"}
     assert activity.ended == ["kbchat-1"]
+
+
+class _SlowFinishActivity(ITurnActivityStore):
+    """A store whose beat write takes long enough that the turn's teardown has to
+    wait on it — the case that decides whether waiting is safe."""
+
+    def __init__(self, write_s: float) -> None:
+        self.write_s = write_s
+        self.ended: list[str] = []
+
+    async def bump(self, key: str) -> None:
+        await asyncio.sleep(self.write_s)
+
+    async def finished(self, key: str) -> None:
+        self.ended.append(key)
+
+    async def alive(self, key: str, *, stale_after_ms: int = 0) -> bool:
+        return key not in self.ended
+
+
+async def test_a_stop_records_the_end_even_when_a_beat_write_is_slow():
+    # Stop is the ending a person is most likely to be watching, and it arrives as
+    # a `CancelledError` — which no `suppress(Exception)` catches and which must
+    # not be swallowed. So anything the teardown waits for while still ON the
+    # turn's own task is in the cancellation's path: the wait is abandoned, the
+    # end goes unrecorded, and the stopped turn reads ALIVE for a whole staleness
+    # window. That is the "maybe" after an ended turn this signal exists to
+    # remove, now with a server-side fact behind it.
+    # Measured trigger: a beat write slower than `poll_interval`, which is left at
+    # its PRODUCTION default here on purpose — #349's watcher then fires its own
+    # cancel at the turn while the teardown is still waiting, and that second
+    # cancellation is what the wait cannot survive. A fast store never sees it,
+    # which is why every earlier probe of this path came back clean.
+    activity = _SlowFinishActivity(write_s=0.6)
+    engine = ChatTurnEngine(
+        _SilentRunner(quiet_s=5),  # ty: ignore[invalid-argument-type]
+        turn_activity=activity,
+        heartbeat_s=0.01,
+    )
+    fut = engine.enqueue(
+        "chat-1",
+        "go",
+        AgentToolContext(investigation_id="ws-1"),
+        on_complete=lambda _msgs: None,
+    )
+    await asyncio.sleep(0.05)
+
+    await engine.cancel_current("chat-1")
+    with contextlib.suppress(asyncio.CancelledError):
+        await fut
+    # Well past the in-flight write and any drain.
+    await asyncio.sleep(1.0)
+
+    assert activity.ended == ["chat-1"], "a Stop left the ended turn reading ALIVE"
