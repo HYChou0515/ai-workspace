@@ -577,6 +577,12 @@ def _agent_for(
             extra_body={**(off.get("extra_body") or {}), **rep_body} or None,
             frequency_penalty=freq,
             presence_penalty=pres,
+            # #748: ask the provider to report its own token usage. An
+            # OpenAI-compatible endpoint does NOT send usage on a stream
+            # unless asked, so without this the streaming path — the default
+            # — never saw a real count, and litellm filled the gap from its
+            # own tokenizer: an estimate wearing a measurement's name.
+            include_usage=True,
         )
     elif reasoning_effort:
         # effort is validated to low/medium/high by the request body.
@@ -586,6 +592,12 @@ def _agent_for(
             extra_body=rep_body or None,
             frequency_penalty=freq,
             presence_penalty=pres,
+            # #748: ask the provider to report its own token usage. An
+            # OpenAI-compatible endpoint does NOT send usage on a stream
+            # unless asked, so without this the streaming path — the default
+            # — never saw a real count, and litellm filled the gap from its
+            # own tokenizer: an estimate wearing a measurement's name.
+            include_usage=True,
         )
     else:
         model_settings = ModelSettings(
@@ -593,6 +605,12 @@ def _agent_for(
             extra_body=rep_body or None,
             frequency_penalty=freq,
             presence_penalty=pres,
+            # #748: ask the provider to report its own token usage. An
+            # OpenAI-compatible endpoint does NOT send usage on a stream
+            # unless asked, so without this the streaming path — the default
+            # — never saw a real count, and litellm filled the gap from its
+            # own tokenizer: an estimate wearing a measurement's name.
+            include_usage=True,
         )
     # Per-config LLM endpoint (new schema's agents.presets.<x>.llm) wins
     # over the runner's constructor default — empty strings mean

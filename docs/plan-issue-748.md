@@ -151,6 +151,35 @@ class AgentMetrics:
 
 兩邊都改同一個地方會漂移。
 
+### 2.9 光是不編造還不夠 —— 得先開口要
+
+**這條是把 P1–P5 跑起來才發現的,讀程式碼看不到。**
+
+第一次 live check 的結果:`model` 記到了、`generation_ms` 也正確排除了 TTFT,但
+`prompt_tokens` / `completion_tokens` 是 `null` —— **而我的替身明明送了 usage**。
+
+追下去,LLM trace 裡寫著:
+
+```
+stream_options: None
+usage in resp:  {'completion_tokens': 80, 'prompt_tokens': 7282, ...}   ← litellm 自己數的
+```
+
+兩件事:
+
+1. **app 從來沒跟 provider 要過 usage。** OpenAI 相容端點在**串流**時,除非客戶端送
+   `stream_options: {"include_usage": true}`,否則不會回報。所以在預設的串流路徑上,
+   provider 的真實數字**從來就拿不到**。
+2. **litellm 會用自己的 tokenizer 湊一個 `usage` 塞進 response。** 那也是估計值 ——
+   一個披著「量到的」外衣的估計值。差一點就把它當真值記下來。
+
+所以 2.1 的「沒量到就存 None」單獨存在的話是誠實但無用的:這一欄會永遠是空的。
+**要讓它有東西,得先開口要。** `stream_options` 加在 `_agent_for` 的 extra_args,
+`litellm.drop_params` 已經是 `True`,所以不懂這個參數的端點會被丟掉而不是報錯。
+
+這正是 live check 存在的理由:**「我們沒送出去的那個請求」從系統內部是看不見的**,
+任何單元測試都照不到 —— 替身只會回答被問到的問題。
+
 ---
 
 ## 3. Phase
@@ -162,6 +191,7 @@ class AgentMetrics:
 | **P3** | model:`FallbackModel` 記下實際服務的 endpoint,事件加 `model`(順帶修好 #69 trace 的謊報) | ✅ |
 | **P4** | 前端:`events.ts` 鏡像、tok/s 換分母、thinking / tool 期間都顯示那一行 | ✅ |
 | **P5** | 聊天訊息的時間小字 + tooltip(app chat 與 KB chat 共用) | ✅ |
+| **P6** | 送出 `stream_options: {include_usage: true}` —— 沒開口要,真值永遠拿不到(§2.9,live check 發現) | ✅ |
 
 每個 phase 都讓事件的新欄位和它的生產者同時落地 —— 先加一個永遠是 `None` 的欄位,
 等於在 schema 裡放一個沒人填的洞,而它會被誤讀成「這個 provider 沒回報」。

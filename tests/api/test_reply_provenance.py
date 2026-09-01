@@ -186,3 +186,30 @@ def test_the_effective_model_is_the_one_that_served_not_the_one_configured():
 
     # A chain that has not answered yet must not be reported as the head.
     assert _effective_model(_NotYet(), "primary") == "primary"
+
+
+# ── asking the provider for its numbers at all ───────────────────────────────
+
+
+def test_a_streamed_turn_asks_the_provider_to_report_usage():
+    """Found by running it, not by reading it: the app never sent
+    `stream_options`, and an OpenAI-compatible endpoint does not report usage on
+    a stream unless asked. So on the streaming path — the default — the
+    provider's real counts were never available at all, and litellm quietly
+    supplied a figure from its OWN tokenizer instead, which is an estimate
+    wearing a measurement's name.
+
+    Recording `None` for that (P1) is honest but useless. Asking is what makes
+    the column carry anything.
+
+    Use the SDK's own `include_usage` knob. My first attempt put
+    `stream_options` into `extra_args` by hand; the SDK passes that argument
+    itself, so every turn died with "got multiple values for keyword argument
+    'stream_options'" — and this test still passed, because it checked the dict
+    we build rather than the call we make. The live turn is what caught it.
+    """
+    from workspace_app.api.litellm_runner import _agent_for
+    from workspace_app.resources import AgentConfig
+
+    agent = _agent_for(AgentConfig(name="t", model="openai/x"))
+    assert agent.model_settings.include_usage is True
