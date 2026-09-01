@@ -29,24 +29,47 @@ import {
 beforeEach(() => localStorage.setItem("ws.locale", "zh-TW"));
 
 describe("metrics formatting", () => {
-  it("computes tok/s from completion tokens over elapsed", () => {
-    expect(tokensPerSec({ phase: "down", promptTokens: 100, completionTokens: 60, elapsedMs: 2000 })).toBe(30);
-    expect(tokensPerSec({ phase: "up", promptTokens: 100, completionTokens: 0, elapsedMs: 0 })).toBe(0);
+  it("computes tok/s from completion tokens over GENERATION time (#748)", () => {
+    // Renamed from "over elapsed": elapsed is the whole turn, and dividing by it
+    // was the defect — see the #748 block below for what it cost.
+    expect(
+      tokensPerSec({ phase: "down", promptTokens: 100, completionTokens: 60, elapsedMs: 9000, generationMs: 2000 }),
+    ).toBe(30);
+    expect(
+      tokensPerSec({ phase: "up", promptTokens: 100, completionTokens: 0, elapsedMs: 0, generationMs: null }),
+    ).toBeNull();
   });
   it("shows ↑ while sending and ↑/↓ + tok/s while receiving", () => {
     expect(formatMetrics({ phase: "up", promptTokens: 256, completionTokens: 0, elapsedMs: 0 })).toMatch(/↑ 256 tok/);
-    const down = formatMetrics({ phase: "down", promptTokens: 256, completionTokens: 40, elapsedMs: 1000 });
+    const down = formatMetrics({
+      phase: "down",
+      promptTokens: 256,
+      completionTokens: 40,
+      elapsedMs: 1000,
+      generationMs: 1000,
+    });
     expect(down).toContain("↑ 256");
     expect(down).toContain("↓ 40 tok");
     expect(down).toContain("40 tok/s");
   });
-  it("during a tool call keeps cumulative tokens but drops the stale tok/s", () => {
-    const m = { phase: "down" as const, promptTokens: 256, completionTokens: 40, elapsedMs: 1000 };
+  it("during a tool call keeps the tokens AND the rate, which is no longer stale (#748)", () => {
+    // It used to be dropped because the denominator was the turn's wall clock,
+    // so the rate decayed for as long as the tool ran — hiding a number that was
+    // going wrong was right. With generation time as the denominator it simply
+    // holds its last true value: no generation happened, so the speed is still
+    // that speed, and the line stays alive instead of losing half its content.
+    const m = {
+      phase: "down" as const,
+      promptTokens: 256,
+      completionTokens: 40,
+      elapsedMs: 30_000,
+      generationMs: 1000,
+    };
     const line = formatMetrics(m, true);
     expect(line).toContain("↑ 256");
     expect(line).toContain("↓ 40 tok");
+    expect(line).toContain("40 tok/s");
     expect(line).toContain("running");
-    expect(line).not.toContain("tok/s"); // paused — no misleading rate during the tool gap
   });
 });
 
@@ -393,6 +416,9 @@ describe("reduceAgent — metrics + timing", () => {
       promptTokens: 118,
       completionTokens: 51,
       elapsedMs: 1500,
+      // #748: absent on the wire ⇒ null here, never a stand-in.
+      generationMs: null,
+      model: null,
     });
   });
 
@@ -702,6 +728,30 @@ describe("failover switch (#249/#131)", () => {
       elapsed_ms: 5,
     });
     expect(same.failover).toEqual({ at: 1 });
+  });
+});
+
+describe("tok/s measures generation, not the turn (#748)", () => {
+  const withGen = (over: Partial<AgentMetricsState> = {}): AgentMetricsState => ({
+    phase: "final",
+    promptTokens: 8412,
+    completionTokens: 356,
+    elapsedMs: 61_000,
+    generationMs: 5_000,
+    ...over,
+  });
+
+  it("divides by generation time, not the turn's wall clock", () => {
+    // The turn ran 61s because a tool took 60 of them. The model still wrote
+    // 356 tokens in 5s. Dividing by the turn reports ~6 tok/s for a model
+    // doing ~71 — an order of magnitude, and it moves with the TOOL.
+    expect(tokensPerSec(withGen())).toBe(71);
+  });
+
+  it("reports nothing rather than a made-up rate when generation was never timed", () => {
+    // Older messages and the non-streaming path carry no generation time.
+    // Falling back to elapsedMs would silently resurrect the wrong number.
+    expect(tokensPerSec(withGen({ generationMs: null }))).toBeNull();
   });
 });
 

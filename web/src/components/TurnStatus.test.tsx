@@ -13,7 +13,15 @@ import {
 import { TurnStatus } from "./TurnStatus";
 
 const up: AgentMetricsState = { phase: "up", promptTokens: 256, completionTokens: 0, elapsedMs: 0 };
-const down: AgentMetricsState = { phase: "down", promptTokens: 256, completionTokens: 4, elapsedMs: 600 };
+const down: AgentMetricsState = {
+  phase: "down",
+  promptTokens: 256,
+  completionTokens: 4,
+  elapsedMs: 600,
+  // #748: a turn that was actually timed. Without this the rate is null
+  // by design — an untimed turn has no speed to report.
+  generationMs: 600,
+};
 
 const streaming = (over: Partial<AgentLog> = {}): AgentLog => ({ ...EMPTY_LOG, streaming: true, ...over });
 const fold = (events: AgentEvent[], from: AgentLog = EMPTY_LOG): AgentLog =>
@@ -115,6 +123,28 @@ describe("TurnStatus", () => {
     const log = fold([{ type: "rate_limited", seconds: 30 }]);
     render(<TurnStatus log={{ ...log, streaming: true }} />);
     expect(screen.getByText(/請求過於頻繁/)).toHaveTextContent("30");
+  });
+
+  it("keeps showing the numbers while the model is only thinking (#748)", () => {
+    // A reasoning model can think for a long time before any visible content.
+    // The backend pushes metrics throughout — `completion_chars` counts the
+    // reasoning deltas too — but the line was rendered only for `answering`,
+    // so the longest silence of the turn was also the emptiest. Nothing was
+    // broken; the numbers simply had nowhere to go.
+    const log = fold([
+      { type: "message_delta", text: "let me think", reasoning: true },
+      {
+        type: "agent_metrics",
+        phase: "down",
+        prompt_tokens: 8412,
+        completion_tokens: 120,
+        elapsed_ms: 4000,
+        generation_ms: 4000,
+      },
+    ]);
+    render(<TurnStatus log={{ ...log, streaming: true }} />);
+    expect(screen.getByText(/↓ 120 tok/)).toBeInTheDocument();
+    expect(screen.getByText(/30 tok\/s/)).toBeInTheDocument();
   });
 
   it("shows '還原工作區… N/M' while a cold sandbox restores, over the tool line (#492 P11)", () => {

@@ -126,8 +126,25 @@ export function TurnStatus({
     );
   }
 
+  // #748: a reasoning model can sit in `thinking` for a long time. The backend
+  // pushes metrics throughout it (reasoning deltas count toward the completion
+  // chars), but the line was rendered only for `answering` — so the longest
+  // silence of a turn was also its emptiest. Nothing was broken; the numbers
+  // had nowhere to go.
+  //
+  // The counts go BESIDE 思考中 rather than replacing it: the words say what the
+  // model is doing, the numbers say it is still doing it. Swapping one for the
+  // other trades a known problem for its mirror image.
+  if (phase === "thinking" && log.metrics) {
+    return (
+      <div className={className} style={box}>
+        {statusText(phase, elapsedSec)} · {formatMetrics(log.metrics)}
+      </div>
+    );
+  }
+
   // The model has produced output and is answering (or is mid tool-call): the
-  // existing token line (↑/↓ tok · tok/s, or "running…") is the right signal.
+  // token line (↑/↓ tok · tok/s) is the whole signal.
   if (phase === "answering" || toolRunning) {
     if (!log.metrics) return null;
     return (

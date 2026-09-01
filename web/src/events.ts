@@ -75,6 +75,17 @@ export type AgentMetrics = {
   prompt_tokens: number;
   completion_tokens: number;
   elapsed_ms: number;
+  /** #748: the provider's OWN counts, null where it gave none. The fields above
+   * stay approximate on purpose so a live line never reads "↑0 ↓0"; these are
+   * what gets recorded. Only ever set on `final`. */
+  measured_prompt_tokens?: number | null;
+  measured_completion_tokens?: number | null;
+  /** #748: time spent GENERATING (first token → last, tool gaps and TTFT
+   * excluded) — the denominator tok/s needs. `elapsed_ms` is the whole turn. */
+  generation_ms?: number | null;
+  /** #748: the model that actually wrote this reply — under failover, not the
+   * configured one. */
+  model?: string | null;
 };
 
 /** #249/#131: the chat model was busy/blipped before its first token, so the turn
