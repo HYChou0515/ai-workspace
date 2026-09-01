@@ -29,6 +29,7 @@ from specstar import BackendBinding, BackendConfig, ConnectionProfile, SpecStar
 from workspace_app.resources import make_spec
 
 from .agent.config_catalog import AgentConfigCatalog
+from .api.env_provider import IEnvProvider
 from .api.litellm_runner import LitellmAgentRunner
 from .api.request_env import IRequestEnv
 from .api.runner import AgentRunner
@@ -1200,6 +1201,19 @@ def get_request_env(dotted: str) -> IRequestEnv | None:
     if not dotted:
         return None
     return _construct_dotted(dotted, IRequestEnv, config_key="server.request_env")
+
+
+def get_env_providers(dotted: tuple[str, ...] | list[str]) -> list[IEnvProvider]:
+    """The deploy's "log in, get the variables" implementations (#750).
+
+    Empty is the ordinary case and not a degraded one: with no providers the
+    panel simply draws no buttons, and every variable is still typeable by hand.
+
+    Takes the values rather than the whole ``Settings`` for the same reason
+    ``get_request_env`` does — ``tests/config/test_server_settings_are_wired``
+    looks for the composition root reading ``settings.server.env_providers`` in
+    plain sight, and a factory handed ``Settings`` hides it."""
+    return [_construct_dotted(d, IEnvProvider, config_key="server.env_providers") for d in dotted]
 
 
 def _tool_check_kwargs(settings: Settings, purpose: str) -> dict:
