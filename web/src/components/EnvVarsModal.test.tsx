@@ -129,6 +129,14 @@ describe("EnvVarsModal declared fields (#750)", () => {
     ];
     openWith(many);
 
+    // Collapsed until asked for. The panel already carries an intro, a summary
+    // line, the fields, a login button, a caveat and the text box; a list that
+    // is always open pushes all of that down for something most visits never
+    // touch. The trigger says which tool is showing, so nothing is hidden.
+    const trigger = await screen.findByTestId("env-tool-trigger");
+    expect(screen.queryByTestId("env-tool-wafer-history")).not.toBeInTheDocument();
+    fireEvent.click(trigger);
+
     const option = await screen.findByTestId("env-tool-wafer-history");
     expect(option).toHaveTextContent("Wafer Team");
     expect(option).toHaveTextContent("1.4.2");
@@ -137,7 +145,12 @@ describe("EnvVarsModal declared fields (#750)", () => {
     expect(option).toHaveTextContent("1");
 
     // Typing narrows it, so a long list stays usable.
-    fireEvent.change(screen.getByTestId("env-tool-search"), { target: { value: "wafer" } });
+    const search = screen.getByTestId("env-tool-search");
+    // A search box, not another value field: they sat next to each other looking
+    // identical, which is what made the panel unreadable.
+    expect(search).toHaveAttribute("type", "search");
+    expect(search).toHaveClass("kb-input");
+    fireEvent.change(search, { target: { value: "wafer" } });
     expect(screen.queryByTestId("env-tool-sap-tools")).not.toBeInTheDocument();
     expect(screen.getByTestId("env-tool-wafer-history")).toBeInTheDocument();
 
@@ -182,6 +195,7 @@ describe("EnvVarsModal declared fields (#750)", () => {
       target: { value: "proxy:3128" },
     });
 
+    fireEvent.click(screen.getByTestId("env-tool-trigger"));
     fireEvent.click(screen.getByTestId("env-tool-wafer"));
 
     // Picking the other tool hides what belongs to the first…

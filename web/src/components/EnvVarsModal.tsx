@@ -55,6 +55,7 @@ import { fuzzyFilter } from "../lib/fuzzy";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 import { ModalShell } from "./ModalShell";
+import { Popover, PopoverItem } from "./Popover";
 
 export function EnvVarsModal({
   envVars,
@@ -230,89 +231,106 @@ export function EnvVarsModal({
       )}
 
       {view.groups.length > 1 && (
-        <div style={{ display: "grid", gap: 4 }}>
-          {/* A list you can type into, not a row of tabs: tabs wrap past a
-              handful and then the only way to find yours is to read every one.
-              Same conclusion `GroupPicker` reached for the same reason. */}
-          <input
-            data-testid="env-tool-search"
-            value={toolQuery}
-            onChange={(e) => setToolQuery(e.target.value)}
-            placeholder={t("env.searchTools")}
-            aria-label={t("env.searchTools")}
-            style={{
-              width: "100%",
-              boxSizing: "border-box",
-              padding: "6px 8px",
-              border: "1px solid var(--paper-3)",
-              borderRadius: 6,
-              background: "var(--paper)",
-              color: "var(--text-paper)",
-              fontSize: pxToRem(12),
-            }}
-          />
-          <div
-            role="listbox"
-            aria-label={t("env.searchTools")}
-            style={{ maxHeight: 132, overflowY: "auto", display: "grid", gap: 2 }}
-          >
-            {offeredGroups.map((group) => (
-              <button
-                key={group.key}
-                type="button"
-                role="option"
-                aria-selected={group.key === shownGroup.key}
-                data-testid={`env-tool-${group.key}`}
-                onClick={() => setTab(group.key)}
-                style={{
-                  display: "flex",
-                  alignItems: "baseline",
-                  gap: 8,
-                  width: "100%",
-                  textAlign: "left",
-                  padding: "5px 8px",
-                  borderRadius: 6,
-                  border: "1px solid transparent",
-                  background:
-                    group.key === shownGroup.key ? "var(--paper-2)" : "transparent",
-                  borderColor:
-                    group.key === shownGroup.key ? "var(--paper-3)" : "transparent",
-                  color: "var(--text-paper)",
-                  cursor: "pointer",
-                  fontSize: pxToRem(12),
-                }}
-              >
-                <span style={{ fontWeight: 500 }}>{group.label}</span>
-                {/* Who shipped it and which release resolved. Two bundles can
-                    carry the same name and differ only in this (#724). */}
-                {(group.author || group.version) && (
-                  <span style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
-                    {[group.author, group.version].filter(Boolean).join(" · ")}
-                  </span>
+        <Popover
+          width={320}
+          trigger={({ onClick, open }) => (
+            <button
+              type="button"
+              className="btn"
+              data-variant="secondary"
+              data-size="sm"
+              data-testid="env-tool-trigger"
+              aria-expanded={open}
+              onClick={onClick}
+              style={{ justifyContent: "space-between", width: "100%" }}
+            >
+              {/* Collapsed, and naming what is showing. The panel already
+                  carries an intro, a summary, the fields, a login button, a
+                  caveat and the box; an always-open list pushes all of it down
+                  for something most visits never touch. */}
+              <span>{shownGroup.label}</span>
+              {/* A glyph, not `<Icon name="chevron-down">`: this set has no
+                  chevron, and an unknown name renders NOTHING — a trigger with
+                  no affordance, and no error anywhere to say why. */}
+              <span aria-hidden style={{ color: "var(--text-paper-d)", fontSize: pxToRem(10) }}>
+                ▾
+              </span>
+            </button>
+          )}
+        >
+          {(close) => (
+            <div style={{ display: "grid", gap: 4 }}>
+              <input
+                type="search"
+                className="kb-input"
+                data-testid="env-tool-search"
+                value={toolQuery}
+                onChange={(e) => setToolQuery(e.target.value)}
+                placeholder={t("env.searchTools")}
+                aria-label={t("env.searchTools")}
+                style={{ width: "100%" }}
+              />
+              {/* Capped and scrollable, like every other list of this shape
+                  here: the search box stays outside the scroll area so it can
+                  never be scrolled out of reach. */}
+              <div style={{ maxHeight: "min(240px, 30vh)", overflowY: "auto" }}>
+                {offeredGroups.map((group) => (
+                  <PopoverItem
+                    key={group.key}
+                    testId={`env-tool-${group.key}`}
+                    selected={group.key === shownGroup.key}
+                    onClick={() => {
+                      setTab(group.key);
+                      close();
+                    }}
+                  >
+                    <span style={{ flex: 1, minWidth: 0 }}>
+                      <span style={{ fontWeight: 500 }}>{group.label}</span>
+                      {/* Who shipped it and which release resolved (#724): two
+                          bundles can share a name and differ only in this. */}
+                      {(group.author || group.version) && (
+                        <span
+                          style={{ color: "var(--text-paper-d2)", fontSize: pxToRem(11) }}
+                        >
+                          {" "}
+                          {[group.author, group.version].filter(Boolean).join(" · ")}
+                        </span>
+                      )}
+                    </span>
+                    <span
+                      style={{
+                        // Pushed right explicitly rather than left to the
+                        // sibling's `flex: 1`, which did not expand inside the
+                        // shared item and left the count touching the name.
+                        marginLeft: "auto",
+                        whiteSpace: "nowrap",
+                        fontSize: pxToRem(11),
+                        color: "var(--text-paper-d)",
+                      }}
+                    >
+                      {group.missing > 0
+                        ? t("env.toolStillNeeds", { count: String(group.missing) })
+                        : t("env.toolReady")}
+                    </span>
+                  </PopoverItem>
+                ))}
+                {offeredGroups.length === 0 && (
+                  <p
+                    data-testid="env-tool-none"
+                    style={{
+                      margin: 0,
+                      padding: "6px 10px",
+                      fontSize: pxToRem(12),
+                      color: "var(--text-paper-d)",
+                    }}
+                  >
+                    {t("env.noToolMatches")}
+                  </p>
                 )}
-                <span
-                  style={{
-                    marginLeft: "auto",
-                    fontSize: pxToRem(11),
-                    color: group.missing > 0 ? "var(--text-paper)" : "var(--text-paper-d)",
-                  }}
-                >
-                  {group.missing > 0
-                    ? t("env.toolStillNeeds", { count: String(group.missing) })
-                    : t("env.toolReady")}
-                </span>
-              </button>
-            ))}
-            {offeredGroups.length === 0 && (
-              <p
-                data-testid="env-tool-none"
-                style={{ margin: 0, fontSize: pxToRem(11), color: "var(--text-paper-d)" }}
-              >
-                {t("env.noToolMatches")}
-              </p>
-            )}
-          </div>
-        </div>
+              </div>
+            </div>
+          )}
+        </Popover>
       )}
 
       {view.groups.length > 0 && (
