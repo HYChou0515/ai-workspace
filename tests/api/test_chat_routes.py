@@ -345,3 +345,50 @@ async def test_chat_scoped_stream_is_per_chat():
     assert "UserMessage" in names and "MessageDelta" in names
     um = next(e for e in seen if type(e).__name__ == "UserMessage")
     assert um.content == "hi-B"
+
+
+def test_export_chat_ships_the_chat_you_asked_for_not_the_default():
+    """The Export button downloads the conversation on screen. It used to be
+    item-scoped, so it resolved the item's DEFAULT chat and handed you the
+    earliest one whatever you were reading — a plausible file, quietly wrong."""
+    from workspace_app.kb.chat_export import parse_chat_export
+
+    client, _spec, iid = _client()
+    a = client.post(f"/a/rca/items/{iid}/chats", json={"title": "A"}).json()["chat_id"]
+    b = client.post(f"/a/rca/items/{iid}/chats", json={"title": "B"}).json()["chat_id"]
+    client.post(f"/a/rca/items/{iid}/chats/{a}/messages", json={"content": "to-A"})
+    client.post(f"/a/rca/items/{iid}/chats/{b}/messages", json={"content": "to-B"})
+
+    resp = client.get(f"/a/rca/items/{iid}/chats/{b}/export-chat")
+    assert resp.status_code == 200, resp.text
+    _title, messages = parse_chat_export(resp.content)
+    assert [m["content"] for m in messages if m["role"] == "user"] == ["to-B"]
+
+
+def test_export_chat_titles_the_file_after_the_chat():
+    """The payload title and the download filename must name the CHAT. Titling
+    them after the item made every export of one item look identical, and left a
+    wrong-chat download with nothing to give itself away with."""
+    from workspace_app.kb.chat_export import parse_chat_export
+
+    client, _spec, iid = _client()
+    b = client.post(f"/a/rca/items/{iid}/chats", json={"title": "Second chat"}).json()["chat_id"]
+    client.post(f"/a/rca/items/{iid}/chats/{b}/messages", json={"content": "to-B"})
+
+    resp = client.get(f"/a/rca/items/{iid}/chats/{b}/export-chat")
+    title, _messages = parse_chat_export(resp.content)
+    assert title == "Second chat"
+    # The filename carries the same name, reduced to characters a header and a
+    # filesystem both accept — a space becomes a hyphen.
+    assert resp.headers["content-disposition"] == 'attachment; filename="Second-chat.chat.json"'
+
+
+def test_export_chat_404s_on_a_chat_from_another_item():
+    """A chat id is only meaningful inside its own item — accepting a foreign one
+    would hand back another item's conversation past this item's access check."""
+    client, spec, iid = _client()
+    other = register_rca_item(spec, title="Other")
+    foreign = client.post(f"/a/rca/items/{other}/chats", json={"title": "elsewhere"}).json()[
+        "chat_id"
+    ]
+    assert client.get(f"/a/rca/items/{iid}/chats/{foreign}/export-chat").status_code == 404

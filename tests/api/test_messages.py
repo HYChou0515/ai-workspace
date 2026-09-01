@@ -1222,4 +1222,6 @@ def test_a_full_workspace_refuses_the_turn_before_the_agent_runs():
     # reply that will never be produced.
     chats = client.get(f"/a/rca/items/{iid}/chats").json()
     assert all(not c.get("messages") for c in chats) if isinstance(chats, list) else True
-    assert client.get(f"/a/rca/items/{iid}/export-chat").text.count("do something") == 0
+    for c in chats:
+        export = client.get(f"/a/rca/items/{iid}/chats/{c['chat_id']}/export-chat")
+        assert export.text.count("do something") == 0

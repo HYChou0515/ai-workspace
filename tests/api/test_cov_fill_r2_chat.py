@@ -185,9 +185,22 @@ def test_promote_to_kb_404_when_title_missing(_title_of_returns_none):
     assert r.json()["detail"].startswith("unknown item")
 
 
-def test_export_chat_404_when_title_missing(_title_of_returns_none):
+def test_export_chat_still_downloads_when_the_item_has_no_title(_title_of_returns_none):
+    """The other endpoints here 404 on a missing title because it is their proxy
+    for "no such item". Export no longer needs that proxy — the chat-scoped route
+    has already resolved the item AND the chat before it looks at a title, which
+    it wants only as the fallback name for an unnamed chat. So a title-less item
+    downloads under a generic name instead of failing: refusing to hand over a
+    conversation a person can read, because of what it is called, would be the
+    wrong trade."""
+    from workspace_app.kb.chat_export import parse_chat_export
+
     client = _harness()
     item_id = _new_item(client)
-    r = client.get(f"/a/rca/items/{item_id}/export-chat")
-    assert r.status_code == 404
-    assert r.json()["detail"].startswith("unknown item")
+    chat_id = client.post(f"/a/rca/items/{item_id}/chats", json={"title": ""}).json()["chat_id"]
+    client.post(f"/a/rca/items/{item_id}/chats/{chat_id}/messages", json={"content": "hi"})
+    r = client.get(f"/a/rca/items/{item_id}/chats/{chat_id}/export-chat")
+    assert r.status_code == 200, r.text
+    title, _messages = parse_chat_export(r.content)
+    assert title == "chat"
+    assert r.headers["content-disposition"] == 'attachment; filename="chat.chat.json"'

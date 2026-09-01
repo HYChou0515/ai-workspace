@@ -2,9 +2,11 @@
 
 One format, two ends:
 
-  - **Export**: ``GET /a/{slug}/items/{id}/export-chat`` serialises a
-    conversation with ``build_chat_export`` and downloads it as
-    ``{investigation_id}.chat.json``.
+  - **Export**: ``GET /a/{slug}/items/{id}/chats/{chat_id}/export-chat``
+    serialises THAT chat with ``build_chat_export`` and downloads it as
+    ``{chat title}.chat.json`` (see ``chat_export_filename``). Naming the
+    file after the chat is what lets a person tell two exports of the same
+    item apart.
   - **Upload**: the Ingestor recognises ``*.chat.json`` (suffix
     convention — the export side guarantees it) and routes the file
     through the SAME insight-extraction pipeline the promote button
@@ -23,6 +25,7 @@ Schema (plain, pretty-printed JSON — editable in any editor)::
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, cast
 
 CHAT_EXPORT_SUFFIX = ".chat.json"
@@ -30,6 +33,17 @@ CHAT_EXPORT_SUFFIX = ".chat.json"
 
 def is_chat_export(filename: str) -> bool:
     return filename.lower().endswith(CHAT_EXPORT_SUFFIX)
+
+
+def chat_export_filename(title: str) -> str:
+    """The download name for a chat's export — its title, reduced to characters
+    that survive a Content-Disposition header and every filesystem, plus the
+    suffix the upload side dispatches on. Same reduction the KB chat's
+    browser-side export already applies, so both ends name a file alike. A title
+    that reduces to nothing (punctuation only, or an unnamed chat) falls back to
+    ``chat`` rather than producing a bare ``.chat.json``."""
+    safe = re.sub(r"[^\w.-]+", "-", title).strip("-")
+    return f"{safe or 'chat'}{CHAT_EXPORT_SUFFIX}"
 
 
 def build_chat_export(*, title: str, messages: list[dict[str, Any]]) -> bytes:

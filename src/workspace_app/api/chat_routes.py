@@ -485,19 +485,25 @@ def register_chat_routes(
         )
         return {"insight_ids": ids}
 
-    @app.get("/a/{slug}/items/{item_id}/export-chat")
-    async def export_chat(slug: str, item_id: str) -> Response:
-        """Download the conversation in the `.chat.json` round-trip
-        format — the KB upload path runs the same insight extraction
-        the promote button does on these files (debug / out-of-band
-        re-ingestion). The filename guarantees the suffix contract."""
-        investigation_id = locator.require_access(slug, item_id, "read_chat")
-        from ..kb.chat_export import CHAT_EXPORT_SUFFIX, build_chat_export
+    @app.get("/a/{slug}/items/{item_id}/chats/{chat_id}/export-chat")
+    async def export_chat(slug: str, item_id: str, chat_id: str) -> Response:
+        """Download THIS chat in the `.chat.json` round-trip format — the KB
+        upload path runs the same insight extraction the promote button does on
+        these files (debug / out-of-band re-ingestion). The filename guarantees
+        the suffix contract.
 
-        title = locator.title_of(investigation_id)
-        if title is None:
-            raise HTTPException(status_code=404, detail=f"unknown item: {investigation_id!r}")
-        _rid, conv = locator.conversation_for(investigation_id)
+        Chat-scoped like every other chat endpoint. It used to hang off the item
+        and resolve `conversation_for` — the item's DEFAULT chat — so whichever
+        chat you had open, you downloaded the earliest one, under the ITEM's
+        title and id. Nothing in the file disagreed with what you expected, which
+        is what made it worth fixing rather than documenting."""
+        locator.require_access(slug, item_id, "read_chat")
+        from ..kb.chat_export import build_chat_export, chat_export_filename
+
+        _rid, conv = locator.require_chat(slug, item_id, chat_id)
+        # An unnamed chat has no title of its own; the item it belongs to is the
+        # honest fallback — and it is what a single-chat item exported before.
+        title = conv.title or locator.title_of(locator.require_item(slug, item_id)) or "chat"
         payload = build_chat_export(
             title=title,
             messages=[
@@ -505,7 +511,7 @@ def register_chat_routes(
                 for m in conv.messages
             ],
         )
-        filename = f"{investigation_id}{CHAT_EXPORT_SUFFIX}"
+        filename = chat_export_filename(title)
         return Response(
             content=payload,
             media_type="application/json",
