@@ -195,6 +195,23 @@ describe("PermissionDialog — group grants (#608)", () => {
     expect(saved.read_content).toEqual(["group:eng"]); // round-tripped, not wiped
   });
 
+  it("keeps groups behind their own tab instead of stacking them under the people list", () => {
+    renderWithQuery(
+      <PermissionDialog
+        resourceName="Docs"
+        owner="bob"
+        value={perm({ read_meta: ["user:alice"], read_content: ["user:alice"] })}
+        pickableGroups={pickable}
+        onSubmit={vi.fn()}
+        onClose={() => {}}
+      />,
+    );
+    expect(screen.queryByTestId("group-grant-select")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("share-tab-groups"));
+    expect(screen.getByTestId("group-grant-select")).toBeInTheDocument();
+    expect(screen.queryByTestId("permission-people-picker")).not.toBeInTheDocument();
+  });
+
   it("adds a group grant from the picker", () => {
     const onSubmit = vi.fn();
     renderWithQuery(
@@ -207,6 +224,7 @@ describe("PermissionDialog — group grants (#608)", () => {
         onClose={() => {}}
       />,
     );
+    fireEvent.click(screen.getByTestId("share-tab-groups"));
     fireEvent.click(screen.getByTestId("group-picker-item-eng"));
     fireEvent.click(screen.getByTestId("permission-save"));
     const saved = onSubmit.mock.calls[0][0] as CollectionPermission;
@@ -248,5 +266,45 @@ describe("PermissionDialog — unresolvable group grant (#608)", () => {
     );
     expect(screen.getByText("Unknown group")).toBeInTheDocument();
     expect(screen.getByTestId("group-remove-ghost")).toBeInTheDocument();
+  });
+});
+
+/* Same panel shape as ItemShareDialog, same failure: the flex column compresses
+ * whatever it may, and the only compressible child is the "Add people…" picker
+ * (a scroll container), so a handful of grants collapsed it to a sliver that no
+ * scrollbar could bring back. Reached from a KB collection and the doc IDE. */
+describe("PermissionDialog layout — a long grant list must not eat the picker", () => {
+  const many = (n: number) => Array.from({ length: n }, (_, i) => `user:p${i}`);
+  const open = () =>
+    renderWithQuery(
+      <PermissionDialog
+        resourceName="Docs"
+        owner="bob"
+        value={perm({ read_meta: many(6), read_content: many(6) })}
+        onSubmit={vi.fn()}
+        onClose={() => {}}
+      />,
+    );
+
+  it("refuses to let the flex column compress the people section", () => {
+    open();
+    expect(screen.getByTestId("permission-grants").style.flexShrink).toBe("0");
+  });
+
+  it("does not wrap the picker in a second scroll layer that hides its search box", () => {
+    open();
+    expect(screen.getByTestId("permission-people-picker").style.overflow).toBe("");
+  });
+
+  it("keeps Save in the pinned action bar so eight grants cannot scroll it away", () => {
+    open();
+    expect(screen.getByTestId("permission-save").closest('[data-testid="modal-actions"]')).not.toBeNull();
+  });
+
+  it("scrolls a long grant list in its own box instead of pushing the picker away", () => {
+    open();
+    const list = screen.getByTestId("grant-list");
+    expect(list.style.overflow).toBe("auto");
+    expect(list.style.maxHeight).not.toBe("");
   });
 });
