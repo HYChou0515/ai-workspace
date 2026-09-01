@@ -130,7 +130,12 @@ KEEP_TAIL_RATIO = 0.5
 
 
 def plan_for_budget(
-    messages: Sequence[Any], *, used: int, budget: int | None, estimate: Estimator
+    messages: Sequence[Any],
+    *,
+    used: int,
+    budget: int | None,
+    estimate: Estimator,
+    force: bool = False,
 ) -> tuple[int, list[Any]]:
     """``(insert_at, span)`` for a thread that no longer fits — empty when it does.
 
@@ -138,13 +143,23 @@ def plan_for_budget(
     reducer would otherwise start throwing things away. One number to get wrong
     instead of two, and it cannot drift from what actually happens.
 
+    ``force`` is a person pressing compact. They have a reason we do not: the
+    last hour of debugging is finished and they want the window back BEFORE the
+    next question rather than after it stops fitting. So the budget gates the
+    automatic path only — asking is the whole trigger.
+
     ``budget is None`` means no ceiling is known, and #624's rule there is to
     send everything and learn the real limit from the response. A thread that is
     never trimmed must never be compacted either — spending a turn and losing
     detail for a limit nobody measured is the worse of the two mistakes."""
-    if budget is None or used <= budget:
+    if not force and (budget is None or used <= budget):
         return 0, []
-    return compaction_plan(messages, keep_tokens=int(budget * KEEP_TAIL_RATIO), estimate=estimate)
+    # The tail is half of whichever is SMALLER: the budget, or what the thread
+    # actually costs. Sizing it from the budget alone makes a forced pass on a
+    # roomy window keep everything — a tail of half of 200k swallows a six
+    # message thread whole, and the button does nothing.
+    tail_of = used if budget is None else min(budget, used)
+    return compaction_plan(messages, keep_tokens=int(tail_of * KEEP_TAIL_RATIO), estimate=estimate)
 
 
 class IConversationCompactor(abc.ABC):

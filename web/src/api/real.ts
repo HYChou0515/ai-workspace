@@ -373,6 +373,15 @@ export const realApi: ApiClient = {
     );
   },
 
+  async compactChat(slug: string, itemId: string, chatId: string) {
+    return json<{ compacted: boolean }>(
+      await apiFetch(
+        `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}/chats/${encodeURIComponent(chatId)}/compact`,
+        { method: "POST" },
+      ),
+    );
+  },
+
   async refreshFiles(slug: string, investigationId) {
     // Server flushes sandbox → snapshot. Swallow 404/405 the same way as
     // listFiles for older backends.

@@ -185,6 +185,16 @@ class _ContextOut(BaseModel):
     measured: bool
 
 
+class _CompactOut(BaseModel):
+    """#739: whether pressing compact actually replaced anything.
+
+    `False` is a normal answer, not an error — a thread with nothing behind its
+    recent turns has nothing to summarise, and refusing with a 4xx would make
+    the button look broken instead of merely idle."""
+
+    compacted: bool
+
+
 class _GoalBody(BaseModel):
     # #613 P3: set the chat's completion condition (whole replace; one goal per
     # chat). Stripped and non-blank — a blank goal is a 422, not an empty row.

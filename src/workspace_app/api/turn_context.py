@@ -271,7 +271,7 @@ class TurnContextBuilder:
         )
 
     def compaction_plan_for(
-        self, item_id: str, messages: list[Message]
+        self, item_id: str, messages: list[Message], *, force: bool = False
     ) -> tuple[int, list[Message]]:
         """#739: ``(insert_at, span)`` for a thread that no longer fits — an
         empty span when it does.
@@ -305,7 +305,17 @@ class TurnContextBuilder:
                 int(window.tokens * (1.0 - DEFAULT_MARGIN_RATIO)) - DEFAULT_REPLY_RESERVE,
             )
         )
-        return plan_for_budget(messages, used=usage.used, budget=budget, estimate=estimate_messages)
+        # `force` is a person pressing compact. They have a reason we do not:
+        # the last hour of debugging is finished and they want the window back
+        # BEFORE the next question, not after it stops fitting. So the budget
+        # gates the automatic path only — asking is the whole trigger.
+        return plan_for_budget(
+            messages,
+            used=usage.used,
+            budget=budget,
+            estimate=estimate_messages,
+            force=force,
+        )
 
     def _budget_for(
         self,

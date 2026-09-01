@@ -825,6 +825,11 @@ export const mockApi: ApiClient = {
     return { used: 9_400, limit: 40_960, measured: true };
   },
 
+  async compactChat(_slug: string, _itemId: string, _chatId: string) {
+    await delay(10);
+    return { compacted: true };
+  },
+
   async refreshFiles(_slug: string, _investigationId) {
     // Mock has no separate sandbox/snapshot — the in-memory map IS the
     // source of truth. Flushing is a no-op; we just delay a tick.

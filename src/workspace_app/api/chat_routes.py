@@ -30,6 +30,7 @@ from .promote import promote_chat_to_kb
 from .rca_messages import undo_cut_index
 from .schemas import (
     _ChatInfo,
+    _CompactOut,
     _ContextOut,
     _CreateChatBody,
     _GoalBody,
@@ -74,6 +75,16 @@ class SendInto(Protocol):
 RecordMention = Callable[..., None]
 
 
+class CompactInto(Protocol):
+    """#739: replace this chat's older span with a précis of it. Same callable
+    the automatic path uses — the user pressing compact differs only in `force`,
+    which skips the budget check because asking IS the trigger."""
+
+    async def __call__(
+        self, item_id: str, rid: str, conv: Any, engine_key: str, *, force: bool = False
+    ) -> bool: ...
+
+
 class ContextUsageFor(Protocol):
     """#739: what a chat currently costs. A narrow callable rather than the whole
     turn-context builder — the routes need one number, not its surface."""
@@ -96,6 +107,7 @@ def register_chat_routes(
     send_into: SendInto,
     record_mention: RecordMention,
     context_usage_for: ContextUsageFor,
+    compact_into: CompactInto,
     goal_max_rounds: int = 3,
     goal_checker_enabled: bool = True,
     # #615: the deployment's off-hours budget + whether a usable window is
@@ -316,6 +328,26 @@ def register_chat_routes(
             turn_engine.subscribe_sse(locator.engine_key(investigation_id, chat_id), since=since),
             media_type="text/event-stream",
         )
+
+    @app.post("/a/{slug}/items/{item_id}/chats/{chat_id}/compact")
+    async def compact_chat(slug: str, item_id: str, chat_id: str) -> _CompactOut:
+        """#739: summarise the older part of this chat, on request.
+
+        `converse` rather than `read_chat`: this WRITES to the thread and costs
+        a model call, so a reader who may only watch must not be able to spend
+        one. Same call the automatic path makes — the only difference is that
+        this one skips the budget check, because a person asking has a reason we
+        cannot see from the token count."""
+        investigation_id = locator.require_access(slug, item_id, "converse")
+        rid, conv = locator.require_chat(slug, item_id, chat_id)
+        did = await compact_into(
+            investigation_id,
+            rid,
+            conv,
+            locator.engine_key(investigation_id, rid),
+            force=True,
+        )
+        return _CompactOut(compacted=did)
 
     @app.get("/a/{slug}/items/{item_id}/chats/{chat_id}/context")
     def get_chat_context(slug: str, item_id: str, chat_id: str) -> _ContextOut:

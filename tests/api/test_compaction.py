@@ -242,3 +242,91 @@ def test_a_turn_that_would_not_fit_compacts_before_it_runs():
     assert at > 0, "the span it replaces stays in the store above it"
     assert "user" in roles[at:], "something must survive after the summary"
     assert after.messages[at].content, "an empty summary is worse than no summary"
+
+
+def test_the_user_can_compact_a_thread_that_still_fits():
+    """#739 P5: asking is the whole trigger. The automatic path waits until the
+    thread no longer fits, but a person pressing compact has a reason we do not
+    have — they know the last hour of debugging is over and want the window back
+    before the next question, not after it stops fitting.
+
+    So the budget check that gates the automatic path must NOT gate this one."""
+    from workspace_app.api import create_app
+    from workspace_app.api.runner import ScriptedAgentRunner
+    from workspace_app.filestore.memory import MemoryFileStore
+    from workspace_app.resources import Conversation, Message, make_spec
+    from workspace_app.sandbox.mock import MockSandbox
+
+    from ._client import TestClient
+    from .conftest import register_rca_item
+
+    spec = make_spec(default_user="u")
+    iid = register_rca_item(spec)
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=ScriptedAgentRunner([MessageDelta(text="這是摘要"), RunDone()]),
+        get_user_id=lambda: "alice",
+        # Roomy on purpose: nothing here is close to full.
+        context_limit=200_000,
+    )
+    rm = spec.get_resource_manager(Conversation)
+    conv = rm.create(
+        Conversation(
+            item_id=iid,
+            created_ms=1,
+            messages=[Message(role="user", content=f"第{i}個問題") for i in range(6)],
+        )
+    )
+
+    r = TestClient(app).post(f"/a/rca/items/{iid}/chats/{conv.resource_id}/compact")
+    assert r.status_code in (200, 202), r.text
+
+    after = rm.get(conv.resource_id).data
+    assert isinstance(after, Conversation)
+    roles = [m.role for m in after.messages]
+    assert "summary" in roles, "pressing compact must compact"
+    at = roles.index("summary")
+    assert at > 0, "the originals stay above it"
+    assert roles[at + 1 :], "something must survive after the summary"
+
+
+def test_compacting_a_thread_with_nothing_to_compact_is_not_an_error():
+    """One message, nothing behind it. Refusing with a 4xx would make the button
+    look broken; the honest answer is that it did nothing, and said so."""
+    from workspace_app.api import create_app
+    from workspace_app.api.runner import ScriptedAgentRunner
+    from workspace_app.filestore.memory import MemoryFileStore
+    from workspace_app.resources import Conversation, Message, make_spec
+    from workspace_app.sandbox.mock import MockSandbox
+
+    from ._client import TestClient
+    from .conftest import register_rca_item
+
+    spec = make_spec(default_user="u")
+    iid = register_rca_item(spec)
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=ScriptedAgentRunner([MessageDelta(text="這是摘要"), RunDone()]),
+        get_user_id=lambda: "alice",
+        context_limit=200_000,
+    )
+    rm = spec.get_resource_manager(Conversation)
+    conv = rm.create(
+        Conversation(
+            item_id=iid,
+            created_ms=1,
+            messages=[Message(role="user", content="只有一句")],
+        )
+    )
+
+    r = TestClient(app).post(f"/a/rca/items/{iid}/chats/{conv.resource_id}/compact")
+    assert r.status_code in (200, 202), r.text
+    assert r.json()["compacted"] is False
+
+    after = rm.get(conv.resource_id).data
+    assert isinstance(after, Conversation)
+    assert [m.role for m in after.messages] == ["user"]

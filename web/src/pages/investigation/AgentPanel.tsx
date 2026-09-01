@@ -4,7 +4,7 @@
  * user / agent / tool-call entries, with suggestion chips + composer.
  */
 
-import { useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useRef, useState } from "react";
 
 import { api } from "../../api";
@@ -23,6 +23,7 @@ import { ToolsPickerModal } from "../../components/ToolsPickerModal";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { UsageBar } from "./UsageBar";
 import { ContextBar } from "../../components/ContextBar";
+import { parseComposerCommand } from "../../components/composerCommand";
 import { ReplayDialog, type ReplayRequest } from "../../components/ReplayDialog";
 import { useDialog } from "../../components/Dialog";
 import { Popover } from "../../components/Popover";
@@ -200,6 +201,20 @@ export function AgentPanel({
   // composer's own feedback channel (Enter during a turn, Stop). Cleared on the
   // next successful send.
   const [composerHint, setComposerHint] = useState<string | null>(null);
+  // #739: `/compact` and the button below are the SAME call — a slash command is
+  // invisible by nature, so the button is what makes it discoverable, and one
+  // route means the two can never drift apart.
+  const compact = useMutation({
+    mutationFn: () => api.compactChat(slug, investigationId, chatId ?? ""),
+    onSuccess: (r) => {
+      if (!r.compacted) {
+        setComposerHint("這段對話還沒有需要壓縮的內容。");
+        return;
+      }
+      void queryClient.invalidateQueries({ queryKey: qk.itemChat(slug, investigationId, chatId ?? "") });
+      void queryClient.invalidateQueries({ queryKey: qk.chatContext(slug, investigationId, chatId ?? "") });
+    },
+  });
   // Messages on a shared item SERIALIZE server-side; they do not cancel each
   // other (#43). So a turn started by SOMEONE ELSE is no reason to lock this
   // viewer out — the backend will happily queue behind it, and taking that away
@@ -433,6 +448,14 @@ export function AgentPanel({
       return;
     }
     setComposerHint(null);
+    // #739: a slash command is not a message. It never reaches the model and is
+    // never persisted as something the user said — the literal text "/compact"
+    // must not end up in the transcript the summariser is about to read.
+    if (chatId && parseComposerCommand(text) === "compact") {
+      setDraft("");
+      compact.mutate();
+      return;
+    }
     // #288: in a workflow run chat the composer steers the run — the text is a
     // free-text instruction, not an interactive turn. (Stop the run from the
     // progress bar above (#331); the composer is inert while a turn streams.)
@@ -747,6 +770,26 @@ export function AgentPanel({
             long session runs into, and the one that used to arrive as a
             surprise rather than as a gauge. */}
         {chatId && <ContextBar slug={slug} itemId={investigationId} chatId={chatId} />}
+        {chatId && (
+          <button
+            type="button"
+            data-testid="compact-chat"
+            onClick={() => compact.mutate()}
+            disabled={compact.isPending || log.streaming}
+            style={{
+              alignSelf: "flex-start",
+              background: "none",
+              border: "none",
+              padding: 0,
+              cursor: compact.isPending ? "default" : "pointer",
+              fontSize: pxToRem(11),
+              color: "var(--text-paper-d)",
+              textDecoration: "underline",
+            }}
+          >
+            {compact.isPending ? "整理中…" : "整理成摘要"}
+          </button>
+        )}
         {progress && (
           <div data-testid="attach-progress" style={{ display: "flex", flexDirection: "column", gap: 2 }}>
             <div

@@ -278,9 +278,15 @@ class ChatSendService:
         task.add_done_callback(self._inflight.discard)
         await asyncio.shield(task)
 
-    async def _maybe_compact(
-        self, item_id: str, rid: str, conv: Conversation, engine_key: str
-    ) -> None:
+    async def compact(
+        self,
+        item_id: str,
+        rid: str,
+        conv: Conversation,
+        engine_key: str,
+        *,
+        force: bool = False,
+    ) -> bool:
         """Replace the span that no longer fits with a précis of it (#739).
 
         Three refusals, all cheaper than the alternative:
@@ -289,10 +295,10 @@ class ChatSendService:
         reducer do what it always did — replacing a span with NOTHING is worse
         than the truncation this exists to avoid."""
         if self._compactor is None:
-            return
-        at, span = self._turn_ctx.compaction_plan_for(item_id, conv.messages)
+            return False
+        at, span = self._turn_ctx.compaction_plan_for(item_id, conv.messages, force=force)
         if not span:
-            return
+            return False
         # The turn is about to take a whole extra round trip. Say so, or the
         # chat looks frozen for the one turn a user is least expecting it.
         self._turn_engine.publish(engine_key, Compacting(replaced=len(span)))
@@ -304,12 +310,13 @@ class ChatSendService:
             text = await self._compactor.summarise(span, ctx=ctx)
         except Exception:  # noqa: BLE001 — a failed summary must not fail the turn
             logger.warning("chat_send: compaction failed for item %s", item_id, exc_info=True)
-            return
+            return False
         if not text.strip():
             logger.warning("chat_send: compaction produced nothing for item %s", item_id)
-            return
+            return False
         conv.messages.insert(at, Message(role=SUMMARY_ROLE, content=text, created_at=now_ms()))
         self._conv_rm.update(rid, conv)
+        return True
 
     async def _resolve_request_env(
         self, request: Request | None, *, user_id: str, item_id: str
@@ -691,7 +698,7 @@ class ChatSendService:
         # final for this turn (the user's message is in), and because `_send`
         # already runs in a shielded background task — so the extra round trip
         # cannot hold the POST open.
-        await self._maybe_compact(investigation_id, rid, conv, engine_key)
+        await self.compact(investigation_id, rid, conv, engine_key)
         logger.info(
             "chat_send: user %s sent message to item %s (chat %s)",
             author,
