@@ -184,6 +184,10 @@ def resolve_usage(
         name=usage.get("name") or default_name or preset_name,
         model=merged["model"],
         vision=bool(merged.get("vision", False)),
+        # #748/#751: a hand-written kwargs list drops any field nobody adds
+        # here, and strict validation ACCEPTS the key because it is a real
+        # Preset field — so the operator gets no error and no effect.
+        reports_usage=bool(merged.get("reports_usage", False)),
         system_prompt=prompt_text,
         description=merged.get("description", ""),
         # ``dataclasses.asdict(preset)`` above flattens the loader-side

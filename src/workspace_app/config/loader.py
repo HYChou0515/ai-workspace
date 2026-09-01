@@ -305,6 +305,7 @@ def _validate(merged: dict[str, Any], *, source: str) -> None:
     _check_unknown_keys(merged, _TOP_SCHEMA, prefix="", source=source)
     _check_preset_references(merged, source=source)
     _check_preset_fallbacks(merged, source=source)
+    _check_reports_usage_chain(merged, source=source)
     _check_preset_required_fields(merged, source=source)
     _check_retrieval_llm_reference(merged, source=source)
     _check_max_searches(merged, source=source)
@@ -633,6 +634,41 @@ def _check_preset_references(merged: dict[str, Any], *, source: str) -> None:
                 )
 
 
+def _check_reports_usage_chain(merged: dict[str, Any], *, source: str) -> None:
+    """#748/#751: a `reports_usage` head may not fall back to an endpoint that
+    has not been vouched for.
+
+    Failover reuses ONE `ModelSettings` across the whole chain, so the head's
+    declaration is what every endpoint in it is asked with. Point a vouched head
+    at a silent one and litellm answers on that endpoint's behalf — its
+    tokenizer's guess, persisted as a measurement. That is the exact fabrication
+    the flag exists to prevent, and it would arrive only on failover, i.e. the
+    path nobody is looking at.
+
+    Per-endpoint settings are the other possible fix. This refuses the config
+    instead, because the operator has written something they cannot have meant
+    and the inconsistency is visible right here, at load, rather than in a
+    record weeks later.
+    """
+    presets = ((merged.get("agents") or {}).get("presets") or {}) if merged else {}
+    if not isinstance(presets, dict):
+        return
+    for name, preset in presets.items():
+        if not isinstance(preset, dict) or not preset.get("reports_usage"):
+            continue
+        for fb in preset.get("fallbacks") or []:
+            other = presets.get(fb)
+            if isinstance(other, dict) and not other.get("reports_usage"):
+                raise ValueError(
+                    f"{source}: preset '{name}' declares reports_usage but falls back to "
+                    f"'{fb}', which does not. The chain shares one request, so the fallback "
+                    f"would be asked for usage it was never vouched for, and litellm answers "
+                    f"in its place with a tokenizer estimate that is stored as a measurement. "
+                    f"Set reports_usage on '{fb}' too if it genuinely reports, or drop it from "
+                    f"'{name}'s fallbacks."
+                )
+
+
 def _check_preset_fallbacks(merged: dict[str, Any], *, source: str) -> None:
     """Every name in a preset's `fallbacks` chain (#196) must resolve to another
     known preset, and a preset must not list itself (a degenerate cycle that
@@ -931,6 +967,10 @@ def _build_preset(d: dict[str, Any]) -> Preset:
     return Preset(
         model=d["model"],
         vision=bool(d.get("vision", False)),
+        # #748/#751: a hand-written kwargs list drops any field nobody adds
+        # here, and strict validation ACCEPTS the key because it is a real
+        # Preset field — so the operator gets no error and no effect.
+        reports_usage=bool(d.get("reports_usage", False)),
         prompt_file=d.get("prompt_file", ""),
         description=d.get("description", ""),
         suggestions=list(d.get("suggestions", [])),

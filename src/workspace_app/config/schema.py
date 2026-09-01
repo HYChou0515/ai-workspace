@@ -1042,6 +1042,7 @@ def _preset_from_dict(d: dict[str, Any]) -> Preset:
     return Preset(
         model=d["model"],
         vision=bool(d.get("vision", False)),
+        reports_usage=bool(d.get("reports_usage", False)),
         prompt_file=d.get("prompt_file", ""),
         description=d.get("description", ""),
         suggestions=[_to_suggestion(v) for v in d.get("suggestions", [])],

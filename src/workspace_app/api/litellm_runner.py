@@ -1497,8 +1497,17 @@ class LitellmAgentRunner:
             "stream_deadlines": self._stream_deadlines,
         }
 
-    async def _run_once(  # pragma: no cover — exercised only by the live Ollama test
-        self, prompt: str, ctx: AgentToolContext, feedback: str | None
+    async def _run_once(  # pragma: no cover — see the note below
+        # The exclusion predates a test that DOES drive this loop
+        # (`test_tool_call_arguments_are_counted_but_never_shown` stubs
+        # `Runner.run_streamed`). Keeping it means the 100% gate stays blind
+        # here — which is how tool-call JSON came to be printed into replies
+        # for a whole commit. Narrow or remove it when the fake stream covers
+        # enough of the loop to hold the line on its own.
+        self,
+        prompt: str,
+        ctx: AgentToolContext,
+        feedback: str | None,
     ) -> AsyncIterator[AgentEvent]:
         assert ctx.agent_config is not None  # run() guards None before _run_once
         # Non-streaming path: the escape hatch (WORKSPACE_AGENT_STREAM=0).

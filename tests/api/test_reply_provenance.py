@@ -15,6 +15,8 @@ store, not of how the engine is wired.
 
 from __future__ import annotations
 
+import pathlib
+
 from workspace_app.api.events import AgentMetrics, MessageDelta
 from workspace_app.api.turns import _TurnReducer
 
@@ -379,6 +381,18 @@ def test_usage_is_requested_only_where_an_operator_vouched_for_the_endpoint():
     default = _agent_for(AgentConfig(name="t", model="openai/x"))
     assert default.model_settings.include_usage is not True
 
+    # All THREE branches, not just the one the default config happens to take.
+    # `reasoning_effort` is a per-turn request field, so a user toggling thinking
+    # in the UI walks into the other two — where deleting the line left the whole
+    # suite green.
+    for effort in ("none", "low", "high"):
+        on = _agent_for(
+            AgentConfig(name="t", model="openai/x", reports_usage=True), reasoning_effort=effort
+        )
+        off = _agent_for(AgentConfig(name="t", model="openai/x"), reasoning_effort=effort)
+        assert on.model_settings.include_usage is True, effort
+        assert off.model_settings.include_usage is not True, effort
+
 
 # ── the streaming loop itself, not its predicates ────────────────────────────
 
@@ -439,3 +453,91 @@ async def test_tool_call_arguments_are_counted_but_never_shown(monkeypatch):
 
     assert "".join(shown) == "Hello. "
     assert "/etc/passwd" not in "".join(shown)
+
+
+def test_the_declaration_survives_the_real_config_loader(tmp_path):
+    """Entered through the loader, not by constructing AgentConfig.
+
+    The earlier test built `AgentConfig(reports_usage=True)` by hand and stayed
+    green over a chain that dropped the value at its first step: `_build_preset`
+    is a hand-written kwargs list, strict validation accepts the key because it
+    IS a Preset field, and the builder then discards it — so an operator setting
+    the flag got no error and no effect. `vision` is the control: the sibling
+    declarative flag on the same preset, which survives.
+    """
+    from textwrap import dedent
+
+    from workspace_app.config.loader import load_with_provenance
+
+    cfg = pathlib.Path(tmp_path) / "config.yaml"
+    cfg.write_text(
+        dedent("""
+            agents:
+              presets:
+                vouched:
+                  model: openai/x
+                  vision: true
+                  reports_usage: true
+                unvouched:
+                  model: openai/y
+        """)
+    )
+    settings, _ = load_with_provenance(config_path=cfg)
+    presets = settings.agents.presets
+    assert presets["vouched"].vision is True  # control
+    assert presets["vouched"].reports_usage is True
+    assert presets["unvouched"].reports_usage is False
+
+
+def test_the_declaration_reaches_the_kb_turn_too():
+    """`AgentConfig.reports_usage` documents "app / KB turn"; the KB half was
+    false. App chat is wired in `apps/catalog.py`, but every preset-referencing
+    role — kb_chat, infer_modules, the `agents.<purpose>` sub-agents behind
+    `ask_knowledge_base` — is built by `catalog_build.resolve_usage`, which had
+    the value in hand (`asdict(preset)`) and did not copy it."""
+    from workspace_app.config.catalog_build import resolve_usage
+    from workspace_app.config.schema import Preset
+
+    preset = Preset(
+        model="openai/x", prompt_file="pkg:workspace_app.kb.prompts/system.md", reports_usage=True
+    )
+    cfg = resolve_usage({"preset": "vouched"}, {"vouched": preset}, config_dir=None)
+    assert cfg.reports_usage is True
+
+    plain = Preset(model="openai/y", prompt_file="pkg:workspace_app.kb.prompts/system.md")
+    off = resolve_usage({"preset": "plain"}, {"plain": plain}, config_dir=None)
+    assert off.reports_usage is False
+
+
+def test_a_vouched_head_may_not_fall_back_to_an_unvouched_endpoint(tmp_path):
+    """Failover reuses ONE `ModelSettings` across the whole chain, so a vouched
+    head hands `include_usage` to whatever it switches to. Point it at an
+    endpoint nobody vouched for and litellm answers for that endpoint — the
+    exact fabrication this flag exists to prevent, arriving through the one path
+    where nobody is watching.
+
+    Per-endpoint settings would be the other fix; refusing the config is the
+    honest one, because the operator wrote something they cannot have meant and
+    the inconsistency is visible right here.
+    """
+    from textwrap import dedent
+
+    import pytest
+
+    from workspace_app.config.loader import load_with_provenance
+
+    cfg = pathlib.Path(tmp_path) / "config.yaml"
+    cfg.write_text(
+        dedent("""
+            agents:
+              presets:
+                vouched:
+                  model: openai/x
+                  reports_usage: true
+                  fallbacks: [silent]
+                silent:
+                  model: ollama_chat/qwen3:14b
+        """)
+    )
+    with pytest.raises(ValueError, match="reports_usage"):
+        load_with_provenance(config_path=cfg)
