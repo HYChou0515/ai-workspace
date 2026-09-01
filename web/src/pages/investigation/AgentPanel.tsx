@@ -38,7 +38,7 @@ import { useStickToBottom } from "../../hooks/useStickToBottom";
 import { ConnectionNotice } from "../../components/ConnectionNotice";
 import { ResourceLinkText } from "../../components/ResourceLinkText";
 import { TurnStatus } from "../../components/TurnStatus";
-import { turnsFromEntry } from "./agentLog";
+import { turnLooksSilent, turnsFromEntry } from "./agentLog";
 import type { QuotaKind } from "../../lib/quotaFailure";
 import { pxToRem } from "../../lib/pxToRem";
 import { useT } from "../../lib/i18n";
@@ -86,11 +86,16 @@ const hdrBtn: React.CSSProperties = {
  * off the screen. The rest are counted, never dropped. */
 const CHIP_RENDER_BUDGET = 12;
 
-/** How long a wait goes on before the panel ASKS whether anyone is driving the
- * turn. Comfortably inside the give-up notice's own threshold, so the answer is
- * in hand before the screen would have to say anything — and late enough that a
- * healthy turn never costs the request at all. */
+/** How long a silence goes on before the panel ASKS whether anyone is driving
+ * the turn. Comfortably inside the give-up notice's own threshold, so the answer
+ * is in hand before the screen would have to say anything — and late enough that
+ * a brief hand-off (every turn begins in this state) never costs a request. */
 const TURN_ALIVE_ASK_AFTER_MS = 60_000;
+
+/** …and how often it asks again while the silence lasts. Matched to the server's
+ * own staleness window (`TURN_STALE_AFTER_MS`), so what the screen shows is
+ * never more than one window behind the fact it describes. */
+const TURN_ALIVE_REFRESH_MS = 30_000;
 
 /** How many rejected files the composer names before switching to a count. Same
  * failure, one surface over: a folder that is refused wholesale used to render
@@ -116,6 +121,7 @@ function overQuotaKey(kind: QuotaKind) {
 
 export function AgentPanel({
   investigationId,
+  chatId,
   readOnly = false,
   agent: agentProp,
   width = 380,
@@ -136,6 +142,10 @@ export function AgentPanel({
   uploadDir = "uploads",
 }: {
   investigationId: string;
+  /** The chat this panel is showing, when it is showing a named one. Turns are
+   * keyed per chat server-side, so a question about the turn has to name it;
+   * absent means the item's DEFAULT chat, whose key is the item id. */
+  chatId?: string;
   /** Permission-disclosure: the current user may read the thread but lacks
    * `converse` — the composer is disabled with a hint (the backend also 403s a
    * send, this just makes the lock legible instead of a raw error). */
@@ -208,28 +218,44 @@ export function AgentPanel({
   useEffect(() => {
     if (!log.streaming) setComposerHint(null);
   }, [log.streaming]);
-  // Whether any pod is driving this turn. Asked ONCE, and only when the wait has
-  // gone on long enough that the screen would otherwise have to guess: for a
-  // healthy turn this question never gets asked at all. `null` while unasked or
-  // unanswerable — which `TurnStatus` reads as "still cannot tell", not as "no".
+  // Whether any pod is driving this turn. Asked only while the turn is silent in
+  // the one way the screen cannot explain (`turnLooksSilent` — the same
+  // predicate `TurnStatus` shows the answer under), and only after the wait is
+  // long enough to be suspicious: a turn that is visibly producing never costs a
+  // request. `null` while unasked or unanswerable — which `TurnStatus` reads as
+  // "still cannot tell", not as "no".
+  //
+  // And asked REPEATEDLY, because the recorded fact expires (30s server-side)
+  // while the answer is shown from ten minutes onwards. A single sample would
+  // have one moment near the start of the silence speaking for the whole of it —
+  // so a pod that died at minute two would still read as 「還在跑」 at minute
+  // twenty, with the retry withheld. That is the endless wait again, now with a
+  // server-side fact behind it, which is worse than the guess it replaced.
   const [turnAlive, setTurnAlive] = useState<boolean | null>(null);
+  const silent = turnLooksSilent(log);
   useEffect(() => {
-    if (!log.streaming) {
+    if (!silent) {
       setTurnAlive(null);
       return;
     }
     let cancelled = false;
-    const id = setTimeout(() => {
+    const ask = () => {
       void api
-        .turnAlive(slug, investigationId)
+        .turnAlive(slug, investigationId, chatId)
         .then((v) => !cancelled && setTurnAlive(v))
         .catch(() => undefined);
+    };
+    let repeat: ReturnType<typeof setInterval> | undefined;
+    const first = setTimeout(() => {
+      ask();
+      repeat = setInterval(ask, TURN_ALIVE_REFRESH_MS);
     }, TURN_ALIVE_ASK_AFTER_MS);
     return () => {
       cancelled = true;
-      clearTimeout(id);
+      clearTimeout(first);
+      if (repeat !== undefined) clearInterval(repeat);
     };
-  }, [log.streaming, slug, investigationId]);
+  }, [silent, slug, investigationId, chatId]);
   // Messages on a shared item SERIALIZE server-side; they do not cancel each
   // other (#43). So a turn started by SOMEONE ELSE is no reason to lock this
   // viewer out — the backend will happily queue behind it, and taking that away

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { AgentEvent } from "../../events";
+import { initialLocale, translate } from "../../lib/i18n";
 import {
   EMPTY_LOG,
   type AgentLog,
@@ -242,8 +243,14 @@ describe("reconcileSnapshot", () => {
     // The persisted message carries `error_kind`, which is the machine-readable
     // half: the backend says WHAT happened, the UI says how to word it. Worded
     // from the same source, the two are the same banner and one of them goes.
+    // Worded the way the app words it, not spelled out here: what is being
+    // asserted is that ONE event yields ONE banner, and hard-coding a language
+    // makes that assertion fail in any other locale — which is a fact about the
+    // runner's environment, not about the collapse. (It did: green locally,
+    // red on CI.)
+    const cancelled = translate(initialLocale(), "banner.cancelled");
     const prev = live({
-      entries: [msg("user", "q"), { kind: "banner", at: 5, text: "已取消。" }],
+      entries: [msg("user", "q"), { kind: "banner", at: 5, text: cancelled }],
     });
 
     const next = reconcileSnapshot(prev, {
@@ -259,7 +266,7 @@ describe("reconcileSnapshot", () => {
     });
 
     expect(next.entries.filter((e) => e.kind === "banner")).toHaveLength(1);
-    expect(next.entries.some((e) => e.kind === "banner" && e.text === "已取消。")).toBe(true);
+    expect(next.entries.some((e) => e.kind === "banner" && e.text === cancelled)).toBe(true);
   });
 
   it("KNOWN GAP: a step-limited turn still says it twice, once in English", () => {

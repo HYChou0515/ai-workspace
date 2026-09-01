@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 
-import { type AgentLog, type TurnPhase, formatMetrics, isToolRunning, turnPhase } from "../pages/investigation/agentLog";
+import {
+  type AgentLog,
+  type TurnPhase,
+  formatMetrics,
+  isToolRunning,
+  turnLooksSilent,
+  turnPhase,
+} from "../pages/investigation/agentLog";
 import { pxToRem } from "../lib/pxToRem";
 
 /** The trailing status of an in-flight turn — replaces the opaque "working…"
@@ -24,10 +31,11 @@ export function TurnStatus({
   /** Ask the same question again, abandoning the stalled attempt. Omitted when
    * the running turn is not this viewer's to restart. */
   onRetry?: () => void;
-  /** Whether any pod is driving this turn, asked of the server once the silence
-   * gets long. `null`/absent = nobody could tell us, which is NOT "alive": being
-   * unable to ask is not evidence, and reading it as one restores the endless
-   * wait this exists to end. */
+  /** Whether any pod is driving this turn, asked of the server while the silence
+   * lasts. `null`/absent = nobody could tell us. Today that lands on the same
+   * screen as `false`, and the separate value exists so it cannot quietly become
+   * "alive" later: being unable to ask is not evidence of life, and reading it as
+   * one restores the endless wait this exists to end. */
   alive?: boolean | null;
 }) {
   const phase = turnPhase(log);
@@ -78,25 +86,14 @@ export function TurnStatus({
   // a long tool call has no metrics either (the stream does not replay them), so
   // it looks identical to a send that was cut. The silence is what we can prove,
   // and the retry is offered on that.
-  // "No sign of life" is the real test, not the phase: a delta can arrive before
-  // any metrics do, which still reads as `prep`. Any assistant text or tool call
-  // means the turn is real and running.
-  // …by THIS turn, which is everything after the question that started it. Asked
-  // of the whole log, the answer is "yes" forever in any chat that has ever been
-  // answered — so the give-up notice below could never appear in a real
-  // conversation, and 「還在準備,稍等一下」 was still on screen at 1300 seconds
-  // with nobody coming.
-  const lastAsk = log.entries
-    .map((e) => e.kind === "message" && e.message.role === "user")
-    .lastIndexOf(true);
-  const producedSomething = log.entries
-    .slice(lastAsk + 1)
-    .some(
-      (e) =>
-        e.kind === "tool_call" ||
-        (e.kind === "message" && e.message.role === "assistant" && !!e.message.content),
-    );
-  if (phase === "prep" && !producedSomething && elapsedSec >= ABANDONED_AFTER_S) {
+  //
+  // `turnLooksSilent` is deliberately the SAME predicate the panel asks under —
+  // the question and the answer have to be about one condition — and it is what
+  // scopes the check to THIS turn. Asked of the whole log, "has it produced
+  // anything" is yes forever in any chat ever answered, which is why this notice
+  // could not appear at all and 「還在準備,稍等一下」 was still on screen at
+  // 1300 seconds with nobody coming.
+  if (turnLooksSilent(log) && elapsedSec >= ABANDONED_AFTER_S) {
     // …unless the server says someone is driving it. Then the silence is a slow
     // turn on a pod this viewer is not subscribed to — the case that made every
     // time-based verdict here wrong, and the reason there is now a fact to ask

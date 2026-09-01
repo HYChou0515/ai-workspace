@@ -532,7 +532,7 @@ export interface ApiClient {
   getConversation(investigationId: string): Promise<Conversation | null>;
   /** Whether any pod is driving a turn on this chat. `null` = could not find
    * out, which is NOT the same as "no" — see `turnAlive` in `real.ts`. */
-  turnAlive(slug: string, investigationId: string): Promise<boolean | null>;
+  turnAlive(slug: string, investigationId: string, chatId?: string): Promise<boolean | null>;
 
   listFiles(slug: string, investigationId: string, prefix?: string): Promise<FileInfo[]>;
   /** GET /a/{slug}/items/{id}/files/usage — the workspace's storage usage vs its

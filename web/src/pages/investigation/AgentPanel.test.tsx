@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MemoryRouter } from "react-router-dom";
@@ -11,6 +11,7 @@ import { DialogProvider } from "../../components/Dialog";
 import type { AgentState } from "../../hooks/useAgent";
 import { translate } from "../../lib/i18n";
 import { renderWithQuery } from "../../test/queryWrapper";
+import { EMPTY_LOG, type AgentLog } from "./agentLog";
 import { AgentPanel, CHAT_COLUMN_MAX_W } from "./AgentPanel";
 
 function stubAgent(): AgentState {
@@ -925,5 +926,106 @@ describe("AgentPanel attaching a large folder", () => {
     expect(hint.textContent!.match(/doc\d+\.txt/g)!.length).toBeLessThanOrEqual(5);
     // The ones it did not name are counted, not dropped from the report.
     expect(hint.textContent).toMatch(/55/);
+  });
+});
+
+
+/**
+ * Asking the server whether anyone is driving this turn.
+ *
+ * Everything about this signal was tested on the CONSUMING side (`TurnStatus`
+ * given an `alive` prop) and nothing on the asking side, which is exactly where
+ * it was wrong: it asked about the item rather than the chat on screen, it asked
+ * for turns that were visibly fine, and one answer taken at 60s was still being
+ * shown as fact ten minutes later.
+ */
+describe("AgentPanel — asking whether the turn is alive", () => {
+  const ASK_AT = 60_000;
+
+  function panelWith(log: Partial<AgentLog>, chatId?: string) {
+    const agent: AgentState = {
+      ...stubAgent(),
+      log: { ...EMPTY_LOG, streaming: true, ...log } as AgentState["log"],
+    };
+    return renderWithQuery(
+      <MemoryRouter>
+        <DialogProvider>
+          <AgentPanel
+            investigationId="it1"
+            chatId={chatId}
+            agent={agent}
+            picker={[]}
+            suggestions={[]}
+            attachedPreset=""
+            onAttachPreset={() => {}}
+            uploadDir="uploads"
+          />
+        </DialogProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  it("never asks about a turn that is visibly producing output", async () => {
+    const ask = vi.spyOn(api, "turnAlive").mockResolvedValue(true);
+    vi.useFakeTimers();
+    try {
+      panelWith({
+        metrics: { phase: "down", promptTokens: 8, completionTokens: 4, elapsedMs: 900 },
+        entries: [{ kind: "message", message: { role: "assistant", content: "answering" } }],
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(15 * 60_000);
+      });
+
+      // A healthy turn has nothing to ask about — the screen can already see it
+      // working. Asking anyway is a request per turn for an answer nothing reads.
+      expect(ask).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps asking while the silence lasts, so no answer speaks for the whole turn", async () => {
+    const ask = vi.spyOn(api, "turnAlive").mockResolvedValue(true);
+    vi.useFakeTimers();
+    try {
+      panelWith({ entries: [{ kind: "message", message: { role: "user", content: "q" } }] });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(ASK_AT + 1_000);
+      });
+      const first = ask.mock.calls.length;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5 * 60_000);
+      });
+
+      expect(first).toBe(1);
+      // The recorded fact expires in 30s (TURN_STALE_AFTER_MS). The screen shows
+      // its answer from 10 minutes onwards — so a single sample taken at 60s is
+      // a statement about a moment nine minutes gone, and a pod that has since
+      // died still reads as 「還在跑」 with no way out.
+      expect(ask.mock.calls.length).toBeGreaterThan(first);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("asks about the chat on screen, not the item", async () => {
+    const ask = vi.spyOn(api, "turnAlive").mockResolvedValue(true);
+    vi.useFakeTimers();
+    try {
+      panelWith(
+        { entries: [{ kind: "message", message: { role: "user", content: "q" } }] },
+        "conversation:c9",
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(ASK_AT + 1_000);
+      });
+
+      // Turns are keyed per chat server-side; the item id answers for the
+      // DEFAULT chat only, which no workflow chat ever is.
+      expect(ask).toHaveBeenCalledWith("", "it1", "conversation:c9");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

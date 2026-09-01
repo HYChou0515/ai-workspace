@@ -994,7 +994,7 @@ export const mockApi: ApiClient = {
     await delay(10);
   },
 
-  async turnAlive(_slug: string, _investigationId: string) {
+  async turnAlive(_slug: string, _investigationId: string, _chatId?: string) {
     // The demo backend runs every turn in this tab, so nothing is ever driving
     // one somewhere this client cannot see. `false` is the honest answer here,
     // not a stub value — a mock that claimed "alive" would hide the very

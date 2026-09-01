@@ -1,10 +1,12 @@
 """Is anyone actually running this turn? (cross-pod)
 
 A viewer watching a chat cannot answer that today, and every notice built on the
-question had to guess. The live stream is per-pod — a viewer subscribed to a
-replica that is not running the turn hears nothing, and silence there proves
-nothing. The persisted thread is written at turn END, so mid-turn it says
-exactly what a turn nobody is running says: the thread ends on the question.
+question had to guess. A silent turn EMITS nothing — that is what makes it
+silent — so no event stream can carry the news, whether it is the in-memory
+per-pod one or the RabbitMQ fan-out (`event_bus/`) that reaches every replica:
+hearing nothing is not evidence either way. The persisted thread is written at
+turn END, so mid-turn it says exactly what a turn nobody is running says: the
+thread ends on the question.
 "Producing nothing yet" and "lost" are the same picture, so a screen that
 insists on a verdict is choosing which way to be wrong: claim it is running and
 the user waits forever for nobody, or claim it is gone and offer to re-ask a
@@ -46,9 +48,15 @@ from specstar.types import (
 
 logger = logging.getLogger(__name__)
 
-#: How long after the last beat a turn counts as gone. Several beats wide, so a
-#: slow store write or a busy loop never reads as a death; short enough that a
-#: person waiting on a dead turn is told within a beat or two of the truth.
+#: How long after the last beat a turn counts as gone — six beats' worth, so it
+#: takes six CONSECUTIVE misses (a wedged store, an event loop pinned by sync
+#: I/O — this repo has had both) to call a live turn dead, not one slow write.
+#: Not a guarantee: a stall longer than the whole window still reads as a death.
+#:
+#: The comparison crosses two machines' clocks — the beat is stamped by the pod
+#: driving the turn and read by whichever pod is asked — so the buffer is also
+#: what absorbs the difference between them. It assumes ordinary NTP-level skew,
+#: which is the same assumption `sandbox_activity` has always made.
 TURN_STALE_AFTER_MS = 30_000
 
 #: How often a running turn says it is still there. A point write per interval
@@ -72,9 +80,14 @@ class ITurnActivityStore(abc.ABC):
     async def alive(self, key: str, *, stale_after_ms: int = TURN_STALE_AFTER_MS) -> bool:
         """Whether a turn on ``key`` has beaten within ``stale_after_ms``.
 
-        `False` covers all three ways of not being alive — never started,
-        finished, or the pod driving it died — because to the person waiting
-        they are the same thing: nobody is coming."""
+        `False` covers every way of having no evidence of life — never started,
+        finished, the pod driving it died, or the beats could not be written at
+        all — because to the person waiting the first three are one thing: nobody
+        is coming. The fourth is not: a running turn whose store is unwritable
+        also reads `False`, and the screen then offers to re-ask a turn that is
+        working. That is the behaviour this replaced, so a broken store costs the
+        improvement and nothing more — it never invents a turn that is not
+        there."""
 
 
 class _TurnActivity(Struct):
@@ -125,9 +138,11 @@ class SpecstarTurnActivityStore(ITurnActivityStore):
             # The previous turn on this chat finished and soft-deleted the row.
             # A new turn has to bring it back, or a second question would look
             # abandoned from its first second.
+            logger.debug("turn-activity: %s restarted, restoring beat row", key)
             rm.restore(key)
             rm.modify(key, rec, status=RevisionStatus.draft)
             return
+        logger.debug("turn-activity: %s beat row absent, creating fresh", key)
         with contextlib.suppress(DuplicateResourceError):
             rm.create(rec, resource_id=key, status=RevisionStatus.draft)
 
@@ -136,6 +151,7 @@ class SpecstarTurnActivityStore(ITurnActivityStore):
 
     def _finished_sync(self, key: str) -> None:
         rm = self._spec.get_resource_manager(_TurnActivity)
+        logger.debug("turn-activity: %s finished", key)
         with contextlib.suppress(ResourceIDNotFoundError, ResourceIsDeletedError):
             rm.delete(key)
 
@@ -150,4 +166,9 @@ class SpecstarTurnActivityStore(ITurnActivityStore):
             return False  # never started, or finished
         data = res.data
         assert isinstance(data, _TurnActivity)
-        return self._now() - data.last_beat_ms < stale_after_ms
+        age = self._now() - data.last_beat_ms
+        # The one place a person's question gets an answer, and the one number
+        # that explains it afterwards: "was anyone driving this?" is unanswerable
+        # from a log that never says how old the last beat was.
+        logger.debug("turn-activity: %s last beat %dms ago (stale at %d)", key, age, stale_after_ms)
+        return age < stale_after_ms

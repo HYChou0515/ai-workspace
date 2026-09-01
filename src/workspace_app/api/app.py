@@ -92,16 +92,16 @@ from .request_env import IRequestEnv
 from .review_inbox_routes import register_review_inbox_routes
 from .runner import AgentRunner
 from .sandbox_activity import IActivityStore, SpecstarActivityStore, register_sandbox_activity
-from .turn_activity import (
-    ITurnActivityStore,
-    SpecstarTurnActivityStore,
-    register_turn_activity,
-)
 from .sandbox_address import IAddressStore, SpecstarAddressStore
 from .spa import SpaStaticFiles
 from .subagent_bridge import SubagentBridge
 from .subagent_run import run_agent_task
 from .tools_routes import register_tools_routes
+from .turn_activity import (
+    ITurnActivityStore,
+    SpecstarTurnActivityStore,
+    register_turn_activity,
+)
 from .turn_context import TurnContextBuilder, resolve_item_tools
 from .turn_gate import TurnRefused, quota_body
 from .turns import ChatTurnEngine

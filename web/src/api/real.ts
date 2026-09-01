@@ -496,14 +496,25 @@ export const realApi: ApiClient = {
     }
   },
 
-  async turnAlive(slug: string, investigationId: string): Promise<boolean | null> {
+  async turnAlive(
+    slug: string,
+    investigationId: string,
+    chatId?: string,
+  ): Promise<boolean | null> {
     // `null` = could not find out. The caller must not read that as "nobody is
     // coming": being unable to ask is not evidence, and treating it as one puts
     // back the guess this whole signal replaces.
+    //
+    // Turns are keyed per CHAT server-side, and the item-level form answers for
+    // the default chat only — so ask about the chat on screen whenever there is
+    // one. Without a chat id the caller is the item's default chat, whose key
+    // IS the item id, so the item form is exact rather than a fallback.
+    const base = `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}`;
+    const path = chatId
+      ? `${base}/chats/${encodeURIComponent(chatId)}/turn-alive`
+      : `${base}/turn-alive`;
     try {
-      const resp = await apiFetch(
-        `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/turn-alive`,
-      );
+      const resp = await apiFetch(path);
       if (!resp.ok) return null;
       const body = (await resp.json()) as { alive?: boolean };
       return body.alive ?? null;

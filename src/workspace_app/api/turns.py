@@ -536,6 +536,12 @@ class _WorkspaceSession:
         return sorted({u for u in self.subscribers.values() if u})
 
 
+"""How long a turn's teardown waits for the liveness beat to finish its current
+write. Generous next to a point write, and bounded so a wedged store delays a
+turn's end rather than holding it open (see `_with_heartbeat`)."""
+_BEAT_DRAIN_S = 2.0
+
+
 class ChatTurnEngine:
     """Runs one cancellable agent turn at a time per conversation key, streams
     its events over SSE, and reduces them into TurnMessages for the caller to
@@ -759,19 +765,28 @@ class ChatTurnEngine:
             return False
         return await self._turn_activity.alive(key)
 
-    async def _beat(self, key: str) -> None:
+    async def _beat(self, key: str, stop: asyncio.Event) -> None:
         """Say "still here" on a timer for as long as the turn runs.
 
         On a timer and not on the turn's events, because the turns worth asking
         about are the silent ones — a long tool call, a slow first token — and an
         event-driven beat stops exactly when the question gets asked. A store
-        that cannot be written is not a reason to fail a turn: the signal
-        degrades to "unknown", which is where every caller started."""
+        that cannot be written is not a reason to fail a turn: the write is
+        best-effort and its failure leaves the turn alone.
+
+        Stopped by a FLAG, never by cancelling this task. The write is offloaded
+        to a worker thread, so cancelling the await abandons the WAIT and not the
+        WRITE: the abandoned write lands after `finished` has cleared the row and
+        restores it — `_bump_sync` restores by design, since that is how a second
+        turn on the same chat becomes alive again. The ended turn would then read
+        as running for a whole staleness window, which is the exact thing
+        `finished` is here to prevent."""
         assert self._turn_activity is not None
-        while True:
+        while not stop.is_set():
             with contextlib.suppress(Exception):
                 await self._turn_activity.bump(key)
-            await asyncio.sleep(self._heartbeat_s)
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(stop.wait(), self._heartbeat_s)
 
     async def _with_heartbeat(self, key: str, coro: Coroutine[Any, Any, None]) -> None:
         """Run one turn with its liveness recorded. Both turn shapes go through
@@ -780,16 +795,32 @@ class ChatTurnEngine:
         if self._turn_activity is None:
             await coro
             return
-        beat = asyncio.create_task(self._beat(key))
+        stop = asyncio.Event()
+        beat = asyncio.create_task(self._beat(key, stop))
         try:
             await coro
         finally:
-            beat.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await beat
+            stop.set()
+            # Let an in-flight write land BEFORE the turn is declared over, so it
+            # cannot undo that (see `_beat`) — but never let a wedged store hold a
+            # turn's teardown open. On timeout `wait_for` has already cancelled
+            # and awaited the beat, and the stray-write window is back for that
+            # turn; a store that slow will have missed its beats anyway, so the
+            # age-out is what answers there.
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(beat, _BEAT_DRAIN_S)
             # Say so explicitly rather than letting it age out: the person is
             # waiting on this answer, and thirty seconds of "maybe" after a turn
             # that has already ended is thirty seconds of the old problem.
+            #
+            # It is best-effort, and deliberately so. This runs on Stop too — the
+            # cancellation is delivered at `await coro`, so the `finally` may
+            # await freely — but a SECOND cancel arriving here (the #349 epoch
+            # watcher re-fires until the task is done) is a `CancelledError`,
+            # which no `suppress(Exception)` catches and which must not be
+            # swallowed anyway. Then the write is skipped and the row ages out
+            # instead. That is the designed fallback, not a hole: ageing out is
+            # what covers the pod that dies mid-turn, and it has to work.
             with contextlib.suppress(Exception):
                 await self._turn_activity.finished(key)
 

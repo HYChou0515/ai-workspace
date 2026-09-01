@@ -405,6 +405,31 @@ export function isToolRunning(log: AgentLog): boolean {
  *  - answering: the model is streaming the visible answer */
 export type TurnPhase = "idle" | "prep" | "waiting" | "thinking" | "answering";
 
+/** Nothing about this turn has reached the screen: the backend never acknowledged
+ * it (no metrics), and it has produced neither text nor a tool call since the
+ * question that started it.
+ *
+ * This is the only silence the screen cannot explain by itself — every other
+ * phase has visible evidence of a turn that exists. So it is BOTH when asking
+ * the server "is anyone driving this?" is worth a request, and when that answer
+ * is worth showing. They have to be one predicate: an answer obtained under one
+ * condition and displayed under another describes a moment that is no longer on
+ * screen. Scoped to entries after the last question, because asked of the whole
+ * log the answer is "yes, output exists" forever in any chat ever answered. */
+export function turnLooksSilent(log: AgentLog): boolean {
+  if (turnPhase(log) !== "prep") return false;
+  const lastAsk = log.entries
+    .map((e) => e.kind === "message" && e.message.role === "user")
+    .lastIndexOf(true);
+  return !log.entries
+    .slice(lastAsk + 1)
+    .some(
+      (e) =>
+        e.kind === "tool_call" ||
+        (e.kind === "message" && e.message.role === "assistant" && !!e.message.content),
+    );
+}
+
 export function turnPhase(log: AgentLog): TurnPhase {
   if (!log.streaming) return "idle";
   if (!log.metrics) return "prep";
