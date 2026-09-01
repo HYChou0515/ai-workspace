@@ -194,7 +194,7 @@ def test_the_effective_model_is_the_one_that_served_not_the_one_configured():
 # ── asking the provider for its numbers at all ───────────────────────────────
 
 
-def test_a_streamed_turn_asks_the_provider_to_report_usage():
+def test_a_streamed_turn_does_not_let_litellm_answer_for_the_provider():
     """Found by running it, not by reading it: the app never sent
     `stream_options`, and an OpenAI-compatible endpoint does not report usage on
     a stream unless asked. So on the streaming path — the default — the
@@ -202,8 +202,16 @@ def test_a_streamed_turn_asks_the_provider_to_report_usage():
     supplied a figure from its OWN tokenizer instead, which is an estimate
     wearing a measurement's name.
 
-    Recording `None` for that (P1) is honest but useless. Asking is what makes
-    the column carry anything.
+    But ASKING is not safe either, which only running it showed: litellm answers
+    on the provider's behalf. With `include_usage` set it emits a synthesised
+    final chunk whose usage is `prompt_tokens or token_counter(...)` — so a
+    silent provider yields litellm's own tokenizer count, indistinguishable from
+    a measurement (verified: identical `completion_tokens_details`, and a live
+    turn against a stub sending NO usage recorded 7282/80).
+
+    That is the thing §2.1 forbids, so we do not ask. The column stays empty
+    until an operator can declare an endpoint that reports honestly — see the
+    follow-up issue. Empty is recoverable; a fabricated history is not.
 
     Use the SDK's own `include_usage` knob. My first attempt put
     `stream_options` into `extra_args` by hand; the SDK passes that argument
@@ -215,7 +223,7 @@ def test_a_streamed_turn_asks_the_provider_to_report_usage():
     from workspace_app.resources import AgentConfig
 
     agent = _agent_for(AgentConfig(name="t", model="openai/x"))
-    assert agent.model_settings.include_usage is True
+    assert agent.model_settings.include_usage is not True
 
 
 # ── what the review found ────────────────────────────────────────────────────

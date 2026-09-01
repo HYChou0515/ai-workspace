@@ -159,36 +159,37 @@ class AgentMetrics:
 所以改成合併:每個 tick 更新它量到的欄位,絕不抹掉它沒量到的。`up` 除外 —— 它帶的
 `elapsed_ms=0` 是「一次嘗試開始了」而不是「這輪花了 0 毫秒」,而重試會再發一次。
 
-### 2.9 光是不編造還不夠 —— 得先開口要
+### 2.9 開口要也沒有用 —— litellm 會替 provider 回答
 
-**這條是把 P1–P5 跑起來才發現的,讀程式碼看不到。**
+**這一條被推翻過兩次,兩次都是跑起來才知道的。**
 
-第一次 live check 的結果:`model` 記到了、`generation_ms` 也正確排除了 TTFT,但
-`prompt_tokens` / `completion_tokens` 是 `null` —— **而我的替身明明送了 usage**。
+第一版結論是「光是不編造還不夠,得先開口要」:OpenAI 相容端點在串流時不主動回報 usage,
+所以不送 `stream_options` 就永遠拿不到真值。於是加上 `ModelSettings(include_usage=True)`。
 
-追下去,LLM trace 裡寫著:
+**對抗式 review 推翻了它。** litellm 在收到這個要求後,會自己補一個 usage:
 
+```python
+# litellm/litellm_core_utils/streaming_chunk_builder_utils.py
+returned_usage.prompt_tokens = prompt_tokens or token_counter(model=model, messages=messages)
+returned_usage.completion_tokens = completion_tokens or token_counter(model=model, text=completion_output)
 ```
-stream_options: None
-usage in resp:  {'completion_tokens': 80, 'prompt_tokens': 7282, ...}   ← litellm 自己數的
-```
 
-兩件事:
+provider 沉默時,那個 `or` 後面的 tokenizer 估計值就會一路變成 `measured_*` 被存下來 ——
+**正是 §2.1 禁止的事,而且比沒修之前更糟**(以前是 `None`,現在是一個看起來像量到的數字)。
 
-1. **app 從來沒跟 provider 要過 usage。** OpenAI 相容端點在**串流**時,除非客戶端送
-   `stream_options: {"include_usage": true}`,否則不會回報。所以在預設的串流路徑上,
-   provider 的真實數字**從來就拿不到**。
-2. **litellm 會用自己的 tokenizer 湊一個 `usage` 塞進 response。** 那也是估計值 ——
-   一個披著「量到的」外衣的估計值。差一點就把它當真值記下來。
+實測:替身完全不送 usage,記錄下來的是 litellm 的 `7282/80`。而且比對兩份 trace,
+有回報與沒回報的 usage **結構完全一樣**(連 `completion_tokens_details.reasoning_tokens` 都
+一樣),所以**從資料上分不出真假**。
 
-所以 2.1 的「沒量到就存 None」單獨存在的話是誠實但無用的:這一欄會永遠是空的。
-**要讓它有東西,得先開口要。** 用 SDK 自己的旋鈕 **`ModelSettings(include_usage=True)`**。
-⚠️ **不要手動把 `stream_options` 塞進 `extra_args`** —— agents SDK 自己就在傳,重複傳會讓
-**每一輪對話**死在 `got multiple values for keyword argument 'stream_options'`。我這樣做過,
-而且單元測試全綠(它斷言的是我組出來的 dict,不是真正發出去的呼叫)。
+**定案:不開口要。** token 那一欄在 provider 主動回報之前保持空白。
 
-這正是 live check 存在的理由:**「我們沒送出去的那個請求」從系統內部是看不見的**,
-任何單元測試都照不到 —— 替身只會回答被問到的問題。
+代價講明白:實務上幾乎沒有 provider 會在串流時主動回報,所以這一欄目前基本上是空的 ——
+「Token 量也可以記錄嗎」的答案是「只在 provider 自己說的時候,而我們不會用一個讓 litellm
+代答的方式去問」。
+
+**下一步不是猜,是讓知道的人宣告**:per-preset 的 `reports_usage` 開關,預設關,由部署的人
+對他清楚會誠實回報的 endpoint(例如 vLLM)打開。那是一個**斷言**而不是啟發式,所以它可以
+安全地讓真值進來。追蹤在 #751 ——空白是可以補救的,一段捏造的歷史不行。
 
 ---
 
@@ -201,7 +202,7 @@ usage in resp:  {'completion_tokens': 80, 'prompt_tokens': 7282, ...}   ← lite
 | **P3** | model:`FallbackModel` 記下實際服務的 endpoint,事件加 `model`(順帶修好 #69 trace 的謊報) | ✅ |
 | **P4** | 前端:`events.ts` 鏡像、tok/s 換分母、thinking / tool 期間都顯示那一行 | ✅ |
 | **P5** | 聊天訊息的時間小字 + tooltip(app chat 與 KB chat 共用) | ✅ |
-| **P6** | 送出 `stream_options: {include_usage: true}` —— 沒開口要,真值永遠拿不到(§2.9,live check 發現) | ✅ |
+| **P6** | ~~送出 `include_usage`~~ → **撤回**:litellm 會替沉默的 provider 代答一個 tokenizer 估計值,而那會被存成真值(§2.9)。改為不開口要,追蹤在 #751 | ✅ |
 
 每個 phase 都讓事件的新欄位和它的生產者同時落地 —— 先加一個永遠是 `None` 的欄位,
 等於在 schema 裡放一個沒人填的洞,而它會被誤讀成「這個 provider 沒回報」。
