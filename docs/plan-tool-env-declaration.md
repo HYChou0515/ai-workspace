@@ -199,8 +199,13 @@ per-tool scoping of `user_env`, which decision "absent is not empty" forecloses
 
 ## Definition of Done
 
-- [ ] A sample tool ships an `env.json`; its variables appear in the panel with
-      their descriptions, under that tool's tab.
+- [x] ~~A sample tool ships an `env.json`~~ — **dropped, deliberately.** No
+      sample tool reads an environment variable, so a declaration added to one
+      would name variables nothing consumes and send people off to fill them.
+      Replaced by a doc-fidelity test: the `env.json` AND `IEnvProvider`
+      examples in `extending-the-platform.md` are parsed and executed by the
+      real reader and the real ABC, so the block an author copies first is one
+      that works (proved by a mutant: renaming a member in the doc goes red).
 - [ ] A tool with no declaration is visibly "did not say", not "needs nothing".
 - [ ] A variable declared by two tools shows once, labelled with both, and
       editing it under either tab changes one value.
