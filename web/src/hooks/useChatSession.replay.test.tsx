@@ -225,6 +225,48 @@ describe("useChatSession — reconnect replay", () => {
     });
   });
 
+  it("lets the store end the turn for a viewer the terminal event never reaches", async () => {
+    // The cross-pod case the #202 poll exists for: no terminal event will ever
+    // arrive, so the poll is what discovers the turn ended — and it writes the
+    // finished thread into the very cache the drop handler compares against. If
+    // only the banner's retraction learns from the store and the in-flight flag
+    // does not, the next idle drop raises a hole that nothing can take back:
+    // no terminal event is coming, and the thread has already stopped growing.
+    let attempt = 0;
+    const finished = {
+      messages: [
+        { role: "user" as const, content: "q", created_at: 1 },
+        { role: "assistant" as const, content: "the whole answer", created_at: 2 },
+      ],
+    };
+    const { result } = render(
+      transport({
+        getThread: vi.fn(async () => finished),
+        subscribe: async function* (_signal: AbortSignal) {
+          attempt += 1;
+          if (attempt === 1) {
+            // Let hydration land first, as it does in production: the store
+            // snapshot REPLACES the log, `streaming` included, so a snapshot that
+            // arrives after the first events would switch the poll back off.
+            await new Promise((r) => setTimeout(r, 50));
+            // A real turn opens with the question being broadcast — that is what
+            // puts the log into `streaming`, which is what arms the poll.
+            yield { type: "user_message", content: "q", author: "tester" } as AgentEvent;
+            yield ev("the whole ans", 5); // a turn IS in flight on this connection
+            await new Promise((r) => setTimeout(r, 400)); // silent: the poll takes over
+            throw new Error("stream failed: 504"); // …and only then the ingress cuts
+          }
+          await new Promise<void>(() => {});
+        },
+      }),
+      60, // poll fast, so it reaches its "done" branch before the drop
+    );
+
+    await waitFor(() => expect(attempt).toBeGreaterThanOrEqual(2), { timeout: 4000 });
+    await new Promise((r) => setTimeout(r, 200));
+    expect(hasBanner(result.current.log.entries)).toBe(false);
+  });
+
   it("keeps the banner when the thread merely ENDS on an answer", async () => {
     // A tail that is not a user message does not mean the turn ended. A workflow
     // chat never persists a user message at all — from the second node on, the

@@ -204,6 +204,33 @@ describe("reconcileSnapshot", () => {
     expect(later.entries.some((e) => e.kind === "banner")).toBe(false);
   });
 
+  it("drops a banner the next question has already been asked under", () => {
+    // The other half of the rule: the next turn can reach the log through the
+    // STREAM (its `user_message` folds in under the banner) long before the store
+    // knows about it. Reading only the snapshot's turn count misses that, and
+    // misses it hardest where the count is uninformative — a log that never held
+    // a user message of its own, where the "cannot place it" escape hatch would
+    // otherwise keep the banner no matter how far the conversation had run on.
+    const prev = live({
+      entries: [
+        { kind: "banner", at: 1, text: "已取消。" },
+        msg("user", "and now something else"),
+        msg("assistant", "a fresh answer"),
+      ],
+    });
+
+    // The store has caught up — anything less takes the store-behind early
+    // return, where the log is kept whole and the carry rule never runs.
+    const next = reconcileSnapshot(prev, {
+      messages: [
+        { role: "user", content: "and now something else", created_at: 9 },
+        { role: "assistant", content: "a fresh answer", created_at: 10 },
+      ],
+    });
+
+    expect(next.entries.some((e) => e.kind === "banner")).toBe(false);
+  });
+
   it("does not duplicate a banner the persisted thread already carries", () => {
     const prev = live({ entries: [{ kind: "banner", text: "turn failed" }] });
     // role:"error" hydrates as the same banner.

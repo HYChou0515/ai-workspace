@@ -451,7 +451,11 @@ export function useChatSession(
           // tail is the previous node's reply while the next one streams), and a
           // `notice` (#624) or a human `mention` can be the tail at any moment.
           const last = fresh.messages[fresh.messages.length - 1];
-          const grew = fresh.messages.length > persistedBefore;
+          // `persistedBefore === 0` means the cache had nothing to compare
+          // against — hydration had not resolved when the stream dropped — and
+          // then "it grew" is true of every non-empty thread, collapsing this
+          // back into the over-broad rule it replaced. No baseline, no verdict.
+          const grew = persistedBefore > 0 && fresh.messages.length > persistedBefore;
           if (grew && last !== undefined && last.role === "assistant") {
             gapBannerPendingRef.current = false;
             setLog((prev) =>
@@ -491,6 +495,15 @@ export function useChatSession(
       const last = msgs[msgs.length - 1];
       const done = last !== undefined && last.role !== "user";
       if (done) {
+        // The store has told us the turn is over — the same conclusion the
+        // terminal event carries, and for a CROSS-POD viewer the only one that
+        // will ever arrive. So it must also end the turn for the gap banner, or
+        // the flag stays armed over a finished turn and the next idle drop
+        // raises a hole that nothing can retract: no terminal event is coming,
+        // and the store-based retraction below reads THIS cache, which the line
+        // beneath already advanced. This is the same "done" the whole hook
+        // already trusts to unlock the composer.
+        turnInFlightRef.current = false;
         qc.setQueryData(transport.queryKey, thread);
         reconcile(thread);
         return;
