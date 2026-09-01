@@ -188,7 +188,7 @@ per-tool scoping of `user_env`, which decision "absent is not empty" forecloses
 | case | behaviour |
 |---|---|
 | package has no `env.json` | tool listed as "did not declare", not as "needs nothing" |
-| `env.json` is malformed | prebuild fails loudly, naming the package (same posture as a half-built bundle in `discover_packages`) |
+| `env.json` is malformed | **asymmetric, deliberately.** At prebuild it raises, naming the file: the author is standing there and wrote it. At discovery it degrades to "undeclared" and logs, because there it is a third party's artifact and an operator running it should not lose their whole startup over a lost hint. `commands.json` stays strict on both — a missing command list means the tool cannot run at all |
 | two tools want one variable | one field, labelled with both; one value |
 | a tool declares a name no provider produces | field only, no button — typing it always works |
 | a tool declares a name whose provider this deploy lacks | same: field only. A tool from elsewhere stays usable |
@@ -215,9 +215,12 @@ per-tool scoping of `user_env`, which decision "absent is not empty" forecloses
 
 ## TDD phases (flat integer; one commit per phase)
 
-**Phase 1** — the declaration travels. `env.json` in a sample tool source →
-copied by `prebuild` into the bundle → parsed by `discover_packages` onto
-`PackageInfo`. Malformed input fails the build, naming the package. No UI.
+**Phase 1** — the declaration travels. `env.json` in a package source → copied
+by `prebuild` into the bundle → parsed by `discover_packages` onto
+`PackageInfo`, where absent stays `None` and empty stays `()`. Malformed input
+raises at prebuild and degrades at discovery (see the edge-case table). Both
+build paths copy it, and both assertions exist: coverage said the second call
+site ran while deleting it left the suite green. No UI.
 
 **Phase 2** — the backend answers "what does this item's toolset want". One
 read-only endpoint returning declared needs for the item's enabled tools, each
