@@ -223,7 +223,7 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
     metrics: null,
     failover: null,
     restore: null,
-  compacting: null,
+    compacting: null,
     rateLimited: null,
   };
 }
@@ -574,11 +574,12 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
 
     case "run_cancelled":
       entries.push({ kind: "banner", at: now, text: translate(initialLocale(), "banner.cancelled") });
-      // #739: an end is an end — never leave a waiting state standing. The
-      // rate-limit hold used to survive its own turn, and since compaction
-      // runs BEFORE the next one, that stale line outranked the compaction
-      // notice: the user was told the system was waiting on a 429 while it
-      // was in fact rewriting their thread.
+      // #739: an end is an end — never leave ANY waiting state standing. Each
+      // of these outranks something below it in `TurnStatus`, so a stale one
+      // does not merely linger, it shadows: the rate-limit hold survived its
+      // own turn and, because compaction runs BEFORE the next one, told the
+      // user the system was waiting on a 429 while it was rewriting their
+      // thread. Restore progress and the failover notice have the same shape.
       return {
         ...log,
         entries,
@@ -586,6 +587,8 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
         streamingBy: null,
         compacting: null,
         rateLimited: null,
+        restore: null,
+        failover: null,
       };
 
     case "error":
@@ -597,6 +600,8 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
         error: ev.message,
         compacting: null,
         rateLimited: null,
+        restore: null,
+        failover: null,
       };
 
     case "done":
@@ -607,6 +612,8 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
         streamingBy: null,
         compacting: null,
         rateLimited: null,
+        restore: null,
+        failover: null,
       };
 
     case "user_message":

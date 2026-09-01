@@ -939,16 +939,30 @@ describe("the compacting pause switches off (#739 review round 2)", () => {
 });
 
 describe("a finished turn leaves no stale waiting-state (#739 review round 3)", () => {
-  it("clears the rate-limit hold when the turn ends", () => {
+  it("clears every waiting state when the turn ends", () => {
     // `rateLimited` was cleared only when real output resumed — never by an end
     // event. Compaction runs BEFORE the next turn, so the stale hold outranked
     // the compaction notice and the user was told the system was waiting on a
     // 429 while it was actually rewriting their thread.
-    const held = reduceAgent(EMPTY_LOG, { type: "rate_limited", seconds: 30 } as AgentEvent);
+    // The class, not just the instance: an interrupted restore leaves
+    // "還原工作區… N/M" up just as readily, and a failover notice outlives the
+    // turn it belonged to. Each of these outranks something below it.
+    const held = reduceAgent(
+      reduceAgent(
+        reduceAgent(EMPTY_LOG, { type: "rate_limited", seconds: 30 } as AgentEvent),
+        { type: "restore_progress", done: 1, total: 9 } as AgentEvent,
+      ),
+      { type: "failover_switch" } as AgentEvent,
+    );
     expect(held.rateLimited).toEqual({ seconds: 30 });
+    expect(held.restore).toEqual({ done: 1, total: 9 });
+    expect(held.failover).not.toBeNull();
+
     for (const ev of ["done", "error", "run_cancelled"]) {
       const ended = reduceAgent(held, { type: ev } as AgentEvent);
-      expect(ended.rateLimited, `${ev} must clear the hold`).toBeNull();
+      expect(ended.rateLimited, `${ev} must clear the rate-limit hold`).toBeNull();
+      expect(ended.restore, `${ev} must clear the restore progress`).toBeNull();
+      expect(ended.failover, `${ev} must clear the failover notice`).toBeNull();
     }
   });
 });
