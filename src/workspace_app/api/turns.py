@@ -373,14 +373,23 @@ class _TurnReducer:
                     tool_display=item.display,
                 )
             )
-        elif isinstance(item, AgentMetrics):
-            # Pin the latest token usage onto the current assistant answer so the
-            # ↑/↓ line survives a reload (the stream is live-only).
+        elif isinstance(item, AgentMetrics) and item.phase == "final":
+            # Pin how this reply was produced onto the assistant answer so it
+            # survives a reload (the stream is live-only).
+            #
+            # #748, two changes: only `final` is recorded — this used to write on
+            # EVERY metrics event and was correct solely because `final` happens
+            # to arrive last, which a 0.2s `down` tick carrying no measurement
+            # would now blank. And the numbers come from the event's `measured_*`
+            # channel, not its display fields: the display deliberately falls back
+            # to a chars/4 estimate so the live line never reads "↑0 ↓0", and
+            # copying that into the record is what made a guess indistinguishable
+            # from a measurement.
             for msg in reversed(self.produced):
                 if msg.role == "assistant":
                     msg.metrics = MessageMetrics(
-                        prompt_tokens=item.prompt_tokens,
-                        completion_tokens=item.completion_tokens,
+                        prompt_tokens=item.measured_prompt_tokens,
+                        completion_tokens=item.measured_completion_tokens,
                         elapsed_ms=item.elapsed_ms,
                     )
                     break

@@ -255,6 +255,25 @@ def _exact_usage(streamed: Any) -> tuple[int, int] | None:
         return None
 
 
+def _measured_tokens(usage: tuple[int, int] | None) -> tuple[int | None, int | None]:
+    """The provider's own counts for the RECORD, or None where it gave none.
+
+    #748. Distinct from `_final_tokens`, which settles what to DISPLAY and
+    deliberately substitutes an estimate so the live line never reads "↑0 ↓0".
+    A record has the opposite requirement: a figure nobody can tell apart from
+    a measurement is worse than no figure at all.
+
+    A reported `0` counts as "did not count", not as a measured zero — a reply
+    exists, so something was read and something was written. Local Ollama
+    streams zeros routinely; storing them would drag every average computed
+    over this column toward nothing. Applied per field, because a provider can
+    report one and not the other.
+    """
+    if usage is None:
+        return None, None
+    return (usage[0] or None), (usage[1] or None)
+
+
 def _final_tokens(
     usage: tuple[int, int] | None, prompt_tok: int, completion_chars: int
 ) -> tuple[int, int]:
@@ -1496,12 +1515,15 @@ class LitellmAgentRunner:
                     reported=usage[0] if usage else None,
                 )
                 prompt_final, completion_final = _final_tokens(usage, prompt_tok, completion_chars)
+                measured_prompt, measured_completion = _measured_tokens(usage)
                 queue.put_nowait(
                     AgentMetrics(
                         phase="final",
                         prompt_tokens=prompt_final,
                         completion_tokens=completion_final,
                         elapsed_ms=round((time.monotonic() - t0) * 1000),
+                        measured_prompt_tokens=measured_prompt,
+                        measured_completion_tokens=measured_completion,
                     )
                 )
             finally:
@@ -1600,9 +1622,12 @@ class LitellmAgentRunner:
             ctx, sent_estimate=_sent_estimate(ctx, prompt), reported=usage[0] if usage else None
         )
         prompt_final, completion_final = _final_tokens(usage, prompt_tok, len("".join(content_buf)))
+        measured_prompt, measured_completion = _measured_tokens(usage)
         yield AgentMetrics(
             phase="final",
             prompt_tokens=prompt_final,
             completion_tokens=completion_final,
             elapsed_ms=round((time.monotonic() - t0) * 1000),
+            measured_prompt_tokens=measured_prompt,
+            measured_completion_tokens=measured_completion,
         )

@@ -151,6 +151,14 @@ class AgentMetrics:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     elapsed_ms: int = 0
+    # #748: the DISPLAY fields above stay approximate on purpose — a live line
+    # that reads "↑0 ↓0" looks broken, so they fall back to chars/4. These two
+    # are the RECORD: the provider's own count, or None when it never gave one.
+    # Two consumers with opposite requirements cannot share one field; sharing
+    # is how an estimate ended up persisted as though it had been measured.
+    # Only ever set on `final`.
+    measured_prompt_tokens: int | None = None
+    measured_completion_tokens: int | None = None
     type: Literal["agent_metrics"] = "agent_metrics"
 
 

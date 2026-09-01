@@ -6,13 +6,23 @@ from msgspec import Struct, field
 
 
 class MessageMetrics(Struct, frozen=True):
-    """The turn's final token usage, persisted on the assistant message so a
-    reloaded thread can still show the ↑prompt / ↓completion line (which is
-    otherwise live-only / lost on refresh)."""
+    """How this reply was produced, persisted on the assistant message so a
+    reloaded thread can still show it (the stream is live-only).
 
-    prompt_tokens: int
-    completion_tokens: int
-    elapsed_ms: int
+    #748: every field is independently absent-able, because they are measured
+    by different things that fail independently. `None` means "not measured" —
+    never zero, and never a stand-in figure. The turn used to persist a chars/4
+    estimate here whenever the provider stayed quiet (local Ollama routinely
+    reports 0), with nothing marking it as a guess; any later comparison of
+    models, cost or anomalies was reading invented numbers and could not tell.
+    """
+
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    elapsed_ms: int = 0
+    """Wall clock for the whole turn — what the UI's "· 12.3s" shows. NOT the
+    denominator for tok/s: see `generation_ms`. Keeping both in one field is the
+    mistake #739 §1.3 records, where one number silently changed meaning."""
 
 
 class Citation(Struct):
