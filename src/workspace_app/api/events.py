@@ -151,6 +151,9 @@ class AgentMetrics:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     elapsed_ms: int = 0
+    #: #739: whether the provider reported these counts, as opposed to us
+    #: estimating them. Only true on `final`, and only when usage came back.
+    exact: bool = False
     type: Literal["agent_metrics"] = "agent_metrics"
 
 

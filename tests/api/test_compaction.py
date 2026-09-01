@@ -162,13 +162,15 @@ def test_an_unknown_ceiling_never_compacts():
     """`history_budget` returns None for "no ceiling known", and #624's rule is
     that we then send everything and learn the real limit from the response. A
     thread that is never trimmed must never be compacted either — compacting on
-    a guess would spend a turn AND lose detail for a limit nobody measured."""
-    _at, span = plan_for_budget(
-        [_Msg("user", "很長" * 1000)],
-        used=999_999,
-        budget=None,
-        estimate=estimate_messages,
-    )
+    a guess would spend a turn AND lose detail for a limit nobody measured.
+
+    The thread has to be long enough for the guard to be the reason. A one
+    message thread returns an empty span whatever the budget says, because
+    `split_for_compaction` always keeps one — so a spec written on one asserts a
+    fact a different rule already guarantees, and passes with this guard deleted.
+    (Caught by review: the double agreed with the code for the wrong reason.)"""
+    msgs = [_Msg("user", f"很長的訊息{i}" * 50) for i in range(5)]
+    _at, span = plan_for_budget(msgs, used=999_999, budget=None, estimate=estimate_messages)
     assert span == []
 
 
@@ -354,3 +356,99 @@ def test_the_tail_is_sized_in_the_unit_it_is_spent_in():
     assert span, "a forced compaction must produce a span even on a small thread"
     assert at == len(span)
     assert len(span) < len(msgs), "and must leave a tail behind"
+
+
+def test_the_overhead_is_subtracted_on_the_path_that_actually_uses_it():
+    """The `- overhead` term only decides anything when the messages' own size
+    exceeds what is left of the budget after the fixed overhead — which is
+    algebraically the same condition as the automatic trigger. So it governs
+    EVERY automatic compaction, and a spec that only exercises `force=True` on a
+    small thread leaves it inert: `min(room, own)` picks `own` either way, and
+    the subtraction can be deleted with the suite green. (Caught by review.)
+
+    Here the thread is big: `own` is larger than `budget - overhead`, so the
+    subtraction is the term that sizes the tail. Without it the tail is sized
+    against the whole budget and swallows messages that do not fit the window."""
+    msgs = [_Msg("user", f"訊息{i}" * 200) for i in range(10)]
+    own = estimate_messages(msgs)
+    overhead = 6_000
+    budget = 8_000
+    assert own > budget - overhead, "the fixture must exercise the subtraction"
+
+    _at, span = plan_for_budget(
+        msgs, used=own + overhead, budget=budget, estimate=estimate_messages
+    )
+    kept = msgs[len(span) :]
+    assert estimate_messages(kept) <= budget - overhead, (
+        "the tail must fit the room the overhead leaves, not the whole budget"
+    )
+    assert span, "an over-budget thread must still produce a span"
+
+
+def test_folding_alone_gets_its_free_pass_before_any_model_is_called():
+    """The agreed order is 折疊 → 壓縮 → 丟棄, and the reason is cost: folding a
+    bulky tool output is free, compaction costs a round trip and permanently
+    replaces a span with a précis.
+
+    A thread pushed over the line by one `exec` dump must therefore NOT be
+    compacted — folding that dump brings it back under on its own. Shipping the
+    check the other way round meant every such thread paid for a summary it did
+    not need. (Caught by review, twice, independently.)"""
+    dump = _Msg("tool", "巨" * 20_000, tool_name="exec")
+    msgs = [_Msg("user", "問題"), dump, _Msg("user", "再問"), _Msg("user", "最新")]
+    own = estimate_messages(msgs)
+    overhead = 1_000
+    # Over budget by a margin far smaller than the dump itself.
+    budget = own + overhead - 5_000
+
+    _at, span = plan_for_budget(
+        msgs, used=own + overhead, budget=budget, estimate=estimate_messages
+    )
+    assert span == [], "folding the dump alone brings this under budget"
+
+
+def test_the_summariser_is_handed_the_folded_span_not_the_raw_one():
+    """When compaction IS needed, the span it summarises is the folded one.
+
+    Nothing else bounds that request: the span grows the further over budget the
+    thread is, and it is sent as ONE prompt carrying the conversation's whole
+    system prompt and tool schemas. If it overflows, the runner's overflow branch
+    can only shrink `ctx.history` — which the compactor deliberately emptied — so
+    it returns nothing, `summarise` yields "", and the thread silently falls back
+    to the amputation this feature exists to remove. The failure mode is
+    inverted: the fuller the thread, the less likely compaction works."""
+    dump = _Msg("tool", "巨" * 20_000, tool_name="exec")
+    msgs = [dump, *[_Msg("user", f"訊息{i}" * 100) for i in range(6)]]
+    own = estimate_messages(msgs)
+
+    _at, span = plan_for_budget(msgs, used=own + 1_000, budget=2_000, estimate=estimate_messages)
+    assert span, "this one really is too big to fold away"
+    bodies = "".join(getattr(m, "content", "") for m in span)
+    assert "巨" * 100 not in bodies, "the dump must reach the summariser folded"
+    assert "摺疊" in bodies, "and folded means the marker, not silence"
+
+
+@pytest.mark.asyncio
+async def test_the_summariser_is_offered_no_tools():
+    """It has one job and no way to do anything else: the context it runs in has
+    no sandbox, no filestore, no retriever. Leaving the conversation's tool set
+    on it means a model can open with a tool call, produce no text at all, and
+    `summarise` returns "" — which the caller reads as "no summary" and falls
+    back to the old amputation. A silent no-op, from a tool that could never
+    have worked. (Caught by review.)"""
+    from workspace_app.resources.agent_config import AgentConfig
+
+    runner = _Runner()
+    base = AgentToolContext(
+        investigation_id="i1",
+        agent_config=AgentConfig(name="c", system_prompt="p", allowed_tools=["exec", "read_file"]),
+    )
+    await AgentCompactor(runner).summarise([_Msg("user", "很久以前")], ctx=base)
+
+    assert runner.ctx is not None
+    assert runner.ctx.agent_config is not None
+    assert runner.ctx.agent_config.allowed_tools == [], "an empty list is an explicit 'no tools'"
+    assert base.agent_config is not None
+    assert base.agent_config.allowed_tools == ["exec", "read_file"], (
+        "the caller's own config is untouched"
+    )

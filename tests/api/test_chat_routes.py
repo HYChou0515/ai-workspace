@@ -365,8 +365,12 @@ def test_the_chat_reports_what_it_is_costing_before_any_turn_runs():
                 Message(
                     role="assistant",
                     content="回答",
+                    # `exact` says the PROVIDER reported these, which is what
+                    # makes them an anchor. Without it they are one of our own
+                    # substituted estimates and the gauge must not present them
+                    # as measured (#739 review).
                     metrics=MessageMetrics(
-                        prompt_tokens=9_000, completion_tokens=400, elapsed_ms=10
+                        prompt_tokens=9_000, completion_tokens=400, elapsed_ms=10, exact=True
                     ),
                 ),
             ],

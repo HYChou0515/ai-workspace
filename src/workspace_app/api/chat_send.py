@@ -694,10 +694,19 @@ class ChatSendService:
             )
         )
         self._conv_rm.update(rid, conv)
-        # #739: compact BEFORE the turn is built. Here because the thread is
-        # final for this turn (the user's message is in), and because `_send`
-        # already runs in a shielded background task — so the extra round trip
-        # cannot hold the POST open.
+        # #739: compact BEFORE the turn is built — the thread is final for this
+        # turn (the user's message is in) and the model has not been called yet.
+        #
+        # This DOES lengthen the POST. `send` awaits `asyncio.shield(task)`, and
+        # shield stops a client disconnect from CANCELLING the work; it does not
+        # stop the caller waiting for it. Measured: a summariser that takes 1s
+        # adds 1s to `POST /messages`. An earlier version of this comment claimed
+        # the opposite, which was simply wrong.
+        #
+        # It stays here anyway: the alternative is compacting inside the turn,
+        # after the model has already been handed a thread that does not fit.
+        # The cost is disclosed instead — `Compacting` streams while it runs, so
+        # the wait is explained rather than silent.
         await self.compact(investigation_id, rid, conv, engine_key)
         logger.info(
             "chat_send: user %s sent message to item %s (chat %s)",

@@ -313,7 +313,14 @@ def context_usage(messages: Any, *, limit: ContextLimit) -> ContextUsage:
             summarised_at is not None
             and (getattr(msgs[i], "created_at", None) or 0) < summarised_at
         )
-        if getattr(msgs[i], "role", "") == "assistant" and reported > 0 and not stale:
+        # #739: and it has to be the provider's number, not ours. A reported 0
+        # never reaches the store — the runner substitutes our estimate so the
+        # live ↑ does not flip to 0 — so `reported > 0` cannot tell a
+        # measurement from a guess, and the refuse-a-zero rule above is
+        # unreachable on any deployment whose provider stays quiet. Absent
+        # (threads older than the flag) counts as not exact.
+        exact = bool(getattr(metrics, "exact", False))
+        if getattr(msgs[i], "role", "") == "assistant" and reported > 0 and exact and not stale:
             used = (
                 reported
                 + (getattr(metrics, "completion_tokens", 0) or 0)

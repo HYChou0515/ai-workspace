@@ -49,3 +49,36 @@ describe("ContextBar", () => {
     expect(el.querySelector("[data-testid='chat-context-fill']")).toBeNull();
   });
 });
+
+describe("ContextBar honesty (#739 review)", () => {
+  it("marks a figure nobody measured as an estimate", async () => {
+    // `measured` was fetched, typed and documented — "so the UI never presents
+    // a guess as a fact" — then read by nothing: an estimate and a
+    // provider-measured count rendered identically. Removing the invented
+    // denominator while leaving an unlabelled invented numerator is half the
+    // #624 lesson.
+    renderWithQuery(
+      <ContextBar
+        slug="rca"
+        itemId="i1"
+        chatId="c1"
+        load={async () => ({ used: 9000, limit: 40960, measured: false })}
+      />,
+    );
+    const el = await screen.findByTestId("chat-context");
+    expect(el.textContent).toContain("~9k");
+  });
+
+  it("does not hedge a figure the provider itself reported", async () => {
+    renderWithQuery(
+      <ContextBar
+        slug="rca"
+        itemId="i1"
+        chatId="c1"
+        load={async () => ({ used: 9000, limit: 40960, measured: true })}
+      />,
+    );
+    const el = await screen.findByTestId("chat-context");
+    expect(el.textContent).not.toContain("~");
+  });
+});

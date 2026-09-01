@@ -24,9 +24,12 @@ from collections.abc import Sequence
 from dataclasses import replace
 from typing import Any
 
+import msgspec.structs
+
 from ..agent.context import AgentToolContext
 from ..context_budget import SUMMARY_ROLE
 from ..context_reduce import Estimator
+from ..context_reducers import fold_bulky
 from .events import MessageDelta
 from .runner import AgentRunner
 
@@ -120,7 +123,10 @@ def compaction_plan(
     return start + len(span), span
 
 
-#: Share of the history budget the kept tail may occupy.
+#: Share of the room actually available that the kept tail may occupy —
+#: `min(budget - overhead, what the thread's own messages cost)`, not the
+#: whole budget. The `min` is what makes a forced pass on a roomy window do
+#: anything at all.
 #:
 #: Not a knob. Too large and the thread is over budget again on the next turn,
 #: paying a round trip every time; too small and we throw away the recent
@@ -152,7 +158,14 @@ def plan_for_budget(
     send everything and learn the real limit from the response. A thread that is
     never trimmed must never be compacted either — spending a turn and losing
     detail for a limit nobody measured is the worse of the two mistakes."""
-    if not force and (budget is None or used <= budget):
+    # The free stage first. `history_items` will fold bulky tool output at turn
+    # time anyway, so a thread pushed over the line by one `exec` dump is
+    # already saved — spending a round trip AND permanently replacing a span
+    # with a précis to reclaim what folding gives away is the expensive answer
+    # to a free question. This is the agreed order: 折疊 → 壓縮 → 丟棄.
+    folded = fold_bulky(list(messages))
+    freed = max(0, estimate(list(messages)) - estimate(folded))
+    if not force and (budget is None or used - freed <= budget):
         return 0, []
     # The tail must be sized in the unit it is SPENT in.
     #
@@ -166,12 +179,21 @@ def plan_for_budget(
     #
     # The overhead is recoverable: it is exactly what `used` has that the
     # messages themselves do not.
-    _, live = _after_last_summary(messages)
+    # From here on the FOLDED thread is the subject. Folding preserves message
+    # count, so the insert index still addresses the caller's own list — but the
+    # span handed to the summariser carries markers instead of dumps, which is
+    # the only thing bounding that request. Nothing else does: the span grows the
+    # further over budget the thread is, it is sent as one prompt alongside the
+    # whole system prompt, and if it overflows the runner can only shrink
+    # `ctx.history` — which the compactor deliberately emptied. It would return
+    # nothing, and the thread would fall back to the amputation this exists to
+    # remove, most likely exactly when it is most needed.
+    _, live = _after_last_summary(folded)
     own = estimate(live)
-    overhead = max(0, used - own)
+    overhead = max(0, used - freed - own)
     room = own if budget is None else budget - overhead
     keep_tokens = int(max(0, min(room, own)) * KEEP_TAIL_RATIO)
-    return compaction_plan(messages, keep_tokens=keep_tokens, estimate=estimate)
+    return compaction_plan(folded, keep_tokens=keep_tokens, estimate=estimate)
 
 
 class IConversationCompactor(abc.ABC):
@@ -201,7 +223,19 @@ class AgentCompactor(IConversationCompactor):
     async def summarise(self, messages: Sequence[Any], *, ctx: AgentToolContext) -> str:
         if not list(messages):
             return ""
-        sub = replace(ctx, history=[], turn_image_urls=())
+        # No tools, explicitly. `[]` means "none"; `None` would mean "use the
+        # workspace defaults", which is the opposite. The sub-context has no
+        # sandbox, filestore or retriever, so any tool the model reached for
+        # could not work — but reaching for one produces no text, `summarise`
+        # returns "", and the caller reads that as "no summary" and falls back
+        # to the amputation. A silent no-op from a capability that never existed.
+        cfg = ctx.agent_config
+        sub = replace(
+            ctx,
+            history=[],
+            turn_image_urls=(),
+            agent_config=msgspec.structs.replace(cfg, allowed_tools=[]) if cfg else None,
+        )
         parts: list[str] = []
         async for ev in self._runner.run(compaction_prompt(messages), sub):
             if isinstance(ev, MessageDelta):

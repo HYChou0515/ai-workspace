@@ -67,9 +67,16 @@ export function ContextBar({
         </div>
       )}
       <span style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
-        {pct === null
-          ? formatTokens(data.used)
-          : `${formatTokens(data.used)} / ${formatTokens(data.limit as number)}`}
+        {/* `~` when nobody measured it. The figure is anchored on the count
+            the provider itself reported; until a turn has run since the last
+            change, it is our own estimate — and an estimate shown exactly like
+            a measurement is the #624 disease with the numerator instead of the
+            denominator. */}
+        {`${data.measured ? "" : "~"}${
+          pct === null
+            ? formatTokens(data.used)
+            : `${formatTokens(data.used)} / ${formatTokens(data.limit as number)}`
+        }`}
       </span>
     </div>
   );

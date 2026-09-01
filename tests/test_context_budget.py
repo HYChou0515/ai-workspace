@@ -24,9 +24,10 @@ class _Metrics:
     """Duck-typed stand-in for `resources.MessageMetrics` — the token counts the
     provider itself reported for one turn."""
 
-    def __init__(self, prompt_tokens: int, completion_tokens: int = 0) -> None:
+    def __init__(self, prompt_tokens: int, completion_tokens: int = 0, exact: bool = True) -> None:
         self.prompt_tokens = prompt_tokens
         self.completion_tokens = completion_tokens
+        self.exact = exact
 
 
 class _Msg:
@@ -331,3 +332,37 @@ def test_a_measurement_taken_after_the_summary_still_anchors():
     got = context_usage(msgs, limit=ContextLimit(tokens=40_960, source="catalog"))
     assert got.measured is True
     assert got.used == 9_400
+
+
+def test_an_estimate_stored_as_usage_is_not_an_anchor():
+    """A provider that reports no usage does not leave a zero behind: the runner
+    substitutes our own estimate so the live ↑ line does not flip to 0, and
+    Ollama routinely takes that path. So `prompt_tokens > 0` cannot tell a
+    measurement from a guess — and the guard that refuses a reported 0 is
+    unreachable on exactly the deployment it was written for.
+
+    `exact` is what the provider actually said. Without it the gauge reports a
+    guess as a fact, which is the #624 disease with a new coat of paint.
+    (Caught by review, by two lenses independently.)"""
+    msgs = [
+        _Msg("問題", role="user"),
+        _Msg("回答", role="assistant", metrics=_Metrics(9_000, 400, exact=False)),
+    ]
+    got = context_usage(msgs, limit=ContextLimit(tokens=40_960, source="catalog"))
+    assert got.measured is False
+    assert got.used == estimate_messages(msgs)
+
+
+def test_a_message_written_before_exactness_was_recorded_is_not_trusted():
+    """Threads predating the field have no `exact` at all. Treating absent as
+    true would quietly re-admit every guess already in the store."""
+
+    class _Old:
+        role = "assistant"
+        content = "回答"
+        tool_args = None
+        created_at = 1
+        metrics = type("M", (), {"prompt_tokens": 9_000, "completion_tokens": 400})()
+
+    got = context_usage([_Old()], limit=ContextLimit(tokens=40_960, source="catalog"))
+    assert got.measured is False

@@ -398,6 +398,9 @@ class _TurnReducer:
                         prompt_tokens=item.prompt_tokens,
                         completion_tokens=item.completion_tokens,
                         elapsed_ms=item.elapsed_ms,
+                        # #739: carry the provider's word for it, so the gauge
+                        # can tell a measurement from a substituted estimate.
+                        exact=item.exact,
                     )
                     break
         elif isinstance(item, RepetitionStopped):

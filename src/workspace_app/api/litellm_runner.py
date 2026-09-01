@@ -1516,6 +1516,11 @@ class LitellmAgentRunner:
                         prompt_tokens=prompt_final,
                         completion_tokens=completion_final,
                         elapsed_ms=round((time.monotonic() - t0) * 1000),
+                        # #739: `_final_tokens` falls back to our estimate when
+                        # the provider reports nothing or 0, so the number alone
+                        # cannot say which it is. Say it here, once, at the only
+                        # place that knows.
+                        exact=bool(usage and usage[0]),
                     )
                 )
             finally:
@@ -1557,7 +1562,7 @@ class LitellmAgentRunner:
             **self._agent_kwargs(ctx, feedback, resolve_credential),
         )
         t0 = time.monotonic()
-        prompt_tok = _approx_tokens(len(prompt))
+        prompt_tok = _live_prompt_tokens(ctx, prompt)
         # No stream → exec stdout can't interleave live; it still lands in the
         # tool's result. Swallow mid-turn pushes so a long exec doesn't error.
         ctx.on_exec_output = lambda b: None

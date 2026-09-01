@@ -352,9 +352,13 @@ def register_chat_routes(
     @app.get("/a/{slug}/items/{item_id}/chats/{chat_id}/context")
     def get_chat_context(slug: str, item_id: str, chat_id: str) -> _ContextOut:
         """#739: how much of the window this chat occupies — the usage bar's
-        initial hydration, the same shape as `/todos` (live updates ride the
-        stream). It exists at rest because the bar must be readable before a
-        turn runs, not only while one streams."""
+        initial hydration. It exists at rest because the bar must be readable
+        before a turn runs, not only while one streams.
+
+        Unlike `/todos`, there is no matching event carrying the new state: the
+        gauge is refreshed by refetching this route when a turn ends. Cheaper,
+        because the number only changes when a turn reports its usage — but it
+        is a different shape, and an earlier comment here claimed otherwise."""
         investigation_id = locator.require_access(slug, item_id, "read_chat")
         _rid, conv = locator.require_chat(slug, item_id, chat_id)
         usage = context_usage_for(investigation_id, conv.messages)

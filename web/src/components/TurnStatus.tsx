@@ -41,8 +41,6 @@ export function TurnStatus({
     return () => clearInterval(id);
   }, [active]);
 
-  if (phase === "idle") return null;
-
   // Self-contained styling so both chat surfaces (KB + RCA) look identical —
   // mono, accent, indented to sit under the speaker avatar.
   const box = {
@@ -51,6 +49,21 @@ export function TurnStatus({
     color: "var(--accent)",
     padding: "2px 0 0 28px",
   } as const;
+
+  // #739: ABOVE the idle guard, deliberately. The manual path (the button and
+  // `/compact`) never sets `streaming`, so everything below that guard is
+  // unreachable for it — the event was published and dropped. The presser saw
+  // the button's own label; nobody else watching the item saw anything while
+  // the thread was rewritten under them.
+  if (log.compacting != null) {
+    return (
+      <div className={className} style={box} data-testid="turn-compacting">
+        整理較早的對話…
+      </div>
+    );
+  }
+
+  if (phase === "idle") return null;
 
   const elapsedSec = startRef.current ? Math.floor((Date.now() - startRef.current) / 1000) : 0;
 
@@ -108,19 +121,6 @@ export function TurnStatus({
     return (
       <div className={className} style={box}>
         請求過於頻繁,{Math.ceil(log.rateLimited.seconds)} 秒後自動重試…
-        {elapsedSec >= 1 && <span style={{ opacity: 0.7 }}> · {elapsedSec}s</span>}
-      </div>
-    );
-  }
-
-  // #739: the thread outgrew its window, so this turn is summarising the part
-  // that no longer fits before it answers. A whole extra round trip, and the one
-  // pause a user cannot anticipate — so it says so rather than sitting blank.
-  // Above the restore branch because compaction happens first, before any tool.
-  if (log.compacting != null) {
-    return (
-      <div className={className} style={box} data-testid="turn-compacting">
-        整理較早的對話…
         {elapsedSec >= 1 && <span style={{ opacity: 0.7 }}> · {elapsedSec}s</span>}
       </div>
     );

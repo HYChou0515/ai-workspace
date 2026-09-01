@@ -236,3 +236,23 @@ describe("TurnStatus — a wait that gave up", () => {
     expect(screen.queryByTestId("turn-abandoned")).not.toBeInTheDocument();
   });
 });
+
+describe("the compaction pause is not only the presser's (#739 review)", () => {
+  it("shows the pause even though no turn is streaming", () => {
+    // The manual path — the button and `/compact` — never sets `streaming`, so
+    // the status sat behind the idle guard and rendered nothing. Whoever
+    // pressed still saw the button's own label; everyone else watching a shared
+    // item saw a still screen while the thread was rewritten under them.
+    render(
+      <TurnStatus
+        log={{ ...EMPTY_LOG, streaming: false, compacting: { replaced: 12 } }}
+      />,
+    );
+    expect(screen.getByTestId("turn-compacting")).toBeTruthy();
+  });
+
+  it("stays quiet when nothing is being compacted", () => {
+    render(<TurnStatus log={{ ...EMPTY_LOG, streaming: false }} />);
+    expect(screen.queryByTestId("turn-compacting")).toBeNull();
+  });
+});
