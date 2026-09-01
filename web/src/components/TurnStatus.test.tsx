@@ -323,3 +323,142 @@ describe("TurnStatus — a wait that gave up", () => {
     expect(screen.queryByTestId("turn-abandoned")).not.toBeInTheDocument();
   });
 });
+
+describe("the compaction pause is not only the presser's (#739 review)", () => {
+  it("shows the pause even though no turn is streaming", () => {
+    // The manual path — the button and `/compact` — never sets `streaming`, so
+    // the status sat behind the idle guard and rendered nothing. Whoever
+    // pressed still saw the button's own label; everyone else watching a shared
+    // item saw a still screen while the thread was rewritten under them.
+    render(
+      <TurnStatus
+        log={{ ...EMPTY_LOG, streaming: false, compacting: { replaced: 12 } }}
+      />,
+    );
+    expect(screen.getByTestId("turn-compacting")).toBeTruthy();
+  });
+
+  it("stays quiet when nothing is being compacted", () => {
+    render(<TurnStatus log={{ ...EMPTY_LOG, streaming: false }} />);
+    expect(screen.queryByTestId("turn-compacting")).toBeNull();
+  });
+});
+
+describe("the compaction notice does not shadow what is above it (#739 review)", () => {
+  it("still lets an abandoned turn be reported, and offers the retry", async () => {
+    // An earlier fix hoisted this branch above every other one to reach the
+    // manual path. That made the abandoned-turn detector — and its 重新問一次
+    // button — unreachable for the whole compaction round trip, which is
+    // exactly the window in which a turn looks stuck. The idle guard was what
+    // needed relaxing, not this branch's position.
+    vi.useFakeTimers();
+    try {
+      const { rerender } = render(
+        <TurnStatus
+          log={{ ...EMPTY_LOG, streaming: true, compacting: { replaced: 5 } }}
+          onRetry={() => {}}
+        />,
+      );
+      await act(async () => {
+        vi.advanceTimersByTime(11 * 60 * 1000);
+      });
+      rerender(
+        <TurnStatus
+          log={{ ...EMPTY_LOG, streaming: true, compacting: { replaced: 5 } }}
+          onRetry={() => {}}
+        />,
+      );
+      expect(screen.queryByTestId("turn-abandoned")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("the compaction clock is its own (#739 review round 4)", () => {
+  it("does not lend its elapsed time to the turn that follows", async () => {
+    // `Compacting`, `Compacting(done)` and the turn's first event can arrive in
+    // one render — a buffering proxy, a backgrounded tab. The turn then
+    // inherited the compaction's elapsed seconds, so a two-second-old turn
+    // could present as ten minutes stuck and offer 重新問一次, a button whose
+    // premise is "this is stuck" and whose first act is to cancel.
+    vi.useFakeTimers();
+    try {
+      const { rerender } = render(
+        <TurnStatus log={{ ...EMPTY_LOG, compacting: { replaced: 5 } }} />,
+      );
+      await act(async () => {
+        vi.advanceTimersByTime(90 * 1000);
+      });
+      // the compaction ends and the turn begins, in one render
+      rerender(<TurnStatus log={{ ...EMPTY_LOG, streaming: true }} onRetry={() => {}} />);
+      await act(async () => {
+        vi.advanceTimersByTime(2000);
+      });
+      rerender(<TurnStatus log={{ ...EMPTY_LOG, streaming: true }} onRetry={() => {}} />);
+      expect(screen.queryByTestId("turn-abandoned")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives up on a compaction that never reported back", async () => {
+    // The manual path publishes no turn, so a lost `done` leaves the notice with
+    // no terminal event to clear it — a line pinned for every spectator and a
+    // 1 Hz timer with no exit. A summariser that has not returned in minutes has
+    // failed, whether or not its `finally` reached us.
+    vi.useFakeTimers();
+    try {
+      const { rerender } = render(
+        <TurnStatus log={{ ...EMPTY_LOG, compacting: { replaced: 5 } }} />,
+      );
+      expect(screen.queryByTestId("turn-compacting")).toBeTruthy();
+      await act(async () => {
+        vi.advanceTimersByTime(10 * 60 * 1000);
+      });
+      rerender(<TurnStatus log={{ ...EMPTY_LOG, compacting: { replaced: 5 } }} />);
+      expect(screen.queryByTestId("turn-compacting")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("the give-up bound binds only where nothing can clear it (#739 round 5)", () => {
+  it("keeps saying so on the automatic path, however long it takes", async () => {
+    // A turn always ends in a terminal event, and every one of them clears
+    // `compacting`. So on the automatic path the bound has nothing to protect
+    // against — and applying it there dropped the status to 「還在準備」 (false:
+    // a compaction is running) and restored 重新問一次, a button whose premise
+    // is "this is stuck" and whose first act is to cancel.
+    vi.useFakeTimers();
+    try {
+      const log = { ...EMPTY_LOG, streaming: true, compacting: { replaced: 40 } };
+      const { rerender } = render(<TurnStatus log={log} onRetry={() => {}} />);
+      await act(async () => {
+        vi.advanceTimersByTime(301 * 1000);
+      });
+      rerender(<TurnStatus log={log} onRetry={() => {}} />);
+      expect(screen.queryByTestId("turn-compacting")).toBeTruthy();
+      expect(screen.queryByText(/重新問一次/)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still gives up when no turn will ever clear it", async () => {
+    // The manual path publishes no turn, so a lost `done` has no other exit.
+    vi.useFakeTimers();
+    try {
+      const log = { ...EMPTY_LOG, compacting: { replaced: 5 } };
+      const { rerender } = render(<TurnStatus log={log} />);
+      await act(async () => {
+        vi.advanceTimersByTime(301 * 1000);
+      });
+      rerender(<TurnStatus log={log} />);
+      expect(screen.queryByTestId("turn-compacting")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

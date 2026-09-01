@@ -175,3 +175,42 @@ def test_the_leading_messages_do_not_churn_as_the_thread_grows():
     after = default_reducer().reduce(grown, budget=6_000, estimate=_tokens)
 
     assert [m.content for m in after.messages[: len(msgs)]] == [m.content for m in before.messages]
+
+
+def test_folding_alone_says_nothing_at_all():
+    """The fold stage loses nothing — its own wording says so ("對話內容完整保留").
+    So there is nothing the user needs to know and nothing they can act on, and
+    a notice would be noise.
+
+    It matters more after #739: the fold now routinely runs right after a
+    compaction saved the thread, so the old unconditional notice announced
+    「請開一個新對話」at the exact moment that had become unnecessary — the one
+    sentence this feature exists to stop showing."""
+    from workspace_app.api.turns import history_items
+    from workspace_app.context_budget import estimate_messages
+    from workspace_app.context_reducers import LayeredReducer
+
+    class _M:
+        def __init__(self, role, content, tool_name=None):
+            self.role, self.content, self.tool_name = role, content, tool_name
+            self.tool_args = None
+            self.tool_call_id = "c1" if role == "tool" else None
+
+    msgs = [
+        _M("user", "原始任務"),
+        _M("tool", "巨" * 20_000, tool_name="exec"),
+        _M("user", "接下來"),
+    ]
+    got = LayeredReducer().reduce(msgs, budget=500, estimate=estimate_messages)
+    assert got.changed and got.lossless, "folding keeps every message"
+
+    said: list[str] = []
+    history_items(msgs, max_tokens=500, on_reduce=said.append)
+    assert said == [], "a lossless reduction has nothing to announce"
+
+
+def test_a_stage_that_drops_messages_still_says_what_to_do():
+    """Dropping IS a loss, and the way out has to be stated."""
+    from workspace_app.api.turns import context_notice_text
+
+    assert "新對話" in context_notice_text("3 則訊息已不再送給模型。")

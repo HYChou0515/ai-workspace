@@ -169,7 +169,31 @@ class AgentMetrics:
     # the configured one, and the configured one is what everything reported
     # until now — wrong in precisely the case where the two differ.
     model: str | None = None
+    #: #739: whether the counts above are the provider's rather than our
+    #: estimate. #748 arrived at the same question independently and answered it
+    #: with `measured_*` above, which carries the real numbers instead of just
+    #: flagging them. Both are kept because #739's consumers read this one — but
+    #: it is DERIVED at the single construction site, never set by hand, so the
+    #: two cannot drift into disagreeing about the same reply.
+    exact: bool = False
     type: Literal["agent_metrics"] = "agent_metrics"
+
+
+@dataclass(frozen=True)
+class Compacting:
+    """#739: the thread outgrew the window, so this turn first spends a round
+    trip summarising the part that no longer fits.
+
+    Ephemeral, like `FailoverSwitch` — the persisted summary message is the
+    durable record. It exists so the chat does not look frozen during the one
+    pause the user has no way to anticipate."""
+
+    replaced: int
+    #: The pass has finished — either way, including when it wrote nothing. The
+    #: manual path publishes no turn afterwards, so without this the live notice
+    #: would stay up forever.
+    done: bool = False
+    type: Literal["compacting"] = "compacting"
 
 
 @dataclass(frozen=True)
@@ -282,6 +306,7 @@ AgentEvent = (
     | RateLimited  # the turn is holding out a 429 before retrying (ephemeral)
     | TodosUpdated  # #613: the agent rewrote the conversation's todo checklist
     | ContextTrimmed  # #624: the request was too long; older history was dropped
+    | Compacting  # #739: the thread outgrew the window; this turn summarises first
     | GoalUpdated  # #613 P3: the chat's goal was set / cleared / advanced
     | UserMessage  # #43: broadcast-only (a human's message on the shared stream)
     | FileChanged  # #43: broadcast-only (a workspace file changed)

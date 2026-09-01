@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -1331,3 +1331,21 @@ def test_both_turn_shapes_build_the_agent_from_one_argument_list():
     assert kw["app_slug"] == "rca"
     # rca ships skills, so only the caller's answer can be keeping it out.
     assert "read_skill" not in {t.name for t in agent.tools if isinstance(t, FunctionTool)}
+
+
+def test_the_live_prompt_figure_counts_the_whole_request_not_just_the_message():
+    """#739 P2: the live prompt figure was `len(prompt) / 4` — the length of the
+    user's own message, which is not the context size and does not move as the
+    window fills. The final phase then replaced it with the provider's count of
+    EVERYTHING (system prompt, tool schemas, replayed history), so the figure
+    jumped by an order of magnitude the instant the turn ended.
+
+    The live figure must be the same KIND of number as the final one."""
+    from workspace_app.api.litellm_runner import _live_prompt_tokens
+
+    class _Ctx:
+        context_overhead_tokens = 4_000
+        history = [dict(role="user", content="先前的對話")]
+
+    got = _live_prompt_tokens(cast(Any, _Ctx()), "這一則")
+    assert got > 4_000, "the per-turn overhead and the replayed history both count"

@@ -91,9 +91,14 @@ def _fold(original: Any, content: str) -> Any:
     return folded
 
 
-def _fold_bulky(messages: Sequence[Any]) -> list[Any]:
+def fold_bulky(messages: Sequence[Any]) -> list[Any]:
     """Stage 1 — fold every bulky tool output except the newest message's (the
-    current turn is most likely still reasoning about that one)."""
+    current turn is most likely still reasoning about that one).
+
+    Public because it is not only the reducer's first stage: #739 has to run it
+    BEFORE deciding to compact. Folding is free and compaction costs a round
+    trip that permanently replaces a span, so a thread pushed over the line by
+    one `exec` dump must be saved by the fold and never reach the model."""
     out = list(messages)
     for i, m in enumerate(out[:-1]):
         content = _content(m)
@@ -120,13 +125,16 @@ class LayeredReducer(IContextReducer):
             return ReductionResult(messages=msgs)
 
         # ── 1. fold bulky old tool output ──────────────────────────
-        folded = _fold_bulky(msgs)
+        folded = fold_bulky(msgs)
         n = sum(1 for a, b in zip(folded, msgs, strict=False) if _content(a) != _content(b))
         if _fits(folded, budget, estimate):
             return ReductionResult(
                 messages=folded,
                 summary=f"{n} 筆較早的工具輸出已摺疊(只留下摘要),對話內容完整保留。",
                 changed=True,
+                # Nothing was given up, and the notice must not advise as if it
+                # had — least of all right after a compaction saved the thread.
+                lossless=True,
             )
 
         # ── 2. drop from the middle, keeping the task ──────────────

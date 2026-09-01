@@ -86,6 +86,11 @@ export type AgentMetrics = {
   /** #748: the model that actually wrote this reply — under failover, not the
    * configured one. */
   model?: string | null;
+  /** #739: whether the provider itself reported these counts. False when we
+   * substituted an estimate — the runner does that whenever usage comes back
+   * absent or 0, so the number alone cannot tell the two apart. Mirrors
+   * api/events.py AgentMetrics. */
+  exact?: boolean;
 };
 
 /** #249/#131: the chat model was busy/blipped before its first token, so the turn
@@ -158,6 +163,20 @@ export type ContextTrimmed = {
   type: "context_trimmed";
   kept: number;
   dropped: number;
+};
+
+/** #739: the thread outgrew the window, so this turn first spends a round trip
+ * summarising the part that no longer fits. Live-only — the durable record is
+ * the `summary` message. It exists so the chat does not look frozen during the
+ * one pause a user has no way to anticipate. `replaced` is how many messages
+ * the summary stands in for. Mirrors api/events.py Compacting. */
+export type Compacting = {
+  type: "compacting";
+  replaced: number;
+  /** The pass has finished (either way — it may have written nothing). Switches
+   * the live notice off; without it the manual path, which publishes no turn
+   * afterwards, would leave it standing forever. */
+  done?: boolean;
 };
 
 /** #613 P3: the chat's goal changed — set / cleared / state or round moved.
@@ -258,6 +277,7 @@ export type AgentEvent =
   | TodosUpdated
   | GoalUpdated
   | ContextTrimmed
+  | Compacting
   | UserMessage
   | FileChanged
   | Presence

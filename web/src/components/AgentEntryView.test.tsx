@@ -1036,3 +1036,40 @@ describe("reply provenance (#748)", () => {
     expect(screen.queryByText(/\d{2}:\d{2}/)).not.toBeInTheDocument();
   });
 });
+
+
+describe("compaction summary (#739)", () => {
+  const entry = {
+    kind: "summary",
+    text: "先前:使用者要修 build,已試過清 cache,失敗在 node 版本。",
+    replaced: 42,
+    at: 1,
+  } as AgentEntry;
+
+  it("reads as a divider over the thread, not as something anyone said", () => {
+    render(<EntryView entry={entry} />);
+    const el = screen.getByTestId("compaction-summary");
+    expect(el).toHaveTextContent("42");
+  });
+
+  it("keeps the précis folded away until asked", () => {
+    // The summary is long by construction — it stands in for dozens of
+    // messages. Expanded by default it would push the actual conversation off
+    // screen every time the thread is opened.
+    render(<EntryView entry={entry} />);
+    expect(screen.queryByText(/node 版本/)).toBeNull();
+    fireEvent.click(screen.getByTestId("compaction-summary-toggle"));
+    expect(screen.getByText(/node 版本/)).toBeTruthy();
+  });
+
+  it("says what happened in the user's terms, not ours", () => {
+    // No "compaction", no "context window", no token counts: the user needs to
+    // know the earlier conversation was summarised and is still readable above.
+    render(<EntryView entry={entry} />);
+    const text = screen.getByTestId("compaction-summary").textContent ?? "";
+    expect(text).toContain("摘要");
+    for (const jargon of ["context", "token", "compact"]) {
+      expect(text.toLowerCase()).not.toContain(jargon);
+    }
+  });
+});

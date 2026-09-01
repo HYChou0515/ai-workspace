@@ -616,3 +616,22 @@ def test_a_bundled_preset_carries_the_declaration_too():
     p = _preset_from_dict({"model": "openai/x", "reports_usage": True})
     assert p.reports_usage is True
     assert _preset_from_dict({"model": "openai/x"}).reports_usage is False
+
+
+def test_the_derived_exactness_flag_agrees_with_the_rule_it_replaces():
+    """#739 and #748 answered the same question in two shapes: a flag, and
+    nullable numbers. The merge keeps both and DERIVES the flag, so they cannot
+    disagree — but only if the derivation matches #739's rule everywhere.
+
+    It did not, at first. #739's `bool(usage and usage[0])` is about the PROMPT
+    count specifically, because that is what anchors its context gauge; deriving
+    from "either count was measured" called a turn exact when the provider had
+    reported a completion and no prompt — precisely the reading that would
+    anchor the gauge on a number nobody measured.
+    """
+    from workspace_app.api.litellm_runner import _measured_tokens
+
+    for usage in (None, (0, 0), (5, 0), (0, 7), (5, 7)):
+        theirs = bool(usage and usage[0])  # #739's rule, verbatim
+        mine = _measured_tokens(usage)[0] is not None
+        assert mine is theirs, usage

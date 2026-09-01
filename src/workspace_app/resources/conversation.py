@@ -42,6 +42,15 @@ class MessageMetrics(Struct, frozen=True):
     reads as slower the longer the conversation gets. None when no token ever
     arrived, or on the non-streaming path, which cannot see token timings."""
 
+    exact: bool = False
+    """#739: whether the counts above are the provider's rather than an estimate.
+
+    #748 answered the same question with nullable counts — `None` IS "not
+    measured" — so this is redundant by construction and kept only because
+    #739's consumers read it. Derived at the single construction site
+    (`turns._TurnReducer`), never set by hand, so it cannot come to disagree
+    with the fields it describes."""
+
 
 class Citation(Struct):
     """A parsed ``[n]`` marker in an answer, resolved to its source. Lives on a

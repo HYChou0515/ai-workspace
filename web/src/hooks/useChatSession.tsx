@@ -63,6 +63,10 @@ export type BroadcastChatTransport = {
    * event merges the new goal state into it; a terminal goal state (met /
    * exhausted) also refetches the thread so the persisted marker appears. */
   goalKey?: QueryKey;
+  /** #739: react-query key the chat's context gauge lives under. A terminal
+   * event refetches it, because the usage only changes when a turn reports what
+   * the provider actually read — and a gauge that never moves gets believed. */
+  contextKey?: QueryKey;
   /** Read the persisted thread. `null` = no thread yet. */
   getThread: () => Promise<ChatThread | null>;
   /** The long-lived broadcast subscription. `since` (passed only on a RECONNECT)
@@ -309,6 +313,9 @@ export function useChatSession(
               // one refetch reconciles the panel cheaply.
               if (transport.todosKey)
                 void qc.invalidateQueries({ queryKey: transport.todosKey });
+              // #739: the turn just told us what the window really holds.
+              if (transport.contextKey)
+                void qc.invalidateQueries({ queryKey: transport.contextKey });
               // Re-snapshot from the store — it carries the BE-attached
               // `ask_knowledge_base` citations the stream doesn't emit.
               const fresh = await transport.getThread();
