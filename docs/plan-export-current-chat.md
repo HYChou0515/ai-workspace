@@ -118,23 +118,35 @@ screen on "Solder paste question" → `Solder-paste-question.chat.json`, titled
 "Oven drift review" → `Oven-drift-review.chat.json` with that chat's message. The
 download follows the screen, and the file names itself.
 
-## Follow-up — the export must carry a reply's provenance (blocked on #749)
+## Follow-up — the export carries the whole message, not three fields of it
 
-#749 (`feat/reply-provenance-748`) persists **how a reply was produced** on the message:
-`MessageMetrics` — the model that actually served, prompt/completion tokens, elapsed and
-generation time — alongside `created_at`. It does not touch the export, so a `.chat.json`
-written today drops all of it: the file says what was said, not who said it, when, or at
-what cost.
+**The file is for debugging.** Asked whether the model's own reasoning and the user ids in
+a mention belong in a file that can be re-uploaded to a KB collection, the answer was "all
+of it — that is what makes it debuggable". So the export is a faithful archive of the
+conversation, not a sanitised artifact, and everything persisted on a message goes in.
 
-Deliberately held until #749 lands rather than guessed at ahead of it. The two changes do
-not overlap on any file, so this is a semantic dependency, not a merge one.
+That decides the shape: serialise each `Message` **generically** (`msgspec.to_builtins`)
+rather than naming fields one at a time. Naming them is what created this defect's whole
+family — a field is added, the export is not updated, and nothing says so. A generic dump
+carries every future field for free, including the two #749 adds.
 
-The work is additive and small: emit `created_at` and `metrics` per message from
-`export_chat`. The format already allows it — `parse_chat_export` validates only that
-`role` and `content` are strings and returns every message verbatim, which was confirmed
-by round-tripping a message carrying `created_at` and a `metrics` object through
-`build_chat_export` → `parse_chat_export` and finding both intact. So the KB upload path
-keeps working unchanged, and nothing about the round-trip contract has to move.
+Confirmed by probe, not by reading: a `Message` carrying `reasoning`, `created_at` and a
+`metrics` object dumps to 17 keys and survives `build_chat_export` → `parse_chat_export`
+intact, with an unmeasured `completion_tokens` still `null` — **not** coerced to `0`, which
+is the invented-number defect #748 exists to remove.
+
+Two things this must keep:
+
+- `role` and `content` stay strings, which the KB upload path validates.
+- Absent stays absent. Nothing in the export may substitute a zero for "not measured".
+
+### Why this no longer waits on #749
+
+It was held for #749 (`feat/reply-provenance-748`), which persists the model that served,
+the token counts and the timings on the message. Naming those two fields in the export
+would have needed that PR to land first. Dumping the message generically does not: the
+fields arrive on their own the moment #749 merges, and so does whatever is added after it.
+The two branches share no file, so nothing here was ever a merge dependency.
 
 ## Not in scope
 
