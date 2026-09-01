@@ -957,3 +957,66 @@ describe("a broadcast question starts a new turn for everyone, not just its send
     expect(turnLooksSilent(next)).toBe(true);
   });
 });
+
+
+describe("a question already on screen from the store is not drawn again", () => {
+  // Reported twice now: one send, two identical bubbles — and undoing from the
+  // first went back a turn too far.
+  //
+  // PR#735 gave each event an id and made delivery idempotent, which fixed the
+  // duplicate that came from the SAME event arriving twice. This is a different
+  // one, and that guard cannot see it: `seenIds` answers "have I drawn this
+  // EVENT", not "is this MESSAGE already on screen". The message can reach a
+  // viewer by two routes with only one event id between them.
+  //
+  // The order is not a rare race — it is how the backend is written.
+  // `chat_send` PERSISTS the user's message and only THEN broadcasts it, so the
+  // store is ahead by construction. What normally hides it is that the
+  // store-poll is gated on a healthy stream, which is why this reproduces on a
+  // multi-pod deployment and never single-pod.
+  it("does not redraw a message the poll already hydrated", () => {
+    const polled = reconcileSnapshot(EMPTY_LOG, {
+      messages: [{ role: "user", content: "hello", created_at: 100 }],
+    });
+
+    const after = reduceAgent(polled, {
+      type: "user_message",
+      author: "u",
+      content: "hello",
+      created_at: 100,
+    } as never);
+
+    const asked = after.entries.filter(
+      (e) => e.kind === "message" && e.message.role === "user",
+    );
+    expect(asked).toHaveLength(1);
+    // …and the turn still starts: only the drawing is skipped, never the state
+    // the event carries. Skipping the whole case would trade two bubbles for a
+    // composer that never locks and a spinner that never appears.
+    expect(after.streaming).toBe(true);
+  });
+
+  it("still draws the same words asked a second time", () => {
+    // Two discriminators, and both are needed. Provenance answers "did the store
+    // already draw this", so two LIVE messages that read alike still both show
+    // (`useChatSession` pins that from the other side). The timestamp separates
+    // this stored message from a later identical one — the backend stamps it once
+    // and gives the same value to the stored copy and the broadcast, so a real
+    // second ask differs.
+    const first = reconcileSnapshot(EMPTY_LOG, {
+      messages: [{ role: "user", content: "again?", created_at: 100 }],
+    });
+
+    const after = reduceAgent(first, {
+      type: "user_message",
+      author: "u",
+      content: "again?",
+      created_at: 900,
+    } as never);
+
+    const asked = after.entries.filter(
+      (e) => e.kind === "message" && e.message.role === "user",
+    );
+    expect(asked).toHaveLength(2);
+  });
+});

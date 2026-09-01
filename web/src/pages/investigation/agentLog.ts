@@ -56,7 +56,20 @@ export type StepView = {
 };
 
 export type AgentEntry =
-  | { kind: "message"; message: Message; at?: number }
+  | {
+      kind: "message";
+      message: Message;
+      at?: number;
+      /** Drawn from the PERSISTED thread rather than from a live event.
+       *
+       * A message reaches a viewer by two routes and only one of them carries an
+       * event id, so the id-based de-dupe cannot tell that a broadcast is
+       * redrawing something the store already supplied. Provenance can: the
+       * question is not "do these read the same" — two people may genuinely say
+       * the same thing in the same millisecond, and both must show — but "did
+       * this already arrive by the other route". */
+      fromStore?: boolean;
+    }
   | { kind: "tool_call"; call: ToolCallView }
   | { kind: "mention"; by: string; users: string[]; note: string; at?: number }
   // #613 P3: a persisted goal marker (met / exhausted) — FE-only, never LLM history.
@@ -199,7 +212,12 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
         at: m.created_at ?? undefined,
       });
     } else {
-      entries.push({ kind: "message", message: m, at: m.created_at ?? undefined });
+      entries.push({
+        kind: "message",
+        message: m,
+        at: m.created_at ?? undefined,
+        fromStore: true,
+      });
     }
   }
   // A thread whose LAST message is the user's is a thread whose reply has not
@@ -704,15 +722,41 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
     case "done":
       return { ...log, entries, streaming: false, streamingBy: null };
 
-    case "user_message":
+    case "user_message": {
       // #43: a human message on the shared investigation, broadcast to every
       // viewer. A turn is now in flight — flip `streaming` so the spinner
       // shows for everyone, not just the sender.
-      entries.push({
-        kind: "message",
-        at: ev.created_at || now,
-        message: { role: "user", author: ev.author, content: ev.content },
-      });
+      //
+      // …unless it is already on screen. A message reaches a viewer by two
+      // routes — this broadcast and the persisted thread — and only one of them
+      // carries an event id, so PR#735's `seenIds` cannot see this duplicate: it
+      // answers "have I drawn this EVENT", not "is this MESSAGE already here".
+      // The ordering that exposes it is not a race but how the backend is
+      // written: `chat_send` persists the message and only then broadcasts it,
+      // so the store is ahead by construction. The store-poll being gated on a
+      // healthy stream is the only reason this stays invisible single-pod.
+      //
+      // The timestamp is what makes this safe to dedupe on: the backend stamps
+      // it ONCE and gives the same value to the stored message and the broadcast,
+      // so asking the same thing twice differs and both still draw. Absent, it
+      // falls back to `now`, matches nothing, and the message is drawn — the
+      // right way round, since a duplicate bubble is cheaper than a lost one.
+      const askedAt = ev.created_at || now;
+      const alreadyDrawn = entries.some(
+        (e) =>
+          e.kind === "message" &&
+          e.fromStore &&
+          e.message.role === "user" &&
+          e.message.content === ev.content &&
+          e.at === askedAt,
+      );
+      if (!alreadyDrawn) {
+        entries.push({
+          kind: "message",
+          at: askedAt,
+          message: { role: "user", author: ev.author, content: ev.content },
+        });
+      }
       // #721: and the previous turn's error stops describing anything. `error`
       // is sticky by design — nothing else clears it and `reconcileSnapshot`
       // keeps it across a re-hydrate — which was right while a step-limited turn
@@ -741,6 +785,7 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
         error: null,
         metrics: null,
       };
+    }
 
     case "file_changed":
       // #43: a workspace file changed — a side effect handled in the hook
