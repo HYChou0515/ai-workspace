@@ -15,6 +15,7 @@ from typing import Any, Protocol, cast
 
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
+from msgspec import to_builtins
 from specstar import SpecStar
 
 from ..kb.ingest import Ingestor
@@ -504,12 +505,17 @@ def register_chat_routes(
         # An unnamed chat has no title of its own; the item it belongs to is the
         # honest fallback — and it is what a single-chat item exported before.
         title = conv.title or locator.title_of(investigation_id) or "chat"
+        # The whole message, not a hand-picked three of it. This file is for
+        # debugging, so it is a faithful archive: the model's own reasoning, the
+        # timings and token counts, the tool call's arguments, the citations.
+        # Listing fields is what produced the defect's whole family — a field is
+        # added to Message and nothing reminds anyone to add it here — and it is
+        # also how a `tool_name or ""` came to write a value the message did not
+        # hold. `to_builtins` carries whatever the message carries, including
+        # every field added after this line was written.
         payload = build_chat_export(
             title=title,
-            messages=[
-                {"role": m.role, "content": m.content, "tool_name": m.tool_name or ""}
-                for m in conv.messages
-            ],
+            messages=[to_builtins(m) for m in conv.messages],
         )
         return Response(
             content=payload,

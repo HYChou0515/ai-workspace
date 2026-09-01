@@ -385,6 +385,53 @@ def test_export_chat_titles_the_file_after_the_chat():
     )
 
 
+def test_export_carries_every_field_a_message_persists():
+    """The file is for debugging, so it is a faithful archive of the thread: the
+    model's own reasoning, when it answered, who it was, and what the reply cost
+    all go in. Naming fields one at a time is what let three of them stand in for
+    sixteen — a field was added, the export was not updated, and nothing said so."""
+    from workspace_app.kb.chat_export import parse_chat_export
+    from workspace_app.resources.conversation import MessageMetrics
+
+    client, spec, iid = _client()
+    chat_id = (
+        _convs(spec, iid)
+        .create(
+            Conversation(
+                item_id=iid,
+                title="Rich chat",
+                messages=[
+                    Message(
+                        role="assistant",
+                        content="the answer",
+                        author="agent",
+                        reasoning="the model's own thinking",
+                        created_at=1788,
+                        metrics=MessageMetrics(
+                            prompt_tokens=10, completion_tokens=7, elapsed_ms=1200
+                        ),
+                    )
+                ],
+            )
+        )
+        .resource_id
+    )
+
+    resp = client.get(f"/a/rca/items/{iid}/chats/{chat_id}/export-chat")
+    assert resp.status_code == 200, resp.text
+    _title, messages = parse_chat_export(resp.content)
+    m = messages[0]
+    assert m["reasoning"] == "the model's own thinking"
+    assert m["created_at"] == 1788
+    assert m["author"] == "agent"
+    assert m["metrics"] == {"prompt_tokens": 10, "completion_tokens": 7, "elapsed_ms": 1200}
+    # Nothing is substituted for an absent value. The old export forced a
+    # missing `tool_name` to "", and the same habit applied to the metrics #749
+    # is about to widen would write a 0 for "not measured" — the invented number
+    # that PR exists to remove. Dumping the message as it stands cannot do that.
+    assert m["tool_name"] is None
+
+
 def test_export_chat_survives_a_title_that_is_not_latin_1():
     """A Content-Disposition header is latin-1 on the wire, and Python's `\\w`
     keeps CJK — so naming the download after the chat turned a Chinese title into
