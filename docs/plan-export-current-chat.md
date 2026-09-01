@@ -118,6 +118,24 @@ screen on "Solder paste question" → `Solder-paste-question.chat.json`, titled
 "Oven drift review" → `Oven-drift-review.chat.json` with that chat's message. The
 download follows the screen, and the file names itself.
 
+## Follow-up — the export must carry a reply's provenance (blocked on #749)
+
+#749 (`feat/reply-provenance-748`) persists **how a reply was produced** on the message:
+`MessageMetrics` — the model that actually served, prompt/completion tokens, elapsed and
+generation time — alongside `created_at`. It does not touch the export, so a `.chat.json`
+written today drops all of it: the file says what was said, not who said it, when, or at
+what cost.
+
+Deliberately held until #749 lands rather than guessed at ahead of it. The two changes do
+not overlap on any file, so this is a semantic dependency, not a merge one.
+
+The work is additive and small: emit `created_at` and `metrics` per message from
+`export_chat`. The format already allows it — `parse_chat_export` validates only that
+`role` and `content` are strings and returns every message verbatim, which was confirmed
+by round-tripping a message carrying `created_at` and a `metrics` object through
+`build_chat_export` → `parse_chat_export` and finding both intact. So the KB upload path
+keeps working unchanged, and nothing about the round-trip contract has to move.
+
 ## Not in scope
 
 - **Which** chat the KB chat's Export downloads — it was already right, and is where the
