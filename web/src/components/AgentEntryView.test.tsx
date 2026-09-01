@@ -1010,6 +1010,27 @@ describe("reply provenance (#748)", () => {
     expect(tip).not.toContain("↑"); // no counts ⇒ no zeros stood in for them
   });
 
+  it("shows the time during the turn, before anything is persisted", () => {
+    // Live-folded messages have no `created_at` — the reducer puts the moment on
+    // the ENTRY (`at`) and the message only gets a timestamp after the post-turn
+    // refetch. Reading only the message meant your own message and the streaming
+    // reply had no time for the whole turn, which is most of when a person is
+    // looking at them.
+    const entry = {
+      kind: "message",
+      at: Date.UTC(2026, 8, 1, 6, 32, 7),
+      message: { role: "assistant", content: "streaming…" },
+    } as unknown as AgentEntry;
+    render(<EntryView entry={entry} />);
+    expect(screen.getByText(/\d{2}:32/)).toBeInTheDocument();
+  });
+
+  it("shows nothing rather than 'Invalid Date' for a broken timestamp", () => {
+    const entry = reply({ created_at: Number.NaN });
+    render(<EntryView entry={entry} />);
+    expect(screen.queryByText(/Invalid/)).not.toBeInTheDocument();
+  });
+
   it("shows no time at all for a message saved before the field existed", () => {
     render(<EntryView entry={reply({ created_at: null, metrics: null })} />);
     expect(screen.queryByText(/\d{2}:\d{2}/)).not.toBeInTheDocument();

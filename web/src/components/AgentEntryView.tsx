@@ -316,6 +316,7 @@ export function EntryView({
   return (
     <MessageBlock
       message={entry.message}
+      at={entry.at}
       onOpenCitation={onOpenCitation}
       onRequestAccess={onRequestAccess}
       onReplay={onReplay}
@@ -343,11 +344,17 @@ export function EntryView({
  * hover affordances already use. It does mean the detail is unreachable by
  * touch; that trade-off is recorded in the plan.
  */
-function ReplyStamp({ message }: { message: Message }) {
-  const at = message.created_at;
+function ReplyStamp({ message, at: entryAt }: { message: Message; at?: number }) {
+  // A live-folded message has no `created_at` — the reducer puts the moment on
+  // the ENTRY and the message only gets one after the post-turn refetch. Reading
+  // just the message left your own message and the streaming reply with no time
+  // for the whole turn, which is most of when anyone is looking at them.
+  const at = message.created_at ?? entryAt;
   if (at == null) return null; // saved before the field existed — say nothing
 
   const d = new Date(at);
+  // A broken value must render nothing rather than the literal "Invalid Date".
+  if (Number.isNaN(d.getTime())) return null;
   const hhmm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
 
   const m = message.metrics;
@@ -603,8 +610,11 @@ function MessageBlock({
   onReportWiki,
   currentUser,
   fileUrl,
+  at,
 }: {
   message: Message;
+  /** The entry's own timestamp — what a message has before it is persisted. */
+  at?: number;
   onOpenCitation?: (c: MessageCitation) => void;
   onRequestAccess?: (w: WithheldSource) => void;
   onReplay?: () => void;
@@ -686,7 +696,7 @@ function MessageBlock({
         >
           <UserAvatar userId={message.author ?? ""} size={20} />
           <span>{message.author ? author.name : "user"}</span>
-          <ReplyStamp message={message} />
+          <ReplyStamp message={message} at={at} />
           {onUndo && (
             <>
               <span style={{ flex: 1 }} />
@@ -744,7 +754,7 @@ function MessageBlock({
             <RcaMark size={14} color="var(--text-dark)" dot="var(--accent)" />
           </span>
           <span>{message.author ?? "Agent"}</span>
-          <ReplyStamp message={message} />
+          <ReplyStamp message={message} at={at} />
           {onReplay && <ReplayButton onReplay={onReplay} />}
           {onReportWiki && <ReportWikiButton onReport={onReportWiki} />}
         </div>

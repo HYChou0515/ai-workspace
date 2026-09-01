@@ -313,7 +313,7 @@ class _GenerationClock:
         return round(total * 1000) if total > 0 else None
 
 
-def _effective_model(model: Any, configured: str) -> str:
+def _effective_model(model: Any, configured: str) -> str | None:
     """The model that actually served, falling back to the configured name.
 
     #748. A single-endpoint turn hands us a `LitellmModel`, which carries its
@@ -327,7 +327,9 @@ def _effective_model(model: Any, configured: str) -> str:
     served = getattr(model, "served_model", None)
     if served:
         return str(served)
-    return str(getattr(model, "model", "") or configured)
+    # "" is neither a model name nor the documented "we don't know", and it is
+    # what an absent `ctx.agent_config` produced. None says the honest thing.
+    return str(getattr(model, "model", "") or configured) or None
 
 
 def _measured_tokens(usage: tuple[int, int] | None) -> tuple[int | None, int | None]:
@@ -922,7 +924,11 @@ def _emit_llm_trace(
     is swallowed to a debug line."""
     try:
         cfg = ctx.agent_config
-        model = _effective_model(getattr(agent, "model", None), cfg.model if cfg else "")
+        # The trace is a log line, not a record: "" would be an empty column, so
+        # say what happened. The RECORD keeps None — see `_effective_model`.
+        model = (
+            _effective_model(getattr(agent, "model", None), cfg.model if cfg else "") or "(unknown)"
+        )
         endpoint = redact_endpoint((cfg.llm_base_url if cfg else "") or runner_base_url)
         tools = [t.name for t in agent.tools if isinstance(t, FunctionTool)]
         ms = agent.model_settings

@@ -180,6 +180,9 @@ def test_the_effective_model_is_the_one_that_served_not_the_one_configured():
     assert _effective_model(_Chain(), "primary") == "backup"  # served wins
     assert _effective_model(_Plain(), "primary") == "qwen3:14b"  # single endpoint
     assert _effective_model(None, "primary") == "primary"  # nothing else to go on
+    # "" is neither a name nor the documented absence; an agent-config-less turn
+    # used to persist it.
+    assert _effective_model(None, "") is None
 
     class _NotYet:
         served_model = None
