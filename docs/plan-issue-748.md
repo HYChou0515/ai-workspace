@@ -110,6 +110,41 @@ class MessageMetrics(Struct, frozen=True):
 - tooltip 用原生 `title=`,聊天區既有做法(`AgentEntryView` 的 replay / undo 都是),不引入新元件。
 - ⚠️ **tooltip 在觸控裝置上等於不存在。** 桌面優先是知情的取捨;真要支援觸控,model 得改成外層灰字,那會和「別太明顯」衝突,屆時要重新拍板。
 
+### 2.8 顯示與記錄不能共用同一個數字
+
+實作 2.1 時才發現:`_final_tokens` 有**兩個消費者**。
+
+1. `AgentMetrics(phase="final")` 事件 —— 使用者眼睛看的那一行;
+2. `turns.py` 直接拿同一組數字組出 `MessageMetrics` 存進資料庫。
+
+所以「沒量到就存 None」**不能靠拿掉 fallback 來達成**。既有測試
+`test_final_tokens_prefers_exact_but_falls_back_when_zero_or_absent` 釘住的是真的需求:
+拿掉之後畫面會翻成 `↑0 ↓0`,看起來像壞了。它保護的是**顯示**,而 2.1 要求的是**記錄** ——
+兩件事,不是同一件。
+
+**做法:給記錄一條自己的路。**
+
+```python
+class AgentMetrics:
+    phase: Literal["up", "down", "final"]
+    prompt_tokens: int = 0            # 顯示用,維持現狀(up/down 是估計,final 是混合)
+    completion_tokens: int = 0        # 顯示用
+    elapsed_ms: int = 0
+    measured_prompt_tokens: int | None = None      # 新增:provider 的真值,沒有就是 None
+    measured_completion_tokens: int | None = None  # 新增
+    generation_ms: int | None = None               # 新增(2.2 的分母)
+    model: str | None = None                       # 新增(2.3)
+```
+
+- 顯示欄位**一個字都不動** —— live 那行的行為完全不變,既有測試繼續綠。
+- `turns.py` 只把 `measured_*` 寫進 `MessageMetrics`。provider 沒說就是 `None`,
+  而不是一個看起來像數字的東西。
+- 畫面日後想標「約 500」,資料已經在同一個事件裡,不必再開一條路。
+
+**而且 `turns.py` 只在 `phase == "final"` 時才寫記錄。** 現在的程式碼對**每一個**
+`AgentMetrics`(含 `down`)都覆寫一次 —— 靠「final 剛好最後到」才對。那是巧合不是設計,
+而 `measured_*` 在 `up`/`down` 恆為 `None`,依賴巧合會讓記錄在串流過程中反覆被清空。
+
 ### 2.7 邊界:`↑` 不歸這裡管
 
 `phase="up"` 的 `prompt_tokens` 只算使用者那一則訊息的長度,和整個請求差一個數量級 —— 那是 #739 §1.3 的題目,`context_usage` 正在錨定真值。**本 issue 不碰 ↑**,只處理 ↓、tok/s、model、時間。
@@ -122,10 +157,13 @@ class MessageMetrics(Struct, frozen=True):
 
 | Phase | 內容 | 狀態 |
 |---|---|---|
-| **P1** | `MessageMetrics` 加 `model` / `generation_ms`、tokens 放寬為可空;`_final_tokens` 不再編造估計值 | ⬜ |
-| **P2** | 在 runner 累計生成時間(首 token → 末 token,跨往返累加) | ⬜ |
-| **P3** | `FallbackModel` 記下實際服務的 endpoint;runner 讀它(順帶修好 #69 trace 的謊報) | ⬜ |
-| **P4** | `AgentMetrics` 事件帶 model + generation_ms;FE 鏡像、reducer、tok/s 換分母、每個階段都顯示 | ⬜ |
+| **P1** | 記錄不再說謊:`MessageMetrics` 欄位放寬 + 事件加 `measured_*` + `turns.py` 只在 `final` 寫真值(§2.8) | ⬜ |
+| **P2** | 生成時間:runner 累計首 token → 末 token 跨往返,事件加 `generation_ms` | ⬜ |
+| **P3** | model:`FallbackModel` 記下實際服務的 endpoint,事件加 `model`(順帶修好 #69 trace 的謊報) | ⬜ |
+| **P4** | 前端:`events.ts` 鏡像、tok/s 換分母、thinking / tool 期間都顯示那一行 | ⬜ |
 | **P5** | 聊天訊息的時間小字 + tooltip(app chat 與 KB chat 共用) | ⬜ |
+
+每個 phase 都讓事件的新欄位和它的生產者同時落地 —— 先加一個永遠是 `None` 的欄位,
+等於在 schema 裡放一個沒人填的洞,而它會被誤讀成「這個 provider 沒回報」。
 
 每個 phase 一個 commit,走 red-green-refactor。
