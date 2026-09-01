@@ -25,8 +25,28 @@ class MessageMetrics(Struct, frozen=True):
     `FailoverSwitch` event's job, not this field's. None for messages written
     before the field existed."""
 
-    prompt_tokens: int | None = None
-    completion_tokens: int | None = None
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    """What to STEER by. Approximate when the provider stayed quiet — the turn
+    substitutes its own estimate — so never read these as a measurement; `exact`
+    says which they are.
+
+    #739's context gauge anchors on `prompt_tokens > 0` and deliberately prefers
+    an estimate to no anchor: without one it falls back to a messages-only figure
+    that cannot see the system prompt, the tool schemas or the skills index, which
+    its own measurements put 5,800 tokens off on a 32k thread and which stopped
+    compaction firing on a full window. #748 made these nullable and removed that
+    anchor on every endpoint not vouched for — i.e. by default."""
+
+    measured_prompt_tokens: int | None = None
+    measured_completion_tokens: int | None = None
+    """What was MEASURED. The provider's own counts, `None` where it gave none —
+    never an estimate standing in for one.
+
+    Two consumers with opposite requirements: a gauge wants a number even if
+    approximate, a record must not carry a figure nobody can tell apart from a
+    measurement. §2.8 split them on the event and then collapsed them again
+    here, which is what broke the gauge."""
     elapsed_ms: int = 0
     """Wall clock for the whole turn — what the UI's "· 12.3s" shows. NOT the
     denominator for tok/s: see `generation_ms`. Keeping both in one field is the

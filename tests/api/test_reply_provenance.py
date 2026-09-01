@@ -40,8 +40,8 @@ def test_the_record_keeps_no_number_when_the_provider_reported_none():
 
     m = r.produced[-1].metrics
     assert m is not None
-    assert m.prompt_tokens is None
-    assert m.completion_tokens is None
+    assert m.measured_prompt_tokens is None
+    assert m.measured_completion_tokens is None
     assert m.elapsed_ms == 3400  # the wall clock was measured, so it is kept
 
 
@@ -59,7 +59,7 @@ def test_the_record_keeps_the_providers_own_numbers_when_it_did_report():
 
     m = r.produced[-1].metrics
     assert m is not None
-    assert (m.prompt_tokens, m.completion_tokens) == (8412, 356)
+    assert (m.measured_prompt_tokens, m.measured_completion_tokens) == (8412, 356)
 
 
 def test_a_mid_stream_tick_does_not_overwrite_the_record():
@@ -80,7 +80,7 @@ def test_a_mid_stream_tick_does_not_overwrite_the_record():
 
     m = r.produced[-1].metrics
     assert m is not None
-    assert (m.prompt_tokens, m.completion_tokens) == (8412, 356)
+    assert (m.measured_prompt_tokens, m.measured_completion_tokens) == (8412, 356)
 
 
 def test_a_reported_zero_is_not_a_measurement():
@@ -252,7 +252,7 @@ def test_a_turn_that_never_reaches_final_still_records_what_it_measured():
     assert m.elapsed_ms == 42_000
     assert m.generation_ms == 1_200
     # Still no invented counts: a `down` tick carries no measurement.
-    assert (m.prompt_tokens, m.completion_tokens) == (None, None)
+    assert (m.measured_prompt_tokens, m.measured_completion_tokens) == (None, None)
 
 
 def test_a_later_tick_never_erases_a_measurement_already_recorded():
@@ -270,7 +270,7 @@ def test_a_later_tick_never_erases_a_measurement_already_recorded():
 
     m = r.produced[-1].metrics
     assert m is not None
-    assert (m.prompt_tokens, m.completion_tokens) == (8412, 356)
+    assert (m.measured_prompt_tokens, m.measured_completion_tokens) == (8412, 356)
     assert m.elapsed_ms == 3600  # the newer clock reading is still taken
 
 
@@ -635,3 +635,42 @@ def test_the_derived_exactness_flag_agrees_with_the_rule_it_replaces():
         theirs = bool(usage and usage[0])  # #739's rule, verbatim
         mine = _measured_tokens(usage)[0] is not None
         assert mine is theirs, usage
+
+
+def test_the_gauge_keeps_a_number_while_the_record_keeps_the_truth():
+    """§2.8 split display from record on the EVENT and then collapsed them again
+    in the persisted struct — which broke #739.
+
+    #739's context gauge anchors on `prompt_tokens > 0` and uses `exact` to know
+    whether that number was measured; it deliberately prefers an estimate to no
+    anchor, because the fallback (messages-only) is worse: its own measurements
+    put it 5,800 tokens off on a 32k thread and stopped compaction firing on a
+    full window. Making the field nullable removed the anchor on every endpoint
+    that has not been vouched for — which is the default.
+
+    So the record carries both: the estimate to steer by, and the measurement
+    (or None) to be believed.
+    """
+    r = _answered(
+        AgentMetrics(phase="final", prompt_tokens=9_000, completion_tokens=400, elapsed_ms=3400)
+    )
+    m = r.produced[-1].metrics
+    assert m is not None
+    assert m.prompt_tokens == 9_000  # the gauge still has something to anchor on
+    assert m.measured_prompt_tokens is None  # and the record still says nothing
+    assert m.exact is False
+
+    r2 = _answered(
+        AgentMetrics(
+            phase="final",
+            prompt_tokens=9_000,
+            completion_tokens=400,
+            elapsed_ms=3400,
+            measured_prompt_tokens=8_412,
+            measured_completion_tokens=356,
+        )
+    )
+    m2 = r2.produced[-1].metrics
+    assert m2 is not None
+    assert (m2.measured_prompt_tokens, m2.measured_completion_tokens) == (8_412, 356)
+    assert m2.exact is True

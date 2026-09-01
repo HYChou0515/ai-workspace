@@ -415,11 +415,14 @@ function ReplyStamp({ message, at: entryAt }: { message: Message; at?: number })
   const lines: string[] = [d.toLocaleString([], { hour12: false })];
   if (m?.model) lines.push(m.model);
   const counts: string[] = [];
-  if (m?.prompt_tokens != null) counts.push(`↑ ${m.prompt_tokens}`);
-  if (m?.completion_tokens != null) counts.push(`↓ ${m.completion_tokens}`);
+  // The MEASURED pair, not the steer-by one: a tooltip that says "↑ 8412" is
+  // read as a fact, and the plain fields are an estimate whenever the provider
+  // stayed quiet.
+  if (m?.measured_prompt_tokens != null) counts.push(`↑ ${m.measured_prompt_tokens}`);
+  if (m?.measured_completion_tokens != null) counts.push(`↓ ${m.measured_completion_tokens}`);
   if (counts.length > 0) lines.push(`${counts.join(" · ")} tok`);
-  if (m?.completion_tokens != null && m.generation_ms != null && m.generation_ms > 0) {
-    lines.push(`${Math.round(m.completion_tokens / (m.generation_ms / 1000))} tok/s`);
+  if (m?.measured_completion_tokens != null && m.generation_ms != null && m.generation_ms > 0) {
+    lines.push(`${Math.round(m.measured_completion_tokens / (m.generation_ms / 1000))} tok/s`);
   }
 
   return (

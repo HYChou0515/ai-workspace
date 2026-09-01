@@ -118,10 +118,15 @@ def test_send_message_persists_final_token_metrics():
     # missing; that is exactly what happened, and this pins it.
     assert answer["metrics"] == {
         "model": "ollama_chat/qwen3:14b",
-        "prompt_tokens": 42,  # the provider's, not the display estimate of 40
-        "completion_tokens": 7,
+        # Steer-by: the display figure, always present, possibly an estimate.
+        "prompt_tokens": 40,
+        "completion_tokens": 6,
+        # Believe-me: the provider's own counts, or null.
+        "measured_prompt_tokens": 42,
+        "measured_completion_tokens": 7,
         "elapsed_ms": 1234,
         "generation_ms": 500,
+        "exact": True,
     }
 
 

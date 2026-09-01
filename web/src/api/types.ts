@@ -67,8 +67,13 @@ export type Message = {
    * MessageMetrics. */
   metrics?: {
     model?: string | null;
+    /** What to steer by — approximate when the provider stayed quiet. */
     prompt_tokens?: number | null;
     completion_tokens?: number | null;
+    /** What was measured. null where the provider gave nothing — never an
+     * estimate standing in for one. This is what the tooltip shows. */
+    measured_prompt_tokens?: number | null;
+    measured_completion_tokens?: number | null;
     elapsed_ms?: number | null;
     generation_ms?: number | null;
   } | null;

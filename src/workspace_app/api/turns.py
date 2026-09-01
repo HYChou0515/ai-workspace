@@ -420,15 +420,20 @@ class _TurnReducer:
                     # actually measured.
                     prev = msg.metrics
                     msg.metrics = MessageMetrics(
-                        prompt_tokens=(
+                        # Steer-by: the event's display figure, which is always
+                        # present. Believe-me: the measured pair, or None.
+                        prompt_tokens=item.prompt_tokens or (prev.prompt_tokens if prev else 0),
+                        completion_tokens=item.completion_tokens
+                        or (prev.completion_tokens if prev else 0),
+                        measured_prompt_tokens=(
                             item.measured_prompt_tokens
                             if item.measured_prompt_tokens is not None
-                            else (prev.prompt_tokens if prev else None)
+                            else (prev.measured_prompt_tokens if prev else None)
                         ),
-                        completion_tokens=(
+                        measured_completion_tokens=(
                             item.measured_completion_tokens
                             if item.measured_completion_tokens is not None
-                            else (prev.completion_tokens if prev else None)
+                            else (prev.measured_completion_tokens if prev else None)
                         ),
                         # `up` is excluded above because it carries elapsed_ms=0
                         # by construction — it announces an attempt rather than

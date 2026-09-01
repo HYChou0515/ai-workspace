@@ -1061,6 +1061,9 @@ def _message_dict(m: KbMessage) -> dict:
                 "model": m.metrics.model,
                 "prompt_tokens": m.metrics.prompt_tokens,
                 "completion_tokens": m.metrics.completion_tokens,
+                "measured_prompt_tokens": m.metrics.measured_prompt_tokens,
+                "measured_completion_tokens": m.metrics.measured_completion_tokens,
+                "exact": m.metrics.exact,
                 "elapsed_ms": m.metrics.elapsed_ms,
                 "generation_ms": m.metrics.generation_ms,
             }

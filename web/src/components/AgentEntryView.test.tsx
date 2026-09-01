@@ -967,8 +967,12 @@ describe("reply provenance (#748)", () => {
         created_at: Date.UTC(2026, 8, 1, 6, 32, 7),
         metrics: {
           model: "qwen3:14b",
-          prompt_tokens: 8412,
-          completion_tokens: 356,
+          // The steer-by pair is an estimate whenever the provider stayed quiet;
+          // deliberately different here so a tooltip showing THESE fails.
+          prompt_tokens: 7282,
+          completion_tokens: 80,
+          measured_prompt_tokens: 8412,
+          measured_completion_tokens: 356,
           elapsed_ms: 61_000,
           generation_ms: 5_000,
         },
@@ -991,6 +995,7 @@ describe("reply provenance (#748)", () => {
     expect(tip).toContain("qwen3:14b");
     expect(tip).toContain("8412");
     expect(tip).toContain("356");
+    expect(tip).not.toContain("7282"); // the estimate must not be shown as a count
     expect(tip).toContain("71 tok/s"); // 356 tokens / 5s of generation, not / 61s
     expect(tip).toMatch(/:07/); // the precise second lives here
     // "別太明顯": nothing but the time is readable without hovering.
