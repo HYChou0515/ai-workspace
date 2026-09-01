@@ -583,3 +583,36 @@ def test_a_role_cannot_vouch_for_an_endpoint_the_preset_did_not(tmp_path):
     )
     with pytest.raises(ValueError, match="reports_usage"):
         load_with_provenance(config_path=path)
+
+
+def test_the_declaration_reaches_the_app_chat_turn():
+    """App chat is the main surface and its wiring was the one nobody asserted.
+
+    A mutation probe deleting `reports_usage=preset.reports_usage` from
+    `AppCatalog.resolve` left the whole suite green — the same dead-knob shape
+    as P14, one file over. The loader and `resolve_usage` (the KB half) had
+    tests; the half most turns go through did not.
+    """
+    from workspace_app.apps.catalog import AppCatalog
+    from workspace_app.config.schema import Preset
+
+    prompt = "pkg:workspace_app.kb.prompts/system.md"
+    catalog = AppCatalog(
+        presets={"qwen3-local": Preset(model="openai/x", prompt_file=prompt, reports_usage=True)}
+    )
+    cfg = catalog.resolve(app_slug="playground", profile="default")
+    assert cfg.reports_usage is True
+
+    plain = AppCatalog(presets={"qwen3-local": Preset(model="openai/y", prompt_file=prompt)})
+    assert plain.resolve(app_slug="playground", profile="default").reports_usage is False
+
+
+def test_a_bundled_preset_carries_the_declaration_too():
+    """`_preset_from_dict` builds the presets shipped in the package. Nothing
+    declares it today, so the line is defence — and defence with no test is the
+    thing that rots first."""
+    from workspace_app.config.schema import _preset_from_dict
+
+    p = _preset_from_dict({"model": "openai/x", "reports_usage": True})
+    assert p.reports_usage is True
+    assert _preset_from_dict({"model": "openai/x"}).reports_usage is False
