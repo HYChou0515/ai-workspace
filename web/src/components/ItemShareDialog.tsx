@@ -19,7 +19,9 @@ import {
 } from "../lib/itemPermission";
 import { pxToRem } from "../lib/pxToRem";
 import { Icon } from "./Icon";
+import { ModalActions } from "./ModalActions";
 import { ModalShell } from "./ModalShell";
+import { ShareTabs } from "./ShareTabs";
 import { UserChip } from "./UserChip";
 import { GroupPicker } from "./GroupPicker";
 import { UserPicker } from "./UserPicker";
@@ -57,6 +59,20 @@ export function ItemShareDialog({
   const [groupGrants, setGroupGrants] = useState<ItemGroupGrant[]>(() =>
     itemGroupGrantsFromPermission(value),
   );
+
+  // People and Groups are tabs, not stacked sections: one panel holding both
+  // pickers and both lists spends more height than a laptop has, and it was the
+  // Groups half that got pushed out of sight. Without groups to grant there is
+  // nothing to switch between, so the strip stays hidden and People just shows.
+  const [tab, setTab] = useState<"people" | "groups">(() =>
+    itemGrantsFromPermission(value, owner).length === 0 &&
+    itemGroupGrantsFromPermission(value).length > 0
+      ? "groups"
+      : "people",
+  );
+  const hasGroups = pickableGroups.length > 0;
+  const showPeople = !hasGroups || tab === "people";
+  const showGroups = hasGroups && tab === "groups";
 
   const next = () => itemPermissionFromGrants(visibility, grants, value, groupGrants);
   // Unresolvable (deleted / not visible) → "Unknown group", still removable (#608).
@@ -130,8 +146,36 @@ export function ItemShareDialog({
       </fieldset>
 
       {visibility === "restricted" && (
-        <div style={{ display: "grid", gap: 8, minHeight: 0 }}>
-          <div style={{ maxHeight: "26vh", overflow: "auto" }}>
+        // flexShrink 0, NOT minHeight 0: the panel is a flex column with a
+        // max-height, so a shrinkable child is compressed instead of the panel
+        // scrolling — and the compression lands on whichever child is a scroll
+        // container (the picker), never on the grant list that caused it. Held
+        // at its natural height, the overflow reaches ModalShell's own
+        // `overflowY: auto`, which is where it was always meant to go.
+        <div data-testid="item-share-grants" style={{ display: "grid", gap: 8, flexShrink: 0 }}>
+          {hasGroups && (
+            <ShareTabs
+              value={tab}
+              onChange={(id) => setTab(id as "people" | "groups")}
+              tabs={[
+                { id: "people", label: "People", count: grants.length },
+                { id: "groups", label: "Groups", count: groupGrants.length },
+              ]}
+            />
+          )}
+
+          {showPeople && (
+          <div
+            data-testid="item-share-people"
+            role={hasGroups ? "tabpanel" : undefined}
+            id="share-panel-people"
+            aria-labelledby={hasGroups ? "share-tab-people" : undefined}
+            style={{ display: "grid", gap: 8 }}
+          >
+          {/* No scroll box here: UserPicker caps and scrolls its own result
+              list, so a second scrollable layer only ever scrolls the search
+              input itself out of view when you click someone far down. */}
+          <div data-testid="item-people-picker">
             <UserPicker
               selected={grants.map((g) => g.userId)}
               exclude={[owner]}
@@ -140,7 +184,10 @@ export function ItemShareDialog({
             />
           </div>
           {grants.length > 0 && (
-            <ul data-testid="item-grant-list" style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 6 }}>
+            // Capped + scrollable so the tenth person cannot push the picker,
+            // the group section and the buttons off the panel: the list grows
+            // inside its own box, everything around it stays where it was.
+            <ul data-testid="item-grant-list" style={{ ...grantList, gap: 6 }}>
               {grants.map((g) => {
                 const custom = g.verbs.size > 0;
                 return (
@@ -194,25 +241,29 @@ export function ItemShareDialog({
             </ul>
           )}
 
-          {pickableGroups.length > 0 && (
-            <div style={{ display: "grid", gap: 6 }}>
-              <span className="caps" id="item-group-picker-label">
-                Groups
-              </span>
-              <div data-testid="item-group-select" style={{ maxHeight: "26vh", overflow: "auto" }}>
+          </div>
+          )}
+
+          {showGroups && (
+            <div
+              data-testid="item-share-groups"
+              role="tabpanel"
+              id="share-panel-groups"
+              aria-labelledby="share-tab-groups"
+              style={{ display: "grid", gap: 6 }}
+            >
+              {/* No heading: the tab above already says Groups, and the picker
+                  names itself from its placeholder. */}
+              <div data-testid="item-group-select">
                 <GroupPicker
                   groups={pickableGroups}
                   exclude={groupGrants.map((x) => x.groupId)}
                   onPick={addGroup}
                   placeholder="Add a group…"
-                  labelledBy="item-group-picker-label"
                 />
               </div>
               {groupGrants.length > 0 && (
-                <ul
-                  data-testid="item-group-list"
-                  style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 4 }}
-                >
+                <ul data-testid="item-group-list" style={{ ...grantList, gap: 4 }}>
                   {groupGrants.map((g) => (
                     <li key={g.groupId} style={{ display: "grid", gap: 2 }}>
                       <div style={grantRow}>
@@ -267,7 +318,7 @@ export function ItemShareDialog({
         </p>
       )}
 
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 2 }}>
+      <ModalActions>
         <button type="button" data-testid="item-share-cancel" onClick={onClose} className="btn" data-variant="secondary" data-size="sm">
           Cancel
         </button>
@@ -282,7 +333,7 @@ export function ItemShareDialog({
         >
           Save
         </button>
-      </div>
+      </ModalActions>
     </ModalShell>
   );
 }
@@ -299,6 +350,14 @@ const caption: React.CSSProperties = { margin: 0, fontSize: pxToRem(12), color: 
 const errorText: React.CSSProperties = { margin: 0, fontSize: pxToRem(12), color: "var(--err)", lineHeight: 1.5 };
 const radioRow: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8 };
 const grantRow: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8 };
+const grantList: React.CSSProperties = {
+  listStyle: "none",
+  margin: 0,
+  padding: 0,
+  display: "grid",
+  maxHeight: "30vh",
+  overflow: "auto",
+};
 const roleHint: React.CSSProperties = {
   paddingLeft: 2,
   fontSize: pxToRem(11),

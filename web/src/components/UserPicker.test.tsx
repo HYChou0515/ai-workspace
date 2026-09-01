@@ -78,3 +78,15 @@ describe("UserPicker — search by id and name", () => {
     expect(screen.getByText(/no matches/i)).toBeInTheDocument();
   });
 });
+
+/* The result list is what makes the picker tall, and the share dialogs stack a
+ * people picker, a grant list, a group picker and a group list in one panel. A
+ * flat 240px list is most of a short screen's budget, which is what pushed the
+ * Groups section below the fold. Cap it against the viewport too. */
+describe("UserPicker list height", () => {
+  it("caps its result list against the viewport, not at a flat pixel height", () => {
+    render(<UserPicker selected={[]} onToggle={() => {}} />);
+    const list = screen.getByRole("list");
+    expect(list.style.maxHeight).toContain("vh");
+  });
+});

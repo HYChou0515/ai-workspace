@@ -56,7 +56,12 @@ export function UserPicker({
         onChange={(e) => setQ(e.target.value)}
         style={{ width: "100%", marginBottom: 6 }}
       />
-      <ul style={{ listStyle: "none", margin: 0, padding: 0, maxHeight: 240, overflowY: "auto" }}>
+      {/* The list is what makes this component tall, and a share dialog stacks
+          two pickers and two grant lists in one panel. 240px is fine on a tall
+          screen and most of the budget on a laptop, so cap it against the
+          viewport as well — the search box above stays outside this scroll
+          area, so it can never be scrolled out of reach. */}
+      <ul style={{ listStyle: "none", margin: 0, padding: 0, maxHeight: "min(240px, 22vh)", overflowY: "auto" }}>
         {shown.map((u) => (
           <li key={u.id}>
             <button

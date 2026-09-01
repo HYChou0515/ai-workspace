@@ -18,7 +18,9 @@ import {
 } from "../lib/permission";
 import { pxToRem } from "../lib/pxToRem";
 import { Icon } from "./Icon";
+import { ModalActions } from "./ModalActions";
 import { ModalShell } from "./ModalShell";
+import { ShareTabs } from "./ShareTabs";
 import { UserChip } from "./UserChip";
 import { GroupPicker } from "./GroupPicker";
 import { UserPicker } from "./UserPicker";
@@ -62,6 +64,18 @@ export function PermissionDialog({
     groupGrantsFromPermission(value),
   );
   const [advanced, setAdvanced] = useState(false);
+
+  // People / Groups as tabs — see ItemShareDialog: stacked, the Groups half
+  // ends up below the fold. Opens on whichever side already has grants.
+  const [tab, setTab] = useState<"people" | "groups">(() =>
+    grantsFromPermission(value, owner).length === 0 &&
+    groupGrantsFromPermission(value).length > 0
+      ? "groups"
+      : "people",
+  );
+  const hasGroups = pickableGroups.length > 0;
+  const showPeople = !hasGroups || tab === "people";
+  const showGroups = hasGroups && tab === "groups";
 
   const next = () => permissionFromGrants(visibility, grants, value, groupGrants);
   // A grant whose group we can't resolve (deleted, or not visible to us) reads as
@@ -120,8 +134,32 @@ export function PermissionDialog({
         </fieldset>
 
         {visibility === "restricted" && (
-          <div style={{ display: "grid", gap: 8, minHeight: 0 }}>
-            <div style={{ maxHeight: "26vh", overflow: "auto" }}>
+          // flexShrink 0, NOT minHeight 0 — see ItemShareDialog for the whole
+          // story: a shrinkable child lets the flex column compress the picker
+          // instead of letting ModalShell's panel scroll.
+          <div data-testid="permission-grants" style={{ display: "grid", gap: 8, flexShrink: 0 }}>
+            {hasGroups && (
+              <ShareTabs
+                value={tab}
+                onChange={(id) => setTab(id as "people" | "groups")}
+                tabs={[
+                  { id: "people", label: "People", count: grants.length },
+                  { id: "groups", label: "Groups", count: groupGrants.length },
+                ]}
+              />
+            )}
+
+            {showPeople && (
+            <div
+              data-testid="permission-people"
+              role={hasGroups ? "tabpanel" : undefined}
+              id="share-panel-people"
+              aria-labelledby={hasGroups ? "share-tab-people" : undefined}
+              style={{ display: "grid", gap: 8 }}
+            >
+            {/* No scroll box here: UserPicker caps and scrolls its own result
+                list, and a second layer just scrolls the search input away. */}
+            <div data-testid="permission-people-picker">
               <UserPicker
                 selected={grants.map((g) => g.userId)}
                 exclude={[owner]}
@@ -130,7 +168,9 @@ export function PermissionDialog({
               />
             </div>
             {grants.length > 0 && (
-              <ul data-testid="grant-list" style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 4 }}>
+              // Capped + scrollable: the list grows inside its own box, so the
+              // picker, the group section and the buttons stay put.
+              <ul data-testid="grant-list" style={grantList}>
                 {grants.map((g) => (
                   <li key={g.userId} style={{ display: "grid", gap: 2 }}>
                     <div style={grantRow}>
@@ -166,28 +206,28 @@ export function PermissionDialog({
               </ul>
             )}
 
-            {pickableGroups.length > 0 && (
-              <div style={{ display: "grid", gap: 6 }}>
-                <span className="caps" id="group-grant-picker-label">
-                  Groups
-                </span>
-                <div
-                  data-testid="group-grant-select"
-                  style={{ maxHeight: "26vh", overflow: "auto" }}
-                >
+            </div>
+            )}
+
+            {showGroups && (
+              <div
+                data-testid="permission-groups"
+                role="tabpanel"
+                id="share-panel-groups"
+                aria-labelledby="share-tab-groups"
+                style={{ display: "grid", gap: 6 }}
+              >
+                {/* No heading: the tab above already says Groups. */}
+                <div data-testid="group-grant-select">
                   <GroupPicker
                     groups={pickableGroups}
                     exclude={groupGrants.map((x) => x.groupId)}
                     onPick={addGroup}
                     placeholder="Add a group…"
-                    labelledBy="group-grant-picker-label"
                   />
                 </div>
                 {groupGrants.length > 0 && (
-                  <ul
-                    data-testid="group-grant-list"
-                    style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 4 }}
-                  >
+                  <ul data-testid="group-grant-list" style={grantList}>
                     {groupGrants.map((g) => (
                       <li key={g.groupId} style={{ display: "grid", gap: 2 }}>
                         <div style={grantRow}>
@@ -255,7 +295,7 @@ export function PermissionDialog({
           </pre>
         )}
 
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 2 }}>
+        <ModalActions>
           <button
             type="button"
             data-testid="permission-cancel"
@@ -277,7 +317,7 @@ export function PermissionDialog({
           >
             Save
           </button>
-        </div>
+        </ModalActions>
     </ModalShell>
   );
 }
@@ -306,6 +346,15 @@ const caption: React.CSSProperties = {
 const radioRow: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8 };
 
 const grantRow: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8 };
+const grantList: React.CSSProperties = {
+  listStyle: "none",
+  margin: 0,
+  padding: 0,
+  display: "grid",
+  gap: 4,
+  maxHeight: "30vh",
+  overflow: "auto",
+};
 const roleHint: React.CSSProperties = {
   paddingLeft: 2,
   fontSize: pxToRem(11),
