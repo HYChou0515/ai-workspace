@@ -34,7 +34,7 @@ from typing import Any, cast
 from fastapi.responses import StreamingResponse
 
 from ..agent.context import AgentToolContext
-from ..context_budget import estimate_messages
+from ..context_budget import SUMMARY_ROLE, estimate_messages
 from ..failover.core import AllProvidersFailed
 from ..resources.conversation import MessageMetrics
 from ..turn_control import InMemoryTurnControl, ITurnControl
@@ -192,6 +192,14 @@ def history_items(
     Duck-typed on `.role`/`.content`/`.tool_call_id`/`.tool_name`/
     `.tool_args` so RCA `Message` and KB `KbMessage` both fit."""
     msgs = list(messages)
+    # #739: a compaction summary is the new beginning of history. Cut BEFORE the
+    # count and token windows, because those bound what the model is sent and
+    # the span behind the summary is no longer part of that — leaving it in
+    # would make compaction cost the window the very tokens it just reclaimed.
+    for i in range(len(msgs) - 1, -1, -1):
+        if getattr(msgs[i], "role", "") == SUMMARY_ROLE:
+            msgs = msgs[i:]
+            break
     before = len(msgs)
     if max_messages:
         msgs = msgs[-max_messages:]
@@ -228,6 +236,14 @@ def history_items(
             # of turns" only derails a small model).
             if getattr(m, "error_kind", None) == "cancelled":
                 _fold_cancellation_marker(items)
+            continue
+        if m.role == SUMMARY_ROLE:
+            # Replayed as `user`, not `system`: a system item mid-conversation
+            # makes providers reject the call outright (the real system prompt
+            # is prepended separately by the SDK) — the same constraint the
+            # cancellation marker works around (#199).
+            if m.content:
+                items.append({"role": "user", "content": m.content})
             continue
         if m.role == "user" and m.content:
             items.append(

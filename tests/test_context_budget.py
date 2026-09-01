@@ -274,3 +274,23 @@ def test_a_thread_nobody_measured_yet_falls_back_to_the_estimate():
     got = context_usage(msgs, limit=ContextLimit(tokens=40_960, source="catalog"))
     assert got.measured is False
     assert got.used == estimate_messages(msgs)
+
+
+def test_a_compacted_thread_stops_counting_what_it_compacted_away():
+    """#739: after compaction the model is sent the summary and what followed
+    it, so that is what the window holds. Keeping the old anchor would leave the
+    gauge pinned at its pre-compaction figure — the user presses compact, the
+    bar does not move, and the feature reads as broken.
+
+    The measurement is also genuinely gone: the last reported `prompt_tokens`
+    counted a request that included the span just replaced, so it is no longer
+    an answer to "how full is the window". `measured` says so."""
+    msgs = [
+        _Msg("很久以前", role="user"),
+        _Msg("回答", role="assistant", metrics=_Metrics(30_000, completion_tokens=400)),
+        _Msg("先前:要修 X,試過 Y。", role="summary"),
+        _Msg("接下來呢", role="user"),
+    ]
+    got = context_usage(msgs, limit=ContextLimit(tokens=40_960, source="catalog"))
+    assert got.measured is False
+    assert got.used == estimate_messages([_Msg("先前:要修 X,試過 Y。"), _Msg("接下來呢")])

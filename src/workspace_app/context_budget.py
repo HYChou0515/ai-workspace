@@ -227,6 +227,13 @@ def history_budget(
     return max(0, usable - max(0, overhead_tokens) - max(0, reply_reserve))
 
 
+#: Role of a compaction summary (#739). Defined here, not in `api.turns`, so the
+#: arithmetic and the replay agree by construction: this module is imported BY
+#: the API and must never import back from it, and a role string spelled in two
+#: places is a rule that will hold in one of them.
+SUMMARY_ROLE = "summary"
+
+
 # ── what the thread is actually costing (#739 P1) ────────────────────
 
 
@@ -282,6 +289,16 @@ def context_usage(messages: Any, *, limit: ContextLimit) -> ContextUsage:
     is input only, so the reply was not in the window it measured but will be in
     the next one."""
     msgs = list(messages)
+    # #739: a summary is the new beginning of the thread. Everything behind it
+    # was replaced by the précis, so it no longer occupies the window — and the
+    # last reported `prompt_tokens` counted a request that still contained it,
+    # which makes that measurement an answer to a question no longer being
+    # asked. Dropping the anchor is the honest outcome: the figure goes back to
+    # an estimate, and `measured` says so, until the next turn reports a real one.
+    for i in range(len(msgs) - 1, -1, -1):
+        if getattr(msgs[i], "role", "") == SUMMARY_ROLE:
+            msgs = msgs[i:]
+            break
     for i in range(len(msgs) - 1, -1, -1):
         metrics = getattr(msgs[i], "metrics", None)
         reported = getattr(metrics, "prompt_tokens", 0) or 0
