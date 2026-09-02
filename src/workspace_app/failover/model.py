@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any, cast
 from agents.models.interface import Model
 
 from .core import AllProvidersFailed, TtftTimeout
+from .rate_limit import is_rate_limited, rate_limit_wait_s
 
 logger = logging.getLogger(__name__)
 
@@ -88,10 +89,47 @@ class FallbackModel(Model):
             await self._sleep(wait)
         return True
 
+    async def _hold_for_rate_limit(
+        self, endpoint: LlmEndpoint, exc: BaseException, held: int, deadline: float
+    ) -> bool:
+        """A 429 is the one failure cured by WAITING at the same endpoint
+        (#742) — the endpoint is healthy and told us to slow down, so neither
+        the quick-retry budget nor the failure cooldown applies to it.
+
+        ``True`` → the stated window (or the doubling backoff, when it stated
+        none) fits in the chain's remaining deadline and has been slept;
+        the caller retries the SAME endpoint. ``False`` → it does not fit;
+        the endpoint is parked for the window IT stated — not the failure
+        cooldown — so every caller sharing the registry honours the same
+        window, and the chain moves on to the next endpoint instead of
+        sleeping past its own budget."""
+        wait = rate_limit_wait_s(exc, attempt=held)
+        if self._registry.now() + wait > deadline:
+            self._registry.mark(endpoint.cooldown_key, wait)
+            logger.warning(
+                "failover-model: endpoint %s rate-limited for %.1fs — past the chain "
+                "deadline, parking it for that window and switching",
+                endpoint.model,
+                wait,
+            )
+            if self._on_switch is not None:
+                self._on_switch(endpoint.model, exc)
+            return False
+        logger.warning(
+            "failover-model: endpoint %s rate-limited (hold %d) — waiting %.1fs before "
+            "retrying the same endpoint",
+            endpoint.model,
+            held,
+            wait,
+        )
+        await self._sleep(wait)
+        return True
+
     async def get_response(self, *args: Any, **kwargs: Any) -> Any:
         keys = [e.cooldown_key for e in self._endpoints]
         deadline = self._registry.now() + self._total_deadline_s
         last: BaseException | None = None
+        rate_limited: BaseException | None = None
         for round_idx in range(len(self._round_backoff_s) + 1):
             if round_idx > 0 and not await self._wait_before_round(
                 self._round_backoff_s[round_idx - 1], keys, deadline
@@ -101,28 +139,46 @@ class FallbackModel(Model):
                 if self._registry.is_cooling(endpoint.cooldown_key):
                     continue
                 logger.debug("failover-model: trying endpoint %s (get_response)", endpoint.model)
-                for attempt in range(endpoint.num_retries + 1):
+                attempt = 0
+                held = 0
+                while True:
                     try:
                         response = await self._make_model(endpoint).get_response(*args, **kwargs)
                         self.served_model = endpoint.model
                         return response
                     except Exception as exc:  # noqa: BLE001 — any error retries/switches
                         last = exc
-                        if attempt == endpoint.num_retries:
-                            # retries exhausted → park it; the loop ends naturally
-                            # and the next endpoint is tried.
+                        if is_rate_limited(exc):
+                            # Held out of the quick-retry budget: that budget is
+                            # for a broken endpoint, and this one is healthy.
+                            rate_limited = exc
+                            held += 1
+                            if await self._hold_for_rate_limit(endpoint, exc, held, deadline):
+                                continue
+                            break  # parked for its stated window → next endpoint
+                        attempt += 1
+                        if attempt > endpoint.num_retries:
+                            # retries exhausted → park it and try the next endpoint.
                             self._degrade(endpoint, exc)
+                            break
                         # else: a quick same-endpoint retry
         logger.warning(
             "failover-model: all endpoints failed or cooling (get_response) — last %r",
             last,
         )
-        raise AllProvidersFailed("all agent models failed or were cooling") from last
+        # Chain from the 429 when one was seen: the turn loop upstream tells
+        # "rate limited" (wait, own budget, own message) from "broken" (retry
+        # hints) by walking exactly this cause chain, and the LAST failure is
+        # often the least informative one — a dead spare, not the throttle.
+        raise AllProvidersFailed("all agent models failed or were cooling") from (
+            rate_limited or last
+        )
 
     async def stream_response(self, *args: Any, **kwargs: Any) -> AsyncIterator[Any]:
         keys = [e.cooldown_key for e in self._endpoints]
         deadline = self._registry.now() + self._total_deadline_s
         last: BaseException | None = None
+        rate_limited: BaseException | None = None
         for round_idx in range(len(self._round_backoff_s) + 1):
             if round_idx > 0 and not await self._wait_before_round(
                 self._round_backoff_s[round_idx - 1], keys, deadline
@@ -132,7 +188,9 @@ class FallbackModel(Model):
                 if self._registry.is_cooling(endpoint.cooldown_key):
                     continue
                 logger.debug("failover-model: trying endpoint %s (stream_response)", endpoint.model)
-                for attempt in range(endpoint.num_retries + 1):
+                attempt = 0
+                held = 0
+                while True:
                     stream = self._make_model(endpoint).stream_response(*args, **kwargs)
                     it = stream.__aiter__()
                     try:
@@ -148,10 +206,19 @@ class FallbackModel(Model):
                         # it's an async generator — close it so the abandoned inner
                         # stream is torn down rather than left suspended.
                         await cast("AsyncGenerator[Any]", stream).aclose()
-                        if attempt == endpoint.num_retries:
-                            # retries exhausted → park it; the loop ends naturally
-                            # and the next endpoint is tried.
+                        if is_rate_limited(cause):
+                            # Pre-first only, so waiting is safe — nothing the
+                            # user saw would be clobbered by the re-send.
+                            rate_limited = cause
+                            held += 1
+                            if await self._hold_for_rate_limit(endpoint, cause, held, deadline):
+                                continue
+                            break  # parked for its stated window → next endpoint
+                        attempt += 1
+                        if attempt > endpoint.num_retries:
+                            # retries exhausted → park it and try the next endpoint.
                             self._degrade(endpoint, cause)
+                            break
                         # else: a quick same-endpoint retry (pre-first only)
                     else:
                         # The first event is the proof this endpoint answered —
@@ -171,4 +238,8 @@ class FallbackModel(Model):
             "failover-model: all endpoints failed or cooling (stream_response) — last %r",
             last,
         )
-        raise AllProvidersFailed("all agent models failed or were cooling") from last
+        # Same cause preference as get_response: surface the 429 when one was
+        # seen, so the turn loop can wait it out instead of "giving up".
+        raise AllProvidersFailed("all agent models failed or were cooling") from (
+            rate_limited or last
+        )
