@@ -563,25 +563,28 @@ async def test_429_without_retry_after_backs_off_doubling():
 
 
 async def test_a_zero_retry_after_does_not_spin():
-    """ "Retry-After: 0" honestly means "now" — but a provider that keeps saying
-    it while still refusing would spin the hold loop at wire speed, with no time
-    ever passing to spend the deadline. Repeated zero windows fall back to the
-    doubling backoff instead."""
+    """A stated 0 (or any window under the backoff floor) never spins the hold
+    loop: `rate_limit_wait_s` floors every wait at the doubling backoff, because
+    a time budget never spends against zero-length waits and re-sending at wire
+    speed is the cadence that earned the throttle. Oversleeping is harmless —
+    Retry-After is a floor, not an exact figure."""
     clock = _Clock()
     reg = CooldownRegistry(clock=clock)
     slept, sleep = _held_sleep(clock)
-    flaky = _FlakyModel([_429("0"), _429("0")], response="ok")
+    flaky = _FlakyModel([_429("0"), _429("0.001")], response="ok")
     m = FallbackModel([_ep("primary")], reg, make_model=lambda e: flaky, sleep=sleep)
 
     assert await m.get_response() == "ok"
     assert slept == [1.0, 2.0]
 
 
-async def test_a_window_past_the_deadline_parks_the_stated_window_and_moves_on():
-    """When the stated wait cannot fit in the chain's remaining deadline, the
-    endpoint is parked for THE WINDOW IT STATED — not the fixed cooldown — so
-    every other caller sharing the registry honours it, and the chain tries the
-    next endpoint instead of sleeping past its own budget."""
+async def test_a_window_past_the_hold_budget_parks_the_stated_window_and_moves_on():
+    """Holds are bounded by TIME — `rate_limit_budget_s`, two hours by default,
+    per the operator's call: hitting a rate limit means the user hit a rate
+    limit, and waiting is the honest behaviour. A wait that cannot fit what is
+    left of that budget parks the endpoint for THE WINDOW IT STATED — not the
+    fixed cooldown — so every caller sharing the registry honours it, and the
+    chain tries the next endpoint instead of sleeping past the budget."""
     clock = _Clock()
     reg = CooldownRegistry(clock=clock)
     slept, sleep = _held_sleep(clock)
@@ -590,9 +593,10 @@ async def test_a_window_past_the_deadline_parks_the_stated_window_and_moves_on()
         "backup": _FakeModel(response="ok"),
     }
     m = FallbackModel(
-        [_ep("limited", total_deadline_s=10.0), _ep("backup")],
+        [_ep("limited"), _ep("backup")],
         reg,
         make_model=lambda e: impls[e.model],
+        rate_limit_budget_s=10.0,
         sleep=sleep,
     )
 
@@ -600,6 +604,62 @@ async def test_a_window_past_the_deadline_parks_the_stated_window_and_moves_on()
     assert slept == []  # never slept a window it could not afford
     assert reg.is_cooling(("limited", "")) is True
     assert reg.remaining([("limited", "")]) == pytest.approx(90.0)
+
+
+async def test_a_hold_is_announced_before_it_is_slept():
+    """#742's visibility rule, applied to the chain: a stated window can be
+    minutes, and silent minutes read as a hang. `on_hold` fires BEFORE the sleep
+    with the model and the seconds — and does NOT fire on the park-and-switch
+    path, where `on_switch` already tells the story."""
+    clock = _Clock()
+    reg = CooldownRegistry(clock=clock)
+    slept, sleep = _held_sleep(clock)
+    holds: list[tuple[str, float]] = []
+    order: list[str] = []
+
+    async def spy_sleep(secs: float) -> None:
+        order.append("sleep")
+        await sleep(secs)
+
+    impls = {
+        "primary": _FlakyModel([_429("7")], response="ok"),
+        "backup": _FakeModel(response="never"),
+    }
+    m = FallbackModel(
+        [_ep("primary"), _ep("backup")],
+        reg,
+        make_model=lambda e: impls[e.model],
+        on_hold=lambda model, secs: (
+            (holds.append((model, secs)), order.append("hold"))[1:] and None
+        ),
+        sleep=spy_sleep,
+    )
+
+    assert await m.get_response() == "ok"
+    assert holds == [("primary", 7.0)]
+    assert order == ["hold", "sleep"]  # announced BEFORE the wait, not after
+
+    # The unaffordable-window path parks and switches — no hold happens, so no
+    # hold is announced (the switch callback carries that story instead).
+    holds.clear()
+    reg2 = CooldownRegistry(clock=clock)
+    switched: list[str] = []
+    impls2 = {
+        "limited": _FlakyModel([_429("90")], response="never"),
+        "backup": _FakeModel(response="ok"),
+    }
+    m2 = FallbackModel(
+        [_ep("limited"), _ep("backup")],
+        reg2,
+        make_model=lambda e: impls2[e.model],
+        on_switch=lambda model, exc: switched.append(model),
+        on_hold=lambda model, secs: holds.append((model, secs)),
+        rate_limit_budget_s=10.0,
+        sleep=sleep,
+    )
+    assert await m2.get_response() == "ok"
+    assert holds == []
+    assert switched == ["limited"]
 
 
 async def test_an_exhausted_chain_still_names_the_rate_limit():
@@ -615,9 +675,10 @@ async def test_an_exhausted_chain_still_names_the_rate_limit():
         "b": _FlakyModel([RuntimeError("down")], response="never"),
     }
     m = FallbackModel(
-        [_ep("a", total_deadline_s=10.0), _ep("b", total_deadline_s=10.0)],
+        [_ep("a"), _ep("b")],
         reg,
         make_model=lambda e: impls[e.model],
+        rate_limit_budget_s=10.0,
         sleep=sleep,
     )
 
@@ -636,9 +697,10 @@ async def test_streamed_exhaustion_names_the_rate_limit_too():
         "b": _FlakyModel([RuntimeError("down")]),
     }
     m = FallbackModel(
-        [_ep("a", total_deadline_s=10.0), _ep("b", total_deadline_s=10.0)],
+        [_ep("a"), _ep("b")],
         reg,
         make_model=lambda e: impls[e.model],
+        rate_limit_budget_s=10.0,
         sleep=sleep,
     )
 
