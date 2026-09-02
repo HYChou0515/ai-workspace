@@ -39,6 +39,7 @@ def _ep(
     num_retries: int = 0,
     round_backoff_s: tuple[float, ...] = (),
     total_deadline_s: float = float("inf"),
+    rate_limit_budget_s: float = 7200.0,
 ) -> LlmEndpoint:
     return LlmEndpoint(
         model=model,
@@ -51,6 +52,7 @@ def _ep(
         num_retries=num_retries,
         round_backoff_s=round_backoff_s,
         total_deadline_s=total_deadline_s,
+        rate_limit_budget_s=rate_limit_budget_s,
     )
 
 
@@ -593,10 +595,9 @@ async def test_a_window_past_the_hold_budget_parks_the_stated_window_and_moves_o
         "backup": _FakeModel(response="ok"),
     }
     m = FallbackModel(
-        [_ep("limited"), _ep("backup")],
+        [_ep("limited", rate_limit_budget_s=10.0), _ep("backup")],
         reg,
         make_model=lambda e: impls[e.model],
-        rate_limit_budget_s=10.0,
         sleep=sleep,
     )
 
@@ -604,6 +605,40 @@ async def test_a_window_past_the_hold_budget_parks_the_stated_window_and_moves_o
     assert slept == []  # never slept a window it could not afford
     assert reg.is_cooling(("limited", "")) is True
     assert reg.remaining([("limited", "")]) == pytest.approx(90.0)
+
+
+async def test_the_hold_budget_is_one_pool_for_the_whole_chain_instance():
+    """The two-hour budget is a POOL of held seconds per chain instance (= one
+    agent run), not a per-model-call allowance: an agentic turn makes one model
+    call per tool round, and a budget reset each call would make a turn's total
+    hold time unbounded again — max_turns × 2h, the very thing the bound
+    exists to prevent. So a later call inherits what earlier calls spent, and a
+    window that no longer fits parks the endpoint instead of holding."""
+    clock = _Clock()
+    reg = CooldownRegistry(clock=clock)
+    slept, sleep = _held_sleep(clock)
+    impls = {
+        "limited": _FlakyModel([_429("7")], response="ok"),
+        "backup": _FakeModel(response="ok-from-backup"),
+    }
+    m = FallbackModel(
+        [_ep("limited", rate_limit_budget_s=10.0), _ep("backup")],
+        reg,
+        make_model=lambda e: impls[e.model],
+        sleep=sleep,
+    )
+
+    # Call 1 (tool round 1): holds 7s of the 10s pool, then the endpoint serves.
+    assert await m.get_response() == "ok"
+    assert slept == [7.0]
+
+    # Call 2 (tool round 2) hits a FRESH 429 with the same window. It no longer
+    # fits the 3s left in the pool → park the stated window and answer from the
+    # backup, with no further sleep.
+    impls["limited"]._errors.append(_429("7"))
+    assert await m.get_response() == "ok-from-backup"
+    assert slept == [7.0]
+    assert reg.remaining([("limited", "")]) == pytest.approx(7.0)
 
 
 async def test_a_hold_is_announced_before_it_is_slept():
@@ -649,12 +684,11 @@ async def test_a_hold_is_announced_before_it_is_slept():
         "backup": _FakeModel(response="ok"),
     }
     m2 = FallbackModel(
-        [_ep("limited"), _ep("backup")],
+        [_ep("limited", rate_limit_budget_s=10.0), _ep("backup")],
         reg2,
         make_model=lambda e: impls2[e.model],
         on_switch=lambda model, exc: switched.append(model),
         on_hold=lambda model, secs: holds.append((model, secs)),
-        rate_limit_budget_s=10.0,
         sleep=sleep,
     )
     assert await m2.get_response() == "ok"
@@ -675,10 +709,9 @@ async def test_an_exhausted_chain_still_names_the_rate_limit():
         "b": _FlakyModel([RuntimeError("down")], response="never"),
     }
     m = FallbackModel(
-        [_ep("a"), _ep("b")],
+        [_ep("a", rate_limit_budget_s=10.0), _ep("b")],
         reg,
         make_model=lambda e: impls[e.model],
-        rate_limit_budget_s=10.0,
         sleep=sleep,
     )
 
@@ -697,10 +730,9 @@ async def test_streamed_exhaustion_names_the_rate_limit_too():
         "b": _FlakyModel([RuntimeError("down")]),
     }
     m = FallbackModel(
-        [_ep("a"), _ep("b")],
+        [_ep("a", rate_limit_budget_s=10.0), _ep("b")],
         reg,
         make_model=lambda e: impls[e.model],
-        rate_limit_budget_s=10.0,
         sleep=sleep,
     )
 

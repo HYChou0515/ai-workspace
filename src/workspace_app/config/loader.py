@@ -1021,6 +1021,7 @@ def _build_preset(d: dict[str, Any]) -> Preset:
         num_retries=d.get("num_retries"),
         round_backoff_s=(tuple(rb) if (rb := d.get("round_backoff_s")) is not None else None),
         total_deadline_s=d.get("total_deadline_s"),
+        rate_limit_budget_s=d.get("rate_limit_budget_s"),
     )
 
 
@@ -1035,4 +1036,5 @@ def _build_failover(d: dict[str, Any]) -> FailoverSettings:
         num_retries=d["num_retries"],
         round_backoff_s=tuple(d["round_backoff_s"]),
         total_deadline_s=d["total_deadline_s"],
+        rate_limit_budget_s=d["rate_limit_budget_s"],
     )

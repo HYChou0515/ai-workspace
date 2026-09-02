@@ -17,15 +17,20 @@ role.
 A 429 is the exception to "switch + cooldown" (#742): the endpoint is healthy
 and told us to slow down, so the chain WAITS it out at the same endpoint — the
 stated window (never less than the doubling backoff), announced through
-``on_hold`` so a long wait is visible instead of reading as a hang. The holds
-are bounded by time, not count (``rate_limit_budget_s``, default two hours):
-hitting a rate limit means the user hit a rate limit, and waiting is the honest
-behaviour — switching away spends a healthy endpoint and giving up helps
-nobody. A window that cannot fit the remaining budget parks the endpoint for
-the window it stated — the shared registry then makes every other caller
-honour it — and an exhausted chain raises from the 429 rather than whichever
-endpoint failed last, so the turn loop upstream can keep waiting instead of
-"giving up after N attempts".
+``on_hold`` so a long wait is visible instead of reading as a hang — even while
+a healthy sibling idles: the operator chose finishing at the limited endpoint
+over failing over to it (#759 review, an informed call). The holds are bounded
+by time, not count: ``rate_limit_budget_s`` (chain-level from the head, like
+``total_deadline_s``; two hours by the operator's call) is a POOL of held
+seconds per chain instance — one agent run — shared by every model call that
+run makes, because a per-call allowance would reset each tool round and make a
+turn's total unbounded again. A window that cannot fit what is left of the pool
+parks the endpoint for the window it stated — the shared registry then makes
+every other caller honour it — and an exhausted chain raises from the 429
+rather than whichever endpoint failed last, so the turn loop upstream can keep
+waiting instead of "giving up after N attempts". (The runner may retry the run
+with a fresh chain after its own, shorter hold; the operator accepts the rare
+stacking that allows — even unbounded waiting was acceptable to them.)
 """
 
 from __future__ import annotations
@@ -63,7 +68,6 @@ class FallbackModel(Model):
         make_model: Callable[[LlmEndpoint], Model],
         on_switch: OnDegrade | None = None,
         on_hold: OnHold | None = None,
-        rate_limit_budget_s: float = 7200.0,
         sleep: Callable[[float], Any] = asyncio.sleep,
     ) -> None:
         self._endpoints = list(endpoints)
@@ -71,19 +75,22 @@ class FallbackModel(Model):
         self._make_model = make_model
         self._on_switch = on_switch
         self._on_hold = on_hold
-        # Rate-limit holds are bounded by TIME, not count — and by their own
-        # budget, not the chain deadline: the deadline (120s in the default
-        # deploy) is sized for busy-endpoint sweeps, and a rate limit is the one
-        # failure whose honest cure can be much longer than that. Two hours by
-        # request: past it, waiting out the window stops being what the user
-        # would choose over the turn failing.
-        self._rate_limit_budget_s = rate_limit_budget_s
         self._sleep = sleep
         # Re-sweep rounds + total deadline are chain-level — taken from the chain
         # head (a fallback's own round budget is ignored, like its `fallbacks`).
         head = self._endpoints[0]
         self._round_backoff_s = head.round_backoff_s
         self._total_deadline_s = head.total_deadline_s
+        # Rate-limit holds are bounded by TIME, not count — and by their own
+        # budget, not the chain deadline: the deadline (120s in the default
+        # deploy) is sized for busy-endpoint sweeps, and a rate limit is the one
+        # failure whose honest cure can be much longer than that. The budget is
+        # a POOL of held seconds for the instance's lifetime (= one agent run),
+        # not a per-call allowance — a reset each model call would make an
+        # agentic turn's total hold time unbounded again, one fresh budget per
+        # tool round.
+        self._rate_limit_budget_s = head.rate_limit_budget_s
+        self._held_s = 0.0
         # #748: the endpoint that most recently ANSWERED. Nothing recorded this,
         # so naming a turn's model meant reading the configured one — correct
         # until failover makes it differ, i.e. wrong in exactly the case worth
@@ -120,20 +127,20 @@ class FallbackModel(Model):
         return True
 
     async def _hold_for_rate_limit(
-        self, endpoint: LlmEndpoint, exc: BaseException, held: int, hold_deadline: float
+        self, endpoint: LlmEndpoint, exc: BaseException, held: int
     ) -> bool:
         """A 429 is the one failure cured by WAITING at the same endpoint
         (#742) — the endpoint is healthy and told us to slow down, so neither
         the quick-retry budget nor the failure cooldown applies to it.
 
         ``True`` → the wait (the stated window, never less than the doubling
-        backoff — `rate_limit_wait_s`) fits in the rate-limit budget and has
-        been slept, announced through ``on_hold`` first; the caller retries the
-        SAME endpoint. ``False`` → it does not fit; the endpoint is parked for
-        the window so every caller sharing the registry honours it, and the
-        chain moves on to the next endpoint."""
+        backoff — `rate_limit_wait_s`) fits what is left of the instance's
+        held-seconds pool and has been slept, announced through ``on_hold``
+        first; the caller retries the SAME endpoint. ``False`` → it does not
+        fit; the endpoint is parked for the window so every caller sharing the
+        registry honours it, and the chain moves on to the next endpoint."""
         wait = rate_limit_wait_s(exc, attempt=held)
-        if self._registry.now() + wait > hold_deadline:
+        if self._held_s + wait > self._rate_limit_budget_s:
             self._registry.mark(endpoint.cooldown_key, wait)
             logger.warning(
                 "failover-model: endpoint %s rate-limited for %.1fs — past the "
@@ -153,13 +160,13 @@ class FallbackModel(Model):
         )
         if self._on_hold is not None:
             self._on_hold(endpoint.model, wait)
+        self._held_s += wait
         await self._sleep(wait)
         return True
 
     async def get_response(self, *args: Any, **kwargs: Any) -> Any:
         keys = [e.cooldown_key for e in self._endpoints]
         deadline = self._registry.now() + self._total_deadline_s
-        hold_deadline = self._registry.now() + self._rate_limit_budget_s
         last: BaseException | None = None
         rate_limited: BaseException | None = None
         for round_idx in range(len(self._round_backoff_s) + 1):
@@ -185,7 +192,7 @@ class FallbackModel(Model):
                             # for a broken endpoint, and this one is healthy.
                             rate_limited = exc
                             held += 1
-                            if await self._hold_for_rate_limit(endpoint, exc, held, hold_deadline):
+                            if await self._hold_for_rate_limit(endpoint, exc, held):
                                 continue
                             break  # parked for its stated window → next endpoint
                         attempt += 1
@@ -209,7 +216,6 @@ class FallbackModel(Model):
     async def stream_response(self, *args: Any, **kwargs: Any) -> AsyncIterator[Any]:
         keys = [e.cooldown_key for e in self._endpoints]
         deadline = self._registry.now() + self._total_deadline_s
-        hold_deadline = self._registry.now() + self._rate_limit_budget_s
         last: BaseException | None = None
         rate_limited: BaseException | None = None
         for round_idx in range(len(self._round_backoff_s) + 1):
@@ -244,9 +250,7 @@ class FallbackModel(Model):
                             # user saw would be clobbered by the re-send.
                             rate_limited = cause
                             held += 1
-                            if await self._hold_for_rate_limit(
-                                endpoint, cause, held, hold_deadline
-                            ):
+                            if await self._hold_for_rate_limit(endpoint, cause, held):
                                 continue
                             break  # parked for its stated window → next endpoint
                         attempt += 1

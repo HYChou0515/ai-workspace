@@ -523,7 +523,9 @@ failover:
   cooldown_s: 30          # 忙的 (model,endpoint) 被跳過多久
   num_retries: 2          # 切之前同 endpoint 快速重試幾次
   round_backoff_s: [1, 2, 4, 8, 16]  # 整條掃完沒結果就重掃，長度=重掃輪數；[]=只掃一次
-  total_deadline_s: 120   # 整回合上限；到了就吐可讀的「模型忙，稍後再試」而非卡死
+  total_deadline_s: 120   # 忙碌/故障掃描的整回合上限；到了就吐可讀的「模型忙，稍後再試」而非卡死
+  rate_limit_budget_s: 7200  # 例外：429（rate limit）不切線、在原 endpoint 等它聲明的窗口，
+                             # 等待秒數累計不超過這個池（每次 agent run 一池）；超過才停用該線改走備援
 ```
 
 互動用的 head preset 把重掃壓短（有人在等）；index/batch 的 head 反而要放長。範例見 example 第 235 行。
