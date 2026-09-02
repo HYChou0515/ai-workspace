@@ -18,6 +18,7 @@ import {
   isToolRunning,
   logFromMessages,
   turnsFromEntry,
+  turnLooksSilent,
   turnPhase,
   reconcileSnapshot,
   reduceAgent,
@@ -567,6 +568,30 @@ describe("turnsFromEntry — undo math (#38)", () => {
     // From a non-user entry (the tool at 3) it still counts later user turns.
     expect(turnsFromEntry(log.entries, 3)).toBe(1);
   });
+
+  it("counts one turn for a question that got drawn twice", () => {
+    // Reported: a sent message shows twice, and undoing from the FIRST copy
+    // rewinds one turn too far — back past the previous conversation.
+    //
+    // That is this number. The count is taken from what is ON SCREEN, while the
+    // deletion happens on what is STORED, and the dialog itself calls the
+    // operation destructive and irreversible. So a duplicate that is merely
+    // drawn — a re-delivery of one broadcast — costs a real turn of history.
+    // Two drawings of one message share the server timestamp they were sent
+    // with, which is what tells them apart from two questions that happen to
+    // read alike.
+    const at = 1_726_000_000_000;
+    const entries = [
+      ...logFromMessages([
+        { role: "user", content: "older", created_at: at - 5000 },
+        { role: "assistant", content: "older answer", created_at: at - 4000 },
+      ]).entries,
+      { kind: "message" as const, at, message: { role: "user" as const, content: "the question" } },
+      { kind: "message" as const, at, message: { role: "user" as const, content: "the question" } },
+    ];
+
+    expect(turnsFromEntry(entries, 2)).toBe(1);
+  });
 });
 
 describe("repetition stop (#113)", () => {
@@ -964,5 +989,222 @@ describe("a finished turn leaves no stale waiting-state (#739 review round 3)", 
       expect(ended.restore, `${ev} must clear the restore progress`).toBeNull();
       expect(ended.failover, `${ev} must clear the failover notice`).toBeNull();
     }
+  });
+});
+
+describe("a turn that recovers stops reporting the attempt that failed", () => {
+  /**
+   * A retry notice is not the end of a turn. `classify_retry_event` sends it as
+   * a `RunError` mid-flight — "retry: … all agent models failed or were
+   * cooling" — and the turn carries on and can finish perfectly well. But the
+   * reducer treats every `error` as terminal, and `error` is sticky: only the
+   * NEXT question cleared it (#721). So a turn that stumbled and then succeeded
+   * left the red box standing over its own good answer until the user typed
+   * again — reported as "the warning is still there when everything is fine".
+   *
+   * `done` is the moment that sentence stops describing anything: this turn
+   * ended, and it ended normally. A turn that really fails ends on `error`, not
+   * on `done`, so its box is untouched.
+   */
+  const retried = (): AgentLog =>
+    reduceAgent(EMPTY_LOG, {
+      type: "error",
+      message: "retry: the previous attempt failed — all agent models failed or were cooling",
+    } as AgentEvent);
+
+  it("keeps the notice while the turn is still unresolved", () => {
+    expect(retried().error).toContain("retry");
+  });
+
+  it("drops it once the turn goes on producing", () => {
+    // Recovery is the turn CONTINUING, and that is the only thing that
+    // distinguishes it: output after the notice.
+    const recovered = reduceAgent(retried(), {
+      type: "message_delta",
+      text: "here is the answer after all",
+    } as AgentEvent);
+    expect(recovered.error).toBeNull();
+  });
+
+  it("leaves a real failure's box alone — including the `done` that follows it", () => {
+    // The sequence the backend actually emits. `litellm_runner` yields
+    // `RunError` and then `RunDone` on a give-up (its own test pins
+    // ["MessageDelta", "RunError", "RunDone"]), so "a failed turn never ends on
+    // done" — which an earlier version of this file asserted — is false, and
+    // hanging the clear on `done` wiped the message explaining the failure.
+    const failed = reduceAgent(EMPTY_LOG, {
+      type: "error",
+      message: "giving up after 3 attempts: APIConnectionError: refused",
+    } as AgentEvent);
+    const closed = reduceAgent(failed, { type: "done" } as AgentEvent);
+
+    expect(closed.error).toBe("giving up after 3 attempts: APIConnectionError: refused");
+  });
+
+  it("does not clear a message the STREAM never set", () => {
+    // `log.error` is one slot with several owners: the reducer's `error` event,
+    // and — set straight from the hook — a send failure, a quota refusal (whose
+    // whole point is the clickable link to the limit that bound), and a Stop
+    // that failed. Only the first belongs to a turn. On a shared item another
+    // participant's turn is streaming deltas at any moment, so "output arrived"
+    // must not be read as "your quota refusal stopped being true".
+    const refused = { ...EMPTY_LOG, error: "workspace is full — free some space" };
+
+    const other = reduceAgent(refused, {
+      type: "message_delta",
+      text: "someone else's turn, producing away",
+    } as AgentEvent);
+
+    expect(other.error).toBe("workspace is full — free some space");
+  });
+
+  it("keeps a failure that produced partial output before dying", () => {
+    // `progress_made` — output, then the failure, then `done`. The output came
+    // BEFORE the error, so it is not evidence of recovery.
+    let log = reduceAgent(EMPTY_LOG, { type: "message_delta", text: "half an answer" });
+    log = reduceAgent(log, { type: "error", message: "APIConnectionError: refused" });
+    log = reduceAgent(log, { type: "done" } as AgentEvent);
+
+    expect(log.error).toBe("APIConnectionError: refused");
+  });
+});
+
+describe("a broadcast question starts a new turn for everyone, not just its sender", () => {
+  // The sender's own `send()` clears `metrics`; the `user_message` broadcast did
+  // not — so for anyone who did NOT send (a spectator on a shared item, or any
+  // turn a workflow or goal-continuation started on an already-open panel) the
+  // previous answer's metrics stayed, and `turnPhase` never returned to "prep".
+  //
+  // Everything that reports on a wait that has produced nothing is gated on that
+  // phase: the give-up notice and the question to the server about whether anyone
+  // is driving the turn. So the two people watching one turn saw different
+  // things, and the one who could not act was the one shown less.
+  const answered: AgentLog = {
+    ...EMPTY_LOG,
+    streaming: true,
+    metrics: { phase: "down", promptTokens: 40, completionTokens: 12, elapsedMs: 800 },
+    entries: [
+      { kind: "message", message: { role: "user", content: "first" } },
+      { kind: "message", message: { role: "assistant", content: "an answer" } },
+    ],
+  };
+
+  it("puts the turn back in prep when someone else's question arrives", () => {
+    const next = reduceAgent(answered, {
+      type: "user_message",
+      author: "someone-else",
+      content: "second",
+      created_at: 200,
+    } as never);
+
+    expect(turnPhase(next)).toBe("prep");
+    expect(turnLooksSilent(next)).toBe(true);
+  });
+});
+
+describe("a question already on screen from the store is not drawn again", () => {
+  // Reported twice now: one send, two identical bubbles — and undoing from the
+  // first went back a turn too far.
+  //
+  // PR#735 gave each event an id and made delivery idempotent, which fixed the
+  // duplicate that came from the SAME event arriving twice. This is a different
+  // one, and that guard cannot see it: `seenIds` answers "have I drawn this
+  // EVENT", not "is this MESSAGE already on screen". The message can reach a
+  // viewer by two routes with only one event id between them.
+  //
+  // The order is not a rare race — it is how the backend is written.
+  // `chat_send` PERSISTS the user's message and only THEN broadcasts it, so the
+  // store is ahead by construction. What normally hides it is that the
+  // store-poll is gated on a healthy stream, which is why this reproduces on a
+  // multi-pod deployment and never single-pod.
+  it("does not redraw a message the poll already hydrated", () => {
+    const polled = reconcileSnapshot(EMPTY_LOG, {
+      messages: [{ role: "user", content: "hello", created_at: 100, author: "u" }],
+    });
+
+    const after = reduceAgent(polled, {
+      type: "user_message",
+      author: "u",
+      content: "hello",
+      created_at: 100,
+    } as never);
+
+    const asked = after.entries.filter(
+      (e) => e.kind === "message" && e.message.role === "user",
+    );
+    expect(asked).toHaveLength(1);
+    // …and the turn still starts: only the drawing is skipped, never the state
+    // the event carries. Skipping the whole case would trade two bubbles for a
+    // composer that never locks and a spinner that never appears.
+    expect(after.streaming).toBe(true);
+  });
+
+  it("still draws the same words asked a second time", () => {
+    // Two discriminators, and both are needed. Provenance answers "did the store
+    // already draw this", so two LIVE messages that read alike still both show
+    // (`useChatSession` pins that from the other side). The timestamp separates
+    // this stored message from a later identical one — the backend stamps it once
+    // and gives the same value to the stored copy and the broadcast, so a real
+    // second ask differs.
+    const first = reconcileSnapshot(EMPTY_LOG, {
+      messages: [{ role: "user", content: "again?", created_at: 100, author: "u" }],
+    });
+
+    const after = reduceAgent(first, {
+      type: "user_message",
+      author: "u",
+      content: "again?",
+      created_at: 900,
+    } as never);
+
+    const asked = after.entries.filter(
+      (e) => e.kind === "message" && e.message.role === "user",
+    );
+    expect(asked).toHaveLength(2);
+  });
+
+  it("does not let one person's message swallow another's", () => {
+    // A shared item has no cross-viewer send lock, so two people can land in the
+    // same millisecond saying something short — "ok", "go", "1". Keyed without
+    // the author, the stored copy of the first matches the second's broadcast
+    // and that person's message never appears at all. Losing a message is worse
+    // than the duplicate this de-dupe exists to remove, so the author is part of
+    // the key for the same reason the timestamp is: the backend stamps both once
+    // and gives the same values to the stored row and the broadcast.
+    const stored = reconcileSnapshot(EMPTY_LOG, {
+      messages: [{ role: "user", content: "ok", created_at: 100, author: "alice" }],
+    });
+
+    const after = reduceAgent(stored, {
+      type: "user_message",
+      author: "bob",
+      content: "ok",
+      created_at: 100,
+    } as never);
+
+    const asked = after.entries.filter(
+      (e) => e.kind === "message" && e.message.role === "user",
+    );
+    expect(asked).toHaveLength(2);
+  });
+
+  it("does not let one message swallow a different one sent in the same millisecond", () => {
+    // The other half of the same hazard: same author, same instant, different
+    // words. Only the content tells them apart.
+    const stored = reconcileSnapshot(EMPTY_LOG, {
+      messages: [{ role: "user", content: "first", created_at: 100, author: "u" }],
+    });
+
+    const after = reduceAgent(stored, {
+      type: "user_message",
+      author: "u",
+      content: "second",
+      created_at: 100,
+    } as never);
+
+    const asked = after.entries.filter(
+      (e) => e.kind === "message" && e.message.role === "user",
+    );
+    expect(asked).toHaveLength(2);
   });
 });

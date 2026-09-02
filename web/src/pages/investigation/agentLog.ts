@@ -56,7 +56,20 @@ export type StepView = {
 };
 
 export type AgentEntry =
-  | { kind: "message"; message: Message; at?: number }
+  | {
+      kind: "message";
+      message: Message;
+      at?: number;
+      /** Drawn from the PERSISTED thread rather than from a live event.
+       *
+       * A message reaches a viewer by two routes and only one of them carries an
+       * event id, so the id-based de-dupe cannot tell that a broadcast is
+       * redrawing something the store already supplied. Provenance can: the
+       * question is not "do these read the same" — two people may genuinely say
+       * the same thing in the same millisecond, and both must show — but "did
+       * this already arrive by the other route". */
+      fromStore?: boolean;
+    }
   | { kind: "tool_call"; call: ToolCallView }
   | { kind: "mention"; by: string; users: string[]; note: string; at?: number }
   // #613 P3: a persisted goal marker (met / exhausted) — FE-only, never LLM history.
@@ -87,6 +100,13 @@ export type AgentLog = {
   streamingBy: string | null;
   /** Non-null when the last terminal was an error. */
   error: string | null;
+  /** Whether `error` came from THIS turn's stream (an `error` event) rather than
+   * from the send path. One slot, several owners: a quota refusal names the limit
+   * that bound and links to it, a failed Stop says the turn may still be running,
+   * and neither stops being true because output arrived — on a shared item that
+   * output is often someone else's turn. Only a turn's own error is retracted by
+   * the turn carrying on. */
+  errorFromTurn: boolean;
   /** Live token telemetry for the current turn (null until first event). */
   metrics: AgentMetricsState | null;
   /** #249/#131: set when the model failed over mid-turn — a transient "switched"
@@ -112,6 +132,7 @@ export const EMPTY_LOG: AgentLog = {
   streaming: false,
   streamingBy: null,
   error: null,
+  errorFromTurn: false,
   metrics: null,
   failover: null,
   restore: null,
@@ -128,6 +149,21 @@ export const EMPTY_LOG: AgentLog = {
  * start a poll that can never terminate. An UNSTAMPED message is old data by
  * definition — the timestamp predates the field — so it never counts as live. */
 const AWAITING_REPLY_MAX_MS = 30 * 60_000;
+
+/** Wording for a persisted terminal failure, by the `error_kind` the backend
+ * stamps on it. Only kinds whose live counterpart says the same thing belong
+ * here — sharing the wording is what lets the de-dupe recognise the live banner
+ * and the stored message as one event instead of two. `max_turns` is absent on
+ * purpose: its persisted text carries the step count inline, and digging a
+ * number back out of an English sentence to re-render it is a parser nobody
+ * should have to maintain.
+ *
+ * Translated per CALL, like the live banner beside it. Held in a module-level
+ * const it froze the language at import, so switching language mid-session left
+ * the stored copy in the old one — different text, de-dupe blind again, and the
+ * doubled banner back in two languages at once. */
+const persistedErrorText = (kind: string | null | undefined): string | undefined =>
+  kind === "cancelled" ? translate(initialLocale(), "banner.cancelled") : undefined;
 
 const isRecent = (at: number | null | undefined): boolean =>
   at != null && Date.now() - at < AWAITING_REPLY_MAX_MS;
@@ -192,9 +228,26 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
       // #37: a persisted terminal failure — rendered as a banner so a
       // reloaded thread shows the turn died (matching the live error
       // banners), rather than the message silently vanishing.
-      entries.push({ kind: "banner", text: m.content, at: m.created_at ?? undefined });
+      //
+      // Worded from `error_kind` where we have wording for it: the backend says
+      // WHAT happened, the UI says how to put it. Its `content` is written in
+      // English for the log, so rendering that verbatim put an English sentence
+      // in a zh-TW transcript — and, because it reads differently from the live
+      // banner for the same event, the de-dupe below never collapsed the two.
+      // One press of Stop showed the stop twice. An unknown kind still falls
+      // back to the content: better the backend's words than none.
+      entries.push({
+        kind: "banner",
+        text: persistedErrorText(m.error_kind) ?? m.content,
+        at: m.created_at ?? undefined,
+      });
     } else {
-      entries.push({ kind: "message", message: m, at: m.created_at ?? undefined });
+      entries.push({
+        kind: "message",
+        message: m,
+        at: m.created_at ?? undefined,
+        fromStore: true,
+      });
     }
   }
   // A thread whose LAST message is the user's is a thread whose reply has not
@@ -220,6 +273,8 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
     // one whose reply has not landed.
     streamingBy: awaitingReply ? (last?.author ?? null) : null,
     error: null,
+    // A snapshot carries no live error, so it owns none either.
+    errorFromTurn: false,
     metrics: null,
     failover: null,
     restore: null,
@@ -235,6 +290,11 @@ const CONTENT_KINDS = new Set(["message", "tool_call", "mention", "goal_note", "
 
 const contentCount = (entries: readonly AgentEntry[]) =>
   entries.filter((e) => CONTENT_KINDS.has(e.kind)).length;
+
+/** How many turns these entries hold: one per user message. A banner's lifetime
+ * is measured in these — see the carry rule in `reconcileSnapshot`. */
+const countUserMessages = (entries: readonly AgentEntry[]) =>
+  entries.filter((e) => e.kind === "message" && e.message.role === "user").length;
 
 /**
  * Fold a persisted thread into the live log WITHOUT deleting what only the
@@ -267,16 +327,75 @@ export function reconcileSnapshot(
   if (contentCount(snap.entries) < contentCount(prev.entries)) {
     return { ...prev, error: prev.error };
   }
-  // Re-attach stream-only banners the persisted thread has no way to hold.
-  const carried = prev.entries.filter(
-    (e) =>
-      e.kind === "banner" &&
-      !snap.entries.some((s) => s.kind === "banner" && s.text === e.text),
+  // Re-attach stream-only banners the persisted thread has no way to hold — but
+  // only the ones still about the turn the thread ends on.
+  //
+  // A carried banner goes to the END of the fresh snapshot, so a leftover from an
+  // earlier turn does not merely linger in place: it MOVES, landing under the
+  // newest answer and reading as a verdict on it. That is how "已達回合上限,對話
+  // 已停止" ends up beneath a turn that finished perfectly well and looks like it
+  // never goes away.
+  //
+  // Staleness is measured in TURNS, not milliseconds. A banner records how many
+  // user messages the thread held when it was raised; the thread having gained
+  // one means the conversation moved on to a turn this banner is not about.
+  //
+  // Timestamps cannot answer this, and not only because one clock is the
+  // browser's and the other the server's. A turn stamps its messages AS THEY ARE
+  // PRODUCED — a fresh assistant message after every tool call — so a banner
+  // raised early in a turn is ALWAYS older than that turn's own later messages,
+  // and "older than the newest message" deletes `parse error: …` at the very
+  // refetch that ends the turn it belongs to. Counting turns is indifferent to
+  // ordering within one.
+  //
+  // Which turn a banner is about is read off the LIVE LOG's own order: a user
+  // message sitting after it means the conversation has moved on to a turn the
+  // banner is not about. Nothing else can answer this reliably — a timestamp
+  // compares a browser clock to a server one AND loses to a turn stamping its
+  // own later messages after the banner; a count recorded when the banner was
+  // raised can be taken from a log still behind the store; and a count adopted
+  // on the first re-hydrate is adopted too late if that re-hydrate happens after
+  // the next turn began. The order is right there in `prev`, at every moment.
+  //
+  // This matters because a carried banner is re-attached at the END of the fresh
+  // snapshot: one that outlives its turn does not linger in place, it MOVES,
+  // landing under the newest answer and reading as a verdict on it.
+  // Two sources, because the next turn can reach us either way: its user message
+  // streams into the live log (a user message sitting after the banner), or it
+  // only ever appears in the store (the snapshot holding more turns than the
+  // banner had beneath it). Both are read HERE, from the two objects in hand — no
+  // stamp to take at the wrong moment, no clock to disagree with.
+  const snapTurns = countUserMessages(snap.entries);
+  // "The store already holds this banner" has to mean THIS turn's, not an
+  // identically worded one from an earlier turn. Since a stop now reads the same
+  // live as it does once persisted, a thread with two cancelled turns had the
+  // second one — the press the user is watching for — swallowed by the first.
+  const snapTail = snap.entries.slice(
+    snap.entries.map((s) => s.kind === "message" && s.message.role === "user").lastIndexOf(true) + 1,
   );
+  const carried = prev.entries.filter((e, i) => {
+    if (e.kind !== "banner") return false;
+    const rest = prev.entries.slice(i + 1);
+    const movedOnLocally = rest.some((l) => l.kind === "message" && l.message.role === "user");
+    const turnsBeneath = countUserMessages(prev.entries.slice(0, i + 1));
+    // With no turn beneath it the banner cannot be placed at all: the log is
+    // behind the store, which happens when a banner is raised before hydration
+    // resolves. "I cannot tell" is not "it is stale", so keep it and let a later
+    // re-hydrate — by which point the log holds its turn — decide.
+    const placeable = turnsBeneath > 0;
+    return (
+      !movedOnLocally &&
+      (!placeable || snapTurns <= turnsBeneath) &&
+      !snapTail.some((s) => s.kind === "banner" && s.text === e.text)
+    );
+  });
   return {
     ...snap,
     entries: [...snap.entries, ...carried],
     error: prev.error ?? snap.error,
+    // …and with it, who owns it — or a re-hydrate would hand a send failure to
+    // the turn, which then retracts it on its next token.
+    errorFromTurn: prev.error !== null ? prev.errorFromTurn : snap.errorFromTurn,
   };
 }
 
@@ -285,12 +404,29 @@ export function reconcileSnapshot(
  * turn is delimited by a user message; this matches the BE's turn-count
  * semantics so "undo to here" on a user turn drops it and all later turns. */
 export function turnsFromEntry(entries: readonly AgentEntry[], index: number): number {
-  let n = 0;
+  // Counted per QUESTION, not per drawing of one. This number is taken from what
+  // is on screen and then spent on what is stored — the backend deletes that
+  // many turns, irreversibly — so a message drawn twice used to cost a real turn
+  // of history: undo from the first copy rewound past the previous conversation.
+  // Two drawings of one message carry the same server timestamp, which is what
+  // separates them from two questions asked at different moments. An undated
+  // entry (older data, or a live one before the server stamped it) counts alone.
+  //
+  // Identity for DRAWING a message is the event id and never the content
+  // (#735) — saying the same thing twice is a thing people do. This is a
+  // different question: how many turns to destroy. Both errors are possible and
+  // they are not equal. Counting one question twice deletes a turn the user
+  // never asked to lose, irreversibly; counting two as one deletes less than
+  // asked, and they can press it again.
+  const seen = new Set<string>();
+  let undated = 0;
   for (let i = index; i < entries.length; i++) {
     const e = entries[i];
-    if (e && e.kind === "message" && e.message.role === "user") n++;
+    if (!e || e.kind !== "message" || e.message.role !== "user") continue;
+    if (e.at === undefined) undated++;
+    else seen.add(JSON.stringify([e.at, e.message.content]));
   }
-  return n;
+  return seen.size + undated;
 }
 
 /** tok/s for the completion phase (0 until any time has elapsed). */
@@ -317,6 +453,31 @@ export function isToolRunning(log: AgentLog): boolean {
  *  - thinking:  the model is streaming reasoning, no answer content yet
  *  - answering: the model is streaming the visible answer */
 export type TurnPhase = "idle" | "prep" | "waiting" | "thinking" | "answering";
+
+/** Nothing about this turn has reached the screen: the backend never acknowledged
+ * it (no metrics), and it has produced neither text nor a tool call since the
+ * question that started it.
+ *
+ * This is the only silence the screen cannot explain by itself — every other
+ * phase has visible evidence of a turn that exists. So it is BOTH when asking
+ * the server "is anyone driving this?" is worth a request, and when that answer
+ * is worth showing. They have to be one predicate: an answer obtained under one
+ * condition and displayed under another describes a moment that is no longer on
+ * screen. Scoped to entries after the last question, because asked of the whole
+ * log the answer is "yes, output exists" forever in any chat ever answered. */
+export function turnLooksSilent(log: AgentLog): boolean {
+  if (turnPhase(log) !== "prep") return false;
+  const lastAsk = log.entries
+    .map((e) => e.kind === "message" && e.message.role === "user")
+    .lastIndexOf(true);
+  return !log.entries
+    .slice(lastAsk + 1)
+    .some(
+      (e) =>
+        e.kind === "tool_call" ||
+        (e.kind === "message" && e.message.role === "assistant" && !!e.message.content),
+    );
+}
 
 export function turnPhase(log: AgentLog): TurnPhase {
   if (!log.streaming) return "idle";
@@ -473,7 +634,22 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
         });
       }
       // #492 P11: the model is producing output ⇒ any cold-wake restore is over.
-      return { ...log, entries, restore: null, rateLimited: null, compacting: null };
+      //
+      // …and so is any error raised earlier in this turn. A retry notice arrives
+      // as a `RunError` mid-flight (`classify_retry_event`), and `error` is
+      // sticky, so a turn that stumbled and then answered left "all agent models
+      // failed or were cooling" standing over its own good answer until the user
+      // typed again. OUTPUT AFTER the notice is what says it recovered — not the
+      // terminal event: the runner yields `RunError` and then `RunDone` on every
+      // give-up, so clearing on `done` erased real failures instead.
+      return {
+        ...log,
+        entries,
+        ...(log.errorFromTurn ? { error: null, errorFromTurn: false } : {}),
+        restore: null,
+        rateLimited: null,
+        compacting: null,
+      };
     }
 
     case "tool_start":
@@ -598,6 +774,7 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
         streaming: false,
         streamingBy: null,
         error: ev.message,
+        errorFromTurn: true,
         compacting: null,
         rateLimited: null,
         restore: null,
@@ -616,24 +793,83 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
         failover: null,
       };
 
-    case "user_message":
+    case "user_message": {
       // #43: a human message on the shared investigation, broadcast to every
       // viewer. A turn is now in flight — flip `streaming` so the spinner
       // shows for everyone, not just the sender.
-      entries.push({
-        kind: "message",
-        at: ev.created_at || now,
-        message: { role: "user", author: ev.author, content: ev.content },
-      });
+      //
+      // …unless it is already on screen. A message reaches a viewer by two
+      // routes — this broadcast and the persisted thread — and only one of them
+      // carries an event id, so PR#735's `seenIds` cannot see this duplicate: it
+      // answers "have I drawn this EVENT", not "is this MESSAGE already here".
+      // The ordering that exposes it is not a race but how the backend is
+      // written: `chat_send` persists the message and only then broadcasts it,
+      // so the store is ahead by construction. The store-poll being gated on a
+      // healthy stream is the only reason this stays invisible single-pod.
+      //
+      // Author and timestamp are both part of the key, and both for the same
+      // reason: the backend stamps each ONCE (`chat_send`) and hands the same
+      // value to the stored message and to the broadcast, so the two copies of
+      // one message agree while two genuinely different messages differ. Drop
+      // the author and a shared chat loses messages — two people saying "ok" in
+      // the same millisecond, and the stored one swallows the other's. Drop the
+      // timestamp and the same person cannot say the same thing twice.
+      //
+      // Every way of NOT matching draws the message, which is the right way
+      // round: a duplicate bubble is cheaper than one that never appears. So an
+      // absent `created_at` (falls back to `now`) or an author recorded as null
+      // on one side and undefined on the other both fail safe.
+      //
+      // One case this does not fix, and does not make worse: while the store is
+      // BEHIND — holding one of a colliding pair — its single row suppresses
+      // both broadcasts, because this is a scan and not a match-and-consume. It
+      // heals itself on the next reconcile, once the snapshot carries both.
+      const askedAt = ev.created_at || now;
+      const alreadyDrawn = entries.some(
+        (e) =>
+          e.kind === "message" &&
+          e.fromStore &&
+          e.message.role === "user" &&
+          e.message.content === ev.content &&
+          e.message.author === ev.author &&
+          e.at === askedAt,
+      );
+      if (!alreadyDrawn) {
+        entries.push({
+          kind: "message",
+          at: askedAt,
+          message: { role: "user", author: ev.author, content: ev.content },
+        });
+      }
       // #721: and the previous turn's error stops describing anything. `error`
       // is sticky by design — nothing else clears it and `reconcileSnapshot`
       // keeps it across a re-hydrate — which was right while a step-limited turn
       // really did end the conversation. A goal now continues by itself, so
       // without this the standing box would keep saying the conversation had
       // stopped while the chat carried on in full view, and no reload would
-      // shift it. The BANNER stays in the transcript: that the turn ran out of
-      // room is still true, and still worth reading.
-      return { ...log, entries, streaming: true, streamingBy: ev.author ?? null, error: null };
+      // shift it. The BANNER stays where it was raised — that the turn ran out of
+      // room is still true, and still worth reading in its place — but it stops
+      // being CARRIED past this turn: a re-hydrate re-attaches carried banners at
+      // the end of the thread, and one that keeps moving down lands under the
+      // next answer and reads as a verdict on it (see `reconcileSnapshot`).
+      // …and the previous turn's METRICS stop describing anything either. The
+      // sender's own `send()` already clears them; this is the same reset for
+      // everyone else, and without it the two people watching one turn are in
+      // different states. `turnPhase` reads "answering" off stale metrics, so a
+      // spectator — or any turn a workflow or goal-continuation started on an
+      // already-open panel — never returns to "prep", and everything gated on
+      // that phase (the give-up notice, the question to the server about whether
+      // anyone is driving this) is unreachable for them. The person who could
+      // not act was the one being shown less.
+      return {
+        ...log,
+        entries,
+        streaming: true,
+        streamingBy: ev.author ?? null,
+        error: null,
+        metrics: null,
+      };
+    }
 
     case "file_changed":
       // #43: a workspace file changed — a side effect handled in the hook

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { AgentEvent } from "../../events";
+import { initialLocale, translate } from "../../lib/i18n";
 import {
   EMPTY_LOG,
   type AgentLog,
@@ -14,6 +15,7 @@ const live = (over: Partial<AgentLog> = {}): AgentLog => ({
   streaming: false,
   streamingBy: null,
   error: null,
+  errorFromTurn: false,
   metrics: null,
   failover: null,
   restore: null,
@@ -86,6 +88,216 @@ describe("reconcileSnapshot", () => {
     expect(next.entries.some((e) => e.kind === "message" && e.message.content === "partial")).toBe(
       true,
     );
+  });
+
+  it("keeps a banner raised mid-turn when that same turn ends", () => {
+    // A turn's messages are stamped AS THEY ARE PRODUCED — `_TurnReducer` opens a
+    // fresh assistant message after every tool call — so a banner raised early in
+    // a turn is necessarily older than that turn's own later messages. Anything
+    // that decides staleness by comparing timestamps therefore deletes it at the
+    // turn's own terminal refetch. `parse error: …` is #76 transparency and its
+    // emitter says "ALWAYS push a banner — never silently drop, or the retry is
+    // invisible"; it has to survive the turn it belongs to.
+    const prev = live({
+      entries: [
+        msg("user", "q"),
+        msg("assistant", "thinking"),
+        { kind: "banner", at: 1200, text: "parse error: the model sent bad JSON" },
+      ],
+    });
+
+    const next = reconcileSnapshot(prev, {
+      messages: [
+        { role: "user", content: "q", created_at: 1000 },
+        { role: "assistant", content: "thinking", created_at: 1100 },
+        // …the turn continued after the banner and persisted more of itself.
+        { role: "assistant", content: "the answer", created_at: 1400 },
+      ],
+    });
+
+    expect(next.entries.some((e) => e.kind === "banner")).toBe(true);
+  });
+
+  it("stops carrying a banner once the conversation has moved past it", () => {
+    // A carried banner is re-attached at the END of the fresh snapshot, so one
+    // left over from an earlier turn does not merely linger — it MOVES, landing
+    // under the newest answer as if it were about that turn. "已達回合上限,對話
+    // 已停止" then shows beneath a turn that finished perfectly well, which is
+    // the report: it never goes away.
+    //
+    // Staleness is measured in TURNS, not milliseconds: the banner records how
+    // many user messages the thread had when it was raised, and a thread that has
+    // gained one has moved on to a turn the banner is not about. No clocks — the
+    // banner's would be the browser's and the messages' the server's.
+    const prev = live({
+      entries: [
+        msg("user", "q1"),
+        msg("assistant", "half"),
+        { kind: "banner", at: 3, text: "已達回合上限（10），對話已停止。" },
+      ],
+    });
+
+    const next = reconcileSnapshot(prev, {
+      messages: [
+        { role: "user", content: "q1", created_at: 1 },
+        { role: "assistant", content: "half", created_at: 2 },
+        { role: "user", content: "q2", created_at: 4 },
+        { role: "assistant", content: "a proper answer", created_at: 5 },
+      ],
+    });
+
+    expect(next.entries.some((e) => e.kind === "banner")).toBe(false);
+    expect(
+      next.entries.some((e) => e.kind === "message" && e.message.content === "a proper answer"),
+    ).toBe(true);
+  });
+
+  it("still carries a banner about the turn the thread ends on", () => {
+    // The counterpart: a stop that IS the latest thing to have happened must
+    // survive the re-hydrate, or a stopped turn reads as merely finished.
+    // Note the ordering a real turn produces: the banner is stamped BEFORE the
+    // turn's own later messages, which is exactly what a timestamp rule gets
+    // wrong. Counting turns is indifferent to it.
+    const prev = live({
+      entries: [msg("user", "q"), { kind: "banner", at: 1, text: "已取消。" }],
+    });
+
+    const next = reconcileSnapshot(prev, {
+      messages: [
+        { role: "user", content: "q", created_at: 1 },
+        { role: "assistant", content: "partial", created_at: 2 },
+      ],
+    });
+
+    expect(next.entries.some((e) => e.kind === "banner" && e.text === "已取消。")).toBe(true);
+  });
+
+  it("dates a banner even when the store it first meets is behind", () => {
+    // The store-behind early return happens BEFORE the turn is assigned, and the
+    // race is documented, not hypothetical: the terminal event is published
+    // before the turn is persisted, so the refetch it triggers can legitimately
+    // arrive early. A banner that meets that snapshot stays undated, and then
+    // adopts whatever turn the thread has reached by its NEXT re-hydrate — one
+    // turn too late, which is the whole reported symptom again.
+    const prev = live({
+      entries: [
+        msg("user", "q1"),
+        msg("assistant", "half"),
+        { kind: "banner", at: 3, text: "已達回合上限（10），對話已停止。" },
+      ],
+    });
+
+    // First re-hydrate: the store has not caught up, so the screen is kept.
+    const behind = reconcileSnapshot(prev, {
+      messages: [{ role: "user", content: "q1", created_at: 1 }],
+    });
+    expect(behind.entries.some((e) => e.kind === "banner")).toBe(true);
+
+    // Second: a whole new turn has since been persisted. The banner is about the
+    // first one and must not follow the conversation down.
+    const later = reconcileSnapshot(behind, {
+      messages: [
+        { role: "user", content: "q1", created_at: 1 },
+        { role: "assistant", content: "half", created_at: 2 },
+        { role: "user", content: "q2", created_at: 4 },
+        { role: "assistant", content: "a proper answer", created_at: 5 },
+      ],
+    });
+
+    expect(later.entries.some((e) => e.kind === "banner")).toBe(false);
+  });
+
+  it("drops a banner the next question has already been asked under", () => {
+    // The other half of the rule: the next turn can reach the log through the
+    // STREAM (its `user_message` folds in under the banner) long before the store
+    // knows about it. Reading only the snapshot's turn count misses that, and
+    // misses it hardest where the count is uninformative — a log that never held
+    // a user message of its own, where the "cannot place it" escape hatch would
+    // otherwise keep the banner no matter how far the conversation had run on.
+    const prev = live({
+      entries: [
+        { kind: "banner", at: 1, text: "已取消。" },
+        msg("user", "and now something else"),
+        msg("assistant", "a fresh answer"),
+      ],
+    });
+
+    // The store has caught up — anything less takes the store-behind early
+    // return, where the log is kept whole and the carry rule never runs.
+    const next = reconcileSnapshot(prev, {
+      messages: [
+        { role: "user", content: "and now something else", created_at: 9 },
+        { role: "assistant", content: "a fresh answer", created_at: 10 },
+      ],
+    });
+
+    expect(next.entries.some((e) => e.kind === "banner")).toBe(false);
+  });
+
+  it("says a stop ONCE, not once live and again from the store", () => {
+    // Reproduced in the running app: one press of Stop rendered three lines —
+    // the live 「已取消。」 banner, the backend's persisted `role:"error"`
+    // message ("The previous response was interrupted.", English, in a zh-TW
+    // UI), and a composer hint saying it a third time. The de-dupe here compares
+    // TEXT, so two wordings of one event never collapse.
+    //
+    // The persisted message carries `error_kind`, which is the machine-readable
+    // half: the backend says WHAT happened, the UI says how to word it. Worded
+    // from the same source, the two are the same banner and one of them goes.
+    // Worded the way the app words it, not spelled out here: what is being
+    // asserted is that ONE event yields ONE banner, and hard-coding a language
+    // makes that assertion fail in any other locale — which is a fact about the
+    // runner's environment, not about the collapse. (It did: green locally,
+    // red on CI.)
+    const cancelled = translate(initialLocale(), "banner.cancelled");
+    const prev = live({
+      entries: [msg("user", "q"), { kind: "banner", at: 5, text: cancelled }],
+    });
+
+    const next = reconcileSnapshot(prev, {
+      messages: [
+        { role: "user", content: "q", created_at: 1 },
+        {
+          role: "error",
+          content: "The previous response was interrupted.",
+          error_kind: "cancelled",
+          created_at: 6,
+        },
+      ],
+    });
+
+    expect(next.entries.filter((e) => e.kind === "banner")).toHaveLength(1);
+    expect(next.entries.some((e) => e.kind === "banner" && e.text === cancelled)).toBe(true);
+  });
+
+  it("KNOWN GAP: a step-limited turn still says it twice, once in English", () => {
+    // The cancel case above is fixed by wording the stored message from its
+    // `error_kind`. `max_turns` is not, and this pins what that costs rather
+    // than leaving it for someone to rediscover: its persisted text carries the
+    // step count inline, so re-rendering it in the user's language would mean
+    // parsing a number back out of an English sentence, and the alternatives
+    // are dropping the count from both sides or adding a field to the stored
+    // message. Neither was reported, so neither was chosen here.
+    const prev = live({
+      entries: [
+        msg("user", "q"),
+        { kind: "banner", at: 5, text: "已達回合上限（12），對話已停止。" },
+      ],
+    });
+
+    const next = reconcileSnapshot(prev, {
+      messages: [
+        { role: "user", content: "q", created_at: 1 },
+        {
+          role: "error",
+          content: "The agent stopped after reaching its step limit (12).",
+          error_kind: "max_turns",
+          created_at: 6,
+        },
+      ],
+    });
+
+    expect(next.entries.filter((e) => e.kind === "banner")).toHaveLength(2);
   });
 
   it("does not duplicate a banner the persisted thread already carries", () => {

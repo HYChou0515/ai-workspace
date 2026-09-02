@@ -1020,6 +1020,15 @@ export const mockApi: ApiClient = {
     await delay(10);
   },
 
+  async turnAlive(_slug: string, _investigationId: string, _chatId?: string) {
+    // The demo backend runs every turn in this tab, so nothing is ever driving
+    // one somewhere this client cannot see. `false` is the honest answer here,
+    // not a stub value — a mock that claimed "alive" would hide the very
+    // notice this signal exists to make trustworthy.
+    await delay(10);
+    return false;
+  },
+
   async undoTurns(_slug: string, investigationId: string, turns: number) {
     await delay(10);
     const conv = ensureConversation(investigationId);

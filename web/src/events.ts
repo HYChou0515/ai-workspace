@@ -291,6 +291,45 @@ export function eventId(ev: AgentEvent): string | undefined {
   return (ev as { id?: string }).id;
 }
 
+/** Events that mean an answer is being produced RIGHT NOW.
+ *
+ * An allow-list, deliberately. The broadcast carries plenty that has nothing to
+ * do with a turn — `file_changed` on any editor save or entity write,
+ * `todos_updated`, `goal_updated`, `presence` — and reading "not presence" as
+ * "a turn is running" is how an idle window that blinked came to claim it had
+ * missed part of an answer, with no turn to ever take the claim back. A new
+ * event type therefore defaults to "not turn progress": the cost of forgetting
+ * to add one here is a warning we don't show, which is the cheaper mistake.
+ *
+ * A retry notice arrives as either `tool_call_parse_error` (in this list, so it
+ * arms) or `RunError` — wire type `"error"`, which `isTerminal` treats as an
+ * ending even though the turn continues. That is pre-existing and unchanged
+ * here; stating it plainly because an earlier version of this comment claimed
+ * the opposite. */
+const TURN_PROGRESS: ReadonlySet<string> = new Set([
+  // A turn is starting: broadcast only after admission and after the message is
+  // persisted, so unlike `file_changed` it cannot fire without one. The window
+  // to the first delta is the model's time-to-first-token — seconds on a local
+  // model — and a stream lost inside it loses the whole answer, so this is the
+  // one non-output event where a hole is genuinely possible.
+  "user_message",
+  "message_delta",
+  "tool_start",
+  "tool_end",
+  "tool_log",
+  "agent_metrics",
+  "tool_call_parse_error",
+  "repetition_stopped",
+  "failover_switch",
+  "restore_progress",
+  "rate_limited",
+  "context_trimmed",
+]);
+
+export function isTurnProgress(ev: AgentEvent): boolean {
+  return TURN_PROGRESS.has(ev.type);
+}
+
 /** Terminal events close the SSE stream and re-enable the composer. */
 export function isTerminal(ev: AgentEvent): boolean {
   return (

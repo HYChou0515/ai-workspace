@@ -1188,9 +1188,13 @@ export const messages = {
   "wf.progress.step": { "zh-TW": "第 {n} 步 · {title}", en: "step {n} · {title}" },
   "wf.progress.noop": { "zh-TW": "已完成，但未執行任何步驟", en: "Finished without running any steps" },
   "wf.stop": { "zh-TW": "停止", en: "Stop" },
+  // What dropped is this browser's stream, not the run: the run executes on the
+  // server and nothing here can stop it. "可能已停止" said otherwise, which turns
+  // a routine reconnect into a reason to doubt the work — the same false alarm
+  // the chat's own notice avoids by saying the reply is not at risk.
   "wf.disconnected": {
-    "zh-TW": "連線中斷，可能已停止。正在嘗試重新連線…",
-    en: "Connection lost — it may have stopped. Reconnecting…",
+    "zh-TW": "連線中斷，正在重新連線…執行仍在伺服器上繼續，進度會補上。",
+    en: "Connection lost — reconnecting… The run continues on the server; progress will catch up.",
   },
   "wf.status.pending": { "zh-TW": "排隊中", en: "queued" },
   "wf.status.running": { "zh-TW": "進行中", en: "running" },
