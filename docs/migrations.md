@@ -168,3 +168,16 @@ uv run python scripts/run_migrate.py doc-chunk
 - **未來要新增一次清理**：在 `resources/__init__.py` 幫該 model 的 `Schema` 加一個
   `_reindex_only` step 升版，然後把 model 名字丟給這支腳本即可 —— 機制是通用的，這支
   腳本不綁定任何特定 model。
+
+---
+
+## 不是資料遷移,但升版時值得看一眼:上下文窗口
+
+本文其餘部分都在講 specstar 的索引回填。有一件**不需要跑 migrate、但需要你確認**的事
+容易在升版後被誤會成故障:
+
+**自動壓縮只有在解得出端點的 context 窗口時才會執行。** 解不出來時它完全不動,而畫面上
+和「壓縮壞了」長得一樣。怎麼分辨、以及什麼時候才需要自己設 `history.context_limit`,
+寫在 [部署說明 §11 —— 上下文窗口與自動壓縮](deployment.md#上下文窗口與自動壓縮誰決定怎麼確認什麼時候才需要你出手)。
+
+規則本身只寫在那一邊 —— 兩份會漂移。
