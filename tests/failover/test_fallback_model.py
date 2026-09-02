@@ -641,6 +641,34 @@ async def test_the_hold_budget_is_one_pool_for_the_whole_chain_instance():
     assert reg.remaining([("limited", "")]) == pytest.approx(7.0)
 
 
+async def test_a_zero_budget_never_holds_and_is_the_escape_hatch():
+    """`rate_limit_budget_s: 0` is the operator's way OUT of hold-and-wait:
+    the floor keeps every wait above zero, so nothing ever fits a zero pool —
+    every 429 parks the stated window (floored) and switches, i.e. plain
+    failover behaviour. Pinned so the escape hatch stays a contract, not an
+    accident of the arithmetic."""
+    clock = _Clock()
+    reg = CooldownRegistry(clock=clock)
+    slept, sleep = _held_sleep(clock)
+    holds: list[tuple[str, float]] = []
+    impls = {
+        "limited": _FlakyModel([_429("0.5")], response="never"),
+        "backup": _FakeModel(response="ok"),
+    }
+    m = FallbackModel(
+        [_ep("limited", rate_limit_budget_s=0.0), _ep("backup")],
+        reg,
+        make_model=lambda e: impls[e.model],
+        on_hold=lambda model, secs: holds.append((model, secs)),
+        sleep=sleep,
+    )
+
+    assert await m.get_response() == "ok"
+    assert slept == []  # zero pool ⇒ no hold, ever — even for a tiny window
+    assert holds == []
+    assert reg.remaining([("limited", "")]) == pytest.approx(1.0)  # floored window
+
+
 async def test_a_hold_is_announced_before_it_is_slept():
     """#742's visibility rule, applied to the chain: a stated window can be
     minutes, and silent minutes read as a hang. `on_hold` fires BEFORE the sleep
