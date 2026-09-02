@@ -73,6 +73,51 @@ async def test_a_resolved_tool_becomes_a_package_the_agent_can_call() -> None:
     assert pkg.commands[0].params_json_schema == {"type": "object", "properties": {}}
 
 
+async def test_a_third_party_tools_env_declaration_survives_the_resolve() -> None:
+    """#750 — the declaration reaches the panel for a THIRD-party tool too.
+
+    This is the path that matters most and the one that silently did not exist:
+    #750 put the declaration in the package because, since #674, the only party
+    who knows what a tool reads is an outside author shipping an artifact. A
+    first-party bundle is read off disk by `discover_packages`; a third-party one
+    arrives through the host, and a field dropped at that boundary leaves every
+    such tool reporting "did not say" with its `env.json` sitting in the bundle."""
+    host = _Host(
+        {
+            "tools": {
+                "wafer-history": {
+                    **_ANSWER["tools"]["wafer-history"],
+                    "env": [
+                        {"name": "WAFER_API", "description": "Yield service", "required": True},
+                        {"name": "WAFER_CACHE"},
+                    ],
+                }
+            },
+            "refused": {},
+        }
+    )
+
+    external = await resolve_external_tools(host, {"wafer-history": "https://g/m"})
+
+    (pkg,) = external.packages
+    assert pkg.env_needs is not None, "the author's declaration must survive the host"
+    assert [(n.name, n.required) for n in pkg.env_needs] == [
+        ("WAFER_API", True),
+        ("WAFER_CACHE", None),
+    ]
+
+
+async def test_a_third_party_tool_that_declared_nothing_stays_undeclared() -> None:
+    """No `env` in the payload is "nobody said", not "needs nothing".
+
+    Every artifact published before #750 lands here, and the two must not merge
+    at the boundary any more than they may inside a bundle."""
+    external = await resolve_external_tools(_Host(_ANSWER), {"wafer-history": "https://g/m"})
+
+    (pkg,) = external.packages
+    assert pkg.env_needs is None
+
+
 async def test_the_sha_travels_to_the_sandbox_that_will_run_it() -> None:
     external = await resolve_external_tools(_Host(_ANSWER), {"wafer-history": "https://g/m"})
 

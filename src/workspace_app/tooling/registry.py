@@ -56,6 +56,30 @@ class CommandInfo:
 
 
 @dataclass(frozen=True)
+class EnvNeed:
+    """One environment variable a package says it wants (#750).
+
+    Hand-written by the package's author into ``env.json`` and copied
+    verbatim into the bundle. ``name`` is the only required key: the point is
+    to make a diligent author's package nicer to configure without making a
+    lazy author's package worse than it is today.
+
+    NOTHING enforces this. It is not a filter, a gate, or a promise — a tool
+    still receives every variable the item holds, and a name absent from here
+    is not refused. It exists so a person filling the panel can stop guessing.
+    """
+
+    name: str
+    description: str = ""
+    required: bool | None = None
+    """``None`` means the author did not say — which is neither "required" nor
+    "optional". Defaulting it either way would invent a fact: assume required
+    and an undecided author's package reports permanently-missing variables
+    (and a panel that always complains is one nobody reads); assume optional
+    and a genuinely needed variable is presented as safe to skip."""
+
+
+@dataclass(frozen=True)
 class PackageInfo:
     """One prebuilt package the sandbox can run. ``install_dir`` is the
     *sandbox-relative* path the launch binary lives at — the sandbox
@@ -65,6 +89,49 @@ class PackageInfo:
     name: str
     commands: tuple[CommandInfo, ...]
     install_dir: str
+    env_needs: tuple[EnvNeed, ...] | None = None
+    """What this package says it wants from the environment (#750), or
+    ``None`` when it shipped no ``env.json``.
+
+    ``None`` and ``()`` are DIFFERENT and must stay so all the way to the UI:
+    ``()`` is "the author looked and it needs nothing", ``None`` is "nobody
+    said". Every package predating #750 is ``None``, so collapsing the two
+    would let the panel state, about almost every tool installed, that it
+    needs no configuration — the one sentence it is least entitled to say."""
+
+
+def _read_env_needs(pkg_dir: Path) -> tuple[EnvNeed, ...] | None:
+    """This package's `env.json`, or ``None`` when it shipped none (#750).
+
+    Absent is NOT empty — see ``PackageInfo.env_needs``. The file is optional
+    precisely because every package that predates #750 lacks it, and a missing
+    hint must never be worse than the no-hint status quo."""
+    env_json = pkg_dir / "env.json"
+    if not env_json.is_file():
+        return None
+    try:
+        return tuple(
+            EnvNeed(
+                name=entry["name"],
+                description=entry.get("description", ""),
+                required=entry.get("required"),
+            )
+            for entry in json.loads(env_json.read_text())
+        )
+    except (OSError, ValueError, TypeError, KeyError):
+        # Degrade to "nobody said" rather than raise. `commands.json` is strict
+        # because a missing command list means the tool cannot run; a malformed
+        # hint means only that the hint is missing, and raising here would let
+        # one third-party author's typo stop an operator's startup for EVERY
+        # package — the convenience turning itself into an outage. The author
+        # gets the loud failure at prebuild instead, on their own build.
+        logger.warning(
+            "registry: package %r has an unreadable env.json; treating it as "
+            "undeclared. The tool still runs; only its environment hint is lost.",
+            pkg_dir.name,
+            exc_info=True,
+        )
+        return None
 
 
 def discover_packages(prebuilt_dir: Path) -> list[PackageInfo]:
@@ -139,6 +206,7 @@ def discover_packages(prebuilt_dir: Path) -> list[PackageInfo]:
                 name=sub.name,
                 commands=tuple(commands),
                 install_dir=f"../.tools/{sub.name}",
+                env_needs=_read_env_needs(sub),
             )
         )
     logger.info("registry: discovered %d tool package(s) from %s", len(out), prebuilt_dir)

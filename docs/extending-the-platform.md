@@ -268,6 +268,93 @@ def run(args: Args) -> str:
   讀 `/proc/<pid>/environ`。這裡**不是 secret store**。比起把值放在 sandbox 裡的檔案(agent
   隨時 `cat` 得到),窗口窄很多,但不是零——要真的隔開,得讓 tool 與 agent 用不同 uid。
 
+### 說出你需要哪些變數(#750)
+
+上一節的問題是:**使用者不知道要設哪些**。tool 一多,唯一的辦法是跑下去看它爆,再從錯誤訊息
+反推名字。所以 tool 可以**手寫一份清單**放在 package 裡,prebuild 會跟 `commands.json` 一起
+帶進 bundle,環境變數面板就會長出對應的欄位。
+
+```json
+// sample-tools/<name>/env.json —— 整份都是選填的
+[
+  { "name": "MY_API_TOKEN",
+    "description": "在 https://internal/tokens 產生的個人 token",
+    "required": true },
+  { "name": "MY_API_BASE",
+    "description": "自架站台才要改;預設打正式站" }
+]
+```
+
+只有 `name` 是必要的。**寫得越多,使用者越好填;什麼都不寫,跟今天一模一樣**——這是刻意的,
+沒有人會因為你沒寫而被擋住。
+
+⚠️ **這是提示,不是閘門。** 沒有列進來的名字**不會**被擋掉:tool 照樣拿得到 item 的
+**全部**變數(見上一節的「AI 讀得到,擋不住」——同一個原因,`_tool_env` 不分對象)。
+所以漏寫一個名字的後果只是「面板少講一句話」,不是功能壞掉。
+
+⚠️ **不寫 `required` 不等於「選填」。** 三種狀態是分開的:標 `true` 會被算進「還缺幾個」,
+標 `false` 不會,**不標則兩者都不是**——面板會列出它但不催你。所以你只在真的想清楚時才標,
+不用為了填欄位而亂猜。同樣地,**整個檔案缺席 ≠ 不需要變數**,面板會照實說「這個工具沒有列出
+它需要什麼」,而不是說它不需要。
+
+`env.json` 格式錯誤的話,**prebuild 會當場失敗並指名檔案**(你在自己的 build 上,改得掉);
+但在別人的部署上 `discover_packages` 會**降級成「沒宣告」並記一條 warning**,不會讓對方的
+服務開不起來——一份壞掉的提示不該變成一次停機。
+
+### 用帳號密碼換出變數(#750,第二方)
+
+有些值使用者**打不出來**:他知道自己的帳號密碼,而 tool 要的是拿它們去換來的 token。
+這時面板可以出現一顆登入鈕,按下去跳出輸入窗,換到的變數**填進表單**(不會自動存,使用者
+還是要按儲存)。**帳號密碼不會被儲存、不進 log、不回傳。**
+
+實作這段邏輯的是**第二方**(照接縫插進來的自家人),不是 tool 作者:
+
+```python
+# yourdeploy/sap.py
+from workspace_app.api.env_provider import IEnvProvider, InputField
+
+class SapLogin(IEnvProvider):
+    @property
+    def id(self) -> str: return "sap-login"
+    @property
+    def label(self) -> str: return "SAP 正式站登入"
+    @property
+    def produces(self) -> frozenset[str]:
+        return frozenset({"SAP_TOKEN", "SAP_HOST"})
+    @property
+    def inputs(self) -> tuple[InputField, ...]:
+        return (InputField("user", "帳號"), InputField("password", "密碼", secret=True))
+
+    async def resolve(self, values: dict[str, str]) -> dict[str, str]:
+        token = await my_sap_client.login(values["user"], values["password"])  # 自己設逾時
+        return {"SAP_TOKEN": token, "SAP_HOST": "sap.corp.example.com"}
+```
+
+```yaml
+# config.yaml
+server:
+  env_providers:
+    - yourdeploy.sap.SapLogin
+```
+
+⚠️ **tool 不會、也不能指名要用哪個方法。** 它只宣告變數**名字**,方法宣告它**產出**哪些名字,
+平台用名字比對——`SAP_TOKEN` 對上了,鈕就出現。這個方向是刻意的:如果讓 tool 寫
+`"filled_by": "sap-login"`,等於讓**第三方上架者決定我們的介面要向使用者索取哪一組憑證**,
+而且兩個素未謀面的人共用一個識別字命名空間,撞名的落點是登入視窗(A 廠的密碼打進 B 廠的表單,
+全程不報錯)。變數名字是 tool 的程式碼**本來就非寫不可**的東西,拿它當接點不新增任何命名空間。
+
+其他要知道的:
+
+- **回傳什麼就寫什麼**,包含沒有人宣告的名字——宣告本來就可能不完整,過濾掉反而會丟掉最需要留的。
+- ⚠️ **回傳的值不能含換行。** 面板是以 `.env` 文字(一行一個變數)在編輯這些值,多行的值讀回來
+  只會剩第一行。面板會**整包拒絕並指名是哪個變數**,而不是存下半截——被告知存不了還救得回來,
+  拿到半張憑證救不回來。如果你要給的是 PEM,這條路送不了它,得用別的方式交給 tool。
+- **自己設逾時**。平台不知道你的閘道多久算合理,在這裡定一個數字只會拒絕掉「只是有點慢」的請求。
+- **丟例外 = 告訴使用者失敗**,面板保留他已經打好的其他內容。訊息裡**不要放 `values`**。
+- **沒有設定任何方法 = 沒有鈕**,不是壞掉:每個變數都還是能手打,那條路永遠可用。
+- 這顆鈕和手動存檔一樣要 `write_meta`。只能讀的參與者按不動——否則他能換出一個自己存不進去的
+  token 並從回應裡讀走。
+
 ### 隨「按下送出的那個人」而變的變數(#714)
 
 上面那組是**一個 item 一份、大家共用**的。有一種值它天生裝不下:**每個人不一樣的身分**——

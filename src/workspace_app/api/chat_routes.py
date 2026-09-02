@@ -167,6 +167,32 @@ def register_chat_routes(
             media_type="text/event-stream",
         )
 
+    @app.get("/a/{slug}/items/{item_id}/turn-alive")
+    async def turn_alive(slug: str, item_id: str) -> dict[str, bool]:
+        """Is anyone driving a turn on this item's DEFAULT chat right now?
+
+        Asked while the screen would otherwise have to guess: after a long
+        silence, is this a turn working quietly somewhere, or is nobody coming?
+        Neither the live stream (a silent turn emits nothing on ANY bus, so
+        hearing nothing proves nothing) nor the persisted thread (written at turn
+        END, so mid-turn it looks exactly like an abandoned one) tells them
+        apart.
+
+        A GET rather than a field on the thread read, because only a suspicious
+        silence asks it at all — a turn that is visibly producing never does —
+        and folding it into the 2.5s store-poll would pay for it on every cycle
+        of every turn. It is re-asked while that silence lasts, because the
+        recorded fact expires: see `chat_turn_alive` for the per-chat form, which
+        is what the screen uses.
+
+        `False` is "no evidence of life", not "proven dead" — never started,
+        already finished, the driving pod died, or the beats could not be written
+        (see `ITurnActivityStore.alive`). To the person waiting the first three
+        are one thing; the fourth costs them this improvement and leaves the old
+        behaviour, which is the right way for it to fail."""
+        investigation_id = locator.require_access(slug, item_id, "read_chat")
+        return {"alive": await turn_engine.turn_alive(investigation_id)}
+
     @app.delete(
         "/a/{slug}/items/{item_id}/messages/current",
         status_code=status.HTTP_204_NO_CONTENT,
@@ -329,6 +355,21 @@ def register_chat_routes(
             turn_engine.subscribe_sse(locator.engine_key(investigation_id, chat_id), since=since),
             media_type="text/event-stream",
         )
+
+    @app.get("/a/{slug}/items/{item_id}/chats/{chat_id}/turn-alive")
+    async def chat_turn_alive(slug: str, item_id: str, chat_id: str) -> dict[str, bool]:
+        """`turn_alive` for one chat — which is the only form the screen can use.
+
+        Turns are keyed per chat (`engine_key`), so the item-level answer speaks
+        for the DEFAULT chat only. Asked about any other chat it is wrong in both
+        directions at once: a workflow chat's long silent turn — the exact case
+        this signal exists for, since `find_default_conversation` skips every
+        chat with a `run_id` — reads as dead, while an idle chat reads as alive
+        whenever the default chat happens to be busy."""
+        investigation_id = locator.require_access(slug, item_id, "read_chat")
+        locator.require_chat(slug, item_id, chat_id)
+        key = locator.engine_key(investigation_id, chat_id)
+        return {"alive": await turn_engine.turn_alive(key)}
 
     @app.post("/a/{slug}/items/{item_id}/chats/{chat_id}/compact")
     async def compact_chat(slug: str, item_id: str, chat_id: str) -> _CompactOut:

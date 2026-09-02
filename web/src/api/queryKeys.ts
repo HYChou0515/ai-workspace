@@ -52,6 +52,9 @@ export const qk = {
   // state. Invalidate `itemTools` after saving the picker (the override changed).
   toolsCatalog: ["toolsCatalog"] as const,
   itemTools: (slug: string, itemId: string) => ["itemTools", slug, itemId] as const,
+  // #750: this deploy's credential->variable implementations, per item
+  // (the item decides who may ask, so the answer is not global).
+  envProviders: (slug: string, itemId: string) => ["envProviders", slug, itemId] as const,
 
   // #380: one item's skills-picker state (per-skill source + tri-state + effective).
   // Invalidate after saving the picker (the override changed).

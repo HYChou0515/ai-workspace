@@ -34,6 +34,7 @@ from .artifact import (
     TOKEN_ENV,
     ArtifactError,
     CommandSpec,
+    EnvSpec,
     IncompatibleArtifact,
     artifact_opener,
     bundle_url,
@@ -112,6 +113,11 @@ class ResolvedTool:
     """Who published it, verbatim from the manifest — provenance the app
     cannot obtain any other way, because it never reads a manifest itself.
     ``None`` for a bundle built before the builder wrote the field."""
+    env: tuple[EnvSpec, ...] | None = None
+    """What the tool says it needs from the environment (#750), or ``None``
+    when its manifest said nothing. Carried for the same reason as ``author``:
+    the app never reads a manifest, so whatever this drops is unavailable to it
+    for good."""
 
 
 class ToolResolver:
@@ -182,6 +188,7 @@ class ToolResolver:
             commands=manifest.commands,
             stale=False,
             author=manifest.author,
+            env=manifest.env,
         )
 
     def _fall_back(self, name: str, url: str, cause: Exception) -> ResolvedTool:
@@ -221,6 +228,20 @@ class ToolResolver:
             # an outage is the worst possible moment to discover that an
             # upgrade made every remembered tool raise instead of resolve.
             author=remembered.get("author"),
+            # Same reasoning, and the same three states: a remembered entry
+            # written before #750 has no `env` key and must stay "did not say".
+            env=(
+                tuple(
+                    EnvSpec(
+                        name=e["name"],
+                        description=e.get("description", ""),
+                        required=e.get("required"),
+                    )
+                    for e in remembered["env"]
+                )
+                if isinstance(remembered.get("env"), list)
+                else None
+            ),
         )
 
     def _recall(self) -> dict[str, dict]:
@@ -237,6 +258,18 @@ class ToolResolver:
             "sha": manifest.bundle.sha256,
             "version": manifest.version,
             "author": manifest.author,
+            # Stored so a store outage does not also cost the declaration:
+            # `_fall_back` rebuilds a ResolvedTool from exactly this dict.
+            **(
+                {
+                    "env": [
+                        {"name": e.name, "description": e.description, "required": e.required}
+                        for e in manifest.env
+                    ]
+                }
+                if manifest.env is not None
+                else {}
+            ),
             # Kept so the fallback can ask again. Without it, an outage was a
             # way around the only revocation this design has.
             "grant": manifest.grant,

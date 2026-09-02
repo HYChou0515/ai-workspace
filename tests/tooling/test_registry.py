@@ -289,3 +289,60 @@ def test_package_info_install_dir_is_sandbox_relative(tmp_path: Path):
     pkgs = discover_packages(pre)
     assert isinstance(pkgs[0], PackageInfo)
     assert pkgs[0].install_dir == "../.tools/datalab"
+
+
+def test_discover_packages_reads_a_declared_env_need(tmp_path: Path):
+    """A bundle's `env.json` reaches its PackageInfo (#750).
+
+    This is the whole point of the declaration: the panel can only tell
+    someone what a tool wants if the tool said so, and since #674 the only
+    party who knows ships an artifact rather than a patch to this repo."""
+    pre = tmp_path / "prebuilt"
+    _seed_package(pre, "sap-tools", [_cmd("query", "Query SAP")])
+    (pre / "sap-tools" / "env.json").write_text(
+        json.dumps([{"name": "SAP_HOST", "description": "SAP server address", "required": True}])
+    )
+
+    (pkg,) = discover_packages(pre)
+    assert pkg.env_needs is not None
+    (need,) = pkg.env_needs
+    assert need.name == "SAP_HOST"
+    assert need.description == "SAP server address"
+    assert need.required is True
+
+
+def test_discover_packages_keeps_undeclared_distinct_from_declared_nothing(tmp_path: Path):
+    """No `env.json` is `None`; an empty one is `()` — and they must not merge.
+
+    Every package built before #750 has no `env.json`. If absent collapsed to
+    empty, the panel would state about nearly every installed tool that it
+    needs no configuration — which is both false and the single most
+    misleading thing this feature could say, since the person reading it is
+    there precisely to find out what they are missing."""
+    pre = tmp_path / "prebuilt"
+    _seed_package(pre, "legacy", [_cmd("go", "Legacy tool")])
+    _seed_package(pre, "audited", [_cmd("go", "Audited tool")])
+    (pre / "audited" / "env.json").write_text(json.dumps([]))
+
+    by_name = {p.name: p for p in discover_packages(pre)}
+    assert by_name["legacy"].env_needs is None, "no env.json must stay 'nobody said'"
+    assert by_name["audited"].env_needs == (), "an empty env.json is a real claim"
+
+
+def test_discover_packages_survives_an_unreadable_env_json(tmp_path: Path, caplog):
+    """A broken hint degrades to "nobody said"; it does not take the deploy down.
+
+    `commands.json` is strict for a reason (the May-30 half-built incident) and
+    that reason does not transfer here: a missing command list means the tool
+    cannot run, whereas a malformed `env.json` means one hint is unavailable.
+    Raising would let a third-party author's typo stop an operator's startup for
+    EVERY package — a convenience turning itself into an outage. The author
+    still gets a loud failure, at prebuild, on their own machine."""
+    pre = tmp_path / "prebuilt"
+    _seed_package(pre, "sloppy", [_cmd("go", "Sloppy tool")])
+    (pre / "sloppy" / "env.json").write_text("{ not json at all")
+
+    (pkg,) = discover_packages(pre)
+    assert [c.name for c in pkg.commands] == ["go"], "the tool itself still works"
+    assert pkg.env_needs is None, "an unreadable claim is no claim, not an empty one"
+    assert "sloppy" in caplog.text, "the operator is told which package to chase"
