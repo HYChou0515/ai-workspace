@@ -1051,16 +1051,54 @@ history:
 
 會,但形狀取決於端點怎麼處理過長的請求:
 
-- **端點會拒絕**(vLLM 的常態):第一個超長的回合**看得見地失敗**,拒絕訊息裡的上限被記
+- **端點會拒絕,而且訊息裡講出上限**:第一個超長的回合**看得見地失敗**,那個數字被記
   下來,之後就正常了。代價是那一趟白跑 —— 而且 `LimitLearner` 是**每個 pod 各自記在
   記憶體裡**,所以每次重啟、每次擴容出新 pod,都會再賠掉一個回合。
+- ⚠️ **端點會拒絕,但訊息裡沒有數字**:這一種**學不到任何東西**,所以不是「撞一次就好」,
+  而是**每次都撞**。已在一個真實部署上量到:自架 vLLM 前面擺 litellm proxy,送 5 萬字
+  的 prompt 就被拒絕,而訊息裡沒有任何可解析的上限。中介層會改寫請求(同一個部署把
+  `max_tokens: 999999999` 靜靜吃掉而不是拒絕),也就會改寫錯誤。
+  **這種拓撲下 `context_limit` 不是優化,是必要的** —— 沒有任何自動途徑能得到那個數字。
 - **端點會靜默截斷**(Ollama 的常態):沒有錯誤、沒有警告,模型從一段它其實沒看完的
   prompt 流暢地作答。這個失敗**只有一個訊號**——provider 回報它實際讀了多少 token——
   而串流路徑要拿到那個數字,需要該 preset 宣告 `reports_usage: true`。**沒宣告的話,
   三道防線一道都不會啟動。**
 
-所以:如果你的端點是**會拒絕**的那種,不設 `context_limit` 是可以接受的取捨(用偶爾一個
-失敗回合換掉一個可能設錯的數字);如果是**會靜默截斷**的那種,`unknown` 等於沒有任何保護。
+所以先確認你是哪一種,再決定要不要設 —— **而「會拒絕」不等於「學得到」**,要看訊息裡有
+沒有數字。一段可以直接跑的判別指令在下面。
+
+> 用越來越長的 prompt 送過去,第一個非 200 就停(所以多數情況第一輪就結束,不會白送幾 MB)。
+> 把 `BASE` / `KEY` / `MODEL` 換成該 preset 的 `llm.base_url` / `llm.api_key` / `model`
+> (去掉 `openai/` 前綴)。
+
+```bash
+BASE='http://your-litellm-proxy:4000/v1' KEY='sk-...' MODEL='your-model-name' \
+python3 - <<'PY'
+import json,os,re,urllib.error,urllib.request
+BASE,KEY,MODEL=os.environ['BASE'].rstrip('/'),os.environ['KEY'],os.environ['MODEL']
+F='這是一段用來測試上限的文字。'
+P=[r"maximum context length is (\d+)",r"max_model_len[^\d]{0,4}(\d+)",r"\d+\s*tokens?\s*>\s*(\d+)"]
+def go(n):
+    b=json.dumps({"model":MODEL,"messages":[{"role":"user","content":F*(n//len(F)+1)}],
+                  "max_tokens":16,"stream":False}).encode()
+    r=urllib.request.Request(f"{BASE}/chat/completions",data=b,method="POST",
+        headers={"content-type":"application/json","authorization":f"Bearer {KEY}"})
+    try:
+        with urllib.request.urlopen(r,timeout=180) as x: return x.status,x.read().decode('utf-8','replace')
+    except urllib.error.HTTPError as e: return e.code,e.read().decode('utf-8','replace')
+    except Exception as e: return 0,f"{type(e).__name__}: {e}"
+for n in (50_000,200_000,800_000,2_000_000):
+    s,t=go(n); print(f"\n--- {n:,} 字 → HTTP {s}")
+    if s==200: print("    正常回答,加大再試"); continue
+    print("    訊息:"," ".join(t.split())[:400])
+    for p in P:
+        m=re.search(p,t,re.I)
+        if m: print(f"\n✅ 上限 = {m.group(1)} — 學得到,不設也行"); raise SystemExit
+    if s==413: print("\n⚠️ 413 被 body 大小擋掉,不算,繼續"); continue
+    print("\n❌ 拒絕但沒講數字 → 學不到,必須自己設 context_limit"); raise SystemExit
+print("\n❌ 200 萬字仍正常回答 → 有東西在悄悄截斷,而且偵測不到")
+PY
+```
 
 ## 12. 開發指令速查
 
