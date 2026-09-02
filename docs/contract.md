@@ -450,7 +450,7 @@ profile/App 預設;override 上限是 `app.json` 的 `tools`,**不是** profile)
 | `RunCancelled`        | `{type: "run_cancelled"}` | 是 | 使用者中斷（DELETE 或新的 POST） |
 | `ToolCallParseError`  | `{type: "tool_call_parse_error", hint: string, call_id: string?, raw: string?}` | 否 | 接著會做 retry-with-feedback |
 | `MaxTurnsExceeded`    | `{type: "max_turns_exceeded", turns: number}` | 是 | agent 沒收斂;`turns` 是 runner 設定的預算 |
-| `AgentMetrics`        | `{type: "agent_metrics", phase: "up"\|"down"\|"final", prompt_tokens, completion_tokens, elapsed_ms}` | 否 | 即時 token telemetry（↑/↓ tok/s）；up/down 為近似值，final 是回報時的精確 usage |
+| `AgentMetrics`        | `{type: "agent_metrics", phase: "up"\|"down"\|"final", prompt_tokens, completion_tokens, elapsed_ms, measured_prompt_tokens?, measured_completion_tokens?, generation_ms?, model?}` | 否 | 即時 token telemetry（↑/↓ tok/s）。前三個是**顯示**用，up/down 為近似值。#748 起，`measured_*` 是**記錄**用的另一條路——provider 自己回報的數字，沒回報就是 `null`，絕不代入估計值；`generation_ms` 是 tok/s 的分母（首 token→末 token，排除 TTFT 與 tool 間隔），`model` 是實際寫出這則回覆的 model。`generation_ms` 每個 `down` tick 都會帶(live tok/s 靠它,而且被取消的一輪就是靠它才留得下記錄);`measured_*` 與 `model` 只在 `final` 出現 |
 
 延後(已在 FE 宣告供未來使用,但尚未發出):
 - `SandboxKilledIdle` `{type: "sandbox_killed_idle"}` — 需要 registry refactor。

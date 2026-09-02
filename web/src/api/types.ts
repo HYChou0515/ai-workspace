@@ -60,6 +60,25 @@ export type Message = {
   /** Epoch ms the message was produced; restores the agent log's timestamps
    * after a reload. Absent for messages saved before this existed. */
   created_at?: number | null;
+  /** #748 — how this reply was produced: which model wrote it, the provider's
+   * own token counts, the turn's wall clock and the time actually spent
+   * generating. Every field is independently absent: `null` means "not
+   * measured", never zero and never a stand-in. Mirrors resources/conversation
+   * MessageMetrics. */
+  metrics?: {
+    model?: string | null;
+    /** What to steer by — approximate when the provider stayed quiet. */
+    prompt_tokens?: number | null;
+    completion_tokens?: number | null;
+    /** What was measured. null where the provider gave nothing — never an
+     * estimate standing in for one. This is what the tooltip shows. */
+    measured_prompt_tokens?: number | null;
+    measured_completion_tokens?: number | null;
+    /** #739: whether the steer-by counts above are the provider's own. */
+    exact?: boolean;
+    elapsed_ms?: number | null;
+    generation_ms?: number | null;
+  } | null;
   /** Resolved [n] markers (KB answers). Rendered as clickable source cards. */
   citations?: MessageCitation[];
   /** Permission-disclosure: knowledge sources found relevant but which the user

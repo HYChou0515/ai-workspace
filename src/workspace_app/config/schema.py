@@ -826,6 +826,14 @@ class Preset:
     # `ollama_chat/qwen2.5vl`) aren't in litellm's capability DB, so we don't
     # auto-detect. Default False keeps text-only models on the describer path.
     vision: bool = False
+    # #748/#751: whether this endpoint answers a `stream_options.include_usage`
+    # request with the PROVIDER's own token counts. Declarative for the same
+    # reason `vision` is — it cannot be detected from the reply. A litellm proxy
+    # answers the request either way: with the backend's real counts if it has
+    # them, with its own tokenizer's if not, in an identically shaped object.
+    # Off unless declared: a wrong `true` persists an invented number as a
+    # measurement, a wrong `false` persists nothing, and blank is recoverable.
+    reports_usage: bool = False
     # Optional — agent-style callers (workspace_chat / kb_chat /
     # infer_modules) need a prompt; LLM-only callers (kb.retrieval_llm)
     # don't. Catalog build enforces non-empty for agent callers.
@@ -1055,6 +1063,7 @@ def _preset_from_dict(d: dict[str, Any]) -> Preset:
     return Preset(
         model=d["model"],
         vision=bool(d.get("vision", False)),
+        reports_usage=bool(d.get("reports_usage", False)),
         prompt_file=d.get("prompt_file", ""),
         description=d.get("description", ""),
         suggestions=[_to_suggestion(v) for v in d.get("suggestions", [])],

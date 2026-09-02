@@ -184,6 +184,15 @@ def resolve_usage(
         name=usage.get("name") or default_name or preset_name,
         model=merged["model"],
         vision=bool(merged.get("vision", False)),
+        # #748/#751: a hand-written kwargs list drops any field nobody adds
+        # here, and strict validation ACCEPTS the key because it is a real
+        # Preset field — so the operator gets no error and no effect.
+        # #748/#751: from the PRESET, not `merged`. This is a claim about an
+        # endpoint, so a per-role usage block has no standing to make it — and
+        # merging let one switch it on for a preset that never declared it,
+        # leaving the same endpoint vouched for in one role and not another.
+        # A usage block that tries is refused at load, not quietly dropped.
+        reports_usage=preset.reports_usage,
         system_prompt=prompt_text,
         description=merged.get("description", ""),
         # ``dataclasses.asdict(preset)`` above flattens the loader-side

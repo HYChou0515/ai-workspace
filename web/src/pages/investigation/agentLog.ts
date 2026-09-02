@@ -36,7 +36,14 @@ export type AgentMetricsState = {
   phase: "up" | "down" | "final";
   promptTokens: number;
   completionTokens: number;
+  /** Wall clock for the whole turn — the "· 12.3s". NOT the tok/s denominator. */
   elapsedMs: number;
+  /** #748: time the model spent generating. null when it was never timed (an
+   * older message, or the non-streaming path), which reads as "no rate" rather
+   * than falling back to `elapsedMs` and reviving the wrong number. */
+  generationMs?: number | null;
+  /** #748: the model that actually wrote this reply. */
+  model?: string | null;
 };
 
 /** One workflow step's live state in the chat feed (#100 observability). A
@@ -429,9 +436,15 @@ export function turnsFromEntry(entries: readonly AgentEntry[], index: number): n
   return seen.size + undated;
 }
 
-/** tok/s for the completion phase (0 until any time has elapsed). */
-export function tokensPerSec(m: AgentMetricsState): number {
-  return m.elapsedMs > 0 ? Math.round(m.completionTokens / (m.elapsedMs / 1000)) : 0;
+/** tok/s for the completion phase (null when no span was measured). */
+export function tokensPerSec(m: AgentMetricsState): number | null {
+  // #748: generation time, never the turn's wall clock. A turn whose 61s were
+  // 60s of tool and 5s of generation reported ~6 tok/s for a model doing ~71 —
+  // and the figure moved with the TOOL. null (not a fallback to elapsedMs) when
+  // generation was never timed: no rate is honest, the old rate was not.
+  const ms = m.generationMs;
+  if (ms == null || ms <= 0) return null;
+  return Math.round(m.completionTokens / (ms / 1000));
 }
 
 /** True while any tool call in the log is still running (no tool_end yet). The
@@ -494,13 +507,35 @@ export function turnPhase(log: AgentLog): TurnPhase {
 
 /** Claude-Code-style one-liner: ↑ prompt while sending, ↓ completion +
  * tok/s while/after receiving. While a tool runs (`toolRunning`), generation is
- * paused and no fresh metrics arrive, so keep the cumulative ↑/↓ tokens but drop
- * the would-be-stale tok/s · elapsed and flag the tool instead. */
+ * paused, so the elapsed is dropped and the tool is flagged instead — but the
+ * rate is KEPT (#748): its denominator is generation time, so it holds its last
+ * true value rather than decaying for as long as the tool takes. */
+/** The counts and the rate, with no clock. #748: a caller that already shows its
+ * own elapsed needs these WITHOUT the backend's — printing both puts two
+ * disagreeing numbers on one line, and they disagree most in the wedged-server
+ * case the FE clock exists to survive. */
+export function formatCounts(m: AgentMetricsState): string {
+  const rate = tokensPerSec(m);
+  return `↑ ${m.promptTokens} · ↓ ${m.completionTokens} tok${rate == null ? "" : ` · ${rate} tok/s`}`;
+}
+
 export function formatMetrics(m: AgentMetricsState, toolRunning = false): string {
-  if (toolRunning) return `↑ ${m.promptTokens} · ↓ ${m.completionTokens} tok · ⏳ running…`;
   const secs = (m.elapsedMs / 1000).toFixed(1);
+  const counts = `↑ ${m.promptTokens} · ↓ ${m.completionTokens} tok`;
+  // A model whose first act is a tool call streams no text, so no `down` tick is
+  // ever emitted and the phase stays `up`. `toolRunning` therefore has to be
+  // decided FIRST — checking `up` first made that turn read "sending…" while a
+  // tool was running, and dropped the running indicator for its whole duration.
+  // #748: the rate used to be dropped while a tool ran, because dividing by the
+  // turn's wall clock made it decay for as long as the tool took — it was going
+  // stale, so hiding it was right. Now that the denominator is generation time
+  // it simply holds its last true value: no generation happened, so the speed
+  // is still that speed. Keeping it visible is what makes the line look alive.
+  const rate = tokensPerSec(m);
+  const speed = rate == null ? "" : ` · ${rate} tok/s`;
+  if (toolRunning) return `${counts}${speed} · ⏳ running…`;
   if (m.phase === "up") return `↑ ${m.promptTokens} tok · sending…`;
-  return `↑ ${m.promptTokens} · ↓ ${m.completionTokens} tok · ${tokensPerSec(m)} tok/s · ${secs}s`;
+  return `${counts}${speed} · ${secs}s`;
 }
 
 /* ------------------------- internal helpers ------------------------- */
@@ -581,6 +616,8 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
           promptTokens: ev.prompt_tokens,
           completionTokens: ev.completion_tokens,
           elapsedMs: ev.elapsed_ms,
+          generationMs: ev.generation_ms ?? null,
+          model: ev.model ?? null,
         },
       };
 

@@ -397,18 +397,69 @@ class _TurnReducer:
                     tool_display=item.display,
                 )
             )
-        elif isinstance(item, AgentMetrics):
-            # Pin the latest token usage onto the current assistant answer so the
-            # ↑/↓ line survives a reload (the stream is live-only).
+        elif isinstance(item, AgentMetrics) and item.phase != "up":
+            # Pin how this reply was produced onto the assistant answer so it
+            # survives a reload (the stream is live-only).
+            #
+            # #748, two changes: only `final` is recorded — this used to write on
+            # EVERY metrics event and was correct solely because `final` happens
+            # to arrive last, which a 0.2s `down` tick carrying no measurement
+            # would now blank. And the numbers come from the event's `measured_*`
+            # channel, not its display fields: the display deliberately falls back
+            # to a chars/4 estimate so the live line never reads "↑0 ↓0", and
+            # copying that into the record is what made a guess indistinguishable
+            # from a measurement.
             for msg in reversed(self.produced):
                 if msg.role == "assistant":
+                    # Merge rather than replace. Gating on `phase == "final"`
+                    # threw the record away for every turn that never gets one —
+                    # Stop, MaxTurns, a provider error, the #113 repetition guard
+                    # — and those turns HAD measured an elapsed and a generation
+                    # time. Replacing wholesale has the opposite failure: a tick
+                    # arriving after `final` carries no counts and would blank
+                    # the provider's. So each field keeps the last value that was
+                    # actually measured.
+                    prev = msg.metrics
                     msg.metrics = MessageMetrics(
-                        prompt_tokens=item.prompt_tokens,
-                        completion_tokens=item.completion_tokens,
-                        elapsed_ms=item.elapsed_ms,
-                        # #739: carry the provider's word for it, so the gauge
-                        # can tell a measurement from a substituted estimate.
-                        exact=item.exact,
+                        # Steer-by: the event's display figure, which is always
+                        # present. Believe-me: the measured pair, or None.
+                        prompt_tokens=item.prompt_tokens or (prev.prompt_tokens if prev else 0),
+                        completion_tokens=item.completion_tokens
+                        or (prev.completion_tokens if prev else 0),
+                        measured_prompt_tokens=(
+                            item.measured_prompt_tokens
+                            if item.measured_prompt_tokens is not None
+                            else (prev.measured_prompt_tokens if prev else None)
+                        ),
+                        measured_completion_tokens=(
+                            item.measured_completion_tokens
+                            if item.measured_completion_tokens is not None
+                            else (prev.measured_completion_tokens if prev else None)
+                        ),
+                        # `up` is excluded above because it carries elapsed_ms=0
+                        # by construction — it announces an attempt rather than
+                        # measuring one, and a retry re-emits it, which would
+                        # persist "this turn took 0ms" over a real reading.
+                        elapsed_ms=item.elapsed_ms or (prev.elapsed_ms if prev else 0),
+                        generation_ms=(
+                            item.generation_ms
+                            if item.generation_ms is not None
+                            else (prev.generation_ms if prev else None)
+                        ),
+                        model=item.model or (prev.model if prev else None),
+                        # #739 asked the same question with a flag. Derived here
+                        # from #748's numbers rather than copied from the event,
+                        # so the flag and the fields it describes are one fact
+                        # with one source and cannot come to disagree.
+                        #
+                        # From the PROMPT count specifically: #739 uses this to
+                        # decide whether `prompt_tokens` can anchor its context
+                        # gauge, so a turn whose provider reported a completion
+                        # but no prompt is NOT exact for that purpose. Deriving
+                        # it from "either was measured" disagreed with #739's own
+                        # rule in exactly that case.
+                        exact=item.measured_prompt_tokens is not None
+                        or (prev.exact if prev else False),
                     )
                     break
         elif isinstance(item, RepetitionStopped):
