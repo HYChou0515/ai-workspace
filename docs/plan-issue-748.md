@@ -81,12 +81,24 @@ thinking 時要顯示(後端本來就在推,`completion_chars` 連 reasoning del
 
 ```python
 class MessageMetrics(Struct, frozen=True):
-    model: str | None = None             # 新增
-    prompt_tokens: int | None = None     # int → int | None
-    completion_tokens: int | None = None # int → int | None
-    elapsed_ms: int = 0                  # 不變:整輪牆鐘,畫面上的「· 12.3s」
-    generation_ms: int | None = None     # 新增:tok/s 的分母
+    model: str | None = None                 # 寫出這則文字的那個
+    prompt_tokens: int = 0                   # 導航用:永遠有值,可能是估計
+    completion_tokens: int = 0               # 導航用
+    measured_prompt_tokens: int | None = None    # 採信用:provider 的真值,沒有就 None
+    measured_completion_tokens: int | None = None
+    elapsed_ms: int = 0                      # 整輪牆鐘,畫面上的「· 12.3s」
+    generation_ms: int | None = None         # tok/s 的分母
+    exact: bool = False                      # #739 的旗標,由 measured_prompt 導出
 ```
+
+⚠️ **「導航」和「採信」必須是不同欄位,這一點我做錯過一次。** 一開始只留可空的那一組,
+理由是「沒量到就該長得像沒量到」—— 但 #739 的 context 量表**錨在 `prompt_tokens > 0`**,
+而它在自己的世界裡永遠是 int(provider 沉默時由 turn 塞估計值)。改成可空之後,量表在
+**預設設定下永遠找不到錨**,退回它自己量測並否決的那條路(「+500 誤差變成 −5,800」、
+「壓縮觸發不再發火」)。
+
+§2.8 講的正是這件事,而我只把它做在事件上、在持久化的 struct 裡合了回去:
+**量表要的是「就算是估計也要有數字」,記錄要的是「不能有分不出真假的數字」。**
 
 - `prompt_tokens` **反正**要因 2.1 變成可空,所以 model 放進來是同一件事,不是多開一條路。
 - 拆成 `Message.model` + `Message.metrics` 兩個家,總有一天有人只更新一邊。
@@ -258,6 +270,11 @@ key(它確實是 Preset 欄位),所以 operator 設了沒反應、也沒有錯�
 | **P12** | **tool-call JSON 漏進回覆內文**(§2.10)—— P9 造成,並補上真的驅動串流迴圈的測試 | ✅ |
 | **P13** | per-preset `reports_usage`(§2.9 定案,依真實部署量測);#751 關閉 | ✅ |
 | **P14** | 旋鈕原本是死的、且 failover 可繞過(§2.11) | ✅ |
+| **P15** | role 不得替 endpoint 背書(usage 區塊寫了就在載入時拒絕) | ✅ |
+| **P16** | app chat 的接線沒有測試 —— 主路徑,同一個死旋鈕形狀 | ✅ |
+| — | 合併 master(#739 compaction);兩套「這數字真不真」的機制合一,`exact` 改為導出 | ✅ |
+| **P17** | 記錄吞掉了量表的錨點(§2.5)—— §2.8 只做在事件上、沒做在 struct 上 | ✅ |
+| **P18** | 只有 token 是估計時仍顯示 `≈ N tok/s`;兩處過期 docstring;`_USAGE_FIELDS` 的接受集對齊拒絕集 | ✅ |
 
 ---
 

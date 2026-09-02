@@ -384,7 +384,12 @@ _PRESET_LLM_FIELDS = {f.name for f in dataclasses.fields(PresetLlmSettings)}
 # infer_modules entries carry the per-step classifier's KB-query depth +
 # effort + fan-out + which collection to search. Allowed on any usage entry
 # (other purposes simply ignore them).
-_USAGE_FIELDS = _PRESET_FIELDS | {
+# #748/#751: `reports_usage` is a preset field but NOT a usage field — it
+# describes what an ENDPOINT reports, so a role may not assert it. Subtracted
+# here rather than only refused later, so the accepted set and the enforced set
+# are the same set: leaving it in meant one validator welcomed a key the next
+# one rejected, and "unknown field" is the error that actually helps.
+_USAGE_FIELDS = (_PRESET_FIELDS - {"reports_usage"}) | {
     "preset",
     "name",
     "reasoning_effort",

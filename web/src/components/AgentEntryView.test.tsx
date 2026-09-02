@@ -1002,6 +1002,31 @@ describe("reply provenance (#748)", () => {
     expect(screen.queryByText(/qwen3/)).not.toBeInTheDocument();
   });
 
+  it("still reports a rate when only the token count was estimated", () => {
+    // `generation_ms` is OUR clock and is always measured; only the token count
+    // depends on the provider. Requiring both made the tok/s fix — the thing
+    // that was asked for — visible live and then gone on reload, on every
+    // endpoint not vouched for, which is the default. An estimate is allowed on
+    // screen as long as it says it is one; what must never be estimated is the
+    // RECORD, and that stays null.
+    render(
+      <EntryView
+        entry={reply({
+          metrics: {
+            model: "qwen3:14b",
+            prompt_tokens: 7282,
+            completion_tokens: 100,
+            elapsed_ms: 5_000,
+            generation_ms: 2_000,
+          },
+        })}
+      />,
+    );
+    const tip = screen.getByText(/\d{2}:32/).getAttribute("title") ?? "";
+    expect(tip).toMatch(/≈\s*50 tok\/s/); // 100 / 2s, marked as approximate
+    expect(tip).not.toContain("↑"); // counts stay absent: those ARE the record
+  });
+
   it("says nothing where nothing was measured", () => {
     render(
       <EntryView

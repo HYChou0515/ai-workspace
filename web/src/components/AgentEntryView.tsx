@@ -421,8 +421,18 @@ function ReplyStamp({ message, at: entryAt }: { message: Message; at?: number })
   if (m?.measured_prompt_tokens != null) counts.push(`↑ ${m.measured_prompt_tokens}`);
   if (m?.measured_completion_tokens != null) counts.push(`↓ ${m.measured_completion_tokens}`);
   if (counts.length > 0) lines.push(`${counts.join(" · ")} tok`);
-  if (m?.measured_completion_tokens != null && m.generation_ms != null && m.generation_ms > 0) {
-    lines.push(`${Math.round(m.measured_completion_tokens / (m.generation_ms / 1000))} tok/s`);
+  // The rate needs a count and a duration. `generation_ms` is OUR clock and is
+  // always measured; only the count depends on the provider. Requiring the
+  // measured count made the rate visible live and gone on reload for every
+  // endpoint not vouched for — which is the default, so the fix that was asked
+  // for was invisible by default. An estimate may go on SCREEN as long as it
+  // says it is one; what must never be estimated is the record, and the ↑/↓
+  // counts above — which are the record — stay absent.
+  const rateTokens = m?.measured_completion_tokens ?? m?.completion_tokens;
+  if (rateTokens != null && m?.generation_ms != null && m.generation_ms > 0) {
+    const rate = Math.round(rateTokens / (m.generation_ms / 1000));
+    const approx = m?.measured_completion_tokens == null ? "≈ " : "";
+    lines.push(`${approx}${rate} tok/s`);
   }
 
   return (

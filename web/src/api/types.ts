@@ -74,6 +74,8 @@ export type Message = {
      * estimate standing in for one. This is what the tooltip shows. */
     measured_prompt_tokens?: number | null;
     measured_completion_tokens?: number | null;
+    /** #739: whether the steer-by counts above are the provider's own. */
+    exact?: boolean;
     elapsed_ms?: number | null;
     generation_ms?: number | null;
   } | null;

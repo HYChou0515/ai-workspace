@@ -20,8 +20,15 @@ class MessageMetrics(Struct, frozen=True):
     model: str | None = None
     """The model that produced THIS message's text — under failover, the endpoint
     that actually served, not the configured head of the chain. A turn can span
-    several round trips and switch between them; this message holds one answer,
-    so it names whoever wrote it. That a switch happened at all is the
+    several round trips and switch between them; this names whoever wrote THIS
+    message's text.
+
+    Only the turn's final answer carries it: a tool call ends an assistant
+    message and starts a new one, and the model is known only on the `final`
+    event, which lands on the last. The intermediate bubbles of an agentic turn
+    therefore show a time and nothing else — sparse, but not wrong. Stamping the
+    last model onto all of them would be a guess in exactly the case this field
+    exists to stop guessing about: a mid-turn failover. That a switch happened at all is the
     `FailoverSwitch` event's job, not this field's. None for messages written
     before the field existed."""
 
@@ -63,13 +70,13 @@ class MessageMetrics(Struct, frozen=True):
     arrived, or on the non-streaming path, which cannot see token timings."""
 
     exact: bool = False
-    """#739: whether the counts above are the provider's rather than an estimate.
+    """#739: whether `prompt_tokens` above is the provider's own count rather
+    than the turn's estimate — i.e. whether the gauge may anchor on it.
 
-    #748 answered the same question with nullable counts — `None` IS "not
-    measured" — so this is redundant by construction and kept only because
-    #739's consumers read it. Derived at the single construction site
-    (`turns._TurnReducer`), never set by hand, so it cannot come to disagree
-    with the fields it describes."""
+    Redundant with `measured_prompt_tokens is not None` and kept because #739's
+    consumers read the flag. Derived at the single construction site
+    (`turns._TurnReducer`), never set by hand, so the two cannot come to
+    disagree about the same reply."""
 
 
 class Citation(Struct):
