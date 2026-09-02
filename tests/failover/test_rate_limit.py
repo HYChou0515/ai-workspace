@@ -289,3 +289,20 @@ def test_the_non_streaming_chain_holds_the_same_way():
     assert slept == [2.0]  # held between the two same-endpoint attempts
     clock.now = 2.5
     assert registry.is_cooling("a") is False  # parked 2s, not 30s
+
+
+# ── the floor: no rate-limit wait is ever shorter than the doubling backoff ──
+# A stated 0 (or 0.001) honoured literally re-sends at the cadence that earned
+# the throttle, and a TIME budget never spends against zero-length waits — the
+# hole both the turn loop and the agent chain would otherwise share.
+
+
+def test_rate_limit_wait_is_floored_at_the_backoff():
+    from workspace_app.failover.rate_limit import rate_limit_wait_s
+
+    assert rate_limit_wait_s(_rate_limited({"retry-after": "0"}), attempt=1) == 1.0
+    assert rate_limit_wait_s(_rate_limited({"retry-after": "0.001"}), attempt=3) == 4.0
+    # …and the floor never CAPS a real window down.
+    assert rate_limit_wait_s(_rate_limited({"retry-after": "90"}), attempt=1) == 90.0
+    # No stated window at all keeps the plain backoff.
+    assert rate_limit_wait_s(_rate_limited({}), attempt=2) == 2.0

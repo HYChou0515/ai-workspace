@@ -43,9 +43,40 @@ def backoff_s(attempt: int) -> float:
 
 def rate_limit_wait_s(exc: BaseException, *, attempt: int) -> float:
     """How long to hold before re-sending after ``exc`` rate-limited us: the
-    window the provider stated, else a doubling backoff on ``attempt``."""
+    window the provider stated, else a doubling backoff on ``attempt`` — and
+    never LESS than that backoff either way. ``Retry-After`` is a floor, not an
+    exact figure, so oversleeping a stated ``0.5`` to 1s is harmless; honouring
+    a stated ``0`` (or ``0.001``) literally is not — a provider that repeats it
+    while still refusing would be re-sent to at wire speed, the very cadence
+    that earned the throttle, and a time budget never spends against zero-length
+    waits."""
     stated = retry_after_s(exc)
-    return stated if stated is not None else backoff_s(attempt)
+    floor = backoff_s(attempt)
+    return max(stated, floor) if stated is not None else floor
+
+
+def park_for(cooldown_s: float, cause: BaseException) -> float:
+    """How long to bench a provider that just failed.
+
+    ``cooldown_s`` is the bench time for an endpoint that is *unwell*. A
+    rate-limited one is healthy — it serves again the moment its window rolls —
+    so when the 429 states a wait, that is the honest bench time. The registry
+    is keyed by ``(model, endpoint)`` and shared across roles, so parking for
+    exactly the stated window also tells every other caller to hold off,
+    instead of each rediscovering the limit one 429 at a time.
+    """
+    if is_rate_limited(cause):
+        stated = retry_after_s(cause)
+        if stated is not None:
+            return stated
+    return cooldown_s
+
+
+def retry_pause(cause: BaseException) -> float:
+    """How long to hold before retrying the SAME endpoint. Zero for an ordinary
+    pre-first failure (the retry is meant to be quick), the stated window when
+    the endpoint rate-limited us."""
+    return retry_after_s(cause) or 0.0 if is_rate_limited(cause) else 0.0
 
 
 def is_rate_limited(exc: BaseException) -> bool:
