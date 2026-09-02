@@ -490,6 +490,16 @@ def make_host_app(
                     for c in tool.commands
                 ],
             }
+            if tool.env is not None:
+                # Only when the author declared something. A key that always
+                # appeared would turn every pre-#750 artifact's silence into
+                # "needs nothing" — and the app cannot tell the difference from
+                # anywhere else, because it never reads a manifest (#696 is the
+                # same shape of loss, in the other direction).
+                resolved[name]["env"] = [
+                    {"name": e.name, "description": e.description, "required": e.required}
+                    for e in tool.env
+                ]
         return {"tools": resolved, "refused": refused}
 
     @app.post("/drain", status_code=202)

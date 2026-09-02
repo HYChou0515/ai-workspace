@@ -80,6 +80,27 @@ class ServerSettings:
     # decision lives in the impl rather than in a mapping table here.
     request_env: str = ""
 
+    # #750 — dotted paths to `IEnvProvider` implementations: the deploy's own
+    # code for "log in, get the variables", so a person who knows their account
+    # and password can fill a variable that is really a token.
+    #
+    # A LIST, unlike `request_env`: one deploy can have an SAP login, an AD
+    # login and an API-key exchange, and they are unrelated to each other.
+    #
+    # Empty (default) ⇒ no buttons anywhere. That is the absence of the feature,
+    # not a degraded mode: every variable is still typeable by hand, which is
+    # the path that always works.
+    #
+    # The implementations belong to the deploy on purpose. A tool declares only
+    # variable NAMES and is joined to a provider by name, so a third-party tool
+    # author can never name — or choose — which credential the UI asks for.
+    # `list`, like `superusers` above, because that is what the loader actually
+    # produces: `_build` passes the parsed YAML through as-is, so a `tuple`
+    # annotation here would simply be false at runtime — and invisible, since
+    # `_build` takes `**dict[str, Any]` and the type checker never sees the
+    # field it is filling.
+    env_providers: list[str] = field(default_factory=list)
+
 
 # ─── sandbox ────────────────────────────────────────────────────────────
 @dataclass(frozen=True)

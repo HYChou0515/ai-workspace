@@ -33,6 +33,7 @@ from workspace_app.factories import (
     get_designed_pptx_vlm,
     get_doc_pipeline,
     get_embedder,
+    get_env_providers,
     get_event_bus,
     get_filestore,
     get_goal_checker_llm,
@@ -231,6 +232,10 @@ def main() -> None:
             # chat send's cookies/headers can become that turn's tool env. None
             # when unconfigured ⇒ no such seam.
             request_env=get_request_env(settings.server.request_env),
+            # #750: the deploy's own credential->variable implementations.
+            # Empty is the ordinary case — no buttons, and every variable
+            # still typeable by hand.
+            env_providers=get_env_providers(settings.server.env_providers),
             # #262: same superuser set threaded into get_spec(...) above, so the
             # route-level authorize() guards agree with the storage access_scope.
             superusers=frozenset(settings.server.superusers),

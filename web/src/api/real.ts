@@ -14,33 +14,34 @@
 
 import type { AgentEvent, CellEvent } from "../events";
 import { decodeBytes } from "./encoding";
-import { API_PREFIX, apiFetch, HttpError, errorCode, errorInfo } from "./http";
+import { API_PREFIX, apiFetch, HttpError, errorCode, errorInfo, httpErrorFrom } from "./http";
 import { parseSseStream } from "./sse";
 import type {
   ActivityEntry,
+  ApiClient,
   AppItem,
   AppManifest,
   AppSummary,
-  ApiClient,
   CellRef,
+  ChatContextUsage,
   CloseStatus,
+  CompactionReason,
   Conversation,
+  EnvProvider,
   ExecResult,
-  SearchParams,
   ExecuteCellArgs,
   FileInfo,
   ItemSkillState,
   ItemToolState,
-  ToolCatalogEntry,
-  WorkspaceUsage,
-  ChatContextUsage,
-  CompactionReason,
   NotebookRef,
   NotificationItem,
   SearchOptions,
+  SearchParams,
   SearchResult,
   SendMessageArgs,
+  ToolCatalogEntry,
   User,
+  WorkspaceUsage,
 } from "./types";
 
 type SpecstarRevisionInfo = {
@@ -157,6 +158,41 @@ export const realApi: ApiClient = {
       ),
     );
     return r.tools;
+  },
+
+  async getEnvProviders(slug: string, itemId: string) {
+    const r = await json<{ providers: EnvProvider[] }>(
+      await apiFetch(
+        `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}/env-providers`,
+      ),
+    );
+    return r.providers;
+  },
+
+  async resolveEnvProvider(
+    slug: string,
+    itemId: string,
+    providerId: string,
+    values: Record<string, string>,
+  ) {
+    const resp = await apiFetch(
+      `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}/env-providers/${encodeURIComponent(providerId)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ values }),
+      },
+    );
+    if (!resp.ok) {
+      // Through `httpErrorFrom`, not `json`'s generic throw: the implementation
+      // wrote a sentence for the person ("your password is wrong") and the
+      // generic path would hand them the whole envelope instead — status line,
+      // error code, provider id and all. Seen in a real browser; every unit
+      // test had supplied an `Error` whose message was already the sentence.
+      throw await httpErrorFrom(resp, `env provider ${providerId} refused`);
+    }
+    const body = (await resp.json()) as { env: Record<string, string> };
+    return body.env;
   },
 
   async getItemSkills(slug: string, itemId: string) {

@@ -68,6 +68,8 @@ from .context_card_routes import register_context_card_actions, register_context
 from .doc_question_routes import register_doc_question_routes
 from .entity_broadcast import build_entity_write_sink
 from .entity_routes import register_entity_routes
+from .env_provider import IEnvProvider
+from .env_provider_routes import register_env_provider_routes
 from .event_bus import IEventBus
 from .events import AgentEvent
 from .file_routes import register_file_routes
@@ -257,6 +259,10 @@ def create_app(
     # the item's shared `env_vars` cannot carry. None (default) ⇒ no such seam.
     # __main__ passes factories.get_request_env(settings.server.request_env).
     request_env: IRequestEnv | None = None,
+    # #750: the deploy's credential->variable implementations. Empty is the
+    # ordinary case — no buttons, and every variable still typeable by hand.
+    # __main__ passes factories.get_env_providers(settings.server.env_providers).
+    env_providers: list[IEnvProvider] | None = None,
     # #262: user ids with UNRESTRICTED collection access — threaded into the
     # route-level `authorize(...)` guards (the dedicated permission endpoint +
     # content-route guards). MUST match the set passed to `make_spec(superusers=…)`
@@ -1651,6 +1657,17 @@ def create_app(
         ingestor=ingestor,
         insights_collection_id=insights_collection_id,
         kb_chat_pipeline=kb_chat_pipeline,
+        superusers=superusers,
+    )
+
+    # On app.state so the routes read the CURRENT list rather than one closed
+    # over at build time.
+    app.state.env_providers = list(env_providers or ())
+
+    register_env_provider_routes(
+        api,
+        spec=spec,
+        get_user_id=get_user_id,
         superusers=superusers,
     )
 

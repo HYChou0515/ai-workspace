@@ -1273,6 +1273,11 @@ export function AgentHeader({
             setShowEnv(false);
           }}
           onClose={() => setShowEnv(false)}
+          // #750: which item, so the panel can offer a field per variable this
+          // item's own tools declared. Only reached when the modal is open, so
+          // a closed panel costs nothing.
+          slug={slug}
+          itemId={investigationId}
         />
       )}
       {showTools && onSaveToolPrefs && (

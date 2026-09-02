@@ -29,6 +29,7 @@ from specstar import BackendBinding, BackendConfig, ConnectionProfile, SpecStar
 from workspace_app.resources import make_spec
 
 from .agent.config_catalog import AgentConfigCatalog
+from .api.env_provider import IEnvProvider
 from .api.litellm_runner import LitellmAgentRunner
 from .api.request_env import IRequestEnv
 from .api.runner import AgentRunner
@@ -1200,6 +1201,46 @@ def get_request_env(dotted: str) -> IRequestEnv | None:
     if not dotted:
         return None
     return _construct_dotted(dotted, IRequestEnv, config_key="server.request_env")
+
+
+def get_env_providers(dotted: list[str]) -> list[IEnvProvider]:
+    """The deploy's "log in, get the variables" implementations (#750).
+
+    Empty is the ordinary case and not a degraded one: with no providers the
+    panel simply draws no buttons, and every variable is still typeable by hand.
+
+    Takes the values rather than the whole ``Settings`` for the same reason
+    ``get_request_env`` does — ``tests/config/test_server_settings_are_wired``
+    looks for the composition root reading ``settings.server.env_providers`` in
+    plain sight, and a factory handed ``Settings`` hides it."""
+    built = [_construct_dotted(d, IEnvProvider, config_key="server.env_providers") for d in dotted]
+    # Refused here rather than resolved later. The id is the one identifier a
+    # third party can never write — the whole point of the design — so two
+    # implementations claiming it would make dispatch pick whichever came first
+    # in the config file, silently, and someone would type a password into a
+    # form belonging to the other system. A startup failure naming the id is the
+    # cheapest possible version of that discovery.
+    seen: dict[str, str] = {}
+    for path, impl in zip(dotted, built, strict=True):
+        # Loud, unlike the request paths, and deliberately so: an env provider is
+        # the DEPLOY's own code and this is their own startup, so the person who
+        # can fix it is standing here. What they must not get is a bare
+        # exception from a property with no clue which entry produced it.
+        try:
+            impl_id = impl.id
+        except Exception as exc:
+            raise ValueError(
+                f"server.env_providers: {path} raised while being asked for its id — "
+                "an implementation that cannot name itself can never be dispatched to."
+            ) from exc
+        if impl_id in seen:
+            raise ValueError(
+                f"server.env_providers: {path} and {seen[impl_id]} both claim the id "
+                f"{impl_id!r}. The id decides which implementation a login button runs, "
+                "so a duplicate would send a credential to whichever was listed first."
+            )
+        seen[impl_id] = path
+    return built
 
 
 def _tool_check_kwargs(settings: Settings, purpose: str) -> dict:

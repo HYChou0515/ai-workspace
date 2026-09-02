@@ -78,15 +78,21 @@ export function PopoverItem({
   disabled,
   onClick,
   children,
+  testId,
 }: {
   selected?: boolean;
   disabled?: boolean;
   onClick: () => void;
   children: React.ReactNode;
+  /** A handle for tests. Without one, a menu built from this component can only
+   * be reached by its visible text — which ties every such test to the copy and
+   * to the active locale. */
+  testId?: string;
 }) {
   return (
     <button
       type="button"
+      data-testid={testId}
       onClick={onClick}
       disabled={disabled}
       style={{
@@ -127,7 +133,14 @@ export function PopoverItem({
       >
         {selected ? "✓" : ""}
       </span>
-      <span>{children}</span>
+      {/* A flex row that fills the button, so an item made of more than one
+          piece can lay itself out — a label on the left and a status on the
+          right is the ordinary shape for a menu, and a plain inline span made
+          `flex: 1` and `margin-left: auto` silently do nothing, leaving the two
+          touching. Single-child items are unaffected. */}
+      <span style={{ display: "flex", alignItems: "baseline", gap: 8, flex: 1, minWidth: 0 }}>
+        {children}
+      </span>
     </button>
   );
 }

@@ -132,6 +132,80 @@ def test_a_third_party_tool_carries_its_release_and_author_on_its_own_row(
     assert "Trend" in row["description"]
 
 
+def test_a_tools_row_carries_what_it_wants_from_the_environment(harness: Harness, monkeypatch):
+    """#750. A package's `env.json` reaches the row for the tool it belongs to.
+
+    It rides the picker's response rather than a route of its own because this
+    endpoint already resolves the item's effective toolset through the same
+    call a turn makes — the anti-drift the route was built around. A second
+    endpoint doing its own resolve would be a second answer to "which tools does
+    this item run", and the two would disagree the moment one of them changed."""
+    from workspace_app.tooling.registry import CommandInfo, EnvNeed, PackageInfo
+
+    iid = register_rca_item(harness.spec)
+    _declaring(monkeypatch, "wafer-history")
+    _resolving(
+        monkeypatch,
+        ExternalTools(
+            packages=(
+                PackageInfo(
+                    name="wafer-history",
+                    install_dir="../.tools/wafer-history",
+                    commands=(CommandInfo("trend", "Yield trend for a lot.", {}),),
+                    env_needs=(
+                        EnvNeed("WAFER_API", "Yield service base URL", required=True),
+                        EnvNeed("WAFER_CACHE"),
+                    ),
+                ),
+            ),
+            shas={"wafer-history": "a" * 64},
+            provenance={"wafer-history": ToolProvenance(version="1.4.2", author="W <w@e.com>")},
+        ),
+    )
+
+    rows = harness.client.get(f"/a/rca/items/{iid}/tools").json()["tools"]
+
+    (row,) = [r for r in rows if r["key"] == "wafer-history"]
+    assert row["env_needs"] == [
+        {"name": "WAFER_API", "description": "Yield service base URL", "required": True},
+        {"name": "WAFER_CACHE", "description": "", "required": None},
+    ]
+
+
+def test_a_builtin_row_needs_nothing_rather_than_saying_nothing(harness: Harness):
+    """A built-in is `[]`, not `null` — and the difference is ours to assert.
+
+    `null` means "the author did not say", which for a third-party bundle is
+    the honest answer. For a built-in it would be false modesty about our own
+    code: `_exec_tool` is the only place `user_env` reaches a tool and it runs
+    a package's launcher, so a built-in receives none of these variables by
+    construction. Reporting every built-in as unknown would also drown the
+    unknowns that matter — and "did not say" is the one signal here that has to
+    keep meaning something."""
+    rows = harness.client.get(harness.wpath("/tools")).json()["tools"]
+    by_key = {r["key"]: r for r in rows}
+    assert by_key["exec"]["env_needs"] == []
+
+
+def test_a_package_that_never_declared_reaches_the_wire_as_null(harness: Harness, monkeypatch):
+    """The three states survive serialisation, which is where two of them merge.
+
+    `[]` and `null` are one keystroke apart in JSON and a Python `or []` away
+    from being the same thing. Every package built before #750 lands here, so
+    if silence arrived as `[]` the panel would tell someone hunting a missing
+    variable that this tool needs none — while sitting next to a built-in
+    saying exactly the same thing, with no way to tell which one was a claim."""
+    iid = register_rca_item(harness.spec)
+    _declaring(monkeypatch, "wafer-history")
+    _resolving(monkeypatch, _resolved())  # a package with no env.json at all
+
+    rows = harness.client.get(f"/a/rca/items/{iid}/tools").json()["tools"]
+
+    by_key = {r["key"]: r for r in rows}
+    assert by_key["wafer-history"]["env_needs"] is None, "silence is not a claim"
+    assert by_key["exec"]["env_needs"] == [], "and it is distinguishable from one"
+
+
 def test_a_first_party_tool_claims_no_release_or_author(harness: Harness, monkeypatch):
     """The fields are per-row rather than per-list, so the ones that ship with
     the platform have to say nothing rather than say something wrong."""

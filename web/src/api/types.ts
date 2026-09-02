@@ -299,6 +299,40 @@ export type ItemToolState = {
   /** Why it could not be resolved. The row keeps its switch; what it lost is
    * the ability to run (#480). */
   unavailable?: string | null;
+  /** #750: what this tool says it wants from the item's environment, or `null`
+   * when nobody said. `null` and `[]` are different claims and the panel draws
+   * them differently — `[]` is "needs nothing", `null` is "did not say". Almost
+   * every tool predates the declaration, so reading silence as `[]` would tell
+   * someone hunting a missing variable that there is nothing to find. */
+  env_needs?: EnvNeedDecl[] | null;
+};
+
+/** #750: one environment variable a tool's author says it wants. A hint, not a
+ * rule — nothing refuses a name absent from here. `required: null` means the
+ * author did not mark it, which is neither required nor optional. */
+export type EnvNeedDecl = {
+  name: string;
+  description: string;
+  required: boolean | null;
+};
+
+/** #750: one thing a provider's dialog asks for. `secret` renders it masked —
+ * a courtesy to the person typing, not a security property. */
+export type EnvProviderInput = {
+  name: string;
+  label: string;
+  secret: boolean;
+};
+
+/** #750: one of this deploy's ways to obtain environment variables from
+ * something a person types. `produces` is the ONLY join with a tool: the panel
+ * matches these names against what the item's tools declared, so a tool never
+ * names — and can never choose — which credential the dialog asks for. */
+export type EnvProvider = {
+  id: string;
+  label: string;
+  produces: string[];
+  inputs: EnvProviderInput[];
 };
 
 /** #380: one available skill's per-item picker state (GET
@@ -492,6 +526,19 @@ export interface ApiClient {
   /** GET /a/{slug}/items/{id}/tools — the per-item tool picker state (per-tool
    * tri-state, resolved server-side) the tool picker reads (#322). */
   getItemTools(slug: string, itemId: string): Promise<ItemToolState[]>;
+  /** #750: GET /a/{slug}/items/{id}/env-providers — this deploy's ways of
+   * turning something a person types into environment variables. Empty is the
+   * ordinary case: no buttons, and every variable is still typeable by hand. */
+  getEnvProviders(slug: string, itemId: string): Promise<EnvProvider[]>;
+  /** #750: POST /a/{slug}/items/{id}/env-providers/{providerId} — run one
+   * exchange. `values` carries the credential and is never stored; what comes
+   * back goes into the FORM, and the person still presses Save. */
+  resolveEnvProvider(
+    slug: string,
+    itemId: string,
+    providerId: string,
+    values: Record<string, string>,
+  ): Promise<Record<string, string>>;
   /** GET /a/{slug}/items/{id}/skills — the per-item skills picker state (per-skill
    * source + tri-state + effective), resolved server-side (#380). */
   getItemSkills(slug: string, itemId: string): Promise<ItemSkillState[]>;
