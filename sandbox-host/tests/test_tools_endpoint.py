@@ -33,7 +33,13 @@ class _Resolver:
         return answer
 
 
-def _tool(name: str, *, stale: bool = False, author: str | None = None) -> ResolvedTool:
+def _tool(
+    name: str,
+    *,
+    stale: bool = False,
+    author: str | None = None,
+    description: str | None = None,
+) -> ResolvedTool:
     return ResolvedTool(
         name=name,
         sha="a" * 64,
@@ -41,6 +47,7 @@ def _tool(name: str, *, stale: bool = False, author: str | None = None) -> Resol
         commands=(CommandSpec("trend", "Yield trend.", {"type": "object"}),),
         stale=stale,
         author=author,
+        description=description,
     )
 
 
@@ -119,6 +126,20 @@ async def test_resolve_names_the_author_so_the_app_can_show_who_to_ask() -> None
         r = await c.post("/tools/resolve", json={"tools": {"wafer-history": "https://g/m"}})
 
     assert r.json()["tools"]["wafer-history"]["author"] == "Wafer Team <w@x>"
+
+
+async def test_resolve_forwards_what_the_tool_says_it_is() -> None:
+    """#697. Same rule as the author, and the same failure if it is skipped: the
+    app never reads a manifest, so a field the host does not forward is a field
+    that does not exist for anyone downstream — the agent included."""
+    resolver = _Resolver(
+        **{"wafer-history": _tool("wafer-history", description="晶圓路徑與良率歷史查詢。")}
+    )
+
+    async with _client(resolver) as c:
+        r = await c.post("/tools/resolve", json={"tools": {"wafer-history": "https://g/m"}})
+
+    assert r.json()["tools"]["wafer-history"]["description"] == "晶圓路徑與良率歷史查詢。"
 
 
 async def test_one_broken_tool_does_not_take_the_others_down() -> None:

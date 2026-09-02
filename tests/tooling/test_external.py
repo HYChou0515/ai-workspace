@@ -307,3 +307,39 @@ def test_an_unknown_mounted_set_is_left_alone_rather_than_guessed() -> None:
     external = _resolved(wafer="a" * 64)
 
     assert confine_to_mounted(external, live=True, mounted=None) is external
+
+
+async def test_the_package_carries_what_the_tool_says_about_itself() -> None:
+    """The agent's side of the chain reads a ``PackageInfo`` — it never sees the
+    provenance record, which is keyed separately and stops at the picker and a
+    log line. So whatever the model is expected to be able to SAY about a tool
+    has to arrive on the package.
+
+    Held here rather than left on ``ToolProvenance`` so there is one home for it:
+    two copies of "which release, by whom" is two things to keep in step, and
+    nothing would notice them drifting."""
+    answer = {
+        "tools": {
+            "wafer-history": {
+                **_ANSWER["tools"]["wafer-history"],
+                "description": "晶圓路徑與良率歷史查詢。",
+            }
+        },
+        "refused": {},
+    }
+
+    external = await resolve_external_tools(_Host(answer), {"wafer-history": "https://g/m"})
+
+    (pkg,) = external.packages
+    assert pkg.description == "晶圓路徑與良率歷史查詢。"
+    assert pkg.version == "1.4.2"
+    assert pkg.author == "Wafer Team <wafer@example.com>"
+
+
+async def test_a_tool_that_describes_nothing_leaves_the_fields_empty() -> None:
+    """Every artifact published before the field existed. Empty is the honest
+    answer; anything else would be the platform speaking for its author."""
+    external = await resolve_external_tools(_Host(_ANSWER), {"wafer-history": "https://g/m"})
+
+    (pkg,) = external.packages
+    assert pkg.description == ""

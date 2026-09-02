@@ -277,6 +277,18 @@ class Manifest:
     #: Optional, because every bundle already in the field was built before the
     #: builder wrote this — and a display string may not take those down.
     author: str | None = None
+    #: What this tool IS, in its author's own words, taken from their own
+    #: ``pyproject``. Same display-only tier as ``author``: nothing reads it to
+    #: decide anything.
+    #:
+    #: A tool could describe each of its COMMANDS and say nothing about itself,
+    #: so the only answer available to "what is this tool" was the list of
+    #: commands it ships — an inventory the platform generated, not a purpose
+    #: its author stated.
+    #:
+    #: Optional, on the same bargain ``author`` and ``env`` struck: every
+    #: artifact already in the field was published without it.
+    description: str | None = None
     #: What the tool says it needs from the environment (#750), or ``None``
     #: when the manifest carried no ``env`` key at all.
     #:
@@ -343,6 +355,7 @@ def parse_manifest(raw: bytes) -> Manifest:
             source=SourceRef(git=src["git"], sha=src["sha"]) if src else None,
             grant=body.get("grant"),
             author=body.get("author"),
+            description=body.get("description"),
         )
     except (KeyError, TypeError) as exc:
         raise ManifestError(f"manifest is missing or malformed at {exc}") from exc
@@ -425,6 +438,8 @@ def render_manifest(manifest: Manifest) -> bytes:
         body["grant"] = manifest.grant
     if manifest.author is not None:
         body["author"] = manifest.author
+    if manifest.description is not None:
+        body["description"] = manifest.description
     # Indented and newline-terminated: a manifest lands in CI logs and in
     # review diffs, where a single long line helps nobody.
     return (json.dumps(body, indent=2, sort_keys=True) + "\n").encode()

@@ -480,6 +480,7 @@ def make_host_app(
                 "sha": tool.sha,
                 "version": tool.version,
                 "author": tool.author,
+                "description": tool.description,
                 "stale": tool.stale,
                 "commands": [
                     {

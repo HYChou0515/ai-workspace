@@ -47,11 +47,12 @@ def _source(
     name: str = "wafer-history",
     version: str = "1.4.2",
     authors: str = "",
+    description: str = "",
 ) -> Path:
     src = tmp_path / "src-tree"
     (src / "src").mkdir(parents=True)
     (src / "pyproject.toml").write_text(
-        f'[project]\nname = "{name}"\nversion = "{version}"\n{authors}'
+        f'[project]\nname = "{name}"\nversion = "{version}"\n{authors}{description}'
         f'\n[project.scripts]\n{name} = "pkg.cli:main"\n'
     )
     (src / "uv.lock").write_text("# pinned")
@@ -139,6 +140,42 @@ def test_build_artifact_publishes_the_author_beside_the_version(tmp_path: Path) 
 
     assert manifest.author == "Wafer Team <wafer@example.com>"
     assert parse_manifest((out / MANIFEST_NAME).read_bytes()).author == manifest.author
+
+
+def test_build_artifact_publishes_what_the_author_says_their_tool_is(tmp_path: Path) -> None:
+    """Read from ``[project].description``, which PEP 621 already gives every
+    author — the same trick #724 used for the author, and for the same reason:
+    the file they must edit to cut a release is the file we read, so there is
+    nothing new to learn and nothing extra to remember."""
+    out = tmp_path / "dist"
+
+    manifest = build_artifact(
+        source=_source(tmp_path, description='description = "晶圓路徑與良率歷史查詢。"\n'),
+        out=out,
+        builder_id=_BUILDER,
+        build_bundle=_fake_bundle({"trend": "t"}),
+        smoke_check=lambda _dist: None,
+    )
+
+    assert manifest.description == "晶圓路徑與良率歷史查詢。"
+    assert parse_manifest((out / MANIFEST_NAME).read_bytes()).description == manifest.description
+
+
+def test_an_author_who_describes_nothing_publishes_a_manifest_that_says_nothing(
+    tmp_path: Path,
+) -> None:
+    """Encouraged, never required. A build must not fail over a courtesy."""
+    out = tmp_path / "dist"
+
+    manifest = build_artifact(
+        source=_source(tmp_path),
+        out=out,
+        builder_id=_BUILDER,
+        build_bundle=_fake_bundle({"trend": "t"}),
+        smoke_check=lambda _dist: None,
+    )
+
+    assert manifest.description is None
 
 
 def test_the_published_bundle_carries_the_runnable_tree(tmp_path: Path) -> None:

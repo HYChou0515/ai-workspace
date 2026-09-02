@@ -105,9 +105,13 @@ def picker_units(app_tools: Sequence[str], packages: Sequence[PackageInfo]) -> l
                 )
             )
         elif entry in pkgs:
-            cmds = pkgs[entry].commands
-            granted = ", ".join(humanize_tool_label(c.name) for c in cmds)
-            desc = f"Bundled tools: {granted}." if granted else ""
+            pkg = pkgs[entry]
+            # The author's own words when they wrote any. Listing the commands
+            # is what the platform says when nobody said anything better — an
+            # inventory, not a purpose, and the command names are one click
+            # away anyway.
+            granted = ", ".join(humanize_tool_label(c.name) for c in pkg.commands)
+            desc = pkg.description.strip() or (f"Bundled tools: {granted}." if granted else "")
             units.append(ToolMeta(entry, humanize_tool_label(entry), desc))
         else:
             # Unknown entry (deploy without that package built) — still show it so
