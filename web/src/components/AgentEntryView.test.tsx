@@ -736,7 +736,6 @@ describe("EntryView — my own messages align right (#583)", () => {
   });
 });
 
-
 // The thread showed the RAW user id and an avatar built from its first two
 // characters — while `UserAvatar`/`useUser` (photo + directory name) were already
 // in use two lines below for the mention line. In a shared item chat that reads
@@ -1066,7 +1065,6 @@ describe("reply provenance (#748)", () => {
     expect(screen.queryByText(/\d{2}:\d{2}/)).not.toBeInTheDocument();
   });
 });
-
 
 describe("compaction summary (#739)", () => {
   const entry = {
