@@ -46,7 +46,7 @@
 - **resolved-config dump**：把「合併後的完整設定」印出來（標註每個值的來源、密鑰遮罩），
   同時寫一份真值到 `config.yaml` 旁的 `config.resolved.yaml`（`chmod 0600`）。跟 example 對 diff
   就知道哪些吃了預設。
-- **LLM 呼叫記錄**：每次對外 litellm 呼叫留一筆可重播的完整記錄（見 [§12 觀測](#12-觀測-observability)）。
+- **LLM 呼叫記錄**：每次對外 litellm 呼叫留一筆可重播的完整記錄（見 [§12 觀測](#12-觀測observability)）。
 
 ---
 
@@ -77,10 +77,11 @@ uv run python -m workspace_app            # API + SPA 一起跑在 127.0.0.1:800
 | **KB 聊天換模型** | 加 `agents.kb_chat[]` 條目；接非 `kb-default` 的 preset **必須**補 `allowed_tools: [kb_search]`（範例 3/4） |
 | **選了 VLM 當主 agent，要牠自己直接看圖** | `agents.presets.<name>.vision: true`（[§7](#vlm-主-agent-直接讀圖vision)） |
 | **檔案要持久化（重啟不掉）** | `filestore.kind: specstar` + `filestore.pg_dsn: ${SPECSTAR_PG_DSN}` + `disk_root` |
-| **上多 pod（k8s）** | `sandbox.kind: http` + `sandbox.http.base_url` ＋ 共享 filestore ＋ 共享 MQ backend（見 [§5 階梯 C](#c-多-pod-k8s)） |
-| **把 job runner 拆出 API** | `server.run_consumers: false`，另跑 worker pod（[§8 訊息佇列](#8-訊息佇列-message-queue)） |
+| **上多 pod（k8s）** | `sandbox.kind: http` + `sandbox.http.base_url` ＋ 共享 filestore ＋ 共享 MQ backend（見 [§5 階梯 C](#c-多-podk8s)） |
+| **把 job runner 拆出 API** | `server.run_consumers: false`，另跑 worker pod（[§8 訊息佇列](#8-訊息佇列message-queue)） |
 | **設管理員（能讀所有 collection）** | `server.superusers: ["alice@example.com"]` |
 | **讓外部系統的網頁把工作交棒進來** | `server.cors_allowed_origins: ["https://legacy-rca.corp"]`；沒設的話瀏覽器會在請求送出前就擋掉（串接方式見[從外部系統交棒進來](external-handoff.md)） |
+| **讓使用者用帳號密碼換出工具要的變數** | `server.env_providers: ["你的套件.YourLogin"]`——一份 `IEnvProvider` 清單(可以有好幾個:SAP 登入、AD 登入、API key 交換)。工具只宣告變數**名字**,平台用名字比對決定給哪顆登入鈕,所以第三方工具作者無從決定你的 UI 向使用者要哪組憑證。沒設 = 沒有登入鈕,變數仍可手填。見[擴充平台](extending-the-platform.md)與[部署指南](deployment.md) §15.2 |
 | **讓工具以「按下送出的那個人」的身分打外部系統** | `server.request_env: "你的套件.YourRequestEnv"`——自己寫一個 `IRequestEnv`,從該次請求的 cookie/header 組出環境變數給那一輪的工具(值不落地、只活一輪;item 自己設的環境變數會蓋過同名的)。見[擴充平台](extending-the-platform.md) |
 | **限制上傳大小 / 每工作區配額** | `filestore.max_file_size` / `filestore.workspace_quota` |
 | **依 App 種類給不同的 cpu / 記憶體 / 硬碟** | App 自己宣告 `apps/<slug>/app.json` 的 `resources`；部署端用 `resources.per_app.default` 給預設、`resources.per_app.max` 設天花板（超過**開機失敗**）。見 §6.5 |
@@ -91,7 +92,7 @@ uv run python -m workspace_app            # API + SPA 一起跑在 127.0.0.1:800
 | **關掉 KB 的 multi-query/HyDE/rerank** | `kb.retrieval_llm: null` |
 | **關掉 wiki 維護 / 圖片 VLM** | `kb.wiki.llm: null` / `kb.vlm_llm: null` |
 | **gateway 吃 session cookie / 要對背景工作收更緊配額** | 不是 config——實作 `ITokenService` 接進 `factories.get_runner()`（[§11.5](#115-每個使用者的-llm-憑證與呼叫-lane接自家系統)） |
-| **模型會塞車 → 自動切備援** | preset 加 `fallbacks: [...]`；全域門檻在 `failover.*`（[§11](#11-忙碌時的-llm-備援-failover)） |
+| **模型會塞車 → 自動切備援** | preset 加 `fallbacks: [...]`；全域門檻在 `failover.*`（[§11](#11-忙碌時的-llm-備援failover)） |
 | **長時間 exec 不要被砍** | `sandbox.exec_timeout: 0` + 設 `sandbox.log_timeout`（idle 上限） |
 | **關/搬 LLM 呼叫記錄** | 環境變數 `WORKSPACE_LLM_LOG=0` 或 `observability.llm_log.dir` |
 
@@ -104,7 +105,7 @@ uv run python -m workspace_app            # API + SPA 一起跑在 127.0.0.1:800
 | 區塊 | 是什麼 | 一般會不會動 |
 |---|---|---|
 | `server` | 監聽位址、`default_user`、`superusers`、`run_consumers`、cancel 輪詢、`cors_allowed_origins`、`request_env` | 上線常改 superusers / run_consumers |
-| `sandbox` | **agent 執行環境**（見 [§6](#6-sandbox-執行環境重點)） | 多 pod 一定改 |
+| `sandbox` | **agent 執行環境**（見 [§6](#6-sandbox執行環境重點)） | 多 pod 一定改 |
 | `tools` | RCA 工具包怎麼佈署（`prebuilt` / `uv-run`） | 開發時改 |
 | `filestore` | 檔案儲存（`memory` / `specstar`）＋ 配額 / GC | 上線一定改 |
 | `runner` | RCA agent loop 的 `max_retries` / `max_turns` | 少改 |
@@ -232,7 +233,7 @@ sandbox:
     pids_max: 512
 ```
 
-- 預設關：多數叢集禁 `CAP_SETUID/SETGID` 與可寫 cgroup tree；[§5-C](#c-多-pod-k8s) 的共享目錄修法**不需要**它也能解資料遺失。
+- 預設關：多數叢集禁 `CAP_SETUID/SETGID` 與可寫 cgroup tree；[§5-C](#c-多-podk8s) 的共享目錄修法**不需要**它也能解資料遺失。
 - 這**不是** `sandbox.isolate` 的 userns jail——是另一套模型（無 namespace）。pod 要帶 `CAP_SETUID/SETGID`
   ＋委派的 cgroup root（見 `kubernetes/base/deployment.yaml`）。
 - `uv-run` 工具模式會強制關掉它。
@@ -407,7 +408,7 @@ message_queue:
 
 搭配 `server.run_consumers`：
 - `true`（預設）= 全包（本機/單 pod），API 進程自己消化。
-- `false` = API 純 producer（仍註冊 + enqueue，只是不消化），另跑 worker pod 各消化一個 JobType（見 [§5-C](#c-多-pod-k8s)）。
+- `false` = API 純 producer（仍註冊 + enqueue，只是不消化），另跑 worker pod 各消化一個 JobType（見 [§5-C](#c-多-podk8s)）。
 
 ---
 
