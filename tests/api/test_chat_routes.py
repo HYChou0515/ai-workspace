@@ -347,6 +347,122 @@ async def test_chat_scoped_stream_is_per_chat():
     assert um.content == "hi-B"
 
 
+def test_export_chat_ships_the_chat_you_asked_for_not_the_default():
+    """The Export button downloads the conversation on screen. It used to be
+    item-scoped, so it resolved the item's DEFAULT chat and handed you the
+    earliest one whatever you were reading — a plausible file, quietly wrong."""
+    from workspace_app.kb.chat_export import parse_chat_export
+
+    client, _spec, iid = _client()
+    a = client.post(f"/a/rca/items/{iid}/chats", json={"title": "A"}).json()["chat_id"]
+    b = client.post(f"/a/rca/items/{iid}/chats", json={"title": "B"}).json()["chat_id"]
+    client.post(f"/a/rca/items/{iid}/chats/{a}/messages", json={"content": "to-A"})
+    client.post(f"/a/rca/items/{iid}/chats/{b}/messages", json={"content": "to-B"})
+
+    resp = client.get(f"/a/rca/items/{iid}/chats/{b}/export-chat")
+    assert resp.status_code == 200, resp.text
+    _title, messages = parse_chat_export(resp.content)
+    assert [m["content"] for m in messages if m["role"] == "user"] == ["to-B"]
+
+
+def test_export_chat_titles_the_file_after_the_chat():
+    """The payload title and the download filename must name the CHAT. Titling
+    them after the item made every export of one item look identical, and left a
+    wrong-chat download with nothing to give itself away with."""
+    from workspace_app.kb.chat_export import parse_chat_export
+
+    client, _spec, iid = _client()
+    b = client.post(f"/a/rca/items/{iid}/chats", json={"title": "Second chat"}).json()["chat_id"]
+    client.post(f"/a/rca/items/{iid}/chats/{b}/messages", json={"content": "to-B"})
+
+    resp = client.get(f"/a/rca/items/{iid}/chats/{b}/export-chat")
+    title, _messages = parse_chat_export(resp.content)
+    assert title == "Second chat"
+    # RFC 6266: an ASCII `filename` every client understands, plus the UTF-8
+    # `filename*` current browsers prefer. Both name the chat.
+    assert resp.headers["content-disposition"] == (
+        "attachment; filename=\"Second-chat.chat.json\"; filename*=UTF-8''Second-chat.chat.json"
+    )
+
+
+def test_export_carries_every_field_a_message_persists():
+    """The file is for debugging, so it is a faithful archive of the thread: the
+    model's own reasoning, when it answered, who it was, and what the reply cost
+    all go in. Naming fields one at a time is what let three of them stand in for
+    sixteen — a field was added, the export was not updated, and nothing said so."""
+    from workspace_app.kb.chat_export import parse_chat_export
+    from workspace_app.resources.conversation import MessageMetrics
+
+    client, spec, iid = _client()
+    chat_id = (
+        _convs(spec, iid)
+        .create(
+            Conversation(
+                item_id=iid,
+                title="Rich chat",
+                messages=[
+                    Message(
+                        role="assistant",
+                        content="the answer",
+                        author="agent",
+                        reasoning="the model's own thinking",
+                        created_at=1788,
+                        metrics=MessageMetrics(
+                            prompt_tokens=10, completion_tokens=7, elapsed_ms=1200
+                        ),
+                    )
+                ],
+            )
+        )
+        .resource_id
+    )
+
+    resp = client.get(f"/a/rca/items/{iid}/chats/{chat_id}/export-chat")
+    assert resp.status_code == 200, resp.text
+    _title, messages = parse_chat_export(resp.content)
+    m = messages[0]
+    assert m["reasoning"] == "the model's own thinking"
+    assert m["created_at"] == 1788
+    assert m["author"] == "agent"
+    # The values this test set, not the whole dict: pinning the exact key set
+    # would re-create the coupling this change removes — `MessageMetrics` grew an
+    # `exact` field in #739 and the export carried it without anyone editing the
+    # export, which is the entire point.
+    assert m["metrics"]["prompt_tokens"] == 10
+    assert m["metrics"]["completion_tokens"] == 7
+    assert m["metrics"]["elapsed_ms"] == 1200
+    # Nothing is substituted for an absent value. The old export forced a
+    # missing `tool_name` to "", and the same habit applied to the metrics #749
+    # is about to widen would write a 0 for "not measured" — the invented number
+    # that PR exists to remove. Dumping the message as it stands cannot do that.
+    assert m["tool_name"] is None
+
+
+def test_export_chat_survives_a_title_that_is_not_latin_1():
+    """A Content-Disposition header is latin-1 on the wire, and Python's `\\w`
+    keeps CJK — so naming the download after the chat turned a Chinese title into
+    a header the server cannot encode. The users of this deployment name chats in
+    Chinese, so this is the common case, not an edge one."""
+    client, _spec, iid = _client()
+    b = client.post(f"/a/rca/items/{iid}/chats", json={"title": "爐溫漂移檢討"}).json()["chat_id"]
+    client.post(f"/a/rca/items/{iid}/chats/{b}/messages", json={"content": "to-B"})
+
+    resp = client.get(f"/a/rca/items/{iid}/chats/{b}/export-chat")
+    assert resp.status_code == 200, resp.text
+    resp.headers["content-disposition"].encode("latin-1")  # must survive the wire
+
+
+def test_export_chat_404s_on_a_chat_from_another_item():
+    """A chat id is only meaningful inside its own item — accepting a foreign one
+    would hand back another item's conversation past this item's access check."""
+    client, spec, iid = _client()
+    other = register_rca_item(spec, title="Other")
+    foreign = client.post(f"/a/rca/items/{other}/chats", json={"title": "elsewhere"}).json()[
+        "chat_id"
+    ]
+    assert client.get(f"/a/rca/items/{iid}/chats/{foreign}/export-chat").status_code == 404
+
+
 def test_the_chat_reports_what_it_is_costing_before_any_turn_runs():
     """#739 P2: the usage bar hydrates on page load, like the todo panel — the
     number must exist at rest, not only while a turn streams. It is anchored on

@@ -121,10 +121,36 @@ describe("fetchChatExport (#100 — export fail-loud)", () => {
         }),
     );
     vi.stubGlobal("fetch", fetchMock);
-    await fetchChatExport("topic-hub", "topic-hub:1");
+    await fetchChatExport("topic-hub", "topic-hub:1", "conversation:c1");
     const url = fetchMock.mock.calls[0][0];
-    expect(url).toContain("/a/topic-hub/items/topic-hub%3A1/export-chat");
+    // Chat-scoped: the id of the conversation being exported is IN the URL, so
+    // the server cannot fall back to the item's first chat.
+    expect(url).toContain(
+      "/a/topic-hub/items/topic-hub%3A1/chats/conversation%3Ac1/export-chat",
+    );
     expect(url).not.toContain("/investigations/");
+  });
+
+  it("saves under the chat's real name when the title is not ASCII", async () => {
+    // The server sends both halves of RFC 6266: an ASCII `filename` fallback and
+    // the UTF-8 `filename*`. Reading only the fallback would save every
+    // Chinese-titled chat as the same placeholder — which is the naming defect
+    // this change exists to remove, reintroduced one hop later.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response('{"title":"爐溫漂移檢討","messages":[]}', {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+            "content-disposition":
+              "attachment; filename=\"chat.chat.json\"; filename*=UTF-8''%E7%88%90%E6%BA%AB%E6%BC%82%E7%A7%BB%E6%AA%A2%E8%A8%8E.chat.json",
+          },
+        }),
+      ),
+    );
+    const { filename } = await fetchChatExport("rca", "rca:1", "conversation:c1");
+    expect(filename).toBe("爐溫漂移檢討.chat.json");
   });
 
   it("throws (no silent HTML download) when the response is the SPA shell, not the chat", async () => {
@@ -139,7 +165,9 @@ describe("fetchChatExport (#100 — export fail-loud)", () => {
         }),
       ),
     );
-    await expect(fetchChatExport("topic-hub", "topic-hub:1")).rejects.toThrow(/匯出/);
+    await expect(fetchChatExport("topic-hub", "topic-hub:1", "conversation:c1")).rejects.toThrow(
+      /匯出/,
+    );
   });
 });
 

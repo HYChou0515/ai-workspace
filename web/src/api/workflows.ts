@@ -233,29 +233,65 @@ async function jsonOrThrow(r: Response, what: string): Promise<unknown> {
 const base = (slug: string, itemId: string) =>
   `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}`;
 
-/** Fetch the conversation as the re-ingestable `.chat.json` (issue #39), via the
- * app-scoped route (#95). Validates it's actually the chat file: a misrouted GET
- * falls through to the SPA and returns `text/html` 200, which the browser used to
- * save silently as `export-chat.html`. We surface that as a loud error instead of
- * a download of the app shell (#100). */
-export async function fetchChatExport(slug: string, itemId: string): Promise<Blob> {
-  const res = await apiFetch(`${base(slug, itemId)}/export-chat`);
+/** The download name the server chose, from `Content-Disposition`.
+ *
+ * RFC 6266 sends two: an ASCII `filename` any client can read, and
+ * `filename*=UTF-8''…` for the real one. Reading only the ASCII half would save
+ * every Chinese-titled chat under the same placeholder — the naming defect this
+ * feature exists to remove, one hop further along. */
+function dispositionFilename(headers: Headers): string {
+  const cd = headers.get("content-disposition") ?? "";
+  const utf8 = /filename\*=UTF-8''([^;]+)/i.exec(cd);
+  if (utf8) {
+    try {
+      return decodeURIComponent(utf8[1]);
+    } catch {
+      // A malformed percent-escape is not worth failing a download over.
+    }
+  }
+  return /filename="([^"]+)"/.exec(cd)?.[1] || "chat.chat.json";
+}
+
+/** Fetch ONE chat as the re-ingestable `.chat.json` (issue #39), via the
+ * app-scoped, chat-scoped route (#95). The chat id is not optional: without it
+ * the server used to answer with the item's default chat, so whichever chat you
+ * were reading, you got the earliest one.
+ *
+ * Validates it's actually the chat file: a misrouted GET falls through to the
+ * SPA and returns `text/html` 200, which the browser used to save silently as
+ * `export-chat.html`. We surface that as a loud error instead of a download of
+ * the app shell (#100).
+ *
+ * Returns the server's own filename alongside the blob — it names the file after
+ * the chat, and deriving a second name here is how the two would drift apart. */
+export async function fetchChatExport(
+  slug: string,
+  itemId: string,
+  chatId: string,
+): Promise<{ blob: Blob; filename: string }> {
+  const res = await apiFetch(
+    `${base(slug, itemId)}/chats/${encodeURIComponent(chatId)}/export-chat`,
+  );
   const contentType = res.headers.get("content-type") ?? "";
   if (!res.ok || !contentType.includes("application/json")) {
     throw new Error("匯出失敗：伺服器沒有回傳對話檔，請稍後再試或回報問題。");
   }
-  return res.blob();
+  return { blob: await res.blob(), filename: dispositionFilename(res.headers) };
 }
 
 /** Browser download wrapper around {@link fetchChatExport} — triggers the save
  * once the response is validated, so a failure shows an error rather than saving
  * the SPA's HTML. */
-export async function downloadChatExport(slug: string, itemId: string): Promise<void> {
-  const blob = await fetchChatExport(slug, itemId);
+export async function downloadChatExport(
+  slug: string,
+  itemId: string,
+  chatId: string,
+): Promise<void> {
+  const { blob, filename } = await fetchChatExport(slug, itemId, chatId);
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `${itemId}.chat.json`;
+  a.download = filename;
   document.body.appendChild(a);
   a.click();
   a.remove();

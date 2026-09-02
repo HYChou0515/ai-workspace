@@ -147,11 +147,15 @@ export function AgentPanel({
   investigationId: string;
   /** The chat this panel is showing, when it is showing a named one.
    *
-   * Two things need it. Turns are keyed per chat server-side, so a question
+   * Three things need it. Turns are keyed per chat server-side, so a question
    * about the running turn has to name it — absent means the item's DEFAULT
-   * chat, whose key is the item id. And #739's context gauge reports this
-   * chat's window; absent on a surface with no chat of its own, it does not
-   * render. */
+   * chat, whose key is the item id. #739's context gauge reports this chat's
+   * window. And Export downloads THIS chat, rather than whichever one happens
+   * to be the item's first.
+   *
+   * Absent on a surface with no chat of its own: the gauge does not render,
+   * and Export is guarded rather than required — a button that cannot name its
+   * chat should not be there at all, since it could only guess. */
   chatId?: string;
   /** Permission-disclosure: the current user may read the thread but lacks
    * `converse` — the composer is disabled with a hint (the backend also 403s a
@@ -619,6 +623,7 @@ export function AgentPanel({
       <AgentHeader
         streaming={log.streaming}
         investigationId={investigationId}
+        chatId={chatId}
         slug={slug}
         appTitle={appTitle}
         appIcon={appIcon}
@@ -1247,6 +1252,7 @@ export function AgentHeader({
   streaming,
   investigationId,
   slug,
+  chatId,
   appTitle = "Agent",
   appIcon,
   appColor,
@@ -1262,6 +1268,13 @@ export function AgentHeader({
   investigationId: string;
   /** The current App's slug (#95) — the export targets the app-scoped route. */
   slug: string;
+  /** The chat this header belongs to. Optional because a surface can have no
+   * chat of its own (#739's gauge is absent there for the same reason), and
+   * Export is then not drawn: it used to know only the item, which let the
+   * server fall back to the item's default chat and hand back the earliest
+   * conversation whatever was on screen. No button is better than one that has
+   * to guess which conversation it means. */
+  chatId?: string;
   /** App identity for the agent panel header (#89) — falls back to a generic
    * "Agent" mark when not provided (e.g. in isolated tests). */
   appTitle?: string;
@@ -1460,25 +1473,30 @@ export function AgentHeader({
       >
         <Icon name="workflow" size={13} /> {t("workflows.button")}
       </button>
-      <button
-        type="button"
-        // Downloads the `.chat.json` round-trip format (issue #39): re-uploadable
-        // to a KB collection, where the BE runs the same insight extraction the
-        // promote path does. Goes through the app-scoped route (#95) and validates
-        // the response, so a misroute surfaces an error instead of silently saving
-        // the SPA shell as `export-chat.html` (#100). Format details live in code.
-        onClick={() => {
-          setExportError(null);
-          downloadChatExport(slug, investigationId).catch((e) =>
-            setExportError(e instanceof Error ? e.message : "匯出失敗"),
-          );
-        }}
-        title="Export this conversation"
-        aria-label="Export conversation"
-        style={hdrBtn}
-      >
-        <Icon name="download" size={13} /> Export
-      </button>
+      {/* Only where there is a chat to name. Without one the button could only
+          ask the server to pick, and it used to pick the item's first — so the
+          absent case is drawn as absent, the way #739's gauge is. */}
+      {chatId && (
+        <button
+          type="button"
+          // Downloads the `.chat.json` round-trip format (issue #39): re-uploadable
+          // to a KB collection, where the BE runs the same insight extraction the
+          // promote path does. Goes through the app-scoped route (#95) and validates
+          // the response, so a misroute surfaces an error instead of silently saving
+          // the SPA shell as `export-chat.html` (#100). Format details live in code.
+          onClick={() => {
+            setExportError(null);
+            downloadChatExport(slug, investigationId, chatId).catch((e) =>
+              setExportError(e instanceof Error ? e.message : "匯出失敗"),
+            );
+          }}
+          title="Export this conversation"
+          aria-label="Export conversation"
+          style={hdrBtn}
+        >
+          <Icon name="download" size={13} /> Export
+        </button>
+      )}
       {exportError && (
         <span role="alert" style={{ fontSize: pxToRem(11), color: "var(--err)" }}>
           {exportError}

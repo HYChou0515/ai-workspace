@@ -308,15 +308,18 @@ async def test_close_app_item_schedules_background_promote():
 
 def test_export_chat_works_on_a_new_app_item():
     """`/export-chat` must read the title generically (find_work_item), so it
-    works for a new RcaInvestigation that isn't in the Investigation table."""
+    works for a new RcaInvestigation that isn't in the Investigation table. An
+    unnamed chat is titled after its item, which is where that read matters."""
     from workspace_app.kb.chat_export import parse_chat_export
 
     client, spec, _ = _build_harness('{"insights": []}')
     item_id = client.post("/a/rca/items", json={"title": "Oven drift"}).json()["resource_id"]
-    spec.get_resource_manager(Conversation).create(
-        Conversation(item_id=item_id, messages=[Message(role="user", content="hi")])
+    chat_id = (
+        spec.get_resource_manager(Conversation)
+        .create(Conversation(item_id=item_id, messages=[Message(role="user", content="hi")]))
+        .resource_id
     )
-    resp = client.get(f"/a/rca/items/{item_id}/export-chat")
+    resp = client.get(f"/a/rca/items/{item_id}/chats/{chat_id}/export-chat")
     assert resp.status_code == 200, resp.text
     title, _messages = parse_chat_export(resp.content)
     assert title == "Oven drift"
@@ -359,19 +362,23 @@ def test_export_includes_new_app_item_metadata():
 
 
 def test_export_chat_downloads_the_round_trip_format():
-    """GET /a/{slug}/items/{id}/export-chat ships the conversation in
-    the `.chat.json` format the KB upload path consumes — the suffix
-    contract is guaranteed by the Content-Disposition filename. The
-    payload round-trips through `parse_chat_export`."""
+    """GET /a/{slug}/items/{id}/chats/{chat_id}/export-chat ships the
+    conversation in the `.chat.json` format the KB upload path consumes — the
+    suffix contract is guaranteed by the Content-Disposition filename, which
+    now names the chat. The payload round-trips through `parse_chat_export`."""
     from workspace_app.kb.chat_export import parse_chat_export
 
     client, spec, _ = _build_harness('{"insights": []}')
     inv_id = _create_investigation(spec)
+    chat_id = client.get(f"/a/rca/items/{inv_id}/chats").json()[0]["chat_id"]
 
-    resp = client.get(f"/a/rca/items/{inv_id}/export-chat")
+    resp = client.get(f"/a/rca/items/{inv_id}/chats/{chat_id}/export-chat")
     assert resp.status_code == 200
     cd = resp.headers["content-disposition"]
-    assert cd.endswith('.chat.json"') and inv_id in cd
+    # RFC 6266: an ASCII `filename` plus the UTF-8 `filename*`; both end in the
+    # suffix the upload side dispatches on, and both name the chat.
+    assert cd.startswith('attachment; filename="MX-7-voids.chat.json"')
+    assert cd.endswith(".chat.json") and "filename*=UTF-8''" in cd
 
     title, messages = parse_chat_export(resp.content)
     assert title == "MX-7 voids"
@@ -381,4 +388,4 @@ def test_export_chat_downloads_the_round_trip_format():
 
 def test_export_chat_404s_on_unknown_investigation():
     client, _, _ = _build_harness('{"insights": []}')
-    assert client.get("/a/rca/items/nope/export-chat").status_code == 404
+    assert client.get("/a/rca/items/nope/chats/whatever/export-chat").status_code == 404
