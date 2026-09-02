@@ -155,6 +155,9 @@ class Project:
     author: str | None
     """``None`` when they declared no usable ``[project].authors`` — see
     ``_read_author``."""
+    description: str | None = None
+    """What the tool IS, from ``[project].description``. ``None`` when they
+    wrote none — encouraged, never required, exactly like the author."""
 
 
 def _read_author(project: dict[str, Any]) -> str | None:
@@ -209,7 +212,15 @@ def read_project(source: Path) -> Project:
     version = project.get("version")
     if not version:
         raise BuildError("[project].version is required — it is how a human names a release")
-    return Project(name=next(iter(scripts)), version=str(version), author=_read_author(project))
+    # PEP 621 already gives an author somewhere to say what their tool is, so
+    # #697 adds no field for them to fill: same rule as the author above.
+    described = project.get("description")
+    return Project(
+        name=next(iter(scripts)),
+        version=str(version),
+        author=_read_author(project),
+        description=str(described) if described else None,
+    )
 
 
 def read_commands(bundle: Path) -> tuple[CommandSpec, ...]:
@@ -389,6 +400,7 @@ def build_artifact(
         source=None,
         grant=token,
         author=project.author,
+        description=project.description,
     )
     (out / BUNDLE_NAME).write_bytes(packed)
     (out / MANIFEST_NAME).write_bytes(render_manifest(manifest))

@@ -107,6 +107,13 @@ def _package(name: str, described: dict[str, Any]) -> PackageInfo:
             if isinstance(described.get("env"), list)
             else None
         ),
+        # What the tool says about ITSELF, and which release said it. The agent
+        # reads a PackageInfo and never sees the provenance record (that stops
+        # at the picker and a log line), so anything the model is expected to be
+        # able to say about a tool has to arrive here. Absent stays absent.
+        description=str(described.get("description") or ""),
+        version=str(described.get("version") or ""),
+        author=str(described.get("author") or ""),
     )
 
 

@@ -119,3 +119,24 @@ def test_picker_units_one_per_app_entry_with_package_summary():
     # the package entry advertises what it grants
     assert "Spc" in by_name["rca-tools"].description
     assert "Pareto" in by_name["rca-tools"].description
+
+
+def test_a_bundle_that_describes_itself_gets_its_own_words_in_the_picker() -> None:
+    """ "Bundled tools: Spc, Pareto." is the platform listing an inventory
+    because nothing better was available. Once the author has written what
+    their tool IS, that is what the person deciding whether to switch it on
+    should be reading — the command names are already one click away."""
+    units = picker_units(
+        ["rca-tools"],
+        packages=[
+            PackageInfo(
+                name="rca-tools",
+                commands=(_cmd("spc", "SPC chart"), _cmd("pareto", "Pareto chart")),
+                install_dir="../.tools/rca-tools",
+                description="SMT 產線的量測資料擷取與初步分析。",
+            )
+        ],
+    )
+
+    (unit,) = units
+    assert unit.description == "SMT 產線的量測資料擷取與初步分析。"

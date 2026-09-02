@@ -113,6 +113,10 @@ class ResolvedTool:
     """Who published it, verbatim from the manifest — provenance the app
     cannot obtain any other way, because it never reads a manifest itself.
     ``None`` for a bundle built before the builder wrote the field."""
+    description: str | None = None
+    """What the tool IS, verbatim from the manifest — the answer to "what does
+    this tool do", which the app cannot obtain any other way. ``None`` when its
+    author wrote none."""
     env: tuple[EnvSpec, ...] | None = None
     """What the tool says it needs from the environment (#750), or ``None``
     when its manifest said nothing. Carried for the same reason as ``author``:
@@ -188,6 +192,7 @@ class ToolResolver:
             commands=manifest.commands,
             stale=False,
             author=manifest.author,
+            description=manifest.description,
             env=manifest.env,
         )
 
@@ -228,6 +233,7 @@ class ToolResolver:
             # an outage is the worst possible moment to discover that an
             # upgrade made every remembered tool raise instead of resolve.
             author=remembered.get("author"),
+            description=remembered.get("description"),
             # Same reasoning, and the same three states: a remembered entry
             # written before #750 has no `env` key and must stay "did not say".
             env=(
@@ -258,6 +264,7 @@ class ToolResolver:
             "sha": manifest.bundle.sha256,
             "version": manifest.version,
             "author": manifest.author,
+            "description": manifest.description,
             # Stored so a store outage does not also cost the declaration:
             # `_fall_back` rebuilds a ResolvedTool from exactly this dict.
             **(
