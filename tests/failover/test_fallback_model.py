@@ -562,6 +562,21 @@ async def test_429_without_retry_after_backs_off_doubling():
     assert slept == [1.0, 2.0, 4.0]
 
 
+async def test_a_zero_retry_after_does_not_spin():
+    """ "Retry-After: 0" honestly means "now" — but a provider that keeps saying
+    it while still refusing would spin the hold loop at wire speed, with no time
+    ever passing to spend the deadline. Repeated zero windows fall back to the
+    doubling backoff instead."""
+    clock = _Clock()
+    reg = CooldownRegistry(clock=clock)
+    slept, sleep = _held_sleep(clock)
+    flaky = _FlakyModel([_429("0"), _429("0")], response="ok")
+    m = FallbackModel([_ep("primary")], reg, make_model=lambda e: flaky, sleep=sleep)
+
+    assert await m.get_response() == "ok"
+    assert slept == [1.0, 2.0]
+
+
 async def test_a_window_past_the_deadline_parks_the_stated_window_and_moves_on():
     """When the stated wait cannot fit in the chain's remaining deadline, the
     endpoint is parked for THE WINDOW IT STATED — not the fixed cooldown — so

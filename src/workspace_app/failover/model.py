@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Any, cast
 from agents.models.interface import Model
 
 from .core import AllProvidersFailed, TtftTimeout
-from .rate_limit import is_rate_limited, rate_limit_wait_s
+from .rate_limit import backoff_s, is_rate_limited, rate_limit_wait_s
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +104,12 @@ class FallbackModel(Model):
         window, and the chain moves on to the next endpoint instead of
         sleeping past its own budget."""
         wait = rate_limit_wait_s(exc, attempt=held)
+        if wait <= 0:
+            # "Retry-After: 0" honestly means "now" — once. A provider that
+            # keeps saying it while still refusing would otherwise spin this
+            # loop at wire speed, with no time passing to ever spend the
+            # deadline. Fall back to the doubling backoff instead.
+            wait = backoff_s(held)
         if self._registry.now() + wait > deadline:
             self._registry.mark(endpoint.cooldown_key, wait)
             logger.warning(
