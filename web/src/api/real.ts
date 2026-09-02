@@ -14,33 +14,34 @@
 
 import type { AgentEvent, CellEvent } from "../events";
 import { decodeBytes } from "./encoding";
-import { API_PREFIX, apiFetch, HttpError, errorCode, errorInfo } from "./http";
+import { API_PREFIX, apiFetch, HttpError, errorCode, errorInfo, httpErrorFrom } from "./http";
 import { parseSseStream } from "./sse";
 import type {
   ActivityEntry,
+  ApiClient,
   AppItem,
   AppManifest,
   AppSummary,
-  ApiClient,
   CellRef,
+  ChatContextUsage,
   CloseStatus,
+  CompactionReason,
   Conversation,
+  EnvProvider,
   ExecResult,
-  SearchParams,
   ExecuteCellArgs,
   FileInfo,
   ItemSkillState,
   ItemToolState,
-  ToolCatalogEntry,
-  WorkspaceUsage,
-  ChatContextUsage,
-  CompactionReason,
   NotebookRef,
   NotificationItem,
   SearchOptions,
+  SearchParams,
   SearchResult,
   SendMessageArgs,
+  ToolCatalogEntry,
   User,
+  WorkspaceUsage,
 } from "./types";
 
 type SpecstarRevisionInfo = {
@@ -157,6 +158,41 @@ export const realApi: ApiClient = {
       ),
     );
     return r.tools;
+  },
+
+  async getEnvProviders(slug: string, itemId: string) {
+    const r = await json<{ providers: EnvProvider[] }>(
+      await apiFetch(
+        `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}/env-providers`,
+      ),
+    );
+    return r.providers;
+  },
+
+  async resolveEnvProvider(
+    slug: string,
+    itemId: string,
+    providerId: string,
+    values: Record<string, string>,
+  ) {
+    const resp = await apiFetch(
+      `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}/env-providers/${encodeURIComponent(providerId)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ values }),
+      },
+    );
+    if (!resp.ok) {
+      // Through `httpErrorFrom`, not `json`'s generic throw: the implementation
+      // wrote a sentence for the person ("your password is wrong") and the
+      // generic path would hand them the whole envelope instead — status line,
+      // error code, provider id and all. Seen in a real browser; every unit
+      // test had supplied an `Error` whose message was already the sentence.
+      throw await httpErrorFrom(resp, `env provider ${providerId} refused`);
+    }
+    const body = (await resp.json()) as { env: Record<string, string> };
+    return body.env;
   },
 
   async getItemSkills(slug: string, itemId: string) {
@@ -512,6 +548,33 @@ export const realApi: ApiClient = {
     if (!resp.ok) {
       const detail = await resp.text().catch(() => "");
       throw new HttpError(resp.status, `copy failed: ${resp.status} ${detail.slice(0, 120)}`);
+    }
+  },
+
+  async turnAlive(
+    slug: string,
+    investigationId: string,
+    chatId?: string,
+  ): Promise<boolean | null> {
+    // `null` = could not find out. The caller must not read that as "nobody is
+    // coming": being unable to ask is not evidence, and treating it as one puts
+    // back the guess this whole signal replaces.
+    //
+    // Turns are keyed per CHAT server-side, and the item-level form answers for
+    // the default chat only — so ask about the chat on screen whenever there is
+    // one. Without a chat id the caller is the item's default chat, whose key
+    // IS the item id, so the item form is exact rather than a fallback.
+    const base = `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}`;
+    const path = chatId
+      ? `${base}/chats/${encodeURIComponent(chatId)}/turn-alive`
+      : `${base}/turn-alive`;
+    try {
+      const resp = await apiFetch(path);
+      if (!resp.ok) return null;
+      const body = (await resp.json()) as { alive?: boolean };
+      return body.alive ?? null;
+    } catch {
+      return null;
     }
   },
 

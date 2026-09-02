@@ -736,7 +736,6 @@ describe("EntryView — my own messages align right (#583)", () => {
   });
 });
 
-
 // The thread showed the RAW user id and an avatar built from its first two
 // characters — while `UserAvatar`/`useUser` (photo + directory name) were already
 // in use two lines below for the mention line. In a shared item chat that reads
@@ -955,6 +954,117 @@ describe("EntryView — run_agent tool card", () => {
   });
 });
 
+describe("reply provenance (#748)", () => {
+  afterEach(cleanup);
+
+  const reply = (over = {}) =>
+    ({
+      kind: "message",
+      message: {
+        role: "assistant",
+        content: "here you go",
+        created_at: Date.UTC(2026, 8, 1, 6, 32, 7),
+        metrics: {
+          model: "qwen3:14b",
+          // The steer-by pair is an estimate whenever the provider stayed quiet;
+          // deliberately different here so a tooltip showing THESE fails.
+          prompt_tokens: 7282,
+          completion_tokens: 80,
+          measured_prompt_tokens: 8412,
+          measured_completion_tokens: 356,
+          elapsed_ms: 61_000,
+          generation_ms: 5_000,
+        },
+        ...over,
+      },
+    }) as unknown as AgentEntry;
+
+  it("shows the reply time as quiet small text, to the minute", () => {
+    render(<EntryView entry={reply()} />);
+    // Seconds are log-grade precision; at chat cadence they are noise. They are
+    // not lost — the tooltip carries them.
+    expect(screen.getByText(/\d{2}:32/)).toBeInTheDocument();
+  });
+
+  it("puts the model and the counts in the tooltip, not on the surface", () => {
+    render(<EntryView entry={reply()} />);
+    const stamp = screen.getByText(/\d{2}:32/);
+    const tip = stamp.getAttribute("title") ?? "";
+
+    expect(tip).toContain("qwen3:14b");
+    expect(tip).toContain("8412");
+    expect(tip).toContain("356");
+    expect(tip).not.toContain("7282"); // the estimate must not be shown as a count
+    expect(tip).toContain("71 tok/s"); // 356 tokens / 5s of generation, not / 61s
+    expect(tip).toMatch(/:07/); // the precise second lives here
+    // "別太明顯": nothing but the time is readable without hovering.
+    expect(screen.queryByText(/qwen3/)).not.toBeInTheDocument();
+  });
+
+  it("still reports a rate when only the token count was estimated", () => {
+    // `generation_ms` is OUR clock and is always measured; only the token count
+    // depends on the provider. Requiring both made the tok/s fix — the thing
+    // that was asked for — visible live and then gone on reload, on every
+    // endpoint not vouched for, which is the default. An estimate is allowed on
+    // screen as long as it says it is one; what must never be estimated is the
+    // RECORD, and that stays null.
+    render(
+      <EntryView
+        entry={reply({
+          metrics: {
+            model: "qwen3:14b",
+            prompt_tokens: 7282,
+            completion_tokens: 100,
+            elapsed_ms: 5_000,
+            generation_ms: 2_000,
+          },
+        })}
+      />,
+    );
+    const tip = screen.getByText(/\d{2}:32/).getAttribute("title") ?? "";
+    expect(tip).toMatch(/≈\s*50 tok\/s/); // 100 / 2s, marked as approximate
+    expect(tip).not.toContain("↑"); // counts stay absent: those ARE the record
+  });
+
+  it("says nothing where nothing was measured", () => {
+    render(
+      <EntryView
+        entry={reply({ metrics: { model: "qwen3:14b", elapsed_ms: 1200 } })}
+      />,
+    );
+    const tip = screen.getByText(/\d{2}:32/).getAttribute("title") ?? "";
+
+    expect(tip).toContain("qwen3:14b");
+    expect(tip).not.toContain("tok/s"); // no generation time ⇒ no rate invented
+    expect(tip).not.toContain("↑"); // no counts ⇒ no zeros stood in for them
+  });
+
+  it("shows the time during the turn, before anything is persisted", () => {
+    // Live-folded messages have no `created_at` — the reducer puts the moment on
+    // the ENTRY (`at`) and the message only gets a timestamp after the post-turn
+    // refetch. Reading only the message meant your own message and the streaming
+    // reply had no time for the whole turn, which is most of when a person is
+    // looking at them.
+    const entry = {
+      kind: "message",
+      at: Date.UTC(2026, 8, 1, 6, 32, 7),
+      message: { role: "assistant", content: "streaming…" },
+    } as unknown as AgentEntry;
+    render(<EntryView entry={entry} />);
+    expect(screen.getByText(/\d{2}:32/)).toBeInTheDocument();
+  });
+
+  it("shows nothing rather than 'Invalid Date' for a broken timestamp", () => {
+    const entry = reply({ created_at: Number.NaN });
+    render(<EntryView entry={entry} />);
+    expect(screen.queryByText(/Invalid/)).not.toBeInTheDocument();
+  });
+
+  it("shows no time at all for a message saved before the field existed", () => {
+    render(<EntryView entry={reply({ created_at: null, metrics: null })} />);
+    expect(screen.queryByText(/\d{2}:\d{2}/)).not.toBeInTheDocument();
+  });
+});
 
 describe("compaction summary (#739)", () => {
   const entry = {

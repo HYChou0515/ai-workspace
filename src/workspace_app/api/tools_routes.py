@@ -27,6 +27,7 @@ same question as whether an author happened to fill their name in.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from typing import Literal
 
 from fastapi import APIRouter, FastAPI
@@ -53,6 +54,21 @@ class ToolCatalogEntry(BaseModel):
     name: str
     label: str
     description: str
+
+
+class EnvNeedOut(BaseModel):
+    """One environment variable a tool says it wants (#750).
+
+    A hint, never a rule: nothing refuses a name absent from here, and a tool
+    still receives every variable the item holds. It exists so the person
+    filling the panel can stop guessing at names and meanings."""
+
+    name: str
+    description: str = ""
+    required: bool | None = None
+    """``None`` = the author did not mark it, which is neither required nor
+    optional. The panel counts only ``True`` toward "still missing", so an
+    author who never marks anything cannot make the panel cry wolf."""
 
 
 class ItemToolState(BaseModel):
@@ -95,10 +111,45 @@ class ItemToolState(BaseModel):
     tool is still in ``tools[]`` and still has a switch; what it has lost is
     the ability to run, and a row that looked ordinary would leave someone
     toggling it and wondering (#480)."""
+    env_needs: list[EnvNeedOut] | None = None
+    """What this tool says it wants from the item's environment (#750), or
+    ``None`` when nobody said.
+
+    ``None`` and ``[]`` carry different claims and the panel renders them
+    differently: ``[]`` is "needs nothing", ``None`` is "did not say". Almost
+    every package predates the declaration, so answering ``[]`` for silence
+    would tell someone hunting for a missing variable that there is nothing to
+    find — the one answer this endpoint must never invent.
+
+    A built-in is ``[]`` on our own authority: `_exec_tool` is the only place
+    `user_env` reaches a tool and it launches a package bundle, so a built-in
+    receives none of these by construction."""
 
 
 class ItemTools(BaseModel):
     tools: list[ItemToolState]
+
+
+def _env_needs_of(unit_key: str, packages: Sequence[PackageInfo]) -> list[EnvNeedOut] | None:
+    """What the tool behind this picker row wants from the environment (#750).
+
+    A ``pkg:cmd`` row reports its PACKAGE's declaration: the variables are read
+    by the bundle, and every command in it runs the same launcher with the same
+    environment. Two commands of one package therefore report the same names —
+    which is true, and is what lets the panel say who else is using a variable
+    before someone clears it.
+
+    A row whose package is not among ``packages`` is a built-in (or a package
+    this deploy never built). Built-ins are ``[]`` — see ``ItemToolState``."""
+    pkg = {p.name: p for p in packages}.get(unit_key.partition(":")[0])
+    if pkg is None:
+        return []
+    if pkg.env_needs is None:
+        return None
+    return [
+        EnvNeedOut(name=n.name, description=n.description, required=n.required)
+        for n in pkg.env_needs
+    ]
 
 
 def register_tools_routes(
@@ -148,6 +199,10 @@ def register_tools_routes(
                 effective=unit.name in effective,
                 declared=declared,
                 external=external,
+                # The same package list `picker_units` described the rows from,
+                # so a row's needs and its label can never come from different
+                # resolutions of the same tool.
+                packages=[*pkgs, *external.packages],
             )
             for unit in units
         ]
@@ -197,6 +252,7 @@ def _row(
     effective: bool,
     declared: dict[str, str],
     external: ExternalTools,
+    packages: Sequence[PackageInfo] = (),
 ) -> ItemToolState:
     """One picker row, with the provenance of whatever provides it.
 
@@ -218,6 +274,7 @@ def _row(
         author=prov.author if prov else None,
         stale=bool(prov and prov.stale),
         unavailable=external.refused.get(provider),
+        env_needs=_env_needs_of(unit.name, packages),
     )
 
 

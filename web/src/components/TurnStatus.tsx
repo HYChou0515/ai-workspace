@@ -1,6 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 
-import { type AgentLog, type TurnPhase, formatMetrics, isToolRunning, turnPhase } from "../pages/investigation/agentLog";
+import {
+  type AgentLog,
+  type TurnPhase,
+  formatCounts,
+  formatMetrics,
+  isToolRunning,
+  turnLooksSilent,
+  turnPhase,
+} from "../pages/investigation/agentLog";
 import { pxToRem } from "../lib/pxToRem";
 
 /** The trailing status of an in-flight turn — replaces the opaque "working…"
@@ -22,12 +30,19 @@ export function TurnStatus({
   log,
   className,
   onRetry,
+  alive,
 }: {
   log: AgentLog;
   className?: string;
   /** Ask the same question again, abandoning the stalled attempt. Omitted when
    * the running turn is not this viewer's to restart. */
   onRetry?: () => void;
+  /** Whether any pod is driving this turn, asked of the server while the silence
+   * lasts. `null`/absent = nobody could tell us. Today that lands on the same
+   * screen as `false`, and the separate value exists so it cannot quietly become
+   * "alive" later: being unable to ask is not evidence of life, and reading it as
+   * one restores the endless wait this exists to end. */
+  alive?: boolean | null;
 }) {
   const phase = turnPhase(log);
   const toolRunning = isToolRunning(log);
@@ -96,18 +111,34 @@ export function TurnStatus({
   // forever. Past the point where any real turn would have produced SOMETHING,
   // stop claiming to be waiting and say so. Visible output means the turn is
   // real; length alone is never the reason.
-  // "No sign of life" is the real test, not the phase: a delta can arrive before
-  // any metrics do, which still reads as `prep`. Any assistant text or tool call
-  // means the turn is real and running.
-  const producedSomething = log.entries.some(
-    (e) =>
-      e.kind === "tool_call" ||
-      (e.kind === "message" && e.message.role === "assistant" && !!e.message.content),
-  );
-  if (phase === "prep" && !producedSomething && elapsedSec >= ABANDONED_AFTER_S) {
+  //
+  // What it says is the EVIDENCE, not a verdict. "This turn never started" is a
+  // claim about the server that this screen cannot make: a page reloaded during
+  // a long tool call has no metrics either (the stream does not replay them), so
+  // it looks identical to a send that was cut. The silence is what we can prove,
+  // and the retry is offered on that.
+  //
+  // `turnLooksSilent` is deliberately the SAME predicate the panel asks under —
+  // the question and the answer have to be about one condition — and it is what
+  // scopes the check to THIS turn. Asked of the whole log, "has it produced
+  // anything" is yes forever in any chat ever answered, which is why this notice
+  // could not appear at all and 「還在準備,稍等一下」 was still on screen at
+  // 1300 seconds with nobody coming.
+  if (turnLooksSilent(log) && elapsedSec >= ABANDONED_AFTER_S) {
+    // …unless the server says someone is driving it. Then the silence is a slow
+    // turn on a pod this viewer is not subscribed to — the case that made every
+    // time-based verdict here wrong, and the reason there is now a fact to ask
+    // for instead of a clock to interpret.
+    if (alive === true) {
+      return (
+        <div className={className} style={box} data-testid="turn-still-working">
+          還在跑,只是這段時間沒有輸出。
+        </div>
+      );
+    }
     return (
       <div className={className} style={box} data-testid="turn-abandoned">
-        這一輪似乎沒有開始 — 可能在送出時就中斷了。
+        這一輪已經 {Math.floor(elapsedSec / 60)} 分鐘沒有任何動靜。
         {onRetry && (
           <button type="button" data-testid="turn-retry" onClick={onRetry} style={retryBtn}>
             重新問一次
@@ -169,8 +200,17 @@ export function TurnStatus({
     );
   }
 
+  // #748: a reasoning model can sit in `thinking` for a long time. The backend
+  // pushes metrics throughout it (reasoning deltas count toward the completion
+  // chars), but the line was rendered only for `answering` — so the longest
+  // silence of a turn was also its emptiest. Nothing was broken; the numbers
+  // had nowhere to go.
+  //
+  // The counts go BESIDE 思考中 rather than replacing it: the words say what the
+  // model is doing, the numbers say it is still doing it. Swapping one for the
+  // other trades a known problem for its mirror image.
   // The model has produced output and is answering (or is mid tool-call): the
-  // existing token line (↑/↓ tok · tok/s, or "running…") is the right signal.
+  // token line (↑/↓ tok · tok/s) is the whole signal.
   if (phase === "answering" || toolRunning) {
     if (!log.metrics) return null;
     return (
@@ -186,6 +226,16 @@ export function TurnStatus({
   return (
     <div className={className} style={box}>
       {switched ? "模型忙線,已自動切換,稍候…" : statusText(phase, elapsedSec)}
+      {/* #748: a reasoning model can sit in `thinking` for minutes, and the
+          backend pushes counts throughout it — they simply had nowhere to go.
+          They are appended HERE rather than in a branch of their own, so this
+          line keeps the retry affordance and the FE-anchored clock; an earlier
+          attempt returned early and lost both, printing the backend's elapsed,
+          which is the very number this component exists to distrust. */}
+      {phase === "thinking" && log.metrics && (
+        // Counts only: the elapsed on this line is the FE-anchored one below.
+        <span style={{ opacity: 0.7 }}> · {formatCounts(log.metrics)}</span>
+      )}
       {elapsedSec >= 1 && <span style={{ opacity: 0.7 }}> · {elapsedSec}s</span>}
       {retry}
     </div>

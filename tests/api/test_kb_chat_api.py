@@ -89,7 +89,19 @@ class _ToolRunner:
 class _MetricsRunner:
     async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
         yield MessageDelta(text="Answer.")
-        yield AgentMetrics(phase="final", prompt_tokens=42, completion_tokens=7, elapsed_ms=1234)
+        # #748: the display fields and the record are different channels. A
+        # provider that reported its own counts fills `measured_*`; the plain
+        # fields stay approximate and must never reach the record.
+        yield AgentMetrics(
+            phase="final",
+            prompt_tokens=40,
+            completion_tokens=6,
+            elapsed_ms=1234,
+            measured_prompt_tokens=42,
+            measured_completion_tokens=7,
+            generation_ms=500,
+            model="ollama_chat/qwen3:14b",
+        )
         yield RunDone()
 
 
@@ -100,8 +112,22 @@ def test_send_message_persists_final_token_metrics():
 
     answer = client.get(f"/kb/chats/{cid}").json()["messages"][-1]
     assert answer["role"] == "assistant"
-    # the live token line survives a reload (persisted on the assistant message)
-    assert answer["metrics"] == {"prompt_tokens": 42, "completion_tokens": 7, "elapsed_ms": 1234}
+    # The line survives a reload (persisted on the assistant message) — and #748
+    # added two fields to it. KB chat hand-serializes `metrics` instead of riding
+    # specstar's auto-CRUD, so it is the surface where a new field silently goes
+    # missing; that is exactly what happened, and this pins it.
+    assert answer["metrics"] == {
+        "model": "ollama_chat/qwen3:14b",
+        # Steer-by: the display figure, always present, possibly an estimate.
+        "prompt_tokens": 40,
+        "completion_tokens": 6,
+        # Believe-me: the provider's own counts, or null.
+        "measured_prompt_tokens": 42,
+        "measured_completion_tokens": 7,
+        "elapsed_ms": 1234,
+        "generation_ms": 500,
+        "exact": True,
+    }
 
 
 class _HistoryRecordingRunner:

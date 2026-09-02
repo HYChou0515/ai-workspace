@@ -80,6 +80,27 @@ class ServerSettings:
     # decision lives in the impl rather than in a mapping table here.
     request_env: str = ""
 
+    # #750 — dotted paths to `IEnvProvider` implementations: the deploy's own
+    # code for "log in, get the variables", so a person who knows their account
+    # and password can fill a variable that is really a token.
+    #
+    # A LIST, unlike `request_env`: one deploy can have an SAP login, an AD
+    # login and an API-key exchange, and they are unrelated to each other.
+    #
+    # Empty (default) ⇒ no buttons anywhere. That is the absence of the feature,
+    # not a degraded mode: every variable is still typeable by hand, which is
+    # the path that always works.
+    #
+    # The implementations belong to the deploy on purpose. A tool declares only
+    # variable NAMES and is joined to a provider by name, so a third-party tool
+    # author can never name — or choose — which credential the UI asks for.
+    # `list`, like `superusers` above, because that is what the loader actually
+    # produces: `_build` passes the parsed YAML through as-is, so a `tuple`
+    # annotation here would simply be false at runtime — and invisible, since
+    # `_build` takes `**dict[str, Any]` and the type checker never sees the
+    # field it is filling.
+    env_providers: list[str] = field(default_factory=list)
+
 
 # ─── sandbox ────────────────────────────────────────────────────────────
 @dataclass(frozen=True)
@@ -805,6 +826,14 @@ class Preset:
     # `ollama_chat/qwen2.5vl`) aren't in litellm's capability DB, so we don't
     # auto-detect. Default False keeps text-only models on the describer path.
     vision: bool = False
+    # #748/#751: whether this endpoint answers a `stream_options.include_usage`
+    # request with the PROVIDER's own token counts. Declarative for the same
+    # reason `vision` is — it cannot be detected from the reply. A litellm proxy
+    # answers the request either way: with the backend's real counts if it has
+    # them, with its own tokenizer's if not, in an identically shaped object.
+    # Off unless declared: a wrong `true` persists an invented number as a
+    # measurement, a wrong `false` persists nothing, and blank is recoverable.
+    reports_usage: bool = False
     # Optional — agent-style callers (workspace_chat / kb_chat /
     # infer_modules) need a prompt; LLM-only callers (kb.retrieval_llm)
     # don't. Catalog build enforces non-empty for agent callers.
@@ -1034,6 +1063,7 @@ def _preset_from_dict(d: dict[str, Any]) -> Preset:
     return Preset(
         model=d["model"],
         vision=bool(d.get("vision", False)),
+        reports_usage=bool(d.get("reports_usage", False)),
         prompt_file=d.get("prompt_file", ""),
         description=d.get("description", ""),
         suggestions=[_to_suggestion(v) for v in d.get("suggestions", [])],

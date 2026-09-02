@@ -240,6 +240,42 @@ def test_a_note_written_before_authors_existed_still_falls_back(tmp_path: Path) 
     assert fallen_back.author is None
 
 
+def test_the_remembered_copy_keeps_what_the_tool_says_it_is(tmp_path: Path) -> None:
+    """Same rule as the author, one field over. An outage is not a reason for a
+    tool to stop being able to say what it is: the note is what the app is
+    served from while the store is unreachable, so anything it does not carry
+    is a blank the agent and the picker cannot fill from anywhere else."""
+    data = _bundle()
+    resolver = _resolver(
+        tmp_path,
+        _Wire(manifest=_manifest(data, description="晶圓路徑與良率歷史查詢。"), bundle=data),
+    )
+    resolver.resolve("wafer-history", _MANIFEST_URL)
+
+    fallen_back = _resolver(tmp_path, _Wire()).resolve("wafer-history", _MANIFEST_URL)
+
+    assert fallen_back.stale is True
+    assert fallen_back.description == "晶圓路徑與良率歷史查詢。"
+
+
+def test_a_note_written_before_descriptions_existed_still_falls_back(tmp_path: Path) -> None:
+    """The same upgrade hazard the author's note has: a file written by an older
+    host must not raise during the one event it exists for."""
+    data = _bundle()
+    resolver = _resolver(tmp_path, _Wire(manifest=_manifest(data), bundle=data))
+    resolver.resolve("wafer-history", _MANIFEST_URL)
+    note = tmp_path / "last-known-good.json"
+    body = json.loads(note.read_text())
+    for entry in body.values():
+        entry.pop("description", None)
+    note.write_text(json.dumps(body))
+
+    fallen_back = _resolver(tmp_path, _Wire()).resolve("wafer-history", _MANIFEST_URL)
+
+    assert fallen_back.stale is True
+    assert fallen_back.description is None
+
+
 def test_an_unreachable_store_with_nothing_cached_says_which_tool_failed(
     tmp_path: Path,
 ) -> None:

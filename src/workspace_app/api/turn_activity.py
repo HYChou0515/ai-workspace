@@ -1,0 +1,174 @@
+"""Is anyone actually running this turn? (cross-pod)
+
+A viewer watching a chat cannot answer that today, and every notice built on the
+question had to guess. A silent turn EMITS nothing — that is what makes it
+silent — so no event stream can carry the news, whether it is the in-memory
+per-pod one or the RabbitMQ fan-out (`event_bus/`) that reaches every replica:
+hearing nothing is not evidence either way. The persisted thread is written at
+turn END, so mid-turn it says exactly what a turn nobody is running says: the
+thread ends on the question.
+"Producing nothing yet" and "lost" are the same picture, so a screen that
+insists on a verdict is choosing which way to be wrong: claim it is running and
+the user waits forever for nobody, or claim it is gone and offer to re-ask a
+turn that is quietly working.
+
+So record the fact instead of inferring it, in the shape this repo already uses
+for the same class of question (`sandbox_activity`, #345): a heartbeat row in
+the shared backend, written by whichever pod is driving the turn and readable
+from any of them.
+
+The heartbeat has to come from a TIMER, not from the turn's own events. The case
+that matters most is a turn that produces nothing for minutes — a long tool call,
+a slow first token — and an event-driven bump goes quiet at exactly the moment
+its answer is needed.
+
+Ageing out is the ONLY way a turn stops being alive here, and that is deliberate.
+A pod that dies mid-turn cannot clear a flag and nothing else knows it should, so
+a row that had to be deleted to mean "finished" would say "running" forever after
+a crash — precisely the state this exists to end. A heartbeat stops on its own.
+
+There WAS an explicit end signal beside it, deleting the row the moment a turn
+finished so the answer went stale in milliseconds instead of `TURN_STALE_AFTER_MS`.
+It is gone. Three review rounds found three genuine timing defects in it, each
+one introduced by the fix for the last: a stray beat resurrecting a row it had
+just cleared; a Stop losing the delete because the wait for that beat sat in the
+cancellation's path; and, once that wait was moved off the turn, one turn's
+delete landing on the NEXT turn's live row and reporting a running turn dead.
+Making it correct needs a generation stamp compared-and-swapped at delete time,
+on a store whose backend's etag is documented as non-atomic — three new pieces of
+machinery to shave at most thirty seconds off an answer that is only ever read
+after ten minutes of silence. The age-out has to be right regardless, because it
+is the only thing covering the case that actually loses a turn. So it is the
+whole mechanism now, and there is one less thing that can be wrong.
+"""
+
+from __future__ import annotations
+
+import abc
+import asyncio
+import contextlib
+import datetime as dt
+import logging
+from collections.abc import Callable
+
+from msgspec import Struct
+from specstar import SpecStar
+from specstar.types import (
+    DuplicateResourceError,
+    ResourceIDNotFoundError,
+    ResourceIsDeletedError,
+    RevisionStatus,
+)
+
+logger = logging.getLogger(__name__)
+
+#: How long after the last beat a turn counts as gone — six beats' worth, so it
+#: takes six CONSECUTIVE misses (a wedged store, an event loop pinned by sync
+#: I/O — this repo has had both) to call a live turn dead, not one slow write.
+#: Not a guarantee: a stall longer than the whole window still reads as a death.
+#:
+#: The comparison crosses two machines' clocks — the beat is stamped by the pod
+#: driving the turn and read by whichever pod is asked — so the buffer is also
+#: what absorbs the difference between them. It assumes ordinary NTP-level skew,
+#: which is the same assumption `sandbox_activity` has always made.
+TURN_STALE_AFTER_MS = 30_000
+
+#: How often a running turn says it is still there. A point write per interval
+#: per in-flight turn — next to a model call, free.
+TURN_HEARTBEAT_MS = 5_000
+
+
+class ITurnActivityStore(abc.ABC):
+    """Whether a turn is being driven right now, answerable from any pod."""
+
+    @abc.abstractmethod
+    async def bump(self, key: str) -> None:
+        """Record that the turn on ``key`` is being driven, as of now."""
+
+    @abc.abstractmethod
+    async def alive(self, key: str, *, stale_after_ms: int = TURN_STALE_AFTER_MS) -> bool:
+        """Whether a turn on ``key`` has beaten within ``stale_after_ms``.
+
+        `False` covers every way of having no evidence of life — never started,
+        ended more than `stale_after_ms` ago, the pod driving it died, or the
+        beats could not be written at all — because to the person waiting the
+        first three are one thing: nobody is coming. The fourth is not: a running
+        turn whose store is unwritable also reads `False`, and the screen then
+        offers to re-ask a turn that is working. That is the behaviour this
+        replaced, so a broken store costs the improvement and nothing more — it
+        never invents a turn that is not there."""
+
+
+class _TurnActivity(Struct):
+    """One chat's in-flight-turn heartbeat.
+
+    `resource_id == key`, so every pod reads the one shared row by point key. No
+    index and no scan: the only question ever asked is about one chat."""
+
+    key: str
+    last_beat_ms: int = 0
+
+
+def register_turn_activity(spec: SpecStar) -> None:
+    """Idempotently register the heartbeat model. Safe on every pod.
+
+    Unindexed on purpose — this is a point lookup by id, and an index would be a
+    filtered one, which is the kind a missed backfill turns into missing rows
+    rather than a wrong number."""
+    with contextlib.suppress(ValueError):
+        spec.add_model(_TurnActivity)
+
+
+class SpecstarTurnActivityStore(ITurnActivityStore):
+    """`ITurnActivityStore` over the shared specstar backend. Blocking specstar
+    I/O is offloaded to a thread, like the rest of the app's specstar access."""
+
+    def __init__(self, spec: SpecStar, *, now_ms: Callable[[], int] | None = None) -> None:
+        self._spec = spec
+        self._now_ms = now_ms  # injectable clock for deterministic tests
+
+    def _now(self) -> int:
+        if self._now_ms is not None:
+            return self._now_ms()
+        return int(dt.datetime.now(dt.UTC).timestamp() * 1000)
+
+    async def bump(self, key: str) -> None:
+        await asyncio.to_thread(self._bump_sync, key)
+
+    def _bump_sync(self, key: str) -> None:
+        rm = self._spec.get_resource_manager(_TurnActivity)
+        rec = _TurnActivity(key=key, last_beat_ms=self._now())
+        try:
+            rm.modify(key, rec, status=RevisionStatus.draft)
+            return
+        except ResourceIDNotFoundError:
+            pass
+        except ResourceIsDeletedError:
+            # The previous turn on this chat finished and soft-deleted the row.
+            # A new turn has to bring it back, or a second question would look
+            # abandoned from its first second.
+            logger.debug("turn-activity: %s restarted, restoring beat row", key)
+            rm.restore(key)
+            rm.modify(key, rec, status=RevisionStatus.draft)
+            return
+        logger.debug("turn-activity: %s beat row absent, creating fresh", key)
+        with contextlib.suppress(DuplicateResourceError):
+            rm.create(rec, resource_id=key, status=RevisionStatus.draft)
+
+    async def alive(self, key: str, *, stale_after_ms: int = TURN_STALE_AFTER_MS) -> bool:
+        return await asyncio.to_thread(self._alive_sync, key, stale_after_ms)
+
+    def _alive_sync(self, key: str, stale_after_ms: int) -> bool:
+        rm = self._spec.get_resource_manager(_TurnActivity)
+        try:
+            res = rm.get(key)
+        except (ResourceIDNotFoundError, ResourceIsDeletedError):
+            return False  # never started, or finished
+        data = res.data
+        assert isinstance(data, _TurnActivity)
+        age = self._now() - data.last_beat_ms
+        # The one place a person's question gets an answer, and the one number
+        # that explains it afterwards: "was anyone driving this?" is unanswerable
+        # from a log that never says how old the last beat was.
+        logger.debug("turn-activity: %s last beat %dms ago (stale at %d)", key, age, stale_after_ms)
+        return age < stale_after_ms

@@ -5,7 +5,7 @@
  */
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "../../api";
 import { investigationFileService } from "../../api/fileService";
@@ -40,7 +40,7 @@ import { useStickToBottom } from "../../hooks/useStickToBottom";
 import { ConnectionNotice } from "../../components/ConnectionNotice";
 import { ResourceLinkText } from "../../components/ResourceLinkText";
 import { TurnStatus } from "../../components/TurnStatus";
-import { turnsFromEntry } from "./agentLog";
+import { turnLooksSilent, turnsFromEntry } from "./agentLog";
 import type { CompactionReason } from "../../api/types";
 import type { QuotaKind } from "../../lib/quotaFailure";
 import { pxToRem } from "../../lib/pxToRem";
@@ -89,6 +89,17 @@ const hdrBtn: React.CSSProperties = {
  * off the screen. The rest are counted, never dropped. */
 const CHIP_RENDER_BUDGET = 12;
 
+/** How long a silence goes on before the panel ASKS whether anyone is driving
+ * the turn. Comfortably inside the give-up notice's own threshold, so the answer
+ * is in hand before the screen would have to say anything — and late enough that
+ * a brief hand-off (every turn begins in this state) never costs a request. */
+const TURN_ALIVE_ASK_AFTER_MS = 60_000;
+
+/** …and how often it asks again while the silence lasts. Matched to the server's
+ * own staleness window (`TURN_STALE_AFTER_MS`), so what the screen shows is
+ * never more than one window behind the fact it describes. */
+const TURN_ALIVE_REFRESH_MS = 30_000;
+
 /** How many rejected files the composer names before switching to a count. Same
  * failure, one surface over: a folder that is refused wholesale used to render
  * one full path per file into a single line of text. */
@@ -134,11 +145,17 @@ export function AgentPanel({
   uploadDir = "uploads",
 }: {
   investigationId: string;
-  /** The chat on screen. #739's context gauge reports its window; Export
-   * downloads it, rather than whichever chat happens to be the item's first.
-   * Absent on a surface with no chat of its own — neither renders then, which
-   * is why Export is guarded rather than required: a button that cannot name
-   * its chat should not be there at all, and could otherwise only guess. */
+  /** The chat this panel is showing, when it is showing a named one.
+   *
+   * Three things need it. Turns are keyed per chat server-side, so a question
+   * about the running turn has to name it — absent means the item's DEFAULT
+   * chat, whose key is the item id. #739's context gauge reports this chat's
+   * window. And Export downloads THIS chat, rather than whichever one happens
+   * to be the item's first.
+   *
+   * Absent on a surface with no chat of its own: the gauge does not render,
+   * and Export is guarded rather than required — a button that cannot name its
+   * chat should not be there at all, since it could only guess. */
   chatId?: string;
   /** Permission-disclosure: the current user may read the thread but lacks
    * `converse` — the composer is disabled with a hint (the backend also 403s a
@@ -205,6 +222,51 @@ export function AgentPanel({
   // composer's own feedback channel (Enter during a turn, Stop). Cleared on the
   // next successful send.
   const [composerHint, setComposerHint] = useState<string | null>(null);
+  // …and when the turn ends, because every hint this channel carries is about a
+  // turn that was running: 「正在停止這一輪…」 and 「回覆還在進行中…」 both describe
+  // a state that is over, and both used to sit there until the next send. A
+  // present-tense line that never resolves reads as a stop that never finished.
+  useEffect(() => {
+    if (!log.streaming) setComposerHint(null);
+  }, [log.streaming]);
+  // Whether any pod is driving this turn. Asked only while the turn is silent in
+  // the one way the screen cannot explain (`turnLooksSilent` — the same
+  // predicate `TurnStatus` shows the answer under), and only after the wait is
+  // long enough to be suspicious: a turn that is visibly producing never costs a
+  // request. `null` while unasked or unanswerable — which `TurnStatus` reads as
+  // "still cannot tell", not as "no".
+  //
+  // And asked REPEATEDLY, because the recorded fact expires (30s server-side)
+  // while the answer is shown from ten minutes onwards. A single sample would
+  // have one moment near the start of the silence speaking for the whole of it —
+  // so a pod that died at minute two would still read as 「還在跑」 at minute
+  // twenty, with the retry withheld. That is the endless wait again, now with a
+  // server-side fact behind it, which is worse than the guess it replaced.
+  const [turnAlive, setTurnAlive] = useState<boolean | null>(null);
+  const silent = turnLooksSilent(log);
+  useEffect(() => {
+    if (!silent) {
+      setTurnAlive(null);
+      return;
+    }
+    let cancelled = false;
+    const ask = () => {
+      void api
+        .turnAlive(slug, investigationId, chatId)
+        .then((v) => !cancelled && setTurnAlive(v))
+        .catch(() => undefined);
+    };
+    let repeat: ReturnType<typeof setInterval> | undefined;
+    const first = setTimeout(() => {
+      ask();
+      repeat = setInterval(ask, TURN_ALIVE_REFRESH_MS);
+    }, TURN_ALIVE_ASK_AFTER_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(first);
+      if (repeat !== undefined) clearInterval(repeat);
+    };
+  }, [silent, slug, investigationId, chatId]);
   // #739: `/compact` and the button below are the SAME call — a slash command is
   // invisible by nature, so the button is what makes it discoverable, and one
   // route means the two can never drift apart.
@@ -653,7 +715,7 @@ export function AgentPanel({
           />
         ))}
         <ConnectionNotice connection={connection} />
-        <TurnStatus log={log} onRetry={othersTurn ? undefined : retryTurn} />
+        <TurnStatus log={log} onRetry={othersTurn ? undefined : retryTurn} alive={turnAlive} />
         {log.error && (
           <div
             style={{
@@ -1139,8 +1201,12 @@ export function AgentPanel({
               onClick={() => {
                 cancel();
                 // Stop's ENTIRE feedback used to be the spinner disappearing,
-                // which reads the same as the turn finishing on its own.
-                setComposerHint("已中止這一輪。已產生的內容保留在上面。");
+                // which reads the same as the turn finishing on its own. So the
+                // click still says something — but about the CLICK, not the
+                // outcome: the transcript already gets a 「已取消。」 banner when
+                // the turn actually stops, and saying it here too is how one
+                // press of Stop came to print the same news twice.
+                setComposerHint("正在停止這一輪…");
               }}
               style={{
                 padding: "6px 14px",
@@ -1285,6 +1351,11 @@ export function AgentHeader({
             setShowEnv(false);
           }}
           onClose={() => setShowEnv(false)}
+          // #750: which item, so the panel can offer a field per variable this
+          // item's own tools declared. Only reached when the modal is open, so
+          // a closed panel costs nothing.
+          slug={slug}
+          itemId={investigationId}
         />
       )}
       {showTools && onSaveToolPrefs && (

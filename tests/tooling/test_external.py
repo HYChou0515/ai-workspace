@@ -73,6 +73,51 @@ async def test_a_resolved_tool_becomes_a_package_the_agent_can_call() -> None:
     assert pkg.commands[0].params_json_schema == {"type": "object", "properties": {}}
 
 
+async def test_a_third_party_tools_env_declaration_survives_the_resolve() -> None:
+    """#750 — the declaration reaches the panel for a THIRD-party tool too.
+
+    This is the path that matters most and the one that silently did not exist:
+    #750 put the declaration in the package because, since #674, the only party
+    who knows what a tool reads is an outside author shipping an artifact. A
+    first-party bundle is read off disk by `discover_packages`; a third-party one
+    arrives through the host, and a field dropped at that boundary leaves every
+    such tool reporting "did not say" with its `env.json` sitting in the bundle."""
+    host = _Host(
+        {
+            "tools": {
+                "wafer-history": {
+                    **_ANSWER["tools"]["wafer-history"],
+                    "env": [
+                        {"name": "WAFER_API", "description": "Yield service", "required": True},
+                        {"name": "WAFER_CACHE"},
+                    ],
+                }
+            },
+            "refused": {},
+        }
+    )
+
+    external = await resolve_external_tools(host, {"wafer-history": "https://g/m"})
+
+    (pkg,) = external.packages
+    assert pkg.env_needs is not None, "the author's declaration must survive the host"
+    assert [(n.name, n.required) for n in pkg.env_needs] == [
+        ("WAFER_API", True),
+        ("WAFER_CACHE", None),
+    ]
+
+
+async def test_a_third_party_tool_that_declared_nothing_stays_undeclared() -> None:
+    """No `env` in the payload is "nobody said", not "needs nothing".
+
+    Every artifact published before #750 lands here, and the two must not merge
+    at the boundary any more than they may inside a bundle."""
+    external = await resolve_external_tools(_Host(_ANSWER), {"wafer-history": "https://g/m"})
+
+    (pkg,) = external.packages
+    assert pkg.env_needs is None
+
+
 async def test_the_sha_travels_to_the_sandbox_that_will_run_it() -> None:
     external = await resolve_external_tools(_Host(_ANSWER), {"wafer-history": "https://g/m"})
 
@@ -262,3 +307,39 @@ def test_an_unknown_mounted_set_is_left_alone_rather_than_guessed() -> None:
     external = _resolved(wafer="a" * 64)
 
     assert confine_to_mounted(external, live=True, mounted=None) is external
+
+
+async def test_the_package_carries_what_the_tool_says_about_itself() -> None:
+    """The agent's side of the chain reads a ``PackageInfo`` — it never sees the
+    provenance record, which is keyed separately and stops at the picker and a
+    log line. So whatever the model is expected to be able to SAY about a tool
+    has to arrive on the package.
+
+    Held here rather than left on ``ToolProvenance`` so there is one home for it:
+    two copies of "which release, by whom" is two things to keep in step, and
+    nothing would notice them drifting."""
+    answer = {
+        "tools": {
+            "wafer-history": {
+                **_ANSWER["tools"]["wafer-history"],
+                "description": "晶圓路徑與良率歷史查詢。",
+            }
+        },
+        "refused": {},
+    }
+
+    external = await resolve_external_tools(_Host(answer), {"wafer-history": "https://g/m"})
+
+    (pkg,) = external.packages
+    assert pkg.description == "晶圓路徑與良率歷史查詢。"
+    assert pkg.version == "1.4.2"
+    assert pkg.author == "Wafer Team <wafer@example.com>"
+
+
+async def test_a_tool_that_describes_nothing_leaves_the_fields_empty() -> None:
+    """Every artifact published before the field existed. Empty is the honest
+    answer; anything else would be the platform speaking for its author."""
+    external = await resolve_external_tools(_Host(_ANSWER), {"wafer-history": "https://g/m"})
+
+    (pkg,) = external.packages
+    assert pkg.description == ""

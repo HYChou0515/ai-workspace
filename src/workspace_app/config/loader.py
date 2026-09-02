@@ -305,6 +305,7 @@ def _validate(merged: dict[str, Any], *, source: str) -> None:
     _check_unknown_keys(merged, _TOP_SCHEMA, prefix="", source=source)
     _check_preset_references(merged, source=source)
     _check_preset_fallbacks(merged, source=source)
+    _check_reports_usage_chain(merged, source=source)
     _check_preset_required_fields(merged, source=source)
     _check_retrieval_llm_reference(merged, source=source)
     _check_max_searches(merged, source=source)
@@ -383,7 +384,12 @@ _PRESET_LLM_FIELDS = {f.name for f in dataclasses.fields(PresetLlmSettings)}
 # infer_modules entries carry the per-step classifier's KB-query depth +
 # effort + fan-out + which collection to search. Allowed on any usage entry
 # (other purposes simply ignore them).
-_USAGE_FIELDS = _PRESET_FIELDS | {
+# #748/#751: `reports_usage` is a preset field but NOT a usage field — it
+# describes what an ENDPOINT reports, so a role may not assert it. Subtracted
+# here rather than only refused later, so the accepted set and the enforced set
+# are the same set: leaving it in meant one validator welcomed a key the next
+# one rejected, and "unknown field" is the error that actually helps.
+_USAGE_FIELDS = (_PRESET_FIELDS - {"reports_usage"}) | {
     "preset",
     "name",
     "reasoning_effort",
@@ -630,6 +636,62 @@ def _check_preset_references(merged: dict[str, Any], *, source: str) -> None:
                     f"config {source}: agents.{purpose}[{i}].preset "
                     f"references unknown preset {ref!r}; "
                     f"known presets: {sorted(known)}"
+                )
+
+
+def _check_reports_usage_chain(merged: dict[str, Any], *, source: str) -> None:
+    """#748/#751: a `reports_usage` head may not fall back to an endpoint that
+    has not been vouched for.
+
+    Failover reuses ONE `ModelSettings` across the whole chain, so the head's
+    declaration is what every endpoint in it is asked with. Point a vouched head
+    at a silent one and litellm answers on that endpoint's behalf — its
+    tokenizer's guess, persisted as a measurement. That is the exact fabrication
+    the flag exists to prevent, and it would arrive only on failover, i.e. the
+    path nobody is looking at.
+
+    Per-endpoint settings are the other possible fix. This refuses the config
+    instead, because the operator has written something they cannot have meant
+    and the inconsistency is visible right here, at load, rather than in a
+    record weeks later.
+    """
+    agents = (merged.get("agents") or {}) if merged else {}
+    presets = agents.get("presets") or {}
+    if not isinstance(presets, dict):
+        return
+
+    # A usage block (agents.kb_chat, agents.<purpose>, workspace_chat entries)
+    # may override most preset fields, but not this one: it is a claim about the
+    # ENDPOINT, and a role has no standing to make it — the same endpoint would
+    # be vouched for in one role and not another. Refused rather than ignored,
+    # because silently dropping a key the operator wrote is the failure this
+    # flag already suffered once.
+    for key, block in agents.items():
+        if key == "presets":
+            continue
+        blocks = block if isinstance(block, list) else [block]
+        for entry in blocks:
+            if isinstance(entry, dict) and "reports_usage" in entry:
+                raise ValueError(
+                    f"{source}: agents.{key} sets reports_usage. It belongs on the preset "
+                    f"(agents.presets.<name>.reports_usage) because it describes what an "
+                    f"ENDPOINT reports, not what a role wants. Declaring it here would vouch "
+                    f"for that endpoint in this role only."
+                )
+
+    for name, preset in presets.items():
+        if not isinstance(preset, dict) or not preset.get("reports_usage"):
+            continue
+        for fb in preset.get("fallbacks") or []:
+            other = presets.get(fb)
+            if isinstance(other, dict) and not other.get("reports_usage"):
+                raise ValueError(
+                    f"{source}: preset '{name}' declares reports_usage but falls back to "
+                    f"'{fb}', which does not. The chain shares one request, so the fallback "
+                    f"would be asked for usage it was never vouched for, and litellm answers "
+                    f"in its place with a tokenizer estimate that is stored as a measurement. "
+                    f"Set reports_usage on '{fb}' too if it genuinely reports, or drop it from "
+                    f"'{name}'s fallbacks."
                 )
 
 
@@ -931,6 +993,10 @@ def _build_preset(d: dict[str, Any]) -> Preset:
     return Preset(
         model=d["model"],
         vision=bool(d.get("vision", False)),
+        # #748/#751: a hand-written kwargs list drops any field nobody adds
+        # here, and strict validation ACCEPTS the key because it is a real
+        # Preset field — so the operator gets no error and no effect.
+        reports_usage=bool(d.get("reports_usage", False)),
         prompt_file=d.get("prompt_file", ""),
         description=d.get("description", ""),
         suggestions=list(d.get("suggestions", [])),

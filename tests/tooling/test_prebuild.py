@@ -375,6 +375,104 @@ def test_build_package_uvrun_carrier_writes_python_launch_and_empty_commands(tmp
     assert (dst / "schemas").is_dir()
 
 
+def test_bundle_carries_the_source_env_declaration(tmp_path):
+    """`env.json` travels from the package source into the bundle (#750).
+
+    Deliberately exercised on the CARRIER branch. A carrier writes its own
+    empty `commands.json` instead of going through `_dump_schemas`, so a copy
+    bolted onto the schema dump would silently skip it — and a carrier is
+    exactly the kind of package that wants an index URL or a proxy set."""
+    from workspace_app.tooling import prebuild
+
+    src = tmp_path / "src" / "python-stack"
+    src.mkdir(parents=True)
+    (src / "pyproject.toml").write_text('[project]\nname = "python-stack"\nversion = "0"\n')
+    (src / "env.json").write_text(
+        json.dumps([{"name": "PIP_INDEX_URL", "description": "internal mirror"}])
+    )
+    dst = tmp_path / "dst"
+    prebuild.build_package_uvrun(name="python-stack", source=src, dst=dst)
+
+    assert json.loads((dst / "env.json").read_text()) == [
+        {"name": "PIP_INDEX_URL", "description": "internal mirror"}
+    ]
+
+
+def test_bundle_has_no_env_json_when_the_source_declared_none(tmp_path):
+    """No declaration in, no declaration out — the bundle must not sprout an
+    empty one. `discover_packages` reads an absent file as "nobody said" and an
+    empty list as "needs nothing", so inventing the file here would make every
+    silent package claim it is fully configured."""
+    from workspace_app.tooling import prebuild
+
+    src = tmp_path / "src" / "python-stack"
+    src.mkdir(parents=True)
+    (src / "pyproject.toml").write_text('[project]\nname = "python-stack"\nversion = "0"\n')
+    dst = tmp_path / "dst"
+    prebuild.build_package_uvrun(name="python-stack", source=src, dst=dst)
+
+    assert not (dst / "env.json").exists()
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        pytest.param("{ not json", id="not-json"),
+        pytest.param('{"SAP_HOST": "x"}', id="object-not-array"),
+        pytest.param('[{"description": "no name here"}]', id="entry-without-name"),
+    ],
+)
+def test_prebuild_refuses_an_unusable_env_declaration(tmp_path, content):
+    """The author gets the loud failure, on their own build.
+
+    This is the deliberate opposite of `discover_packages`, which degrades a
+    broken `env.json` to "undeclared" and carries on. The asymmetry is about
+    who is standing there: at prebuild it is the author, who wrote the file and
+    can fix it now; at discovery it is an operator running someone else's
+    artifact, for whom a raise would be an outage over a lost hint."""
+    from workspace_app.tooling import prebuild
+
+    src = tmp_path / "src" / "python-stack"
+    src.mkdir(parents=True)
+    (src / "pyproject.toml").write_text('[project]\nname = "python-stack"\nversion = "0"\n')
+    (src / "env.json").write_text(content)
+    dst = tmp_path / "dst"
+
+    with pytest.raises(RuntimeError, match="env.json"):
+        prebuild.build_package_uvrun(name="python-stack", source=src, dst=dst)
+
+
+def test_prebuilt_bundle_carries_the_env_declaration_too(tmp_path: Path, monkeypatch):
+    """The OTHER build path copies it as well (#750).
+
+    There are two build entry points and the copy lives in both. Coverage alone
+    said this line ran, but dropping it left the whole suite green — the
+    uvrun test asserted the effect and this path asserted nothing, which is how
+    one rule written in two places quietly becomes one rule."""
+    from workspace_app.tooling import prebuild
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "pyproject.toml").write_text('[project]\nname = "data-fetch"\nversion = "0"\n')
+    (src / "uv.lock").write_text("# fake")
+    (src / "env.json").write_text(json.dumps([{"name": "DATA_FETCH_TOKEN"}]))
+    dst = tmp_path / "dst"
+
+    monkeypatch.setattr(prebuild.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(prebuild.shutil, "copytree", lambda *a, **kw: None)
+    monkeypatch.setattr(prebuild, "_dump_schemas", lambda launch, dst: None)
+    bundled = tmp_path / "bin" / "python3.99"
+    bundled.parent.mkdir()
+    bundled.write_text("")
+    monkeypatch.setattr(
+        prebuild.Path, "resolve", lambda self: bundled if self.name == "python" else self
+    )
+
+    prebuild.build_package(name="data-fetch", source=src, dst=dst)
+
+    assert json.loads((dst / "env.json").read_text()) == [{"name": "DATA_FETCH_TOKEN"}]
+
+
 def test_provision_uvrun_builds_present_sources_and_skips_missing(tmp_path, monkeypatch):
     """provision_uvrun builds a bundle per existing source and skips a
     missing source dir (keeps the gitignored in-house rca-tools optional)."""

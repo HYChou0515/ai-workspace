@@ -289,3 +289,150 @@ def test_package_info_install_dir_is_sandbox_relative(tmp_path: Path):
     pkgs = discover_packages(pre)
     assert isinstance(pkgs[0], PackageInfo)
     assert pkgs[0].install_dir == "../.tools/datalab"
+
+
+def test_discover_packages_reads_a_declared_env_need(tmp_path: Path):
+    """A bundle's `env.json` reaches its PackageInfo (#750).
+
+    This is the whole point of the declaration: the panel can only tell
+    someone what a tool wants if the tool said so, and since #674 the only
+    party who knows ships an artifact rather than a patch to this repo."""
+    pre = tmp_path / "prebuilt"
+    _seed_package(pre, "sap-tools", [_cmd("query", "Query SAP")])
+    (pre / "sap-tools" / "env.json").write_text(
+        json.dumps([{"name": "SAP_HOST", "description": "SAP server address", "required": True}])
+    )
+
+    (pkg,) = discover_packages(pre)
+    assert pkg.env_needs is not None
+    (need,) = pkg.env_needs
+    assert need.name == "SAP_HOST"
+    assert need.description == "SAP server address"
+    assert need.required is True
+
+
+def test_discover_packages_keeps_undeclared_distinct_from_declared_nothing(tmp_path: Path):
+    """No `env.json` is `None`; an empty one is `()` — and they must not merge.
+
+    Every package built before #750 has no `env.json`. If absent collapsed to
+    empty, the panel would state about nearly every installed tool that it
+    needs no configuration — which is both false and the single most
+    misleading thing this feature could say, since the person reading it is
+    there precisely to find out what they are missing."""
+    pre = tmp_path / "prebuilt"
+    _seed_package(pre, "legacy", [_cmd("go", "Legacy tool")])
+    _seed_package(pre, "audited", [_cmd("go", "Audited tool")])
+    (pre / "audited" / "env.json").write_text(json.dumps([]))
+
+    by_name = {p.name: p for p in discover_packages(pre)}
+    assert by_name["legacy"].env_needs is None, "no env.json must stay 'nobody said'"
+    assert by_name["audited"].env_needs == (), "an empty env.json is a real claim"
+
+
+def test_discover_packages_survives_an_unreadable_env_json(tmp_path: Path, caplog):
+    """A broken hint degrades to "nobody said"; it does not take the deploy down.
+
+    `commands.json` is strict for a reason (the May-30 half-built incident) and
+    that reason does not transfer here: a missing command list means the tool
+    cannot run, whereas a malformed `env.json` means one hint is unavailable.
+    Raising would let a third-party author's typo stop an operator's startup for
+    EVERY package — a convenience turning itself into an outage. The author
+    still gets a loud failure, at prebuild, on their own machine."""
+    pre = tmp_path / "prebuilt"
+    _seed_package(pre, "sloppy", [_cmd("go", "Sloppy tool")])
+    (pre / "sloppy" / "env.json").write_text("{ not json at all")
+
+    (pkg,) = discover_packages(pre)
+    assert [c.name for c in pkg.commands] == ["go"], "the tool itself still works"
+    assert pkg.env_needs is None, "an unreadable claim is no claim, not an empty one"
+    assert "sloppy" in caplog.text, "the operator is told which package to chase"
+
+
+def test_a_command_says_which_bundle_it_came_from(tmp_path: Path):
+    """A user asks "what is `rca-tools`?" and the agent has to be able to answer.
+
+    Today it cannot. The only thing that reaches the model is a flat list of
+    command names: `_to_function_tool` is handed the package and uses it to
+    dispatch and to log, and nothing identifying the TOOL survives into what the
+    model reads — so the id the user saw in the picker is a string the model has
+    never been shown.
+
+    The description is where it goes, because that one string is what BOTH
+    channels render: the native tool schema takes it verbatim, and the prompt
+    section renders the same field. Written anywhere else it would be a second
+    place to keep in step with the tool list.
+
+    The author's own sentence stays first — that is what the model reads to
+    decide whether to call this command at all. The bundle line is identity, not
+    timing.
+    """
+    pre = tmp_path / "prebuilt"
+    _seed_package(
+        pre,
+        "rca-tools",
+        [_cmd("data-fetch", "Fetch a lot's measurement history.", lot={"type": "string"})],
+    )
+
+    (tool,) = build_function_tools(discover_packages(pre), allowed=["rca-tools"])
+
+    assert tool.description.startswith("Fetch a lot's measurement history.")
+    assert "rca-tools" in tool.description
+
+
+def test_a_bundle_that_describes_itself_says_so_rather_than_listing_its_commands():
+    """The point of letting a tool describe itself.
+
+    Without one, the best anyone can say about a bundle is which commands it
+    ships — which is what the picker already generates ("Bundled tools: …") and
+    is a list, not a purpose. An author who writes one sentence about their tool
+    should have that sentence be the answer instead.
+    """
+    pkg = PackageInfo(
+        name="rca-tools",
+        install_dir="../.tools/rca-tools",
+        commands=(CommandInfo("data-fetch", "Fetch a lot's history.", {"type": "object"}),),
+        description="SMT 產線的量測資料擷取與初步分析。",
+    )
+
+    (tool,) = build_function_tools([pkg], allowed=["rca-tools"])
+
+    assert "SMT 產線的量測資料擷取與初步分析。" in tool.description
+    assert tool.description.startswith("Fetch a lot's history.")
+
+
+def test_the_bundle_line_names_the_release_and_who_published_it():
+    """ "This tool is behaving oddly" has no answer without them, and the person
+    in the chat is the one who notices. The agent already cannot say WHICH tool a
+    command came from; it should not then be unable to say which release of it
+    ran or who to go to.
+
+    Both are optional — a first-party package has neither, and an artifact built
+    before the builder published the author has no author. Absent stays absent
+    rather than becoming "unknown", which would be the platform putting words in
+    an author's mouth."""
+    pkg = PackageInfo(
+        name="rca-tools",
+        install_dir="../.tools/rca-tools",
+        commands=(CommandInfo("data-fetch", "Fetch.", {"type": "object"}),),
+        version="1.2.0",
+        author="Wafer Team <wafer@example.com>",
+    )
+
+    (tool,) = build_function_tools([pkg], allowed=["rca-tools"])
+
+    assert "1.2.0" in tool.description
+    assert "Wafer Team <wafer@example.com>" in tool.description
+
+
+def test_a_bundle_that_says_nothing_about_itself_still_reads_as_a_sentence():
+    """The common case for a while: every artifact published before any of this
+    existed. It must not leave a dangling clause or an empty ``by``."""
+    pkg = PackageInfo(
+        name="rca-tools",
+        install_dir="../.tools/rca-tools",
+        commands=(CommandInfo("data-fetch", "Fetch.", {"type": "object"}),),
+    )
+
+    (tool,) = build_function_tools([pkg], allowed=["rca-tools"])
+
+    assert tool.description == "Fetch.\n\nFrom the `rca-tools` tool bundle."

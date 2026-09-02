@@ -60,6 +60,25 @@ export type Message = {
   /** Epoch ms the message was produced; restores the agent log's timestamps
    * after a reload. Absent for messages saved before this existed. */
   created_at?: number | null;
+  /** #748 — how this reply was produced: which model wrote it, the provider's
+   * own token counts, the turn's wall clock and the time actually spent
+   * generating. Every field is independently absent: `null` means "not
+   * measured", never zero and never a stand-in. Mirrors resources/conversation
+   * MessageMetrics. */
+  metrics?: {
+    model?: string | null;
+    /** What to steer by — approximate when the provider stayed quiet. */
+    prompt_tokens?: number | null;
+    completion_tokens?: number | null;
+    /** What was measured. null where the provider gave nothing — never an
+     * estimate standing in for one. This is what the tooltip shows. */
+    measured_prompt_tokens?: number | null;
+    measured_completion_tokens?: number | null;
+    /** #739: whether the steer-by counts above are the provider's own. */
+    exact?: boolean;
+    elapsed_ms?: number | null;
+    generation_ms?: number | null;
+  } | null;
   /** Resolved [n] markers (KB answers). Rendered as clickable source cards. */
   citations?: MessageCitation[];
   /** Permission-disclosure: knowledge sources found relevant but which the user
@@ -299,6 +318,40 @@ export type ItemToolState = {
   /** Why it could not be resolved. The row keeps its switch; what it lost is
    * the ability to run (#480). */
   unavailable?: string | null;
+  /** #750: what this tool says it wants from the item's environment, or `null`
+   * when nobody said. `null` and `[]` are different claims and the panel draws
+   * them differently — `[]` is "needs nothing", `null` is "did not say". Almost
+   * every tool predates the declaration, so reading silence as `[]` would tell
+   * someone hunting a missing variable that there is nothing to find. */
+  env_needs?: EnvNeedDecl[] | null;
+};
+
+/** #750: one environment variable a tool's author says it wants. A hint, not a
+ * rule — nothing refuses a name absent from here. `required: null` means the
+ * author did not mark it, which is neither required nor optional. */
+export type EnvNeedDecl = {
+  name: string;
+  description: string;
+  required: boolean | null;
+};
+
+/** #750: one thing a provider's dialog asks for. `secret` renders it masked —
+ * a courtesy to the person typing, not a security property. */
+export type EnvProviderInput = {
+  name: string;
+  label: string;
+  secret: boolean;
+};
+
+/** #750: one of this deploy's ways to obtain environment variables from
+ * something a person types. `produces` is the ONLY join with a tool: the panel
+ * matches these names against what the item's tools declared, so a tool never
+ * names — and can never choose — which credential the dialog asks for. */
+export type EnvProvider = {
+  id: string;
+  label: string;
+  produces: string[];
+  inputs: EnvProviderInput[];
 };
 
 /** #380: one available skill's per-item picker state (GET
@@ -492,6 +545,19 @@ export interface ApiClient {
   /** GET /a/{slug}/items/{id}/tools — the per-item tool picker state (per-tool
    * tri-state, resolved server-side) the tool picker reads (#322). */
   getItemTools(slug: string, itemId: string): Promise<ItemToolState[]>;
+  /** #750: GET /a/{slug}/items/{id}/env-providers — this deploy's ways of
+   * turning something a person types into environment variables. Empty is the
+   * ordinary case: no buttons, and every variable is still typeable by hand. */
+  getEnvProviders(slug: string, itemId: string): Promise<EnvProvider[]>;
+  /** #750: POST /a/{slug}/items/{id}/env-providers/{providerId} — run one
+   * exchange. `values` carries the credential and is never stored; what comes
+   * back goes into the FORM, and the person still presses Save. */
+  resolveEnvProvider(
+    slug: string,
+    itemId: string,
+    providerId: string,
+    values: Record<string, string>,
+  ): Promise<Record<string, string>>;
   /** GET /a/{slug}/items/{id}/skills — the per-item skills picker state (per-skill
    * source + tri-state + effective), resolved server-side (#380). */
   getItemSkills(slug: string, itemId: string): Promise<ItemSkillState[]>;
@@ -551,6 +617,9 @@ export interface ApiClient {
   listActivity(): Promise<ActivityEntry[]>;
 
   getConversation(investigationId: string): Promise<Conversation | null>;
+  /** Whether any pod is driving a turn on this chat. `null` = could not find
+   * out, which is NOT the same as "no" — see `turnAlive` in `real.ts`. */
+  turnAlive(slug: string, investigationId: string, chatId?: string): Promise<boolean | null>;
 
   listFiles(slug: string, investigationId: string, prefix?: string): Promise<FileInfo[]>;
   /** GET /a/{slug}/items/{id}/files/usage — the workspace's storage usage vs its

@@ -370,6 +370,7 @@ export function EntryView({
   return (
     <MessageBlock
       message={entry.message}
+      at={entry.at}
       onOpenCitation={onOpenCitation}
       onRequestAccess={onRequestAccess}
       onReplay={onReplay}
@@ -378,6 +379,75 @@ export function EntryView({
       currentUser={currentUser}
       fileUrl={fileUrl}
     />
+  );
+}
+
+/** #748: when a message was produced, and — on hover — what produced it.
+ *
+ * The visible half is the time alone, to the minute: seconds are log-grade
+ * precision and read as noise at chat cadence. Everything else (the model, the
+ * counts, the rate, the exact second) lives in the tooltip, because the ask was
+ * for provenance that is available without being on display.
+ *
+ * Every line is omitted when its number was not measured. A record that cannot
+ * distinguish "nothing was reported" from "it was zero" is the defect this
+ * whole issue exists to remove, and printing `↑0 ↓0 · 0 tok/s` here would put
+ * it straight back on the screen.
+ *
+ * Native `title` rather than a tooltip component — it is what the entry's other
+ * hover affordances already use. It does mean the detail is unreachable by
+ * touch; that trade-off is recorded in the plan.
+ */
+function ReplyStamp({ message, at: entryAt }: { message: Message; at?: number }) {
+  // A live-folded message has no `created_at` — the reducer puts the moment on
+  // the ENTRY and the message only gets one after the post-turn refetch. Reading
+  // just the message left your own message and the streaming reply with no time
+  // for the whole turn, which is most of when anyone is looking at them.
+  const at = message.created_at ?? entryAt;
+  if (at == null) return null; // saved before the field existed — say nothing
+
+  const d = new Date(at);
+  // A broken value must render nothing rather than the literal "Invalid Date".
+  if (Number.isNaN(d.getTime())) return null;
+  const hhmm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+
+  const m = message.metrics;
+  const lines: string[] = [d.toLocaleString([], { hour12: false })];
+  if (m?.model) lines.push(m.model);
+  const counts: string[] = [];
+  // The MEASURED pair, not the steer-by one: a tooltip that says "↑ 8412" is
+  // read as a fact, and the plain fields are an estimate whenever the provider
+  // stayed quiet.
+  if (m?.measured_prompt_tokens != null) counts.push(`↑ ${m.measured_prompt_tokens}`);
+  if (m?.measured_completion_tokens != null) counts.push(`↓ ${m.measured_completion_tokens}`);
+  if (counts.length > 0) lines.push(`${counts.join(" · ")} tok`);
+  // The rate needs a count and a duration. `generation_ms` is OUR clock and is
+  // always measured; only the count depends on the provider. Requiring the
+  // measured count made the rate visible live and gone on reload for every
+  // endpoint not vouched for — which is the default, so the fix that was asked
+  // for was invisible by default. An estimate may go on SCREEN as long as it
+  // says it is one; what must never be estimated is the record, and the ↑/↓
+  // counts above — which are the record — stay absent.
+  const rateTokens = m?.measured_completion_tokens ?? m?.completion_tokens;
+  if (rateTokens != null && m?.generation_ms != null && m.generation_ms > 0) {
+    const rate = Math.round(rateTokens / (m.generation_ms / 1000));
+    const approx = m?.measured_completion_tokens == null ? "≈ " : "";
+    lines.push(`${approx}${rate} tok/s`);
+  }
+
+  return (
+    <span
+      title={lines.join("\n")}
+      style={{
+        marginLeft: 6,
+        color: "var(--text-paper-d2)",
+        fontSize: pxToRem(10),
+        fontVariantNumeric: "tabular-nums",
+        cursor: "default",
+      }}
+    >
+      {hhmm}
+    </span>
   );
 }
 
@@ -607,8 +677,11 @@ function MessageBlock({
   onReportWiki,
   currentUser,
   fileUrl,
+  at,
 }: {
   message: Message;
+  /** The entry's own timestamp — what a message has before it is persisted. */
+  at?: number;
   onOpenCitation?: (c: MessageCitation) => void;
   onRequestAccess?: (w: WithheldSource) => void;
   onReplay?: () => void;
@@ -690,6 +763,7 @@ function MessageBlock({
         >
           <UserAvatar userId={message.author ?? ""} size={20} />
           <span>{message.author ? author.name : "user"}</span>
+          <ReplyStamp message={message} at={at} />
           {onUndo && (
             <>
               <span style={{ flex: 1 }} />
@@ -747,6 +821,7 @@ function MessageBlock({
             <RcaMark size={14} color="var(--text-dark)" dot="var(--accent)" />
           </span>
           <span>{message.author ?? "Agent"}</span>
+          <ReplyStamp message={message} at={at} />
           {onReplay && <ReplayButton onReplay={onReplay} />}
           {onReportWiki && <ReportWikiButton onReport={onReportWiki} />}
         </div>

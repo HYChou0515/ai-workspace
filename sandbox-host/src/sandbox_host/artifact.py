@@ -212,6 +212,23 @@ class CommandSpec:
 
 
 @dataclass(frozen=True)
+class EnvSpec:
+    """One environment variable the tool's author says it wants (#750).
+
+    Provenance-tier information, like ``author``: the host never reads it to
+    decide anything, it only carries it. The platform shows it to whoever is
+    filling the workspace's variables, so an author writing nonsense here costs
+    only their own users a confusing sentence — it can refuse nothing."""
+
+    name: str
+    description: str = ""
+    required: bool | None = None
+    """``None`` = the author did not mark it, which is neither required nor
+    optional. Carried as-is; deciding what to do with the third state belongs
+    to the platform, not to the host."""
+
+
+@dataclass(frozen=True)
 class BundleRef:
     """Where the bytes' identity lives: the content-address key + its size."""
 
@@ -260,6 +277,30 @@ class Manifest:
     #: Optional, because every bundle already in the field was built before the
     #: builder wrote this — and a display string may not take those down.
     author: str | None = None
+    #: What this tool IS, in its author's own words, taken from their own
+    #: ``pyproject``. Same display-only tier as ``author``: nothing reads it to
+    #: decide anything.
+    #:
+    #: A tool could describe each of its COMMANDS and say nothing about itself,
+    #: so the only answer available to "what is this tool" was the list of
+    #: commands it ships — an inventory the platform generated, not a purpose
+    #: its author stated.
+    #:
+    #: Optional, on the same bargain ``author`` and ``env`` struck: every
+    #: artifact already in the field was published without it.
+    description: str | None = None
+    #: What the tool says it needs from the environment (#750), or ``None``
+    #: when the manifest carried no ``env`` key at all.
+    #:
+    #: ``None`` and ``()`` are DIFFERENT and both travel: ``()`` is an author
+    #: who looked and needs nothing, ``None`` is an artifact that predates the
+    #: field. Collapsing them here would make every bundle already published
+    #: claim it needs no configuration — to a panel whose entire job is telling
+    #: someone what they are missing.
+    #:
+    #: Optional and last, exactly like ``author``: a manifest written before
+    #: this existed must still parse.
+    env: tuple[EnvSpec, ...] | None = None
 
 
 def parse_manifest(raw: bytes) -> Manifest:
@@ -295,6 +336,18 @@ def parse_manifest(raw: bytes) -> Manifest:
                 )
                 for c in body["commands"]
             ),
+            env=(
+                tuple(
+                    EnvSpec(
+                        name=e["name"],
+                        description=e.get("description", ""),
+                        required=e.get("required"),
+                    )
+                    for e in body["env"]
+                )
+                if isinstance(body.get("env"), list)
+                else None
+            ),
             builder=body["builder"],
             python=body["python"],
             arch=body["arch"],
@@ -302,6 +355,7 @@ def parse_manifest(raw: bytes) -> Manifest:
             source=SourceRef(git=src["git"], sha=src["sha"]) if src else None,
             grant=body.get("grant"),
             author=body.get("author"),
+            description=body.get("description"),
         )
     except (KeyError, TypeError) as exc:
         raise ManifestError(f"manifest is missing or malformed at {exc}") from exc
@@ -370,12 +424,22 @@ def render_manifest(manifest: Manifest) -> bytes:
         "arch": manifest.arch,
         "bundle": {"sha256": manifest.bundle.sha256, "size": manifest.bundle.size},
     }
+    if manifest.env is not None:
+        # Written only when the author declared something — including an empty
+        # list, which is a claim. A key that always appeared would turn every
+        # pre-#750 artifact's silence into "needs nothing".
+        body["env"] = [
+            {"name": e.name, "description": e.description, "required": e.required}
+            for e in manifest.env
+        ]
     if manifest.source is not None:
         body["source"] = {"git": manifest.source.git, "sha": manifest.source.sha}
     if manifest.grant is not None:
         body["grant"] = manifest.grant
     if manifest.author is not None:
         body["author"] = manifest.author
+    if manifest.description is not None:
+        body["description"] = manifest.description
     # Indented and newline-terminated: a manifest lands in CI logs and in
     # review diffs, where a single long line helps nobody.
     return (json.dumps(body, indent=2, sort_keys=True) + "\n").encode()

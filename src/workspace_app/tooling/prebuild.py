@@ -316,6 +316,8 @@ def build_package(*, name: str, source: Path, dst: Path, force: bool = False) ->
         # Use the venv's console_script entrypoint as the "launch" for
         # schema-dumping.
         _dump_schemas(venv / "bin" / name, dst)
+    # After the branch, so a carrier gets its declaration too (#750).
+    _copy_env_declaration(source, dst)
     # Record the build stamp (source content-hash + launcher-template
     # fingerprint) so the next prebuild can tell whether anything actually
     # changed (mtime is unreliable; see _should_rebuild).
@@ -379,6 +381,8 @@ def build_package_uvrun(*, name: str, source: Path, dst: Path) -> None:
         launch.write_text(_UVRUN_LAUNCH.format(tool=name))
         launch.chmod(0o755)
         _dump_schemas(launch, dst)
+    # After the branch, so a carrier gets its declaration too (#750).
+    _copy_env_declaration(source, dst)
 
 
 def provision_uvrun(packages: dict[str, Path], dst_root: Path) -> Path:
@@ -478,6 +482,37 @@ def _should_rebuild(source: Path, dst: Path) -> bool:
     if not marker.exists():
         return True
     return marker.read_text().strip() != _build_stamp(source).strip()
+
+
+def _copy_env_declaration(source: Path, dst: Path) -> None:
+    """Carry the package's hand-written ``env.json`` into the bundle (#750).
+
+    Called from BOTH build paths after their carrier/CLI branch, not from
+    ``_dump_schemas``: a venv carrier writes its own empty ``commands.json``
+    and never reaches the schema dump, yet a carrier is exactly the package
+    that wants an index URL or a proxy named.
+
+    Absent stays absent. Writing an empty file for a package that declared
+    nothing would turn "nobody said" into "needs nothing" — a distinction
+    ``discover_packages`` and the panel both depend on.
+
+    Malformed content is rejected HERE, loudly, because here the author is the
+    one running the build and can fix it. The host's ``discover_packages``
+    deliberately does the opposite and degrades, since there the file belongs
+    to a third party and the operator can only be told."""
+    src_file = source / "env.json"
+    if not src_file.is_file():
+        return
+    try:
+        declared = json.loads(src_file.read_text("utf-8"))
+        if not isinstance(declared, list):
+            raise TypeError(f"env.json must be a JSON array, got {type(declared).__name__}")
+        for entry in declared:
+            if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
+                raise TypeError(f"every env.json entry needs a string `name`; got {entry!r}")
+    except (ValueError, TypeError) as exc:
+        raise RuntimeError(f"{src_file} is not a usable environment declaration: {exc}") from exc
+    shutil.copyfile(src_file, dst / "env.json")
 
 
 def _dump_schemas(launch: Path, dst: Path) -> None:

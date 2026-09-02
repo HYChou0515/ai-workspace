@@ -151,8 +151,30 @@ class AgentMetrics:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     elapsed_ms: int = 0
-    #: #739: whether the provider reported these counts, as opposed to us
-    #: estimating them. Only true on `final`, and only when usage came back.
+    # #748: the DISPLAY fields above stay approximate on purpose — a live line
+    # that reads "↑0 ↓0" looks broken, so they fall back to chars/4. These two
+    # are the RECORD: the provider's own count, or None when it never gave one.
+    # Two consumers with opposite requirements cannot share one field; sharing
+    # is how an estimate ended up persisted as though it had been measured.
+    # Only ever set on `final`.
+    measured_prompt_tokens: int | None = None
+    measured_completion_tokens: int | None = None
+    # #748: time the model spent GENERATING — first token to last, summed over
+    # the turn's round trips. `elapsed_ms` above is the whole turn and stays the
+    # "· 12.3s" the UI shows; this is the denominator for tok/s. Two quantities,
+    # two fields: one field meaning both is the mistake #739 §1.3 records.
+    # None when no token ever arrived.
+    generation_ms: int | None = None
+    # #748: the model that actually WROTE this reply. Under failover that is not
+    # the configured one, and the configured one is what everything reported
+    # until now — wrong in precisely the case where the two differ.
+    model: str | None = None
+    #: #739: whether the counts above are the provider's rather than our
+    #: estimate. #748 arrived at the same question independently and answered it
+    #: with `measured_*` above, which carries the real numbers instead of just
+    #: flagging them. Both are kept because #739's consumers read this one — but
+    #: it is DERIVED at the single construction site, never set by hand, so the
+    #: two cannot drift into disagreeing about the same reply.
     exact: bool = False
     type: Literal["agent_metrics"] = "agent_metrics"
 

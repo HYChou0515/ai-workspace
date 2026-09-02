@@ -33,7 +33,7 @@
 | `src/workspace_app/sync/ignore.py` | `DEFAULT_IGNORES` + `should_ignore` — reverse-sync 過濾器：跳過 build/cache 雜訊（`.venv/`、`node_modules/`、`__pycache__/`、`.git/`、`*.pyc`…）與任何超過 `MAX_FILE_SIZE`（10 MB）的檔，免得一個 dump 灌爆 specstar。 |
 | `src/workspace_app/sync/__init__.py` | 套件門面，re-export `SandboxSync` 與 ignore helper。 |
 | `src/workspace_app/filestore/protocol.py` | `FileStore` Protocol — 持久的 per-workspace 虛擬根。方法：`write`/`write_from_path`/`read`/`read_to_file`/`ls`/`exists`/`delete`/`mkdir`/`rmdir`/`is_dir`/`listdir`。一等公民的誠實目錄（無 `.keep` hack）；`dir_ancestors` helper；`FileNotFound`/`FileExists` 例外。`workspace_usage`/`file_size` 標為選用的 duck-typed 能力，非核心。 |
-| `src/workspace_app/filestore/specstar_impl.py` | `SpecstarFileStore` — 生產級 FileStore（#219）：每個檔是一個 `WorkspaceFile` specstar resource，內容是 `Binary` blob（位元組 offload 到 blob store），所以一次寫入是 O(一個檔)。目錄住在小的 per-workspace `_WorkspaceDirs` record。slash-free id 由 `_fid`/`_wsid` 產（U+2215 + percent-encode）。`content.size` 索引成 `content_size` 供 #245 usage `Sum` 聚合；冪等自註冊 model。 |
+| `src/workspace_app/filestore/specstar_impl.py` | `SpecstarFileStore` — 生產級 FileStore（#219）：每個檔是一個 `WorkspaceFile` specstar resource，內容是 `Binary` blob（位元組 offload 到 blob store），所以一次寫入是 O(一個檔)。目錄住在小的 per-workspace `_WorkspaceDirs` record。slash-free id 由 `_fid`/`_wsid` 產（U+2215 + percent-encode）。`content.size` 索引成 `content_size` 供 #245 usage `Sum` 聚合；`path` 也索引（#667/#668），`ls(prefix=…)` 靠它把 prefix 下推成 DB 述詞——這也是就緒閘門 `prefix_index_ready()` 存在的原因（見下方 note）；冪等自註冊 model。 |
 | `src/workspace_app/filestore/memory.py` | `MemoryFileStore` — 無 specstar 的記憶體內預設，`__main__` 用它免得漏出 ~19 條 `/-workspacefiles/*` CRUD 路由；重啟即清空。複製誠實目錄 + usage 語意供 dev/test。 |
 | `src/workspace_app/filestore/blob_gc.py` | Blob GC 排程（#245/#370）：包 specstar v0.11.10 的 `SpecStar.gc(mode="reconcile")`。一列的 `_GcLease` CAS lease（`register_gc_lease`/`try_claim_gc`/`run_blob_gc`）讓每個 window 只有一個 pod 跑會刪東西的 reconcile，其餘 no-op。 |
 | `src/workspace_app/filestore/migrate.py` | 一次性遷移（#219）：把舊的 inline-bytes `_WorkspaceFiles` record 改寫成 per-file `WorkspaceFile` Binary + `_WorkspaceDirs`；冪等。每次部署在新 store 服務前跑一次。 |
@@ -117,6 +117,15 @@ flowchart LR
 
 !!! note "content_size 聚合對未遷移列會少算"
     寫在索引之前的列其 `content_size` sum 成 `None`→0，直到操作員跑 `migrate/execute`；別把 0 當未遷移 workspace 的權威用量。
+
+!!! danger "`path` 未回填不是「數字錯」，是「列不見了」"
+    上面那條是**聚合**變小；`path` 不一樣——它是被**過濾**的欄位。`ls(prefix=…)` 把 prefix
+    下推成 `path` 述詞，所以未回填的列**一列都不會回來**，檔案樹和每一份 entity 列表都會在
+    資料完好的情況下讀成**空的**（三個 replica 滾動更新時還會在 pod 之間閃爍）。因此
+    `SpecstarFileStore.prefix_index_ready()` 在全部回填完成前為 False、`/api/readyz` 回 503，
+    而 k8s 的 readinessProbe 就指著它：**新 pod 不會 ready，rollout 會停住**，直到操作員跑
+    `workspace-file` 的回填。做法（含「回填不能打 Service」這個陷阱）見
+    [部署指南](../deployment.md) §11 與[資料遷移](../migrations.md) §8。
 
 ## 設計決策與出處
 

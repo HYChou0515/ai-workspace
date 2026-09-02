@@ -413,6 +413,41 @@
 # `read_image` (source B) — a VLM with no tool support only sees inline images.
 #     qwen-vl: { model: ollama_chat/qwen3-vl, vision: true }
 
+# `reports_usage: true` — this endpoint answers a `stream_options.include_usage`
+# request with the PROVIDER's own token counts, so the ↑/↓ numbers on a reply are
+# a measurement rather than a guess (#748/#751). Declarative for the same reason
+# as `vision`: it cannot be detected from the reply. A litellm proxy answers the
+# request either way — with the backend's real counts if it has them, with its
+# own tokenizer's if it does not — in an identically shaped object, so nothing
+# downstream can tell them apart.
+#
+# How to decide it for an endpoint, with three curls (same prompt — use one with
+# plenty of CJK, where litellm's tokenizer and a model's own diverge most):
+#   A) `stream: false`                                   → the backend's own usage
+#   B) `stream: true`, no stream_options                 → does it volunteer any?
+#   C) `stream: true` + `stream_options.include_usage`   → what we would record
+# C ≈ A and B empty  ⇒ it answers when asked, with real counts ⇒ set true.
+# C absent                                    ⇒ leave it off.
+# ⚠️ C ≈ A is NOT enough on its own. An endpoint that reports nothing at all
+# (local Ollama) makes litellm substitute in BOTH A and C, so the two agree —
+# on the same invented number. B is the tell: it distinguishes "silent, and
+# something else filled in" from "silent until asked". If in doubt, leave it off.
+#
+# Default (absent) = false = the reply records no token counts at all, which is
+# the honest answer when nobody has checked. A wrong `true` writes an invented
+# number into history as though it had been measured; a wrong `false` writes
+# nothing — and only the second is recoverable, because a blank can be filled in
+# later while a fabricated history cannot be told apart from a real one.
+#
+# Only the STREAMING path is affected. A non-streaming reply carries the
+# provider's usage in the response body with no substitution, so
+# `WORKSPACE_AGENT_STREAM=0` records real counts regardless of this flag.
+#
+# ⚠️ A chain may not mix: a preset with `reports_usage: true` whose `fallbacks`
+# include one without it is refused at load. Failover shares one request, so the
+# fallback would be asked for usage nobody vouched for.
+#     vllm-prod: { model: openai/glm-5, reports_usage: true }
+
 # ─── chat LLM endpoint (fallback when a preset omits llm.*) ── [OPT] ─
 # Per-preset `llm.base_url` / `llm.api_key` (under agents.presets.*)
 # win over this. Empty = LiteLLM's provider env defaults.

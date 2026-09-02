@@ -170,6 +170,29 @@ def _build_input(
     return [*history, {"role": "user", "content": user_content}]
 
 
+# #748: the deltas that ARE the model's output — what the provider counts in
+# `completion_tokens`, and therefore what both sides of tok/s must agree on. This
+# is a whitelist rather than "anything `_delta_channel` does not ignore", because
+# that classifier ends in a catch-all: audio deltas carry base64 bytes that are
+# in no token count, and would inflate the denominator with nothing on top.
+_GENERATED_OUTPUT = frozenset(
+    {
+        "response.output_text.delta",
+        "response.refusal.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_text.delta",
+        # The model wrote these too, and the provider bills them; they are kept
+        # out of the answer TEXT (see `_delta_channel`) but not out of the count.
+        "response.function_call_arguments.delta",
+    }
+)
+
+
+def _is_generated_output(event_type: str) -> bool:
+    """Whether this delta is model output the provider counts as completion."""
+    return event_type in _GENERATED_OUTPUT
+
+
 def _delta_channel(event_type: str) -> Literal["content", "reasoning", "ignore"]:
     """Classify a raw Responses ``*.delta`` event by its type. FIVE event
     types carry a ``.delta`` string on the LiteLLM/Qwen path, so routing by
@@ -253,6 +276,105 @@ def _exact_usage(streamed: Any) -> tuple[int, int] | None:
         return int(usage.input_tokens), int(usage.output_tokens)
     except Exception:  # noqa: BLE001 — usage shape varies / may be absent
         return None
+
+
+class _GenerationClock:
+    """How long the model spent GENERATING this turn (#748) — the denominator
+    tok/s needs, which is not the turn's wall clock.
+
+    The wall clock also carries TTFT, every tool call, every retry and every
+    rate-limit hold. TTFT is the damaging one: it grows with the prompt, so
+    dividing by it makes the SAME model look slower as the conversation gets
+    longer — the misreading a person is most likely to make. llama.cpp and vLLM
+    report prompt-eval and generation separately for this reason.
+
+    So the clock runs from the first token to the last, and a turn with several
+    round trips sums its stretches. Where a stretch ENDS is told to it via
+    :meth:`pause` rather than inferred from how big a gap looks: the runner
+    already knows when the model stopped to call a tool, and a duration
+    threshold would be a rule invented here that nothing else agrees with.
+    """
+
+    def __init__(self, now: Callable[[], float] = time.monotonic) -> None:
+        self._now = now
+        self._started: float | None = None  # first token of the open stretch
+        self._last: float | None = None  # most recent token of it
+        self._closed_s = 0.0  # stretches already ended
+
+    def token(self) -> None:
+        """A token arrived. Opens a stretch if none is open."""
+        t = self._now()
+        if self._started is None:
+            self._started = t
+        self._last = t
+
+    def pause(self) -> None:
+        """Generation stopped (the model went off to call a tool). Banks the
+        open stretch so the gap that follows is not counted."""
+        if self._started is not None and self._last is not None:
+            self._closed_s += self._last - self._started
+        self._started = None
+        self._last = None
+
+    def elapsed_ms(self) -> int | None:
+        """Total generation time, or None when there is no span to report.
+
+        Two timestamps are the minimum: a single delta gives one, so a stretch
+        of one token has no duration. The earlier form inferred "nothing ever
+        arrived" from the accumulator being 0.0, which cannot tell that apart
+        from stretches that each measured exactly zero — so the same situation
+        answered `None` when the stretch had been banked and `0` when it was
+        still open. Zero is the worse of the two: it divides into an infinite
+        rate, and the record's own contract says a number means measured.
+        """
+        open_s = (
+            self._last - self._started
+            if self._started is not None and self._last is not None
+            else 0.0
+        )
+        total = self._closed_s + open_s
+        # Guard the ROUNDED value: a guard on seconds let a sub-millisecond span
+        # through as `0`, the one number this field documents as impossible.
+        ms = round(total * 1000)
+        return ms if ms > 0 else None
+
+
+def _effective_model(model: Any, configured: str) -> str | None:
+    """The model that actually served, falling back to the configured name.
+
+    #748. A single-endpoint turn hands us a `LitellmModel`, which carries its
+    own `.model`. A failover turn hands us a `FallbackModel`, which does not —
+    so the previous form of this lookup (inline in the #69 trace) silently
+    returned the CONFIGURED name, making it wrong in exactly the case where the
+    two differ and the question is worth asking. `served_model` is that chain's
+    answer, and it is None until something has actually answered, which falls
+    through here rather than claiming the head.
+    """
+    served = getattr(model, "served_model", None)
+    if served:
+        return str(served)
+    # "" is neither a model name nor the documented "we don't know", and it is
+    # what an absent `ctx.agent_config` produced. None says the honest thing.
+    return str(getattr(model, "model", "") or configured) or None
+
+
+def _measured_tokens(usage: tuple[int, int] | None) -> tuple[int | None, int | None]:
+    """The provider's own counts for the RECORD, or None where it gave none.
+
+    #748. Distinct from `_final_tokens`, which settles what to DISPLAY and
+    deliberately substitutes an estimate so the live line never reads "↑0 ↓0".
+    A record has the opposite requirement: a figure nobody can tell apart from
+    a measurement is worse than no figure at all.
+
+    A reported `0` counts as "did not count", not as a measured zero — a reply
+    exists, so something was read and something was written. Local Ollama
+    streams zeros routinely; storing them would drag every average computed
+    over this column toward nothing. Applied per field, because a provider can
+    report one and not the other.
+    """
+    if usage is None:
+        return None, None
+    return (usage[0] or None), (usage[1] or None)
 
 
 def _final_tokens(
@@ -502,6 +624,11 @@ def _agent_for(
             extra_body={**(off.get("extra_body") or {}), **rep_body} or None,
             frequency_penalty=freq,
             presence_penalty=pres,
+            # #748/#751: ask for usage ONLY where an operator has vouched for
+            # the endpoint. Asking everywhere lets litellm answer on a silent
+            # provider's behalf, and its tokenizer's guess is indistinguishable
+            # from a measurement once it lands in the record.
+            include_usage=True if config.reports_usage else None,
         )
     elif reasoning_effort:
         # effort is validated to low/medium/high by the request body.
@@ -511,6 +638,11 @@ def _agent_for(
             extra_body=rep_body or None,
             frequency_penalty=freq,
             presence_penalty=pres,
+            # #748/#751: ask for usage ONLY where an operator has vouched for
+            # the endpoint. Asking everywhere lets litellm answer on a silent
+            # provider's behalf, and its tokenizer's guess is indistinguishable
+            # from a measurement once it lands in the record.
+            include_usage=True if config.reports_usage else None,
         )
     else:
         model_settings = ModelSettings(
@@ -518,6 +650,11 @@ def _agent_for(
             extra_body=rep_body or None,
             frequency_penalty=freq,
             presence_penalty=pres,
+            # #748/#751: ask for usage ONLY where an operator has vouched for
+            # the endpoint. Asking everywhere lets litellm answer on a silent
+            # provider's behalf, and its tokenizer's guess is indistinguishable
+            # from a measurement once it lands in the record.
+            include_usage=True if config.reports_usage else None,
         )
     # Per-config LLM endpoint (new schema's agents.presets.<x>.llm) wins
     # over the runner's constructor default — empty strings mean
@@ -824,7 +961,11 @@ def _emit_llm_trace(
     is swallowed to a debug line."""
     try:
         cfg = ctx.agent_config
-        model = getattr(getattr(agent, "model", None), "model", "") or (cfg.model if cfg else "")
+        # The trace is a log line, not a record: "" would be an empty column, so
+        # say what happened. The RECORD keeps None — see `_effective_model`.
+        model = (
+            _effective_model(getattr(agent, "model", None), cfg.model if cfg else "") or "(unknown)"
+        )
         endpoint = redact_endpoint((cfg.llm_base_url if cfg else "") or runner_base_url)
         tools = [t.name for t in agent.tools if isinstance(t, FunctionTool)]
         ms = agent.model_settings
@@ -1370,8 +1511,17 @@ class LitellmAgentRunner:
             "stream_deadlines": self._stream_deadlines,
         }
 
-    async def _run_once(  # pragma: no cover — exercised only by the live Ollama test
-        self, prompt: str, ctx: AgentToolContext, feedback: str | None
+    async def _run_once(  # pragma: no cover — see the note below
+        # The exclusion predates a test that DOES drive this loop
+        # (`test_tool_call_arguments_are_counted_but_never_shown` stubs
+        # `Runner.run_streamed`). Keeping it means the 100% gate stays blind
+        # here — which is how tool-call JSON came to be printed into replies
+        # for a whole commit. Narrow or remove it when the fake stream covers
+        # enough of the loop to hold the line on its own.
+        self,
+        prompt: str,
+        ctx: AgentToolContext,
+        feedback: str | None,
     ) -> AsyncIterator[AgentEvent]:
         assert ctx.agent_config is not None  # run() guards None before _run_once
         # Non-streaming path: the escape hatch (WORKSPACE_AGENT_STREAM=0).
@@ -1430,6 +1580,7 @@ class LitellmAgentRunner:
                 queue.put_nowait(AgentMetrics(phase="up", prompt_tokens=prompt_tok, elapsed_ms=0))
                 completion_chars = 0
                 last_emit = 0.0
+                gen = _GenerationClock()
                 splitter = ThinkSplitter()
                 # #69 trace: accumulate the visible content + count tool
                 # starts so we can label the turn's outcome (a real tool
@@ -1440,12 +1591,28 @@ class LitellmAgentRunner:
                     if getattr(event, "type", None) == "raw_response_event":
                         data = getattr(event, "data", None)
                         delta = getattr(data, "delta", None)
-                        channel = _delta_channel(getattr(data, "type", "") or "")
-                        if isinstance(delta, str) and delta and channel != "ignore":
+                        event_type = getattr(data, "type", "") or ""
+                        channel = _delta_channel(event_type)
+                        if isinstance(delta, str) and delta and _is_generated_output(event_type):
+                            # #748: the count and the clock move TOGETHER. The
+                            # tool-call argument JSON is kept out of the answer
+                            # text but the provider bills it, so excluding it
+                            # from one side and not the other makes tok/s a ratio
+                            # of two different populations — first too high, then
+                            # (when only the clock was fixed) too low.
                             completion_chars += len(delta)
+                            gen.token()
                             if channel == "reasoning":
                                 queue.put_nowait(MessageDelta(text=delta, reasoning=True))
-                            else:  # content — still split any inline <think> tags
+                            elif channel == "content":
+                                # Explicitly `content`, never a bare `else`. The
+                                # gate above answers "does the provider bill
+                                # this?", which is now TRUE for tool-call
+                                # argument JSON — and an `else` therefore routed
+                                # that JSON into the visible reply. Counting and
+                                # routing ask different questions; the `if` that
+                                # does both has to keep asking both.
+                                # (still split any inline <think> tags)
                                 content, reasoning = splitter.feed(delta)
                                 if reasoning:
                                     queue.put_nowait(MessageDelta(text=reasoning, reasoning=True))
@@ -1461,6 +1628,7 @@ class LitellmAgentRunner:
                                         prompt_tokens=prompt_tok,
                                         completion_tokens=_approx_tokens(completion_chars),
                                         elapsed_ms=round((now - t0) * 1000),
+                                        generation_ms=gen.elapsed_ms(),
                                     )
                                 )
                         continue
@@ -1468,6 +1636,9 @@ class LitellmAgentRunner:
                     if mapped is not None:
                         if isinstance(mapped, ToolStart):
                             tool_calls_seen += 1
+                            # The model went quiet to call this tool; the gap
+                            # that follows is the tool's time, not generation.
+                            gen.pause()
                         if isinstance(mapped, ToolEnd):
                             # #62: attach the full display result (success-stderr
                             # kept) the exec tool stashed under its cleaned output,
@@ -1510,17 +1681,21 @@ class LitellmAgentRunner:
                     reported=usage[0] if usage else None,
                 )
                 prompt_final, completion_final = _final_tokens(usage, prompt_tok, completion_chars)
+                measured_prompt, measured_completion = _measured_tokens(usage)
                 queue.put_nowait(
                     AgentMetrics(
                         phase="final",
                         prompt_tokens=prompt_final,
                         completion_tokens=completion_final,
                         elapsed_ms=round((time.monotonic() - t0) * 1000),
-                        # #739: `_final_tokens` falls back to our estimate when
-                        # the provider reports nothing or 0, so the number alone
-                        # cannot say which it is. Say it here, once, at the only
-                        # place that knows.
-                        exact=bool(usage and usage[0]),
+                        measured_prompt_tokens=measured_prompt,
+                        measured_completion_tokens=measured_completion,
+                        generation_ms=gen.elapsed_ms(),
+                        model=_effective_model(
+                            getattr(agent, "model", None),
+                            ctx.agent_config.model if ctx.agent_config else "",
+                        ),
+                        exact=measured_prompt is not None,
                     )
                 )
             finally:
@@ -1619,16 +1794,17 @@ class LitellmAgentRunner:
             ctx, sent_estimate=_sent_estimate(ctx, prompt), reported=usage[0] if usage else None
         )
         prompt_final, completion_final = _final_tokens(usage, prompt_tok, len("".join(content_buf)))
+        measured_prompt, measured_completion = _measured_tokens(usage)
         yield AgentMetrics(
             phase="final",
             prompt_tokens=prompt_final,
             completion_tokens=completion_final,
             elapsed_ms=round((time.monotonic() - t0) * 1000),
-            # #739: same as the streaming path. `_final_tokens` substitutes our
-            # estimate when the provider reports nothing, so the number alone
-            # cannot say which it is. Without this the gauge could never anchor
-            # on a non-streaming deployment — and compaction would then be
-            # decided by comparing message-only tokens against a whole-request
-            # budget, which is the very unit confusion this feature fixed.
-            exact=bool(usage and usage[0]),
+            measured_prompt_tokens=measured_prompt,
+            measured_completion_tokens=measured_completion,
+            model=_effective_model(
+                getattr(agent, "model", None),
+                ctx.agent_config.model if ctx.agent_config else "",
+            ),
+            exact=measured_prompt is not None,
         )

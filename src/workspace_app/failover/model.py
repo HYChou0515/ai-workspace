@@ -56,6 +56,12 @@ class FallbackModel(Model):
         head = self._endpoints[0]
         self._round_backoff_s = head.round_backoff_s
         self._total_deadline_s = head.total_deadline_s
+        # #748: the endpoint that most recently ANSWERED. Nothing recorded this,
+        # so naming a turn's model meant reading the configured one — correct
+        # until failover makes it differ, i.e. wrong in exactly the case worth
+        # asking about. Starts None: a chain that has not served yet must not
+        # claim a model, and defaulting to the head would be the same lie.
+        self.served_model: str | None = None
 
     def _degrade(self, endpoint: LlmEndpoint, cause: BaseException) -> None:
         self._registry.mark(endpoint.cooldown_key, endpoint.cooldown_s)
@@ -97,7 +103,9 @@ class FallbackModel(Model):
                 logger.debug("failover-model: trying endpoint %s (get_response)", endpoint.model)
                 for attempt in range(endpoint.num_retries + 1):
                     try:
-                        return await self._make_model(endpoint).get_response(*args, **kwargs)
+                        response = await self._make_model(endpoint).get_response(*args, **kwargs)
+                        self.served_model = endpoint.model
+                        return response
                     except Exception as exc:  # noqa: BLE001 — any error retries/switches
                         last = exc
                         if attempt == endpoint.num_retries:
@@ -146,6 +154,10 @@ class FallbackModel(Model):
                             self._degrade(endpoint, cause)
                         # else: a quick same-endpoint retry (pre-first only)
                     else:
+                        # The first event is the proof this endpoint answered —
+                        # claim it here, not at the end: a stream that dies
+                        # mid-flight still had THIS model write what was seen.
+                        self.served_model = endpoint.model
                         yield first
                         while True:
                             try:

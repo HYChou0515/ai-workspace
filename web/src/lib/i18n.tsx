@@ -1188,9 +1188,13 @@ export const messages = {
   "wf.progress.step": { "zh-TW": "第 {n} 步 · {title}", en: "step {n} · {title}" },
   "wf.progress.noop": { "zh-TW": "已完成，但未執行任何步驟", en: "Finished without running any steps" },
   "wf.stop": { "zh-TW": "停止", en: "Stop" },
+  // What dropped is this browser's stream, not the run: the run executes on the
+  // server and nothing here can stop it. "可能已停止" said otherwise, which turns
+  // a routine reconnect into a reason to doubt the work — the same false alarm
+  // the chat's own notice avoids by saying the reply is not at risk.
   "wf.disconnected": {
-    "zh-TW": "連線中斷，可能已停止。正在嘗試重新連線…",
-    en: "Connection lost — it may have stopped. Reconnecting…",
+    "zh-TW": "連線中斷，正在重新連線…執行仍在伺服器上繼續，進度會補上。",
+    en: "Connection lost — reconnecting… The run continues on the server; progress will catch up.",
   },
   "wf.status.pending": { "zh-TW": "排隊中", en: "queued" },
   "wf.status.running": { "zh-TW": "進行中", en: "running" },
@@ -1246,11 +1250,66 @@ export const messages = {
   },
   "env.button": { "zh-TW": "環境變數", en: "Env" },
   "env.title": { "zh-TW": "工具用的環境變數", en: "Environment variables for tools" },
+  // Read top to bottom, this is the first sentence — and until #750 it
+  // described a text box, which is now the SECOND thing on screen. Seen by
+  // opening the panel: someone is told they are looking at an editor, then
+  // shown a form. Says what the panel is now, and keeps "this workspace only",
+  // which is the part people actually need to know before typing a key in.
   "env.desc": {
     "zh-TW":
-      "一行一個,`名稱=值`。這些會交給這個工作區的工具使用,常見用途是 API 金鑰。只影響這個工作區。",
-    en: "One per line, `NAME=value`. Handed to the tools this workspace runs — API keys and the like. This workspace only.",
+      "這些值會交給這個工作區的工具使用,常見用途是 API 金鑰。有列出需求的工具會直接顯示欄位;其餘的可以在下方以「名稱=值」自行增減。只影響這個工作區。",
+    en: "These are handed to the tools this workspace runs — API keys and the like. Tools that said what they need get a field; anything else can be added below as `NAME=value`. This workspace only.",
   },
+  // #750. Says what is true and no more: these tools SAID what they want.
+  // Never "this is everything you need" — an author may have left names out,
+  // and the panel has no way to know that they did.
+  "env.searchTools": { "zh-TW": "搜尋工具…", en: "Search tools…" },
+  // A count, not a list: the list is the fields right below it.
+  "env.toolStillNeeds": { "zh-TW": "還缺 {count} 個", en: "{count} to fill" },
+  "env.toolReady": { "zh-TW": "齊了", en: "ready" },
+  "env.noToolMatches": { "zh-TW": "沒有符合的工具", en: "No tool matches" },
+  "env.alsoUsedBy": { "zh-TW": "{tools} 也會用到", en: "Also used by {tools}" },
+  // The third state, spelled out. NOT "needs nothing": these tools shipped no
+  // list at all, and someone hunting a variable they are missing must not be
+  // told there is nothing left to find.
+  "env.undeclared": {
+    "zh-TW": "{tools} 沒有列出它需要哪些變數,不代表它不需要。",
+    en: "{tools} did not list what it needs — which is not the same as needing nothing.",
+  },
+  // Says what the button will FILL, beside it. Two systems can look alike,
+  // and someone about to type a production password has to see which one
+  // this is before typing, not after.
+  // The answer the panel exists to give. Names the variables rather than
+  // counting them: a count sends someone hunting for which, and the names are
+  // what they will type.
+  // Says WHICH variable and WHY, because the person's next move depends on it:
+  // this is not a failure of their password, it is a shape this panel cannot
+  // store, and they need to get that value in some other way.
+  // Used only when the implementation said nothing usable. Says what failed and
+  // what to do, never a status code — the person did not make an HTTP request,
+  // they pressed a button.
+  "env.providerFailed": {
+    "zh-TW": "取得失敗,請確認輸入的內容後再試一次。",
+    en: "Could not fetch those values. Check what you entered and try again.",
+  },
+  "env.providerValueTooComplex": {
+    "zh-TW": "{names} 的內容含有換行,這個面板存不了。請改用其他方式設定它。",
+    en: "{names} came back with line breaks, which this panel cannot store. Set it another way.",
+  },
+  "env.stillMissing": {
+    "zh-TW": "還沒填:{names}",
+    en: "Not filled yet: {names}",
+  },
+  // Deliberately NOT "you are all set". What is true is narrower: every
+  // variable a tool MARKED required has a value. A tool that declared nothing,
+  // or an author who left something off the list, is invisible to this
+  // sentence — so it claims only what it can see.
+  "env.nothingMissing": {
+    "zh-TW": "有標示必填的變數都填好了。",
+    en: "Everything marked required is set.",
+  },
+  "env.providerFills": { "zh-TW": "會填入 {names}", en: "Fills {names}" },
+  "env.providerRun": { "zh-TW": "取得並填入", en: "Fetch and fill" },
   "env.import": { "zh-TW": "載入 .env", en: "Import .env" },
   "env.export": { "zh-TW": "匯出 .env", en: "Export .env" },
   "env.save": { "zh-TW": "儲存", en: "Save" },

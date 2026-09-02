@@ -6,24 +6,77 @@ from msgspec import Struct, field
 
 
 class MessageMetrics(Struct, frozen=True):
-    """The turn's final token usage, persisted on the assistant message so a
-    reloaded thread can still show the ↑prompt / ↓completion line (which is
-    otherwise live-only / lost on refresh)."""
+    """How this reply was produced, persisted on the assistant message so a
+    reloaded thread can still show it (the stream is live-only).
 
-    prompt_tokens: int
-    completion_tokens: int
-    elapsed_ms: int
+    #748: every field is independently absent-able, because they are measured
+    by different things that fail independently. `None` means "not measured" —
+    never zero, and never a stand-in figure. The turn used to persist a chars/4
+    estimate here whenever the provider stayed quiet (local Ollama routinely
+    reports 0), with nothing marking it as a guess; any later comparison of
+    models, cost or anomalies was reading invented numbers and could not tell.
+    """
+
+    model: str | None = None
+    """The model that produced THIS message's text — under failover, the endpoint
+    that actually served, not the configured head of the chain. A turn can span
+    several round trips and switch between them; this names whoever wrote THIS
+    message's text.
+
+    Only the turn's final answer carries it: a tool call ends an assistant
+    message and starts a new one, and the model is known only on the `final`
+    event, which lands on the last. The intermediate bubbles of an agentic turn
+    therefore show a time and nothing else — sparse, but not wrong. Stamping the
+    last model onto all of them would be a guess in exactly the case this field
+    exists to stop guessing about: a mid-turn failover. That a switch happened at all is the
+    `FailoverSwitch` event's job, not this field's. None for messages written
+    before the field existed."""
+
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    """What to STEER by. Approximate when the provider stayed quiet — the turn
+    substitutes its own estimate — so never read these as a measurement; `exact`
+    says which they are.
+
+    #739's context gauge anchors on `prompt_tokens > 0` and deliberately prefers
+    an estimate to no anchor: without one it falls back to a messages-only figure
+    that cannot see the system prompt, the tool schemas or the skills index, which
+    its own measurements put 5,800 tokens off on a 32k thread and which stopped
+    compaction firing on a full window. #748 made these nullable and removed that
+    anchor on every endpoint not vouched for — i.e. by default."""
+
+    measured_prompt_tokens: int | None = None
+    measured_completion_tokens: int | None = None
+    """What was MEASURED. The provider's own counts, `None` where it gave none —
+    never an estimate standing in for one.
+
+    Two consumers with opposite requirements: a gauge wants a number even if
+    approximate, a record must not carry a figure nobody can tell apart from a
+    measurement. §2.8 split them on the event and then collapsed them again
+    here, which is what broke the gauge."""
+    elapsed_ms: int = 0
+    """Wall clock for the whole turn — what the UI's "· 12.3s" shows. NOT the
+    denominator for tok/s: see `generation_ms`. Keeping both in one field is the
+    mistake #739 §1.3 records, where one number silently changed meaning."""
+
+    generation_ms: int | None = None
+    """Time the model spent GENERATING — first token to last, summed over the
+    turn's round trips, excluding TTFT and the gaps where a tool was running.
+
+    This is the denominator tok/s needs. Dividing by `elapsed_ms` instead
+    measured the turn, not the model: one 60s tool call drags the figure down by
+    an order of magnitude, and TTFT grows with the prompt, so the same model
+    reads as slower the longer the conversation gets. None when no token ever
+    arrived, or on the non-streaming path, which cannot see token timings."""
+
     exact: bool = False
-    """#739: whether the provider itself reported these counts.
+    """#739: whether `prompt_tokens` above is the provider's own count rather
+    than the turn's estimate — i.e. whether the gauge may anchor on it.
 
-    `prompt_tokens > 0` cannot answer that. When a provider reports no usage —
-    Ollama routinely does — the runner substitutes our own estimate so the live
-    ↑ line does not flip to 0, so a stored count may be a guess. The context
-    gauge anchors only on an exact one; without this flag it would present a
-    guess as a fact, which is #624 in a new coat of paint.
-
-    Defaults False so threads written before the field are not retroactively
-    trusted."""
+    Redundant with `measured_prompt_tokens is not None` and kept because #739's
+    consumers read the flag. Derived at the single construction site
+    (`turns._TurnReducer`), never set by hand, so the two cannot come to
+    disagree about the same reply."""
 
 
 class Citation(Struct):

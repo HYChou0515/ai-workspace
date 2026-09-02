@@ -56,6 +56,7 @@ from .events import (
 )
 from .repetition_guard import guard_repetition
 from .runner import AgentRunner
+from .turn_activity import TURN_HEARTBEAT_MS, ITurnActivityStore
 
 logger = logging.getLogger(__name__)
 
@@ -396,18 +397,69 @@ class _TurnReducer:
                     tool_display=item.display,
                 )
             )
-        elif isinstance(item, AgentMetrics):
-            # Pin the latest token usage onto the current assistant answer so the
-            # ↑/↓ line survives a reload (the stream is live-only).
+        elif isinstance(item, AgentMetrics) and item.phase != "up":
+            # Pin how this reply was produced onto the assistant answer so it
+            # survives a reload (the stream is live-only).
+            #
+            # #748, two changes: only `final` is recorded — this used to write on
+            # EVERY metrics event and was correct solely because `final` happens
+            # to arrive last, which a 0.2s `down` tick carrying no measurement
+            # would now blank. And the numbers come from the event's `measured_*`
+            # channel, not its display fields: the display deliberately falls back
+            # to a chars/4 estimate so the live line never reads "↑0 ↓0", and
+            # copying that into the record is what made a guess indistinguishable
+            # from a measurement.
             for msg in reversed(self.produced):
                 if msg.role == "assistant":
+                    # Merge rather than replace. Gating on `phase == "final"`
+                    # threw the record away for every turn that never gets one —
+                    # Stop, MaxTurns, a provider error, the #113 repetition guard
+                    # — and those turns HAD measured an elapsed and a generation
+                    # time. Replacing wholesale has the opposite failure: a tick
+                    # arriving after `final` carries no counts and would blank
+                    # the provider's. So each field keeps the last value that was
+                    # actually measured.
+                    prev = msg.metrics
                     msg.metrics = MessageMetrics(
-                        prompt_tokens=item.prompt_tokens,
-                        completion_tokens=item.completion_tokens,
-                        elapsed_ms=item.elapsed_ms,
-                        # #739: carry the provider's word for it, so the gauge
-                        # can tell a measurement from a substituted estimate.
-                        exact=item.exact,
+                        # Steer-by: the event's display figure, which is always
+                        # present. Believe-me: the measured pair, or None.
+                        prompt_tokens=item.prompt_tokens or (prev.prompt_tokens if prev else 0),
+                        completion_tokens=item.completion_tokens
+                        or (prev.completion_tokens if prev else 0),
+                        measured_prompt_tokens=(
+                            item.measured_prompt_tokens
+                            if item.measured_prompt_tokens is not None
+                            else (prev.measured_prompt_tokens if prev else None)
+                        ),
+                        measured_completion_tokens=(
+                            item.measured_completion_tokens
+                            if item.measured_completion_tokens is not None
+                            else (prev.measured_completion_tokens if prev else None)
+                        ),
+                        # `up` is excluded above because it carries elapsed_ms=0
+                        # by construction — it announces an attempt rather than
+                        # measuring one, and a retry re-emits it, which would
+                        # persist "this turn took 0ms" over a real reading.
+                        elapsed_ms=item.elapsed_ms or (prev.elapsed_ms if prev else 0),
+                        generation_ms=(
+                            item.generation_ms
+                            if item.generation_ms is not None
+                            else (prev.generation_ms if prev else None)
+                        ),
+                        model=item.model or (prev.model if prev else None),
+                        # #739 asked the same question with a flag. Derived here
+                        # from #748's numbers rather than copied from the event,
+                        # so the flag and the fields it describes are one fact
+                        # with one source and cannot come to disagree.
+                        #
+                        # From the PROMPT count specifically: #739 uses this to
+                        # decide whether `prompt_tokens` can anchor its context
+                        # gauge, so a turn whose provider reported a completion
+                        # but no prompt is NOT exact for that purpose. Deriving
+                        # it from "either was measured" disagreed with #739's own
+                        # rule in exactly that case.
+                        exact=item.measured_prompt_tokens is not None
+                        or (prev.exact if prev else False),
                     )
                     break
         elif isinstance(item, RepetitionStopped):
@@ -575,8 +627,15 @@ class ChatTurnEngine:
         replay_buffer_events: int = 2000,
         event_bus: IEventBus | None = None,
         pod_id: str | None = None,
+        turn_activity: ITurnActivityStore | None = None,
+        heartbeat_s: float = TURN_HEARTBEAT_MS / 1000,
     ) -> None:
         self._runner = runner
+        # Whether anyone is driving a turn, recorded where every pod can read it.
+        # `None` = no signal: single-pod deploys and tests behave exactly as
+        # before, and the surfaces that ask fall back to their old guesswork.
+        self._turn_activity = turn_activity
+        self._heartbeat_s = heartbeat_s
         self._sessions: dict[str, _TurnSession] = {}
         # #43 reconnect replay: how many recent broadcast events each session's ring
         # buffer keeps so a same-pod reconnect can replay the gap. 0 disables it.
@@ -735,7 +794,10 @@ class ChatTurnEngine:
             # already-bumped value, and the watcher's `> my_epoch` never trips, so
             # the Stop is silently lost (the intermittent "Stop does nothing").
             turn = asyncio.create_task(
-                self._run_turn(content, ctx, on_complete, on_turn_end, session.publish)
+                self._with_heartbeat(
+                    key,
+                    self._run_turn(content, ctx, on_complete, on_turn_end, session.publish),
+                )
             )
             session.current_turn = turn
             # #349: stamp the CURRENT epoch without bumping — a new collaborative
@@ -763,6 +825,61 @@ class ChatTurnEngine:
                     fut.set_result(None)
                 session.queue.task_done()
             logger.debug("turns: worker %s turn finished", key)
+
+    async def turn_alive(self, key: str) -> bool:
+        """Whether a turn on `key` is being driven, on ANY pod.
+
+        `False` when no store is configured: a single-pod deploy has no second
+        opinion to offer, and a caller that treats "no signal" as "alive" would
+        be back to the guess this exists to replace."""
+        if self._turn_activity is None:
+            return False
+        return await self._turn_activity.alive(key)
+
+    async def _beat(self, key: str, stop: asyncio.Event) -> None:
+        """Say "still here" on a timer for as long as the turn runs.
+
+        On a timer and not on the turn's events, because the turns worth asking
+        about are the silent ones — a long tool call, a slow first token — and an
+        event-driven beat stops exactly when the question gets asked. A store
+        that cannot be written is not a reason to fail a turn: the write is
+        best-effort and its failure leaves the turn alone.
+
+        Stopped by a FLAG rather than by cancelling this task, so the loop can
+        finish whatever it is doing and return on its own. The write is offloaded
+        to a worker thread and so cannot be cancelled once it is running anyway;
+        with the flag, the beat is never left mid-await when its turn ends."""
+        assert self._turn_activity is not None
+        while not stop.is_set():
+            with contextlib.suppress(Exception):
+                await self._turn_activity.bump(key)
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(stop.wait(), self._heartbeat_s)
+
+    async def _with_heartbeat(self, key: str, coro: Coroutine[Any, Any, None]) -> None:
+        """Run one turn with its liveness recorded. Both turn shapes go through
+        here — the queued workspace turn and the streamed KB one — because a
+        signal that covers one surface is a signal a caller cannot trust."""
+        if self._turn_activity is None:
+            await coro
+            return
+        stop = asyncio.Event()
+        # Through the existing helper, so the task is strongly referenced (asyncio
+        # keeps only a weak one) AND lands in `aclose`'s drain for free. Rolling
+        # my own of these two lines is how the last version of this code ended up
+        # outside that drain.
+        self._spawn_detached(self._beat(key, stop))
+        try:
+            await coro
+        finally:
+            # Setting the flag is the whole teardown. Nothing is awaited here, so
+            # there is nothing for the cancellation that ends most turns to
+            # interrupt; the beat exits at its next check, and a write already in
+            # flight simply lands, extending this turn's liveness by one write and
+            # nothing more. The row goes stale on its own after
+            # `TURN_STALE_AFTER_MS` — see that module for why there is no longer
+            # an explicit "this turn ended" write to get wrong.
+            stop.set()
 
     async def _run_turn(
         self,
@@ -995,7 +1112,7 @@ class ChatTurnEngine:
             # turn running on a peer pod (sticky routing failed) sees the advance
             # and aborts. `_cancel_prior_turn` above is the same-pod fast path.
             my_epoch = await self._turn_control.advance(key)
-            task = asyncio.create_task(self._drive(content, ctx, queue))
+            task = asyncio.create_task(self._with_heartbeat(key, self._drive(content, ctx, queue)))
             session.current_turn = task
             self._spawn_watcher(key, my_epoch, task)
             logger.info("turns: stream turn started for %s (epoch %d)", key, my_epoch)

@@ -234,6 +234,32 @@ def test_a_manifest_published_before_authors_existed_still_parses() -> None:
     assert parse_manifest(render_manifest(m)) == m
 
 
+def test_parse_manifest_carries_what_the_tool_says_it_is() -> None:
+    """A tool could say what each of its COMMANDS does and nothing about itself,
+    so the only available answer to "what is this tool" was the list of commands
+    it ships — an inventory the platform generated, not a purpose its author
+    stated. Same display-only tier as `author`: nothing reads it to decide
+    anything."""
+    m = parse_manifest(_manifest_bytes(description="晶圓路徑與良率歷史查詢。"))
+
+    assert m.description == "晶圓路徑與良率歷史查詢。"
+    assert parse_manifest(render_manifest(m)) == m
+
+
+def test_a_manifest_that_describes_nothing_still_parses() -> None:
+    """Encouraged, never required — the same bargain `author` and `env` struck.
+    Every artifact already in the field was built without it, and a courtesy
+    field may not take them all down."""
+    body = json.loads(_manifest_bytes())
+    assert "description" not in body
+
+    m = parse_manifest(json.dumps(body).encode())
+
+    assert m.description is None
+    assert "description" not in json.loads(render_manifest(m))
+    assert parse_manifest(render_manifest(m)) == m
+
+
 def test_the_host_carries_a_byte_identical_copy_of_this_contract() -> None:
     """sandbox-host is a separate service that deliberately imports nothing
     from workspace_app (see its `protocol.py`), so the artifact contract must

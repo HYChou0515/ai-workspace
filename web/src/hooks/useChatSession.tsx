@@ -2,7 +2,7 @@ import { useQueryClient, type QueryKey } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { AgentEvent } from "../events";
-import { eventId, eventSeq, isTerminal } from "../events";
+import { eventId, eventSeq, isTerminal, isTurnProgress } from "../events";
 import { type AgentLog, logFromMessages, reduceAgent } from "../pages/investigation/agentLog";
 import type { MsgKey } from "../lib/i18n";
 import { type QuotaDetail, type QuotaKind, quotaMessage } from "../lib/quotaFailure";
@@ -135,9 +135,22 @@ const GATEWAY_CUT = new Set([0, 502, 503, 504]);
 
 const isAbort = (err: unknown) => (err as { name?: string } | null)?.name === "AbortError";
 
-/** The transient "you may have missed a piece" notice shown while a dropped
- * stream reconnects. Removed again if the reconnect's replay turns out contiguous
- * (the same-pod buffer filled the gap), so it only stays for a real hole. */
+/** The transient "you may have missed a piece" notice, shown while a dropped
+ * stream reconnects — and only when a turn was actually being written.
+ *
+ * It lives no longer than the turn it interrupted, and three things retract it:
+ * a contiguous replay (the buffer filled the gap), the re-hydrate after the
+ * reconnect finding the turn already ended, and the turn's own terminal event.
+ *
+ * Contiguity alone was too narrow to hang it on. Each pod numbers its own
+ * broadcast, so a reconnect that lands elsewhere can resume in a numbering that
+ * was never this viewer's — not always (two pods that both kept a subscriber
+ * throughout do agree), but often enough that the test fails on a turn nothing
+ * was lost from. The terminal event alone is not enough either: a pod with no
+ * subscriber buffers nothing, so a turn that ends during the outage never
+ * announces itself. Hence the middle one, which asks the store instead of the
+ * stream. A claim that outlives what it describes is read as "you lost
+ * something" while the whole answer sits above it. */
 const GAP_BANNER = "連線中斷,這裡可能少了一段";
 
 export function useChatSession(
@@ -158,6 +171,12 @@ export function useChatSession(
   // the reconnect's first event decides if the replay filled the hole (remove) or
   // a real gap remains (keep).
   const gapBannerPendingRef = useRef(false);
+  // Whether an answer was actually being written when the connection dropped.
+  // Set from turn events, cleared by the terminal one — the only evidence that a
+  // hole is even possible. Without it the banner was gated on "the last entry is
+  // an assistant message", which is true of every chat that has ever been
+  // answered, so an idle window that blinked claimed a missing piece.
+  const turnInFlightRef = useRef(false);
   // #43: the ids already drawn, so one event delivered twice is drawn once.
   //
   // Delivery is at-least-once and always was — a reconnect resumes `?since=`
@@ -189,6 +208,10 @@ export function useChatSession(
   useEffect(() => {
     maxSeqRef.current = 0;
     seenIdsRef.current = new Set();
+    // Whether an answer was being written belongs to the thread we were watching.
+    // Carried across, it makes the NEXT thread's first drop claim a hole in a
+    // conversation that has never run anything.
+    turnInFlightRef.current = false;
   }, [transport.threadKey]);
 
   // The long-lived broadcast subscription (#43) with the #493 auto-reconnect:
@@ -221,9 +244,11 @@ export function useChatSession(
             // Track the highest broadcast seq so the next reconnect resumes here.
             const seq = eventSeq(ev);
             if (seq !== undefined && seq > maxSeqRef.current) maxSeqRef.current = seq;
-            // Already drawn — a replay of something this viewer has. Skipped
-            // BEFORE the gap-banner check, which reasons about seq and is
-            // unaffected, and before the fold, which is what would double it.
+            // Already drawn — a replay of something this viewer has. `continue`
+            // skips the rest of this iteration, the gap-banner check below
+            // INCLUDED (an earlier comment here claimed otherwise); that is why
+            // the banner no longer hangs on the seq test alone — the turn's own
+            // terminal event retracts it.
             // An event with no id (a backend that predates them) is always
             // folded: dropping those would blank the stream during a rollout.
             const id = eventId(ev);
@@ -274,6 +299,14 @@ export function useChatSession(
             // it kept the #202 store-poll dormant in exactly the cross-pod case
             // the poll exists for.
             if (ev.type !== "presence") lastEventAtRef.current = Date.now();
+            // Is an answer being written right now? Only that makes a hole
+            // possible, and only a turn-progress event can say so — the log's own
+            // shape cannot ("the last entry is an assistant message" is the
+            // resting state of every answered chat), and neither can "not
+            // presence": `file_changed` fires on any editor save, with no turn
+            // anywhere. Terminal clears it in its own branch below; everything
+            // else — retry notices included — leaves it untouched.
+            if (isTurnProgress(ev)) turnInFlightRef.current = true;
             if (ev.type === "file_changed") {
               // A human edited a workspace file — refetch the tree. Not a turn
               // event, so it never folds into the log.
@@ -308,6 +341,24 @@ export function useChatSession(
             }
             setLog((prev) => reduceAgent(prev, ev));
             if (isTerminal(ev)) {
+              // The gap banner was a claim about THIS turn. The turn is over and
+              // the thread is re-read below, so the answer on screen is the
+              // stored one and the claim describes nothing — whatever the seq
+              // numbers said. Leaving it is the false alarm users lose
+              // confidence over: they are told they missed something while
+              // looking at the whole answer.
+              gapBannerPendingRef.current = false;
+              turnInFlightRef.current = false;
+              setLog((prev) =>
+                prev.entries.some((e) => e.kind === "banner" && e.text === GAP_BANNER)
+                  ? {
+                      ...prev,
+                      entries: prev.entries.filter(
+                        (e) => !(e.kind === "banner" && e.text === GAP_BANNER),
+                      ),
+                    }
+                  : prev,
+              );
               // #613: catch up on todo updates missed while disconnected — the
               // stream has no replay across pods, but the turn just ended, so
               // one refetch reconciles the panel cheaply.
@@ -354,23 +405,42 @@ export function useChatSession(
         // replayed, so an answer that resumes after this gap is missing a piece
         // and rejoins mid-sentence. Splicing the two halves together silently
         // presents a mutilated answer as a whole one — say where the hole is.
-        // Gate on "an answer was being written", not on `streaming`: the
-        // subscription starts before hydration resolves, so the flag can still
-        // be false while text is visibly arriving. A hole only matters where
-        // there was something to interrupt.
-        setLog((prev) => {
-          const last = prev.entries[prev.entries.length - 1];
-          const midAnswer = last?.kind === "message" && last.message.role === "assistant";
-          return midAnswer
+        // A hole only matters where there was something to interrupt, and the
+        // only witness to that is a turn event seen on this connection —
+        // `turnInFlightRef`. Not `streaming` (the subscription starts before
+        // hydration resolves, so it can be false while text is visibly
+        // arriving), and no longer "the last entry is an assistant message":
+        // that is the resting state of every answered chat, so an idle window
+        // that blinked announced a missing piece and, with no further event
+        // coming, never took it back.
+        const interruptedATurn = turnInFlightRef.current;
+        turnInFlightRef.current = false;
+        // What the store held before the outage, so the re-hydrate below can tell
+        // "an answer landed while we were away" from "the thread is unchanged".
+        //
+        // `undefined` is the only real absence of a baseline — hydration had not
+        // resolved. An EMPTY thread is a baseline of zero, and every chat's first
+        // turn starts there; reading that as "cannot tell" withheld the
+        // retraction exactly where a brand-new conversation lives.
+        const cachedBefore = qc.getQueryData<ChatThread | null>(transport.queryKey);
+        const hadBaseline = cachedBefore !== undefined;
+        const persistedBefore = cachedBefore?.messages.length ?? 0;
+        setLog((prev) =>
+          interruptedATurn
             ? {
                 ...prev,
-                entries: [...prev.entries, { kind: "banner", at: Date.now(), text: GAP_BANNER }],
+                entries: [
+                  ...prev.entries,
+                  { kind: "banner", at: Date.now(), text: GAP_BANNER },
+                ],
               }
-            : prev;
-        });
+            : prev,
+        );
         // Let the reconnect's first event confirm whether the replay filled the
-        // gap (remove the banner) or a real hole remains (keep it).
-        gapBannerPendingRef.current = true;
+        // gap (remove the banner) or a real hole remains (keep it). Only when
+        // one was actually added — a pending flag with no banner behind it would
+        // spend the retraction on nothing.
+        gapBannerPendingRef.current = interruptedATurn;
         await sleep(backoff);
         if (stopped) return;
         const fresh = await transport.getThread().catch(() => null);
@@ -380,6 +450,37 @@ export function useChatSession(
           // answer being streamed — reconcile so reconnecting never costs the
           // user what they were reading.
           reconcile(fresh);
+          // …and if the store says the turn ENDED while we were away, the hole is
+          // closed by this very read: the whole answer is on screen, from the
+          // store. The terminal event cannot be relied on to say so — a pod with
+          // no subscriber buffers nothing, so a turn that finishes during the
+          // outage never announces itself to the reconnected stream, and a banner
+          // waiting for that announcement waits forever.
+          //
+          // The evidence has to be an ANSWER THAT ARRIVED: the thread grew while
+          // we were away AND now ends on an assistant message. "Ends on something
+          // other than a user message" is not the same thing and deletes live
+          // banners — a workflow chat never persists a user message at all (its
+          // tail is the previous node's reply while the next one streams), and a
+          // `notice` (#624) or a human `mention` can be the tail at any moment.
+          const last = fresh.messages[fresh.messages.length - 1];
+          // With nothing to compare against, "it grew" is true of every non-empty
+          // thread and this collapses back into the over-broad rule it replaced.
+          // No baseline, no verdict — but an empty thread IS a baseline.
+          const grew = hadBaseline && fresh.messages.length > persistedBefore;
+          if (grew && last !== undefined && last.role === "assistant") {
+            gapBannerPendingRef.current = false;
+            setLog((prev) =>
+              prev.entries.some((e) => e.kind === "banner" && e.text === GAP_BANNER)
+                ? {
+                    ...prev,
+                    entries: prev.entries.filter(
+                      (e) => !(e.kind === "banner" && e.text === GAP_BANNER),
+                    ),
+                  }
+                : prev,
+            );
+          }
         }
         backoff = Math.min(backoff * 2, 15000);
       }
@@ -406,6 +507,19 @@ export function useChatSession(
       const last = msgs[msgs.length - 1];
       const done = last !== undefined && last.role !== "user";
       if (done) {
+        // The store has told us the turn is over — for a CROSS-POD viewer the
+        // only such word that will ever arrive, since no terminal event is
+        // coming and the retraction below reads the cache the line beneath
+        // advances. So it ends the turn for the gap banner too.
+        //
+        // But on the STRICT reading, not this `done`. "The tail is not a user
+        // message" is true mid-turn twice over: a human `mention` lands at any
+        // moment, and the #624 `notice` is persisted before the model is even
+        // called, so it stands through the whole time-to-first-token window.
+        // Disarming there means a real hole later in that turn raises nothing —
+        // silence, which is the failure nobody reports. Only an assistant answer
+        // says a turn produced its result.
+        if (last.role === "assistant") turnInFlightRef.current = false;
         qc.setQueryData(transport.queryKey, thread);
         reconcile(thread);
         return;
@@ -471,7 +585,9 @@ export function useChatSession(
             : err instanceof Error
               ? err.message
               : String(err));
-        setLog((prev) => ({ ...prev, streaming: false, error: msg }));
+        // Not the turn's error: no turn ran. It says which limit bound and
+        // links to it, and it must survive whatever the stream does next.
+        setLog((prev) => ({ ...prev, streaming: false, error: msg, errorFromTurn: false }));
       }
     },
     [transport, t],
@@ -487,7 +603,11 @@ export function useChatSession(
     // told them it stopped.
     void Promise.resolve(transport.requestCancel()).catch((err: unknown) => {
       const why = err instanceof Error ? err.message : String(err);
-      setLog((prev) => ({ ...prev, error: `停止失敗,這一輪可能仍在進行:${why}` }));
+      setLog((prev) => ({
+        ...prev,
+        error: `停止失敗,這一輪可能仍在進行:${why}`,
+        errorFromTurn: false,
+      }));
     });
     setLog((prev) => ({ ...prev, streaming: false }));
   }, [transport]);

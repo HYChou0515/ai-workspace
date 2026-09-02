@@ -666,6 +666,22 @@ export const mockApi: ApiClient = {
     ];
   },
 
+  // #750. A deploy with no credential->variable implementations is the
+  // ordinary case, and it is what the mock models: no buttons, every
+  // variable still typeable by hand.
+  async getEnvProviders(_slug: string, _itemId: string) {
+    return [];
+  },
+
+  async resolveEnvProvider(
+    _slug: string,
+    _itemId: string,
+    providerId: string,
+    _values: Record<string, string>,
+  ): Promise<Record<string, string>> {
+    throw new Error(`no env provider in the mock backend: ${providerId}`);
+  },
+
   async getItemSkills(_slug: string, _itemId: string) {
     await delay(10);
     return [
@@ -1002,6 +1018,15 @@ export const mockApi: ApiClient = {
 
   async cancelMessage(_slug: string, _investigationId: string) {
     await delay(10);
+  },
+
+  async turnAlive(_slug: string, _investigationId: string, _chatId?: string) {
+    // The demo backend runs every turn in this tab, so nothing is ever driving
+    // one somewhere this client cannot see. `false` is the honest answer here,
+    // not a stub value — a mock that claimed "alive" would hide the very
+    // notice this signal exists to make trustworthy.
+    await delay(10);
+    return false;
   },
 
   async undoTurns(_slug: string, investigationId: string, turns: number) {

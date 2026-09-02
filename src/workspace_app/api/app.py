@@ -68,6 +68,8 @@ from .context_card_routes import register_context_card_actions, register_context
 from .doc_question_routes import register_doc_question_routes
 from .entity_broadcast import build_entity_write_sink
 from .entity_routes import register_entity_routes
+from .env_provider import IEnvProvider
+from .env_provider_routes import register_env_provider_routes
 from .event_bus import IEventBus
 from .events import AgentEvent
 from .file_routes import register_file_routes
@@ -98,6 +100,11 @@ from .spa import SpaStaticFiles
 from .subagent_bridge import SubagentBridge
 from .subagent_run import run_agent_task
 from .tools_routes import register_tools_routes
+from .turn_activity import (
+    ITurnActivityStore,
+    SpecstarTurnActivityStore,
+    register_turn_activity,
+)
 from .turn_context import TurnContextBuilder, resolve_item_tools
 from .turn_gate import TurnRefused, quota_body
 from .turns import ChatTurnEngine
@@ -257,6 +264,10 @@ def create_app(
     # the item's shared `env_vars` cannot carry. None (default) ⇒ no such seam.
     # __main__ passes factories.get_request_env(settings.server.request_env).
     request_env: IRequestEnv | None = None,
+    # #750: the deploy's credential->variable implementations. Empty is the
+    # ordinary case — no buttons, and every variable still typeable by hand.
+    # __main__ passes factories.get_env_providers(settings.server.env_providers).
+    env_providers: list[IEnvProvider] | None = None,
     # #262: user ids with UNRESTRICTED collection access — threaded into the
     # route-level `authorize(...)` guards (the dedicated permission endpoint +
     # content-route guards). MUST match the set passed to `make_spec(superusers=…)`
@@ -1104,6 +1115,7 @@ def create_app(
     # wired for one backend; now that it is also the per-person ledger, a
     # sandbox wake on a bare test client would hit an unregistered model.
     register_sandbox_activity(spec)
+    register_turn_activity(spec)
     register_disk_ledger(spec)
     register_user_quota(spec)
 
@@ -1213,12 +1225,17 @@ def create_app(
     turn_control = SpecstarTurnControl(spec)
     # One turn engine drives the RCA workspace; one cancellable in-flight turn
     # per conversation, SSE streaming, cancel hook.
+    # Whether a turn is being driven, written where every pod can read it. Both
+    # engines share one store: the question ("is anyone working on this chat?")
+    # is the same on either surface, and two stores would be two answers.
+    turn_activity: ITurnActivityStore = SpecstarTurnActivityStore(spec)
     turn_engine = ChatTurnEngine(
         runner,
         turn_control=turn_control,
         poll_interval=turn_cancel_poll_seconds,
         replay_buffer_events=turn_replay_buffer_events,
         event_bus=event_bus,
+        turn_activity=turn_activity,
     )
     # The sweeper feeds the durable per-person ledger with what the mirror just
     # measured — the ONLY path by which bytes the agent produced with `exec`
@@ -1260,6 +1277,7 @@ def create_app(
 
     kb_turn_engine = ChatTurnEngine(
         runner,
+        turn_activity=turn_activity,
         turn_control=turn_control,
         poll_interval=turn_cancel_poll_seconds,
         replay_buffer_events=turn_replay_buffer_events,
@@ -1651,6 +1669,17 @@ def create_app(
         ingestor=ingestor,
         insights_collection_id=insights_collection_id,
         kb_chat_pipeline=kb_chat_pipeline,
+        superusers=superusers,
+    )
+
+    # On app.state so the routes read the CURRENT list rather than one closed
+    # over at build time.
+    app.state.env_providers = list(env_providers or ())
+
+    register_env_provider_routes(
+        api,
+        spec=spec,
+        get_user_id=get_user_id,
         superusers=superusers,
     )
 

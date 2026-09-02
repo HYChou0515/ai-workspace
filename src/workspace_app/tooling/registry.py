@@ -56,6 +56,30 @@ class CommandInfo:
 
 
 @dataclass(frozen=True)
+class EnvNeed:
+    """One environment variable a package says it wants (#750).
+
+    Hand-written by the package's author into ``env.json`` and copied
+    verbatim into the bundle. ``name`` is the only required key: the point is
+    to make a diligent author's package nicer to configure without making a
+    lazy author's package worse than it is today.
+
+    NOTHING enforces this. It is not a filter, a gate, or a promise — a tool
+    still receives every variable the item holds, and a name absent from here
+    is not refused. It exists so a person filling the panel can stop guessing.
+    """
+
+    name: str
+    description: str = ""
+    required: bool | None = None
+    """``None`` means the author did not say — which is neither "required" nor
+    "optional". Defaulting it either way would invent a fact: assume required
+    and an undecided author's package reports permanently-missing variables
+    (and a panel that always complains is one nobody reads); assume optional
+    and a genuinely needed variable is presented as safe to skip."""
+
+
+@dataclass(frozen=True)
 class PackageInfo:
     """One prebuilt package the sandbox can run. ``install_dir`` is the
     *sandbox-relative* path the launch binary lives at — the sandbox
@@ -65,6 +89,69 @@ class PackageInfo:
     name: str
     commands: tuple[CommandInfo, ...]
     install_dir: str
+    env_needs: tuple[EnvNeed, ...] | None = None
+    """What this package says it wants from the environment (#750), or
+    ``None`` when it shipped no ``env.json``.
+
+    ``None`` and ``()`` are DIFFERENT and must stay so all the way to the UI:
+    ``()`` is "the author looked and it needs nothing", ``None`` is "nobody
+    said". Every package predating #750 is ``None``, so collapsing the two
+    would let the panel state, about almost every tool installed, that it
+    needs no configuration — the one sentence it is least entitled to say."""
+
+    description: str = ""
+    """What this tool IS, in its author's own words, or ``""`` when they said
+    nothing.
+
+    A bundle could previously only be described by listing the commands it
+    ships, which is an inventory rather than a purpose — and it is the platform
+    talking, not the author. Optional on purpose: a tool that says nothing is
+    exactly as usable as it was, and every artifact published before the field
+    existed says nothing."""
+
+    version: str = ""
+    """The release this package resolved at, or ``""`` for a first-party
+    package — it has no artifact and no release."""
+
+    author: str = ""
+    """Who published it, as a display string, or ``""`` when nobody said: a
+    first-party package, or an artifact built before the builder wrote the
+    field. Never "unknown" — that would be the platform putting words in an
+    author's mouth."""
+
+
+def _read_env_needs(pkg_dir: Path) -> tuple[EnvNeed, ...] | None:
+    """This package's `env.json`, or ``None`` when it shipped none (#750).
+
+    Absent is NOT empty — see ``PackageInfo.env_needs``. The file is optional
+    precisely because every package that predates #750 lacks it, and a missing
+    hint must never be worse than the no-hint status quo."""
+    env_json = pkg_dir / "env.json"
+    if not env_json.is_file():
+        return None
+    try:
+        return tuple(
+            EnvNeed(
+                name=entry["name"],
+                description=entry.get("description", ""),
+                required=entry.get("required"),
+            )
+            for entry in json.loads(env_json.read_text())
+        )
+    except (OSError, ValueError, TypeError, KeyError):
+        # Degrade to "nobody said" rather than raise. `commands.json` is strict
+        # because a missing command list means the tool cannot run; a malformed
+        # hint means only that the hint is missing, and raising here would let
+        # one third-party author's typo stop an operator's startup for EVERY
+        # package — the convenience turning itself into an outage. The author
+        # gets the loud failure at prebuild instead, on their own build.
+        logger.warning(
+            "registry: package %r has an unreadable env.json; treating it as "
+            "undeclared. The tool still runs; only its environment hint is lost.",
+            pkg_dir.name,
+            exc_info=True,
+        )
+        return None
 
 
 def discover_packages(prebuilt_dir: Path) -> list[PackageInfo]:
@@ -139,6 +226,7 @@ def discover_packages(prebuilt_dir: Path) -> list[PackageInfo]:
                 name=sub.name,
                 commands=tuple(commands),
                 install_dir=f"../.tools/{sub.name}",
+                env_needs=_read_env_needs(sub),
             )
         )
     logger.info("registry: discovered %d tool package(s) from %s", len(out), prebuilt_dir)
@@ -375,6 +463,33 @@ async def _declare_images(actx: AgentToolContext, result: ExecResult, text: str,
     return declare_shown_files(text, shown)
 
 
+def describe_command(pkg: PackageInfo, cmd: CommandInfo) -> str:
+    """What the model is told about ``cmd`` — its author's words, then which
+    tool it belongs to.
+
+    The id the user sees in the picker is a package; what reaches the model is a
+    command. With nothing joining them, "what is `rca-tools`?" is a question
+    about a string the model has never been shown, and it can only guess.
+
+    It goes in the DESCRIPTION rather than anywhere else because that one string
+    is what both channels render: the native tool schema takes it verbatim, and
+    the prompt section renders the same field. A second home would be a second
+    thing to keep in step with the tool list, and nothing would notice it drift.
+
+    The author's sentence stays first. It is what the model reads to decide
+    whether to call this command at all; the bundle line answers a different
+    question — who provides this — and burying the first under the second would
+    trade a working inventory for a lookup nobody asked for yet.
+    """
+    # Every part after the id is optional and simply absent when unsaid. An
+    # "unknown", or a `by ` with nothing after it, would be the platform
+    # speaking for an author who said nothing.
+    release = f" {pkg.version}" if pkg.version else ""
+    by = f", by {pkg.author}" if pkg.author else ""
+    said = f" — {pkg.description.strip()}" if pkg.description.strip() else "."
+    return f"{cmd.description}\n\nFrom the `{pkg.name}` tool bundle{release}{by}{said}"
+
+
 def _to_function_tool(pkg: PackageInfo, cmd: CommandInfo) -> FunctionTool:
     """Wrap ``cmd`` as a FunctionTool whose on_invoke execs
     ``[pkg.install_dir/launch, cmd.name, args_json]`` in the sandbox.
@@ -412,7 +527,7 @@ def _to_function_tool(pkg: PackageInfo, cmd: CommandInfo) -> FunctionTool:
 
     return FunctionTool(
         name=cmd.name,
-        description=cmd.description,
+        description=describe_command(pkg, cmd),
         params_json_schema=cmd.params_json_schema,
         on_invoke_tool=on_invoke,
         # Same leniency as legacy provisioned tools — pydantic schemas

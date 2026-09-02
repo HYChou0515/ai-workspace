@@ -13,7 +13,15 @@ import {
 import { TurnStatus } from "./TurnStatus";
 
 const up: AgentMetricsState = { phase: "up", promptTokens: 256, completionTokens: 0, elapsedMs: 0 };
-const down: AgentMetricsState = { phase: "down", promptTokens: 256, completionTokens: 4, elapsedMs: 600 };
+const down: AgentMetricsState = {
+  phase: "down",
+  promptTokens: 256,
+  completionTokens: 4,
+  elapsedMs: 600,
+  // #748: a turn that was actually timed. Without this the rate is null
+  // by design — an untimed turn has no speed to report.
+  generationMs: 600,
+};
 
 const streaming = (over: Partial<AgentLog> = {}): AgentLog => ({ ...EMPTY_LOG, streaming: true, ...over });
 const fold = (events: AgentEvent[], from: AgentLog = EMPTY_LOG): AgentLog =>
@@ -117,6 +125,85 @@ describe("TurnStatus", () => {
     expect(screen.getByText(/請求過於頻繁/)).toHaveTextContent("30");
   });
 
+  it("shows one elapsed figure while thinking, not two that disagree", () => {
+    // The shared line already prints this component's own FE-anchored clock.
+    // Appending formatMetrics whole added the BACKEND's elapsed beside it — and
+    // the wedged-server case, the reason the FE clock exists, is exactly when
+    // the two diverge. The counts belong there; the second clock does not.
+    const log = fold([
+      { type: "message_delta", text: "thinking", reasoning: true },
+      { type: "agent_metrics", phase: "down", prompt_tokens: 8412, completion_tokens: 120, elapsed_ms: 4000, generation_ms: 4000 },
+    ]);
+    render(<TurnStatus log={{ ...log, streaming: true }} />);
+    const line = screen.getByText(/思考中/).textContent ?? "";
+    expect(line).toContain("↓ 120 tok");
+    expect(line).not.toContain("4.0s"); // the backend's clock has no business here
+  });
+
+  it("keeps the retry affordance and a moving clock while thinking (#748 review)", () => {
+    // The thinking branch returned early, so it dropped both the retry button
+    // and this component's own FE-anchored clock — and then printed the
+    // BACKEND's elapsed, which is exactly the number the component's docstring
+    // says stalls when the server wedges. A model that thinks for minutes and
+    // then hangs showed a frozen "· 4.0s" and offered no way out.
+    const log = fold([
+      { type: "message_delta", text: "thinking", reasoning: true },
+      { type: "agent_metrics", phase: "down", prompt_tokens: 8412, completion_tokens: 120, elapsed_ms: 4000, generation_ms: 4000 },
+    ]);
+    // `elapsedSec` comes from a ref the component sets on its first streaming
+    // render, so the 60s threshold is only reachable by moving the clock.
+    const real = Date.now;
+    const t0 = real();
+    const view = render(
+      <TurnStatus log={{ ...log, streaming: true }} onRetry={() => {}} />,
+    );
+    Date.now = () => t0 + 90_000;
+    try {
+      view.rerender(<TurnStatus log={{ ...log, streaming: true }} onRetry={() => {}} />);
+      expect(screen.getByTestId("turn-retry")).toBeInTheDocument();
+      // and the counts are on that same line, not in a branch of their own
+      expect(screen.getByText(/↓ 120 tok/)).toBeInTheDocument();
+    } finally {
+      Date.now = real;
+    }
+  });
+
+  it("does not relabel a running tool as thinking (#748 review)", () => {
+    // A reasoning model that thinks, emits no prose, then calls a tool is BOTH
+    // `thinking` and `toolRunning`. The new branch sat above the tool branch and
+    // called formatMetrics without the flag, so the ⏳ running… signal vanished
+    // for exactly the turns the phase was added to serve.
+    const log = fold([
+      { type: "message_delta", text: "thinking", reasoning: true },
+      { type: "agent_metrics", phase: "down", prompt_tokens: 8412, completion_tokens: 120, elapsed_ms: 4000, generation_ms: 4000 },
+      { type: "tool_start", call_id: "t1", name: "kb_search", args: {} },
+    ]);
+    render(<TurnStatus log={{ ...log, streaming: true }} />);
+    expect(screen.getByText(/running/)).toBeInTheDocument();
+  });
+
+  it("keeps showing the numbers while the model is only thinking (#748)", () => {
+    // A reasoning model can think for a long time before any visible content.
+    // The backend pushes metrics throughout — `completion_chars` counts the
+    // reasoning deltas too — but the line was rendered only for `answering`,
+    // so the longest silence of the turn was also the emptiest. Nothing was
+    // broken; the numbers simply had nowhere to go.
+    const log = fold([
+      { type: "message_delta", text: "let me think", reasoning: true },
+      {
+        type: "agent_metrics",
+        phase: "down",
+        prompt_tokens: 8412,
+        completion_tokens: 120,
+        elapsed_ms: 4000,
+        generation_ms: 4000,
+      },
+    ]);
+    render(<TurnStatus log={{ ...log, streaming: true }} />);
+    expect(screen.getByText(/↓ 120 tok/)).toBeInTheDocument();
+    expect(screen.getByText(/30 tok\/s/)).toBeInTheDocument();
+  });
+
   it("shows '還原工作區… N/M' while a cold sandbox restores, over the tool line (#492 P11)", () => {
     // The restore happens INSIDE the first tool's lazy wake, so a tool is
     // 'running' with metrics present — yet the restore line must take precedence.
@@ -215,6 +302,63 @@ describe("TurnStatus — a wait that gave up", () => {
   it("stops claiming to be waiting once nothing has happened for far too long", async () => {
     vi.useFakeTimers();
     render(<TurnStatus log={streaming()} />);
+    await act(async () => {
+      vi.advanceTimersByTime(11 * 60_000);
+    });
+    expect(screen.getByTestId("turn-abandoned")).toBeInTheDocument();
+  });
+
+  it("gives up on THIS turn even in a chat that has answered before", async () => {
+    // Reported from the running product: 「還在準備,稍等一下」 still showing at
+    // 1300 seconds. The give-up test asked whether the LOG holds any output —
+    // and any chat that has ever been answered holds some, forever. So in the
+    // only chats people actually use, the notice could never appear, and the
+    // wait went on claiming to be a wait with nobody coming.
+    //
+    // "Has this turn produced anything" is a question about this turn: what
+    // came after the question that started it.
+    vi.useFakeTimers();
+    const answeredBefore = fold([
+      { type: "user_message", author: "u", content: "first question" } as AgentEvent,
+      { type: "message_delta", text: "a complete earlier answer" } as AgentEvent,
+      { type: "done" } as AgentEvent,
+      { type: "user_message", author: "u", content: "second question" } as AgentEvent,
+    ]);
+    render(<TurnStatus log={answeredBefore} />);
+    await act(async () => {
+      vi.advanceTimersByTime(11 * 60_000);
+    });
+    expect(screen.getByTestId("turn-abandoned")).toBeInTheDocument();
+  });
+
+  it("says it is still working when the server says someone is driving it", async () => {
+    // The whole point of the heartbeat: a long silence is no longer a verdict.
+    // A turn on a pod this viewer is not subscribed to looks exactly like an
+    // abandoned one until something authoritative says otherwise.
+    vi.useFakeTimers();
+    render(<TurnStatus log={streaming()} alive />);
+    await act(async () => {
+      vi.advanceTimersByTime(11 * 60_000);
+    });
+    expect(screen.queryByTestId("turn-abandoned")).not.toBeInTheDocument();
+    expect(screen.getByTestId("turn-still-working")).toBeInTheDocument();
+  });
+
+  it("still reports the silence when nobody is driving it", async () => {
+    vi.useFakeTimers();
+    render(<TurnStatus log={streaming()} alive={false} />);
+    await act(async () => {
+      vi.advanceTimersByTime(11 * 60_000);
+    });
+    expect(screen.getByTestId("turn-abandoned")).toBeInTheDocument();
+  });
+
+  it("falls back to reporting the silence when it could not find out", async () => {
+    // `null` is "could not ask" — a failed request, an older backend. It must
+    // not be read as "alive", or an unreachable answer would silently restore
+    // the endless wait this replaced.
+    vi.useFakeTimers();
+    render(<TurnStatus log={streaming()} alive={null} />);
     await act(async () => {
       vi.advanceTimersByTime(11 * 60_000);
     });

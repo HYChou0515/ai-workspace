@@ -12,7 +12,7 @@ import pytest
 from httpx import ASGITransport
 
 from sandbox_host.app import make_host_app
-from sandbox_host.artifact import CommandSpec
+from sandbox_host.artifact import CommandSpec, EnvSpec
 from sandbox_host.tool_resolve import FetchError, ResolvedTool
 
 
@@ -33,7 +33,13 @@ class _Resolver:
         return answer
 
 
-def _tool(name: str, *, stale: bool = False, author: str | None = None) -> ResolvedTool:
+def _tool(
+    name: str,
+    *,
+    stale: bool = False,
+    author: str | None = None,
+    description: str | None = None,
+) -> ResolvedTool:
     return ResolvedTool(
         name=name,
         sha="a" * 64,
@@ -41,12 +47,54 @@ def _tool(name: str, *, stale: bool = False, author: str | None = None) -> Resol
         commands=(CommandSpec("trend", "Yield trend.", {"type": "object"}),),
         stale=stale,
         author=author,
+        description=description,
     )
 
 
 def _client(resolver) -> httpx.AsyncClient:
     app = make_host_app(object(), advertise_url="http://h", tool_resolver=resolver)
     return httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://h")
+
+
+async def test_resolve_passes_on_what_the_tool_says_it_needs_from_the_environment() -> None:
+    """#750 — the author's `env.json` reaches the app through this route.
+
+    The app never reads a manifest, so anything this response drops is gone for
+    good: the declaration would sit in the bundle while every third-party tool
+    reported "did not say" to the panel that exists to answer exactly that.
+    Same shape of loss as the `tools` field the host once dropped (#696)."""
+    resolver = _Resolver(
+        **{
+            "wafer-history": ResolvedTool(
+                name="wafer-history",
+                sha="a" * 64,
+                version="1.4.2",
+                commands=(CommandSpec("trend", "Yield trend.", {"type": "object"}),),
+                stale=False,
+                env=(EnvSpec("WAFER_API", "Yield service", True), EnvSpec("WAFER_CACHE")),
+            )
+        }
+    )
+
+    async with _client(resolver) as c:
+        r = await c.post("/tools/resolve", json={"tools": {"wafer-history": "https://g/m"}})
+
+    assert r.status_code == 200, r.text
+    assert r.json()["tools"]["wafer-history"]["env"] == [
+        {"name": "WAFER_API", "description": "Yield service", "required": True},
+        {"name": "WAFER_CACHE", "description": "", "required": None},
+    ]
+
+
+async def test_resolve_omits_env_entirely_when_the_tool_declared_none() -> None:
+    """Absent, not empty. Every artifact published before #750 lands here, and
+    an empty list would tell the panel "needs nothing" about all of them."""
+    resolver = _Resolver(**{"wafer-history": _tool("wafer-history")})
+
+    async with _client(resolver) as c:
+        r = await c.post("/tools/resolve", json={"tools": {"wafer-history": "https://g/m"}})
+
+    assert "env" not in r.json()["tools"]["wafer-history"]
 
 
 async def test_resolve_answers_with_the_sha_to_mount_and_the_schema_to_publish() -> None:
@@ -78,6 +126,20 @@ async def test_resolve_names_the_author_so_the_app_can_show_who_to_ask() -> None
         r = await c.post("/tools/resolve", json={"tools": {"wafer-history": "https://g/m"}})
 
     assert r.json()["tools"]["wafer-history"]["author"] == "Wafer Team <w@x>"
+
+
+async def test_resolve_forwards_what_the_tool_says_it_is() -> None:
+    """#697. Same rule as the author, and the same failure if it is skipped: the
+    app never reads a manifest, so a field the host does not forward is a field
+    that does not exist for anyone downstream — the agent included."""
+    resolver = _Resolver(
+        **{"wafer-history": _tool("wafer-history", description="晶圓路徑與良率歷史查詢。")}
+    )
+
+    async with _client(resolver) as c:
+        r = await c.post("/tools/resolve", json={"tools": {"wafer-history": "https://g/m"}})
+
+    assert r.json()["tools"]["wafer-history"]["description"] == "晶圓路徑與良率歷史查詢。"
 
 
 async def test_one_broken_tool_does_not_take_the_others_down() -> None:
