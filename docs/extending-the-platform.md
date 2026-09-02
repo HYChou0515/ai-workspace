@@ -50,6 +50,7 @@ deploy-time 動作,見 §Tool）。
 sample-tools/<name>/
   pyproject.toml            # package 定義 + 依賴 + ruff TID252（禁相對 import）
   uv.lock                   # 凍結依賴（prebuild 用 --frozen，可重現）
+  env.json                  # 選填：這個 package 需要哪些環境變數（#750，見下）
   src/<pkg>/
     cli.py                  # 三段 dispatcher（entry point）— iterate COMMANDS
     core.py                 # 共用邏輯
@@ -275,7 +276,8 @@ def run(args: Args) -> str:
 帶進 bundle,環境變數面板就會長出對應的欄位。
 
 ```json
-// sample-tools/<name>/env.json —— 整份都是選填的
+// <package 根目錄>/env.json —— 和 pyproject.toml 同一層,整份都是選填的
+// (vendor 進 repo 就是 sample-tools/<name>/env.json;外部作者放自己 repo 的根)
 [
   { "name": "MY_API_TOKEN",
     "description": "在 https://internal/tokens 產生的個人 token",
