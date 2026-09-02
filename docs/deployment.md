@@ -528,7 +528,7 @@ RCA 的 system prompt 是純 markdown，存在
   ```
 
   pg_trgm 擴充與該 GIN 由 specstar 開機時自動確保存在，不需手動建。細節與
-  回填前後的行為對照見 [資料遷移](migrations.md) §6。
+  回填前後的行為對照見 [資料遷移](migrations.md) §7。
 - **索引回填（知識圖譜 reconcile，升級後一次性，不擋部署）**：每週的詞彙 pass
   以前要整張表撈回來才讀得到 mention 的 `surface` / `kind` / `occurrences`，
   以及 relationship 的 `predicate`、entity 的 `canonical_name`、link 的
@@ -548,6 +548,44 @@ RCA 的 system prompt 是純 markdown，存在
   沒帶這些欄位時,會退回去讀它的 blob——因為把「沒有這個索引格」當成「名字是
   空字串」,會讓舊列被拿去當實體的顯示名稱,那是安靜的錯而不是大聲的失敗。
   所以遷移只是把那條退路關掉、換回全速,**部署順序不需要跟它對齊**。
+- **索引回填(知識圖譜的比對鍵,升級後一次性,⚠️ 這一條會影響結果)**:`GraphClaim`
+  升到 `v3`,它的 step **不是重抽索引,而是依當前規則重算比對鍵**
+  (`norm_subject` / `norm_attribute` / `norm_period` / `norm_unit`)。
+
+  ```bash
+  uv run python scripts/run_migrate.py --dry-run graph-claim
+  uv run python scripts/run_migrate.py graph-claim
+  ```
+
+  **上一條那句「不跑也不會有錯的結果」不適用於這一條。** 沒回填的列還帶著舊規則算出來
+  的鍵,依現行規則本該視為同一件事的兩列可能還是兩件。好消息是每一列都記著產生它的
+  schema 版本,所以「哪些還停在舊規則上」查得出來,不是猜的。細節見
+  [資料遷移](migrations.md) §9。
+- **索引回填(`workspace-file` 的 `path`,升級後一次性,🚨 不做的話 rollout 會停住)**:
+  `WorkspaceFile` 升到 `v3`,把 `path` 加進索引讓 `ls(prefix=…)` 能下推。**這一條和上面
+  每一條都不同 —— 它不是「變慢」或「少給答案」,而是會擋住部署。** 沒回填的列答不出
+  `path` 述詞,檔案樹和每一份 entity 列表都會在資料完好的情況下讀成**空的**;所以
+  `/api/readyz` 在回填完成前一律回 **503**,而 k8s 的 readinessProbe 就指著它 ——
+  **新 pod 永遠不會 ready,rollout 停在那裡**(liveness 故意走靜態路由,讓那些 pod 活著
+  給你用)。
+
+  ⚠️ **回填不能打 Service。** Service 只導流量給 ready 的 pod,而卡住的時候 ready 的
+  全是**舊 pod**;migrate 只會把每列帶到「該 pod 認得的最新版」= `v2`,而 `v2` 沒有
+  `path`。打在 Service 上會**回報一整排成功、什麼都沒改**。要直接連一個新 pod:
+
+  ```bash
+  kubectl get pods -l app=rca-app                      # 找一個新的、還沒 ready 的
+  kubectl port-forward pod/<新 pod 名稱> 8000:8000      # 不經過 Service,不 ready 也連得到
+
+  uv run python scripts/run_migrate.py --dry-run --base-url http://localhost:8000 workspace-file
+  uv run python scripts/run_migrate.py           --base-url http://localhost:8000 workspace-file
+
+  curl -i http://localhost:8000/api/readyz             # 200 "ok" = 好了,新 pod 會自己 ready
+  ```
+
+  順序是**先 rollout、再回填**:新 pod 起來但不 ready 是預期的,舊 pod 繼續服務,沒有
+  中斷。全新安裝不受影響(沒有舊列時 `readyz` 一開始就是綠的)。完整說明見
+  [資料遷移](migrations.md) §8。
 
 ---
 
