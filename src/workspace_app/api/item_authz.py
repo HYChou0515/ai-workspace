@@ -1,19 +1,40 @@
 """Shared WorkItem authorization for the hand-written workspace routes (#306 /
 plan-permissions.md Rollout PR3).
 
-``require_item_access`` is the gate for the hand-written routes, and a
-difference a caller needs is a PARAMETER on it (``slug=ANY_APP`` for a route
-with no slug in its path, ``allow_deleted`` for a billing action) rather than a
-copy of its body — a copy is how a rule added here later stops reaching every
-caller, which is how this file came to be missing `refuse_if_gone` at one gate a
-round after writing it.
+THREE gates stand in front of the item routes, and which one a route uses is
+not guessable from its path. Grepped, not remembered — three separate claims in
+this branch's own comments got it wrong:
 
-There is ONE deliberate second implementation: `ItemLocator.require_access`
-composes the same three steps around a 5-second facts MEMO, which is not
-expressible as an argument here (the facts are the thing being cached, and this
-function loads them). It is the authorizing gate for the chat/file routes, and a
-rule added here has to be added there too — `refuse_if_gone` names all three
-gates for that reason.
+===========================  ==========================================
+gate                         routes
+===========================  ==========================================
+``require_item_access``      ``/resources`` ``/environment``
+(here; via ``_authorize_item``   ``/permission`` ``/members``, the item
+ in `item_routes`, ``_gate``     PATCH, the env-provider routes, and
+ in `env_provider_routes`)      ``DELETE /me/resources/live/{id}``
+``ItemLocator.require_access``  ``/exec`` ``/files`` ``/chats`` and the
+                                streams — 59 call sites across
+                                `file_routes`, `chat_routes`,
+                                `workflow_routes`
+``ItemLocator.require_item``    ``/tools`` ``/entities`` ``/export``
+                                (`tools_routes`, `entity_routes`,
+                                 `capability_routes`) — validates the
+                                 slug pairing and authorizes NOBODY
+===========================  ==========================================
+
+A difference a caller needs is a PARAMETER on ``require_item_access``
+(``slug=ANY_APP`` for a route with no slug in its path, ``allow_deleted`` for a
+billing action) rather than a copy of its body — a copy is how a rule added here
+later stops reaching every caller, which is how this file came to be missing
+`refuse_if_gone` at one gate a round after writing it.
+
+The other two gates are deliberate second compositions, for reasons that cannot
+be arguments here: `require_access` wraps the same steps in a 5-second facts
+MEMO (the facts are the thing being cached, and this function loads them), and
+`require_item` answers from ONE read because it needs no permission facts at
+all. So the RULES they share are extracted instead — ``app_matches`` below is
+the slug pairing, ``refuse_if_gone`` the deleted-item refusal — and each names
+every gate that must call it.
 
 The item auto-CRUD is storage-gated by ``work_item_access_scope`` (read_meta →
 404), but the workspace SUB-routes (files, chat, stream) resolve the item through
@@ -128,6 +149,19 @@ def refuse_if_gone(facts: ItemAccessFacts | None, item_id: str) -> None:
         raise HTTPException(status_code=410, detail=f"item {item_id!r} is gone")
 
 
+def app_matches(actual: str, wanted: str | AnyApp) -> bool:
+    """#95: does the App this item really belongs to satisfy how the caller
+    addressed it? ``ANY_APP`` for a route that carries no slug (see `AnyApp`).
+
+    One function because the pairing is tested at TWO gates and cannot be tested
+    at one: `check_access` has the item's access facts, `ItemLocator.require_item`
+    deliberately has only the item (one read, no meta). With the comparison
+    written out in both, a mutation of either left the other green — which is
+    how the rule came to have no test at `check_access` at all while a commit
+    message claimed otherwise."""
+    return isinstance(wanted, AnyApp) or actual == wanted
+
+
 def check_access(
     facts: ItemAccessFacts | None,
     slug: str | AnyApp,
@@ -146,13 +180,12 @@ def check_access(
     `AnyApp`). Passing a fabricated slug there is what made a deleted item's
     environment unclosable: the fabrication came from a lookup that reports one
     as absent, so the check refused every time."""
-    if facts is None or (not isinstance(slug, AnyApp) and facts.slug != slug):
-        detail = (
-            f"item {item_id!r} not found"
-            if isinstance(slug, AnyApp)
-            else f"item {item_id!r} not found in app {slug!r}"
-        )
-        raise HTTPException(status_code=404, detail=detail)
+    if facts is None or not app_matches(facts.slug, slug):
+        # One message, no branch. The ANY_APP rendering is never surfaced: its
+        # only caller maps every refusal here to "unknown environment", and a
+        # branch nothing can fail without is a branch this branch keeps having
+        # to delete.
+        raise HTTPException(status_code=404, detail=f"item {item_id!r} not found in app {slug!r}")
     actor = Actor.human(user, groups=groups)
     perm = facts.item.permission
     if not authorize(actor, "read_meta", perm, created_by=facts.created_by, superusers=superusers):

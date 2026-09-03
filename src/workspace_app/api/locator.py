@@ -32,6 +32,7 @@ from ..resources.groups import groups_of
 from .chats import find_default_conversation, resolve_default_conversation
 from .item_authz import (
     ItemAccessFacts,
+    app_matches,
     check_access,
     load_access_facts,
     refuse_if_gone,
@@ -180,7 +181,7 @@ class ItemLocator:
         cost moved back onto the failure path, where a second round trip is
         free."""
         found = find_work_item(self._spec, item_id)
-        if found is not None and found[0] == slug:
+        if found is not None and app_matches(found[0], slug):
             return item_id
         # A miss here is one of three things, and only ONE of them is Gone: a
         # soft-deleted item OF THIS APP. An unknown id and an item of another

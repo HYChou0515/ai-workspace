@@ -2039,21 +2039,30 @@ def test_a_delegate_can_close_a_deleted_items_environment():
 
 
 def test_the_slug_must_match_the_item_at_every_gate():
-    """Round-10 finding 2 — #95 ("a wrong slug can't operate on another App's
-    item") was pinned at ONE of the three gates, and the review's mutation
-    survived 146 tests.
+    """Round-10 finding 2, corrected by round 11 — #95 ("a wrong slug can't
+    operate on another App's item") is tested at TWO carriers, because it lives
+    at two.
 
-    Deleting the slug comparison from `check_access` left `/tools` red (this
-    branch added that case last round) and `/environment` + `/chats` GREEN at
-    200 — i.e. the rule was live only where a test happened to look.
+    THE MAP, grepped rather than remembered (three claims in this branch got it
+    wrong, including the commit message that introduced this test):
 
-    That matters now because the parameter became `str | AnyApp` this round: it
-    is one accidental `slug_of()` away from switching itself off, and neither
-    `ty` nor the suite would have said anything. So the rule is asserted through
-    each gate's OWN routes: `require_item_access` (the resize route),
-    `ItemLocator.require_access` (exec, and the whole chat/file family), and
-    `ItemLocator.require_item` (tools) — the last one already covered by
+    * ``/resources`` and ``/environment`` -> ``_authorize_item`` ->
+      `require_item_access` -> `check_access`
+    * ``/exec`` -> `ItemLocator.require_access` -> `check_access`
+    * ``/tools`` -> `ItemLocator.require_item`, which never reaches
+      `check_access` at all — it answers from ONE read and compares the slug
+      itself
+
+    So a mutation of `check_access` leaves ``/tools`` green and a mutation of
+    `require_item` leaves the other three green. The comparison is now the
+    shared `app_matches`, which is what makes ONE mutation reach both; the
+    ``/tools`` half is asserted in
     `test_a_live_item_under_the_wrong_app_is_not_found_rather_than_gone`.
+
+    Every gate is asserted INDEPENDENTLY. The first version asserted in
+    sequence, and under the mutation the first request raised out of the client
+    — so the other two assertions never ran and "verified red" evidenced only
+    one of them.
     """
     with _app(PerUserResources(cpu=100.0), app_resources={"rca": FOUR_CORES}) as (
         client,
@@ -2062,16 +2071,30 @@ def test_the_slug_must_match_the_item_at_every_gate():
     ):
         item = _mk(spec, WHO["id"])
 
-        # require_item_access — the hand-written item routes
-        resize = client.put(f"/a/pm/items/{item}/resources", json={"cpu_cores": 1.0})
-        # ItemLocator.require_access — the authorizing gate for exec/chat/files
-        env = client.get(f"/a/pm/items/{item}/environment")
-        run = client.post(f"/a/pm/items/{item}/exec", json={"cmd": ["echo"]})
+        def _status(call) -> int | str:
+            """The status, or the exception — a gate that CRASHES on a wrong slug
+            has not enforced anything either, and swallowing that would make the
+            next mutation look guarded."""
+            try:
+                return call().status_code
+            except Exception as exc:  # noqa: BLE001
+                return type(exc).__name__
 
-        assert resize.status_code == 404, f"require_item_access let a wrong slug in: {resize.text}"
-        assert env.status_code == 404, f"require_access let a wrong slug in: {env.text}"
-        assert run.status_code == 404, f"require_access let a wrong slug in: {run.text}"
+        got = {
+            # require_item_access
+            "resources": _status(
+                lambda: client.put(f"/a/pm/items/{item}/resources", json={"cpu_cores": 1.0})
+            ),
+            "environment": _status(lambda: client.get(f"/a/pm/items/{item}/environment")),
+            # require_access
+            "exec": _status(
+                lambda: client.post(f"/a/pm/items/{item}/exec", json={"cmd": ["echo"]})
+            ),
+        }
 
-        # …and the same three still work under the RIGHT slug, so this is
-        # pinning the pairing rather than "everything 404s".
+        assert got == {"resources": 404, "environment": 404, "exec": 404}, got
+
+        # …and the same routes still work under the RIGHT slug, so this pins the
+        # pairing rather than "everything 404s".
         assert client.get(f"/a/rca/items/{item}/environment").status_code == 200
+        assert client.post(f"/a/rca/items/{item}/exec", json={"cmd": ["echo"]}).status_code == 200
