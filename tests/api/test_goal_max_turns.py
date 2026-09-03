@@ -263,9 +263,19 @@ def test_a_step_capped_turn_spends_a_round_and_keeps_going():
 
         client.post(f"{base}/messages", json={"content": "go"})
 
-        _wait(lambda: (g := read_goal(spec, rid)) is not None and g.rounds_used >= 1)
-        continuations = [
-            m for m in _messages(spec, rid) if m.role == "user" and m.content.startswith("[goal]")
-        ]
+        # Wait for the CONTINUATION, not for the counter. `rounds_used` is bumped
+        # at a different moment from the message being written, so waiting on it
+        # left a window in which the count below was still 0 — a race that stayed
+        # invisible until something else on the machine shifted the timing.
+        def _continuations():
+            return [
+                m
+                for m in _messages(spec, rid)
+                if m.role == "user" and m.content.startswith("[goal]")
+            ]
+
+        _wait(lambda: len(_continuations()) >= 1)
+        assert (g := read_goal(spec, rid)) is not None and g.rounds_used >= 1
+        continuations = _continuations()
         assert len(continuations) == 1
         assert "the report exists" in continuations[0].content
