@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as importlib_version
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from agents.tracing import set_trace_processors
 from fastapi import APIRouter, FastAPI, Request, Response
@@ -20,6 +20,11 @@ from ..agent.config_catalog import AgentConfigCatalog
 from ..agent.context import AgentToolContext
 from ..apps.subagents import SubagentDef
 from ..config.schema import EnhancementSettings, OffHoursSettings, PerUserResources
+
+if TYPE_CHECKING:
+    # Annotation-only: `factories` composes THIS module, so a runtime import
+    # here would be circular. `LlmEndpoint` values arrive through parameters.
+    from ..factories import LlmEndpoint
 from ..files import WorkspaceFiles, WorkspaceFull
 from ..filestore.protocol import FileNotFound, FileStore
 from ..health import CheckRegistry, CheckResult
@@ -1355,10 +1360,12 @@ def create_app(
         defn: SubagentDef,
         prompt: str,
         emit: OutputSink | None = None,
+        model: LlmEndpoint | None = None,
     ) -> str:
         """Run one sub-agent for the `run_agent` tool, relaying its work into the
         calling turn's tool card so a delegated task shows movement rather than a
-        card that sits there."""
+        card that sits there. `model` is the caller's pick from
+        `agents.subagent_models`, already resolved by the tool impl."""
 
         def relay(ev: AgentEvent) -> None:
             if emit is None:
@@ -1366,7 +1373,7 @@ def create_app(
             if line := progress_line(ev):
                 emit(line.encode())
 
-        return await run_agent_task(runner, parent_ctx, defn, prompt, on_event=relay)
+        return await run_agent_task(runner, parent_ctx, defn, prompt, model=model, on_event=relay)
 
     # #506: close the card-gen loop — swap the coordinator's fallback (open-loop)
     # drafter for the AGENTIC one when card drafting is enabled. #506/#577 follow-up:

@@ -150,3 +150,37 @@ agents:
     ref = dataclasses.replace(RetrievalLlmRef(preset="primary"), model="m-override")
     chain = resolve_llm_chain(settings, ref)
     assert [e.model for e in chain] == ["m-override", "m-spare1"]  # only primary overridden
+
+
+def test_subagent_models_resolve_to_ordered_endpoints_with_descriptions(tmp_path):
+    """`resolve_subagent_models` turns the operator's run_agent allowlist into
+    what a turn needs: order kept (display order), each entry carrying the
+    preset's one-line description (what the LLM reads to pick) and its endpoint
+    resolved through the SAME cascade as everything else — so the (model,
+    base_url) pair matches the failover-chain key `get_runner` built for that
+    preset. Empty list ⇒ empty tuple (the feature is off)."""
+    from workspace_app.factories import resolve_subagent_models
+
+    settings = _settings(
+        tmp_path,
+        """
+llm: { base_url: "http://global:4000/v1", api_key: gk }
+agents:
+  presets:
+    deep:
+      model: "m-deep"
+      description: "Deepest reasoning for hard sub-tasks."
+      llm: { base_url: "http://deep:4000/v1", api_key: dk }
+    fast: { model: "m-fast" }
+  subagent_models: [deep, fast]
+""",
+    )
+    got = resolve_subagent_models(settings)
+    assert [(m.name, m.endpoint.model) for m in got] == [("deep", "m-deep"), ("fast", "m-fast")]
+    assert got[0].description == "Deepest reasoning for hard sub-tasks."
+    assert got[0].endpoint.base_url == "http://deep:4000/v1"
+    assert got[0].endpoint.api_key == "dk"
+    assert got[1].endpoint.base_url == "http://global:4000/v1"  # cascade to global
+
+    off = _settings(tmp_path, 'agents: { presets: { solo: { model: "m" } } }\n')
+    assert resolve_subagent_models(off) == ()
