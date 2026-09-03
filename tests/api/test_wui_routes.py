@@ -352,3 +352,25 @@ def test_build_needs_the_authority_to_run_things():
     client.post(BUILD_URL, json={"folder": "/page"})
 
     assert locator.asked_verb == ["execute"]
+
+
+def test_build_provisions_the_dependencies_the_mirror_never_kept():
+    # `node_modules/` is in the mirror's ignore list, deliberately — it is
+    # derived, and huge. So a sandbox that has been recycled comes back with
+    # `src/`, `package.json` and the lockfile, and no dependencies. A rebuild
+    # that assumed them would fail on the first click after a recycle, which is
+    # exactly when a person is least equipped to know why: the remedy would be
+    # "ask someone to run pnpm install", and needing to know that is the friction
+    # a WUI exists to remove.
+    sandbox = _BuildSandbox([b"ok\n"])
+    client, _, _, _ = build(sandbox=sandbox)
+
+    client.post(BUILD_URL, json={"folder": "/page"})
+
+    script = " ".join(sandbox.calls[0])
+    assert "pnpm install" in script
+    assert script.index("pnpm install") < script.index("pnpm run build")
+    # With a lockfile, the install must be the reproducible one: two installs
+    # from one lock that resolve differently make the lock pointless.
+    assert "--frozen-lockfile" in script
+    assert "pnpm-lock.yaml" in script

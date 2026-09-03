@@ -77,6 +77,26 @@ def _build_dir(folder: str) -> str | None:
     return f"/{'/'.join(out)}" if out else None
 
 
+# What a rebuild runs, once the shell is in the page's folder.
+#
+# The install is not optional politeness: `node_modules/` is in the mirror's
+# ignore list — derived, and huge — so a recycled sandbox comes back with the
+# source, `package.json` and the lockfile, and no dependencies. A build that
+# assumed them fails on the first click after a recycle, and the remedy would be
+# "get someone to run pnpm install", which is the friction a WUI exists to
+# remove. With `node_modules` already in place and the lock unchanged this costs
+# about a second, so it is not worth making conditional.
+#
+# `--frozen-lockfile` where there IS a lock: two installs from one lock that
+# resolve differently make the lock pointless. Where there is none — a page
+# installing for the first time — the plain install is what WRITES it, and
+# `--frozen-lockfile` would refuse instead.
+_BUILD = (
+    "if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; else pnpm install; fi"
+    " && pnpm run build"
+)
+
+
 class CallToolOut(BaseModel):
     """What the page gets back.
 
@@ -142,7 +162,7 @@ def register_wui_routes(
         # `exec` takes no working directory, so the shell provides one. The path
         # is quoted rather than trusted: `_build_dir` decided it is a workspace
         # path, and `shlex.quote` decides it cannot be anything else.
-        script = f"cd {shlex.quote(cwd)} && pnpm run build"
+        script = f"cd {shlex.quote(cwd)} && {_BUILD}"
 
         queue: asyncio.Queue[bytes | None] = asyncio.Queue()
         loop = asyncio.get_running_loop()
