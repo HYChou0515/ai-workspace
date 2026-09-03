@@ -20,8 +20,10 @@ import { useCurrentUser } from "../hooks/useCurrentUser";
 import { useIsNarrow, useMinWidth } from "../hooks/useMediaQuery";
 import { useAppItems, useAppManifest, useApps } from "../hooks/useResources";
 import { usePlatformDestinations } from "../hooks/usePlatformDestinations";
+import { useT } from "../lib/i18n";
 import { itemNouns } from "../lib/itemNoun";
 import { BREAKPOINTS } from "../lib/breakpoints";
+import { DeleteItemBody } from "./DeleteItemConfirm";
 import { DialogProvider, useDialog } from "./Dialog";
 import { ShareChatDialog } from "./ShareChatDialog";
 import { UserChip } from "./UserChip";
@@ -275,6 +277,7 @@ function ChatRailItem({
   const [sharing, setSharing] = useState(false);
   const [draft, setDraft] = useState("");
   const { confirm } = useDialog();
+  const t = useT();
   const me = useCurrentUser();
   const shared = item.owner !== me; // shared WITH me → I don't own it
   const title = item.title || `Untitled ${noun.toLowerCase()}`;
@@ -368,23 +371,19 @@ function ChatRailItem({
                   onClick={() => {
                     setMenuOpen(false);
                     // The dialog says what actually dies (plan-delete-item-cascade):
-                    // this is the cascade, not a row removal.
+                    // this is the cascade, not a row removal. The body is the
+                    // SHARED DeleteItemBody, so this dialog and My resources'
+                    // cannot drift — usage number and zip escape hatch included.
                     void confirm({
-                      title: `Delete “${title}”?`,
-                      body: (
-                        <>
-                          <p>
-                            Deletes this {noun.toLowerCase()} and everything it owns
-                            — its files, chats and workflow runs — and frees its
-                            disk quota. Knowledge already promoted to the knowledge
-                            base stays.
-                          </p>
-                          <p>To keep a copy, open it and download the files first. This can't be undone.</p>
-                        </>
-                      ),
+                      title: t("resources.disk.delete.title"),
+                      body: <DeleteItemBody slug={slug} itemId={item.resource_id} />,
                       actions: [
-                        { id: "cancel", label: "Cancel" },
-                        { id: "delete", label: "Delete", variant: "danger" },
+                        { id: "cancel", label: t("resources.disk.delete.cancel") },
+                        {
+                          id: "delete",
+                          label: t("resources.disk.delete"),
+                          variant: "danger",
+                        },
                       ],
                     }).then((choice) => {
                       if (choice === "delete") onDelete(item.resource_id);

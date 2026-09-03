@@ -120,6 +120,71 @@ async def test_deleting_an_item_takes_its_conversations_and_workflow_runs():
     assert conv_rm.get(other_conv).data.title == "keep me"
 
 
+async def test_deleting_an_item_takes_each_conversations_satellite_rows_too():
+    """Goal / todos / off-hours-stretch rows key on `resource_id ==
+    conversation_id` (#613/#615) — the review's sharpest orphan: a leftover
+    ACTIVE off-hours goal makes the sweeper claim it every night, crash on the
+    missing conversation BEFORE spending the round budget, release the claim,
+    and retry forever. They die with their conversation."""
+    from workspace_app.api.goal_offhours import _GoalStretch, register_stretch_claims
+    from workspace_app.resources.conversation import Conversation
+    from workspace_app.resources.conversation_goal import ConversationGoal
+    from workspace_app.resources.conversation_todos import ConversationTodos
+
+    app, spec, _fs = _build()
+    register_stretch_claims(
+        spec
+    )  # conditional in prod (off-hours wiring) — mirror a deploy that has it
+    client = TestClient(app)
+    item_id = _create_item(client)
+    conv_rm = spec.get_resource_manager(Conversation)
+    conv_id = conv_rm.create(Conversation(item_id=item_id, title="chat")).resource_id
+    goal_rm = spec.get_resource_manager(ConversationGoal)
+    todos_rm = spec.get_resource_manager(ConversationTodos)
+    stretch_rm = spec.get_resource_manager(_GoalStretch)
+    goal_rm.create(
+        ConversationGoal(conversation_id=conv_id, condition="done", set_by="default-user"),
+        resource_id=conv_id,
+    )
+    todos_rm.create(ConversationTodos(conversation_id=conv_id), resource_id=conv_id)
+    stretch_rm.create(_GoalStretch(conversation_id=conv_id), resource_id=conv_id)
+
+    resp = client.delete(f"/a/rca/items/{item_id}")
+
+    assert resp.status_code == 204, resp.text
+    for rm in (goal_rm, todos_rm, stretch_rm):
+        with pytest.raises(ResourceIDNotFoundError):
+            rm.get(conv_id)
+
+
+async def test_deleting_an_item_stops_every_chats_turn_not_just_the_default(monkeypatch):
+    """The turn engine keys per CHAT: the default chat rides the item_id key,
+    every other chat keys on its own conversation id — so forgetting only
+    item_id leaves a non-default chat's in-flight turn running while the
+    cascade deletes the ground under it (the review's finding)."""
+    from workspace_app.resources.conversation import Conversation
+
+    app, spec, _fs = _build()
+    client = TestClient(app)
+    item_id = _create_item(client)
+    conv_rm = spec.get_resource_manager(Conversation)
+    side_chat = conv_rm.create(Conversation(item_id=item_id, title="side")).resource_id
+
+    turn_engine = app.state.turn_engines[0]
+    forgotten: list[str] = []
+    real_forget = turn_engine.forget
+
+    async def spy_forget(key: str) -> None:
+        forgotten.append(key)
+        await real_forget(key)
+
+    monkeypatch.setattr(turn_engine, "forget", spy_forget)
+
+    assert client.delete(f"/a/rca/items/{item_id}").status_code == 204
+    assert item_id in forgotten  # the default chat's (and workflow-drive) key
+    assert side_chat in forgotten  # every other chat keys on its own id
+
+
 async def test_deleting_an_item_tears_down_its_environment_and_forgets_the_address(monkeypatch):
     """The live-environment half: the session is closed (via `close_session`,
     write-back included — the purge that follows wipes it, and reusing the one
@@ -327,3 +392,28 @@ async def test_a_failed_sweep_leaves_the_row_so_the_delete_can_be_retried(monkey
     with pytest.raises(ResourceIDNotFoundError):
         rm.get(item_id)
     assert await filestore.ls(item_id) == []
+
+
+async def test_nfs_purge_propagates_real_failures(tmp_path, monkeypatch):
+    """`ignore_errors=True` was the review's finding: an EACCES or NFS hiccup
+    became 204 + quota refund with the bytes still on disk — and the route's
+    "retry to resume" contract voided, because nothing ever reported failure.
+    Only ABSENCE is tolerated; anything else propagates (→ the route's 500)."""
+    import shutil
+
+    from workspace_app.filestore.nfs_tree import NfsTreeFileStore
+
+    store = NfsTreeFileStore(tmp_path)
+    await store.write("ws1", "/a.txt", b"x")
+
+    def boom(path, *a, **kw):
+        raise PermissionError(f"EACCES: {path}")
+
+    monkeypatch.setattr(shutil, "rmtree", boom)
+    with pytest.raises(PermissionError):
+        await store.purge("ws1")
+
+    monkeypatch.undo()
+    await store.purge("ws1")  # real purge works
+    await store.purge("ws1")  # and absence is tolerated (idempotent)
+    assert await store.ls("ws1") == []

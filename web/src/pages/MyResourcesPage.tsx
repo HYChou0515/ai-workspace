@@ -22,6 +22,7 @@ import { type MyResources, type MyResourcesApi, type OverrideList as OverrideLis
 import { qk } from "../api/queryKeys";
 import { useIsSuperuser } from "../hooks/useIsSuperuser";
 import { UserPicker } from "../components/UserPicker";
+import { DeleteItemBody } from "../components/DeleteItemConfirm";
 import { DialogProvider, useDialog } from "../components/Dialog";
 import { api } from "../api";
 
@@ -201,7 +202,16 @@ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResour
                     clean-up still lives in the item's own file view. */}
                 <Link to={`/a/${ws.slug}/${ws.item_id}`}>{ws.title || ws.item_id}</Link>
                 <span className="detail">{formatBytes(ws.bytes_used)}</span>
-                <DeleteItemButton slug={ws.slug} itemId={ws.item_id} title={ws.title || ws.item_id} />
+                {/* A GHOST row (its item already hard-deleted, slug unknown —
+                    the pre-cascade orphans #778 tracks) has nothing this
+                    button could delete; rendering it would 404 silently. */}
+                {ws.slug ? (
+                  <DeleteItemButton
+                    slug={ws.slug}
+                    itemId={ws.item_id}
+                    title={ws.title || ws.item_id}
+                  />
+                ) : null}
               </li>
             ))}
           </ul>
@@ -238,12 +248,7 @@ function DeleteItemButton({ slug, itemId, title }: { slug: string; itemId: strin
       onClick={() => {
         void confirm({
           title: t("resources.disk.delete.title"),
-          body: (
-            <>
-              <p>{t("resources.disk.delete.body1")}</p>
-              <p>{t("resources.disk.delete.body2")}</p>
-            </>
-          ),
+          body: <DeleteItemBody slug={slug} itemId={itemId} />,
           actions: [
             { id: "cancel", label: t("resources.disk.delete.cancel") },
             { id: "delete", label: t("resources.disk.delete"), variant: "danger" },

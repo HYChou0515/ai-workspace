@@ -249,9 +249,15 @@ export const realApi: ApiClient = {
     // everything it owns (files, sandbox, chats, workflow runs) and refunds
     // the owner's disk quota. The old raw `/permanently` route orphaned all of
     // that (the backend now refuses it for work items). Owner/superuser gated.
-    await apiFetch(`/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(id)}`, {
+    //
+    // The failure semantics are DESIGNED (review H1): a mid-sweep 500 says
+    // "retry to resume", a busy sandbox is 503, a non-owner 403 — swallowing
+    // them (the old code never checked resp.ok) made every failure look like
+    // success and the item silently resurrect on the refetch.
+    const resp = await apiFetch(`/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(id)}`, {
       method: "DELETE",
     });
+    if (!resp.ok) throw await httpErrorFrom(resp, "delete item failed");
   },
 
   async patchAppItemFields(resourceRoute: string, id: string, patch: Record<string, unknown>) {

@@ -1712,7 +1712,9 @@ def create_app(
         kb_chat_pipeline=kb_chat_pipeline,
         superusers=superusers,
         # plan-delete-item-cascade: deleting an item refunds its quota — the
-        # ledger row goes with the item, never orphaned again.
+        # ledger row goes with the item. (A peer pod's in-flight measurement
+        # can still land in the seconds between forget and the row delete and
+        # re-create it; #778's deferred sweep is the safety net.)
         disk_ledger=disk_ledger,
     )
 

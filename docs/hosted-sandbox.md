@@ -113,6 +113,13 @@ specstar 原生的 `DELETE /{model}/{id}/permanently` 對 WorkItem **已封鎖**
 cascade 路):它只刪 item 列,上表其他欄全部變孤兒——尤其 disk ledger 會永遠凍著繼續
 記在 owner 頭上。
 
+!!! note "host 的 NFS archive 靠「同一棵樹」被 purge 蓋到"
+    host 自己沒有刪 archive 的 API(`nfs_archive.py` 只有 persist/restore)。cascade 的
+    durable purge 之所以連 archive 一起清,靠的是受祝福拓撲的硬約束:durable tree 與
+    `SANDBOX_HOST_NFS_ROOT` **必須是同一棵樹**(`kubernetes/base/configmap.yaml`)——
+    `NfsTreeFileStore.purge` 的 rmtree 就是在刪 archive 目錄本身。若部署違反這個約束
+    (host 有 archive、app durable 卻走 specstar),刪除 item 會留下孤兒 archive 目錄。
+
 ---
 
 ## 3. 何時與 host 溝通:完整觸發表

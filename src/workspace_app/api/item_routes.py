@@ -18,6 +18,7 @@ import msgspec
 from fastapi import APIRouter, FastAPI, HTTPException, Response, status
 from pydantic import BaseModel
 from specstar import QB, SpecStar
+from specstar.types import ResourceIDNotFoundError, ResourceIsDeletedError
 
 from ..apps.base import WorkItemBase
 from ..filestore.protocol import FileStore
@@ -471,15 +472,64 @@ def register_item_routes(
         if user != owner and user not in superusers:
             raise HTTPException(status_code=403, detail="only the item's owner can delete it")
         title = current.title
+        from ..resources.conversation import Conversation
+        from ..resources.conversation_goal import ConversationGoal
+        from ..resources.conversation_todos import ConversationTodos
+        from ..workflow.run import WorkflowRun
+        from .goal_offhours import _GoalStretch
+
+        by_item = (QB["item_id"] == item_id).build()
+
+        def _list_ids(model: type) -> list[str]:
+            record_rm = spec.get_resource_manager(model)
+            out: list[str] = []
+            for row in record_rm.list_resources(by_item):
+                rid = row.info.resource_id  # ty: ignore[unresolved-attribute]
+                assert isinstance(rid, str)
+                out.append(rid)
+            return out
+
+        def _sweep_rows(conv_ids: list[str], run_ids: list[str]) -> None:
+            """Conversations (soft-deleted ones included — the cascade must not
+            leave what a soft delete already hid), each conversation's SATELLITE
+            rows (goal / todos / off-hours stretch key on `resource_id ==
+            conversation_id`, #613/#615 — an orphaned ACTIVE off-hours goal
+            makes the sweeper claim-crash-release every tick, forever), and the
+            workflow runs. Permanent, so blobs die too. Satellite models are
+            registered conditionally (a deploy without the goal feature lacks
+            some), hence the KeyError tolerance."""
+            conv_rm = spec.get_resource_manager(Conversation)
+            run_rm = spec.get_resource_manager(WorkflowRun)
+            for cid in conv_ids:
+                for satellite in (ConversationGoal, ConversationTodos, _GoalStretch):
+                    with contextlib.suppress(
+                        KeyError, ResourceIDNotFoundError, ResourceIsDeletedError
+                    ):
+                        spec.get_resource_manager(satellite).permanently_delete(cid)
+                with contextlib.suppress(ResourceIDNotFoundError):
+                    conv_rm.permanently_delete(cid)
+            for rid in run_ids:
+                with contextlib.suppress(ResourceIDNotFoundError):
+                    run_rm.permanently_delete(rid)
+
         try:
-            # Stop the machinery first: no turn may keep writing into what we
-            # are about to remove. Then the environment — close_session finds
-            # the sandbox through session/address/listing and kills it
-            # (SandboxBusy propagates as 503: better to refuse the delete than
-            # to sweep durable storage under a live sandbox that would
-            # re-mirror it).
-            await turn_engine.forget(item_id)
+            # The environment FIRST, because it is the one step that can refuse:
+            # close_session finds the sandbox through session/address/listing,
+            # writes back, kills — and a reachable-but-slow host raises
+            # SandboxBusy → 503 with NOTHING destroyed yet. Better to refuse
+            # the delete than to sweep durable storage under a live sandbox.
             await registry.close_session(item_id)
+            # Stop every chat's turn machinery. The engine keys are per CHAT:
+            # the default chat rides the item_id key (its forget also bumps the
+            # cross-pod epoch, so a peer pod's default-chat turn dies too);
+            # every other chat keys on its own conversation id, and those
+            # forgets are pod-local — #349's cross-pod window applies to them,
+            # the same exposure `close` has today.
+            conv_ids = await asyncio.to_thread(_list_ids, Conversation)
+            run_ids = await asyncio.to_thread(_list_ids, WorkflowRun)
+            await turn_engine.forget(item_id)
+            for cid in conv_ids:
+                await turn_engine.forget(cid)
             # The ADDRESS row goes too. `close` deliberately keeps it (a stale
             # row is harmless; deleting one risks erasing a peer's live
             # rebuild), but after THIS cascade there is no item left for a
@@ -490,24 +540,17 @@ def register_item_routes(
             # Every file and directory record, permanently — what makes the
             # blobs collectable by the existing GC.
             await filestore.purge(item_id)
-            # The item's records: conversations (soft-deleted ones included —
-            # the cascade must not leave what a soft delete already hid) and
-            # workflow runs, permanently, by their indexed item_id.
-            from ..resources.conversation import Conversation
-            from ..workflow.run import WorkflowRun
-
-            by_item = (QB["item_id"] == item_id).build()
-            for record_model in (Conversation, WorkflowRun):
-                record_rm = spec.get_resource_manager(record_model)
-                for row in record_rm.list_resources(by_item):
-                    rid = row.info.resource_id  # ty: ignore[unresolved-attribute]
-                    assert isinstance(rid, str)
-                    record_rm.permanently_delete(rid)
+            # Off the event loop: pg round-trips per row would otherwise
+            # serialise the whole pod (the #657 class).
+            await asyncio.to_thread(_sweep_rows, conv_ids, run_ids)
             # Refund the quota: the ledger row goes with the item. This is THE
             # orphan that motivated the cascade — frozen at its last
             # measurement and charged to the owner forever, with no caller for
             # `forget` and no way to resolve the owner once the item row was
-            # gone.
+            # gone. (A peer pod's in-flight measurement can still land between
+            # this and the row delete below and re-create the row — a window of
+            # seconds, bounded by the access-facts TTL; #778's sweep is the
+            # safety net if it ever bites.)
             if disk_ledger is not None:
                 await disk_ledger.forget(item_id)
         except (HTTPException, SandboxBusy):
@@ -522,11 +565,20 @@ def register_item_routes(
                     f"({type(exc).__name__})"
                 ),
             ) from exc
-        activity.record(
-            "item_deleted",
-            f"Deleted “{title}” and everything it owned",
-            {"item_id": item_id},
-        )
         # The row goes LAST — see the docstring.
-        rm.permanently_delete(item_id)
+        await asyncio.to_thread(rm.permanently_delete, item_id)
+        # The access-facts cache would otherwise let an already-authorized
+        # writer re-create durable rows (and, via the disk gate, the ledger
+        # row) for a few seconds after the purge — same drop the permission
+        # setter does on revocation.
+        locator.forget_access(item_id)
+        # AFTER the row delete, so the activity stream never claims a delete
+        # that then failed; best-effort, so an activity hiccup can't undo a
+        # delete that already happened (mirrors the create route's tolerance).
+        with contextlib.suppress(Exception):
+            activity.record(
+                "item_deleted",
+                f"Deleted “{title}” and everything it owned",
+                {"item_id": item_id},
+            )
         return Response(status_code=status.HTTP_204_NO_CONTENT)

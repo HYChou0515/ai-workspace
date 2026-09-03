@@ -151,9 +151,11 @@ describe("ChatListRail", () => {
     fireEvent.click(screen.getByRole("button", { name: /Project options for Oven drift/i }));
     fireEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
     const dialog = await screen.findByRole("dialog");
-    expect(dialog).toHaveTextContent(/files, chats and workflow runs/);
-    expect(dialog).toHaveTextContent(/knowledge base stays/i);
-    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    expect(dialog).toHaveTextContent(/檔案、對話、workflow 紀錄/);
+    expect(dialog).toHaveTextContent(/知識庫的知識會保留/);
+    // The zip escape hatch is IN the dialog — the locked decision.
+    expect(within(dialog).getByRole("button", { name: /下載 zip/ })).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "刪除" }));
     await waitFor(() => expect(chatActions.remove).toHaveBeenCalledWith("rca-investigation/1"));
   });
 
@@ -163,7 +165,7 @@ describe("ChatListRail", () => {
     fireEvent.click(screen.getByRole("button", { name: /Project options for Oven drift/i }));
     fireEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
     const dialog = await screen.findByRole("dialog");
-    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(chatActions.remove).not.toHaveBeenCalled();
   });

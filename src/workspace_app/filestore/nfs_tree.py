@@ -20,6 +20,7 @@ host chowns to the item uid only when it restores into the local live dir.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import shutil
@@ -210,9 +211,19 @@ class NfsTreeFileStore:
 
     async def purge(self, workspace_id: str) -> None:
         """The whole item subtree, gone — including the workspace dir itself
-        (there is nothing left for it to hold). Idempotent when already absent."""
+        (there is nothing left for it to hold). Idempotent when already absent —
+        but ONLY absence is tolerated: an EACCES (host-side root-owned file) or
+        NFS hiccup must propagate, because the delete route's whole retry
+        contract ("500 — retry to resume the sweep") is architecture the
+        review found `ignore_errors=True` quietly voiding: 204 + quota refund
+        with the bytes still on disk, and no retry ever offered."""
         item_root = self._item_root(workspace_id)
-        await asyncio.to_thread(lambda: shutil.rmtree(item_root, ignore_errors=True))
+
+        def _rm() -> None:
+            with contextlib.suppress(FileNotFoundError):
+                shutil.rmtree(item_root)
+
+        await asyncio.to_thread(_rm)
 
     async def rmdir(self, workspace_id: str, path: str) -> None:
         target = self._abs(workspace_id, path)
