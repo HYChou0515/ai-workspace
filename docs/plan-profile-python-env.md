@@ -105,14 +105,23 @@ pyproject 產生。
 > `pip install` 裝的東西**下一次冷啟動會消失**。提示寫在 prompt 裡,是因為 agent 會讀
 > 它、也會自己打 `pip install`。
 
-### `uv` 烤進 workspace 映像
+### `uv` 從映像來,不做成 bundle
 
 > 否決**做成 carrier bundle**:carrier 那套機制(憑證、體積上限、ABI 錨點)是為
 > **第三方作者發布自己的東西**而存在的。`uv` 是平台自己的基礎設施,套進那個框只會讓它
 > 背一堆無關的規則 —— 那是為複用而複用。而且 `uv` 必須在 provisioning **能跑之前**就存在。
 
-⚠️ uv 的版本因此被映像釘死。這其實是好事(lock 的解讀方式不會在使用者背後改變),
-但升級 uv = 重推映像。
+⚠️ **實作時查出來的重要更正**:正式環境**本來就有 uv**,而且不是靠 `Dockerfile.workspace`。
+命令是在 **sandbox-host 的容器裡**跑的(uid + cgroup,沒有 per-sandbox 容器),而
+`sandbox-host/Dockerfile` 的 runtime stage 就是 `FROM ghcr.io/astral-sh/uv:...`。
+所以 uv 早就在 PATH 上。
+
+而 `sandbox_image`(預設 `workspace-app/sandbox:py312-ds`)**從來沒有任何程式碼拿它去起
+容器** —— 它只從 config 一路傳到 `AgentConfig` 就停了(docker 後端已於 #252 廢棄)。
+`Dockerfile.workspace` 仍然補上了 uv,讓那個映像自身一致,但**讓功能能動的不是它**。
+
+⚠️ **`kind: local` 是唯一有缺口的**:jail 只 bind-mount `/usr`,所以裝在開發者
+`$HOME` 底下的 uv 在 jail 裡看不到;不 jail 則繼承開發者的 PATH,沒問題。
 
 ### cache 先只做 per-uid,**不做共用層**
 
@@ -164,8 +173,9 @@ mode 444,誰都改不動,別名才不再是問題。
   `isolate=False`,隔離是**純 uid + cgroup**。jail 的 `mount --bind` 那套(`/.tools`
   唯讀掛載)**只在 `kind: local` 跑**。正式環境的等價物是「workspace 外的兄弟目錄
   + 檔案權限」,`.home`(#393)就是這樣做的。
-- **有東西掃 `{sandbox.root}/*` 嗎?** 多一個 `.uv-cache` 進去,可能被當成孤兒 sandbox
-  收掉。實作前要確認。
+- ~~**有東西掃 `{sandbox.root}/*` 嗎?**~~ **查過了,不會。** 孤兒回收靠的是
+  `_last_active`,一個**記憶體裡以 handle id 為鍵的字典**,不掃檔案系統;而 ext tool
+  cache 那個 `iterdir` 有 `_SHA256.match` 過濾,`.uv-cache` 不會命中。
 - **cache 沒有上界**,只會長。需要一個清理策略(可照抄 blob GC 的形狀)。
 - **uv 的鎖在某些檔案系統上會退化**並印出 `Shared locking is not supported by the
   current platform or filesystem`。共享磁碟區若是 NFS,`uv cache clean` 的安全性沒有

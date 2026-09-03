@@ -70,16 +70,25 @@ async def ensure_project_env(
     if not await sandbox.exists(handle, _MANIFEST):
         return
 
-    # Reported, never refused. Refusing would land on the cold-start path,
-    # where the person watching can do nothing about it.
-    stale = await sandbox.exec(handle, ["uv", "lock", "--check"], on_output=None)
-    if stale.exit_code != 0 and on_output is not None:
-        on_output(_STALE)
     # `--frozen`: the LOCK decides. Re-resolving would let one lock file
     # produce different versions on two cold starts, which is the whole thing
     # a lock is for. A hand-edited `pyproject.toml` therefore does not take
-    # effect — silently, unless someone says so, which is why that is its own
-    # behaviour rather than a comment.
+    # effect — silently, unless someone says so, which is the advisory below.
     result = await sandbox.exec(handle, ["uv", "sync", "--frozen"], on_output=on_output)
     if result.exit_code != 0:
         raise ProjectEnvError(result)
+
+    # AFTER a sync that worked, never before. This check cannot tell "uv says
+    # the lock moved on" from "uv did not run at all" — a missing binary exits
+    # 127 like anything else — so reading every non-zero as staleness told the
+    # person the one thing that was NOT true: that their manifest had changed.
+    # A false diagnosis in front of the real error is worse than none. Past the
+    # sync, uv demonstrably exists.
+    #
+    # Reported, never refused: refusing would land on the cold-start path,
+    # where the person watching can do nothing about it.
+    if on_output is None:
+        return
+    stale = await sandbox.exec(handle, ["uv", "lock", "--check"], on_output=None)
+    if stale.exit_code != 0:
+        on_output(_STALE)

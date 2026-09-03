@@ -125,7 +125,8 @@ async def test_preparing_the_environment_is_visible_while_it_happens() -> None:
         on_output=seen.append,
     )
 
-    assert sb.sinks and sb.sinks[-1] is not None, "uv's progress must have somewhere to go"
+    (sink,) = [k for c, k in zip(sb.calls, sb.sinks, strict=True) if c[:2] == ["uv", "sync"]]
+    assert sink is not None, "the sync's progress must have somewhere to go"
 
 
 async def test_a_lock_that_no_longer_matches_the_manifest_is_said_out_loud() -> None:
@@ -152,3 +153,35 @@ async def test_a_lock_that_no_longer_matches_the_manifest_is_said_out_loud() -> 
     told = b"".join(said).decode()
     assert "uv add" in told, "the person needs the route, not just the diagnosis"
     assert ["uv", "sync", "--frozen"] in sb.calls, "and the sync still happens"
+
+
+async def test_a_missing_uv_is_not_reported_as_a_stale_lock() -> None:
+    """The staleness check cannot tell "uv says the lock moved on" from "uv did
+    not run at all" — a missing binary exits 127 like any other failure.
+
+    Reading every non-zero as staleness told the person the one thing that was
+    NOT true: that their `pyproject.toml` had changed. A false diagnosis ahead
+    of the real error is worse than no diagnosis, and it is the exact failure
+    this feature exists to avoid.
+
+    So the notice comes only after a sync that WORKED, by which point uv
+    demonstrably exists.
+    """
+    said: list[bytes] = []
+    sb = _Recording(
+        present={"pyproject.toml"},
+        results={
+            ("uv", "lock", "--check"): ExecResult(exit_code=127, stdout=b"uv: not found"),
+            ("uv", "sync", "--frozen"): ExecResult(exit_code=127, stdout=b"uv: not found"),
+        },
+    )
+
+    with pytest.raises(ProjectEnvError) as caught:
+        await ensure_project_env(
+            sb,  # ty: ignore[invalid-argument-type]
+            SandboxHandle(id="s1"),
+            on_output=said.append,
+        )
+
+    assert "not found" in str(caught.value), "the real reason must reach the operator"
+    assert b"uv.lock" not in b"".join(said), "and must not be preceded by a false one"
