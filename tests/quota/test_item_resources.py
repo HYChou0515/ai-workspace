@@ -823,3 +823,106 @@ def test_the_panel_can_say_the_app_was_what_bound_it():
 
         assert body["stated_cpu_cores"] == 999.0
         assert body["effective_cpu_cores"] == 4.0, "the App bound it, not the quota"
+
+
+def test_resizing_a_live_environment_is_refused_by_the_server():
+    """Adversarial review, finding 3 — a quota bypass, not a UI nicety.
+
+    §1.4 says the size is read-only while the sandbox is live, and gave the
+    reason: there is no resize op, so the number and the cgroup would disagree.
+    I disabled the INPUT and left the route open. The heartbeat re-reads
+    `spec_for` on every bump, so lowering a live item's size re-bills the new
+    number against a cgroup still holding the old one:
+
+        A live at 4 cores (budget 4) ⇒ B correctly refused
+        PUT A {"cpu_cores": 0.1} ⇒ 200
+        ledger now says 0.1 ⇒ B admitted, 7 real cores running, panel says 3.1/4
+
+    Repeat per item and the budget is unbounded. This is exactly the
+    "紀錄＝信念，沒有東西對應現實" failure §1.4 cited #720 to avoid — arriving
+    through a door the plan opened itself.
+    """
+    with _app(PerUserResources(cpu=4.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        item = _mk(spec, "alice", cpu=4.0)
+        _wake(client, item)
+
+        refused = client.put(f"/a/rca/items/{item}/resources", json={"cpu_cores": 0.1})
+
+        assert refused.status_code == 409, refused.text
+        detail = str(refused.json()["detail"])
+        assert "close" in detail.lower() or "關閉" in detail, (
+            f"must say what to do about it: {detail}"
+        )
+
+
+def test_resizing_is_allowed_again_once_nothing_is_running():
+    """The control. Refusing while live is the rule; refusing always would make
+    the setting unreachable on any item anyone has ever used."""
+    with _app(PerUserResources(cpu=4.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        item = _mk(spec, "alice", cpu=4.0)
+
+        got = client.put(f"/a/rca/items/{item}/resources", json={"cpu_cores": 1.0})
+
+        assert got.status_code in (200, 204), got.text
+
+
+def test_the_refusal_never_names_an_item_the_reader_cannot_see():
+    """Adversarial review, finding 4.
+
+    §1.8's disclosure gate is `viewer == exc.owner`, and I read that as "the
+    person whose items these are". It is not: `owner` is the DEBTOR field, an
+    ordinary string anyone with write access can PATCH (#687). So carol can
+    create a private item, set its `owner` to alice, wake it — and the next time
+    alice is refused on her own work, the refusal hands her carol's title.
+
+    `_title_of` is a point `get`, which no access scope filters, so the gate has
+    to be the reader's own access rather than a field either of them can write.
+    """
+    with _app(PerUserResources(cpu=2.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        WHO["id"] = "carol"
+        hers = _mk(
+            spec,
+            "alice",  # the DEBTOR field points at alice…
+            cpu=2.0,
+            permission=Permission(visibility="private"),  # …but alice cannot see it
+        )
+        client.patch(f"/rca-investigation/{hers}", json={"title": "Carol's confidential plan"})
+        _wake(client, hers)
+
+        WHO["id"] = "alice"
+        mine = _mk(spec, "alice", cpu=2.0)
+        refused = client.post(f"/a/rca/items/{mine}/messages", json={"content": "go"})
+
+        assert refused.status_code == 507, refused.text
+        assert "Carol" not in str(refused.json()), "a title alice holds no read_meta on"
+
+
+def test_the_refusal_still_names_the_items_the_reader_can_see():
+    """The control. Redacting everything would take away the remedy §1.8 exists
+    to provide — a refusal that names nothing is the wall it replaced."""
+    with _app(PerUserResources(cpu=2.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        first = _mk(spec, "alice", cpu=2.0)
+        client.patch(f"/rca-investigation/{first}", json={"title": "晶圓良率分析"})
+        _wake(client, first)
+        second = _mk(spec, "alice", cpu=2.0)
+
+        refused = client.post(f"/a/rca/items/{second}/messages", json={"content": "go"})
+
+        holding = refused.json()["detail"]["holding"]
+        assert [h["title"] for h in holding] == ["晶圓良率分析"]

@@ -424,6 +424,22 @@ def register_item_routes(
             raise HTTPException(status_code=404, detail=f"unknown app: {slug!r}")
         model = app_model(slug)
         item, created_by = _authorize_item(slug, item_id, "change_permission")
+        # Refused while the environment is LIVE, and this is a quota rule rather
+        # than a UI nicety. There is no resize op — the size is applied when the
+        # sandbox is created — but the heartbeat re-reads it on every bump, so
+        # accepting a change now would re-bill the NEW number against a cgroup
+        # still holding the old one. Lower it on a live item and the person is
+        # charged 0.1 cores for 4 real ones, which repeated per item makes the
+        # budget unbounded. Disabling the input alone left this door open.
+        if await registry.has_live_sandbox(item_id):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This item's environment is running, so its size cannot change — "
+                    "the running sandbox would keep the old one. Close the environment "
+                    "first; the new size applies the next time it starts."
+                ),
+            )
         cpu, memory = _validated_resources(body)
         rm = spec.get_resource_manager(model)
         with rm.using(created_by):

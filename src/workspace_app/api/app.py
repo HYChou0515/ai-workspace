@@ -78,6 +78,7 @@ from .health_routes import (
     register_replay_routes,
     register_sanity_routes,
 )
+from .item_authz import require_item_access
 from .item_routes import register_item_routes
 from .kb_chat_routes import (
     register_kb_chat_routes,
@@ -781,13 +782,33 @@ def create_app(
         )
 
     def _title_of(item_id: str) -> str:
-        """This item's headline, for a refusal that names what to close.
+        """This item's headline for a refusal, IF the person reading may see it.
 
         An id is addressable but not recognisable — "close one of
         rca-investigation:12cec732" is not an instruction anybody can follow.
-        Reached only when a turn is already being refused, so it costs nothing
-        on the path that succeeds, and an item that has gone missing degrades to
-        an empty string rather than turning a 507 into a 500."""
+        But `find_work_item` is a point `get`, which no access scope filters, so
+        naming the item has to be gated on the READER's own access.
+
+        It cannot be gated on the debtor instead. `owner` is an ordinary string
+        anyone with write access can PATCH (#687), so someone could point it at
+        another person and have their own private titles read back to that
+        person the next time they were refused. The reader's `read_meta` is the
+        only test here that neither party can rewrite.
+
+        Empty rather than raising: a missing item, or one this reader may not
+        see, degrades to "an environment you cannot see" rather than turning a
+        507 into a 500 or a disclosure."""
+        try:
+            require_item_access(
+                spec,
+                locator.slug_of(item_id) or "",
+                item_id,
+                "read_meta",
+                user=get_user_id(),
+                superusers=superusers,
+            )
+        except Exception:  # noqa: BLE001 — no access is an ordinary answer here
+            return ""
         found = find_work_item(spec, item_id)
         return getattr(found[1], "title", "") if found is not None else ""
 
