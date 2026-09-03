@@ -1538,6 +1538,12 @@ def test_a_deleted_item_is_still_named_in_a_refusal():
     `holding` hid the one thing the person could close — and two shipped
     comments describe this case by name ("addressable beats invisible"), so the
     behaviour was documented in two places and asserted in none.
+
+    Round 6 made it NAMED rather than merely addressable. The row is here
+    because its sandbox is still running, and "close t" is an instruction
+    somebody can follow where "close rca-investigation:12cec732" is not. The
+    reader's own `read_meta` is still what decides whether the name is shown —
+    `include_deleted` relaxes what can be FOUND, never who may see it.
     """
     with _app(PerUserResources(cpu=2.0), app_resources={"rca": FOUR_CORES}) as (
         client,
@@ -1554,7 +1560,7 @@ def test_a_deleted_item_is_still_named_in_a_refusal():
         assert refused.status_code == 507, refused.text
         holding = refused.json()["detail"]["holding"]
         assert [h["item_id"] for h in holding] == [holder], holding
-        assert holding[0]["title"] == "", "no title for a row whose item is gone"
+        assert holding[0]["title"] == "t", "a deleted item's row must still name it"
 
 
 def test_someone_elses_deleted_item_does_not_410_my_resources_page(monkeypatch):
@@ -1617,3 +1623,177 @@ def test_a_deleted_items_environment_can_still_be_closed():
         closed = client.delete(f"/me/resources/live/{item}")
 
         assert closed.status_code == 204, f"the row is visible but not closable: {closed.text}"
+
+
+def test_deleting_an_item_does_not_free_its_slot_while_it_still_runs(monkeypatch):
+    """Round-6 finding 1 — a quota evasion I introduced, in four calls.
+
+    Making the seam answer `None` for a soft-deleted item lost the difference
+    between "there is no debtor" and "we could not resolve one". Four consumers
+    read `owner is None` as nothing-to-bill: the admission gate returns early,
+    the per-person disk cap returns early, usage is never recorded, and — worst
+    — `registry._bump` writes `owner=""` over a ledger row that already named
+    somebody, ERASING the charge for a sandbox that is still running.
+
+    So: fill your quota, delete the item, poke it once (a soft-deleted item
+    stays operable for the access memo's five seconds), and the slot is free
+    while both sandboxes run.
+
+    A soft-deleted item still exists and still owes. The seam reads it — with
+    `include_deleted` — rather than pretending it is gone.
+    """
+    from workspace_app.api import app as app_mod
+
+    monkeypatch.setattr(app_mod, "_ITEM_FACT_TTL_S", 0.0)
+    with _app(PerUserResources(count=1), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        first = _mk(spec, "alice")
+        second = _mk(spec, "alice")
+        _wake(client, first)
+        assert client.post(f"/a/rca/items/{second}/exec", json={"cmd": ["echo"]}).status_code == 507
+
+        assert client.delete(f"/rca-investigation/{first}").status_code in (200, 204)
+        client.post(f"/a/rca/items/{first}/exec", json={"cmd": ["echo"]})
+
+        still_refused = client.post(f"/a/rca/items/{second}/exec", json={"cmd": ["echo"]})
+        assert still_refused.status_code == 507, (
+            f"deleting an item freed its slot while it still runs: {still_refused.text}"
+        )
+
+
+def test_a_deleted_items_sandbox_is_still_billed_to_its_owner(monkeypatch):
+    """The same defect from the ledger's side, and the half that stays wrong
+    silently rather than loudly: the page shows nothing running while the
+    machine runs, so nobody can even see what to close."""
+    from workspace_app.api import app as app_mod
+
+    monkeypatch.setattr(app_mod, "_ITEM_FACT_TTL_S", 0.0)
+    with _app(PerUserResources(cpu=100.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        item = _mk(spec, "alice")
+        _wake(client, item)
+        assert client.delete(f"/rca-investigation/{item}").status_code in (200, 204)
+        client.post(f"/a/rca/items/{item}/exec", json={"cmd": ["echo"]})
+
+        body = client.get("/me/resources").json()
+
+        assert any(e["item_id"] == item for e in body["live"]), (
+            f"a running sandbox vanished from the page that owns Close: {body}"
+        )
+        assert body["cpu_in_use"] > 0, body
+
+
+def test_a_deleted_item_is_billed_but_not_operable():
+    """The other half of round-6 finding 1, and the direction I got wrong first.
+
+    Making the seam resolve soft-deleted rows unconditionally fixes the billing
+    and REOPENS the item: `require_item` gates every `/a/{slug}/items/...` route
+    on the same lookup, so exec, resize and the rest would all start answering
+    200 for something the user deleted. My own docstring claimed the routes
+    would still refuse it "because they gate on access" — but access is read off
+    the item record, which had just started resolving.
+
+    "Still owes for its sandbox" and "still operable" are different questions.
+    So resolving a deleted row is OPT-IN, taken only by the paths that answer
+    the first — the debtor, the size, the resources page — and the default stays
+    a miss, which is what keeps one person's delete from 410ing everybody's
+    page. Both halves are asserted here because a fix for either one alone is
+    what the last two rounds actually shipped.
+
+    `unused` is deleted without ever being addressed through the API: the access
+    memo holds a POSITIVE answer for five seconds and a delete does not
+    invalidate it, so a just-used item stays operable for that window — true of
+    this build with or without the change under test, and not what this is
+    about.
+    """
+    with _app(PerUserResources(cpu=100.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        billed = _mk(spec, "alice")
+        _wake(client, billed)
+        assert client.delete(f"/rca-investigation/{billed}").status_code in (200, 204)
+
+        assert any(e["item_id"] == billed for e in client.get("/me/resources").json()["live"]), (
+            "a deleted item's running sandbox stopped being billed"
+        )
+
+        unused = _mk(spec, "alice")
+        assert client.delete(f"/rca-investigation/{unused}").status_code in (200, 204)
+        for verb, path, body in (
+            ("post", f"/a/rca/items/{unused}/exec", {"cmd": ["echo"]}),
+            ("put", f"/a/rca/items/{unused}/resources", {"cpu_cores": 1.0}),
+            ("get", f"/a/rca/items/{unused}/environment", None),
+        ):
+            call = getattr(client, verb)
+            reply = call(path, json=body) if body is not None else call(path)
+            assert reply.status_code != 200, f"{verb.upper()} {path} still works on a deleted item"
+            assert reply.status_code != 410, f"{verb.upper()} {path} leaked a 410: {reply.text}"
+
+
+def test_a_deleted_item_is_still_charged_at_the_size_it_chose(monkeypatch):
+    """Round-6, and what the mutation probe caught my OTHER tests not pinning.
+
+    Deleting an item does not stop its sandbox, and the ledger keeps charging
+    for it — but at WHAT? The size is resolved fresh on every heartbeat from the
+    item's own record (never stored, §1), so a seam that reports a deleted item
+    absent does not merely lose the debtor: the item's stated 1 core falls back
+    to the App's declared ceiling and the person is billed FOUR.
+
+    The lesson underneath is the probe's, not the reviewer's: my first three
+    tests for this fix all stayed green when I broke the facts lookup, because
+    the ledger backstop and the address of the heartbeat covered for it. A
+    guard with no test that fails without it is a guard I only believe in.
+
+    The fact memo is switched off: it holds the size for five seconds, this test
+    runs in six, so with it on the assertion reads a value cached from BEFORE
+    the delete and passes no matter what the lookup behind it does. That is the
+    same lesson one layer down — it was the mutation probe that said so.
+    """
+    from workspace_app.api import app as app_mod
+
+    monkeypatch.setattr(app_mod, "_ITEM_FACT_TTL_S", 0.0)
+    with _app(PerUserResources(cpu=100.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        item = _mk(spec, "alice", cpu=1.0)
+        _wake(client, item)
+        assert client.delete(f"/rca-investigation/{item}").status_code in (200, 204)
+
+        client.post(f"/a/rca/items/{item}/exec", json={"cmd": ["echo"]})
+
+        body = client.get("/me/resources").json()
+        assert body["cpu_in_use"] == 1.0, (
+            f"a deleted item stopped being charged at the size it chose: {body}"
+        )
+
+
+def test_the_resources_page_names_a_deleted_items_environment():
+    """The row is on this page so somebody can close it, and "close
+    rca-investigation:12cec732" is not an instruction anybody can follow.
+
+    Same rule as everywhere else here: `include_deleted` relaxes what can be
+    FOUND, never who may see it — the name still comes out only if this reader
+    passes `read_meta` on the item.
+    """
+    with _app(PerUserResources(cpu=100.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        item = _mk(spec, "alice")
+        _wake(client, item)
+        assert client.delete(f"/rca-investigation/{item}").status_code in (200, 204)
+
+        rows = [e for e in client.get("/me/resources").json()["live"] if e["item_id"] == item]
+
+        assert rows and rows[0]["title"] == "t", f"a deleted item's row lost its name: {rows}"

@@ -178,6 +178,15 @@ class SpecstarActivityStore(IActivityStore):
 
     def _bump_sync(self, item_id: str, owner: str, cpu_milli: int, memory_bytes: int) -> None:
         rm = self._spec.get_resource_manager(_SandboxActivity)
+        # An empty owner means "I could not resolve the debtor", never "nobody
+        # owes for this" — a real owner is never the empty string. Letting the
+        # two be one value made an unresolvable item's next heartbeat ERASE the
+        # name from a row that had one, and a sandbox charged to nobody is one
+        # the admission gate skips, the tally omits, and the resources page
+        # cannot show to the person who would close it. A debtor is only ever
+        # replaced by ANOTHER name.
+        if not owner:
+            owner = self._owner_sync(item_id) or ""
         rec = _SandboxActivity(
             item_id=item_id,
             last_active_ms=self._now(),

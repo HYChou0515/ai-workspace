@@ -41,13 +41,24 @@ class ItemAccessFacts:
     created_by: str
 
 
-def load_access_facts(spec: SpecStar, item_id: str) -> ItemAccessFacts | None:
-    """The item's identity + permission inputs, or ``None`` for an unknown id."""
-    found = find_work_item(spec, item_id)
+def load_access_facts(
+    spec: SpecStar, item_id: str, *, include_deleted: bool = False
+) -> ItemAccessFacts | None:
+    """The item's identity + permission inputs, or ``None`` for an unknown id.
+
+    ``include_deleted`` is for the one caller that must still NAME a deleted
+    item — the resources page, where its sandbox is still running and still
+    being charged for. It relaxes what can be found, never who may see it: the
+    reader's own `read_meta` is checked on the facts either way."""
+    found = find_work_item(spec, item_id, include_deleted=include_deleted)
     if found is None:
         return None
     slug, item = found
-    created_by = spec.get_resource_manager(app_model(slug)).get_meta(item_id).created_by
+    created_by = (
+        spec.get_resource_manager(app_model(slug))
+        .get_meta(item_id, include_deleted=include_deleted)
+        .created_by
+    )
     return ItemAccessFacts(slug=slug, item=item, created_by=created_by)
 
 

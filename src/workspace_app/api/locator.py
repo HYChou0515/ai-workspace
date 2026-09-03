@@ -138,8 +138,13 @@ class ItemLocator:
 
     def owner_of(self, item_id: str) -> str | None:
         """The item's `owner` field — who its resources are charged to (#687).
-        Deliberately not specstar's `created_by`; see `quota.admission`."""
-        found = find_work_item(self._spec, item_id)
+        Deliberately not specstar's `created_by`; see `quota.admission`.
+
+        Reads a DELETED item too, because deleting an item does not stop its
+        sandbox: the machine keeps running until the reaper takes it, and
+        somebody has to be charged for it in the meantime. Returning `None`
+        here read as "nobody owes" at four gates at once."""
+        found = find_work_item(self._spec, item_id, include_deleted=True)
         return found[1].owner if found is not None else None
 
     def slug_of(self, item_id: str) -> str | None:

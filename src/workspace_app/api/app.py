@@ -597,7 +597,11 @@ def create_app(
         hit = _item_facts.get(item_id)
         if hit is not None and now - hit[0] < _ITEM_FACT_TTL_S:
             return hit[1], hit[2], hit[3], hit[4]
-        found = find_work_item(spec, item_id)
+        # A deleted item is read here (and only here, plus `owner_of` and the
+        # resources page): it still holds a live sandbox, so the debtor and the
+        # size it is charged at both still have answers. The route gates use
+        # the same seam WITHOUT this flag and keep refusing it.
+        found = find_work_item(spec, item_id, include_deleted=True)
         if found is None:
             slug, owner, cpu, mem = "", "", None, None
         else:
@@ -854,14 +858,13 @@ def create_app(
         out: dict[str, str] = {}
         for item_id in item_ids:
             try:
-                facts = load_access_facts(spec, item_id)
+                facts = load_access_facts(spec, item_id, include_deleted=True)
                 if facts is None:
-                    # No record — the item is unknown, or soft-deleted (the seam
-                    # reports both as a miss so one person's delete cannot 410
-                    # somebody else's page). A deleted item still HOLDS its
-                    # sandbox, which is why it is in this list, so the row stays
-                    # and only the name is missing: addressable beats invisible,
-                    # and it is the row most in need of closing.
+                    # No record at all. A DELETED item is named normally — it
+                    # still holds the sandbox this list is about, and it is the
+                    # row most in need of closing — so this is only a genuinely
+                    # unknown id, where the row stays but unnamed: addressable
+                    # beats invisible.
                     out[item_id] = ""
                     continue
                 check_access(

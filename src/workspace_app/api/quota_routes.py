@@ -169,7 +169,7 @@ def register_quota_routes(
             # on this page at all — so it must degrade to an unnamed row rather
             # than take the whole response down with it.
             try:
-                facts = load_access_facts(spec, item_id)
+                facts = load_access_facts(spec, item_id, include_deleted=True)
             except Exception:  # noqa: BLE001 — deleted / unknown are ordinary here
                 return "", ""
             if facts is None:
