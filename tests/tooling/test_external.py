@@ -73,16 +73,15 @@ async def test_a_resolved_tool_becomes_a_package_the_agent_can_call() -> None:
     assert pkg.commands[0].params_json_schema == {"type": "object", "properties": {}}
 
 
-async def test_a_strangers_malformed_declaration_costs_its_own_row_not_the_panel() -> None:
-    """A third-party `"description": null` must not reach the response model.
+async def test_a_strangers_entry_that_cannot_name_a_variable_is_dropped() -> None:
+    """An entry that is not an object, or has no string `name`, cannot build an
+    `EnvNeed` at all — letting the `KeyError` out would cost the whole resolve
+    rather than that one row.
 
-    `EnvNeedOut` is a Pydantic model with `description: str`, and the call that
-    builds it sits OUTSIDE the resolve guard — so one junk row would 500
-    `GET /a/{slug}/items/{id}/tools` and take away the whole picker and env
-    panel for an item whose owner cannot edit the offending artifact. Same
-    posture as the guard beside it: degrade, keep what still works.
-
-    Loud at BUILD time (the author can fix it), quiet here (a stranger's file).
+    Only that. The VALUES are carried through as written: typing them is done
+    once, where the response model is built, because the first-party reader
+    feeds the same model and a rule here would have to be repeated there
+    (see `tools_routes._env_needs_of`, and the route test that pins it).
     """
     host = _Host(
         {
@@ -107,11 +106,13 @@ async def test_a_strangers_malformed_declaration_costs_its_own_row_not_the_panel
 
     (pkg,) = external.packages
     assert pkg.env_needs is not None
+    # The two unusable entries are gone; the four that can name a variable stay,
+    # values untouched.
     assert [(n.name, n.description, n.required) for n in pkg.env_needs] == [
         ("GOOD", "fine", True),
-        ("NULL_DESC", "", None),
-        ("ODD_REQUIRED", "", None),
-        ("DICT_DESC", "", None),
+        ("NULL_DESC", None, None),
+        ("ODD_REQUIRED", "", 3),
+        ("DICT_DESC", {}, None),
     ]
 
 
