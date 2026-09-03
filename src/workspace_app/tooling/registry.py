@@ -266,6 +266,41 @@ def build_function_tools(
     return cap_tool_outputs([_to_function_tool(pkg, cmd) for pkg, cmd in selected])
 
 
+def find_allowed_command(
+    packages: Sequence[PackageInfo],
+    allowed: list[str] | None,
+    name: str,
+) -> tuple[PackageInfo, CommandInfo] | None:
+    """The package command called ``name``, if this allow-list grants it.
+
+    Resolution goes through the SAME expansion and collision check the model's
+    toolset is built from (`build_function_tools`), so a caller outside a turn
+    cannot reach a command the agent in that item could not — including the
+    `allowed=None` "the deploy did not restrict" case, which means everything
+    there and has to mean everything here.
+
+    Commands are matched on their FLAT name, which is what a caller sees: a
+    package is a delivery unit, but `data-fetch` is what gets invoked."""
+    every = [p.name for p in packages]
+    selected = _select_commands(packages, allowed if allowed is not None else every)
+    _check_collisions(selected)
+    return next(((pkg, cmd) for pkg, cmd in selected if cmd.name == name), None)
+
+
+async def exec_package_command(
+    actx: AgentToolContext,
+    handle: SandboxHandle,
+    pkg: PackageInfo,
+    cmd_name: str,
+    args_json: str,
+) -> ExecResult:
+    """Run one package command. The public face of `_exec_tool`, so a caller
+    outside a turn (a WUI's `callTool`) goes through the same launcher, the same
+    item environment and the same exit-code contract as the model's call —
+    "inject at the call site" was only one place until it was two."""
+    return await _exec_tool(actx, handle, pkg, cmd_name, args_json)
+
+
 def _select_commands(
     packages: Sequence[PackageInfo],
     allowed: Iterable[str],

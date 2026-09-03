@@ -30,7 +30,15 @@ function ctx(over: Partial<BridgeContext> = {}, files: Record<string, string> = 
     deleteFile: vi.fn(async () => {}),
     fileDownloadUrl: (path: string) => `/api/files${path}`,
   } as unknown as FileService;
-  return { fs, folder: "/sales", openFile: null, me: "alice", ...over };
+  return {
+    fs,
+    folder: "/sales",
+    openFile: null,
+    me: "alice",
+    declaredTools: [],
+    callTool: null,
+    ...over,
+  };
 }
 
 const req = (verb: string, args: Record<string, unknown> = {}): WuiRequest => ({
@@ -125,6 +133,47 @@ describe("dispatchWuiRequest", () => {
 
     expect(res).toMatchObject({ ok: false });
     expect(res.ok === false && res.error).toMatch(/cannot open/i);
+  });
+
+  it("runs a tool the page declared", async () => {
+    const callTool = vi.fn(async () => ({ output: "{}", exit_code: 0 }));
+    const c = ctx({ declaredTools: ["lot-status"], callTool });
+
+    const res = await dispatchWuiRequest(
+      req("callTool", { name: "lot-status", args: { lot: "A1" } }),
+      c,
+    );
+
+    expect(res).toMatchObject({ ok: true, value: { exit_code: 0 } });
+    expect(callTool).toHaveBeenCalledWith("lot-status", { lot: "A1" });
+  });
+
+  it("refuses a tool the page did not declare, and says where to declare it", async () => {
+    // The declaration is disclosure — the server's ceiling is the real boundary
+    // — but a page must not be able to use something it did not announce, and
+    // the view file is the one place the reader can fix that.
+    const callTool = vi.fn();
+    const c = ctx({ declaredTools: [], callTool });
+
+    const res = await dispatchWuiRequest(req("callTool", { name: "lot-status" }), c);
+
+    expect(res).toMatchObject({ ok: false });
+    expect(res.ok === false && res.error).toContain("tools:");
+    expect(callTool).not.toHaveBeenCalled();
+  });
+
+  it("turns a failed tool call into a refusal a person can read", async () => {
+    const c = ctx({
+      declaredTools: ["lot-status"],
+      callTool: vi.fn(async () => {
+        throw new Error("This app does not offer lot-status to its pages.");
+      }),
+    });
+
+    const res = await dispatchWuiRequest(req("callTool", { name: "lot-status" }), c);
+
+    expect(res).toMatchObject({ ok: false });
+    expect(res.ok === false && res.error).toContain("does not offer");
   });
 
   it("names an unknown verb instead of failing silently", async () => {

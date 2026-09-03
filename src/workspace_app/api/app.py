@@ -112,6 +112,7 @@ from .version_header import VersionHeaderMiddleware
 from .work_calendar_routes import register_work_calendar_routes
 from .workflow_exec import WorkflowExecutor
 from .workflow_routes import register_workflow_routes
+from .wui_routes import register_wui_routes
 
 logger = logging.getLogger(__name__)
 
@@ -1690,6 +1691,15 @@ def create_app(
         packages=packages,
         locator=locator,
         sandbox=sandbox,
+    )
+
+    register_wui_routes(
+        api,
+        locator=locator,
+        sandbox=sandbox,
+        registry=registry,
+        packages=packages,
+        prebuilt_dir=prebuilt_dir,
     )
 
     register_capability_routes(

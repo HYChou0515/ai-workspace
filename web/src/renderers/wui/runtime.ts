@@ -183,6 +183,9 @@ export const WUI_RUNTIME_SOURCE = String.raw`function (window, parent, document)
     deleteFile: function (path) { return send("deleteFile", { path: path }); },
     openFile: function (path) { return send("openFile", { path: path }); },
     whoami: function () { return send("whoami"); },
+    // The page's only way to reach anything outside itself — it has no network
+    // of its own, and a credential never comes in here to be spent.
+    callTool: function (name, args) { return send("callTool", { name: name, args: args || {} }); },
     onFileChanged: function (fn) { fileListeners.push(fn); },
   };
 }`;

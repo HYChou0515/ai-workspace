@@ -39,14 +39,16 @@ afterEach(() => {
 
 describe("the WUI runtime", () => {
   it("gives the page the seven verbs and nothing else", () => {
-    // The set is closed: an eighth name here would be a capability nobody
-    // reviewed, and the page would have found it before we did.
+    // The set is closed: another name here would be a capability nobody
+    // reviewed, and the page would have found it before we did. Everything
+    // added from now on is a `callTool` target, not an eighth verb.
     const { ws } = boot();
 
     expect(Object.keys(ws()).sort()).toEqual([
+      "callTool",
       "deleteFile",
       "listFiles",
-      "onFileChanged",
+      "onFileChanged", // a subscription, not a verb
       "openFile",
       "readFile",
       "whoami",

@@ -159,6 +159,29 @@ describe("WuiView", () => {
     expect(replies[0]).toMatchObject({ event: "file_changed", path: "/sales/data.json" });
   });
 
+  it("refuses a tool the view file did not declare", async () => {
+    // End of the wiring: the declaration is read off the view file and reaches
+    // the gate. Nothing here touches the network, because nothing should.
+    renderWui({ "/sales/index.html": "<html><body>hi</body></html>" }, {
+      tools: ["lot-status"],
+    } as Partial<ViewSpec>);
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+    const win = frame()?.contentWindow as Window;
+    const replies: unknown[] = [];
+    vi.spyOn(win, "postMessage").mockImplementation((m: unknown) => replies.push(m));
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: { proto: WUI_PROTOCOL, id: "9", verb: "callTool", args: { name: "other" } },
+        source: win,
+      }),
+    );
+
+    await waitFor(() => expect(replies).toHaveLength(1));
+    expect(replies[0]).toMatchObject({ ok: false });
+    expect((replies[0] as { error: string }).error).toContain("other");
+  });
+
   it("shows what the page reported, because nobody here can open a console", async () => {
     const { say } = await withFrame({ "/sales/index.html": "<html><body>hi</body></html>" });
 

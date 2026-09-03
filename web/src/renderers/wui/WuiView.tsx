@@ -14,16 +14,18 @@
  */
 
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useFileService } from "../../api/fileService";
 import { qk } from "../../api/queryKeys";
 import { useCurrentUserState } from "../../hooks/useCurrentUser";
 import { useOpenFile } from "../../hooks/openFile";
+import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { publishAgentDraft } from "../../lib/agentDraftBus";
 import { subscribeFileChanged } from "../../lib/fileChangedBus";
 import { pxToRem } from "../../lib/pxToRem";
-import { viewParamString } from "../entity/shared";
+import { viewParam, viewParamString } from "../entity/shared";
+import { itemCallTool } from "./api";
 import type { ViewSpec } from "../entity/types";
 import { buildWuiDoc } from "./assets";
 import { dispatchWuiRequest } from "./bridge";
@@ -63,6 +65,19 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
   const [reports, setReports] = useState<WuiReport[]>([]);
   const nextReportId = useRef(0);
 
+  // What this page says it uses. Disclosure rather than the boundary — the
+  // app's ceiling is enforced on the server — but a page that could quietly
+  // call anything the app grants would make the declaration not worth reading.
+  const declaredTools = useMemo(() => {
+    const raw = viewParam(spec, "tools");
+    return Array.isArray(raw) ? raw.filter((t): t is string => typeof t === "string") : [];
+  }, [spec]);
+  const slug = useWorkspaceSlug();
+  const callTool = useMemo(
+    () => (slug ? itemCallTool(slug, fs.scopeId) : null),
+    [slug, fs.scopeId],
+  );
+
   /** Post to the frame. `"*"` because a sandboxed frame's origin is the string
    * "null" and cannot be named; safe because the target is this one frame,
    * reached through the handle we hold. */
@@ -89,13 +104,15 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
         folder,
         openFile,
         me: meReady ? me : null,
+        declaredTools,
+        callTool,
       }).then((res) => {
         win.postMessage(res, "*");
       });
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [fs, folder, openFile, me, meReady]);
+  }, [fs, folder, openFile, me, meReady, declaredTools, callTool]);
 
   // Forwarded, not acted on: the platform cannot know whether a half-finished
   // form should be thrown away, and only the page does.

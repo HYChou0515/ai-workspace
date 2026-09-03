@@ -23,6 +23,11 @@ import { readAsset } from "./assets";
 import { ok, refuse, type WuiRequest, type WuiResponse } from "./protocol";
 import { resolveReadPath, resolveWritePath } from "./paths";
 
+export type CallTool = (
+  name: string,
+  args: Record<string, unknown>,
+) => Promise<{ output: string; exit_code: number }>;
+
 export type BridgeContext = {
   fs: FileService;
   /** The page's own folder — the write boundary. */
@@ -31,6 +36,17 @@ export type BridgeContext = {
   openFile: OpenFile | null;
   /** The signed-in user's id, or `null` while it is still loading. */
   me: string | null;
+  /**
+   * The tools this page's view file declares (`tools:` in the yaml).
+   *
+   * Disclosure, not the security boundary — the app's `tools[]` ceiling is
+   * enforced on the server and a page can never exceed it. What this adds is
+   * that a page cannot QUIETLY use something it did not announce, which is what
+   * makes the declaration worth reading before opening one.
+   */
+  declaredTools: string[];
+  /** Run one package tool, or `null` where no backend is wired. */
+  callTool: CallTool | null;
 };
 
 const str = (args: Record<string, unknown> | undefined, key: string): string | null => {
@@ -102,6 +118,27 @@ export async function dispatchWuiRequest(
       if (!ctx.openFile) return refuse(id, "This page cannot open files from where it is shown.");
       ctx.openFile(path);
       return ok(id, { path });
+    }
+
+    case "callTool": {
+      const name = str(args, "name");
+      if (name === null) return refuse(id, "callTool needs a tool `name`.");
+      if (!ctx.declaredTools.includes(name)) {
+        // Named, and told what to do about it: the page's view file is the one
+        // place this can be fixed, and the person reading has no other way to
+        // find that out.
+        return refuse(
+          id,
+          `This page did not declare ${name}. Add it to \`tools:\` in the page's view file.`,
+        );
+      }
+      if (!ctx.callTool) return refuse(id, "Tools cannot be run from where this page is shown.");
+      const toolArgs = args?.args;
+      try {
+        return ok(id, await ctx.callTool(name, (toolArgs ?? {}) as Record<string, unknown>));
+      } catch (err) {
+        return refuse(id, err instanceof Error ? err.message : `${name} could not be run.`);
+      }
     }
 
     case "whoami":
