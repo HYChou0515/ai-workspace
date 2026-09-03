@@ -44,7 +44,9 @@ from workspace_app.tooling.artifact import (
     ArtifactError,
     BundleRef,
     CommandSpec,
+    EnvSpec,
     Manifest,
+    parse_env_declaration,
     parse_manifest,
     render_manifest,
     verify_bundle,
@@ -186,6 +188,28 @@ def _read_author(project: dict[str, Any]) -> str | None:
             # already says "by".
             rendered.append(str(name or email))
     return ", ".join(rendered) or None
+
+
+def read_env_declaration(source: Path) -> tuple[EnvSpec, ...] | None:
+    """What the author says their tool needs from the environment (#750).
+
+    Read from the SOURCE, beside `author` and `description`: this is
+    provenance the manifest carries, not something derived from the built
+    tree. It has to reach the MANIFEST — the host reads `manifest.env` and
+    never opens the bundle, so a declaration that only lands in the tarball
+    is one the platform never sees (#763).
+
+    Absent stays absent. `None` means the author never wrote the file, which
+    is a different claim from an empty list, and both travel all the way to
+    the panel.
+    """
+    declared = source / "env.json"
+    if not declared.is_file():
+        return None
+    try:
+        return parse_env_declaration(declared.read_text("utf-8"))
+    except ValueError as exc:
+        raise BuildError(f"{declared} is not a usable environment declaration: {exc}") from exc
 
 
 def read_project(source: Path) -> Project:
@@ -401,6 +425,7 @@ def build_artifact(
         grant=token,
         author=project.author,
         description=project.description,
+        env=read_env_declaration(source),
     )
     (out / BUNDLE_NAME).write_bytes(packed)
     (out / MANIFEST_NAME).write_bytes(render_manifest(manifest))

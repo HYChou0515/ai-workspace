@@ -228,6 +228,40 @@ class EnvSpec:
     to the platform, not to the host."""
 
 
+def parse_env_declaration(raw: str) -> tuple[EnvSpec, ...]:
+    """Parse an author's hand-written ``env.json`` (#750).
+
+    ONE reader, because two build paths both have to trust this file:
+    ``prebuild`` validates it before copying it into a bundle, and
+    ``build_artifact`` turns it into the ``env`` the manifest carries — which
+    is the only copy the host ever reads. Two parsers would drift, and the
+    half that drifted would be the half deciding whether a person is ever
+    shown the variable.
+
+    Only ``name`` is checked. The rest is the author's prose, and this file
+    can refuse nothing anyway (see :class:`EnvSpec`) — being strict here would
+    fail a build over a courtesy.
+
+    Raises ``ValueError`` describing the fault; the CALLER names the file,
+    since only it knows where the text came from.
+    """
+    declared = json.loads(raw)
+    if not isinstance(declared, list):
+        raise ValueError(f"must be a JSON array, got {type(declared).__name__}")
+    specs: list[EnvSpec] = []
+    for entry in declared:
+        if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
+            raise ValueError(f"every entry needs a string `name`; got {entry!r}")
+        specs.append(
+            EnvSpec(
+                name=entry["name"],
+                description=entry.get("description", ""),
+                required=entry.get("required"),
+            )
+        )
+    return tuple(specs)
+
+
 @dataclass(frozen=True)
 class BundleRef:
     """Where the bytes' identity lives: the content-address key + its size."""

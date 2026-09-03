@@ -31,6 +31,8 @@ import subprocess
 import tomllib
 from pathlib import Path
 
+from workspace_app.tooling.artifact import parse_env_declaration
+
 logger = logging.getLogger(__name__)
 
 # Same launcher template as the legacy `scripts/prebuild_tools.py`: the
@@ -504,13 +506,8 @@ def _copy_env_declaration(source: Path, dst: Path) -> None:
     if not src_file.is_file():
         return
     try:
-        declared = json.loads(src_file.read_text("utf-8"))
-        if not isinstance(declared, list):
-            raise TypeError(f"env.json must be a JSON array, got {type(declared).__name__}")
-        for entry in declared:
-            if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
-                raise TypeError(f"every env.json entry needs a string `name`; got {entry!r}")
-    except (ValueError, TypeError) as exc:
+        parse_env_declaration(src_file.read_text("utf-8"))
+    except ValueError as exc:
         raise RuntimeError(f"{src_file} is not a usable environment declaration: {exc}") from exc
     shutil.copyfile(src_file, dst / "env.json")
 
