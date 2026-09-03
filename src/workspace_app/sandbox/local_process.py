@@ -203,6 +203,11 @@ _JAILBIN = ".jailbin"
 # as SANDBOX_HOME; this replaces the launcher's old shared-/tmp HOME that leaked
 # a user's `pip install --break-system-packages` across sandboxes.
 _HOME = ".home"
+# #775: where `uv sync` builds the workspace's own environment. A sibling of
+# the workspace, like `.home` and `.jailbin` — outside it, so walk/sync never
+# see it and the quota never charges for a directory the user cannot delete
+# and we discard with the sandbox anyway.
+_PROJECT_VENV = ".venv"
 # Shim every flavour name the agent or a tool launcher might spell — matching
 # the jail bootstrap. A bare `python` shim alone would let `python3` fall
 # through to the host interpreter.
@@ -324,7 +329,16 @@ class LocalProcessSandbox:
         # own venv that heads the inherited PATH. (A deployment image always
         # ships one or the other; prod always ships the carrier.)
         has_carrier = os.access(carrier, os.X_OK)
-        target = carrier if has_carrier else Path("/usr/bin/python3")
+        # #775, tier 1: the WORKSPACE's own venv, when it declared its
+        # dependencies and `uv sync` built one. The carrier is what a profile
+        # that said nothing falls back to — never a layer under one that spoke.
+        # Checked per exec: the venv appears AFTER the sandbox exists.
+        project = root / _PROJECT_VENV / "bin" / "python"
+        if os.access(project, os.X_OK):
+            target = project
+            has_carrier = False  # a uv venv ships no pip; see the shim tests
+        else:
+            target = carrier if has_carrier else Path("/usr/bin/python3")
         want = os.fspath(target)
         jailbin = root / _JAILBIN
         jailbin.mkdir(exist_ok=True)

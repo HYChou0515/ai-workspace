@@ -210,6 +210,11 @@ _JAILBIN = ".jailbin"
 # as SANDBOX_HOME; this replaces the launcher's old shared-/tmp HOME that leaked
 # a user's `pip install --break-system-packages` across sandboxes on a pod.
 _HOME = ".home"
+# #775: where `uv sync` builds the workspace's own environment. A sibling of
+# the workspace, like `.home` and `.jailbin` — outside it, so walk/sync never
+# see it and the quota never charges for a directory the user cannot delete
+# and we throw away with the sandbox anyway.
+_PROJECT_VENV = ".venv"
 # Shim every flavour name the agent or a tool launcher might spell — matching
 # the jail bootstrap. A bare `python` shim alone would let `python3` fall
 # through to the host interpreter.
@@ -372,11 +377,25 @@ class LocalProcessSandbox:
         extract that lands after `create`. A plain symlink suffices: the carrier
         launch does `readlink -f "$0"`, resolving the chain to the real bundle."""
         carrier = root / _TOOLS / "python-stack" / "launch"
-        # Carrier when present, else the system python3 — anything but the host's
-        # own service venv that heads the inherited PATH. (A deployment image
-        # always ships one or the other; prod always ships the carrier.)
+        # Three tiers, most specific first:
+        #   1. The WORKSPACE's own venv (#775), when it declared dependencies
+        #      and `uv sync` built one. A profile that says what it needs gets
+        #      exactly that — the carrier is the fallback for profiles that
+        #      said nothing, never a layer underneath one that spoke.
+        #   2. The `python-stack` carrier, so a raw `exec(["python", …])` sees
+        #      the bundled data-science stack for free.
+        #   3. The system python3 — anything but the host's own service venv,
+        #      which heads the inherited PATH.
+        # Checked per exec rather than once at create: the venv appears AFTER
+        # the sandbox exists (ensure_sandbox syncs it), and a sandbox outlives
+        # many commands.
+        project = root / _PROJECT_VENV / "bin" / "python"
         has_carrier = os.access(carrier, os.X_OK)
-        target = carrier if has_carrier else Path("/usr/bin/python3")
+        if os.access(project, os.X_OK):
+            target = project
+            has_carrier = False  # the venv brings its own pip; see below
+        else:
+            target = carrier if has_carrier else Path("/usr/bin/python3")
         want = os.fspath(target)
         jailbin = root / _JAILBIN
         jailbin.mkdir(exist_ok=True)
