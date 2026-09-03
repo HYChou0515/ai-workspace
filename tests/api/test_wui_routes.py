@@ -36,6 +36,12 @@ class _Sandbox:
         self.envs: list[dict[str, str]] = []
         self.result = result or ExecResult(exit_code=0, stdout=b'{"lot":"A1"}')
 
+    async def exists(self, handle, path: str) -> bool:
+        # Part of the Sandbox protocol. #775 asks it on every
+        # ensure_sandbox; no workspace here declares python
+        # dependencies, so nothing follows from the answer.
+        return False
+
     async def exec(self, handle, cmd, on_output=None, env=None):
         self.calls.append(list(cmd))
         self.envs.append(dict(env or {}))

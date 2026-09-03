@@ -40,7 +40,15 @@
    而 carrier 那層沒這問題 —— 也就是說宣告依賴反而讓 `pip` 變差。出路是 `uv add`,
    那句話寫進了 `exec` 工具自己的描述
 6. 準備過程透過既有的 **`ToolLog`** 事件串進當下那張工具卡
-7. **沒有 `pyproject.toml` 的 profile 完全照舊**,走 carrier
+7. **沒有 `pyproject.toml` 的 profile 走 carrier,`python` 的解析一字不變**
+
+⚠️ **但「完全照舊」這句話我說過頭了,更正**:`UV_PROJECT_ENVIRONMENT` 是**無條件**設在
+每一次 exec 上的,包括未宣告的 workspace。所以那裡的使用者打 `uv venv` / `uv add` 時,
+環境會落在 infra 區而不是他專案旁邊的 `.venv` —— **檔案樹裡看不到,也不再算進額度**。
+
+對他其實是變好的(`.venv/` 本來就在 `sync/ignore.py` 的 `DEFAULT_IGNORES` 裡、不會被
+持久化,所以他原本是在為一個我們不保存的目錄付額度),而且無條件設它才能讓宣告與未宣告
+兩種 workspace 對 uv 的行為一致。**但它不是「照舊」,不該用那句話蓋過去。**
 
 ---
 
@@ -90,9 +98,26 @@ pyproject 產生。
 > 藏起來,讓使用者一輪一輪地撞。而且退回 carrier 之後環境是「看起來合理但其實是錯的」
 > —— pandas 還在,profile 指定的東西不在。
 
-⚠️ **這個失敗不能用 502 / 503 / 504 回。** 前端的 `GATEWAY_CUT` 會把 5xx 當成閘道斷線
-然後無限等待(#714 踩過),那會讓「直接失敗」在畫面上表現成「永遠轉圈」。
-現在的 `ProvisionError` 是直接往上拋、沒有任何顯式處理,這條路徑要一起釐清。
+⚠️ **這一條我原本寫錯了,更正。** 我當初寫「失敗不能回 502/503/504,否則前端的
+`GATEWAY_CUT` 會無限等待(#714)」—— **那個限制套錯層了**。
+
+`GATEWAY_CUT` 住在 `web/src/hooks/useChatSession.tsx`,管的是**聊天送出那個 POST**:
+它的意思是「請求被切斷,但那一輪可能還在跑」,所以維持 streaming 讓串流補上結果。
+而**這個失敗不在那個 POST 上** —— `ensure_project_env` 是在 agent 的 `exec` 工具裡、
+turn 中途、SSE 串流上發生的,`GATEWAY_CUT` 根本不會被問到。
+
+實際發生的事(查證過):`turns.py` 的 `_run_turn` 接住 turn 裡的任何 `Exception`,
+交給 `_terminal_error`,產出 `RunError(message=f"{type(exc).__name__}: {exc}")` 並發布 ——
+其 docstring 明寫這是「the raw class+message **for an operator**」。所以使用者看到的是
+
+    ProjectEnvError: `uv sync` failed (exit 2): <uv 的原話>
+
+**看得見、可讀、停住那一輪、帶著營運方要的原始訊息 —— 正是這一節要求的行為,而且既有
+機制已經做到,不需要新的處理器。**
+
+(順帶:`SandboxBusy` / `SandboxNotFound` 這兩個既有處理器**刻意**回 503 加
+`Retry-After`,理由是「這是轉圈和 bug report 的差別」。所以「一律不准 5xx」本來就不是
+這個 repo 的規則。)
 
 ### **不攔** `pip install`
 
@@ -137,7 +162,9 @@ pyproject 產生。
 > 在量到那個「第一次」實際上是幾秒之前,不該為沒量過的問題付永久的代價。
 
 ⚠️ **如果之後要做共用層,那一份必須是唯讀的。** 理由不是「怕有人塞假 wheel」——
-`uv.lock` 有 2353 個 sha256,那條路走不通。真正的路徑是 **hardlink**:uv 為了效能會把
+lock 把**每一個 distribution 都用 sha256 釘死**,那條路走不通。(先前這裡寫「2353 個
+sha256」,那是**本 repo 自己的** lock;這段論證講的是 **profile 的** lock,它是 690 個。
+數字取錯檔案,而且它會隨依賴變動 —— 論證不需要那個數字。)真正的路徑是 **hardlink**:uv 為了效能會把
 cache 的檔案 **hardlink** 進 venv(官方文件明說 cache 必須和 venv 同一個檔案系統,
 否則會退化成慢速複製)。所以
 
