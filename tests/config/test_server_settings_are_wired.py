@@ -18,7 +18,9 @@ from pathlib import Path
 
 from workspace_app.config.schema import HistorySettings, ServerSettings
 
-_COMPOSITION_ROOT = Path(__file__).resolve().parents[2] / "src" / "workspace_app" / "__main__.py"
+_SRC = Path(__file__).resolve().parents[2] / "src" / "workspace_app"
+_COMPOSITION_ROOT = _SRC / "__main__.py"
+_CREATE_APP = _SRC / "api" / "app.py"
 
 
 def test_every_server_setting_is_read_by_the_composition_root():
@@ -55,4 +57,40 @@ def test_every_history_setting_is_read_by_the_composition_root():
     assert not unread, (
         f"{unread} exist in HistorySettings but nothing in __main__.py reads them — "
         "an operator can set them and nothing will happen"
+    )
+
+
+def test_every_history_setting_survives_the_SECOND_hop_as_well():
+    """`__main__` reading a knob is only half the chain.
+
+    It forwards each one to `create_app`, which forwards it again to the
+    builder that actually applies it. The check above cannot see that second
+    hop, so deleting the kwarg inside `create_app` leaves an operator's setting
+    read, passed, and then dropped — with every test green, including the one
+    written to catch exactly this. That is not hypothetical: it is what the
+    adversarial review found for `max_tokens_window_ratio`.
+
+    A source-text check for the same reason as its neighbour: it has to cover
+    the field nobody has added yet, so a future knob is caught the day it is
+    written rather than the day someone notices it does nothing.
+    """
+    import re
+
+    main = _COMPOSITION_ROOT.read_text(encoding="utf-8")
+    app = _CREATE_APP.read_text(encoding="utf-8")
+
+    dropped = []
+    for f in dataclasses.fields(HistorySettings):
+        m = re.search(rf"(\w+)=settings\.history\.{re.escape(f.name)}\b", main)
+        if m is None:
+            continue  # the first test already names an unread field
+        kwarg = m.group(1)
+        # It has to arrive AND leave: `create_app` must accept the parameter and
+        # pass it on, not merely have a name that looks like it.
+        if f"{kwarg}=" not in app or app.count(f"{kwarg}") < 2:
+            dropped.append(kwarg)
+
+    assert not dropped, (
+        f"{dropped} reach create_app from __main__.py but are not forwarded on inside it — "
+        "the operator sets them, they travel one hop, and nothing applies them"
     )
