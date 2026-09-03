@@ -1,9 +1,12 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { StrictMode } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FileServiceProvider, type FileService } from "../../api/fileService";
+import { WorkspaceSlugProvider } from "../../hooks/useWorkspaceSlug";
+import { autoBuildScope, getWuiAutoBuild, setWuiAutoBuild } from "../../lib/wuiAutoBuild";
 import type { FileContent } from "../../api/types";
 import { subscribeAgentDraft } from "../../lib/agentDraftBus";
 import { publishFileChanged } from "../../lib/fileChangedBus";
@@ -280,7 +283,9 @@ describe("WuiView", () => {
       say({ proto: WUI_PROTOCOL, report: "error", message: `boom ${i}` });
     }
 
-    await waitFor(() => expect(screen.getByRole("log").children.length).toBe(MAX_REPORTS));
+    await waitFor(() =>
+      expect(screen.getByRole("log", { name: "Reports" }).children.length).toBe(MAX_REPORTS),
+    );
     // BOTH ends survive. The first error is usually the cause, so keeping only
     // the newest throws away the thing worth forwarding; keeping only the
     // oldest hides what the person is looking at now.
@@ -329,5 +334,347 @@ describe("WuiView", () => {
     fireEvent.click(screen.getByRole("button", { name: /refresh/i }));
 
     await waitFor(() => expect(frame()?.getAttribute("srcdoc")).toContain("v2"));
+  });
+});
+
+describe("WuiView: rebuilding a page that has a build step", () => {
+  const PAGE = { "/sales/index.html": "<html><body>v1</body></html>" };
+  const BUILT = {
+    ...PAGE,
+    "/sales/package.json": JSON.stringify({ scripts: { build: "vite build" } }),
+  };
+
+  /** Render inside a workspace, which is what gives the pane an item to build
+   * in — the slug is how every workspace route is addressed. */
+  function renderIn(files: Record<string, string>, path = "/sales/page.ai.yaml") {
+    return render(
+      <QueryWrap>
+        <WorkspaceSlugProvider value="rca">
+          <FileServiceProvider value={svc(files)}>
+            <WuiView path={path} spec={{ view: "wui", entity: "" } as ViewSpec} />
+          </FileServiceProvider>
+        </WorkspaceSlugProvider>
+      </QueryWrap>,
+    );
+  }
+
+  /** A build whose output arrives in pieces, with a gate between them. */
+  function serveBuild(chunks: string[]) {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        const encode = new TextEncoder();
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            async start(controller) {
+              controller.enqueue(encode.encode(chunks[0]));
+              await gate;
+              for (const chunk of chunks.slice(1)) controller.enqueue(encode.encode(chunk));
+              controller.close();
+            },
+          }),
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        );
+      }),
+    );
+    return { release };
+  }
+
+  const sse = (payload: unknown) => `data: ${JSON.stringify(payload)}\n\n`;
+
+  // These are the MANUAL path. Rebuilding on open is on by default — that is
+  // what makes a stale page impossible — so a test about the button has to say
+  // it is not testing the automatic one.
+  beforeEach(() => setWuiAutoBuild(autoBuildScope("item1", "/sales"), false));
+  afterEach(() => localStorage.clear());
+  // The label says "Building…" while it runs — that IS the progress signal, so
+  // the helper has to accept both.
+  const rebuild = () => screen.getByRole("button", { name: /rebuild|building/i });
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("offers no Rebuild on a page that has no build", async () => {
+    // Most pages are plain files and nothing to build. A button that ran a
+    // build that cannot exist would fail, loudly, for a page that is fine.
+    renderIn(PAGE);
+
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: /rebuild/i })).not.toBeInTheDocument();
+  });
+
+  it("offers Rebuild once the folder declares the script the platform runs", async () => {
+    renderIn(BUILT);
+
+    expect(await screen.findByRole("button", { name: /rebuild/i })).toBeInTheDocument();
+  });
+
+  it("does not offer a rebuild at the workspace root, which the server refuses", async () => {
+    // A root-level page has no folder to build in, and the route says so with a
+    // 400. Offering the button anyway makes the platform look broken.
+    renderIn({ "/index.html": "<html><body>v1</body></html>", "/package.json": BUILT["/sales/package.json"] }, "/page.ai.yaml");
+
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: /rebuild/i })).not.toBeInTheDocument();
+  });
+
+  it("shows the build's output while it is still running", async () => {
+    // The reason this exists. A build takes tens of seconds and fails often
+    // while someone is iterating; a spinner cannot tell them apart from a hang,
+    // and the compiler's own words are the whole value.
+    const { release } = serveBuild([
+      sse({ type: "output", text: "> vite build" }),
+      sse({ type: "output", text: "built in 615ms" }),
+      sse({ type: "done", exit_code: 0 }),
+    ]);
+    renderIn(BUILT);
+    fireEvent.click(await screen.findByRole("button", { name: /rebuild/i }));
+
+    expect(await screen.findByText(/vite build/)).toBeInTheDocument();
+    // Still running: the last line has not been sent, and it is already on screen.
+    expect(screen.queryByText(/615ms/)).not.toBeInTheDocument();
+
+    release();
+    expect(await screen.findByText(/615ms/)).toBeInTheDocument();
+  });
+
+  it("shows the rebuilt page once the build succeeds", async () => {
+    // Without this the person presses Rebuild, watches it succeed, and goes on
+    // looking at the old page — the exact confusion the feature is here to end.
+    const files = { ...BUILT };
+    const { release } = serveBuild([sse({ type: "output", text: "ok" }), sse({ type: "done", exit_code: 0 })]);
+    renderIn(files);
+
+    await waitFor(() => expect(frame()?.getAttribute("srcdoc")).toContain("v1"));
+    fireEvent.click(await screen.findByRole("button", { name: /rebuild/i }));
+    await screen.findByText(/ok/);
+    files["/sales/index.html"] = "<html><body>v2</body></html>";
+    release();
+
+    await waitFor(() => expect(frame()?.getAttribute("srcdoc")).toContain("v2"));
+  });
+
+  it("leaves a failed build's own words on screen, and the page alone", async () => {
+    const files = { ...BUILT };
+    const { release } = serveBuild([
+      sse({ type: "output", text: "src/main.jsx:12 Unexpected token" }),
+      sse({ type: "done", exit_code: 1 }),
+    ]);
+    renderIn(files);
+
+    await waitFor(() => expect(frame()?.getAttribute("srcdoc")).toContain("v1"));
+    fireEvent.click(await screen.findByRole("button", { name: /rebuild/i }));
+    files["/sales/index.html"] = "<html><body>v2</body></html>";
+    release();
+
+    expect(await screen.findByText(/Unexpected token/)).toBeInTheDocument();
+    expect(await screen.findByText(/failed/i)).toBeInTheDocument();
+    // A failed build produced no new `dist/`. Swapping the page here would
+    // replace what someone is looking at with the SAME thing and call it a
+    // rebuild.
+    expect(frame()?.getAttribute("srcdoc")).toContain("v1");
+  });
+
+  it("says why when the build could not be started at all", async () => {
+    // A refusal (403 for a viewer without `execute`, 400 for a bad folder)
+    // arrives as an HTTP status, not as build output. Unshown, the button looks
+    // like it did nothing.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ detail: "You cannot run things here." }), { status: 403 })),
+    );
+    renderIn(BUILT);
+
+    fireEvent.click(await screen.findByRole("button", { name: /rebuild/i }));
+
+    expect(await screen.findByText(/cannot run things here/)).toBeInTheDocument();
+  });
+
+  it("cannot be started twice over", async () => {
+    // Two builds in one folder race over `dist/`, and the second one's output
+    // interleaves with the first's in the log.
+    const { release } = serveBuild([sse({ type: "output", text: "working" }), sse({ type: "done", exit_code: 0 })]);
+    renderIn(BUILT);
+    fireEvent.click(await screen.findByRole("button", { name: /rebuild/i }));
+    await screen.findByText(/working/);
+
+    expect(rebuild()).toBeDisabled();
+    fireEvent.click(rebuild());
+
+    // Count the BUILD calls, not every fetch: the pane also asks who you are,
+    // and a total that mixes the two agrees with the bug it is meant to catch.
+    const builds = vi
+      .mocked(fetch)
+      .mock.calls.filter(([url]) => String(url).includes("/wui/build"));
+    expect(builds).toHaveLength(1);
+    release();
+  });
+});
+
+describe("WuiView: rebuilding a page when it is opened", () => {
+  const BUILT = {
+    "/sales/index.html": "<html><body>v1</body></html>",
+    "/sales/package.json": JSON.stringify({ scripts: { build: "vite build" } }),
+  };
+  const PLAIN = { "/sales/index.html": "<html><body>v1</body></html>" };
+
+  function renderIn(files: Record<string, string>) {
+    return render(
+      <QueryWrap>
+        <WorkspaceSlugProvider value="rca">
+          <FileServiceProvider value={svc(files)}>
+            <WuiView path="/sales/page.ai.yaml" spec={{ view: "wui", entity: "" } as ViewSpec} />
+          </FileServiceProvider>
+        </WorkspaceSlugProvider>
+      </QueryWrap>,
+    );
+  }
+
+  const sse = (payload: unknown) => `data: ${JSON.stringify(payload)}\n\n`;
+
+  /** A build that answers immediately — the automatic path is not driven by a
+   * click, so there is nothing to hold open. */
+  function serveBuild(body: string, status = 200) {
+    const spy = vi.fn(
+      async () =>
+        new Response(body, {
+          status,
+          headers: { "content-type": status === 200 ? "text/event-stream" : "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", spy);
+    return spy;
+  }
+
+  const buildCalls = () =>
+    vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes("/wui/build"));
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    localStorage.clear();
+  });
+
+  it("rebuilds a built page as soon as it is opened", async () => {
+    // The setting under which a stale page is IMPOSSIBLE rather than unlikely,
+    // and therefore the default. Nobody has to remember anything.
+    const files = { ...BUILT };
+    serveBuild(sse({ type: "output", text: "> vite build" }) + sse({ type: "done", exit_code: 0 }));
+    renderIn(files);
+
+    expect(await screen.findByText(/vite build/)).toBeInTheDocument();
+  });
+
+  it("builds ONCE, though its own success re-reads the folder", async () => {
+    // The success bumps the generation so the new `dist/` is what you see —
+    // which re-runs the very effect that started the build. Unguarded this is
+    // not a double build, it is an endless one.
+    const files = { ...BUILT };
+    serveBuild(sse({ type: "output", text: "built" }) + sse({ type: "done", exit_code: 0 }));
+    renderIn(files);
+
+    await screen.findByText(/built/);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(buildCalls()).toHaveLength(1);
+  });
+
+  it("shows the freshly built page, not the one that was there", async () => {
+    const files = { ...BUILT };
+    serveBuild(sse({ type: "done", exit_code: 0 }));
+    files["/sales/index.html"] = "<html><body>v2</body></html>";
+    renderIn(files);
+
+    await waitFor(() => expect(frame()?.getAttribute("srcdoc")).toContain("v2"));
+  });
+
+  it("does nothing on a page that has no build", async () => {
+    // Most pages are plain files. Opening one must not run anything at all.
+    serveBuild(sse({ type: "done", exit_code: 0 }));
+    renderIn({ ...PLAIN });
+
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+    await new Promise((r) => setTimeout(r, 50));
+    expect(buildCalls()).toHaveLength(0);
+  });
+
+  it("does nothing when this page's viewer has turned it off", async () => {
+    setWuiAutoBuild(autoBuildScope("item1", "/sales"), false);
+    serveBuild(sse({ type: "done", exit_code: 0 }));
+    renderIn({ ...BUILT });
+
+    await screen.findByRole("button", { name: /rebuild/i });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(buildCalls()).toHaveLength(0);
+  });
+
+  it("turns itself off for a viewer who is not allowed to run things", async () => {
+    // A reader may open the item and not run anything in it. Left on, this
+    // would greet them with the same refusal on every single open — so it stops
+    // asking, and says why.
+    serveBuild(JSON.stringify({ detail: "You cannot run things here." }), 403);
+    renderIn({ ...BUILT });
+
+    expect(await screen.findByText(/cannot run things here/)).toBeInTheDocument();
+    expect(await screen.findByText(/turned off/i)).toBeInTheDocument();
+    expect(getWuiAutoBuild(autoBuildScope("item1", "/sales"))).toBe(false);
+  });
+
+  it("keeps asking after a failure that is not a refusal", async () => {
+    // A gateway hiccup is not permission. Disabling on any failure would let one
+    // bad moment silently switch the feature off for good.
+    serveBuild("<html>gateway</html>", 502);
+    renderIn({ ...BUILT });
+
+    await screen.findByText(/502/);
+    expect(getWuiAutoBuild(autoBuildScope("item1", "/sales"))).toBe(true);
+  });
+
+  it("does not start a build when the setting is merely toggled", async () => {
+    // "Rebuild when I open this" is a promise about OPENING. React re-runs the
+    // effect whenever the preference changes — and twice on mount, under
+    // StrictMode — and none of those is somebody opening the page.
+    setWuiAutoBuild(autoBuildScope("item1", "/sales"), false);
+    serveBuild(sse({ type: "done", exit_code: 0 }));
+    renderIn({ ...BUILT });
+    const toggle = await screen.findByLabelText(/rebuild when i open this/i);
+
+    fireEvent.click(toggle); // on
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(getWuiAutoBuild(autoBuildScope("item1", "/sales"))).toBe(true);
+    expect(buildCalls()).toHaveLength(0);
+  });
+
+  it("builds once, not twice, when React runs the effect twice", async () => {
+    // StrictMode double-invokes every effect on mount, and the app runs in it.
+    // Two builds in one folder race over `dist/` and interleave in the log.
+    serveBuild(sse({ type: "output", text: "built" }) + sse({ type: "done", exit_code: 0 }));
+    render(
+      <StrictMode>
+        <QueryWrap>
+          <WorkspaceSlugProvider value="rca">
+            <FileServiceProvider value={svc({ ...BUILT })}>
+              <WuiView path="/sales/page.ai.yaml" spec={{ view: "wui", entity: "" } as ViewSpec} />
+            </FileServiceProvider>
+          </WorkspaceSlugProvider>
+        </QueryWrap>
+      </StrictMode>,
+    );
+
+    await screen.findByText(/built/);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(buildCalls()).toHaveLength(1);
+  });
+
+  it("lets the viewer turn it off from the pane", async () => {
+    // The user's own choice, in front of them — not a hidden default.
+    serveBuild(sse({ type: "done", exit_code: 0 }));
+    renderIn({ ...BUILT });
+
+    const toggle = await screen.findByLabelText(/rebuild when i open this/i);
+    expect(toggle).toBeChecked();
+    fireEvent.click(toggle);
+
+    expect(getWuiAutoBuild(autoBuildScope("item1", "/sales"))).toBe(false);
   });
 });

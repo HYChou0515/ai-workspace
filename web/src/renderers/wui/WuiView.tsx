@@ -27,11 +27,14 @@ import { Btn } from "../../components/Btn";
 import { useCurrentUserState } from "../../hooks/useCurrentUser";
 import { useOpenFile } from "../../hooks/openFile";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
+import { HttpError } from "../../api/http";
 import { publishAgentDraft } from "../../lib/agentDraftBus";
 import { subscribeFileChanged } from "../../lib/fileChangedBus";
 import { pxToRem } from "../../lib/pxToRem";
+import { autoBuildScope, useWuiAutoBuild } from "../../lib/wuiAutoBuild";
 import { viewParam, viewParamString } from "../entity/shared";
 import { itemCallTool } from "./api";
+import { hasBuildScript, itemBuild } from "./build";
 import type { ViewSpec } from "../entity/types";
 import { buildWuiDoc } from "./assets";
 import { dispatchWuiRequest } from "./bridge";
@@ -115,6 +118,43 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
     staleTime: Infinity,
     retry: false,
   });
+
+  /**
+   * Does this page have a build step?
+   *
+   * `scripts.build` decides, because `pnpm run build` is what the route runs.
+   * Most pages are plain files with nothing to build, and a Rebuild button in
+   * front of them would fail loudly over a page that is perfectly fine.
+   *
+   * The workspace root is excluded: a root-level page has no folder to build in
+   * and the route answers 400, so offering the button would only make the
+   * platform look broken.
+   */
+  const buildable = useQuery({
+    queryKey: qk.wuiBuildable(fs.scopeId, folder),
+    queryFn: () =>
+      fs
+        .readFile(`${folder}/package.json`)
+        .then((content) => (content.kind === "text" ? content.text : ""))
+        // No manifest is the ordinary case, not a fault worth reporting.
+        .catch(() => ""),
+    staleTime: Infinity,
+    retry: false,
+  });
+  const canBuild = folder !== "" && hasBuildScript(buildable.data ?? "");
+
+  /** The build's output, newest last. `null` means no build has been run — the
+   * panel is absent rather than empty, so the pane costs nothing until someone
+   * asks for it. */
+  const [buildLog, setBuildLog] = useState<string[] | null>(null);
+  const [building, setBuilding] = useState(false);
+  const logRef = useRef<HTMLDivElement | null>(null);
+  const [autoBuild, setAutoBuild] = useWuiAutoBuild(autoBuildScope(fs.scopeId, folder));
+  /** The page this pane has already rebuilt on open, so that "when I open this"
+   * means what it says: once. React re-runs the effect whenever the preference
+   * changes — and in StrictMode, twice on mount — and neither is somebody
+   * opening the page. */
+  const autoBuiltFor = useRef<string | null>(null);
 
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const openFile = useOpenFile();
@@ -206,6 +246,74 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
     [fs.scopeId],
   );
 
+  // Keep the newest line in view. A build's interesting output is its last few
+  // lines — where it failed, or how long it took — and a log that has to be
+  // scrolled to be read is a log nobody reads.
+  useEffect(() => {
+    const el = logRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [buildLog]);
+
+  const say = (line: string) => setBuildLog((lines) => [...(lines ?? []), line]);
+
+  /**
+   * Rebuild the page, showing the build's output as it arrives.
+   *
+   * On success the page is re-read — the whole point is that `dist/` and what
+   * you are looking at stop being different things. On failure it is left
+   * alone: the build produced no new `dist/`, so swapping the frame would
+   * replace the page with the same page and call it a rebuild.
+   */
+  const runBuild = async ({ automatic = false } = {}) => {
+    if (!slug) return;
+    setBuilding(true);
+    setBuildLog([]);
+    try {
+      for await (const event of itemBuild(slug, fs.scopeId)(folder)) {
+        if (event.type === "output") say(event.text);
+        else if (event.exit_code === 0) {
+          say("Build finished.");
+          setGeneration((g) => g + 1);
+        } else say(`Build failed (exit ${event.exit_code}).`);
+      }
+    } catch (err) {
+      // A build that could not be STARTED — a viewer without `execute`, a
+      // folder the server refuses — arrives as a status, not as output. Unsaid,
+      // the button looks like it did nothing at all.
+      say(err instanceof Error ? err.message : "The build could not be run.");
+      // A 403 is permanent for this person: they may read the item and not run
+      // things in it. Left on, rebuilding on open would greet them with that
+      // same refusal every single time they open the page — so it turns itself
+      // off, and says that it did. Only for the AUTOMATIC path, and only for a
+      // refusal: a build that failed to start once because the network hiccuped
+      // must not quietly disable itself forever.
+      if (automatic && err instanceof HttpError && err.status === 403) {
+        setAutoBuild(false);
+        say("Rebuilding on open has been turned off, because you cannot run things here.");
+      }
+    } finally {
+      setBuilding(false);
+    }
+  };
+
+  // Rebuild on open, when this page is set to. This is the setting under which
+  // going stale is IMPOSSIBLE rather than unlikely — and it is a setting, not a
+  // rule, because the cost (tens of seconds, and waking the item's sandbox) is
+  // real enough that someone may not want to pay it on every open.
+  useEffect(() => {
+    if (!canBuild || !slug) return; // not a built page, or not known yet
+    if (autoBuiltFor.current === folder) return;
+    // The opening moment is spent HERE, whether or not it builds. Marking it
+    // only on the way to a build made ticking the box later count as opening
+    // the page, which is not what the box says.
+    autoBuiltFor.current = folder;
+    if (!autoBuild) return;
+    void runBuild({ automatic: true });
+    // `runBuild` is deliberately not a dependency: it is rebuilt every render,
+    // and the guard above is what decides when this may run.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canBuild, autoBuild, slug, folder]);
+
   const tellTheAgent = () => {
     publishAgentDraft(fs.scopeId, formatReportsForAgent(folder, reports));
     setReports([]);
@@ -223,9 +331,38 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
           flex: "0 0 auto",
         }}
       >
-        <Btn size="sm" onClick={() => setGeneration((g) => g + 1)}>
+        <Btn
+          size="sm"
+          onClick={() => {
+            setBuildLog(null);
+            setGeneration((g) => g + 1);
+          }}
+        >
           Refresh
         </Btn>
+        {canBuild && (
+          <>
+            <Btn size="sm" disabled={building} onClick={() => void runBuild()}>
+              {building ? "Building…" : "Rebuild"}
+            </Btn>
+            <label
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                fontSize: pxToRem(12),
+                color: "var(--text-paper-d)",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={autoBuild}
+                onChange={(e) => setAutoBuild(e.target.checked)}
+              />
+              Rebuild when I open this
+            </label>
+          </>
+        )}
         <Btn size="sm" onClick={() => toFrame({ proto: WUI_PROTOCOL, command: "pick", on: true })}>
           Report a problem
         </Btn>
@@ -235,9 +372,32 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
           </Btn>
         )}
       </div>
+      {buildLog !== null && (
+        // The build's own words, verbatim and monospaced, because they are a
+        // compiler's and their columns mean something.
+        <div
+          ref={logRef}
+          role="log"
+          aria-label="Build output"
+          style={{
+            flex: "0 0 auto",
+            maxHeight: "30%",
+            overflowY: "auto",
+            padding: "6px 8px",
+            borderBottom: "1px solid var(--paper-3)",
+            fontFamily: "var(--font-mono, ui-monospace, monospace)",
+            fontSize: pxToRem(12),
+            whiteSpace: "pre-wrap",
+            color: "var(--text-paper-d)",
+          }}
+        >
+          {buildLog.length === 0 ? "Starting the build…" : buildLog.join("")}
+        </div>
+      )}
       {reports.length > 0 && (
         <div
           role="log"
+          aria-label="Reports"
           style={{
             flex: "0 0 auto",
             maxHeight: "30%",
