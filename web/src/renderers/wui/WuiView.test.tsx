@@ -11,7 +11,7 @@ import { QueryWrap } from "../../test/queryWrapper";
 import type { ViewSpec } from "../entity/types";
 import { WUI_CSP } from "./assemble";
 import { WUI_PROTOCOL } from "./protocol";
-import { WuiView } from "./WuiView";
+import { MAX_REPORTS, WuiView } from "./WuiView";
 
 const text = (path: string, body: string): FileContent => ({
   kind: "text",
@@ -233,6 +233,58 @@ describe("WuiView", () => {
 
     await waitFor(() => expect(screen.queryByText(/boom/)).not.toBeInTheDocument());
     off();
+  });
+
+  it("answers a refusal when the write is rejected, instead of never answering", async () => {
+    // The file verbs used to `await` unguarded, so a 403 (read-only viewer) or a
+    // 507 (full workspace) rejected the dispatch, posted nothing, and left the
+    // page's `await workspace.writeFile(...)` pending forever — a save button
+    // that does nothing, with no message, which is the exact opposite of this
+    // bridge's rule that a refusal is a sentence.
+    const files: Record<string, string> = { "/sales/index.html": "<html><body>hi</body></html>" };
+    const service = svc(files);
+    (service.writeFile as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("this workspace is full"),
+    );
+    render(
+      <QueryWrap>
+        <FileServiceProvider value={service}>
+          <WuiView path="/sales/page.ai.yaml" spec={{ view: "wui", entity: "" } as ViewSpec} />
+        </FileServiceProvider>
+      </QueryWrap>,
+    );
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+    const win = frame()?.contentWindow as Window;
+    const replies: unknown[] = [];
+    vi.spyOn(win, "postMessage").mockImplementation((m: unknown) => replies.push(m));
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: { proto: WUI_PROTOCOL, id: "1", verb: "writeFile", args: { path: "a.json", text: "x" } },
+        source: win,
+      }),
+    );
+
+    await waitFor(() => expect(replies).toHaveLength(1));
+    expect(replies[0]).toMatchObject({ id: "1", ok: false });
+    expect((replies[0] as { error: string }).error).toContain("this workspace is full");
+  });
+
+  it("keeps a page stuck in an error loop from freezing the workspace", async () => {
+    // The runtime reports every uncaught error. A page throwing inside a timer
+    // produces one message per frame, and an unbounded list re-rendered per
+    // message locks up the WHOLE app — including the button that would clear it.
+    const { say } = await withFrame({ "/sales/index.html": "<html><body>hi</body></html>" });
+
+    for (let i = 0; i < MAX_REPORTS + 20; i++) {
+      say({ proto: WUI_PROTOCOL, report: "error", message: `boom ${i}` });
+    }
+
+    await waitFor(() => expect(screen.getByRole("log").children.length).toBe(MAX_REPORTS));
+    // The newest survive: the first error is usually the cause, but the ones a
+    // person is looking at are the ones that just happened.
+    expect(screen.queryByText(/boom 0$/)).not.toBeInTheDocument();
+    expect(screen.getByText(/boom 119$/)).toBeInTheDocument();
   });
 
   it("does not tell the page about its own save", async () => {

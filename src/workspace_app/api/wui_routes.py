@@ -71,7 +71,11 @@ def register_wui_routes(
     ``resolve_external`` is a seam for tests; it defaults to the same host
     round-trip a turn makes."""
 
-    first_party: Sequence[PackageInfo] = packages or []
+    # NOT "first party": in this codebase that names the bundled `sample-tools`
+    # packages, which ARE reachable — the unreachable set is the agent's
+    # BUILT-INS, and inverting the vocabulary here is how a future reader talks
+    # themselves into the opposite rule.
+    bundled: Sequence[PackageInfo] = packages or []
 
     async def _external(item_id: str) -> ExternalTools:
         if resolve_external is not None:
@@ -88,9 +92,16 @@ def register_wui_routes(
         allowed = config.allowed_tools if config is not None else []
 
         external = await _external(investigation_id)
-        available = [*first_party, *external.packages]
+        available = [*bundled, *external.packages]
 
-        found = find_allowed_command(available, allowed, name)
+        try:
+            found = find_allowed_command(available, allowed, name)
+        except ValueError as exc:
+            # Two packages exporting one command name: a deploy-configuration
+            # fault, not this caller's. It breaks the agent's turn identically,
+            # but an opaque 500 here reaches a person through the page's error
+            # panel with nothing to act on.
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         if found is None:
             # Named rather than 404'd blank: this reaches a person through the
             # page's own error panel, and "which tool, and why not" is the whole

@@ -55,10 +55,15 @@ export default defineConfig({
         settings: {
           disableCSSFileLoading: true,
           disableJavaScriptFileLoading: true,
+          // Refusing quietly. Without this happy-dom still logs a DOMException
+          // per skipped file, which is noise in the one place a real failure
+          // has to be readable.
+          handleDisabledFileLoadingAsSuccess: true,
           // NOT `disableIframePageLoading`. It would also close the `<iframe src>`
-          // preview tests' sockets, but happy-dom implements `srcDoc` as a page
-          // load too — so switching it off makes a self-contained frame with no
-          // URL at all throw, which is a worse trade than the sockets it saves.
+          // preview tests' sockets — the ones `KbDocViewer.test.tsx` still opens,
+          // so this is not the last of them — but happy-dom implements `srcDoc`
+          // as a page load too, so switching it off makes a self-contained frame
+          // with no URL at all throw. A worse trade than the sockets it saves.
         },
       },
     },

@@ -83,6 +83,18 @@ describe("dispatchWuiRequest", () => {
     expect(c.fs.writeFile).not.toHaveBeenCalled();
   });
 
+  it("tells a root-level page why it cannot save, and what to do about it", async () => {
+    // The generic sentence would read "can only write inside its own folder" to
+    // someone whose page has no folder — true, useless, and unfixable-sounding.
+    const c = ctx({ folder: "" });
+    const res = await dispatchWuiRequest(req("writeFile", { path: "data.json", text: "x" }), c);
+
+    expect(res).toMatchObject({ ok: false });
+    expect(res.ok === false && res.error).toMatch(/root/i);
+    expect(res.ok === false && res.error).toMatch(/folder/i);
+    expect(c.fs.writeFile).not.toHaveBeenCalled();
+  });
+
   it("refuses to delete outside its folder", async () => {
     const c = ctx();
     const res = await dispatchWuiRequest(req("deleteFile", { path: "../notes.md" }), c);
@@ -112,6 +124,23 @@ describe("dispatchWuiRequest", () => {
 
     expect(res).toMatchObject({ ok: true });
     expect(res.ok === true && (res.value as { files: FileInfo[] }).files).toHaveLength(2);
+  });
+
+  it("reads a listFiles prefix the same way every other verb reads a path", async () => {
+    // It was the one verb whose relative spelling meant something different:
+    // an author inside /sales writing `listFiles("data")` silently got the
+    // workspace's /data.
+    const c = ctx();
+    await dispatchWuiRequest(req("listFiles", { prefix: "data" }), c);
+
+    expect(c.fs.listFiles).toHaveBeenCalledWith("/sales/data");
+  });
+
+  it("still lists the whole item when asked for no prefix", async () => {
+    const c = ctx();
+    await dispatchWuiRequest(req("listFiles"), c);
+
+    expect(c.fs.listFiles).toHaveBeenCalledWith("");
   });
 
   it("says who is looking", async () => {

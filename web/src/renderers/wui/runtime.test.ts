@@ -10,9 +10,13 @@ type Handler = (ev: unknown) => void;
 function boot() {
   const handlers: Record<string, Handler[]> = {};
   const sent: Record<string, unknown>[] = [];
+  // Capture-phase listeners are kept apart, because whether the runtime
+  // registers in the capture phase is the whole of what makes a failed
+  // subresource visible — a bubble listener never sees one.
+  const capture: Record<string, Handler[]> = {};
   const win = {
-    addEventListener: (type: string, fn: Handler) => {
-      (handlers[type] ??= []).push(fn);
+    addEventListener: (type: string, fn: Handler, useCapture?: boolean) => {
+      (useCapture ? (capture[type] ??= []) : (handlers[type] ??= [])).push(fn);
     },
     getComputedStyle: (el: Element) => globalThis.getComputedStyle(el),
     workspace: undefined as unknown,
@@ -26,9 +30,13 @@ function boot() {
   ) => void;
   make(win, parent, document);
 
-  const fire = (type: string, ev: unknown) => (handlers[type] ?? []).forEach((f) => f(ev));
+  const fire = (type: string, ev: unknown) =>
+    [...(handlers[type] ?? []), ...(capture[type] ?? [])].forEach((f) => f(ev));
+  /** Only the capture-phase listeners — what a non-bubbling resource error
+   * actually reaches. */
+  const fireCapture = (type: string, ev: unknown) => (capture[type] ?? []).forEach((f) => f(ev));
   const ws = () => win.workspace as Record<string, (...a: unknown[]) => Promise<unknown>>;
-  return { sent, fire, ws };
+  return { sent, fire, fireCapture, ws };
 }
 
 afterEach(() => {
@@ -91,6 +99,21 @@ describe("the WUI runtime", () => {
     expect(sent.at(-1)).toMatchObject({ report: "refused", message: "only its own folder" });
   });
 
+  it("does not raise an alarm for a refusal the parent calls ordinary", async () => {
+    // A first run reads a data file that is not there yet. Reporting that put a
+    // red "not allowed" in front of every user opening every new page, which is
+    // how the alarm that matters gets ignored. It still rejects.
+    const { sent, fire, ws } = boot();
+
+    const answer = ws().readFile("data.json");
+    fire("message", {
+      data: { proto: "wui/1", id: sent[0].id, ok: false, error: "There is no file at /a/data.json.", expected: true },
+    });
+
+    await expect(answer).rejects.toThrow("There is no file");
+    expect(sent.find((m) => m.report === "refused")).toBeUndefined();
+  });
+
   it("ignores a message that is not ours", async () => {
     const { sent, fire } = boot();
 
@@ -108,6 +131,36 @@ describe("the WUI runtime", () => {
     expect(sent[0]).toMatchObject({ report: "error" });
     expect(sent[0].message).toContain("x is not a function");
     expect(sent[0].message).toContain("app.js:12");
+  });
+
+  it("reports a subresource that failed to load, naming it", () => {
+    // A missing or misnamed `app.js` is left in the document on purpose, so
+    // that the failure is visible rather than silently becoming an empty
+    // script. It only IS visible if it reaches the pane: a resource error fires
+    // on the element and does NOT bubble, so a bubble-phase listener saw
+    // nothing and the page rendered, did nothing, and reported nothing —
+    // exactly the outcome that choice was made to avoid.
+    const { sent, fireCapture } = boot();
+
+    fireCapture("error", {
+      target: Object.assign(document.createElement("script"), { src: "http://x/app.js" }),
+      message: undefined,
+    });
+
+    expect(sent[0]).toMatchObject({ report: "error" });
+    expect(sent[0].message).toContain("app.js");
+  });
+
+  it("reports a CSP refusal, which is how a page reaching outward fails", () => {
+    const { sent, fire } = boot();
+
+    fire("securitypolicyviolation", {
+      violatedDirective: "connect-src",
+      blockedURI: "https://cdn.example/x.js",
+    });
+
+    expect(sent[0]).toMatchObject({ report: "error" });
+    expect(sent[0].message).toContain("https://cdn.example/x.js");
   });
 
   it("reports an unhandled rejection, which is how an async page fails", () => {

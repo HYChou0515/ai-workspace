@@ -6,11 +6,16 @@
  * path (its folder is the whole unit) and it wants the pane full-bleed rather
  * than inside the entity panel's chrome.
  *
- * The iframe's attributes are the security model, not decoration:
- * `sandbox="allow-scripts"` WITHOUT `allow-same-origin` gives the frame a null
- * origin — no cookies, no parent DOM, no API — so `postMessage` is its only way
- * out and the parent is the gate. See `assemble.ts` for the CSP that closes the
- * remaining one, the network.
+ * The boundary is made of three things, in two files and not only this one:
+ *
+ * - `sandbox="allow-scripts"` WITHOUT `allow-same-origin` — a null origin, so
+ *   no cookies, no parent DOM, no API, and `postMessage` is the only way out.
+ * - The CSP in `assemble.ts` — no fetch, no XHR, no WebSocket, no remote
+ *   subresource, so the page cannot send what it read.
+ * - `SPA_CSP`'s `frame-src` in `api/spa.py` — the page cannot NAVIGATE itself
+ *   somewhere else either. That one cannot live in the frame: a document's own
+ *   CSP has no say over its own navigation, and without it `location.href` was
+ *   an open exfiltration route past the other two.
  */
 
 import { useQuery } from "@tanstack/react-query";
@@ -32,7 +37,7 @@ import { buildWuiDoc } from "./assets";
 import { dispatchWuiRequest } from "./bridge";
 import { wuiFolder } from "./paths";
 import { createSelfWrites } from "./selfWrites";
-import { WUI_PROTOCOL, isWuiRequest, type WuiEvent } from "./protocol";
+import { WUI_PROTOCOL, isWuiRequest, refuse, type WuiEvent } from "./protocol";
 import {
   formatReportsForAgent,
   isWuiReportMessage,
@@ -42,6 +47,18 @@ import {
 
 /** The conventional entry, overridable with `entry:` in the view file. */
 export const DEFAULT_ENTRY = "index.html";
+
+/**
+ * How many of a page's reports we keep.
+ *
+ * The runtime reports every uncaught error, and the archetypal agent bug is one
+ * inside a timer — one message per frame, forever. An unbounded list re-rendered
+ * per message locks up the whole app, not just the pane, and the button that
+ * would clear it is inside the frozen tree. The newest are kept: the first error
+ * is usually the cause, but the ones a person is looking at are the ones that
+ * just happened.
+ */
+export const MAX_REPORTS = 100;
 
 export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
   const fs = useFileService();
@@ -81,9 +98,9 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
     [slug, fs.scopeId],
   );
 
-  /** Post to the frame. `"*"` because a sandboxed frame's origin is the string
-   * "null" and cannot be named; safe because the target is this one frame,
-   * reached through the handle we hold. */
+  /** Post to the frame. `"*"` because an opaque origin cannot be named as a
+   * target; what makes that safe is `SPA_CSP` (see the note on the reply path
+   * below), not this handle. */
   const toFrame = (msg: unknown) => frameRef.current?.contentWindow?.postMessage(msg, "*");
 
   // The gate. Everything the page can do arrives here, and the only thing that
@@ -97,12 +114,15 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
 
       if (isWuiReportMessage(ev.data)) {
         const { report, message, detail } = ev.data;
-        setReports((rs) => [...rs, { id: nextReportId.current++, kind: report, message, detail }]);
+        setReports((rs) =>
+          [...rs, { id: nextReportId.current++, kind: report, message, detail }].slice(-MAX_REPORTS),
+        );
         return;
       }
 
       if (!isWuiRequest(ev.data)) return;
-      void dispatchWuiRequest(ev.data, {
+      const request = ev.data;
+      void dispatchWuiRequest(request, {
         fs,
         folder,
         openFile,
@@ -110,9 +130,23 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
         declaredTools,
         callTool,
         onWrote: (written) => selfWrites.current.record(written),
-      }).then((res) => {
-        win.postMessage(res, "*");
-      });
+      })
+        // A file op can reject for reasons the gate cannot see — a 403 for a
+        // read-only viewer, a 507 for a full workspace. Unanswered, the page's
+        // `await` never settles: a save button that does nothing, forever, with
+        // no message. That is the one outcome this bridge exists to prevent, so
+        // every path out of here posts a sentence.
+        .catch((err: unknown) =>
+          refuse(request.id, err instanceof Error ? err.message : `${request.verb} failed.`),
+        )
+        .then((res) => {
+          // `"*"` because an opaque origin cannot be named as a target. What
+          // makes that safe is not this handle — a WindowProxy keeps its
+          // identity across navigation — but `SPA_CSP`'s `frame-src` on the
+          // containing document, which forbids this frame becoming anything
+          // else. See `api/spa.py`.
+          win.postMessage(res, "*");
+        });
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);

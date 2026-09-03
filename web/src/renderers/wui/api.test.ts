@@ -47,4 +47,18 @@ describe("itemCallTool", () => {
 
     await expect(itemCallTool("rca", "i1")("lot-status", {})).rejects.toThrow(/502/);
   });
+
+  it("does not hand the reader a stringified validation array", async () => {
+    // FastAPI's 422 `detail` is a LIST, and passing it through produced
+    // "Error: [object Object]" in the page and in the report forwarded to the
+    // agent — the one outcome this branch exists to prevent.
+    stubFetch(
+      new Response(JSON.stringify({ detail: [{ loc: ["body", "args"], msg: "not a dict" }] }), {
+        status: 422,
+      }),
+    );
+
+    await expect(itemCallTool("rca", "i1")("lot-status", {})).rejects.toThrow(/422/);
+    await expect(itemCallTool("rca", "i1")("lot-status", {})).rejects.not.toThrow(/object Object/);
+  });
 });

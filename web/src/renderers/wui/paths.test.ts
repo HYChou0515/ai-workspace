@@ -107,8 +107,19 @@ describe("resolveWritePath", () => {
     expect(resolveWritePath("/sales", "/sales")).toBeNull();
   });
 
-  it("lets a root-level WUI write anywhere, because its folder IS the root", () => {
-    expect(resolveWritePath("", "data.json")).toBe("/data.json");
-    expect(resolveWritePath("", "/deep/data.json")).toBe("/deep/data.json");
+  it("refuses every write from a view file sitting at the workspace root", () => {
+    // This used to return the path unchanged, on the reasoning that such a
+    // page's folder IS the root — which quietly removed the containment the
+    // rest of this module exists for. A page there could overwrite the item's
+    // notes, another WUI's `index.html`, and the skills and workflows the
+    // platform later runs on the user's behalf. "No own folder" has to mean
+    // nothing to write to, not everything.
+    expect(resolveWritePath("", "data.json")).toBeNull();
+    expect(resolveWritePath("", "/deep/data.json")).toBeNull();
+  });
+
+  it("still lets a root-level WUI READ, which was never the risk", () => {
+    expect(resolveReadPath("", "/notes.md")).toBe("/notes.md");
+    expect(resolveReadPath("", "data.json")).toBe("/data.json");
   });
 });

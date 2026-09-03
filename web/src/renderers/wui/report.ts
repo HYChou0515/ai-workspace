@@ -12,6 +12,9 @@ import { WUI_PROTOCOL } from "./protocol";
 
 export type WuiReportKind = "error" | "refused" | "pick";
 
+/** How much markup a pick may carry into the chat box. */
+export const MAX_PICK_HTML = 4000;
+
 /** What the user pointed at. No screenshot (the CSP will not let us fetch a
  * canvas library) and no source map (the markup is generated, and the agent
  * wrote the folder) — the computed styles are what let a model reason about
@@ -83,7 +86,11 @@ export function formatReportsForAgent(
           .join("; ");
         if (styles) lines.push(`- computed style: ${styles}`);
       }
-      if (r.detail?.html) lines.push("```html", r.detail.html, "```");
+      // Capped HERE as well as in the runtime. The runtime's slice only binds
+      // messages the runtime sent, and nothing stops a page posting its own
+      // `report` — while the pane shows only the headline, so what a person
+      // forwards under their own name would not be what they read.
+      if (r.detail?.html) lines.push("```html", r.detail.html.slice(0, MAX_PICK_HTML), "```");
     } else if (r.kind === "refused") {
       lines.push(`The page was refused: ${r.message}`);
     } else {

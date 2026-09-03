@@ -75,14 +75,48 @@ export const WUI_RUNTIME_SOURCE = String.raw`function (window, parent, document)
     } else {
       // Reported AND rejected: the page may well handle this, but the person
       // looking at it should still be told, and it is what they forward on.
-      report("refused", m.error);
+      //
+      // Except when the parent marks it EXPECTED. A page's first run reads a
+      // data file that does not exist yet — the documented way to start empty —
+      // and reporting that put a red "not allowed" in front of every user
+      // opening every new WUI. An alarm that always fires is one nobody reads,
+      // which costs exactly the refusals that matter.
+      if (!m.expected) report("refused", m.error);
       p.reject(new Error(m.error));
     }
   });
 
-  window.addEventListener("error", function (e) {
-    var where = e.filename ? " (" + e.filename + ":" + e.lineno + ")" : "";
-    report("error", (e.message || "Something went wrong") + where);
+  // CAPTURE phase, deliberately. A script or image that fails to load fires its
+  // error ON THE ELEMENT and does not bubble, so a bubble-phase listener sees
+  // nothing — and a page whose app.js is misnamed then renders, does nothing,
+  // and reports nothing. That silence is the exact failure the assembler leaves
+  // broken references in place to avoid.
+  window.addEventListener(
+    "error",
+    function (e) {
+      var el = e.target;
+      if (el && el.nodeType === 1 && el !== window) {
+        var url = el.src || el.href || "";
+        report("error", "This page could not load " + (url || el.tagName.toLowerCase()) + ".");
+        return;
+      }
+      var where = e.filename ? " (" + e.filename + ":" + e.lineno + ")" : "";
+      report("error", (e.message || "Something went wrong") + where);
+    },
+    true,
+  );
+
+  // The other half of the same silence: anything the page reaches for that the
+  // policy refuses. The browser names it in a console nobody here can open.
+  window.addEventListener("securitypolicyviolation", function (e) {
+    report(
+      "error",
+      "This page is not allowed to load " +
+        (e.blockedURI || "that") +
+        " (" +
+        (e.violatedDirective || "blocked") +
+        "). A WUI has no network — put the file in its folder, or use a tool.",
+    );
   });
 
   window.addEventListener("unhandledrejection", function (e) {

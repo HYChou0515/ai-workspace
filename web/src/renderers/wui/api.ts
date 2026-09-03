@@ -26,9 +26,13 @@ export function itemCallTool(slug: string, itemId: string): CallTool {
       // The server's own sentence where there is one — it names the tool and
       // why it was refused, which is what the page's error panel shows and what
       // gets forwarded to the agent.
+      // FastAPI's `detail` is a STRING for our own refusals and an ARRAY for a
+      // validation failure. Passing the array through gave the page — and the
+      // report it forwards — "Error: [object Object]", which is the one thing
+      // this branch exists to prevent.
       const detail = await resp
         .json()
-        .then((b: { detail?: string }) => b.detail)
+        .then((b: { detail?: unknown }) => (typeof b.detail === "string" ? b.detail : undefined))
         .catch(() => undefined);
       throw new Error(detail ?? `${name} could not be run (${resp.status}).`);
     }

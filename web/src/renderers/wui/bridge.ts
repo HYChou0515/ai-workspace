@@ -20,7 +20,7 @@
 import type { FileService } from "../../api/fileService";
 import type { OpenFile } from "../../hooks/openFile";
 import { readAsset } from "./assets";
-import { ok, refuse, type WuiRequest, type WuiResponse } from "./protocol";
+import { ok, refuse, refuseExpected, type WuiRequest, type WuiResponse } from "./protocol";
 import { resolveReadPath, resolveWritePath } from "./paths";
 
 export type CallTool = (
@@ -58,6 +58,19 @@ export type BridgeContext = {
   onWrote?: (path: string) => void;
 };
 
+/**
+ * Why this page may not change that path.
+ *
+ * A page whose view file sits at the workspace root has no folder of its own,
+ * so the ordinary sentence ("only inside its own folder") is true, useless and
+ * reads as unfixable. Naming the cause names the fix: move the file.
+ */
+function cannotWrite(folder: string, verb: string, target: string): string {
+  return folder
+    ? `This page can only write inside its own folder (${folder}), so it cannot ${verb} ${target}.`
+    : `This page's view file is at the workspace root, so it has no folder of its own to write in and cannot ${verb} ${target}. Move the page into a folder.`;
+}
+
 const str = (args: Record<string, unknown> | undefined, key: string): string | null => {
   const v = args?.[key];
   return typeof v === "string" ? v : null;
@@ -72,7 +85,12 @@ export async function dispatchWuiRequest(
 
   switch (verb) {
     case "listFiles": {
-      const prefix = str(args, "prefix") ?? "";
+      const raw = str(args, "prefix") ?? "";
+      // Read-scoped like every other path, so a relative spelling means the
+      // same thing here as it does in `readFile`. Empty stays empty: listing
+      // the whole item is the ordinary case and has no path to resolve.
+      const prefix = raw ? resolveReadPath(folder, raw) : "";
+      if (prefix === null) return refuse(id, `${raw} is not a path in this workspace.`);
       return ok(id, { files: await fs.listFiles(prefix) });
     }
 
@@ -82,7 +100,7 @@ export async function dispatchWuiRequest(
       const path = resolveReadPath(folder, raw);
       if (path === null) return refuse(id, `${raw} is not a path in this workspace.`);
       const asset = await readAsset(fs, path);
-      if (asset === null) return refuse(id, `There is no file at ${path}.`);
+      if (asset === null) return refuseExpected(id, `There is no file at ${path}.`);
       return ok(id, { path, ...asset });
     }
 
@@ -92,12 +110,7 @@ export async function dispatchWuiRequest(
       if (raw === null || text === null) return refuse(id, "writeFile needs a `path` and `text`.");
       if (!fs.caps.write) return refuse(id, "This workspace is read-only, so nothing can be saved.");
       const path = resolveWritePath(folder, raw);
-      if (path === null) {
-        return refuse(
-          id,
-          `This page can only write inside its own folder${folder ? ` (${folder})` : ""}, so it cannot save to ${raw}.`,
-        );
-      }
+      if (path === null) return refuse(id, cannotWrite(folder, "save to", raw));
       await fs.writeFile(path, text);
       ctx.onWrote?.(path);
       return ok(id, { path });
@@ -108,12 +121,7 @@ export async function dispatchWuiRequest(
       if (raw === null) return refuse(id, "deleteFile needs a `path`.");
       if (!fs.caps.delete) return refuse(id, "This workspace is read-only, so nothing can be deleted.");
       const path = resolveWritePath(folder, raw);
-      if (path === null) {
-        return refuse(
-          id,
-          `This page can only delete inside its own folder${folder ? ` (${folder})` : ""}, so it cannot delete ${raw}.`,
-        );
-      }
+      if (path === null) return refuse(id, cannotWrite(folder, "delete", raw));
       await fs.deleteFile(path);
       ctx.onWrote?.(path);
       return ok(id, { path });

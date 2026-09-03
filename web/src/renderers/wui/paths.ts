@@ -79,8 +79,14 @@ export function resolveReadPath(folder: string, path: string): string | null {
  * test and neither is inside `/sales`.
  */
 export function resolveWritePath(folder: string, path: string): string | null {
+  // A view file at the workspace ROOT has no folder of its own, and the honest
+  // reading of "only its own folder" is then NOTHING — not everything. Treating
+  // it as the whole workspace removed the containment this module exists for,
+  // silently and with no signal in the pane: such a page could overwrite the
+  // item's notes, another WUI's entry, and the skills and workflow scripts the
+  // platform later runs on the user's behalf.
+  if (folder === "") return null;
   const abs = path.startsWith("/") ? normalizeAbsolute(path) : resolveInFolder(folder, path);
   if (abs === null) return null;
-  if (folder === "") return abs; // a root-level WUI's folder IS the workspace
   return abs.startsWith(`${folder}/`) ? abs : null;
 }

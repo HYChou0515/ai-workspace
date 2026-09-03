@@ -126,6 +126,63 @@ describe("assembleWuiDoc", () => {
     expect(parsed.querySelector("img")?.getAttribute("src")).toBe("data:image/png;base64,AA");
   });
 
+  it("inlines an SVG reference, which arrives as text rather than bytes", async () => {
+    // An SVG decodes as UTF-8, so it is a `text` asset — but it is still a
+    // picture, and a rewrite that only accepted `binary` left it broken.
+    const load = textLoader({ "icon.svg": "<svg/>" });
+    const { doc } = await assembleWuiDoc(
+      `<html><head></head><body><img src="./icon.svg"></body></html>`,
+      load,
+    );
+
+    const src = new DOMParser().parseFromString(doc, "text/html").querySelector("img")?.getAttribute("src");
+    expect(src).toMatch(/^data:image\/svg\+xml;base64,/);
+  });
+
+  it("resolves a url() inside an inlined stylesheet", async () => {
+    // `background-image: url(./bg.png)` is what an agent writes, and nothing
+    // was resolving it — the page had no network, so it simply never appeared.
+    const load = vi.fn(async (rel: string) =>
+      rel === "style.css"
+        ? ({ kind: "text", text: "body{background:url(./bg.png)}" } as const)
+        : rel === "bg.png"
+          ? ({ kind: "binary", dataUrl: "data:image/png;base64,AA" } as const)
+          : null,
+    );
+    const { doc, used } = await assembleWuiDoc(
+      `<html><head><link rel="stylesheet" href="style.css"></head><body></body></html>`,
+      load,
+    );
+
+    expect(doc).toContain("url(data:image/png;base64,AA)");
+    expect(used.sort()).toEqual(["bg.png", "style.css"]);
+  });
+
+  it("resolves a url() the page wrote inline, not only one it linked", async () => {
+    const load = vi.fn(async (rel: string) =>
+      rel === "bg.png" ? ({ kind: "binary", dataUrl: "data:image/png;base64,AA" } as const) : null,
+    );
+    const { doc } = await assembleWuiDoc(
+      `<html><head><style>div{background:url('bg.png')}</style></head><body></body></html>`,
+      load,
+    );
+
+    expect(doc).toContain("url(data:image/png;base64,AA)");
+  });
+
+  it("inlines a video's poster, which is a picture spelled a different way", async () => {
+    const load = vi.fn(async (rel: string) =>
+      rel === "thumb.png" ? ({ kind: "binary", dataUrl: "data:image/png;base64,AA" } as const) : null,
+    );
+    const { doc } = await assembleWuiDoc(
+      `<html><head></head><body><video poster="thumb.png"></video></body></html>`,
+      load,
+    );
+
+    const el = new DOMParser().parseFromString(doc, "text/html").querySelector("video");
+    expect(el?.getAttribute("poster")).toBe("data:image/png;base64,AA");
+  });
+
   it("keeps inlined JS from closing its own tag", async () => {
     // A serialiser does not escape a script element's text, so a file that
     // merely MENTIONS the closing sequence would spill the rest of itself into

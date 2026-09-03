@@ -229,3 +229,32 @@ def test_frontmatter_tolerates_blank_lines(isolated_apps: Path):
     (sk / "spaced").mkdir()
     (sk / "spaced" / "SKILL.md").write_text("---\nname: spaced\n\ndescription: ok\n---\n\nbody")
     assert [m.name for m in list_skills("rca", "local-lab")] == ["spaced"]
+
+
+def test_wui_skill_is_told_which_tools_a_page_may_call():
+    """The model cannot tell a package tool from a built-in by looking, so the
+    one thing the static skill cannot say has to be appended per app."""
+    from workspace_app.apps.skills import augment_shared_skill_body
+
+    out = augment_shared_skill_body("wui", "BODY", "rca", "default", wui_tools=["lot-status"])
+
+    assert out.startswith("BODY")
+    assert "`lot-status`" in out
+    assert "callTool" in out
+
+
+def test_wui_skill_says_plainly_when_an_app_offers_none():
+    from workspace_app.apps.skills import augment_shared_skill_body
+
+    out = augment_shared_skill_body("wui", "BODY", "rca", "default", wui_tools=[])
+
+    assert "None." in out
+    assert "leave `tools:` out" in out
+
+
+def test_wui_skill_omits_the_section_when_nobody_could_say():
+    """ "This app grants none" and "the caller had no toolset to ask" are
+    different claims, and only one of them is safe to invent."""
+    from workspace_app.apps.skills import augment_shared_skill_body
+
+    assert augment_shared_skill_body("wui", "BODY", "rca", "default") == "BODY"

@@ -238,3 +238,22 @@ def test_undecodable_output_still_comes_back(raw: bytes):
     client, _, _, _ = build(sandbox=_Sandbox(ExecResult(exit_code=0, stdout=raw)))
 
     assert client.post(URL, json={}).status_code == 200
+
+
+def test_a_name_two_packages_both_export_is_a_conflict_a_person_can_read():
+    # A deploy-configuration fault, not this caller's — but an opaque 500 would
+    # reach a person through the page's error panel with nothing to act on.
+    other = PackageInfo(
+        name="legacy",
+        install_dir="/tools/legacy",
+        commands=(
+            CommandInfo(name="lot-status", description="An older one.", params_json_schema={}),
+        ),
+    )
+    client, sandbox, _, _ = build(allowed=["mes", "legacy"], packages=[PKG, other])
+
+    resp = client.post(URL, json={})
+
+    assert resp.status_code == 409
+    assert "lot-status" in resp.json()["detail"]
+    assert sandbox.calls == []

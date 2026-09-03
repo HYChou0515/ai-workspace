@@ -36,9 +36,12 @@ await workspace.readFile("data.json");   // your folder
 await workspace.readFile("/notes.md");   // the item's notes
 ```
 
-`readFile` and `openFile` reach the whole item. `writeFile` and `deleteFile`
-reach **only your folder** — `"/notes.md"` and `"../notes.md"` are both refused,
-and so is `/lot-tracker2/x` from inside `/lot-tracker`.
+`readFile`, `listFiles` and `openFile` reach the whole item. `writeFile` and
+`deleteFile` reach **only your folder** — `"/notes.md"` and `"../notes.md"` are
+both refused, and so is `/lot-tracker2/x` from inside `/lot-tracker`.
+
+**Put the page in a folder.** A view file at the workspace root has no folder of
+its own, so it can read but every write is refused.
 
 ### Reading a file that may not exist
 
@@ -108,16 +111,24 @@ is verbatim — nothing is appended to it.
 ## Blocked, by design
 
 `fetch` · XHR · WebSocket · `<script src="https://…">` · web fonts · remote
-images · `<form action>` · opening a window. The page has no network. Anything
-you need is a file in the folder, a `data:` URI, or a tool.
+images · `<form action>` · opening a window · **navigating the page to another
+site**. The page has no network at all. Anything you need is a file in the
+folder, a `data:` URI, or a tool.
+
+Files in your folder ARE reachable, by every ordinary spelling — `<script src>`,
+`<link rel=stylesheet>`, `<img src>`, `<video src>`/`poster`, and `url()` inside
+a stylesheet (linked or inline). They are read and folded into the page before
+it runs, so they need no network either.
+
+**`srcset` is not resolved.** Write one `src`.
 
 ## Errors
 
-Uncaught errors and unhandled rejections are captured for you and shown in the
-pane — you do not need a global handler. What you **do** need is to show the
-message from a rejected `workspace.*` call somewhere the user can see, because
-that one names something they can act on ("this page can only write inside its
-own folder").
+Uncaught errors, unhandled rejections, a file that failed to load and anything
+the policy refused are all captured for you and shown in the pane — you do not
+need a global handler. What you **do** need is to show the message from a
+rejected `workspace.*` call somewhere the user can see, because that one names
+something they can act on ("this page can only write inside its own folder").
 
 ## Labels for reporting
 

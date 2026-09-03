@@ -26,7 +26,7 @@ export type WuiRequest = {
  * the agent verbatim, so it has to say what happened and why. */
 export type WuiResponse =
   | { proto: typeof WUI_PROTOCOL; id: string; ok: true; value: unknown }
-  | { proto: typeof WUI_PROTOCOL; id: string; ok: false; error: string };
+  | { proto: typeof WUI_PROTOCOL; id: string; ok: false; error: string; expected?: true };
 
 /** Parent → frame, unsolicited. `file_changed` is forwarded rather than acted
  * on: the platform cannot know whether a half-filled form should be discarded,
@@ -50,4 +50,18 @@ export function ok(id: string, value: unknown): WuiResponse {
 
 export function refuse(id: string, error: string): WuiResponse {
   return { proto: WUI_PROTOCOL, id, ok: false, error };
+}
+
+/**
+ * A "no" that is part of ordinary use, not a fault.
+ *
+ * A page's first run reads a data file that does not exist yet — the reference
+ * documents that as the way to start empty — so reporting it like a refusal put
+ * a red "this page was not allowed to do that" in front of every user opening
+ * every new WUI. An alarm that always fires is one nobody reads, which costs
+ * exactly the refusals that DO matter. It still rejects: the page's `.catch`
+ * is unchanged.
+ */
+export function refuseExpected(id: string, error: string): WuiResponse {
+  return { proto: WUI_PROTOCOL, id, ok: false, error, expected: true };
 }
