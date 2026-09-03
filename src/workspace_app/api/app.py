@@ -768,6 +768,17 @@ def create_app(
             memory_bytes=_clamp_bytes(mem, parse_size(budget.memory) if budget else 0),
         )
 
+    def _title_of(item_id: str) -> str:
+        """This item's headline, for a refusal that names what to close.
+
+        An id is addressable but not recognisable — "close one of
+        rca-investigation:12cec732" is not an instruction anybody can follow.
+        Reached only when a turn is already being refused, so it costs nothing
+        on the path that succeeds, and an item that has gone missing degrades to
+        an empty string rather than turning a 507 into a 500."""
+        found = find_work_item(spec, item_id)
+        return getattr(found[1], "title", "") if found is not None else ""
+
     def _owner_of(item_id: str) -> str | None:
         """The debtor for an item's resources: its `owner` field (#687).
 
@@ -963,7 +974,13 @@ def create_app(
 
         507 rather than 429: this is not "slow down", it is "you are at your
         limit" — the fix is to free something, not to wait."""
-        return JSONResponse(status_code=507, content={"detail": quota_body(exc)})
+        return JSONResponse(
+            status_code=507,
+            # WHO is asking decides whether the holding list is included: it is
+            # the owner's working set, and a collaborator who hit their ceiling
+            # is owed the reason, not the inventory.
+            content={"detail": quota_body(exc, viewer=get_user_id(), title_of=_title_of)},
+        )
 
     @app.exception_handler(TurnRefused)
     async def _turn_refused(_request: Request, exc: TurnRefused) -> JSONResponse:
@@ -971,7 +988,10 @@ def create_app(
         `also` list, so a client that only knows `error` still behaves exactly as
         it did — and one that reads `also` can stop sending people to fix one
         limit at a time."""
-        return JSONResponse(status_code=507, content={"detail": exc.body()})
+        return JSONResponse(
+            status_code=507,
+            content={"detail": exc.body(viewer=get_user_id(), title_of=_title_of)},
+        )
 
     @app.exception_handler(SandboxBusy)
     async def _sandbox_busy(_request: Request, exc: SandboxBusy) -> JSONResponse:

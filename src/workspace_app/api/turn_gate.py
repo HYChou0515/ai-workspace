@@ -19,6 +19,7 @@ what to lose.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from ..files.facade import WorkspaceFull
@@ -44,18 +45,46 @@ def quota_code(exc: Exception) -> str:
     return _CODES[type(exc)]
 
 
-def quota_body(exc: Exception) -> dict[str, object]:
+def quota_body(
+    exc: Exception,
+    *,
+    viewer: str | None = None,
+    title_of: Callable[[str], str] | None = None,
+) -> dict[str, object]:
     """The 507 body for one refusal — the code plus the numbers behind it.
 
     The numbers are not decoration: "your workspace is full" is unfalsifiable to
     the person reading it, and a wrong one is indistinguishable from a right one
-    until someone reads the code."""
+    until someone reads the code.
+
+    `holding` says WHICH environments are using the quota, so the remedy is one
+    click rather than a page the person has to know exists. Defaulting to the
+    App's ceiling made hitting the limit ordinary rather than exceptional, so
+    this is the difference between a wall and a door.
+
+    It is included ONLY for the person whose quota it is. A collaborator can hit
+    the owner's ceiling, and naming the items would hand them that person's
+    working set — titles included — to explain one refusal. They still learn why
+    they were stopped; they do not learn what else that person is doing. Absent
+    `viewer` means no caller vouched for who is asking, and the list is withheld
+    rather than assumed safe.
+    """
     if isinstance(exc, SandboxQuotaExceeded):
+        mine = viewer is not None and viewer == exc.owner
         return {
             "error": _CODES[SandboxQuotaExceeded],
             "dimension": exc.dimension,
             "used": exc.used,
             "limit": exc.limit,
+            "holding": [
+                {
+                    "item_id": h.item_id,
+                    "title": title_of(h.item_id) if title_of else "",
+                    "cpu_cores": h.cpu_milli / 1000,
+                    "memory_bytes": h.memory_bytes,
+                }
+                for h in (exc.holding if mine else [])
+            ],
         }
     assert isinstance(exc, WorkspaceFull | UserDiskFull)
     return {
@@ -82,8 +111,16 @@ class TurnRefused(Exception):
         self.primary = primary
         self.also = also
 
-    def body(self) -> dict[str, object]:
-        return {**quota_body(self.primary), "also": [quota_code(e) for e in self.also]}
+    def body(
+        self,
+        *,
+        viewer: str | None = None,
+        title_of: Callable[[str], str] | None = None,
+    ) -> dict[str, object]:
+        return {
+            **quota_body(self.primary, viewer=viewer, title_of=title_of),
+            "also": [quota_code(e) for e in self.also],
+        }
 
 
 async def admit_turn(

@@ -50,7 +50,14 @@ class SandboxQuotaExceeded(Exception):
     Carries which dimension bound and the numbers behind it, because the only
     useful thing to tell someone is what to close and how much it buys back."""
 
-    def __init__(self, owner: str, dimension: str, used: float, limit: float) -> None:
+    def __init__(
+        self,
+        owner: str,
+        dimension: str,
+        used: float,
+        limit: float,
+        holding: list[LiveSandbox] | None = None,
+    ) -> None:
         super().__init__(
             f"{owner} is at their sandbox limit: {dimension} {used} of {limit} "
             f"already in use by live environments"
@@ -59,6 +66,13 @@ class SandboxQuotaExceeded(Exception):
         self.dimension = dimension
         self.used = used
         self.limit = limit
+        #: WHICH environments are holding it. The docstring above has always
+        #: promised "what to close and how much it buys back", and the numbers
+        #: alone answer only the second half — leaving the person to work out who
+        #: is holding their quota, on a page they have to know exists. Ids and
+        #: figures only; a title is a store lookup and does not belong in an
+        #: exception constructor.
+        self.holding: list[LiveSandbox] = list(holding or [])
 
 
 class AdmissionGate:
@@ -178,4 +192,4 @@ class AdmissionGate:
                     would_be,
                     limit,
                 )
-                raise SandboxQuotaExceeded(owner, name, would_be, limit)
+                raise SandboxQuotaExceeded(owner, name, would_be, limit, holding=live)

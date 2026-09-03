@@ -514,3 +514,71 @@ def test_running_is_reported_from_a_probe_of_this_item():
 
         _wake(client, item)
         assert client.get(f"/a/rca/items/{item}/environment").json()["running"] is True
+
+
+# ── P5: the refusal is a door, not a wall ────────────────────────────────
+#
+# Defaulting to the ceiling (§1.3) makes hitting the limit ordinary rather than
+# exceptional, so this moment IS the feature's experience. `SandboxQuotaExceeded`
+# already promises in its own docstring that "the only useful thing to tell
+# someone is what to close and how much it buys back" — and then carries only a
+# dimension and two numbers.
+
+
+def test_the_refusal_names_what_is_holding_the_budget():
+    """Without this the person is told they are full and left to work out both
+    who is holding it and where to go — on a page they have to know exists."""
+    with _app(PerUserResources(cpu=2.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        first = _mk(spec, "alice", cpu=2.0)
+        second = _mk(spec, "alice", cpu=2.0)
+        client.patch(f"/rca-investigation/{first}", json={"title": "晶圓良率分析"})
+        _wake(client, first)
+
+        refused = client.post(f"/a/rca/items/{second}/messages", json={"content": "go"})
+
+        assert refused.status_code == 507, refused.text
+        holding = refused.json()["detail"]["holding"]
+        assert [h["item_id"] for h in holding] == [first]
+        assert holding[0]["title"] == "晶圓良率分析", "so it can be recognised, not just addressed"
+        assert holding[0]["cpu_cores"] == 2.0, "and how much closing it buys back"
+
+
+def test_the_refusal_tells_a_collaborator_nothing_about_the_owners_other_items():
+    """The same message, minus everything that is not theirs to see.
+
+    A collaborator drives a turn and hits the OWNER's ceiling. Naming the items
+    would hand them the owner's working set — titles included — to explain one
+    refusal. They still learn why they were stopped; they do not learn what else
+    that person is doing."""
+    with _app(PerUserResources(cpu=2.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        first = _mk(spec, "owner-alice", cpu=2.0)
+        client.patch(f"/rca-investigation/{first}", json={"title": "機密專案"})
+        _wake(client, first)
+        second = _mk(
+            spec,
+            "owner-alice",
+            cpu=2.0,
+            permission=_restricted(
+                read_meta=["user:bob"],
+                read_chat=["user:bob"],
+                read_content=["user:bob"],
+                converse=["user:bob"],
+            ),
+        )
+
+        WHO["id"] = "bob"
+        refused = client.post(f"/a/rca/items/{second}/messages", json={"content": "go"})
+
+        assert refused.status_code == 507, refused.text
+        detail = refused.json()["detail"]
+        assert detail["error"] == "sandbox_quota_exceeded"
+        assert detail.get("holding") == [], "not the owner's working set"
+        assert "機密專案" not in str(detail)
