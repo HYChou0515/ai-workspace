@@ -2036,3 +2036,42 @@ def test_a_delegate_can_close_a_deleted_items_environment():
         assert closed.status_code == 204, (
             f"a manager could not close the deleted item's environment: {closed.text}"
         )
+
+
+def test_the_slug_must_match_the_item_at_every_gate():
+    """Round-10 finding 2 — #95 ("a wrong slug can't operate on another App's
+    item") was pinned at ONE of the three gates, and the review's mutation
+    survived 146 tests.
+
+    Deleting the slug comparison from `check_access` left `/tools` red (this
+    branch added that case last round) and `/environment` + `/chats` GREEN at
+    200 — i.e. the rule was live only where a test happened to look.
+
+    That matters now because the parameter became `str | AnyApp` this round: it
+    is one accidental `slug_of()` away from switching itself off, and neither
+    `ty` nor the suite would have said anything. So the rule is asserted through
+    each gate's OWN routes: `require_item_access` (the resize route),
+    `ItemLocator.require_access` (exec, and the whole chat/file family), and
+    `ItemLocator.require_item` (tools) — the last one already covered by
+    `test_a_live_item_under_the_wrong_app_is_not_found_rather_than_gone`.
+    """
+    with _app(PerUserResources(cpu=100.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        item = _mk(spec, WHO["id"])
+
+        # require_item_access — the hand-written item routes
+        resize = client.put(f"/a/pm/items/{item}/resources", json={"cpu_cores": 1.0})
+        # ItemLocator.require_access — the authorizing gate for exec/chat/files
+        env = client.get(f"/a/pm/items/{item}/environment")
+        run = client.post(f"/a/pm/items/{item}/exec", json={"cmd": ["echo"]})
+
+        assert resize.status_code == 404, f"require_item_access let a wrong slug in: {resize.text}"
+        assert env.status_code == 404, f"require_access let a wrong slug in: {env.text}"
+        assert run.status_code == 404, f"require_access let a wrong slug in: {run.text}"
+
+        # …and the same three still work under the RIGHT slug, so this is
+        # pinning the pairing rather than "everything 404s".
+        assert client.get(f"/a/rca/items/{item}/environment").status_code == 200

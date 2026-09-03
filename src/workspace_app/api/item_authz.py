@@ -1,11 +1,19 @@
 """Shared WorkItem authorization for the hand-written workspace routes (#306 /
 plan-permissions.md Rollout PR3).
 
-``require_item_access`` is THE gate: every difference a caller needs is a
-parameter on it (``slug=None`` for a route with no slug in its path,
-``allow_deleted`` for a billing action). Inlining its body to get one of those
-differences is how a later rule stops reaching every caller — this file has lost
-`refuse_if_gone` that way once already.
+``require_item_access`` is the gate for the hand-written routes, and a
+difference a caller needs is a PARAMETER on it (``slug=ANY_APP`` for a route
+with no slug in its path, ``allow_deleted`` for a billing action) rather than a
+copy of its body — a copy is how a rule added here later stops reaching every
+caller, which is how this file came to be missing `refuse_if_gone` at one gate a
+round after writing it.
+
+There is ONE deliberate second implementation: `ItemLocator.require_access`
+composes the same three steps around a 5-second facts MEMO, which is not
+expressible as an argument here (the facts are the thing being cached, and this
+function loads them). It is the authorizing gate for the chat/file routes, and a
+rule added here has to be added there too — `refuse_if_gone` names all three
+gates for that reason.
 
 The item auto-CRUD is storage-gated by ``work_item_access_scope`` (read_meta →
 404), but the workspace SUB-routes (files, chat, stream) resolve the item through
@@ -29,6 +37,23 @@ from ..apps.registry import app_model
 from ..apps.resolve import find_work_item
 from ..perm import Actor, Verb, authorize
 from ..resources.groups import groups_of
+
+
+class AnyApp:
+    """Marker for a route that addresses an item by ID ALONE, where there is no
+    slug↔item pairing to validate — `/me/resources/live/{item_id}` is the case.
+
+    A distinct TYPE rather than ``None`` because `ItemLocator.slug_of` and
+    `TurnFacts.slug` are both ``str | None``: with ``None`` as the marker, any
+    one of them flowing into a gate would silently switch off #95 with no type
+    error and no red test. ``str | AnyApp`` makes that a `ty` failure instead.
+    Skipping the check has to be something a caller SAYS, not something that
+    happens to it."""
+
+    __slots__ = ()
+
+
+ANY_APP = AnyApp()
 
 
 @dataclass(frozen=True)
@@ -105,7 +130,7 @@ def refuse_if_gone(facts: ItemAccessFacts | None, item_id: str) -> None:
 
 def check_access(
     facts: ItemAccessFacts | None,
-    slug: str | None,
+    slug: str | AnyApp,
     item_id: str,
     verb: Verb,
     *,
@@ -117,13 +142,17 @@ def check_access(
     can come from a cache without the DECISION being cached with them: a verb the
     caller has never asked for is still evaluated properly.
 
-    ``slug`` is ``None`` for a route that addresses the item by ID ALONE, where
-    there is no slug↔item pairing to validate — `/me/resources/live/{item_id}`
-    is the case. Passing a fabricated slug there is what made a deleted item's
+    ``slug`` is ``ANY_APP`` for a route that addresses the item by ID ALONE (see
+    `AnyApp`). Passing a fabricated slug there is what made a deleted item's
     environment unclosable: the fabrication came from a lookup that reports one
     as absent, so the check refused every time."""
-    if facts is None or (slug is not None and facts.slug != slug):
-        raise HTTPException(status_code=404, detail=f"item {item_id!r} not found in app {slug!r}")
+    if facts is None or (not isinstance(slug, AnyApp) and facts.slug != slug):
+        detail = (
+            f"item {item_id!r} not found"
+            if isinstance(slug, AnyApp)
+            else f"item {item_id!r} not found in app {slug!r}"
+        )
+        raise HTTPException(status_code=404, detail=detail)
     actor = Actor.human(user, groups=groups)
     perm = facts.item.permission
     if not authorize(actor, "read_meta", perm, created_by=facts.created_by, superusers=superusers):
@@ -134,7 +163,7 @@ def check_access(
 
 def require_item_access(
     spec: SpecStar,
-    slug: str | None,
+    slug: str | AnyApp,
     item_id: str,
     verb: Verb,
     *,
@@ -153,8 +182,8 @@ def require_item_access(
     defaults to the live ``groups_of`` lookup, keeping this consistent with the
     storage-layer ``work_item_access_scope`` (which honours groups).
 
-    ``slug=None`` for a route that addresses the item by id alone (see
-    `check_access`). ``allow_deleted`` for a BILLING action rather than an
+    ``slug=ANY_APP`` for a route that addresses the item by id alone (see
+    `AnyApp`). ``allow_deleted`` for a BILLING action rather than an
     operation on the item: a deleted item's sandbox keeps running and keeps
     being charged for, so closing it must still work — the resources page exists
     to offer exactly that. Both are PARAMETERS rather than a second copy of this

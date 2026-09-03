@@ -193,3 +193,27 @@ def test_emits_even_though_the_app_configures_no_logging(
     out = capsys.readouterr().out
     assert "perf: GET" in out, out[-2000:]
     assert perf_trace.logger.level == logging.INFO
+
+
+def test_the_slug_gate_costs_one_lookup_when_it_lets_you_through(
+    traced: ApiTestClient, perf_log: list[str]
+) -> None:
+    """Round-10 S3 — a ceiling for the OTHER gate, which had none.
+
+    `ItemLocator.require_item` fronts the tools / entity / capability routes,
+    and it is the only gate with no facts memo behind it, so what it reads it
+    reads on every request. Resolving the full access facts up front cost an
+    extra `get_meta` on every SUCCESS; that regression shipped and came back out
+    a round later, and nothing here would have said so — the ceiling above is on
+    `/files`, which goes through `require_access` instead.
+
+    A CEILING, and a TIGHT one: measured at 6 here, and the regression it is
+    guarding against was exactly 6 -> 7. A ceiling with slack in it would have
+    watched that happen and said nothing, which is the same as not existing.
+    """
+    item = traced.post("/a/pm/items", json={"title": "P", "profile": "default"}).json()
+    traced.get(f"/a/pm/items/{item['resource_id']}/tools")
+
+    line = next(m for m in _perf_lines(perf_log) if "/tools" in m)
+
+    assert _field(line, "db") <= 6, line

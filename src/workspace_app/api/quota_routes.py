@@ -26,7 +26,7 @@ from ..quota.disk_ledger import DiskLedger
 from ..quota.limits import parse_size
 from ..quota.user_limits import UserLimits
 from ..resources.groups import groups_of
-from .item_authz import check_access, load_access_facts, require_item_access
+from .item_authz import ANY_APP, check_access, load_access_facts, require_item_access
 from .locator import ItemLocator
 from .registry import InvestigationRegistry
 from .sandbox_activity import IActivityStore
@@ -330,7 +330,7 @@ def register_quota_routes(
         # an environment running is not a fact a bystander is owed.
         if owner != get_user_id() and get_user_id() not in superusers:
             # THE shared gate, with the two differences stated as arguments.
-            # `slug=None` because this route addresses the item by id alone —
+            # `ANY_APP` because this route addresses the item by id alone —
             # fabricating one from a lookup that reports a deleted item as
             # absent is what refused a manager on the one row this page argues
             # hardest for. `allow_deleted` because closing is a BILLING action:
@@ -343,7 +343,7 @@ def register_quota_routes(
             try:
                 require_item_access(
                     spec,
-                    None,
+                    ANY_APP,
                     item_id,
                     "change_permission",
                     user=get_user_id(),

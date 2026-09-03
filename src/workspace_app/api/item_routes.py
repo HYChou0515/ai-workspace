@@ -727,7 +727,12 @@ def register_item_routes(
             members = current.members
             if isinstance(members, msgspec.UnsetType):  # pragma: no cover - RCA enables members
                 members = []
-            for uid in {current.owner, *members} - {actor}:
+            # `debtor_of`, not `current.owner` raw, for the same reason the
+            # quota uses it: `owner` is free text, and a padded one is a
+            # recipient no lookup matches.
+            from ..apps.resolve import debtor_of
+
+            for uid in {debtor_of(spec, slug, item_id, current), *members} - {actor}:
                 notify(
                     spec,
                     recipient=uid,
