@@ -29,6 +29,9 @@ logger = logging.getLogger(__name__)
 #: wrong endpoint must cost a moment, not a boot.
 PROBE_TIMEOUT_S = 3.0
 
+#: Refusals already reported, as (url, status) — see `_report`.
+_REFUSALS_SAID: set[tuple[str, Any]] = set()
+
 
 @dataclass(frozen=True)
 class EndpointLimits:
@@ -162,6 +165,14 @@ def _report(url: str, status: Any) -> None:
     ceiling and no compaction, on a deployment whose operator has already done
     their half of the work and is waiting to see it take effect."""
     if status in (401, 403):
+        # Once per address+status per process. The negative this produces now
+        # expires and is re-asked every ten minutes, so an unfixed permission
+        # would otherwise repeat this line forever — and a notice that fires
+        # every round becomes wallpaper. Only the LOGGING is deduped; the
+        # re-asking is what makes the operator's fix take effect on its own.
+        if (url, status) in _REFUSALS_SAID:
+            return
+        _REFUSALS_SAID.add((url, status))
         logger.info(
             "context probe: %s answered %s — the route exists but this key cannot read it, "
             "so the endpoint's declared max_input_tokens cannot be used. Grant the app's key "

@@ -467,3 +467,34 @@ def test_a_refusal_is_reported_but_a_missing_route_is_not(caplog):
     said = "\n".join(r.getMessage() for r in caplog.records if r.levelno >= logging.INFO)
     assert "403" in said, said
     assert "max_input_tokens" in said, "and it says what to do about it"
+
+
+def test_the_refusal_is_said_once_not_on_every_retry(caplog):
+    """A negative from the proxy now expires and is re-asked every ten minutes,
+    so a permanently-refused route would repeat this line forever — two or three
+    times per window, per pod. This codebase already has the rule for that: a
+    notice that fires every round becomes wallpaper and stops being read. Said
+    once per address and status per process; the RE-ASKING is unaffected."""
+    import logging
+
+    from workspace_app import context_probe
+
+    context_probe._REFUSALS_SAID.clear()
+
+    def _probe_once():
+        context_probe.probe_endpoint_limits(
+            base_url="http://proxy/v1", model="m", client=_get_client(_Resp(403, {}))
+        )
+
+    with caplog.at_level(logging.INFO):
+        _probe_once()
+    first = [r.getMessage() for r in caplog.records if r.levelno >= logging.INFO]
+    # Once per ADDRESS: both spellings were refused and the operator wants to
+    # know which, so two lines here is the signal, not the noise.
+    assert len(first) == len(set(first)) == 2, first
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        for _ in range(4):
+            _probe_once()
+    assert not [r for r in caplog.records if r.levelno >= logging.INFO], "and never again"
