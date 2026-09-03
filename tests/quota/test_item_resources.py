@@ -1224,3 +1224,102 @@ def test_a_genuinely_running_environment_still_blocks_the_edit():
 # `groups_of` 0 -> 4 before the batching. What holds it now is that
 # `check_access` is pure — there is no per-row I/O left to add back without
 # reintroducing a call the code no longer makes.
+
+
+def test_the_environment_says_which_limit_bound_the_size():
+    """Adversarial review, finding 7 — the panel was guessing, with the wrong
+    person's number.
+
+    It compared `effective` against the VIEWER's budget from `/me/resources`,
+    while `effective` was clamped by the OWNER's. For the `change_permission`
+    delegate P6 exists to create those are two different people, so the
+    comparison was normally false and the panel blamed the App — which after R2
+    is a real possibility, so a wrong attribution now sends someone to change a
+    setting that is not the one holding them.
+
+    Only the backend knows both ceilings, so it says which one bound rather
+    than shipping the numbers and hoping the client works it out.
+    """
+    with _app(PerUserResources(cpu=100.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        by_app = _mk(spec, "alice", cpu=999.0)
+        body = client.get(f"/a/rca/items/{by_app}/environment").json()
+        assert body["bound_by"] == "app", body
+
+    with _app(PerUserResources(cpu=1.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        by_quota = _mk(spec, "alice", cpu=999.0)
+        body = client.get(f"/a/rca/items/{by_quota}/environment").json()
+        assert body["bound_by"] == "quota", body
+
+
+def test_nothing_bound_it_when_the_stated_size_fits():
+    """The control: an attribution that is always set would read as "you are
+    being held back" on every item that is not."""
+    with _app(PerUserResources(cpu=100.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        item = _mk(spec, "alice", cpu=1.0)
+
+        assert client.get(f"/a/rca/items/{item}/environment").json()["bound_by"] is None
+
+
+def test_a_nonsense_number_is_refused_rather_than_silently_clearing_the_setting():
+    """Adversarial review, finding 12.
+
+    Pydantic accepts `Infinity` and `NaN` by default. Neither is `<= 0`, so both
+    passed validation, and both collapsed to `None` on the store round trip — so
+    a request to SET a size performed a RESET and reported 200. The worst
+    possible pair: the action taken is not the action asked for, and the status
+    says it worked.
+
+    A huge finite value is refused for a different reason: `int(1e300 * 100000)`
+    is what reaches `cpu.max`, and the cgroup write fails with a generic launch
+    error that names nothing. §1.7 traded away the floor mechanism on the
+    promise that a bad value would point back at the setting, and a failure
+    three layers down does not.
+    """
+    with _app(PerUserResources(cpu=4.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        item = _mk(spec, "alice", cpu=2.0)
+
+        # Sent as RAW body text: `json=` refuses to encode these, but a client
+        # that writes them literally is exactly how they reach the server, and
+        # pydantic accepts them by default.
+        for bad in ("Infinity", "NaN", "1e400", "1e300"):
+            got = client.put(
+                f"/a/rca/items/{item}/resources",
+                content=b'{"cpu_cores": ' + bad.encode() + b"}",
+                headers={"content-type": "application/json"},
+            )
+            assert got.status_code == 422, f"{bad} -> {got.status_code} {got.text}"
+
+        # …and the setting they had is untouched, which is the half a 200 broke.
+        body = client.get(f"/a/rca/items/{item}/environment").json()
+        assert body["stated_cpu_cores"] == 2.0
+
+
+def test_a_nonsense_memory_size_is_refused_too():
+    """Its own condition — cpu standing in for memory is how this feature keeps
+    nearly shipping one-dimensional checks."""
+    with _app(PerUserResources(cpu=4.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        item = _mk(spec, "alice")
+
+        for bad in ("inf", "nan", "9" * 40):
+            got = client.put(f"/a/rca/items/{item}/resources", json={"memory": bad})
+            assert got.status_code == 422, f"{bad!r} -> {got.status_code} {got.text}"

@@ -111,3 +111,53 @@
   font-variant-numeric: tabular-nums;
   color: var(--text-paper-d);
 }
+
+/* Who may manage the item. Its own block rather than borrowing the share
+   dialog's inline styles: the dialog styles its rows inline, so a semantic
+   block dropped into it inherits nothing — the same zero-stylesheet shape that
+   shipped once already. Deliberately quieter than the role list beside it and
+   set apart by a rule, because it is a different KIND of grant rather than one
+   more degree of the same. */
+.item-share-managers {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding-top: var(--space-8);
+  border-top: 1px solid var(--paper-3);
+}
+
+.item-share-managers > h4 {
+  margin: 0;
+  font-size: var(--text-body-sm);
+  color: var(--text-paper);
+}
+
+.item-share-managers .detail {
+  margin: 0;
+  font-size: var(--text-body-sm);
+  color: var(--text-paper-d);
+}
+
+.item-share-managers ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.item-share-managers > ul > li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  font-size: var(--text-body-sm);
+}
+
+.item-share-managers > ul > li > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

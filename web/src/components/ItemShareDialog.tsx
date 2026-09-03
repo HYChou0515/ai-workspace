@@ -156,6 +156,14 @@ export function ItemShareDialog({
         ))}
       </fieldset>
 
+      {/* OUTSIDE the restricted-only block: `authorize` consults the
+          `change_permission` grant list whatever the visibility, so the grant
+          is live on private and public items too — and those are the two most
+          common states (new items default to private, legacy ones are public).
+          Hiding the control there made P6's own acceptance impossible on a
+          freshly created item. */}
+      <ItemShareManagers managers={managers} onChange={setManagers} />
+
       {visibility === "restricted" && (
         // flexShrink 0, NOT minHeight 0: the panel is a flex column with a
         // max-height, so a shrinkable child is compressed instead of the panel
@@ -164,8 +172,6 @@ export function ItemShareDialog({
         // at its natural height, the overflow reaches ModalShell's own
         // `overflowY: auto`, which is where it was always meant to go.
         <div data-testid="item-share-grants" style={{ display: "grid", gap: 8, flexShrink: 0 }}>
-          {/* Above the roles, and outside the tabs: it is not one of them. */}
-          <ItemShareManagers managers={managers} onChange={setManagers} />
           {hasGroups && (
             <ShareTabs
               value={tab}

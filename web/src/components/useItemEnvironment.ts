@@ -10,18 +10,6 @@
 
 import type { EnvBudget } from "./ItemEnvironmentPanel";
 
-type SandboxCapability = { function: { sandbox: boolean } };
-
-/** Whether this App ever opens an environment.
- *
- * `function.sandbox` is a CAPABILITY gate — an App with it off never creates a
- * sandbox, so a panel there would be a control that can never do anything.
- * Absent (still loading) counts as no: rendering optimistically would flash a
- * panel onto items that turn out never to have one. */
-export function shouldShowEnvironmentPanel(manifest: SandboxCapability | undefined): boolean {
-  return manifest?.function?.sandbox === true;
-}
-
 type ResourcesPayload = {
   limits: { count: number; cpu: number; memory_bytes: number; disk_bytes: number };
   cpu_in_use: number;

@@ -8,28 +8,8 @@
 
 import { describe, expect, it } from "vitest";
 
-import { budgetFrom, shouldShowEnvironmentPanel } from "./useItemEnvironment";
+import { budgetFrom } from "./useItemEnvironment";
 
-const MANIFEST_WITH = { function: { workspace: true, sandbox: true, terminal: true } };
-const MANIFEST_WITHOUT = { function: { workspace: true, sandbox: false, terminal: false } };
-
-describe("shouldShowEnvironmentPanel", () => {
-  it("is absent for an App that never opens a sandbox", () => {
-    // Not "present but permanently idle" — that is a control that can never do
-    // anything, which is the dead-knob shape this codebase keeps recording.
-    expect(shouldShowEnvironmentPanel(MANIFEST_WITHOUT)).toBe(false);
-  });
-
-  it("is present for an App that does", () => {
-    expect(shouldShowEnvironmentPanel(MANIFEST_WITH)).toBe(true);
-  });
-
-  it("is absent when the manifest has not arrived yet", () => {
-    // Undefined is not "yes". Rendering optimistically would flash a panel onto
-    // items that will turn out never to have an environment.
-    expect(shouldShowEnvironmentPanel(undefined)).toBe(false);
-  });
-});
 
 describe("budgetFrom", () => {
   it("is null when this deploy caps nobody", () => {

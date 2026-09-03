@@ -78,8 +78,6 @@ export function ItemEnvironmentModal({
         env={env.data}
         budget={budgetFrom(resources.data)}
         canEdit={canEdit}
-        slug={slug}
-        itemId={itemId}
         onClose={() => close.mutate()}
         onSave={(edit) => save.mutate(edit)}
       />

@@ -738,7 +738,7 @@ def create_app(
             return want
         return min(want, ceiling)
 
-    async def _spec_for(item_id: str) -> SandboxSpec:
+    async def _resolved_for(item_id: str) -> tuple[SandboxSpec, str | None]:
         """How big THIS item's sandbox may be — the one place that answers it.
 
         Three inputs, in this order:
@@ -757,7 +757,14 @@ def create_app(
 
         Clamping happens HERE, on the way out, and nowhere else. `would_cost`
         and the create path both read this, so the gate weighs exactly what the
-        cgroup will get."""
+        cgroup will get.
+
+        Returns the spec AND which ceiling bound it, because this is the only
+        place that holds both. The panel used to infer that by comparing the
+        effective figure against the VIEWER's quota — and for a
+        `change_permission` delegate the viewer and the owner are different
+        people, so the guess was normally wrong and pointed them at a setting
+        that was not holding them."""
         limits = _limits_for(item_id)
         _slug, owner, item_cpu, item_mem = _all_facts_of(item_id)
         budget = await user_limits.for_user(owner) if owner else None
@@ -774,12 +781,26 @@ def create_app(
         # said otherwise, and that string was unreachable: with only a budget
         # clamp, being clamped implied the budget was what bound it, so the
         # panel could never name the App.
-        cpu = _clamp_cpu(cpu, app_cpu or 0.0)
-        mem = _clamp_bytes(mem, app_mem or 0)
-        return SandboxSpec(
-            cpu_cores=_clamp_cpu(cpu, budget.cpu if budget else 0.0),
-            memory_bytes=_clamp_bytes(mem, parse_size(budget.memory) if budget else 0),
-        )
+        after_app = _clamp_cpu(cpu, app_cpu or 0.0)
+        after_app_mem = _clamp_bytes(mem, app_mem or 0)
+        final_cpu = _clamp_cpu(after_app, budget.cpu if budget else 0.0)
+        final_mem = _clamp_bytes(after_app_mem, parse_size(budget.memory) if budget else 0)
+        # WHICH ceiling bound, decided here because this is the only place that
+        # holds both. The panel used to infer it by comparing the effective
+        # figure against the VIEWER's quota — and for a `change_permission`
+        # delegate the viewer and the owner are different people, so the guess
+        # was normally wrong and sent them to change a setting that was not
+        # holding them.
+        bound: str | None = None
+        if (cpu is not None and final_cpu != cpu) or (mem is not None and final_mem != mem):
+            bound = "quota" if (final_cpu, final_mem) != (after_app, after_app_mem) else "app"
+        return SandboxSpec(cpu_cores=final_cpu, memory_bytes=final_mem), bound
+
+    async def _spec_for(item_id: str) -> SandboxSpec:
+        """The registry's seam: just the spec. One resolver, two readers — the
+        attribution is a second question about the same answer, not a second
+        answer."""
+        return (await _resolved_for(item_id))[0]
 
     def _titles_of(item_ids: list[str]) -> dict[str, str]:
         """Each item's headline, for the ones this reader may see.
@@ -1812,6 +1833,10 @@ def create_app(
 
     register_item_routes(
         api,
+        # The richer resolver, so the environment route can say WHICH ceiling
+        # bound the size rather than leaving the client to compare numbers it
+        # can see — which for a delegate were two different people's.
+        resolved_for=_resolved_for,
         spec=spec,
         filestore=filestore,
         get_user_id=get_user_id,

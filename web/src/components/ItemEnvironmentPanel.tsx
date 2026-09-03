@@ -38,8 +38,6 @@ export type ItemEnvironmentPanelProps = {
    *  Read-only for everyone else, deliberately: a collaborator who gets refused
    *  needs to SEE the number that refused them. */
   canEdit: boolean;
-  slug: string;
-  itemId: string;
   onClose?: () => void;
   /** One dimension at a time. An absent key means "not touched", which the
    *  caller turns into "keep what is stored" — the distinction that stops a cpu
@@ -89,10 +87,12 @@ export function ItemEnvironmentPanel({
   // shown, and which limit bound is named: showing the smaller one alone makes
   // the panel disagree with what the person typed, with nothing to explain it.
   const clamped = stated !== null && effective !== null && effective < stated;
-  // The owner's quota is the binding one when it is what the effective figure
-  // landed on. Otherwise it was the App's ceiling. Guessing wrong here sends
-  // someone to change the wrong setting, so it is derived rather than assumed.
-  const boundByQuota = clamped && budget !== null && effective === budget.cpu;
+  // Which limit bound comes from the SERVER. Deriving it here meant comparing
+  // the effective figure — clamped against the OWNER's quota — with the
+  // viewer's own, and for a `change_permission` delegate those are different
+  // people: the comparison was normally false, so the panel blamed the App and
+  // sent them to change a setting that was not holding them.
+  const boundByQuota = env.boundBy === "quota";
 
   return (
     <section className="item-environment" aria-label={t("itemenv.heading")}>

@@ -35,6 +35,12 @@ export type ItemEnvironment = {
    *  A dial the machine will not honour is a promise, so it is not drawn. */
   enforcedCpuCores: number | null;
   enforcedMemoryBytes: number | null;
+  /** Which ceiling held a stated size down — the App's or the owner's quota —
+   *  or null when nothing did. Answered by the server because it is the only
+   *  place that holds both: comparing the effective figure against the numbers
+   *  a CLIENT can see meant comparing the viewer's quota with a clamp made
+   *  against the owner's, which for a delegate are different people. */
+  boundBy: "app" | "quota" | null;
 };
 
 /** A size to store. `null` in either dimension CLEARS it — which is not zero,
@@ -54,6 +60,7 @@ type Wire = {
   effective_memory_bytes: number | null;
   enforced_cpu_cores: number | null;
   enforced_memory_bytes: number | null;
+  bound_by: "app" | "quota" | null;
 };
 
 export type ItemEnvironmentApi = {
@@ -80,6 +87,7 @@ export const itemEnvironmentApi: ItemEnvironmentApi = {
       effectiveMemoryBytes: w.effective_memory_bytes,
       enforcedCpuCores: w.enforced_cpu_cores ?? null,
       enforcedMemoryBytes: w.enforced_memory_bytes ?? null,
+      boundBy: w.bound_by ?? null,
     };
   },
   async setSize(slug, itemId, size) {

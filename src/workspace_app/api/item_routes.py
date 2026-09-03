@@ -12,7 +12,7 @@ import contextlib
 import json
 import logging
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 import msgspec
 from fastapi import APIRouter, FastAPI, HTTPException, Response, status
@@ -26,7 +26,7 @@ from ..perm import Actor, Permission, Verb, authorize
 from ..perm.model import user_subject
 from ..quota.limits import parse_size
 from ..resources.groups import groups_of
-from ..sandbox.protocol import SandboxBusy
+from ..sandbox.protocol import SandboxBusy, SandboxSpec
 from .activity import ActivityLog
 from .item_authz import require_item_access
 from .item_conversation_perm import push_item_mirror_to_conversations
@@ -111,6 +111,13 @@ class _EnvironmentOut(BaseModel):
     #: the backend cannot make. The UI says "cannot confirm" for both.
     enforced_cpu_cores: float | None
     enforced_memory_bytes: int | None
+    #: Which ceiling held the stated size down — `"app"`, `"quota"`, or `None`
+    #: when nothing did. Answered here because the resolver is the only place
+    #: that holds both ceilings: the panel used to infer it by comparing the
+    #: effective figure against the VIEWER's quota, and for a
+    #: `change_permission` delegate that is a different person from the owner
+    #: whose quota actually bound it.
+    bound_by: str | None = None
 
 
 class _ResourcesOut(BaseModel):
@@ -134,6 +141,29 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
+#: Upper bounds, so a value that cannot be applied is refused HERE rather than
+#: three layers down. §1.7 deliberately has no floor — someone who sets a small
+#: environment chose it — but it made that trade on the promise that a bad value
+#: would point back at the setting, and `int(1e300 * 100000)` reaching `cpu.max`
+#: fails as a generic launch error that names nothing. Generous on purpose:
+#: these are "not a machine" rather than "more than we would like".
+_MAX_CORES = 1024.0
+_MAX_BYTES = 1024**5  # 1 PiB
+
+
+def _is_usable_number(value: float | int) -> bool:
+    """A finite, positive count.
+
+    `math.isfinite` is the part that was missing: pydantic accepts `Infinity`
+    and `NaN` by default, neither is `<= 0`, and both collapse to `None` on the
+    store round trip — so a request to SET a size performed a RESET and reported
+    200. The action taken was not the action asked for, and the status said it
+    worked."""
+    import math
+
+    return math.isfinite(value) and value > 0
+
+
 def _validated_resources(body: _ResourcesBody) -> tuple[float | None, int | None]:
     """The two numbers, or a 422 naming which one and why.
 
@@ -150,10 +180,13 @@ def _validated_resources(body: _ResourcesBody) -> tuple[float | None, int | None
     config; here it would let a person silently opt their item out of a ceiling
     the deploy set for them."""
     cpu = body.cpu_cores
-    if cpu is not None and cpu <= 0:
+    if cpu is not None and (not _is_usable_number(cpu) or cpu > _MAX_CORES):
         raise HTTPException(
             status_code=422,
-            detail=f"cpu_cores must be greater than 0 (got {cpu}); omit it to use the default",
+            detail=(
+                f"cpu_cores must be a real number greater than 0 and below {_MAX_CORES:g} "
+                f"(got {cpu}); omit it to use the default"
+            ),
         )
     memory: int | None = None
     if body.memory is not None:
@@ -161,11 +194,13 @@ def _validated_resources(body: _ResourcesBody) -> tuple[float | None, int | None
             memory = parse_size(body.memory)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=f"memory: {exc}") from exc
-        if memory <= 0:
+        if not _is_usable_number(memory) or memory > _MAX_BYTES:
             raise HTTPException(
                 status_code=422,
-                detail=f"memory must be greater than 0 (got {body.memory!r}); "
-                "omit it to use the default",
+                detail=(
+                    f"memory must be greater than 0 and below {_MAX_BYTES // 1024**4} TiB "
+                    f"(got {body.memory!r}); omit it to use the default"
+                ),
             )
     return cpu, memory
 
@@ -208,6 +243,7 @@ def register_item_routes(
     get_user_id: Callable[[], str],
     activity: ActivityLog,
     registry: InvestigationRegistry,
+    resolved_for: Callable[[str], Awaitable[tuple[SandboxSpec, str | None]]],
     turn_engine: ChatTurnEngine,
     locator: ItemLocator,
     ingestor: Ingestor,
@@ -419,7 +455,7 @@ def register_item_routes(
         It is safe to FIND things with and never safe to conclude absence from.
         """
         item, _created_by = _authorize_item(slug, item_id, "read_chat")
-        effective = await registry.spec_for(item_id)
+        effective, bound_by = await resolved_for(item_id)
         enforced = await registry.sandbox.effective_limits(effective)
         return _EnvironmentOut(
             running=await registry.has_live_sandbox(item_id),
@@ -429,6 +465,7 @@ def register_item_routes(
             effective_memory_bytes=effective.memory_bytes,
             enforced_cpu_cores=enforced.cpu_cores,
             enforced_memory_bytes=enforced.memory_bytes,
+            bound_by=bound_by,
         )
 
     @app.put("/a/{slug}/items/{item_id}/resources")

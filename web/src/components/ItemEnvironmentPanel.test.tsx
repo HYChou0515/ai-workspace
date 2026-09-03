@@ -32,6 +32,9 @@ const IDLE = {
   effectiveMemoryBytes: 2 * 1024 ** 3,
   enforcedCpuCores: 2,
   enforcedMemoryBytes: 2 * 1024 ** 3,
+  // Which ceiling bound, from the SERVER — the panel no longer infers it by
+  // comparing the viewer's quota with a clamp made against the owner's.
+  boundBy: null,
 };
 
 const BUDGET = { cpu: 4, memoryBytes: 8 * 1024 ** 3, cpuInUse: 2, memoryInUse: 2 * 1024 ** 3 };
@@ -41,7 +44,7 @@ describe("what is visible", () => {
     // The condition the user made the price of never storing a default: an
     // empty field must not render as `0`, and must not render as a blank box
     // either — one reads as "unlimited", the other as "broken".
-    render(<ItemEnvironmentPanel env={IDLE} budget={BUDGET} canEdit slug="rca" itemId="i" />);
+    render(<ItemEnvironmentPanel env={IDLE} budget={BUDGET} canEdit />);
 
     const shown = screen.getByTestId("cpu-value").textContent ?? "";
     expect(shown).toContain("2");
@@ -55,8 +58,6 @@ describe("what is visible", () => {
         env={{ ...IDLE, statedCpuCores: 1 }}
         budget={BUDGET}
         canEdit
-        slug="rca"
-        itemId="i"
       />,
     );
 
@@ -68,11 +69,9 @@ describe("what is visible", () => {
   it("shows BOTH numbers when a setting is held down, and names what held it", () => {
     render(
       <ItemEnvironmentPanel
-        env={{ ...IDLE, statedCpuCores: 8, effectiveCpuCores: 4 }}
+        env={{ ...IDLE, statedCpuCores: 8, effectiveCpuCores: 4, boundBy: "quota" }}
         budget={BUDGET}
         canEdit
-        slug="rca"
-        itemId="i"
       />,
     );
 
@@ -83,7 +82,7 @@ describe("what is visible", () => {
   });
 
   it("draws no budget half at all when this deploy caps nobody", () => {
-    render(<ItemEnvironmentPanel env={IDLE} budget={null} canEdit slug="rca" itemId="i" />);
+    render(<ItemEnvironmentPanel env={IDLE} budget={null} canEdit />);
 
     expect(screen.queryByTestId("budget-gauge")).toBeNull();
     expect(screen.queryByTestId("cpu-input")).toBeNull();
@@ -97,8 +96,6 @@ describe("what is visible", () => {
         env={{ ...IDLE, running: true }}
         budget={BUDGET}
         canEdit
-        slug="rca"
-        itemId="i"
       />,
     );
 
@@ -114,8 +111,6 @@ describe("what is clickable", () => {
         env={{ ...IDLE, running: true }}
         budget={BUDGET}
         canEdit
-        slug="rca"
-        itemId="i"
       />,
     );
 
@@ -124,7 +119,7 @@ describe("what is clickable", () => {
   });
 
   it("opens the size for editing once nothing is running", () => {
-    render(<ItemEnvironmentPanel env={IDLE} budget={BUDGET} canEdit slug="rca" itemId="i" />);
+    render(<ItemEnvironmentPanel env={IDLE} budget={BUDGET} canEdit />);
 
     expect(screen.getByTestId("cpu-input").hasAttribute("disabled")).toBe(false);
     expect(screen.queryByTestId("close-environment")).toBeNull();
@@ -132,7 +127,7 @@ describe("what is clickable", () => {
 
   it("is read-only for someone who may see it but not spend the owner's budget", () => {
     render(
-      <ItemEnvironmentPanel env={IDLE} budget={BUDGET} canEdit={false} slug="rca" itemId="i" />,
+      <ItemEnvironmentPanel env={IDLE} budget={BUDGET} canEdit={false} />,
     );
 
     expect(screen.getByTestId("cpu-input").hasAttribute("disabled")).toBe(true);
@@ -156,8 +151,6 @@ describe("a deploy that will not honour the dial", () => {
         env={{ ...IDLE, enforcedCpuCores: null }}
         budget={BUDGET}
         canEdit
-        slug="rca"
-        itemId="i"
       />,
     );
 
@@ -167,7 +160,7 @@ describe("a deploy that will not honour the dial", () => {
   });
 
   it("still draws the dial where the backend does apply a ceiling", () => {
-    render(<ItemEnvironmentPanel env={IDLE} budget={BUDGET} canEdit slug="rca" itemId="i" />);
+    render(<ItemEnvironmentPanel env={IDLE} budget={BUDGET} canEdit />);
 
     expect(screen.getByTestId("cpu-input")).toBeTruthy();
     expect(screen.queryByTestId("cpu-unenforced")).toBeNull();

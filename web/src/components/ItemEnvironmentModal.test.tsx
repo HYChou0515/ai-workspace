@@ -31,6 +31,7 @@ const ENVIRONMENT = {
   // test went red — which is the enforcement gate proving itself end to end.
   enforced_cpu_cores: 2,
   enforced_memory_bytes: null,
+  bound_by: null,
 };
 
 const CAPPED = {
