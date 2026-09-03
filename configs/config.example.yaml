@@ -566,6 +566,33 @@
 #   context_limit: 32768                  # ← the ceiling, if you know it
 #   max_messages: 0                       # ← optional hard cap (0 = off)
 #   max_context_tokens: 0                 # ← optional hard cap (0 = off)
+#   max_tokens_window_ratio: 0.8          # ← see below; only used as a last resort
+#
+# `max_tokens_window_ratio` — the LAST rung, and the only one whose number
+# nobody stated. Reached when the operator config, what the traffic taught us,
+# the endpoint's own `/tokenize`, its proxy's `max_input_tokens` AND the model
+# registry are all silent, which is the normal state for a self-hosted model
+# behind a litellm proxy under a local alias: `/tokenize` is a vLLM extension
+# that the proxy does not route, and no registry knows the alias. There the
+# alternative is not a better number — it is `unknown`, which means the history
+# is never trimmed and compaction never runs, so a conversation grows until the
+# endpoint refuses it.
+#
+# In that case we ask the proxy's own `GET /model/info`. If it states
+# `max_input_tokens`, that IS the input window and is used as-is. If it states
+# only `max_tokens`, that figure is multiplied by this ratio.
+#
+# ⚠️ It is a ratio and not a reading because `max_tokens` is not one thing.
+# Measured against litellm's own registry: `gpt-4o` reports `max_tokens` 16,384
+# beside a 128,000 window (an OUTPUT cap), while `ollama_chat/qwen3:14b` reports
+# 40,960 for both (the window). Inside a proxy's own config it is whatever the
+# operator put there. So the fraction is yours to set, the result never
+# outranks a figure anyone stated, and it is reported with its own source so
+# nothing downstream mistakes it for a measurement.
+#
+# Never applied to a stated `max_input_tokens` — that already is the input
+# window, and scaling it would discount twice on top of the prompt, the tool
+# schemas, the reply reserve and the margin the budget already subtracts.
 #
 # ── Serving-layer note: the window is NOT the model's capability ──
 #

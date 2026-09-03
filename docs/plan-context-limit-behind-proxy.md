@@ -191,3 +191,12 @@ litellm 的管理路由,回它**被設定成什麼**。兩件事要分開:
 | **P3** | `history.max_tokens_window_ratio`(預設 0.8) |
 | **P4** | 接進 `turn_context`(照 `catalog` 的 `deferred_lookup` 樣式,不動 runner) |
 | **P5** | 文件 |
+
+全部落地。階梯現在是六段:
+
+```
+config → learned → declared → catalog → estimated → unknown
+```
+
+其中 `declared` / `estimated` 都來自 `GET /model/info`,而且**只有 `estimated` 是導出的**
+—— 來源名稱刻意分開,因為一個沒人講過的數字絕不能讀起來像量測。
