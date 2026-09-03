@@ -18,6 +18,8 @@ which never depended on an answer.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
@@ -79,10 +81,12 @@ def probe_endpoint_limits(
     # two round trips and two timeouts to learn the same nothing, and the
     # `/v1/model/info` spelling was never reached.
     stripped = root.removesuffix("/v1")
-    for url in _unique(f"{root}/model/info", f"{stripped}/model/info", f"{stripped}/v1/model/info"):
-        found = _read_model_info(url, model=model, client=client, timeout=timeout)
-        if found is not None:
-            return found
+    urls = _unique(f"{root}/model/info", f"{stripped}/model/info", f"{stripped}/v1/model/info")
+    with _http(client, timeout) as http:
+        for url in urls:
+            found = _read_model_info(url, model=model, client=http, timeout=timeout)
+            if found is not None:
+                return found
     return None
 
 
@@ -93,10 +97,29 @@ def _unique(*urls: str) -> list[str]:
     return list(dict.fromkeys(urls))
 
 
+@contextmanager
+def _http(client: Any, timeout: float) -> Iterator[Any]:
+    """Close what we opened; never close what we were handed.
+
+    A probe that opens a connection pool per request and drops it leaks the
+    socket until the GC happens to run — and this one runs per (model, endpoint)
+    on every pod, most often down the path that learns nothing at all. A caller
+    that lends us a client keeps ownership of it."""
+    if client is not None:
+        yield client
+        return
+    http = _default_client(timeout)
+    try:
+        yield http
+    finally:
+        closer = getattr(http, "close", None)
+        if callable(closer):
+            closer()
+
+
 def _read_model_info(url: str, *, model: str, client: Any, timeout: float) -> EndpointLimits | None:
     try:
-        http = client if client is not None else _default_client(timeout)
-        resp = http.get(url)
+        resp = client.get(url)
         if getattr(resp, "status_code", 0) != 200:
             logger.debug("context probe: %s answered %s", url, getattr(resp, "status_code", "?"))
             return None
@@ -159,12 +182,14 @@ def probe_context_limit(
         return None
     url = f"{base_url.rstrip('/')}/tokenize"
     try:
-        http = client if client is not None else _default_client(timeout)
-        resp = http.post(url, json={"model": model, "prompt": "ping"})
-        if getattr(resp, "status_code", 0) != 200:
-            logger.debug("context probe: %s answered %s", url, getattr(resp, "status_code", "?"))
-            return None
-        body = resp.json()
+        with _http(client, timeout) as http:
+            resp = http.post(url, json={"model": model, "prompt": "ping"})
+            if getattr(resp, "status_code", 0) != 200:
+                logger.debug(
+                    "context probe: %s answered %s", url, getattr(resp, "status_code", "?")
+                )
+                return None
+            body = resp.json()
     except Exception as exc:  # noqa: BLE001 — a probe must never break anything
         logger.debug("context probe: %s unavailable (%s)", url, type(exc).__name__)
         return None

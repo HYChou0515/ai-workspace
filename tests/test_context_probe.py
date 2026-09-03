@@ -359,3 +359,80 @@ def test_a_body_carrying_infinity_is_silence_not_an_exception():
         )
         is None
     )
+
+
+class _CountingClient:
+    """Records that it was closed — the thing an `httpx.Client` needs and the
+    thing nothing was doing."""
+
+    def __init__(self, resp: _Resp) -> None:
+        self._resp = resp
+        self.closed = False
+        self.gets = 0
+
+    def get(self, url: str, **kw: object) -> _Resp:
+        self.gets += 1
+        return self._resp
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_one_client_per_probe_and_it_is_closed(monkeypatch):
+    """A client was opened per URL VARIANT and never closed — up to three leaked
+    connection pools per probe, on every pod, for the path that most often
+    learns nothing. `httpx` warns about exactly this and then holds the socket
+    until the GC happens to run."""
+    from workspace_app import context_probe
+
+    made: list[_CountingClient] = []
+
+    def _fake(timeout: float) -> _CountingClient:
+        client = _CountingClient(_Resp(404, {"detail": "Not Found"}))
+        made.append(client)
+        return client
+
+    monkeypatch.setattr(context_probe, "_default_client", _fake)
+    context_probe.probe_endpoint_limits(base_url="http://proxy/v1", model="nobody")
+
+    assert len(made) == 1, "one client for the whole probe, not one per url variant"
+    assert made[0].gets == 2, "and it is the one that asks each variant"
+    assert made[0].closed, "an opened connection pool must be closed"
+
+
+def test_a_client_we_were_handed_is_never_closed(monkeypatch):
+    """Closing a borrowed client would break the caller that lent it — the
+    runner could reasonably pass a long-lived one."""
+    from workspace_app import context_probe
+
+    borrowed = _CountingClient(_Resp(404, {}))
+    monkeypatch.setattr(
+        context_probe, "_default_client", lambda timeout: pytest.fail("must not open its own")
+    )
+    context_probe.probe_endpoint_limits(base_url="http://proxy/v1", model="nobody", client=borrowed)
+
+    assert not borrowed.closed
+
+
+def test_the_tokenize_probe_also_closes_what_it_opened(monkeypatch):
+    """The same defect, in the same module, in older code — the probe beside it
+    leaked one client per call too. Left unfixed it would have been the
+    surviving half of a bug this PR only half repaired."""
+    from workspace_app import context_probe
+
+    made: list[_Post] = []
+
+    class _Post(_CountingClient):
+        def post(self, url: str, **kw: object) -> _Resp:
+            return self._resp
+
+    def _fake(timeout: float) -> _Post:
+        client = _Post(_Resp(404, {"detail": "Not Found"}))
+        made.append(client)
+        return client
+
+    monkeypatch.setattr(context_probe, "_default_client", _fake)
+    context_probe.probe_context_limit(base_url="http://vllm", model="m")
+
+    assert len(made) == 1
+    assert made[0].closed

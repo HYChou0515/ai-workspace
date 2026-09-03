@@ -212,3 +212,58 @@ def test_two_endpoints_under_one_model_name_are_asked_separately():
     runner.endpoint_limits("same-name", "http://a/v1")
     runner.endpoint_limits("same-name", "http://b/v1")
     assert calls == ["http://a/v1", "http://b/v1"]
+
+
+def test_a_negative_from_the_proxy_is_asked_again_later():
+    """The one cached value here that a HUMAN is expected to change.
+
+    The proxy's model list is a config file on ANOTHER service, and the
+    documented next step for a deployment sitting on `unknown` is that somebody
+    adds `max_input_tokens` to it. Remembering "it did not say" for the life of
+    the pod means their edit does nothing until WE are redeployed — a silent
+    dependency between two services that nothing would have told either of them
+    about. It is also what a probe that landed during a proxy restart leaves
+    behind: a legitimate-looking negative, permanently."""
+    from workspace_app.api.litellm_runner import (
+        DECLARED_RETRY_S,
+        LitellmAgentRunner,
+    )
+
+    now = [0.0]
+    calls: list[str | None] = []
+    runner = LitellmAgentRunner(base_url="http://proxy/v1")
+    runner._clock = lambda: now[0]
+    runner._declared_probe = lambda base_url, model: calls.append(base_url)
+
+    runner.endpoint_limits("our-alias", None)
+    now[0] = DECLARED_RETRY_S - 1
+    runner.endpoint_limits("our-alias", None)
+    assert len(calls) == 1, "not once per turn — that is a round trip per message"
+
+    now[0] = DECLARED_RETRY_S + 1
+    runner.endpoint_limits("our-alias", None)
+    assert len(calls) == 2, "but eventually, or the operator's fix needs a redeploy of us"
+
+
+def test_an_answer_is_kept_for_the_life_of_the_pod():
+    """Only the SILENCE expires. A number that was stated changes when the proxy
+    is reconfigured, and re-asking for it would spend a round trip to relearn
+    what we already know."""
+    from workspace_app.api.litellm_runner import DECLARED_RETRY_S, LitellmAgentRunner
+    from workspace_app.context_probe import EndpointLimits
+
+    now = [0.0]
+    calls: list[str | None] = []
+
+    def _answers(base_url: str | None, model: str) -> EndpointLimits:
+        calls.append(base_url)
+        return EndpointLimits(max_input_tokens=131072, max_tokens=8192)
+
+    runner = LitellmAgentRunner(base_url="http://proxy/v1")
+    runner._clock = lambda: now[0]
+    runner._declared_probe = _answers
+
+    assert runner.endpoint_limits("our-alias", None).max_input_tokens == 131072
+    now[0] = DECLARED_RETRY_S * 10
+    assert runner.endpoint_limits("our-alias", None).max_input_tokens == 131072
+    assert len(calls) == 1

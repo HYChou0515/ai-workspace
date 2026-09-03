@@ -100,6 +100,25 @@ _LOGGER = logging.getLogger(__name__)
 #: turn's line.
 _NUM_CTX_SEEN: set[tuple[str, int | None]] = set()
 
+#: How long "the proxy did not say" is believed before asking again.
+#:
+#: Every other cached lookup in this file caches a fact about software we ship.
+#: This one caches a fact about a config file on ANOTHER service — and the
+#: documented remedy for a deployment stuck on an `unknown` ceiling is that
+#: somebody adds `max_input_tokens` to exactly that file. Remembering the
+#: negative for the life of the pod would make their fix take effect only when
+#: WE are next redeployed: a dependency between two services that neither of
+#: them is told about, presenting as "I added it and nothing happened".
+#:
+#: It also bounds the other way a negative gets recorded: a probe that lands
+#: while the proxy is restarting gets a legitimate-looking "no", and nothing
+#: about that answer says it was taken from a dead endpoint.
+#:
+#: Ten minutes because the cost is one GET per (model, endpoint) per pod per
+#: window — nothing — while the thing it buys is that a correct proxy config
+#: starts working on its own. An ANSWER never expires; only silence does.
+DECLARED_RETRY_S = 600.0
+
 # Drop params a model doesn't support (e.g. reasoning_effort on a non-reasoning
 # model) instead of erroring — the per-message reasoning-effort selector sends
 # it to every model, and LiteLLM's support varies by provider.
@@ -1174,6 +1193,10 @@ class LitellmAgentRunner:
         # with a different answer shape, and separate from the learner because
         # what a proxy relays is a claim, not something the endpoint did.
         self._endpoint_declared: dict[tuple[str, str], Any] = {}
+        # When each of those keys was last asked, so a NEGATIVE can expire. See
+        # `DECLARED_RETRY_S`.
+        self._declared_at: dict[tuple[str, str], float] = {}
+        self._clock: Callable[[], float] = time.monotonic
         self._declared_probe: Callable[[str | None, str], Any] = lambda base_url, model: (
             probe_endpoint_limits(base_url=base_url, model=model)
         )
@@ -1523,16 +1546,36 @@ class LitellmAgentRunner:
         alone sees no endpoint on exactly the deployment this rung exists for:
         one endpoint configured globally, presets naming only a model.
 
-        Asked once per (model, endpoint) and cached, silence included — most
-        endpoints are not a litellm proxy, and re-asking would put an HTTP round
-        trip in front of every message for a value that does not change. Filled
-        off the loop by `deferred_lookup`, like the `/tokenize` probe: an
-        endpoint that hangs must not stall the pod."""
+        Asked once per (model, endpoint) and cached — most endpoints are not a
+        litellm proxy, and re-asking would put an HTTP round trip in front of
+        every message for a value that does not change. Filled off the loop by
+        `deferred_lookup`, like the `/tokenize` probe: an endpoint that hangs
+        must not stall the pod.
+
+        Silence expires, though — see `DECLARED_RETRY_S`."""
+        key = (model or "", base_url or "")
+        self._expire_declared(key)
         return deferred_lookup(
             self._endpoint_declared,
-            (model or "", base_url or ""),
+            key,
             lambda: self._declared_probe(base_url or self._base_url, model),
         )
+
+    def _expire_declared(self, key: tuple[str, str]) -> None:
+        """Forget a cached silence once it is old enough to re-ask.
+
+        Only silence: an answer is kept for the life of the pod. And the stamp
+        is taken at the moment the question is ASKED, not answered, so a lookup
+        still in flight (which reads as `None` until the thread lands) cannot be
+        re-asked out from under itself."""
+        now = self._clock()
+        asked_at = self._declared_at.get(key)
+        if asked_at is None:
+            self._declared_at[key] = now
+            return
+        if self._endpoint_declared.get(key) is None and now - asked_at >= DECLARED_RETRY_S:
+            self._endpoint_declared.pop(key, None)
+            self._declared_at[key] = now
 
     def _agent_kwargs(
         self,
