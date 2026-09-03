@@ -22,6 +22,7 @@ from page paths); the wiki doesn't need empty folders.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from pathlib import Path
 
 from specstar import QB, SpecStar
@@ -291,6 +292,15 @@ class WikiFileStore:
         # list_resources; `permanently_delete` is what the doc/chunk
         # delete paths use too.
         self._rm.permanently_delete(rid)
+
+    async def purge(self, workspace_id: str) -> None:
+        """Every page of the collection, permanently (`workspace_id` IS the
+        collection id here). FileStore-contract completeness; nothing routes an
+        item delete through the wiki — a collection's pages die with the
+        collection, not with any item."""
+        for p in await asyncio.to_thread(self._paths, workspace_id):
+            with contextlib.suppress(FileNotFound):
+                await self.delete(workspace_id, p)
 
     # ── directories (implicit, derived from page paths) ──────────────
     async def mkdir(self, workspace_id: str, path: str) -> None:

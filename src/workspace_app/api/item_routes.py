@@ -17,13 +17,14 @@ from collections.abc import Callable
 import msgspec
 from fastapi import APIRouter, FastAPI, HTTPException, Response, status
 from pydantic import BaseModel
-from specstar import SpecStar
+from specstar import QB, SpecStar
 
 from ..apps.base import WorkItemBase
 from ..filestore.protocol import FileStore
 from ..kb.ingest import Ingestor
 from ..perm import Actor, Permission, Verb, authorize
 from ..perm.model import user_subject
+from ..quota.disk_ledger import DiskLedger
 from ..resources.groups import groups_of
 from ..sandbox.protocol import SandboxBusy
 from .activity import ActivityLog
@@ -105,8 +106,9 @@ def register_item_routes(
     insights_collection_id: str,
     kb_chat_pipeline: object | None,
     superusers: frozenset[str] = frozenset(),
+    disk_ledger: DiskLedger | None = None,
 ) -> None:
-    """Mount the App work-item create / close routes onto ``app``."""
+    """Mount the App work-item create / close / delete routes onto ``app``."""
 
     def _authorize_item(slug: str, item_id: str, verb: Verb) -> tuple[WorkItemBase, str]:
         """#306 — gate a hand-written WorkItem route: ``read_meta`` first (404, no
@@ -438,4 +440,93 @@ def register_item_routes(
         with contextlib.suppress(SandboxBusy):
             await registry.close_session(item_id)
         await turn_engine.forget(item_id)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @app.delete(
+        "/a/{slug}/items/{item_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
+    async def delete_app_item(slug: str, item_id: str) -> Response:
+        """Delete the item AND everything it owns (plan-delete-item-cascade).
+
+        The generic specstar delete removes only the item row and orphans the
+        rest — worst of all the disk-ledger row, frozen and charged to the
+        owner forever. This route owns the ordered cascade, and the ORDER is
+        the contract: the item row goes LAST, because every earlier step needs
+        it (owner resolution, retryability) — deleting it first is exactly how
+        the orphans were made. A partial failure leaves the row, so retrying
+        the DELETE resumes the sweep."""
+        from ..apps.catalog import discover_app_slugs
+        from ..apps.registry import app_model
+
+        if slug not in discover_app_slugs():
+            raise HTTPException(status_code=404, detail=f"unknown app: {slug!r}")
+        model = app_model(slug)
+        rm = spec.get_resource_manager(model)
+        # 404-no-leak first, then the owner gate: delete is a lifecycle action
+        # only the owner (or a superuser) may take — the same rule the
+        # permission handler enforces on the raw resource actions.
+        current, owner = _authorize_item(slug, item_id, "read_meta")
+        user = get_user_id()
+        if user != owner and user not in superusers:
+            raise HTTPException(status_code=403, detail="only the item's owner can delete it")
+        title = current.title
+        try:
+            # Stop the machinery first: no turn may keep writing into what we
+            # are about to remove. Then the environment — close_session finds
+            # the sandbox through session/address/listing and kills it
+            # (SandboxBusy propagates as 503: better to refuse the delete than
+            # to sweep durable storage under a live sandbox that would
+            # re-mirror it).
+            await turn_engine.forget(item_id)
+            await registry.close_session(item_id)
+            # The ADDRESS row goes too. `close` deliberately keeps it (a stale
+            # row is harmless; deleting one risks erasing a peer's live
+            # rebuild), but after THIS cascade there is no item left for a
+            # peer to legitimately rebuild — a kept row would only point at a
+            # dir the sweep removed.
+            if registry.address is not None:
+                await registry.address.forget(item_id)
+            # Every file and directory record, permanently — what makes the
+            # blobs collectable by the existing GC.
+            await filestore.purge(item_id)
+            # The item's records: conversations (soft-deleted ones included —
+            # the cascade must not leave what a soft delete already hid) and
+            # workflow runs, permanently, by their indexed item_id.
+            from ..resources.conversation import Conversation
+            from ..workflow.run import WorkflowRun
+
+            by_item = (QB["item_id"] == item_id).build()
+            for record_model in (Conversation, WorkflowRun):
+                record_rm = spec.get_resource_manager(record_model)
+                for row in record_rm.list_resources(by_item):
+                    rid = row.info.resource_id  # ty: ignore[unresolved-attribute]
+                    assert isinstance(rid, str)
+                    record_rm.permanently_delete(rid)
+            # Refund the quota: the ledger row goes with the item. This is THE
+            # orphan that motivated the cascade — frozen at its last
+            # measurement and charged to the owner forever, with no caller for
+            # `forget` and no way to resolve the owner once the item row was
+            # gone.
+            if disk_ledger is not None:
+                await disk_ledger.forget(item_id)
+        except (HTTPException, SandboxBusy):
+            raise  # already an honest answer (SandboxBusy → the global 503)
+        except Exception as exc:  # noqa: BLE001 — a half-swept delete must say so
+            _LOGGER.warning("delete_app_item: sweep failed for %s", item_id, exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "deleting the item's storage failed partway; the item "
+                    "still exists — retry the delete to resume the sweep "
+                    f"({type(exc).__name__})"
+                ),
+            ) from exc
+        activity.record(
+            "item_deleted",
+            f"Deleted “{title}” and everything it owned",
+            {"item_id": item_id},
+        )
+        # The row goes LAST — see the docstring.
+        rm.permanently_delete(item_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -208,6 +208,12 @@ class NfsTreeFileStore:
             raise FileExists(path)
         target.mkdir(parents=True, exist_ok=True)
 
+    async def purge(self, workspace_id: str) -> None:
+        """The whole item subtree, gone — including the workspace dir itself
+        (there is nothing left for it to hold). Idempotent when already absent."""
+        item_root = self._item_root(workspace_id)
+        await asyncio.to_thread(lambda: shutil.rmtree(item_root, ignore_errors=True))
+
     async def rmdir(self, workspace_id: str, path: str) -> None:
         target = self._abs(workspace_id, path)
         await asyncio.to_thread(self._rmdir_sync, target, path)

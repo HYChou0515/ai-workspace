@@ -1686,6 +1686,9 @@ def create_app(
         insights_collection_id=insights_collection_id,
         kb_chat_pipeline=kb_chat_pipeline,
         superusers=superusers,
+        # plan-delete-item-cascade: deleting an item refunds its quota — the
+        # ledger row goes with the item, never orphaned again.
+        disk_ledger=disk_ledger,
     )
 
     # On app.state so the routes read the CURRENT list rather than one closed

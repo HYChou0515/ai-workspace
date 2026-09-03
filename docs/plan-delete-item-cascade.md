@@ -47,11 +47,13 @@ apps) have no delete affordance at all.
 1. **Stop the turn machinery first**: cancel any local in-flight turn,
    `turn_engine.forget(item_id)` — and refuse the delete politely if a turn
    cannot be stopped (report, don't half-delete).
-2. **Kill the environment**: `registry.close_session`-equivalent sweep —
-   write-back SKIPPED (we are deleting; writing back first would be wasted
-   I/O and re-inflate the snapshot), `sandbox.kill` (rmtree of the shared
-   dir, `.ready` unlinked first), **clear the address row** (close
-   deliberately keeps it; delete must not), `activity.forget`.
+2. **Kill the environment**: `registry.close_session` verbatim — its
+   write-back is wasted I/O (the purge wipes it next) but reusing the one
+   teardown keeps the #345 lock discipline and the multi-source
+   session/address/listing search; a bespoke skip-writeback copy would be a
+   second teardown to drift. Then **clear the address row** (close
+   deliberately keeps it; delete must not — there is no item left for a peer
+   to legitimately rebuild).
 3. **Delete the durable storage**: every `WorkspaceFile` row via
    `permanently_delete` (what makes blobs collectable by the existing GC —
    soft-deleted rows keep revisions, hence blobs, forever), the
