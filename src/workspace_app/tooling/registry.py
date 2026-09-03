@@ -38,6 +38,7 @@ from ..agent.plot_review import run_review
 from ..agent.shown_files import declare_shown_files, describe_for_display
 from ..agent.tools import _exec_result_text
 from ..sandbox.protocol import ExecResult, SandboxHandle
+from .artifact import parse_env_declaration
 
 logger = logging.getLogger(__name__)
 
@@ -125,26 +126,37 @@ def _read_env_needs(pkg_dir: Path) -> tuple[EnvNeed, ...] | None:
 
     Absent is NOT empty — see ``PackageInfo.env_needs``. The file is optional
     precisely because every package that predates #750 lacks it, and a missing
-    hint must never be worse than the no-hint status quo."""
+    hint must never be worse than the no-hint status quo.
+
+    WHAT the file means is decided once, by ``parse_env_declaration`` — the
+    same function the two build paths use. Only WHAT TO DO ABOUT A BAD ONE
+    differs here, and that difference is the whole point of this wrapper (see
+    below). A second opinion on the parsing itself is what let a BOM'd file
+    build green and then arrive here as silence: the builder had been taught
+    to read one encoding and this had not (#763).
+
+    The FILE is the unit: one unusable entry degrades the whole declaration,
+    it does not get skipped. A list with the bad rows quietly dropped would
+    reach the panel looking complete, and "here is what this tool needs",
+    missing two names, is a worse answer than "this tool did not say" — the
+    same reason absent and empty are kept apart at all."""
     env_json = pkg_dir / "env.json"
     if not env_json.is_file():
         return None
     try:
         return tuple(
-            EnvNeed(
-                name=entry["name"],
-                description=entry.get("description", ""),
-                required=entry.get("required"),
-            )
-            for entry in json.loads(env_json.read_text())
+            EnvNeed(name=e.name, description=e.description, required=e.required)
+            for e in parse_env_declaration(env_json.read_text("utf-8-sig"))
         )
-    except (OSError, ValueError, TypeError, KeyError):
-        # Degrade to "nobody said" rather than raise. `commands.json` is strict
-        # because a missing command list means the tool cannot run; a malformed
-        # hint means only that the hint is missing, and raising here would let
-        # one third-party author's typo stop an operator's startup for EVERY
-        # package — the convenience turning itself into an outage. The author
-        # gets the loud failure at prebuild instead, on their own build.
+    except (OSError, ValueError):
+        # Degrade to "nobody said" rather than raise — this is the ONLY thing
+        # this reader does differently, and it is deliberate. `commands.json`
+        # is strict because a missing command list means the tool cannot run;
+        # a malformed hint means only that the hint is missing, and raising
+        # here would let one third-party author's typo stop an operator's
+        # startup for EVERY package — the convenience turning itself into an
+        # outage. The author gets the loud failure at prebuild instead, on
+        # their own build.
         logger.warning(
             "registry: package %r has an unreadable env.json; treating it as "
             "undeclared. The tool still runs; only its environment hint is lost.",

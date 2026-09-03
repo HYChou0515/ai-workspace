@@ -172,6 +172,58 @@ def test_a_tools_row_carries_what_it_wants_from_the_environment(harness: Harness
     ]
 
 
+def test_a_junk_declaration_costs_its_own_field_not_the_whole_endpoint(
+    harness: Harness, monkeypatch
+) -> None:
+    """#763 — the row survives, and so does every other row.
+
+    `EnvNeedOut.description` is a `str` and Pydantic does not coerce, so a
+    package declaring `"description": null` used to raise inside the `rows`
+    comprehension — which sits OUTSIDE the resolve guard, with no catch-all
+    behind it. The endpoint 500s, the picker and the env panel vanish for the
+    item, and its owner cannot edit the package that did it.
+
+    Asserted HERE, at the route, because the route is where it broke. Both
+    producers feed this list (`[*pkgs, *external.packages]`), and the
+    FIRST-party reader is deliberately lenient — it degrades a malformed file
+    to `None` but passes a well-formed one's junk VALUES straight through — so
+    guarding only the third-party parser leaves the same 500 one door along.
+    """
+    from workspace_app.tooling.registry import CommandInfo, EnvNeed, PackageInfo
+
+    iid = register_rca_item(harness.spec)
+    _declaring(monkeypatch, "wafer-history")
+    _resolving(
+        monkeypatch,
+        ExternalTools(
+            packages=(
+                PackageInfo(
+                    name="wafer-history",
+                    install_dir="../.tools/wafer-history",
+                    commands=(CommandInfo("trend", "Yield trend for a lot.", {}),),
+                    env_needs=(
+                        EnvNeed("GOOD", "a real description", required=True),
+                        EnvNeed("NULL_DESC", None),  # ty: ignore[invalid-argument-type]
+                        EnvNeed("ODD_REQUIRED", "", required=3),  # ty: ignore[invalid-argument-type]
+                    ),
+                ),
+            ),
+            shas={"wafer-history": "a" * 64},
+            provenance={},
+        ),
+    )
+
+    resp = harness.client.get(f"/a/rca/items/{iid}/tools")
+
+    assert resp.status_code == 200, "one junk value must not take the endpoint down"
+    (row,) = [r for r in resp.json()["tools"] if r["key"] == "wafer-history"]
+    assert row["env_needs"] == [
+        {"name": "GOOD", "description": "a real description", "required": True},
+        {"name": "NULL_DESC", "description": "", "required": None},
+        {"name": "ODD_REQUIRED", "description": "", "required": None},
+    ]
+
+
 def test_a_builtin_row_needs_nothing_rather_than_saying_nothing(harness: Harness):
     """A built-in is `[]`, not `null` — and the difference is ours to assert.
 

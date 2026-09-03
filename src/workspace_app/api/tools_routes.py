@@ -146,8 +146,29 @@ def _env_needs_of(unit_key: str, packages: Sequence[PackageInfo]) -> list[EnvNee
         return []
     if pkg.env_needs is None:
         return None
+    # Coerce HERE, once, because this is where the typed model is built and
+    # BOTH producers arrive at it: `packages` is `[*first-party, *third-party]`.
+    # `EnvNeedOut.description` is a `str` and Pydantic does not coerce, so an
+    # author writing `"description": null` used to raise inside the `rows`
+    # comprehension below — which sits outside the resolve guard, with no
+    # catch-all behind it, so one junk value returned 500 and took away the
+    # whole picker and env panel for an item whose owner cannot edit that
+    # package (#763).
+    #
+    # A guard on either producer alone leaves the other door open: the builder
+    # refuses this content loudly, but only for artifacts built AFTER that
+    # landed, and the first-party reader is deliberately lenient — it degrades
+    # a malformed FILE to "nobody said" while passing a well-formed one's junk
+    # VALUES straight through.
+    #
+    # Values, not rows: a name is what the panel is for, so a row keeps its
+    # name and loses only the prose it could not carry.
     return [
-        EnvNeedOut(name=n.name, description=n.description, required=n.required)
+        EnvNeedOut(
+            name=n.name,
+            description=n.description if isinstance(n.description, str) else "",
+            required=n.required if isinstance(n.required, bool) else None,
+        )
         for n in pkg.env_needs
     ]
 
