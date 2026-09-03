@@ -1813,7 +1813,7 @@ def test_the_resources_page_names_a_deleted_items_environment():
         assert rows and rows[0]["title"] == "t", f"a deleted item's row lost its name: {rows}"
 
 
-@pytest.mark.parametrize("blank", ["", "   ", "\t\n"])
+@pytest.mark.parametrize("blank", ["", "   ", "\t\n", " alice ", "alice\t"])
 def test_blanking_the_owner_does_not_switch_the_quota_off(monkeypatch, blank):
     """Round-7 finding 1 — one PATCH per extra sandbox, and the gate stops.
 
@@ -1839,6 +1839,12 @@ def test_blanking_the_owner_does_not_switch_the_quota_off(monkeypatch, blank):
     A non-empty bogus name (`"ghost"`) is a different case and stays accepted:
     that is #687's documented trade-off, where the bill MOVES to a name nobody
     holds. What must not exist is a bill that goes nowhere.
+
+    The PADDED cases are round-9's, and they are the ones that matter most: the
+    first fix tested `.strip()` but RETURNED the raw string, so `"alice "` billed
+    a person who does not exist while reading as "alice" in every UI there is.
+    Predicate and value have to use the same normalisation — a rule that decides
+    on one form of a value and then stores another is two rules.
     """
     from workspace_app.api import app as app_mod
 
@@ -1980,6 +1986,16 @@ def test_a_live_item_under_the_wrong_app_is_not_found_rather_than_gone():
         assert client.delete(f"/rca-investigation/{alive}").status_code in (200, 204)
         gone = client.get(f"/a/rca/items/{alive}/tools")
         assert gone.status_code == 410, f"a deleted item answered {gone.status_code}: {gone.text}"
+
+        # …but only under ITS OWN App. A deleted item addressed under another
+        # App is a wrong-slug 404 like any other: "some App holds this id" is
+        # not a stranger's to learn from a gate that authorizes nobody. The
+        # mutation probe is what found this case missing — dropping the slug
+        # test from the 410 branch changed nothing that any test could see.
+        gone_elsewhere = client.get(f"/a/pm/items/{alive}/tools")
+        assert gone_elsewhere.status_code == 404, (
+            f"a deleted item leaked its App: {gone_elsewhere.status_code} {gone_elsewhere.text}"
+        )
 
 
 def test_a_delegate_can_close_a_deleted_items_environment():

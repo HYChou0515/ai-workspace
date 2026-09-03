@@ -26,7 +26,7 @@ from ..quota.disk_ledger import DiskLedger
 from ..quota.limits import parse_size
 from ..quota.user_limits import UserLimits
 from ..resources.groups import groups_of
-from .item_authz import check_access, load_access_facts
+from .item_authz import check_access, load_access_facts, require_item_access
 from .locator import ItemLocator
 from .registry import InvestigationRegistry
 from .sandbox_activity import IActivityStore
@@ -329,23 +329,26 @@ def register_quota_routes(
         # Still 404 rather than 403 for everyone else: whether a given item has
         # an environment running is not a fact a bystander is owed.
         if owner != get_user_id() and get_user_id() not in superusers:
-            # Resolved the way the LEDGER resolves it, and deliberately not
-            # through `require_item_access`: that gate answers 410 for a deleted
-            # item and takes its slug from a lookup that reports one as absent,
-            # so a manager was refused twice over on the one row this page
-            # argues hardest for. Closing is a billing action — the machine is
-            # running and somebody is paying for it — not an operation on the
-            # item, so "the item is deleted" is not a reason to refuse it.
-            facts = load_access_facts(spec, item_id, include_deleted=True)
+            # THE shared gate, with the two differences stated as arguments.
+            # `slug=None` because this route addresses the item by id alone —
+            # fabricating one from a lookup that reports a deleted item as
+            # absent is what refused a manager on the one row this page argues
+            # hardest for. `allow_deleted` because closing is a BILLING action:
+            # the machine is running and somebody is paying for it, so "the item
+            # is deleted" is not a reason to refuse.
+            #
+            # Inlining this gate's body to get those two was the first fix, and
+            # it was the same defect it had just repaired one file over: a copy
+            # the next rule added to the shared gate would never reach.
             try:
-                check_access(
-                    facts,
-                    facts.slug if facts is not None else "",
+                require_item_access(
+                    spec,
+                    None,
                     item_id,
                     "change_permission",
                     user=get_user_id(),
-                    groups=groups_of(spec, get_user_id()),
                     superusers=superusers,
+                    allow_deleted=True,
                 )
             except Exception as exc:  # noqa: BLE001 — any refusal reads the same
                 raise HTTPException(status_code=404, detail="unknown environment") from exc

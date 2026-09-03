@@ -121,10 +121,14 @@ class _SandboxActivity(Struct):
 
     item_id: str
     last_active_ms: int = 0
-    # The debtor, as `apps.resolve.debtor_of` resolved it when the row was
-    # written: the item's `owner` FIELD, or its creator when that field says
-    # nothing. See #687 — `owner` is today rewritable by anyone with write
-    # access, the reason the per-person limits are not yet tamper-proof.
+    # The debtor: the item's `owner` FIELD, or its creator when that field says
+    # nothing (`apps.resolve.debtor_of`). Written by whichever bump last
+    # RESOLVED one — a bump that could not is refused the right to blank this
+    # (see `_bump_sync`), so the name can be older than the row's timestamp.
+    # That is deliberate: a stale debtor still bills somebody, while an empty
+    # one bills nobody and hides the sandbox from the page that would close it.
+    # See #687 — `owner` is today rewritable by anyone with write access, the
+    # reason the per-person limits are not yet tamper-proof.
     owner: str = ""
     # What this item's sandbox may consume, from its App (`quota.limits`).
     # Milli-cores rather than a float so the index sorts and sums exactly.

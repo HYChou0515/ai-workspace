@@ -1,6 +1,12 @@
 """Shared WorkItem authorization for the hand-written workspace routes (#306 /
 plan-permissions.md Rollout PR3).
 
+``require_item_access`` is THE gate: every difference a caller needs is a
+parameter on it (``slug=None`` for a route with no slug in its path,
+``allow_deleted`` for a billing action). Inlining its body to get one of those
+differences is how a later rule stops reaching every caller — this file has lost
+`refuse_if_gone` that way once already.
+
 The item auto-CRUD is storage-gated by ``work_item_access_scope`` (read_meta →
 404), but the workspace SUB-routes (files, chat, stream) resolve the item through
 ``ItemLocator.require_item`` / ``rm.get``, which bypasses that scope and — before
@@ -79,8 +85,16 @@ def refuse_if_gone(facts: ItemAccessFacts | None, item_id: str) -> None:
     is how the last six review rounds went. Call it right after the access check
     in each.
 
-    AFTER the access check, never before: 410 says "this item existed", and only
+    AFTER the access check wherever there IS one — `require_item_access` here and
+    `ItemLocator.require_access` — because 410 says "this item existed" and only
     somebody who could already have seen it may learn that.
+
+    `ItemLocator.require_item` calls it with no access check, because it has
+    none to make: it validates the slug↔item pairing and nothing else, and the
+    routes behind it (tools / entity / capability / export) authorize nobody at
+    all. The 410 there discloses strictly less than the 200 beside it. That is a
+    pre-existing hole in those routes rather than a licence — when they are
+    gated, this call moves after the gate like the other two.
 
     404 and 410 are told apart deliberately. An outside system lists items and
     then acts on them (#700), so "that one is finished, open a new one" and "no
@@ -91,7 +105,7 @@ def refuse_if_gone(facts: ItemAccessFacts | None, item_id: str) -> None:
 
 def check_access(
     facts: ItemAccessFacts | None,
-    slug: str,
+    slug: str | None,
     item_id: str,
     verb: Verb,
     *,
@@ -101,8 +115,14 @@ def check_access(
 ) -> None:
     """Raise unless ``user`` may ``verb`` this item. Pure — no I/O — so the facts
     can come from a cache without the DECISION being cached with them: a verb the
-    caller has never asked for is still evaluated properly."""
-    if facts is None or facts.slug != slug:
+    caller has never asked for is still evaluated properly.
+
+    ``slug`` is ``None`` for a route that addresses the item by ID ALONE, where
+    there is no slug↔item pairing to validate — `/me/resources/live/{item_id}`
+    is the case. Passing a fabricated slug there is what made a deleted item's
+    environment unclosable: the fabrication came from a lookup that reports one
+    as absent, so the check refused every time."""
+    if facts is None or (slug is not None and facts.slug != slug):
         raise HTTPException(status_code=404, detail=f"item {item_id!r} not found in app {slug!r}")
     actor = Actor.human(user, groups=groups)
     perm = facts.item.permission
@@ -114,13 +134,14 @@ def check_access(
 
 def require_item_access(
     spec: SpecStar,
-    slug: str,
+    slug: str | None,
     item_id: str,
     verb: Verb,
     *,
     user: str,
     superusers: frozenset[str] = frozenset(),
     groups_provider: Callable[[str], frozenset[str]] | None = None,
+    allow_deleted: bool = False,
 ) -> tuple[WorkItemBase, str]:
     """Gate a hand-written workspace route: validate that ``item_id`` belongs to
     App ``slug`` (404), then check ``read_meta`` first (404 — an actor who can't
@@ -130,10 +151,20 @@ def require_item_access(
 
     ``groups_provider`` resolves the caller's groups so a ``group:`` grant matches;
     defaults to the live ``groups_of`` lookup, keeping this consistent with the
-    storage-layer ``work_item_access_scope`` (which honours groups)."""
+    storage-layer ``work_item_access_scope`` (which honours groups).
+
+    ``slug=None`` for a route that addresses the item by id alone (see
+    `check_access`). ``allow_deleted`` for a BILLING action rather than an
+    operation on the item: a deleted item's sandbox keeps running and keeps
+    being charged for, so closing it must still work — the resources page exists
+    to offer exactly that. Both are PARAMETERS rather than a second copy of this
+    body somewhere else, because the copy is what stops the next rule added here
+    from reaching every caller — which is precisely how `refuse_if_gone` came to
+    be missing from a gate one round after it was written."""
     facts = load_access_facts(spec, item_id, include_deleted=True)
     groups = groups_provider(user) if groups_provider is not None else groups_of(spec, user)
     check_access(facts, slug, item_id, verb, user=user, groups=groups, superusers=superusers)
-    refuse_if_gone(facts, item_id)
+    if not allow_deleted:
+        refuse_if_gone(facts, item_id)
     assert facts is not None  # check_access raises on None
     return facts.item, facts.created_by

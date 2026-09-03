@@ -124,15 +124,22 @@ def debtor_of(spec: SpecStar, slug: str, item_id: str, item: WorkItemBase) -> st
 
     "Says anything" is `.strip()`, not truthiness: the first version of this
     floor was `if item.owner:`, and a single SPACE walked straight past it and
-    reproduced the whole defect. A non-empty bogus name is a different case and
-    stays as it was — that is #687's documented trade-off, where the bill moves
-    to a name nobody holds. What must not exist is a bill that goes nowhere.
+    reproduced the whole defect. The second tested the STRIPPED value and
+    returned the RAW one, so `"alice "` billed a person who does not exist —
+    the ledger matches owners exactly — while reading as "alice" in every UI
+    there is. A rule that decides on one form of a value and stores another is
+    two rules; this returns what it tested.
+
+    A non-empty bogus name is a different case and stays as it was — that is
+    #687's documented trade-off, where the bill moves to a name nobody holds.
+    What must not exist is a bill that goes nowhere.
 
     Takes the already-resolved ``item`` so the common path costs nothing: the
     meta read happens only when ``owner`` is empty. Best effort — a debtor we
     cannot read is not a reason to fail the write that asked."""
-    if item.owner.strip():
-        return item.owner
+    stated = item.owner.strip()
+    if stated:
+        return stated
     try:
         return (
             spec.get_resource_manager(app_model(slug))

@@ -170,16 +170,27 @@ class ItemLocator:
         wrong-slug branch is 404 and nothing else: this gate authorizes nobody,
         so it must never tell a stranger that some other App holds this id.
 
-        Reads the facts (one item + one meta) rather than the item alone,
-        because that is what carries ``is_deleted`` and what lets the refusal be
-        the SHARED one. `require_access` already pays the same two reads."""
+        ONE read when it lets you through. The second version resolved the full
+        access facts up front — an extra `get_meta` on every success, on the
+        routes that poll (`turn-alive` went 3 gets + 3 metas to 3 + 4) — and
+        justified it with "`require_access` already pays the same two reads",
+        which is false: `require_access` MEMOISES its facts, so inside the
+        window it pays nothing and this gate would re-read what the line above
+        it had just cached. Both branches of the answer are unchanged; only the
+        cost moved back onto the failure path, where a second round trip is
+        free."""
+        found = find_work_item(self._spec, item_id)
+        if found is not None and found[0] == slug:
+            return item_id
+        # A miss here is one of three things, and only ONE of them is Gone: a
+        # soft-deleted item OF THIS APP. An unknown id and an item of another
+        # App are both 404 — this gate authorizes nobody, so the difference
+        # between "no such id" and "another App holds it" is not a stranger's
+        # to learn.
         facts = load_access_facts(self._spec, item_id, include_deleted=True)
-        if facts is None or facts.slug != slug:
-            raise HTTPException(
-                status_code=404, detail=f"item {item_id!r} not found in app {slug!r}"
-            )
-        refuse_if_gone(facts, item_id)
-        return item_id
+        if facts is not None and facts.slug == slug:
+            refuse_if_gone(facts, item_id)
+        raise HTTPException(status_code=404, detail=f"item {item_id!r} not found in app {slug!r}")
 
     def require_access(self, slug: str, item_id: str, verb: Verb) -> str:
         """#306 PR3 — the authorizing sibling of ``require_item``: validate slug↔item,
