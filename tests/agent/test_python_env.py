@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import pytest
 
+from workspace_app.agent.context import AgentToolContext
 from workspace_app.agent.python_env import ProjectEnvError, ensure_project_env
 from workspace_app.sandbox.protocol import ExecResult, SandboxHandle, SandboxSpec
 
@@ -185,3 +186,55 @@ async def test_a_missing_uv_is_not_reported_as_a_stale_lock() -> None:
 
     assert "not found" in str(caught.value), "the real reason must reach the operator"
     assert b"uv.lock" not in b"".join(said), "and must not be preceded by a false one"
+
+
+async def test_a_failed_sync_takes_its_half_built_venv_with_it() -> None:
+    """`uv sync` creates the environment BEFORE it fails — measured with uv
+    0.7.5 on a project whose lock is missing. Left behind, that directory is
+    exactly what the `python` shim probes, so the sandbox would adopt an
+    interpreter with none of the packages anyone asked for AND lose the
+    carrier's stack and its `pip` shims with it.
+
+    The invariant: `python` points at the project env only if we actually
+    prepared one. So a failure removes what it made.
+    """
+    sb = _Recording(
+        present={"pyproject.toml"},
+        results={
+            ("uv", "sync", "--frozen"): ExecResult(
+                exit_code=2, stdout=b"error: Unable to find lockfile at `uv.lock`"
+            )
+        },
+    )
+
+    with pytest.raises(ProjectEnvError):
+        await ensure_project_env(sb, SandboxHandle(id="s1"))  # ty: ignore[invalid-argument-type]
+
+    removals = [c for c in sb.calls if any("UV_PROJECT_ENVIRONMENT" in part for part in c)]
+    assert removals, "a failed sync must not leave a venv for the shim to adopt"
+
+
+async def test_a_failure_is_not_forgotten_by_the_next_call() -> None:
+    """`ensure_sandbox` used to prepare the env only when it created the
+    handle. The pre-warm in `turns.py` calls it inside
+    `contextlib.suppress(Exception)`, so the raise was swallowed, the handle
+    stayed set, and the agent's own exec — the one whose error the USER would
+    have seen — never tried again. The turn then ran against an environment
+    nobody had prepared, and neither the person nor the operator was told.
+
+    So preparation is remembered by whether it SUCCEEDED, not by whether a
+    handle exists: a failure is raised again for the next caller.
+    """
+    ctx = AgentToolContext(
+        sandbox=_Recording(  # ty: ignore[invalid-argument-type]
+            present={"pyproject.toml"},
+            results={
+                ("uv", "sync", "--frozen"): ExecResult(exit_code=2, stdout=b"boom"),
+            },
+        ),
+    )
+
+    with pytest.raises(ProjectEnvError):
+        await ctx.ensure_sandbox()
+    with pytest.raises(ProjectEnvError):
+        await ctx.ensure_sandbox()  # the swallowed first one must not count as done

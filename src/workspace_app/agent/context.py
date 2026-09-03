@@ -520,6 +520,11 @@ class AgentToolContext:
     # so agent/ stays decoupled from kb/wiki/.
     submit_wiki_correction: Callable[..., Awaitable[str]] | None = None
 
+    #: #775: has this context's python environment been prepared SUCCESSFULLY?
+    #: Not `handle is not None` — a failed preparation leaves a live handle,
+    #: and treating that as done is how the failure went unseen.
+    _project_env_ready: bool = False
+
     async def ensure_sandbox(self) -> SandboxHandle:
         assert self.sandbox is not None  # file/exec tools imply an RCA context
         if self.handle is None:
@@ -553,11 +558,20 @@ class AgentToolContext:
                     await provision_tools(
                         self.sandbox, self.handle, todo, prebuilt_dir=self.prebuilt_dir
                     )
-            # A workspace may declare its own python dependencies (#775). Runs
-            # AFTER provisioning so the carrier is already in place for the
-            # profiles that have no declaration, and after the snapshot restore
-            # above so the manifest being read is the one the workspace holds.
+        # A workspace may declare its own python dependencies (#775). Runs
+        # AFTER provisioning so the carrier is already in place for profiles
+        # with no declaration, and after the snapshot restore so the manifest
+        # read is the one the workspace holds.
+        #
+        # Keyed on whether preparation SUCCEEDED, not on whether a handle
+        # exists. Inside the `handle is None` branch it ran once and its raise
+        # was swallowed by the pre-warm's `contextlib.suppress(Exception)` in
+        # `turns.py`; the handle stayed set, so the agent's own exec — whose
+        # error the user would actually have seen — never tried again, and the
+        # turn ran against an environment nobody had prepared.
+        if not self._project_env_ready:
             from .python_env import ensure_project_env
 
             await ensure_project_env(self.sandbox, self.handle, on_output=self.on_exec_output)
+            self._project_env_ready = True
         return self.handle

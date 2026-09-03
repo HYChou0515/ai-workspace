@@ -76,6 +76,23 @@ async def ensure_project_env(
     # effect — silently, unless someone says so, which is the advisory below.
     result = await sandbox.exec(handle, ["uv", "sync", "--frozen"], on_output=on_output)
     if result.exit_code != 0:
+        # uv creates the environment BEFORE it fails — a missing lock still
+        # leaves a working interpreter with none of the packages. That
+        # directory is exactly what the `python` shim probes, so leaving it
+        # would hand the agent a stack-less interpreter AND cost it the
+        # carrier's `pip` shims: #581 ("installed into A, running in B")
+        # through a new door, and permanent, because the manifest outlives the
+        # sandbox.
+        #
+        # The invariant is that `python` is the project's only if we prepared
+        # one. The path is the backend's to know (it sets the variable for
+        # every exec), so the shell reads it there rather than us duplicating
+        # it here; unset, the guard makes this a no-op.
+        await sandbox.exec(
+            handle,
+            ["sh", "-c", '[ -n "$UV_PROJECT_ENVIRONMENT" ] && rm -rf "$UV_PROJECT_ENVIRONMENT"'],
+            on_output=None,
+        )
         raise ProjectEnvError(result)
 
     # AFTER a sync that worked, never before. This check cannot tell "uv says
