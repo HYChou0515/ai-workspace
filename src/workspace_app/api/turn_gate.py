@@ -49,7 +49,7 @@ def quota_body(
     exc: Exception,
     *,
     viewer: str | None = None,
-    title_of: Callable[[str], str] | None = None,
+    titles_of: Callable[[list[str]], dict[str, str]] | None = None,
 ) -> dict[str, object]:
     """The 507 body for one refusal — the code plus the numbers behind it.
 
@@ -71,19 +71,28 @@ def quota_body(
     """
     if isinstance(exc, SandboxQuotaExceeded):
         mine = viewer is not None and viewer == exc.owner
+        held = list(exc.holding) if mine else []
+        # One batched lookup for the whole list rather than one per row: this
+        # runs on the failure path inside an exception handler, and the call
+        # count is the latency.
+        titles = titles_of([h.item_id for h in held]) if titles_of and held else {}
         return {
             "error": _CODES[SandboxQuotaExceeded],
             "dimension": exc.dimension,
             "used": exc.used,
             "limit": exc.limit,
+            # Only the ones the READER may see — an item they hold no read_meta
+            # on is absent rather than named, because `owner` is a field anyone
+            # with write access can point at somebody else (#687).
             "holding": [
                 {
                     "item_id": h.item_id,
-                    "title": title_of(h.item_id) if title_of else "",
+                    "title": titles[h.item_id],
                     "cpu_cores": h.cpu_milli / 1000,
                     "memory_bytes": h.memory_bytes,
                 }
-                for h in (exc.holding if mine else [])
+                for h in held
+                if h.item_id in titles
             ],
         }
     assert isinstance(exc, WorkspaceFull | UserDiskFull)
@@ -115,10 +124,10 @@ class TurnRefused(Exception):
         self,
         *,
         viewer: str | None = None,
-        title_of: Callable[[str], str] | None = None,
+        titles_of: Callable[[list[str]], dict[str, str]] | None = None,
     ) -> dict[str, object]:
         return {
-            **quota_body(self.primary, viewer=viewer, title_of=title_of),
+            **quota_body(self.primary, viewer=viewer, titles_of=titles_of),
             "also": [quota_code(e) for e in self.also],
         }
 

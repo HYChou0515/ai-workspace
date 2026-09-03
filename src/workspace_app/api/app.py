@@ -78,7 +78,7 @@ from .health_routes import (
     register_replay_routes,
     register_sanity_routes,
 )
-from .item_authz import require_item_access
+from .item_authz import check_access, load_access_facts
 from .item_routes import register_item_routes
 from .kb_chat_routes import (
     register_kb_chat_routes,
@@ -781,13 +781,13 @@ def create_app(
             memory_bytes=_clamp_bytes(mem, parse_size(budget.memory) if budget else 0),
         )
 
-    def _title_of(item_id: str) -> str:
-        """This item's headline for a refusal, IF the person reading may see it.
+    def _titles_of(item_ids: list[str]) -> dict[str, str]:
+        """Each item's headline, for the ones this reader may see.
 
         An id is addressable but not recognisable — "close one of
         rca-investigation:12cec732" is not an instruction anybody can follow.
         But `find_work_item` is a point `get`, which no access scope filters, so
-        naming the item has to be gated on the READER's own access.
+        naming an item has to be gated on the READER's own access.
 
         It cannot be gated on the debtor instead. `owner` is an ordinary string
         anyone with write access can PATCH (#687), so someone could point it at
@@ -795,22 +795,49 @@ def create_app(
         person the next time they were refused. The reader's `read_meta` is the
         only test here that neither party can rewrite.
 
-        Empty rather than raising: a missing item, or one this reader may not
-        see, degrades to "an environment you cannot see" rather than turning a
-        507 into a 500 or a disclosure."""
+        BATCHED, and that is not premature: this runs inside an exception
+        handler on the failure path, and the first version paid three store
+        round trips per held environment — a `slug_of` for a slug the fact set
+        already carried, the facts themselves, and the title read — plus a
+        groups query per row with identical arguments. Measured at four
+        environments: `find_work_item` 6 -> 14, `groups_of` 0 -> 4, all of it
+        synchronous specstar I/O inside an `async def`. This codebase prices
+        that in its own docstrings: one round trip measured ~219 ms in
+        production, and the call count IS the latency.
+
+        `check_access` is PURE, so one fact fetch per item and one groups
+        lookup per refusal is all the information the decision needs.
+
+        A missing item, or one this reader may not see, is simply absent from
+        the result — "an environment you cannot see" rather than a 500 or a
+        disclosure."""
+        from ..resources.groups import groups_of
+
+        viewer = get_user_id()
         try:
-            require_item_access(
-                spec,
-                locator.slug_of(item_id) or "",
-                item_id,
-                "read_meta",
-                user=get_user_id(),
-                superusers=superusers,
-            )
-        except Exception:  # noqa: BLE001 — no access is an ordinary answer here
-            return ""
-        found = find_work_item(spec, item_id)
-        return getattr(found[1], "title", "") if found is not None else ""
+            groups = groups_of(spec, viewer)
+        except Exception:  # noqa: BLE001 — a refusal must not become a 500
+            logger.debug("titles: group lookup failed for %s", viewer, exc_info=True)
+            groups = frozenset()
+        out: dict[str, str] = {}
+        for item_id in item_ids:
+            try:
+                facts = load_access_facts(spec, item_id)
+                if facts is None:
+                    continue
+                check_access(
+                    facts,
+                    facts.slug,
+                    item_id,
+                    "read_meta",
+                    user=viewer,
+                    groups=groups,
+                    superusers=superusers,
+                )
+            except Exception:  # noqa: BLE001 — no access is an ordinary answer
+                continue
+            out[item_id] = getattr(facts.item, "title", "")
+        return out
 
     def _owner_of(item_id: str) -> str | None:
         """The debtor for an item's resources: its `owner` field (#687).
@@ -1012,7 +1039,7 @@ def create_app(
             # WHO is asking decides whether the holding list is included: it is
             # the owner's working set, and a collaborator who hit their ceiling
             # is owed the reason, not the inventory.
-            content={"detail": quota_body(exc, viewer=get_user_id(), title_of=_title_of)},
+            content={"detail": quota_body(exc, viewer=get_user_id(), titles_of=_titles_of)},
         )
 
     @app.exception_handler(TurnRefused)
@@ -1023,7 +1050,7 @@ def create_app(
         limit at a time."""
         return JSONResponse(
             status_code=507,
-            content={"detail": exc.body(viewer=get_user_id(), title_of=_title_of)},
+            content={"detail": exc.body(viewer=get_user_id(), titles_of=_titles_of)},
         )
 
     @app.exception_handler(SandboxBusy)

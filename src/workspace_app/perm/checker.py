@@ -214,9 +214,7 @@ class CollectionPermissionChecker(IPermissionChecker):
         if new is UNSET or new is None:
             return PermissionResult.allow
         stated = [
-            f
-            for f in ESCALATED_FIELDS
-            if f != "permission" and getattr(new, f, None) is not None
+            f for f in ESCALATED_FIELDS if f != "permission" and getattr(new, f, None) is not None
         ]
         if not stated:
             return PermissionResult.allow

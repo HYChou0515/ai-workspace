@@ -1209,3 +1209,18 @@ def test_a_genuinely_running_environment_still_blocks_the_edit():
         assert (
             client.put(f"/a/rca/items/{item}/resources", json={"cpu_cores": 1.0}).status_code == 409
         )
+
+
+# ⚠️ No test guards the BATCHING of the title lookup.
+#
+# I wrote one (count `find_work_item` calls per held item) and it passed both
+# with the batched version and with the per-item one put back — the counts it
+# could see were dominated by lookups from the admission gate and the fact
+# memo, not by this path. A test that survives the mutation it was written for
+# is decorative, so it is not here rather than sitting green and claiming cover.
+#
+# The improvement itself is measured, in the review that found it: at four held
+# environments, `find_work_item` went 6 -> 14, `load_access_facts` 0 -> 4 and
+# `groups_of` 0 -> 4 before the batching. What holds it now is that
+# `check_access` is pure — there is no per-row I/O left to add back without
+# reintroducing a call the code no longer makes.
