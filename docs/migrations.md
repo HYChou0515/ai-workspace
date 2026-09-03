@@ -143,6 +143,22 @@ uv run python scripts/run_migrate.py --dry-run \
 
 ---
 
+## 5.5 設定選項帳本（新旋鈕）
+
+上面 §5 管的是**資料**落後；這張表管的是**設定**：每次升版帶進了哪些新的 config 選項。
+重點欄位是「**不設會怎樣**」——新選項不一定是純加法，有的旋鈕就算不設，升版本身就改了
+預設行為（那通常是修 bug 的預期變化，但 operator 必須看得到）。細節一律指向
+`docs/configuration.md`，這裡只記帳，不重複規則本身。
+
+**慣例：之後每個新增 config 選項的 PR，都要在這張表加一列。**
+
+| 選項 | 帶進來的 PR | 不設會怎樣 | 細節 |
+| --- | --- | --- | --- |
+| `failover.rate_limit_budget_s` | #759（2026-09-03） | ⚠️ **行為有變**：agent 鏈碰到 429 從「快速燒完重試然後 giving up」變成「在原端點等它聲明的窗口」，等待秒數每次 agent run 共用一池，預設上限 2 小時；畫面會出現「請求過於頻繁，N 秒後自動重試」。設 `0` 回到一律切換的舊行為 | configuration.md §11 |
+| `agents.subagent_models` | #770（2026-09-03） | **完全不變**：`run_agent` 不長 `model` 參數，sub-agent 照舊跟 parent turn 同一顆模型（review 以逐位元比對驗證） | configuration.md §7 |
+
+---
+
 ## 6. 案例：specstar 0.12.1 向量清理
 
 0.12.1 讓 `Vector` 欄位不再進 `indexed_data`。**受影響的是兩個帶向量的 model**：
