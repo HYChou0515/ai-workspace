@@ -372,3 +372,45 @@ def test_a_message_written_before_exactness_was_recorded_is_not_trusted():
     got = context_usage([_Old()], limit=ContextLimit(tokens=40_960, source="catalog"))
     assert got.measured is False
     assert got.used == 9_400, "the stored figure is still the best one available"
+
+
+# ── what a proxy relays, and what we derive from it ──────────────────────
+
+
+def test_a_declared_window_beats_the_catalog_but_not_what_we_learned():
+    """`declared` is the proxy relaying what an operator configured. That is a
+    real statement about THIS endpoint, so it outranks a registry keyed on a
+    model name the endpoint may not even use — but it is still a claim, and
+    what the traffic actually did outranks any claim."""
+    assert resolve_context_limit(learned=4096, declared=131072, catalog=40960) == ContextLimit(
+        tokens=4096, source="learned"
+    )
+    assert resolve_context_limit(learned=None, declared=131072, catalog=40960) == ContextLimit(
+        tokens=131072, source="declared"
+    )
+
+
+def test_an_estimate_ranks_below_every_stated_number():
+    """The estimate is derived from a figure that does not mean what we want it
+    to mean, so it may never displace something that was actually stated —
+    including a catalog entry, which is at least exact about the model it
+    names."""
+    assert resolve_context_limit(catalog=40960, estimated=104857) == ContextLimit(
+        tokens=40960, source="catalog"
+    )
+
+
+def test_an_estimate_is_used_when_nothing_else_answers_and_says_it_is_one():
+    """The rung that exists for the topology where every other one is silent.
+    Its source is distinguishable, because a number nobody stated must never
+    read like a measurement — `learned` carries the authority of "the endpoint
+    actually did this", and an estimate carries none of it."""
+    got = resolve_context_limit(estimated=104857)
+    assert got == ContextLimit(tokens=104857, source="estimated")
+    assert got.known is True
+
+
+def test_no_estimate_still_means_unknown():
+    """A silent proxy leaves the ladder exactly where it was: `unknown` — send
+    it all rather than trim on a guess."""
+    assert resolve_context_limit() == ContextLimit(tokens=None, source="unknown")

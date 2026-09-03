@@ -181,7 +181,7 @@ async def test_a_backgrounded_probe_still_teaches_the_next_turn():
     assert runner.learned_limit("m", "http://vllm") == 32_768
 
 
-# ── asking the PROXY what it was told (#760) ─────────────────────────────
+# ── asking the PROXY what it was told ────────────────────────────────────
 #
 # `/tokenize` is a vLLM extension, so it never survives a proxy: the request
 # goes to the proxy, which has no such route. That is the shape a real
