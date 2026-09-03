@@ -553,4 +553,11 @@ class AgentToolContext:
                     await provision_tools(
                         self.sandbox, self.handle, todo, prebuilt_dir=self.prebuilt_dir
                     )
+            # A workspace may declare its own python dependencies (#775). Runs
+            # AFTER provisioning so the carrier is already in place for the
+            # profiles that have no declaration, and after the snapshot restore
+            # above so the manifest being read is the one the workspace holds.
+            from .python_env import ensure_project_env
+
+            await ensure_project_env(self.sandbox, self.handle)
         return self.handle
