@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveReadPath, resolveInFolder, resolveWritePath, wuiFolder } from "./paths";
+import {
+  resolveAssetPath,
+  resolveReadPath,
+  resolveInFolder,
+  resolveWritePath,
+  wuiFolder,
+} from "./paths";
 
 describe("wuiFolder", () => {
   it("is the folder holding the view file", () => {
@@ -121,5 +127,37 @@ describe("resolveWritePath", () => {
   it("still lets a root-level WUI READ, which was never the risk", () => {
     expect(resolveReadPath("", "/notes.md")).toBe("/notes.md");
     expect(resolveReadPath("", "data.json")).toBe("/data.json");
+  });
+});
+
+describe("resolveAssetPath", () => {
+  // What a built entry needs: `dist/index.html` referencing `./assets/x.js`
+  // means the file next to IT, not next to the view file. Resolving from the
+  // WUI folder instead pointed every reference one directory too high, and the
+  // page rendered with nothing inlined — the same lost-origin mistake that
+  // broke markdown images (#717).
+  it("resolves a reference against the ENTRY's directory", () => {
+    expect(resolveAssetPath("/app", "/app/dist", "assets/x.js")).toBe("/app/dist/assets/x.js");
+    expect(resolveAssetPath("/app", "/app/dist", "./assets/x.js")).toBe("/app/dist/assets/x.js");
+  });
+
+  it("is the folder itself when the entry sits at the top", () => {
+    expect(resolveAssetPath("/app", "/app", "app.js")).toBe("/app/app.js");
+  });
+
+  it("lets a nested entry reach a sibling of the view file", () => {
+    // The boundary is the WUI FOLDER, not the entry's directory: a built page
+    // referencing `../logo.png` is still inside its own WUI.
+    expect(resolveAssetPath("/app", "/app/dist", "../logo.png")).toBe("/app/logo.png");
+  });
+
+  it("still refuses anything outside the WUI folder", () => {
+    expect(resolveAssetPath("/app", "/app/dist", "../../notes.md")).toBeNull();
+    expect(resolveAssetPath("/app", "/app", "../notes.md")).toBeNull();
+    expect(resolveAssetPath("/app", "/app/dist", "/notes.md")).toBeNull();
+  });
+
+  it("refuses a sibling folder that merely shares the prefix", () => {
+    expect(resolveAssetPath("/app", "/app/dist", "../../app2/x.js")).toBeNull();
   });
 });
