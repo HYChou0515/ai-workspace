@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 
-from ..sandbox.protocol import ExecResult, Sandbox, SandboxHandle
+from ..sandbox.protocol import ExecResult, OutputSink, Sandbox, SandboxHandle
 
 logger = logging.getLogger(__name__)
 
@@ -45,15 +45,41 @@ class ProjectEnvError(RuntimeError):
 _MANIFEST = "pyproject.toml"
 
 
-async def ensure_project_env(sandbox: Sandbox, handle: SandboxHandle) -> None:
-    """Make the sandbox's python environment match the workspace's lock."""
+#: Said when the manifest has moved on but the lock has not. `--frozen` means
+#: that edit does not take effect, which is the right trade and a SILENT one —
+#: so it is the one thing here that must be spoken rather than logged.
+_STALE = (
+    b"note: pyproject.toml has changed but uv.lock has not, so the lock is what "
+    b"was installed. Run `uv add <package>` (it updates both) or `uv lock`.\n"
+)
+
+
+async def ensure_project_env(
+    sandbox: Sandbox,
+    handle: SandboxHandle,
+    *,
+    on_output: OutputSink | None = None,
+) -> None:
+    """Make the sandbox's python environment match the workspace's lock.
+
+    `on_output` is the turn's own sink, so uv's progress reaches the tool card
+    the user is already watching. This runs inside the agent's first `exec`,
+    before its command — without it, that card sits still for as long as the
+    install takes with nothing saying why.
+    """
     if not await sandbox.exists(handle, _MANIFEST):
         return
+
+    # Reported, never refused. Refusing would land on the cold-start path,
+    # where the person watching can do nothing about it.
+    stale = await sandbox.exec(handle, ["uv", "lock", "--check"], on_output=None)
+    if stale.exit_code != 0 and on_output is not None:
+        on_output(_STALE)
     # `--frozen`: the LOCK decides. Re-resolving would let one lock file
     # produce different versions on two cold starts, which is the whole thing
     # a lock is for. A hand-edited `pyproject.toml` therefore does not take
     # effect — silently, unless someone says so, which is why that is its own
     # behaviour rather than a comment.
-    result = await sandbox.exec(handle, ["uv", "sync", "--frozen"])
+    result = await sandbox.exec(handle, ["uv", "sync", "--frozen"], on_output=on_output)
     if result.exit_code != 0:
         raise ProjectEnvError(result)

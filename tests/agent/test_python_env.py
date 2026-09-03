@@ -28,6 +28,7 @@ class _Recording:
     ) -> None:
         self.calls: list[list[str]] = []
         self.envs: list[dict[str, str]] = []
+        self.sinks: list[object] = []
         self._present = present or set()
         self._results = results or {}
 
@@ -42,6 +43,7 @@ class _Recording:
     async def exec(self, handle, cmd, on_output=None, env=None) -> ExecResult:
         self.calls.append(cmd)
         self.envs.append(dict(env) if env else {})
+        self.sinks.append(on_output)
         return self._results.get(tuple(cmd), ExecResult(exit_code=0, stdout=b"ok"))
 
     async def kill(self, handle) -> None:  # pragma: no cover
@@ -55,9 +57,7 @@ async def test_a_workspace_that_declares_dependencies_gets_them_synced() -> None
 
     await ensure_project_env(sb, SandboxHandle(id="s1"))  # ty: ignore[invalid-argument-type]
 
-    assert sb.calls, "a declared project must be synced"
-    (cmd,) = sb.calls
-    assert cmd[:2] == ["uv", "sync"]
+    assert any(c[:2] == ["uv", "sync"] for c in sb.calls), "a declared project must be synced"
 
 
 async def test_a_workspace_that_declares_nothing_is_left_completely_alone() -> None:
@@ -83,8 +83,8 @@ async def test_the_lock_decides_not_the_manifest() -> None:
 
     await ensure_project_env(sb, SandboxHandle(id="s1"))  # ty: ignore[invalid-argument-type]
 
-    (cmd,) = sb.calls
-    assert "--frozen" in cmd
+    (sync,) = [c for c in sb.calls if c[:2] == ["uv", "sync"]]
+    assert "--frozen" in sync
 
 
 async def test_an_environment_that_cannot_be_prepared_stops_the_turn() -> None:
@@ -110,3 +110,45 @@ async def test_an_environment_that_cannot_be_prepared_stops_the_turn() -> None:
         await ensure_project_env(sb, SandboxHandle(id="s1"))  # ty: ignore[invalid-argument-type]
 
     assert "no wheel for this platform" in str(caught.value), "uv's own words must survive"
+
+
+async def test_preparing_the_environment_is_visible_while_it_happens() -> None:
+    """This runs inside the agent's first `exec`, before its command. Without
+    the output going anywhere the user watches a tool card sit still for as
+    long as the install takes, with nothing saying why."""
+    seen: list[bytes] = []
+    sb = _Recording(present={"pyproject.toml"})
+
+    await ensure_project_env(
+        sb,  # ty: ignore[invalid-argument-type]
+        SandboxHandle(id="s1"),
+        on_output=seen.append,
+    )
+
+    assert sb.sinks and sb.sinks[-1] is not None, "uv's progress must have somewhere to go"
+
+
+async def test_a_lock_that_no_longer_matches_the_manifest_is_said_out_loud() -> None:
+    """`--frozen` means an edit to `pyproject.toml` does not take effect. That
+    is the right trade (see the module docstring) but it is SILENT, and silent
+    is the failure mode this whole feature is otherwise built to avoid.
+
+    So the staleness is checked and reported — reported, not refused: failing
+    here would land on the cold-start path, where the person watching can do
+    nothing about it.
+    """
+    said: list[bytes] = []
+    sb = _Recording(
+        present={"pyproject.toml"},
+        results={("uv", "lock", "--check"): ExecResult(exit_code=1, stdout=b"stale")},
+    )
+
+    await ensure_project_env(
+        sb,  # ty: ignore[invalid-argument-type]
+        SandboxHandle(id="s1"),
+        on_output=said.append,
+    )
+
+    told = b"".join(said).decode()
+    assert "uv add" in told, "the person needs the route, not just the diagnosis"
+    assert ["uv", "sync", "--frozen"] in sb.calls, "and the sync still happens"

@@ -559,5 +559,5 @@ class AgentToolContext:
             # above so the manifest being read is the one the workspace holds.
             from .python_env import ensure_project_env
 
-            await ensure_project_env(self.sandbox, self.handle)
+            await ensure_project_env(self.sandbox, self.handle, on_output=self.on_exec_output)
         return self.handle
