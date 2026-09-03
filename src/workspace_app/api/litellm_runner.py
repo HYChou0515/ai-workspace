@@ -57,7 +57,7 @@ from ..context_budget import (
     is_context_overflow,
     parse_limit_from_error,
 )
-from ..context_probe import probe_context_limit
+from ..context_probe import probe_context_limit, probe_endpoint_limits
 from ..failover.rate_limit import is_rate_limited, rate_limit_wait_s
 from ..resources import AgentConfig
 from ..tokens import ITokenService, LlmCredential
@@ -1169,6 +1169,14 @@ class LitellmAgentRunner:
         self._limits = LimitLearner()
         # Endpoints already asked (value or None), so a silent one is asked once.
         self._probed: dict[tuple[str, str], int | None] = {}
+        # The same, for what a PROXY in front of the model says it was
+        # configured with. Separate cache because it is a different question
+        # with a different answer shape, and separate from the learner because
+        # what a proxy relays is a claim, not something the endpoint did.
+        self._endpoint_declared: dict[tuple[str, str], Any] = {}
+        self._declared_probe: Callable[[str | None, str], Any] = lambda base_url, model: (
+            probe_endpoint_limits(base_url=base_url, model=model)
+        )
         # The endpoint-asking seam. A plain attribute (not a method) so it is an
         # injectable dependency like the other sinks here — every failure inside
         # `probe_context_limit` already degrades to None.
@@ -1502,6 +1510,29 @@ class LitellmAgentRunner:
             # land there, so nothing downstream has to know which of them spoke.
             self._limits.learn_exact(model, base_url, limit=probed)
         return self._limits.get(model, base_url)
+
+    def endpoint_limits(self, model: str, base_url: str | None) -> Any:
+        """What a proxy in front of `model` says it was configured with (#624
+        follow-up), or None.
+
+        Lives here rather than in the turn-context builder for one reason, and
+        it is the reason the first version of this did nothing at all: an
+        `AgentConfig` carries `llm_base_url == ""` whenever the preset does not
+        override it, and that empty string MEANS "use the deploy's endpoint" —
+        which only the runner knows. A caller that reads the config's field
+        alone sees no endpoint on exactly the deployment this rung exists for:
+        one endpoint configured globally, presets naming only a model.
+
+        Asked once per (model, endpoint) and cached, silence included — most
+        endpoints are not a litellm proxy, and re-asking would put an HTTP round
+        trip in front of every message for a value that does not change. Filled
+        off the loop by `deferred_lookup`, like the `/tokenize` probe: an
+        endpoint that hangs must not stall the pod."""
+        return deferred_lookup(
+            self._endpoint_declared,
+            (model or "", base_url or ""),
+            lambda: self._declared_probe(base_url or self._base_url, model),
+        )
 
     def _agent_kwargs(
         self,

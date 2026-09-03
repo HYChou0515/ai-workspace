@@ -238,10 +238,28 @@ def test_it_asks_both_spellings_because_base_url_may_or_may_not_end_in_v1():
     seen: list[str] = []
     probe_endpoint_limits(
         base_url="http://proxy/v1",
-        model="nobody",  # never matches, so both spellings get asked
+        model="nobody",  # never matches, so every spelling gets asked
         client=_get_client(_Resp(404, {"detail": "Not Found"}), seen=seen),
     )
     assert seen == ["http://proxy/v1/model/info", "http://proxy/model/info"]
+
+
+def test_a_base_url_without_v1_reaches_both_spellings_and_neither_twice():
+    """The half the first version got wrong. Deriving the second spelling by
+    STRIPPING `/v1` is a no-op on a url that does not have it, so the same
+    address was asked twice — the most common path (not a litellm proxy) paid
+    two round trips and two timeouts to learn the same nothing, and
+    `/v1/model/info` was never reached at all."""
+    from workspace_app.context_probe import probe_endpoint_limits
+
+    seen: list[str] = []
+    probe_endpoint_limits(
+        base_url="http://proxy",
+        model="nobody",
+        client=_get_client(_Resp(404, {"detail": "Not Found"}), seen=seen),
+    )
+    assert seen == ["http://proxy/model/info", "http://proxy/v1/model/info"]
+    assert len(seen) == len(set(seen)), "the same address must never be asked twice"
 
 
 @pytest.mark.parametrize(
@@ -311,3 +329,33 @@ def test_no_base_url_asks_nothing():
         is None
     )
     assert seen == []
+
+
+def test_a_fraction_below_one_is_absent_not_zero():
+    """`0` is neither a count nor absent, and the field would carry it as if it
+    were an answer."""
+    from workspace_app.context_probe import probe_endpoint_limits
+
+    got = probe_endpoint_limits(
+        base_url="http://proxy",
+        model="our-alias",
+        client=_get_client(_model_info(max_tokens=0.5)),
+    )
+    assert got is not None
+    assert got.max_tokens is None
+
+
+def test_a_body_carrying_infinity_is_silence_not_an_exception():
+    """`json.loads` accepts a bare `Infinity`, and a non-strict proxy can emit
+    one. Converting it raises — outside the guard, that escaped a function whose
+    whole contract is that it answers `None` instead of failing."""
+    from workspace_app.context_probe import probe_endpoint_limits
+
+    assert (
+        probe_endpoint_limits(
+            base_url="http://proxy",
+            model="our-alias",
+            client=_get_client(_model_info(max_input_tokens=float("inf"))),
+        )
+        is None
+    )

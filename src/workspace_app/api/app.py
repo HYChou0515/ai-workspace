@@ -1454,6 +1454,7 @@ def create_app(
     # after construction because the runner is injected, and duck-typed because
     # ScriptedAgentRunner (tests, replay) has nothing to learn from.
     turn_ctx.learned_limit_fn = getattr(runner, "learned_limit", None)
+    turn_ctx.endpoint_limits_fn = getattr(runner, "endpoint_limits", None)
 
     # ── replay diagnostics (#51 P4) ──────────────────────────────────
     # Read-only loaders: replay must never create/mutate anything, so

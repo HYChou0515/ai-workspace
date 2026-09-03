@@ -142,3 +142,73 @@ async def test_a_healthy_turn_teaches_nothing():
     for _ in range(3):
         await _drain(runner, _ctx())
     assert runner.learned_limit("m", None) is None
+
+
+# ── what a proxy in front of the model was told ──────────────────────────
+
+
+def test_an_unset_per_config_endpoint_falls_back_to_the_deploys_own():
+    """The bug this rung was shipped with, pinned.
+
+    `AgentConfig.llm_base_url == ""` MEANS "use the deploy's endpoint" — that is
+    the documented contract, and it is the normal shape for a deployment with
+    one endpoint whose presets name only a model. Every other consumer of that
+    field does this fallback. The first version of this rung did not, so it saw
+    no endpoint, asked nothing, and silently changed nothing on precisely the
+    deployment it was written for."""
+    from workspace_app.api.litellm_runner import LitellmAgentRunner
+
+    seen: list[str | None] = []
+    runner = LitellmAgentRunner(base_url="http://the-deploys-proxy/v1")
+    runner._declared_probe = lambda base_url, model: seen.append(base_url)
+
+    runner.endpoint_limits("our-alias", None)
+    assert seen == ["http://the-deploys-proxy/v1"]
+
+
+def test_a_per_config_endpoint_still_wins():
+    """A preset that names its own endpoint is asked about THAT one — the
+    fallback is for the empty case, not a override."""
+    from workspace_app.api.litellm_runner import LitellmAgentRunner
+
+    seen: list[str | None] = []
+    runner = LitellmAgentRunner(base_url="http://the-deploys-proxy/v1")
+    runner._declared_probe = lambda base_url, model: seen.append(base_url)
+
+    runner.endpoint_limits("our-alias", "http://a-different-one/v1")
+    assert seen == ["http://a-different-one/v1"]
+
+
+def test_the_proxy_is_asked_once_per_endpoint_not_once_per_turn():
+    """An HTTP round trip reached from inside a turn. Asking per turn would put
+    one in front of every message for a value that does not change — and the
+    silence has to be cached too, because most endpoints are not a litellm proxy
+    and would otherwise be re-asked forever."""
+    from workspace_app.api.litellm_runner import LitellmAgentRunner
+
+    calls: list[tuple[str | None, str]] = []
+
+    def _once(base_url: str | None, model: str) -> None:
+        calls.append((base_url, model))
+        return None  # the ordinary answer: not a litellm proxy
+
+    runner = LitellmAgentRunner(base_url="http://proxy/v1")
+    runner._declared_probe = _once
+
+    for _ in range(3):
+        runner.endpoint_limits("our-alias", None)
+    assert len(calls) == 1
+
+
+def test_two_endpoints_under_one_model_name_are_asked_separately():
+    """The answer belongs to the endpoint, not to the model name — two presets
+    can carry the same name across different proxies."""
+    from workspace_app.api.litellm_runner import LitellmAgentRunner
+
+    calls: list[str | None] = []
+    runner = LitellmAgentRunner(base_url="http://a/v1")
+    runner._declared_probe = lambda base_url, model: calls.append(base_url)
+
+    runner.endpoint_limits("same-name", "http://a/v1")
+    runner.endpoint_limits("same-name", "http://b/v1")
+    assert calls == ["http://a/v1", "http://b/v1"]

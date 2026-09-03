@@ -203,8 +203,7 @@ def _bare_builder():
     builder.learned_limit_fn = None
     builder._catalog_cache = {}
     builder._catalog_fn = lambda model: None  # the registry knows nothing by default
-    builder._endpoint_cache = {}
-    builder._endpoint_fn = lambda base_url, model: None  # no proxy answers by default
+    builder.endpoint_limits_fn = None  # nothing wired ⇒ the rung is skipped
     builder._max_tokens_window_ratio = 0.8
     return builder
 
@@ -510,7 +509,7 @@ def test_a_window_the_proxy_states_is_used_and_named_as_a_declaration():
     from workspace_app.context_probe import EndpointLimits
 
     builder = _bare_builder()
-    builder._endpoint_fn = lambda base_url, model: EndpointLimits(
+    builder.endpoint_limits_fn = lambda model, base_url: EndpointLimits(
         max_input_tokens=131072, max_tokens=8192
     )
 
@@ -526,7 +525,7 @@ def test_only_max_tokens_is_derived_and_says_it_was():
     from workspace_app.context_probe import EndpointLimits
 
     builder = _bare_builder()
-    builder._endpoint_fn = lambda base_url, model: EndpointLimits(
+    builder.endpoint_limits_fn = lambda model, base_url: EndpointLimits(
         max_input_tokens=None, max_tokens=131072
     )
 
@@ -541,7 +540,7 @@ def test_the_operators_ratio_is_the_one_applied():
 
     builder = _bare_builder()
     builder._max_tokens_window_ratio = 0.5
-    builder._endpoint_fn = lambda base_url, model: EndpointLimits(
+    builder.endpoint_limits_fn = lambda model, base_url: EndpointLimits(
         max_input_tokens=None, max_tokens=100_000
     )
 
@@ -556,7 +555,7 @@ def test_a_stated_window_is_never_scaled_by_the_ratio():
 
     builder = _bare_builder()
     builder._max_tokens_window_ratio = 0.5
-    builder._endpoint_fn = lambda base_url, model: EndpointLimits(
+    builder.endpoint_limits_fn = lambda model, base_url: EndpointLimits(
         max_input_tokens=131072, max_tokens=131072
     )
 
@@ -570,7 +569,7 @@ def test_the_registry_still_outranks_a_derived_number():
 
     builder = _bare_builder()
     builder._catalog_fn = lambda model: 40_960
-    builder._endpoint_fn = lambda base_url, model: EndpointLimits(
+    builder.endpoint_limits_fn = lambda model, base_url: EndpointLimits(
         max_input_tokens=None, max_tokens=131072
     )
 
@@ -589,21 +588,31 @@ def test_a_silent_proxy_leaves_the_ceiling_unknown():
     assert got.source == "unknown"
 
 
-def test_the_proxy_is_asked_once_per_endpoint_not_once_per_turn():
-    """It is an HTTP round trip reached from inside `async def build_chat_turn`.
-    Asking every turn would put one in front of every message for a value that
-    does not change — the same reason the catalog rung is memoised."""
+def test_an_empty_base_url_reaches_the_runner_unchanged():
+    """`llm_base_url == ""` MEANS "the deploy's endpoint" — only the runner
+    knows which that is. Resolving it to `None` here is what made this rung
+    silent on a single-endpoint deployment, which is the only shape it was
+    written for: every other consumer of this field does the same fallback, and
+    this one skipped it."""
     from workspace_app.context_probe import EndpointLimits
+    from workspace_app.resources import AgentConfig
 
-    calls: list[tuple[str | None, str]] = []
+    seen: list[tuple[str, str | None]] = []
 
-    def _once(base_url: str | None, model: str) -> EndpointLimits:
-        calls.append((base_url, model))
+    def _record(model: str, base_url: str | None) -> EndpointLimits:
+        seen.append((model, base_url))
         return EndpointLimits(max_input_tokens=131072, max_tokens=None)
 
     builder = _bare_builder()
-    builder._endpoint_fn = _once
+    builder.endpoint_limits_fn = _record
 
-    for _ in range(3):
-        builder._context_window(_cfg())
-    assert len(calls) == 1
+    got = builder._context_window(AgentConfig(name="t", model="our-alias", system_prompt=""))
+    assert seen == [("our-alias", None)], "the config's own url is passed through untouched"
+    assert got.tokens == 131072
+
+
+def test_nothing_wired_skips_the_rung_rather_than_failing():
+    """Replay and tests run without a runner. The ladder simply has one fewer
+    rung there — never an exception on a turn."""
+    builder = _bare_builder()
+    assert builder._context_window(_cfg()).source == "unknown"

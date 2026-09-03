@@ -40,7 +40,6 @@ from ..context_budget import (
     catalog_limit,
     estimate_tokens,
 )
-from ..context_probe import probe_endpoint_limits
 from ..entity.brief import entity_schema_brief
 from ..entity.catalog import discover_catalog
 from ..sandbox.protocol import Sandbox, SandboxSpec
@@ -196,22 +195,19 @@ class TurnContextBuilder:
         # (tests, replay) has nothing to learn from. None ⇒ the ladder simply
         # skips that rung.
         self.learned_limit_fn: Callable[[str, str | None], int | None] | None = None
+        # The proxy rung, wired to the runner for the same reason as the one
+        # above: only the runner knows the deploy's endpoint, and an
+        # `AgentConfig` whose `llm_base_url` is "" is SAYING "use that one".
+        # Reading the config's field here instead is how the first version of
+        # this rung came to do nothing on the very deployment it was for.
+        # None ⇒ the ladder simply skips it (tests, replay).
+        self.endpoint_limits_fn: Callable[[str, str | None], Any] | None = None
         # #624 §9.12: the catalog rung, memoised per model and filled OFF the
         # event loop (see `deferred_lookup`). `_catalog_fn` is a plain attribute
         # rather than a direct call so a test can stand in for the slow, untimed
         # registry lookup — the hazard itself is what needs driving.
         self._catalog_cache: dict[str, int | None] = {}
         self._catalog_fn: Callable[[str], int | None] = catalog_limit
-        # The proxy rung, memoised and seamed the same way and for the same
-        # reasons: it is an HTTP round trip reached from inside `async def
-        # build_chat_turn`, so it must not be asked per turn and must not be
-        # awaited on the loop. Its key is (model, base_url) because the answer
-        # belongs to the endpoint, not to the model name alone — two presets can
-        # share a name across different proxies.
-        self._endpoint_cache: dict[tuple[str, str], Any] = {}
-        self._endpoint_fn: Callable[[str | None, str], Any] = lambda base_url, model: (
-            probe_endpoint_limits(base_url=base_url, model=model)
-        )
         # What fraction of a stated `max_tokens` to treat as the window, when
         # that is the only figure the proxy gave us. See `history` settings.
         self._max_tokens_window_ratio = max_tokens_window_ratio
@@ -284,19 +280,21 @@ class TurnContextBuilder:
         )
 
     def _endpoint_limits(self, agent_config: AgentConfig) -> Any:
-        """What the endpoint's own model list says, or None — memoised per
-        (model, endpoint) and filled off the event loop, like the catalog rung.
+        """What a proxy in front of this model says it was configured with, or
+        None when nothing is wired or nothing answered.
 
-        Silence is cached too: most endpoints are not a litellm proxy, and one
-        that never answers must be asked once, not once per message."""
-        from ..context_budget import deferred_lookup
-
-        base_url = agent_config.llm_base_url or None
-        return deferred_lookup(
-            self._endpoint_cache,
-            (agent_config.model or "", base_url or ""),
-            lambda: self._endpoint_fn(base_url, agent_config.model),
-        )
+        The empty-string base_url is passed through UNTOUCHED: it means "the
+        deploy's endpoint", and resolving it is the runner's job. Turning it
+        into `None` here is what made this rung silent on a single-endpoint
+        deployment — the only shape it was written for."""
+        fn = self.endpoint_limits_fn
+        if fn is None:
+            return None
+        try:
+            return fn(agent_config.model, agent_config.llm_base_url or None)
+        except Exception:  # noqa: BLE001 — a probe must never break a turn
+            logger.debug("endpoint limits lookup failed", exc_info=True)
+            return None
 
     def _learned_limit(self, agent_config: AgentConfig) -> int | None:
         """What the endpoint stated in a past rejection, via the runner's

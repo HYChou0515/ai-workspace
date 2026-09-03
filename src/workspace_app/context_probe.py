@@ -70,15 +70,27 @@ def probe_endpoint_limits(
     if not base_url:
         return None
     root = base_url.rstrip("/")
-    # Both spellings: `base_url` usually ends in `/v1` (the chat route lives
-    # there), and litellm mounts the management route at BOTH `/model/info` and
-    # `/v1/model/info`. Trying one only works for whichever way the operator
-    # happened to write the url.
-    for url in (f"{root}/model/info", f"{root.removesuffix('/v1')}/model/info"):
+    # Both spellings, DEDUPED: `base_url` usually ends in `/v1` (the chat route
+    # lives there) but need not, and litellm mounts the management route at both
+    # `/model/info` and `/v1/model/info`. Deriving one variant by stripping and
+    # the other by appending covers either way the operator wrote it — while
+    # only stripping meant a url that did NOT end in `/v1` produced the same
+    # address twice, so the most common path (not a litellm proxy at all) paid
+    # two round trips and two timeouts to learn the same nothing, and the
+    # `/v1/model/info` spelling was never reached.
+    stripped = root.removesuffix("/v1")
+    for url in _unique(f"{root}/model/info", f"{stripped}/model/info", f"{stripped}/v1/model/info"):
         found = _read_model_info(url, model=model, client=client, timeout=timeout)
         if found is not None:
             return found
     return None
+
+
+def _unique(*urls: str) -> list[str]:
+    """Order-preserving dedupe — the variants collapse to one or two depending
+    on how the url was written, and asking the same address twice is waste
+    charged to the path that learns nothing."""
+    return list(dict.fromkeys(urls))
 
 
 def _read_model_info(url: str, *, model: str, client: Any, timeout: float) -> EndpointLimits | None:
@@ -103,19 +115,29 @@ def _read_model_info(url: str, *, model: str, client: Any, timeout: float) -> En
         info = row.get("model_info")
         if not isinstance(info, dict):
             return None
-        return EndpointLimits(
-            max_input_tokens=_as_count(info.get("max_input_tokens")),
-            max_tokens=_as_count(info.get("max_tokens")),
-        )
+        try:
+            return EndpointLimits(
+                max_input_tokens=_as_count(info.get("max_input_tokens")),
+                max_tokens=_as_count(info.get("max_tokens")),
+            )
+        except (OverflowError, ValueError):  # a body carrying Infinity / NaN
+            logger.debug("context probe: %s reported an unusable count", url)
+            return None
     return None
 
 
 def _as_count(value: Any) -> int | None:
-    """A positive whole number, or None. litellm reports these as floats in its
-    own examples (`16385.0`), so a strict int check would drop real answers."""
+    """A positive whole number, or None.
+
+    Floats are accepted because litellm's own documented example reports
+    `16385.0`, and rejecting that on a technicality would drop a real answer.
+    The positivity check is applied AFTER truncation, or a fractional value
+    below one (`0.5`) survives as `0` — a number that is neither a count nor
+    absent, and which the field would then carry as if it were an answer."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    return int(value) if value > 0 else None
+    count = int(value)  # may raise on inf/nan; the caller treats that as silence
+    return count if count > 0 else None
 
 
 def probe_context_limit(
