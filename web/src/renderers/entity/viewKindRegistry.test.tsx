@@ -4,8 +4,8 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { EntityInstance, EntityType } from "../../api/entities";
-import type { EntityViewProps, ViewSpec } from "./types";
-import { resolveViewRenderer } from "./viewKindRegistry";
+import { VIEW_KIND, type EntityViewProps, type ViewSpec } from "./types";
+import { registerViewKind, resolveViewRenderer } from "./viewKindRegistry";
 
 afterEach(cleanup);
 
@@ -29,6 +29,15 @@ function props(spec: ViewSpec, entities: EntityInstance[] = []): EntityViewProps
 }
 
 describe("viewKindRegistry", () => {
+  it("reserves `wui`, which the container answers to before the dispatcher runs", () => {
+    // Same trap `health` is reserved against: registering a name the container
+    // already handles succeeds and yields a component that never renders — a
+    // plug-in that appears to work and silently does nothing.
+    expect(() => registerViewKind({ kind: VIEW_KIND.wui, Component: () => null })).toThrow(
+      /reserved/,
+    );
+  });
+
   it("falls back to an unsupported-view notice for an unknown kind", () => {
     const r = resolveViewRenderer("chart");
     render(<r.Component {...props({ view: "chart", entity: "issue" })} />);

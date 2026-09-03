@@ -1651,6 +1651,17 @@ async def read_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -
     # skill of the same name. Read live (uncached) — it may have just been saved.
     from ..apps.skills import augment_shared_skill_body, materialize_skill
 
+    def _wui_callable(actx: AgentToolContext) -> list[str]:
+        """Which of this turn's tools a WUI may call.
+
+        Read off the SAME resolved packages and allow-list the toolset was built
+        from, so what the skill names and what the route admits cannot drift.
+        The model has no other way to tell one of these from a built-in."""
+        from ..tooling.registry import allowed_command_names
+
+        cfg = actx.agent_config
+        return allowed_command_names(actx.packages, cfg.allowed_tools if cfg else [])
+
     files = ctx.context.files
     inv = ctx.context.investigation_id
     if files is not None and inv is not None:
@@ -1672,7 +1683,11 @@ async def read_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -
             # day the skill was copied. The AUTHORED text is what gets copied and
             # edited; the DERIVED part is recomputed every read.
             return augment_shared_skill_body(
-                name, body, ctx.context.app_slug, ctx.context.template_profile
+                name,
+                body,
+                ctx.context.app_slug,
+                ctx.context.template_profile,
+                wui_tools=_wui_callable(ctx.context),
             )
 
     # #298 Q7: a built-in (shared) skill the App opted into — author-skill etc.
@@ -1687,6 +1702,7 @@ async def read_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -
                 load_shared_skill(name),
                 ctx.context.app_slug,
                 ctx.context.template_profile,
+                wui_tools=_wui_callable(ctx.context),
             )
         except SkillError as e:
             return f"error: {e}"
