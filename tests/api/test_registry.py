@@ -396,6 +396,14 @@ class _FakeActivity(IActivityStore):
         self.rows.pop(item_id, None)
         self.owners.pop(item_id, None)
 
+    async def is_live(self, item_id: str, *, since_ms: int) -> bool:
+        # Keyed on the ITEM, deliberately — no owner in the question. Asking
+        # `live_for(owner_of(item))` made the answer depend on a field anyone
+        # with write access can PATCH, so repointing `owner` reported a running
+        # sandbox as stopped. A double that answered by owner here would model
+        # the contract it replaced rather than the one it stands for.
+        return item_id in self.rows and self.ms.get(item_id, 0) >= since_ms
+
     async def live_for(self, owner: str, *, since_ms: int) -> list[LiveSandbox]:
         return [
             row

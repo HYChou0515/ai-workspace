@@ -958,6 +958,17 @@ export const messages = {
     "zh-TW": "你設定 {stated}，實際生效 {effective}（受這個 App 的上限限制）",
     en: "You set {stated}; {effective} is in effect (held down by this App's ceiling)",
   },
+  // The memory twin of the two above. Absent, the memory block showed
+  // "2 GiB · Set by you" to someone who set 8 GiB — the panel disagreeing with
+  // what the person typed, which is exactly what the cpu message prevents.
+  "itemenv.memory.clamped.quota": {
+    "zh-TW": "你設定 {stated}，實際生效 {effective}（受你的額度限制）",
+    en: "You set {stated}; {effective} is in effect (held down by your quota)",
+  },
+  "itemenv.memory.clamped.app": {
+    "zh-TW": "你設定 {stated}，實際生效 {effective}（受這個 App 的上限限制）",
+    en: "You set {stated}; {effective} is in effect (held down by this App's ceiling)",
+  },
   "itemenv.usage.total": { "zh-TW": "你的總用量", en: "Your total" },
   // Says CANNOT CONFIRM, not "not enforced": the backend reports an unreachable
   // host identically to one that caps nothing, so claiming to know which would

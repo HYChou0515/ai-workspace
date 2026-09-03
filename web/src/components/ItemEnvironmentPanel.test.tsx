@@ -167,3 +167,58 @@ describe("a deploy that will not honour the dial", () => {
     expect(screen.queryByTestId("cpu-unenforced")).toBeNull();
   });
 });
+
+
+describe("the memory half explains itself too", () => {
+  it("shows BOTH numbers when memory is held down, and names what held it", () => {
+    // Round-4 finding 4. `memory_bound_by` shipped on the wire and was rendered
+    // nowhere, so someone who set 8 GiB saw "2 GiB · Set by you" — the panel
+    // disagreeing with what they typed, with nothing to explain it, which is
+    // precisely what the CPU message exists to prevent.
+    //
+    // Same shape as the round-3 finding I had just fixed: the backend half
+    // shipped and the screen was left behind.
+    render(
+      <ItemEnvironmentPanel
+        env={{
+          ...IDLE,
+          statedMemoryBytes: 8 * 1024 ** 3,
+          effectiveMemoryBytes: 2 * 1024 ** 3,
+          memoryBoundBy: "quota",
+        }}
+        budget={BUDGET}
+        canEdit
+      />,
+    );
+
+    const note = screen.getByTestId("memory-clamped").textContent ?? "";
+    expect(note).toContain("8");
+    expect(note).toContain("2");
+    expect(note).toMatch(/額度|quota/);
+  });
+
+  it("says nothing when memory was not held down", () => {
+    render(<ItemEnvironmentPanel env={IDLE} budget={BUDGET} canEdit />);
+
+    expect(screen.queryByTestId("memory-clamped")).toBeNull();
+  });
+
+  it("names the App when the App is what held it", () => {
+    // The two attributions are separate for a reason: cpu can be held by one
+    // ceiling while memory is held by the other.
+    render(
+      <ItemEnvironmentPanel
+        env={{
+          ...IDLE,
+          statedMemoryBytes: 8 * 1024 ** 3,
+          effectiveMemoryBytes: 2 * 1024 ** 3,
+          memoryBoundBy: "app",
+        }}
+        budget={BUDGET}
+        canEdit
+      />,
+    );
+
+    expect(screen.getByTestId("memory-clamped").textContent ?? "").toMatch(/App/);
+  });
+});

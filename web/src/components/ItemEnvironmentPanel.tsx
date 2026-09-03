@@ -189,6 +189,21 @@ export function ItemEnvironmentPanel({
               {env.statedMemoryBytes === null ? t("itemenv.size.default") : t("itemenv.size.stated")}
             </span>
           </p>
+          {env.memoryBoundBy === null ||
+          env.statedMemoryBytes === null ||
+          env.effectiveMemoryBytes === null ? null : (
+            <p data-testid="memory-clamped" className="detail">
+              {t(
+                env.memoryBoundBy === "quota"
+                  ? "itemenv.memory.clamped.quota"
+                  : "itemenv.memory.clamped.app",
+                {
+                  stated: formatBytes(env.statedMemoryBytes),
+                  effective: formatBytes(env.effectiveMemoryBytes),
+                },
+              )}
+            </p>
+          )}
           {env.enforcedMemoryBytes === null ? null : (
             <input
               data-testid="memory-input"

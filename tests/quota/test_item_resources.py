@@ -528,7 +528,7 @@ def test_a_clamped_setting_reports_both_numbers():
         assert body["effective_cpu_cores"] == 2.0, "and what actually applies"
 
 
-def test_running_is_reported_from_a_probe_of_this_item():
+def test_running_is_reported_from_this_items_own_heartbeat():
     with _app(PerUserResources(cpu=4.0), app_resources={"rca": FOUR_CORES}) as (
         client,
         spec,
@@ -1458,3 +1458,100 @@ def test_my_resources_does_not_name_an_item_i_cannot_see():
         # …and the row itself survives, because she IS being charged for it and
         # closing it is the remedy the page exists to offer.
         assert any(e["item_id"] == hers for e in body["live"]), body
+
+
+def test_a_soft_deleted_item_does_not_take_down_the_whole_resources_page():
+    """Round-4 finding 3, and strictly worse than the one R3-6 just fixed.
+
+    A soft-deleted item can still be holding a sandbox — that is R3-6's whole
+    premise, and why its row must stay closable. But on the page that OWNS the
+    Close button, an unguarded lookup let `ResourceIsDeletedError` reach the
+    global handler, which 410s the entire response: the person loses every row,
+    including the healthy ones, and with them the only way to free their quota.
+
+    "A rule that holds on one route and not its neighbour is not a rule" was the
+    thesis of the commit that fixed the 507 side. This is the neighbour.
+    """
+    # Roomy on purpose: this is about a deleted row, not about a limit.
+    with _app(PerUserResources(cpu=100.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        healthy = _mk(spec, "alice")
+        doomed = _mk(spec, "alice")
+        _wake(client, healthy)
+        _wake(client, doomed)
+        assert len(client.get("/me/resources").json()["live"]) == 2
+
+        assert client.delete(f"/rca-investigation/{doomed}").status_code in (200, 204)
+
+        page = client.get("/me/resources")
+        assert page.status_code == 200, f"one deleted item took the page with it: {page.text}"
+        body = page.json()
+        assert any(e["item_id"] == healthy for e in body["live"]), body
+        # …and the deleted one is still listed, because it is still being
+        # charged for and closing it is the remedy this page exists to offer.
+        assert any(e["item_id"] == doomed for e in body["live"]), body
+
+
+def test_the_panel_and_the_resize_refusal_agree_about_running():
+    """Round-4 finding 5: R3-3 shipped with no test and survived a mutation.
+
+    The panel disables its inputs on `running`, and the resize route refuses on
+    its own reading. When those came from different sources the route unblocked
+    while the screen stayed grey — the person clicked Close and nothing changed.
+    One question, one answer, asserted together so they cannot drift apart
+    again.
+    """
+    with _app(PerUserResources(cpu=4.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        sandbox,
+    ):
+        # The dir survives everything, which is what `kind: local` really does —
+        # so a directory probe would answer "running" forever while the
+        # heartbeat correctly says it stopped.
+        sandbox.pretend_dir_survives = True
+        item = _mk(spec, "alice")
+        _wake(client, item)
+
+        assert client.get(f"/a/rca/items/{item}/environment").json()["running"] is True
+        assert (
+            client.put(f"/a/rca/items/{item}/resources", json={"cpu_cores": 1.0}).status_code == 409
+        )
+
+        assert client.delete(f"/me/resources/live/{item}").status_code == 204
+
+        # BOTH must move together. Asserting only the route is what let the
+        # backend-only fix pass.
+        assert client.get(f"/a/rca/items/{item}/environment").json()["running"] is False
+        assert client.put(
+            f"/a/rca/items/{item}/resources", json={"cpu_cores": 1.0}
+        ).status_code in (200, 204)
+
+
+def test_a_deleted_item_is_still_named_in_a_refusal():
+    """Round-4 finding 5, the other half: R3-6 also survived a mutation.
+
+    A soft-deleted item can still hold a sandbox. Dropping its row from
+    `holding` hid the one thing the person could close — and two shipped
+    comments describe this case by name ("addressable beats invisible"), so the
+    behaviour was documented in two places and asserted in none.
+    """
+    with _app(PerUserResources(cpu=2.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        holder = _mk(spec, "alice", cpu=2.0)
+        _wake(client, holder)
+        assert client.delete(f"/rca-investigation/{holder}").status_code in (200, 204)
+
+        second = _mk(spec, "alice", cpu=2.0)
+        refused = client.post(f"/a/rca/items/{second}/messages", json={"content": "go"})
+
+        assert refused.status_code == 507, refused.text
+        holding = refused.json()["detail"]["holding"]
+        assert [h["item_id"] for h in holding] == [holder], holding
+        assert holding[0]["title"] == "", "no title for a row whose item is gone"
