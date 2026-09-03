@@ -25,7 +25,7 @@ from workspace_app.perm.model import Permission
 from workspace_app.quota.limits import ResourceLimits
 from workspace_app.resources import make_spec
 from workspace_app.sandbox.mock import MockSandbox
-from workspace_app.sandbox.protocol import SandboxHandle, SandboxSpec
+from workspace_app.sandbox.protocol import SandboxHandle, SandboxSpec, WalkResult
 
 from ..api._client import TestClient as ApiTestClient
 
@@ -46,9 +46,23 @@ class _RecordingSandbox(MockSandbox):
         super().__init__(cpu_cores=cpu_cores, memory_bytes=memory_bytes)
         self.specs: list[SandboxSpec] = []
 
+    #: When True, `exists` keeps answering yes after everything has been killed
+    #: — which is what the shared item dir on `kind: local` actually does. Those
+    #: dirs answer "who has files", not "what is running".
+    pretend_dir_survives = False
+
     async def create(self, spec: SandboxSpec, sandbox_id: str | None = None) -> SandboxHandle:
         self.specs.append(spec)
         return await super().create(spec, sandbox_id)
+
+    async def walk(self, handle: SandboxHandle, root: str) -> WalkResult:
+        # `_is_cold` probes with `walk` (measured, not guessed), so this is the
+        # method that decides whether the item's dir "still exists". Answering
+        # for a killed sandbox is what `kind: local` really does: the dir is on
+        # a shared volume and outlives the processes until the reaper rmtrees it.
+        if self.pretend_dir_survives:
+            return WalkResult(files=[], dirs=[])
+        return await super().walk(handle, root)
 
 
 #: Who the next request is from. A mutable holder rather than a header,
@@ -1132,3 +1146,66 @@ def test_creating_an_ordinary_item_through_the_auto_crud_still_works():
         made = client.post("/rca-investigation", json={"title": "x", "owner": "alice"})
 
         assert made.status_code in (200, 201), made.text
+
+
+def test_the_size_is_editable_again_after_a_pod_forgot_its_session():
+    """Regression review F5 — my 409 became a dead end on the default backend.
+
+    On `kind: local` there is no address store, so `has_live_sandbox` falls back
+    to "does the item's dir exist" — and that dir outlives the processes until
+    the idle reaper rmtrees it (its own docstring: the item dirs answer "who has
+    files", not "what is running"). After a pod restart that skipped
+    `close_all`, or on a replica that never warmed this item, the dir is there
+    and nothing is running.
+
+    My 409 then tells the person to close an environment that is already gone,
+    the panel disables the input on the same signal, and the only way out is the
+    8-hour idle reaper. Refusing an edit needs a source that answers "is
+    something RUNNING", so it now asks the heartbeat — which is also the source
+    the quota actually bills from, so the refusal and the bill agree by
+    construction.
+    """
+    with _app(PerUserResources(cpu=4.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        sandbox,
+    ):
+        # Set BEFORE anything runs. Flipping it after the close was too late —
+        # the teardown's own walk had already reported the dir gone, so the probe
+        # never saw the state, and the first version of this test survived a
+        # mutation that put the directory probe back. Measured with a script:
+        # after `close_session`, with the dir answering, `has_live_sandbox`
+        # returns True.
+        sandbox.pretend_dir_survives = True
+
+        item = _mk(spec, "alice")
+        _wake(client, item)
+        assert (
+            client.put(f"/a/rca/items/{item}/resources", json={"cpu_cores": 1.0}).status_code == 409
+        )
+
+        # `close_environment` clears the HEARTBEAT even when it finds no session
+        # to kill, which is what makes the heartbeat the honest source here.
+        assert client.delete(f"/me/resources/live/{item}").status_code == 204
+
+        reopened = client.put(f"/a/rca/items/{item}/resources", json={"cpu_cores": 1.0})
+        assert reopened.status_code in (200, 204), (
+            f"the dir outlives the processes; the setting must not: {reopened.text}"
+        )
+
+
+def test_a_genuinely_running_environment_still_blocks_the_edit():
+    """The control, and the reason the change is not just a loosening: while a
+    heartbeat is live the cgroup really does hold the old number, so accepting
+    an edit would re-bill against a machine that never changed."""
+    with _app(PerUserResources(cpu=4.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        item = _mk(spec, "alice")
+        _wake(client, item)
+
+        assert (
+            client.put(f"/a/rca/items/{item}/resources", json={"cpu_cores": 1.0}).status_code == 409
+        )

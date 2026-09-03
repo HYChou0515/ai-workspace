@@ -122,6 +122,18 @@ class _ResourcesOut(BaseModel):
     memory_bytes: int | None
 
 
+#: How far back a heartbeat still counts as "running". The same window the
+#: admission gate uses, and for the same reason: a pod that died without
+#: reaping stops counting on its own rather than pinning a limit forever.
+_LIVE_WINDOW_MS = 120_000
+
+
+def _now_ms() -> int:
+    import time
+
+    return int(time.time() * 1000)
+
+
 def _validated_resources(body: _ResourcesBody) -> tuple[float | None, int | None]:
     """The two numbers, or a 422 naming which one and why.
 
@@ -364,6 +376,32 @@ def register_item_routes(
             )
         return PermissionOut(resource_id=item_id, visibility=new_perm.visibility, notified=notified)
 
+    async def _environment_is_running(item_id: str) -> bool:
+        """Whether something is RUNNING for this item — the heartbeat's answer.
+
+        Deliberately not `registry.has_live_sandbox`. That one is the admission
+        gate's question ("is this item already holding its slot") and on
+        `kind: local`, with no address store, it degrades to "does the item's dir
+        exist" — and those dirs live on a shared volume and outlive the
+        processes until the idle reaper rmtrees them. Measured: with the pod's
+        session gone and the dir still present it answers True, so a refusal
+        built on it never lifts. The person is told to close an environment that
+        is already gone, and the only way out is an eight-hour reaper.
+
+        The heartbeat is the source the QUOTA bills from, so refusing an edit
+        and charging for a sandbox now agree by construction: if nothing is
+        being billed, there is nothing whose cgroup could disagree with a new
+        number."""
+        store = registry.activity
+        if store is None:
+            return await registry.has_live_sandbox(item_id)
+        owner = locator.owner_of(item_id)
+        if not owner:
+            return False
+        since = _now_ms() - _LIVE_WINDOW_MS
+        live = await store.live_for(owner, since_ms=since)
+        return any(s.item_id == item_id for s in live)
+
     @app.get("/a/{slug}/items/{item_id}/environment")
     async def get_item_environment(slug: str, item_id: str) -> _EnvironmentOut:
         """Is this item's environment running, how big is it, and who said so.
@@ -431,7 +469,7 @@ def register_item_routes(
         # still holding the old one. Lower it on a live item and the person is
         # charged 0.1 cores for 4 real ones, which repeated per item makes the
         # budget unbounded. Disabling the input alone left this door open.
-        if await registry.has_live_sandbox(item_id):
+        if await _environment_is_running(item_id):
             raise HTTPException(
                 status_code=409,
                 detail=(
