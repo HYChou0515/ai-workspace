@@ -179,3 +179,135 @@ async def test_a_backgrounded_probe_still_teaches_the_next_turn():
             break
 
     assert runner.learned_limit("m", "http://vllm") == 32_768
+
+
+# ── asking the PROXY what it was told (#760) ─────────────────────────────
+#
+# `/tokenize` is a vLLM extension, so it never survives a proxy: the request
+# goes to the proxy, which has no such route. That is the shape a real
+# deployment has — self-hosted vLLM behind a litellm proxy — and it is exactly
+# the shape the ladder had no rung for.
+#
+# litellm's own management route DOES answer, from the model list it was
+# configured with. It is a different kind of source from `/tokenize`: not the
+# enforcer speaking, but the operator's declaration relayed. So it is asked
+# separately and ranked separately.
+
+
+def _get_client(resp: object, *, seen: list[str] | None = None):
+    """A stand-in whose GET returns `resp` (or raises it), recording the urls."""
+
+    def get(url: str, **kw: object) -> _Resp:
+        if seen is not None:
+            seen.append(url)
+        if isinstance(resp, Exception):
+            raise resp
+        assert isinstance(resp, _Resp)
+        return resp
+
+    return type("C", (), {"get": staticmethod(get)})()
+
+
+def _model_info(**info: object) -> _Resp:
+    """The shape litellm's `/model/info` answers with."""
+    return _Resp(200, {"data": [{"model_name": "our-alias", "model_info": info}]})
+
+
+def test_the_proxy_can_state_the_input_window():
+    """`max_input_tokens` IS the input window — it needs no interpretation, and
+    it outranks anything derived."""
+    from workspace_app.context_probe import probe_endpoint_limits
+
+    got = probe_endpoint_limits(
+        base_url="http://proxy/v1",
+        model="our-alias",
+        client=_get_client(_model_info(max_input_tokens=131072, max_tokens=8192)),
+    )
+    assert got is not None
+    assert got.max_input_tokens == 131072
+    assert got.max_tokens == 8192
+
+
+def test_it_asks_both_spellings_because_base_url_may_or_may_not_end_in_v1():
+    """`base_url` is whatever the operator wrote — the chat route lives under
+    `/v1`, so it usually ends there, but not always. litellm mounts the
+    management route at BOTH spellings, and asking only one makes this rung work
+    or not depending on a trailing path nobody thinks about."""
+    from workspace_app.context_probe import probe_endpoint_limits
+
+    seen: list[str] = []
+    probe_endpoint_limits(
+        base_url="http://proxy/v1",
+        model="nobody",  # never matches, so both spellings get asked
+        client=_get_client(_Resp(404, {"detail": "Not Found"}), seen=seen),
+    )
+    assert seen == ["http://proxy/v1/model/info", "http://proxy/model/info"]
+
+
+@pytest.mark.parametrize(
+    "resp",
+    [
+        _Resp(404, {"detail": "Not Found"}),  # not a litellm proxy at all
+        _Resp(401, {"detail": "no key"}),  # a key without management rights
+        _Resp(200, {"data": []}),  # answered, knows no models
+        _Resp(200, {"data": [{"model_name": "someone-else"}]}),  # not our model
+        _Resp(200, {"data": "not a list"}),  # unexpected shape
+        _Resp(200, ["not", "a", "dict"]),
+        _Resp(200, ValueError("not json")),  # unparseable
+        _Resp(500, {"detail": "boom"}),
+        ConnectionError("refused"),  # nothing listening
+    ],
+)
+def test_every_way_of_not_answering_is_silent(resp: object):
+    """This rung's most-exercised path is the one where it learns nothing —
+    most endpoints are not a litellm proxy. Silence has to be free and
+    non-fatal, or a rung that exists for ONE topology breaks every other one."""
+    from workspace_app.context_probe import probe_endpoint_limits
+
+    assert (
+        probe_endpoint_limits(base_url="http://x", model="our-alias", client=_get_client(resp))
+        is None
+    )
+
+
+def test_a_row_that_states_nothing_useful_yields_no_numbers():
+    """Found the model, and it carries neither figure. That is an answer — the
+    proxy was never told — not a reason to keep looking or to invent one."""
+    from workspace_app.context_probe import probe_endpoint_limits
+
+    got = probe_endpoint_limits(
+        base_url="http://proxy",
+        model="our-alias",
+        client=_get_client(_model_info(max_input_tokens=None, max_tokens=0)),
+    )
+    assert got is not None
+    assert got.max_input_tokens is None
+    assert got.max_tokens is None
+
+
+def test_a_float_count_is_read_as_a_count():
+    """litellm's own documented example reports `16385.0`. Rejecting a float
+    here would drop a real answer on a technicality."""
+    from workspace_app.context_probe import probe_endpoint_limits
+
+    got = probe_endpoint_limits(
+        base_url="http://proxy",
+        model="our-alias",
+        client=_get_client(_model_info(max_tokens=16385.0)),
+    )
+    assert got is not None
+    assert got.max_tokens == 16385
+
+
+def test_no_base_url_asks_nothing():
+    """Nothing to ask, and no exception either — the ladder simply moves on."""
+    from workspace_app.context_probe import probe_endpoint_limits
+
+    seen: list[str] = []
+    assert (
+        probe_endpoint_limits(
+            base_url=None, model="m", client=_get_client(_Resp(200, {}), seen=seen)
+        )
+        is None
+    )
+    assert seen == []

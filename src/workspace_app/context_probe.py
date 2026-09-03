@@ -18,6 +18,7 @@ which never depended on an answer.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,96 @@ logger = logging.getLogger(__name__)
 #: Kept short on purpose: this is a startup nicety, not a dependency. A slow or
 #: wrong endpoint must cost a moment, not a boot.
 PROBE_TIMEOUT_S = 3.0
+
+
+@dataclass(frozen=True)
+class EndpointLimits:
+    """What a litellm proxy says it was configured with for one model.
+
+    Two numbers, kept apart because they mean different things and only one of
+    them is an answer to our question. `max_input_tokens` IS the input window.
+    `max_tokens` is the OUTPUT cap for most entries — measured against litellm's
+    own registry, gpt-4o reports 16,384 beside a 128,000 window — so it is
+    returned raw and left to the caller to decide what, if anything, to make of
+    it. Interpreting it here would bury a guess inside something that reads like
+    a measurement.
+    """
+
+    max_input_tokens: int | None
+    max_tokens: int | None
+
+
+def probe_endpoint_limits(
+    *,
+    base_url: str | None,
+    model: str,
+    client: Any = None,
+    timeout: float = PROBE_TIMEOUT_S,
+) -> EndpointLimits | None:
+    """What the endpoint's own model list says about `model`, or `None`.
+
+    `/tokenize` asks the thing that ENFORCES the window, which is the best
+    source there is — and it is a vLLM extension, so it does not survive a
+    proxy. A deployment running self-hosted vLLM behind a litellm proxy
+    therefore has no rung at all: the request reaches the proxy, which has no
+    such route, and the model's name is a local alias no registry knows.
+
+    litellm's management route answers from the model list it was configured
+    with. That is a relayed declaration rather than the enforcer speaking, so it
+    is ranked below `/tokenize` and below what the traffic taught us — but it is
+    the only thing that answers at all in that topology.
+
+    Silent on every failure, like the probe beside it: most endpoints are not a
+    litellm proxy, and a 404 here is the ordinary case rather than a fault."""
+    if not base_url:
+        return None
+    root = base_url.rstrip("/")
+    # Both spellings: `base_url` usually ends in `/v1` (the chat route lives
+    # there), and litellm mounts the management route at BOTH `/model/info` and
+    # `/v1/model/info`. Trying one only works for whichever way the operator
+    # happened to write the url.
+    for url in (f"{root}/model/info", f"{root.removesuffix('/v1')}/model/info"):
+        found = _read_model_info(url, model=model, client=client, timeout=timeout)
+        if found is not None:
+            return found
+    return None
+
+
+def _read_model_info(url: str, *, model: str, client: Any, timeout: float) -> EndpointLimits | None:
+    try:
+        http = client if client is not None else _default_client(timeout)
+        resp = http.get(url)
+        if getattr(resp, "status_code", 0) != 200:
+            logger.debug("context probe: %s answered %s", url, getattr(resp, "status_code", "?"))
+            return None
+        body = resp.json()
+    except Exception as exc:  # noqa: BLE001 — a probe must never break anything
+        logger.debug("context probe: %s unavailable (%s)", url, type(exc).__name__)
+        return None
+    if not isinstance(body, dict):
+        return None
+    rows = body.get("data")
+    if not isinstance(rows, list):
+        return None
+    for row in rows:
+        if not isinstance(row, dict) or row.get("model_name") != model:
+            continue
+        info = row.get("model_info")
+        if not isinstance(info, dict):
+            return None
+        return EndpointLimits(
+            max_input_tokens=_as_count(info.get("max_input_tokens")),
+            max_tokens=_as_count(info.get("max_tokens")),
+        )
+    return None
+
+
+def _as_count(value: Any) -> int | None:
+    """A positive whole number, or None. litellm reports these as floats in its
+    own examples (`16385.0`), so a strict int check would drop real answers."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return int(value) if value > 0 else None
 
 
 def probe_context_limit(
