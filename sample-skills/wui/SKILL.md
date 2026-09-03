@@ -18,9 +18,19 @@ right the things that are easy to get wrong, and copying beats generating.
 | `examples/dashboard/` | the data already exists and somebody wants to SEE it differently | listing then reading in parallel, parsing files people hand-edit, `openFile` to hand the user back to the real file |
 | `examples/editor/` | the page is where the data gets ENTERED or changed | saving without thrashing, hearing about someone else's edit without discarding what is half-typed, staying inside your own folder |
 | `examples/external/` | the answer lives in ANOTHER system | `callTool`, and telling the three refusals apart — not declared / not granted / the tool itself said no |
+| `examples/react/` | hand-written DOM has stopped paying | a real build (`pnpm build` → `dist/`), the three settings that fail silently without them, and the one step that can be forgotten |
 
 If a page both reads and writes, start from the dashboard and add saving — a
 page that reads wrongly is obvious, a page that writes wrongly is not.
+
+**Prefer no build unless the page needs one.** Without one, the files you wrote
+ARE the page: edit, press Refresh, see it. With one, the page is `dist/` and
+editing `src/` changes nothing until you rebuild — so a change with no rebuild
+leaves the user looking at the old page with nothing saying why. That is the
+only silent failure on this path, and it is yours to avoid: **rebuild in the
+same turn as the edit.** Libraries do not decide this — a UMD file in the folder
+(`<script src="./chart.umd.js">`) is inlined like anything else, no build
+needed.
 
 ⚠️ **The external example is the one you cannot copy unchanged.** Its tool has
 to be one this app actually grants, and **"Tools this app offers its WUIs"** —
@@ -65,9 +75,12 @@ title: Lot tracker
 
 ## The rules that are enforced (not advice)
 
-- **No network.** `fetch`, XHR, WebSocket, a CDN `<script src>`, a Google Font —
-  all blocked. Everything the page uses is a file in its folder, or comes
-  through `workspace.*`. There is no workaround; do not spend a turn looking.
+- **No network AT RUNTIME.** `fetch`, XHR, WebSocket, a CDN `<script src>`, a
+  Google Font — all blocked once the page is running. Everything it uses is a
+  file in its folder, or comes through `workspace.*`. There is no workaround; do
+  not spend a turn looking.
+  **A build is not runtime.** `pnpm install` runs in the sandbox, where you have
+  a network like any other command. What must not need one is the finished page.
 - **Read anywhere in the item, write only your own folder.** `workspace.readFile`
   can read `/notes.md`; `workspace.writeFile` can only write under
   `lot-tracker/`.

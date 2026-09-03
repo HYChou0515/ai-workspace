@@ -80,13 +80,52 @@ Renderer 是全平台都有的——**手寫一份 `view: wui` 的 yaml 現在�
 - **頁面自己還要在 yaml 宣告一次**（`tools: [lot-status]`）。那不是安全閘門——伺服器端的
   上限才是——而是揭露：讓人打開一個頁面之前，看得出它會伸手到哪裡。
 
-## 頁面能做什麼，不能做什麼
+## 你能拿什麼來寫
+
+**你們平常怎麼寫前端，這裡就怎麼寫。** React、Vue、任何 component library、任何圖表套件
+都可以——因為函式庫**住在資料夾裡**，不是從 CDN 拉。
+
+```
+銷售儀表板/
+  page.ai.yaml         view: wui
+  package.json         pnpm-lock.yaml
+  src/App.jsx          ← AI 改這裡
+  dist/index.html      ← build 產物，這才是頁面
+  dist/assets/…js
+```
+
+AI 在 sandbox 裡跑 `pnpm install && pnpm build`，產物存進 workspace。實測過：Vite 建出來的
+React app 丟進資料夾，元件掛載、state 隨點擊更新、在 `useEffect` 裡呼叫
+`workspace.whoami()` 也正常——**bridge 對 React 沒有任何特別之處，它就是個全域物件**。
+
+不想用建置工具也完全可以：把一份 UMD 檔（`chart.umd.js`、`purify.min.js`）放進資料夾，
+`<script src="./chart.umd.js">`，渲染時自動內嵌。實測過 DOMPurify 這樣載入並正常運作。
+
+三個設定少一個就靜默失敗，寫進 `vite.config.js`：
+
+| 設定 | 不做會怎樣 |
+|---|---|
+| `base: "./"` | Vite 預設輸出 `/assets/…`（workspace 根目錄絕對路徑），不會被內嵌，頁面全白 |
+| `inlineDynamicImports: true` | lazy chunk 沒被進入點引用，不會內嵌，點下去才壞 |
+| `entry: dist/index.html` 寫進 yaml | 不寫的話預設找資料夾根目錄的 `index.html` |
+
+!!! warning "`node_modules` 不會被保存"
+
+    鏡像的預設忽略清單有它（`sync/ignore.py`）。**這對執行期沒有影響**——頁面跑的是
+    `dist/` 裡的普通檔案，執行期不需要 `node_modules`。它只在 AI 要 rebuild 時需要，
+    而那時 sandbox 是熱的；被回收過就重跑一次 `pnpm install --frozen-lockfile`，
+    lock 保證裝出同一份東西。
+
+    **但是：`pnpm` 的 store 一定要和 item 目錄在同一個檔案系統。** pnpm 是用硬連結把
+    store 連進 `node_modules` 的，跨檔案系統會靜默退化成整份複製（實測 `links=2`
+    vs `links=1`，兩種情況都不吭聲）。
+
+## 頁面的邊界
 
 頁面跑在一個 **null origin** 的 iframe 裡（`sandbox="allow-scripts"`，**沒有**
 `allow-same-origin`），所以它拿不到 cookie、碰不到外層 DOM、也呼叫不了 API。
-唯一的出口是 `postMessage`，而外層是關卡。
-
-平台注入的 runtime 給它 `window.workspace`，七個動詞，**而且這個集合是封閉的**：
+唯一的出口是 `postMessage`，而外層是關卡。平台注入的 runtime 給它 `window.workspace`，
+七個動詞，**而且這個集合是封閉的**：
 
 | 動詞 | 範圍 |
 |---|---|
@@ -95,12 +134,17 @@ Renderer 是全平台都有的——**手寫一份 `view: wui` 的 yaml 現在�
 | `whoami` | 誰在看 |
 | `callTool` | 只通這個 App 開放、且頁面在 yaml 宣告過的 tool |
 
-**頁面沒有網路。** `fetch`、CDN 的 `<script src>`、web font、遠端圖片全部被 CSP 擋掉，
-連「把自己導航到別的網站」都擋掉了（那條要靠 app 文件的 `frame-src`，見
-[`plan-wui.md`](plan-wui.md)）。要對外只有一條路：呼叫 tool，由平台去跑——
-**帳密留在平台，永遠不會進到瀏覽器**，而且頁面也決定不了要跟使用者要哪一組密碼。
+**執行期沒有網路。** 這是說「頁面跑起來之後」——`fetch`、遠端 `<script src>`、web font、
+遠端圖片，連「把自己導航到別的網站」都擋掉（那條靠 app 文件的 `frame-src`，見
+[`plan-wui.md`](plan-wui.md)）。**建置期不受這個限制**：那是 sandbox 裡的 `pnpm`，
+不是瀏覽器。
 
-以後要加新能力，一律從 `callTool` 進來，不會再多一個動詞。這樣要信任的程式碼面積是固定的。
+所以「不能 CDN」的實際意思是**依賴要跟頁面一起被存起來**——對你們碰不到 CDN 的環境來說，
+這本來就是你們的做法，而且結果更好：離線可用、版本不會被上游偷換、外網不通也不影響。
+
+要在執行期跟外部系統講話只有一條路：呼叫 tool，由平台去跑——**帳密留在平台，永遠不會進到
+瀏覽器**，而且頁面也決定不了要跟使用者要哪一組密碼。以後要加新能力一律從 `callTool` 進來，
+不會再多一個動詞，這樣要信任的程式碼面積是固定的。
 
 ## 壞掉的時候
 

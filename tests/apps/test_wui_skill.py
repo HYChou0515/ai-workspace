@@ -9,6 +9,7 @@ deleted by the next change with nothing turning red.
 
 from __future__ import annotations
 
+import json
 import re
 
 import pytest
@@ -16,7 +17,15 @@ import pytest
 from workspace_app.apps.shared_skills import SHARED_SKILLS
 from workspace_app.apps.skill_payload import skill_payload
 
+#: The examples whose files ARE the page — no build, so the entry and its two
+#: siblings sit at the folder root.
 EXAMPLES = ("dashboard", "editor", "external")
+
+#: The built one. A different shape on purpose: its entry is the build OUTPUT,
+#: its source is `src/`, and its root `index.html` is the bundler's template
+#: rather than the page. Asserting the plain shape on it would either fail or,
+#: worse, be loosened until it stopped holding for the other three.
+BUILT = "react"
 
 #: What `dispatchWuiRequest` answers to. An example calling anything else would
 #: be teaching the agent an API that does not exist — the one mistake a copied
@@ -147,3 +156,62 @@ def test_the_skill_points_at_both_examples():
     body = SHARED_SKILLS["wui"].joinpath("SKILL.md").read_text()
     for name in EXAMPLES:
         assert f"examples/{name}/" in body, name
+
+def test_the_built_example_points_at_its_build_output(payload: dict[str, bytes]):
+    """`entry:` is the whole difference. Without it the renderer opens the
+    folder's root `index.html` — the bundler's TEMPLATE, which loads
+    `/src/main.jsx`, a dev-server path nothing can inline. The page renders
+    empty and nothing says why."""
+    yaml = payload[f"examples/{BUILT}/page.ai.yaml"].decode()
+
+    assert re.search(r"^entry:\s*dist/index\.html\s*$", yaml, re.MULTILINE)
+
+
+def test_the_built_example_carries_the_settings_that_fail_silently(payload: dict[str, bytes]):
+    """Both are silent when wrong: the default `base` emits root-absolute asset
+    URLs the assembler will not inline (blank page), and a code-split build
+    leaves lazy chunks referenced only from JS the assembler never reads (breaks
+    on the first navigation, not at build time)."""
+    config = payload[f"examples/{BUILT}/vite.config.js"].decode()
+
+    assert 'base: "./"' in config
+    assert "inlineDynamicImports: true" in config
+
+
+def test_the_built_example_declares_its_dependencies(payload: dict[str, bytes]):
+    """A page whose libraries are declared can be rebuilt after the sandbox is
+    recycled; one that had them installed ad hoc cannot."""
+    pkg = json.loads(payload[f"examples/{BUILT}/package.json"])
+
+    assert "react" in pkg["dependencies"]
+    assert "vite" in pkg["devDependencies"]
+    assert "build" in pkg["scripts"]
+
+
+def test_the_built_example_says_the_rebuild_step_out_loud(payload: dict[str, bytes]):
+    """The one silent failure on this path: editing `src/` changes nothing until
+    a rebuild, and the user is left looking at the old page. Writing it down is
+    the whole mitigation, so it has to actually be written down."""
+    readme = payload[f"examples/{BUILT}/README.md"].decode()
+
+    assert "rebuild" in readme.lower()
+    assert "--frozen-lockfile" in readme
+
+
+def test_the_built_example_reaches_the_bridge_the_same_way(payload: dict[str, bytes]):
+    """A build changes how the page is produced, not what it can do. If this
+    example implied a different API, it would teach one that does not exist."""
+    source = payload[f"examples/{BUILT}/src/main.jsx"].decode()
+    used = set(re.findall(r"workspace\s*\.?\s*\n?\s*\.?(\w+)\(", source))
+
+    assert used, "it would not need a WUI"
+    assert used <= VERBS, f"invents {sorted(used - VERBS)}"
+
+
+def test_the_skill_offers_the_built_example_too():
+    body = SHARED_SKILLS["wui"].joinpath("SKILL.md").read_text()
+
+    assert f"examples/{BUILT}/" in body
+    # And says which to prefer, because "you can build" is not the same as
+    # "you should": the build step is the only thing here that can be forgotten.
+    assert "Prefer no build" in body
