@@ -238,11 +238,12 @@ def parse_env_declaration(raw: str) -> tuple[EnvSpec, ...]:
     half that drifted would be the half deciding whether a person is ever
     shown the variable.
 
-    ``registry._read_env_needs`` reads the same file a third time and is
-    deliberately NOT this: it runs at discovery, on an already-published
-    bundle, where the only available response to a bad file is to degrade and
-    log. Loud where the author can fix it, quiet where they cannot — the same
-    split this function has with ``external._package``.
+    ``registry._read_env_needs`` reads the same file at discovery and calls
+    THIS — it differs only in what it does with a bad one (degrade and log,
+    because raising there would let one author's typo stop an operator's whole
+    startup). Loud where the author can fix it, quiet where they cannot: the
+    split is in the HANDLING, never in the rules. Two opinions on the rules is
+    what shipped a BOM'd file that built green and arrived as silence.
 
     LOUD here on purpose. This runs in the AUTHOR's own build, where the one
     person who can fix the file is the one reading the error. The RUNTIME side

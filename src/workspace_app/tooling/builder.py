@@ -218,7 +218,11 @@ def read_env_declaration(source: Path) -> tuple[EnvSpec, ...] | None:
         # hand-write, and a Windows editor puts a BOM on it. It reads plain
         # UTF-8 identically, so accepting one costs nothing.
         raw = declared.read_text("utf-8-sig")
-    except OSError as exc:
+    # UnicodeDecodeError is a ValueError, not an OSError, so naming only the
+    # latter left an undecodable file escaping as a bare traceback past
+    # `main`'s `except ArtifactError` — the one thing this docstring promises
+    # does not happen.
+    except (OSError, UnicodeDecodeError) as exc:
         raise BuildError(f"{declared} could not be read: {exc}") from exc
     try:
         return parse_env_declaration(raw)
