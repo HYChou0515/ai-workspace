@@ -338,9 +338,9 @@ async def test_a_picked_model_reaches_the_seam_resolved_and_is_named_in_the_repo
     """The impl owns name→endpoint: the seam receives the RESOLVED endpoint
     (it should not know the list), and the report says which engine ran —
     the #748 rule: where an answer came from must be visible."""
-    from workspace_app.factories import LlmEndpoint
+    from workspace_app.factories import SubagentModel
 
-    seen: list[LlmEndpoint | None] = []
+    seen: list[SubagentModel | None] = []
 
     async def run_agent(parent, defn, prompt, emit=None, model=None):
         seen.append(model)
@@ -358,7 +358,7 @@ async def test_a_picked_model_reaches_the_seam_resolved_and_is_named_in_the_repo
     assert len(seen) == 1
     first = seen[0]
     assert first is not None
-    assert first.model == "m-fast" and first.base_url == "http://fast:4000/v1"
+    assert first.name == "fast" and first.endpoint.model == "m-fast"
     assert "[log-digger] report" in out
     assert "fast" in out  # the report names the engine that ran
 

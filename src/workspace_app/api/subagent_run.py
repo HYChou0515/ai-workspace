@@ -28,7 +28,7 @@ from .events import AgentEvent, MessageDelta, RunError
 from .runner import AgentRunner
 
 if TYPE_CHECKING:
-    from ..factories import LlmEndpoint
+    from ..factories import SubagentModel
 
 logger = logging.getLogger(__name__)
 
@@ -39,12 +39,12 @@ async def run_agent_task(
     defn: SubagentDef,
     prompt: str,
     *,
-    model: LlmEndpoint | None = None,
+    model: SubagentModel | None = None,
     on_event: Callable[[AgentEvent], None] | None = None,
 ) -> str:
     """Drive `defn`'s sub-agent over `prompt` and return what it finally said.
 
-    `model` (when given) is a resolved preset endpoint the caller picked from
+    `model` (when given) is the resolved preset the caller picked from
     `agents.subagent_models` — the child runs on THAT engine instead of
     inheriting the parent turn's (plan-subagent-model-choice). Everything else
     about the child is untouched either way.
@@ -83,7 +83,7 @@ async def run_agent_task(
 
 
 def _child_context(
-    parent_ctx: AgentToolContext, defn: SubagentDef, model: LlmEndpoint | None = None
+    parent_ctx: AgentToolContext, defn: SubagentDef, model: SubagentModel | None = None
 ) -> AgentToolContext:
     """The parent's context with everything a sub-agent must not inherit removed.
 
@@ -101,19 +101,29 @@ def _child_context(
     parent_cfg = parent_ctx.agent_config
     if parent_cfg is None:  # pragma: no cover — `_agent_for` needs a config too
         raise ValueError("run_agent_task needs the parent turn's AgentConfig")
-    # A picked model swaps the ENGINE fields and nothing else. `""` on the
-    # config means "inherit the runner default", which is exactly what an
-    # endpoint resolved with no explicit base_url/key wants — and because the
-    # resolver filled those the same way the chain builder did, the swapped
-    # (model, effective base_url) pair still finds the preset's failover chain
-    # in the runner's map (`get_runner` builds one for every preset).
-    engine: dict[str, str] = (
+    # A picked model swaps the ENGINE BUNDLE and nothing else: the address
+    # (`""` on the config means "inherit the runner default", which is exactly
+    # what an endpoint resolved with no explicit base_url/key wants — and
+    # because the resolver filled those the same way the chain builder did,
+    # the swapped (model, effective base_url) pair still finds the preset's
+    # failover chain in `get_runner`'s map) AND the endpoint-shaped
+    # declarations. Leaving those to the parent was the review's finding: a
+    # vouched parent (`reports_usage=True`) delegating to an unvouched local
+    # preset would send `include_usage` there and persist litellm's tokenizer
+    # estimate as a measurement (#748/#751), and `vision=True` would feed raw
+    # image bytes to a text-only model.
+    engine: dict[str, object] = (
         {}
         if model is None
         else {
-            "model": model.model,
-            "llm_base_url": model.base_url or "",
-            "llm_api_key": model.api_key or "",
+            "model": model.endpoint.model,
+            "llm_base_url": model.endpoint.base_url or "",
+            "llm_api_key": model.endpoint.api_key or "",
+            "reports_usage": model.reports_usage,
+            "vision": model.vision,
+            "frequency_penalty": model.frequency_penalty,
+            "presence_penalty": model.presence_penalty,
+            "repetition_penalty": model.repetition_penalty,
         }
     )
     return dataclasses.replace(

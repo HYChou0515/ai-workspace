@@ -23,9 +23,8 @@ from ..config.schema import EnhancementSettings, OffHoursSettings, PerUserResour
 
 if TYPE_CHECKING:
     # Annotation-only: `factories` composes THIS module, so a runtime import
-    # here would be circular. `LlmEndpoint`/`SubagentModel` values arrive
-    # through parameters.
-    from ..factories import LlmEndpoint, SubagentModel
+    # here would be circular. `SubagentModel` values arrive through parameters.
+    from ..factories import SubagentModel
 from ..files import WorkspaceFiles, WorkspaceFull
 from ..filestore.protocol import FileNotFound, FileStore
 from ..health import CheckRegistry, CheckResult
@@ -1365,7 +1364,7 @@ def create_app(
         defn: SubagentDef,
         prompt: str,
         emit: OutputSink | None = None,
-        model: LlmEndpoint | None = None,
+        model: SubagentModel | None = None,
     ) -> str:
         """Run one sub-agent for the `run_agent` tool, relaying its work into the
         calling turn's tool card so a delegated task shows movement rather than a

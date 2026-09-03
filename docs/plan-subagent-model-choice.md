@@ -56,7 +56,8 @@ agents:
 
 - Chosen preset → its primary endpoint via the existing cascade
   (`resolve_llm_chain(settings, RetrievalLlmRef(preset=name))[0]` at assembly
-  time — model, base_url, api_key, reasoning_effort). The resolved refs for
+  time — model, base_url, api_key; `reasoning_effort` stays the parent turn's,
+  since a preset carries none). The resolved refs for
   the listed presets are computed **once in `create_app`/factories** and carried
   to the `run_agent` seam; no Settings access at turn time.
 - `_child_context` additionally swaps those fields on the child's
@@ -70,10 +71,11 @@ agents:
 
 ### Provenance
 
-The `run_agent` tool result states the engine when it differs from the parent
-(`[sub-agent ran on <preset name>]` appended, mirroring the #748 "where did
-this answer come from" rule), and the existing per-turn model logging applies
-to the child turn unchanged.
+The `run_agent` tool result states the engine whenever the caller picked one
+(`[sub-agent ran on <preset name>]` appended — including a pick equal to the
+parent's engine, a harmless superset; mirroring the #748 "where did this
+answer come from" rule), and the existing per-turn model logging applies to
+the child turn unchanged.
 
 ### Knob scope (entrypoint × honoured — per the standing rule)
 
@@ -99,8 +101,9 @@ never look dead (#759's docs note, same shape).
 
 ## Phases (one commit each)
 
-1. **Config**: `agents.subagent_models` — schema field, loader wiring (both
-   hand-written builders), load-time validation, `docs/configuration.md`.
+1. **Config**: `agents.subagent_models` — schema field, loader wiring (the
+   hand-written `_settings_from_dict` plus the reserved-key exclusions),
+   load-time validation, `docs/configuration.md`.
    Red test through the real yaml→load path first.
 2. **Resolution seam**: resolve listed presets to endpoint refs at assembly;
    thread them + the chosen name through the `run_agent` seam into

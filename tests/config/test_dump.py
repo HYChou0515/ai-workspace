@@ -161,3 +161,32 @@ def test_emit_never_raises_when_file_unwritable(tmp_path: Path):
 
     assert written is None
     assert out.getvalue()  # the masked dump still printed
+
+
+def test_a_tuple_field_the_operator_set_is_not_labelled_default(tmp_path: Path):
+    """Tuple-backed settings (`agents.subagent_models`, `failover.round_backoff_s`)
+    were the dump's blind spot: the provenance walker only recursed into lists,
+    so the whole tuple became one leaf whose path matched nothing the operator
+    wrote — and the dump, whose entire reason to exist is telling "mine" from
+    "default", labelled an operator-set value `# ← default`. Tuples now walk
+    like lists: per-element paths, per-element source comments."""
+    settings, prov = _resolved(
+        tmp_path,
+        """
+        failover:
+          round_backoff_s: [2, 4]
+        agents:
+          presets:
+            fast: { model: "m-fast" }
+          subagent_models: [fast]
+        """,
+    )
+    out = render(settings, prov, reveal_secrets=True)
+    assert "- fast  # ← config.yaml" in out
+    assert "- 2  # ← config.yaml" in out
+    assert "fast  # ← default" not in out
+
+    # Unset stays honestly default — the empty tuple renders as a [] leaf.
+    plain, plain_prov = _resolved(tmp_path, "server: { port: 9090 }\n")
+    plain_out = render(plain, plain_prov, reveal_secrets=True)
+    assert "subagent_models: []  # ← default" in plain_out

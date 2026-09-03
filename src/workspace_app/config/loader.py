@@ -211,7 +211,11 @@ def _assign_settings_sources(
     if isinstance(node, dict) and node:
         for k, v in node.items():
             _assign_settings_sources(v, _join(prefix, str(k)), op_sources, out)
-    elif isinstance(node, list) and node:
+    elif isinstance(node, (list, tuple)) and node:
+        # Tuples walk like lists: `asdict` keeps tuple-backed settings
+        # (`round_backoff_s`, `subagent_models`) as tuples, and treating one
+        # as a leaf made its path match nothing the operator wrote — so the
+        # dump labelled an operator-set value `# ← default`.
         for i, v in enumerate(node):
             _assign_settings_sources(v, f"{prefix}[{i}]", op_sources, out)
     else:
@@ -880,7 +884,9 @@ def _settings_from_dict(d: dict[str, Any]) -> Settings:
                 purpose: _normalize_usage_list(entries)
                 for purpose, entries in d["agents"]["sub_agents"].items()
             },
-            subagent_models=tuple(d["agents"].get("subagent_models", [])),
+            # `or []`: a bare `subagent_models:` (every entry commented out) is
+            # null — tolerated as empty, like the other agents lists.
+            subagent_models=tuple(d["agents"].get("subagent_models") or []),
         ),
         health=HealthSettings(
             checks=list(d.get("health", {}).get("checks", [])),

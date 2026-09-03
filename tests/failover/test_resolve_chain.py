@@ -184,3 +184,42 @@ agents:
 
     off = _settings(tmp_path, 'agents: { presets: { solo: { model: "m" } } }\n')
     assert resolve_subagent_models(off) == ()
+
+
+def test_subagent_models_carry_the_presets_endpoint_declarations(tmp_path):
+    """A picked engine must behave as if that preset were configured — and a
+    preset is more than (model, url, key): `reports_usage` (whether the
+    endpoint is VOUCHED to return real usage; sending `include_usage` to an
+    unvouched one lets litellm substitute a tokenizer estimate that persists
+    as a measurement, the #748/#751 poison), `vision` (feeding raw image bytes
+    to a text-only model), and the sampling penalties. The resolver carries
+    them so the swap can."""
+    from workspace_app.factories import resolve_subagent_models
+
+    settings = _settings(
+        tmp_path,
+        """
+agents:
+  presets:
+    vouched:
+      model: "m-v"
+      reports_usage: true
+      vision: true
+      llm: { frequency_penalty: 0.5, presence_penalty: 0.25, repetition_penalty: 1.1 }
+    plain: { model: "m-p" }
+  subagent_models: [vouched, plain]
+""",
+    )
+    vouched, plain = resolve_subagent_models(settings)
+    assert (vouched.reports_usage, vouched.vision) == (True, True)
+    assert (
+        vouched.frequency_penalty,
+        vouched.presence_penalty,
+        vouched.repetition_penalty,
+    ) == (0.5, 0.25, 1.1)
+    assert (plain.reports_usage, plain.vision) == (False, False)
+    assert (plain.frequency_penalty, plain.presence_penalty, plain.repetition_penalty) == (
+        None,
+        None,
+        None,
+    )

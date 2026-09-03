@@ -921,11 +921,23 @@ class SubagentModel:
     `description` it reads to pick, and the preset's primary endpoint resolved
     through the same cascade as everything else — which is what keeps the
     child's `(model, base_url)` matching the failover-chain key `get_runner`
-    built for that preset."""
+    built for that preset.
+
+    The endpoint-shaped DECLARATIONS ride along too, because a picked engine
+    must behave as if that preset were configured: `reports_usage` (send
+    `include_usage` only to an endpoint someone vouched returns real numbers —
+    an unvouched one lets litellm persist a tokenizer estimate as a
+    measurement, #748/#751), `vision` (never feed raw image bytes to a
+    text-only model), and the sampling penalties the preset declares."""
 
     name: str
     description: str
     endpoint: LlmEndpoint
+    reports_usage: bool = False
+    vision: bool = False
+    frequency_penalty: float | None = None
+    presence_penalty: float | None = None
+    repetition_penalty: float | None = None
 
 
 def resolve_subagent_models(settings: Settings) -> tuple[SubagentModel, ...]:
@@ -936,7 +948,18 @@ def resolve_subagent_models(settings: Settings) -> tuple[SubagentModel, ...]:
     for name in settings.agents.subagent_models:
         chain = resolve_llm_chain(settings, RetrievalLlmRef(preset=name))
         preset = settings.agents.presets[name]
-        out.append(SubagentModel(name=name, description=preset.description, endpoint=chain[0]))
+        out.append(
+            SubagentModel(
+                name=name,
+                description=preset.description,
+                endpoint=chain[0],
+                reports_usage=preset.reports_usage,
+                vision=preset.vision,
+                frequency_penalty=preset.llm.frequency_penalty,
+                presence_penalty=preset.llm.presence_penalty,
+                repetition_penalty=preset.llm.repetition_penalty,
+            )
+        )
     return tuple(out)
 
 

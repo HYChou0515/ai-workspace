@@ -1391,3 +1391,60 @@ def test_agent_for_threads_the_curated_subagent_models_onto_run_agent():
     ctx = AgentToolContext(investigation_id="inv-1", subagent_models=(choice,))
     kw = runner._agent_kwargs(ctx, None, LlmCredential)
     assert kw["subagent_models"] == (choice,)
+
+
+def test_a_picked_presets_failover_chain_is_found_for_the_child():
+    """The plan's failover row, pinned at the real build level: the child config
+    `_child_context` produces for a picked preset must make `_agent_for`'s
+    chain lookup HIT the `(model, base_url)` key `get_runner` builds for that
+    preset — so the picked engine inherits its own `fallbacks:` chain (#759's
+    429 behaviour included). A mutation that corrupts the swapped address
+    (e.g. a sentinel in `llm_base_url`) turns the agent's model back into a
+    plain single-endpoint one and fails here."""
+    import time
+
+    from workspace_app.api.litellm_runner import _agent_for
+    from workspace_app.api.subagent_run import _child_context
+    from workspace_app.apps.subagents import SubagentDef
+    from workspace_app.factories import LlmEndpoint, SubagentModel
+    from workspace_app.failover.cooldown import CooldownRegistry
+    from workspace_app.failover.model import FallbackModel
+
+    def _ep(model: str) -> LlmEndpoint:
+        return LlmEndpoint(
+            model=model,
+            base_url="http://picked:4000/v1",
+            api_key="pk",
+            reasoning_effort=None,
+            ttft_s=8.0,
+            idle_s=120.0,
+            cooldown_s=30.0,
+        )
+
+    chain = [_ep("m-picked"), _ep("m-spare")]
+    chains = {(chain[0].model, chain[0].base_url): chain}  # get_runner's key shape
+    picked = SubagentModel(name="picked", description="", endpoint=chain[0])
+
+    parent = AgentToolContext(
+        investigation_id="inv-1",
+        agent_config=AgentConfig(name="main", model="m-parent"),
+    )
+    child = _child_context(parent, SubagentDef(name="d", description="", tools=[]), picked)
+    assert child.agent_config is not None
+    agent = _agent_for(
+        child.agent_config,
+        fallback_chains=chains,
+        cooldown_registry=CooldownRegistry(clock=time.monotonic),
+    )
+    assert isinstance(agent.model, FallbackModel)
+
+    # The control: the un-overridden child keeps the parent's engine, whose
+    # model does not head this chain — so no FallbackModel is built.
+    plain = _child_context(parent, SubagentDef(name="d", description="", tools=[]))
+    assert plain.agent_config is not None
+    plain_agent = _agent_for(
+        plain.agent_config,
+        fallback_chains=chains,
+        cooldown_registry=CooldownRegistry(clock=time.monotonic),
+    )
+    assert not isinstance(plain_agent.model, FallbackModel)

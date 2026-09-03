@@ -1269,3 +1269,22 @@ def test_subagent_models_with_an_unknown_preset_refuses_to_load(tmp_path: Path):
         load(config_path=cfg, env={})
     assert "subagent_models" in str(err.value)
     assert "fast" in str(err.value)  # the known presets are named
+
+
+def test_subagent_models_left_null_loads_as_empty(tmp_path: Path):
+    """A bare `subagent_models:` (every entry commented out — routine YAML) is
+    null, not a typo. The other agents lists tolerate null, so this one must
+    too — before this test it died at construction with a bare TypeError,
+    bypassing the loader's own ValueError contract."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        dedent("""
+            agents:
+              presets:
+                fast: { model: "m-fast" }
+              subagent_models:
+        """),
+        encoding="utf-8",
+    )
+    s = load(config_path=cfg, env={})
+    assert s.agents.subagent_models == ()

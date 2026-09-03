@@ -1224,12 +1224,12 @@ async def run_agent_impl(
         return f"error: no sub-agent named {agent_type!r}, and none are defined."
     if picked is None:
         return await run(ctx.context, chosen, prompt, ctx.context.on_exec_output)
-    report = await run(
-        ctx.context, chosen, prompt, ctx.context.on_exec_output, model=picked.endpoint
-    )
+    report = await run(ctx.context, chosen, prompt, ctx.context.on_exec_output, model=picked)
     # #748's rule, applied to delegation: where a report came from must be
-    # visible — to the model reading it AND in the transcript.
-    return f"{report}\n\n[sub-agent ran on {picked.name}]"
+    # visible — to the model reading it AND in the transcript. A PREFIX, not a
+    # suffix: the output cap trims the tail, and a report sitting at the
+    # ceiling would lose exactly this line.
+    return f"[sub-agent ran on {picked.name}]\n\n{report}"
 
 
 async def _live_subagent_defs(ctx: AgentToolContext) -> tuple[SubagentDef, ...]:
