@@ -310,6 +310,50 @@ def _validate(merged: dict[str, Any], *, source: str) -> None:
     _check_retrieval_llm_reference(merged, source=source)
     _check_max_searches(merged, source=source)
     _check_host_managed_durable(merged, source=source)
+    _check_window_ratio(merged, source=source)
+
+
+def _check_window_ratio(merged: dict[str, Any], *, source: str) -> None:
+    """`history.max_tokens_window_ratio` is the only MULTIPLIER in this config.
+
+    Every other number nearby is a token count, where a typo is visibly too big
+    or too small. Here the typo that matters is a missing decimal point, and `8`
+    looks entirely reasonable in a field that takes numbers — it just claims the
+    input window is eight times what the endpoint stated, which surfaces as a
+    rejected request on every turn, on exactly the deployment that set this key
+    because compaction was not working.
+
+    `0` and negatives are the other end: they derive no window at all, which
+    reads downstream as "no ceiling known" and switches off the fallback the
+    operator was in the middle of configuring.
+
+    So the range is stated once, at load, while they are still looking at the
+    file they just edited.
+    """
+    history = merged.get("history")
+    if not isinstance(history, dict) or "max_tokens_window_ratio" not in history:
+        return
+    ratio = history["max_tokens_window_ratio"]
+    path = "history.max_tokens_window_ratio"
+    if isinstance(ratio, bool) or not isinstance(ratio, (int, float)):
+        raise ValueError(
+            f"config {source}: {path}={ratio!r} is not a number. It is the fraction of an "
+            f"endpoint's stated max_tokens to treat as its input window (0 < ratio <= 1, "
+            f"default 0.8)."
+        )
+    if 0 < ratio <= 1:
+        return
+    hint = (
+        f" Did you mean {ratio / 10:g}?"
+        if ratio > 1
+        else " A value of 0 or less derives no window at all, which silently disables the "
+        "fallback this key configures."
+    )
+    raise ValueError(
+        f"config {source}: {path}={ratio!r} is out of range. It is the FRACTION of an "
+        f"endpoint's stated max_tokens to treat as its input window, so 0 < ratio <= 1 "
+        f"(default 0.8).{hint}"
+    )
 
 
 def _check_host_managed_durable(merged: dict[str, Any], *, source: str) -> None:

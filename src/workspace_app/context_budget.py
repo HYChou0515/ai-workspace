@@ -110,6 +110,15 @@ class ContextLimit:
     def known(self) -> bool:
         return self.tokens is not None
 
+    @property
+    def derived(self) -> bool:
+        """True when nobody stated this number — we computed it from one that
+        means something else. Everything else on the ladder was said out loud by
+        an operator, the endpoint, or a registry; this one is our own arithmetic
+        and is the only rung allowed to be overruled by its own implausibility.
+        """
+        return self.source == "estimated"
+
 
 def _positive(value: int | None) -> int | None:
     """A limit must be a positive count; 0 / negative / None all mean absent."""
@@ -271,11 +280,36 @@ def history_budget(
     prompt and the tool schemas. Both were entirely absent from the old
     arithmetic, which is why a deploy could aim 18.5k + 24k at a 40,960 model
     and only find out via silent truncation.
+
+    A DERIVED ceiling gets one extra test that a stated one does not: if it
+    leaves no room for history at all, it is refused and the answer is
+    ``None`` — unknown — rather than 0. The reasoning is evidence, not taste.
+    Most proxies report `max_tokens` as what it usually means, an output cap, so
+    a well-behaved `max_tokens: 4096` derives a 3,276-token "window" smaller
+    than the system prompt this deployment demonstrably sends in every request
+    and gets answers to. A number that cannot contain what the endpoint is
+    already accepting is not that endpoint's input window, and believing it
+    would replay exactly one message per turn — an assistant that has lost its
+    memory, silently, on a deployment that worked before this rung existed.
+
+    A STATED ceiling that small is not second-guessed: 0 is then the truth
+    ("we know the ceiling and the prompt alone fills it"), and the caller
+    depends on being able to tell that from "we do not know".
     """
     if limit.tokens is None:
         return None
     usable = int(limit.tokens * (1.0 - margin_ratio))
-    return max(0, usable - max(0, overhead_tokens) - max(0, reply_reserve))
+    budget = max(0, usable - max(0, overhead_tokens) - max(0, reply_reserve))
+    if budget <= 0 and limit.derived:
+        logger.warning(
+            "context: a derived ceiling of %d leaves no room for history beside %d tokens of "
+            "prompt and tools, so it is not the input window — falling back to no ceiling. "
+            "Set model_info.max_input_tokens on the endpoint to fix this properly.",
+            limit.tokens,
+            overhead_tokens,
+        )
+        return None
+    return budget
 
 
 #: Role of a compaction summary (#739). Defined here, not in `api.turns`, so the

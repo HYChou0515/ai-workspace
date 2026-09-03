@@ -457,3 +457,47 @@ def test_a_ratio_that_would_round_to_nothing_yields_nothing():
 
     assert window_from_max_tokens(3, ratio=0.1) is None
     assert window_from_max_tokens(100_000, ratio=0.0) is None
+
+
+# ── a derived ceiling that cannot hold a conversation is not a ceiling ────
+
+
+def test_a_derived_ceiling_too_small_to_hold_history_is_refused():
+    """The way this feature could make a deployment WORSE than before it.
+
+    Most proxies report `max_tokens` as what it usually means: the OUTPUT cap.
+    A well-behaved `max_tokens: 4096` derives a 3,276-token "window" — smaller
+    than the system prompt alone (11k-18.5k, measured) — and the arithmetic then
+    says history gets 0 tokens, which the caller floors at 1: every turn replays
+    exactly one message and the assistant appears to have lost its memory. That
+    is worse than the `unknown` it replaced, and silent.
+
+    The refusal is evidence-based rather than a magic threshold: the deployment
+    is up and answering with that overhead in every request, so a number too
+    small to contain the overhead is demonstrably not the input window. Falling
+    back to `unknown` restores exactly the behaviour that was working."""
+    from workspace_app.context_budget import ContextLimit, history_budget
+
+    derived = ContextLimit(tokens=3276, source="estimated")
+    assert history_budget(derived, overhead_tokens=11_000) is None
+
+
+def test_a_stated_ceiling_that_small_still_answers_zero():
+    """`0` and `None` are different answers and must stay different. When the
+    ceiling was STATED — an operator's config, the endpoint's own report — "the
+    prompt already fills it" is the truth, and the caller needs to hear it
+    rather than be told the ceiling is unknown."""
+    from workspace_app.context_budget import ContextLimit, history_budget
+
+    for source in ("config", "learned", "declared", "catalog"):
+        stated = ContextLimit(tokens=3276, source=source)
+        assert history_budget(stated, overhead_tokens=11_000) == 0, source
+
+
+def test_a_derived_ceiling_with_room_to_spare_is_used():
+    """The case this rung exists for: a proxy whose `max_tokens` really is the
+    window. It must not be refused along with the small ones."""
+    from workspace_app.context_budget import ContextLimit, history_budget
+
+    derived = ContextLimit(tokens=104857, source="estimated")  # 131072 * 0.8
+    assert history_budget(derived, overhead_tokens=18_500) == 73_871
