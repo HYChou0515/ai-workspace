@@ -414,3 +414,46 @@ def test_no_estimate_still_means_unknown():
     """A silent proxy leaves the ladder exactly where it was: `unknown` — send
     it all rather than trim on a guess."""
     assert resolve_context_limit() == ContextLimit(tokens=None, source="unknown")
+
+
+# ── deriving a window from the one figure a proxy did state ──────────────
+
+
+def test_a_stated_output_cap_becomes_a_conservative_window_estimate():
+    """`max_tokens` is the OUTPUT cap for most entries, so this is a derivation
+    and not a reading. It is here because on a proxy that states nothing else it
+    is the only figure in the room, and the alternative is `unknown` — no
+    trimming and no compaction at all."""
+    from workspace_app.context_budget import window_from_max_tokens
+
+    assert window_from_max_tokens(131072, ratio=0.8) == 104857
+
+
+def test_the_ratio_is_the_operators_and_is_not_applied_to_a_stated_window():
+    """The knob exists because the right fraction depends on what the operator
+    put in that field, which only they know. And it is deliberately only ever
+    applied HERE: `max_input_tokens` is already the input window, so scaling
+    that one would discount twice — the budget already subtracts the prompt,
+    the tool schemas, a reply reserve and a margin."""
+    from workspace_app.context_budget import window_from_max_tokens
+
+    assert window_from_max_tokens(100_000, ratio=0.5) == 50_000
+    assert window_from_max_tokens(100_000, ratio=1.0) == 100_000
+
+
+def test_nothing_stated_derives_nothing():
+    """No figure, no estimate — never a floor, never a default. An invented
+    number here would govern every later turn on this endpoint."""
+    from workspace_app.context_budget import window_from_max_tokens
+
+    assert window_from_max_tokens(None, ratio=0.8) is None
+    assert window_from_max_tokens(0, ratio=0.8) is None
+
+
+def test_a_ratio_that_would_round_to_nothing_yields_nothing():
+    """A window of 0 is not "unlimited" and not "unknown" — it is a number that
+    would trim every conversation to its last message. Refuse to produce one."""
+    from workspace_app.context_budget import window_from_max_tokens
+
+    assert window_from_max_tokens(3, ratio=0.1) is None
+    assert window_from_max_tokens(100_000, ratio=0.0) is None

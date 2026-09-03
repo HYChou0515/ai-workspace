@@ -36,7 +36,7 @@ from .kb.tokens import count_tokens
 
 logger = logging.getLogger(__name__)
 
-LimitSource = Literal["config", "learned", "catalog", "unknown"]
+LimitSource = Literal["config", "learned", "declared", "catalog", "estimated", "unknown"]
 
 #: Strong refs to in-flight deferred lookups — asyncio keeps only a weak one, so
 #: an unreferenced task can be collected mid-flight.
@@ -116,11 +116,46 @@ def _positive(value: int | None) -> int | None:
     return value if value is not None and value > 0 else None
 
 
+#: What fraction of a stated `max_tokens` to treat as the input window when it
+#: is the only figure an endpoint gave us. Configurable because the right
+#: fraction depends on what the operator put in that field, which only they
+#: know — see `window_from_max_tokens`.
+DEFAULT_MAX_TOKENS_WINDOW_RATIO = 0.8
+
+
+def window_from_max_tokens(max_tokens: int | None, *, ratio: float) -> int | None:
+    """An input window derived from a stated `max_tokens`, or ``None``.
+
+    A DERIVATION, not a reading. `max_tokens` is the OUTPUT cap for most
+    entries — measured against litellm's own registry, gpt-4o reports 16,384
+    beside a 128,000 window, while `ollama_chat/qwen3:14b` reports 40,960 for
+    both — so the ratio between them is not a constant and cannot be one. That
+    is exactly why the fraction is the operator's to set and why the result
+    ranks below every figure someone actually stated.
+
+    It earns its place only where every other rung is silent: a self-hosted
+    model behind a proxy, under a local alias no registry knows. There the
+    alternative is not a better number, it is `unknown` — which means the
+    history is never trimmed and compaction never runs, so a conversation grows
+    until the endpoint refuses it.
+
+    Never applied to `max_input_tokens`: that one already IS the input window,
+    and scaling it would discount twice, on top of the prompt, the tool schemas,
+    the reply reserve and the margin the budget already subtracts.
+
+    Absent or non-positive in, ``None`` out — never a floor and never a default.
+    A window of 0 is not "unlimited" and not "unknown"; it is a number that
+    would cut every conversation down to its last message."""
+    return _positive(int((max_tokens or 0) * max(0.0, ratio)))
+
+
 def resolve_context_limit(
     *,
     configured: int | None = None,
     learned: int | None = None,
+    declared: int | None = None,
     catalog: int | None = None,
+    estimated: int | None = None,
 ) -> ContextLimit:
     """The ceiling for this endpoint, by descending authority.
 
@@ -131,14 +166,30 @@ def resolve_context_limit(
        by evidence is a trap.)
     2. ``learned`` — what the endpoint actually accepted or reported. Beats a
        table, because it is an observation rather than a claim.
-    3. ``catalog`` — a registry lookup (litellm). Right for hosted models and
+    3. ``declared`` — what a proxy in front of the model says it was configured
+       with (`model_info.max_input_tokens`). A claim rather than an observation,
+       so it ranks below ``learned`` — but it is a claim about THIS endpoint,
+       which beats a table keyed on a model name the endpoint may not even use.
+    4. ``catalog`` — a registry lookup (litellm). Right for hosted models and
        ``ollama/*``; blank for a self-hosted model served under a custom name.
-    4. otherwise ``unknown`` — stated, never faked.
+    5. ``estimated`` — derived rather than stated (see `window_from_max_tokens`).
+       Last, below every figure anyone actually gave us, because it is the only
+       rung whose number nobody vouched for. It exists for the topology where
+       all four above are silent — self-hosted behind a proxy, under a local
+       alias — and there the alternative is not a better number, it is `unknown`,
+       which means the history is never trimmed and compaction never runs.
+    6. otherwise ``unknown`` — stated, never faked.
+
+    The SOURCE travels with the number for exactly this reason: a caller that
+    cannot tell an estimate from a measurement will eventually present one as
+    the other.
     """
     for value, source in (
         (configured, "config"),
         (learned, "learned"),
+        (declared, "declared"),
         (catalog, "catalog"),
+        (estimated, "estimated"),
     ):
         got = _positive(value)
         if got is not None:

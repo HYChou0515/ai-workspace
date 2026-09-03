@@ -104,6 +104,10 @@ def test_history_section_defaults():
     assert s.max_messages == 0
     assert s.max_context_tokens == 0
     assert s.context_limit is None
+    # The derived-window fraction has a default because its rung only fires
+    # where every stated source is silent — leaving it unset there would mean
+    # "no compaction at all", which is the state this rung exists to end.
+    assert s.max_tokens_window_ratio == 0.8
 
 
 def test_kb_section_is_nested_dataclasses():
