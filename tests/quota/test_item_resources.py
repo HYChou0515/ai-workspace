@@ -21,6 +21,7 @@ from workspace_app.api import ScriptedAgentRunner, create_app
 from workspace_app.apps.rca.model import RcaInvestigation
 from workspace_app.config.schema import PerUserResources
 from workspace_app.filestore.specstar_impl import SpecstarFileStore
+from workspace_app.perm.model import Permission
 from workspace_app.quota.limits import ResourceLimits
 from workspace_app.resources import make_spec
 from workspace_app.sandbox.mock import MockSandbox
@@ -50,19 +51,28 @@ class _RecordingSandbox(MockSandbox):
         return await super().create(spec, sandbox_id)
 
 
+#: Who the next request is from. A mutable holder rather than a header,
+#: because that is how the app resolves identity — `get_user_id` is a callable
+#: the composition root supplies, and a double that invented a header would be
+#: testing a door this app does not have.
+WHO = {"id": "alice"}
+
+
 @contextlib.contextmanager
 def _app(
     limits: PerUserResources, *, app_resources: dict[str, ResourceLimits]
 ) -> Iterator[tuple[ApiTestClient, SpecStar, _RecordingSandbox]]:
     """Driven through the LIFESPAN: the heartbeat row that doubles as the
     per-person ledger is registered there."""
-    spec = make_spec()
+    WHO["id"] = "alice"
+    spec = make_spec(default_user=lambda: WHO["id"])
     sandbox = _RecordingSandbox(cpu_cores=8.0, memory_bytes=8 * 1024**3)
     app = create_app(
         spec=spec,
         sandbox=sandbox,
         filestore=SpecstarFileStore(spec),
         runner=ScriptedAgentRunner([]),
+        get_user_id=lambda: WHO["id"],
         app_resources=app_resources,
         per_user_resources=limits,
     )
@@ -76,6 +86,7 @@ def _mk(
     *,
     cpu: float | None = None,
     memory: int | None = None,
+    permission: Permission | None = None,
 ) -> str:
     """Named rather than `**kwargs`: a splatted dict types as a union, and ty
     stops checking which field got which value — the exact way a test can call
@@ -88,6 +99,7 @@ def _mk(
                 owner=owner,
                 sandbox_cpu_cores=cpu,
                 sandbox_memory_bytes=memory,
+                permission=permission,
             )
         )
         .resource_id
@@ -273,3 +285,125 @@ def test_nothing_declared_anywhere_leaves_the_spec_unstated():
         got = sandbox.specs[-1]
         assert got.cpu_cores is None
         assert got.memory_bytes is None
+
+
+# ── P2: its own route, its own verb ──────────────────────────────────────
+
+
+def _restricted(**grants: list[str]) -> Permission:
+    """A `restricted` permission granting exactly the verbs named — set at
+    CREATE time, which is how the item's `created_by` and its grants come to
+    agree. Patching it on afterwards fights the very access scope under test.
+
+    Subjects carry their `user:` prefix. Without it the grant simply matches
+    nobody, and the test would read as "correctly refused" while proving
+    nothing."""
+    return Permission(visibility="restricted", **grants)
+
+
+def test_editing_the_size_needs_more_than_editing_the_item():
+    """The reason this is not a field on the item PATCH.
+
+    Everything else on an item is `write_meta`. This decides how much of the
+    OWNER's budget the item may spend, which is a different grant — and it must
+    stay out of reach of the item's own agent, since `AI_FORBIDDEN` is what
+    stops a turn raising its own ceiling.
+
+    The second half of the assertion is the one that matters: the person is not
+    locked out of the item, only out of this. A fix that gated too much would
+    pass a test that only checked the refusal.
+    """
+    with _app(PerUserResources(cpu=4.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        item = _mk(
+            spec,
+            "owner-alice",
+            permission=_restricted(read_meta=["user:bob"], write_meta=["user:bob"]),
+        )
+
+        WHO["id"] = "bob"
+        refused = client.put(f"/a/rca/items/{item}/resources", json={"cpu_cores": 1.0})
+        assert refused.status_code in (403, 404), refused.text
+
+        # The item's own fields go through specstar's auto-CRUD, gated on
+        # `write_meta` — which bob has and must keep.
+        still_editable = client.patch(f"/rca-investigation/{item}", json={"title": "renamed"})
+        assert still_editable.status_code == 200, (
+            f"bob must keep the write_meta he has: {still_editable.text}"
+        )
+
+
+def test_a_delegate_with_change_permission_may_set_it():
+    with _app(PerUserResources(cpu=4.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        sandbox,
+    ):
+        item = _mk(
+            spec,
+            "owner-alice",
+            permission=_restricted(
+                read_meta=["user:bob"], read_chat=["user:bob"], change_permission=["user:bob"]
+            ),
+        )
+
+        WHO["id"] = "bob"
+        got = client.put(f"/a/rca/items/{item}/resources", json={"cpu_cores": 1.0})
+        assert got.status_code in (200, 204), got.text
+
+        # Back to someone who may actually run the item: bob was granted the
+        # right to SET the size, not to spend it. That asymmetry is the design.
+        WHO["id"] = "alice"
+        _wake(client, item)
+        assert sandbox.specs[-1].cpu_cores == 1.0, "and it reaches the sandbox"
+
+
+def test_clearing_it_goes_back_to_the_resolved_default():
+    """`null` is how "I have no opinion" is said — and it must restore the
+    computed default rather than storing a zero."""
+    with _app(PerUserResources(cpu=3.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        sandbox,
+    ):
+        item = _mk(spec, "alice", cpu=1.0)
+        cleared = client.put(f"/a/rca/items/{item}/resources", json={"cpu_cores": None})
+        assert cleared.status_code in (200, 204), cleared.text
+
+        _wake(client, item)
+        assert sandbox.specs[-1].cpu_cores == 3.0, "min(App 4, budget 3)"
+
+
+def test_the_agent_can_never_hold_the_verb_that_sets_the_size():
+    """The deciding reason this route is gated on `change_permission` and not on
+    something more ordinary.
+
+    The item's agent runs INSIDE the very sandbox this number sizes. A verb the
+    AI can hold would let a turn raise its own CPU ceiling and spend the owner's
+    budget — so the gate had to be one of the two verbs `AI_FORBIDDEN` covers,
+    and `use_terminal` is about shell access rather than administration.
+
+    Asserted against the authorizer rather than the constant: `AI_FORBIDDEN`
+    containing the name proves only that someone wrote it down, while this
+    proves the refusal actually happens. A grant as explicit as it gets — the
+    AI is named in `change_permission` — and it still must not pass.
+    """
+    from workspace_app.perm import Actor, Permission, authorize
+
+    everything_granted = Permission(
+        visibility="restricted",
+        read_meta=["user:agent"],
+        change_permission=["user:agent"],
+    )
+    ai = Actor(user_id="agent", is_ai=True)
+    human = Actor(user_id="agent", is_ai=False)
+
+    # `created_by` is somebody else on purpose: the owner bypass would answer
+    # True for either actor and hide the rule under test.
+    assert authorize(human, "change_permission", everything_granted, created_by="alice") is True
+    assert authorize(ai, "change_permission", everything_granted, created_by="alice") is False, (
+        "an agent holding this verb could raise its own ceiling"
+    )

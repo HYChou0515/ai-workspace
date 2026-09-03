@@ -24,6 +24,7 @@ from ..filestore.protocol import FileStore
 from ..kb.ingest import Ingestor
 from ..perm import Actor, Permission, Verb, authorize
 from ..perm.model import user_subject
+from ..quota.limits import parse_size
 from ..resources.groups import groups_of
 from ..sandbox.protocol import SandboxBusy
 from .activity import ActivityLog
@@ -59,6 +60,65 @@ class ItemAccessRequestOut(BaseModel):
 
 class _MembersBody(BaseModel):
     members: list[str]
+
+
+class _ResourcesBody(BaseModel):
+    """How big this item's environment may be. Both dimensions optional and
+    independent — an item may state memory and leave cpu to resolve, exactly as
+    the config layer already lets an App do.
+
+    ``None`` CLEARS: it means "nobody has said", which is not zero and not a
+    number. Memory is a size string (``512M`` / ``2G``) so the wire matches
+    what the operator writes in config, parsed by the one parser that already
+    knows the spelling."""
+
+    cpu_cores: float | None = None
+    memory: str | None = None
+
+
+class _ResourcesOut(BaseModel):
+    """What was stored. Bytes on the way out because that is what a
+    ``SandboxSpec`` carries and a cgroup is written with; the string spelling
+    belongs to the operator and the UI, not to the machinery."""
+
+    cpu_cores: float | None
+    memory_bytes: int | None
+
+
+def _validated_resources(body: _ResourcesBody) -> tuple[float | None, int | None]:
+    """The two numbers, or a 422 naming which one and why.
+
+    Only ``> 0`` is enforced, deliberately: there is no floor. Someone who sets
+    a small environment chose it, and the connection between their setting and a
+    slow environment is one they can make — inventing a minimum here would be a
+    number nobody vouched for, and shipping it as an unset knob would be a
+    protection that does not exist. What DOES have to hold up its end is the
+    failure: a sandbox that cannot start at this size must say so against this
+    setting rather than as a generic launch error.
+
+    Zero is refused rather than treated as "unlimited". Elsewhere in this
+    feature ``0`` means "no limit", but that reading belongs to an OPERATOR's
+    config; here it would let a person silently opt their item out of a ceiling
+    the deploy set for them."""
+    cpu = body.cpu_cores
+    if cpu is not None and cpu <= 0:
+        raise HTTPException(
+            status_code=422,
+            detail=f"cpu_cores must be greater than 0 (got {cpu}); omit it to use the default",
+        )
+    memory: int | None = None
+    if body.memory is not None:
+        try:
+            memory = parse_size(body.memory)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=f"memory: {exc}") from exc
+        if memory <= 0:
+            raise HTTPException(
+                status_code=422,
+                detail=f"memory must be greater than 0 (got {body.memory!r}); "
+                "omit it to use the default",
+            )
+    return cpu, memory
 
 
 # grill D7: a member is a Participant — the verbs that let them work in the item.
@@ -252,6 +312,46 @@ def register_item_routes(
                 actor=me,
             )
         return PermissionOut(resource_id=item_id, visibility=new_perm.visibility, notified=notified)
+
+    @app.put("/a/{slug}/items/{item_id}/resources")
+    async def set_item_resources(slug: str, item_id: str, body: _ResourcesBody) -> _ResourcesOut:
+        """How big THIS item's environment may be.
+
+        Its own route rather than two more fields on the item PATCH, and the
+        reason is the same one that pulled `members` out: this looks like a
+        field and is actually a spending decision. It sets how much of the
+        OWNER's budget the item may consume, so it is gated on
+        ``change_permission`` — the only verb that is both semantically right
+        and in ``AI_FORBIDDEN``, which is what stops the item's own agent (which
+        runs inside that very sandbox) from raising its own ceiling.
+
+        Folding it into the item PATCH would have meant a per-FIELD check inside
+        a route that otherwise needs only ``write_meta`` — one rule in two
+        places, and the kind that fails open: miss it and the PATCH still
+        succeeds, with every existing test green.
+
+        ``null`` in either dimension clears it, which is not the same as zero:
+        cleared means "nobody has said", and the size resolves fresh from
+        ``min(App ceiling, owner budget)`` every time it is asked.
+
+        Persists AS THE OWNER for the same reason the permission setter does —
+        a ``change_permission`` delegate need not hold ``write_meta``, and it is
+        ``change_permission`` that was just verified."""
+        from ..apps.catalog import discover_app_slugs
+        from ..apps.registry import app_model
+
+        if slug not in discover_app_slugs():
+            raise HTTPException(status_code=404, detail=f"unknown app: {slug!r}")
+        model = app_model(slug)
+        item, created_by = _authorize_item(slug, item_id, "change_permission")
+        cpu, memory = _validated_resources(body)
+        rm = spec.get_resource_manager(model)
+        with rm.using(created_by):
+            rm.update(
+                item_id,
+                msgspec.structs.replace(item, sandbox_cpu_cores=cpu, sandbox_memory_bytes=memory),
+            )
+        return _ResourcesOut(cpu_cores=cpu, memory_bytes=memory)
 
     @app.put("/a/{slug}/items/{item_id}/members")
     async def set_item_members(slug: str, item_id: str, body: _MembersBody) -> PermissionOut:
