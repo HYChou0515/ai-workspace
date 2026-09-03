@@ -34,26 +34,38 @@ function toDataUrl(blob: Blob): Promise<string> {
 export function folderLoader(fs: FileService, folder: string): WuiLoad {
   return async (rel: string): Promise<WuiAsset | null> => {
     const path = resolveInFolder(folder, rel);
-    if (path === null) return null;
-
-    let content;
-    try {
-      content = await fs.readFile(path);
-    } catch {
-      return null;
-    }
-    if (content.kind === "text") return { kind: "text", text: content.text };
-
-    // `readFile` reports a binary file's existence but not its bytes; the raw
-    // route is where those live.
-    try {
-      const resp = await fetch(fs.fileDownloadUrl(path));
-      if (!resp.ok) return null;
-      return { kind: "binary", dataUrl: await toDataUrl(await resp.blob()) };
-    } catch {
-      return null;
-    }
+    return path === null ? null : readAsset(fs, path);
   };
+}
+
+/**
+ * One workspace file in the shape a page can hold: text as text, anything else
+ * as a `data:` URL, because a null-origin frame with no network cannot follow a
+ * URL to fetch the bytes itself.
+ *
+ * `null` for anything that will not come. Every caller's answer to a missing
+ * file is to carry on — the assembler leaves the reference for CSP to refuse by
+ * name, and the bridge turns it into a sentence — so throwing here would only
+ * convert one absent image into a blank pane.
+ */
+export async function readAsset(fs: FileService, path: string): Promise<WuiAsset | null> {
+  let content;
+  try {
+    content = await fs.readFile(path);
+  } catch {
+    return null;
+  }
+  if (content.kind === "text") return { kind: "text", text: content.text };
+
+  // `readFile` reports a binary file's existence but not its bytes; the raw
+  // route is where those live.
+  try {
+    const resp = await fetch(fs.fileDownloadUrl(path));
+    if (!resp.ok) return null;
+    return { kind: "binary", dataUrl: await toDataUrl(await resp.blob()) };
+  } catch {
+    return null;
+  }
 }
 
 /** Raised when the entry document itself is missing — the one absence that has

@@ -5,9 +5,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { FileServiceProvider, type FileService } from "../../api/fileService";
 import type { FileContent } from "../../api/types";
+import { publishFileChanged } from "../../lib/fileChangedBus";
 import { QueryWrap } from "../../test/queryWrapper";
 import type { ViewSpec } from "../entity/types";
 import { WUI_CSP } from "./assemble";
+import { WUI_PROTOCOL } from "./protocol";
 import { WuiView } from "./WuiView";
 
 const text = (path: string, body: string): FileContent => ({
@@ -40,6 +42,18 @@ function renderWui(files: Record<string, string>, spec: Partial<ViewSpec> = {}) 
 }
 
 const frame = () => document.querySelector("iframe");
+
+/** Speak as the page inside the frame, and capture what comes back. */
+async function withFrame(files: Record<string, string>) {
+  renderWui(files);
+  await waitFor(() => expect(frame()).toBeInTheDocument());
+  const win = frame()?.contentWindow as Window;
+  const replies: unknown[] = [];
+  vi.spyOn(win, "postMessage").mockImplementation((m: unknown) => replies.push(m));
+  const say = (data: unknown, source: unknown = win) =>
+    window.dispatchEvent(new MessageEvent("message", { data, source: source as Window }));
+  return { say, replies };
+}
 
 afterEach(() => {
   cleanup();
@@ -99,6 +113,49 @@ describe("WuiView", () => {
 
     expect(await screen.findByRole("status")).toHaveTextContent("index.html");
     expect(frame()).toBeNull();
+  });
+
+  it("answers a bridge request from its own frame", async () => {
+    const { say, replies } = await withFrame({
+      "/sales/index.html": "<html><body>hi</body></html>",
+      "/notes.md": "the notes",
+    });
+
+    say({ proto: WUI_PROTOCOL, id: "7", verb: "readFile", args: { path: "/notes.md" } });
+
+    await waitFor(() => expect(replies).toHaveLength(1));
+    expect(replies[0]).toMatchObject({ id: "7", ok: true, value: { text: "the notes" } });
+  });
+
+  it("ignores a message from any other window", async () => {
+    // The page shares `window` with the rest of the app and with anything else
+    // the browser lets talk to it; only OUR frame is the page.
+    const { say, replies } = await withFrame({ "/sales/index.html": "<html><body>hi</body></html>" });
+
+    say({ proto: WUI_PROTOCOL, id: "7", verb: "whoami" }, { postMessage: vi.fn() });
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(replies).toHaveLength(0);
+  });
+
+  it("ignores a message that is not ours", async () => {
+    const { say, replies } = await withFrame({ "/sales/index.html": "<html><body>hi</body></html>" });
+
+    say({ type: "webpack-hmr" });
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(replies).toHaveLength(0);
+  });
+
+  it("tells the page when someone else edits a file", async () => {
+    // Not a reload: the page is holding state we cannot merge, so it hears what
+    // changed and decides. Without this an editor silently overwrites.
+    const { replies } = await withFrame({ "/sales/index.html": "<html><body>hi</body></html>" });
+
+    publishFileChanged("item1", "/sales/data.json");
+
+    await waitFor(() => expect(replies).toHaveLength(1));
+    expect(replies[0]).toMatchObject({ event: "file_changed", path: "/sales/data.json" });
   });
 
   it("rebuilds the page on Refresh, since nothing reloads it automatically", async () => {

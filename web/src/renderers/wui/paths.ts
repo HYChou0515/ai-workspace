@@ -42,3 +42,45 @@ export function resolveInFolder(folder: string, ref: string): string | null {
   if (out.length === 0) return null; // `.` / `a/..` name the folder, not a file
   return `${folder}/${out.join("/")}`;
 }
+
+/** Normalise a workspace-absolute path, or `null` if it climbs past the root or
+ * names the root itself. Same segment walk as above, so `/sales/../notes.md`
+ * cannot arrive somewhere a string comparison would later mistake for inside. */
+function normalizeAbsolute(path: string): string | null {
+  const out: string[] = [];
+  for (const seg of path.split("/")) {
+    if (seg === "" || seg === ".") continue;
+    if (seg !== "..") {
+      out.push(seg);
+      continue;
+    }
+    if (out.length === 0) return null;
+    out.pop();
+  }
+  return out.length === 0 ? null : `/${out.join("/")}`;
+}
+
+/**
+ * A path the page may READ: anywhere in the item.
+ *
+ * A leading `/` means the workspace root; anything else means next to the page,
+ * which is what an author writing `readFile("data.json")` means. The same two
+ * spellings the platform already resolves for a markdown ref.
+ */
+export function resolveReadPath(folder: string, path: string): string | null {
+  return path.startsWith("/") ? normalizeAbsolute(path) : resolveInFolder(folder, path);
+}
+
+/**
+ * A path the page may WRITE or DELETE: only inside its own folder.
+ *
+ * Both spellings are normalised FIRST and the containment is then checked on
+ * segments, because `/sales2` and `/sales.bak` both pass a `startsWith("/sales")`
+ * test and neither is inside `/sales`.
+ */
+export function resolveWritePath(folder: string, path: string): string | null {
+  const abs = path.startsWith("/") ? normalizeAbsolute(path) : resolveInFolder(folder, path);
+  if (abs === null) return null;
+  if (folder === "") return abs; // a root-level WUI's folder IS the workspace
+  return abs.startsWith(`${folder}/`) ? abs : null;
+}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveInFolder, wuiFolder } from "./paths";
+import { resolveReadPath, resolveInFolder, resolveWritePath, wuiFolder } from "./paths";
 
 describe("wuiFolder", () => {
   it("is the folder holding the view file", () => {
@@ -58,5 +58,57 @@ describe("resolveInFolder", () => {
   it("scopes to the whole workspace for a root-level WUI", () => {
     expect(resolveInFolder("", "app.js")).toBe("/app.js");
     expect(resolveInFolder("", "../escape.js")).toBeNull();
+  });
+});
+
+describe("resolveReadPath", () => {
+  it("reads anywhere in the item when given an absolute path", () => {
+    // Reading broadly is the point: secondary analysis of the item's real data
+    // is the use case, and the user opening the page can already see all of it.
+    expect(resolveReadPath("/sales", "/notes.md")).toBe("/notes.md");
+    expect(resolveReadPath("/sales", "/issues/5.md")).toBe("/issues/5.md");
+  });
+
+  it("treats a bare path as next to the page, which is what an author means", () => {
+    expect(resolveReadPath("/sales", "data.json")).toBe("/sales/data.json");
+  });
+
+  it("normalises an absolute path rather than trusting it", () => {
+    expect(resolveReadPath("/sales", "/a/../b.md")).toBe("/b.md");
+    expect(resolveReadPath("/sales", "/a//b.md")).toBe("/a/b.md");
+  });
+
+  it("refuses to climb above the workspace root", () => {
+    expect(resolveReadPath("/sales", "/../secret")).toBeNull();
+    expect(resolveReadPath("/sales", "/")).toBeNull();
+  });
+});
+
+describe("resolveWritePath", () => {
+  it("writes inside the page's own folder", () => {
+    expect(resolveWritePath("/sales", "data.json")).toBe("/sales/data.json");
+    expect(resolveWritePath("/sales", "/sales/data.json")).toBe("/sales/data.json");
+  });
+
+  it("refuses anywhere else in the item, however it is spelled", () => {
+    // Reading is broad and writing is narrow: a page must not be able to
+    // overwrite the item's notes or the folder next door.
+    expect(resolveWritePath("/sales", "/notes.md")).toBeNull();
+    expect(resolveWritePath("/sales", "../notes.md")).toBeNull();
+    expect(resolveWritePath("/sales", "/sales/../notes.md")).toBeNull();
+  });
+
+  it("refuses a sibling folder that merely shares the prefix", () => {
+    expect(resolveWritePath("/sales", "/sales2/x.json")).toBeNull();
+    expect(resolveWritePath("/sales", "/sales.bak/x.json")).toBeNull();
+  });
+
+  it("refuses the folder itself, which is not a file", () => {
+    expect(resolveWritePath("/sales", "/sales")).toBeNull();
+  });
+
+  it("lets a root-level WUI write anywhere, because its folder IS the root", () => {
+    expect(resolveWritePath("", "data.json")).toBe("/data.json");
+    expect(resolveWritePath("", "/deep/data.json")).toBe("/deep/data.json");
   });
 });
