@@ -494,6 +494,13 @@ class LocalProcessSandbox:
             # evaporation. This is not persistence — nothing outlives the sandbox
             # — it is the jail catching up to the unjailed path.
             env["SANDBOX_HOME"] = f"/{_HOME}"
+            # #775: uv builds the project env HERE, in the infra area, not at
+            # the `.venv` beside `pyproject.toml` that it would default to.
+            # Inside the workspace it would be charged to the user's quota
+            # while the mirror deliberately refuses to persist it — paying for
+            # something they cannot delete and we discard anyway. Set for every
+            # exec so a user's own `uv add` targets the same env as the sync.
+            env["UV_PROJECT_ENVIRONMENT"] = f"/{_PROJECT_VENV}"
             # The user-env file, in its chroot-relative spelling — the SAME file
             # the unjailed branch names below, a sibling of the `/root`
             # workspace. Set unconditionally: the launcher guards with `-f`, and
@@ -514,6 +521,14 @@ class LocalProcessSandbox:
             # exec uid (0700). #393 moved only the CARRIER launcher's HOME here;
             # this moves EVERY exec's, so a plain `soffice`/`git`/… works the same.
             env["HOME"] = str(root / _HOME)
+            # #775: uv builds the project env HERE, in the infra area, not at
+            # the `.venv` beside `pyproject.toml` that it would default to.
+            # Inside the workspace it would be charged to the user's quota
+            # while the mirror deliberately refuses to persist it — paying for
+            # something they cannot delete and we discard anyway. Set for every
+            # exec so a user's own `uv add` targets the same env as the sync,
+            # and it is the very path the `python` shim looks for.
+            env["UV_PROJECT_ENVIRONMENT"] = str(root / _PROJECT_VENV)
             # SANDBOX_HOME names the same dir for the carrier launcher's
             # `export HOME="${SANDBOX_HOME:-…}"` (#393). Survives the `setpriv`
             # wrap (no `--reset-env`) so the dropped uid's launcher reads it.

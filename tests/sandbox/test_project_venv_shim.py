@@ -82,3 +82,24 @@ async def test_a_venv_brings_no_pip_so_none_is_shimmed(tmp_path: Path) -> None:
 
     assert (jailbin / "python").is_symlink(), "the interpreter is still shimmed"
     assert not (jailbin / "pip").exists(), "no pip shim beats one that cannot work"
+
+
+async def test_uv_builds_the_env_where_the_shim_looks_for_it(tmp_path: Path) -> None:
+    """The join between the sync and the shim, and the one place they can
+    silently disagree.
+
+    Left alone, uv puts the env at `.venv` beside `pyproject.toml` — inside the
+    workspace, where the quota charges for it and the mirror refuses to persist
+    it, and where this shim never looks. Both halves would pass their own tests
+    and the feature would not work.
+    """
+    sb, h = await _sandbox(tmp_path, None)
+    root = Path(sb._require(h))  # ty: ignore[invalid-argument-type]
+
+    _argv, _cwd, env = sb._exec_argv(h, ["true"])  # ty: ignore[invalid-argument-type]
+
+    built = Path(env["UV_PROJECT_ENVIRONMENT"])
+    assert built == root / ".venv", "not the `.venv` beside pyproject.toml, which is the point"
+    # The literal path `_install_python_shim` probes. Spelled out rather than
+    # imported so the two cannot drift apart while both still pass.
+    assert built / "bin" / "python" == root / ".venv" / "bin" / "python"

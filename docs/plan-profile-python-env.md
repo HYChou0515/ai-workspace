@@ -1,6 +1,8 @@
 # Profile 自帶 python 環境:`uv.lock` 決定 sandbox 裡有哪些套件
 
-> **狀態**:設計定案(grill-me 九題),尚未實作。
+> **狀態**:設計定案(grill-me 九題),**P1–P5 已實作**(#775 / PR #776)。
+>
+> 實作推翻了設計裡的兩處,已就地更正並標 ⚠️:`pip` 那條,以及 shim 的份數。
 >
 > 這份文件記的是**為什麼這樣設計、當初考慮過哪些路、為什麼不走**。要改其中任何一條之前,
 > 先看它原本被否決的理由。
@@ -30,8 +32,13 @@
    跟著 sandbox 一起回收
 4. uv 的下載 cache 放在 **`{sandbox.root}/.uv-cache/{uid}/`** —— 在 sandbox 目錄
    **外面**,所以撐得過閒置回收
-5. `.jailbin` 加**第三層**:有 project venv 時,`python` / `python3` / `pip` 指向它,
-   優先於 carrier
+5. `.jailbin` 加**第三層**:有 project venv 時,`python` / `python3` 指向它,優先於
+   carrier。⚠️ **`pip` 不指過去** —— 實作時實測 `uv venv` 產出的 `bin/` 只有
+   `python`/`python3`/`python3.x`,**沒有 pip**,所以沒有東西可以指。照既有程式碼對
+   同類情況的立場(「與其 shim 一個不可能運作的東西,不如讓映像自己的 pip 回答」)
+   留給映像。代價是**在有宣告的 workspace 裡 `pip install` 會裝到映像的直譯器**,
+   而 carrier 那層沒這問題 —— 也就是說宣告依賴反而讓 `pip` 變差。出路是 `uv add`,
+   那句話寫進了 `exec` 工具自己的描述
 6. 準備過程透過既有的 **`ToolLog`** 事件串進當下那張工具卡
 7. **沒有 `pyproject.toml` 的 profile 完全照舊**,走 carrier
 
@@ -149,9 +156,10 @@ mode 444,誰都改不動,別名才不再是問題。
 
 ## 實作要拆的地雷
 
-- **shim 有三份**:`src/workspace_app/sandbox/local_process.py` 和**兩份**
-  `isolated_process.py`(app 側與 sandbox-host 側)。第三層要三個地方都落 ——
-  漏一個就是「本機會動、線上不會」。
+- **shim 有兩份**:`src/workspace_app/sandbox/local_process.py` 與
+  `sandbox-host/src/sandbox_host/local_process.py`(兩個 `isolated_process.py` 是子類別,
+  exec 那條直接繼承)。⚠️ 這兩份**已漂了 440 行**且**沒有**逐位元相同的守衛(不像
+  `artifact.py`),所以要各改各的。漏一份就是「本機會動、線上不會」。
 - **正式環境沒有 jail**。`sandbox-host` 的 `IsolatedProcessSandbox` 明寫
   `isolate=False`,隔離是**純 uid + cgroup**。jail 的 `mount --bind` 那套(`/.tools`
   唯讀掛載)**只在 `kind: local` 跑**。正式環境的等價物是「workspace 外的兄弟目錄
