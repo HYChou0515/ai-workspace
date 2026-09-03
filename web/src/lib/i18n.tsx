@@ -960,6 +960,13 @@ export const messages = {
   },
   "itemenv.usage.this": { "zh-TW": "這個項目佔用", en: "This item is using" },
   "itemenv.usage.total": { "zh-TW": "你的總用量", en: "Your total" },
+  // Says CANNOT CONFIRM, not "not enforced": the backend reports an unreachable
+  // host identically to one that caps nothing, so claiming to know which would
+  // be inventing a distinction it cannot make.
+  "itemenv.unenforced": {
+    "zh-TW": "這個部署無法確認會套用 CPU 上限，所以這裡不提供調整。",
+    en: "This deployment can't confirm a CPU ceiling is applied, so there's nothing to set here.",
+  },
   "itemenv.readonly": {
     "zh-TW": "只有能變更這個項目存取權的人可以調整大小 —— 它花的是擁有者的額度。",
     en: "Only someone who can change this item's access may resize it — it spends the owner's quota.",

@@ -96,6 +96,21 @@ class _EnvironmentOut(BaseModel):
     stated_memory_bytes: int | None
     effective_cpu_cores: float | None
     effective_memory_bytes: int | None
+    #: What the BACKEND says it will really apply — `Sandbox.effective_limits`,
+    #: the same source the quota ledger reads. #712's first defect was billing
+    #: what was REQUESTED rather than what is applied, and an App that declared
+    #: nothing occupied a core for free. Here the gap would be worse, because a
+    #: PERSON set the number: they choose two cores, the panel shows two, and
+    #: the sandbox runs uncapped on a deploy that cannot apply one.
+    #:
+    #: `None` means no ceiling will be applied — and deliberately does NOT
+    #: distinguish "this backend caps nothing" from "we could not ask it".
+    #: `HttpSandbox` reports an unreachable host identically to one that caps
+    #: nothing (`warn_unenforceable_dimensions` says so in as many words), so a
+    #: field that claimed to tell them apart would be inventing a distinction
+    #: the backend cannot make. The UI says "cannot confirm" for both.
+    enforced_cpu_cores: float | None
+    enforced_memory_bytes: int | None
 
 
 class _ResourcesOut(BaseModel):
@@ -353,12 +368,15 @@ def register_item_routes(
         """
         item, _created_by = _authorize_item(slug, item_id, "read_chat")
         effective = await registry.spec_for(item_id)
+        enforced = await registry.sandbox.effective_limits(effective)
         return _EnvironmentOut(
             running=await registry.has_live_sandbox(item_id),
             stated_cpu_cores=getattr(item, "sandbox_cpu_cores", None),
             stated_memory_bytes=getattr(item, "sandbox_memory_bytes", None),
             effective_cpu_cores=effective.cpu_cores,
             effective_memory_bytes=effective.memory_bytes,
+            enforced_cpu_cores=enforced.cpu_cores,
+            enforced_memory_bytes=enforced.memory_bytes,
         )
 
     @app.put("/a/{slug}/items/{item_id}/resources")

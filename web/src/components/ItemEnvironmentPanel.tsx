@@ -74,6 +74,11 @@ export function ItemEnvironmentPanel({
 
   const stated = env.statedCpuCores;
   const effective = env.effectiveCpuCores;
+  // A dial this deploy will not honour is a promise, not a control — #712's
+  // lesson one layer up, and worse here because a PERSON set the number.
+  // `null` covers "caps nothing" and "could not ask" alike, because the backend
+  // reports an unreachable host identically to one that caps nothing.
+  const enforced = env.enforcedCpuCores !== null;
   // Held down when somebody asked for more than they may have. Both numbers are
   // shown, and which limit bound is named: showing the smaller one alone makes
   // the panel disagree with what the person typed, with nothing to explain it.
@@ -145,6 +150,12 @@ export function ItemEnvironmentPanel({
             </p>
           ) : null}
 
+          {enforced ? null : (
+            <p data-testid="cpu-unenforced" className="detail">
+              {t("itemenv.unenforced")}
+            </p>
+          )}
+          {!enforced ? null : (
           <input
             data-testid="cpu-input"
             type="number"
@@ -158,6 +169,7 @@ export function ItemEnvironmentPanel({
             onChange={(e) => setDraft(e.target.value)}
             onBlur={() => onSave?.(draft === "" ? null : Number(draft))}
           />
+          )}
           {canEdit ? null : <p className="detail">{t("itemenv.readonly")}</p>}
 
           <div data-testid="budget-gauge" className="gauge">

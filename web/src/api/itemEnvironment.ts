@@ -29,6 +29,12 @@ export type ItemEnvironment = {
    *  budget have both had their say. */
   effectiveCpuCores: number | null;
   effectiveMemoryBytes: number | null;
+  /** What the BACKEND says it will really enforce. `null` means no ceiling will
+   *  be applied — and deliberately does not distinguish "this backend caps
+   *  nothing" from "we could not ask it", because the backend itself cannot.
+   *  A dial the machine will not honour is a promise, so it is not drawn. */
+  enforcedCpuCores: number | null;
+  enforcedMemoryBytes: number | null;
 };
 
 /** A size to store. `null` in either dimension CLEARS it — which is not zero,
@@ -46,6 +52,8 @@ type Wire = {
   stated_memory_bytes: number | null;
   effective_cpu_cores: number | null;
   effective_memory_bytes: number | null;
+  enforced_cpu_cores: number | null;
+  enforced_memory_bytes: number | null;
 };
 
 export type ItemEnvironmentApi = {
@@ -70,6 +78,8 @@ export const itemEnvironmentApi: ItemEnvironmentApi = {
       statedMemoryBytes: w.stated_memory_bytes,
       effectiveCpuCores: w.effective_cpu_cores,
       effectiveMemoryBytes: w.effective_memory_bytes,
+      enforcedCpuCores: w.enforced_cpu_cores ?? null,
+      enforcedMemoryBytes: w.enforced_memory_bytes ?? null,
     };
   },
   async setSize(slug, itemId, size) {

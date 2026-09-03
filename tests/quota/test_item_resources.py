@@ -582,3 +582,69 @@ def test_the_refusal_tells_a_collaborator_nothing_about_the_owners_other_items()
         assert detail["error"] == "sandbox_quota_exceeded"
         assert detail.get("holding") == [], "not the owner's working set"
         assert "機密專案" not in str(detail)
+
+
+# ── P7: a dial the backend will not honour is a lie ──────────────────────
+
+
+def test_the_environment_reports_what_the_backend_will_really_apply():
+    """#712's lesson, one layer up.
+
+    That round's first defect was billing what was REQUESTED rather than what
+    the backend actually applies — an App that declared nothing occupied a core
+    for free. The same gap here is worse, because a person set the number
+    themselves: they choose 2 cores, the panel shows 2, and the sandbox runs
+    with no ceiling at all because this deploy cannot apply one.
+
+    So the payload carries the backend's own answer alongside the resolved one.
+    Where they disagree, the resolved figure is what we asked for and the
+    enforced figure is what will happen.
+    """
+    with _app(PerUserResources(cpu=4.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        item = _mk(spec, "alice", cpu=2.0)
+        body = client.get(f"/a/rca/items/{item}/environment").json()
+
+        assert body["effective_cpu_cores"] == 2.0, "what we asked for"
+        assert body["enforced_cpu_cores"] == 2.0, "and what the backend says it will apply"
+
+
+def test_a_backend_that_caps_nothing_is_reported_as_capping_nothing():
+    """The case that must NOT read as "2 cores applied".
+
+    A local deploy without CAP_SETUID or a writable cgroup root applies no
+    ceiling at all. The dial then has no effect, and drawing it would promise
+    something the machine will not do. `None` is the honest answer — and it is
+    deliberately the same answer as "we could not ask the host", because
+    `HttpSandbox` reports an unreachable host identically to one that caps
+    nothing (see `warn_unenforceable_dimensions`). The UI says "cannot confirm"
+    for both rather than inventing a distinction the backend cannot make.
+    """
+
+    class _Unenforcing(_RecordingSandbox):
+        async def effective_limits(self, spec):  # noqa: ANN001, ANN201
+            from workspace_app.sandbox.protocol import EnforcedLimits
+
+            return EnforcedLimits(cpu_cores=None, memory_bytes=None)
+
+    spec_store = make_spec(default_user=lambda: WHO["id"])
+    WHO["id"] = "alice"
+    sandbox = _Unenforcing(cpu_cores=8.0, memory_bytes=8 * 1024**3)
+    app = create_app(
+        spec=spec_store,
+        sandbox=sandbox,
+        filestore=SpecstarFileStore(spec_store),
+        runner=ScriptedAgentRunner([]),
+        get_user_id=lambda: WHO["id"],
+        app_resources={"rca": FOUR_CORES},
+        per_user_resources=PerUserResources(cpu=4.0),
+    )
+    with ApiTestClient(app) as client:
+        item = _mk(spec_store, "alice", cpu=2.0)
+        body = client.get(f"/a/rca/items/{item}/environment").json()
+
+        assert body["effective_cpu_cores"] == 2.0, "we still asked for it"
+        assert body["enforced_cpu_cores"] is None, "but nothing will hold it to that"

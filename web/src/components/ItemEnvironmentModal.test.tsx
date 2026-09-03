@@ -26,6 +26,11 @@ const ENVIRONMENT = {
   stated_memory_bytes: null,
   effective_cpu_cores: 2,
   effective_memory_bytes: null,
+  // What the BACKEND says it will really apply. Omitting these made the double
+  // disagree with the real payload, the dial correctly disappeared, and this
+  // test went red — which is the enforcement gate proving itself end to end.
+  enforced_cpu_cores: 2,
+  enforced_memory_bytes: null,
 };
 
 const CAPPED = {

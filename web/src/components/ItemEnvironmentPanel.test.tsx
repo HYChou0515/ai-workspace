@@ -30,6 +30,8 @@ const IDLE = {
   statedMemoryBytes: null,
   effectiveCpuCores: 2,
   effectiveMemoryBytes: 2 * 1024 ** 3,
+  enforcedCpuCores: 2,
+  enforcedMemoryBytes: 2 * 1024 ** 3,
 };
 
 const BUDGET = { cpu: 4, memoryBytes: 8 * 1024 ** 3, cpuInUse: 2, memoryInUse: 2 * 1024 ** 3 };
@@ -135,5 +137,39 @@ describe("what is clickable", () => {
 
     expect(screen.getByTestId("cpu-input").hasAttribute("disabled")).toBe(true);
     expect(screen.getByTestId("cpu-value")).toBeTruthy(); // still legible — that is the point
+  });
+});
+
+
+describe("a deploy that will not honour the dial", () => {
+  it("offers no dial, and says it cannot confirm rather than that it is off", () => {
+    // #712 one layer up: billing what was REQUESTED instead of what is APPLIED
+    // let an undeclared App hold a core for free. The same gap here is worse
+    // because a PERSON chose the number — they set 2, the panel shows 2, and
+    // the sandbox runs uncapped.
+    //
+    // "Cannot confirm" rather than "not enforced": `HttpSandbox` reports an
+    // unreachable host identically to one that caps nothing, so a stronger
+    // claim would be inventing a distinction the backend cannot make.
+    render(
+      <ItemEnvironmentPanel
+        env={{ ...IDLE, enforcedCpuCores: null }}
+        budget={BUDGET}
+        canEdit
+        slug="rca"
+        itemId="i"
+      />,
+    );
+
+    expect(screen.queryByTestId("cpu-input")).toBeNull();
+    const note = screen.getByTestId("cpu-unenforced").textContent ?? "";
+    expect(note).toMatch(/無法確認|can't confirm/);
+  });
+
+  it("still draws the dial where the backend does apply a ceiling", () => {
+    render(<ItemEnvironmentPanel env={IDLE} budget={BUDGET} canEdit slug="rca" itemId="i" />);
+
+    expect(screen.getByTestId("cpu-input")).toBeTruthy();
+    expect(screen.queryByTestId("cpu-unenforced")).toBeNull();
   });
 });
