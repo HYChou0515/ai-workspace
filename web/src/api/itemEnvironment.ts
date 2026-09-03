@@ -40,7 +40,8 @@ export type ItemEnvironment = {
    *  place that holds both: comparing the effective figure against the numbers
    *  a CLIENT can see meant comparing the viewer's quota with a clamp made
    *  against the owner's, which for a delegate are different people. */
-  boundBy: "app" | "quota" | null;
+  cpuBoundBy: "app" | "quota" | null;
+  memoryBoundBy: "app" | "quota" | null;
 };
 
 /** A size to store. `null` in either dimension CLEARS it — which is not zero,
@@ -60,7 +61,8 @@ type Wire = {
   effective_memory_bytes: number | null;
   enforced_cpu_cores: number | null;
   enforced_memory_bytes: number | null;
-  bound_by: "app" | "quota" | null;
+  cpu_bound_by: "app" | "quota" | null;
+  memory_bound_by: "app" | "quota" | null;
 };
 
 export type ItemEnvironmentApi = {
@@ -87,7 +89,8 @@ export const itemEnvironmentApi: ItemEnvironmentApi = {
       effectiveMemoryBytes: w.effective_memory_bytes,
       enforcedCpuCores: w.enforced_cpu_cores ?? null,
       enforcedMemoryBytes: w.enforced_memory_bytes ?? null,
-      boundBy: w.bound_by ?? null,
+      cpuBoundBy: w.cpu_bound_by ?? null,
+      memoryBoundBy: w.memory_bound_by ?? null,
     };
   },
   async setSize(slug, itemId, size) {

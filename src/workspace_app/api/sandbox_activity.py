@@ -72,6 +72,17 @@ class IActivityStore(abc.ABC):
         """Drop the heartbeat (the item's dir was recycled / closed)."""
 
     @abc.abstractmethod
+    async def is_live(self, item_id: str, *, since_ms: int) -> bool:
+        """Whether THIS item has beaten recently.
+
+        A point read, deliberately: the sibling `live_for` answers a question
+        about a PERSON, and asking it about one item means going through the
+        `owner` field — which anyone with write access can PATCH (#687), so
+        repointing it moves the query to somebody with no rows and the item
+        reads as stopped while its sandbox is still running. An item's own
+        heartbeat is keyed on the item, and nobody can rewrite that."""
+
+    @abc.abstractmethod
     async def live_for(self, owner: str, *, since_ms: int) -> list[LiveSandbox]:
         """Every sandbox charged to ``owner`` whose heartbeat is at least as
         recent as ``since_ms``.
@@ -198,6 +209,22 @@ class SpecstarActivityStore(IActivityStore):
         logger.debug("activity: forget heartbeat for item %s", item_id)
         with contextlib.suppress(ResourceIDNotFoundError, ResourceIsDeletedError):
             rm.delete(item_id)
+
+    async def is_live(self, item_id: str, *, since_ms: int) -> bool:
+        return await asyncio.to_thread(self._is_live_sync, item_id, since_ms)
+
+    def _is_live_sync(self, item_id: str, since_ms: int) -> bool:
+        # A point get on the item's own row — no owner in the question, so a
+        # rewritten `owner` cannot change the answer. `forget` soft-deletes, and
+        # a soft-deleted row must read as stopped: that is what "closed" means.
+        rm = self._spec.get_resource_manager(_SandboxActivity)
+        try:
+            rev = rm.get(item_id)
+        except (ResourceIDNotFoundError, ResourceIsDeletedError):
+            return False
+        data = rev.data
+        assert isinstance(data, _SandboxActivity)
+        return data.last_active_ms >= since_ms
 
     async def live_for(self, owner: str, *, since_ms: int) -> list[LiveSandbox]:
         return await asyncio.to_thread(self._live_sync, owner, since_ms)

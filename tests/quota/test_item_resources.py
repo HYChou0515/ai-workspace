@@ -1247,7 +1247,7 @@ def test_the_environment_says_which_limit_bound_the_size():
     ):
         by_app = _mk(spec, "alice", cpu=999.0)
         body = client.get(f"/a/rca/items/{by_app}/environment").json()
-        assert body["bound_by"] == "app", body
+        assert body["cpu_bound_by"] == "app", body
 
     with _app(PerUserResources(cpu=1.0), app_resources={"rca": FOUR_CORES}) as (
         client,
@@ -1256,7 +1256,7 @@ def test_the_environment_says_which_limit_bound_the_size():
     ):
         by_quota = _mk(spec, "alice", cpu=999.0)
         body = client.get(f"/a/rca/items/{by_quota}/environment").json()
-        assert body["bound_by"] == "quota", body
+        assert body["cpu_bound_by"] == "quota", body
 
 
 def test_nothing_bound_it_when_the_stated_size_fits():
@@ -1269,7 +1269,7 @@ def test_nothing_bound_it_when_the_stated_size_fits():
     ):
         item = _mk(spec, "alice", cpu=1.0)
 
-        assert client.get(f"/a/rca/items/{item}/environment").json()["bound_by"] is None
+        assert client.get(f"/a/rca/items/{item}/environment").json()["cpu_bound_by"] is None
 
 
 def test_a_nonsense_number_is_refused_rather_than_silently_clearing_the_setting():
@@ -1320,6 +1320,108 @@ def test_a_nonsense_memory_size_is_refused_too():
     ):
         item = _mk(spec, "alice")
 
-        for bad in ("inf", "nan", "9" * 40):
+        # `"9" * 309` overflows a float, and `math.isfinite` converts before it
+        # compares — so the guard meant to stop "a generic error that names
+        # nothing" raised `OverflowError` and produced a 500 that names nothing.
+        for bad in ("inf", "nan", "9" * 40, "9" * 309, "9" * 300 + "G"):
             got = client.put(f"/a/rca/items/{item}/resources", json={"memory": bad})
             assert got.status_code == 422, f"{bad!r} -> {got.status_code} {got.text}"
+
+
+# ── round 3: my own RR5 fix was ineffective ─────────────────────────────
+
+
+def test_an_idle_but_running_environment_still_blocks_the_edit(monkeypatch):
+    """Round-3 finding 1. I hardcoded a 120-second window and wrote in the
+    docstring that it was "the same window the admission gate uses". It was not:
+    the gate is built from `idle_timeout`, which defaults to EIGHT HOURS — 240x
+    longer. And the heartbeat is only bumped on use, never on a timer.
+
+    So three minutes of the model thinking was enough to make a running sandbox
+    read as stopped, and the 409 lifted — which is verbatim the re-billing the
+    refusal exists to prevent ("charged 0.1 cores for 4 real ones").
+
+    The window is now passed in from the same place the gate takes it, because
+    a second number is a second rule.
+    """
+    with _app(PerUserResources(cpu=4.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        item = _mk(spec, "alice", cpu=4.0)
+        _wake(client, item)
+        assert (
+            client.put(f"/a/rca/items/{item}/resources", json={"cpu_cores": 0.1}).status_code == 409
+        )
+
+        # Three minutes later, nothing closed, the sandbox still running.
+        from workspace_app.api import item_routes
+
+        real_now = item_routes._now_ms
+        monkeypatch.setattr(item_routes, "_now_ms", lambda: real_now() + 180_000)
+        still = client.put(f"/a/rca/items/{item}/resources", json={"cpu_cores": 0.1})
+
+        assert still.status_code == 409, f"idle is not stopped: {still.text}"
+
+
+def test_repointing_the_owner_does_not_unlock_a_running_environment():
+    """Round-3 finding 2 — a door my own fix opened.
+
+    The heartbeat row is keyed by the owner recorded when it was bumped, and I
+    looked it up under `owner_of(item)` as it is NOW. `owner` is an ordinary
+    PATCH-able field (#687), so repointing it moved the query to somebody with
+    no rows and the item read as stopped. It also fired on an ordinary handover,
+    which is the same bug wearing a legitimate hat.
+
+    The item's own heartbeat is keyed on the item, and nobody can rewrite that.
+    """
+    with _app(PerUserResources(cpu=4.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        item = _mk(spec, "alice", cpu=4.0)
+        _wake(client, item)
+        assert (
+            client.put(f"/a/rca/items/{item}/resources", json={"cpu_cores": 0.1}).status_code == 409
+        )
+
+        moved = client.patch(
+            f"/rca-investigation/{item}",
+            json=[{"op": "replace", "path": "/owner", "value": "bob"}],
+        )
+        assert moved.status_code == 200, moved.text
+
+        still = client.put(f"/a/rca/items/{item}/resources", json={"cpu_cores": 0.1})
+        assert still.status_code == 409, f"a rewritten owner unlocked it: {still.text}"
+
+
+def test_each_dimension_reports_its_own_ceiling():
+    """Round-3 finding 5. One scalar for both dimensions misattributes the
+    moment they differ.
+
+    App declares 4 cores and states no memory; the owner's quota is unlimited
+    on cpu and 2G on memory; the item asks for 999 cores and 8G. The CPU is held
+    by the App, the memory by the quota — and a single value reported "quota",
+    so the panel (which renders the explanation for CPU) told the person their
+    quota was holding a number the App was holding.
+
+    That is the wrong-setting failure the field exists to remove, produced by
+    the field itself.
+    """
+    app_caps_cpu_only = ResourceLimits(cpu_cores=4.0, memory_bytes=None, disk_bytes=0)
+    quota_caps_memory_only = PerUserResources(cpu=0.0, memory="2G")
+    with _app(quota_caps_memory_only, app_resources={"rca": app_caps_cpu_only}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        item = _mk(spec, "alice", cpu=999.0, memory=8 * 1024**3)
+
+        body = client.get(f"/a/rca/items/{item}/environment").json()
+
+        assert body["effective_cpu_cores"] == 4.0
+        assert body["cpu_bound_by"] == "app", body
+        assert body["effective_memory_bytes"] == 2 * 1024**3
+        assert body["memory_bound_by"] == "quota", body

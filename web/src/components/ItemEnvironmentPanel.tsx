@@ -92,7 +92,7 @@ export function ItemEnvironmentPanel({
   // viewer's own, and for a `change_permission` delegate those are different
   // people: the comparison was normally false, so the panel blamed the App and
   // sent them to change a setting that was not holding them.
-  const boundByQuota = env.boundBy === "quota";
+  const boundByQuota = env.cpuBoundBy === "quota";
 
   return (
     <section className="item-environment" aria-label={t("itemenv.heading")}>

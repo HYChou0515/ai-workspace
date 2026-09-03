@@ -11,6 +11,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 
@@ -111,13 +112,19 @@ class _EnvironmentOut(BaseModel):
     #: the backend cannot make. The UI says "cannot confirm" for both.
     enforced_cpu_cores: float | None
     enforced_memory_bytes: int | None
-    #: Which ceiling held the stated size down — `"app"`, `"quota"`, or `None`
+    #: Which ceiling held each stated size down — `"app"`, `"quota"`, or `None`
     #: when nothing did. Answered here because the resolver is the only place
     #: that holds both ceilings: the panel used to infer it by comparing the
     #: effective figure against the VIEWER's quota, and for a
     #: `change_permission` delegate that is a different person from the owner
     #: whose quota actually bound it.
-    bound_by: str | None = None
+    #:
+    #: PER DIMENSION, because one scalar for both misattributes as soon as they
+    #: differ — an item whose cpu is held by the App and whose memory is held by
+    #: the quota reported "quota", and the panel then blamed the quota for a
+    #: number the App was holding.
+    cpu_bound_by: str | None = None
+    memory_bound_by: str | None = None
 
 
 class _ResourcesOut(BaseModel):
@@ -127,18 +134,6 @@ class _ResourcesOut(BaseModel):
 
     cpu_cores: float | None
     memory_bytes: int | None
-
-
-#: How far back a heartbeat still counts as "running". The same window the
-#: admission gate uses, and for the same reason: a pod that died without
-#: reaping stops counting on its own rather than pinning a limit forever.
-_LIVE_WINDOW_MS = 120_000
-
-
-def _now_ms() -> int:
-    import time
-
-    return int(time.time() * 1000)
 
 
 #: Upper bounds, so a value that cannot be applied is refused HERE rather than
@@ -151,17 +146,30 @@ _MAX_CORES = 1024.0
 _MAX_BYTES = 1024**5  # 1 PiB
 
 
-def _is_usable_number(value: float | int) -> bool:
-    """A finite, positive count.
+def _within(value: float | int, ceiling: float | int) -> bool:
+    """A finite, positive number no larger than `ceiling`.
 
-    `math.isfinite` is the part that was missing: pydantic accepts `Infinity`
-    and `NaN` by default, neither is `<= 0`, and both collapse to `None` on the
-    store round trip — so a request to SET a size performed a RESET and reported
-    200. The action taken was not the action asked for, and the status said it
-    worked."""
+    Two guards, and the ORDER is the point. `math.isfinite` is what stops
+    `Infinity` and `NaN`: pydantic accepts both, neither is `<= 0`, and both
+    collapse to `None` on the store round trip — so a request to SET a size
+    performed a RESET and answered 200, doing something other than what was
+    asked and calling it success.
+
+    But `isfinite` converts its argument to a float first, and `parse_size`
+    returns an int — so a 309-digit byte count raised `OverflowError` straight
+    out of the guard, and the check written to stop "a generic error that names
+    nothing" produced a 500 that names nothing. The magnitude test therefore
+    runs FIRST, on ints, where nothing can overflow; only a value already known
+    to be in range reaches the float conversion."""
     import math
 
-    return math.isfinite(value) and value > 0
+    if isinstance(value, int):
+        return 0 < value <= ceiling
+    return math.isfinite(value) and 0 < value <= ceiling
+
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
 
 
 def _validated_resources(body: _ResourcesBody) -> tuple[float | None, int | None]:
@@ -180,7 +188,7 @@ def _validated_resources(body: _ResourcesBody) -> tuple[float | None, int | None
     config; here it would let a person silently opt their item out of a ceiling
     the deploy set for them."""
     cpu = body.cpu_cores
-    if cpu is not None and (not _is_usable_number(cpu) or cpu > _MAX_CORES):
+    if cpu is not None and not _within(cpu, _MAX_CORES):
         raise HTTPException(
             status_code=422,
             detail=(
@@ -194,7 +202,7 @@ def _validated_resources(body: _ResourcesBody) -> tuple[float | None, int | None
             memory = parse_size(body.memory)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=f"memory: {exc}") from exc
-        if not _is_usable_number(memory) or memory > _MAX_BYTES:
+        if not _within(memory, _MAX_BYTES):
             raise HTTPException(
                 status_code=422,
                 detail=(
@@ -243,7 +251,15 @@ def register_item_routes(
     get_user_id: Callable[[], str],
     activity: ActivityLog,
     registry: InvestigationRegistry,
-    resolved_for: Callable[[str], Awaitable[tuple[SandboxSpec, str | None]]],
+    resolved_for: Callable[[str], Awaitable[tuple[SandboxSpec, str | None, str | None]]],
+    #: How far back a heartbeat still counts as running. Passed in rather than
+    #: chosen here so it is the SAME number the admission gate uses — the
+    #: reaper's idle threshold. A shorter one under-counts a live-but-idle
+    #: sandbox that is still holding memory, and the heartbeat is only bumped on
+    #: use, so a hardcoded 120 s let three minutes of thinking unlock a resize
+    #: on a genuinely running environment: the exact re-billing this refusal
+    #: exists to prevent.
+    live_window_ms: int,
     turn_engine: ChatTurnEngine,
     locator: ItemLocator,
     ingestor: Ingestor,
@@ -431,12 +447,12 @@ def register_item_routes(
         store = registry.activity
         if store is None:
             return await registry.has_live_sandbox(item_id)
-        owner = locator.owner_of(item_id)
-        if not owner:
-            return False
-        since = _now_ms() - _LIVE_WINDOW_MS
-        live = await store.live_for(owner, since_ms=since)
-        return any(s.item_id == item_id for s in live)
+        # The item's OWN heartbeat, not "is anything of this owner's alive".
+        # Looking it up under `owner_of(item)` made the answer depend on a field
+        # anyone with write access can PATCH (#687): repointing `owner` moved
+        # the query to a person with no rows and the 409 lifted on a sandbox
+        # that was still running. It also fired on an ordinary handover.
+        return await store.is_live(item_id, since_ms=_now_ms() - live_window_ms)
 
     @app.get("/a/{slug}/items/{item_id}/environment")
     async def get_item_environment(slug: str, item_id: str) -> _EnvironmentOut:
@@ -455,17 +471,24 @@ def register_item_routes(
         It is safe to FIND things with and never safe to conclude absence from.
         """
         item, _created_by = _authorize_item(slug, item_id, "read_chat")
-        effective, bound_by = await resolved_for(item_id)
+        effective, cpu_bound_by, memory_bound_by = await resolved_for(item_id)
         enforced = await registry.sandbox.effective_limits(effective)
         return _EnvironmentOut(
-            running=await registry.has_live_sandbox(item_id),
+            # The SAME source the resize refusal uses. Leaving this on
+            # `has_live_sandbox` made the fix backend-only: the route unblocked
+            # while the panel — which disables its inputs on this field — stayed
+            # grey, so the person clicked Close, nothing changed, and the
+            # setting was still unreachable. Two answers to "is it running" is
+            # how the screen and the server come to disagree.
+            running=await _environment_is_running(item_id),
             stated_cpu_cores=getattr(item, "sandbox_cpu_cores", None),
             stated_memory_bytes=getattr(item, "sandbox_memory_bytes", None),
             effective_cpu_cores=effective.cpu_cores,
             effective_memory_bytes=effective.memory_bytes,
             enforced_cpu_cores=enforced.cpu_cores,
             enforced_memory_bytes=enforced.memory_bytes,
-            bound_by=bound_by,
+            cpu_bound_by=cpu_bound_by,
+            memory_bound_by=memory_bound_by,
         )
 
     @app.put("/a/{slug}/items/{item_id}/resources")

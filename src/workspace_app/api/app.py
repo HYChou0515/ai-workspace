@@ -738,7 +738,7 @@ def create_app(
             return want
         return min(want, ceiling)
 
-    async def _resolved_for(item_id: str) -> tuple[SandboxSpec, str | None]:
+    async def _resolved_for(item_id: str) -> tuple[SandboxSpec, str | None, str | None]:
         """How big THIS item's sandbox may be — the one place that answers it.
 
         Three inputs, in this order:
@@ -785,16 +785,27 @@ def create_app(
         after_app_mem = _clamp_bytes(mem, app_mem or 0)
         final_cpu = _clamp_cpu(after_app, budget.cpu if budget else 0.0)
         final_mem = _clamp_bytes(after_app_mem, parse_size(budget.memory) if budget else 0)
-        # WHICH ceiling bound, decided here because this is the only place that
-        # holds both. The panel used to infer it by comparing the effective
-        # figure against the VIEWER's quota — and for a `change_permission`
-        # delegate the viewer and the owner are different people, so the guess
-        # was normally wrong and sent them to change a setting that was not
-        # holding them.
-        bound: str | None = None
-        if (cpu is not None and final_cpu != cpu) or (mem is not None and final_mem != mem):
-            bound = "quota" if (final_cpu, final_mem) != (after_app, after_app_mem) else "app"
-        return SandboxSpec(cpu_cores=final_cpu, memory_bytes=final_mem), bound
+
+        # WHICH ceiling bound, PER DIMENSION. One scalar for both misattributes
+        # the moment they differ: an item whose cpu is held by the App and whose
+        # memory is held by the quota reported "quota", and the panel — which
+        # renders the explanation for CPU — then told the person their quota was
+        # holding a number the App was holding. That is the wrong-setting
+        # failure this field exists to remove, produced by the field itself.
+        def _who(
+            stated: float | int | None,
+            after_app_v: float | int | None,
+            final: float | int | None,
+        ) -> str | None:
+            if stated is None or final == stated:
+                return None
+            return "app" if final == after_app_v else "quota"
+
+        return (
+            SandboxSpec(cpu_cores=final_cpu, memory_bytes=final_mem),
+            _who(cpu, after_app, final_cpu),
+            _who(mem, after_app_mem, final_mem),
+        )
 
     async def _spec_for(item_id: str) -> SandboxSpec:
         """The registry's seam: just the spec. One resolver, two readers — the
@@ -855,9 +866,17 @@ def create_app(
                     groups=groups,
                     superusers=superusers,
                 )
+            except ResourceIsDeletedError:
+                # A soft-deleted item can still be holding a sandbox — that is
+                # the whole reason it appears here. Dropping the row hid the one
+                # thing the person could close, and two shipped comments already
+                # describe this case by name ("addressable beats invisible").
+                # No title, but the row survives and stays closable.
+                out[item_id] = ""
             except Exception:  # noqa: BLE001 — no access is an ordinary answer
                 continue
-            out[item_id] = getattr(facts.item, "title", "")
+            else:
+                out[item_id] = getattr(facts.item, "title", "")
         return out
 
     def _owner_of(item_id: str) -> str | None:
@@ -1837,6 +1856,10 @@ def create_app(
         # bound the size rather than leaving the client to compare numbers it
         # can see — which for a delegate were two different people's.
         resolved_for=_resolved_for,
+        # The SAME window the admission gate is built with, passed rather than
+        # re-chosen: a second number here is a second rule, and the one I picked
+        # was 240x too short.
+        live_window_ms=int(idle_timeout.total_seconds() * 1000),
         spec=spec,
         filestore=filestore,
         get_user_id=get_user_id,

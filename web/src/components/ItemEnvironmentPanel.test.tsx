@@ -34,7 +34,8 @@ const IDLE = {
   enforcedMemoryBytes: 2 * 1024 ** 3,
   // Which ceiling bound, from the SERVER — the panel no longer infers it by
   // comparing the viewer's quota with a clamp made against the owner's.
-  boundBy: null,
+  cpuBoundBy: null,
+  memoryBoundBy: null,
 };
 
 const BUDGET = { cpu: 4, memoryBytes: 8 * 1024 ** 3, cpuInUse: 2, memoryInUse: 2 * 1024 ** 3 };
@@ -69,7 +70,7 @@ describe("what is visible", () => {
   it("shows BOTH numbers when a setting is held down, and names what held it", () => {
     render(
       <ItemEnvironmentPanel
-        env={{ ...IDLE, statedCpuCores: 8, effectiveCpuCores: 4, boundBy: "quota" }}
+        env={{ ...IDLE, statedCpuCores: 8, effectiveCpuCores: 4, cpuBoundBy: "quota" }}
         budget={BUDGET}
         canEdit
       />,
