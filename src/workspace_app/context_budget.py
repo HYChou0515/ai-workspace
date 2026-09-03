@@ -301,6 +301,47 @@ def estimate_messages(messages: Any) -> int:
     return total
 
 
+def usable_window(
+    limit: ContextLimit,
+    *,
+    overhead_tokens: int,
+    reply_reserve: int = DEFAULT_REPLY_RESERVE,
+    margin_ratio: float = DEFAULT_MARGIN_RATIO,
+) -> ContextLimit:
+    """The ceiling, or ``unknown`` when a DERIVED one cannot be a window.
+
+    Most proxies report `max_tokens` as what it usually means: the output cap.
+    A well-behaved `max_tokens: 4096` derives a 3,276-token "window" — smaller
+    than the system prompt this deployment demonstrably sends in every request
+    and gets answers to. A number that cannot contain what the endpoint is
+    already accepting is not that endpoint's input window, and every consumer
+    that believes it does something destructive with it: the history budget
+    replays one message per turn, and the compaction trigger summarises the
+    thread on every turn, lossily and irreversibly.
+
+    So the test lives HERE, beside the ladder, rather than inside whichever
+    consumer was looked at — that is exactly how the first version of it came to
+    protect the budget and leave compaction firing on a fabricated ceiling.
+
+    A STATED ceiling is never second-guessed. `config`, `learned`, `declared`
+    and `catalog` were said out loud by an operator, the endpoint or a registry;
+    if one of those is genuinely too small for the prompt, that is the truth and
+    the caller needs to act on it."""
+    if limit.tokens is None or not limit.derived:
+        return limit
+    usable = int(limit.tokens * (1.0 - margin_ratio))
+    if usable - max(0, overhead_tokens) - max(0, reply_reserve) > 0:
+        return limit
+    logger.warning(
+        "context: a derived ceiling of %d leaves no room beside %d tokens of prompt and tools, "
+        "so it is not the input window — falling back to no ceiling. Set "
+        "model_info.max_input_tokens on the endpoint to fix this properly.",
+        limit.tokens,
+        overhead_tokens,
+    )
+    return ContextLimit(tokens=None, source="unknown")
+
+
 def history_budget(
     limit: ContextLimit,
     *,
@@ -316,35 +357,25 @@ def history_budget(
     arithmetic, which is why a deploy could aim 18.5k + 24k at a 40,960 model
     and only find out via silent truncation.
 
-    A DERIVED ceiling gets one extra test that a stated one does not: if it
-    leaves no room for history at all, it is refused and the answer is
-    ``None`` — unknown — rather than 0. The reasoning is evidence, not taste.
-    Most proxies report `max_tokens` as what it usually means, an output cap, so
-    a well-behaved `max_tokens: 4096` derives a 3,276-token "window" smaller
-    than the system prompt this deployment demonstrably sends in every request
-    and gets answers to. A number that cannot contain what the endpoint is
-    already accepting is not that endpoint's input window, and believing it
-    would replay exactly one message per turn — an assistant that has lost its
-    memory, silently, on a deployment that worked before this rung existed.
+    A DERIVED ceiling is first put through ``usable_window``, which refuses one
+    too small to be a window at all — so ``None`` here means either "no ceiling
+    known" or "the only candidate was not credible", and both mean the same
+    thing to the caller: do not trim.
 
     A STATED ceiling that small is not second-guessed: 0 is then the truth
     ("we know the ceiling and the prompt alone fills it"), and the caller
     depends on being able to tell that from "we do not know".
     """
+    limit = usable_window(
+        limit,
+        overhead_tokens=overhead_tokens,
+        reply_reserve=reply_reserve,
+        margin_ratio=margin_ratio,
+    )
     if limit.tokens is None:
         return None
     usable = int(limit.tokens * (1.0 - margin_ratio))
-    budget = max(0, usable - max(0, overhead_tokens) - max(0, reply_reserve))
-    if budget <= 0 and limit.derived:
-        logger.warning(
-            "context: a derived ceiling of %d leaves no room for history beside %d tokens of "
-            "prompt and tools, so it is not the input window — falling back to no ceiling. "
-            "Set model_info.max_input_tokens on the endpoint to fix this properly.",
-            limit.tokens,
-            overhead_tokens,
-        )
-        return None
-    return budget
+    return max(0, usable - max(0, overhead_tokens) - max(0, reply_reserve))
 
 
 #: Role of a compaction summary (#739). Defined here, not in `api.turns`, so the

@@ -701,3 +701,67 @@ def test_unknown_says_so_too(caplog):
         builder._context_window(_cfg())
 
     assert "unknown" in "\n".join(r.getMessage() for r in caplog.records)
+
+
+def test_a_derived_ceiling_too_small_to_be_a_window_does_not_drive_compaction():
+    """The half of the sanity floor that lived in only one consumer.
+
+    `history_budget` refuses a derived ceiling that cannot hold the fixed
+    overhead — but the COMPACTION trigger computes its own budget straight off
+    `window.tokens`, and so was untouched by that refusal. With a proxy
+    reporting a well-behaved `max_tokens: 4096`, the derived 3,276-token
+    "window" leaves a compaction budget of 948, and every thread above a
+    paragraph gets compacted on every turn.
+
+    That is strictly worse than the symptom the floor was written for.
+    Replaying one message is recoverable; compaction is lossy and irreversible,
+    and here it would be driven by a size measured against a ceiling nobody
+    stated. The rule has to live where the ceiling is resolved, not in whichever
+    consumer happened to be reviewed."""
+    from workspace_app.context_probe import EndpointLimits
+    from workspace_app.resources import Message
+
+    builder = _bare_builder()
+    builder._max_tokens_window_ratio = 0.8
+    builder.endpoint_limits_fn = lambda model, base_url: EndpointLimits(
+        max_input_tokens=None,
+        max_tokens=4_096,  # an OUTPUT cap, reported correctly
+    )
+    cfg = _cfg()
+    cfg.system_prompt = "x" * 44_000  # ~11k tokens, the measured low end
+    builder._locator = _LocatorFor(cfg)
+
+    messages = [
+        Message(role="user" if i % 2 == 0 else "assistant", content="x" * 400) for i in range(20)
+    ]
+    plan = builder.compaction_plan_for("item", messages)
+
+    assert plan.span == [], "compaction must not be driven by a ceiling nobody stated"
+
+
+class _LocatorFor:
+    def __init__(self, cfg):
+        self._cfg = cfg
+
+    def resolve_agent_config(self, item_id):
+        return self._cfg
+
+
+def test_a_stated_ceiling_that_small_still_drives_compaction():
+    """The control. When the ceiling was STATED, a thread that overflows it
+    genuinely needs compacting, and refusing to would leave the user with a
+    conversation that cannot be sent at all."""
+    from workspace_app.resources import Message
+
+    builder = _bare_builder()
+    builder._context_limit = 4_096  # the operator said so
+    cfg = _cfg()
+    cfg.system_prompt = "s"
+    builder._locator = _LocatorFor(cfg)
+
+    messages = [
+        Message(role="user" if i % 2 == 0 else "assistant", content="x" * 4_000) for i in range(20)
+    ]
+    plan = builder.compaction_plan_for("item", messages)
+
+    assert plan.span, "a stated ceiling is not second-guessed"

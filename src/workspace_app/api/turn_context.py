@@ -384,11 +384,23 @@ class TurnContextBuilder:
             DEFAULT_MARGIN_RATIO,
             DEFAULT_REPLY_RESERVE,
             estimate_messages,
+            estimate_tokens,
+            usable_window,
         )
         from .compaction import plan_for_budget
 
         cfg = self._locator.resolve_agent_config(item_id)
-        window = self._context_window(cfg)
+        # The same credibility test the history budget applies, for the same
+        # reason and with more at stake: a derived ceiling too small to hold the
+        # prompt would summarise the thread on EVERY turn — lossily and
+        # irreversibly — driven by a size measured against a number nobody
+        # stated. Sizing the system prompt is cheap (no tool schemas built, which
+        # is the 28 ms part) and it is the dominant term anyway, measured at
+        # 11k-18.5k tokens.
+        window = usable_window(
+            self._context_window(cfg),
+            overhead_tokens=estimate_tokens(getattr(cfg, "system_prompt", "") or ""),
+        )
         usage = self.usage_of(item_id, messages)
         # Deliberately NOT `_budget_for`. That budget is for HISTORY alone, so it
         # subtracts the system prompt and the tool schemas — and measuring those
