@@ -87,7 +87,7 @@ def probe_endpoint_limits(
     urls = _unique(f"{root}/model/info", f"{stripped}/model/info", f"{stripped}/v1/model/info")
     with _http(client, timeout) as http:
         for url in urls:
-            found = _read_model_info(url, model=model, client=http, timeout=timeout)
+            found = _read_model_info(url, model=model, client=http)
             if found is not None:
                 return found
     return None
@@ -120,7 +120,10 @@ def _http(client: Any, timeout: float) -> Iterator[Any]:
             closer()
 
 
-def _read_model_info(url: str, *, model: str, client: Any, timeout: float) -> EndpointLimits | None:
+def _read_model_info(url: str, *, model: str, client: Any) -> EndpointLimits | None:
+    """One address, asked with a client somebody else owns. No `timeout` here:
+    it belongs to the client now that one covers the whole probe, and a second
+    copy of it would be a number that looks like it does something."""
     try:
         resp = client.get(url)
         status = getattr(resp, "status_code", 0)
