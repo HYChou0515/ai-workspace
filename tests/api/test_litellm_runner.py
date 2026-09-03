@@ -1349,3 +1349,45 @@ def test_the_live_prompt_figure_counts_the_whole_request_not_just_the_message():
 
     got = _live_prompt_tokens(cast(Any, _Ctx()), "這一則")
     assert got > 4_000, "the per-turn overhead and the replayed history both count"
+
+
+def test_agent_for_threads_the_curated_subagent_models_onto_run_agent():
+    """plan-subagent-model-choice, asserted at the real build entry: an agent
+    built for a turn that curates sub-agent models carries the enum'd `model`
+    argument on `run_agent`; a turn that curates none carries no such argument.
+    And `_agent_kwargs` — the ONE list both turn shapes share — reads the
+    choices off the ctx, so both shapes get them without a second copy."""
+    import json
+
+    from workspace_app.api.litellm_runner import _agent_for
+    from workspace_app.factories import LlmEndpoint, SubagentModel
+    from workspace_app.tokens import LlmCredential
+
+    choice = SubagentModel(
+        name="fast",
+        description="Cheap local engine.",
+        endpoint=LlmEndpoint(
+            model="m-fast",
+            base_url=None,
+            api_key=None,
+            reasoning_effort=None,
+            ttft_s=8.0,
+            idle_s=120.0,
+            cooldown_s=30.0,
+        ),
+    )
+    from agents import FunctionTool
+
+    cfg = AgentConfig(name="ws", allowed_tools=["run_agent"])
+    agent = _agent_for(cfg, has_subagents=True, subagent_models=(choice,))
+    tool = next(t for t in agent.tools if isinstance(t, FunctionTool) and t.name == "run_agent")
+    assert '"fast"' in json.dumps(tool.params_json_schema["properties"]["model"])
+
+    plain = _agent_for(cfg, has_subagents=True)
+    tool = next(t for t in plain.tools if isinstance(t, FunctionTool) and t.name == "run_agent")
+    assert "model" not in tool.params_json_schema.get("properties", {})
+
+    runner = LitellmAgentRunner()
+    ctx = AgentToolContext(investigation_id="inv-1", subagent_models=(choice,))
+    kw = runner._agent_kwargs(ctx, None, LlmCredential)
+    assert kw["subagent_models"] == (choice,)

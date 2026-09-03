@@ -261,3 +261,129 @@ async def test_a_typo_is_offered_the_names_that_exist_only_live():
 
     assert out.startswith("error:")
     assert "hand-made" in out
+
+
+def _run_agent_tool(tools):
+    return next(t for t in tools if t.name == "run_agent")
+
+
+def test_the_model_argument_exists_only_when_the_operator_curated_models():
+    """plan-subagent-model-choice, the #537 rule: an option that cannot be used
+    must not appear. No curated list ⇒ `run_agent`'s schema has NO `model`
+    property at all (byte-identical to today). A curated list ⇒ the property
+    exists with the exact names as its enum, and the tool description carries
+    each preset's one-line description — that line is what the model reads to
+    pick an engine."""
+    import json
+
+    from workspace_app.factories import LlmEndpoint, SubagentModel
+
+    off = _run_agent_tool(build_tools(["run_agent"], has_subagents=True))
+    assert "model" not in off.params_json_schema.get("properties", {})
+    assert "model" not in off.params_json_schema.get("required", [])
+
+    def _preset(name: str, desc: str) -> SubagentModel:
+        return SubagentModel(
+            name=name,
+            description=desc,
+            endpoint=LlmEndpoint(
+                model=f"m-{name}",
+                base_url=None,
+                api_key=None,
+                reasoning_effort=None,
+                ttft_s=8.0,
+                idle_s=120.0,
+                cooldown_s=30.0,
+            ),
+        )
+
+    on = _run_agent_tool(
+        build_tools(
+            ["run_agent"],
+            has_subagents=True,
+            subagent_models=(
+                _preset("fast", "Cheap local engine."),
+                _preset("deep", "Hard sub-tasks."),
+            ),
+        )
+    )
+    prop = on.params_json_schema["properties"]["model"]
+    blob = json.dumps(prop)
+    assert '"fast"' in blob and '"deep"' in blob and "enum" in blob
+    desc = on.description or ""
+    assert "Cheap local engine." in desc and "Hard sub-tasks." in desc
+
+
+def _choices():
+    from workspace_app.factories import LlmEndpoint, SubagentModel
+
+    return (
+        SubagentModel(
+            name="fast",
+            description="Cheap local engine.",
+            endpoint=LlmEndpoint(
+                model="m-fast",
+                base_url="http://fast:4000/v1",
+                api_key="fk",
+                reasoning_effort=None,
+                ttft_s=8.0,
+                idle_s=120.0,
+                cooldown_s=30.0,
+            ),
+        ),
+    )
+
+
+async def test_a_picked_model_reaches_the_seam_resolved_and_is_named_in_the_report():
+    """The impl owns name→endpoint: the seam receives the RESOLVED endpoint
+    (it should not know the list), and the report says which engine ran —
+    the #748 rule: where an answer came from must be visible."""
+    from workspace_app.factories import LlmEndpoint
+
+    seen: list[LlmEndpoint | None] = []
+
+    async def run_agent(parent, defn, prompt, emit=None, model=None):
+        seen.append(model)
+        return f"[{defn.name}] report"
+
+    ctx = RunContextWrapper(
+        AgentToolContext(
+            investigation_id="inv-1",
+            subagent_defs=(_DIGGER,),
+            run_agent=run_agent,
+            subagent_models=_choices(),
+        )
+    )
+    out = await run_agent_impl(ctx, "log-digger", "go", model="fast")
+    assert len(seen) == 1
+    first = seen[0]
+    assert first is not None
+    assert first.model == "m-fast" and first.base_url == "http://fast:4000/v1"
+    assert "[log-digger] report" in out
+    assert "fast" in out  # the report names the engine that ran
+
+    # Omitted ⇒ the seam sees None and the report is exactly the plain one.
+    out = await run_agent_impl(ctx, "log-digger", "go")
+    assert seen[1] is None and out == "[log-digger] report"
+
+
+async def test_an_unknown_model_pick_is_refused_with_the_curated_names():
+    """Small local models ignore enums, so the impl re-checks — and names the
+    options, same shape as the unknown-agent_type refusal."""
+    calls: list[object] = []
+
+    async def run_agent(parent, defn, prompt, emit=None, model=None):
+        calls.append(model)
+        return "ran"
+
+    ctx = RunContextWrapper(
+        AgentToolContext(
+            investigation_id="inv-1",
+            subagent_defs=(_DIGGER,),
+            run_agent=run_agent,
+            subagent_models=_choices(),
+        )
+    )
+    out = await run_agent_impl(ctx, "log-digger", "go", model="gpt-9")
+    assert calls == []  # nothing ran
+    assert "gpt-9" in out and "fast" in out

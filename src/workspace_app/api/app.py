@@ -23,8 +23,9 @@ from ..config.schema import EnhancementSettings, OffHoursSettings, PerUserResour
 
 if TYPE_CHECKING:
     # Annotation-only: `factories` composes THIS module, so a runtime import
-    # here would be circular. `LlmEndpoint` values arrive through parameters.
-    from ..factories import LlmEndpoint
+    # here would be circular. `LlmEndpoint`/`SubagentModel` values arrive
+    # through parameters.
+    from ..factories import LlmEndpoint, SubagentModel
 from ..files import WorkspaceFiles, WorkspaceFull
 from ..filestore.protocol import FileNotFound, FileStore
 from ..health import CheckRegistry, CheckResult
@@ -201,6 +202,10 @@ def create_app(
     filestore: FileStore,
     runner: AgentRunner,
     agent_config_catalog: AgentConfigCatalog | None = None,
+    # plan-subagent-model-choice: the operator's curated engines a run_agent
+    # call may pick (`resolve_subagent_models(settings)` in production).
+    # Empty ⇒ the tool grows no `model` argument anywhere.
+    subagent_models: tuple[SubagentModel, ...] = (),
     kb_embedder: Embedder | None = None,
     kb_code_embedder: Embedder | None = None,  # P3.0 code-specialised embedder
     kb_image_embedder: ImageEmbedder | None = None,  # #513 image embedder (embedding_img)
@@ -1448,6 +1453,10 @@ def create_app(
         # #397: lets the request_wiki_update tool submit a user's wiki correction.
         wiki_coordinator=wiki_coordinator,
         run_agent=_delegate,
+        # plan-subagent-model-choice: the operator's curated run_agent engines
+        # (production: `resolve_subagent_models(settings)`), stamped onto every
+        # turn ctx so `_agent_kwargs` can shape the tool's schema.
+        subagent_models=subagent_models,
     )
 
     # #624: let the budget consult what the RUNNER has learned about each
