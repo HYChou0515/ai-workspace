@@ -24,9 +24,13 @@ const text = (path: string, body: string): FileContent => ({
 function svc(files: Record<string, string>): FileService {
   return {
     scopeId: "item1",
+    caps: { write: true, delete: true },
     readFile: vi.fn(async (path: string) => {
       if (!(path in files)) throw new Error(`not found: ${path}`);
       return text(path, files[path]);
+    }),
+    writeFile: vi.fn(async (path: string, body: string) => {
+      files[path] = body;
     }),
     fileDownloadUrl: (path: string) => `/api/files${path}`,
   } as unknown as FileService;
@@ -229,6 +233,24 @@ describe("WuiView", () => {
 
     await waitFor(() => expect(screen.queryByText(/boom/)).not.toBeInTheDocument());
     off();
+  });
+
+  it("does not tell the page about its own save", async () => {
+    // Found by running one in a browser: every save came back as "somebody else
+    // changed this", which discredits the warning that matters.
+    const { say, replies } = await withFrame({ "/sales/index.html": "<html><body>hi</body></html>" });
+
+    say({ proto: WUI_PROTOCOL, id: "1", verb: "writeFile", args: { path: "data.json", text: "[]" } });
+    await waitFor(() => expect(replies).toHaveLength(1));
+    publishFileChanged("item1", "/sales/data.json");
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(replies).toHaveLength(1); // the write's own reply, and no echo
+
+    // A second, unmatched event is somebody else and still gets through.
+    publishFileChanged("item1", "/sales/data.json");
+    await waitFor(() => expect(replies).toHaveLength(2));
+    expect(replies[1]).toMatchObject({ event: "file_changed" });
   });
 
   it("rebuilds the page on Refresh, since nothing reloads it automatically", async () => {

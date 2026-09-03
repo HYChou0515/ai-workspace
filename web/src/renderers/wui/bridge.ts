@@ -47,6 +47,15 @@ export type BridgeContext = {
   declaredTools: string[];
   /** Run one package tool, or `null` where no backend is wired. */
   callTool: CallTool | null;
+  /**
+   * Called after this page changes a file, with the resolved path.
+   *
+   * Every write is broadcast back to everyone looking at the item, the writer
+   * included — so without this a page hears "somebody else changed this" after
+   * each of its own saves. The bridge reports the fact; what to do about the
+   * echo is the pane's business, not a rule about writing.
+   */
+  onWrote?: (path: string) => void;
 };
 
 const str = (args: Record<string, unknown> | undefined, key: string): string | null => {
@@ -90,6 +99,7 @@ export async function dispatchWuiRequest(
         );
       }
       await fs.writeFile(path, text);
+      ctx.onWrote?.(path);
       return ok(id, { path });
     }
 
@@ -105,6 +115,7 @@ export async function dispatchWuiRequest(
         );
       }
       await fs.deleteFile(path);
+      ctx.onWrote?.(path);
       return ok(id, { path });
     }
 

@@ -18,6 +18,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useFileService } from "../../api/fileService";
 import { qk } from "../../api/queryKeys";
+import { Btn } from "../../components/Btn";
 import { useCurrentUserState } from "../../hooks/useCurrentUser";
 import { useOpenFile } from "../../hooks/openFile";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
@@ -30,6 +31,7 @@ import type { ViewSpec } from "../entity/types";
 import { buildWuiDoc } from "./assets";
 import { dispatchWuiRequest } from "./bridge";
 import { wuiFolder } from "./paths";
+import { createSelfWrites } from "./selfWrites";
 import { WUI_PROTOCOL, isWuiRequest, type WuiEvent } from "./protocol";
 import {
   formatReportsForAgent,
@@ -64,6 +66,7 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
   const { id: me, ready: meReady } = useCurrentUserState();
   const [reports, setReports] = useState<WuiReport[]>([]);
   const nextReportId = useRef(0);
+  const selfWrites = useRef(createSelfWrites());
 
   // What this page says it uses. Disclosure rather than the boundary — the
   // app's ceiling is enforced on the server — but a page that could quietly
@@ -106,6 +109,7 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
         me: meReady ? me : null,
         declaredTools,
         callTool,
+        onWrote: (written) => selfWrites.current.record(written),
       }).then((res) => {
         win.postMessage(res, "*");
       });
@@ -119,6 +123,11 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
   useEffect(
     () =>
       subscribeFileChanged(fs.scopeId, (changed) => {
+        // The broadcast goes to everyone looking at the item, the writer
+        // included. Told about its own save, an editor warns "somebody else
+        // changed this" every time it saves — and the one warning that matters
+        // arrives already discredited.
+        if (selfWrites.current.consume(changed)) return;
         const event: WuiEvent = { proto: WUI_PROTOCOL, event: "file_changed", path: changed };
         frameRef.current?.contentWindow?.postMessage(event, "*");
       }),
@@ -142,19 +151,16 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
           flex: "0 0 auto",
         }}
       >
-        <button type="button" onClick={() => setGeneration((g) => g + 1)}>
+        <Btn size="sm" onClick={() => setGeneration((g) => g + 1)}>
           Refresh
-        </button>
-        <button
-          type="button"
-          onClick={() => toFrame({ proto: WUI_PROTOCOL, command: "pick", on: true })}
-        >
+        </Btn>
+        <Btn size="sm" onClick={() => toFrame({ proto: WUI_PROTOCOL, command: "pick", on: true })}>
           Report a problem
-        </button>
+        </Btn>
         {reports.length > 0 && (
-          <button type="button" onClick={tellTheAgent}>
+          <Btn size="sm" variant="primary" onClick={tellTheAgent}>
             Tell the agent ({reports.length})
-          </button>
+          </Btn>
         )}
       </div>
       {reports.length > 0 && (
