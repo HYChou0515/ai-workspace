@@ -417,6 +417,11 @@ def register_item_routes(
                 item_id,
                 msgspec.structs.replace(item, sandbox_cpu_cores=cpu, sandbox_memory_bytes=memory),
             )
+        # The size is memoised for a few seconds with the item's other facts,
+        # and the person who just saved it is the one who would meet the stale
+        # copy. Same position `set_item_permission` takes on a revocation: the
+        # write invalidates rather than the reader waiting it out.
+        locator.forget_item(item_id)
         return _ResourcesOut(cpu_cores=cpu, memory_bytes=memory)
 
     @app.put("/a/{slug}/items/{item_id}/members")

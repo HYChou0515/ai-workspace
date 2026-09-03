@@ -1474,6 +1474,21 @@ def create_app(
     # modules + the turn/mention/replay services call ``locator.<method>`` directly.
     locator = ItemLocator(spec, app_catalog, get_user_id=get_user_id, superusers=superusers)
 
+    # The write side of `_item_facts`: whoever changes an item's stored facts
+    # drops the entry, so the next read re-derives instead of serving a value
+    # the person has already replaced.
+    def _forget_item_facts(item_id: str) -> None:
+        """Drop one item's memoised facts. Returns nothing on purpose: the
+        contract is DISCARD, not "take it out and hand it over", and a lambda
+        that leaked `pop`'s return value said the opposite (ty refused it).
+
+        `pop(key, None)`, not `pop(key)`: "never cached" is the ORDINARY case —
+        nobody has opened this item's panel yet — and a bare `pop` would turn a
+        successful save into a 500 exactly then."""
+        _item_facts.pop(item_id, None)
+
+    locator.forget_item_facts = _forget_item_facts
+
     # #674: teach the registry what an item mounts, for the wakes with no turn
     # behind them (the human terminal, a workflow node, the file-op rebuild).
     # Assigned here rather than passed in because the locator this needs is built

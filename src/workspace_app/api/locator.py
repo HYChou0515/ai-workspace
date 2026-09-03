@@ -211,6 +211,24 @@ class ItemLocator:
         security bug, not a slow one."""
         self._access.pop(item_id, None)
 
+    #: Called when an item's stored facts change under the memo that caches
+    #: them. Wired by `create_app`, which owns that cache; absent in the tests
+    #: and replay paths that construct a locator without one.
+    forget_item_facts: Callable[[str], None] | None = None
+
+    def forget_item(self, item_id: str) -> None:
+        """Drop the cached (slug, owner, environment size) for an item.
+
+        Called by whatever WRITES those facts, for the same reason
+        `forget_access` exists next door: the memo is five seconds wide, and a
+        person who has just saved a size does not experience that as caching —
+        they experience it as the setting not working, then working, with
+        nothing to explain either. Five seconds is the worst duration for that:
+        long enough to look broken, short enough to be gone before anyone can
+        look."""
+        if self.forget_item_facts is not None:
+            self.forget_item_facts(item_id)
+
     def resolve_agent_config(self, item_id: str) -> AgentConfig | None:
         """#89: a per-App WorkItem (RcaInvestigation, …) resolves its turn's
         config via the 3-layer AppCatalog (app ◇ profile ◇ preset)."""

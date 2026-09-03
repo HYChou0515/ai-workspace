@@ -648,3 +648,39 @@ def test_a_backend_that_caps_nothing_is_reported_as_capping_nothing():
 
         assert body["effective_cpu_cores"] == 2.0, "we still asked for it"
         assert body["enforced_cpu_cores"] is None, "but nothing will hold it to that"
+
+
+def test_a_new_size_lands_on_the_very_next_request():
+    """Found by asking who else reads the number, not by a failing test.
+
+    `_all_facts_of` memoises (item -> slug, owner, cpu, memory) for five
+    seconds, because the quota closures turned one file write into five store
+    round trips without it. That cache now holds the size somebody just typed:
+    save, start a turn immediately, and the sandbox is built from the OLD value
+    while the panel cheerfully shows it too — "I changed it and nothing
+    happened", self-healing after five seconds, which is the worst duration for
+    a bug because it is exactly long enough to look like it did not work and
+    short enough to be gone when anybody looks.
+
+    The permission setter has held this position since #306: "a cache that
+    outlives a revocation is a security bug, not a slow one." Same rule, same
+    remedy — the write drops the entry so the next read re-derives.
+    """
+    with _app(PerUserResources(cpu=4.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        sandbox,
+    ):
+        item = _mk(spec, "alice")
+        # Warm the cache the way a real page load does, so the entry exists and
+        # is fresh — reading through the route is the whole point.
+        assert client.get(f"/a/rca/items/{item}/environment").status_code == 200
+
+        client.put(f"/a/rca/items/{item}/resources", json={"cpu_cores": 1.0})
+
+        body = client.get(f"/a/rca/items/{item}/environment").json()
+        assert body["stated_cpu_cores"] == 1.0
+        assert body["effective_cpu_cores"] == 1.0, "the panel must not show the pre-save size"
+
+        _wake(client, item)
+        assert sandbox.specs[-1].cpu_cores == 1.0, "and the sandbox is built from it"
