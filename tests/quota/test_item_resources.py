@@ -1425,3 +1425,36 @@ def test_each_dimension_reports_its_own_ceiling():
         assert body["cpu_bound_by"] == "app", body
         assert body["effective_memory_bytes"] == 2 * 1024**3
         assert body["memory_bound_by"] == "quota", body
+
+
+def test_my_resources_does_not_name_an_item_i_cannot_see():
+    """Round-3 finding 7 — the redaction I added to the 507 is defeated one
+    route over, and that route is the one the refusal points at.
+
+    `GET /me/resources` builds every live row's title from `locator.title_of`
+    with no `read_meta` check. The debtor is the `owner` FIELD, which anyone
+    with write access can PATCH (#687), so carol can point a private item at
+    alice and have her own title read back to alice on a page alice opens for
+    an unrelated reason.
+
+    Pre-dates this branch — the page has always listed by owner — but the
+    property is one this branch now claims, and a rule that holds on one route
+    and not its neighbour is not a rule.
+    """
+    with _app(PerUserResources(cpu=4.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        WHO["id"] = "carol"
+        hers = _mk(spec, "alice", permission=Permission(visibility="private"))
+        client.patch(f"/rca-investigation/{hers}", json={"title": "Carol's confidential plan"})
+        _wake(client, hers)
+
+        WHO["id"] = "alice"
+        body = client.get("/me/resources").json()
+
+        assert "Carol" not in str(body), f"a title alice holds no read_meta on: {body}"
+        # …and the row itself survives, because she IS being charged for it and
+        # closing it is the remedy the page exists to offer.
+        assert any(e["item_id"] == hers for e in body["live"]), body

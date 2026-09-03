@@ -128,7 +128,30 @@ def register_quota_routes(
     """Mount the resource-usage + per-user-limit routes."""
 
     def _describe(item_id: str) -> tuple[str, str]:
-        return locator.slug_of(item_id) or "", locator.title_of(item_id) or ""
+        """This row's slug and title — the title only if the reader may see it.
+
+        The debtor is the `owner` FIELD, which anyone with write access can
+        PATCH (#687), so a row can name an item its owner has no access to:
+        point a private item at somebody and your title is read back to them on
+        a page they opened for an unrelated reason.
+
+        The row itself STAYS. They are being charged for it and closing it is
+        the remedy this page exists to offer — an unnamed environment is still
+        closable, an invisible one is not. Same rule the 507 body uses, because
+        a rule that holds on one route and not its neighbour is not a rule."""
+        slug = locator.slug_of(item_id) or ""
+        try:
+            require_item_access(
+                spec,
+                slug,
+                item_id,
+                "read_meta",
+                user=get_user_id(),
+                superusers=superusers,
+            )
+        except Exception:  # noqa: BLE001 — no access is an ordinary answer here
+            return slug, ""
+        return slug, locator.title_of(item_id) or ""
 
     async def _found_running(owner: str, already_listed: set[str]) -> list[_LiveEnvironment]:
         """This person's environments that are RUNNING but that no ledger row
