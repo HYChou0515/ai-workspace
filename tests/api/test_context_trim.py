@@ -805,3 +805,30 @@ def test_the_gauge_still_shows_a_ceiling_anyone_actually_stated():
 
     assert usage.limit == 40_960
     assert usage.limit_source == "config"
+
+
+def test_a_person_can_still_compact_when_no_ceiling_is_credible():
+    """The reassuring half of refusing an incredible ceiling.
+
+    Declining to act on a derived number silences the AUTOMATIC path — that is
+    the point. It must not take away the button: someone pressing compact has a
+    reason we do not (the last hour of debugging is finished and they want the
+    window back before the next question), and on the deployment this rung
+    exists for they may have no other way to get it.
+
+    Nothing covered `force=True` together with `budget=None` through this
+    method, which is exactly the combination the credibility test creates."""
+    from workspace_app.context_probe import EndpointLimits
+
+    builder = _bare_builder()
+    builder._max_tokens_window_ratio = 0.8
+    builder.endpoint_limits_fn = lambda model, base_url: EndpointLimits(
+        max_input_tokens=None, max_tokens=4_096
+    )
+    cfg = _cfg()
+    cfg.system_prompt = "x" * 44_000
+    builder._locator = _LocatorFor(cfg)
+
+    messages = _msgs(20)
+    assert builder.compaction_plan_for("item", messages).span == [], "not automatically"
+    assert builder.compaction_plan_for("item", messages, force=True).span, "but on request, yes"
