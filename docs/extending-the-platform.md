@@ -29,6 +29,7 @@ Tool 這一面還多一條路（#674）:**dev 不一定要是我們**。外部�
 | **Skill** | ✅ `sample-skills/` + `SHARED_SKILLS` 註冊 | ✅ `author-skill` + `save_skill` → `.skill/`（#298） |
 | **Workflow** | ✅ Python `run.py`（圖靈完備） | ✅ `workflow.json` **降階 DSL**（#323）——**最難的一塊** |
 | **View Kind** | ✅ React 元件 + `web/src/ext/` 一行註冊（#698）——**dev 可以是維運方** | ❌ **無**——會執行任意前端程式碼 |
+| **WUI** | ✅ 就是一個 workspace 資料夾——沒有 dev 專屬路徑 | ✅ **和 AI 共創**——`view: wui` + `index.html`（見 [`wui.md`](wui.md)） |
 
 三個 user 自建路徑刻意共用同一套模型（照搬 #298 的 skill 流程）:**跟 AI 共創 → 存進
 workspace 的點開頭資料夾 → 側邊面板列出／下載／匯入 → dev 把它 commit 進 profile 就升格成

@@ -9,10 +9,17 @@ A **WUI** is a folder in this item's workspace whose `*.ai.yaml` file says
 `view: wui`. Opening that file runs the folder as a page. There is no publish
 step and nothing to register — write the files and it works.
 
-Read `reference.md` for the exact API before you write code. There is a complete,
-working example in `example/`; **start by copying it**, because it already gets
-the three things right that are easy to get wrong (saving without thrashing,
-hearing about someone else's edit, staying inside your own folder).
+Read `reference.md` for the exact API before you write code. **Start by copying
+one of the two complete, working examples in `examples/`** — they already get
+right the things that are easy to get wrong, and copying beats generating.
+
+| copy | when | what it shows |
+|---|---|---|
+| `examples/dashboard/` | the data already exists and somebody wants to SEE it differently | listing then reading in parallel, parsing files people hand-edit, `openFile` to hand the user back to the real file |
+| `examples/editor/` | the page is where the data gets ENTERED or changed | saving without thrashing, hearing about someone else's edit without discarding what is half-typed, staying inside your own folder |
+
+If you need both, start from the dashboard and add saving — a page that reads
+wrongly is obvious, a page that writes wrongly is not.
 
 ## What you are actually making
 
@@ -35,6 +42,8 @@ lot-tracker/
   style.css        ← looks
   data.json        ← whatever the page saves (your folder, your file)
 ```
+
+A read-only page has no `data.json` — it reads what the item already holds.
 
 `page.ai.yaml`:
 
@@ -74,8 +83,8 @@ Open it yourself in your head, in this order:
 
 1. Does `index.html` load `./app.js` and `./style.css` by relative path?
 2. Is every URL in the page either relative or a `data:` URI?
-3. Does the first render work with **no** saved data — an empty `data.json`, or
-   none at all?
+3. Does the first render work with **no** data — an empty `data.json`, none at
+   all, or an empty folder to read?
 4. Does every `workspace.*` call have a `.catch`, and does the page show that
    text rather than going blank?
 
