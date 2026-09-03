@@ -39,7 +39,9 @@ import { modCombo } from "../../lib/platform";
 import { nameForPreset, pickerModels, presetForName } from "./agentPicker";
 import { useStickToBottom } from "../../hooks/useStickToBottom";
 import { ConnectionNotice } from "../../components/ConnectionNotice";
+import { QuotaHoldingList } from "../../components/QuotaHoldingList";
 import { ResourceLinkText } from "../../components/ResourceLinkText";
+import { myResourcesApi } from "../../api/myResources";
 import { TurnStatus } from "../../components/TurnStatus";
 import { turnLooksSilent, turnsFromEntry } from "./agentLog";
 import type { CompactionReason } from "../../api/types";
@@ -229,6 +231,9 @@ export function AgentPanel({
   // composer's own feedback channel (Enter during a turn, Stop). Cleared on the
   // next successful send.
   const [composerHint, setComposerHint] = useState<string | null>(null);
+  // Which environment's close is in flight, so a second click cannot queue a
+  // second teardown of the same sandbox.
+  const [closingItemId, setClosingItemId] = useState<string | null>(null);
   // …and when the turn ends, because every hint this channel carries is about a
   // turn that was running: 「正在停止這一輪…」 and 「回覆還在進行中…」 both describe
   // a state that is over, and both used to sit there until the next send. A
@@ -740,6 +745,20 @@ export function AgentPanel({
                 #688 "refuse outright" trade-off resting on a page you have to
                 go and find. */}
             <ResourceLinkText text={log.error} />
+            {/* #P5: naming /my-resources tells someone where to go; this lets
+                them act without going. The list is empty for every refusal that
+                is not about environments, and for a collaborator the backend
+                withheld the inventory from — both render as nothing. */}
+            <QuotaHoldingList
+              holding={log.holding ?? []}
+              busyItemId={closingItemId ?? undefined}
+              onClose={(itemId) => {
+                setClosingItemId(itemId);
+                void myResourcesApi
+                  .closeEnvironment(itemId)
+                  .finally(() => setClosingItemId(null));
+              }}
+            />
           </div>
         )}
         </div>

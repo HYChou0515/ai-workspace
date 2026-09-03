@@ -6,6 +6,7 @@ import { eventId, eventSeq, isTerminal, isTurnProgress } from "../events";
 import { type AgentLog, logFromMessages, reduceAgent } from "../pages/investigation/agentLog";
 import type { MsgKey } from "../lib/i18n";
 import { type QuotaDetail, type QuotaKind, quotaMessage } from "../lib/quotaFailure";
+import { holdingFromSendError } from "./useChatSessionHolding";
 import { type ChatThread, useChatLog } from "./useChatLog";
 import { useCurrentUser } from "./useCurrentUser";
 import { useT } from "../lib/i18n";
@@ -587,7 +588,15 @@ export function useChatSession(
               : String(err));
         // Not the turn's error: no turn ran. It says which limit bound and
         // links to it, and it must survive whatever the stream does next.
-        setLog((prev) => ({ ...prev, streaming: false, error: msg, errorFromTurn: false }));
+        setLog((prev) => ({
+          ...prev,
+          streaming: false,
+          error: msg,
+          errorFromTurn: false,
+          // The sentence above is lossy by design; the LIST survives beside it
+          // so the refusal can offer to act rather than only to explain.
+          holding: holdingFromSendError({ ...(err as object | null), status }),
+        }));
       }
     },
     [transport, t],
