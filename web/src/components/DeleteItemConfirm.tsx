@@ -35,6 +35,11 @@ export function DeleteItemBody({ slug, itemId }: { slug: string; itemId: string 
         <button
           type="button"
           className="btn"
+          // A variant is what gives `.btn` its chrome (base.css sets a
+          // TRANSPARENT border on the bare class) — without it the escape
+          // hatch rendered as plain text and read as unpressable. Caught by
+          // recording the demo, not by a test.
+          data-variant="secondary"
           data-size="sm"
           onClick={() => void downloadItemZip(slug, itemId)}
         >

@@ -153,8 +153,13 @@ describe("ChatListRail", () => {
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toHaveTextContent(/檔案、對話、workflow 紀錄/);
     expect(dialog).toHaveTextContent(/知識庫的知識會保留/);
-    // The zip escape hatch is IN the dialog — the locked decision.
-    expect(within(dialog).getByRole("button", { name: /下載 zip/ })).toBeInTheDocument();
+    // The zip escape hatch is IN the dialog — the locked decision — and it
+    // LOOKS pressable: `.btn` alone paints a transparent border, so a missing
+    // variant renders the one escape hatch as plain text (the first demo take
+    // showed exactly that).
+    const zip = within(dialog).getByRole("button", { name: /下載 zip/ });
+    expect(zip).toBeInTheDocument();
+    expect(zip).toHaveAttribute("data-variant");
     fireEvent.click(within(dialog).getByRole("button", { name: "刪除" }));
     await waitFor(() => expect(chatActions.remove).toHaveBeenCalledWith("rca-investigation/1"));
   });
