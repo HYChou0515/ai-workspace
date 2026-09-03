@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -143,12 +143,29 @@ describe("ChatListRail", () => {
     expect(newChat).toHaveBeenCalled();
   });
 
-  it("deletes a chat from its ⋯ menu, after a confirm", () => {
-    window.confirm = vi.fn(() => true); // happy-dom has no confirm — stub it
+  it("deletes a chat from its ⋯ menu, after a dialog that says what dies", async () => {
+    // Not window.confirm any more: the delete is a CASCADE (files, chats,
+    // workflow runs, the disk-quota charge), so the dialog must say so — and
+    // say what survives (knowledge already promoted to the KB).
     renderRail();
     fireEvent.click(screen.getByRole("button", { name: /Project options for Oven drift/i }));
     fireEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
-    expect(chatActions.remove).toHaveBeenCalledWith("rca-investigation/1");
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent(/files, chats and workflow runs/);
+    expect(dialog).toHaveTextContent(/knowledge base stays/i);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(chatActions.remove).toHaveBeenCalledWith("rca-investigation/1"));
+  });
+
+  it("cancelling the delete dialog deletes nothing", async () => {
+    chatActions.remove.mockClear(); // module-level mock — earlier tests called it
+    renderRail();
+    fireEvent.click(screen.getByRole("button", { name: /Project options for Oven drift/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(chatActions.remove).not.toHaveBeenCalled();
   });
 
   it("renames a chat inline from its ⋯ menu", () => {

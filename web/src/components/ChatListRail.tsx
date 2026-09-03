@@ -22,6 +22,7 @@ import { useAppItems, useAppManifest, useApps } from "../hooks/useResources";
 import { usePlatformDestinations } from "../hooks/usePlatformDestinations";
 import { itemNouns } from "../lib/itemNoun";
 import { BREAKPOINTS } from "../lib/breakpoints";
+import { DialogProvider, useDialog } from "./Dialog";
 import { ShareChatDialog } from "./ShareChatDialog";
 import { UserChip } from "./UserChip";
 
@@ -125,7 +126,7 @@ export function ChatListRail({
   }
 
   return (
-    <>
+    <DialogProvider>
       {/* Only mounted where the rail overlays, so it can carry the dismissal
           without a media query of its own. It sits UNDER the rail and over the
           chat, so one click closes the drawer rather than also firing whatever
@@ -244,7 +245,7 @@ export function ChatListRail({
           )}
         </div>
       </nav>
-    </>
+    </DialogProvider>
   );
 }
 
@@ -273,6 +274,7 @@ function ChatRailItem({
   const [editing, setEditing] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [draft, setDraft] = useState("");
+  const { confirm } = useDialog();
   const me = useCurrentUser();
   const shared = item.owner !== me; // shared WITH me → I don't own it
   const title = item.title || `Untitled ${noun.toLowerCase()}`;
@@ -365,9 +367,28 @@ function ChatRailItem({
                   className="chat-rail__menu-item chat-rail__menu-item--danger"
                   onClick={() => {
                     setMenuOpen(false);
-                    if (window.confirm(`Delete “${title}”? This can't be undone.`)) {
-                      onDelete(item.resource_id);
-                    }
+                    // The dialog says what actually dies (plan-delete-item-cascade):
+                    // this is the cascade, not a row removal.
+                    void confirm({
+                      title: `Delete “${title}”?`,
+                      body: (
+                        <>
+                          <p>
+                            Deletes this {noun.toLowerCase()} and everything it owns
+                            — its files, chats and workflow runs — and frees its
+                            disk quota. Knowledge already promoted to the knowledge
+                            base stays.
+                          </p>
+                          <p>To keep a copy, open it and download the files first. This can't be undone.</p>
+                        </>
+                      ),
+                      actions: [
+                        { id: "cancel", label: "Cancel" },
+                        { id: "delete", label: "Delete", variant: "danger" },
+                      ],
+                    }).then((choice) => {
+                      if (choice === "delete") onDelete(item.resource_id);
+                    });
                   }}
                 >
                   Delete

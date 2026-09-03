@@ -22,6 +22,8 @@ import { type MyResources, type MyResourcesApi, type OverrideList as OverrideLis
 import { qk } from "../api/queryKeys";
 import { useIsSuperuser } from "../hooks/useIsSuperuser";
 import { UserPicker } from "../components/UserPicker";
+import { DialogProvider, useDialog } from "../components/Dialog";
+import { api } from "../api";
 
 // Re-exported for this page's own tests. The implementation lives in
 // `lib/bytes` — where it always did. A second copy briefly existed here under a
@@ -101,8 +103,9 @@ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResour
 
   const { limits } = data;
   return (
-    <div className="page">
-      <h1>{t("resources.heading")}</h1>
+    <DialogProvider>
+      <div className="page">
+        <h1>{t("resources.heading")}</h1>
 
       <section aria-labelledby="live-heading">
         <h2 id="live-heading">{t("resources.live.heading")}</h2>
@@ -191,11 +194,14 @@ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResour
           <ul>
             {data.workspaces.map((ws) => (
               <li key={ws.item_id}>
-                {/* Deleting happens in the item's own file view: it is the only
-                    place that shows WHAT is being deleted, and deleting the
-                    wrong thing here would be unrecoverable. */}
+                {/* This row can delete the WHOLE item (plan-delete-item-cascade):
+                    the backend cascade removes everything the item owns and
+                    refunds the quota, and this page is where the person at
+                    their limit sees which item is worth the trade. Per-file
+                    clean-up still lives in the item's own file view. */}
                 <Link to={`/a/${ws.slug}/${ws.item_id}`}>{ws.title || ws.item_id}</Link>
                 <span className="detail">{formatBytes(ws.bytes_used)}</span>
+                <DeleteItemButton slug={ws.slug} itemId={ws.item_id} title={ws.title || ws.item_id} />
               </li>
             ))}
           </ul>
@@ -204,7 +210,51 @@ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResour
       </section>
 
       <AdminOverrides client={client} />
-    </div>
+      </div>
+    </DialogProvider>
+  );
+}
+
+/** The per-row "delete this item and everything it owns" affordance
+ * (plan-delete-item-cascade). Its own component because `useDialog` must run
+ * UNDER the page's DialogProvider; the mutation invalidates `myResources`, so
+ * the gauge drops the moment the refund lands — the visible proof it worked. */
+function DeleteItemButton({ slug, itemId, title }: { slug: string; itemId: string; title: string }) {
+  const t = useT();
+  const qc = useQueryClient();
+  const { confirm } = useDialog();
+  const del = useMutation({
+    mutationFn: () => api.deleteAppItem(slug, itemId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.myResources }),
+  });
+  return (
+    <button
+      type="button"
+      className="btn"
+      data-variant="danger"
+      data-size="sm"
+      aria-label={`${t("resources.disk.delete")} ${title}`}
+      disabled={del.isPending}
+      onClick={() => {
+        void confirm({
+          title: t("resources.disk.delete.title"),
+          body: (
+            <>
+              <p>{t("resources.disk.delete.body1")}</p>
+              <p>{t("resources.disk.delete.body2")}</p>
+            </>
+          ),
+          actions: [
+            { id: "cancel", label: t("resources.disk.delete.cancel") },
+            { id: "delete", label: t("resources.disk.delete"), variant: "danger" },
+          ],
+        }).then((choice) => {
+          if (choice === "delete") del.mutate();
+        });
+      }}
+    >
+      {t("resources.disk.delete")}
+    </button>
   );
 }
 

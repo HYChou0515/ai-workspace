@@ -244,10 +244,14 @@ export const realApi: ApiClient = {
     });
     return json<{ resource_id: string }>(resp);
   },
-  async deleteAppItem(resourceRoute: string, id: string) {
-    // #chat-private: hard delete (the specstar permanent delete) — owner /
-    // superuser gated by the backend. Removes the chat, not just closes it.
-    await apiFetch(`${resourceRoute}/${encodeURIComponent(id)}/permanently`, { method: "DELETE" });
+  async deleteAppItem(slug: string, id: string) {
+    // plan-delete-item-cascade: the CASCADE route — deletes the item AND
+    // everything it owns (files, sandbox, chats, workflow runs) and refunds
+    // the owner's disk quota. The old raw `/permanently` route orphaned all of
+    // that (the backend now refuses it for work items). Owner/superuser gated.
+    await apiFetch(`/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
   },
 
   async patchAppItemFields(resourceRoute: string, id: string, patch: Record<string, unknown>) {
