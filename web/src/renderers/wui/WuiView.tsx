@@ -78,8 +78,13 @@ const GAP_ID = -1;
 export function trimReports(reports: WuiReport[]): WuiReport[] {
   if (reports.length <= MAX_REPORTS) return reports;
   const previous = reports.find((r) => r.id === GAP_ID)?.dropped ?? 0;
-  const dropped = previous + (reports.length - MAX_REPORTS);
-  const tail = reports.filter((r) => r.id !== GAP_ID).slice(-(MAX_REPORTS - KEEP_FIRST - 1));
+  const real = reports.filter((r) => r.id !== GAP_ID);
+  const tail = real.slice(-(MAX_REPORTS - KEEP_FIRST - 1));
+  // Count what is actually lost. The marker occupies one of the slots, so
+  // `reports.length - MAX_REPORTS` under-counts by one on every trim — and
+  // trimming happens once per message, so the error compounds into exactly the
+  // wrong number this marker exists to prevent.
+  const dropped = previous + (real.length - KEEP_FIRST - tail.length);
   return [
     ...reports.slice(0, KEEP_FIRST),
     {

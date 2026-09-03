@@ -46,12 +46,16 @@ afterEach(() => {
 });
 
 describe("the WUI runtime", () => {
-  it("carries no backtick, which would end the template it lives in", () => {
-    // The source is a `String.raw` template, so one backtick in a comment closes
-    // it and the whole module stops parsing — every test in this folder fails to
-    // collect at once, which reads like something far more interesting than a
-    // stray character. Made twice; pinned now.
-    expect(WUI_RUNTIME_SOURCE).not.toContain("`");
+  it("serialises to a self-contained function expression", () => {
+    // It used to be a `String.raw` template, and a backtick in a comment closed
+    // it and stopped the module parsing — three times. It is a real function
+    // now, so that hazard is gone and the code is type-checked; the hazard that
+    // REPLACES it is referencing something outside the function, which
+    // serialisation silently drops. `boot()` below runs the serialised text
+    // through `new Function`, so every other test in this file is that guard —
+    // this one just states it.
+    expect(WUI_RUNTIME_SOURCE.trimStart()).toMatch(/^function\b/);
+    expect(() => new Function(`return (${WUI_RUNTIME_SOURCE})`)()).not.toThrow();
   });
 
   it("gives the page the seven verbs and nothing else", () => {

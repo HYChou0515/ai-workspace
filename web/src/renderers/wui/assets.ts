@@ -47,8 +47,32 @@ const MEDIA_TYPES: Record<string, string> = {
   pdf: "application/pdf",
 };
 
-function mediaType(path: string): string | null {
-  return MEDIA_TYPES[path.toLowerCase().split(".").pop() ?? ""] ?? null;
+/**
+ * Extensions that are text however they are encoded.
+ *
+ * The whole point of the table above is that a Big5 `app.js` is a script, not a
+ * picture. But "not in the media table" cannot mean "text" on its own — that
+ * left `photo.jfif` (what Windows writes when you save a JPEG), `.tif`, `.heic`
+ * and an agent's own `chart.bin` as bare references the CSP then refused. So
+ * the two named lists decide what they know, and an extension in NEITHER falls
+ * back to what the bytes say.
+ */
+const TEXT_EXTENSIONS = new Set([
+  "js", "mjs", "cjs", "jsx", "ts", "tsx", "css", "html", "htm", "json", "jsonl",
+  "md", "markdown", "txt", "csv", "tsv", "yaml", "yml", "xml", "toml", "ini",
+  "cfg", "conf", "log", "sql", "py", "sh",
+]);
+
+/** `null` ⇒ text; a string ⇒ this is data, under that media type. */
+function classify(path: string, encoding: string): string | null {
+  const ext = path.toLowerCase().split(".").pop() ?? "";
+  if (MEDIA_TYPES[ext]) return MEDIA_TYPES[ext];
+  if (TEXT_EXTENSIONS.has(ext)) return null;
+  // Unknown extension: the bytes decide. Valid UTF-8 is text; anything else is
+  // data, and a generic type still renders — a browser content-sniffs an
+  // `<img>`, so a JPEG named `.jfif` works. (Not for `<video>`, which needs a
+  // real type — but an out-of-table video never worked, so nothing is lost.)
+  return encoding === "binary" ? "application/octet-stream" : null;
 }
 
 /**
@@ -100,13 +124,22 @@ export async function readAsset(fs: FileService, path: string): Promise<AssetRea
   try {
     content = await fs.readFile(path);
   } catch (err) {
-    if (err instanceof HttpError && err.status !== 404) {
-      return { kind: "failed", reason: err.message };
+    // Only the workspace service throws a typed error, and only it can tell
+    // "not there" from "not allowed": a 404 is absence, any other status is a
+    // fault worth showing. A `TypeError` is `fetch` failing to complete at all
+    // — a dropped connection — which is emphatically not absence and used to be
+    // filed as one. The KB and wiki services throw a plain `Error`, and only for
+    // a document they do not have, so absence stays the default for those.
+    if (err instanceof HttpError) {
+      return err.status === 404 ? { kind: "missing" } : { kind: "failed", reason: err.message };
+    }
+    if (err instanceof TypeError) {
+      return { kind: "failed", reason: `Could not reach the workspace to read ${path}.` };
     }
     return { kind: "missing" };
   }
 
-  const type = mediaType(path);
+  const type = content.kind === "text" ? classify(path, content.encoding) : null;
   if (content.kind === "text") {
     // The workspace service decodes every file and returns `kind: "text"`,
     // flagging the non-UTF-8 ones as `binary` so anything can be opened in the
@@ -149,11 +182,14 @@ export function folderLoader(fs: FileService, folder: string): WuiLoad {
   };
 }
 
-/** Raised when the entry document itself is missing — the one absence that has
- * nothing to degrade to, so it is reported by name rather than swallowed. */
+/** Raised when the entry document itself cannot be opened — the one absence that
+ * has nothing to degrade to, so it is reported by name rather than swallowed. */
 export class WuiEntryMissing extends Error {
-  constructor(readonly entry: string) {
-    super(`This WUI has no ${entry} to open.`);
+  constructor(readonly entry: string, reason?: string) {
+    // The reason matters: telling a read-only viewer their page "has no
+    // index.html" is a false sentence about a file they can see in the tree,
+    // and it sends them looking for the wrong thing.
+    super(reason ?? `This WUI has no ${entry} to open.`);
     this.name = "WuiEntryMissing";
   }
 }
@@ -161,9 +197,14 @@ export class WuiEntryMissing extends Error {
 /** Build the document for a WUI folder: read its entry, fold the folder in. */
 export async function buildWuiDoc(fs: FileService, folder: string, entry: string): Promise<WuiDoc> {
   const load = folderLoader(fs, folder);
-  const doc = await load(entry);
-  if (doc?.kind !== "text") throw new WuiEntryMissing(entry);
-  const built = await assembleWuiDoc(doc.text, load);
+  // Read the entry through the three-outcome reader rather than the loader,
+  // which collapses them: an entry that exists but could not be READ is not the
+  // same as one that is not there, and this is the one place a person is told.
+  const path = resolveInFolder(folder, entry);
+  const read = path === null ? ({ kind: "missing" } as const) : await readAsset(fs, path);
+  if (read.kind === "failed") throw new WuiEntryMissing(entry, read.reason);
+  if (read.kind === "missing" || read.asset.kind !== "text") throw new WuiEntryMissing(entry);
+  const built = await assembleWuiDoc(read.asset.text, load);
   // The entry is code by definition; `assembleWuiDoc` only sees what it pulls IN.
   return { ...built, used: [entry, ...built.used] };
 }

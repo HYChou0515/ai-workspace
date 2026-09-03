@@ -288,10 +288,12 @@ describe("WuiView", () => {
     expect(screen.getByText(/boom 119$/)).toBeInTheDocument();
     // And the gap is stated: a truncated transcript that reads as complete tells
     // the agent what happened and does not tell it that more did.
-    // And the gap is stated, with the CUMULATIVE count: trimming happens one at
-    // a time, so a marker counting only the last trim would say "1" after
-    // hundreds were lost.
-    expect(screen.getByText(/and 20 more reports in between, dropped/)).toBeInTheDocument();
+    // And the gap is stated, with the CUMULATIVE and CORRECT count. 120 pushed,
+    // 100 slots of which one holds the marker itself → 21 real reports lost.
+    // Both halves have been wrong here: a marker counting only the last trim
+    // said "1", and one that forgot its own slot said "20".
+    expect(screen.getByText(/and 21 more reports in between, dropped/)).toBeInTheDocument();
+    expect(screen.getAllByText(/boom /).length).toBe(MAX_REPORTS - 1);
   });
 
   it("does not tell the page about its own save", async () => {

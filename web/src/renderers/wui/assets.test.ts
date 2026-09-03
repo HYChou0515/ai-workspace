@@ -3,8 +3,22 @@ import { describe, expect, it, vi } from "vitest";
 
 import { decodeBytes } from "../../api/encoding";
 import type { FileService } from "../../api/fileService";
+import { HttpError } from "../../api/http";
 import type { FileContent } from "../../api/types";
-import { folderLoader } from "./assets";
+import { buildWuiDoc, readAsset, folderLoader } from "./assets";
+
+/** A service that fails the way the REAL one does: a typed error carrying a
+ * status. The old doubles threw a plain `Error`, so the branch that tells
+ * "not there" from "not allowed" could not be reached by any test — the double
+ * agreed with the gap. */
+function failing(err: unknown): FileService {
+  return {
+    readFile: vi.fn(async () => {
+      throw err;
+    }),
+    fileDownloadUrl: (path: string) => `/api/files${path}`,
+  } as unknown as FileService;
+}
 
 /**
  * A FileService stub that answers the way the REAL one does.
@@ -148,5 +162,46 @@ describe("folderLoader", () => {
 
     expect(await folderLoader(fs, "/sales")("logo.png")).toBeNull();
     vi.unstubAllGlobals();
+  });
+
+  it("calls a 404 absence and anything else a failure", async () => {
+    // Absence is ordinary and is deliberately not reported; a 403 for a
+    // read-only viewer is not, and filing it as absence made it silent.
+    expect((await readAsset(failing(new HttpError(404, "nope")), "/a.json")).kind).toBe("missing");
+    expect((await readAsset(failing(new HttpError(403, "forbidden")), "/a.json")).kind).toBe(
+      "failed",
+    );
+    expect((await readAsset(failing(new HttpError(500, "boom")), "/a.json")).kind).toBe("failed");
+  });
+
+  it("calls a dropped connection a failure, not an absence", async () => {
+    // `fetch` rejects with a TypeError when it cannot complete at all. This was
+    // named in the fix that introduced the three outcomes and not handled by it.
+    const read = await readAsset(failing(new TypeError("Failed to fetch")), "/a.json");
+
+    expect(read.kind).toBe("failed");
+  });
+
+  it("treats a plain error as absence, which is all the KB service means by one", async () => {
+    expect((await readAsset(failing(new Error("unknown KB document")), "/a.json")).kind).toBe(
+      "missing",
+    );
+  });
+});
+
+describe("buildWuiDoc", () => {
+  it("says the entry could not be READ, rather than that it is not there", async () => {
+    // "This WUI has no index.html to open" is a false sentence to show someone
+    // who can see index.html in the tree — and it sends them looking for the
+    // wrong thing.
+    await expect(buildWuiDoc(failing(new HttpError(403, "forbidden")), "/w", "index.html")).rejects.toThrow(
+      /forbidden/,
+    );
+  });
+
+  it("still says it plainly when the entry really is absent", async () => {
+    await expect(buildWuiDoc(failing(new HttpError(404, "nope")), "/w", "index.html")).rejects.toThrow(
+      /no index\.html/,
+    );
   });
 });

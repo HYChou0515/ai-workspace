@@ -21,16 +21,30 @@
  * page we did not write, so it must not assume a build step or a global.
  */
 
-/** The runtime, as the source of one function `(window, parent, document)`. */
-export const WUI_RUNTIME_SOURCE = String.raw`function (window, parent, document) {
+/**
+ * The runtime itself — a real function, not a template.
+ *
+ * It is serialised with `String(...)` rather than written as a string literal
+ * because a string literal is a trap: a backtick anywhere in it (in a COMMENT,
+ * typically) closes the template and the module stops parsing. That happened
+ * three times. As a function it is also type-checked, linted and formatted like
+ * the rest of the file.
+ *
+ * Two rules it must keep, because serialising a function drops its surroundings:
+ * it may reference NOTHING outside its own body — no import, no module
+ * constant — and it takes its globals as parameters. The tests run the
+ * serialised text through `new Function`, so a violation of the first rule
+ * fails there rather than in someone's browser.
+ */
+function wuiRuntime(window: any, parent: any, document: any): void {
   var PROTO = "wui/1";
-  var pending = {};
+  var pending: any = {};
   var seq = 0;
-  var fileListeners = [];
+  var fileListeners: any[] = [];
   var picking = false;
-  var box = null;
+  var box: any = null;
 
-  function post(msg) {
+  function post(msg: any) {
     // "*" because our own origin is "null" and cannot be named as a target.
     parent.postMessage(msg, "*");
   }
@@ -38,16 +52,22 @@ export const WUI_RUNTIME_SOURCE = String.raw`function (window, parent, document)
   // A blocked subresource announces itself TWICE — the element's error and the
   // policy violation — in an order that varies, so three broken references cost
   // six red lines. One line per URL, whichever arrives first.
-  var announced = {};
+  // No prototype: "constructor" and "toString" are perfectly good keys and an
+  // inherited truthy value would silence them.
+  var announced: any = Object.create(null);
 
-  function once(url) {
-    if (!url) return true;
+  function once(url: any) {
+    // An empty key says nothing, and a `data:` one says almost nothing —
+    // Chromium reports every blocked data: URL as the bare string "data", so
+    // keying on it silences EVERY later one and names none of them. Both are
+    // better reported twice than merged into one anonymous line.
+    if (!url || url === "data" || url.length > 200) return true;
     if (announced[url]) return false;
     announced[url] = 1;
     return true;
   }
 
-  function report(kind, message, detail) {
+  function report(kind: any, message: any, detail?: any) {
     // Capped: a message can contain a URL, and after inlining a URL can BE a
     // multi-megabyte data: payload. It is rendered in the pane and pushed into
     // the chat draft, so an uncapped one is a page freezing the app it reports
@@ -62,15 +82,15 @@ export const WUI_RUNTIME_SOURCE = String.raw`function (window, parent, document)
     });
   }
 
-  function send(verb, args) {
-    return new Promise(function (resolve, reject) {
+  function send(verb: any, args?: any) {
+    return new Promise(function (resolve: any, reject: any) {
       var id = String(++seq);
       pending[id] = { resolve: resolve, reject: reject };
       post({ proto: PROTO, id: id, verb: verb, args: args || {} });
     });
   }
 
-  window.addEventListener("message", function (ev) {
+  window.addEventListener("message", function (ev: any) {
     var m = ev.data;
     if (!m || m.proto !== PROTO) return;
 
@@ -78,8 +98,9 @@ export const WUI_RUNTIME_SOURCE = String.raw`function (window, parent, document)
       for (var i = 0; i < fileListeners.length; i++) {
         try {
           fileListeners[i](m.path);
-        } catch (e) {
-          report("error", "A file-changed handler threw: " + (e && e.message ? e.message : e));
+        } catch (thrown: any) {
+          var why = thrown && thrown.message ? thrown.message : thrown;
+          report("error", "A file-changed handler threw: " + why);
         }
       }
       return;
@@ -116,7 +137,7 @@ export const WUI_RUNTIME_SOURCE = String.raw`function (window, parent, document)
   // broken references in place to avoid.
   window.addEventListener(
     "error",
-    function (e) {
+    function (e: any) {
       var el = e.target;
       if (el && el.nodeType === 1) {
         var url = el.src || el.href || "";
@@ -133,7 +154,7 @@ export const WUI_RUNTIME_SOURCE = String.raw`function (window, parent, document)
 
   // The other half of the same silence: anything the page reaches for that the
   // policy refuses. The browser names it in a console nobody here can open.
-  window.addEventListener("securitypolicyviolation", function (e) {
+  window.addEventListener("securitypolicyviolation", function (e: any) {
     if (!once(e.blockedURI)) return;
     report(
       "error",
@@ -145,7 +166,7 @@ export const WUI_RUNTIME_SOURCE = String.raw`function (window, parent, document)
     );
   });
 
-  window.addEventListener("unhandledrejection", function (e) {
+  window.addEventListener("unhandledrejection", function (e: any) {
     var r = e.reason;
     report("error", r && r.message ? r.message : String(r));
   });
@@ -156,7 +177,7 @@ export const WUI_RUNTIME_SOURCE = String.raw`function (window, parent, document)
   // agent-written code and would otherwise inherit into, or paint over, the one
   // affordance that has to keep working when the page does not.
 
-  function outline() {
+  function outline(): any {
     if (box) return box;
     box = document.createElement("div");
     box.setAttribute("data-wui-pick", "");
@@ -167,7 +188,7 @@ export const WUI_RUNTIME_SOURCE = String.raw`function (window, parent, document)
     return box;
   }
 
-  function draw(el) {
+  function draw(el: any) {
     var r = el.getBoundingClientRect();
     var b = outline();
     b.style.display = "block";
@@ -177,7 +198,7 @@ export const WUI_RUNTIME_SOURCE = String.raw`function (window, parent, document)
     b.style.height = r.height + "px";
   }
 
-  function styleSummary(el) {
+  function styleSummary(el: any) {
     var cs = window.getComputedStyle ? window.getComputedStyle(el) : null;
     if (!cs) return {};
     var keep = [
@@ -185,12 +206,12 @@ export const WUI_RUNTIME_SOURCE = String.raw`function (window, parent, document)
       "background-color", "font-size", "flex-direction", "grid-template-columns",
       "text-align", "white-space",
     ];
-    var out = {};
+    var out: any = {};
     for (var i = 0; i < keep.length; i++) out[keep[i]] = cs.getPropertyValue(keep[i]);
     return out;
   }
 
-  function marker(el) {
+  function marker(el: any) {
     // An optional aid: a page that labels its parts makes a pick near-certain to
     // land on the right code. Absent, the HTML and styles still identify it.
     for (var n = el; n; n = n.parentElement) {
@@ -201,17 +222,17 @@ export const WUI_RUNTIME_SOURCE = String.raw`function (window, parent, document)
 
   // An event's target is not always an element — a click can land on the
   // document itself, and this code must not be the thing that throws.
-  function element(t) {
+  function element(t: any) {
     return t && t.nodeType === 1 && t !== box ? t : null;
   }
 
-  function onMove(e) {
+  function onMove(e: any) {
     var el = element(e.target);
     if (!picking || !el) return;
     draw(el);
   }
 
-  function onPick(e) {
+  function onPick(e: any) {
     var el = element(e.target);
     if (!picking || !el) return;
     e.preventDefault();
@@ -226,7 +247,7 @@ export const WUI_RUNTIME_SOURCE = String.raw`function (window, parent, document)
     setPicking(false);
   }
 
-  function setPicking(on) {
+  function setPicking(on: any) {
     picking = on;
     if (box) box.style.display = "none";
     if (on) document.body.style.cursor = "crosshair";
@@ -237,19 +258,21 @@ export const WUI_RUNTIME_SOURCE = String.raw`function (window, parent, document)
   document.addEventListener("click", onPick, true);
 
   window.workspace = {
-    listFiles: function (prefix) { return send("listFiles", { prefix: prefix || "" }); },
-    readFile: function (path) { return send("readFile", { path: path }); },
-    writeFile: function (path, text) { return send("writeFile", { path: path, text: text }); },
-    deleteFile: function (path) { return send("deleteFile", { path: path }); },
-    openFile: function (path) { return send("openFile", { path: path }); },
+    listFiles: function (prefix?: any) { return send("listFiles", { prefix: prefix || "" }); },
+    readFile: function (path: any) { return send("readFile", { path: path }); },
+    writeFile: function (path: any, text: any) { return send("writeFile", { path: path, text: text }); },
+    deleteFile: function (path: any) { return send("deleteFile", { path: path }); },
+    openFile: function (path: any) { return send("openFile", { path: path }); },
     whoami: function () { return send("whoami"); },
     // The page's only way to reach anything outside itself — it has no network
     // of its own, and a credential never comes in here to be spent.
-    callTool: function (name, args) { return send("callTool", { name: name, args: args || {} }); },
-    onFileChanged: function (fn) { fileListeners.push(fn); },
+    callTool: function (name: any, args?: any) { return send("callTool", { name: name, args: args || {} }); },
+    onFileChanged: function (fn: any) { fileListeners.push(fn); },
   };
-}`;
+}
 
+/** The runtime, as the source of one function `(window, parent, document)`. */
+export const WUI_RUNTIME_SOURCE: string = String(wuiRuntime);
 /** The runtime as a `<script>` body, ready to inject into the assembled page. */
 export function wuiRuntimeScript(): string {
   return `(${WUI_RUNTIME_SOURCE})(window, parent, document);`;

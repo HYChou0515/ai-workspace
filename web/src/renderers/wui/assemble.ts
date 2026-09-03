@@ -89,7 +89,7 @@ function safeScriptText(code: string): string {
  * it is a list with descriptors rather than one reference, and an agent writing
  * one gets a page that renders from `src` instead of a broken rewrite. */
 const MEDIA_REFS: ReadonlyArray<readonly [string, string]> = [
-  ["img[src], source[src], video[src], audio[src], embed[src]", "src"],
+  ["img[src], source[src], video[src], audio[src]", "src"],
   ["video[poster]", "poster"],
   ["image[href]", "href"],
 ];
