@@ -152,3 +152,4 @@ async def test_a_lock_that_no_longer_matches_the_manifest_is_said_out_loud() -> 
     told = b"".join(said).decode()
     assert "uv add" in told, "the person needs the route, not just the diagnosis"
     assert ["uv", "sync", "--frozen"] in sb.calls, "and the sync still happens"
+

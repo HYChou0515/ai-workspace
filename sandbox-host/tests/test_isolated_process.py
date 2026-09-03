@@ -364,3 +364,32 @@ async def test_the_tool_view_is_never_handed_to_the_sandboxs_own_uid(tmp_path):
     chowned = {p for p, _uid in chowns}
     assert chowned, "the workspace itself is still chowned"
     assert not any(str(view) in str(p) for p in chowned)
+
+
+async def test_the_download_cache_is_per_uid_and_outlives_the_sandbox(isolated):
+    """#775 — where uv keeps its downloads decides whether "sync on every cold
+    start" is cheap or a network round trip every time.
+
+    A reaped sandbox is rmtree'd WHOLE, so a cache inside it buys nothing: each
+    cold start would re-fetch the stack, and a failed sync stops the turn by
+    design, so an index having a bad day would stop everyone. The cache
+    therefore lives beside the sandboxes rather than inside one.
+
+    Keyed by UID, never shared. The uid is derived from the item and stable
+    across rebuilds, so it survives the reap; and a shared WRITABLE cache would
+    be a cross-item hole rather than a saving — uv hardlinks cache files into
+    the venv, so one item could rewrite a file another is executing, and the
+    lock's hashes are checked at install time and never again.
+    """
+    h = await isolated.create(SandboxSpec())
+    uid = isolated._identities[h.id].uid
+
+    _argv, _cwd, env = isolated._exec_argv(h, ["true"])
+
+    cache = Path(env["UV_CACHE_DIR"])
+    assert cache.name == str(uid), "one cache per uid, so no item can write another's"
+    root = Path(isolated._require(h))
+    assert root != cache and root not in cache.parents, (
+        "inside the sandbox it would be rmtree'd with it — not surviving the reap is the "
+        "one thing this must not do"
+    )
