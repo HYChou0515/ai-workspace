@@ -214,8 +214,40 @@ Flat integers, one commit each.
 `file_changed` forwarding (decision 9) rides with P2, since it is the same
 channel and an editor without it is unsafe.
 
+### After the first five: pages that have a build
+
+P1–P5 assumed the files in the folder ARE the page. Once a page can be written
+with a bundler that stops being true — the folder holds `src/` (edited) and
+`dist/` (rendered), and nothing keeps them together. A `src/` edit with no
+rebuild leaves the reader looking at the old page with nothing saying why, which
+is the only SILENT failure on this path.
+
+A staleness warning was designed and then dropped: telling someone their page
+might be out of date is worse than either rebuilding it or leaving it alone.
+
+- **P1 — the build route.** `POST …/wui/build`, streaming the build's own output
+  as SSE. `package.json`'s `scripts.build` decides what a build is (a command
+  named in the view file would let an LLM-written page choose what a human's
+  click executes); the verb is `execute`, the same one a notebook cell needs.
+- **P2 — a build that survives a recycle.** `node_modules/` is not mirrored, so
+  the build installs first — `--frozen-lockfile` where there is a lock. Without
+  this, the first click after a recycle fails and the remedy is "get someone to
+  run pnpm install", which is the friction a WUI exists to remove.
+- **P3 — the pane.** A **Rebuild** button for pages that have a build, the log on
+  screen while it runs, and **"Rebuild when I open this"** — on by default,
+  per page and per viewer, turning itself off for a viewer a 403 says may not run
+  things here. Rebuilding on open is the only setting under which staleness is
+  impossible rather than unlikely; it is a choice because the cost (a sandbox
+  waking, tens of seconds) is real.
+- **P4 — the claim ledger.** The skill, the react example's README and
+  `docs/wui.md` all said the AI rebuilding in the same turn was the only defence.
+  It is still worth doing — the automatic build protects the next person to OPEN
+  the page, not the one already looking at it — but it is no longer the only one.
+
 ## Deliberately not built
 
+- Detecting staleness. Under "rebuild on open" there is nothing to detect, and a
+  warning that a page MIGHT be old asks the reader to do the platform's job.
 - Auto-reload, live data push, write throttling, tool concurrency limits (10).
 - Screenshots and source maps in the pick report (13).
 - Entity access from the bridge (14).

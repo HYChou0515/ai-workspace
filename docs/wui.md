@@ -109,12 +109,31 @@ React app 丟進資料夾，元件掛載、state 隨點擊更新、在 `useEffec
 | `inlineDynamicImports: true` | lazy chunk 沒被進入點引用，不會內嵌，點下去才壞 |
 | `entry: dist/index.html` 寫進 yaml | 不寫的話預設找資料夾根目錄的 `index.html` |
 
+### 誰負責重建
+
+`src/` 改了、`dist/` 沒重建，頁面就會**安靜地**停在舊版本——這是這條路上唯一一種
+沒有任何訊息的失敗。所以重建這件事放在看得到的地方：
+
+- 有 build 的頁面，Refresh 旁邊會多一顆 **Rebuild**，按下去**邊跑邊把 build 的輸出
+  印在頁面上方**。build 動輒數十秒、而且改到一半失敗是常態，編譯器講的話就是全部的
+  價值，只給一顆轉圈圈等於什麼都沒給。
+- 旁邊有一個 **「Rebuild when I open this」** 的勾選框，**預設是開的**：只要是打開
+  這個頁面，就不可能看到過期的版本。它是「選項」而不是「規則」，因為代價是真的
+  ——每次開都要叫醒 sandbox、等數十秒——所以是**逐頁**記住的（同一個人可以讓快的
+  頁面自動建、慢的不要）。
+- 只能讀、不能執行的人（沒有 `execute`）按不動，也不會每次開頁都被拒絕一次：
+  自動重建收到 403 就自己關掉並說明原因（只有 403，避免一次網路抖動就永久關掉）。
+
+Refresh **不會** build，它只是重讀資料夾。所以 AI 改完 `src/` 還是要在**同一輪**
+裡自己 rebuild：自動重建保護的是「下次打開的人」，不是「現在正看著這頁的人」。
+
 !!! warning "`node_modules` 不會被保存"
 
     鏡像的預設忽略清單有它（`sync/ignore.py`）。**這對執行期沒有影響**——頁面跑的是
-    `dist/` 裡的普通檔案，執行期不需要 `node_modules`。它只在 AI 要 rebuild 時需要，
-    而那時 sandbox 是熱的；被回收過就重跑一次 `pnpm install --frozen-lockfile`，
-    lock 保證裝出同一份東西。
+    `dist/` 裡的普通檔案，執行期不需要 `node_modules`。但 sandbox 被回收過之後，
+    相依就不見了。所以 Rebuild 這條路是**先 install 再 build**（有 lock 就
+    `--frozen-lockfile`，沒有就寫一份出來）：熱的時候多花約一秒，冷的時候會自己長回來，
+    不需要有人知道「要先跑 pnpm install」。
 
     **但是：`pnpm` 的 store 一定要和 item 目錄在同一個檔案系統。** pnpm 是用硬連結把
     store 連進 `node_modules` 的，跨檔案系統會靜默退化成整份複製（實測 `links=2`

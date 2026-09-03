@@ -157,6 +157,7 @@ def test_the_skill_points_at_both_examples():
     for name in EXAMPLES:
         assert f"examples/{name}/" in body, name
 
+
 def test_the_built_example_points_at_its_build_output(payload: dict[str, bytes]):
     """`entry:` is the whole difference. Without it the renderer opens the
     folder's root `index.html` — the bundler's TEMPLATE, which loads
@@ -188,13 +189,19 @@ def test_the_built_example_declares_its_dependencies(payload: dict[str, bytes]):
     assert "build" in pkg["scripts"]
 
 
-def test_the_built_example_says_the_rebuild_step_out_loud(payload: dict[str, bytes]):
+def test_the_built_example_says_who_rebuilds_and_when(payload: dict[str, bytes]):
     """The one silent failure on this path: editing `src/` changes nothing until
-    a rebuild, and the user is left looking at the old page. Writing it down is
-    the whole mitigation, so it has to actually be written down."""
+    a rebuild, and the user is left looking at the old page.
+
+    The pane now covers the person who OPENS the page — it rebuilds on open, and
+    there is a button. It does not cover the person already looking at it while
+    the agent edits: they press Refresh and see the old build. So the README has
+    to say BOTH halves; saying only the automatic one would teach the agent it
+    can skip the step that protects the reader in front of it."""
     readme = payload[f"examples/{BUILT}/README.md"].decode()
 
-    assert "rebuild" in readme.lower()
+    assert "rebuild in the same turn as the edit" in readme.lower()
+    assert "rebuild when i open this" in readme.lower()
     assert "--frozen-lockfile" in readme
 
 
