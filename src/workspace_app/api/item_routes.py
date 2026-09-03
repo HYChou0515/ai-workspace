@@ -500,12 +500,17 @@ def register_item_routes(
             some), hence the KeyError tolerance."""
             conv_rm = spec.get_resource_manager(Conversation)
             run_rm = spec.get_resource_manager(WorkflowRun)
+            satellite_rms = []
+            for satellite in (ConversationGoal, ConversationTodos, _GoalStretch):
+                # Resolved OUTSIDE the per-row suppress: only "this deploy never
+                # registered the model" is tolerable here — a KeyError from
+                # inside a delete would be a real failure to surface.
+                with contextlib.suppress(KeyError):
+                    satellite_rms.append(spec.get_resource_manager(satellite))
             for cid in conv_ids:
-                for satellite in (ConversationGoal, ConversationTodos, _GoalStretch):
-                    with contextlib.suppress(
-                        KeyError, ResourceIDNotFoundError, ResourceIsDeletedError
-                    ):
-                        spec.get_resource_manager(satellite).permanently_delete(cid)
+                for satellite_rm in satellite_rms:
+                    with contextlib.suppress(ResourceIDNotFoundError, ResourceIsDeletedError):
+                        satellite_rm.permanently_delete(cid)
                 with contextlib.suppress(ResourceIDNotFoundError):
                     conv_rm.permanently_delete(cid)
             for rid in run_ids:
@@ -530,6 +535,13 @@ def register_item_routes(
             await turn_engine.forget(item_id)
             for cid in conv_ids:
                 await turn_engine.forget(cid)
+            # Once more, idempotently: between the first close and the forgets
+            # above, an in-flight turn's next file op may have re-acquired a
+            # fresh session for the same shared dir (#345's designed recovery).
+            # A second close reaps exactly that milliseconds-wide re-acquire,
+            # so the purge below cannot race a resurrected sandbox and the
+            # mirror sweeper has nothing left to write back.
+            await registry.close_session(item_id)
             # The ADDRESS row goes too. `close` deliberately keeps it (a stale
             # row is harmless; deleting one risks erasing a peer's live
             # rebuild), but after THIS cascade there is no item left for a

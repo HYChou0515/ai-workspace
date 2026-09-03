@@ -250,7 +250,11 @@ async def test_deleting_an_item_tears_down_its_environment_and_forgets_the_addre
     resp = client.delete(f"/a/rca/items/{item_id}")
 
     assert resp.status_code == 204, resp.text
-    assert closed == [item_id]
+    # TWICE, by design: once before anything destructive (SandboxBusy there
+    # refuses the whole delete), and once after the turn forgets — reaping a
+    # session an in-flight turn may have re-acquired in between, so the purge
+    # cannot race a resurrected sandbox.
+    assert closed == [item_id, item_id]
     assert spy.forgotten == [item_id]
 
 
