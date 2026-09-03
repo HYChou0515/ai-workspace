@@ -579,20 +579,35 @@ def create_app(
     # more inside the registry's heartbeat) — the #657 / #667 shape, on the
     # hottest path there is. Slug never changes; owner does, so the entry ages
     # out on the same window the usage measurement already trails by.
-    _item_facts: dict[str, tuple[float, str, str]] = {}
+    _item_facts: dict[str, tuple[float, str, str, float | None, int | None]] = {}
 
     def _facts_of(item_id: str) -> tuple[str, str]:
         """`(slug, owner)` for an item — one lookup, not one per question."""
+        return _all_facts_of(item_id)[:2]
+
+    def _all_facts_of(item_id: str) -> tuple[str, str, float | None, int | None]:
+        """`(slug, owner, cpu, memory)` — the item's own environment size rides
+        along on the lookup that was already happening.
+
+        Fetching it separately would have been a second store round trip on the
+        same hot path this cache exists to protect, for two fields that arrive
+        in the very record being read."""
         now = time.monotonic()
         hit = _item_facts.get(item_id)
         if hit is not None and now - hit[0] < _ITEM_FACT_TTL_S:
-            return hit[1], hit[2]
+            return hit[1], hit[2], hit[3], hit[4]
         found = find_work_item(spec, item_id)
-        slug, owner = (found[0], found[1].owner) if found is not None else ("", "")
+        if found is None:
+            slug, owner, cpu, mem = "", "", None, None
+        else:
+            slug, item = found[0], found[1]
+            owner = item.owner
+            cpu = getattr(item, "sandbox_cpu_cores", None)
+            mem = getattr(item, "sandbox_memory_bytes", None)
         if len(_item_facts) > _ITEM_FACT_MAX:  # bounded: this is a cache, not a map
             _item_facts.clear()
-        _item_facts[item_id] = (now, slug, owner)
-        return slug, owner
+        _item_facts[item_id] = (now, slug, owner, cpu, mem)
+        return slug, owner, cpu, mem
 
     def _limits_for(item_id: str) -> ResourceLimits | None:
         """This item's App's resolved ceilings, or None when the deploy passed
@@ -700,15 +715,58 @@ def create_app(
         limits = _limits_for(item_id)
         return workspace_quota if limits is None else limits.disk_bytes
 
-    def _spec_for(item_id: str) -> SandboxSpec:
-        """This item's sandbox spec: its App's resolved ceilings, looked up when
-        the sandbox is actually created. The item→App lookup is a store read, but
-        it only happens on a COLD acquire (once per sandbox lifetime), which is
-        already the expensive path."""
+    def _clamp_cpu(want: float | None, ceiling: float) -> float | None:
+        """`want` cores, held down to `ceiling` — where 0 means "no ceiling" and
+        None means "nobody stated a size", both of which pass straight through.
+
+        Never clamps on the way IN, only here on the way out: a stored value
+        above the budget is kept as written so the panel can say "you set 4,
+        2 is in effect", which is the difference between a setting that
+        disagrees with reality and one that explains itself."""
+        if want is None or not ceiling:
+            return want
+        return min(want, ceiling)
+
+    def _clamp_bytes(want: int | None, ceiling: int) -> int | None:
+        """The bytes twin of `_clamp_cpu`. Kept separate rather than made
+        generic over `float | int`: a union return would widen `memory_bytes`
+        from `int` to `int | float` and hand a fractional byte count to a cgroup
+        — which is precisely the check that caught this being written as one
+        helper."""
+        if want is None or not ceiling:
+            return want
+        return min(want, ceiling)
+
+    async def _spec_for(item_id: str) -> SandboxSpec:
+        """How big THIS item's sandbox may be — the one place that answers it.
+
+        Three inputs, in this order:
+
+        1. what the item itself asks for, when someone has said (`None` means
+           nobody has, and that is a real answer — see `WorkItemBase`);
+        2. otherwise the App's ceiling, which is the behaviour before per-item
+           sizing existed;
+        3. and either way, clamped by the OWNER's own budget.
+
+        The clamp is what stops a default from producing an item that can never
+        run: admission refuses when `incoming > limit`, so a 4-core App under a
+        2-core budget is a structural dead end rather than a queue — closing
+        other things would not help. Handing back the smaller number makes the
+        item runnable at the size the person can actually afford.
+
+        Clamping happens HERE, on the way out, and nowhere else. `would_cost`
+        and the create path both read this, so the gate weighs exactly what the
+        cgroup will get."""
         limits = _limits_for(item_id)
-        if limits is None:
-            return SandboxSpec()
-        return SandboxSpec(cpu_cores=limits.cpu_cores, memory_bytes=limits.memory_bytes)
+        _slug, owner, item_cpu, item_mem = _all_facts_of(item_id)
+        budget = await user_limits.for_user(owner) if owner else None
+
+        cpu = item_cpu if item_cpu is not None else (limits.cpu_cores if limits else None)
+        mem = item_mem if item_mem is not None else (limits.memory_bytes if limits else None)
+        return SandboxSpec(
+            cpu_cores=_clamp_cpu(cpu, budget.cpu if budget else 0.0),
+            memory_bytes=_clamp_bytes(mem, parse_size(budget.memory) if budget else 0),
+        )
 
     def _owner_of(item_id: str) -> str | None:
         """The debtor for an item's resources: its `owner` field (#687).

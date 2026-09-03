@@ -70,7 +70,7 @@ class InvestigationSession:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
-def _bare_spec(_item: str) -> SandboxSpec:
+async def _bare_spec(_item: str) -> SandboxSpec:
     """The spec every item gets when nothing App-specific is wired — i.e. what
     this registry handed out before per-App resources existed."""
     return SandboxSpec()
@@ -84,7 +84,12 @@ class InvestigationRegistry:
     # the registry only learns which item it is serving when `_acquire` runs.
     # One source, not a constant-plus-override pair — two ways to answer the
     # same question is how they end up disagreeing.
-    spec_for: Callable[[str], SandboxSpec] = _bare_spec
+    #
+    # Async because the answer now depends on the OWNER's own budget as well as
+    # the App's ceiling, and that is a store read. Keeping it sync would have
+    # meant applying the owner clamp somewhere else — which is precisely the
+    # "one rule, two places" shape this comment already warns about.
+    spec_for: Callable[[str], Awaitable[SandboxSpec]] = _bare_spec
     # #674: this item's third-party bundles, `{name: sha}`, for the wakes that
     # have no turn behind them — the human terminal, a workflow's deterministic
     # node, the file-op rebuild. What a sandbox mounts is a property of the ITEM
@@ -258,7 +263,7 @@ class InvestigationRegistry:
         "what is already held?" are the same measurement asked at two moments,
         so they read the same source — the backend's own ceilings, not the
         App's declaration."""
-        enforced = await self.sandbox.effective_limits(self.spec_for(item))
+        enforced = await self.sandbox.effective_limits(await self.spec_for(item))
         return ResourceLimits(
             cpu_cores=enforced.cpu_cores,
             memory_bytes=enforced.memory_bytes,
@@ -316,7 +321,7 @@ class InvestigationRegistry:
         never bind."""
         if self.activity is None:
             return
-        enforced = await self.sandbox.effective_limits(self.spec_for(item))
+        enforced = await self.sandbox.effective_limits(await self.spec_for(item))
         await self.activity.bump(
             item,
             owner=self.owner_of(item) or "",
@@ -441,7 +446,7 @@ class InvestigationRegistry:
         # not pay for a resolve on every wake.
         mounted = tools if tools is not None else await self._declared_tools(item)
         handle = await self.sandbox.create(
-            replace(self.spec_for(item), tools=mounted), sandbox_id=item
+            replace(await self.spec_for(item), tools=mounted), sandbox_id=item
         )
         logger.info(
             "registry: created sandbox handle %s for item %s (cold=%s)",

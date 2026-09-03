@@ -158,6 +158,45 @@ class WorkItemBase(Struct):
     query need ever appears, index it deliberately and delete these guards —
     do not smuggle a filter past them.)"""
 
+    sandbox_cpu_cores: float | None = None
+    """Tier 1 — how much CPU THIS item's environment may use, or None.
+
+    ``None`` is the whole design, not an empty slot: it means "nobody has said",
+    and the size is then resolved fresh every time from ``min(the App's ceiling,
+    the owner's own budget)``. Storing that resolved number here instead would
+    make it a copy that drifts — raise the owner's quota and a three-month-old
+    item still runs at the old size, looking entirely normal. The same reason a
+    configured context limit was refused in #767: a second copy of a fact is a
+    fact that will be wrong.
+
+    A CEILING, never a reservation. Choosing four cores costs the owner nothing
+    until a sandbox is actually alive: the per-person tally is derived from live
+    heartbeats (``quota.admission``), and a reservation would be exactly the
+    counter that module refuses to keep — one missed decrement and the quota is
+    gone for good, silently. A cgroup also only exists while a sandbox does, so
+    there would be nothing for a reservation to bind against.
+
+    Clamped on the way out, never on the way in: a value above the App's ceiling
+    or the owner's budget is kept as written and reported as reduced, because
+    silently trimming what someone typed is how a setting comes to disagree with
+    what it does.
+
+    ACCESS IS NOT ``write_meta`` — unlike ``env_vars`` and every other field
+    here, this one is written through its own route gated on
+    ``change_permission``. It decides how much of the OWNER's budget this item
+    may spend, which is a different grant from "may edit this item", and it must
+    stay out of reach of the item's own agent: ``AI_FORBIDDEN`` is what stops a
+    turn raising its own ceiling. Reading is ``read_chat`` — a collaborator who
+    is refused needs to see the number that refused them."""
+
+    sandbox_memory_bytes: int | None = None
+    """Tier 1 — how much memory THIS item's environment may use, or None.
+
+    The memory half of :attr:`sandbox_cpu_cores`; every word there applies. Held
+    in bytes because that is what a ``SandboxSpec`` carries and what a cgroup is
+    written with; the ``512M`` / ``2G`` spelling belongs to config and to the UI,
+    and is parsed by ``quota.limits.parse_size`` before it reaches here."""
+
     permission: Permission | None = None
     """Tier 1 — access control (#306). The SAME embedded ``Permission`` that
     governs collections / KbChat: ``visibility`` decides whether the per-verb grant
