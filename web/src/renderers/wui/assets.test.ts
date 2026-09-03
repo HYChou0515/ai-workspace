@@ -96,7 +96,7 @@ describe("folderLoader", () => {
     });
   });
 
-  it("treats a file with no media extension as TEXT, whatever its encoding", async () => {
+  it("keeps a KNOWN text extension as text, whatever its encoding", async () => {
     // The regression this pins: keying on `encoding` made a Big5 `app.js` an
     // image. It is not UTF-8 and it is still a script; the extension is what
     // says what a file is for.
@@ -106,6 +106,35 @@ describe("folderLoader", () => {
 
     expect((await load("app.js"))?.kind).toBe("text");
     expect((await load("data.csv"))?.kind).toBe("text");
+  });
+
+  it("falls back to a generic data URL for an unlisted extension it cannot decode", async () => {
+    // `photo.jfif` is what Windows writes when you save a JPEG, and neither
+    // list names it. Left as text it stays a bare reference the CSP refuses —
+    // a broken image in a WUI. A browser content-sniffs an `<img>`, so a
+    // generic type still renders.
+    //
+    // This pin is the point: the previous round deleted this fallback ALONG
+    // WITH the test that held it, which is exactly how a capability goes
+    // missing without anything turning red.
+    const fs = svc({ "/sales/photo.jfif": PNG, "/sales/thing.bin": PNG });
+    const load = folderLoader(fs, "/sales");
+
+    for (const name of ["photo.jfif", "thing.bin"]) {
+      const asset = await load(name);
+      expect(asset?.kind).toBe("binary");
+      expect(asset && "dataUrl" in asset && asset.dataUrl).toContain(
+        "data:application/octet-stream;base64,",
+      );
+    }
+  });
+
+  it("keeps an unlisted extension that DID decode as text", async () => {
+    // The fallback asks the bytes, not the name: a `.tpl` of ordinary UTF-8 is
+    // text, and turning it into a data URL would break a page that reads it.
+    const asset = await folderLoader(svc({ "/sales/page.tpl": "hello" }), "/sales")("page.tpl");
+
+    expect(asset).toEqual({ kind: "text", text: "hello" });
   });
 
   it("turns an SVG into a data URL, because it is text used as a picture", async () => {
@@ -194,9 +223,13 @@ describe("buildWuiDoc", () => {
     // "This WUI has no index.html to open" is a false sentence to show someone
     // who can see index.html in the tree — and it sends them looking for the
     // wrong thing.
-    await expect(buildWuiDoc(failing(new HttpError(403, "forbidden")), "/w", "index.html")).rejects.toThrow(
-      /forbidden/,
-    );
+    const opening = buildWuiDoc(failing(new HttpError(403, "forbidden")), "/w", "index.html");
+
+    // What matters is what it does NOT say. And the sentence it does say has to
+    // be one: `err.message` is "read /w/index.html failed: 403", an internal
+    // path and a bare number, shown to someone with no console to open.
+    await expect(opening).rejects.toThrow(/permission/i);
+    await expect(opening).rejects.not.toThrow(/no index\.html/);
   });
 
   it("still says it plainly when the entry really is absent", async () => {

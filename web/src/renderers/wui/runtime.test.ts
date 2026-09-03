@@ -163,6 +163,30 @@ describe("the WUI runtime", () => {
     expect(sent[0].message).toContain("app.js");
   });
 
+  it("reports one line per blocked URL however long the URL is", () => {
+    // A blocked ref announces itself twice (the element error and the policy
+    // violation). Skipping the dedup for long keys brought that back for any
+    // ordinary long URL — a signed CDN link is exactly that shape.
+    const long = "https://cdn.example/" + "a".repeat(400) + ".png";
+    const { sent, fire, fireCapture } = boot();
+
+    fireCapture("error", { target: Object.assign(document.createElement("img"), { src: long }) });
+    fire("securitypolicyviolation", { violatedDirective: "img-src", blockedURI: long });
+
+    expect(sent.filter((m) => m.report === "error")).toHaveLength(1);
+  });
+
+  it("still reports every blocked data: URL, which share one useless key", () => {
+    // Chromium reports them all as the bare string "data", so deduping on it
+    // silences every one after the first and names none of them.
+    const { sent, fire } = boot();
+
+    fire("securitypolicyviolation", { violatedDirective: "img-src", blockedURI: "data" });
+    fire("securitypolicyviolation", { violatedDirective: "script-src-elem", blockedURI: "data" });
+
+    expect(sent.filter((m) => m.report === "error")).toHaveLength(2);
+  });
+
   it("reports a CSP refusal, which is how a page reaching outward fails", () => {
     const { sent, fire } = boot();
 

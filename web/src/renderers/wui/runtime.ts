@@ -57,11 +57,16 @@ function wuiRuntime(window: any, parent: any, document: any): void {
   var announced: any = Object.create(null);
 
   function once(url: any) {
-    // An empty key says nothing, and a `data:` one says almost nothing —
-    // Chromium reports every blocked data: URL as the bare string "data", so
-    // keying on it silences EVERY later one and names none of them. Both are
-    // better reported twice than merged into one anonymous line.
-    if (!url || url === "data" || url.length > 200) return true;
+    // An empty key says nothing, and a "data" one says almost nothing —
+    // Chromium reports every blocked data: URL as that bare string, so keying
+    // on it silences EVERY later one and names none of them. Better reported
+    // twice than merged into one anonymous line.
+    //
+    // Length is NOT a reason to skip: a long key is still a unique one. A
+    // `url.length > 200` clause here brought back the double report for
+    // ordinary long URLs — a signed CDN link is exactly that shape — which is
+    // the defect this function exists to prevent, returning under another key.
+    if (!url || url === "data") return true;
     if (announced[url]) return false;
     announced[url] = 1;
     return true;

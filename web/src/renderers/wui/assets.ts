@@ -128,10 +128,25 @@ export async function readAsset(fs: FileService, path: string): Promise<AssetRea
     // "not there" from "not allowed": a 404 is absence, any other status is a
     // fault worth showing. A `TypeError` is `fetch` failing to complete at all
     // — a dropped connection — which is emphatically not absence and used to be
-    // filed as one. The KB and wiki services throw a plain `Error`, and only for
-    // a document they do not have, so absence stays the default for those.
+    // filed as one.
+    //
+    // Everything else falls to absence, and that is a WEAKER answer than it
+    // looks: `kbFileService` throws a plain `Error` for ANY non-ok status, so a
+    // KB 403 lands here as "not there". Fixing that means giving those services
+    // a typed failure of their own, which is theirs to do — this is where it
+    // would be read, not where it can be decided.
     if (err instanceof HttpError) {
-      return err.status === 404 ? { kind: "missing" } : { kind: "failed", reason: err.message };
+      if (err.status === 404) return { kind: "missing" };
+      // Not `err.message`: that is "read /w/index.html failed: 403", an
+      // internal path and a bare number shown to someone who cannot open a
+      // console. True, and not a sentence they can act on.
+      return {
+        kind: "failed",
+        reason:
+          err.status === 403
+            ? `You do not have permission to read ${path}.`
+            : `${path} could not be read (the workspace answered ${err.status}).`,
+      };
     }
     if (err instanceof TypeError) {
       return { kind: "failed", reason: `Could not reach the workspace to read ${path}.` };
@@ -139,8 +154,8 @@ export async function readAsset(fs: FileService, path: string): Promise<AssetRea
     return { kind: "missing" };
   }
 
-  const type = content.kind === "text" ? classify(path, content.encoding) : null;
   if (content.kind === "text") {
+    const type = classify(path, content.encoding);
     // The workspace service decodes every file and returns `kind: "text"`,
     // flagging the non-UTF-8 ones as `binary` so anything can be opened in the
     // editor. Whether this is a PICTURE is the extension's answer, not that
@@ -203,7 +218,13 @@ export async function buildWuiDoc(fs: FileService, folder: string, entry: string
   const path = resolveInFolder(folder, entry);
   const read = path === null ? ({ kind: "missing" } as const) : await readAsset(fs, path);
   if (read.kind === "failed") throw new WuiEntryMissing(entry, read.reason);
-  if (read.kind === "missing" || read.asset.kind !== "text") throw new WuiEntryMissing(entry);
+  if (read.kind === "missing") throw new WuiEntryMissing(entry);
+  if (read.asset.kind !== "text") {
+    // It IS there — saying it is not sends them looking for the wrong thing,
+    // which is the same false-sentence class the `failed` branch above exists
+    // to remove.
+    throw new WuiEntryMissing(entry, `${entry} is not a page this can open — a WUI's entry is HTML.`);
+  }
   const built = await assembleWuiDoc(read.asset.text, load);
   // The entry is code by definition; `assembleWuiDoc` only sees what it pulls IN.
   return { ...built, used: [entry, ...built.used] };
