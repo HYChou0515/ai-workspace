@@ -354,8 +354,9 @@ superuser 在同一頁的最下方多一個**個人額度**區塊,可以直接�
   `run_agent` 時可以多帶一個 `model` 參數、從這張清單裡挑一顆給 sub-agent 跑（例如把 grep 型子任務交給便宜的本地模型）；
   不帶＝sub-agent 照舊跟著這個對話的模型。**沒設或空清單＝這個參數整個不存在**，行為與從前完全相同。
   清單裡的名字必須存在於 `presets`，打錯開機就 raise。
-  **範圍**：只作用於 `run_agent`；workflow 的 agent 節點、`ask_knowledge_base`/`infer_modules`（KB sub-agent，模型來自上面
-  各自的 usage 清單第一條）、KB 聊天 picker 都**不讀**這個 key。
+  **範圍**：只作用於 `run_agent` 這個工具——聊天 turn 和 workflow 驅動的 turn 都拿得到這個參數（兩種 turn 共用同一條組裝路）。
+  **不歸它管的**：workflow 節點**自身**跑哪顆模型（workflow.json 沒有這語法）、`ask_knowledge_base`/`infer_modules`
+  （KB sub-agent，模型來自上面各自的 usage 清單第一條）、KB 聊天 picker。
 
 `allowed_tools` 是**三態**：省略（None）= 給預設工具集；`[]` = 明確清空；`[a,b,c]` = 就這些。
 

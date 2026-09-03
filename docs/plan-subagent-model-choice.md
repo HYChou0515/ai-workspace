@@ -79,8 +79,8 @@ to the child turn unchanged.
 
 | Entry point | Honours `agents.subagent_models`? |
 |---|---|
-| `run_agent` tool (app workspace turns) | **Yes** — this feature |
-| Workflow agent nodes | No — out of scope, caller is not an LLM |
+| `run_agent` tool (app workspace turns, chat AND workflow-driven — both shapes share `_common`) | **Yes** — this feature |
+| Workflow agent nodes' OWN model (workflow.json syntax) | No — out of scope, that caller is not an LLM |
 | `ask_knowledge_base` / `infer_modules` (SubagentBridge) | No — their model comes from `agents.kb_chat[]` / `agents.infer_modules[]` first entry, unchanged |
 | Interactive KB chat picker | No — human-facing picker, unchanged |
 
