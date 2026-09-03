@@ -152,11 +152,15 @@ Each of these was argued and settled; the reason is the part worth keeping.
     PM has plenty of special rules and they live inside PM. WUI is general, so
     coupling it to entities would make it "good in apps that have entities". A
     frontmatter helper belongs in the skill's example, or in an App's own skill.
-15. **Discovery is deliberately deferred** until the trial. The skill ships
-    `default_on: false` and testers switch it on per item (`attached_skill_prefs`,
-    #380) — no feature flag, nothing to remove later. Note the asymmetry: the
-    renderer ships to everyone, so a hand-written `view: wui` file works. What is
-    gated is whether the *agent* knows how, not whether the platform can.
+15. **Discovery is deliberately deferred** until the trial. The skill is
+    registered in `SHARED_SKILLS` but declared by **no app** — an app opts in
+    with one line in its `agent.skills` when it is ready. (Declaring it and
+    turning it off is not the same thing: a shared skill is default-ON unless the
+    profile pins an explicit `skills` list, and pinning one for `rca/default`
+    would change the defaults of four unrelated skills to hide this one.) No
+    feature flag, nothing to remove later. Note the asymmetry: the renderer ships
+    to everyone, so a hand-written `view: wui` file already works. What is gated
+    is whether the *agent* proposes one, not whether the platform can run one.
 
 ## Phases
 

@@ -1,0 +1,66 @@
+/* Plain CSS in the folder. No web fonts and no CDN — the page has no network,
+   so a stylesheet that reaches out simply does not arrive. */
+
+body {
+  font-family: system-ui, sans-serif;
+  font-size: 14px;
+  margin: 0;
+  padding: 16px;
+  color: #1a1a1a;
+  background: #fff;
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+h1 {
+  font-size: 18px;
+  margin: 0;
+}
+
+.status {
+  color: #666;
+}
+
+.status--bad {
+  color: #c22;
+}
+
+section {
+  margin-bottom: 16px;
+}
+
+input {
+  padding: 6px 8px;
+  margin-right: 6px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+
+button {
+  padding: 6px 10px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: #f6f6f6;
+  cursor: pointer;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid #eee;
+}
+
+.empty {
+  color: #888;
+}
