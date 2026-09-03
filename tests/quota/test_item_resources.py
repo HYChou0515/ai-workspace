@@ -407,3 +407,110 @@ def test_the_agent_can_never_hold_the_verb_that_sets_the_size():
     assert authorize(ai, "change_permission", everything_granted, created_by="alice") is False, (
         "an agent holding this verb could raise its own ceiling"
     )
+
+
+# ── P3: what a collaborator may see ──────────────────────────────────────
+
+
+def test_seeing_the_environment_needs_more_than_seeing_the_item_exists():
+    """`read_meta` is the discoverability verb — it puts a title in a dashboard
+    list and nothing else. Someone with only that never opens the workspace, so
+    there is no screen to put this on; granting it would open a route answering
+    "how big is that person's environment right now" to an audience with no use
+    for the answer. An authorisation with no consumer is only attack surface.
+
+    `read_chat` is "may enter this workspace", which is exactly where the panel
+    lives — the gate and the screen it guards line up, so they cannot drift.
+    """
+    with _app(PerUserResources(cpu=4.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        item = _mk(spec, "owner-alice", permission=_restricted(read_meta=["user:bob"]))
+
+        WHO["id"] = "bob"
+        assert client.get(f"/a/rca/items/{item}/environment").status_code in (403, 404)
+
+
+def test_a_collaborator_in_the_workspace_sees_this_items_environment():
+    with _app(PerUserResources(cpu=4.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        item = _mk(
+            spec,
+            "owner-alice",
+            cpu=1.5,
+            permission=_restricted(read_meta=["user:bob"], read_chat=["user:bob"]),
+        )
+
+        WHO["id"] = "bob"
+        got = client.get(f"/a/rca/items/{item}/environment")
+
+        assert got.status_code == 200, got.text
+        body = got.json()
+        assert body["stated_cpu_cores"] == 1.5, "what somebody set"
+        assert body["effective_cpu_cores"] == 1.5, "and what will actually apply"
+        assert body["running"] is False
+
+
+def test_the_environment_view_never_leaks_the_owners_other_items():
+    """The reason this is a separate route rather than reusing `/me/resources`.
+
+    That payload is scoped to ONE person and carries every environment they
+    hold, with titles. A collaborator needs to know why THIS item was refused,
+    not what else its owner is working on."""
+    with _app(PerUserResources(cpu=4.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        mine = _mk(
+            spec,
+            "owner-alice",
+            permission=_restricted(read_meta=["user:bob"], read_chat=["user:bob"]),
+        )
+        _mk(spec, "owner-alice")  # a second item bob has no business seeing
+
+        WHO["id"] = "bob"
+        body = client.get(f"/a/rca/items/{mine}/environment").json()
+
+        flat = str(body)
+        assert "cpu_in_use" not in flat, "the owner's total is not this route's business"
+        assert "live" not in flat
+
+
+def test_a_clamped_setting_reports_both_numbers():
+    """Never silently trim. Someone set 8 cores and can only have 2 — showing
+    only the 2 makes the panel disagree with what they typed, with nothing on
+    screen to explain it, and showing only the 8 would be a lie about what runs.
+
+    Both, so the UI can say WHICH limit bound. `_enforce_ceiling` already takes
+    this position at boot: a config above the ceiling fails loudly rather than
+    being trimmed behind the operator's back.
+    """
+    with _app(PerUserResources(cpu=2.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        item = _mk(spec, "alice", cpu=8.0)
+        body = client.get(f"/a/rca/items/{item}/environment").json()
+
+        assert body["stated_cpu_cores"] == 8.0, "kept as written"
+        assert body["effective_cpu_cores"] == 2.0, "and what actually applies"
+
+
+def test_running_is_reported_from_a_probe_of_this_item():
+    with _app(PerUserResources(cpu=4.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        item = _mk(spec, "alice")
+        assert client.get(f"/a/rca/items/{item}/environment").json()["running"] is False
+
+        _wake(client, item)
+        assert client.get(f"/a/rca/items/{item}/environment").json()["running"] is True

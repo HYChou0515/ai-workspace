@@ -76,6 +76,28 @@ class _ResourcesBody(BaseModel):
     memory: str | None = None
 
 
+class _EnvironmentOut(BaseModel):
+    """This ONE item's environment — for whoever is in the workspace.
+
+    Deliberately not `/me/resources`. That payload is scoped to a person and
+    lists every environment they hold, with titles; a collaborator needs to know
+    why THIS item was refused, not what else its owner is working on. So there
+    is no total here and no other item, and the tests say so.
+
+    `stated_*` is what somebody typed (``None`` = nobody has). `effective_*` is
+    what will actually be applied, after the App's ceiling and the owner's
+    budget have both had their say. They are reported separately because when
+    they differ the UI has to explain WHICH one bound rather than silently
+    showing the smaller number — a setting that quietly disagrees with what it
+    does is the failure this whole design keeps circling."""
+
+    running: bool
+    stated_cpu_cores: float | None
+    stated_memory_bytes: int | None
+    effective_cpu_cores: float | None
+    effective_memory_bytes: int | None
+
+
 class _ResourcesOut(BaseModel):
     """What was stored. Bytes on the way out because that is what a
     ``SandboxSpec`` carries and a cgroup is written with; the string spelling
@@ -312,6 +334,32 @@ def register_item_routes(
                 actor=me,
             )
         return PermissionOut(resource_id=item_id, visibility=new_perm.visibility, notified=notified)
+
+    @app.get("/a/{slug}/items/{item_id}/environment")
+    async def get_item_environment(slug: str, item_id: str) -> _EnvironmentOut:
+        """Is this item's environment running, how big is it, and who said so.
+
+        Gated on ``read_chat`` — "may enter this workspace", which is where the
+        panel lives. Higher than ``read_meta`` on purpose: that verb only puts a
+        title in a dashboard list, so its holder has no screen for this and no
+        use for the answer, and opening the route to them would be attack
+        surface with no consumer. Aligning the gate with the screen it guards is
+        also what stops the two drifting apart later.
+
+        `running` comes from a real probe of THIS item, not from
+        ``running_sandboxes()`` — that one answers for whichever replica took
+        the request, so an item missing from it may simply be on another pod.
+        It is safe to FIND things with and never safe to conclude absence from.
+        """
+        item, _created_by = _authorize_item(slug, item_id, "read_chat")
+        effective = await registry.spec_for(item_id)
+        return _EnvironmentOut(
+            running=await registry.has_live_sandbox(item_id),
+            stated_cpu_cores=getattr(item, "sandbox_cpu_cores", None),
+            stated_memory_bytes=getattr(item, "sandbox_memory_bytes", None),
+            effective_cpu_cores=effective.cpu_cores,
+            effective_memory_bytes=effective.memory_bytes,
+        )
 
     @app.put("/a/{slug}/items/{item_id}/resources")
     async def set_item_resources(slug: str, item_id: str, body: _ResourcesBody) -> _ResourcesOut:
