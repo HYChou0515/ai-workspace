@@ -109,6 +109,16 @@ ESCALATED_FIELDS: frozenset[str] = frozenset(
 )
 
 
+def _stored_of(context: Any) -> Any:
+    """The resource as currently stored, or None.
+
+    Named here rather than inlined so the field name has ONE spelling. The
+    module's own `_current` already knew it; a second reader guessing a shorter
+    name is what turned an escalation into a blanket refusal."""
+    snap = _current(context)
+    return getattr(snap, "data", None) if snap is not None else None
+
+
 def _patch_touches_permission(patch: Any) -> bool:
     """True when a PATCH body names any :data:`ESCALATED_FIELDS` member, across
     both patch flavors: RFC 7386 merge (``MergePatch``, a ``dict`` subclass →
@@ -116,7 +126,15 @@ def _patch_touches_permission(patch: Any) -> bool:
     ``/<field>…`` path)."""
     if isinstance(patch, dict):
         return any(f in patch for f in ESCALATED_FIELDS)
-    ops = getattr(patch, "patch", None)
+    # specstar binds `patch_data.patch`, so RFC 6902 arrives as a plain LIST of
+    # ops — not an object with a `.patch` attribute. Reaching for that attribute
+    # made this whole branch dead: every json-patch write skipped the escalation,
+    # including the `permission` one this module's docstring promises ("generic
+    # PUT/PATCH can't be used to rewire access control"). The FE's own
+    # `patchAppItemFields` sends 6902, so that was the ordinary path, not a
+    # corner. The existing test passed a real `jsonpatch.JsonPatch` object, which
+    # is a shape specstar never delivers — a double that agreed with the bug.
+    ops = patch if isinstance(patch, list) else getattr(patch, "patch", None)
     if isinstance(ops, list):
         return any(
             isinstance(op, dict)
@@ -170,9 +188,43 @@ class CollectionPermissionChecker(IPermissionChecker):
             return self._check_write(context)
         if action in _OWNER_ACTIONS:
             return self._check_owner(context)
-        # reads / create / everything else — access_scope governs reads, and
-        # create has no current row; voice no opinion (allow).
+        if action == ResourceAction.create:
+            return self._check_create(context)
+        # reads / everything else — access_scope governs reads.
         return PermissionResult.allow
+
+    def _check_create(self, context: Any) -> PermissionResult:
+        """A create may not STATE an escalated field.
+
+        "No current row" answers the question `_rewrites_permission` asks —
+        does this differ from what is stored — and that made create look like
+        nothing to have an opinion about. It is a different question from "may
+        you say this at all", and for the environment sizes the answer is no:
+        they are gated on `change_permission` at their own route precisely
+        because they spend the item owner's compute budget, and a create can
+        name any `owner` it likes.
+
+        `memory 0` was the sharp end — the cgroup reads it as `max` (unlimited)
+        while admission charges `memory_bytes or 0`, i.e. nothing.
+
+        `permission` is deliberately NOT in this check: setting an item's
+        visibility at create is how a private item comes to exist, and the
+        creator is its owner."""
+        new = getattr(context, "data", UNSET)
+        if new is UNSET or new is None:
+            return PermissionResult.allow
+        stated = [
+            f
+            for f in ESCALATED_FIELDS
+            if f != "permission" and getattr(new, f, None) is not None
+        ]
+        if not stated:
+            return PermissionResult.allow
+        logger.warning(
+            "checker: refusing create that states %s — set it from the item's own route",
+            ", ".join(sorted(stated)),
+        )
+        return PermissionResult.deny
 
     def required_resource_parts(self, action: ResourceAction) -> frozenset[ResourcePart]:
         if action in _WRITE_META_ACTIONS:
@@ -197,8 +249,14 @@ class CollectionPermissionChecker(IPermissionChecker):
         # A whole-object write carries every field, so "differs from what is
         # stored" is the only usable test for the others — the same one already
         # applied to `permission` above.
-        current = getattr(context, "current", None)
-        held = getattr(current, "data", None) if current is not None else None
+        #
+        # `current_resource` is the field name, and getting it wrong was not a
+        # small miss: `held` became None, `getattr(None, field, UNSET)` became
+        # UNSET, and the stored default is `None` — so `None != UNSET` marked
+        # EVERY whole-object write on EVERY App's items as privileged. Ordinary
+        # closes turned into 500s, because `close_app_item` calls `rm.update`
+        # directly and nothing maps `PermissionDeniedError` to a status.
+        held = _stored_of(context)
         return any(
             getattr(new, f, UNSET) is not UNSET
             and getattr(new, f, UNSET) != getattr(held, f, UNSET)

@@ -88,22 +88,33 @@ def _mk(
     memory: int | None = None,
     permission: Permission | None = None,
 ) -> str:
-    """Named rather than `**kwargs`: a splatted dict types as a union, and ty
-    stops checking which field got which value — the exact way a test can call
-    something wrong and still be green."""
-    return (
-        spec.get_resource_manager(RcaInvestigation)
-        .create(
-            RcaInvestigation(
-                title="t",
-                owner=owner,
-                sandbox_cpu_cores=cpu,
-                sandbox_memory_bytes=memory,
-                permission=permission,
+    """An item, and its size set the way production sets it.
+
+    The size is NOT written at create: a create may not state one — that was the
+    third open door the review found, and a fixture that seeded the row directly
+    would be a fourth, testing a state the product cannot reach.
+
+    It is applied afterwards under `rm.using(created_by)`, which is exactly what
+    `set_item_resources` does: the owner bypass in `authorize` is what lets a
+    `change_permission` delegate persist without holding `write_meta`.
+
+    Named parameters rather than `**kwargs`: a splatted dict types as a union
+    and ty stops checking which field got which value, which is how a test calls
+    something wrong and stays green."""
+    import msgspec
+
+    rm = spec.get_resource_manager(RcaInvestigation)
+    item = rm.create(RcaInvestigation(title="t", owner=owner, permission=permission)).resource_id
+    if cpu is not None or memory is not None:
+        rev = rm.get(item)
+        data = rev.data
+        assert isinstance(data, RcaInvestigation)
+        with rm.using(WHO["id"]):
+            rm.update(
+                item,
+                msgspec.structs.replace(data, sandbox_cpu_cores=cpu, sandbox_memory_bytes=memory),
             )
-        )
-        .resource_id
-    )
+    return item
 
 
 def _wake(client: ApiTestClient, item: str) -> None:
@@ -926,3 +937,198 @@ def test_the_refusal_still_names_the_items_the_reader_can_see():
 
         holding = refused.json()["detail"]["holding"]
         assert [h["title"] for h in holding] == ["晶圓良率分析"]
+
+
+# ── the regression MY fix introduced ────────────────────────────────────
+
+
+def test_closing_an_item_still_works_for_someone_who_is_not_the_owner():
+    """Regression review F1. My escalation read `context.current`; specstar's
+    field is `current_resource`.
+
+    So `held` was always None, `getattr(None, "sandbox_cpu_cores", UNSET)` was
+    UNSET, and `WorkItemBase.sandbox_cpu_cores` defaults to `None` — so
+    `None != UNSET` made EVERY whole-object write on EVERY WorkItem look like a
+    privileged edit. Everyone except the owner and superusers was refused, and
+    `close_app_item` calls `rm.update` directly with no handler for
+    `PermissionDeniedError`, so an ordinary close became a 500.
+
+    One wrong attribute name, and the blast radius was every App's every item.
+    """
+    with _app(PerUserResources(cpu=4.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        item = _mk(spec, "alice", permission=Permission(visibility="public"))
+
+        WHO["id"] = "carol"
+        closed = client.post(f"/a/rca/items/{item}/close", json={"status": "resolved"})
+
+        assert closed.status_code in (200, 204), closed.text
+
+
+def test_a_whole_object_write_that_changes_nothing_privileged_is_allowed():
+    """The same regression from the other side: read the item, put it back
+    unchanged. Every field matches what is stored, so nothing privileged is
+    being written and `write_meta` is the right bar."""
+    with _app(PerUserResources(cpu=4.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        item = _mk(
+            spec,
+            "owner-alice",
+            permission=_restricted(read_meta=["user:bob"], write_meta=["user:bob"]),
+        )
+
+        WHO["id"] = "bob"
+        current = client.get(f"/rca-investigation/{item}").json()["data"]
+        put_back = client.put(f"/rca-investigation/{item}", json=current)
+
+        assert put_back.status_code == 200, put_back.text
+
+
+def test_a_whole_object_write_that_raises_the_size_is_still_refused():
+    """…and the control for the control. Fixing the over-block must not undo
+    the block."""
+    with _app(PerUserResources(cpu=4.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        item = _mk(
+            spec,
+            "owner-alice",
+            permission=_restricted(read_meta=["user:bob"], write_meta=["user:bob"]),
+        )
+
+        WHO["id"] = "bob"
+        current = client.get(f"/rca-investigation/{item}").json()["data"]
+        current["sandbox_cpu_cores"] = 999.0
+
+        assert client.put(f"/rca-investigation/{item}", json=current).status_code == 403
+
+
+def test_a_json_patch_cannot_raise_the_size_either():
+    """Regression review F2 — and the format the FE actually sends.
+
+    specstar binds `patch_data.patch`, so RFC 6902 arrives as a plain LIST of
+    ops. The escalation reached for a `.patch` attribute on it, so the whole
+    branch was dead and every json-patch write skipped the check. My commit
+    message claimed "both patch flavours are covered"; it was covering one.
+
+    The existing test for this passed a real `jsonpatch.JsonPatch` object — a
+    shape specstar never delivers — so the double agreed with the bug.
+    """
+    with _app(PerUserResources(cpu=4.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        item = _mk(spec, "alice", permission=Permission(visibility="public"))
+
+        WHO["id"] = "carol"  # no grants at all
+        smuggled = client.patch(
+            f"/rca-investigation/{item}",
+            json=[{"op": "replace", "path": "/sandbox_cpu_cores", "value": 999.0}],
+        )
+
+        assert smuggled.status_code == 403, smuggled.text
+
+
+def test_a_json_patch_cannot_rewire_access_either():
+    """The pre-existing half of the same dead branch, and the sharper one.
+
+    `perm/checker`'s module docstring promises that a generic PUT/PATCH cannot
+    be used to rewire access control. Through 6902 it could: a stranger could
+    grant themselves `change_permission` on somebody else's item. That defect
+    predates this branch — the escalation was written for merge-patch and never
+    reached the other flavour — but it is the same line, so it is fixed and
+    pinned here rather than left for whoever meets it next.
+    """
+    with _app(PerUserResources(cpu=4.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        item = _mk(spec, "alice", permission=Permission(visibility="public"))
+
+        WHO["id"] = "carol"
+        escalation = client.patch(
+            f"/rca-investigation/{item}",
+            json=[
+                {"op": "replace", "path": "/permission/change_permission", "value": ["user:carol"]}
+            ],
+        )
+
+        assert escalation.status_code == 403, escalation.text
+
+
+def test_a_json_patch_of_an_ordinary_field_still_works():
+    """The control. The FE patches titles and statuses this way all day."""
+    with _app(PerUserResources(cpu=4.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        item = _mk(
+            spec,
+            "owner-alice",
+            permission=_restricted(read_meta=["user:bob"], write_meta=["user:bob"]),
+        )
+
+        WHO["id"] = "bob"
+        got = client.patch(
+            f"/rca-investigation/{item}",
+            json=[{"op": "replace", "path": "/title", "value": "renamed"}],
+        )
+
+        assert got.status_code == 200, got.text
+
+
+def test_the_auto_crud_create_cannot_set_a_size_either():
+    """Regression review F3 — the third door, and the one carrying the sharp end.
+
+    `POST /rca-investigation` is specstar's own create route, and the checker
+    votes `allow` for create because there is no current row to compare against.
+    "No row" answers the DIFFERS question; it does not answer "may you state
+    this at all", and for these two fields the answer is no — the same reason
+    the App-level create route strips them.
+
+    `memory_bytes: 0` is why it matters: `_fmt_bytes(0)` writes `max` to the
+    cgroup (unlimited) while admission charges `memory_bytes or 0`, i.e.
+    nothing. Unlimited memory, billed as zero, set by anyone who may create an
+    item — and `owner` can name somebody else, so the bill lands on them.
+    """
+    with _app(PerUserResources(cpu=4.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        WHO["id"] = "carol"
+        made = client.post(
+            "/rca-investigation",
+            json={
+                "title": "x",
+                "owner": "alice",
+                "sandbox_cpu_cores": 999.0,
+                "sandbox_memory_bytes": 0,
+            },
+        )
+
+        assert made.status_code == 403, made.text
+
+
+def test_creating_an_ordinary_item_through_the_auto_crud_still_works():
+    """The control. Refusing every create to protect two fields would be a much
+    bigger outage than the hole."""
+    with _app(PerUserResources(cpu=4.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        made = client.post("/rca-investigation", json={"title": "x", "owner": "alice"})
+
+        assert made.status_code in (200, 201), made.text

@@ -24,6 +24,7 @@ from ..files import WorkspaceFiles
 from ..quota.disk_ledger import DiskLedger
 from ..quota.limits import parse_size
 from ..quota.user_limits import UserLimits
+from .item_authz import require_item_access
 from .locator import ItemLocator
 from .registry import InvestigationRegistry
 from .sandbox_activity import IActivityStore
@@ -244,8 +245,27 @@ def register_quota_routes(
         without freeing the machine would be lying about what it did — and would
         make the next person's limit meaningless."""
         owner = locator.owner_of(item_id)
+        # The debtor, a superuser, or someone the owner made a manager of this
+        # item. That last one is not generosity: `change_permission` is what
+        # lets a person resize the environment, §1.4 makes closing the ONLY way
+        # to resize a live one, and the panel draws them the button. Requiring
+        # the `owner` FIELD here handed them a 404 — a visible no-op, since the
+        # mutation has no error branch — for the one action their grant is for.
+        #
+        # Still 404 rather than 403 for everyone else: whether a given item has
+        # an environment running is not a fact a bystander is owed.
         if owner != get_user_id() and get_user_id() not in superusers:
-            raise HTTPException(status_code=404, detail="unknown environment")
+            try:
+                require_item_access(
+                    spec,
+                    locator.slug_of(item_id) or "",
+                    item_id,
+                    "change_permission",
+                    user=get_user_id(),
+                    superusers=superusers,
+                )
+            except Exception as exc:  # noqa: BLE001 — any refusal reads the same
+                raise HTTPException(status_code=404, detail="unknown environment") from exc
         # `close_session` owns the whole teardown, INCLUDING clearing the
         # heartbeat. Clearing it here as well was the shape of the bug: the close
         # could quietly do nothing — no session on this replica — and this line
