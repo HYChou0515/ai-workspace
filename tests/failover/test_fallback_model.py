@@ -10,6 +10,8 @@ import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
+import httpx
+import litellm
 import pytest
 from agents.models.interface import Model
 
@@ -17,6 +19,7 @@ from workspace_app.factories import LlmEndpoint
 from workspace_app.failover.cooldown import CooldownRegistry
 from workspace_app.failover.core import AllProvidersFailed
 from workspace_app.failover.model import FallbackModel
+from workspace_app.failover.rate_limit import is_rate_limited
 
 
 class _Clock:
@@ -36,6 +39,7 @@ def _ep(
     num_retries: int = 0,
     round_backoff_s: tuple[float, ...] = (),
     total_deadline_s: float = float("inf"),
+    rate_limit_budget_s: float = 7200.0,
 ) -> LlmEndpoint:
     return LlmEndpoint(
         model=model,
@@ -48,6 +52,7 @@ def _ep(
         num_retries=num_retries,
         round_backoff_s=round_backoff_s,
         total_deadline_s=total_deadline_s,
+        rate_limit_budget_s=rate_limit_budget_s,
     )
 
 
@@ -421,3 +426,344 @@ async def test_nothing_is_claimed_before_anything_answers():
     )
 
     assert chain.served_model is None
+
+
+# ── 429: wait it out at the SAME endpoint (#742's rule, applied to the chain) ─
+#
+# #742 taught three call paths that a rate limit is cured by WAITING, not by
+# switching — and this chain was the fourth path, still doing the old thing:
+# zero-wait same-endpoint retries, then parking the healthy endpoint for the
+# fixed cooldown. On a rate-limited multi-endpoint deploy the chain burned every
+# endpoint in milliseconds and surfaced AllProvidersFailed, whose message is the
+# "giving up after N attempts: … all agent models failed or were cooling" the
+# report keeps seeing.
+#
+# The doubles are litellm's OWN exception classes, built the way litellm builds
+# them (same rationale as test_rate_limit.py): a hand-rolled 429 would let the
+# detector and the test agree on a shape the provider never sends.
+
+
+def _429(retry_after: str | None) -> litellm.exceptions.RateLimitError:
+    headers = {"retry-after": retry_after} if retry_after is not None else {}
+    return litellm.exceptions.RateLimitError(
+        message="rate limit exceeded",
+        llm_provider="openai",
+        model="gpt",
+        response=httpx.Response(
+            429,
+            headers=headers,
+            request=httpx.Request("POST", "http://x/v1/chat/completions"),
+        ),
+    )
+
+
+def _wrapped_429(retry_after: str | None) -> litellm.exceptions.APIConnectionError:
+    """The form the agents SDK actually hands us: the 429 re-raised under an
+    APIConnectionError, status and headers one link down the cause chain."""
+    try:
+        raise _429(retry_after)
+    except litellm.exceptions.RateLimitError as inner:
+        try:
+            raise litellm.exceptions.APIConnectionError(
+                message="APIConnectionError: litellm.RateLimitError",
+                llm_provider="openai",
+                model="gpt",
+            ) from inner
+        except litellm.exceptions.APIConnectionError as outer:
+            return outer
+
+
+class _FlakyModel(Model):
+    """Raises the queued errors one per call, then serves."""
+
+    def __init__(self, errors: list[BaseException], *, response=None, events=None) -> None:
+        self._errors = list(errors)
+        self._response = response
+        self._events = events or []
+
+    async def get_response(self, *args, **kwargs):
+        if self._errors:
+            raise self._errors.pop(0)
+        return self._response
+
+    async def stream_response(self, *args, **kwargs) -> AsyncIterator[Any]:
+        if self._errors:
+            raise self._errors.pop(0)
+        for ev in self._events:
+            yield ev
+
+
+def _held_sleep(clock: _Clock) -> tuple[list[float], Any]:
+    """An async sleep double that records and ADVANCES the fake clock, so a
+    stated window interacts with the chain deadline the way real time would."""
+    slept: list[float] = []
+
+    async def sleep(s: float) -> None:
+        slept.append(s)
+        clock.now += s
+
+    return slept, sleep
+
+
+async def test_get_response_waits_out_a_429_at_the_same_endpoint():
+    """The window the provider stated, at the endpoint that stated it — no
+    switch, no cooldown, and `num_retries` (0 here) untouched: that budget is
+    for a broken endpoint, and this one is healthy."""
+    clock = _Clock()
+    reg = CooldownRegistry(clock=clock)
+    slept, sleep = _held_sleep(clock)
+    built: list[str] = []
+    # Stable instances: make_model is called per ATTEMPT, so a double built
+    # fresh in the factory would re-arm its error queue forever.
+    impls = {
+        "primary": _FlakyModel([_429("7")], response="ok"),
+        "backup": _FakeModel(response="never"),
+    }
+
+    def make(e):
+        built.append(e.model)
+        return impls[e.model]
+
+    m = FallbackModel([_ep("primary"), _ep("backup")], reg, make_model=make, sleep=sleep)
+
+    assert await m.get_response() == "ok"
+    assert slept == [7.0]
+    assert built.count("backup") == 0  # never switched
+    assert reg.is_cooling(("primary", "")) is False  # healthy, not parked
+
+
+async def test_stream_waits_out_a_wrapped_429_before_the_first_event():
+    """Same rule on the streamed path, with the 429 in the wrapped form the SDK
+    actually raises — the status sits under __cause__, not on the outer error."""
+    clock = _Clock()
+    reg = CooldownRegistry(clock=clock)
+    slept, sleep = _held_sleep(clock)
+    impls = {
+        "primary": _FlakyModel([_wrapped_429("3")], events=["a", "b"]),
+        "backup": _FakeModel(["never"]),
+    }
+    m = FallbackModel(
+        [_ep("primary"), _ep("backup")], reg, make_model=lambda e: impls[e.model], sleep=sleep
+    )
+
+    assert [ev async for ev in m.stream_response()] == ["a", "b"]
+    assert slept == [3.0]
+    assert reg.is_cooling(("primary", "")) is False
+
+
+async def test_429_without_retry_after_backs_off_doubling():
+    """A 429 that states no window still must not be re-sent at blip speed —
+    same 1/2/4 shape the other paths use (`rate_limit.backoff_s`)."""
+    clock = _Clock()
+    reg = CooldownRegistry(clock=clock)
+    slept, sleep = _held_sleep(clock)
+    flaky = _FlakyModel([_429(None), _429(None), _429(None)], response="ok")
+    m = FallbackModel([_ep("primary")], reg, make_model=lambda e: flaky, sleep=sleep)
+
+    assert await m.get_response() == "ok"
+    assert slept == [1.0, 2.0, 4.0]
+
+
+async def test_a_zero_retry_after_does_not_spin():
+    """A stated 0 (or any window under the backoff floor) never spins the hold
+    loop: `rate_limit_wait_s` floors every wait at the doubling backoff, because
+    a time budget never spends against zero-length waits and re-sending at wire
+    speed is the cadence that earned the throttle. Oversleeping is harmless —
+    Retry-After is a floor, not an exact figure."""
+    clock = _Clock()
+    reg = CooldownRegistry(clock=clock)
+    slept, sleep = _held_sleep(clock)
+    flaky = _FlakyModel([_429("0"), _429("0.001")], response="ok")
+    m = FallbackModel([_ep("primary")], reg, make_model=lambda e: flaky, sleep=sleep)
+
+    assert await m.get_response() == "ok"
+    assert slept == [1.0, 2.0]
+
+
+async def test_a_window_past_the_hold_budget_parks_the_stated_window_and_moves_on():
+    """Holds are bounded by TIME — `rate_limit_budget_s`, two hours by default,
+    per the operator's call: hitting a rate limit means the user hit a rate
+    limit, and waiting is the honest behaviour. A wait that cannot fit what is
+    left of that budget parks the endpoint for THE WINDOW IT STATED — not the
+    fixed cooldown — so every caller sharing the registry honours it, and the
+    chain tries the next endpoint instead of sleeping past the budget."""
+    clock = _Clock()
+    reg = CooldownRegistry(clock=clock)
+    slept, sleep = _held_sleep(clock)
+    impls = {
+        "limited": _FlakyModel([_429("90")], response="never"),
+        "backup": _FakeModel(response="ok"),
+    }
+    m = FallbackModel(
+        [_ep("limited", rate_limit_budget_s=10.0), _ep("backup")],
+        reg,
+        make_model=lambda e: impls[e.model],
+        sleep=sleep,
+    )
+
+    assert await m.get_response() == "ok"
+    assert slept == []  # never slept a window it could not afford
+    assert reg.is_cooling(("limited", "")) is True
+    assert reg.remaining([("limited", "")]) == pytest.approx(90.0)
+
+
+async def test_the_hold_budget_is_one_pool_for_the_whole_chain_instance():
+    """The two-hour budget is a POOL of held seconds per chain instance (= one
+    agent run), not a per-model-call allowance: an agentic turn makes one model
+    call per tool round, and a budget reset each call would make a turn's total
+    hold time unbounded again — max_turns × 2h, the very thing the bound
+    exists to prevent. So a later call inherits what earlier calls spent, and a
+    window that no longer fits parks the endpoint instead of holding."""
+    clock = _Clock()
+    reg = CooldownRegistry(clock=clock)
+    slept, sleep = _held_sleep(clock)
+    impls = {
+        "limited": _FlakyModel([_429("7")], response="ok"),
+        "backup": _FakeModel(response="ok-from-backup"),
+    }
+    m = FallbackModel(
+        [_ep("limited", rate_limit_budget_s=10.0), _ep("backup")],
+        reg,
+        make_model=lambda e: impls[e.model],
+        sleep=sleep,
+    )
+
+    # Call 1 (tool round 1): holds 7s of the 10s pool, then the endpoint serves.
+    assert await m.get_response() == "ok"
+    assert slept == [7.0]
+
+    # Call 2 (tool round 2) hits a FRESH 429 with the same window. It no longer
+    # fits the 3s left in the pool → park the stated window and answer from the
+    # backup, with no further sleep.
+    impls["limited"]._errors.append(_429("7"))
+    assert await m.get_response() == "ok-from-backup"
+    assert slept == [7.0]
+    assert reg.remaining([("limited", "")]) == pytest.approx(7.0)
+
+
+async def test_a_zero_budget_never_holds_and_is_the_escape_hatch():
+    """`rate_limit_budget_s: 0` is the operator's way OUT of hold-and-wait:
+    the floor keeps every wait above zero, so nothing ever fits a zero pool —
+    every 429 parks the stated window (floored) and switches, i.e. plain
+    failover behaviour. Pinned so the escape hatch stays a contract, not an
+    accident of the arithmetic."""
+    clock = _Clock()
+    reg = CooldownRegistry(clock=clock)
+    slept, sleep = _held_sleep(clock)
+    holds: list[tuple[str, float]] = []
+    impls = {
+        "limited": _FlakyModel([_429("0.5")], response="never"),
+        "backup": _FakeModel(response="ok"),
+    }
+    m = FallbackModel(
+        [_ep("limited", rate_limit_budget_s=0.0), _ep("backup")],
+        reg,
+        make_model=lambda e: impls[e.model],
+        on_hold=lambda model, secs: holds.append((model, secs)),
+        sleep=sleep,
+    )
+
+    assert await m.get_response() == "ok"
+    assert slept == []  # zero pool ⇒ no hold, ever — even for a tiny window
+    assert holds == []
+    assert reg.remaining([("limited", "")]) == pytest.approx(1.0)  # floored window
+
+
+async def test_a_hold_is_announced_before_it_is_slept():
+    """#742's visibility rule, applied to the chain: a stated window can be
+    minutes, and silent minutes read as a hang. `on_hold` fires BEFORE the sleep
+    with the model and the seconds — and does NOT fire on the park-and-switch
+    path, where `on_switch` already tells the story."""
+    clock = _Clock()
+    reg = CooldownRegistry(clock=clock)
+    slept, sleep = _held_sleep(clock)
+    holds: list[tuple[str, float]] = []
+    order: list[str] = []
+
+    async def spy_sleep(secs: float) -> None:
+        order.append("sleep")
+        await sleep(secs)
+
+    impls = {
+        "primary": _FlakyModel([_429("7")], response="ok"),
+        "backup": _FakeModel(response="never"),
+    }
+    m = FallbackModel(
+        [_ep("primary"), _ep("backup")],
+        reg,
+        make_model=lambda e: impls[e.model],
+        on_hold=lambda model, secs: (
+            (holds.append((model, secs)), order.append("hold"))[1:] and None
+        ),
+        sleep=spy_sleep,
+    )
+
+    assert await m.get_response() == "ok"
+    assert holds == [("primary", 7.0)]
+    assert order == ["hold", "sleep"]  # announced BEFORE the wait, not after
+
+    # The unaffordable-window path parks and switches — no hold happens, so no
+    # hold is announced (the switch callback carries that story instead).
+    holds.clear()
+    reg2 = CooldownRegistry(clock=clock)
+    switched: list[str] = []
+    impls2 = {
+        "limited": _FlakyModel([_429("90")], response="never"),
+        "backup": _FakeModel(response="ok"),
+    }
+    m2 = FallbackModel(
+        [_ep("limited", rate_limit_budget_s=10.0), _ep("backup")],
+        reg2,
+        make_model=lambda e: impls2[e.model],
+        on_switch=lambda model, exc: switched.append(model),
+        on_hold=lambda model, secs: holds.append((model, secs)),
+        sleep=sleep,
+    )
+    assert await m2.get_response() == "ok"
+    assert holds == []
+    assert switched == ["limited"]
+
+
+async def test_an_exhausted_chain_still_names_the_rate_limit():
+    """When every endpoint is limited past the deadline, the raised error must
+    carry a 429 in its cause chain — the turn loop upstream distinguishes
+    "rate limited" from "broken" by exactly that, and picking the wrong one
+    turns a recoverable wait into "giving up after N attempts"."""
+    clock = _Clock()
+    reg = CooldownRegistry(clock=clock)
+    _slept, sleep = _held_sleep(clock)
+    impls = {
+        "a": _FlakyModel([_429("90")], response="never"),
+        "b": _FlakyModel([RuntimeError("down")], response="never"),
+    }
+    m = FallbackModel(
+        [_ep("a", rate_limit_budget_s=10.0), _ep("b")],
+        reg,
+        make_model=lambda e: impls[e.model],
+        sleep=sleep,
+    )
+
+    with pytest.raises(AllProvidersFailed) as err:
+        await m.get_response()
+    # "b" failed LAST, but the diagnosis worth surfacing is the rate limit.
+    assert is_rate_limited(err.value)
+
+
+async def test_streamed_exhaustion_names_the_rate_limit_too():
+    clock = _Clock()
+    reg = CooldownRegistry(clock=clock)
+    _slept, sleep = _held_sleep(clock)
+    impls = {
+        "a": _FlakyModel([_429("90")]),
+        "b": _FlakyModel([RuntimeError("down")]),
+    }
+    m = FallbackModel(
+        [_ep("a", rate_limit_budget_s=10.0), _ep("b")],
+        reg,
+        make_model=lambda e: impls[e.model],
+        sleep=sleep,
+    )
+
+    with pytest.raises(AllProvidersFailed) as err:
+        _ = [ev async for ev in m.stream_response()]
+    assert is_rate_limited(err.value)

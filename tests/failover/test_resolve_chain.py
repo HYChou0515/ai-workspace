@@ -86,6 +86,30 @@ agents:
     assert chain[1].ttft_s == 30.0  # the slow fallback's own override
 
 
+def test_rate_limit_budget_resolves_like_the_other_chain_budgets(tmp_path):
+    """`rate_limit_budget_s` is a chain-level knob and must flow the same way
+    `total_deadline_s` does — global `failover:` default, overridable on the
+    chain-HEAD preset — or it is a documented setting nothing reads (a dead
+    knob). Entered through the real path: yaml → load → resolve_llm_chain."""
+    settings = _settings(
+        tmp_path,
+        """
+failover: { rate_limit_budget_s: 600 }
+agents:
+  presets:
+    primary: { model: "m-primary", fallbacks: [spare], rate_limit_budget_s: 900 }
+    spare: { model: "m-spare" }
+""",
+    )
+    chain = resolve_llm_chain(settings, RetrievalLlmRef(preset="primary"))
+    assert chain[0].rate_limit_budget_s == 900.0  # head override wins
+    assert chain[1].rate_limit_budget_s == 600.0  # others carry the global
+
+    plain = _settings(tmp_path, 'agents: { presets: { solo: { model: "m" } } }\n')
+    solo = resolve_llm_chain(plain, RetrievalLlmRef(preset="solo"))
+    assert solo[0].rate_limit_budget_s == 7200.0  # the shipped two-hour default
+
+
 def test_reasoning_effort_propagates_to_every_entry(tmp_path):
     settings = _settings(
         tmp_path,

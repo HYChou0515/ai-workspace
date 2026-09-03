@@ -826,6 +826,11 @@ class LlmEndpoint:
     num_retries: int = 0
     round_backoff_s: tuple[float, ...] = ()
     total_deadline_s: float = float("inf")
+    # #759: pool of held seconds for 429 waits, chain-level from the HEAD like
+    # the two above. Finite by default even where total_deadline_s is not — the
+    # hold loop's termination must not depend on a deadline a hand-built chain
+    # leaves infinite.
+    rate_limit_budget_s: float = 7200.0
 
     @property
     def cooldown_key(self) -> tuple[str, str]:
@@ -859,6 +864,11 @@ def _endpoint(
         round_backoff_s=tuple(round_backoff),
         total_deadline_s=(
             preset.total_deadline_s if preset.total_deadline_s is not None else fo.total_deadline_s
+        ),
+        rate_limit_budget_s=(
+            preset.rate_limit_budget_s
+            if preset.rate_limit_budget_s is not None
+            else fo.rate_limit_budget_s
         ),
     )
 
