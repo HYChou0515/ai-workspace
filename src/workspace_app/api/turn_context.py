@@ -75,6 +75,12 @@ RunAgent = Callable[..., Awaitable[str]]
 
 logger = logging.getLogger(__name__)
 
+#: Ceilings already announced, as (model, source, tokens) — so the line that
+#: says which rung answered is written once per distinct outcome per pod rather
+#: than once per turn. Module-level, like `_NUM_CTX_SEEN` beside it: the fact
+#: belongs to the process, and two builders in one pod should not each repeat it.
+_CEILING_SAID: set[tuple[str, str, int | None]] = set()
+
 
 async def resolve_item_tools(sandbox: Sandbox, locator: ItemLocator, item_id: str) -> ExternalTools:
     """#674: what this item's App declares as third-party tools, resolved.
@@ -250,34 +256,66 @@ class TurnContextBuilder:
         if agent_config is None:
             return ContextLimit(tokens=None, source="unknown")
         endpoint = self._endpoint_limits(agent_config)
-        return resolve_context_limit(
-            configured=self._context_limit,
-            # #624: what the endpoint told us in a past rejection. Wired to the
-            # runner's learner — the adversarial review caught this as a dangling
-            # `learned=None  # P3 feeds this` comment that nothing ever fed.
-            learned=self._learned_limit(agent_config),
-            # #624 §9.12: NOT a table lookup, whatever its name says — litellm
-            # resolves an `ollama/*` name by asking the daemon, untimed (measured
-            # 129,781 ms against an address that does not answer). This runs on
-            # every turn, inside `async def build_chat_turn`, so it is deferred
-            # off the loop like the probe.
-            # What a proxy in front of the model says it was configured with.
-            # A relayed claim rather than the enforcer speaking, so it sits below
-            # `learned` — but above the registry, which is keyed on a model name
-            # this endpoint may not even use.
-            declared=getattr(endpoint, "max_input_tokens", None),
-            catalog=deferred_lookup(
-                self._catalog_cache,
-                agent_config.model,
-                lambda: self._catalog_fn(agent_config.model),
-            ),
-            # Last, and derived rather than stated — see `window_from_max_tokens`
-            # for why the ratio cannot be a constant.
-            estimated=window_from_max_tokens(
-                getattr(endpoint, "max_tokens", None),
-                ratio=self._max_tokens_window_ratio,
+        return self._announce(
+            agent_config.model,
+            resolve_context_limit(
+                configured=self._context_limit,
+                # #624: what the endpoint told us in a past rejection. Wired to the
+                # runner's learner — the adversarial review caught this as a dangling
+                # `learned=None  # P3 feeds this` comment that nothing ever fed.
+                learned=self._learned_limit(agent_config),
+                # #624 §9.12: NOT a table lookup, whatever its name says — litellm
+                # resolves an `ollama/*` name by asking the daemon, untimed (measured
+                # 129,781 ms against an address that does not answer). This runs on
+                # every turn, inside `async def build_chat_turn`, so it is deferred
+                # off the loop like the probe.
+                # What a proxy in front of the model says it was configured with.
+                # A relayed claim rather than the enforcer speaking, so it sits below
+                # `learned` — but above the registry, which is keyed on a model name
+                # this endpoint may not even use.
+                declared=getattr(endpoint, "max_input_tokens", None),
+                catalog=deferred_lookup(
+                    self._catalog_cache,
+                    agent_config.model,
+                    lambda: self._catalog_fn(agent_config.model),
+                ),
+                # Last, and derived rather than stated — see `window_from_max_tokens`
+                # for why the ratio cannot be a constant.
+                estimated=window_from_max_tokens(
+                    getattr(endpoint, "max_tokens", None),
+                    ratio=self._max_tokens_window_ratio,
+                ),
             ),
         )
+
+    def _announce(self, model: str, limit: ContextLimit) -> ContextLimit:
+        """Say once, per distinct outcome, which rung answered.
+
+        The rule this serves is the ladder's own: a number nobody stated must
+        never read like a measurement. Until this line, that held in the type
+        system and nowhere else — `ContextLimit.source` had no production reader,
+        so an estimate derived from an output cap and a window the endpoint
+        stated were the same integer with nothing to tell them apart.
+
+        It matters most where it is least visible. Production is reachable only
+        through the log aggregator, so this line IS how an operator checks
+        whether the ladder is working, and `unknown` is logged as loudly as the
+        rest: "nothing answered" is the diagnosis this whole feature exists for,
+        and it would be invisible if only the successes spoke.
+
+        Deduped per (model, source, tokens): one line per outcome per pod, not
+        one per turn. A per-turn line would bury the thing it exists to surface.
+        """
+        seen = (model, limit.source, limit.tokens)
+        if seen not in _CEILING_SAID:
+            _CEILING_SAID.add(seen)
+            logger.info(
+                "context ceiling for %s: %s (source=%s)",
+                model,
+                "unknown — history is not trimmed" if limit.tokens is None else limit.tokens,
+                limit.source,
+            )
+        return limit
 
     def _endpoint_limits(self, agent_config: AgentConfig) -> Any:
         """What a proxy in front of this model says it was configured with, or

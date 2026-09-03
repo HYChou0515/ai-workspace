@@ -9,6 +9,8 @@ landing neither — an accurate estimator against a fabricated 24,000 cap trims
 
 from __future__ import annotations
 
+import pytest
+
 from workspace_app.api.turns import history_items
 from workspace_app.resources import Message
 
@@ -616,3 +618,82 @@ def test_nothing_wired_skips_the_rung_rather_than_failing():
     rung there — never an exception on a turn."""
     builder = _bare_builder()
     assert builder._context_window(_cfg()).source == "unknown"
+
+
+# ── which rung answered has to be visible OUTSIDE the type system ────────
+
+
+@pytest.fixture(autouse=True)
+def _fresh_announcements():
+    """The dedupe set is process state, so a test that does not clear it passes
+    or fails depending on what ran before it — and would pass for the wrong
+    reason once some earlier test happened to announce the same outcome."""
+    from workspace_app.api.turn_context import _CEILING_SAID
+
+    _CEILING_SAID.clear()
+    yield
+    _CEILING_SAID.clear()
+
+
+def test_the_resolved_ceiling_is_logged_with_its_source(caplog):
+    """The plan's own rule — "a number nobody stated must never read like a
+    measurement" — held only in the type system. `ContextLimit.source` had no
+    production reader at all, so in operation an estimate and a measurement were
+    the same number with no way to tell them apart. A deployment whose ceiling
+    is a guess derived from an output cap looked exactly like one whose endpoint
+    stated its window.
+
+    It matters most where it is least visible: production is reachable only
+    through the log aggregator, so this line IS the check that the ladder is
+    working, and it names the model so two presets can be told apart."""
+    import logging
+
+    from workspace_app.context_probe import EndpointLimits
+
+    builder = _bare_builder()
+    builder.endpoint_limits_fn = lambda model, base_url: EndpointLimits(
+        max_input_tokens=None, max_tokens=131072
+    )
+
+    with caplog.at_level(logging.INFO):
+        got = builder._context_window(_cfg())
+
+    assert got.source == "estimated"
+    line = "\n".join(r.getMessage() for r in caplog.records)
+    assert "estimated" in line, line
+    assert "104857" in line, line
+    assert _cfg().model in line, line
+
+
+def test_the_same_answer_is_not_logged_every_turn(caplog):
+    """One line per distinct outcome per pod. A per-turn line would bury the
+    thing it exists to make findable."""
+    import logging
+
+    from workspace_app.context_probe import EndpointLimits
+
+    builder = _bare_builder()
+    builder.endpoint_limits_fn = lambda model, base_url: EndpointLimits(
+        max_input_tokens=131072, max_tokens=None
+    )
+
+    with caplog.at_level(logging.INFO):
+        for _ in range(5):
+            builder._context_window(_cfg())
+
+    said = [r for r in caplog.records if "context ceiling" in r.getMessage()]
+    assert len(said) == 1, said
+
+
+def test_unknown_says_so_too(caplog):
+    """The state this whole feature exists to leave. An operator reading the log
+    has to be able to see that NOTHING answered — that is the diagnosis, and it
+    is invisible if only successes are logged."""
+    import logging
+
+    builder = _bare_builder()
+
+    with caplog.at_level(logging.INFO):
+        builder._context_window(_cfg())
+
+    assert "unknown" in "\n".join(r.getMessage() for r in caplog.records)

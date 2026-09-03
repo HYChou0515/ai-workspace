@@ -497,3 +497,11 @@ def test_the_chat_reports_what_it_is_costing_before_any_turn_runs():
     got = r.json()
     assert got["used"] == 9_400
     assert got["measured"] is True
+    # Which rung answered, not just what it said. `measured` describes the
+    # NUMERATOR (did a provider count the prompt, or did we estimate it); this
+    # describes the DENOMINATOR, and they are independently trustworthy. An
+    # operator checking whether the ladder works sees `limit: 104857` and cannot
+    # otherwise tell a window the endpoint stated from one we derived from its
+    # output cap — which is the difference the whole ladder is built around.
+    assert got["limit_source"] == "catalog", got
+    assert got["limit"] == 40_960, got  # and it is the number that rung produced

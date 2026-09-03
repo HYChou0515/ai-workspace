@@ -330,6 +330,12 @@ class ContextUsage:
     used: int
     limit: int | None
     measured: bool
+    #: Which rung of the ladder produced `limit`. `measured` describes the
+    #: NUMERATOR — did a provider count the prompt, or did we estimate it — and
+    #: this one describes the DENOMINATOR. They are independently trustworthy,
+    #: and collapsing them would hide the difference the ladder is built around:
+    #: a window the endpoint stated versus one we derived from its output cap.
+    limit_source: LimitSource = "unknown"
 
     @property
     def ratio(self) -> float | None:
@@ -431,8 +437,14 @@ def context_usage(messages: Any, *, limit: ContextLimit) -> ContextUsage:
                 used=used,
                 limit=limit.tokens,
                 measured=bool(getattr(metrics, "exact", False)),
+                limit_source=limit.source,
             )
-    return ContextUsage(used=estimate_messages(_replayed(msgs)), limit=limit.tokens, measured=False)
+    return ContextUsage(
+        used=estimate_messages(_replayed(msgs)),
+        limit=limit.tokens,
+        measured=False,
+        limit_source=limit.source,
+    )
 
 
 # ── learning the ceiling from the traffic (#624 P3) ──────────────────
