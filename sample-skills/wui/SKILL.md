@@ -10,16 +10,21 @@ A **WUI** is a folder in this item's workspace whose `*.ai.yaml` file says
 step and nothing to register — write the files and it works.
 
 Read `reference.md` for the exact API before you write code. **Start by copying
-one of the two complete, working examples in `examples/`** — they already get
+one of the three complete, working examples in `examples/`** — they already get
 right the things that are easy to get wrong, and copying beats generating.
 
 | copy | when | what it shows |
 |---|---|---|
 | `examples/dashboard/` | the data already exists and somebody wants to SEE it differently | listing then reading in parallel, parsing files people hand-edit, `openFile` to hand the user back to the real file |
 | `examples/editor/` | the page is where the data gets ENTERED or changed | saving without thrashing, hearing about someone else's edit without discarding what is half-typed, staying inside your own folder |
+| `examples/external/` | the answer lives in ANOTHER system | `callTool`, and telling the three refusals apart — not declared / not granted / the tool itself said no |
 
-If you need both, start from the dashboard and add saving — a page that reads
-wrongly is obvious, a page that writes wrongly is not.
+If a page both reads and writes, start from the dashboard and add saving — a
+page that reads wrongly is obvious, a page that writes wrongly is not.
+
+⚠️ **The external example is the one you cannot copy unchanged.** Its tool has
+to be one this app actually grants; the section below listing them by name is
+the only place that says which. A tool you invent fails at the call.
 
 ## What you are actually making
 

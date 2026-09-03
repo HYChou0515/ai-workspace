@@ -16,7 +16,7 @@ import pytest
 from workspace_app.apps.shared_skills import SHARED_SKILLS
 from workspace_app.apps.skill_payload import skill_payload
 
-EXAMPLES = ("dashboard", "editor")
+EXAMPLES = ("dashboard", "editor", "external")
 
 #: What `dispatchWuiRequest` answers to. An example calling anything else would
 #: be teaching the agent an API that does not exist — the one mistake a copied
@@ -89,20 +89,47 @@ def test_examples_only_call_verbs_that_exist(payload: dict[str, bytes]):
         assert used <= VERBS, f"{name} invents {sorted(used - VERBS)}"
 
 
-def test_the_two_examples_are_the_two_shapes(payload: dict[str, bytes]):
-    """They are not two of the same thing. The editor writes; the dashboard does
-    not and navigates instead. Two write-shaped examples would leave the reading
-    half — the one this platform is mostly for — unillustrated."""
+def test_the_examples_are_three_different_shapes(payload: dict[str, bytes]):
+    """They are not three of the same thing. The editor writes; the dashboard
+    does not and navigates instead; only the external one reaches outside the
+    item. Three write-shaped examples would leave the reading half — the one
+    this platform is mostly for — unillustrated."""
     # Matched the way `test_examples_only_call_verbs_that_exist` does, because
-    # both examples chain across lines — a literal `workspace.writeFile` is
+    # the examples chain across lines — a literal `workspace.writeFile` is
     # absent from code that plainly calls it.
     editor = _verbs(payload, "editor")
     dashboard = _verbs(payload, "dashboard")
+    external = _verbs(payload, "external")
 
     assert "writeFile" in editor
     assert "writeFile" not in dashboard
     assert "deleteFile" not in dashboard
     assert "openFile" in dashboard
+    assert "callTool" in external
+    assert "callTool" not in editor and "callTool" not in dashboard
+
+
+def test_only_the_tool_calling_example_declares_a_tool(payload: dict[str, bytes]):
+    """`tools:` is a page's disclosure of what it reaches for. An example
+    declaring one it never calls would teach the habit of asking for reach it
+    does not need; one CALLING a tool it never declared would be refused, and a
+    reader copying it would meet that refusal instead of a working page."""
+    for name in EXAMPLES:
+        yaml = payload[f"examples/{name}/page.ai.yaml"].decode()
+        declares = bool(re.search(r"^tools:", yaml, re.MULTILINE))
+        assert declares == ("callTool" in _verbs(payload, name)), name
+
+
+def test_the_tool_example_tells_the_refusals_apart(payload: dict[str, bytes]):
+    """Its whole reason to exist. The three failures send a reader to three
+    different places — the view file, an operator, the tool's own output — and a
+    page showing "Lookup failed" for all of them sends them to the wrong one
+    twice out of three times. So it must NOT flatten the platform's message."""
+    app = payload["examples/external/app.js"].decode()
+
+    assert "exit_code" in app, "the tool's own failure is not the platform's"
+    assert re.search(r"\.catch\(", app), "a refusal arrives as a rejection"
+    assert "err.message" in app, "the refusal text must be shown, not replaced"
 
 
 def test_both_examples_handle_a_failed_call(payload: dict[str, bytes]):
