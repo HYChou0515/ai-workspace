@@ -229,7 +229,21 @@ def register_item_routes(
             raise HTTPException(status_code=404, detail=f"unknown app: {slug!r}")
         manifest = load_app_manifest(slug)
         model = app_model(slug)
-        payload = {**body, "owner": get_user_id()}
+        # `owner` comes from auth, never the body — and the environment sizes
+        # go the same way, for a stronger reason: they are gated on
+        # `change_permission` at their own route, and merging them from a create
+        # body would let anyone who may create an item set one with no verb
+        # checked and no `> 0` validation run. `memory 0` was the sharp end —
+        # the cgroup reads it as `max` (unlimited) while admission charges
+        # `memory_bytes or 0`, i.e. nothing.
+        #
+        # Dropped rather than refused: a client sending them is not doing
+        # anything malicious, it is sending a field that has one correct place,
+        # and the panel is right there once the item exists.
+        payload = {
+            k: v for k, v in body.items() if k not in ("sandbox_cpu_cores", "sandbox_memory_bytes")
+        }
+        payload["owner"] = get_user_id()
         payload.setdefault("profile", manifest.default_profile)
         # #306 PR3 (grill D6): NEW items default to PRIVATE (owner-only) — a
         # workspace is the creator's until they share it. The owner is `created_by`,

@@ -761,8 +761,20 @@ def create_app(
         _slug, owner, item_cpu, item_mem = _all_facts_of(item_id)
         budget = await user_limits.for_user(owner) if owner else None
 
-        cpu = item_cpu if item_cpu is not None else (limits.cpu_cores if limits else None)
-        mem = item_mem if item_mem is not None else (limits.memory_bytes if limits else None)
+        app_cpu = limits.cpu_cores if limits else None
+        app_mem = limits.memory_bytes if limits else None
+        cpu = item_cpu if item_cpu is not None else app_cpu
+        mem = item_mem if item_mem is not None else app_mem
+        # BOTH ceilings, in this order. The App's was previously only a
+        # fallback — read when the item stated nothing and ignored when it did —
+        # so "App declares 4, person types 999" resolved to 999 on any deploy
+        # with no per-user quota, which is the shipped default and therefore the
+        # common case rather than the corner. Three documents and an i18n string
+        # said otherwise, and that string was unreachable: with only a budget
+        # clamp, being clamped implied the budget was what bound it, so the
+        # panel could never name the App.
+        cpu = _clamp_cpu(cpu, app_cpu or 0.0)
+        mem = _clamp_bytes(mem, app_mem or 0)
         return SandboxSpec(
             cpu_cores=_clamp_cpu(cpu, budget.cpu if budget else 0.0),
             memory_bytes=_clamp_bytes(mem, parse_size(budget.memory) if budget else 0),

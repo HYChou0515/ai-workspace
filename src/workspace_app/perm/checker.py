@@ -90,17 +90,38 @@ def _context_user(context: Any) -> str:
     return user if isinstance(user, str) else ""
 
 
+#: Fields that LOOK like ordinary metadata and are not, so writing one demands
+#: ``change_permission`` rather than ``write_meta``.
+#:
+#: ``permission`` is the original member: rewiring access is not a field edit.
+#: The two sandbox sizes joined it because they decide how much of the item
+#: OWNER's compute budget it may spend — a different grant from "may edit this
+#: item", and one the item's own agent must never hold, since it runs inside the
+#: very sandbox the number sizes (``AI_FORBIDDEN``).
+#:
+#: The set exists because naming only ``permission`` here was a rule enforced in
+#: one of two doors: a dedicated route checked the verb while the generic PATCH
+#: wrote the same field under ``write_meta`` — which ``authorize`` grants to
+#: ANY caller on a public item. Adding a privileged field to a WorkItem now
+#: means adding it here, not writing a second gate somewhere else.
+ESCALATED_FIELDS: frozenset[str] = frozenset(
+    {"permission", "sandbox_cpu_cores", "sandbox_memory_bytes"}
+)
+
+
 def _patch_touches_permission(patch: Any) -> bool:
-    """True when a PATCH body names the ``permission`` field, across both patch
-    flavors: RFC 7386 merge (``MergePatch``, a ``dict`` subclass → key membership)
-    and RFC 6902 JSON-patch (``.patch`` = a list of ops with a ``/permission…``
-    path)."""
+    """True when a PATCH body names any :data:`ESCALATED_FIELDS` member, across
+    both patch flavors: RFC 7386 merge (``MergePatch``, a ``dict`` subclass →
+    key membership) and RFC 6902 JSON-patch (``.patch`` = a list of ops with a
+    ``/<field>…`` path)."""
     if isinstance(patch, dict):
-        return "permission" in patch
+        return any(f in patch for f in ESCALATED_FIELDS)
     ops = getattr(patch, "patch", None)
     if isinstance(ops, list):
         return any(
-            isinstance(op, dict) and str(op.get("path", "")).startswith("/permission") for op in ops
+            isinstance(op, dict)
+            and any(str(op.get("path", "")).startswith(f"/{f}") for f in ESCALATED_FIELDS)
+            for op in ops
         )
     return False
 
@@ -171,7 +192,19 @@ class CollectionPermissionChecker(IPermissionChecker):
         if new is UNSET or new is None:
             return False
         new_perm = getattr(new, "permission", UNSET)
-        return new_perm is not UNSET and new_perm != stored
+        if new_perm is not UNSET and new_perm != stored:
+            return True
+        # A whole-object write carries every field, so "differs from what is
+        # stored" is the only usable test for the others — the same one already
+        # applied to `permission` above.
+        current = getattr(context, "current", None)
+        held = getattr(current, "data", None) if current is not None else None
+        return any(
+            getattr(new, f, UNSET) is not UNSET
+            and getattr(new, f, UNSET) != getattr(held, f, UNSET)
+            for f in ESCALATED_FIELDS
+            if f != "permission"
+        )
 
     def _check_write(self, context: Any) -> PermissionResult:
         snap = _current(context)

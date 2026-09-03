@@ -684,3 +684,142 @@ def test_a_new_size_lands_on_the_very_next_request():
 
         _wake(client, item)
         assert sandbox.specs[-1].cpu_cores == 1.0, "and the sandbox is built from it"
+
+
+# ── the gate has to hold on EVERY door, not the one I built ──────────────
+#
+# Adversarial review, finding 1. I added a dedicated route on
+# `change_permission` and then left the FIELD on `WorkItemBase`, where
+# specstar's generic PATCH writes it under `write_meta` — and `authorize`
+# short-circuits `write_meta` to True for ANY caller on a public item. The
+# careful route was one of two doors.
+#
+# Same shape as #767's F1, twice in one session: the rule was enforced where I
+# was looking rather than where the value is written.
+
+
+def test_the_generic_patch_cannot_set_the_size_on_a_public_item():
+    """The traced repro: a caller with no grants at all, on a public item.
+
+    `PUT .../resources` correctly refuses them. The generic PATCH must refuse
+    them too, or the verb chosen in §1.5 — the one the AI can never hold —
+    protects a route nobody has to use."""
+    with _app(PerUserResources(cpu=4.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        item = _mk(spec, "alice", permission=Permission(visibility="public"))
+
+        WHO["id"] = "carol"  # no grants whatsoever
+        refused = client.put(f"/a/rca/items/{item}/resources", json={"cpu_cores": 1.0})
+        assert refused.status_code in (403, 404), refused.text
+
+        smuggled = client.patch(f"/rca-investigation/{item}", json={"sandbox_cpu_cores": 999.0})
+        assert smuggled.status_code == 403, f"the other door: {smuggled.text}"
+
+
+def test_the_generic_patch_still_edits_everything_else():
+    """The control. Over-gating would take away ordinary editing to protect one
+    field, and a test that only checked the refusal would call that a pass."""
+    with _app(PerUserResources(cpu=4.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        item = _mk(
+            spec,
+            "owner-alice",
+            permission=_restricted(read_meta=["user:bob"], write_meta=["user:bob"]),
+        )
+
+        WHO["id"] = "bob"
+        assert (
+            client.patch(f"/rca-investigation/{item}", json={"title": "renamed"}).status_code == 200
+        )
+        assert (
+            client.patch(f"/rca-investigation/{item}", json={"sandbox_memory_bytes": 1}).status_code
+            == 403
+        ), "memory is gated too — one dimension standing in for the other is how P1 nearly shipped"
+
+
+def test_creating_an_item_cannot_smuggle_a_size_past_the_gate():
+    """Finding 1b. `POST /a/{slug}/items` merged the body straight into the
+    model, so both fields arrived with no verb checked and no validation run —
+    `> 0` never applies at create.
+
+    `memory_bytes: 0` was the sharp end: `_fmt_bytes(0)` writes `max` to the
+    cgroup (unlimited) while admission charges `memory_bytes or 0` — unlimited
+    memory, billed as nothing."""
+    with _app(PerUserResources(cpu=4.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        sandbox,
+    ):
+        made = client.post(
+            "/a/rca/items",
+            json={"title": "x", "sandbox_cpu_cores": -4.0, "sandbox_memory_bytes": 0},
+        )
+        assert made.status_code in (200, 201, 422), made.text
+        if made.status_code == 422:
+            return  # refused outright is also a correct answer
+        item = made.json()["item_id"] if "item_id" in made.json() else made.json()["resource_id"]
+        body = client.get(f"/a/rca/items/{item}/environment").json()
+        assert body["stated_cpu_cores"] is None, "a size may not be set at create"
+        assert body["stated_memory_bytes"] is None
+
+
+def test_a_stated_size_cannot_exceed_the_apps_ceiling():
+    """Adversarial review, finding 2: the App's number was a FALLBACK, never a
+    ceiling.
+
+    `_spec_for` read the item's value when set and the App's when not, then
+    clamped by the owner's budget alone. So "App declares 4, person types 999"
+    resolved to 999 on a deploy with no per-user quota — which is the shipped
+    default, so it is the common case rather than the corner.
+
+    Three documents and an i18n string all said the opposite. That string,
+    `itemenv.size.clamped.app`, was provably unreachable: with only a budget
+    clamp, `clamped` implies `effective === budget.cpu`, so the panel could
+    only ever blame the quota.
+    """
+    with _app(PerUserResources(), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        sandbox,
+    ):
+        item = _mk(spec, "alice", cpu=999.0)
+        _wake(client, item)
+
+        assert sandbox.specs[-1].cpu_cores == 4.0, "the App's ceiling binds a stated value too"
+
+
+def test_memory_cannot_exceed_the_apps_ceiling_either():
+    """Its own condition. cpu standing in for memory is how P1 nearly shipped a
+    clamp that only worked in one dimension."""
+    with _app(PerUserResources(), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        sandbox,
+    ):
+        item = _mk(spec, "alice", memory=64 * 1024**3)
+        _wake(client, item)
+
+        assert sandbox.specs[-1].memory_bytes == 4 * 1024**3
+
+
+def test_the_panel_can_say_the_app_was_what_bound_it():
+    """The other half of finding 2: the explanation must be reachable.
+
+    A string that cannot render is worse than a missing one — it reads as
+    covered."""
+    with _app(PerUserResources(cpu=100.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        item = _mk(spec, "alice", cpu=999.0)
+        body = client.get(f"/a/rca/items/{item}/environment").json()
+
+        assert body["stated_cpu_cores"] == 999.0
+        assert body["effective_cpu_cores"] == 4.0, "the App bound it, not the quota"
