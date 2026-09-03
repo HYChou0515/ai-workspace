@@ -233,6 +233,26 @@ async def test_only_the_owner_or_a_superuser_may_delete():
     assert client.delete("/a/rca/items/rca-investigation:nope").status_code == 404
 
 
+async def test_the_raw_permanent_route_is_blocked_for_work_items():
+    """The old footgun: specstar's generic `/permanently` deletes the row and
+    orphans everything — two doors where one leaks is a guaranteed regression,
+    so for WorkItem models it refuses and NAMES the cascade route. The generic
+    SOFT delete stays untouched (no FE caller, out of scope)."""
+    app, spec, _fs = _build()
+    client = TestClient(app)
+    item_id = _create_item(client)
+
+    resp = client.delete(f"/rca-investigation/{item_id}/permanently")
+
+    assert resp.status_code == 403, resp.text
+    assert "/a/{slug}/items/" in resp.json()["detail"]
+    # Nothing was deleted — the row is intact.
+    assert spec.get_resource_manager(RcaInvestigation).get(item_id) is not None
+
+    # The cascade route itself still works on the very same item.
+    assert client.delete(f"/a/rca/items/{item_id}").status_code == 204
+
+
 async def test_nothing_resurrects_after_the_delete(monkeypatch):
     """The #366/#492 lesson pointed at deletion: records must not outlive
     reality. A WARM sandbox holding a file is deleted through the route; the

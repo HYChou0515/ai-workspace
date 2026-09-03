@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from agents.tracing import set_trace_processors
-from fastapi import APIRouter, FastAPI, Request, Response
+from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from specstar import SpecStar
@@ -1115,6 +1115,31 @@ def create_app(
     # #177: generate specstar's CRUD routes onto the /api router (not the app),
     # but DON'T include it yet — more hand-written routes are added to `api`
     # below; we include it once, after all routes exist, before spec.openapi.
+    # plan-delete-item-cascade: the generic `/permanently` on a WorkItem is the
+    # old footgun — it deletes the ROW and orphans everything the item owns
+    # (files, blobs, sandbox, and a disk-ledger row charged to the owner
+    # forever). Registered BEFORE spec.apply so first-match-wins refuses it and
+    # names the cascade route. The generic SOFT delete stays: no FE caller, and
+    # the cascade's own internal `rm.permanently_delete` is untouched (this
+    # blocks the HTTP door, not the resource action).
+    from ..apps.registry import registered_apps, resource_route
+
+    def _block_raw_permanent(kebab: str) -> None:
+        @api.delete(f"{kebab}/{{resource_id}}/permanently", include_in_schema=False)
+        async def _refuse(resource_id: str) -> None:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "work items are deleted through DELETE /a/{slug}/items/{item_id} "
+                    "— the cascade that also removes the item's files, sandbox, "
+                    "conversations and disk-quota charge. This raw route would "
+                    "orphan all of that."
+                ),
+            )
+
+    for app_slug in registered_apps():
+        _block_raw_permanent(resource_route(app_slug))
+
     with boot_step("apply spec to backend (DB schema)"):
         spec.apply(app, router=api, auto_include=False)
 
