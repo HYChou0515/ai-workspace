@@ -30,6 +30,7 @@ from .tool_authz import authorize_tool
 
 if TYPE_CHECKING:
     from ..apps.subagents import SubagentDef
+    from ..factories import SubagentModel
     from ..resources.conversation import Citation
 
 _LOGGER = logging.getLogger(__name__)
@@ -1154,7 +1155,7 @@ async def ask_knowledge_base_impl(
 
 
 async def run_agent_impl(
-    ctx: RunContextWrapper[AgentToolContext], agent_type: str, prompt: str
+    ctx: RunContextWrapper[AgentToolContext], agent_type: str, prompt: str, model: str | None = None
 ) -> str:
     """Delegate a whole sub-task to a named sub-agent and get back its report.
     The ones you can call are listed in your system prompt — when none are
@@ -1176,6 +1177,22 @@ async def run_agent_impl(
     run = ctx.context.run_agent
     if run is None:
         return "error: run_agent is only available in an App workspace turn"
+    # `model` (offered only when the operator curated `agents.subagent_models`):
+    # resolve the picked name here — the seam below gets the ENDPOINT, never the
+    # list. Re-checked despite the schema enum, because small local models
+    # ignore enums; the refusal names the options, same shape as the
+    # unknown-agent_type one further down.
+    picked = None
+    if model is not None:
+        choices = ctx.context.subagent_models
+        picked = next((c for c in choices if c.name == model), None)
+        if picked is None:
+            if offered := ", ".join(c.name for c in choices):
+                return f"error: no sub-agent model named {model!r}. Available: {offered}"
+            return (
+                f"error: no sub-agent model named {model!r} — this deploy curates none; "
+                "call run_agent without `model`."
+            )
     defs = ctx.context.subagent_defs
     chosen = next((d for d in defs if d.name == agent_type), None)
     if chosen is None:
@@ -1205,7 +1222,14 @@ async def run_agent_impl(
                 "Create one with save_subagent and it is callable right away."
             )
         return f"error: no sub-agent named {agent_type!r}, and none are defined."
-    return await run(ctx.context, chosen, prompt, ctx.context.on_exec_output)
+    if picked is None:
+        return await run(ctx.context, chosen, prompt, ctx.context.on_exec_output)
+    report = await run(ctx.context, chosen, prompt, ctx.context.on_exec_output, model=picked)
+    # #748's rule, applied to delegation: where a report came from must be
+    # visible — to the model reading it AND in the transcript. A PREFIX, not a
+    # suffix: the output cap trims the tail, and a report sitting at the
+    # ceiling would lose exactly this line.
+    return f"[sub-agent ran on {picked.name}]\n\n{report}"
 
 
 async def _live_subagent_defs(ctx: AgentToolContext) -> tuple[SubagentDef, ...]:
@@ -2657,6 +2681,47 @@ def _with_absent_convention(tool: FunctionTool) -> FunctionTool:
     return dataclasses.replace(tool, description=desc)
 
 
+def _offer_subagent_models(
+    tool: FunctionTool, models: Collection[SubagentModel] | None
+) -> FunctionTool:
+    """Shape `run_agent`'s `model` argument to the operator's curated list
+    (plan-subagent-model-choice, the #537 rule both ways).
+
+    No list ⇒ the argument is REMOVED from the schema outright — an option that
+    cannot be used must not appear, and the tool is byte-identical to the
+    pre-feature one. A list ⇒ the argument's string side gets the names as its
+    `enum` (provider-side validation for free) and the description grows one
+    line per preset — the operator's own `description`, the same line the FE
+    picker shows humans — because an enum of bare names tells the model nothing
+    about which engine suits which sub-task."""
+    schema = tool.params_json_schema or {}
+    props = schema.get("properties")
+    if not isinstance(props, dict) or "model" not in props:
+        return tool
+    if not models:
+        del props["model"]
+        req = schema.get("required")
+        if isinstance(req, list) and "model" in req:
+            req.remove("model")
+        return tool
+    names = [m.name for m in models]
+    prop = props["model"]
+    variants = prop.get("anyOf") if isinstance(prop, dict) else None
+    if isinstance(variants, list):
+        for v in variants:
+            if isinstance(v, dict) and v.get("type") == "string":
+                v["enum"] = names
+    elif isinstance(prop, dict):
+        prop["enum"] = names
+    lines = "\n".join(f"- `{m.name}` — {m.description or '(no description)'}" for m in models)
+    note = (
+        "`model` — the engine this delegation runs on (send JSON `null` to use "
+        f"this conversation's model):\n{lines}"
+    )
+    desc = f"{tool.description}\n\n{note}" if tool.description else note
+    return dataclasses.replace(tool, description=desc)
+
+
 def _inline_schema_refs(schema: dict[str, Any]) -> dict[str, Any]:
     """Resolve local ``#/$defs/...`` refs in a tool's JSON schema and drop the
     ``$defs`` block plus pydantic's decorative ``title``s. Semantically the
@@ -2689,6 +2754,7 @@ def build_tools(
     profile: str | None = None,
     has_subagents: bool = False,
     skills_reachable: bool | None = None,
+    subagent_models: Collection[SubagentModel] | None = None,
 ) -> list[FunctionTool]:
     """Build FunctionTool list for the Agent. If `allowed` is None, the
     workspace toolset (file/exec); otherwise exactly the named tools.
@@ -2720,16 +2786,22 @@ def build_tools(
     # `workspace_app.tooling.registry.build_function_tools`. The colon syntax
     # entries (`pkg:cmd`) likewise aren't built-ins and fall through here.
     tools = [
-        _with_absent_convention(
-            function_tool(
-                _guard_workspace_full(_IMPLS[n]),
-                name_override=n,
-                strict_mode=n not in _NONSTRICT_TOOLS,
-            )
+        function_tool(
+            _guard_workspace_full(_IMPLS[n]),
+            name_override=n,
+            strict_mode=n not in _NONSTRICT_TOOLS,
         )
         for n in names
         if n in _IMPLS
     ]
+    # The model-choice surgery runs BEFORE `_with_absent_convention`: with no
+    # curated list the `model` property is REMOVED, and the absent-convention
+    # note reads the emitted schema — done the other way round it would tell
+    # the model how to leave empty an argument that no longer exists.
+    tools = [
+        _offer_subagent_models(t, subagent_models) if t.name == "run_agent" else t for t in tools
+    ]
+    tools = [_with_absent_convention(t) for t in tools]
     # #613 live-probe fix: pydantic renders a nested TypedDict param as
     # `$defs` + `$ref`, which local chat templates (Ollama qwen3) present so
     # poorly the model either declares the tool "not available" or emits nested

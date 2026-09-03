@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as importlib_version
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from agents.tracing import set_trace_processors
 from fastapi import APIRouter, FastAPI, Request, Response
@@ -20,6 +20,11 @@ from ..agent.config_catalog import AgentConfigCatalog
 from ..agent.context import AgentToolContext
 from ..apps.subagents import SubagentDef
 from ..config.schema import EnhancementSettings, OffHoursSettings, PerUserResources
+
+if TYPE_CHECKING:
+    # Annotation-only: `factories` composes THIS module, so a runtime import
+    # here would be circular. `SubagentModel` values arrive through parameters.
+    from ..factories import SubagentModel
 from ..files import WorkspaceFiles, WorkspaceFull
 from ..filestore.protocol import FileNotFound, FileStore
 from ..health import CheckRegistry, CheckResult
@@ -197,6 +202,10 @@ def create_app(
     filestore: FileStore,
     runner: AgentRunner,
     agent_config_catalog: AgentConfigCatalog | None = None,
+    # plan-subagent-model-choice: the operator's curated engines a run_agent
+    # call may pick (`resolve_subagent_models(settings)` in production).
+    # Empty ⇒ the tool grows no `model` argument anywhere.
+    subagent_models: tuple[SubagentModel, ...] = (),
     kb_embedder: Embedder | None = None,
     kb_code_embedder: Embedder | None = None,  # P3.0 code-specialised embedder
     kb_image_embedder: ImageEmbedder | None = None,  # #513 image embedder (embedding_img)
@@ -1356,10 +1365,12 @@ def create_app(
         defn: SubagentDef,
         prompt: str,
         emit: OutputSink | None = None,
+        model: SubagentModel | None = None,
     ) -> str:
         """Run one sub-agent for the `run_agent` tool, relaying its work into the
         calling turn's tool card so a delegated task shows movement rather than a
-        card that sits there."""
+        card that sits there. `model` is the caller's pick from
+        `agents.subagent_models`, already resolved by the tool impl."""
 
         def relay(ev: AgentEvent) -> None:
             if emit is None:
@@ -1367,7 +1378,7 @@ def create_app(
             if line := progress_line(ev):
                 emit(line.encode())
 
-        return await run_agent_task(runner, parent_ctx, defn, prompt, on_event=relay)
+        return await run_agent_task(runner, parent_ctx, defn, prompt, model=model, on_event=relay)
 
     # #506: close the card-gen loop — swap the coordinator's fallback (open-loop)
     # drafter for the AGENTIC one when card drafting is enabled. #506/#577 follow-up:
@@ -1442,6 +1453,10 @@ def create_app(
         # #397: lets the request_wiki_update tool submit a user's wiki correction.
         wiki_coordinator=wiki_coordinator,
         run_agent=_delegate,
+        # plan-subagent-model-choice: the operator's curated run_agent engines
+        # (production: `resolve_subagent_models(settings)`), stamped onto every
+        # turn ctx so `_agent_kwargs` can shape the tool's schema.
+        subagent_models=subagent_models,
     )
 
     # #624: let the budget consult what the RUNNER has learned about each

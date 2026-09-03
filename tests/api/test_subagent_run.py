@@ -11,6 +11,8 @@ from __future__ import annotations
 import dataclasses
 from collections.abc import AsyncIterator
 
+import msgspec
+
 from workspace_app.agent.context import AgentToolContext
 from workspace_app.api.events import AgentEvent, MessageDelta, RunDone, RunError, ToolStart
 from workspace_app.api.subagent_run import run_agent_task
@@ -217,3 +219,84 @@ async def test_a_sub_agents_kb_citations_do_not_get_attributed_to_the_parent():
     assert runner.ctx.subagent_citations == {}
     runner.ctx.subagent_citations.setdefault("ask_knowledge_base", []).append([])
     assert len(parent.subagent_citations["ask_knowledge_base"]) == 1
+
+
+async def test_a_model_override_moves_the_child_onto_that_preset_endpoint():
+    """plan-subagent-model-choice: the caller may hand the sub-agent a resolved
+    preset endpoint; the child's config then carries ITS model + endpoint +
+    key — everything else about the child (prompt swap, tool narrowing, clean
+    history) is exactly the un-overridden behaviour. No override ⇒ the child
+    keeps the parent's engine, byte-for-byte as today."""
+    from workspace_app.factories import LlmEndpoint, SubagentModel
+
+    ep = SubagentModel(
+        name="cheap",
+        description="",
+        endpoint=LlmEndpoint(
+            model="m-cheap",
+            base_url="http://cheap:4000/v1",
+            api_key="ck",
+            reasoning_effort=None,
+            ttft_s=8.0,
+            idle_s=120.0,
+            cooldown_s=30.0,
+        ),
+    )
+    defn = SubagentDef(name="digger", description="", tools=["read_file"], body="dig")
+
+    runner = _Recorder([MessageDelta(text="ok"), RunDone()])
+    await run_agent_task(runner, _parent(), defn, "go", model=ep)
+    assert runner.ctx is not None and runner.ctx.agent_config is not None
+    cfg = runner.ctx.agent_config
+    assert cfg.model == "m-cheap"
+    assert cfg.llm_base_url == "http://cheap:4000/v1"
+    assert cfg.llm_api_key == "ck"
+    assert cfg.system_prompt == "dig"  # the definition still wins the prompt
+
+    parent = _parent()
+    assert parent.agent_config is not None
+    plain = _Recorder([MessageDelta(text="ok"), RunDone()])
+    await run_agent_task(plain, parent, defn, "go")
+    assert plain.ctx is not None and plain.ctx.agent_config is not None
+    assert plain.ctx.agent_config.model == parent.agent_config.model  # inherited
+
+
+async def test_a_model_override_swaps_the_whole_endpoint_bundle_not_just_the_address():
+    """The parent's endpoint-shaped declarations must not leak onto a picked
+    engine: a parent on a vouched proxy (`reports_usage=True`) delegating to an
+    unvouched local preset would send `include_usage` there and persist
+    litellm's estimate as a measurement (#748/#751); `vision=True` would feed
+    raw images to a text-only model. The picked preset's own declarations win —
+    in BOTH directions (True→False and False→True)."""
+    from workspace_app.factories import LlmEndpoint, SubagentModel
+
+    choice = SubagentModel(
+        name="local",
+        description="",
+        endpoint=LlmEndpoint(
+            model="m-local",
+            base_url=None,
+            api_key=None,
+            reasoning_effort=None,
+            ttft_s=8.0,
+            idle_s=120.0,
+            cooldown_s=30.0,
+        ),
+        reports_usage=False,
+        vision=False,
+        frequency_penalty=0.5,
+    )
+    parent = _parent()
+    assert parent.agent_config is not None
+    parent = dataclasses.replace(
+        parent,
+        agent_config=msgspec.structs.replace(parent.agent_config, reports_usage=True, vision=True),
+    )
+    defn = SubagentDef(name="digger", description="", tools=[], body="dig")
+    runner = _Recorder([MessageDelta(text="ok"), RunDone()])
+    await run_agent_task(runner, parent, defn, "go", model=choice)
+    assert runner.ctx is not None and runner.ctx.agent_config is not None
+    cfg = runner.ctx.agent_config
+    assert (cfg.reports_usage, cfg.vision) == (False, False)  # the preset's, not the parent's
+    assert cfg.frequency_penalty == 0.5
+    assert (cfg.presence_penalty, cfg.repetition_penalty) == (None, None)
