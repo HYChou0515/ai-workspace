@@ -120,8 +120,9 @@ def _http(client: Any, timeout: float) -> Iterator[Any]:
 def _read_model_info(url: str, *, model: str, client: Any, timeout: float) -> EndpointLimits | None:
     try:
         resp = client.get(url)
-        if getattr(resp, "status_code", 0) != 200:
-            logger.debug("context probe: %s answered %s", url, getattr(resp, "status_code", "?"))
+        status = getattr(resp, "status_code", 0)
+        if status != 200:
+            _report(url, status)
             return None
         body = resp.json()
     except Exception as exc:  # noqa: BLE001 — a probe must never break anything
@@ -147,6 +148,29 @@ def _read_model_info(url: str, *, model: str, client: Any, timeout: float) -> En
             logger.debug("context probe: %s reported an unusable count", url)
             return None
     return None
+
+
+def _report(url: str, status: Any) -> None:
+    """A missing route and a refused one are opposite diagnoses.
+
+    404 is the ordinary answer — this endpoint is not a litellm proxy, nothing
+    is wrong, and a line per endpoint would be noise drowning the signal. But
+    401/403 says the route EXISTS and turned us away, which on litellm means the
+    key this app authenticates with does not reach the management routes. That
+    is a fixable misconfiguration, and logging it the same way as a 404 left it
+    indistinguishable from "no proxy here": both end as a silent `unknown`
+    ceiling and no compaction, on a deployment whose operator has already done
+    their half of the work and is waiting to see it take effect."""
+    if status in (401, 403):
+        logger.info(
+            "context probe: %s answered %s — the route exists but this key cannot read it, "
+            "so the endpoint's declared max_input_tokens cannot be used. Grant the app's key "
+            "access to the proxy's model-info route, or set history.context_limit.",
+            url,
+            status,
+        )
+        return
+    logger.debug("context probe: %s answered %s", url, status)
 
 
 def _as_count(value: Any) -> int | None:

@@ -52,6 +52,30 @@ prompt 越來越大 → prefill 超過 TTFT 門檻(預設 8 秒)
 
 ⇒ `unknown`。
 
+### ⚠️ 新這一段**還沒有**真實部署的量測
+
+上面那張表的每一列都有依據,**新加的第 5 段沒有**。這裡誠實寫下來,因為這份文件
+前面才剛因為同一件事付過代價(見下)。
+
+已經量到的只有:litellm **登錄表**裡 3,518 筆有 2,888 筆同時帶兩個數字,只有 6 筆
+單獨帶 `max_tokens`;以及 litellm 自己對這個欄位的定義原文是
+*"LEGACY parameter. set to max_output_tokens if provider specifies it. IF not set to
+max_input_tokens"*。**那是登錄表,不是你們的 proxy。**
+
+還沒有答案的是這個:**app 用的那把 key 打得到 proxy 的管理路由嗎?** litellm 的
+`/model/info` 常常只開給 master key。打不到的話,這一段跟前四段一樣安靜,而且
+「沒權限」和「這裡根本不是 litellm proxy」**在舊的 log 裡長得一模一樣**。
+
+所以這個 PR 讓它自己講(不必再寫腳本、不必貼設定):
+
+| 想知道的事 | 部署後在 log 找 | 看到什麼就代表 |
+|---|---|---|
+| 階梯到底走到哪一段 | `context ceiling` | `source=declared` 成功;`source=estimated` 是我們推導的;`source=unknown` 全滅 |
+| key 有沒有權限 | `context probe` + `401`/`403` | 有這行 = 路由在、但我們讀不到 → 要開權限 |
+| 是不是根本沒有這條路由 | 上面兩行都沒有,且 ceiling 是 `unknown` | 這個端點前面沒有 litellm proxy |
+
+`/context` 這個 route 也多回一個 `limit_source` 欄位,所以同樣的答案可以直接 curl 到。
+
 ### 一個代價高的錯誤,記在這裡
 
 第 2 段曾經被量成「拒絕但不講數字」,據此寫進文件說「這個部署學不到上限」。**那次量測是在
@@ -192,7 +216,19 @@ litellm 的管理路由,回它**被設定成什麼**。兩件事要分開:
 | **P4** | 接進 `turn_context`(照 `catalog` 的 `deferred_lookup` 樣式,不動 runner) |
 | **P5** | 文件 |
 
-全部落地。階梯現在是六段:
+對抗式 review 之後(9 項發現,全部修掉):
+
+| | 內容 |
+|---|---|
+| **P6** | 空字串的 `llm_base_url` **是**「用這個部署的端點」——這一段本來對它唯一存在目的的那種部署完全沒作用 |
+| **P7** | 兩種拼法變成問同一個位址兩次;`_as_count` 讓 `0.5` 變成 `0`、讓 `inf` 逸出 |
+| **P8** | 每次 probe 洩漏連線池;proxy 的否定答案被永久記住(對面是**別人服務上的設定檔**) |
+| **P9** | 推導出來的天花板若裝不下固定開銷就拒收(否則每回合只剩一則訊息);比率在載入時做範圍檢查 |
+| **P10** | 把「哪一段答的」講出來——log 一行 + `/context` 的 `limit_source` |
+| **P11** | 登錄表裡同一個曖昧欄位本來也被當精確值讀 |
+| **P12** | 端到端測接縫(用突變驗證會紅);死旋鈕檢查延伸到第二跳 |
+
+階梯現在是六段:
 
 ```
 config → learned → declared → catalog → estimated → unknown

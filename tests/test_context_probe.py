@@ -436,3 +436,34 @@ def test_the_tokenize_probe_also_closes_what_it_opened(monkeypatch):
 
     assert len(made) == 1
     assert made[0].closed
+
+
+def test_a_refusal_is_reported_but_a_missing_route_is_not(caplog):
+    """404 and 403 are opposite diagnoses and were logged identically.
+
+    A 404 is the ordinary answer: this endpoint is not a litellm proxy, nothing
+    is wrong, and saying so per endpoint would be noise. A 401/403 is the
+    opposite — the route EXISTS and refused us, which on litellm means the key
+    the app authenticates with does not reach the management routes. That is a
+    fixable misconfiguration, and it is otherwise indistinguishable from "no
+    proxy here": both end as a silent `unknown` ceiling with no compaction, on a
+    deployment where the operator has already done their half of the work.
+    """
+    import logging
+
+    from workspace_app.context_probe import probe_endpoint_limits
+
+    with caplog.at_level(logging.INFO):
+        probe_endpoint_limits(
+            base_url="http://proxy/v1", model="m", client=_get_client(_Resp(404, {}))
+        )
+    assert not [r for r in caplog.records if r.levelno >= logging.INFO]
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        probe_endpoint_limits(
+            base_url="http://proxy/v1", model="m", client=_get_client(_Resp(403, {}))
+        )
+    said = "\n".join(r.getMessage() for r in caplog.records if r.levelno >= logging.INFO)
+    assert "403" in said, said
+    assert "max_input_tokens" in said, "and it says what to do about it"
