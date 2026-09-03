@@ -571,7 +571,7 @@ def create_app(
             "operation — durable write-back would silently no-op (data loss). Use "
             "sandbox.kind: http (with SANDBOX_HOST_NFS_ROOT on the host) or unset it."
         )
-    from ..apps.resolve import find_work_item
+    from ..apps.resolve import debtor_of, find_work_item
 
     # item -> (slug, owner), memoised. `find_work_item` is a store round-trip,
     # and its own docstring warns the call COUNT is the latency. Without this the
@@ -606,7 +606,7 @@ def create_app(
             slug, owner, cpu, mem = "", "", None, None
         else:
             slug, item = found[0], found[1]
-            owner = item.owner
+            owner = debtor_of(spec, slug, item_id, item)
             cpu = getattr(item, "sandbox_cpu_cores", None)
             mem = getattr(item, "sandbox_memory_bytes", None)
         if len(_item_facts) > _ITEM_FACT_MAX:  # bounded: this is a cache, not a map
@@ -844,9 +844,11 @@ def create_app(
         `check_access` is PURE, so one fact fetch per item and one groups
         lookup per refusal is all the information the decision needs.
 
-        A missing item, or one this reader may not see, is simply absent from
-        the result — "an environment you cannot see" rather than a 500 or a
-        disclosure."""
+        A row is never dropped: a missing item, or one this reader may not see,
+        comes back with an EMPTY title. Everything in this list is charged to
+        the reader, so "an environment you cannot name" is still one they can
+        close, while "no environments" beside "1 of 1 in use" is not something
+        anybody can act on."""
         from ..resources.groups import groups_of
 
         viewer = get_user_id()
@@ -877,7 +879,14 @@ def create_app(
                     superusers=superusers,
                 )
             except Exception:  # noqa: BLE001 — no access is an ordinary answer
-                continue
+                # KEPT, unnamed — the same answer `/me/resources` gives, and for
+                # the same reason. Every row here is charged to the viewer, so
+                # dropping it tells somebody "1 of 1 in use" and then hands them
+                # an empty list to act on. The title is the disclosure; the id
+                # is something they are already paying for. The two surfaces had
+                # opposite rules written into their own docstrings, which is how
+                # a rule stops being true.
+                out[item_id] = ""
             else:
                 out[item_id] = getattr(facts.item, "title", "")
         return out
@@ -931,7 +940,6 @@ def create_app(
         activity_store,
         user_limits.for_user,
         owner_of=_owner_of,
-        has_live_sandbox=registry.has_live_sandbox,
         # The SAME number the ledger charges a live sandbox (`registry._bump`),
         # so "does one more fit?" and "what is already held?" cannot answer in
         # different units.

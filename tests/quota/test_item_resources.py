@@ -1656,7 +1656,13 @@ def test_deleting_an_item_does_not_free_its_slot_while_it_still_runs(monkeypatch
         assert client.post(f"/a/rca/items/{second}/exec", json={"cmd": ["echo"]}).status_code == 507
 
         assert client.delete(f"/rca-investigation/{first}").status_code in (200, 204)
-        client.post(f"/a/rca/items/{first}/exec", json={"cmd": ["echo"]})
+        # The poke is ADMITTED, and the assertion says so: the positive access
+        # memo holds for five seconds and a delete does not invalidate it, which
+        # is the door the evasion walked through. Leaving the status unchecked
+        # let this pass for the wrong reason — shorten the memo and the sequence
+        # it narrates would stop happening while the test stayed green.
+        poke = client.post(f"/a/rca/items/{first}/exec", json={"cmd": ["echo"]})
+        assert poke.status_code == 200, poke.text
 
         still_refused = client.post(f"/a/rca/items/{second}/exec", json={"cmd": ["echo"]})
         assert still_refused.status_code == 507, (
@@ -1701,10 +1707,16 @@ def test_a_deleted_item_is_billed_but_not_operable():
 
     "Still owes for its sandbox" and "still operable" are different questions.
     So resolving a deleted row is OPT-IN, taken only by the paths that answer
-    the first — the debtor, the size, the resources page — and the default stays
-    a miss, which is what keeps one person's delete from 410ing everybody's
-    page. Both halves are asserted here because a fix for either one alone is
-    what the last two rounds actually shipped.
+    the first — the debtor, the size, the resources page. Both halves are
+    asserted here because a fix for either one alone is what the last two rounds
+    actually shipped.
+
+    The refusal is **410 Gone**, not 404: an outside system lists items and then
+    acts on them, and "that one is finished, open a new one" is a different
+    instruction from "no such item". CI caught me breaking that contract — no
+    review round did — so the rule now lives at the GATE the routes share:
+    operating on one item says GONE, while a page that lists or bills across
+    MANY items never lets one deleted row take the page down.
 
     `unused` is deleted without ever being addressed through the API: the access
     memo holds a POSITIVE answer for five seconds and a delete does not
@@ -1734,8 +1746,9 @@ def test_a_deleted_item_is_billed_but_not_operable():
         ):
             call = getattr(client, verb)
             reply = call(path, json=body) if body is not None else call(path)
-            assert reply.status_code != 200, f"{verb.upper()} {path} still works on a deleted item"
-            assert reply.status_code != 410, f"{verb.upper()} {path} leaked a 410: {reply.text}"
+            assert reply.status_code == 410, (
+                f"{verb.upper()} {path} answered {reply.status_code}, not 410 Gone: {reply.text}"
+            )
 
 
 def test_a_deleted_item_is_still_charged_at_the_size_it_chose(monkeypatch):
@@ -1797,3 +1810,116 @@ def test_the_resources_page_names_a_deleted_items_environment():
         rows = [e for e in client.get("/me/resources").json()["live"] if e["item_id"] == item]
 
         assert rows and rows[0]["title"] == "t", f"a deleted item's row lost its name: {rows}"
+
+
+def test_blanking_the_owner_does_not_switch_the_quota_off(monkeypatch):
+    """Round-7 finding 1 — one PATCH per extra sandbox, and the gate stops.
+
+    #687 (`owner` is writable by anyone with write access) is an accepted
+    trade-off, and §4 states it as "point `owner` at yourself and raise the
+    numbers" — the bill MOVES. Blanking it is different in kind: `_owner_of`
+    answers `None`, and that reads as NO DEBTOR at every gate at once. The
+    admission gate returns early, the disk cap returns early, usage is never
+    recorded, and the sandbox appears on nobody's resources page — so it is also
+    a sandbox nobody can see to close.
+
+    So an empty `owner` falls back to the creator. `created_by` is specstar's
+    own, set at create and not writable through any route, which is what makes
+    it a floor rather than a second field to keep in sync. `owner` still wins
+    whenever it says anything, so the documented trade-off is unchanged: this
+    only removes the answer "nobody".
+    """
+    from workspace_app.api import app as app_mod
+
+    monkeypatch.setattr(app_mod, "_ITEM_FACT_TTL_S", 0.0)
+    with _app(PerUserResources(count=1), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        first = _mk(spec, WHO["id"])
+        second = _mk(spec, WHO["id"])
+        _wake(client, first)
+        assert client.post(f"/a/rca/items/{second}/exec", json={"cmd": ["echo"]}).status_code == 507
+
+        blanked = client.patch(f"/rca-investigation/{second}", json={"owner": ""})
+        assert blanked.status_code in (200, 204), blanked.text
+
+        still_refused = client.post(f"/a/rca/items/{second}/exec", json={"cmd": ["echo"]})
+
+        assert still_refused.status_code == 507, (
+            f"blanking `owner` switched the per-person quota off: {still_refused.text}"
+        )
+
+
+def test_an_item_that_ran_once_still_occupies_a_slot_the_next_time():
+    """Round-7 finding 5 — the admission gate asked the wrong thing, and I had
+    already worked that out one file over.
+
+    "Does this item already hold its slot?" was answered by
+    `registry.has_live_sandbox`, which on `kind: local` degrades to "does the
+    item's directory exist" — and those dirs outlive the processes until the
+    8-hour reaper. So the FIRST run of an item leaves a mark that reads as
+    "already holding a slot" for the rest of the day: close it, start somebody
+    else, and it lets itself back in for free.
+
+    `set_item_resources` rejected that same source and moved to the heartbeat,
+    with the measurement written into its docstring ("with the pod's session
+    gone and the dir still present it answers True"). The judgement did not
+    travel one file.
+
+    Now the gate reads the ledger it is about to count — "does it hold a slot"
+    and "what is held" cannot disagree when they are the same row.
+    """
+    with _app(PerUserResources(count=1), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        sandbox,
+    ):
+        sandbox.pretend_dir_survives = True
+        first = _mk(spec, "alice")
+        second = _mk(spec, "alice")
+        _wake(client, first)
+        assert client.post(f"/a/rca/items/{second}/exec", json={"cmd": ["echo"]}).status_code == 507
+
+        assert client.delete(f"/me/resources/live/{first}").status_code == 204
+        assert client.post(f"/a/rca/items/{second}/exec", json={"cmd": ["echo"]}).status_code == 200
+
+        back_in = client.post(f"/a/rca/items/{first}/exec", json={"cmd": ["echo"]})
+
+        assert back_in.status_code == 507, (
+            f"an item that had run once let itself back in for free: {back_in.text}"
+        )
+
+
+def test_the_debtor_of_an_item_they_cannot_read_sees_the_row_but_not_its_name():
+    """`include_deleted` relaxes what can be FOUND, never who may SEE it — and
+    every other test of that sentence reads as one person who is owner,
+    creator and permission-holder at once, so none of them could tell the two
+    halves apart.
+
+    Here they come apart: bob creates a private item and states alice as its
+    `owner`, so the sandbox is billed to alice while the item stays unreadable
+    to her. She is refused, and the refusal must still list the environment
+    holding her budget — it is hers to close — with NO title, because naming it
+    would read bob's private item back to her.
+    """
+    with _app(PerUserResources(count=1), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        WHO["id"] = "bob"
+        hers = _mk(spec, "alice", permission=Permission(visibility="private"))
+        _wake(client, hers)
+
+        WHO["id"] = "alice"
+        mine = _mk(spec, "alice")
+        refused = client.post(f"/a/rca/items/{mine}/exec", json={"cmd": ["echo"]})
+
+        assert refused.status_code == 507, refused.text
+        holding = refused.json()["detail"]["holding"]
+        assert [h["item_id"] for h in holding] == [hers], holding
+        assert holding[0]["title"] == "", (
+            f"the debtor was shown the title of an item she cannot read: {holding}"
+        )

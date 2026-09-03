@@ -78,11 +78,23 @@ class SandboxQuotaExceeded(Exception):
 class AdmissionGate:
     """Decides whether one more live sandbox may be opened for an item.
 
-    `has_live_sandbox` answers "is this item already holding a slot?" — wired to
-    the registry's liveness probe, which is authoritative across pods (#366).
+    "Is this item already holding a slot?" is answered by the LEDGER — the same
+    heartbeat rows this gate is about to count — and not by the registry's
+    liveness probe. With no address store (`kind: local`) that probe degrades to
+    "does the item's directory exist", and those dirs outlive the processes
+    until the eight-hour reaper: an item that ran once read as already-holding
+    for the rest of the day, so closing it and starting somebody else let it
+    back in for free, two live sandboxes under a limit of one.
+
+    `set_item_resources` had already rejected the same source for the same
+    reason, with the measurement in its docstring; the judgement did not travel
+    one file. Reading the ledger also means "does it hold a slot" and "what is
+    held" cannot disagree — they are the same row.
+
     `owner_of` resolves the debtor; an item with no resolvable owner is NOT
     gated, because charging a limit to nobody can only produce a refusal no
-    person can act on.
+    person can act on. (`owner` blank is not that case — see
+    `apps.resolve.debtor_of`, which falls back to the creator.)
     """
 
     def __init__(
@@ -91,7 +103,6 @@ class AdmissionGate:
         limits_for: Callable[[str], Awaitable[PerUserResources]],
         *,
         owner_of: Callable[[str], str | None],
-        has_live_sandbox: Callable[[str], Awaitable[bool]],
         cost_of: Callable[[str], Awaitable[ResourceLimits]] | None,
         window_ms: int,
         now_ms: Callable[[], int],
@@ -114,7 +125,6 @@ class AdmissionGate:
         # ledger.
         self._limits_for = limits_for
         self._owner_of = owner_of
-        self._has_live = has_live_sandbox
         self._window_ms = window_ms
         self._now_ms = now_ms
 
@@ -146,11 +156,11 @@ class AdmissionGate:
         limits = await self._limits_for(owner)
         if not self._configured(limits):
             return
-        if await self._has_live(item_id):
+        since = self._now_ms() - self._window_ms
+        if await self._activity.is_live(item_id, since_ms=since):
             return  # already holding its slot — never refuse what is already open
         if incoming is None and self._cost_of is not None:
             incoming = await self._cost_of(item_id)
-        since = self._now_ms() - self._window_ms
         live = [
             s for s in await self._activity.live_for(owner, since_ms=since) if s.item_id != item_id
         ]

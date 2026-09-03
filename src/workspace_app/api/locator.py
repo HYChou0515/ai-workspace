@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from typing import NamedTuple
+from typing import NamedTuple, NoReturn
 
 from fastapi import HTTPException
 from specstar import SpecStar
@@ -25,7 +25,7 @@ from specstar.types import ResourceIDNotFoundError
 
 from ..apps.catalog import AppCatalog
 from ..apps.manifest import load_app_manifest
-from ..apps.resolve import find_work_item, resolve_item_agent_config
+from ..apps.resolve import debtor_of, find_work_item, resolve_item_agent_config
 from ..perm import Verb
 from ..resources import AgentConfig, Conversation
 from ..resources.groups import groups_of
@@ -34,6 +34,7 @@ from .item_authz import (
     ItemAccessFacts,
     check_access,
     load_access_facts,
+    refuse_if_gone,
 )
 from .item_conversation_perm import item_conversation_mirror
 
@@ -137,15 +138,18 @@ class ItemLocator:
         return dict(found[1].env_vars) if found is not None else {}
 
     def owner_of(self, item_id: str) -> str | None:
-        """The item's `owner` field — who its resources are charged to (#687).
-        Deliberately not specstar's `created_by`; see `quota.admission`.
+        """Who this item's resources are charged to — `owner`, falling back to
+        the creator when it is blank. The rule itself is `apps.resolve.debtor_of`,
+        shared with the quota facts memo so the two cannot disagree.
 
         Reads a DELETED item too, because deleting an item does not stop its
         sandbox: the machine keeps running until the reaper takes it, and
         somebody has to be charged for it in the meantime. Returning `None`
         here read as "nobody owes" at four gates at once."""
         found = find_work_item(self._spec, item_id, include_deleted=True)
-        return found[1].owner if found is not None else None
+        if found is None:
+            return None
+        return debtor_of(self._spec, found[0], item_id, found[1]) or None
 
     def slug_of(self, item_id: str) -> str | None:
         """The App slug owning an item — pairs with `profile_of` so the
@@ -160,10 +164,21 @@ class ItemLocator:
         for the handler to use."""
         found = find_work_item(self._spec, item_id)
         if found is None or found[0] != slug:
-            raise HTTPException(
-                status_code=404, detail=f"item {item_id!r} not found in app {slug!r}"
-            )
+            self._reject_missing(slug, item_id)
         return item_id
+
+    def _reject_missing(self, slug: str, item_id: str) -> NoReturn:
+        """404 for an id that never was, 410 for one that is finished.
+
+        The second lookup is on the FAILURE path only, so the gate every item
+        route runs still costs exactly one read when it lets you through. A
+        deleted item is deliberately told apart from an unknown one: this API is
+        polled by an outside system that lists items and then acts on them, and
+        "that one is gone, open a new one" and "the platform is broken, retry"
+        are different instructions."""
+        if find_work_item(self._spec, item_id, include_deleted=True) is not None:
+            raise HTTPException(status_code=410, detail=f"item {item_id!r} is gone")
+        raise HTTPException(status_code=404, detail=f"item {item_id!r} not found in app {slug!r}")
 
     def require_access(self, slug: str, item_id: str, verb: Verb) -> str:
         """#306 PR3 — the authorizing sibling of ``require_item``: validate slug↔item,
@@ -184,7 +199,7 @@ class ItemLocator:
         now = self._now()
         cached = self._access.get(item_id)
         if cached is None or now - cached[1] >= self._access_window:
-            facts = load_access_facts(self._spec, item_id)
+            facts = load_access_facts(self._spec, item_id, include_deleted=True)
             # Cache the POSITIVE answer only. "No such item" is the one result
             # that goes stale in the direction that breaks things: an id looked
             # up moments before it exists — a workflow addressing the item it
@@ -198,6 +213,7 @@ class ItemLocator:
         check_access(
             facts, slug, item_id, verb, user=user, groups=groups, superusers=self._superusers
         )
+        refuse_if_gone(facts, item_id)
         return item_id
 
     def _groups_for(self, user: str, now: float) -> frozenset[str]:

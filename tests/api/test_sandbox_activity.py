@@ -90,3 +90,27 @@ async def test_a_heartbeat_that_does_not_know_the_owner_keeps_the_one_on_record(
 
     assert await store.owner_of("ws-1") == "alice"
     assert [s.item_id for s in await store.live_for("alice", since_ms=0)] == ["ws-1"]
+
+
+async def test_the_owner_survives_the_branch_that_restores_a_forgotten_row():
+    """Round-7 finding 3 — the backstop held on one branch of `_bump_sync` and
+    not the other, and the existing test for that branch could not see it.
+
+    `forget()` soft-deletes the row, so a later bump takes the
+    restore-then-write path. The owner lookup behind the backstop read the row
+    WITHOUT `include_deleted`, found nothing, and wrote the empty owner anyway —
+    so "a debtor is only ever replaced by another name" was false exactly where
+    the row had been put aside and brought back.
+
+    `test_bump_after_forget_restores_the_row` already runs this branch with an
+    ownerless bump and asserts only the timestamp: a test that exercises the
+    hole without looking at it.
+    """
+    store, _clock = _store()
+    await store.bump("ws-1", owner="alice", cpu_milli=8000, memory_bytes=1 << 33)
+    await store.forget("ws-1")
+
+    await store.bump("ws-1")
+
+    assert await store.owner_of("ws-1") == "alice"
+    assert [s.item_id for s in await store.live_for("alice", since_ms=0)] == ["ws-1"]

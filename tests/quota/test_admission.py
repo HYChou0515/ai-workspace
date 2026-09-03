@@ -47,14 +47,7 @@ def _gate(
     store: IActivityStore | None,
     clock: _Clock,
     limits: PerUserResources,
-    *,
-    live_items: set[str] | None = None,
 ) -> AdmissionGate:
-    held = live_items or set()
-
-    async def _has_live(item_id: str) -> bool:
-        return item_id in held
-
     async def _limits_for(_owner: str) -> PerUserResources:
         return limits
 
@@ -62,7 +55,6 @@ def _gate(
         store,
         _limits_for,
         owner_of=lambda item: "alice" if item.startswith("a-") else None,
-        has_live_sandbox=_has_live,
         # These tests weigh the incoming sandbox EXPLICITLY (`check(item, limits)`)
         # to isolate the arithmetic, so there is nothing for the gate to ask.
         # Stated rather than defaulted: the production wiring is what proves the
@@ -107,12 +99,20 @@ async def test_another_persons_sandboxes_do_not_count():
 
 async def test_an_item_that_already_has_a_sandbox_is_never_refused():
     """Otherwise someone at their limit cannot use the environments they already
-    have open — which is the opposite of what the limit is for."""
+    have open — which is the opposite of what the limit is for.
+
+    "Already has one" is a HEARTBEAT, which is also the row the tally counts.
+    It used to be a separate probe injected into the gate, and on `kind: local`
+    that probe answered "does the item's directory exist" — permanently true
+    after the item's first run, so an item could close its environment and let
+    itself straight back in past a full quota. One source, one answer.
+    """
     store, clock = _store()
     for i in range(9):
         await store.bump(f"a-{i}", owner="alice", cpu_milli=1000)
-    gate = _gate(store, clock, PerUserResources(count=2), live_items={"a-warm"})
-    await gate.check("a-warm", ONE_CORE)  # no raise
+    await store.bump("a-warm", owner="alice", cpu_milli=1000)
+
+    await _gate(store, clock, PerUserResources(count=2)).check("a-warm", ONE_CORE)  # no raise
 
 
 # ─── self-healing: the two conditions from the plan ────────────────────

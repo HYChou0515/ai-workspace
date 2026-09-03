@@ -178,13 +178,18 @@ class SpecstarActivityStore(IActivityStore):
 
     def _bump_sync(self, item_id: str, owner: str, cpu_milli: int, memory_bytes: int) -> None:
         rm = self._spec.get_resource_manager(_SandboxActivity)
-        # An empty owner means "I could not resolve the debtor", never "nobody
-        # owes for this" — a real owner is never the empty string. Letting the
-        # two be one value made an unresolvable item's next heartbeat ERASE the
-        # name from a row that had one, and a sandbox charged to nobody is one
-        # the admission gate skips, the tally omits, and the resources page
-        # cannot show to the person who would close it. A debtor is only ever
-        # replaced by ANOTHER name.
+        # An empty owner is read as "I could not resolve the debtor", not as
+        # "nobody owes for this". Letting the two be one value made an
+        # unresolvable item's next heartbeat ERASE the name from a row that had
+        # one, and a sandbox charged to nobody is one the admission gate skips,
+        # the tally omits, and the resources page cannot show to the person who
+        # would close it. A debtor is only ever replaced by ANOTHER name.
+        #
+        # An item created through the API always states an owner, but `owner` is
+        # a plain writable field (#687) and could be PATCHed to "". That case
+        # lands here too, and keeping the previous name is still the answer to
+        # prefer: the alternative is that blanking one field sheds the bill for
+        # a machine that is still running.
         if not owner:
             owner = self._owner_sync(item_id) or ""
         rec = _SandboxActivity(
@@ -238,8 +243,12 @@ class SpecstarActivityStore(IActivityStore):
     def _owner_sync(self, item_id: str) -> str | None:
         rm = self._spec.get_resource_manager(_SandboxActivity)
         try:
-            rev = rm.get(item_id)
-        except (ResourceIDNotFoundError, ResourceIsDeletedError):
+            # A FORGOTTEN row still names its debtor. `forget` soft-deletes, and
+            # the bump that brings the row back takes the restore branch — so
+            # reading without this flag made the backstop hold on one branch of
+            # `_bump_sync` and not the other, which is the same as not holding.
+            rev = rm.get(item_id, include_deleted=True)
+        except ResourceIDNotFoundError:
             return None
         data = rev.data
         assert isinstance(data, _SandboxActivity)

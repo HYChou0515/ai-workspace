@@ -7,13 +7,17 @@ A per-App ``WorkItem`` (``RcaInvestigation`` …) resolves its turn's
 
 from __future__ import annotations
 
+import logging
+
 from specstar import SpecStar
 from specstar.types import ResourceIDNotFoundError, ResourceIsDeletedError
 
 from ..resources import AgentConfig
 from .base import WorkItemBase
 from .catalog import AppCatalog
-from .registry import registered_apps
+from .registry import app_model, registered_apps
+
+logger = logging.getLogger(__name__)
 
 
 def find_work_item(
@@ -64,9 +68,15 @@ def find_work_item(
 
     "Still owes for its sandbox" and "still operable" are different questions,
     so the caller says which one it is asking. ``include_deleted`` is taken by
-    the paths that answer the first — the debtor, the environment size, the
-    resources page — and by nothing else. The default stays a miss, which is
-    both what the route gates want and what keeps a delete from 410ing anyone."""
+    the paths that answer the first — the debtor (`ItemLocator.owner_of`), the
+    environment size (the quota facts memo), and the two places a still-running
+    sandbox has to be NAMED: the resources page and the `holding` list in a 507
+    refusal. The chat permission mirror takes it too, for a different reason: a
+    deleted item's permission still applies, and reading it as absent stamped
+    the item's threads public.
+
+    The default stays a miss. A route gate that resolves one does so to answer
+    410 rather than 404 (`refuse_if_gone`), never to let the request through."""
     by_resource_name = {
         spec.get_resource_manager(model).resource_name: (slug, model)
         for slug, model in registered_apps().items()
@@ -92,6 +102,40 @@ def find_work_item(
         assert isinstance(item, WorkItemBase)
         return slug, item
     return None
+
+
+def debtor_of(spec: SpecStar, slug: str, item_id: str, item: WorkItemBase) -> str:
+    """Who an item's resources are charged to: its ``owner``, or the CREATOR when
+    ``owner`` says nothing.
+
+    One function because there are two debtor lookups — the quota facts memo in
+    `api/app.py` and `ItemLocator.owner_of` — and a rule that lives in one of
+    them is a rule the other disagrees with.
+
+    ``owner`` is an ordinary writable field (#687), and the accepted trade-off is
+    that it can be pointed at somebody else: the bill MOVES. Blanking it was
+    different in kind — an empty debtor reads as "nobody owes" at four gates at
+    once, so one PATCH per item switched the whole per-person quota off and left
+    the sandbox on nobody's resources page, where nobody could see it to close.
+
+    ``created_by`` is written by the store at create and reachable through no
+    route, so it is a FLOOR rather than a second field to keep in sync. ``owner``
+    still wins whenever it says anything; this only deletes the answer "nobody".
+
+    Takes the already-resolved ``item`` so the common path costs nothing: the
+    meta read happens only when ``owner`` is empty. Best effort — a debtor we
+    cannot read is not a reason to fail the write that asked."""
+    if item.owner:
+        return item.owner
+    try:
+        return (
+            spec.get_resource_manager(app_model(slug))
+            .get_meta(item_id, include_deleted=True)
+            .created_by
+        )
+    except Exception:  # noqa: BLE001
+        logger.debug("resolve: could not read created_by for item %s", item_id, exc_info=True)
+        return ""
 
 
 def resolve_item_agent_config(
