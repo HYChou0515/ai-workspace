@@ -72,10 +72,11 @@ agents:
 ### Provenance
 
 The `run_agent` tool result states the engine whenever the caller picked one
-(`[sub-agent ran on <preset name>]` appended — including a pick equal to the
-parent's engine, a harmless superset; mirroring the #748 "where did this
-answer come from" rule), and the existing per-turn model logging applies to
-the child turn unchanged.
+(`[sub-agent ran on <preset name>]` as a PREFIX — the output cap trims tails,
+and a report at the ceiling would lose a suffix; fired on every pick,
+including one equal to the parent's engine, a harmless superset; mirroring
+the #748 "where did this answer come from" rule), and the existing per-turn
+model logging applies to the child turn unchanged.
 
 ### Knob scope (entrypoint × honoured — per the standing rule)
 
