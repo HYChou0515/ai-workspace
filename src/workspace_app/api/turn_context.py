@@ -33,7 +33,14 @@ from ..agent.context import AgentToolContext
 from ..apps.manifest import load_app_manifest
 from ..apps.skills import advertised_workspace_skills, effective_item_skills
 from ..apps.subagents import SubagentDef, load_subagents
-from ..context_budget import ContextLimit, ContextUsage, catalog_limit, estimate_tokens
+from ..context_budget import (
+    DEFAULT_MAX_TOKENS_WINDOW_RATIO,
+    ContextLimit,
+    ContextUsage,
+    catalog_limit,
+    estimate_tokens,
+)
+from ..context_probe import probe_endpoint_limits
 from ..entity.brief import entity_schema_brief
 from ..entity.catalog import discover_catalog
 from ..sandbox.protocol import Sandbox, SandboxSpec
@@ -144,6 +151,7 @@ class TurnContextBuilder:
         history_max_messages: int,
         history_max_context_tokens: int,
         context_limit: int | None = None,
+        max_tokens_window_ratio: float = DEFAULT_MAX_TOKENS_WINDOW_RATIO,
         wiki_coordinator: WikiMaintenanceCoordinator | None = None,
         run_agent: RunAgent | None = None,
     ) -> None:
@@ -194,6 +202,19 @@ class TurnContextBuilder:
         # registry lookup — the hazard itself is what needs driving.
         self._catalog_cache: dict[str, int | None] = {}
         self._catalog_fn: Callable[[str], int | None] = catalog_limit
+        # The proxy rung, memoised and seamed the same way and for the same
+        # reasons: it is an HTTP round trip reached from inside `async def
+        # build_chat_turn`, so it must not be asked per turn and must not be
+        # awaited on the loop. Its key is (model, base_url) because the answer
+        # belongs to the endpoint, not to the model name alone — two presets can
+        # share a name across different proxies.
+        self._endpoint_cache: dict[tuple[str, str], Any] = {}
+        self._endpoint_fn: Callable[[str | None, str], Any] = lambda base_url, model: (
+            probe_endpoint_limits(base_url=base_url, model=model)
+        )
+        # What fraction of a stated `max_tokens` to treat as the window, when
+        # that is the only figure the proxy gave us. See `history` settings.
+        self._max_tokens_window_ratio = max_tokens_window_ratio
 
     def _overhead_for(
         self,
@@ -224,10 +245,15 @@ class TurnContextBuilder:
         we budget against one window and are served another, which is exactly the
         shape of the silent truncation this resolves against.
         """
-        from ..context_budget import deferred_lookup, resolve_context_limit
+        from ..context_budget import (
+            deferred_lookup,
+            resolve_context_limit,
+            window_from_max_tokens,
+        )
 
         if agent_config is None:
             return ContextLimit(tokens=None, source="unknown")
+        endpoint = self._endpoint_limits(agent_config)
         return resolve_context_limit(
             configured=self._context_limit,
             # #624: what the endpoint told us in a past rejection. Wired to the
@@ -239,11 +265,37 @@ class TurnContextBuilder:
             # 129,781 ms against an address that does not answer). This runs on
             # every turn, inside `async def build_chat_turn`, so it is deferred
             # off the loop like the probe.
+            # What a proxy in front of the model says it was configured with.
+            # A relayed claim rather than the enforcer speaking, so it sits below
+            # `learned` — but above the registry, which is keyed on a model name
+            # this endpoint may not even use.
+            declared=getattr(endpoint, "max_input_tokens", None),
             catalog=deferred_lookup(
                 self._catalog_cache,
                 agent_config.model,
                 lambda: self._catalog_fn(agent_config.model),
             ),
+            # Last, and derived rather than stated — see `window_from_max_tokens`
+            # for why the ratio cannot be a constant.
+            estimated=window_from_max_tokens(
+                getattr(endpoint, "max_tokens", None),
+                ratio=self._max_tokens_window_ratio,
+            ),
+        )
+
+    def _endpoint_limits(self, agent_config: AgentConfig) -> Any:
+        """What the endpoint's own model list says, or None — memoised per
+        (model, endpoint) and filled off the event loop, like the catalog rung.
+
+        Silence is cached too: most endpoints are not a litellm proxy, and one
+        that never answers must be asked once, not once per message."""
+        from ..context_budget import deferred_lookup
+
+        base_url = agent_config.llm_base_url or None
+        return deferred_lookup(
+            self._endpoint_cache,
+            (agent_config.model or "", base_url or ""),
+            lambda: self._endpoint_fn(base_url, agent_config.model),
         )
 
     def _learned_limit(self, agent_config: AgentConfig) -> int | None:

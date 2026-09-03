@@ -203,6 +203,9 @@ def _bare_builder():
     builder.learned_limit_fn = None
     builder._catalog_cache = {}
     builder._catalog_fn = lambda model: None  # the registry knows nothing by default
+    builder._endpoint_cache = {}
+    builder._endpoint_fn = lambda base_url, model: None  # no proxy answers by default
+    builder._max_tokens_window_ratio = 0.8
     return builder
 
 
@@ -489,3 +492,118 @@ def test_kb_history_budget_does_not_call_the_catalog_every_turn(monkeypatch):
     kb_chat_routes._kb_history_budget(cfg, None)
 
     assert len(calls) == 1, "the catalog lookup must be cached, not repeated each turn"
+
+
+# ── the rung for a self-hosted model behind a proxy ──────────────────────
+
+
+def _cfg(model: str = "our-alias", base_url: str = "http://proxy/v1"):
+    from workspace_app.resources import AgentConfig
+
+    return AgentConfig(name="t", model=model, system_prompt="", llm_base_url=base_url)
+
+
+def test_a_window_the_proxy_states_is_used_and_named_as_a_declaration():
+    """The topology this whole rung exists for: the registry does not know the
+    alias, `/tokenize` never survives the proxy, and nothing has been learned —
+    but the proxy itself was told what the window is."""
+    from workspace_app.context_probe import EndpointLimits
+
+    builder = _bare_builder()
+    builder._endpoint_fn = lambda base_url, model: EndpointLimits(
+        max_input_tokens=131072, max_tokens=8192
+    )
+
+    got = builder._context_window(_cfg())
+    assert got.tokens == 131072
+    assert got.source == "declared"
+
+
+def test_only_max_tokens_is_derived_and_says_it_was():
+    """The real deployment's shape: `max_input_tokens` is null and `max_tokens`
+    carries a large number. Using it is a judgement call, so the answer has to
+    admit which kind of number it is."""
+    from workspace_app.context_probe import EndpointLimits
+
+    builder = _bare_builder()
+    builder._endpoint_fn = lambda base_url, model: EndpointLimits(
+        max_input_tokens=None, max_tokens=131072
+    )
+
+    got = builder._context_window(_cfg())
+    assert got.tokens == 104857  # 131072 * 0.8
+    assert got.source == "estimated"
+
+
+def test_the_operators_ratio_is_the_one_applied():
+    """Not a constant in the code — see `history.max_tokens_window_ratio`."""
+    from workspace_app.context_probe import EndpointLimits
+
+    builder = _bare_builder()
+    builder._max_tokens_window_ratio = 0.5
+    builder._endpoint_fn = lambda base_url, model: EndpointLimits(
+        max_input_tokens=None, max_tokens=100_000
+    )
+
+    assert builder._context_window(_cfg()).tokens == 50_000
+
+
+def test_a_stated_window_is_never_scaled_by_the_ratio():
+    """`max_input_tokens` already IS the input window. Scaling it would discount
+    twice, on top of the prompt, tool schemas, reply reserve and margin the
+    budget subtracts later."""
+    from workspace_app.context_probe import EndpointLimits
+
+    builder = _bare_builder()
+    builder._max_tokens_window_ratio = 0.5
+    builder._endpoint_fn = lambda base_url, model: EndpointLimits(
+        max_input_tokens=131072, max_tokens=131072
+    )
+
+    assert builder._context_window(_cfg()).tokens == 131072
+
+
+def test_the_registry_still_outranks_a_derived_number():
+    """An estimate may never displace a figure someone stated — the catalog is
+    at least exact about the model it names."""
+    from workspace_app.context_probe import EndpointLimits
+
+    builder = _bare_builder()
+    builder._catalog_fn = lambda model: 40_960
+    builder._endpoint_fn = lambda base_url, model: EndpointLimits(
+        max_input_tokens=None, max_tokens=131072
+    )
+
+    got = builder._context_window(_cfg())
+    assert got.tokens == 40_960
+    assert got.source == "catalog"
+
+
+def test_a_silent_proxy_leaves_the_ceiling_unknown():
+    """Most endpoints are not a litellm proxy. This rung must add nothing when
+    it learns nothing — `unknown` still means send it all."""
+    builder = _bare_builder()
+
+    got = builder._context_window(_cfg())
+    assert got.tokens is None
+    assert got.source == "unknown"
+
+
+def test_the_proxy_is_asked_once_per_endpoint_not_once_per_turn():
+    """It is an HTTP round trip reached from inside `async def build_chat_turn`.
+    Asking every turn would put one in front of every message for a value that
+    does not change — the same reason the catalog rung is memoised."""
+    from workspace_app.context_probe import EndpointLimits
+
+    calls: list[tuple[str | None, str]] = []
+
+    def _once(base_url: str | None, model: str) -> EndpointLimits:
+        calls.append((base_url, model))
+        return EndpointLimits(max_input_tokens=131072, max_tokens=None)
+
+    builder = _bare_builder()
+    builder._endpoint_fn = _once
+
+    for _ in range(3):
+        builder._context_window(_cfg())
+    assert len(calls) == 1

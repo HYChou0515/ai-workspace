@@ -16,7 +16,7 @@ from __future__ import annotations
 import dataclasses
 from pathlib import Path
 
-from workspace_app.config.schema import ServerSettings
+from workspace_app.config.schema import HistorySettings, ServerSettings
 
 _COMPOSITION_ROOT = Path(__file__).resolve().parents[2] / "src" / "workspace_app" / "__main__.py"
 
@@ -32,5 +32,27 @@ def test_every_server_setting_is_read_by_the_composition_root():
 
     assert not unread, (
         f"{unread} exist in ServerSettings but nothing in __main__.py reads them — "
+        "an operator can set them and nothing will happen"
+    )
+
+
+def test_every_history_setting_is_read_by_the_composition_root():
+    """Same rule, same reason — and this section is where it bites hardest.
+
+    Every knob here governs how much of a conversation survives, and getting
+    none of it is silent by design: an unresolved ceiling means "send it all",
+    which looks exactly like a working deploy right up until a thread grows too
+    large. So a `history` field nothing reads does not fail, it just quietly
+    never applies."""
+    source = _COMPOSITION_ROOT.read_text(encoding="utf-8")
+
+    unread = [
+        f.name
+        for f in dataclasses.fields(HistorySettings)
+        if f"settings.history.{f.name}" not in source
+    ]
+
+    assert not unread, (
+        f"{unread} exist in HistorySettings but nothing in __main__.py reads them — "
         "an operator can set them and nothing will happen"
     )
