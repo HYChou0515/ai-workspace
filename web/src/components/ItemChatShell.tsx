@@ -54,6 +54,13 @@ type AgentChrome = {
    * AgentPanel header's Env panel; absent → no Env button. */
   envVars?: Record<string, string>;
   onSaveEnvVars?: (envVars: Record<string, string>) => void;
+  /** #P4: whether this App ever opens a sandbox, and whether this viewer may
+   * resize it. Absent → no Environment button. Gated on the App HAVING one
+   * rather than on who may edit: everyone in the workspace needs to see whether
+   * an environment is running and what it costs, because that is what explains
+   * a refusal. Only `canResize` needs `change_permission`, since resizing spends
+   * the OWNER's quota. */
+  environment?: { canResize: boolean };
   /** #198: the folder the composer's attach stages files into (the item's profile's
    * upload_dir; default uploads/). Threaded straight through to the AgentPanel. */
   uploadDir: string;
@@ -87,6 +94,7 @@ export function ItemChatShell({
   onSaveToolPrefs,
   envVars,
   onSaveEnvVars,
+  environment,
   onSaveSkillPrefs,
   uploadDir,
 }: {
@@ -295,6 +303,7 @@ export function ItemChatShell({
           onSaveToolPrefs={onSaveToolPrefs}
           envVars={envVars}
           onSaveEnvVars={onSaveEnvVars}
+          environment={environment}
           onSaveSkillPrefs={onSaveSkillPrefs}
           uploadDir={uploadDir}
         />
@@ -350,6 +359,7 @@ function ItemChatPanel({
   onSaveToolPrefs,
   envVars,
   onSaveEnvVars,
+  environment,
   onSaveSkillPrefs,
   uploadDir,
 }: {
@@ -512,6 +522,7 @@ function ItemChatPanel({
         onSaveToolPrefs={onSaveToolPrefs}
         envVars={envVars}
         onSaveEnvVars={onSaveEnvVars}
+        environment={environment}
         onSaveSkillPrefs={onSaveSkillPrefs}
         appTitle={appTitle}
         appIcon={appIcon}

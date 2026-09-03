@@ -916,6 +916,43 @@ export const messages = {
   "resources.gauge.count": { "zh-TW": "環境數", en: "Environments" },
   "resources.gauge.cpu": { "zh-TW": "CPU", en: "CPU" },
   "resources.gauge.unlimited": { "zh-TW": "（無上限）", en: "(no limit)" },
+  // ── the item page's own environment panel ────────────────────────────
+  "itemenv.button": { "zh-TW": "環境", en: "Environment" },
+  "itemenv.tip": {
+    "zh-TW": "這個項目的執行環境：狀態、用量、大小。",
+    en: "This item's environment — status, usage, size.",
+  },
+  "itemenv.heading": { "zh-TW": "執行環境", en: "Environment" },
+  "itemenv.status.running": { "zh-TW": "執行中", en: "Running" },
+  "itemenv.status.idle": { "zh-TW": "未啟動", en: "Not running" },
+  "itemenv.close": { "zh-TW": "關閉環境", en: "Close environment" },
+  // Says WHY the size is locked, so the disabled field is not read as broken.
+  "itemenv.close.hint": {
+    "zh-TW": "關閉後即可調整大小。關閉會結束正在執行的程序，檔案不受影響。",
+    en: "Close it to change the size. Running processes end; your files are untouched.",
+  },
+  "itemenv.size.heading": { "zh-TW": "這個項目的環境大小", en: "This item's environment size" },
+  // The label an UNSET value carries. Without it an empty field renders as a
+  // number with no provenance, and the person cannot tell what they chose from
+  // what was chosen for them.
+  "itemenv.size.default": { "zh-TW": "預設（依你目前的額度）", en: "Default (from your current quota)" },
+  "itemenv.size.stated": { "zh-TW": "你設定的", en: "Set by you" },
+  "itemenv.size.reset": { "zh-TW": "回到預設", en: "Back to default" },
+  // Both numbers, and which limit bound — never the smaller one alone.
+  "itemenv.size.clamped.quota": {
+    "zh-TW": "你設定 {stated}，實際生效 {effective}（受你的額度限制）",
+    en: "You set {stated}; {effective} is in effect (held down by your quota)",
+  },
+  "itemenv.size.clamped.app": {
+    "zh-TW": "你設定 {stated}，實際生效 {effective}（受這個 App 的上限限制）",
+    en: "You set {stated}; {effective} is in effect (held down by this App's ceiling)",
+  },
+  "itemenv.usage.this": { "zh-TW": "這個項目佔用", en: "This item is using" },
+  "itemenv.usage.total": { "zh-TW": "你的總用量", en: "Your total" },
+  "itemenv.readonly": {
+    "zh-TW": "只有能變更這個項目存取權的人可以調整大小 —— 它花的是擁有者的額度。",
+    en: "Only someone who can change this item's access may resize it — it spends the owner's quota.",
+  },
   "resources.disk.heading": { "zh-TW": "儲存空間", en: "Storage" },
   "resources.disk.untracked": {
     "zh-TW": "這個部署沒有設定個人儲存空間上限,因此不統計用量。",

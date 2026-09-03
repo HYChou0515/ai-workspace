@@ -1,0 +1,79 @@
+/* The item page's environment panel.
+ *
+ * Its own sheet rather than a `.page` selector, because `my-resources.css`
+ * scopes `.gauge` / `.summary` / `.detail` under `.page` and this panel lives in
+ * a sidebar, not on that page. Reusing the class NAMES without the styles is
+ * exactly how the previous round shipped a resource page whose meters were two
+ * zero-height divs and whose whole row read as one run-on word — semantic
+ * markup, no stylesheet, and it passed every "clickable" check.
+ *
+ * `.meter` / `.meter-fill` are already global and are deliberately NOT
+ * redeclared here: one bar, one definition, so the two cannot drift.
+ */
+
+.item-environment {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  padding: var(--space-12);
+}
+
+.item-environment > h3,
+.item-environment > h4 {
+  margin: 0;
+  font-size: var(--text-body);
+  color: var(--text-paper);
+}
+
+.item-environment > h4 {
+  margin-top: var(--space-8);
+  font-size: var(--text-body-sm);
+  color: var(--text-paper-d);
+}
+
+/* Label grows, value sits at the end — the gap is what keeps a title and a
+   figure from reading as one word. */
+.item-environment .summary {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-8);
+  margin: 0;
+  font-size: var(--text-body);
+  color: var(--text-paper);
+}
+
+.item-environment .gauge-label {
+  flex: 1;
+  min-width: 0;
+}
+
+.item-environment .gauge-value {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Everything that explains rather than states: which limit bound, why the field
+   is locked, why it is read-only. Quieter than the figure it qualifies, but it
+   has to stay legible — these lines are the whole reason a clamped setting is
+   not a contradiction. */
+.item-environment .detail {
+  margin: 0;
+  font-size: var(--text-body-sm);
+  color: var(--text-paper-d);
+}
+
+.item-environment .gauge {
+  margin-top: var(--space-4);
+}
+
+.item-environment input[type="number"] {
+  width: 6rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A disabled field here means "not now" (something is running) or "not you"
+   (you may look, not spend) — never "broken". It stays readable, and the
+   sentence beside it says which of the two it is. */
+.item-environment input:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}

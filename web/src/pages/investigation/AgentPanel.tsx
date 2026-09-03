@@ -19,6 +19,7 @@ import { ModelEffortPicker } from "../../components/ModelEffortPicker";
 import { SkillsModal } from "../../components/SkillsModal";
 import { WorkflowsModal } from "../../components/WorkflowsModal";
 import { EnvVarsModal } from "../../components/EnvVarsModal";
+import { ItemEnvironmentModal } from "../../components/ItemEnvironmentModal";
 import { ToolsPickerModal } from "../../components/ToolsPickerModal";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { UsageBar } from "./UsageBar";
@@ -142,6 +143,7 @@ export function AgentPanel({
   onSaveSkillPrefs,
   envVars,
   onSaveEnvVars,
+  environment,
   uploadDir = "uploads",
 }: {
   investigationId: string;
@@ -204,6 +206,11 @@ export function AgentPanel({
    * header's Env panel. Absent → no Env button (surfaces with no item). */
   envVars?: Record<string, string>;
   onSaveEnvVars?: (envVars: Record<string, string>) => void;
+  /** #P4: whether this App ever opens a sandbox (`function.sandbox`), and
+   *  whether this viewer may resize it (`change_permission`). Absent ⇒ the
+   *  button is not drawn: a control that can never do anything is worse than
+   *  a missing one, because it looks like a promise. */
+  environment?: { canResize: boolean };
   /** #198: the folder the composer's attach stages files into — the item's profile's
    * `upload_dir` (default `uploads/`), the same folder its workflows glob. */
   uploadDir?: string;
@@ -633,6 +640,7 @@ export function AgentPanel({
         onSaveSkillPrefs={onSaveSkillPrefs}
         envVars={envVars}
         onSaveEnvVars={onSaveEnvVars}
+        environment={environment}
         appliedSkills={appliedSkills}
         onToggleApplySkill={toggleApplySkill}
       />
@@ -1261,6 +1269,7 @@ export function AgentHeader({
   onSaveSkillPrefs,
   envVars,
   onSaveEnvVars,
+  environment,
   appliedSkills = [],
   onToggleApplySkill,
 }: {
@@ -1296,6 +1305,11 @@ export function AgentHeader({
   /** Persist them. Absent → no Env button, the same way the Tools picker is
    * withheld on a surface that cannot persist onto an item. */
   onSaveEnvVars?: (envVars: Record<string, string>) => void;
+  /** #P4: whether this App ever opens a sandbox (`function.sandbox`), and
+   *  whether this viewer may resize it (`change_permission`). Absent ⇒ the
+   *  button is not drawn: a control that can never do anything is worse than
+   *  a missing one, because it looks like a promise. */
+  environment?: { canResize: boolean };
   /** #380: skills queued (composer-owned) to apply this turn — lit in the panel. */
   appliedSkills?: string[];
   /** #380: toggle a skill in this turn's apply set (composer state lives in AgentPanel). */
@@ -1307,6 +1321,7 @@ export function AgentHeader({
   const [showWorkflows, setShowWorkflows] = useState(false);
   const [showTools, setShowTools] = useState(false);
   const [showEnv, setShowEnv] = useState(false);
+  const [showItemEnv, setShowItemEnv] = useState(false);
   const fileService = useMemo(
     () => investigationFileService(slug, investigationId),
     [slug, investigationId],
@@ -1341,6 +1356,14 @@ export function AgentHeader({
           itemId={investigationId}
           fileService={fileService}
           onClose={() => setShowWorkflows(false)}
+        />
+      )}
+      {showItemEnv && environment && (
+        <ItemEnvironmentModal
+          slug={slug}
+          itemId={investigationId}
+          canEdit={environment.canResize}
+          onClose={() => setShowItemEnv(false)}
         />
       )}
       {showEnv && onSaveEnvVars && (
@@ -1433,6 +1456,22 @@ export function AgentHeader({
           style={hdrBtn}
         >
           <Icon name="settings" size={13} /> {t("tools.button")}
+        </button>
+      )}
+      {environment && (
+        <button
+          type="button"
+          // The item's execution environment: is it running, what is it costing,
+          // how big may it be. Beside the variables button because both are
+          // per-item configuration of the same sandbox — but gated on the App
+          // HAVING one, not on who may edit the item.
+          data-testid="item-environment-button"
+          onClick={() => setShowItemEnv(true)}
+          title={t("itemenv.tip")}
+          aria-label={t("itemenv.tip")}
+          style={hdrBtn}
+        >
+          <Icon name="settings" size={13} /> {t("itemenv.button")}
         </button>
       )}
       {onSaveEnvVars && (

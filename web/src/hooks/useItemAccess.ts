@@ -30,6 +30,7 @@
 
 import type { AppItem } from "../api/types";
 import {
+  canChangeItemPermission,
   canConverse,
   canReadChat,
   canReadItemContent,
@@ -56,6 +57,13 @@ export type ItemAccess = {
   canWriteMeta: boolean;
   /** Sees it exists but cannot enter — the 🔒 list row offering "request access". */
   isDiscoverableOnly: boolean;
+  /** May rewire this item's access — and, since #P4, may resize its environment.
+   *  The two travel together because resizing spends the OWNER's quota, which is
+   *  a different grant from "may edit this item"; and because the verb behind it
+   *  is `change_permission`, one of the two the item's own agent can never hold.
+   *  That last part is the point: the agent runs inside the very sandbox this
+   *  number sizes. */
+  canManageAccess: boolean;
 };
 
 export function useItemAccess(item: AppItem | undefined): ItemAccess {
@@ -70,6 +78,9 @@ export function useItemAccess(item: AppItem | undefined): ItemAccess {
       canWrite: true,
       canWriteMeta: true,
       isDiscoverableOnly: false,
+      // Optimistic like its siblings during the identity load — see the module
+      // docstring. The SERVER is the gate; this only decides what to draw.
+      canManageAccess: true,
     };
   }
   // Owner-for-access is `created_by` (the real owner), not the display `owner`
@@ -83,5 +94,6 @@ export function useItemAccess(item: AppItem | undefined): ItemAccess {
     canWrite: canWriteItem(perm, me, owner, isSuperuser, groups),
     canWriteMeta: canWriteItemMeta(perm, me, owner, isSuperuser, groups),
     isDiscoverableOnly: isDiscoverableOnly(perm, me, owner, isSuperuser, groups),
+    canManageAccess: canChangeItemPermission(perm, me, owner, isSuperuser, groups),
   };
 }
