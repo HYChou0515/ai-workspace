@@ -37,7 +37,7 @@ from ..context_budget import (
     DEFAULT_MAX_TOKENS_WINDOW_RATIO,
     ContextLimit,
     ContextUsage,
-    catalog_limit,
+    catalog_limits,
     estimate_tokens,
 )
 from ..entity.brief import entity_schema_brief
@@ -213,7 +213,11 @@ class TurnContextBuilder:
         # rather than a direct call so a test can stand in for the slow, untimed
         # registry lookup — the hazard itself is what needs driving.
         self._catalog_cache: dict[str, int | None] = {}
-        self._catalog_fn: Callable[[str], int | None] = catalog_limit
+        # Returns BOTH registry figures, because they answer different rungs:
+        # `max_input_tokens` is exact, while `max_tokens` is documented upstream
+        # as meaning one of two things — so it is derived and labelled, exactly
+        # like a proxy's.
+        self._catalog_fn: Callable[[str], Any] = catalog_limits
         # What fraction of a stated `max_tokens` to treat as the window, when
         # that is the only figure the proxy gave us. See `history` settings.
         self._max_tokens_window_ratio = max_tokens_window_ratio
@@ -256,6 +260,23 @@ class TurnContextBuilder:
         if agent_config is None:
             return ContextLimit(tokens=None, source="unknown")
         endpoint = self._endpoint_limits(agent_config)
+        # #624 §9.12: NOT a table lookup, whatever its name says — litellm
+        # resolves an `ollama/*` name by asking the daemon, untimed (measured
+        # 129,781 ms against an address that does not answer). This runs on every
+        # turn, inside `async def build_chat_turn`, so it is deferred off the
+        # loop like the probe.
+        catalog = deferred_lookup(
+            self._catalog_cache,
+            agent_config.model,
+            lambda: self._catalog_fn(agent_config.model),
+        )
+        # A stated `max_tokens` is the same ambiguous figure whichever source
+        # holds it — litellm's registry documents its own as "LEGACY parameter.
+        # set to max_output_tokens if provider specifies it. IF not set to
+        # max_input_tokens" — so both feed the one DERIVED rung rather than one
+        # of them being read as exact. The endpoint's own wins: it describes this
+        # deployment, while the registry describes a model name.
+        ambiguous = getattr(endpoint, "max_tokens", None) or getattr(catalog, "max_tokens", None)
         return self._announce(
             agent_config.model,
             resolve_context_limit(
@@ -264,25 +285,16 @@ class TurnContextBuilder:
                 # runner's learner — the adversarial review caught this as a dangling
                 # `learned=None  # P3 feeds this` comment that nothing ever fed.
                 learned=self._learned_limit(agent_config),
-                # #624 §9.12: NOT a table lookup, whatever its name says — litellm
-                # resolves an `ollama/*` name by asking the daemon, untimed (measured
-                # 129,781 ms against an address that does not answer). This runs on
-                # every turn, inside `async def build_chat_turn`, so it is deferred
-                # off the loop like the probe.
                 # What a proxy in front of the model says it was configured with.
                 # A relayed claim rather than the enforcer speaking, so it sits below
                 # `learned` — but above the registry, which is keyed on a model name
                 # this endpoint may not even use.
                 declared=getattr(endpoint, "max_input_tokens", None),
-                catalog=deferred_lookup(
-                    self._catalog_cache,
-                    agent_config.model,
-                    lambda: self._catalog_fn(agent_config.model),
-                ),
+                catalog=getattr(catalog, "max_input_tokens", None),
                 # Last, and derived rather than stated — see `window_from_max_tokens`
                 # for why the ratio cannot be a constant.
                 estimated=window_from_max_tokens(
-                    getattr(endpoint, "max_tokens", None),
+                    ambiguous,
                     ratio=self._max_tokens_window_ratio,
                 ),
             ),

@@ -32,6 +32,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from .context_probe import EndpointLimits
 from .kb.tokens import count_tokens
 
 logger = logging.getLogger(__name__)
@@ -206,8 +207,8 @@ def resolve_context_limit(
     return ContextLimit(tokens=None, source="unknown")
 
 
-def catalog_limit(model: str) -> int | None:
-    """The registry's input-token ceiling for ``model``, or None when unknown.
+def catalog_limits(model: str) -> EndpointLimits | None:
+    """Both figures the registry holds for ``model``, kept apart — or None.
 
     **This does network I/O.** It reads like a table lookup and mostly is one —
     hosted models really are in litellm's bundled map — but an ``ollama/*`` name
@@ -216,24 +217,58 @@ def catalog_limit(model: str) -> int | None:
     every caller on a request path must reach it through ``deferred_lookup``,
     never directly.
 
+    The two numbers are returned separately, and that is the whole point. This
+    used to answer with ``max_input_tokens`` **or**, failing that,
+    ``max_tokens`` — unscaled, and the ladder then labelled the result
+    ``catalog``, which reads as "a registry stated this". But litellm's own
+    registry documents that field as, verbatim:
+
+        LEGACY parameter. set to max_output_tokens if provider specifies it.
+        IF not set to max_input_tokens, if provider specifies it.
+
+    The upstream source is saying the field means one of two different things
+    and does not say which. Reading it as an input window is therefore a guess,
+    exactly like reading a proxy's `max_tokens` is a guess — so it goes to the
+    same rung, under the same ratio, with the same `estimated` label. One rule,
+    because two rules for one number is a rule that holds in one place only.
+
+    Measured against the bundled registry: 2,888 of 3,518 entries carry both
+    figures and only six carry `max_tokens` alone, so this narrows what the
+    ladder may CLAIM far more than what it can answer.
+
     A self-hosted model behind an OpenAI-compatible endpoint (the production
     shape) is in no registry, so None is the honest and expected answer there —
     never a fallback number. Import is local and every failure degrades to None:
-    a registry lookup must not be able to break a turn."""
+    a registry lookup must not be able to break a turn. That promise now covers
+    the numbers too — litellm ships an entry whose limits are prose describing
+    the field (`sample_spec`), and comparing one of those against zero raised
+    `TypeError` straight through a guard that only wrapped the lookup."""
     if not model:
         return None
     try:
         import litellm
 
         info = litellm.get_model_info(model)
+        if not isinstance(info, dict):
+            return None
+        window = _positive_count(info.get("max_input_tokens"))
+        output = _positive_count(info.get("max_tokens"))
+        # Neither figure usable is the same answer as "not in the registry" for
+        # every caller here, and saying it one way keeps them from having to
+        # check both. It is also what the entry whose limits are prose returns.
+        if window is None and output is None:
+            return None
+        return EndpointLimits(max_input_tokens=window, max_tokens=output)
     except Exception:  # noqa: BLE001 — unknown model / registry shape drift
         return None
-    if not isinstance(info, dict):
+
+
+def _positive_count(value: Any) -> int | None:  # noqa: ANN401 — registry data, any shape
+    """A positive whole number out of whatever the registry holds, or None."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    for key in ("max_input_tokens", "max_tokens"):
-        got = _positive(info.get(key))
-        if got is not None:
-            return got
+    count = int(value)
+    return count if count > 0 else None
     return None
 
 

@@ -427,11 +427,15 @@ async def test_the_catalog_rung_does_not_block_the_event_loop():
     """
     import time
 
+    from workspace_app.context_probe import EndpointLimits
     from workspace_app.resources import AgentConfig
 
     cfg = AgentConfig(name="t", model="ollama/qwen3:14b", system_prompt="s")
     builder = _bare_builder()
-    builder._catalog_fn = lambda model: (time.sleep(0.5), 40_960)[1]  # a hanging daemon
+    builder._catalog_fn = lambda model: (  # a hanging daemon
+        time.sleep(0.5),
+        EndpointLimits(max_input_tokens=40_960, max_tokens=None),
+    )[1]
 
     started = time.perf_counter()
     got = builder._budget_for(cfg)
@@ -486,7 +490,7 @@ def test_kb_history_budget_does_not_call_the_catalog_every_turn(monkeypatch):
 
     kb_chat_routes._KB_CATALOG_CACHE.clear()
     calls: list[str] = []
-    monkeypatch.setattr(context_budget, "catalog_limit", lambda m: calls.append(m) or None)
+    monkeypatch.setattr(context_budget, "catalog_limits", lambda m: calls.append(m) or None)
 
     cfg = AgentConfig(name="t", model="openai/self-hosted", system_prompt="s")
     kb_chat_routes._kb_history_budget(cfg, None)
@@ -570,7 +574,7 @@ def test_the_registry_still_outranks_a_derived_number():
     from workspace_app.context_probe import EndpointLimits
 
     builder = _bare_builder()
-    builder._catalog_fn = lambda model: 40_960
+    builder._catalog_fn = lambda model: EndpointLimits(max_input_tokens=40_960, max_tokens=None)
     builder.endpoint_limits_fn = lambda model, base_url: EndpointLimits(
         max_input_tokens=None, max_tokens=131072
     )
