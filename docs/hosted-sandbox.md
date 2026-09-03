@@ -98,6 +98,21 @@ flowchart TD
     `SandboxBusy`,視為**活著**——把只是忙的 sandbox 判死會再開一個,變成 split-brain
     (#492 / #493 g1)。
 
+### 三條拆除路各清什麼(close / idle reap / delete)
+
+同一個 item 有三條「結束」路,各自的清理範圍**刻意不同**——把 close 當 delete 用
+(或反過來)是常見誤會:
+
+| | sandbox(先回寫再 kill) | address 列 | heartbeat | durable 檔案 | 對話 / workflow runs | disk ledger | item 列 |
+|---|---|---|---|---|---|---|---|
+| **close**(`POST /a/{slug}/items/{id}/close`) | ✅ | **留**(stale 無害;刪掉有 split-brain 風險,見上) | 清 | 留 | 留 | 留 | 留 |
+| **idle reaper**(`kill_idle`) | ✅ | 留 | 清 | 留 | 留 | 留 | 留 |
+| **delete**(`DELETE /a/{slug}/items/{id}`,cascade) | ✅ | **清**(item 都沒了,誰也不該重建) | 清 | **永久刪**(blob 才能被 GC 回收) | **永久刪** | **退帳**(`forget`) | **最後**永久刪——它是交易記號,中途失敗可重打續掃 |
+
+specstar 原生的 `DELETE /{model}/{id}/permanently` 對 WorkItem **已封鎖**(403 並指向
+cascade 路):它只刪 item 列,上表其他欄全部變孤兒——尤其 disk ledger 會永遠凍著繼續
+記在 owner 頭上。
+
 ---
 
 ## 3. 何時與 host 溝通:完整觸發表
