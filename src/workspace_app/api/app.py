@@ -892,12 +892,15 @@ def create_app(
         return out
 
     def _owner_of(item_id: str) -> str | None:
-        """The debtor for an item's resources: its `owner` field (#687).
+        """The debtor for an item's resources — the rule is
+        `apps.resolve.debtor_of`, shared with `ItemLocator.owner_of`.
 
-        Deliberately NOT specstar's `created_by`. `owner` is the field the
-        product treats as "whose item is this", and #687 is what makes it
-        trustworthy — until it lands, this is charged to a field anyone with
-        write access can rewrite."""
+        `owner` is the field the product treats as "whose item is this", and
+        #687 is what makes it trustworthy — until it lands, this is charged to a
+        field anyone with write access can rewrite. `created_by` is NOT an
+        alternative to it, only the FLOOR beneath it: an `owner` that says
+        nothing would otherwise read as "nobody owes", which is not a debtor but
+        the absence of the whole rule."""
         return _facts_of(item_id)[1] or None
 
     registry = InvestigationRegistry(

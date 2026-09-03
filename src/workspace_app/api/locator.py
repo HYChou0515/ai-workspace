@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from typing import NamedTuple, NoReturn
+from typing import NamedTuple
 
 from fastapi import HTTPException
 from specstar import SpecStar
@@ -161,24 +161,25 @@ class ItemLocator:
         """#95: the workspace routes nest under ``/a/{slug}/items/{item_id}``.
         Validate that ``item_id`` really belongs to App ``slug`` (404 otherwise)
         so a wrong slug can't operate on another App's item, and return the id
-        for the handler to use."""
-        found = find_work_item(self._spec, item_id)
-        if found is None or found[0] != slug:
-            self._reject_missing(slug, item_id)
+        for the handler to use. A SOFT-DELETED item of this App answers 410 Gone
+        — the same answer `require_access` gives, through the same function.
+
+        The first version of that 410 was hand-rolled here rather than shared,
+        and asked "does this id resolve at all?" instead of "is it deleted?" —
+        so a LIVE item addressed under the wrong App came back as Gone. The
+        wrong-slug branch is 404 and nothing else: this gate authorizes nobody,
+        so it must never tell a stranger that some other App holds this id.
+
+        Reads the facts (one item + one meta) rather than the item alone,
+        because that is what carries ``is_deleted`` and what lets the refusal be
+        the SHARED one. `require_access` already pays the same two reads."""
+        facts = load_access_facts(self._spec, item_id, include_deleted=True)
+        if facts is None or facts.slug != slug:
+            raise HTTPException(
+                status_code=404, detail=f"item {item_id!r} not found in app {slug!r}"
+            )
+        refuse_if_gone(facts, item_id)
         return item_id
-
-    def _reject_missing(self, slug: str, item_id: str) -> NoReturn:
-        """404 for an id that never was, 410 for one that is finished.
-
-        The second lookup is on the FAILURE path only, so the gate every item
-        route runs still costs exactly one read when it lets you through. A
-        deleted item is deliberately told apart from an unknown one: this API is
-        polled by an outside system that lists items and then acts on them, and
-        "that one is gone, open a new one" and "the platform is broken, retry"
-        are different instructions."""
-        if find_work_item(self._spec, item_id, include_deleted=True) is not None:
-            raise HTTPException(status_code=410, detail=f"item {item_id!r} is gone")
-        raise HTTPException(status_code=404, detail=f"item {item_id!r} not found in app {slug!r}")
 
     def require_access(self, slug: str, item_id: str, verb: Verb) -> str:
         """#306 PR3 — the authorizing sibling of ``require_item``: validate slug↔item,

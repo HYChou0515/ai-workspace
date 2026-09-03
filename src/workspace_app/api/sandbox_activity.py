@@ -121,9 +121,10 @@ class _SandboxActivity(Struct):
 
     item_id: str
     last_active_ms: int = 0
-    # The debtor. See #687: this mirrors the item's `owner` FIELD, which is
-    # today rewritable by anyone with write access — the reason the per-person
-    # limits are not yet tamper-proof.
+    # The debtor, as `apps.resolve.debtor_of` resolved it when the row was
+    # written: the item's `owner` FIELD, or its creator when that field says
+    # nothing. See #687 — `owner` is today rewritable by anyone with write
+    # access, the reason the per-person limits are not yet tamper-proof.
     owner: str = ""
     # What this item's sandbox may consume, from its App (`quota.limits`).
     # Milli-cores rather than a float so the index sorts and sums exactly.

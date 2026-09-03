@@ -19,10 +19,13 @@ Three properties this must have, each of which was a decision:
   service boundary, not where the agent first reaches for `exec` — otherwise a
   turn is spent rediscovering a limit we already knew about.
 
-The debtor is the item's `owner`. See #687: that field is currently rewritable
-by anyone with write access, so these limits bind only as far as that issue's
-lockdown. This module does not paper over it — it charges the owner, and #687
-makes the owner mean something.
+The debtor is the item's `owner`, or its CREATOR when `owner` says nothing
+(`apps.resolve.debtor_of`). See #687: `owner` is currently rewritable by anyone
+with write access, so these limits bind only as far as that issue's lockdown.
+This module does not paper over it — it charges the owner, and #687 makes the
+owner mean something. The `created_by` floor is not a second answer to "whose
+item is this"; it exists because a BLANK owner used to switch this gate off
+entirely, which is a different failure from charging the wrong person.
 """
 
 from __future__ import annotations

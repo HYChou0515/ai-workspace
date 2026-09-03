@@ -81,9 +81,18 @@ def quota_body(
             "dimension": exc.dimension,
             "used": exc.used,
             "limit": exc.limit,
-            # Only the ones the READER may see — an item they hold no read_meta
-            # on is absent rather than named, because `owner` is a field anyone
-            # with write access can point at somebody else (#687).
+            # Every row, NAMED only where the reader may see it — `titles_of`
+            # returns an empty title rather than dropping the row. Each of these
+            # is charged to the reader (`held` is emptied above unless the
+            # viewer is the debtor), so an environment they cannot name is still
+            # one they must be able to close; dropping it left somebody at
+            # "1 of 1 in use" with nothing to act on. The title is the
+            # disclosure, and `owner` is a field anyone with write access can
+            # point at somebody else (#687), so the title stays gated on the
+            # READER's own `read_meta`.
+            #
+            # The membership test below therefore only survives for
+            # `titles_of is None`, where nothing can be named at all.
             "holding": [
                 {
                     "item_id": h.item_id,

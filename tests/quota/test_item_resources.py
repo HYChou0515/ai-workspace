@@ -15,6 +15,7 @@ from __future__ import annotations
 import contextlib
 from collections.abc import Iterator
 
+import pytest
 from specstar import SpecStar
 
 from workspace_app.api import ScriptedAgentRunner, create_app
@@ -1812,7 +1813,8 @@ def test_the_resources_page_names_a_deleted_items_environment():
         assert rows and rows[0]["title"] == "t", f"a deleted item's row lost its name: {rows}"
 
 
-def test_blanking_the_owner_does_not_switch_the_quota_off(monkeypatch):
+@pytest.mark.parametrize("blank", ["", "   ", "\t\n"])
+def test_blanking_the_owner_does_not_switch_the_quota_off(monkeypatch, blank):
     """Round-7 finding 1 — one PATCH per extra sandbox, and the gate stops.
 
     #687 (`owner` is writable by anyone with write access) is an accepted
@@ -1828,6 +1830,15 @@ def test_blanking_the_owner_does_not_switch_the_quota_off(monkeypatch):
     it a floor rather than a second field to keep in sync. `owner` still wins
     whenever it says anything, so the documented trade-off is unchanged: this
     only removes the answer "nobody".
+
+    Parametrised over WHITESPACE, which is round-8's finding: the floor was
+    `if item.owner:`, so one space walked straight past it — truthiness is not
+    the same question as "does this say anything". A blank of any shape says
+    nothing.
+
+    A non-empty bogus name (`"ghost"`) is a different case and stays accepted:
+    that is #687's documented trade-off, where the bill MOVES to a name nobody
+    holds. What must not exist is a bill that goes nowhere.
     """
     from workspace_app.api import app as app_mod
 
@@ -1842,7 +1853,7 @@ def test_blanking_the_owner_does_not_switch_the_quota_off(monkeypatch):
         _wake(client, first)
         assert client.post(f"/a/rca/items/{second}/exec", json={"cmd": ["echo"]}).status_code == 507
 
-        blanked = client.patch(f"/rca-investigation/{second}", json={"owner": ""})
+        blanked = client.patch(f"/rca-investigation/{second}", json={"owner": blank})
         assert blanked.status_code in (200, 204), blanked.text
 
         still_refused = client.post(f"/a/rca/items/{second}/exec", json={"cmd": ["echo"]})
@@ -1922,4 +1933,90 @@ def test_the_debtor_of_an_item_they_cannot_read_sees_the_row_but_not_its_name():
         assert [h["item_id"] for h in holding] == [hers], holding
         assert holding[0]["title"] == "", (
             f"the debtor was shown the title of an item she cannot read: {holding}"
+        )
+
+
+def test_a_live_item_under_the_wrong_app_is_not_found_rather_than_gone():
+    """Round-8 finding 1 — I hand-rolled a second copy of the shared refusal at
+    the one gate that most needed the shared one, and the copy asks the wrong
+    question.
+
+    `require_item`'s fallback asked "does this id resolve AT ALL?" rather than
+    "is it deleted?", so the whole wrong-slug branch started answering 410 Gone
+    for an item that is alive and well. That inverts the very contract the
+    previous round restored: the outside system that lists items and acts on
+    them is told "that one is finished, open a new one" about a live item it
+    merely addressed under the wrong App.
+
+    `require_item` also authorizes nothing, so the 410/404 split there is
+    readable by anyone — one more reason the answer for a live item must be the
+    same 404 a stranger gets for an id that never existed.
+
+    My own checklist this round says a rule has to become ONE function so that
+    missing a gate is impossible. I wrote that function and then did not call it
+    here.
+    """
+    with _app(PerUserResources(cpu=100.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        alive = _mk(spec, "alice")
+
+        wrong_slug = client.get(f"/a/pm/items/{alive}/tools")
+        unknown = client.get("/a/rca/items/rca-investigation:does-not-exist/tools")
+
+        assert wrong_slug.status_code == 404, (
+            f"a LIVE item answered {wrong_slug.status_code} under the wrong app: {wrong_slug.text}"
+        )
+        assert unknown.status_code == 404, unknown.text
+
+        # …and the SAME gate still says Gone for an item of this App that is
+        # deleted. Asserted here because the routes behind `require_item`
+        # (tools / capability / entity) are the only ones that reach it — the
+        # resize and environment routes go through the other two gates, so a
+        # test written against those cannot see this one at all. The mutation
+        # probe is what said so: deleting this call changed nothing anywhere.
+        assert client.delete(f"/rca-investigation/{alive}").status_code in (200, 204)
+        gone = client.get(f"/a/rca/items/{alive}/tools")
+        assert gone.status_code == 410, f"a deleted item answered {gone.status_code}: {gone.text}"
+
+
+def test_a_delegate_can_close_a_deleted_items_environment():
+    """Round-8 S1 — the row this page argues hardest for was the one a manager
+    could not act on.
+
+    Closing is what a `change_permission` grant is FOR: §1.4 makes closing the
+    only way to resize a live environment, and the panel draws that person the
+    button. But the delegate branch resolved the App slug with a lookup that
+    reports a soft-deleted item as absent, so the slug came out `""` and the
+    check refused — and once the gates started answering 410 for a deleted item,
+    they refused it a second way.
+
+    Closing is a BILLING action, not an operation on the item: the sandbox is
+    running and somebody is paying for it, exactly as the resources page says
+    two lines above. So this path resolves the item the way the ledger does and
+    deliberately does not refuse a deleted one.
+    """
+    with _app(PerUserResources(cpu=100.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        WHO["id"] = "alice"
+        item = _mk(
+            spec,
+            "alice",
+            permission=_restricted(
+                read_meta=["user:bob"], read_chat=["user:bob"], change_permission=["user:bob"]
+            ),
+        )
+        _wake(client, item)
+        assert client.delete(f"/rca-investigation/{item}").status_code in (200, 204)
+
+        WHO["id"] = "bob"
+        closed = client.delete(f"/me/resources/live/{item}")
+
+        assert closed.status_code == 204, (
+            f"a manager could not close the deleted item's environment: {closed.text}"
         )
