@@ -23,8 +23,11 @@ If a page both reads and writes, start from the dashboard and add saving — a
 page that reads wrongly is obvious, a page that writes wrongly is not.
 
 ⚠️ **The external example is the one you cannot copy unchanged.** Its tool has
-to be one this app actually grants; the section below listing them by name is
-the only place that says which. A tool you invent fails at the call.
+to be one this app actually grants, and **"Tools this app offers its WUIs"** —
+appended to the end of this skill when you read it — is the only place that says
+which. You cannot tell from a tool's name: `read_file` and `lot-status` look
+alike to you, and only one of them a page can call. If that section is absent,
+say so and ask rather than guessing; a tool you invent fails at the call.
 
 ## What you are actually making
 

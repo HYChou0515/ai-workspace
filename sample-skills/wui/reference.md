@@ -91,6 +91,11 @@ workspace.onFileChanged(function (path) {
 runs on the platform with the item's credentials — **your page never holds a
 secret and cannot ask for one**.
 
+**Which tools exist is per-app, and you cannot tell from the names.** The list is
+appended to the end of `SKILL.md` when you read it, under "Tools this app offers
+its WUIs". Your own toolset is not the answer: most of what you hold are
+built-ins, which a page can never call.
+
 Declare each tool in the view file, or the call is refused:
 
 ```yaml
@@ -106,7 +111,19 @@ const data = JSON.parse(res.output);
 ```
 
 `exit_code !== 0` is the tool's own failure, not a platform error, and `output`
-is verbatim — nothing is appended to it.
+is verbatim — nothing is appended to it, so it is safe to parse (though whether
+it IS JSON is the tool's contract, not the platform's).
+
+A rejected `callTool` is a different thing again, and the message says which:
+
+| message | what the reader must change |
+|---|---|
+| "did not declare X" | add it to `tools:` in the view file — yours to fix |
+| "does not offer X" | this app does not grant it; an operator must add it |
+| "X is unavailable: …" | the app grants it but it could not be resolved |
+
+Show the message as it arrives. Collapsing these into "it failed" sends the
+reader to the wrong place most of the time. `examples/external/` does this.
 
 ## Blocked, by design
 

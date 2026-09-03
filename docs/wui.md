@@ -52,6 +52,34 @@ Renderer 是全平台都有的——**手寫一份 `view: wui` 的 yaml 現在�
     shared skill 只要被宣告就是 default-on，除非那個 profile 釘了明確的 `skills` 清單
     （`pm` 就是這樣做的）。想要「出現在選單但預設關閉」，兩件事都要做。
 
+## 怎麼讓頁面查得到外部系統
+
+**沒有「WUI 專用」的授權。** 頁面能呼叫的，就是那個 item 的 agent 能呼叫的
+**package tool**——同一份 `app.json` 的 `agent.tools`，經 profile 和 item 開關收窄後的
+結果。所以維運方要做的事跟平時一樣，沒有第二套：
+
+```json
+"agent": {
+  "tools": ["read_file", "write_file", "lot-status"],
+  "external_tools": { "lot-status": "https://.../tool.manifest.json" }
+}
+```
+
+第三方的 tool 兩個欄位都要寫（`external_tools` 說去哪拿，`tools` 說這個 App 用不用它）；
+第一方的（`sample-tools/`）只要寫 `tools`。細節見
+[`tool-authoring.md`](tool-authoring.md) 和 [`extending-the-platform.md`](extending-the-platform.md)。
+
+三件事值得先知道：
+
+- **agent 的內建工具（`read_file`、`exec` …）永遠不通。** 不是安全考量，是型別：
+  那些工具是講給模型聽的——會截斷、會在資料後面接一句英文說它截斷了、錯誤是一段散文。
+  程式讀到那種東西會靜默地拿到半份 JSON。頁面要平台的能力，補一條 HTTP 路由，不是開一個內建工具。
+- **AI 不會自己猜哪些能用。** `read_file` 和 `lot-status` 在它眼裡只是兩個名字，
+  所以平台會在 skill 裡把可呼叫的清單**逐個列出來**給它。這也表示 tool 一加上去，
+  下一輪對話 AI 就知道了，不用改 skill。
+- **頁面自己還要在 yaml 宣告一次**（`tools: [lot-status]`）。那不是安全閘門——伺服器端的
+  上限才是——而是揭露：讓人打開一個頁面之前，看得出它會伸手到哪裡。
+
 ## 頁面能做什麼，不能做什麼
 
 頁面跑在一個 **null origin** 的 iframe 裡（`sandbox="allow-scripts"`，**沒有**
