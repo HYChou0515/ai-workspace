@@ -350,6 +350,12 @@ superuser 在同一頁的最下方多一個**個人額度**區塊,可以直接�
 - **`workspace_chat[]`**：FE 的 RCA picker。**順序有意義——第一個是預設**，新調查自動掛它。每條參照一個 preset，可就地覆蓋任何欄位。
 - **`kb_chat[]`**：KB 聊天面。形狀同 `workspace_chat`，但**解析後 `allowed_tools` 一定要含 `kb_search`**，否則開機 raise。
 - **`infer_modules`**：模組推論分類器（#66），第一條帶 per-step 設定（`reasoning_effort` / `parallelism` / `collection`）。
+- **`subagent_models`**：`run_agent`（委派 sub-agent）的**模型白名單**——preset 名的清單。設了之後，主 agent 呼叫
+  `run_agent` 時可以多帶一個 `model` 參數、從這張清單裡挑一顆給 sub-agent 跑（例如把 grep 型子任務交給便宜的本地模型）；
+  不帶＝sub-agent 照舊跟著這個對話的模型。**沒設或空清單＝這個參數整個不存在**，行為與從前完全相同。
+  清單裡的名字必須存在於 `presets`，打錯開機就 raise。
+  **範圍**：只作用於 `run_agent`；workflow 的 agent 節點、`ask_knowledge_base`/`infer_modules`（KB sub-agent，模型來自上面
+  各自的 usage 清單第一條）、KB 聊天 picker 都**不讀**這個 key。
 
 `allowed_tools` 是**三態**：省略（None）= 給預設工具集；`[]` = 明確清空；`[a,b,c]` = 就這些。
 

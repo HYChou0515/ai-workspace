@@ -172,14 +172,15 @@ def _remap_agents_paths(op_sources: dict[str, Source]) -> dict[str, Source]:
     """Operators write sub-agent purposes flat (`agents.workspace_chat`), but
     `_pack_merged_sub_agents` nests them under `agents.sub_agents.<purpose>` in
     the resolved tree. Rewrite those operator paths so they line up with
-    `asdict(settings)`. `agents.presets.*` is NOT a purpose — left untouched."""
+    `asdict(settings)`. `agents.presets.*` / `agents.subagent_models` are NOT
+    purposes — left untouched."""
     prefix = "agents."
     out: dict[str, Source] = {}
     for path, src in op_sources.items():
         if path.startswith(prefix):
             rest = path[len(prefix) :]
             purpose = rest.split(".", 1)[0].split("[", 1)[0]
-            if purpose != "presets":
+            if purpose not in _AGENTS_RESERVED_KEYS:
                 path = f"agents.sub_agents.{rest}"
         out[path] = src
     return out
@@ -229,18 +230,25 @@ def _flatten_bundled_sub_agents(bundled: dict[str, Any]) -> None:
         agents.update(sub_agents)
 
 
+#: `agents.<key>`s that are NOT sub-agent purposes: the recipes dict and the
+#: run_agent model allowlist. Everything else under `agents:` is a usage list.
+_AGENTS_RESERVED_KEYS = frozenset({"presets", "subagent_models"})
+
+
 def _pack_merged_sub_agents(merged: dict[str, Any]) -> None:
     """Inverse of `_flatten_bundled_sub_agents`. After the merged dict
-    is validated (every non-`presets` key under `agents` is a usage
+    is validated (every non-reserved key under `agents` is a usage
     list), pack them back into `agents.sub_agents` for
     `_settings_from_dict` to consume."""
     agents = merged.get("agents")
     if not isinstance(agents, dict):
         return
-    presets = agents.get("presets", {})
-    sub_agents = {k: v for k, v in agents.items() if k != "presets"}
+    reserved = {k: agents[k] for k in _AGENTS_RESERVED_KEYS if k in agents}
+    sub_agents = {k: v for k, v in agents.items() if k not in _AGENTS_RESERVED_KEYS}
     agents.clear()
-    agents["presets"] = presets
+    agents["presets"] = reserved.get("presets", {})
+    if "subagent_models" in reserved:
+        agents["subagent_models"] = reserved["subagent_models"]
     agents["sub_agents"] = sub_agents
 
 
@@ -566,11 +574,23 @@ def _check_agents_keys(node: dict[str, Any], *, prefix: str, source: str) -> Non
         _check_preset_dict(
             preset_dict, prefix=_join(prefix, f"presets.{preset_name}"), source=source
         )
-    # Every non-`presets` key is treated as a usage list (purpose). Both
+    # `subagent_models` is the second reserved key (run_agent's model
+    # allowlist): a flat list of preset-name strings, not a usage list.
+    # (list from operator YAML; tuple when the bundled `asdict(Settings())`
+    # default survives the merge untouched)
+    sm = node.get("subagent_models")
+    if sm is not None and (
+        not isinstance(sm, (list, tuple)) or any(not isinstance(n, str) for n in sm)
+    ):
+        raise ValueError(
+            f"config {source}: {_join(prefix, 'subagent_models')} must be a "
+            f"list of preset names (strings), got {sm!r}"
+        )
+    # Every other non-`presets` key is treated as a usage list (purpose). Both
     # legacy single-dict and list-of-dicts shapes are accepted (the merge
     # step normalises the single-dict form when it lands).
     for purpose, entries_node in node.items():
-        if purpose == "presets":
+        if purpose in _AGENTS_RESERVED_KEYS:
             continue
         if isinstance(entries_node, dict):
             _check_usage_dict(entries_node, prefix=_join(prefix, purpose), source=source)
@@ -619,8 +639,18 @@ def _check_preset_references(merged: dict[str, Any], *, source: str) -> None:
     agents = merged.get("agents", {})
     presets = agents.get("presets", {})
     known = set(presets)
+    # `subagent_models` entries ARE preset references — bare names, not usage
+    # dicts (plan-subagent-model-choice). A typo must die here, at load, not at
+    # the first run_agent call hours later.
+    for i, name in enumerate(agents.get("subagent_models", []) or []):
+        if name not in known:
+            raise ValueError(
+                f"config {source}: agents.subagent_models[{i}] "
+                f"references unknown preset {name!r}; "
+                f"known presets: {sorted(known)}"
+            )
     for purpose, entries_node in agents.items():
-        if purpose == "presets":
+        if purpose in _AGENTS_RESERVED_KEYS:
             continue
         # Single-dict legacy form is accepted by the merge step; defensively
         # wrap it here so the loop is uniform.
@@ -850,6 +880,7 @@ def _settings_from_dict(d: dict[str, Any]) -> Settings:
                 purpose: _normalize_usage_list(entries)
                 for purpose, entries in d["agents"]["sub_agents"].items()
             },
+            subagent_models=tuple(d["agents"].get("subagent_models", [])),
         ),
         health=HealthSettings(
             checks=list(d.get("health", {}).get("checks", [])),

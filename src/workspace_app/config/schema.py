@@ -1123,6 +1123,12 @@ class AgentsSettings:
 
     presets: dict[str, Preset] = field(default_factory=_bundled_presets)
     sub_agents: dict[str, list[dict[str, Any]]] = field(default_factory=_bundled_sub_agents)
+    # The curated presets a `run_agent` caller may pick for a sub-agent
+    # (plan-subagent-model-choice): preset NAMES, order = display order.
+    # Empty ⇒ the feature does not exist (run_agent grows no `model`
+    # parameter). Reserved at YAML level like `presets` — every OTHER
+    # `agents.<key>` is a sub-agent usage list; this one is not.
+    subagent_models: tuple[str, ...] = ()
 
     @property
     def kb_chat(self) -> list[dict[str, Any]]:
