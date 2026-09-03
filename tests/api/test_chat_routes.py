@@ -497,11 +497,14 @@ def test_the_chat_reports_what_it_is_costing_before_any_turn_runs():
     got = r.json()
     assert got["used"] == 9_400
     assert got["measured"] is True
-    # Which rung answered, not just what it said. `measured` describes the
-    # NUMERATOR (did a provider count the prompt, or did we estimate it); this
-    # describes the DENOMINATOR, and they are independently trustworthy. An
-    # operator checking whether the ladder works sees `limit: 104857` and cannot
-    # otherwise tell a window the endpoint stated from one we derived from its
-    # output cap — which is the difference the whole ladder is built around.
-    assert got["limit_source"] == "catalog", got
-    assert got["limit"] == 40_960, got  # and it is the number that rung produced
+    # The DENOMINATOR's provenance travels beside the numerator's: `measured`
+    # says whether a provider counted the prompt, `limit_source` says which rung
+    # of the ceiling ladder produced `limit`. Only the field's presence is
+    # asserted here — WHICH rung answers depends on the machine, because this
+    # app's bundled preset is an `ollama_chat/*` name and litellm resolves those
+    # by asking the daemon. Asserting `catalog` here passed on a laptop with
+    # Ollama installed and failed on CI, which is a test describing its
+    # environment rather than the product. The ladder's own behaviour is pinned
+    # in `test_context_ladder_end_to_end.py`, over a model the registry knows
+    # without a daemon.
+    assert "limit_source" in got, got
