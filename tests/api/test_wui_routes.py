@@ -319,7 +319,27 @@ def test_build_runs_pnpm_in_the_pages_own_folder():
     assert len(sandbox.calls) == 1
     script = " ".join(sandbox.calls[0])
     assert "pnpm run build" in script
-    assert "/page" in script
+    assert "page" in script
+
+
+def test_the_build_runs_where_the_page_actually_is():
+    """`exec` runs with the WORKSPACE ROOT as its working directory, so a
+    workspace-absolute path is not one the shell can use.
+
+    Found by opening a real page rather than by reading: every build died with
+    `sh: cd: can't cd to /built` before running anything, and the assertion that
+    was meant to catch it (`"/page" in script`) pinned the defect instead — the
+    string is there either way. Inside the jail it is worse than an error:
+    `/built` names the infra area beside the workspace, which exists."""
+    sandbox = _BuildSandbox([b"ok\n"])
+    client, _, _, _ = build(sandbox=sandbox)
+
+    client.post(BUILD_URL, json={"folder": "/page"})
+
+    script = " ".join(sandbox.calls[0])
+    assert "./page" in script
+    assert "cd /page" not in script
+    assert "cd -- /page" not in script
 
 
 def test_a_failed_build_is_reported_with_its_own_output():

@@ -58,7 +58,15 @@ class BuildBody(BaseModel):
 
 
 def _build_dir(folder: str) -> str | None:
-    """The folder as an absolute workspace path, or `None` if it is not one.
+    """The folder as a path RELATIVE to the workspace root, or `None`.
+
+    Relative because that is what the shell can use: `exec` runs with the
+    workspace root as its working directory (`Sandbox.exec`'s contract), so the
+    workspace path `/page` names the filesystem root instead — outside the
+    workspace entirely, and inside the userns jail it names the infra area
+    beside it, which EXISTS. Passing the workspace path through made every build
+    die with `sh: cd: can't cd to /built` before running anything; it took
+    opening a real page to see, because the string is present either way.
 
     Checked on normalised SEGMENTS and interpolated into a shell command only
     after passing: this string reaches `sh -c`, so "looks fine" is not the bar.
@@ -74,7 +82,7 @@ def _build_dir(folder: str) -> str | None:
         if seg == "..":
             return None  # not "pop": a build path is not a place to be clever
         out.append(seg)
-    return f"/{'/'.join(out)}" if out else None
+    return "/".join(out) or None
 
 
 # What a rebuild runs, once the shell is in the page's folder.
@@ -159,10 +167,12 @@ def register_wui_routes(
 
         session = await registry.session(investigation_id)
         handle = await registry.ensure_handle(session)
-        # `exec` takes no working directory, so the shell provides one. The path
-        # is quoted rather than trusted: `_build_dir` decided it is a workspace
-        # path, and `shlex.quote` decides it cannot be anything else.
-        script = f"cd {shlex.quote(cwd)} && {_BUILD}"
+        # `exec` takes no working directory, so the shell provides one — relative
+        # to the workspace root it already starts in. `./` and `--` so a folder
+        # named `-p` is a folder and not an option, and `shlex.quote` because
+        # `_build_dir` decided this is a workspace path, not that it is safe to
+        # paste into a shell.
+        script = f"cd -- {shlex.quote(f'./{cwd}')} && {_BUILD}"
 
         queue: asyncio.Queue[bytes | None] = asyncio.Queue()
         loop = asyncio.get_running_loop()

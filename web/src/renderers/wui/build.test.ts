@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { HttpError } from "../../api/http";
-import { hasBuildScript, itemBuild } from "./build";
+import { cleanBuildOutput, hasBuildScript, itemBuild } from "./build";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -137,5 +137,36 @@ describe("hasBuildScript", () => {
     expect(hasBuildScript("[]")).toBe(false);
     expect(hasBuildScript(JSON.stringify({ scripts: "build" }))).toBe(false);
     expect(hasBuildScript(JSON.stringify({ scripts: { build: "" } }))).toBe(false);
+  });
+});
+
+describe("cleanBuildOutput", () => {
+  it("shows the build's words, not its colour codes", () => {
+    // Every real build tool colours its output, and a browser renders none of
+    // it: the pane showed `[32m✓[39m built in 565ms` — the escape sequences as
+    // literal text, which reads as a broken tool rather than a working one.
+    // Seen in a screenshot of the first real rebuild; no unit test could have.
+    const raw = "\u001b[2mdist/\u001b[22m\u001b[32mindex.html\u001b[39m 0.60 kB\n";
+
+    expect(cleanBuildOutput(raw)).toBe("dist/index.html 0.60 kB\n");
+  });
+
+  it("keeps text that merely looks like an escape", () => {
+    // A compiler error quoting source is the reason to read this log at all.
+    expect(cleanBuildOutput("expected [32m] to be a number")).toBe(
+      "expected [32m] to be a number",
+    );
+  });
+
+  it("turns a progress rewrite into a line rather than one long smear", () => {
+    // `\r` redraws a line in a terminal and does nothing in a <div>, so a
+    // progress bar arrived as one unreadable run-on line.
+    expect(cleanBuildOutput("Progress: 1\rProgress: 2\r\n")).toBe("Progress: 1\nProgress: 2\n");
+  });
+
+  it("leaves ordinary output exactly alone", () => {
+    expect(cleanBuildOutput("> vite build\nbuilt in 615ms\n")).toBe(
+      "> vite build\nbuilt in 615ms\n",
+    );
   });
 });

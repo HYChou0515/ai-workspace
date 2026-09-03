@@ -116,7 +116,13 @@ elif [ -e /usr/bin/python3 ]; then
   ln -sf /usr/bin/python3 "$ROOT/tmp/.jailbin/python"
   ln -sf /usr/bin/python3 "$ROOT/tmp/.jailbin/python3"
 fi
-export PATH="/tmp/.jailbin:/usr/bin:/bin:/usr/sbin:/sbin"
+# /usr/local/bin last: it is where `npm install -g` puts a command on Debian
+# (pptxgenjs, and the pnpm a WUI build runs) and it is on every ordinary
+# Debian PATH, but it was missing here — so anything the image installed
+# globally was present on disk and unreachable by name. Appended rather than
+# prepended so nothing that resolves today changes; only names that resolved
+# to nothing start resolving.
+export PATH="/tmp/.jailbin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin"
 # IMPORTANT — login-shell PATH guard. The agent commonly runs commands as
 # `bash -lc "python3 -c …"`; the `-l` makes bash source /etc/profile, which
 # on Debian/Ubuntu hard-resets PATH to "/usr/local/sbin:/usr/local/bin:..."

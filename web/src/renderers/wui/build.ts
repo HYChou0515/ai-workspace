@@ -54,6 +54,29 @@ export function itemBuild(slug: string, itemId: string): RunBuild {
 }
 
 /**
+ * A build tool's output, as a browser can show it.
+ *
+ * Every one of them colours its output, and none of that survives into a
+ * `<div>`: the pane showed `[32m✓[39m built in 565ms` — the escape sequences as
+ * literal text — which reads as a broken tool rather than a working one. `\r`
+ * has the same problem from the other side: it redraws a line in a terminal and
+ * does nothing here, so a progress bar arrived as one unreadable run-on line.
+ *
+ * Anchored on the ESC character, so text that merely LOOKS like an escape — a
+ * compiler quoting source, which is the reason to read this log at all — is
+ * left exactly as it is.
+ */
+export function cleanBuildOutput(text: string): string {
+  return text
+    // CSI (colour, cursor moves) and the OSC title sequences some tools emit.
+    // eslint-disable-next-line no-control-regex
+    .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "")
+    // eslint-disable-next-line no-control-regex
+    .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, "")
+    .replace(/\r\n?/g, "\n");
+}
+
+/**
  * Does this folder's `package.json` declare the script the platform runs?
  *
  * `scripts.build` is exactly the question, because `pnpm run build` is exactly

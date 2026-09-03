@@ -666,6 +666,61 @@ describe("WuiView: rebuilding a page when it is opened", () => {
     expect(buildCalls()).toHaveLength(1);
   });
 
+  it("does not shout about a missing dist/ while it is building one", async () => {
+    // The first open of a page nobody has built yet: `dist/` really is absent,
+    // and the pane said so in red — under a log showing the build that was
+    // about to create it. Seen in a screenshot; alarming and, seconds later,
+    // untrue.
+    const { release } = (() => {
+      let go: () => void = () => {};
+      const gate = new Promise<void>((r) => (go = r));
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => {
+          const encode = new TextEncoder();
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              async start(c) {
+                c.enqueue(encode.encode(sse({ type: "output", text: "vite build" })));
+                await gate;
+                c.enqueue(encode.encode(sse({ type: "done", exit_code: 0 })));
+                c.close();
+              },
+            }),
+            { status: 200, headers: { "content-type": "text/event-stream" } },
+          );
+        }),
+      );
+      return { release: () => go() };
+    })();
+    // No entry file at all — exactly the state before a first build.
+    const files: Record<string, string> = {
+      "/sales/package.json": JSON.stringify({ scripts: { build: "vite build" } }),
+    };
+    renderIn(files);
+
+    await screen.findByText(/vite build/);
+    expect(screen.queryByText(/no index\.html/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(/building/i);
+
+    // And once it is built, the page appears.
+    files["/sales/index.html"] = "<html><body>v1</body></html>";
+    release();
+    await waitFor(() => expect(frame()?.getAttribute("srcdoc")).toContain("v1"));
+  });
+
+  it("shows the build's words without its colour codes", async () => {
+    serveBuild(
+      sse({ type: "output", text: "\u001b[32m✓\u001b[39m built in 565ms" }) +
+        sse({ type: "done", exit_code: 0 }),
+    );
+    renderIn({ ...BUILT });
+
+    const log = await screen.findByRole("log", { name: "Build output" });
+    await waitFor(() => expect(log).toHaveTextContent(/built in 565ms/));
+    expect(log.textContent).not.toContain("[32m");
+  });
+
   it("lets the viewer turn it off from the pane", async () => {
     // The user's own choice, in front of them — not a hidden default.
     serveBuild(sse({ type: "done", exit_code: 0 }));

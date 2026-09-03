@@ -34,7 +34,7 @@ import { pxToRem } from "../../lib/pxToRem";
 import { autoBuildScope, useWuiAutoBuild } from "../../lib/wuiAutoBuild";
 import { viewParam, viewParamString } from "../entity/shared";
 import { itemCallTool } from "./api";
-import { hasBuildScript, itemBuild } from "./build";
+import { cleanBuildOutput, hasBuildScript, itemBuild } from "./build";
 import type { ViewSpec } from "../entity/types";
 import { buildWuiDoc } from "./assets";
 import { dispatchWuiRequest } from "./bridge";
@@ -270,7 +270,7 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
     setBuildLog([]);
     try {
       for await (const event of itemBuild(slug, fs.scopeId)(folder)) {
-        if (event.type === "output") say(event.text);
+        if (event.type === "output") say(cleanBuildOutput(event.text));
         else if (event.exit_code === 0) {
           say("Build finished.");
           setGeneration((g) => g + 1);
@@ -416,6 +416,13 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
       )}
       {built.isPending ? (
         <div style={{ padding: 12, color: "var(--text-paper-d)" }}>Opening…</div>
+      ) : built.error && building ? (
+        // The first open of a page nobody has built yet: `dist/` really is
+        // absent, and saying so in red — under a log showing the build that is
+        // about to create it — is alarming and, seconds later, untrue.
+        <div role="status" style={{ padding: 12, color: "var(--text-paper-d)" }}>
+          Building… the page appears when this finishes.
+        </div>
       ) : built.error ? (
         // Plain language and the file's name: whoever hits this may have no
         // console to open, and this text is what they forward to the agent.
