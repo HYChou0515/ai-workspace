@@ -19,6 +19,7 @@ import { itemEnvironmentApi } from "../api/itemEnvironment";
 import { myResourcesApi } from "../api/myResources";
 import { ItemEnvironmentPanel } from "./ItemEnvironmentPanel";
 import { budgetFrom } from "./useItemEnvironment";
+import { type SizeEdit, sizeToSave } from "./ItemEnvironmentSize";
 
 export type ItemEnvironmentModalProps = {
   slug: string;
@@ -54,8 +55,11 @@ export function ItemEnvironmentModal({
   };
 
   const save = useMutation({
-    mutationFn: (cpu: number | null) =>
-      itemEnvironmentApi.setSize(slug, itemId, { cpuCores: cpu, memory: null }),
+    // The route REPLACES both dimensions, so the client owns the whole value.
+    // Hard-coding `memory: null` here meant every cpu edit — and every "back to
+    // default" click — silently destroyed a stored memory setting.
+    mutationFn: (edit: SizeEdit) =>
+      itemEnvironmentApi.setSize(slug, itemId, sizeToSave(env.data!, edit)),
     onSuccess: refresh,
   });
   const close = useMutation({
@@ -77,7 +81,7 @@ export function ItemEnvironmentModal({
         slug={slug}
         itemId={itemId}
         onClose={() => close.mutate()}
-        onSave={(cpu) => save.mutate(cpu)}
+        onSave={(edit) => save.mutate(edit)}
       />
       <button type="button" onClick={onClose}>
         ×

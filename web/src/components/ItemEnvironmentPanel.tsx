@@ -41,7 +41,10 @@ export type ItemEnvironmentPanelProps = {
   slug: string;
   itemId: string;
   onClose?: () => void;
-  onSave?: (cpu: number | null) => void;
+  /** One dimension at a time. An absent key means "not touched", which the
+   *  caller turns into "keep what is stored" — the distinction that stops a cpu
+   *  edit from clearing memory. */
+  onSave?: (edit: { cpuCores?: number | null; memory?: string | null }) => void;
 };
 
 function Meter({ used, limit }: { used: number; limit: number }) {
@@ -70,6 +73,9 @@ export function ItemEnvironmentPanel({
   const t = useT();
   const [draft, setDraft] = useState<string>(
     env.statedCpuCores === null ? "" : String(env.statedCpuCores),
+  );
+  const [memoryDraft, setMemoryDraft] = useState<string>(
+    env.statedMemoryBytes === null ? "" : String(env.statedMemoryBytes),
   );
 
   const stated = env.statedCpuCores;
@@ -133,7 +139,7 @@ export function ItemEnvironmentPanel({
                 disabled={!canEdit || env.running}
                 onClick={() => {
                   setDraft("");
-                  onSave?.(null);
+                  onSave?.({ cpuCores: null });
                 }}
               >
                 {t("itemenv.size.reset")}
@@ -167,10 +173,33 @@ export function ItemEnvironmentPanel({
             // change now would be promising something the protocol cannot do.
             disabled={!canEdit || env.running}
             onChange={(e) => setDraft(e.target.value)}
-            onBlur={() => onSave?.(draft === "" ? null : Number(draft))}
+            onBlur={() => onSave?.({ cpuCores: draft === "" ? null : Number(draft) })}
           />
           )}
           {canEdit ? null : <p className="detail">{t("itemenv.readonly")}</p>}
+
+          {/* Memory had no control at all — the field existed on the item, the
+              route accepted it, and nothing could set it. P9's SIGKILL note
+              even tells people to come here and look at it. */}
+          <p className="summary">
+            <span data-testid="memory-value" className="gauge-value">
+              {env.effectiveMemoryBytes === null ? "—" : formatBytes(env.effectiveMemoryBytes)}
+            </span>
+            <span data-testid="memory-origin" className="detail">
+              {env.statedMemoryBytes === null ? t("itemenv.size.default") : t("itemenv.size.stated")}
+            </span>
+          </p>
+          {env.enforcedMemoryBytes === null ? null : (
+            <input
+              data-testid="memory-input"
+              value={memoryDraft}
+              placeholder="512M"
+              aria-label={t("resources.memory")}
+              disabled={!canEdit || env.running}
+              onChange={(e) => setMemoryDraft(e.target.value)}
+              onBlur={() => onSave?.({ memory: memoryDraft === "" ? null : memoryDraft })}
+            />
+          )}
 
           <div data-testid="budget-gauge" className="gauge">
             <p className="summary">
