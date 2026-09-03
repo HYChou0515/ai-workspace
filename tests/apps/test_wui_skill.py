@@ -222,3 +222,55 @@ def test_the_skill_offers_the_built_example_too():
     # And says which to prefer, because "you can build" is not the same as
     # "you should": the build step is the only thing here that can be forgotten.
     assert "Prefer no build" in body
+
+
+# ── the examples have to LOOK like something ──────────────────────────────
+
+
+def _classes_used(markup: str) -> set[str]:
+    """Every class the markup asks for, from `class=` and JSX `className=`."""
+    used: set[str] = set()
+    for attr in re.findall(r'class(?:Name)?="([^"{}]+)"', markup):
+        used.update(attr.split())
+    return used
+
+
+def _classes_defined(css: str) -> set[str]:
+    return set(re.findall(r"\.([A-Za-z][\w-]*)", css))
+
+
+@pytest.mark.parametrize("name", (*EXAMPLES, BUILT))
+def test_every_example_ships_its_own_looks(payload: dict[str, bytes], name: str):
+    """A page with no stylesheet is not "unstyled" — it is the browser's 1995
+    defaults, and that is the FIRST thing the person who asked for the page
+    sees. The react example shipped without one, so its built page rendered as
+    Times New Roman headings and a grey submit button; it took a screenshot to
+    notice, because nothing about it fails.
+
+    The page has no network, so the stylesheet is a file in the folder — linked
+    from `index.html` by hand, or imported from the source and emitted by the
+    bundler."""
+    css = [p for p in payload if p.startswith(f"examples/{name}/") and p.endswith(".css")]
+
+    assert css, f"{name} ships no stylesheet"
+    assert len(payload[css[0]]) > 300, f"{name}'s stylesheet is a stub"
+
+
+@pytest.mark.parametrize(
+    ("name", "markup"),
+    [(e, f"examples/{e}/index.html") for e in EXAMPLES]
+    + [(BUILT, f"examples/{BUILT}/src/main.jsx")],
+)
+def test_no_example_names_a_class_that_does_not_exist(
+    payload: dict[str, bytes], name: str, markup: str
+):
+    """A `className` with no rule behind it is invisible: the element renders,
+    unstyled, and nothing anywhere says the name was a typo or a leftover. The
+    react example asked for `problem` and `empty` and defined neither."""
+    used = _classes_used(payload[markup].decode())
+    defined: set[str] = set()
+    for path, body in payload.items():
+        if path.startswith(f"examples/{name}/") and path.endswith(".css"):
+            defined |= _classes_defined(body.decode())
+
+    assert used <= defined, f"{name} uses classes nothing defines: {sorted(used - defined)}"

@@ -107,7 +107,12 @@ title: Lot tracker
 
 Open it yourself in your head, in this order:
 
-1. Does `index.html` load `./app.js` and `./style.css` by relative path?
+1. Does `index.html` load `./app.js` and `./style.css` by relative path? **Is
+   there a stylesheet at all?** A page with none is not "unstyled", it is the
+   browser's 1995 defaults — Times New Roman headings, a grey submit button —
+   and that is the first thing the person who asked for it sees. With a build,
+   the equivalent is an `import "./styles.css"` in the source; the bundler
+   emits it and links it for you.
 2. Is every URL in the page either relative or a `data:` URI?
 3. Does the first render work with **no** data — an empty `data.json`, none at
    all, or an empty folder to read?

@@ -9,6 +9,12 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
+// With a build step the bundler owns the stylesheet: import it here and Vite
+// emits it into `dist/` and links it from `dist/index.html` itself. Write one —
+// a page with none is not "unstyled", it is the browser's 1995 defaults, and
+// that is what the person who asked for the page sees first.
+import "./styles.css";
+
 const DATA = "data.json"; // in THIS page's folder — the only place it may write
 
 /** Read this page's own data, treating absence as the empty start. */
