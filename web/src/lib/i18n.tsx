@@ -916,6 +916,17 @@ export const messages = {
   "resources.gauge.count": { "zh-TW": "環境數", en: "Environments" },
   "resources.gauge.cpu": { "zh-TW": "CPU", en: "CPU" },
   "resources.gauge.unlimited": { "zh-TW": "（無上限）", en: "(no limit)" },
+  // ── who may MANAGE an item (change_permission), shown apart from roles ──
+  "itemshare.managers.heading": { "zh-TW": "可以管理這個項目的人", en: "Who can manage this item" },
+  // The consequence, stated BEFORE the control. Both halves matter and the
+  // second is the easy one to miss: this grant now decides who may spend the
+  // owner's quota, not merely who may see the item.
+  "itemshare.managers.consequence": {
+    "zh-TW": "他們可以把這個項目的存取權再授權給任何人，也可以調整執行環境大小 —— 那花的是擁有者的額度。",
+    en: "They can re-share this item with anyone, and can resize its environment — which spends the owner's quota.",
+  },
+  "itemshare.managers.add": { "zh-TW": "加入使用者 ID", en: "Add a user id" },
+  "itemshare.managers.remove": { "zh-TW": "移除", en: "Remove" },
   // ── the item page's own environment panel ────────────────────────────
   "itemenv.button": { "zh-TW": "環境", en: "Environment" },
   "itemenv.tip": {

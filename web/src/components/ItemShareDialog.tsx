@@ -17,7 +17,9 @@ import {
   itemPermissionFromGrants,
   itemRoleDef,
 } from "../lib/itemPermission";
+import { itemManagersFromPermission, withItemManagers } from "../lib/itemManagers";
 import { pxToRem } from "../lib/pxToRem";
+import { ItemShareManagers } from "./ItemShareManagers";
 import { Icon } from "./Icon";
 import { ModalActions } from "./ModalActions";
 import { ModalShell } from "./ModalShell";
@@ -56,6 +58,11 @@ export function ItemShareDialog({
 }) {
   const [visibility, setVisibility] = useState<ItemVisibility>(value.visibility);
   const [grants, setGrants] = useState<ItemGrant[]>(() => itemGrantsFromPermission(value, owner));
+  // Held apart from `grants` because it is a different KIND of grant, not
+  // another rung — see `ItemShareManagers`.
+  const [managers, setManagers] = useState<string[]>(() =>
+    itemManagersFromPermission(value, owner),
+  );
   const [groupGrants, setGroupGrants] = useState<ItemGroupGrant[]>(() =>
     itemGroupGrantsFromPermission(value),
   );
@@ -74,7 +81,11 @@ export function ItemShareDialog({
   const showPeople = !hasGroups || tab === "people";
   const showGroups = hasGroups && tab === "groups";
 
-  const next = () => itemPermissionFromGrants(visibility, grants, value, groupGrants);
+  // Composed in two steps on purpose: `itemPermissionFromGrants` rebuilds only
+  // the ladder verbs and preserves everything else, so the management grant is
+  // layered on afterwards rather than smuggled into the ladder's vocabulary.
+  const next = () =>
+    withItemManagers(itemPermissionFromGrants(visibility, grants, value, groupGrants), managers);
   // Unresolvable (deleted / not visible) → "Unknown group", still removable (#608).
   const groupName = (id: string) =>
     pickableGroups.find((g) => g.resource_id === id)?.name ?? "Unknown group";
@@ -153,6 +164,8 @@ export function ItemShareDialog({
         // at its natural height, the overflow reaches ModalShell's own
         // `overflowY: auto`, which is where it was always meant to go.
         <div data-testid="item-share-grants" style={{ display: "grid", gap: 8, flexShrink: 0 }}>
+          {/* Above the roles, and outside the tabs: it is not one of them. */}
+          <ItemShareManagers managers={managers} onChange={setManagers} />
           {hasGroups && (
             <ShareTabs
               value={tab}
