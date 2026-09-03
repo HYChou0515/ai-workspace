@@ -46,6 +46,14 @@ afterEach(() => {
 });
 
 describe("the WUI runtime", () => {
+  it("carries no backtick, which would end the template it lives in", () => {
+    // The source is a `String.raw` template, so one backtick in a comment closes
+    // it and the whole module stops parsing — every test in this folder fails to
+    // collect at once, which reads like something far more interesting than a
+    // stray character. Made twice; pinned now.
+    expect(WUI_RUNTIME_SOURCE).not.toContain("`");
+  });
+
   it("gives the page the seven verbs and nothing else", () => {
     // The set is closed: another name here would be a capability nobody
     // reviewed, and the page would have found it before we did. Everything

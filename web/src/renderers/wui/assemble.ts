@@ -94,17 +94,6 @@ const MEDIA_REFS: ReadonlyArray<readonly [string, string]> = [
   ["image[href]", "href"],
 ];
 
-/** An asset as something a `src`/`url()` can point at with no network. A text
- * asset reaching here is a picture that happens to be text — an SVG — so it is
- * base64'd under its own media type rather than left as a file reference. */
-function dataUrlFor(rel: string, asset: WuiAsset): string {
-  if (asset.kind === "binary") return asset.dataUrl;
-  const type = /\.svg$/i.test(rel) ? "image/svg+xml" : "text/plain";
-  // The standard way to get a latin1 string `btoa` accepts out of UTF-8 text.
-  const latin1 = String.fromCharCode(...new TextEncoder().encode(asset.text));
-  return `data:${type};base64,${btoa(latin1)}`;
-}
-
 /**
  * Resolve `url(...)` references inside a stylesheet.
  *
@@ -121,8 +110,12 @@ async function inlineCssUrls(
     const rel = folderRelative(raw.trim());
     if (!rel) continue;
     const asset = await take(rel);
-    if (!asset) continue;
-    out = out.split(match).join(`url(${dataUrlFor(rel, asset)})`);
+    // Only a binary asset becomes a `data:` URL. Base64-ing a TEXT file into a
+    // `url()` cannot make it a picture — it just guarantees the browser refuses
+    // a reference that is now the whole file, and the load error then quotes it
+    // back at the reader.
+    if (asset?.kind !== "binary") continue;
+    out = out.split(match).join(`url(${asset.dataUrl})`);
   }
   return out;
 }
@@ -148,10 +141,21 @@ export async function assembleWuiDoc(entryHtml: string, load: WuiLoad): Promise<
   const doc = new DOMParser().parseFromString(entryHtml, "text/html");
   const used: string[] = [];
 
-  const take = async (rel: string): Promise<WuiAsset | null> => {
-    const asset = await load(rel);
-    if (asset) used.push(rel);
-    return asset;
+  // Remembered per assemble, because a reference can appear more than once — a
+  // stylesheet using one background N times, or a link-derived `<style>` that
+  // the generic `<style>` pass visits again. Without this each occurrence was a
+  // fresh read and a fresh base64 of the same file.
+  const seen = new Map<string, Promise<WuiAsset | null>>();
+  const take = (rel: string): Promise<WuiAsset | null> => {
+    let pending = seen.get(rel);
+    if (!pending) {
+      pending = load(rel).then((asset) => {
+        if (asset) used.push(rel);
+        return asset;
+      });
+      seen.set(rel, pending);
+    }
+    return pending;
   };
 
   for (const el of Array.from(doc.querySelectorAll("script[src]"))) {
@@ -185,8 +189,8 @@ export async function assembleWuiDoc(entryHtml: string, load: WuiLoad): Promise<
       const rel = folderRelative(el.getAttribute(attr));
       if (!rel) continue;
       const asset = await take(rel);
-      if (!asset) continue;
-      el.setAttribute(attr, dataUrlFor(rel, asset));
+      if (asset?.kind !== "binary") continue;
+      el.setAttribute(attr, asset.dataUrl);
     }
   }
 

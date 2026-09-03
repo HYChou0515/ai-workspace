@@ -126,17 +126,31 @@ describe("assembleWuiDoc", () => {
     expect(parsed.querySelector("img")?.getAttribute("src")).toBe("data:image/png;base64,AA");
   });
 
-  it("inlines an SVG reference, which arrives as text rather than bytes", async () => {
-    // An SVG decodes as UTF-8, so it is a `text` asset — but it is still a
-    // picture, and a rewrite that only accepted `binary` left it broken.
-    const load = textLoader({ "icon.svg": "<svg/>" });
+  it("leaves a media reference alone when the file is text", async () => {
+    // `<img src="./notes.md">` used to be base64'd in as `data:text/plain`,
+    // which cannot make it a picture — the browser refuses it, and the load
+    // error then quotes the whole file back at the reader. Classification is
+    // the loader's job (by extension); this only rewrites what IS a picture.
+    const load = textLoader({ "notes.md": "# hello" });
     const { doc } = await assembleWuiDoc(
-      `<html><head></head><body><img src="./icon.svg"></body></html>`,
+      `<html><head></head><body><img src="./notes.md"></body></html>`,
       load,
     );
 
     const src = new DOMParser().parseFromString(doc, "text/html").querySelector("img")?.getAttribute("src");
-    expect(src).toMatch(/^data:image\/svg\+xml;base64,/);
+    expect(src).toBe("./notes.md");
+  });
+
+  it("reads a file referenced twice only once", async () => {
+    const load = vi.fn(async (rel: string) =>
+      rel === "bg.png" ? ({ kind: "binary", dataUrl: "data:image/png;base64,AA" } as const) : null,
+    );
+    await assembleWuiDoc(
+      `<html><head><style>a{background:url(bg.png)}b{background:url(bg.png)}</style></head><body><img src="bg.png"></body></html>`,
+      load,
+    );
+
+    expect(load).toHaveBeenCalledTimes(1);
   });
 
   it("resolves a url() inside an inlined stylesheet", async () => {

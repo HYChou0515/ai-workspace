@@ -35,8 +35,31 @@ export const WUI_RUNTIME_SOURCE = String.raw`function (window, parent, document)
     parent.postMessage(msg, "*");
   }
 
+  // A blocked subresource announces itself TWICE — the element's error and the
+  // policy violation — in an order that varies, so three broken references cost
+  // six red lines. One line per URL, whichever arrives first.
+  var announced = {};
+
+  function once(url) {
+    if (!url) return true;
+    if (announced[url]) return false;
+    announced[url] = 1;
+    return true;
+  }
+
   function report(kind, message, detail) {
-    post({ proto: PROTO, report: kind, message: String(message), detail: detail || null });
+    // Capped: a message can contain a URL, and after inlining a URL can BE a
+    // multi-megabyte data: payload. It is rendered in the pane and pushed into
+    // the chat draft, so an uncapped one is a page freezing the app it reports
+    // to. The pick detail is capped separately, on the parent, which is the half
+    // a fabricated message can reach.
+    var text = String(message);
+    post({
+      proto: PROTO,
+      report: kind,
+      message: text.length > 400 ? text.slice(0, 400) + "…" : text,
+      detail: detail || null,
+    });
   }
 
   function send(verb, args) {
@@ -95,9 +118,11 @@ export const WUI_RUNTIME_SOURCE = String.raw`function (window, parent, document)
     "error",
     function (e) {
       var el = e.target;
-      if (el && el.nodeType === 1 && el !== window) {
+      if (el && el.nodeType === 1) {
         var url = el.src || el.href || "";
-        report("error", "This page could not load " + (url || el.tagName.toLowerCase()) + ".");
+        if (once(url)) {
+          report("error", "This page could not load " + (url || el.tagName.toLowerCase()) + ".");
+        }
         return;
       }
       var where = e.filename ? " (" + e.filename + ":" + e.lineno + ")" : "";
@@ -109,6 +134,7 @@ export const WUI_RUNTIME_SOURCE = String.raw`function (window, parent, document)
   // The other half of the same silence: anything the page reaches for that the
   // policy refuses. The browser names it in a console nobody here can open.
   window.addEventListener("securitypolicyviolation", function (e) {
+    if (!once(e.blockedURI)) return;
     report(
       "error",
       "This page is not allowed to load " +

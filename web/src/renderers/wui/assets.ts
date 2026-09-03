@@ -7,30 +7,23 @@
  * weaker thing — the read would still have happened.
  */
 
+import { HttpError } from "../../api/http";
 import type { FileService } from "../../api/fileService";
 import { assembleWuiDoc, type WuiAsset, type WuiDoc, type WuiLoad } from "./assemble";
 import { resolveInFolder } from "./paths";
 
-/** A blob as a `data:` URL — the only form an image can take in a document that
- * has no network. */
-function toDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(reader.error ?? new Error("could not read blob"));
-    reader.readAsDataURL(blob);
-  });
-}
-
 /**
- * What to call these bytes in a `data:` URL.
+ * What a file is FOR, keyed by extension.
  *
- * The browser will not render an image, play a video or load a font it has been
- * handed as `application/octet-stream`, and the FileService reports no type —
- * it deals in bytes. The extension is the only thing left, which is fine: it is
- * also what the author wrote in the tag.
+ * Deliberately not keyed by whether the bytes decoded as UTF-8. That is what
+ * the service reports, and it answers a different question: a Big5 `app.js` and
+ * a CP950 `.csv` are "not UTF-8" and are still text, while a `.png` is a picture
+ * whatever is in it. Keying on the encoding turned every legacy-encoded source
+ * file in a workspace into an image — an `index.html` with one such byte failed
+ * with "this WUI has no index.html", which was not true.
  *
- * SVG is deliberately absent — it decodes as UTF-8 and is inlined as text.
+ * SVG is here on purpose: it is text, but it is text used AS a picture, so it
+ * has to survive being pointed at by `<img src>`.
  */
 const MEDIA_TYPES: Record<string, string> = {
   png: "image/png",
@@ -41,6 +34,7 @@ const MEDIA_TYPES: Record<string, string> = {
   avif: "image/avif",
   bmp: "image/bmp",
   ico: "image/x-icon",
+  svg: "image/svg+xml",
   mp4: "video/mp4",
   webm: "video/webm",
   ogg: "audio/ogg",
@@ -53,72 +47,106 @@ const MEDIA_TYPES: Record<string, string> = {
   pdf: "application/pdf",
 };
 
-function mediaType(path: string): string {
-  const ext = path.toLowerCase().split(".").pop() ?? "";
-  // Unknown still resolves: a generic type beats a reference the CSP refuses.
-  return MEDIA_TYPES[ext] ?? "application/octet-stream";
+function mediaType(path: string): string | null {
+  return MEDIA_TYPES[path.toLowerCase().split(".").pop() ?? ""] ?? null;
 }
 
 /**
- * Read files beside the WUI's view file.
+ * Base64, in chunks.
  *
- * Anything that cannot be produced — outside the folder, missing, or a binary
- * whose bytes will not come — resolves to `null`, because the assembler's answer
- * to "no asset" is to leave the reference alone so CSP refuses it visibly. An
- * exception here would instead take down the whole render, turning one missing
- * image into a blank page.
+ * `String.fromCharCode(...bytes)` is the obvious spelling and throws
+ * `RangeError: Maximum call stack size exceeded` somewhere past 100 000
+ * arguments — measured at 125 000 in Chromium. A generated SVG chart clears
+ * that easily, and the throw escaped through the render, so one oversized asset
+ * replaced the whole page with a stack-overflow message. `encoding.ts` solved
+ * the same problem 90 lines away and this did not.
  */
-export function folderLoader(fs: FileService, folder: string): WuiLoad {
-  return async (rel: string): Promise<WuiAsset | null> => {
-    const path = resolveInFolder(folder, rel);
-    return path === null ? null : readAsset(fs, path);
-  };
+function base64(bytes: Uint8Array): string {
+  const CHUNK = 0x8000;
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
+/** A blob as a `data:` URL, for a service that reports bytes it will not decode. */
+function toDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error ?? new Error("could not read blob"));
+    reader.readAsDataURL(blob);
+  });
 }
 
 /**
- * One workspace file in the shape a page can hold: text as text, anything else
- * as a `data:` URL, because a null-origin frame with no network cannot follow a
- * URL to fetch the bytes itself.
+ * Reading a file has three outcomes, and they are not interchangeable.
  *
- * `null` for anything that will not come. Every caller's answer to a missing
- * file is to carry on — the assembler leaves the reference for CSP to refuse by
- * name, and the bridge turns it into a sentence — so throwing here would only
- * convert one absent image into a blank pane.
+ * `missing` is ordinary — a page's first run reads a data file that is not there
+ * yet. `failed` is not: a 403 for a read-only viewer, a 500, a dropped
+ * connection. Collapsing them (which `null` did) meant every such failure was
+ * reported to the page as "there is no file at X" and, once not-found stopped
+ * being reported at all, silently.
  */
-export async function readAsset(fs: FileService, path: string): Promise<WuiAsset | null> {
+export type AssetRead =
+  | { kind: "asset"; asset: WuiAsset }
+  | { kind: "missing" }
+  | { kind: "failed"; reason: string };
+
+/** Read one workspace file in the shape a page can hold. */
+export async function readAsset(fs: FileService, path: string): Promise<AssetRead> {
   let content;
   try {
     content = await fs.readFile(path);
-  } catch {
-    return null;
+  } catch (err) {
+    if (err instanceof HttpError && err.status !== 404) {
+      return { kind: "failed", reason: err.message };
+    }
+    return { kind: "missing" };
   }
 
+  const type = mediaType(path);
   if (content.kind === "text") {
-    // The workspace service returns `kind: "text"` for EVERY file — it decodes
-    // the bytes and flags the ones that are not UTF-8 as `binary` (latin1, one
-    // char per byte, reversible) so that anything can be opened in the editor.
-    // So this flag, not `kind`, is what says "this is an image": keying on
-    // `kind` alone left every picture in every WUI a broken reference in
-    // production while the tests, whose double emitted the other shape, agreed
-    // it worked.
-    //
-    // The bytes are already here, so there is nothing to fetch: `btoa` over a
-    // latin1 string is exactly base64 of those bytes.
-    if (content.encoding === "binary") {
-      return { kind: "binary", dataUrl: `data:${mediaType(path)};base64,${btoa(content.text)}` };
-    }
-    return { kind: "text", text: content.text };
+    // The workspace service decodes every file and returns `kind: "text"`,
+    // flagging the non-UTF-8 ones as `binary` so anything can be opened in the
+    // editor. Whether this is a PICTURE is the extension's answer, not that
+    // flag's — see MEDIA_TYPES.
+    if (type === null) return { kind: "asset", asset: { kind: "text", text: content.text } };
+    const bytes =
+      content.encoding === "binary"
+        ? Uint8Array.from(content.text, (c) => c.charCodeAt(0) & 0xff)
+        : new TextEncoder().encode(content.text);
+    return { kind: "asset", asset: { kind: "binary", dataUrl: `data:${type};base64,${base64(bytes)}` } };
   }
 
   // A service that reports binary directly (the in-memory one) says a file
   // exists but not what is in it; the raw route is where those bytes live.
   try {
     const resp = await fetch(fs.fileDownloadUrl(path));
-    if (!resp.ok) return null;
-    return { kind: "binary", dataUrl: await toDataUrl(await resp.blob()) };
+    if (!resp.ok) return { kind: "failed", reason: `could not read ${path} (${resp.status})` };
+    return { kind: "asset", asset: { kind: "binary", dataUrl: await toDataUrl(await resp.blob()) } };
   } catch {
-    return null;
+    return { kind: "failed", reason: `could not read ${path}` };
   }
+}
+
+/**
+ * Read files beside the WUI's view file.
+ *
+ * Anything that cannot be produced — outside the folder, missing, or unreadable
+ * — resolves to `null`, because the assembler's answer to "no asset" is to leave
+ * the reference alone so the page's own error reporting names it. An exception
+ * here would instead take down the whole render, turning one missing image into
+ * a blank page.
+ */
+export function folderLoader(fs: FileService, folder: string): WuiLoad {
+  return async (rel: string): Promise<WuiAsset | null> => {
+    const path = resolveInFolder(folder, rel);
+    if (path === null) return null;
+    const read = await readAsset(fs, path);
+    return read.kind === "asset" ? read.asset : null;
+  };
 }
 
 /** Raised when the entry document itself is missing — the one absence that has
@@ -131,11 +159,7 @@ export class WuiEntryMissing extends Error {
 }
 
 /** Build the document for a WUI folder: read its entry, fold the folder in. */
-export async function buildWuiDoc(
-  fs: FileService,
-  folder: string,
-  entry: string,
-): Promise<WuiDoc> {
+export async function buildWuiDoc(fs: FileService, folder: string, entry: string): Promise<WuiDoc> {
   const load = folderLoader(fs, folder);
   const doc = await load(entry);
   if (doc?.kind !== "text") throw new WuiEntryMissing(entry);

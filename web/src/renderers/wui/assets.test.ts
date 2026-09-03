@@ -71,7 +71,7 @@ describe("folderLoader", () => {
   });
 
   it("names the media type from the extension, so the browser renders it", async () => {
-    const fs = svc({ "/sales/clip.mp4": PNG, "/sales/f.woff2": PNG, "/sales/x.bin": PNG });
+    const fs = svc({ "/sales/clip.mp4": PNG, "/sales/f.woff2": PNG });
     const load = folderLoader(fs, "/sales");
 
     expect((await load("clip.mp4")) as { dataUrl: string }).toMatchObject({
@@ -80,19 +80,37 @@ describe("folderLoader", () => {
     expect((await load("f.woff2")) as { dataUrl: string }).toMatchObject({
       dataUrl: expect.stringContaining("data:font/woff2;base64,"),
     });
-    // Unknown extensions still resolve — a generic type beats a broken ref.
-    expect((await load("x.bin")) as { dataUrl: string }).toMatchObject({
-      dataUrl: expect.stringContaining("data:application/octet-stream;base64,"),
+  });
+
+  it("treats a file with no media extension as TEXT, whatever its encoding", async () => {
+    // The regression this pins: keying on `encoding` made a Big5 `app.js` an
+    // image. It is not UTF-8 and it is still a script; the extension is what
+    // says what a file is for.
+    const big5 = new Uint8Array([0xa7, 0x41, 0xa6, 0x6e]); // 你好 in Big5
+    const fs = svc({ "/sales/app.js": big5, "/sales/data.csv": big5 });
+    const load = folderLoader(fs, "/sales");
+
+    expect((await load("app.js"))?.kind).toBe("text");
+    expect((await load("data.csv"))?.kind).toBe("text");
+  });
+
+  it("turns an SVG into a data URL, because it is text used as a picture", async () => {
+    const asset = await folderLoader(svc({ "/sales/icon.svg": "<svg/>" }), "/sales")("icon.svg");
+
+    expect(asset).toEqual({
+      kind: "binary",
+      dataUrl: `data:image/svg+xml;base64,${btoa("<svg/>")}`,
     });
   });
 
-  it("keeps an SVG as text, because it is text and inlines better", async () => {
-    const fs = svc({ "/sales/icon.svg": "<svg/>" });
+  it("base64s a large asset without blowing the stack", async () => {
+    // `String.fromCharCode(...bytes)` throws past ~125 000 arguments, and the
+    // throw escaped through the render — one oversized SVG replaced the whole
+    // page with a stack-overflow message.
+    const big = "<svg>" + "x".repeat(400_000) + "</svg>";
+    const asset = await folderLoader(svc({ "/sales/big.svg": big }), "/sales")("big.svg");
 
-    expect(await folderLoader(fs, "/sales")("icon.svg")).toEqual({
-      kind: "text",
-      text: "<svg/>",
-    });
+    expect(asset?.kind).toBe("binary");
   });
 
   it("still handles a service that reports binary directly", async () => {

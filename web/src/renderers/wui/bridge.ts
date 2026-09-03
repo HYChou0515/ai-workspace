@@ -87,9 +87,11 @@ export async function dispatchWuiRequest(
     case "listFiles": {
       const raw = str(args, "prefix") ?? "";
       // Read-scoped like every other path, so a relative spelling means the
-      // same thing here as it does in `readFile`. Empty stays empty: listing
-      // the whole item is the ordinary case and has no path to resolve.
-      const prefix = raw ? resolveReadPath(folder, raw) : "";
+      // same thing here as it does in `readFile`. The spellings for "the whole
+      // item" — absent, empty, `/`, `.` — all stay empty: they name the root,
+      // which has no path to resolve, and scoping them was a regression that
+      // refused a listing that used to work.
+      const prefix = raw && raw !== "/" && raw !== "." ? resolveReadPath(folder, raw) : "";
       if (prefix === null) return refuse(id, `${raw} is not a path in this workspace.`);
       return ok(id, { files: await fs.listFiles(prefix) });
     }
@@ -99,9 +101,14 @@ export async function dispatchWuiRequest(
       if (raw === null) return refuse(id, "readFile needs a `path`.");
       const path = resolveReadPath(folder, raw);
       if (path === null) return refuse(id, `${raw} is not a path in this workspace.`);
-      const asset = await readAsset(fs, path);
-      if (asset === null) return refuseExpected(id, `There is no file at ${path}.`);
-      return ok(id, { path, ...asset });
+      const read = await readAsset(fs, path);
+      // Only ABSENCE is ordinary. A 403 or a 500 arriving as "there is no file"
+      // was already misleading; once not-found stopped being reported at all it
+      // became silent, which is how a read-only viewer's page does nothing and
+      // says nothing.
+      if (read.kind === "missing") return refuseExpected(id, `There is no file at ${path}.`);
+      if (read.kind === "failed") return refuse(id, read.reason);
+      return ok(id, { path, ...read.asset });
     }
 
     case "writeFile": {

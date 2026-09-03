@@ -60,6 +60,39 @@ export const DEFAULT_ENTRY = "index.html";
  */
 export const MAX_REPORTS = 100;
 
+/** How many of the OLDEST reports survive a trim. The comment above says the
+ * first error is usually the cause — keeping only the newest would discard
+ * exactly that, so both ends are kept and the gap is stated. */
+const KEEP_FIRST = 20;
+
+/** The id the gap marker always carries, so a trim can find its own previous
+ * marker and keep counting instead of restarting at one. */
+const GAP_ID = -1;
+
+/** Trim to `MAX_REPORTS`, keeping both ends and recording what fell out.
+ * A truncated list that reads as a complete transcript is worse than a short
+ * one: the agent is told what happened and not told that more did. The count is
+ * CUMULATIVE — trimming one at a time is the normal case, and a marker that
+ * says "1 more" after nine hundred were dropped is a wrong number, not a
+ * rounding. */
+export function trimReports(reports: WuiReport[]): WuiReport[] {
+  if (reports.length <= MAX_REPORTS) return reports;
+  const previous = reports.find((r) => r.id === GAP_ID)?.dropped ?? 0;
+  const dropped = previous + (reports.length - MAX_REPORTS);
+  const tail = reports.filter((r) => r.id !== GAP_ID).slice(-(MAX_REPORTS - KEEP_FIRST - 1));
+  return [
+    ...reports.slice(0, KEEP_FIRST),
+    {
+      id: GAP_ID,
+      kind: "error" as const,
+      message: `… and ${dropped} more report${dropped === 1 ? "" : "s"} in between, dropped.`,
+      detail: null,
+      dropped,
+    },
+    ...tail,
+  ];
+}
+
 export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
   const fs = useFileService();
   const folder = wuiFolder(path);
@@ -115,7 +148,7 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
       if (isWuiReportMessage(ev.data)) {
         const { report, message, detail } = ev.data;
         setReports((rs) =>
-          [...rs, { id: nextReportId.current++, kind: report, message, detail }].slice(-MAX_REPORTS),
+          trimReports([...rs, { id: nextReportId.current++, kind: report, message, detail }]),
         );
         return;
       }

@@ -31,6 +31,9 @@ export type WuiReport = {
   kind: WuiReportKind;
   message: string;
   detail: WuiPickDetail | null;
+  /** Set only on the gap marker a trim leaves behind: how many reports it
+   * stands for, cumulatively. */
+  dropped?: number;
 };
 
 const KINDS: WuiReportKind[] = ["error", "refused", "pick"];

@@ -281,10 +281,17 @@ describe("WuiView", () => {
     }
 
     await waitFor(() => expect(screen.getByRole("log").children.length).toBe(MAX_REPORTS));
-    // The newest survive: the first error is usually the cause, but the ones a
-    // person is looking at are the ones that just happened.
-    expect(screen.queryByText(/boom 0$/)).not.toBeInTheDocument();
+    // BOTH ends survive. The first error is usually the cause, so keeping only
+    // the newest throws away the thing worth forwarding; keeping only the
+    // oldest hides what the person is looking at now.
+    expect(screen.getByText(/boom 0$/)).toBeInTheDocument();
     expect(screen.getByText(/boom 119$/)).toBeInTheDocument();
+    // And the gap is stated: a truncated transcript that reads as complete tells
+    // the agent what happened and does not tell it that more did.
+    // And the gap is stated, with the CUMULATIVE count: trimming happens one at
+    // a time, so a marker counting only the last trim would say "1" after
+    // hundreds were lost.
+    expect(screen.getByText(/and 20 more reports in between, dropped/)).toBeInTheDocument();
   });
 
   it("does not tell the page about its own save", async () => {
