@@ -15,6 +15,8 @@
  * the caller's business.
  */
 
+import { wuiRuntimeScript } from "./runtime";
+
 /** One sibling file, in the shape the tag that references it needs. */
 export type WuiAsset =
   | { kind: "text"; text: string }
@@ -126,6 +128,14 @@ export async function assembleWuiDoc(entryHtml: string, load: WuiLoad): Promise<
     if (asset?.kind !== "binary") continue;
     el.setAttribute("src", asset.dataUrl);
   }
+
+  // Our runtime goes second — after the CSP, which nothing may precede, and
+  // before every line the agent wrote. `window.workspace` has to exist when the
+  // page's first statement runs, and the error capture has to be listening
+  // before the failure it exists for, which is the page failing on load.
+  const runtime = doc.createElement("script");
+  runtime.textContent = safeScriptText(wuiRuntimeScript());
+  doc.head.insertBefore(runtime, doc.head.firstChild);
 
   const csp = doc.createElement("meta");
   csp.setAttribute("http-equiv", "Content-Security-Policy");

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { FileServiceProvider, type FileService } from "../../api/fileService";
 import type { FileContent } from "../../api/types";
+import { subscribeAgentDraft } from "../../lib/agentDraftBus";
 import { publishFileChanged } from "../../lib/fileChangedBus";
 import { QueryWrap } from "../../test/queryWrapper";
 import type { ViewSpec } from "../entity/types";
@@ -156,6 +157,55 @@ describe("WuiView", () => {
 
     await waitFor(() => expect(replies).toHaveLength(1));
     expect(replies[0]).toMatchObject({ event: "file_changed", path: "/sales/data.json" });
+  });
+
+  it("shows what the page reported, because nobody here can open a console", async () => {
+    const { say } = await withFrame({ "/sales/index.html": "<html><body>hi</body></html>" });
+
+    say({ proto: WUI_PROTOCOL, report: "error", message: "x is not a function (app.js:12)" });
+
+    expect(await screen.findByText(/x is not a function/)).toBeInTheDocument();
+  });
+
+  it("asks the page to enter pick mode when Report is pressed", async () => {
+    // The parent cannot reach into a null-origin frame, so pointing at
+    // something can only happen inside — this is the request to start.
+    const { replies } = await withFrame({ "/sales/index.html": "<html><body>hi</body></html>" });
+
+    fireEvent.click(screen.getByRole("button", { name: /report/i }));
+
+    expect(replies.at(-1)).toMatchObject({ command: "pick", on: true });
+  });
+
+  it("hands the report to the chat box instead of asking the user to retype it", async () => {
+    const offered: string[] = [];
+    const off = subscribeAgentDraft("item1", (t) => offered.push(t));
+    const { say } = await withFrame({ "/sales/index.html": "<html><body>hi</body></html>" });
+
+    say({
+      proto: WUI_PROTOCOL,
+      report: "pick",
+      message: "pointed",
+      detail: { html: "<b>42</b>", marker: "total", styles: { display: "flex" } },
+    });
+    fireEvent.click(await screen.findByRole("button", { name: /tell the agent/i }));
+
+    expect(offered).toHaveLength(1);
+    expect(offered[0]).toContain("total");
+    expect(offered[0]).toContain("display: flex");
+    expect(offered[0]).toContain("/sales");
+    off();
+  });
+
+  it("clears the reports once they have been handed over", async () => {
+    const off = subscribeAgentDraft("item1", () => {});
+    const { say } = await withFrame({ "/sales/index.html": "<html><body>hi</body></html>" });
+
+    say({ proto: WUI_PROTOCOL, report: "error", message: "boom" });
+    fireEvent.click(await screen.findByRole("button", { name: /tell the agent/i }));
+
+    await waitFor(() => expect(screen.queryByText(/boom/)).not.toBeInTheDocument());
+    off();
   });
 
   it("rebuilds the page on Refresh, since nothing reloads it automatically", async () => {

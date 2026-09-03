@@ -4,41 +4,18 @@
  *
  * The `file_changed` broadcast (#43) already arrives on the chat's SSE
  * subscription, where it invalidates the file-tree query. That is enough for a
- * tree that re-reads on demand, but not for a WUI: a page holding edited state
- * has to be TOLD, or it saves over the other person's work with neither of them
- * noticing. It lives several layers below the subscription and takes no props
- * from it, hence a module-level bus rather than more plumbing.
- *
- * Keyed by workspace scope id, because two items can be open at once and an edit
- * in one is not news in the other.
+ * tree that re-reads on demand, but not for a WUI: a page holding half-entered
+ * state has to be TOLD, or it saves over the other person's work with neither of
+ * them noticing. The path travels with it — the tree's own refetch would have
+ * lost exactly the part that matters.
  */
 
-type Listener = (path: string) => void;
+import { createScopedBus } from "./scopedBus";
 
-const listeners = new Map<string, Set<Listener>>();
+const bus = createScopedBus<string>();
 
 /** Subscribe to edits in one workspace. Returns the unsubscribe. */
-export function subscribeFileChanged(scopeId: string, fn: Listener): () => void {
-  let set = listeners.get(scopeId);
-  if (!set) {
-    set = new Set();
-    listeners.set(scopeId, set);
-  }
-  set.add(fn);
-  return () => {
-    set.delete(fn);
-    if (set.size === 0) listeners.delete(scopeId);
-  };
-}
+export const subscribeFileChanged = bus.subscribe;
 
-/** Announce an edit. Called from wherever the broadcast is already handled. */
-export function publishFileChanged(scopeId: string, path: string): void {
-  for (const fn of listeners.get(scopeId) ?? []) {
-    try {
-      fn(path);
-    } catch {
-      // One listener throwing must not stop the others hearing about it — a WUI
-      // is arbitrary agent-written code, and it is the likeliest to throw.
-    }
-  }
-}
+/** Announce an edit. Called where the broadcast is already handled. */
+export const publishFileChanged = bus.publish;

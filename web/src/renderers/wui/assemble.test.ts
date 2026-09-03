@@ -32,6 +32,24 @@ describe("assembleWuiDoc", () => {
     expect(WUI_CSP).not.toContain("connect-src");
   });
 
+  it("runs our runtime before any of the page's own code", async () => {
+    // `window.workspace` and the error capture have to exist by the time the
+    // agent's first line runs — and the error capture especially, because the
+    // failure it exists for is the page failing on load.
+    const { doc } = await assembleWuiDoc(
+      `<html><head></head><body><script>ready()</script></body></html>`,
+      textLoader({}),
+    );
+
+    const parsed = new DOMParser().parseFromString(doc, "text/html");
+    const scripts = Array.from(parsed.querySelectorAll("script"));
+    expect(scripts[0].textContent).toContain("window.workspace");
+    expect(scripts.at(-1)?.textContent).toBe("ready()");
+    // Second only to the CSP, which nothing may precede.
+    expect(parsed.head.firstElementChild?.tagName).toBe("META");
+    expect(parsed.head.children[1]?.tagName).toBe("SCRIPT");
+  });
+
   it("inlines a relative <script src> so the page needs no network", async () => {
     const load = textLoader({ "app.js": "console.log(1)" });
     const { doc } = await assembleWuiDoc(
@@ -120,6 +138,6 @@ describe("assembleWuiDoc", () => {
 
     const parsed = new DOMParser().parseFromString(doc, "text/html");
     expect(parsed.querySelector("h1")).toBeNull();
-    expect(parsed.querySelector("script")?.textContent).toContain(String.raw`<\/script>`);
+    expect(parsed.querySelector("body script")?.textContent).toContain(String.raw`<\/script>`);
   });
 });

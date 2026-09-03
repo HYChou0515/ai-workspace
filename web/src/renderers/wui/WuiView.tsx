@@ -20,13 +20,21 @@ import { useFileService } from "../../api/fileService";
 import { qk } from "../../api/queryKeys";
 import { useCurrentUserState } from "../../hooks/useCurrentUser";
 import { useOpenFile } from "../../hooks/openFile";
+import { publishAgentDraft } from "../../lib/agentDraftBus";
 import { subscribeFileChanged } from "../../lib/fileChangedBus";
+import { pxToRem } from "../../lib/pxToRem";
 import { viewParamString } from "../entity/shared";
 import type { ViewSpec } from "../entity/types";
 import { buildWuiDoc } from "./assets";
 import { dispatchWuiRequest } from "./bridge";
 import { wuiFolder } from "./paths";
 import { WUI_PROTOCOL, isWuiRequest, type WuiEvent } from "./protocol";
+import {
+  formatReportsForAgent,
+  isWuiReportMessage,
+  reportHeadline,
+  type WuiReport,
+} from "./report";
 
 /** The conventional entry, overridable with `entry:` in the view file. */
 export const DEFAULT_ENTRY = "index.html";
@@ -52,6 +60,13 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const openFile = useOpenFile();
   const { id: me, ready: meReady } = useCurrentUserState();
+  const [reports, setReports] = useState<WuiReport[]>([]);
+  const nextReportId = useRef(0);
+
+  /** Post to the frame. `"*"` because a sandboxed frame's origin is the string
+   * "null" and cannot be named; safe because the target is this one frame,
+   * reached through the handle we hold. */
+  const toFrame = (msg: unknown) => frameRef.current?.contentWindow?.postMessage(msg, "*");
 
   // The gate. Everything the page can do arrives here, and the only thing that
   // makes a message OURS is that it came from this frame's window — origin is
@@ -61,6 +76,13 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
     const onMessage = (ev: MessageEvent) => {
       const win = frameRef.current?.contentWindow;
       if (!win || ev.source !== win) return;
+
+      if (isWuiReportMessage(ev.data)) {
+        const { report, message, detail } = ev.data;
+        setReports((rs) => [...rs, { id: nextReportId.current++, kind: report, message, detail }]);
+        return;
+      }
+
       if (!isWuiRequest(ev.data)) return;
       void dispatchWuiRequest(ev.data, {
         fs,
@@ -68,9 +90,6 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
         openFile,
         me: meReady ? me : null,
       }).then((res) => {
-        // `"*"` because the recipient's origin IS "null" and cannot be named.
-        // Safe here only because the target is this specific frame, reached
-        // through the handle we hold rather than by broadcasting to the page.
         win.postMessage(res, "*");
       });
     };
@@ -89,6 +108,11 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
     [fs.scopeId],
   );
 
+  const tellTheAgent = () => {
+    publishAgentDraft(fs.scopeId, formatReportsForAgent(folder, reports));
+    setReports([]);
+  };
+
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
       <div
@@ -104,7 +128,37 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
         <button type="button" onClick={() => setGeneration((g) => g + 1)}>
           Refresh
         </button>
+        <button
+          type="button"
+          onClick={() => toFrame({ proto: WUI_PROTOCOL, command: "pick", on: true })}
+        >
+          Report a problem
+        </button>
+        {reports.length > 0 && (
+          <button type="button" onClick={tellTheAgent}>
+            Tell the agent ({reports.length})
+          </button>
+        )}
       </div>
+      {reports.length > 0 && (
+        <div
+          role="log"
+          style={{
+            flex: "0 0 auto",
+            maxHeight: "30%",
+            overflowY: "auto",
+            padding: "6px 8px",
+            borderBottom: "1px solid var(--paper-3)",
+            fontSize: pxToRem(12),
+          }}
+        >
+          {reports.map((r) => (
+            <div key={r.id} style={{ color: r.kind === "pick" ? "var(--text-paper-d)" : "var(--err)" }}>
+              {reportHeadline(r)}
+            </div>
+          ))}
+        </div>
+      )}
       {built.isPending ? (
         <div style={{ padding: 12, color: "var(--text-paper-d)" }}>Opening…</div>
       ) : built.error ? (
