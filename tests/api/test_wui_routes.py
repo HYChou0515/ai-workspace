@@ -7,22 +7,23 @@ whose authority it runs them with.
 
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from workspace_app.api.locator import ItemLocator
 from workspace_app.api.wui_routes import register_wui_routes
 from workspace_app.resources import AgentConfig
-from workspace_app.sandbox.protocol import ExecResult, SandboxHandle
+from workspace_app.sandbox.protocol import ExecResult, Sandbox, SandboxHandle
 from workspace_app.tooling.external import ExternalTools
 from workspace_app.tooling.registry import CommandInfo, PackageInfo
 
 PKG = PackageInfo(
     name="mes",
     install_dir="/tools/mes",
-    commands=(
-        CommandInfo(name="lot-status", description="Look up a lot.", params_json_schema={}),
-    ),
+    commands=(CommandInfo(name="lot-status", description="Look up a lot.", params_json_schema={}),),
 )
 
 
@@ -79,9 +80,15 @@ class _Locator:
         return dict(self.env)
 
 
+#: `allowed=None` is a MEANINGFUL value here — "this deploy did not restrict" —
+#: so it cannot double as "the caller said nothing", and the default needs a
+#: sentinel of its own.
+_UNSET = object()
+
+
 def build(
     *,
-    allowed: list[str] | None = ["mes"],
+    allowed: list[str] | None | object = _UNSET,
     packages: list[PackageInfo] | None = None,
     external: ExternalTools | None = None,
     env: dict[str, str] | None = None,
@@ -92,15 +99,19 @@ def build(
     app = FastAPI()
     sb = sandbox or _Sandbox()
     reg = registry or _Registry()
-    loc = locator or _Locator(allowed, env)
+    grants = ["mes"] if allowed is _UNSET else cast("list[str] | None", allowed)
+    loc = locator or _Locator(grants, env)
 
     async def _external(item_id: str) -> ExternalTools:
         return external or ExternalTools()
 
     register_wui_routes(
         app,
-        locator=loc,
-        sandbox=sb,
+        # Contract doubles: each implements the members this route reaches for
+        # and nothing else, so a change in what it reaches for shows up as a
+        # failure rather than being absorbed by a stub of the whole protocol.
+        locator=cast("ItemLocator", loc),
+        sandbox=cast("Sandbox", sb),
         registry=reg,
         packages=packages if packages is not None else [PKG],
         prebuilt_dir=None,
