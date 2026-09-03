@@ -22,17 +22,20 @@ page needing a platform capability gets an HTTP route, not a built-in tool.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
-from collections.abc import Callable, Sequence
+import shlex
+from collections.abc import AsyncIterator, Callable, Sequence
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from ..agent.context import AgentToolContext
-from ..sandbox.protocol import Sandbox, SandboxSpec
+from ..sandbox.protocol import ExecResult, Sandbox, SandboxSpec
 from ..tooling.external import ExternalTools
 from ..tooling.registry import PackageInfo, exec_package_command, find_allowed_command
 from .locator import ItemLocator
@@ -43,6 +46,35 @@ logger = logging.getLogger(__name__)
 
 class CallToolBody(BaseModel):
     args: dict[str, Any] = {}
+
+
+class BuildBody(BaseModel):
+    """Which page to rebuild. The folder, not a command: `package.json`'s
+    `scripts.build` decides what a build IS, which is the standard place for
+    that and keeps a page — LLM-written — from choosing what a human's click
+    executes."""
+
+    folder: str
+
+
+def _build_dir(folder: str) -> str | None:
+    """The folder as an absolute workspace path, or `None` if it is not one.
+
+    Checked on normalised SEGMENTS and interpolated into a shell command only
+    after passing: this string reaches `sh -c`, so "looks fine" is not the bar.
+    The workspace root itself is refused — a build there would run over the
+    whole item, and no page lives there anyway (a root-level view file cannot
+    write, so it cannot be a built page)."""
+    if not folder.startswith("/"):
+        return None
+    out: list[str] = []
+    for seg in folder.split("/"):
+        if seg in ("", "."):
+            continue
+        if seg == "..":
+            return None  # not "pop": a build path is not a place to be clever
+        out.append(seg)
+    return f"/{'/'.join(out)}" if out else None
 
 
 class CallToolOut(BaseModel):
@@ -81,6 +113,65 @@ def register_wui_routes(
         if resolve_external is not None:
             return await resolve_external(item_id)
         return await resolve_item_tools(sandbox, locator, item_id)
+
+    @app.post("/a/{slug}/items/{item_id}/wui/build")
+    async def wui_build(slug: str, item_id: str, body: BuildBody) -> StreamingResponse:
+        """Rebuild a page, streaming the build's own output as it arrives.
+
+        A page written with a bundler has two halves — the source someone edits
+        and the `dist/` a viewer sees — and they go out of step the moment a
+        rebuild is forgotten: the page renders, unchanged, with nothing saying
+        why. This is how that stops being possible: the person looking at the
+        page can rebuild it themselves.
+
+        **Streaming is the feature, not a detail.** A build takes tens of
+        seconds and fails often while someone is iterating, and its compiler
+        errors are the whole value. A route that answered only at the end would
+        give a spinner and no idea whether anything was happening.
+
+        The verb is `execute`: this runs a command in the item's sandbox, the
+        same thing a notebook cell does.
+        """
+        investigation_id = locator.require_access(slug, item_id, "execute")
+        cwd = _build_dir(body.folder)
+        if cwd is None:
+            raise HTTPException(status_code=400, detail=f"{body.folder} is not a page folder.")
+
+        session = await registry.session(investigation_id)
+        handle = await registry.ensure_handle(session)
+        # `exec` takes no working directory, so the shell provides one. The path
+        # is quoted rather than trusted: `_build_dir` decided it is a workspace
+        # path, and `shlex.quote` decides it cannot be anything else.
+        script = f"cd {shlex.quote(cwd)} && pnpm run build"
+
+        queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+
+        def on_output(chunk: bytes) -> None:
+            # Called from whatever thread the backend reads on; hop to the loop
+            # rather than touching the queue directly.
+            loop.call_soon_threadsafe(queue.put_nowait, chunk)
+
+        async def run() -> ExecResult:
+            try:
+                return await sandbox.exec(handle, ["sh", "-c", script], on_output=on_output)
+            finally:
+                # The SAME hop the chunks take, so the order is right by
+                # construction rather than by luck. `call_soon_threadsafe` from
+                # this thread DEFERS, so a straight `put` here overtook output
+                # a backend had already handed us — the build's log arrived
+                # after the line saying it had finished, or not at all.
+                loop.call_soon_threadsafe(queue.put_nowait, None)
+
+        async def gen() -> AsyncIterator[str]:
+            task = asyncio.ensure_future(run())
+            while (chunk := await queue.get()) is not None:
+                text = chunk.decode("utf-8", "replace")
+                yield f"data: {json.dumps({'type': 'output', 'text': text})}\n\n"
+            result = await task
+            yield f"data: {json.dumps({'type': 'done', 'exit_code': result.exit_code})}\n\n"
+
+        return StreamingResponse(gen(), media_type="text/event-stream")
 
     @app.post("/a/{slug}/items/{item_id}/wui/tools/{name}/call")
     async def wui_call_tool(slug: str, item_id: str, name: str, body: CallToolBody) -> CallToolOut:

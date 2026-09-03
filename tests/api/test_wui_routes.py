@@ -7,6 +7,7 @@ whose authority it runs them with.
 
 from __future__ import annotations
 
+import json
 from typing import cast
 
 import pytest
@@ -257,3 +258,97 @@ def test_a_name_two_packages_both_export_is_a_conflict_a_person_can_read():
     assert resp.status_code == 409
     assert "lot-status" in resp.json()["detail"]
     assert sandbox.calls == []
+
+
+# ── the build route (rebuild from the pane, with the log in front of you) ──
+
+
+BUILD_URL = "/a/rca/items/i1/wui/build"
+
+
+class _BuildSandbox(_Sandbox):
+    """Streams output the way a real sandbox does — in pieces, as they arrive —
+    so the route is exercised against the shape it has to forward, not a single
+    blob at the end."""
+
+    def __init__(self, chunks: list[bytes], exit_code: int = 0):
+        super().__init__(ExecResult(exit_code=exit_code, stdout=b"".join(chunks)))
+        self.chunks = chunks
+
+    async def exec(self, handle, cmd, on_output=None, env=None):
+        self.calls.append(list(cmd))
+        self.envs.append(dict(env or {}))
+        for chunk in self.chunks:
+            if on_output is not None:
+                on_output(chunk)
+        return self.result
+
+
+def _events(resp) -> list[dict]:
+    return [json.loads(line[6:]) for line in resp.text.splitlines() if line.startswith("data: ")]
+
+
+def test_build_streams_its_output_while_it_runs():
+    # The point of the feature: a rebuild you can WATCH. A route that answered
+    # only when the build finished would give a spinner and no idea whether
+    # anything is happening — which is what people do not trust.
+    sandbox = _BuildSandbox([b"> vite build\n", b"transforming...\n", b"built in 615ms\n"])
+    client, _, _, _ = build(sandbox=sandbox)
+
+    resp = client.post(BUILD_URL, json={"folder": "/page"})
+
+    assert resp.status_code == 200
+    events = _events(resp)
+    assert [e["text"] for e in events if e["type"] == "output"] == [
+        "> vite build\n",
+        "transforming...\n",
+        "built in 615ms\n",
+    ]
+    assert events[-1] == {"type": "done", "exit_code": 0}
+
+
+def test_build_runs_pnpm_in_the_pages_own_folder():
+    # `package.json`'s `scripts.build` decides WHAT a build is — the standard
+    # place. Naming a command in the view file would let a page choose what gets
+    # executed on a human's click.
+    sandbox = _BuildSandbox([b"ok\n"])
+    client, _, _, _ = build(sandbox=sandbox)
+
+    client.post(BUILD_URL, json={"folder": "/page"})
+
+    assert len(sandbox.calls) == 1
+    script = " ".join(sandbox.calls[0])
+    assert "pnpm run build" in script
+    assert "/page" in script
+
+
+def test_a_failed_build_is_reported_with_its_own_output():
+    # A build that fails is the normal case while someone is iterating. Its
+    # compiler errors are the whole value; a status code is not.
+    sandbox = _BuildSandbox([b"error: Unexpected token\n"], exit_code=1)
+    client, _, _, _ = build(sandbox=sandbox)
+
+    events = _events(client.post(BUILD_URL, json={"folder": "/page"}))
+
+    assert events[-1] == {"type": "done", "exit_code": 1}
+    assert "Unexpected token" in events[0]["text"]
+
+
+def test_build_refuses_a_folder_outside_the_workspace():
+    sandbox = _BuildSandbox([b"ok\n"])
+    client, _, _, _ = build(sandbox=sandbox)
+
+    for folder in ("/page/../../etc", "page", "/", ""):
+        resp = client.post(BUILD_URL, json={"folder": folder})
+        assert resp.status_code == 400, folder
+    assert sandbox.calls == []
+
+
+def test_build_needs_the_authority_to_run_things():
+    # It runs a command in the item's sandbox. That is the notebook cell's verb,
+    # not the file editor's.
+    client, _, _, locator = build(sandbox=_BuildSandbox([b"ok\n"]))
+
+    client.post(BUILD_URL, json={"folder": "/page"})
+
+    assert locator.asked_verb == ["execute"]
