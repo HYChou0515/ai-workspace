@@ -368,7 +368,30 @@ class TurnContextBuilder:
         from ..context_budget import context_usage
 
         return context_usage(
-            messages, limit=self._context_window(self._locator.resolve_agent_config(item_id))
+            messages, limit=self._credible_window(self._locator.resolve_agent_config(item_id))
+        )
+
+    def _credible_window(self, agent_config: AgentConfig | None) -> ContextLimit:
+        """The resolved ceiling, minus one that cannot be a window.
+
+        Three things read the ceiling — the history budget, the compaction
+        trigger, and the usage gauge — and every one of them does something
+        wrong with a derived number too small to hold the prompt: replay one
+        message, summarise the thread on every turn, or draw a bar past 100%
+        beside a chat that never compacts. The rule was written into the first
+        of those and immediately missed the other two, so it lives here, once,
+        and the three ask rather than each deciding.
+
+        `_budget_for` has its own call because it already holds the EXACT
+        overhead — prompt plus tool schemas — and should not re-estimate a
+        figure it measured. The other two size the system prompt only: cheap (no
+        schemas built, which is the 28 ms part) and the dominant term anyway.
+        """
+        from ..context_budget import estimate_tokens, usable_window
+
+        return usable_window(
+            self._context_window(agent_config),
+            overhead_tokens=estimate_tokens(getattr(agent_config, "system_prompt", "") or ""),
         )
 
     def compaction_plan_for(
@@ -384,23 +407,15 @@ class TurnContextBuilder:
             DEFAULT_MARGIN_RATIO,
             DEFAULT_REPLY_RESERVE,
             estimate_messages,
-            estimate_tokens,
-            usable_window,
         )
         from .compaction import plan_for_budget
 
         cfg = self._locator.resolve_agent_config(item_id)
-        # The same credibility test the history budget applies, for the same
-        # reason and with more at stake: a derived ceiling too small to hold the
-        # prompt would summarise the thread on EVERY turn — lossily and
-        # irreversibly — driven by a size measured against a number nobody
-        # stated. Sizing the system prompt is cheap (no tool schemas built, which
-        # is the 28 ms part) and it is the dominant term anyway, measured at
-        # 11k-18.5k tokens.
-        window = usable_window(
-            self._context_window(cfg),
-            overhead_tokens=estimate_tokens(getattr(cfg, "system_prompt", "") or ""),
-        )
+        # The same credibility test every other reader of the ceiling applies —
+        # and with the most at stake here, because a derived ceiling too small to
+        # hold the prompt would summarise the thread on EVERY turn, lossily and
+        # irreversibly, driven by a size measured against a number nobody stated.
+        window = self._credible_window(cfg)
         usage = self.usage_of(item_id, messages)
         # Deliberately NOT `_budget_for`. That budget is for HISTORY alone, so it
         # subtracts the system prompt and the tool schemas — and measuring those

@@ -765,3 +765,43 @@ def test_a_stated_ceiling_that_small_still_drives_compaction():
     plan = builder.compaction_plan_for("item", messages)
 
     assert plan.span, "a stated ceiling is not second-guessed"
+
+
+def test_the_gauge_shows_no_ceiling_when_nothing_credible_answered():
+    """The third consumer of the same number, and the one the user looks at.
+
+    `usage_of` drew its denominator straight off the resolved ceiling, so a
+    derived 3,276 that neither the budget nor the compaction trigger is willing
+    to act on would still be rendered as the bar's limit — a gauge reading past
+    100% beside a chat that never compacts, which is a worse answer than an
+    honest "no denominator". The FE is already built for `limit: null`: it shows
+    the usage with no bar rather than inventing one."""
+    from workspace_app.context_probe import EndpointLimits
+
+    builder = _bare_builder()
+    builder._max_tokens_window_ratio = 0.8
+    builder.endpoint_limits_fn = lambda model, base_url: EndpointLimits(
+        max_input_tokens=None, max_tokens=4_096
+    )
+    cfg = _cfg()
+    cfg.system_prompt = "x" * 44_000
+    builder._locator = _LocatorFor(cfg)
+
+    usage = builder.usage_of("item", _msgs(4))
+
+    assert usage.limit is None, "an incredible ceiling must not be drawn as one"
+    assert usage.limit_source == "unknown"
+
+
+def test_the_gauge_still_shows_a_ceiling_anyone_actually_stated():
+    """The control — this must not turn the gauge off for everyone."""
+    builder = _bare_builder()
+    builder._context_limit = 40_960
+    cfg = _cfg()
+    cfg.system_prompt = "s"
+    builder._locator = _LocatorFor(cfg)
+
+    usage = builder.usage_of("item", _msgs(4))
+
+    assert usage.limit == 40_960
+    assert usage.limit_source == "config"
