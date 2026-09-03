@@ -443,7 +443,22 @@ def register_item_routes(
         The heartbeat is the source the QUOTA bills from, so refusing an edit
         and charging for a sandbox now agree by construction: if nothing is
         being billed, there is nothing whose cgroup could disagree with a new
-        number."""
+        number.
+
+        ONE answer serves two questions — "may I resize this" and "should the
+        page offer Close" — and merging them is deliberate rather than
+        incidental. They could differ: `close_session` clears the heartbeat even
+        when it killed nothing, so a sandbox can be running with no row, and the
+        page will then offer no Close for it.
+
+        The trade is taken knowingly, in this direction, because the errors are
+        not symmetric. Believing a stopped sandbox is running is what the old
+        source did on `kind: local` — permanently, since the item dir outlives
+        the processes — and it locked the setting behind an eight-hour reaper
+        with a message telling the person to close something already gone. The
+        opposite mistake ends the next time anything touches the item, which
+        bumps the heartbeat again. A recoverable wrong answer beats a permanent
+        one, and the recovery here is "use the item", not "wait"."""
         store = registry.activity
         if store is None:
             return await registry.has_live_sandbox(item_id)

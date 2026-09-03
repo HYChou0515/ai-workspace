@@ -396,6 +396,12 @@ class _FakeActivity(IActivityStore):
         self.rows.pop(item_id, None)
         self.owners.pop(item_id, None)
 
+    async def owner_of(self, item_id: str) -> str | None:
+        # The ledger outlives the item record, which is the whole reason this
+        # exists — a double that read the item back would model the source it
+        # was added to replace.
+        return self.owners.get(item_id)
+
     async def is_live(self, item_id: str, *, since_ms: int) -> bool:
         # Keyed on the ITEM, deliberately — no owner in the question. Asking
         # `live_for(owner_of(item))` made the answer depend on a field anyone

@@ -8,7 +8,7 @@ A per-App ``WorkItem`` (``RcaInvestigation`` …) resolves its turn's
 from __future__ import annotations
 
 from specstar import SpecStar
-from specstar.types import ResourceIDNotFoundError
+from specstar.types import ResourceIDNotFoundError, ResourceIsDeletedError
 
 from ..resources import AgentConfig
 from .base import WorkItemBase
@@ -35,7 +35,23 @@ def find_work_item(spec: SpecStar, item_id: str) -> tuple[str, WorkItemBase] | N
     A recognised prefix that holds no such row is a genuine miss, not a reason to
     go looking elsewhere — the id could not live in another table. The scan stays
     for ids whose prefix names no registered App (legacy ``Investigation``), which
-    is exactly the case it was written for."""
+    is exactly the case it was written for.
+
+    A SOFT-DELETED row is a miss too, and saying so here is what stops it being
+    everyone else's problem. specstar raises `ResourceIsDeletedError` rather
+    than returning nothing, and the global handler maps that to 410 — so an
+    unguarded lookup anywhere turned one person's deleted item into a 410 for
+    whoever happened to be reading. `/me/resources` scans every sandbox on the
+    replica, so that was every tenant on the pod, from one delete, with no
+    reaping or window expiry needed.
+
+    Guarding it at each call site is what produced that: three lookups run
+    behind one request and only the one being looked at was covered. The
+    contract already says "``None`` for an id that is not there, callers handle
+    that" — a deleted id is not there, and callers that must still act on it
+    (the quota ledger keeps charging for a deleted item's live sandbox, and its
+    row must stay closable) read the ledger, which is keyed on the id and does
+    not need the row."""
     by_resource_name = {
         spec.get_resource_manager(model).resource_name: (slug, model)
         for slug, model in registered_apps().items()
@@ -45,14 +61,14 @@ def find_work_item(spec: SpecStar, item_id: str) -> tuple[str, WorkItemBase] | N
         slug, model = named
         try:
             item = spec.get_resource_manager(model).get(item_id).data
-        except ResourceIDNotFoundError:
+        except (ResourceIDNotFoundError, ResourceIsDeletedError):
             return None
         assert isinstance(item, WorkItemBase)
         return slug, item
     for slug, model in registered_apps().items():
         try:
             item = spec.get_resource_manager(model).get(item_id).data
-        except ResourceIDNotFoundError:
+        except (ResourceIDNotFoundError, ResourceIsDeletedError):
             continue
         assert isinstance(item, WorkItemBase)
         return slug, item

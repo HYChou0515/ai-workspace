@@ -1555,3 +1555,65 @@ def test_a_deleted_item_is_still_named_in_a_refusal():
         holding = refused.json()["detail"]["holding"]
         assert [h["item_id"] for h in holding] == [holder], holding
         assert holding[0]["title"] == "", "no title for a row whose item is gone"
+
+
+def test_someone_elses_deleted_item_does_not_410_my_resources_page(monkeypatch):
+    """Round-5 finding 1 — the fifth time this shape has held, and the widest.
+
+    I guarded `_describe` and not the OTHER two lookups the same request makes.
+    `_found_running` calls `facts_of` over `running_items()` — every sandbox on
+    the replica, every tenant's — BEFORE the owner filter. So one person's
+    soft-deleted item took down `/me/resources` for everybody else on the pod,
+    with no heartbeat loss and no window expiry needed.
+
+    The commit's own test was green because it was written from the deleter's
+    point of view, and the deleter's row short-circuits before that lookup.
+    """
+    with _app(PerUserResources(cpu=100.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        WHO["id"] = "alice"
+        hers = _mk(spec, "alice")
+        _wake(client, hers)
+        assert client.delete(f"/rca-investigation/{hers}").status_code in (200, 204)
+
+        # The 5-second fact memo hides it: alice's own request warmed the entry,
+        # so bob's lookup is served from cache. In production the entry expires
+        # five seconds after the last touch and the raise then stands for as
+        # long as the sandbox lives — up to the eight-hour reaper. Expiring it
+        # here is what makes the probe reach the code under test.
+        from workspace_app.api import app as app_mod
+
+        monkeypatch.setattr(app_mod, "_ITEM_FACT_TTL_S", 0.0)
+
+        WHO["id"] = "bob"
+        page = client.get("/me/resources")
+
+        assert page.status_code == 200, f"alice's deleted item broke bob's page: {page.text}"
+
+
+def test_a_deleted_items_environment_can_still_be_closed():
+    """Round-5 finding 2. The row I made visible last round carried a Close
+    button that 410s — `close_environment` resolves the owner through another
+    unguarded lookup.
+
+    My own docstring justified keeping the row on exactly this basis: "they are
+    being charged for it and closing it is the remedy this page exists to
+    offer… an unnamed environment is still closable while an invisible one is
+    not." It was not closable.
+    """
+    with _app(PerUserResources(cpu=100.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        item = _mk(spec, "alice")
+        _wake(client, item)
+        assert client.delete(f"/rca-investigation/{item}").status_code in (200, 204)
+        assert any(e["item_id"] == item for e in client.get("/me/resources").json()["live"])
+
+        closed = client.delete(f"/me/resources/live/{item}")
+
+        assert closed.status_code == 204, f"the row is visible but not closable: {closed.text}"

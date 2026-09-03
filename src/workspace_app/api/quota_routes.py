@@ -311,7 +311,14 @@ def register_quota_routes(
         The machine resource is one thing, and a panel that freed the tally
         without freeing the machine would be lying about what it did — and would
         make the next person's limit meaningless."""
+        # The item record first, the LEDGER when it is gone. A soft-deleted
+        # item still holds its sandbox and still owes for it — the row is on
+        # this page for exactly that reason — so resolving the debtor only
+        # through the record made the one row that most needs closing the one
+        # row that could not be.
         owner = locator.owner_of(item_id)
+        if owner is None and activity is not None:
+            owner = await activity.owner_of(item_id)
         # The debtor, a superuser, or someone the owner made a manager of this
         # item. That last one is not generosity: `change_permission` is what
         # lets a person resize the environment, §1.4 makes closing the ONLY way

@@ -72,6 +72,19 @@ class IActivityStore(abc.ABC):
         """Drop the heartbeat (the item's dir was recycled / closed)."""
 
     @abc.abstractmethod
+    async def owner_of(self, item_id: str) -> str | None:
+        """Who this item's live sandbox is charged to, per the LEDGER.
+
+        The item record is the usual source, but a soft-deleted item still holds
+        its sandbox and still owes for it — that is why its row appears on the
+        resources page at all — and the record is gone. The heartbeat carries
+        the owner it was billed under, is keyed on the id, and outlives the
+        item, so it can still answer.
+
+        `None` when nothing has beaten for this id."""
+        ...
+
+    @abc.abstractmethod
     async def is_live(self, item_id: str, *, since_ms: int) -> bool:
         """Whether THIS item has beaten recently.
 
@@ -209,6 +222,19 @@ class SpecstarActivityStore(IActivityStore):
         logger.debug("activity: forget heartbeat for item %s", item_id)
         with contextlib.suppress(ResourceIDNotFoundError, ResourceIsDeletedError):
             rm.delete(item_id)
+
+    async def owner_of(self, item_id: str) -> str | None:
+        return await asyncio.to_thread(self._owner_sync, item_id)
+
+    def _owner_sync(self, item_id: str) -> str | None:
+        rm = self._spec.get_resource_manager(_SandboxActivity)
+        try:
+            rev = rm.get(item_id)
+        except (ResourceIDNotFoundError, ResourceIsDeletedError):
+            return None
+        data = rev.data
+        assert isinstance(data, _SandboxActivity)
+        return data.owner or None
 
     async def is_live(self, item_id: str, *, since_ms: int) -> bool:
         return await asyncio.to_thread(self._is_live_sync, item_id, since_ms)

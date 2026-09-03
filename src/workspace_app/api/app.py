@@ -856,6 +856,13 @@ def create_app(
             try:
                 facts = load_access_facts(spec, item_id)
                 if facts is None:
+                    # No record — the item is unknown, or soft-deleted (the seam
+                    # reports both as a miss so one person's delete cannot 410
+                    # somebody else's page). A deleted item still HOLDS its
+                    # sandbox, which is why it is in this list, so the row stays
+                    # and only the name is missing: addressable beats invisible,
+                    # and it is the row most in need of closing.
+                    out[item_id] = ""
                     continue
                 check_access(
                     facts,
@@ -866,13 +873,6 @@ def create_app(
                     groups=groups,
                     superusers=superusers,
                 )
-            except ResourceIsDeletedError:
-                # A soft-deleted item can still be holding a sandbox — that is
-                # the whole reason it appears here. Dropping the row hid the one
-                # thing the person could close, and two shipped comments already
-                # describe this case by name ("addressable beats invisible").
-                # No title, but the row survives and stays closable.
-                out[item_id] = ""
             except Exception:  # noqa: BLE001 — no access is an ordinary answer
                 continue
             else:
