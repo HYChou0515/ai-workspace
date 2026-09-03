@@ -73,6 +73,48 @@ async def test_a_resolved_tool_becomes_a_package_the_agent_can_call() -> None:
     assert pkg.commands[0].params_json_schema == {"type": "object", "properties": {}}
 
 
+async def test_a_strangers_malformed_declaration_costs_its_own_row_not_the_panel() -> None:
+    """A third-party `"description": null` must not reach the response model.
+
+    `EnvNeedOut` is a Pydantic model with `description: str`, and the call that
+    builds it sits OUTSIDE the resolve guard — so one junk row would 500
+    `GET /a/{slug}/items/{id}/tools` and take away the whole picker and env
+    panel for an item whose owner cannot edit the offending artifact. Same
+    posture as the guard beside it: degrade, keep what still works.
+
+    Loud at BUILD time (the author can fix it), quiet here (a stranger's file).
+    """
+    host = _Host(
+        {
+            "tools": {
+                "wafer-history": {
+                    **_ANSWER["tools"]["wafer-history"],
+                    "env": [
+                        {"name": "GOOD", "description": "fine", "required": True},
+                        {"name": "NULL_DESC", "description": None},
+                        {"name": "ODD_REQUIRED", "required": 3},
+                        {"name": "DICT_DESC", "description": {}},
+                        {"no_name": "dropped"},
+                        "not even a dict",
+                    ],
+                }
+            },
+            "refused": {},
+        }
+    )
+
+    external = await resolve_external_tools(host, {"wafer-history": "https://g/m"})
+
+    (pkg,) = external.packages
+    assert pkg.env_needs is not None
+    assert [(n.name, n.description, n.required) for n in pkg.env_needs] == [
+        ("GOOD", "fine", True),
+        ("NULL_DESC", "", None),
+        ("ODD_REQUIRED", "", None),
+        ("DICT_DESC", "", None),
+    ]
+
+
 async def test_a_third_party_tools_env_declaration_survives_the_resolve() -> None:
     """#750 — the declaration reaches the panel for a THIRD-party tool too.
 

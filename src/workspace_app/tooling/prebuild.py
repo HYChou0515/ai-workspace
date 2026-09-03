@@ -506,7 +506,7 @@ def _copy_env_declaration(source: Path, dst: Path) -> None:
     if not src_file.is_file():
         return
     try:
-        parse_env_declaration(src_file.read_text("utf-8"))
+        parse_env_declaration(src_file.read_text("utf-8-sig"))
     except ValueError as exc:
         raise RuntimeError(f"{src_file} is not a usable environment declaration: {exc}") from exc
     shutil.copyfile(src_file, dst / "env.json")

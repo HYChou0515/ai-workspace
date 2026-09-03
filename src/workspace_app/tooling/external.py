@@ -99,10 +99,19 @@ def _package(name: str, described: dict[str, Any]) -> PackageInfo:
             tuple(
                 EnvNeed(
                     name=e["name"],
-                    description=e.get("description", ""),
-                    required=e.get("required"),
+                    # DEGRADE, do not refuse. This file belongs to a stranger,
+                    # and these values are carried verbatim into a Pydantic
+                    # response model whose call site sits OUTSIDE the resolve
+                    # guard below — so one `"description": null` would 500 the
+                    # whole picker and env panel for an item whose owner cannot
+                    # edit that artifact. A bad row costs its own row; the
+                    # author's own build refuses the same content loudly, where
+                    # the person reading the error can fix it (#763).
+                    description=e["description"] if isinstance(e.get("description"), str) else "",
+                    required=e["required"] if isinstance(e.get("required"), bool) else None,
                 )
                 for e in described["env"]
+                if isinstance(e, dict) and isinstance(e.get("name"), str)
             )
             if isinstance(described.get("env"), list)
             else None

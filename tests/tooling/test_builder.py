@@ -180,11 +180,12 @@ def test_an_author_who_describes_nothing_publishes_a_manifest_that_says_nothing(
 
 # ── #763: the author's `env.json` has to reach the MANIFEST ──────────────
 #
-# The host reads `manifest.env` and never opens the bundle, so a declaration
-# that only lands in the tarball is one the platform never sees. These enter
-# through `build_artifact` on purpose: every existing test of the `env` field
-# builds a `Manifest` by hand, which is exactly why nothing caught that the
-# builder was never filling it in.
+# The host reads `manifest.env` and never reads `env.json` out of the bundle
+# it unpacks, so a declaration that only lands in the tarball is one the
+# platform never sees. These enter through `build_artifact` on purpose: before
+# them NO test anywhere carried `env` through a real `Manifest` — the line that
+# renders it was uncovered — so every test of the field was grading a double,
+# which is why nothing caught that the builder was not filling it in.
 
 
 def test_build_artifact_publishes_the_variables_the_author_declared(tmp_path: Path) -> None:
@@ -286,6 +287,98 @@ def test_a_malformed_declaration_fails_the_authors_own_build(tmp_path: Path) -> 
             build_bundle=_fake_bundle({"trend": "t"}),
             smoke_check=lambda _dist: None,
         )
+
+
+def _build_with_env(tmp_path: Path, contents: str | None, *, name: str = "env.json"):
+    """Publish an artifact whose source carries `contents` as its `env.json`."""
+    src = _source(tmp_path)
+    if contents is not None:
+        (src / name).write_text(contents)
+    return build_artifact(
+        source=src,
+        out=tmp_path / "dist",
+        builder_id=_BUILDER,
+        build_bundle=_fake_bundle({"trend": "t"}),
+        smoke_check=lambda _dist: None,
+    )
+
+
+def test_a_declaration_that_is_not_an_array_is_refused(tmp_path: Path) -> None:
+    """`{}` on its own reaches NO entry loop, so it is the only input that
+    grades the array check. The first version of these tests used a NON-empty
+    object, which trips the per-entry check instead and left this guard bare —
+    a mutation probe deleting it kept the whole suite green."""
+    with pytest.raises(BuildError, match="must be a JSON array"):
+        _build_with_env(tmp_path, "{}")
+
+
+def test_a_description_that_is_not_text_is_refused(tmp_path: Path) -> None:
+    """Carried verbatim into a Pydantic response model downstream, where a
+    `null` becomes a 500 for the whole tool picker. The author is the only
+    person who can fix it and this is the only moment they are looking."""
+    with pytest.raises(BuildError, match="`description` must be a string"):
+        _build_with_env(tmp_path, json.dumps([{"name": "A", "description": None}]))
+
+
+def test_a_required_that_is_not_a_boolean_is_refused(tmp_path: Path) -> None:
+    """`"required": "yes"` would coerce to True downstream and silently mark a
+    variable mandatory that the author never marked."""
+    with pytest.raises(BuildError, match="`required` must be true, false or absent"):
+        _build_with_env(tmp_path, json.dumps([{"name": "A", "required": "yes"}]))
+
+
+def test_a_declaration_that_cannot_be_read_is_named_not_silence(tmp_path: Path) -> None:
+    """The #763 symptom through a different door: an unreadable file must not
+    publish as "the author said nothing" — that is the exact silence this
+    change exists to end."""
+    src = _source(tmp_path)
+    (src / "env.json").mkdir()
+
+    with pytest.raises(BuildError, match="could not be read"):
+        build_artifact(
+            source=src,
+            out=tmp_path / "dist",
+            builder_id=_BUILDER,
+            build_bundle=_fake_bundle({"trend": "t"}),
+            smoke_check=lambda _dist: None,
+        )
+
+
+def test_a_declaration_that_is_a_broken_symlink_is_named_not_silence(tmp_path: Path) -> None:
+    """A CI checkout that did not materialise the target would otherwise
+    publish silence from a build that looked completely green."""
+    src = _source(tmp_path)
+    (src / "env.json").symlink_to(tmp_path / "nowhere.json")
+
+    with pytest.raises(BuildError, match="symlink"):
+        build_artifact(
+            source=src,
+            out=tmp_path / "dist",
+            builder_id=_BUILDER,
+            build_bundle=_fake_bundle({"trend": "t"}),
+            smoke_check=lambda _dist: None,
+        )
+
+
+def test_a_declaration_saved_with_a_byte_order_mark_still_builds(tmp_path: Path) -> None:
+    """The docs tell a third party to hand-write this file, and a Windows
+    editor adds a BOM. Refusing it buys nothing."""
+    manifest = _build_with_env(tmp_path, '\ufeff[{"name": "A"}]')
+
+    assert manifest.env is not None
+    assert [e.name for e in manifest.env] == ["A"]
+
+
+def test_looked_and_needs_nothing_survives_into_the_published_file(tmp_path: Path) -> None:
+    """The empty state has to reach the host, not just the returned object:
+    `render_manifest` writes the key only when `env is not None`, so a
+    regression collapsing `()` to absent during serialisation would leave the
+    object-level test green while the panel started saying "did not say"."""
+    _build_with_env(tmp_path, "[]")
+
+    body = json.loads((tmp_path / "dist" / MANIFEST_NAME).read_bytes())
+    assert body["env"] == []
+    assert parse_manifest((tmp_path / "dist" / MANIFEST_NAME).read_bytes()).env == ()
 
 
 def test_the_published_bundle_carries_the_runnable_tree(tmp_path: Path) -> None:

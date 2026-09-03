@@ -231,34 +231,61 @@ class EnvSpec:
 def parse_env_declaration(raw: str) -> tuple[EnvSpec, ...]:
     """Parse an author's hand-written ``env.json`` (#750).
 
-    ONE reader, because two build paths both have to trust this file:
+    One reader for both BUILD paths, which is where this file is trusted:
     ``prebuild`` validates it before copying it into a bundle, and
     ``build_artifact`` turns it into the ``env`` the manifest carries — which
     is the only copy the host ever reads. Two parsers would drift, and the
     half that drifted would be the half deciding whether a person is ever
     shown the variable.
 
-    Only ``name`` is checked. The rest is the author's prose, and this file
-    can refuse nothing anyway (see :class:`EnvSpec`) — being strict here would
-    fail a build over a courtesy.
+    ``registry._read_env_needs`` reads the same file a third time and is
+    deliberately NOT this: it runs at discovery, on an already-published
+    bundle, where the only available response to a bad file is to degrade and
+    log. Loud where the author can fix it, quiet where they cannot — the same
+    split this function has with ``external._package``.
+
+    LOUD here on purpose. This runs in the AUTHOR's own build, where the one
+    person who can fix the file is the one reading the error. The RUNTIME side
+    (``external._package``) does the opposite and degrades, because there the
+    file belongs to a stranger and a bad row must cost its own row rather than
+    the panel it appears in.
+
+    Every key is checked for its DOMAIN, not just its presence: these values
+    are carried verbatim into a Pydantic response model downstream, and the
+    call that builds it sits outside the resolve guard — so a
+    ``"description": null`` that got through here would 500 the entire tool
+    picker for an item whose owner cannot edit the offending artifact (#763).
+
+    Messages name ``env.json`` themselves. The caller prefixes the path, but
+    the guard that pins this asserts on the message, and a path that merely
+    ends in the filename would satisfy it without the message saying anything.
 
     Raises ``ValueError`` describing the fault; the CALLER names the file,
     since only it knows where the text came from.
     """
     declared = json.loads(raw)
     if not isinstance(declared, list):
-        raise ValueError(f"must be a JSON array, got {type(declared).__name__}")
+        raise ValueError(f"env.json must be a JSON array, got {type(declared).__name__}")
     specs: list[EnvSpec] = []
     for entry in declared:
         if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
-            raise ValueError(f"every entry needs a string `name`; got {entry!r}")
-        specs.append(
-            EnvSpec(
-                name=entry["name"],
-                description=entry.get("description", ""),
-                required=entry.get("required"),
+            raise ValueError(f"every env.json entry needs a string `name`; got {entry!r}")
+        description = entry.get("description", "")
+        if not isinstance(description, str):
+            raise ValueError(
+                f"env.json entry {entry['name']!r}: `description` must be a string, "
+                f"got {type(description).__name__}"
             )
-        )
+        # `None` is the third state and travels; anything else is not a state.
+        # A truthy string here would read as True downstream and mark a
+        # variable mandatory that the author never marked.
+        required = entry.get("required")
+        if required is not None and not isinstance(required, bool):
+            raise ValueError(
+                f"env.json entry {entry['name']!r}: `required` must be true, false or "
+                f"absent, got {type(required).__name__}"
+            )
+        specs.append(EnvSpec(name=entry["name"], description=description, required=required))
     return tuple(specs)
 
 

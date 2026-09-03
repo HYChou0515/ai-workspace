@@ -196,18 +196,32 @@ def read_env_declaration(source: Path) -> tuple[EnvSpec, ...] | None:
     Read from the SOURCE, beside `author` and `description`: this is
     provenance the manifest carries, not something derived from the built
     tree. It has to reach the MANIFEST — the host reads `manifest.env` and
-    never opens the bundle, so a declaration that only lands in the tarball
-    is one the platform never sees (#763).
+    never reads `env.json` out of the bundle it unpacks, so a declaration
+    that only lands in the tarball is one the platform never sees (#763).
 
     Absent stays absent. `None` means the author never wrote the file, which
     is a different claim from an empty list, and both travel all the way to
     the panel.
+
+    Everything that is NOT absence is named instead: a directory, an
+    unreadable file, a symlink to nothing. Reading those as "the author said
+    nothing" would be #763 itself coming back through a different door — a
+    green build that publishes silence.
     """
     declared = source / "env.json"
-    if not declared.is_file():
+    if not declared.exists():
+        if declared.is_symlink():
+            raise BuildError(f"{declared} is a symlink to nothing — refusing to publish silence")
         return None
     try:
-        return parse_env_declaration(declared.read_text("utf-8"))
+        # utf-8-sig, not utf-8: this is a file the docs tell a third party to
+        # hand-write, and a Windows editor puts a BOM on it. It reads plain
+        # UTF-8 identically, so accepting one costs nothing.
+        raw = declared.read_text("utf-8-sig")
+    except OSError as exc:
+        raise BuildError(f"{declared} could not be read: {exc}") from exc
+    try:
+        return parse_env_declaration(raw)
     except ValueError as exc:
         raise BuildError(f"{declared} is not a usable environment declaration: {exc}") from exc
 
@@ -399,6 +413,14 @@ def build_artifact(
     project = read_project(source)
     name, version = project.name, project.version
     token = _read_grant(source)
+    # Read with the other source-derived provenance, BEFORE anything is
+    # written: a refusal must leave no dist behind (the same reason the weight
+    # check runs inside the temp dir below), and reading it here is also what
+    # puts the named `BuildError` in front of the author. Deeper in, the
+    # bundle build has already refused the same file as a bare `RuntimeError`
+    # that `main` cannot catch, so the author's CI log gets a traceback
+    # instead of one `build failed:` line.
+    env_needs = read_env_declaration(source)
     out.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -425,7 +447,7 @@ def build_artifact(
         grant=token,
         author=project.author,
         description=project.description,
-        env=read_env_declaration(source),
+        env=env_needs,
     )
     (out / BUNDLE_NAME).write_bytes(packed)
     (out / MANIFEST_NAME).write_bytes(render_manifest(manifest))
