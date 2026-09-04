@@ -864,7 +864,10 @@ describe("WuiView: rebuilding a page when it is opened", () => {
       "title",
       expect.stringMatching(/rebuild this page whenever you open it/i),
     );
-    expect(toggle.closest("label")).toHaveTextContent(/^on open$/);
+    // Readable on its own: "on open" said nothing to anyone who had not just
+    // read the code. The Rebuild button beside it establishes the word, so the
+    // box is that word made automatic.
+    expect(toggle.closest("label")).toHaveTextContent(/^Auto-rebuild$/);
   });
 
   it("lets the viewer turn it off from the pane", async () => {

@@ -401,7 +401,7 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
                 checked={autoBuild}
                 onChange={(e) => setAutoBuild(e.target.checked)}
               />
-              on open
+              Auto-rebuild
             </label>
           </>
         )}
