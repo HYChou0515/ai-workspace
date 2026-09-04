@@ -264,17 +264,29 @@ export function setViewScalar(text: string, key: string, value: string | null): 
   if (at === -1) {
     return value === null ? text : `${text.replace(/\s*$/, "")}\n${key}: ${value}\n`;
   }
-  // A key whose value is a nested mapping OWNS the indented lines under it, and
-  // touching only its own line leaves those orphaned beneath a flow mapping.
-  // That is not a wrong setting but a YAML parse error, and `parseViewSpec`
-  // answers those with null — so the whole view would go blank because someone
-  // moved a control. Stops at the first blank line or the first line back at
-  // this key's own indent, which is where the block ends.
+  // A key whose value is a BLOCK owns the lines under it, and touching only its
+  // own line leaves those orphaned beneath a flow mapping. That is not a wrong
+  // setting but a YAML parse error, and `parseViewSpec` answers those with null
+  // — so the whole view goes blank because somebody moved a control.
+  //
+  // Three shapes count as "under it", and the first version of this knew only
+  // the first:
+  //   · a more-indented line — a nested mapping's entries, and its comments;
+  //   · a `-` item at the key's OWN indent — how a YAML list is ordinarily
+  //     written, and `sort` is a list this panel writes;
+  //   · a blank line, but only when a line that belongs follows it. A blank
+  //     inside a block is formatting; a blank after one is the gap before the
+  //     next key, and eating it would pull that key's comment along.
   const indent = (head.exec(lines[at]) as RegExpExecArray)[1].length;
+  const indentOf = (l: string) => (/^\s*/.exec(l) as RegExpExecArray)[0].length;
   let end = at + 1;
-  while (end < lines.length && lines[end].trim() !== "") {
-    if ((/^\s*/.exec(lines[end]) as RegExpExecArray)[0].length <= indent) break;
-    end++;
+  for (let i = end; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim() === "") continue; // undecided until something below claims it
+    const ind = indentOf(line);
+    const isSeqItem = ind === indent && /^\s*-(\s|$)/.test(line);
+    if (ind <= indent && !isSeqItem) break;
+    end = i + 1; // commit this line, and any blanks skipped to reach it
   }
   const rest = lines.slice(end);
   const replacement = value === null ? [] : [`${lines[at].slice(0, lines[at].indexOf(":") + 1)} ${value}`];

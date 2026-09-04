@@ -268,6 +268,45 @@ describe("GanttView", () => {
       expect(onPatch).toHaveBeenCalledWith(1, { span: "2026-07-03/2026-07-07" });
     });
 
+    it("follows the cursor while dragging, showing the dates being written", () => {
+      // The bar at rest is wider than the record. If the drag keeps drawing the
+      // REACH, the left edge stays pinned to the earliest issue and a "move"
+      // reads as a stretch — the bar does not follow the pointer, and the title
+      // shows a range that is not what gets saved. Someone who drags again
+      // because "it didn't take" walks the stored dates further every time.
+      //
+      // So the drag draws the milestone's OWN span: the thing being moved, at
+      // the place the cursor put it. The reach comes back on release.
+      const onPatch = vi.fn();
+      render(
+        <GanttView
+          {...props({
+            spec: roadmap,
+            type: milestoneType,
+            onPatch,
+            refIndex: issues({ title: "early", span: "2026-06-20/2026-06-25", milestone: 1 }),
+            entities: [rec(1, { title: "M1", span: "2026-07-01/2026-07-05" })],
+          })}
+        />,
+      );
+      const bar = screen.getByTestId("bar-1");
+      const restWidth = bar.style.width;
+      const ppd = pxPerDay("week");
+
+      fireEvent.pointerDown(bar, { clientX: 0 });
+      fireEvent.pointerMove(window, { clientX: ppd * 3 });
+
+      const dragging = screen.getByTestId("bar-1");
+      // Five days wide — the record's own span — wherever the reach starts.
+      expect(Number.parseFloat(dragging.style.width)).toBeCloseTo(5 * ppd);
+      expect(Number.parseFloat(dragging.style.width)).toBeLessThan(Number.parseFloat(restWidth));
+      // And it says what it is about to write, not what it was drawing before.
+      expect(dragging).toHaveAttribute("title", "2026-07-04/2026-07-08");
+
+      fireEvent.pointerUp(window, { clientX: ppd * 3 });
+      expect(onPatch).toHaveBeenCalledWith(1, { span: "2026-07-04/2026-07-08" });
+    });
+
     it("does not let an issue's PROPOSED dates stretch the milestone", () => {
       // An unscheduled issue is drawn as a week from today. Letting that reach
       // into the roadmap would move a milestone because of a record nobody has
@@ -596,6 +635,41 @@ describe("GanttView", () => {
     );
     expect(screen.getByTestId("bar-1")).not.toHaveAttribute("data-provisional");
     expect(screen.getByTestId("bar-2")).toHaveAttribute("data-provisional", "true");
+  });
+
+  it("never writes an estimate of zero days, however far the end is dragged (#785)", () => {
+    // Losing the width floor means a span lying entirely in folded time
+    // measures zero columns — right for a BAR, meaningless for an ESTIMATE.
+    // "This takes no days" is not a thing anyone can mean, and the record would
+    // read "0 days" ever after. A day is the smallest estimate expressible.
+    const onPatch = vi.fn();
+    render(
+      <GanttView
+        {...props({
+          spec: {
+            view: "gantt" as const,
+            entity: "issue",
+            span: "span",
+            label: "title",
+            skip_weekends: true,
+            schedule: { span: "span", duration: "exp_days", flag: "schedule" },
+          },
+          onPatch,
+          // Starts on a SATURDAY. Dragging the end handle back clamps it to the
+          // start, and Sat→Sat is zero working columns — the case a span that
+          // starts on a working day can never reach, because the clamp lands it
+          // on that working day.
+          entities: [rec(1, { title: "A", span: "2026-01-10/2026-01-16", schedule: "auto" })],
+        })}
+      />,
+    );
+    const ppd = pxPerDay("week");
+    fireEvent.pointerDown(screen.getByTestId("bar-1-end"), { clientX: 0 });
+    fireEvent.pointerUp(window, { clientX: -ppd * 20 });
+
+    expect(onPatch).toHaveBeenCalledTimes(1);
+    const [, patch] = onPatch.mock.calls[0];
+    expect((patch as Record<string, number>).exp_days).toBeGreaterThanOrEqual(1);
   });
 
   it("dragging the right edge of an automatic bar changes its DURATION, not its dates", () => {

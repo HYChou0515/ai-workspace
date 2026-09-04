@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { EntityInstance, EntityType } from "../../api/entities";
-import { backrefRecords, buildRefIndex, referencedTypes, refOptions, traverseColumn } from "./refTraversal";
+import { backrefBuckets, backrefRecords, buildRefIndex, referencedTypes, refOptions, traverseColumn } from "./refTraversal";
 
 const issueType: EntityType = {
   name: "issue",
@@ -76,6 +76,25 @@ describe("backrefRecords (#785)", () => {
     expect(backrefRecords(ms(1, {}), issueType, index)).toEqual([]);
     expect(backrefRecords(ms(9, {}), milestoneType, index)).toEqual([]);
     expect(backrefRecords(ms(1, {}), milestoneType, new Map())).toEqual([]);
+  });
+
+  it("buckets the whole corpus in one pass, agreeing with the per-record answer", () => {
+    // A roadmap is milestones × issues. Asking each milestone to filter every
+    // issue is quadratic in the two numbers that both grow with the project, and
+    // it happens inside a render — so the grouping is done once and read by
+    // number. Same answers, or the cheap path is a different feature.
+    const buckets = backrefBuckets(milestoneType, index);
+    for (const n of [1, 2, 9]) {
+      expect(buckets.get(n) ?? []).toEqual(backrefRecords(ms(n, {}), milestoneType, index));
+    }
+    // Records pointing nowhere are in nobody's bucket.
+    expect([...buckets.values()].flat().map((r) => r.number)).not.toContain(3);
+  });
+
+  it("buckets nothing for a type with no backref, or an empty corpus", () => {
+    expect(backrefBuckets(issueType, index).size).toBe(0);
+    expect(backrefBuckets(milestoneType, new Map()).size).toBe(0);
+    expect(backrefBuckets(null, index).size).toBe(0);
   });
 });
 

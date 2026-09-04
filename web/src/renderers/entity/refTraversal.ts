@@ -63,6 +63,34 @@ export function backrefRecords(
   return out;
 }
 
+/** The same relation as {@link backrefRecords}, for EVERY record at once:
+ * target number → the records pointing at it.
+ *
+ * One pass over the corpus rather than one per row. A roadmap is milestones ×
+ * issues, so asking each milestone to filter every issue is quadratic in two
+ * numbers that both grow with the project — and it runs inside a render, on
+ * every pointer move of a drag. Records pointing at nothing, or at a number
+ * nothing has, simply land in no bucket. */
+export function backrefBuckets(
+  type: EntityType | null,
+  index: RefIndex,
+): Map<number, EntityInstance[]> {
+  const buckets = new Map<number, EntityInstance[]>();
+  for (const f of type?.fields ?? []) {
+    if (f.role !== "backref" || !f.from) continue;
+    const [srcType, srcField] = sourceOf(f.from);
+    if (!srcField) continue;
+    for (const r of index.get(srcType)?.values() ?? []) {
+      const target = Number(r.fields[srcField]);
+      if (!Number.isFinite(target)) continue;
+      const bucket = buckets.get(target);
+      if (bucket) bucket.push(r);
+      else buckets.set(target, [r]);
+    }
+  }
+  return buckets;
+}
+
 export function buildRefIndex(recordsByType: Record<string, EntityInstance[]>): RefIndex {
   const index: RefIndex = new Map();
   for (const [t, records] of Object.entries(recordsByType)) {

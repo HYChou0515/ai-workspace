@@ -43,6 +43,53 @@ describe("setViewScalar over a BLOCK value (#785)", () => {
     expect(changed).toContain("# the working day:");
   });
 
+  it("takes a block SEQUENCE with it, dashes at the key's own indent", () => {
+    // The ordinary way to write a YAML list: `- item` sits at the parent's
+    // indent, not further in. An indent-only rule stops at the first dash, so
+    // the items are orphaned under a flow mapping and the file stops parsing —
+    // and `sort` is a key the panel writes, so this is reachable today.
+    const text = [
+      "view: gantt",
+      "entity: issue",
+      "sort:",
+      "- field: title",
+      "  dir: asc",
+      "label: title",
+      "",
+    ].join("\n");
+    const changed = setViewScalar(text, "sort", '[{"field":"status","dir":"desc"}]');
+    expect(parseViewSpec(changed)?.sort).toEqual([{ field: "status", dir: "desc" }]);
+    expect(parseViewSpec(changed)?.label).toBe("title");
+  });
+
+  it("keeps going past a blank line inside a block", () => {
+    // A blank line between two settings in one block is formatting, not the end
+    // of the block. Treating it as the end leaves the rest behind.
+    const text = [
+      "view: gantt",
+      "entity: issue",
+      "work_hours:",
+      '  from: "07:00"',
+      "",
+      '  to: "21:00"',
+      "label: title",
+      "",
+    ].join("\n");
+    const changed = setViewScalar(text, "work_hours", '{ from: "08:00", to: "18:00" }');
+    expect(parseViewSpec(changed)?.work_hours).toEqual({ from: 8, to: 18 });
+    expect(parseViewSpec(changed)?.label).toBe("title");
+  });
+
+  it("stops at the next key, not at the end of the file", () => {
+    // The positive control for the two above: a greedier walk that ran to EOF
+    // would satisfy them by eating everything.
+    const text = ["view: gantt", "entity: issue", "group_by: status", "label: title", ""].join("\n");
+    const changed = setViewScalar(text, "group_by", "milestone");
+    expect(parseViewSpec(changed)?.group_by).toBe("milestone");
+    expect(parseViewSpec(changed)?.label).toBe("title");
+    expect(parseViewSpec(changed)?.entity).toBe("issue");
+  });
+
   it("takes the block's children with it when the key is removed", () => {
     const dropped = setViewScalar(text, "work_hours", null);
     expect(parseViewSpec(dropped)?.work_hours).toBeUndefined();

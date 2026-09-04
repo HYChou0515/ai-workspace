@@ -54,7 +54,7 @@ import {
   visibleDaysFor,
   type Zoom,
 } from "./ganttScale";
-import { backrefRecords, type RefIndex } from "./refTraversal";
+import { backrefBuckets, type RefIndex } from "./refTraversal";
 import { fieldText, roleOf } from "./shared";
 import { usePersistentSet } from "../../hooks/usePersistentSet";
 import { actorPalette } from "./actorColor";
@@ -243,18 +243,24 @@ export function GanttView({
   // the only span name a view file names. Nothing here is in a position to know
   // that issues might keep their dates under a different key, and the schedule
   // block makes the same assumption about the same two types.
+  //
+  // Bucketed in ONE pass over the corpus, not scanned per row: a roadmap is
+  // milestones × issues, so asking each milestone to filter every issue is
+  // quadratic in the two numbers that both grow with the project.
   const index = refIndex ?? NO_REFS;
-  const reachOf = (e: EntityInstance, own: Span): Span => {
-    const stated = backrefRecords(e, type ?? null, index)
-      .map((r) => resolveSpan(r.fields[spanField], today))
-      .filter((r) => r.source === "given")
-      .map((r) => r.span);
-    return unionSpan([own, ...stated]) ?? own;
-  };
-  const rows: Row[] = ordered.map((e) => {
-    const resolved = resolveSpan(e.fields[spanField], today);
-    return { e, ...resolved, reach: reachOf(e, resolved.span) };
-  });
+  const buckets = useMemo(() => backrefBuckets(type ?? null, index), [type, index]);
+  const rows: Row[] = useMemo(
+    () =>
+      ordered.map((e) => {
+        const resolved = resolveSpan(e.fields[spanField], today);
+        const stated = (buckets.get(e.number) ?? [])
+          .map((r) => resolveSpan(r.fields[spanField], today))
+          .filter((r) => r.source === "given")
+          .map((r) => r.span);
+        return { e, ...resolved, reach: unionSpan([resolved.span, ...stated]) ?? resolved.span };
+      }),
+    [ordered, buckets, spanField, today],
+  );
 
   // #PM auto-schedule — present only when the view names the fields that carry
   // the schedule, so a plain gantt stays a plain drawing of dates.
@@ -294,15 +300,6 @@ export function GanttView({
     </div>
   ) : null;
 
-  if (rows.length === 0) {
-    return (
-      <div>
-        {scheduleBar}
-        <div style={{ color: "var(--text-paper-d)" }}>No records to chart yet.</div>
-      </div>
-    );
-  }
-
   // #648: `skip_weekends` collapses Sat/Sun — every position is a COLUMN offset
   // (working days when on, calendar days when off) via columnOf, so the whole
   // gantt — axis, bars, drag, today — counts only working days.
@@ -314,12 +311,17 @@ export function GanttView({
   // the difference is seven columns of canvas the bars still need.
   // Measured over the REACH, not the stated spans: a milestone bar drawn wider
   // than its record still has to fit on the canvas it is drawn on.
-  const minDate = rows
-    .map((r) => r.reach.start)
-    .reduce((m, s) => (instantOf(s, "start") < instantOf(m, "start") ? s : m));
-  const maxDate = rows
-    .map((r) => r.reach.end)
-    .reduce((m, e) => (instantOf(e, "end") > instantOf(m, "end") ? e : m));
+  //
+  // Seeded from the first row rather than from `today`, and guarded for the
+  // empty case: React forbids a hook after a conditional return, so the
+  // "nothing to chart" branch has to come AFTER the axis memo below, and this
+  // arithmetic has to survive being reached with no rows at all.
+  const minDate = rows.length
+    ? rows.map((r) => r.reach.start).reduce((m, s) => (instantOf(s, "start") < instantOf(m, "start") ? s : m))
+    : today;
+  const maxDate = rows.length
+    ? rows.map((r) => r.reach.end).reduce((m, e) => (instantOf(e, "end") > instantOf(m, "end") ? e : m))
+    : today;
   // #785: the same "time the chart does not draw" rule as `skip_weekends`, one
   // scale down. It has no effect at day grain — a day is one column however
   // many of its hours are worked — so it is carried on both scales and simply
@@ -398,7 +400,14 @@ export function GanttView({
         // In DAYS whatever the chart is drawing: `exp_days` is a number of
         // days, and measuring the stretched bar at hour grain would write 24
         // into it for a one-day task.
-        onPatch(number, { [sched.duration]: barColumns(next, dayScale) });
+        //
+        // At least one. A span lying entirely in folded time measures zero
+        // columns, which is the right WIDTH for a bar and a meaningless
+        // ESTIMATE — nobody can mean "this takes no days", and the record would
+        // read "0 days" from then on. This floor is about what the number can
+        // say, not about how wide to draw it; that is why it lives here and not
+        // back inside `barColumns`.
+        onPatch(number, { [sched.duration]: Math.max(1, barColumns(next, dayScale)) });
         return;
       }
       onPatch(number, { [spanField]: spanValue(next) });
@@ -414,16 +423,52 @@ export function GanttView({
   // `today` also feeds the week axis's `by_today` cross-year boundary, so it is
   // computed before the axis. The clock is read here (the view shell) and
   // injected into the pure scale math — never read inside it.
-  const axis = axisFor(minDate, visibleDays, ppd, spec.week, today, skip, {
-    always_week: spec.always_week,
-    weekday: spec.weekday,
-    day_of_month: spec.day_of_month,
-  }, work);
+  // Memoised because a bar drag calls `setDrag` on every pointer move, and the
+  // axis depends on none of what a drag changes. Building it walks the whole
+  // visible range; at hour grain over a long project that is thousands of ticks
+  // and bands, and doing it per pointer move is what makes dragging stutter.
+  const axis = useMemo(
+    () =>
+      axisFor(
+        minDate,
+        visibleDays,
+        ppd,
+        spec.week,
+        today,
+        skip,
+        { always_week: spec.always_week, weekday: spec.weekday, day_of_month: spec.day_of_month },
+        work,
+      ),
+    [
+      minDate,
+      visibleDays,
+      ppd,
+      spec.week,
+      today,
+      skip,
+      spec.always_week,
+      spec.weekday,
+      spec.day_of_month,
+      work,
+    ],
+  );
   const fineH = FINE_H + (axis.fine.some((t) => t.sub) ? SUB_H : 0);
   const axisH = COARSE_H + fineH;
 
   const todayOffset = columnOf(minDate, today, scale);
   const todayInRange = todayOffset >= 0 && todayOffset < visibleDays;
+
+  // Below every hook, deliberately. React counts hooks per render, so a return
+  // above one makes the count depend on whether there is anything to chart —
+  // and the render after a record appears throws instead of drawing.
+  if (rows.length === 0) {
+    return (
+      <div>
+        {scheduleBar}
+        <div style={{ color: "var(--text-paper-d)" }}>No records to chart yet.</div>
+      </div>
+    );
+  }
 
   return (
     <DndContext sensors={sensors} onDragEnd={onRowDragEnd}>
@@ -533,11 +578,17 @@ export function GanttView({
               <div key={lane.key}>
                 {grouped && <div className="ev-gantt__lane-band" style={{ height: LANE_H }} />}
                 {(collapsed.has(lane.key) ? [] : lane.rows).map((row) => {
-                  // The drag changes what the record SAYS; the reach is
-                  // recomputed around it, so the bar under the cursor is what
-                  // the chart will look like once the drop is written.
+                  // At rest the bar is the REACH, computed once per row.
+                  // While dragging it is the record's OWN span — the thing the
+                  // gesture is moving. Keeping the reach during a drag pins the
+                  // left edge to the earliest record pointing at this one, so a
+                  // move reads as a stretch, the bar does not follow the
+                  // pointer, and the title shows a range that is not what gets
+                  // saved; someone who drags again because "it didn't take"
+                  // walks the stored dates further every time. The reach comes
+                  // back on release.
                   const ps = previewSpan(row);
-                  const drawn = reachOf(row.e, ps);
+                  const drawn = drag?.number === row.e.number ? ps : row.reach;
                   const left = xOf(drawn.start);
                   // Both ends of the range are coloured (barColumns) — the clamp
                   // this replaces was hiding the off-by-one: it made a same-day

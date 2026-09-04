@@ -383,6 +383,68 @@ describe("non-working hours take no width (#785)", () => {
   });
 });
 
+// Just above the `DETAIL_PPD` cutoff inside axisFor, so the middle tier (day
+// numbers, no week rule) is exercised — that is the branch that printed "NaN".
+const DETAIL_PPD_PROBE = 10;
+
+describe("dateAtColumn jumps whole weeks instead of walking days (#785)", () => {
+  /** What it replaces: one calendar day at a time. Kept here as the oracle. */
+  const naive = (origin: string, col: number): string => {
+    const dir = col >= 0 ? 1 : -1;
+    let left = Math.abs(col);
+    let d = origin.slice(0, 10);
+    while (isWeekend(d)) d = shiftDate(d, 1);
+    while (left > 0) {
+      d = shiftDate(d, dir);
+      if (!isWeekend(d)) left -= 1;
+    }
+    return d;
+  };
+
+  it("agrees with the day-by-day walk over a year, in both directions", () => {
+    // The walk was O(columns), and the hour axis calls it once per tick with a
+    // column that grows linearly — so the axis was quadratic exactly when
+    // `skip_weekends` is on, which is what the shipped Timeline ships. Jumping
+    // five working days per calendar week is O(1); this pins the arithmetic,
+    // which is the part that can be wrong.
+    for (const origin of ["2026-01-05", "2026-01-10", "2026-01-11", "2026-02-27"]) {
+      for (const col of [0, 1, 4, 5, 6, 9, 10, 11, 260, -1, -5, -11, -260]) {
+        expect(dateAtColumn(origin, col, true)).toBe(naive(origin, col));
+      }
+    }
+  });
+});
+
+describe("the axis survives an origin that carries a clock (#785)", () => {
+  // `ymd` builds `${date}T00:00:00Z`, so an edge that already has a T makes an
+  // Invalid Date: y/m come back NaN, `firstOfMonth` yields "NaN-NaN-01", and
+  // `columnOf` answers NaN. `monthTicks`' only exit is `day >= visibleDays`,
+  // and every comparison against NaN is false — a pure, allocation-free
+  // infinite loop. No error, no memory growth, just a frozen tab, and it
+  // happens as the chart OPENS because auto-fit puts a long project in the
+  // month zone. This became reachable the moment P2 let `minDate` keep a clock.
+  const TIMED = "2026-01-05T09:30";
+
+  it("terminates at the month zoom instead of hanging the tab", () => {
+    const axis = axisFor(TIMED, 300, PPD_ANCHORS.month);
+    expect(axis.fine.length).toBeGreaterThan(0);
+  }, 3000);
+
+  it("terminates with weekends collapsed and a week rule, the shipped shape", () => {
+    const axis = axisFor(TIMED, 300, PPD_ANCHORS.month, WW, "2026-06-01", true);
+    expect(axis.coarse.length).toBeGreaterThan(0);
+  }, 3000);
+
+  it("labels the axis with dates rather than NaN", () => {
+    // The same root cause one tier up, where it is visible instead of fatal.
+    for (const ppd of [PPD_ANCHORS.month, DETAIL_PPD_PROBE, PPD_ANCHORS.day]) {
+      const axis = axisFor(TIMED, 100, ppd);
+      for (const t of axis.fine) expect(t.label).not.toContain("NaN");
+      for (const b of axis.coarse) expect(b.label).not.toContain("NaN");
+    }
+  }, 3000);
+});
+
 describe("the axis at hour grain (#785)", () => {
   const PPD = PPD_HOUR_GRAIN * 2; // 12px hour columns
 

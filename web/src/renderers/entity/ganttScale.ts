@@ -413,7 +413,12 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 const DETAIL_PPD = 5;
 
 function ymd(date: string): { y: number; m: number; d: number } {
-  const t = new Date(`${date}T00:00:00Z`);
+  // Through `dayOf`, like every other reader of a raw edge. Without it an edge
+  // that already carries a `T` builds `2026-01-05T09:30T00:00:00Z`, which is an
+  // Invalid Date, and the NaN that comes out of it is not a wrong label — it is
+  // a hung tab, because the month walk's exit is a comparison and every
+  // comparison against NaN is false.
+  const t = new Date(`${dayOf(date)}T00:00:00Z`);
   return { y: t.getUTCFullYear(), m: t.getUTCMonth(), d: t.getUTCDate() };
 }
 
@@ -476,7 +481,13 @@ function monthTicks(minDate: string, visibleDays: number, ppd: number, skip: boo
       m += 1;
     }
   }
-  for (let count = 0; ; count += 1) {
+  // Bounded by construction. A month is never narrower than one column, so
+  // `visibleDays` months cannot fit in `visibleDays` columns and this ceiling
+  // is unreachable in normal use — it exists so that a bad number can only ever
+  // produce a wrong axis, which a test can see, instead of a frozen tab, which
+  // no test can survive long enough to report. `advance()` gives the other
+  // walks the same property; this loop predates it and never got it.
+  for (let count = 0; count <= visibleDays; count += 1) {
     const day = columnOf(minDate, firstOfMonth(y, m), skip);
     if (day >= visibleDays) break;
     if (day >= 0 && count % step === 0) ticks.push({ day, label: MONTHS[m] });
@@ -809,6 +820,18 @@ export function dateAtColumn(minDate: string, col: number, scale: ScaleArg): str
   // at or after it) — it only makes this function its true inverse.
   let d = dayOf(minDate);
   while (isWeekend(d)) d = shiftDate(d, 1);
+  // Whole weeks are arithmetic, not a walk: from a working day, seven calendar
+  // days is the same weekday and exactly five working days, in either
+  // direction. Only the remainder is walked, so this is at most nine
+  // iterations instead of one per column. The hour axis asks for one of these
+  // per tick with a column that grows linearly, which made the axis quadratic
+  // in the project's length — 1.6s for two years — precisely when
+  // `skip_weekends` is on, which is what the shipped Timeline ships.
+  const weeks = Math.floor(remaining / 5);
+  if (weeks > 0) {
+    d = shiftDate(d, dir * weeks * 7);
+    remaining -= weeks * 5;
+  }
   while (remaining > 0) {
     d = shiftDate(d, dir);
     if (!isWeekend(d)) remaining--;
