@@ -311,3 +311,23 @@ def test_the_charting_example_gives_its_canvas_a_height(payload: dict[str, bytes
     css = payload["examples/chart/style.css"].decode()
 
     assert re.search(r"\.plot\s*\{[^}]*height:", css, re.S), "the plot box needs a height"
+
+
+def test_the_skill_names_every_example_it_ships(payload: dict[str, bytes]):
+    """A count in prose drifts: the skill said "the three complete, working
+    examples" for as long as it took to add two more, and an agent reading it
+    would stop looking after the third. So the table, not a number, is the
+    index — and every folder has to be in it.
+
+    The other direction matters as much: a row pointing at a folder that is not
+    shipped sends the agent to copy something that is not there."""
+    skill = payload["SKILL.md"].decode()
+    shipped = {p.split("/")[1] for p in payload if p.startswith("examples/")}
+    listed = set(re.findall(r"`examples/([a-z-]+)/`", skill))
+
+    assert shipped <= listed, f"the skill never mentions {sorted(shipped - listed)}"
+    assert listed <= shipped, f"the skill points at folders it does not ship: {sorted(listed - shipped)}"
+    # And no bare count to go stale beside the table.
+    assert not re.search(r"the (?:two|three|four|five) complete", skill), (
+        "a number in the prose will drift the next time an example is added"
+    )

@@ -23,6 +23,7 @@ page needing a platform capability gets an HTTP route, not a built-in tool.
 from __future__ import annotations
 
 import asyncio
+import codecs
 import json
 import logging
 import shlex
@@ -42,6 +43,14 @@ from .locator import ItemLocator
 from .turn_context import resolve_item_tools
 
 logger = logging.getLogger(__name__)
+
+# What a backend returns when it killed the command on its own deadline
+# (`ExecResult.exit_code`'s documented convention).
+EXIT_TIMED_OUT = 124
+# Ours, for a stream that ended without the command reporting. The page needs a
+# non-zero code to show a failure, and inventing `1` would read as "the build
+# failed" when what failed was reaching it.
+EXIT_STREAM_BROKE = -1
 
 
 class CallToolBody(BaseModel):
@@ -193,13 +202,57 @@ def register_wui_routes(
                 # after the line saying it had finished, or not at all.
                 loop.call_soon_threadsafe(queue.put_nowait, None)
 
+        def frame(payload: dict[str, Any]) -> str:
+            return f"data: {json.dumps(payload)}\n\n"
+
         async def gen() -> AsyncIterator[str]:
             task = asyncio.ensure_future(run())
-            while (chunk := await queue.get()) is not None:
-                text = chunk.decode("utf-8", "replace")
-                yield f"data: {json.dumps({'type': 'output', 'text': text})}\n\n"
-            result = await task
-            yield f"data: {json.dumps({'type': 'done', 'exit_code': result.exit_code})}\n\n"
+            # A chunk is a byte FRAGMENT, not a string — the backend reads a
+            # fixed block at a time, so a multi-byte character lands astride the
+            # boundary. Decoding each chunk on its own turned vite's `✓`, which
+            # it prints on every build, into a replacement character.
+            decoder = codecs.getincrementaldecoder("utf-8")("replace")
+            try:
+                while (chunk := await queue.get()) is not None:
+                    if text := decoder.decode(chunk):
+                        yield frame({"type": "output", "text": text})
+                if tail := decoder.decode(b"", final=True):
+                    yield frame({"type": "output", "text": tail})
+
+                result = await task
+                if result.exit_code == EXIT_TIMED_OUT:
+                    # The backend explains itself in `stderr`, appended AFTER the
+                    # output pumps have stopped — so it never reaches `on_output`
+                    # and never reaches the page. Without this the reader watches
+                    # the log stop mid-install and gets a bare number.
+                    yield frame(
+                        {
+                            "type": "output",
+                            "text": (
+                                "\nThe build timed out and was killed. It has to finish inside "
+                                "the sandbox's `exec_timeout` (60s by default) — raise it for "
+                                "this deployment, or give the build less to do.\n"
+                            ),
+                        }
+                    )
+                yield frame({"type": "done", "exit_code": result.exit_code})
+            except Exception as exc:  # noqa: BLE001 — every path out posts a verdict
+                # The headers went out with the first byte, so this can never be
+                # a 500: it just ENDS the response. The page's `for await` then
+                # falls through with nothing said — partial output and no
+                # verdict, forever. A sentence and a non-zero code instead.
+                logger.warning("wui: build stream failed: %s", exc)
+                yield frame({"type": "output", "text": f"\nThe build could not finish: {exc}\n"})
+                yield frame({"type": "done", "exit_code": EXIT_STREAM_BROKE})
+            finally:
+                # The reader navigated away (the server cancels this generator,
+                # or closes it) — take the build down with them. Left alone, a
+                # `pnpm install` keeps running against a folder nobody is
+                # watching and the next open starts a second one beside it, both
+                # writing the same `dist/`. One guard, in the one place every
+                # exit passes through.
+                if not task.done():
+                    task.cancel()
 
         return StreamingResponse(gen(), media_type="text/event-stream")
 

@@ -7,6 +7,7 @@ whose authority it runs them with.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import cast
 
@@ -17,7 +18,12 @@ from fastapi.testclient import TestClient
 from workspace_app.api.locator import ItemLocator
 from workspace_app.api.wui_routes import register_wui_routes
 from workspace_app.resources import AgentConfig
-from workspace_app.sandbox.protocol import ExecResult, Sandbox, SandboxHandle
+from workspace_app.sandbox.protocol import (
+    ExecResult,
+    Sandbox,
+    SandboxHandle,
+    SandboxNotFound,
+)
 from workspace_app.tooling.external import ExternalTools
 from workspace_app.tooling.registry import CommandInfo, PackageInfo
 
@@ -394,3 +400,136 @@ def test_build_provisions_the_dependencies_the_mirror_never_kept():
     # from one lock that resolve differently make the lock pointless.
     assert "--frozen-lockfile" in script
     assert "pnpm-lock.yaml" in script
+
+
+def test_a_build_killed_by_the_deadline_says_which_deadline():
+    """`sandbox.exec_timeout` (60s by default) is a WALL CLOCK over the whole
+    command, and a cold `pnpm install` plus a bundler can outrun it. The backend
+    explains itself in `stderr` — which it appends AFTER the output pumps have
+    stopped, so it never reaches `on_output` and never reaches the page. What
+    the reader saw was the log stopping mid-install and `exit 124`."""
+    sandbox = _BuildSandbox([b"lockfile is up to date\n"], exit_code=124)
+    client, _, _, _ = build(sandbox=sandbox)
+
+    events = _events(client.post(BUILD_URL, json={"folder": "/page"}))
+    said = "".join(e.get("text", "") for e in events)
+
+    assert "124" not in said or "timed out" in said.lower()
+    assert "timed out" in said.lower(), said
+    # And it names the knob, because the reader cannot act on a number alone.
+    assert "exec_timeout" in said
+    assert events[-1] == {"type": "done", "exit_code": 124}
+
+
+def test_a_build_that_blows_up_still_ends_the_stream():
+    """The headers are already sent by the time anything can fail, so an
+    exception cannot become a 500 — it just ends the response. The page's
+    `for await` then falls through with NOTHING said: partial output, no
+    verdict, forever. Every path out of here has to post a verdict."""
+
+    class _Exploding(_Sandbox):
+        async def exec(self, handle, cmd, on_output=None, env=None):
+            if on_output is not None:
+                on_output(b"pnpm install\n")
+            raise SandboxNotFound("the item was reaped mid-build")
+
+    client, _, _, _ = build(sandbox=_Exploding(ExecResult(exit_code=0)))
+
+    events = _events(client.post(BUILD_URL, json={"folder": "/page"}))
+
+    assert events[-1]["type"] == "done"
+    assert events[-1]["exit_code"] != 0
+    said = "".join(e.get("text", "") for e in events)
+    assert "reaped mid-build" in said, said
+
+
+def test_output_split_across_chunks_is_not_mojibake():
+    """A chunk is a byte fragment, not a string: the backend reads 4096 bytes at
+    a time, so a multi-byte character lands astride the boundary. Decoding each
+    chunk on its own turned vite's `✓` — which it prints on every build — into
+    a replacement character."""
+    tick = "✓ 27 modules transformed\n".encode()
+    # Split INSIDE the ✓ (three bytes) — splitting between characters proves
+    # nothing, which is how this test passed against the broken code once.
+    sandbox = _BuildSandbox([tick[:2], tick[2:]])
+    client, _, _, _ = build(sandbox=sandbox)
+
+    events = _events(client.post(BUILD_URL, json={"folder": "/page"}))
+    said = "".join(e.get("text", "") for e in events)
+
+    assert "✓ 27 modules transformed" in said
+    assert "\ufffd" not in said
+
+
+def test_leaving_the_page_takes_the_build_with_it():
+    """A reader who navigates away disconnects. Nothing else stops the command:
+    `pnpm install` would keep running against a folder nobody is watching, and
+    the next open would start a second one beside it, both writing `dist/`.
+
+    Driven at the ASGI layer because that is where a disconnect exists —
+    `TestClient` consumes the whole response and never sends one, so a test
+    written through it waits out the build and proves nothing."""
+
+    class _Hanging(_Sandbox):
+        def __init__(self):
+            super().__init__(ExecResult(exit_code=0))
+            self.cancelled = False
+
+        async def exec(self, handle, cmd, on_output=None, env=None):
+            self.calls.append(list(cmd))
+            if on_output is not None:
+                on_output(b"resolving...\n")
+            try:
+                await asyncio.sleep(30)  # a real install, from this test's view
+            except asyncio.CancelledError:
+                self.cancelled = True
+                raise
+            return self.result
+
+    sandbox = _Hanging()
+    client, _, _, _ = build(sandbox=sandbox)
+    app = client.app  # the ASGI app itself, not the client that hides disconnects
+
+    async def drive() -> None:
+        body = json.dumps({"folder": "/page"}).encode()
+        sent: list[dict] = []
+        started = asyncio.Event()
+
+        async def receive():
+            if not sent:
+                sent.append({})
+                return {"type": "http.request", "body": body, "more_body": False}
+            # Wait until the first chunk is out, then hang up — a browser
+            # closing the tab, not a client that read to the end.
+            await started.wait()
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            if message["type"] == "http.response.body" and message.get("body"):
+                started.set()
+
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "POST",
+            "path": "/a/rca/items/i1/wui/build",
+            "raw_path": b"/a/rca/items/i1/wui/build",
+            "root_path": "",
+            "scheme": "http",
+            "query_string": b"",
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode()),
+            ],
+            "client": ("test", 1),
+            "server": ("test", 80),
+        }
+        await asyncio.wait_for(app(scope, receive, send), timeout=10)
+        # Asserted HERE, inside the loop. Outside it, `asyncio.run` tears the
+        # loop down and cancels every pending task — so the assertion passed
+        # with the guard removed, measuring the teardown instead of the fix.
+        await asyncio.sleep(0.05)
+        assert sandbox.cancelled, "the build outlived the reader who asked for it"
+
+    asyncio.run(drive())
