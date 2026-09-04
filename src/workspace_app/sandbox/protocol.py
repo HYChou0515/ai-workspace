@@ -291,6 +291,7 @@ class Sandbox(Protocol):
         cmd: list[str],
         on_output: OutputSink | None = None,
         env: Mapping[str, str] | None = None,
+        exec_timeout: float | None = None,
     ) -> ExecResult:
         """Run `cmd` (an argv list — NOT a shell string; use
         `["sh", "-c", "..."]` if you need shell features) with the workspace

@@ -341,16 +341,59 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         # the item uid so the carrier launcher's HOME/caches + a user's `pip
         # --user` install land there. No default ACL — only the uid writes here.
         # Idempotent — a re-create chowns to the same derived uid (a no-op).
-        self._own_home(workspace.parent / _HOME, uid)
+        self._own_privately(workspace.parent / _HOME, uid)
         logger.debug(
             "isolated: provisioned %s -> uid=%d (chown 0700 + default ACL)", workspace, uid
         )
 
-    def _own_home(self, home: Path, uid: int) -> None:
-        """Hand `.home` to the item uid, 0700. Idempotent — chowning to the same
+    def _own_privately(self, path: Path, uid: int) -> None:
+        """Hand one infra-area dir to the item uid, 0700 — `.home` (#393) and
+        the project venv (#775), both of which the dropped uid has to write and
+        neither of which anyone else may read. Idempotent: chowning to the same
         derived uid is a no-op, which is what lets the exec path redo it."""
-        os.chown(home, uid, -1)
-        os.chmod(home, 0o700)
+        os.chown(path, uid, -1)
+        os.chmod(path, 0o700)
+
+    def _ensure_venv(self, handle: SandboxHandle, root: Path) -> Path:
+        """The base makes the dir; here it also has to be OWNED correctly.
+
+        `uv sync` is the thing that fills it, and it runs as the sandbox uid via
+        `setpriv` — so a directory this pod owns is one uv cannot write, and the
+        profile's whole environment fails to build. Idempotent, like `.home`:
+        chowning to the same derived uid is a no-op, which is what lets the exec
+        path redo it every time."""
+        venv = super()._ensure_venv(handle, root)
+        self._own_privately(venv, self._uid_for(handle.id))
+        return venv
+
+    def _own_cache(self, handle: SandboxHandle, cache: Path) -> None:
+        """The cache belongs to the ITEM, so it outlives any one sandbox — but
+        the uid that must fill it is per sandbox (derived here, POOLED on the
+        host) and cannot be assumed. Re-established every exec, the same shape
+        `.home` has, for the same reason.
+
+        0700 is what makes the key's guarantee real: a cache only the tenant
+        that filled it can read is the entire argument for keeping one."""
+        self._own_privately(cache, self._uid_for(handle.id))
+
+    # NOTE: no `_release_cache` override here, deliberately — see the base
+    # class's hook. This backend's uid is `uid_base + xxhash(item_id) %
+    # uid_range`: a pure function of the item, identical on every pod, and never
+    # freed. Nothing INHERITS it when a sandbox dies, which is the whole thing
+    # the release protects against — so handing the cache back would buy nothing
+    # and cost the window the host's version has to guard (a second live sandbox
+    # for the same item losing access mid-sync).
+    #
+    # ⚠️ Not "never handed to anyone else", which an earlier version of this
+    # said: `% uid_range` can collide, and `_derive_uid`'s own docstring is the
+    # accurate statement — a collision "only lets two of OUR items share a uid
+    # (degraded isolation for that pair)". Negligible at the default 2e9 range,
+    # and stable rather than sequential, so it is not the inheritance case; but
+    # the sentence justifying a deletion should not be stronger than the code.
+    #
+    # An override shipped here anyway, justified by a docstring that said this
+    # backend pools uids — which the class docstring 130 lines above flatly
+    # contradicts.
 
     def _ensure_home(self, handle: SandboxHandle, root: Path) -> Path:
         """The base makes the dir; here it also has to be OWNED correctly.
@@ -362,7 +405,7 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         same "User installation could not be completed", reached from the
         permission side instead of the missing-directory side."""
         home = super()._ensure_home(handle, root)
-        self._own_home(home, self._uid_for(handle.id))
+        self._own_privately(home, self._uid_for(handle.id))
         return home
 
     async def kill(self, handle: SandboxHandle) -> None:

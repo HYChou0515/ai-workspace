@@ -108,6 +108,11 @@ async def exec_impl(ctx: RunContextWrapper[AgentToolContext], cmd: list[str]) ->
     it and restores the snapshot into it, so any file writes the agent made while
     cold are present; from here on the sandbox IS the source of truth and the
     file tools route to it directly (no flush needed).
+
+    If the workspace has a `pyproject.toml`, the packages it locks are already
+    installed and importable — waking the sandbox syncs them. Add another with
+    `uv add <package>`: it records the package in `pyproject.toml` and `uv.lock`,
+    so it is still there the next time the environment is built.
     """
     if (denied := authorize_tool(ctx.context, "execute")) is not None:
         return denied

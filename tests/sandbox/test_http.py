@@ -173,6 +173,8 @@ def _fake_host(backend: MockSandbox, advertise_url: str) -> FastAPI:
                     # The real host reads this key too; a mirror that ignored it
                     # would let the client "send" an env nothing ever applied.
                     env=body.get("env"),
+                    # Same contract for the per-call wall-clock budget (#775).
+                    exec_timeout=body.get("exec_timeout"),
                 )
             except Exception as exc:  # noqa: BLE001 — relayed in-band as an error frame
                 yield (
@@ -994,3 +996,38 @@ async def test_a_down_host_is_not_asked_for_its_listing_by_every_caller_in_turn(
         clock["t"] += 31.0  # the backoff expires: ask again rather than believe it forever
         assert await sandbox.running_sandboxes() is None
         assert asked == 2
+
+
+async def test_exec_carries_the_callers_wall_clock_budget_across_the_hop():
+    """`uv sync` names its own budget because the instance default (60s) kills a
+    cold start of a heavy profile instead of waiting for it. That budget is
+    useless unless it survives the hop — a hosted deployment is exactly where
+    the slow link lives."""
+    backend = MockSandbox()
+    app = _fake_host(backend, _ADVERTISE)
+    async with httpx.AsyncClient(transport=ASGITransport(app=app)) as client:
+        sb = HttpSandbox(base_url=_ADVERTISE, client=client)
+        h = await sb.create(SandboxSpec())
+        await sb.exec(h, ["true"], exec_timeout=900.0)
+    assert backend.exec_timeouts[-1] == 900.0
+
+
+async def test_no_budget_sends_the_same_request_it_always_did():
+    """An older host must keep working: omit the key rather than send a null it
+    would have to know to ignore. Same shape as the `env` pair above."""
+    seen: list[dict] = []
+    backend = MockSandbox()
+    app = _fake_host(backend, _ADVERTISE)
+
+    @app.middleware("http")
+    async def _capture(request, call_next):  # noqa: ANN001, ANN202
+        if request.url.path.endswith("/exec"):
+            seen.append(json.loads(await request.body()))
+        return await call_next(request)
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app)) as client:
+        sb = HttpSandbox(base_url=_ADVERTISE, client=client)
+        h = await sb.create(SandboxSpec())
+        await sb.exec(h, ["true"])
+    assert seen and "exec_timeout" not in seen[-1]
+    assert backend.exec_timeouts[-1] is None

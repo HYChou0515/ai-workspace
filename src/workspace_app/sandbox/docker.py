@@ -136,6 +136,7 @@ class DockerSandbox:
         cmd: list[str],
         on_output: OutputSink | None = None,
         env: Mapping[str, str] | None = None,
+        exec_timeout: float | None = None,
     ) -> ExecResult:
         container = self._require(handle)
         result: Any = await asyncio.to_thread(

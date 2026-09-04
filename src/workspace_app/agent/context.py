@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -520,37 +521,121 @@ class AgentToolContext:
     # so agent/ stays decoupled from kb/wiki/.
     submit_wiki_correction: Callable[..., Awaitable[str]] | None = None
 
-    async def ensure_sandbox(self) -> SandboxHandle:
-        assert self.sandbox is not None  # file/exec tools imply an RCA context
-        if self.handle is None:
-            if self.ensure_sandbox_via is not None:
-                # #492 P11: hand the wake hook the restore-progress sink so a slow
-                # cold-wake restore streams "還原中 N/M" to the turn.
-                # #674: and this turn's bundles — the same ones whose schemas the
-                # model was handed a moment ago. Reading them off `sandbox_spec`
-                # (rather than passing them in separately) is what keeps this
-                # branch and the one below mounting the same thing.
-                self.handle = await self.ensure_sandbox_via(
-                    self.on_restore_progress, self.sandbox_spec.tools
-                )
-            else:
-                self.handle = await self.sandbox.create(self.sandbox_spec)
-            # Eagerly install the allowed packages into the fresh sandbox
-            # (after any snapshot restore the ensure-hook did), so the agent
-            # can call their commands. Runs once per sandbox (handle was None).
-            #
-            # `allowed_tools` uses the colon syntax (`"pkg"` or `"pkg:cmd"`);
-            # for provisioning, a package goes in if ANY of its commands
-            # appear in the allow list — we can't install half a venv.
-            if self.packages and self.agent_config is not None:
-                from .provision import provision_tools
+    #: #775: has this context's python environment been prepared SUCCESSFULLY?
+    #: Not `handle is not None` — a failed preparation leaves a live handle,
+    #: and treating that as done is how the failure went unseen.
+    _project_env_ready: bool = False
 
-                pkg_names_in_allowed = {
-                    a.split(":", 1)[0] for a in (self.agent_config.allowed_tools or [])
-                }
-                todo = [p for p in self.packages if p.name in pkg_names_in_allowed]
-                if todo and self.prebuilt_dir is not None:
-                    await provision_tools(
-                        self.sandbox, self.handle, todo, prebuilt_dir=self.prebuilt_dir
+    #: #775: prepare this ITEM's python environment, under the item's own lock.
+    #:
+    #: Wired by the API layer to `InvestigationRegistry.prepare_project_env`,
+    #: for the same reason `ensure_sandbox_via` exists: the thing being
+    #: protected belongs to the item, not to this context. `_wake` below is
+    #: per-context and a context is per turn, so it cannot see a workflow
+    #: `run:` node, a WUI tool call, or a second chat on the same item — and
+    #: they all write one `UV_PROJECT_ENVIRONMENT`, which a failed preparation
+    #: deletes before raising. Two locks on one directory is a guarantee that
+    #: only looks like one.
+    #:
+    #: None ⇒ not wired (tests, and any context with no registry behind it):
+    #: the preparation runs directly, exactly as it did before.
+    prepare_env_via: Callable[[SandboxHandle, OutputSink | None], Awaitable[None]] | None = None
+
+    #: One wake at a time per context.
+    #:
+    #: Both `handle` and `_project_env_ready` are assigned only AFTER the await
+    #: that earns them returns, so two tool calls arriving together each found
+    #: the work undone and did it again — two sandboxes with the loser's tools
+    #: orphaned in it, or two `uv sync --frozen` in one project directory. That
+    #: is not hypothetical: the model may put several tool calls in ONE
+    #: assistant message, the SDK runs each in its own task with no bound, and
+    #: the backend production serves does emit them. The pre-warm used to hide
+    #: the second half by finishing the preparation before any tool ran; it no
+    #: longer prepares, so the window is real and both halves need this.
+    #:
+    #: Held across the whole method rather than around each assignment: the
+    #: guarantee is that the second caller sees the FINISHED state, not that a
+    #: flag is written atomically. `dataclasses.replace` carries the reference,
+    #: so a sub-agent working in the same workspace shares it — which is what
+    #: is wanted, since it shares the sandbox the lock protects.
+    #:
+    #: ⚠️ Its reach is THIS CONTEXT, and a context is built per turn / per WUI
+    #: request. It cannot see a second chat on the same item, a workflow `run:`
+    #: node, or a WUI tool call beside a turn. That is fine for what it guards
+    #: — `create` and `provision_tools` are idempotent per item and the loser
+    #: only wastes work — but NOT for the project environment, whose failure
+    #: path deletes a directory all of them share. That one is guarded per
+    #: ITEM instead, through `prepare_env_via`; see it above.
+    _wake: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False, compare=False)
+
+    async def ensure_sandbox(self, *, prepare_env: bool = True) -> SandboxHandle:
+        """Wake this context's sandbox, and by default bring its declared python
+        environment in line with the workspace's lock.
+
+        `prepare_env=False` is for the turn's PRE-WARM (`turns.py`), which runs
+        before `_run_once` attaches `ctx.on_exec_output`. Preparing there sent
+        uv's progress to a sink that did not exist yet and — because a
+        successful preparation is remembered — meant the staleness advisory,
+        which is guarded on having somewhere to say it, never ran at all that
+        turn. Both were named deliverables (#775): the tool card was supposed to
+        show the wait, and `--frozen` was accepted only in exchange for saying
+        out loud when the lock had moved on.
+
+        So the pre-warm does what it is actually for — waking the sandbox — and
+        the environment is prepared on the agent's first exec, where a tool card
+        is on screen and a failure lands on the call whose error the user sees."""
+        assert self.sandbox is not None  # file/exec tools imply an RCA context
+        async with self._wake:
+            if self.handle is None:
+                if self.ensure_sandbox_via is not None:
+                    # #492 P11: hand the wake hook the restore-progress sink so a slow
+                    # cold-wake restore streams "還原中 N/M" to the turn.
+                    # #674: and this turn's bundles — the same ones whose schemas the
+                    # model was handed a moment ago. Reading them off `sandbox_spec`
+                    # (rather than passing them in separately) is what keeps this
+                    # branch and the one below mounting the same thing.
+                    self.handle = await self.ensure_sandbox_via(
+                        self.on_restore_progress, self.sandbox_spec.tools
                     )
+                else:
+                    self.handle = await self.sandbox.create(self.sandbox_spec)
+                # Eagerly install the allowed packages into the fresh sandbox
+                # (after any snapshot restore the ensure-hook did), so the agent
+                # can call their commands. Runs once per sandbox (handle was None).
+                #
+                # `allowed_tools` uses the colon syntax (`"pkg"` or `"pkg:cmd"`);
+                # for provisioning, a package goes in if ANY of its commands
+                # appear in the allow list — we can't install half a venv.
+                if self.packages and self.agent_config is not None:
+                    from .provision import provision_tools
+
+                    pkg_names_in_allowed = {
+                        a.split(":", 1)[0] for a in (self.agent_config.allowed_tools or [])
+                    }
+                    todo = [p for p in self.packages if p.name in pkg_names_in_allowed]
+                    if todo and self.prebuilt_dir is not None:
+                        await provision_tools(
+                            self.sandbox, self.handle, todo, prebuilt_dir=self.prebuilt_dir
+                        )
+            # A workspace may declare its own python dependencies (#775). Runs
+            # AFTER provisioning so the carrier is already in place for profiles
+            # with no declaration, and after the snapshot restore so the manifest
+            # read is the one the workspace holds.
+            #
+            # Keyed on whether preparation SUCCEEDED, not on whether a handle
+            # exists. Inside the `handle is None` branch it ran once and its raise
+            # was swallowed by the pre-warm's `contextlib.suppress(Exception)` in
+            # `turns.py`; the handle stayed set, so the agent's own exec — whose
+            # error the user would actually have seen — never tried again, and the
+            # turn ran against an environment nobody had prepared.
+            if prepare_env and not self._project_env_ready:
+                if self.prepare_env_via is not None:
+                    await self.prepare_env_via(self.handle, self.on_exec_output)
+                else:
+                    from .python_env import ensure_project_env
+
+                    await ensure_project_env(
+                        self.sandbox, self.handle, on_output=self.on_exec_output
+                    )
+                self._project_env_ready = True
         return self.handle

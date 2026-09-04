@@ -1,5 +1,8 @@
+import asyncio
 import tempfile
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -1518,3 +1521,291 @@ async def test_close_all_carries_on_past_one_item_it_could_not_finish():
 
     assert sandbox.kill_calls == 2, "the second session was stranded by the first"
     assert registry._sessions == {}
+
+
+class _CacheSandbox(MockSandbox):
+    """A backend that owns a persistent per-item uv cache, like the local one."""
+
+    def __init__(self, *, live: set[str], present: set[str]) -> None:
+        super().__init__()
+        self._live, self._present = live, present
+        self.swept_with: set[str] | None = None
+        self.swept_ceiling: int | None = None
+        self.live_reads = 0
+        self.present_reads = 0
+
+    def cache_keys_in_use(self) -> set[str]:
+        self.live_reads += 1
+        return set(self._live)
+
+    def cache_keys_present(self) -> set[str]:
+        self.present_reads += 1
+        return set(self._present)
+
+    def sweep_uv_cache(self, *, in_use: set[str], max_bytes: int | None = None) -> list[str]:
+        self.swept_with = set(in_use)
+        self.swept_ceiling = max_bytes
+        return []
+
+
+class _Heartbeat:
+    """The cross-pod activity store, in the shape `_globally_idle` reads."""
+
+    def __init__(self, ms: dict[str, int]) -> None:
+        self._ms = ms
+
+    async def last_active_ms(self, item: str) -> int | None:
+        return self._ms.get(item)
+
+
+async def test_the_sweep_protects_a_cache_another_POD_is_filling():
+    """`cache_keys_in_use` is one PROCESS's view, and `{sandbox.root}` is a
+    ReadWriteMany volume every replica writes to (#345). A pod that never
+    created a sandbox for an item saw its cache as free and deleted it — while
+    a `uv sync` on another pod was filling it. Reproduced by review with two
+    backends on one root: `podB sweep removed: ['item-live']`.
+
+    `kill_idle`, four lines below the caller, has guarded exactly this since
+    #345/#366. The sweep now asks the same heartbeat about every candidate this
+    pod does not already know is live.
+    """
+    now_ms = int(datetime.now(UTC).timestamp() * 1000)
+    sandbox = _CacheSandbox(live=set(), present={"busy-elsewhere", "really-idle"})
+    registry = InvestigationRegistry(sandbox=sandbox)
+    registry.activity = _Heartbeat({"busy-elsewhere": now_ms})  # ty: ignore[invalid-assignment]
+
+    await registry.sweep_uv_cache(4096, timedelta(minutes=30))
+
+    assert sandbox.swept_with == {"busy-elsewhere"}, (
+        "an item live on ANOTHER pod must be protected; an idle one must not be"
+    )
+
+
+async def test_no_heartbeat_means_single_process_so_local_is_global():
+    """No activity store wired ⇒ one process ⇒ this pod's view IS the global
+    one. The same rule `_globally_idle` already states, not a second one."""
+    sandbox = _CacheSandbox(live={"mine"}, present={"mine", "other"})
+    registry = InvestigationRegistry(sandbox=sandbox)
+
+    await registry.sweep_uv_cache(4096, timedelta(minutes=30))
+
+    assert sandbox.swept_with == {"mine"}
+
+
+async def test_no_ceiling_asks_nobody_anything():
+    """`None` is the DEFAULT, and with it nothing is ever evicted — so every
+    question the sweep asks to decide what to evict is a question asked for a
+    guaranteed no-op.
+
+    It is not a small no-op either: the cross-pod check is one specstar read
+    per cached item, on every idle tick, and with no ceiling `.uv-cache` grows
+    one directory per item forever. The cost of the check therefore grows
+    without bound exactly in the configuration where it can do nothing.
+    """
+    now_ms = int(datetime.now(UTC).timestamp() * 1000)
+    sandbox = _CacheSandbox(live=set(), present={f"item-{n}" for n in range(50)})
+    registry = InvestigationRegistry(sandbox=sandbox)
+    reads: list[str] = []
+
+    class _Counting:
+        async def last_active_ms(self, item: str) -> int | None:
+            reads.append(item)
+            return now_ms
+
+    registry.activity = _Counting()  # ty: ignore[invalid-assignment]
+
+    await registry.sweep_uv_cache(None, timedelta(minutes=30))
+
+    assert reads == [], f"no ceiling means nothing is evicted; nothing to decide: {reads}"
+    assert sandbox.present_reads == 0, "and no directory walk either"
+
+
+async def test_an_item_woken_while_the_sweep_was_asking_is_still_protected():
+    """The liveness answer must be fresh at the moment it is ACTED on.
+
+    The cross-pod check is a sequential await per candidate, so on a host with
+    many caches the first answer is many round trips old by the time the
+    backend deletes anything — and the backend then does its own `iterdir`, so
+    the delete is later still. An item this pod woke during that window was
+    answered "idle" before it existed and is removed mid-`uv sync`: the exact
+    failure the check was added to prevent, arriving through the check.
+
+    Re-reading the pod's OWN view costs nothing (it is a dict of live
+    sandboxes) and closes the half we can close.
+    """
+    sandbox = _CacheSandbox(live=set(), present={"woken-later", "really-idle"})
+    registry = InvestigationRegistry(sandbox=sandbox)
+
+    class _WakesOneMidFlight:
+        """A turn lands on this pod while the sweep is still asking around."""
+
+        async def last_active_ms(self, item: str) -> int | None:
+            sandbox._live.add("woken-later")
+            return None  # nobody has heartbeated; every candidate reads as idle
+
+    registry.activity = _WakesOneMidFlight()  # ty: ignore[invalid-assignment]
+
+    await registry.sweep_uv_cache(4096, timedelta(minutes=30))
+
+    assert sandbox.swept_with is not None
+    assert "woken-later" in sandbox.swept_with, (
+        f"woken before the delete, so it must survive it: {sandbox.swept_with}"
+    )
+    assert "really-idle" not in sandbox.swept_with, (
+        "and the freshness must not turn into protecting everything"
+    )
+
+
+async def test_a_reap_cancelled_after_the_kill_still_drops_the_session():
+    """Shutdown cancels the reaper mid-tick, and the tick has to be over by
+    then or the sandbox is killed twice.
+
+    `lifespan` cancels the background tasks, awaits them, and THEN calls
+    `close_all`. So a reaper parked at an await between `sandbox.kill` and the
+    session removal loses the removal — `CancelledError` is not an `Exception`
+    and the per-item guard below does not catch it — and `close_all` then finds
+    a session whose sandbox is already gone and kills it again. Harmless in
+    production (`SandboxNotFound` is suppressed, and it is the last thing a pod
+    does), but `test_idle_kill.py::test_idle_killer_reaps_session_past_threshold`
+    is a coin flip on it: measured 1-in-15 to 2-in-15 across 30 runs.
+
+    The window is `activity.forget`, a heartbeat cleanup that nothing depends
+    on being finished. So the session is dropped FIRST, with no await between
+    the kill and the drop — and a tick that never reaches `forget` leaves a
+    heartbeat that ages out on its own.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    class _CancelsOnForget(_FakeActivity):
+        async def forget(self, item_id: str) -> None:
+            raise asyncio.CancelledError
+
+    sandbox = _CountingSandbox()
+    activity = _CancelsOnForget()
+    registry = InvestigationRegistry(sandbox=sandbox, activity=activity)
+    s = await registry.session("ws-1")
+    await registry.ensure_handle(s)
+    s.last_active = datetime.now(UTC) - timedelta(minutes=30)
+    activity.ms.clear()  # no pod has touched the shared dir ⇒ globally idle too
+
+    with pytest.raises(asyncio.CancelledError):
+        await registry.kill_idle(threshold=timedelta(minutes=15))
+
+    assert registry._sessions == {}, (
+        "the sandbox is already dead; leaving the session behind means close_all "
+        f"kills it a second time: {registry._sessions}"
+    )
+
+
+async def test_a_session_being_acquired_right_now_is_not_idle():
+    """A sandbox mid-creation is not an idle sandbox.
+
+    `ensure_handle` holds `session.lock` for the whole acquire — create,
+    restore, mark_ready — and writes `session.handle` only when that returns.
+    `kill_idle` never consulted the lock, so a tick landing inside that window
+    saw a session with no handle, took the "nothing to kill" path, and dropped
+    it. The sandbox `_acquire` had already built was then orphaned: no session
+    refers to it, so neither the reaper nor `close_all` will ever kill it.
+
+    This is what actually reddened
+    `test_idle_kill.py::test_idle_killer_reaps_session_past_threshold`, ~4% of
+    runs — instrumented rather than guessed at, after an earlier fix on this
+    branch named a different mechanism (a double kill, `kill_calls == 2`) that
+    the surviving failures could not have produced: every one of them was
+    `kill_calls == 0`.
+
+    Production needs an 8-hour acquire to reach it, so the impact there is the
+    orphan, not the flake. It is still the wrong answer to "is this idle?".
+    """
+    sandbox = _CountingSandbox()
+    registry = InvestigationRegistry(sandbox=sandbox)
+    s = await registry.session("ws-1")
+    s.last_active = datetime.now(UTC) - timedelta(minutes=30)
+
+    async with s.lock:  # someone is inside `ensure_handle` right now
+        killed = await registry.kill_idle(threshold=timedelta(minutes=15))
+
+    assert killed == [], f"a session being acquired must not be reaped: {killed}"
+    assert "ws-1" in registry._sessions, "and it must still be there when the acquire finishes"
+    assert sandbox.kill_calls == 0
+
+
+async def test_a_handle_less_session_that_is_dropped_says_so(caplog):
+    """The drop that left no trace.
+
+    A session with no handle is dropped with no kill and no log line, which is
+    why the failure above needed an instrumented run to find rather than a
+    reading of the log. The loop's other two exits both log; this was the only
+    way a session could leave the registry silently.
+    """
+    import logging
+
+    registry = InvestigationRegistry(sandbox=_CountingSandbox())
+    s = await registry.session("ws-1")
+    s.last_active = datetime.now(UTC) - timedelta(minutes=30)
+
+    with caplog.at_level(logging.INFO, logger="workspace_app.api.registry"):
+        killed = await registry.kill_idle(threshold=timedelta(minutes=15))
+
+    assert killed == ["ws-1"]
+    assert any("no sandbox" in r.getMessage() for r in caplog.records), (
+        f"dropping a session has to be visible: {[r.getMessage() for r in caplog.records]}"
+    )
+
+
+async def test_preparing_the_environment_does_not_block_reaching_the_sandbox():
+    """Two resources, two locks.
+
+    The first version of `prepare_project_env` borrowed `session.lock` — the
+    one `ensure_handle` takes. That serialises the right thing and blocks the
+    wrong ones: `file_routes` and the WUI reach a sandbox through
+    `ensure_handle` too, so browsing an item's files would have stalled behind
+    its cold `uv sync`, whose budget is 900 seconds.
+
+    Nothing takes both locks, so there is no order between them to get wrong.
+    """
+    registry = InvestigationRegistry(sandbox=_CountingSandbox())
+    session = await registry.session("ws-1")
+    handle = await registry.ensure_handle(session)
+
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def slow_prepare(_sandbox, _handle, *, on_output=None):
+        started.set()
+        await release.wait()
+
+    with mock.patch("workspace_app.agent.python_env.ensure_project_env", slow_prepare):
+        preparing = asyncio.create_task(registry.prepare_project_env(session, handle))
+        await asyncio.wait_for(started.wait(), 1)
+
+        # A file route arriving at the same item while the sync runs.
+        again = await asyncio.wait_for(registry.ensure_handle(session), 1)
+
+        release.set()
+        await asyncio.wait_for(preparing, 1)
+
+    assert again == handle
+
+
+async def test_one_item_prepares_its_environment_once_at_a_time():
+    """The guarantee the lock exists for, at the registry rather than through a
+    workflow: `ensure_project_env` removes the environment before it raises, so
+    two overlapping preparations mean one caller's failure deletes what the
+    other is filling."""
+    registry = InvestigationRegistry(sandbox=_CountingSandbox())
+    session = await registry.session("ws-1")
+    handle = await registry.ensure_handle(session)
+    live = peak = 0
+
+    async def counting_prepare(_sandbox, _handle, *, on_output=None):
+        nonlocal live, peak
+        live += 1
+        peak = max(peak, live)
+        for _ in range(5):
+            await asyncio.sleep(0)
+        live -= 1
+
+    with mock.patch("workspace_app.agent.python_env.ensure_project_env", counting_prepare):
+        await asyncio.gather(*(registry.prepare_project_env(session, handle) for _ in range(8)))
+
+    assert peak == 1, f"eight callers, one item, one directory: peaked at {peak}"

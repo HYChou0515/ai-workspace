@@ -250,7 +250,56 @@ def _build_isolated_sandbox(
     )
 
 
+def _warn_dead_uv_ceiling(sb: SandboxSettings, sandbox: Sandbox) -> None:
+    """#775: say so when `sandbox.uv_cache_max_bytes` reaches nothing here.
+
+    Asked ONCE, of the backend that was actually built — not at a list of entry
+    points. The list is what produced the defect this replaces: the warning was
+    written for `kind: http`, extended to `docker` and the jailed `local`, and
+    `mock` stayed silent while three documents said every such entry point
+    warned. A new backend is covered the day it is added, because it either
+    answers that it keeps sweepable per-item caches or this fires for it.
+
+    Two questions, in the order they can be answered:
+
+    * has this backend a sweeper at all? `mock` / `docker` / `http` keep no
+      per-item uv cache on this pod, so there is nothing here to bound;
+    * does it keep those caches where a cross-sandbox sweeper can see them?
+      Only `LocalProcessSandbox` can say no — inside the userns jail the cache
+      lives in the sandbox and goes with it.
+    """
+    if sb.uv_cache_max_bytes is None:
+        return
+    if getattr(sandbox, "sweep_uv_cache", None) is None:
+        why = "this backend keeps no per-item uv cache on the pod, so there is nothing to bound."
+        if sb.kind == "http":
+            why = (
+                "the uv caches live in the sandbox-host service. Set "
+                "SANDBOX_HOST_UV_CACHE_MAX_BYTES on the host instead."
+            )
+    elif not getattr(sandbox, "keeps_item_uv_caches", True):
+        why = (
+            "the userns jail keeps each sandbox's uv cache inside it, where no "
+            "cross-sandbox sweeper can see it. Set sandbox.isolate: false (or "
+            "sandbox.isolation.enabled: true) if you want the ceiling applied."
+        )
+    else:
+        return
+    logger.warning(
+        "sandbox.uv_cache_max_bytes/%d is not applied here — %s", sb.uv_cache_max_bytes, why
+    )
+
+
 def get_sandbox(settings: Settings, tools_dir: Path | None = None) -> Sandbox:
+    """The configured backend, plus the one check that must outlive any list of
+    backends. `_build_sandbox` is the match; this is where the answer is read
+    back off what it returned."""
+    sandbox = _build_sandbox(settings, tools_dir)
+    _warn_dead_uv_ceiling(settings.sandbox, sandbox)
+    return sandbox
+
+
+def _build_sandbox(settings: Settings, tools_dir: Path | None = None) -> Sandbox:
     sb = settings.sandbox
     match sb.kind:
         case "mock":
@@ -289,13 +338,14 @@ def get_sandbox(settings: Settings, tools_dir: Path | None = None) -> Sandbox:
                     )
             if want_uid_isolation:
                 return _build_isolated_sandbox(sb, iso, tools_dir)
-            return LocalProcessSandbox(
+            plain = LocalProcessSandbox(
                 root_dir=Path(sb.root) if sb.root else None,
                 exec_timeout=sb.exec_timeout,
                 log_timeout=sb.log_timeout,
                 isolate=isolate,
                 tools_dir=tools_dir,
             )
+            return plain
         case "docker":
             from .sandbox.docker import DockerSandbox
 
@@ -324,7 +374,6 @@ def get_sandbox(settings: Settings, tools_dir: Path | None = None) -> Sandbox:
                     sb.exec_timeout,
                     sb.log_timeout,
                 )
-
             return HttpSandbox(
                 base_url=sb.http.base_url,
                 read_timeout=sb.http.read_timeout,

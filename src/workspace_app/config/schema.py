@@ -201,6 +201,12 @@ class SandboxSettings:
     # sandbox — NOT on the global filestore.kind). Default "" ⇒ follow filestore.kind.
     durable: SandboxDurableSettings = field(default_factory=SandboxDurableSettings)
     http: HttpSandboxSettings | None = None  # only when kind == "http"
+    # #775: how much disk the per-ITEM uv download caches may hold, together.
+    # None ⇒ no ceiling and nothing is evicted — what "unset" means for every
+    # other limit here. The caches outlive the sandboxes on purpose (a cold
+    # start re-uses what that item already downloaded), so on this backend they
+    # sit on the shared scratch volume and nothing else reclaims them.
+    uv_cache_max_bytes: int | None = None
 
 
 @dataclass(frozen=True)

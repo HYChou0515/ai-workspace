@@ -437,11 +437,16 @@ class HttpSandbox:
         cmd: list[str],
         on_output: OutputSink | None = None,
         env: Mapping[str, str] | None = None,
+        exec_timeout: float | None = None,
     ) -> ExecResult:
         pod_url, remote_id = _decode_handle(handle)
         url = f"{pod_url}/sandboxes/{remote_id}/exec"
         logger.debug("sandbox-http: exec sandbox %s cmd=%s", handle.id, cmd)
         body: dict[str, object] = {"cmd": cmd}
+        if exec_timeout is not None:
+            # Omitted when unset so an older host sees the request it always
+            # got — same shape as `env` above.
+            body["exec_timeout"] = exec_timeout
         if env:
             # Omitted when empty so the host sees the same request it always
             # has — an older host ignores the key, a newer one applies it.
