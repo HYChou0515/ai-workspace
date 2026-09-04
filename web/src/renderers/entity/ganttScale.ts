@@ -191,6 +191,22 @@ function edgesOf(value: unknown): { start: string | null; end: string | null } {
   return { start: canonicalEdge(a), end: canonicalEdge(b) };
 }
 
+/** The span that contains all of them, or `null` over nothing.
+ *
+ * Edges are compared by what they DENOTE and returned exactly as they were
+ * written — the union is a DRAWING, and nothing about it should come back out
+ * looking like a decision somebody made about a record's dates. */
+export function unionSpan(spans: Span[]): Span | null {
+  if (spans.length === 0) return null;
+  let start = spans[0].start;
+  let end = spans[0].end;
+  for (const s of spans.slice(1)) {
+    if (instantOf(s.start, "start") < instantOf(start, "start")) start = s.start;
+    if (instantOf(s.end, "end") > instantOf(end, "end")) end = s.end;
+  }
+  return { start, end };
+}
+
 /** Whether a bar's dates are the record's own or the chart's suggestion. */
 export type SpanSource = "given" | "derived";
 export type ResolvedSpan = { span: Span; source: SpanSource };

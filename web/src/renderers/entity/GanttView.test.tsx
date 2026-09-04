@@ -181,6 +181,111 @@ describe("GanttView", () => {
     expect(onPatch).toHaveBeenCalledWith(1, { span: "2026-01-07/2026-01-13" });
   });
 
+  describe("a milestone reaches over its issues (#785)", () => {
+    const milestoneType: EntityType = {
+      name: "milestone",
+      records_path: "milestones",
+      fields: [
+        { name: "title", role: "text" },
+        { name: "span", role: "daterange" },
+        { name: "issues", role: "backref", from: "issue.milestone" },
+      ],
+      form: [],
+    };
+    const roadmap = { view: "gantt" as const, entity: "milestone", span: "span", label: "title" };
+    const issues = (...fields: Record<string, unknown>[]) =>
+      buildRefIndex({
+        issue: fields.map((f, i) => ({
+          number: i + 1,
+          type_name: "issue",
+          fields: f,
+          body: "",
+          diagnostics: [],
+        })),
+      });
+
+    it("draws the bar over its own span AND its issues', not just its own", () => {
+      render(
+        <GanttView
+          {...props({
+            spec: roadmap,
+            type: milestoneType,
+            refIndex: issues(
+              { title: "early", span: "2026-06-20/2026-06-25", milestone: 1 },
+              { title: "late", span: "2026-07-10/2026-07-20", milestone: 1 },
+              { title: "someone else's", span: "2026-01-01/2026-12-31", milestone: 2 },
+            ),
+            entities: [rec(1, { title: "M1", span: "2026-07-01/2026-07-05" })],
+          })}
+        />,
+      );
+      expect(screen.getByTestId("bar-1")).toHaveAttribute("title", "2026-06-20/2026-07-20");
+    });
+
+    it("leaves the milestone's own file alone — the reach is drawn, never written", () => {
+      // Writing the union back would let the milestone's own lower bound creep
+      // earlier every time one of its issues moved earlier, and the next
+      // Recalculate would take the crept value as the bound. Every step looks
+      // like arithmetic; the schedule drifts anyway.
+      const onPatch = vi.fn();
+      const onPatchAnchor = vi.fn();
+      render(
+        <GanttView
+          {...props({
+            spec: roadmap,
+            type: milestoneType,
+            onPatch,
+            onPatchAnchor,
+            refIndex: issues({ title: "early", span: "2026-06-20/2026-06-25", milestone: 1 }),
+            entities: [rec(1, { title: "M1", span: "2026-07-01/2026-07-05" })],
+          })}
+        />,
+      );
+      expect(onPatch).not.toHaveBeenCalled();
+      expect(onPatchAnchor).not.toHaveBeenCalled();
+    });
+
+    it("moves the milestone's OWN dates when the bar is dragged, not the reach", () => {
+      // The bar you grab is wider than the record — dragging has to change what
+      // the record SAYS, or the milestone would swallow its own issues' extent
+      // on the first drag and never give it back.
+      const onPatch = vi.fn();
+      render(
+        <GanttView
+          {...props({
+            spec: roadmap,
+            type: milestoneType,
+            onPatch,
+            refIndex: issues({ title: "early", span: "2026-06-20/2026-06-25", milestone: 1 }),
+            entities: [rec(1, { title: "M1", span: "2026-07-01/2026-07-05" })],
+          })}
+        />,
+      );
+      const ppd = pxPerDay("week");
+      fireEvent.pointerDown(screen.getByTestId("bar-1"), { clientX: 0 });
+      fireEvent.pointerMove(window, { clientX: ppd * 2 });
+      fireEvent.pointerUp(window, { clientX: ppd * 2 });
+      expect(onPatch).toHaveBeenCalledWith(1, { span: "2026-07-03/2026-07-07" });
+    });
+
+    it("does not let an issue's PROPOSED dates stretch the milestone", () => {
+      // An unscheduled issue is drawn as a week from today. Letting that reach
+      // into the roadmap would move a milestone because of a record nobody has
+      // scheduled — the chart's own guess, fed back as if it were a plan.
+      render(
+        <GanttView
+          {...props({
+            spec: roadmap,
+            type: milestoneType,
+            refIndex: issues({ title: "unscheduled", milestone: 1 }),
+            entities: [rec(1, { title: "M1", span: "2026-07-01/2026-07-05" })],
+          })}
+        />,
+      );
+      expect(screen.getByTestId("bar-1")).toHaveAttribute("title", "2026-07-01/2026-07-05");
+    });
+  });
+
   it("moves a bar by dragging its body and writes the shifted daterange", () => {
     const onPatch = vi.fn();
     render(<GanttView {...props({ entities: [rec(1, { title: "A", span: "2026-01-10/2026-01-20" })], onPatch })} />);

@@ -21,8 +21,46 @@ export function referencedTypes(type: EntityType | null): string[] {
   const seen = new Set<string>();
   for (const f of type.fields) {
     if (f.role === "ref" && f.to) seen.add(f.to);
+    // And the types pointing BACK at this one (#785). A milestone's bar reaches
+    // over its issues, which the view cannot know without their records — and
+    // an unfetched corpus makes that feature a silent no-op rather than a
+    // visible failure, because a union over nothing is just the original span.
+    if (f.role === "backref" && f.from) seen.add(sourceOf(f.from)[0]);
   }
   return [...seen];
+}
+
+/** `"issue.milestone"` → `["issue", "milestone"]`: the type that points here and
+ * the `ref` field on it that does the pointing. */
+function sourceOf(from: string): [string, string] {
+  const dot = from.indexOf(".");
+  return dot < 0 ? [from, ""] : [from.slice(0, dot), from.slice(dot + 1)];
+}
+
+/** The records that point BACK at `record` through its `backref` fields — a
+ * milestone's issues, say.
+ *
+ * Resolved from the loaded corpus rather than read off the record's projected
+ * list, for the same reason ref traversal is done here at all: this file
+ * already owns the relation at render time, and filtering works whether or not
+ * the backend's projection ran. Compared numerically because the same
+ * milestone is a string when a form wrote it and a number when the projection
+ * did. */
+export function backrefRecords(
+  record: EntityInstance,
+  type: EntityType | null,
+  index: RefIndex,
+): EntityInstance[] {
+  const out: EntityInstance[] = [];
+  for (const f of type?.fields ?? []) {
+    if (f.role !== "backref" || !f.from) continue;
+    const [srcType, srcField] = sourceOf(f.from);
+    if (!srcField) continue;
+    for (const r of index.get(srcType)?.values() ?? []) {
+      if (Number(r.fields[srcField]) === record.number) out.push(r);
+    }
+  }
+  return out;
 }
 
 export function buildRefIndex(recordsByType: Record<string, EntityInstance[]>): RefIndex {

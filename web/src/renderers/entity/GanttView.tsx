@@ -49,11 +49,12 @@ import {
   sliderToPpd,
   resolveSpan,
   type SpanSource,
+  unionSpan,
   spanValue,
   visibleDaysFor,
   type Zoom,
 } from "./ganttScale";
-import type { RefIndex } from "./refTraversal";
+import { backrefRecords, type RefIndex } from "./refTraversal";
 import { fieldText, roleOf } from "./shared";
 import { usePersistentSet } from "../../hooks/usePersistentSet";
 import { actorPalette } from "./actorColor";
@@ -85,7 +86,10 @@ const LANE_H = 24;
 const ROW_H = 26;
 const ZOOMS: Zoom[] = ["day", "week", "month"];
 
-type Row = { e: EntityInstance; span: Span; source: SpanSource };
+type Row = { e: EntityInstance; span: Span; source: SpanSource; reach: Span };
+
+/** Stands in for an absent ref index so the reach lookup has one shape. */
+const NO_REFS: RefIndex = new Map();
 type Lane = { key: string; label: string | null; rows: Row[] };
 type Drag = { number: number; mode: DragMode; cols: number };
 
@@ -220,7 +224,37 @@ export function GanttView({
   // also why the scheduler always worked from `ordered`: a record with no dates
   // is exactly the one most in need of being given some.
   const ordered = sortRows(entities, spec.sort, type ?? null, refIndex, users);
-  const rows: Row[] = ordered.map((e) => ({ e, ...resolveSpan(e.fields[spanField], today) }));
+  // #785 — what a record REACHES over: its own span, widened to contain the
+  // spans of the records that point at it. A milestone's bar covers its issues,
+  // because that is when the milestone actually happens.
+  //
+  // Drawn, never written. Writing the union back onto `milestone.span` would
+  // make the milestone's own lower bound creep earlier every time one of its
+  // issues moved earlier, and the next Recalculate would take the crept value
+  // as the bound and schedule earlier still. Every step is just arithmetic on
+  // the data, and the schedule drifts anyway — so the chart tells the truth
+  // while the bound you set stays the bound you set.
+  //
+  // Only spans the records actually STATE count. An issue nobody has scheduled
+  // is drawn as a week from today (P6), and letting the chart's own guess reach
+  // into a milestone would move someone's roadmap on the strength of it.
+  //
+  // The pointing records are read through the view's own `span` field, which is
+  // the only span name a view file names. Nothing here is in a position to know
+  // that issues might keep their dates under a different key, and the schedule
+  // block makes the same assumption about the same two types.
+  const index = refIndex ?? NO_REFS;
+  const reachOf = (e: EntityInstance, own: Span): Span => {
+    const stated = backrefRecords(e, type ?? null, index)
+      .map((r) => resolveSpan(r.fields[spanField], today))
+      .filter((r) => r.source === "given")
+      .map((r) => r.span);
+    return unionSpan([own, ...stated]) ?? own;
+  };
+  const rows: Row[] = ordered.map((e) => {
+    const resolved = resolveSpan(e.fields[spanField], today);
+    return { e, ...resolved, reach: reachOf(e, resolved.span) };
+  });
 
   // #PM auto-schedule — present only when the view names the fields that carry
   // the schedule, so a plain gantt stays a plain drawing of dates.
@@ -278,11 +312,13 @@ export function GanttView({
   // all the chart used to need — but a whole-day "2026-01-05" runs to the next
   // midnight while "2026-01-05T17:00" stops at five, and once columns are hours
   // the difference is seven columns of canvas the bars still need.
+  // Measured over the REACH, not the stated spans: a milestone bar drawn wider
+  // than its record still has to fit on the canvas it is drawn on.
   const minDate = rows
-    .map((r) => r.span.start)
+    .map((r) => r.reach.start)
     .reduce((m, s) => (instantOf(s, "start") < instantOf(m, "start") ? s : m));
   const maxDate = rows
-    .map((r) => r.span.end)
+    .map((r) => r.reach.end)
     .reduce((m, e) => (instantOf(e, "end") > instantOf(m, "end") ? e : m));
   // #785: the same "time the chart does not draw" rule as `skip_weekends`, one
   // scale down. It has no effect at day grain — a day is one column however
@@ -497,12 +533,16 @@ export function GanttView({
               <div key={lane.key}>
                 {grouped && <div className="ev-gantt__lane-band" style={{ height: LANE_H }} />}
                 {(collapsed.has(lane.key) ? [] : lane.rows).map((row) => {
+                  // The drag changes what the record SAYS; the reach is
+                  // recomputed around it, so the bar under the cursor is what
+                  // the chart will look like once the drop is written.
                   const ps = previewSpan(row);
-                  const left = xOf(ps.start);
+                  const drawn = reachOf(row.e, ps);
+                  const left = xOf(drawn.start);
                   // Both ends of the range are coloured (barColumns) — the clamp
                   // this replaces was hiding the off-by-one: it made a same-day
                   // span look right while every longer bar stopped a day short.
-                  const columns = barColumns(ps, scale);
+                  const columns = barColumns(drawn, scale);
                   // A bar with no working time in it — a Saturday-to-Sunday
                   // issue on a working-day chart, a job booked for the middle
                   // of the night — measures zero columns, and this is the only
@@ -529,7 +569,7 @@ export function GanttView({
                     <div key={row.e.number} className="ev-gantt__bar-row" style={{ height: ROW_H }}>
                       <div
                         data-testid={`bar-${row.e.number}`}
-                        title={spanValue(ps)}
+                        title={spanValue(drawn)}
                         className="ev-gantt__bar"
                         data-provisional={provisional ? "true" : undefined}
                         data-empty={columns === 0 ? "true" : undefined}

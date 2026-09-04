@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { EntityInstance, EntityType } from "../../api/entities";
-import { buildRefIndex, referencedTypes, refOptions, traverseColumn } from "./refTraversal";
+import { backrefRecords, buildRefIndex, referencedTypes, refOptions, traverseColumn } from "./refTraversal";
 
 const issueType: EntityType = {
   name: "issue",
@@ -28,6 +28,17 @@ const ms = (number: number, fields: Record<string, unknown>): EntityInstance => 
   diagnostics: [],
 });
 
+const milestoneType: EntityType = {
+  name: "milestone",
+  records_path: "milestones",
+  fields: [
+    { name: "title", role: "text" },
+    { name: "span", role: "daterange" },
+    { name: "issues", role: "backref", from: "issue.milestone" },
+  ],
+  form: [],
+};
+
 describe("referencedTypes", () => {
   it("lists the target types of the schema's ref fields", () => {
     expect(referencedTypes(issueType)).toEqual(["milestone"]);
@@ -35,6 +46,36 @@ describe("referencedTypes", () => {
   it("is empty for a schema with no refs (and for a null type)", () => {
     expect(referencedTypes({ ...issueType, fields: [{ name: "title", role: "text" }] })).toEqual([]);
     expect(referencedTypes(null)).toEqual([]);
+  });
+  it("also lists the types that point BACK at this one (#785)", () => {
+    // A view over milestones has to load issues to know what a milestone
+    // reaches over. Without this the corpus is never fetched and the feature
+    // is silently a no-op — there is nothing to union.
+    expect(referencedTypes(milestoneType)).toEqual(["issue"]);
+  });
+});
+
+describe("backrefRecords (#785)", () => {
+  const index = buildRefIndex({
+    issue: [
+      rec(1, { title: "mine", milestone: 1 }),
+      rec(2, { title: "someone else's", milestone: 2 }),
+      rec(3, { title: "unassigned" }),
+      rec(4, { title: "mine too", milestone: "1" }),
+    ],
+  });
+
+  it("finds the records whose ref points at this one", () => {
+    const found = backrefRecords(ms(1, { title: "M1" }), milestoneType, index);
+    // Written as a string by the form, as a number by the projection — both are
+    // the same milestone to a reader, so both have to be to this.
+    expect(found.map((r) => r.number)).toEqual([1, 4]);
+  });
+
+  it("is empty for a type with no backref, and when nothing points here", () => {
+    expect(backrefRecords(ms(1, {}), issueType, index)).toEqual([]);
+    expect(backrefRecords(ms(9, {}), milestoneType, index)).toEqual([]);
+    expect(backrefRecords(ms(1, {}), milestoneType, new Map())).toEqual([]);
   });
 });
 

@@ -22,6 +22,7 @@ import {
   shiftDate,
   sliderToPpd,
   spanToDates,
+  unionSpan,
   visibleDaysFor,
   barColumns,
   columnOf,
@@ -508,6 +509,44 @@ describe("resolveSpan — every record gets a bar (#785)", () => {
   it("proposes a whole week — seven days, because a plain end date is inclusive", () => {
     const { span } = resolveSpan(undefined, TODAY);
     expect(barColumns(span, false)).toBe(7);
+  });
+});
+
+describe("unionSpan (#785)", () => {
+  it("reaches from the earliest start to the latest end", () => {
+    expect(
+      unionSpan([
+        { start: "2026-03-05", end: "2026-03-10" },
+        { start: "2026-03-01", end: "2026-03-04" },
+        { start: "2026-03-02", end: "2026-03-20" },
+      ]),
+    ).toEqual({ start: "2026-03-01", end: "2026-03-20" });
+  });
+
+  it("compares what the edges MEAN, not how they are written", () => {
+    // A plain end date runs to the next midnight, so it reaches FURTHER than a
+    // 17:00 on the same day — though as text it sorts earlier, being shorter.
+    expect(
+      unionSpan([
+        { start: "2026-03-01T09:00", end: "2026-03-01T17:00" },
+        { start: "2026-03-01", end: "2026-03-01" },
+      ]),
+    ).toEqual({ start: "2026-03-01", end: "2026-03-01" });
+  });
+
+  it("keeps the edges as they were written, rather than rewriting them", () => {
+    // The union is a DRAWING. Nothing about it should look like a decision
+    // someone made about a record's dates.
+    expect(
+      unionSpan([
+        { start: "2026-03-01T09:00", end: "2026-03-02T17:00" },
+        { start: "2026-03-05", end: "2026-03-06" },
+      ]),
+    ).toEqual({ start: "2026-03-01T09:00", end: "2026-03-06" });
+  });
+
+  it("is nothing over nothing", () => {
+    expect(unionSpan([])).toBeNull();
   });
 });
 
