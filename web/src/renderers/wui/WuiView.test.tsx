@@ -724,6 +724,70 @@ describe("WuiView: rebuilding a page that has a build step", () => {
     expect(JSON.parse(String(init.body))).toEqual({ folder: "/sales" });
   });
 
+  it("does not let the build you left finish the one you are watching", async () => {
+    // The page you left keeps building; the page you arrived at starts its own.
+    // When the first one ends, its `finally` used to clear `building` and
+    // `firstBuild` unconditionally — so the pane declared the SECOND build over
+    // while it was still running: Rebuild enabled again, and the page shown
+    // before the build that was going to replace it had finished.
+    const files = {
+      "/sales/index.html": "<html><body>sales</body></html>",
+      "/sales/package.json": JSON.stringify({ scripts: { build: "vite build" } }),
+      "/costs/index.html": "<html><body>costs</body></html>",
+      "/costs/package.json": JSON.stringify({ scripts: { build: "vite build" } }),
+    };
+
+    // Two gates: the first build is released only after the second has begun.
+    const gates: (() => void)[] = [];
+    let served = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: unknown) => {
+        // Only the build route: the pane also asks who you are, and a stub that
+        // answers everything gave that request the first gate and hung it.
+        if (!String(url).includes("/wui/build")) return new Response("{}", { status: 404 });
+        const nth = served++;
+        const encode = new TextEncoder();
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            async start(c) {
+              c.enqueue(encode.encode(sse({ type: "output", text: `build ${nth}` })));
+              await new Promise<void>((r) => gates.push(r));
+              c.enqueue(encode.encode(sse({ type: "done", exit_code: 0 })));
+              c.close();
+            },
+          }),
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        );
+      }),
+    );
+
+    const at = (path: string) => (
+      <QueryWrap>
+        <WorkspaceSlugProvider value="rca">
+          <FileServiceProvider value={svc(files)}>
+            <WuiView path={path} spec={{ view: "wui", entity: "" } as ViewSpec} />
+          </FileServiceProvider>
+        </WorkspaceSlugProvider>
+      </QueryWrap>
+    );
+
+    const view = render(at("/sales/page.ai.yaml"));
+    fireEvent.click(await screen.findByRole("button", { name: /rebuild/i }));
+    await screen.findByText(/build 0/);
+
+    view.rerender(at("/costs/page.ai.yaml"));
+    fireEvent.click(await screen.findByRole("button", { name: /rebuild/i }));
+    await screen.findByText(/build 1/);
+
+    // The page you left finishes. The one you are watching is still building.
+    gates[0]();
+    await new Promise((r) => setTimeout(r, 60));
+
+    expect(screen.getByRole("button", { name: /building/i })).toBeDisabled();
+    gates[1]();
+  });
+
   it("unfolds again for the next build", async () => {
     // The fold is about a build that is OVER. Pressing Rebuild is asking to
     // watch one, and finding the log still folded would read as the button

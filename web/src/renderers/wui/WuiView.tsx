@@ -356,10 +356,16 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
         note("Rebuilding on open has been turned off, because you cannot run things here.");
       }
     } finally {
-      // Not gated on `stale()`: the effect above already reset these for the
-      // new page, and leaving them set would strand it on "Building…".
-      setBuilding(false);
-      setFirstBuild(false);
+      // Gated like every other write. The page you left keeps building while
+      // the page you arrived at starts its own; clearing these unconditionally
+      // declared the SECOND build over while it was still running — Rebuild
+      // enabled again, and the page shown before the build that was going to
+      // replace it had finished. Moving away already reset them, so there is
+      // nothing to strand.
+      if (!stale()) {
+        setBuilding(false);
+        setFirstBuild(false);
+      }
     }
   };
 
