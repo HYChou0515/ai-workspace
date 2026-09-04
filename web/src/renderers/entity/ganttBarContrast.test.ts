@@ -79,6 +79,16 @@ function props(overrides: Partial<EntityViewProps> = {}): EntityViewProps {
   };
 }
 
+/**
+ * .ev-gantt__lane-band: color-mix(in srgb, var(--paper-2) 60%, transparent)
+ * over the chart surface — i.e. --paper-2 at 60% alpha. Shared by both extent
+ * guards below, since "a coloured bar" now means two different palettes.
+ */
+const laneBand = (block: RegExp) => {
+  const [r, g, b] = parseFill(tokenIn(TOKENS_CSS, block, "--paper-2"));
+  return over([r, g, b, 0.6], tokenIn(TOKENS_CSS, block, "--white"));
+};
+
 const THEMES = [
   ["light", LIGHT],
   ["dark", DARK],
@@ -189,7 +199,7 @@ describe("a gantt bar coloured by ACTOR", () => {
   const TEAM = 16;
 
   /** One bar per person, so every seat in the palette is actually painted. */
-  function renderTeam() {
+  function renderTeam(extra: Partial<EntityViewProps["spec"]> = {}) {
     render(
       createElement(
         GanttView,
@@ -202,6 +212,7 @@ describe("a gantt bar coloured by ACTOR", () => {
             assignee: "assignee",
             assignee_display: "name",
             color_by: "assignee",
+            ...extra,
           } as EntityViewProps["spec"],
           entities: Array.from({ length: TEAM }, (_, i) =>
             rec(i + 1, { title: `Task ${i + 1}`, span: SPAN, assignee: `u${i}` }),
@@ -235,6 +246,57 @@ describe("a gantt bar coloured by ACTOR", () => {
     const fills = new Set(renderTeam().map((b) => b.style.background));
     expect(fills.size).toBe(TEAM);
   });
+
+  /**
+   * The property a gantt actually owes: you can see where a bar starts and
+   * ends. Two things can carry it — the fill standing off the lane band, or the
+   * edge — and which one does depends on the theme, because an actor fill is
+   * OPAQUE and light where a chip fill is translucent:
+   *
+   *   light mode — fill 2.4:1 (too close to cream), edge `--ink` 15:1  → edge
+   *   dark mode  — edge `--ink` 1.1:1 (it IS the dark), fill 5.9:1     → fill
+   *
+   * Asking for the edge alone would demand a solution to a problem the dark
+   * theme does not have; asking for the fill alone would miss light mode. So
+   * the guard asks for the boundary, and names which half is carrying it — a
+   * regression that flips or flattens either one still fails here, and #690's
+   * original state (fill ≈ band, edge transparent) fails on both halves.
+   */
+  for (const [themeName, block] of THEMES) {
+    it(`makes every person's bar state its extent in ${themeName} mode`, () => {
+      const band = laneBand(block);
+      const surface = tokenIn(TOKENS_CSS, block, "--white");
+      for (const [i, bar] of renderTeam({ group_by: "assignee" }).entries()) {
+        const edge = bar.style.borderColor || effective(ENTITY_VIEWS_CSS, ".ev-gantt__bar", "border");
+        expect(edge, "the bar draws no boundary of its own").toBeTruthy();
+        expect(edge, "a transparent edge is not an edge").not.toContain("transparent");
+
+        const byEdge = contrast(inkHex(edge as string, block), band);
+        const byFill = contrast(paintedOver(TOKENS_CSS, block, bar.style.background, surface), band);
+        expect(
+          Math.max(byEdge, byFill),
+          `person ${i} in ${themeName}: edge ${byEdge.toFixed(2)}:1, fill ${byFill.toFixed(2)}:1`,
+        ).toBeGreaterThanOrEqual(3);
+      }
+    });
+  }
+
+  it("carries the extent by the EDGE in light mode and by the FILL in dark", () => {
+    // Named rather than implied: this is the pairing that makes the guard above
+    // pass, and if it ever inverts, the boundary has moved to a mechanism
+    // nobody checked.
+    const bars = renderTeam({ group_by: "assignee" });
+    const surface = (block: RegExp) => tokenIn(TOKENS_CSS, block, "--white");
+    const fillOf = (bar: HTMLElement, block: RegExp) =>
+      contrast(paintedOver(TOKENS_CSS, block, bar.style.background, surface(block)), laneBand(block));
+    const edgeOf = (bar: HTMLElement, block: RegExp) =>
+      contrast(inkHex(bar.style.borderColor, block), laneBand(block));
+
+    expect(edgeOf(bars[0], LIGHT)).toBeGreaterThanOrEqual(3);
+    expect(fillOf(bars[0], LIGHT)).toBeLessThan(3);
+    expect(fillOf(bars[0], DARK)).toBeGreaterThanOrEqual(3);
+    expect(edgeOf(bars[0], DARK)).toBeLessThan(3);
+  });
 });
 
 describe("a coloured gantt bar's extent", () => {
@@ -243,13 +305,6 @@ describe("a coloured gantt bar's extent", () => {
   // then has no readable edge, and in a gantt the bar's start and end ARE the
   // data. The solid fill used to do this job; since #690 it cannot, so the
   // bar states its own boundary in the ink it already carries.
-  const laneBand = (block: RegExp) => {
-    // .ev-gantt__lane-band: color-mix(in srgb, var(--paper-2) 60%, transparent)
-    // over the chart surface — i.e. --paper-2 at 60% alpha.
-    const [r, g, b] = parseFill(tokenIn(TOKENS_CSS, block, "--paper-2"));
-    return over([r, g, b, 0.6], tokenIn(TOKENS_CSS, block, "--white"));
-  };
-
   for (const urgency of ["critical", "low"]) {
     for (const [themeName, block] of THEMES) {
       it(`gives the ${urgency} bar an edge against a lane band in ${themeName} mode`, () => {
