@@ -194,7 +194,8 @@ Each of these was argued and settled; the reason is the part worth keeping.
 
 ## Phases
 
-Flat integers, one commit each.
+Flat integers, one commit each. Two sequences, because the work landed as two
+pull requests — a commit's `P<n>` is a phase of ITS pull request.
 
 - **P1 — render.** `assemble.ts` (pure: inline the folder's relative refs, inject
   the CSP), the `wui` kind reserved and branched ahead of the entity dispatcher
@@ -214,8 +215,82 @@ Flat integers, one commit each.
 `file_changed` forwarding (decision 9) rides with P2, since it is the same
 channel and an editor without it is unsafe.
 
+### PR #769 — the first five
+
+The five above.
+
+### PR #773 — pages that have a build
+
+P1–P5 assumed the files in the folder ARE the page. Once a page can be written
+with a bundler that stops being true — the folder holds `src/` (edited) and
+`dist/` (rendered), and nothing keeps them together. A `src/` edit with no
+rebuild leaves the reader looking at the old page with nothing saying why, which
+is the only SILENT failure on this path.
+
+A staleness warning was designed and then dropped: telling someone their page
+might be out of date is worse than either rebuilding it or leaving it alone.
+
+- **P1 — the build route.** `POST …/wui/build`, streaming the build's own output
+  as SSE. `package.json`'s `scripts.build` decides what a build is (a command
+  named in the view file would let an LLM-written page choose what a human's
+  click executes); the verb is `execute`, the same one a notebook cell needs.
+- **P2 — a build that survives a recycle.** `node_modules/` is not mirrored, so
+  the build installs first — `--frozen-lockfile` where there is a lock. Without
+  this, the first click after a recycle fails and the remedy is "get someone to
+  run pnpm install", which is the friction a WUI exists to remove.
+- **P3 — the pane.** A **Rebuild** button for pages that have a build, the log on
+  screen while it runs, and an **Auto-rebuild** switch — on by default,
+  per page and per viewer, turning itself off for a viewer a 403 says may not run
+  things here. Rebuilding on open is what closes the gap for everyone who opens
+  the page — not a guarantee, since the manifest read may fail quietly and a
+  failed build leaves the old `dist/` up; it is a choice because the cost (a
+  sandbox waking, tens of seconds) is real.
+- **P4 — the claim ledger.** The skill, the react example's README and
+  `docs/wui.md` all said the AI rebuilding in the same turn was the only defence.
+  It is still worth doing — the automatic build protects the next person to OPEN
+  the page, not the one already looking at it — but it is no longer the only one.
+
+The rest of this sequence was not planned. Each phase is something that only
+appeared once the thing was USED — pressed in a browser, or looked at in a
+screenshot — which is the argument for doing that before calling a feature done.
+
+- **P5 — what the first real Rebuild found.** Four defects, none visible to a
+  test: the build ran in the wrong directory (`exec`'s cwd is the workspace
+  root, so a workspace-absolute path names the filesystem root); the sandbox had
+  no pnpm; the jail's PATH omitted `/usr/local/bin`, where an image installs
+  one; and the log printed the build's ANSI colour codes as literal text.
+- **P6 — the built example had no stylesheet.** It rendered as browser defaults
+  and asked for two class names nothing defined. Caught by someone looking at a
+  screenshot and asking whether it had any CSS at all.
+- **P7 — opening and building at once showed a broken page.** The build's
+  restore races the page's own reads, so `app.js` and `style.css` come back
+  missing for a few seconds. The pane waits now. (The race itself is older and
+  wider — see "Known and not fixed".)
+- **P8 — a real charting library.** "No network" is about runtime: a UMD build
+  in the folder is inlined, and the sandbox has a network to fetch it with, so
+  `examples/chart/` makes fetching it the page's build step. Hand-drawing an
+  SVG was never the answer, and the skill had never said so.
+- **P9 — the log folds away when the build succeeds.** It earns the pane while
+  it runs and while something is wrong; after that it is a receipt.
+- **P10 — the toggle's label.** "on open" was two words nobody could read.
+
+## Known and not fixed
+
+- **Reads route to a sandbox that is not ready yet.** `files/facade.py`'s
+  `_warm` probes that a sandbox EXISTS and never asks `is_ready`, so a read
+  landing inside a restore window can answer "not there" over an intact durable
+  snapshot — for the agent, the file tree and the entity lists, not only a WUI.
+  `.ready` was added in #366 for exactly this ambiguity and the mirror honours
+  it; reads do not. Wants its own change.
+- **`kind: local` cannot run an npm script in a page's folder.** The sandbox
+  directory is named after the item, and an item id contains a colon, so
+  `<cwd>/node_modules/.bin` cannot be expressed on `PATH`. The hosted sandbox
+  mints uuid directories and is unaffected.
+
 ## Deliberately not built
 
+- Detecting staleness. Under "rebuild on open" there is nothing to detect, and a
+  warning that a page MIGHT be old asks the reader to do the platform's job.
 - Auto-reload, live data push, write throttling, tool concurrency limits (10).
 - Screenshots and source maps in the pick report (13).
 - Entity access from the bridge (14).

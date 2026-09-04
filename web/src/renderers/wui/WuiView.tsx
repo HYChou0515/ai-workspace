@@ -24,14 +24,18 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useFileService } from "../../api/fileService";
 import { qk } from "../../api/queryKeys";
 import { Btn } from "../../components/Btn";
+import { Switch } from "../../components/Switch";
 import { useCurrentUserState } from "../../hooks/useCurrentUser";
 import { useOpenFile } from "../../hooks/openFile";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
+import { HttpError } from "../../api/http";
 import { publishAgentDraft } from "../../lib/agentDraftBus";
 import { subscribeFileChanged } from "../../lib/fileChangedBus";
 import { pxToRem } from "../../lib/pxToRem";
+import { autoBuildScope, useWuiAutoBuild } from "../../lib/wuiAutoBuild";
 import { viewParam, viewParamString } from "../entity/shared";
 import { itemCallTool } from "./api";
+import { cleanBuildOutput, hasBuildScript, itemBuild } from "./build";
 import type { ViewSpec } from "../entity/types";
 import { buildWuiDoc } from "./assets";
 import { dispatchWuiRequest } from "./bridge";
@@ -115,6 +119,75 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
     staleTime: Infinity,
     retry: false,
   });
+
+  /**
+   * Does this page have a build step?
+   *
+   * `scripts.build` decides, because `pnpm run build` is what the route runs.
+   * Most pages are plain files with nothing to build, and a Rebuild button in
+   * front of them would fail loudly over a page that is perfectly fine.
+   *
+   * The workspace root is excluded: a root-level page has no folder to build in
+   * and the route answers 400, so offering the button would only make the
+   * platform look broken.
+   */
+  const buildable = useQuery({
+    // Never for a root-level page: `canBuild` is false there whatever the
+    // answer, so the read is a 404 nobody can use.
+    enabled: folder !== "",
+    queryKey: qk.wuiBuildable(fs.scopeId, folder),
+    queryFn: () =>
+      fs
+        .readFile(`${folder}/package.json`)
+        .then((content) => (content.kind === "text" ? content.text : ""))
+        // No manifest is the ordinary case, not a fault worth reporting.
+        .catch(() => ""),
+    staleTime: Infinity,
+    retry: false,
+  });
+  const canBuild = folder !== "" && hasBuildScript(buildable.data ?? "");
+
+  /** The build's output, newest last. `null` means no build has been run — the
+   * panel is absent rather than empty, so the pane costs nothing until someone
+   * asks for it. */
+  const [buildLog, setBuildLog] = useState<string[] | null>(null);
+  const [building, setBuilding] = useState(false);
+  /** True while the build this pane started ON OPEN is still running.
+   *
+   * Opening a page and building it at once makes the page's own reads race the
+   * sandbox restore the build triggers: for a moment `app.js` and `style.css`
+   * come back missing, so nothing is inlined and the frame renders unstyled and
+   * inert under three red lines. It comes right when the build finishes and the
+   * folder is re-read — which is the reason not to show the first version at
+   * all. (The race itself is older and wider than this pane: `files/facade.py`'s
+   * `_warm` routes reads to a sandbox that merely EXISTS, without asking
+   * `is_ready`, so any read during a restore can answer "not there".) */
+  const [firstBuild, setFirstBuild] = useState(false);
+  /** Whether the log is unfolded. It earns the top of the pane while the build
+   * runs and for as long as something went wrong; a build that SUCCEEDED has
+   * already said everything it has to say, and leaving twelve lines of vite
+   * output above somebody's page is taking their pane for a receipt. */
+  const [logOpen, setLogOpen] = useState(true);
+  const logRef = useRef<HTMLDivElement | null>(null);
+  const [autoBuild, setAutoBuild] = useWuiAutoBuild(autoBuildScope(fs.scopeId, folder));
+  /** The page this pane has already rebuilt on open, so that "when I open this"
+   * means what it says: once. React re-runs the effect whenever the preference
+   * changes — and in StrictMode, twice on mount — and neither is somebody
+   * opening the page. */
+  const autoBuiltFor = useRef<string | null>(null);
+  /** Bumped whenever the pane moves to another page. A build started for one
+   * page can still be running when `path` changes without unmounting, and
+   * everything it does on the way out — the log, the verdict, the re-read that
+   * swaps the frame — would land on a page that never asked for it.
+   *
+   * A counter bumped in an EFFECT, not the folder written during render: React
+   * may render without committing, and a ref set by a render that was thrown
+   * away would tell a running build it had been left when it had not. */
+  const epoch = useRef(0);
+  /** The build in flight, so leaving can actually stop it. `stale()` only stops
+   * this pane ACTING on a build; the server hears nothing until the request is
+   * aborted. */
+  const inFlight = useRef<AbortController | null>(null);
 
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const openFile = useOpenFile();
@@ -206,6 +279,156 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
     [fs.scopeId],
   );
 
+  // Moving to another page starts clean. Its log, its fold, and the fact that
+  // one has already been built on open are all facts about the page that left —
+  // and until the log survived Refresh (P12), clearing it there hid this.
+  useEffect(() => {
+    epoch.current += 1;
+    inFlight.current?.abort();
+    inFlight.current = null;
+    setBuildLog(null);
+    setLogOpen(true);
+    setBuilding(false);
+    setFirstBuild(false);
+    // NOT `autoBuiltFor`. It already holds the FOLDER it built, so the guard is
+    // folder-aware without help — and clearing it here defeated that guard
+    // between StrictMode's two effect passes, which is two builds on mount.
+  }, [folder]);
+
+  // Closing the pane is leaving too: without this the build outlives the whole
+  // view, not just the page.
+  //
+  // The guard goes with it. StrictMode mounts, unmounts and mounts again, so
+  // this cleanup runs between the two passes — aborting the build the first
+  // pass started while `autoBuiltFor` still said one had been done, which left
+  // the page never built at all. Clearing it makes the pair idempotent, and a
+  // real remount is somebody opening the page again, which is when rebuilding
+  // is exactly what was asked for.
+  useEffect(
+    () => () => {
+      inFlight.current?.abort();
+      autoBuiltFor.current = null;
+    },
+    [],
+  );
+
+  // Keep the newest line in view. A build's interesting output is its last few
+  // lines — where it failed, or how long it took — and a log that has to be
+  // scrolled to be read is a log nobody reads.
+  useEffect(() => {
+    const el = logRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [buildLog]);
+
+  /** A chunk of the build's own output, exactly as it arrived. */
+  const say = (chunk: string) => setBuildLog((lines) => [...(lines ?? []), chunk]);
+
+  /** One of OUR lines, which always gets a line to itself. A build whose last
+   * chunk did not end in a newline — normal, since chunks are byte fragments —
+   * would otherwise read "…built in 581msBuild finished." */
+  const note = (line: string) =>
+    setBuildLog((lines) => {
+      const prev = lines ?? [];
+      const glued = prev.length > 0 && !prev[prev.length - 1].endsWith("\n");
+      return [...prev, `${glued ? "\n" : ""}${line}\n`];
+    });
+
+  /**
+   * Rebuild the page, showing the build's output as it arrives.
+   *
+   * On success the page is re-read — the whole point is that `dist/` and what
+   * you are looking at stop being different things. On failure it is left
+   * alone: the build produced no new `dist/`, so swapping the frame would
+   * replace the page with the same page and call it a rebuild.
+   */
+  const runBuild = async ({ automatic = false } = {}) => {
+    if (!slug) return;
+    const mine = folder;
+    const startedAt = epoch.current;
+    // Every path that could start a second build already stopped the first:
+    // leaving the page aborts it, closing the pane aborts it, and the button is
+    // disabled while one runs. A pre-emptive abort here guarded nothing that
+    // could be reached, so it is not here.
+    const control = new AbortController();
+    inFlight.current = control;
+    /** Has the pane moved on? Then this build is answering a question nobody is
+     * asking any more, and the page it would re-read is not the page it built. */
+    const stale = () => epoch.current !== startedAt;
+    setBuilding(true);
+    if (automatic) setFirstBuild(true);
+    setBuildLog([]);
+    setLogOpen(true);
+    try {
+      for await (const event of itemBuild(slug, fs.scopeId)(mine, control.signal)) {
+        if (stale()) return;
+        if (event.type === "output") say(event.text);
+        else if (event.exit_code === 0) {
+          note("Build finished.");
+          // Fold it away: the page below IS the result, and it is what the
+          // reader came for. One line stays, and opens it again.
+          setLogOpen(false);
+          setGeneration((g) => g + 1);
+        } else note(`Build failed (exit ${event.exit_code}).`);
+      }
+    } catch (err) {
+      // An abort is this pane's own doing, not something to report.
+      if (stale() || control.signal.aborted) return;
+      // A build that could not be STARTED — a viewer without `execute`, a
+      // folder the server refuses — arrives as a status, not as output. Unsaid,
+      // the button looks like it did nothing at all.
+      note(err instanceof Error ? err.message : "The build could not be run.");
+      // A 403 is permanent for this person: they may read the item and not run
+      // things in it. Left on, rebuilding on open would greet them with that
+      // same refusal every single time they open the page — so it turns itself
+      // off, and says that it did. Only for the AUTOMATIC path, and only for a
+      // refusal: a build that failed to start once because the network hiccuped
+      // must not quietly disable itself forever.
+      if (automatic && err instanceof HttpError && err.status === 403) {
+        setAutoBuild(false);
+        note("Rebuilding on open has been turned off, because you cannot run things here.");
+      }
+    } finally {
+      if (inFlight.current === control) inFlight.current = null;
+      // Gated like every other write. The page you left keeps building while
+      // the page you arrived at starts its own; clearing these unconditionally
+      // declared the SECOND build over while it was still running — Rebuild
+      // enabled again, and the page shown before the build that was going to
+      // replace it had finished. Moving away already reset them, so there is
+      // nothing to strand.
+      if (!stale()) {
+        setBuilding(false);
+        setFirstBuild(false);
+      }
+    }
+  };
+
+  // Rebuild on open, when this page is set to. This is what closes the gap for
+  // everyone who OPENS the page — not a guarantee: the manifest read below is
+  // allowed to fail quietly, and a build that fails leaves the previous `dist/`
+  // up. It is a setting, not a rule, because the cost (tens of seconds, and
+  // waking the item's sandbox) is real enough that someone may not want to pay
+  // it on every open.
+  useEffect(() => {
+    if (!canBuild || !slug) return; // not a built page, or not known yet
+    if (autoBuiltFor.current === folder) return;
+    // The opening moment is spent HERE, whether or not it builds. Marking it
+    // only on the way to a build made ticking the box later count as opening
+    // the page, which is not what the box says.
+    autoBuiltFor.current = folder;
+    if (!autoBuild) return;
+    void runBuild({ automatic: true });
+    // `runBuild` is deliberately not a dependency: it is rebuilt every render,
+    // and the guard above is what decides when this may run.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canBuild, autoBuild, slug, folder]);
+
+  // Cleaned HERE, over the joined stream, not chunk by chunk: an escape
+  // sequence is a byte fragment too, and half of one arriving in the previous
+  // chunk left its tail on screen as literal text.
+  const logText = buildLog === null ? "" : cleanBuildOutput(buildLog.join(""));
+  const logLines = logText.trimEnd().split("\n");
+  const logSummary = logLines[logLines.length - 1] || "Build output";
+
   const tellTheAgent = () => {
     publishAgentDraft(fs.scopeId, formatReportsForAgent(folder, reports));
     setReports([]);
@@ -223,9 +446,36 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
           flex: "0 0 auto",
         }}
       >
-        <Btn size="sm" onClick={() => setGeneration((g) => g + 1)}>
+        <Btn
+          size="sm"
+          onClick={() => {
+            // NOT the build log. Refresh after a failure is the reflex — you
+            // fixed the file, now show me — and clearing it took the compiler
+            // error, the only explanation on screen, along with the page.
+            setGeneration((g) => g + 1);
+          }}
+        >
           Refresh
         </Btn>
+        {canBuild && (
+          <>
+            <Btn size="sm" disabled={building} onClick={() => void runBuild()}>
+              {building ? "Building…" : "Rebuild"}
+            </Btn>
+            {/* A switch, not a checkbox: flipping it takes effect at once, and
+                a checkbox reads as a choice that has not happened yet. Short on
+                screen, whole sentence on hover AND as the accessible name — the
+                strip sits above someone else's page, so a sentence here is a
+                sentence taken from them. */}
+            <Switch
+              checked={autoBuild}
+              onChange={setAutoBuild}
+              title="Rebuild this page whenever you open it"
+            >
+              Auto-rebuild
+            </Switch>
+          </>
+        )}
         <Btn size="sm" onClick={() => toFrame({ proto: WUI_PROTOCOL, command: "pick", on: true })}>
           Report a problem
         </Btn>
@@ -235,9 +485,78 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
           </Btn>
         )}
       </div>
+      {buildLog !== null && (
+        <div style={{ flex: "0 0 auto", borderBottom: "1px solid var(--paper-3)" }}>
+          <button
+            type="button"
+            onClick={() => setLogOpen((open) => !open)}
+            aria-expanded={logOpen}
+            // The control's name is what it DOES. Naming it after the status
+            // line it carries made it a second button called "Building…",
+            // indistinguishable from the one that starts a build.
+            aria-label={logOpen ? "Hide build output" : "Show build output"}
+            style={{
+              display: "flex",
+              width: "100%",
+              alignItems: "baseline",
+              justifyContent: "space-between",
+              gap: 8,
+              padding: "4px 8px",
+              border: 0,
+              background: "none",
+              color: "var(--text-paper-d)",
+              fontFamily: "var(--font-mono, ui-monospace, monospace)",
+              fontSize: pxToRem(12),
+              textAlign: "left",
+              cursor: "pointer",
+            }}
+          >
+            {/* A fixed word while it runs, not the newest line: the line is
+                already on screen underneath, and two copies of it make the
+                pane look like it is stuttering. */}
+            <span
+              // The one line that IS worth announcing: it changes twice a build
+              // and it carries the verdict. The log itself is `aria-live="off"`
+              // precisely so this can be heard.
+              aria-live="polite"
+              style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+            >
+              {building ? "Building…" : logOpen ? "Build output" : logSummary}
+            </span>
+            <span style={{ flex: "0 0 auto", opacity: 0.7 }}>{logOpen ? "Hide" : "Show"}</span>
+          </button>
+          {logOpen && (
+            // The build's own words, verbatim and monospaced, because they are
+            // a compiler's and their columns mean something.
+            <div
+              ref={logRef}
+              role="log"
+              aria-label="Build output"
+              // Off, deliberately. The pane already has one polite live region
+              // — the reports panel, which speaks rarely and about something
+              // the reader must act on. A build emits a chunk every few
+              // milliseconds, and announcing each one drowns the other. The
+              // outcome is announced instead: it lands in the summary line.
+              aria-live="off"
+              style={{
+                maxHeight: "30%",
+                overflowY: "auto",
+                padding: "0 8px 6px",
+                fontFamily: "var(--font-mono, ui-monospace, monospace)",
+                fontSize: pxToRem(12),
+                whiteSpace: "pre-wrap",
+                color: "var(--text-paper-d)",
+              }}
+            >
+              {buildLog.length === 0 ? "Starting the build…" : logText}
+            </div>
+          )}
+        </div>
+      )}
       {reports.length > 0 && (
         <div
           role="log"
+          aria-label="Reports"
           style={{
             flex: "0 0 auto",
             maxHeight: "30%",
@@ -256,6 +575,21 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
       )}
       {built.isPending ? (
         <div style={{ padding: 12, color: "var(--text-paper-d)" }}>Opening…</div>
+      ) : firstBuild ? (
+        // Whatever the folder holds right now is about to be replaced by what
+        // the build produces, and mid-restore it may not even read correctly —
+        // so this waits rather than showing a page with a shelf life of
+        // seconds.
+        <div role="status" style={{ padding: 12, color: "var(--text-paper-d)" }}>
+          Building… the page appears when this finishes.
+        </div>
+      ) : built.error && building ? (
+        // The first open of a page nobody has built yet: `dist/` really is
+        // absent, and saying so in red — under a log showing the build that is
+        // about to create it — is alarming and, seconds later, untrue.
+        <div role="status" style={{ padding: 12, color: "var(--text-paper-d)" }}>
+          Building… the page appears when this finishes.
+        </div>
       ) : built.error ? (
         // Plain language and the file's name: whoever hits this may have no
         // console to open, and this text is what they forward to the agent.

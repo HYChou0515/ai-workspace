@@ -10,7 +10,7 @@
 import { HttpError } from "../../api/http";
 import type { FileService } from "../../api/fileService";
 import { assembleWuiDoc, type WuiAsset, type WuiDoc, type WuiLoad } from "./assemble";
-import { resolveInFolder } from "./paths";
+import { resolveAssetPath, resolveInFolder } from "./paths";
 
 /**
  * What a file is FOR, keyed by extension.
@@ -188,13 +188,23 @@ export async function readAsset(fs: FileService, path: string): Promise<AssetRea
  * here would instead take down the whole render, turning one missing image into
  * a blank page.
  */
-export function folderLoader(fs: FileService, folder: string): WuiLoad {
+export function folderLoader(fs: FileService, folder: string, entryDir?: string): WuiLoad {
+  const from = entryDir ?? folder;
   return async (rel: string): Promise<WuiAsset | null> => {
-    const path = resolveInFolder(folder, rel);
+    // Relative to the ENTRY, bounded by the FOLDER. Those differ the moment a
+    // page is built: `dist/index.html` naming `./assets/x.js` means the file
+    // beside itself, and resolving from the folder inlined nothing.
+    const path = resolveAssetPath(folder, from, rel);
     if (path === null) return null;
     const read = await readAsset(fs, path);
     return read.kind === "asset" ? read.asset : null;
   };
+}
+
+/** The directory an entry lives in, as an absolute workspace path. */
+function directoryOf(entryPath: string): string {
+  const cut = entryPath.lastIndexOf("/");
+  return cut <= 0 ? "" : entryPath.slice(0, cut);
 }
 
 /** Raised when the entry document itself cannot be opened — the one absence that
@@ -211,11 +221,11 @@ export class WuiEntryMissing extends Error {
 
 /** Build the document for a WUI folder: read its entry, fold the folder in. */
 export async function buildWuiDoc(fs: FileService, folder: string, entry: string): Promise<WuiDoc> {
-  const load = folderLoader(fs, folder);
   // Read the entry through the three-outcome reader rather than the loader,
   // which collapses them: an entry that exists but could not be READ is not the
   // same as one that is not there, and this is the one place a person is told.
   const path = resolveInFolder(folder, entry);
+  const load = folderLoader(fs, folder, path === null ? folder : directoryOf(path));
   const read = path === null ? ({ kind: "missing" } as const) : await readAsset(fs, path);
   if (read.kind === "failed") throw new WuiEntryMissing(entry, read.reason);
   if (read.kind === "missing") throw new WuiEntryMissing(entry);

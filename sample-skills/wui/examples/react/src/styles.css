@@ -1,0 +1,108 @@
+/* The page's looks. Imported from `main.jsx`, not linked from `index.html` —
+   with a build step the bundler owns the stylesheet: it emits one file into
+   `dist/assets/` and writes the `<link>` into `dist/index.html` for you.
+   The assembler then inlines it like any other folder-relative reference.
+
+   Write one. A page with no stylesheet is not "unstyled", it is the browser's
+   1995 defaults — Times New Roman headings, a grey submit button, text running
+   the full width of the pane — and that is what the person who asked for this
+   page will see first.
+
+   No web fonts and no CDN: the page has no network once it is running, so a
+   stylesheet that reaches out simply does not arrive. `system-ui` is the good
+   font that is always already there. */
+
+body {
+  font-family: system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  margin: 0;
+  padding: 16px;
+  color: #1a1a1a;
+  background: #fff;
+}
+
+h1 {
+  font-size: 18px;
+  margin: 0 0 12px;
+}
+
+section {
+  margin-bottom: 16px;
+}
+
+/* The platform's own refusal, shown in the page's words rather than swallowed.
+   Red because it is the one thing on the page the reader has to act on. */
+.problem {
+  margin: 0 0 12px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: #fdecea;
+  color: #c22;
+}
+
+[data-wui="add"] {
+  display: flex;
+  gap: 6px;
+}
+
+input[type="text"],
+input:not([type]) {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font: inherit;
+}
+
+button {
+  padding: 5px 10px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: #f6f6f6;
+  font: inherit;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: #eee;
+}
+
+button:disabled {
+  color: #999;
+  cursor: default;
+}
+
+ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid #eee;
+}
+
+li > :first-child {
+  flex: 1;
+  min-width: 0;
+  /* A note somebody pasted a paragraph into wraps instead of pushing the
+     Remove button off the edge of the pane. */
+  overflow-wrap: anywhere;
+}
+
+li small {
+  color: #888;
+}
+
+/* Nothing saved yet is the ordinary first state, not a fault — so it is quiet
+   text, not an empty white rectangle that reads as a page that failed. */
+.empty {
+  margin: 0;
+  color: #888;
+}

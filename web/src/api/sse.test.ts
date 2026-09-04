@@ -82,3 +82,26 @@ describe("parseSseStream", () => {
     expect(events).toEqual([]);
   });
 });
+
+describe("parseSseStream cleanup", () => {
+  it("releases the body when the consumer stops early", async () => {
+    // A generator abandoned mid-stream used to leave the reader locked and the
+    // connection open: the server saw a client that had simply gone quiet, not
+    // one that had left, so whatever it was running kept running.
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new TextEncoder().encode('data: {"n":1}\n\n'));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+
+    const stream = parseSseStream<{ n: number }>(body);
+    expect((await stream.next()).value).toEqual({ n: 1 });
+    await stream.return(undefined as never);
+
+    expect(cancelled).toBe(true);
+  });
+});
