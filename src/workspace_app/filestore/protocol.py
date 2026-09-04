@@ -63,11 +63,15 @@ class FileStore(Protocol):
 
     # `workspace_usage` / `file_size` (the #245 quota basis) are NOT on this
     # core Protocol — they're an optional capability the WorkspaceFiles facade
-    # duck-types, exactly like the CAS pair (`read_with_etag` / `write_cas`)
-    # and `read_many` (#781: a set of paths in ONE query instead of a row fetch
-    # each; the facade chunks the ask and falls back to per-path `read`).
+    # duck-types, exactly like the CAS pair (`read_with_etag` / `write_cas`).
     # Only the workspace-backing stores (SpecstarFileStore / MemoryFileStore)
     # implement them; the wiki-page store and test doubles need not.
+    #
+    # `read_many` (#781 — a set of paths in ONE query instead of a row fetch
+    # each) is the same kind of capability, but so far **only
+    # `SpecstarFileStore` has it**. Everything else, `MemoryFileStore`
+    # included, is read per path by the facade's fallback: correct, and one
+    # round trip per file.
 
     async def delete(self, workspace_id: str, path: str) -> None:
         """Delete the file at `path`; raise `FileNotFound` if absent. Leaves the

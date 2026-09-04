@@ -127,10 +127,11 @@ async def test_listing_cost_does_not_scale_with_how_many_workflows() -> None:
     )
 
 
-async def test_a_workflow_that_vanishes_after_the_listing_does_not_empty_the_panel() -> None:
+async def test_a_workflow_that_vanishes_after_the_listing_does_not_break_the_panel() -> None:
     """`ls` names the files, and reading them happens after — so a file deleted
     in between is a RACE, not a corrupt workspace, and the rest of the panel
-    still has to render.
+    still has to render. (`list_item_workflows` has no handler for it, so the
+    unguarded version does not render an empty panel — it 500s the route.)
 
     Reading them one at a time made this free (the loop skipped a `FileNotFound`
     and carried on). Batching them is what puts the whole listing at risk of one

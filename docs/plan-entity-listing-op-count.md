@@ -13,7 +13,8 @@ entities 15 秒、workflow 10 秒,改完 span 之後 issue 58 秒。這個資料
 | entities 15s | `entity/catalog.py` `discover_catalog` | 每個型別讀 schema + skeleton |
 | workflow 10s | `workflow/workspace_store.py` `workspace_workflow_metas` | `ls` 之後逐筆 `read` |
 
-同一個形狀還在 `apps/subagents.py:154-159` 和 `apps/skills.py:175-189` —— 這兩支是
+同一個形狀還在 `apps/subagents.py` 的 `workspace_subagent_defs` 和 `apps/skills.py` 的
+`workspace_skill_metas` —— 這兩支是
 **每個 turn 都會走**的,不只是使用者點開面板的時候。
 
 關鍵在 `WorkspaceFiles.read`:它每一次都呼叫 `_warm` 重新解析 workspace 的活性,而
@@ -32,46 +33,59 @@ rollup 就要建跨型別 corpus(`store.py` `_corpus`),把**每個型別的每�
 
 ## Measured ground truth
 
-從真入口(TestClient + 真路由)進去,鋪 pm profile 真正的 issue / milestone schema,
-資料量比照回報的 68 issues + 7 milestones。**同一次執行內量前後兩種形狀**(把
-`read_many` 藏起來,`_read_all` 就退回舊路徑),所以兩個數字是同一把尺:
+全部從真入口(TestClient + 真路由)進去,鋪 pm profile 真正的 issue / milestone schema,
+資料量比照回報的 68 issues + 7 milestones。
 
-| 端點 | 回傳筆數 | 原始 | Phase 1 後 | Phase 2 後 |
-| --- | --- | --- | --- | --- |
-| `GET /entities/issue` | 68 | 148 | 81 | **76** |
-| `GET /entities/milestone` | **7** | 164 | 91 | **86** |
-| `GET /entities`(型別目錄) | 2 型別 | 10 | 10 | **5** |
+**⚠️ 兩張表用的是兩把不同的尺,所以分開放。** 混在一起是 veracity review 抓到的錯:原本的
+「熱路徑」表把冷路徑的數字填進 `master 原始` 那一列,而一個 `~` 遮不住那件事 —— 那不是同一
+個量測的近似值,是另一個量測。
 
-Phase 2 的 `GET /entities` 10→5 有一半來自一個計劃原本沒寫的改動:`discover_catalog` 不再
-逐型別問兩次 `exists`,而是從已經拿到的清單推導。那是對的做法(`workspace_skill_metas`
-早就這樣做),但它**當初沒寫進計劃就做了** —— review 把它列為未揭露的範圍擴張,補記於此。
+**(一)冷路徑:facade 操作數**(`_warm` + `ls` + `_read_with`,沒有 live sandbox)
+
+| 端點 | 回傳筆數 | master | Phase 1 | Phase 2 | Phase 4(現況) |
+| --- | --- | --- | --- | --- | --- |
+| `GET /entities/issue` | 68 | 148 | 81 | 76 | **6** |
+| `GET /entities/milestone` | **7** | 164 | 91 | 86 | **9** |
+| `GET /entities`(型別目錄) | 2 型別 | 10 | 10 | 5 | **3** |
+
+**(二)熱路徑:sandbox 來回次數**(有 live sandbox = 正式環境的形狀)
+
+| 端點 | master | 快速道路關 | 快速道路開 |
+| --- | --- | --- | --- |
+| `GET /entities/issue` | 152 | 76 | **8** |
+| `GET /entities/milestone` | 168 | 86 | **12** |
+
+⚠️ Phase 3 的 commit 訊息寫的是 `GET milestone 81→8` / `GET issue 71→4`。**那兩組數字是對
+的,但標籤是錯的** —— 它們量的是直接呼叫 `EntityStore.query()`,沒有經過路由,所以不含路由
+自己的型別目錄探索與 `ls`。走真路由是上表的 86→12 / 76→8。十倍的形狀兩種量法都成立,標籤
+不成立。
+
+Phase 2 的 `GET /entities` 10→5 裡有 **4 次**來自一個計劃原本沒寫的改動:`discover_catalog`
+不再逐型別問兩次 `exists`,而是從已經拿到的清單推導(第 5 次來自把兩個讀合併)。那是對的做法
+(`workspace_skill_metas` 早就這樣做),但它**當初沒寫進計劃就做了** —— review 把它列為未揭露
+的範圍擴張,補記於此。
 
 Phase 1 後剩下的 81 次裡有 70 次是「一筆記錄一次檔案抓取」—— 那是 `download` 一次只拿一個
 檔案的硬下限,不是解析次數的問題。Phase 3 打破的就是這個下限。
 
-**熱路徑(有 live sandbox = 正式環境的形狀)的 sandbox 來回次數**,快速道路關/開對照:
-
-| | milestone(7 筆) | issue(68 筆) |
-| --- | --- | --- |
-| master 原始 | ~164 | ~148 |
-| Phase 1 + 2 後 | 81 | 71 |
-| **Phase 3(快速道路)** | **8** | **4** |
-
-探針放在 `$CLAUDE_JOB_DIR/tmp/test_zzz_entity_fanout_probe.py`(刻意不進 repo:它是量尺,
-不是回歸守門員;守門員是下面 Test plan 那條會紅的測試)。
+**量法**:把 `WorkspaceFiles.read_many` 從類別上拿掉再重跑,同一個行程內比對前後 —— 這樣兩個
+數字才是同一把尺。⚠️ 留在 `$CLAUDE_JOB_DIR/tmp/` 的那支探針**並沒有真的這樣做**:它把
+master 的數字寫死成常數來對照。結論經 veracity review 獨立重量後成立(把 `read_many` 藏起來
+會精確回到 10 / 148 / 164),但那支探針不能當成證據 —— 它連 master 真的漂移了都看不出來。
+探針刻意不進 repo:它是量尺,不是回歸守門員;守門員是下面 Test plan 那些會紅的測試。
 
 ## Design
 
 `WorkspaceFiles.read_many(workspace_id, paths)` —— 一個操作解析一次活性,每一步保證打到
 同一個 store。這**不是新設計**,是多步驟寫入路徑已經在用的 `_read_with` 契約
-(`files/facade.py:300`),`_parse_type` 只是沒用它。
+(`files/facade.py` 的 `_read_with`),`_parse_type` 只是沒用它。
 
 **它不是「把探測結果快取起來」**,那個做法程式碼裡已經評估過並否決:`_warm` 同時是
 sandbox 被 host 回收後的重建觸發點,跨操作記住「還活著」會把復原變成 500
-(`files/facade.py:281-288` 的註解寫得很清楚)。這裡只把範圍收斂到**單一操作內**。
+(`files/facade.py` `_warm` 的註解寫得很清楚)。這裡只把範圍收斂到**單一操作內**。
 
 呼叫端用 duck-type 取用,跟 `stat_all` / CAS 那組選配能力一樣
-(`filestore/protocol.py:64-68` 記載了這個慣例),所以 wiki store 和測試替身不必長出這個方法。
+(`filestore/protocol.py` 在 `exists` 下方記載了這個慣例),所以 wiki store 和測試替身不必長出這個方法。
 
 ## Locked decisions
 
@@ -99,7 +113,8 @@ interface」「對 caller 應無感」。
   `HttpSandbox`(正式環境,POST `/sandboxes/{id}/files`,base64,缺檔回 `null`)、
   `LocalProcessSandbox`(連帶 `IsolatedProcessSandbox`,一次 thread hop)、以及
   `sandbox-host` 的對應端點。沒有這個能力的後端(mock / docker)照舊逐筆,呼叫端零改動。
-  milestone 81→8、issue 71→4 次來回。
+  走真路由量:milestone 86→12、issue 76→8 次 sandbox 來回(直接呼叫 `EntityStore.query()`
+  則是 81→8 / 71→4 —— 見上面 Measured ground truth 的標籤更正)。
 - **Phase 4 — 冷路徑**(已完成):沒有 live sandbox 的 item 是由 durable store 回答的,
   那裡的來回是打資料庫,sandbox 的快速道路對它一點用都沒有。`SpecstarFileStore.read_many`
   用**一次** `path in (...)` 查詢取代逐列取得,同樣是選配能力、同樣呼叫端零改動。
@@ -116,9 +131,11 @@ interface」「對 caller 應無感」。
 
 ## 刻意不做的
 
-- **不加衍生索引 / 快取表**。entity 是刻意「file-first、讀的時候才算」(`store.py`
-  `_corpus` 的註解:there is no derived index)。加一份衍生狀態就要處理失效與回填,而且
-  會靜默錯。加速要靠減少來回,不是複製一份狀態。
+- **不加衍生索引 / 快取表**。entity 是刻意「file-first、讀的時候才算」——
+  `entity/store.py` 的 module docstring:`get`/`query` scan-and-parse (no index — §S2)。
+  加一份衍生狀態就要處理失效與回填,而且會靜默錯。加速要靠減少來回,不是複製一份狀態。
+  (⚠️ 這裡原本引的是 `_corpus` 註解裡的「there is no derived index」—— **那串字整個 repo
+  都不存在**,是我寫計劃時捏造的引文。想法本身有出處,句子沒有。)
 - **不把 `asyncio.gather` 當主要解法**。它降的是牆鐘時間、不是操作數,而且在 hosted
   sandbox 上一次噴 68 個併發請求,很可能只是把排隊從一個地方搬到另一個地方。Phase 3
   做完之後如果還需要,再單獨談。
@@ -144,19 +161,20 @@ interface」「對 caller 應無感」。
 
 ## Verified ground truth(檔案指標)
 
-- 每次操作都探活:`files/facade.py:256-295`(`_warm`),註解說明為何刻意不快取
-- 已解析活性的讀取接縫:`files/facade.py:300-310`(`_read_with`)
-- entity 逐筆讀:`entity/store.py:207-215`(Phase 1 前)
-- rollup 逼出跨型別 corpus:`entity/store.py:217-232`(`_corpus`)、`248-266`(`query`)
+- 每次操作都探活:`files/facade.py` 的 `_warm`,註解說明為何刻意不快取
+- 已解析活性的讀取接縫:`files/facade.py` 的 `_read_with`
+- entity 逐筆讀:`entity/store.py` 的 `_parse_type`(Phase 1 前是逐筆 `await ... read`)
+- rollup 逼出跨型別 corpus:`entity/store.py` 的 `_corpus` 與 `query`
 - PM 只有 issue / milestone 兩個型別:`apps/pm/profiles/default/.entity/`
-- 選配能力 duck-type 的慣例:`filestore/protocol.py:64-68`
+- 選配能力 duck-type 的慣例:`filestore/protocol.py`(`exists` 下方的註解)
 - 既有的活性探測計數慣例:`tests/files/test_quota.py`(`_WalkCountingSandbox`)
 
 ## Test plan(紅燈先行,只跑 targeted)
 
 Phase 1 的紅燈測試斷言**行為**而不是實作:「解析 workspace 在哪的成本不隨記錄筆數成長」
 (`tests/entity/test_entity_store.py`)。修改前 3 筆 4 次、30 筆 31 次(線性);修改後兩者
-相同。量法沿用 `tests/files/test_quota.py` 既有的 `_WalkCountingSandbox`,在 sandbox 邊界
-數 `exists(handle, "/")`,不是新發明的量法。
+相同。量法沿用 `tests/files/test_quota.py` `_WalkCountingSandbox` 的**做法**(在 sandbox
+邊界數 `exists(handle, "/")`),不是新發明的判準;類別本身是新的
+(`tests/warm_workspace.py` 的 `ProbeCountingSandbox`),因為要跨測試檔共用。
 
 Phase 2 每個呼叫點各一條同形狀的測試(成本不隨 workflow 數 / 型別數成長)。
