@@ -106,7 +106,27 @@ export async function dispatchWuiRequest(
       // was already misleading; once not-found stopped being reported at all it
       // became silent, which is how a read-only viewer's page does nothing and
       // says nothing.
-      if (read.kind === "missing") return refuseExpected(id, `There is no file at ${path}.`);
+      //
+      // And absence is ordinary only in the page's OWN folder, where a first run
+      // reads a data file nobody has written yet. Elsewhere it is a mistake, and
+      // the shape it takes is specific: a tool with a large result answers with a
+      // PATH rather than its payload, so the page reads a string it did not
+      // choose. A sandbox path like `/tmp/out.json` resolves against THIS item's
+      // root, where nothing is — and the page, catching absence the way every
+      // example teaches, renders its empty state and says "nothing found",
+      // forever, while the pane stays silent because the refusal was marked
+      // expected. Both halves have to be wrong for that to happen, so this fixes
+      // the half that can tell the difference.
+      if (read.kind === "missing") {
+        const mine = resolveWritePath(folder, raw) !== null;
+        if (mine) return refuseExpected(id, `There is no file at ${path}.`);
+        // Names the thing that is actually surprising. The reader cannot open a
+        // console, and "there is no file" leaves them nothing to act on.
+        return refuse(
+          id,
+          `There is no file at ${path} in this item. A path starting with "/" is read from this item's root, not from a sandbox or a disk.`,
+        );
+      }
       if (read.kind === "failed") return refuse(id, read.reason);
       return ok(id, { path, ...read.asset });
     }

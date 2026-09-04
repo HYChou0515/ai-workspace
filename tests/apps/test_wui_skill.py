@@ -237,6 +237,13 @@ def test_the_skill_makes_the_agent_look_at_a_tools_real_output():
     reference = SHARED_SKILLS["wui"].joinpath("reference.md").read_text()
 
     assert "Run the tool before you parse it" in body
+    # The specific misuse a real deploy hit: a tool with a large result writes a
+    # file and prints the PATH, so `output` is a filename. Parsing it "works"
+    # and yields no rows; reading it against the wrong root fails and, caught
+    # the way a first run is caught, shows as a permanent silent "nothing
+    # found". Naming the case is the only thing that stops both.
+    assert "When the tool answers with a PATH" in body
+    assert "not a disk" in body
     # Not just "be careful": the instruction has to be an ACTION, and it has to
     # say what to do when running it is impossible, or the agent guesses anyway.
     assert "You hold the same tool" in body

@@ -98,6 +98,28 @@ call, so before you write a line of parsing:
 
 Then write the parser against **that**, not against what the name suggested.
 
+### When the tool answers with a PATH
+
+A tool with a large result should not print megabytes to stdout — it writes a
+file and prints the **path**. So `output` is a filename, the data comes back
+through `readFile`, and two things go wrong quietly:
+
+- **You parse the path.** `JSON.parse(res.output)` on `{"path": "out.json"}`
+  succeeds and yields an object with no rows in it, so the page renders "nothing
+  found" over a perfectly good answer.
+- **The path is not where you think.** `readFile` reads THIS item's workspace: a
+  leading `/` is the item's root, not a disk. A tool that wrote to a sandbox
+  `/tmp/out.json` and printed that path names a place the page cannot see, and
+  the read fails. The page must show that failure — do not `.catch(() => [])`
+  around a read of somebody else's path; that catch is for YOUR OWN data file on
+  its first run, and using it here is what turns a wrong path into a permanent,
+  silent "nothing found".
+
+So when a tool answers with a path: check whether the file is really in the
+item's workspace, `readFile` it, and show the read's own error message when it
+fails. A 13MB single-line JSON goes through the bridge fine (measured), so size
+is not what you are debugging — the path is.
+
 If you cannot run it — it needs an identifier you do not have, or the data is
 not there yet — **say so and ask for one real example of its output.** Do not
 guess a shape and ship it; the guess fails in front of the user, not in front of

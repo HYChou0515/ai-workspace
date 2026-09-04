@@ -221,6 +221,42 @@ describe("dispatchWuiRequest", () => {
     expect(res.ok === false && res.error).toContain("/gone.md");
   });
 
+  it("keeps a missing file in the page's OWN folder quiet — that is a first run", async () => {
+    // The documented way to start empty, and the examples all catch it. Reported,
+    // it would put a red refusal in front of every user opening every new WUI.
+    const res = await dispatchWuiRequest(req("readFile", { path: "data.json" }), ctx());
+
+    expect(res).toMatchObject({ ok: false, expected: true });
+  });
+
+  it("does NOT keep a missing file elsewhere in the item quiet", async () => {
+    // A tool that returns a PATH rather than its payload — the way a tool with a
+    // large result is supposed to answer — hands the page a string it did not
+    // choose. If that path is wrong (a sandbox `/tmp/out.json`, say, which the
+    // bridge resolves against the ITEM's root, where nothing exists), the page
+    // gets the same "not there" a first run gets. Every example catches that and
+    // renders its empty state, so the page says "nothing found", forever, and
+    // the pane says nothing at all.
+    //
+    // The page's own folder is where absence is ordinary. Everywhere else it is
+    // a mistake somebody has to be able to see.
+    const res = await dispatchWuiRequest(req("readFile", { path: "/tmp/out.json" }), ctx());
+
+    expect(res).toMatchObject({ ok: false });
+    expect(res.ok === false && res.expected).toBeUndefined();
+  });
+
+  it("says a path outside the folder was read from the item's root", async () => {
+    // The reader cannot open a console, so the sentence has to name what is
+    // actually wrong. "There is no file" is true and leaves them nothing to act
+    // on; the surprise is almost always that a leading `/` means the ITEM's
+    // root, not a sandbox's disk.
+    const res = await dispatchWuiRequest(req("readFile", { path: "/tmp/out.json" }), ctx());
+
+    expect(res.ok === false && res.error).toContain("/tmp/out.json");
+    expect(res.ok === false && res.error).toContain("this item");
+  });
+
   it("answers on the id it was asked with, so replies cannot be crossed", async () => {
     const res = await dispatchWuiRequest({ ...req("whoami"), id: "abc" }, ctx());
 
