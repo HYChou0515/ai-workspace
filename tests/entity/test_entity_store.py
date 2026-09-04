@@ -7,13 +7,11 @@ from __future__ import annotations
 
 import asyncio
 
+from tests.warm_workspace import ProbeCountingSandbox, warm_files
 from workspace_app.entity.catalog import EntityCatalog, EntityType
 from workspace_app.entity.schema import EntitySchema, FieldSpec, Role
 from workspace_app.entity.store import EntityStore
-from workspace_app.files.facade import WorkspaceFiles
 from workspace_app.filestore.memory import MemoryFileStore
-from workspace_app.sandbox.mock import MockSandbox
-from workspace_app.sandbox.protocol import SandboxHandle, SandboxSpec
 
 
 def _issue_type() -> EntityType:
@@ -379,31 +377,10 @@ async def test_query_corpus_sees_pre_derived_fields_of_its_own_type() -> None:
     assert rows[1].fields["kid_avg"] == 30
 
 
-class _ProbeCountingSandbox(MockSandbox):
-    """Counts the facade's per-op liveness probe (`exists(handle, "/")`) — the
-    same seam `tests/files/test_quota.py` counts. Against the hosted sandbox
-    every one of them is a network round trip."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.liveness_probes = 0
-
-    async def exists(self, handle: SandboxHandle, path: str) -> bool:
-        if path == "/":
-            self.liveness_probes += 1
-        return await super().exists(handle, path)
-
-
-async def _warm_store(records: int) -> tuple[EntityStore, _ProbeCountingSandbox]:
+async def _warm_store(records: int) -> tuple[EntityStore, ProbeCountingSandbox]:
     """A store whose workspace has a LIVE sandbox holding `records` issues —
     the state a real item is in while somebody is working in it."""
-    sb = _ProbeCountingSandbox()
-    handle = await sb.create(SandboxSpec())
-
-    async def _resolve(_ws: str) -> SandboxHandle:
-        return handle
-
-    files = WorkspaceFiles(MemoryFileStore(), sandbox=sb, handle_for=_resolve)
+    files, sb = await warm_files()
     store = EntityStore(files, "ws1", EntityCatalog({"issue": _issue_type()}))
     for i in range(1, records + 1):
         await files.write(

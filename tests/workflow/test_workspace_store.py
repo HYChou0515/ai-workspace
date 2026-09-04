@@ -100,3 +100,53 @@ async def test_load_workspace_workflow_resolves_or_none():
     _d, manifest = res
     assert manifest.id == "good"  # forced to the addressing id (filename authoritative)
     assert manifest.title == "T"
+
+
+async def test_listing_cost_does_not_scale_with_how_many_workflows() -> None:
+    """Listing the panel's workflows is ONE operation, so it settles where the
+    workspace lives once instead of once per workflow file.
+
+    Same defect the entity listings had: against the hosted sandbox each
+    resolution is a network round trip, so a workspace with 30 workflows paid 31
+    of them to read 30 files."""
+    from tests.warm_workspace import warm_files
+
+    async def probes_for(count: int) -> int:
+        files, sb = await warm_files()
+        for i in range(count):
+            await files.write("ws1", f"/.workflows/w{i}.json", _VALID.encode())
+        sb.liveness_probes = 0
+        metas = await workspace_workflow_metas(files, "ws1")
+        assert len(metas) == count
+        return sb.liveness_probes
+
+    few, many = await probes_for(2), await probes_for(20)
+    assert many == few, (
+        f"{few} probes for 2 workflows but {many} for 20 — the cost of locating "
+        "the workspace is scaling with how many workflows it holds"
+    )
+
+
+async def test_a_workflow_that_vanishes_after_the_listing_does_not_empty_the_panel() -> None:
+    """`ls` names the files, and reading them happens after — so a file deleted
+    in between is a RACE, not a corrupt workspace, and the rest of the panel
+    still has to render.
+
+    Reading them one at a time made this free (the loop skipped a `FileNotFound`
+    and carried on). Batching them is what puts the whole listing at risk of one
+    vanished file, so the tolerance has to be stated rather than inherited."""
+    class _GhostListing(WorkspaceFiles):
+        """A listing that names a file the reads can no longer find — the race,
+        as the store sees it."""
+
+        async def ls(self, workspace_id: str, prefix: str = "") -> list[str]:
+            got = await super().ls(workspace_id, prefix)
+            return [*got, "/.workflows/ghost.json"]  # listed, but never written
+
+    files = _GhostListing(MemoryFileStore())
+    for name in ("a", "b"):
+        await files.write("ws1", f"/.workflows/{name}.json", _VALID.encode())
+
+    metas = await workspace_workflow_metas(files, "ws1")
+
+    assert [m.id for m in metas] == ["a", "b"]

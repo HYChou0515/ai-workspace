@@ -171,22 +171,25 @@ async def workspace_skill_metas(files: WorkspaceFiles, workspace_id: str) -> lis
         for p in paths
         if p.endswith(f"/{ORIGIN_FILE}")
     }
+    from ..files.facade import read_all_existing
+
+    wanted = [
+        path
+        for path in sorted(paths)
+        if path[len(prefix) :].count("/") == 1 and path.endswith("/SKILL.md")
+    ]
+    # The index is rendered every turn, so reading each SKILL.md with its own
+    # call put a sandbox round trip per skill in front of every message.
     out: list[SkillMeta] = []
-    for path in sorted(paths):
-        rel = path[len(prefix) :]
-        if rel.count("/") != 1 or not rel.endswith("/SKILL.md"):
-            continue
-        dir_name = rel[: -len("/SKILL.md")]
-        meta = await _workspace_skill_meta(files, workspace_id, path, dir_name)
+    for path, raw in (await read_all_existing(files, workspace_id, wanted)).items():
+        dir_name = path[len(prefix) : -len("/SKILL.md")]
+        meta = _workspace_skill_meta(raw, dir_name)
         if meta is not None:
             out.append(msgspec.structs.replace(meta, is_copy=dir_name in copies))
     return out
 
 
-async def _workspace_skill_meta(
-    files: WorkspaceFiles, workspace_id: str, path: str, dir_name: str
-) -> SkillMeta | None:
-    raw = await files.read(workspace_id, path)
+def _workspace_skill_meta(raw: bytes, dir_name: str) -> SkillMeta | None:
     try:
         front, _body = _parse_frontmatter(raw)
     except SkillError as e:

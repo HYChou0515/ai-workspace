@@ -197,3 +197,37 @@ def test_an_unclamped_definition_is_still_a_fresh_object():
 
     assert shipped.tools == ["read_file"]
     assert clamp_tools(shipped, None).tools == ["read_file"]
+
+
+async def test_reading_the_definitions_costs_one_resolution_not_one_per_definition():
+    """The sub-agent index is rebuilt EVERY turn (a definition the user just
+    wrote has to be callable on the next one), so its cost is paid on every
+    message — not only when somebody opens a panel.
+
+    Reading each `AGENT.md` with its own call re-resolved where the workspace
+    lives per file, which against the hosted sandbox is a network round trip
+    apiece."""
+    from tests.warm_workspace import warm_files
+    from workspace_app.apps.subagents import workspace_subagent_defs
+
+    async def probes_for(count: int) -> int:
+        files, sb = await warm_files()
+        for i in range(count):
+            await files.write(
+                "inv-1",
+                f"/.agent/a{i}/AGENT.md",
+                (
+                    f"---\nname: a{i}\ndescription: does a{i} things.\n"
+                    "tools: [read_file]\n---\n\nbody\n"
+                ).encode(),
+            )
+        sb.liveness_probes = 0
+        defs = await workspace_subagent_defs(files, "inv-1")
+        assert len(defs) == count
+        return sb.liveness_probes
+
+    few, many = await probes_for(2), await probes_for(20)
+    assert many == few, (
+        f"{few} probes for 2 definitions but {many} for 20 — every turn pays for "
+        "locating the workspace once per sub-agent the item declares"
+    )

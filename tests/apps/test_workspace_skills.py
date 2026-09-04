@@ -153,3 +153,27 @@ async def test_derived_reference_is_appended_whatever_source_the_body_came_from(
     assert body is not None
     assert "purpose only" in body
     assert "machine-derived reference (always current)" in body
+
+
+async def test_the_skill_index_costs_one_resolution_not_one_per_skill():
+    """The workspace skill index is rendered EVERY turn (a skill the user just
+    saved has to be listed on the next one), so its cost rides on every message.
+
+    Reading each `SKILL.md` with its own call re-resolved where the workspace
+    lives per skill — a network round trip apiece against the hosted sandbox."""
+    from tests.warm_workspace import warm_files
+
+    async def probes_for(count: int) -> int:
+        files, sb = await warm_files()
+        for i in range(count):
+            await _put(files, "inv-1", f"s{i}", f"does s{i}", "body")
+        sb.liveness_probes = 0
+        metas = await workspace_skill_metas(files, "inv-1")
+        assert len(metas) == count
+        return sb.liveness_probes
+
+    few, many = await probes_for(2), await probes_for(20)
+    assert many == few, (
+        f"{few} probes for 2 skills but {many} for 20 — every turn pays for "
+        "locating the workspace once per skill the item holds"
+    )

@@ -132,21 +132,39 @@ async def discover_catalog(
 ) -> tuple[EntityCatalog, list[Diagnostic]]:
     """Scan `.entity/<type>/` into the item's `EntityCatalog`. No `.entity/`
     dir → empty catalog (opt-in guard)."""
+    from ..files.facade import read_all
+
     paths = await store.ls(workspace_id, prefix=_ENTITY_ROOT)
+    # Whether a type's files are there falls straight out of the listing we
+    # already have — the trick `workspace_skill_metas` uses to know which skill
+    # folders are copies. Asking `exists` per type was a round trip spent
+    # re-learning what the listing just said, and there were TWO of them per
+    # type before the two reads.
+    present = set(paths)
     type_names = sorted(
         {p[len(_ENTITY_ROOT) :].split("/", 1)[0] for p in paths if "/" in p[len(_ENTITY_ROOT) :]}
     )
-    types: dict[str, EntityType] = {}
-    diagnostics: list[Diagnostic] = []
+    wanted: list[tuple[str, str, str | None]] = []
+    to_read: list[str] = []
     for name in type_names:
         schema_path = f"{_ENTITY_ROOT}{name}/schema.yaml"
-        if not await store.exists(workspace_id, schema_path):
+        if schema_path not in present:
             continue
         skeleton_path = f"{_ENTITY_ROOT}{name}/skeleton.md"
-        skeleton = ""
-        if await store.exists(workspace_id, skeleton_path):
-            skeleton = (await store.read(workspace_id, skeleton_path)).decode("utf-8", "replace")
-        entity_type, diags = _load_type(name, await store.read(workspace_id, schema_path), skeleton)
+        has_skeleton = skeleton_path in present
+        wanted.append((name, schema_path, skeleton_path if has_skeleton else None))
+        to_read.append(schema_path)
+        if has_skeleton:
+            to_read.append(skeleton_path)
+
+    blob = dict(zip(to_read, await read_all(store, workspace_id, to_read), strict=True))
+    types: dict[str, EntityType] = {}
+    diagnostics: list[Diagnostic] = []
+    for name, schema_path, skeleton_path in wanted:
+        skeleton = (
+            blob[skeleton_path].decode("utf-8", "replace") if skeleton_path is not None else ""
+        )
+        entity_type, diags = _load_type(name, blob[schema_path], skeleton)
         diagnostics.extend(diags)
         if entity_type is not None:
             types[name] = entity_type

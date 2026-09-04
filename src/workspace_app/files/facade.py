@@ -297,6 +297,10 @@ class WorkspaceFiles:
     async def read(self, workspace_id: str, path: str) -> bytes:
         return await self._read_with(workspace_id, path, await self._warm(workspace_id))
 
+    # NOTE: the module-level `read_all` below is how callers reach this — it
+    # degrades for stores that do not have it. Do not duck-type it a second
+    # time at a call site; two spellings of one rule drift.
+
     async def read_many(self, workspace_id: str, paths: Sequence[str]) -> list[bytes]:
         """Read several paths as ONE operation — liveness resolved once, every
         path read against that same answer, in the order given.
@@ -1085,3 +1089,49 @@ class WorkspaceFiles:
         # Persistent contention: hand back the latest content as a conflict.
         got = await read_with_etag(workspace_id, path)
         return got[0].decode("utf-8", errors="replace") if got is not None else ""
+
+
+async def read_all(store: FileStore, workspace_id: str, paths: Sequence[str]) -> list[bytes]:
+    """Read `paths` as ONE operation where the store can (`read_many` — the
+    WorkspaceFiles facade), else one at a time. Order matches `paths`.
+
+    THE place this rule is spelled. Reading a set of files a call at a time
+    re-resolves the workspace's liveness per file, which against the hosted
+    sandbox is a second network round trip in front of every one of them — the
+    defect behind the entity/workflow/skill listings. Duck-typed like the
+    store's other optional capabilities (`stat_all`, the CAS pair), so the wiki
+    store and the test doubles need not grow a method.
+
+    Every caller that reads a batch of paths goes through here rather than
+    duck-typing `read_many` itself: two spellings of one rule drift, and the
+    one that drifts is the one nobody measured."""
+    read_many = getattr(store, "read_many", None)
+    if read_many is not None:
+        return list(await read_many(workspace_id, paths))
+    return [await store.read(workspace_id, path) for path in paths]
+
+
+async def read_all_existing(
+    store: FileStore, workspace_id: str, paths: Sequence[str]
+) -> dict[str, bytes]:
+    """`read_all`, but a path that is gone is OMITTED rather than an error.
+
+    For a listing: `ls` names the files and the reads happen after, so a file
+    deleted in between is a race, not a corrupt workspace — the rest of the list
+    still has to render. Reading one at a time made that tolerance free (the
+    caller's loop skipped a `FileNotFound` and carried on); batching is what puts
+    a whole listing at the mercy of one vanished file, so the tolerance has to
+    be stated here instead of inherited.
+
+    The batch is tried first and only a real miss pays for the per-path retry,
+    so the ordinary case keeps the single resolution."""
+    try:
+        return dict(zip(paths, await read_all(store, workspace_id, paths), strict=True))
+    except (FileNotFound, FileNotFoundError):
+        got: dict[str, bytes] = {}
+        for path in paths:
+            try:
+                got[path] = await store.read(workspace_id, path)
+            except (FileNotFound, FileNotFoundError):
+                continue
+        return got
