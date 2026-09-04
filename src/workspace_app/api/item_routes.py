@@ -18,13 +18,15 @@ from collections.abc import Awaitable, Callable
 import msgspec
 from fastapi import APIRouter, FastAPI, HTTPException, Response, status
 from pydantic import BaseModel
-from specstar import SpecStar
+from specstar import QB, SpecStar
+from specstar.types import ResourceIDNotFoundError, ResourceIsDeletedError
 
 from ..apps.base import WorkItemBase
 from ..filestore.protocol import FileStore
 from ..kb.ingest import Ingestor
 from ..perm import Actor, Permission, Verb, authorize
 from ..perm.model import user_subject
+from ..quota.disk_ledger import DiskLedger
 from ..quota.limits import parse_size
 from ..resources.groups import groups_of
 from ..sandbox.protocol import SandboxBusy, SandboxSpec
@@ -267,8 +269,9 @@ def register_item_routes(
     insights_collection_id: str,
     kb_chat_pipeline: object | None,
     superusers: frozenset[str] = frozenset(),
+    disk_ledger: DiskLedger | None = None,
 ) -> None:
-    """Mount the App work-item create / close routes onto ``app``."""
+    """Mount the App work-item create / close / delete routes onto ``app``."""
 
     def _authorize_item(slug: str, item_id: str, verb: Verb) -> tuple[WorkItemBase, str]:
         """#306 — gate a hand-written WorkItem route: ``read_meta`` first (404, no
@@ -758,4 +761,156 @@ def register_item_routes(
         with contextlib.suppress(SandboxBusy):
             await registry.close_session(item_id)
         await turn_engine.forget(item_id)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @app.delete(
+        "/a/{slug}/items/{item_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
+    async def delete_app_item(slug: str, item_id: str) -> Response:
+        """Delete the item AND everything it owns (plan-delete-item-cascade).
+
+        The generic specstar delete removes only the item row and orphans the
+        rest — worst of all the disk-ledger row, frozen and charged to the
+        owner forever. This route owns the ordered cascade, and the ORDER is
+        the contract: the item row goes LAST, because every earlier step needs
+        it (owner resolution, retryability) — deleting it first is exactly how
+        the orphans were made. A partial failure leaves the row, so retrying
+        the DELETE resumes the sweep."""
+        from ..apps.catalog import discover_app_slugs
+        from ..apps.registry import app_model
+
+        if slug not in discover_app_slugs():
+            raise HTTPException(status_code=404, detail=f"unknown app: {slug!r}")
+        model = app_model(slug)
+        rm = spec.get_resource_manager(model)
+        # 404-no-leak first, then the owner gate: delete is a lifecycle action
+        # only the owner (or a superuser) may take — the same rule the
+        # permission handler enforces on the raw resource actions.
+        current, owner = _authorize_item(slug, item_id, "read_meta")
+        user = get_user_id()
+        if user != owner and user not in superusers:
+            raise HTTPException(status_code=403, detail="only the item's owner can delete it")
+        title = current.title
+        from ..resources.conversation import Conversation
+        from ..resources.conversation_goal import ConversationGoal
+        from ..resources.conversation_todos import ConversationTodos
+        from ..workflow.run import WorkflowRun
+        from .goal_offhours import _GoalStretch
+
+        by_item = (QB["item_id"] == item_id).build()
+
+        def _list_ids(model: type) -> list[str]:
+            record_rm = spec.get_resource_manager(model)
+            out: list[str] = []
+            for row in record_rm.list_resources(by_item):
+                rid = row.info.resource_id  # ty: ignore[unresolved-attribute]
+                assert isinstance(rid, str)
+                out.append(rid)
+            return out
+
+        def _sweep_rows(conv_ids: list[str], run_ids: list[str]) -> None:
+            """Conversations (soft-deleted ones included — the cascade must not
+            leave what a soft delete already hid), each conversation's SATELLITE
+            rows (goal / todos / off-hours stretch key on `resource_id ==
+            conversation_id`, #613/#615 — an orphaned ACTIVE off-hours goal
+            makes the sweeper claim-crash-release every tick, forever), and the
+            workflow runs. Permanent, so blobs die too. Satellite models are
+            registered conditionally (a deploy without the goal feature lacks
+            some), hence the KeyError tolerance."""
+            conv_rm = spec.get_resource_manager(Conversation)
+            run_rm = spec.get_resource_manager(WorkflowRun)
+            satellite_rms = []
+            for satellite in (ConversationGoal, ConversationTodos, _GoalStretch):
+                # Resolved OUTSIDE the per-row suppress: only "this deploy never
+                # registered the model" is tolerable here — a KeyError from
+                # inside a delete would be a real failure to surface.
+                with contextlib.suppress(KeyError):
+                    satellite_rms.append(spec.get_resource_manager(satellite))
+            for cid in conv_ids:
+                for satellite_rm in satellite_rms:
+                    with contextlib.suppress(ResourceIDNotFoundError, ResourceIsDeletedError):
+                        satellite_rm.permanently_delete(cid)
+                with contextlib.suppress(ResourceIDNotFoundError):
+                    conv_rm.permanently_delete(cid)
+            for rid in run_ids:
+                with contextlib.suppress(ResourceIDNotFoundError):
+                    run_rm.permanently_delete(rid)
+
+        try:
+            # The environment FIRST, because it is the one step that can refuse:
+            # close_session finds the sandbox through session/address/listing,
+            # writes back, kills — and a reachable-but-slow host raises
+            # SandboxBusy → 503 with NOTHING destroyed yet. Better to refuse
+            # the delete than to sweep durable storage under a live sandbox.
+            await registry.close_session(item_id)
+            # Stop every chat's turn machinery. The engine keys are per CHAT:
+            # the default chat rides the item_id key (its forget also bumps the
+            # cross-pod epoch, so a peer pod's default-chat turn dies too);
+            # every other chat keys on its own conversation id, and those
+            # forgets are pod-local — #349's cross-pod window applies to them,
+            # the same exposure `close` has today.
+            conv_ids = await asyncio.to_thread(_list_ids, Conversation)
+            run_ids = await asyncio.to_thread(_list_ids, WorkflowRun)
+            await turn_engine.forget(item_id)
+            for cid in conv_ids:
+                await turn_engine.forget(cid)
+            # Once more, idempotently: between the first close and the forgets
+            # above, an in-flight turn's next file op may have re-acquired a
+            # fresh session for the same shared dir (#345's designed recovery).
+            # A second close reaps exactly that milliseconds-wide re-acquire,
+            # so the purge below cannot race a resurrected sandbox and the
+            # mirror sweeper has nothing left to write back.
+            await registry.close_session(item_id)
+            # The ADDRESS row goes too. `close` deliberately keeps it (a stale
+            # row is harmless; deleting one risks erasing a peer's live
+            # rebuild), but after THIS cascade there is no item left for a
+            # peer to legitimately rebuild — a kept row would only point at a
+            # dir the sweep removed.
+            if registry.address is not None:
+                await registry.address.forget(item_id)
+            # Every file and directory record, permanently — what makes the
+            # blobs collectable by the existing GC.
+            await filestore.purge(item_id)
+            # Off the event loop: pg round-trips per row would otherwise
+            # serialise the whole pod (the #657 class).
+            await asyncio.to_thread(_sweep_rows, conv_ids, run_ids)
+            # Refund the quota: the ledger row goes with the item. This is THE
+            # orphan that motivated the cascade — frozen at its last
+            # measurement and charged to the owner forever, with no caller for
+            # `forget` and no way to resolve the owner once the item row was
+            # gone. (A peer pod's in-flight measurement can still land between
+            # this and the row delete below and re-create the row — a window of
+            # seconds, bounded by the access-facts TTL; #778's sweep is the
+            # safety net if it ever bites.)
+            if disk_ledger is not None:
+                await disk_ledger.forget(item_id)
+        except (HTTPException, SandboxBusy):
+            raise  # already an honest answer (SandboxBusy → the global 503)
+        except Exception as exc:  # noqa: BLE001 — a half-swept delete must say so
+            _LOGGER.warning("delete_app_item: sweep failed for %s", item_id, exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "deleting the item's storage failed partway; the item "
+                    "still exists — retry the delete to resume the sweep "
+                    f"({type(exc).__name__})"
+                ),
+            ) from exc
+        # The row goes LAST — see the docstring.
+        await asyncio.to_thread(rm.permanently_delete, item_id)
+        # The access-facts cache would otherwise let an already-authorized
+        # writer re-create durable rows (and, via the disk gate, the ledger
+        # row) for a few seconds after the purge — same drop the permission
+        # setter does on revocation.
+        locator.forget_access(item_id)
+        # AFTER the row delete, so the activity stream never claims a delete
+        # that then failed; best-effort, so an activity hiccup can't undo a
+        # delete that already happened (mirrors the create route's tolerance).
+        with contextlib.suppress(Exception):
+            activity.record(
+                "item_deleted",
+                f"Deleted “{title}” and everything it owned",
+                {"item_id": item_id},
+            )
         return Response(status_code=status.HTTP_204_NO_CONTENT)

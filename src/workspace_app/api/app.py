@@ -7,10 +7,10 @@ from datetime import UTC, datetime, timedelta
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as importlib_version
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from agents.tracing import set_trace_processors
-from fastapi import APIRouter, FastAPI, Request, Response
+from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from specstar import SpecStar
@@ -20,6 +20,11 @@ from ..agent.config_catalog import AgentConfigCatalog
 from ..agent.context import AgentToolContext
 from ..apps.subagents import SubagentDef
 from ..config.schema import EnhancementSettings, OffHoursSettings, PerUserResources
+
+if TYPE_CHECKING:
+    # Annotation-only: `factories` composes THIS module, so a runtime import
+    # here would be circular. `SubagentModel` values arrive through parameters.
+    from ..factories import SubagentModel
 from ..files import WorkspaceFiles, WorkspaceFull
 from ..filestore.protocol import FileNotFound, FileStore
 from ..health import CheckRegistry, CheckResult
@@ -113,6 +118,7 @@ from .version_header import VersionHeaderMiddleware
 from .work_calendar_routes import register_work_calendar_routes
 from .workflow_exec import WorkflowExecutor
 from .workflow_routes import register_workflow_routes
+from .wui_routes import register_wui_routes
 
 logger = logging.getLogger(__name__)
 
@@ -197,6 +203,10 @@ def create_app(
     filestore: FileStore,
     runner: AgentRunner,
     agent_config_catalog: AgentConfigCatalog | None = None,
+    # plan-subagent-model-choice: the operator's curated engines a run_agent
+    # call may pick (`resolve_subagent_models(settings)` in production).
+    # Empty ⇒ the tool grows no `model` argument anywhere.
+    subagent_models: tuple[SubagentModel, ...] = (),
     kb_embedder: Embedder | None = None,
     kb_code_embedder: Embedder | None = None,  # P3.0 code-specialised embedder
     kb_image_embedder: ImageEmbedder | None = None,  # #513 image embedder (embedding_img)
@@ -1313,6 +1323,31 @@ def create_app(
     # #177: generate specstar's CRUD routes onto the /api router (not the app),
     # but DON'T include it yet — more hand-written routes are added to `api`
     # below; we include it once, after all routes exist, before spec.openapi.
+    # plan-delete-item-cascade: the generic `/permanently` on a WorkItem is the
+    # old footgun — it deletes the ROW and orphans everything the item owns
+    # (files, blobs, sandbox, and a disk-ledger row charged to the owner
+    # forever). Registered BEFORE spec.apply so first-match-wins refuses it and
+    # names the cascade route. The generic SOFT delete stays: no FE caller, and
+    # the cascade's own internal `rm.permanently_delete` is untouched (this
+    # blocks the HTTP door, not the resource action).
+    from ..apps.registry import registered_apps, resource_route
+
+    def _block_raw_permanent(kebab: str) -> None:
+        @api.delete(f"{kebab}/{{resource_id}}/permanently", include_in_schema=False)
+        async def _refuse(resource_id: str) -> None:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "work items are deleted through DELETE /a/{slug}/items/{item_id} "
+                    "— the cascade that also removes the item's files, sandbox, "
+                    "conversations and disk-quota charge. This raw route would "
+                    "orphan all of that."
+                ),
+            )
+
+    for app_slug in registered_apps():
+        _block_raw_permanent(resource_route(app_slug))
+
     with boot_step("apply spec to backend (DB schema)"):
         spec.apply(app, router=api, auto_include=False)
 
@@ -1563,10 +1598,12 @@ def create_app(
         defn: SubagentDef,
         prompt: str,
         emit: OutputSink | None = None,
+        model: SubagentModel | None = None,
     ) -> str:
         """Run one sub-agent for the `run_agent` tool, relaying its work into the
         calling turn's tool card so a delegated task shows movement rather than a
-        card that sits there."""
+        card that sits there. `model` is the caller's pick from
+        `agents.subagent_models`, already resolved by the tool impl."""
 
         def relay(ev: AgentEvent) -> None:
             if emit is None:
@@ -1574,7 +1611,7 @@ def create_app(
             if line := progress_line(ev):
                 emit(line.encode())
 
-        return await run_agent_task(runner, parent_ctx, defn, prompt, on_event=relay)
+        return await run_agent_task(runner, parent_ctx, defn, prompt, model=model, on_event=relay)
 
     # #506: close the card-gen loop — swap the coordinator's fallback (open-loop)
     # drafter for the AGENTIC one when card drafting is enabled. #506/#577 follow-up:
@@ -1664,6 +1701,10 @@ def create_app(
         # #397: lets the request_wiki_update tool submit a user's wiki correction.
         wiki_coordinator=wiki_coordinator,
         run_agent=_delegate,
+        # plan-subagent-model-choice: the operator's curated run_agent engines
+        # (production: `resolve_subagent_models(settings)`), stamped onto every
+        # turn ctx so `_agent_kwargs` can shape the tool's schema.
+        subagent_models=subagent_models,
     )
 
     # #624: let the budget consult what the RUNNER has learned about each
@@ -1901,6 +1942,11 @@ def create_app(
         insights_collection_id=insights_collection_id,
         kb_chat_pipeline=kb_chat_pipeline,
         superusers=superusers,
+        # plan-delete-item-cascade: deleting an item refunds its quota — the
+        # ledger row goes with the item. (A peer pod's in-flight measurement
+        # can still land in the seconds between forget and the row delete and
+        # re-create it; #778's deferred sweep is the safety net.)
+        disk_ledger=disk_ledger,
     )
 
     # On app.state so the routes read the CURRENT list rather than one closed
@@ -1921,6 +1967,15 @@ def create_app(
         packages=packages,
         locator=locator,
         sandbox=sandbox,
+    )
+
+    register_wui_routes(
+        api,
+        locator=locator,
+        sandbox=sandbox,
+        registry=registry,
+        packages=packages,
+        prebuilt_dir=prebuilt_dir,
     )
 
     register_capability_routes(

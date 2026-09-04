@@ -136,6 +136,12 @@ class MigratingFileStore:
     async def delete(self, workspace_id: str, path: str) -> None:
         await self._delete_from_both(workspace_id, path, "delete")
 
+    async def purge(self, workspace_id: str) -> None:
+        # Both sides: a purge that misses the legacy store would let the next
+        # read-through resurrect the workspace it just deleted.
+        await self._primary.purge(workspace_id)
+        await self._legacy.purge(workspace_id)
+
     async def rmdir(self, workspace_id: str, path: str) -> None:
         await self._delete_from_both(workspace_id, path, "rmdir")
 

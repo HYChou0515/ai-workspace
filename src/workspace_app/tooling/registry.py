@@ -278,6 +278,58 @@ def build_function_tools(
     return cap_tool_outputs([_to_function_tool(pkg, cmd) for pkg, cmd in selected])
 
 
+def allowed_command_names(
+    packages: Sequence[PackageInfo],
+    allowed: list[str] | None,
+) -> list[str]:
+    """Every package command this allow-list grants, by the flat name a caller
+    invokes.
+
+    The model cannot tell one of these from a built-in by looking: `data-fetch`
+    and `read_file` are both just names in its toolset. So anything that has to
+    say WHICH of an agent's tools are package tools — a WUI's `tools:`
+    declaration is the case this exists for — has to be told, and told from the
+    same expansion the toolset itself was built from."""
+    every = [p.name for p in packages]
+    selected = _select_commands(packages, allowed if allowed is not None else every)
+    return sorted({cmd.name for _, cmd in selected})
+
+
+def find_allowed_command(
+    packages: Sequence[PackageInfo],
+    allowed: list[str] | None,
+    name: str,
+) -> tuple[PackageInfo, CommandInfo] | None:
+    """The package command called ``name``, if this allow-list grants it.
+
+    Resolution goes through the SAME expansion and collision check the model's
+    toolset is built from (`build_function_tools`), so a caller outside a turn
+    cannot reach a command the agent in that item could not — including the
+    `allowed=None` "the deploy did not restrict" case, which means everything
+    there and has to mean everything here.
+
+    Commands are matched on their FLAT name, which is what a caller sees: a
+    package is a delivery unit, but `data-fetch` is what gets invoked."""
+    every = [p.name for p in packages]
+    selected = _select_commands(packages, allowed if allowed is not None else every)
+    _check_collisions(selected)
+    return next(((pkg, cmd) for pkg, cmd in selected if cmd.name == name), None)
+
+
+async def exec_package_command(
+    actx: AgentToolContext,
+    handle: SandboxHandle,
+    pkg: PackageInfo,
+    cmd_name: str,
+    args_json: str,
+) -> ExecResult:
+    """Run one package command. The public face of `_exec_tool`, so a caller
+    outside a turn (a WUI's `callTool`) goes through the same launcher, the same
+    item environment and the same exit-code contract as the model's call —
+    "inject at the call site" was only one place until it was two."""
+    return await _exec_tool(actx, handle, pkg, cmd_name, args_json)
+
+
 def _select_commands(
     packages: Sequence[PackageInfo],
     allowed: Iterable[str],
@@ -356,9 +408,10 @@ async def _exec_tool(
 ) -> ExecResult:
     """Run one tool command, with the item's environment variables.
 
-    Both dispatch paths funnel through here — the agent's call and the #285
-    chart re-render — because "inject at the call site" is only one place until
-    it is two, and the second one is where it silently stops happening.
+    Every dispatch path funnels through here — the agent's call, the #285 chart
+    re-render, and a WUI's `callTool` — because "inject at the call site" is only
+    one place until it is two, and the second one is where it silently stops
+    happening.
 
     The variables are named PER CALL rather than left in the sandbox: the tool
     and the agent share a uid, so anything on disk is readable by both or by

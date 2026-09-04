@@ -34,6 +34,7 @@ import { UserPicker } from "../../components/UserPicker";
 import { docHref } from "../kb/kbLinks";
 import { type AgentState, useOptionalAgent } from "../../hooks/useAgent";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
+import { subscribeAgentDraft } from "../../lib/agentDraftBus";
 import { chatEmptyHint } from "../../lib/chatCopy";
 import { modCombo } from "../../lib/platform";
 import { nameForPreset, pickerModels, presetForName } from "./agentPicker";
@@ -374,6 +375,16 @@ export function AgentPanel({
   const chatScrollRef = useStickToBottom<HTMLDivElement>(log);
   const t = useT();
   const [draft, setDraft] = useState("");
+  // A WUI hands its error/pick report over rather than making someone who
+  // cannot open a console retype it. Offered into the box, never sent: what to
+  // say next is still theirs.
+  useEffect(
+    () =>
+      subscribeAgentDraft(investigationId, (text) =>
+        setDraft((d) => (d.trim() ? `${d.replace(/\s+$/, "")}\n\n${text}` : text)),
+      ),
+    [investigationId],
+  );
   const [mentions, setMentions] = useState<string[]>([]);
   // #198: live upload state for the composer attach — null when idle, else the
   // aggregate byte/file progress driving the bar. `dragging` flags the drop overlay.

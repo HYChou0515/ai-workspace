@@ -319,6 +319,7 @@ def register_quota_routes(
         owner = locator.owner_of(item_id)
         if owner is None and activity is not None:
             owner = await activity.owner_of(item_id)
+
         # The debtor, a superuser, or someone the owner made a manager of this
         # item. That last one is not generosity: `change_permission` is what
         # lets a person resize the environment, §1.4 makes closing the ONLY way

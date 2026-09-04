@@ -24,8 +24,12 @@ export function useChatActions(slug: string, resourceRoute: string | undefined) 
   });
 
   const remove = useMutation({
-    mutationFn: (id: string) => api.deleteAppItem(route, id),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: qk.appItems(slug) }),
+    mutationFn: (id: string) => api.deleteAppItem(slug, id),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: qk.appItems(slug) });
+      // The cascade refunds the disk quota — My resources must show it.
+      void qc.invalidateQueries({ queryKey: qk.myResources });
+    },
   });
 
   return {

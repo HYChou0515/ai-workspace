@@ -21,7 +21,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from functools import cache
 from importlib import resources
 from importlib.resources.abc import Traversable
@@ -329,13 +329,52 @@ def effective_item_skills(
     return out
 
 
+def describe_wui_tools(names: Sequence[str]) -> str:
+    """The tools a WUI in this app may call, named.
+
+    This CANNOT live in the skill: which tools an app grants is per-app, and the
+    model cannot tell a package tool from a built-in by looking — `data-fetch`
+    and `read_file` are both just names in its toolset. Left to guess, it either
+    declares something a WUI can never call or never declares anything."""
+    if not names:
+        return (
+            "## Tools this app offers its WUIs\n\n"
+            "None. This app grants no package tools, so a page here cannot reach "
+            "anything outside the item — leave `tools:` out of the view file."
+        )
+    return "\n".join(
+        [
+            "## Tools this app offers its WUIs",
+            "",
+            "These, and only these, may go in a view file's `tools:` and be called",
+            "with `workspace.callTool(...)`. Your other tools are built-ins; a page",
+            "cannot call them, and declaring one fails at the call:",
+            "",
+            *(f"- `{n}`" for n in names),
+        ]
+    )
+
+
 def augment_shared_skill_body(
-    name: str, body: str, app_slug: str | None, profile: str | None
+    name: str,
+    body: str,
+    app_slug: str | None,
+    profile: str | None,
+    *,
+    wui_tools: Sequence[str] | None = None,
 ) -> str:
     """Append machine-derived, always-current detail to a shared skill whose static body is
     deliberately purpose-only (plan §3). ``author-workflow`` gets the DSL grammar (derived
     from the schema — P5) + this app's capability/tool boundaries (P6), so the AI drafts
-    against the real grammar and knows what it can/can't do, without the skill drifting."""
+    against the real grammar and knows what it can/can't do, without the skill drifting.
+    ``wui`` gets the tools this app offers its pages, for the same reason.
+
+    ``wui_tools`` is ``None`` when the caller had no resolved toolset to ask —
+    then the section is OMITTED rather than rendered empty, because "this app
+    grants none" and "nobody asked" are different claims and only one of them is
+    ever safe to make up."""
+    if name == "wui":
+        return body if wui_tools is None else "\n\n".join([body, describe_wui_tools(wui_tools)])
     if name != "author-workflow":
         return body
     from ..agent.tools import _profile_tool_ceiling

@@ -26,6 +26,11 @@ export const VIEW_KIND = {
   /** Cross-type: rendered by the container ahead of the dispatcher, so it is
    * not a registry entry — but the registry still reserves the name. */
   health: "health",
+  /** A WUI: the view file's FOLDER, run as a page. Like `health` it is rendered
+   * by the container ahead of the dispatcher — it draws no entity records, it
+   * needs the view file's own path to find its folder, and it wants the pane
+   * full-bleed rather than inside the entity panel's chrome. */
+  wui: "wui",
 } as const;
 
 export type ViewKind = string;

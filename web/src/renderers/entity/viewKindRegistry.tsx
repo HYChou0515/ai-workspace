@@ -46,7 +46,7 @@ const registry = new Map<string, ViewRenderer>();
  * here can win them. Without this, registering `health` succeeded and produced a
  * component that simply never rendered — the exact silent outcome the duplicate
  * check exists to prevent, on the one built-in name a plug-in might reuse. */
-const RESERVED = new Set<string>([VIEW_KIND.health]);
+const RESERVED = new Set<string>([VIEW_KIND.health, VIEW_KIND.wui]);
 
 /** Add a view kind. Throws on a name that is taken rather than silently
  * replacing the incumbent — two renderers answering to one `view:` has no right
