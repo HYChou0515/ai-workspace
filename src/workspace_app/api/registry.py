@@ -640,14 +640,26 @@ class InvestigationRegistry:
                     # SandboxNotFound — that IS the goal, so still drop the session.
                     with contextlib.suppress(SandboxNotFound):
                         await self.sandbox.kill(s.handle)
+                    # Dropped HERE, with no await between it and the kill.
+                    # Shutdown cancels this task and only then calls `close_all`,
+                    # so a tick parked at the `forget` below lost the removal —
+                    # `CancelledError` is not an `Exception` and the guard at the
+                    # bottom of this loop does not catch it — and `close_all`
+                    # then killed a sandbox that was already gone. Harmless (the
+                    # second kill is a suppressed `SandboxNotFound` on a dying
+                    # pod), but it made the idle-kill test a coin flip.
+                    del self._sessions[inv_id]
                     if self.activity is not None:
+                        # A heartbeat nothing gets to clear ages out on its own,
+                        # which is why this is the side of the line to be on.
                         await self.activity.forget(inv_id)
                     logger.info(
                         "registry: reaped idle sandbox %s for item %s (globally idle)",
                         s.handle.id,
                         inv_id,
                     )
-                del self._sessions[inv_id]
+                else:
+                    del self._sessions[inv_id]
                 killed.append(inv_id)
             except Exception:  # noqa: BLE001 — #366: one bad item must not abort the sweep
                 logger.warning(

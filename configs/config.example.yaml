@@ -155,6 +155,15 @@
 #                              # idle tick, least-recently-used first, and a
 #                              # cache a live sandbox may still write to is
 #                              # never evicted however full the disk.
+#                              # ⚠️ Applies on `kind: local` ONLY when the
+#                              # userns jail is off (isolate: false, or
+#                              # isolation.enabled: true) — the jail keeps each
+#                              # sandbox's uv cache inside it, where no
+#                              # cross-sandbox sweeper can see it. On `kind:
+#                              # http` the caches are the sandbox-host's:
+#                              # SANDBOX_HOST_UV_CACHE_MAX_BYTES is the live
+#                              # one there. Setting it where it does not apply
+#                              # logs a warning at startup rather than pretending.
 #   # #345 per-item OS-user + cgroup isolation (ported from the HTTP sandbox host).
 #   # Off by default — needs CAP_SETUID/SETGID + a writable cgroup v2 tree, which
 #   # most clusters forbid; the shared-dir fix above cures the data loss without

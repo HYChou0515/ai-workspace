@@ -6,9 +6,11 @@
 > 「被推翻的宣稱」和「要當心的代價」兩種,所以那個記號的數量不是前者的計數 —— 不要
 > 只讀這段摘要,也不要用數 ⚠️ 來代替讀它們。
 >
-> 其中**四條各自足以讓功能對使用者完全無效**:venv 建在 shim 不看的地方、shim 用
+> 其中**五條各自足以讓功能對使用者完全無效**:venv 建在 shim 不看的地方、shim 用
 > symlink 指進 venv(CPython 會解析穿過去)、`uv sync` 因為父目錄權限根本建不出 venv、
-> 以及失敗時**錯誤訊息是空的**(讀 `stdout`,而 uv 全寫在 `stderr`)。四條的共通點一樣:
+> 失敗時**錯誤訊息是空的**(讀 `stdout`,而 uv 全寫在 `stderr`),以及 shim 排在 PATH
+> 最前面讓 `uv sync` **把 venv 建在 shim 上**(於是 `python` exec 自己,無限迴圈、零輸出)。
+> 最後那條只有 CI 重現得出來,是它自己一類;**前四條的共通點是同一個**:
 > 兩邊單元測試全綠,而**替身都和被測程式一起錯**。真因是**全 repo 沒有任何測試真的在真
 > sandbox 裡跑過一次 `uv sync`**。那個測試現在有了 ——
 > `tests/sandbox/test_project_env_e2e.py`,而且它的**大部分會在 CI 跑**(零依賴的專案
@@ -326,6 +328,58 @@ per-call timeout 參數 —— 它吃 backend 實例層級的 `exec_timeout`,**�
   保證 —— 不影響一般安裝,但清 cache 那個動作要小心。
 - **venv 在 infra 區 = 使用者在檔案樹裡看不到它**。這是刻意的(不佔額度、不會被誤刪),
   但 `uv` 預設要在專案旁邊建 `.venv`,得用 `UV_PROJECT_ENVIRONMENT` 指出去。
+
+- ⚠️ **搬走一段工作,也會搬走它順手提供的保證。** P27 把環境準備從 turn 的 pre-warm
+  移到 agent 第一次 exec —— 理由是對的(pre-warm 沒有 sink,而且成功會被記住,導致
+  `uv lock --check` 整輪都不跑)。但 pre-warm 同時是**唯一的序列化點**:它在
+  `_events` 之前 await 完,所以任何 tool 跑起來時旗標已經是 True。移走之後,同一則
+  assistant 訊息裡的兩個 tool call(SDK 每個開一個 task、不設上限,而正式環境的後端
+  確實會平行發)就會在同一個專案目錄開兩個 `uv sync`。實測 1 → 2。同一個窗口對
+  `create` + `provision_tools` 本來就開著(只是被 pre-warm 蓋住),所以答案是
+  `AgentToolContext` 上一把 `asyncio.Lock` 蓋住整個 `ensure_sandbox`。
+  **看新機制對不對,用 regression lens,不要用 defect lens**:單獨讀那行修改它是對的
+  —— 它就是為了對才被寫出來的 —— 壞掉的是舊機制**順便**做的事。
+- ⚠️ **同一個順手保證的第二受害者:workflow 的 `run:` 節點。** 它走
+  `registry.ensure_handle`,從來沒要過環境;以前是靠前面任何一個 agent 節點的 pre-warm
+  順手準備好。現在沒有了,`python` 靜默退回 carrier,跑出一個沒有 profile 套件的答案。
+  順帶把「`run:` 節點前面沒有 agent 節點」這個**一直都壞**的情況一起補掉。
+- ⚠️ **per-item 的資源,不能在 per-handle 的事件上釋放。** host 的 `kill` 是按 handle 的,
+  而 uv cache 是按 item 的,且 host 每次 create 都發新 uuid —— 所以一個 item 可以有兩個
+  活著的 sandbox,那正是 #366 重建競賽每次都會產生的狀態(兩個 app pod 喚醒同一個冷
+  item,輸的那個 kill 掉自己的孤兒)。在那個 kill 上把 cache 交還服務,等於把**贏家**
+  正在 `uv sync` 的 cache 權限收走(EACCES → turn 死)。要問「這是不是這個 item 最後
+  一個活著的 sandbox」。
+- ⚠️ **同一個 override 在 app 側連理由都不成立。** 它的 docstring 說「這個 backend 把
+  uid 還給 pool」,但同一個檔案往上十二個方法的 class docstring 說的是相反的,而且那個
+  才對:`uid_base + xxhash(item_id) % uid_range`,每個 pod 一樣、永不回收。沒有下一個
+  租戶要防,只剩上面那個窗口要開,所以整個 override 直接刪掉。
+- ⚠️ **降級一條 lint / type 規則,要降在債務所在的範圍。** P28 把 host 的
+  `invalid-argument-type` 整包降成 `ignore`,但 51 條診斷**全部**在 `tests`,`src` 是零 ——
+  於是在 `src` 注入一個真正型別錯誤的呼叫,gate 照樣全綠。那正是 P28 本身要修的
+  「綠在零檔案上」,只是換了個範圍。用 `[[tool.ty.overrides]] include = ["src/**"]`
+  把降級關在 `tests` 裡,兩個方向都驗過。
+  ⚠️ 並且:讓 `ty` 不再往上走到 repo 根設定的,是**這裡有任何一張 `[tool.ty*]` 表**,
+  不是 `exclude = []`。原本的註解把功勞掛錯了 —— 實測:單獨刪掉哪一半都照樣檢查全部檔案。
+- ⚠️ **「這個旋鈕在這裡沒作用」的警告,要裝在每一個不能兌現它的入口。** 第一版只寫給
+  `kind: http`;`kind: docker` 和**套了 userns jail 的 `kind: local`**(在支援 userns 但
+  沒有 CAP_SETUID 的機器上就是 auto 預設)一樣沒作用、一樣安靜。而且判斷「這份有沒有
+  套 jail」要**問 backend**(`keeps_item_uv_caches`),不要在 factory 再推一次 ——
+  `isolate=None` 是在 backend 裡解析的,抄第二份就是第二條會跟第一條吵架的規則。
+- ⚠️ **沒設上限時,連「該淘汰誰」都不要問。** 跨 pod 檢查是「每個 cache 目錄一次
+  specstar 讀取,每跳一次」,而沒有上限時什麼都不會被淘汰、`.uv-cache` 又會每個 item
+  長一格 —— 所以**問這件事的成本,恰好在答案不可能有用的那個設定下無上限成長**。
+- ⚠️ **活性的答案,要在「動手的那一刻」才算數。** 跨 pod 檢查是每個候選一次循序 await,
+  後面 backend 還要自己走一次目錄,所以第一個答案在真正刪除時已經舊了(review 實測
+  426 ms 的窗口,而且刪掉了另一個 pod 已經開始填的 cache)。本 pod 那一半只是查個
+  dict,所以在 sweep 前重讀一次。
+- ⚠️ **`contextlib.suppress` 活下來了,但沒說話。** 它抄的兩個前例(`kill_idle` /
+  `mirror_warm`)都有 `logger.warning(..., exc_info=True)`。而現在會從那裡拋出來的是
+  specstar 呼叫 —— 它掛掉就等於上限無限期停止套用,而且「超過上限」那句警告蓋不到,
+  因為它只在 sweep **跑完**時才印。
+- ⚠️ **一個會丟掉位元組的 sink,不是「沒有 sink」。** 非串流那條路把
+  `ctx.on_exec_output` 設成 `lambda b: None` —— 對 exec 輸出的描述是誠實的,但這個屬性
+  是整個 app 用來問「有沒有人看得到」的,所以 `uv lock --check` 每輪都多跑一次沙盒指令、
+  把答案寫進黑洞。設 `None` 就好,那本來就是 KB turn 一直在用的值。
 
 ## 為什麼 venv 不放在 workspace 裡
 

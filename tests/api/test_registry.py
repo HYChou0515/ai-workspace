@@ -1,3 +1,4 @@
+import asyncio
 import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -1637,4 +1638,45 @@ async def test_an_item_woken_while_the_sweep_was_asking_is_still_protected():
     )
     assert "really-idle" not in sandbox.swept_with, (
         "and the freshness must not turn into protecting everything"
+    )
+
+
+async def test_a_reap_cancelled_after_the_kill_still_drops_the_session():
+    """Shutdown cancels the reaper mid-tick, and the tick has to be over by
+    then or the sandbox is killed twice.
+
+    `lifespan` cancels the background tasks, awaits them, and THEN calls
+    `close_all`. So a reaper parked at an await between `sandbox.kill` and the
+    session removal loses the removal — `CancelledError` is not an `Exception`
+    and the per-item guard below does not catch it — and `close_all` then finds
+    a session whose sandbox is already gone and kills it again. Harmless in
+    production (`SandboxNotFound` is suppressed, and it is the last thing a pod
+    does), but `test_idle_kill.py::test_idle_killer_reaps_session_past_threshold`
+    is a coin flip on it: measured 1-in-15 to 2-in-15 across 30 runs.
+
+    The window is `activity.forget`, a heartbeat cleanup that nothing depends
+    on being finished. So the session is dropped FIRST, with no await between
+    the kill and the drop — and a tick that never reaches `forget` leaves a
+    heartbeat that ages out on its own.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    class _CancelsOnForget(_FakeActivity):
+        async def forget(self, item_id: str) -> None:
+            raise asyncio.CancelledError
+
+    sandbox = _CountingSandbox()
+    activity = _CancelsOnForget()
+    registry = InvestigationRegistry(sandbox=sandbox, activity=activity)
+    s = await registry.session("ws-1")
+    await registry.ensure_handle(s)
+    s.last_active = datetime.now(UTC) - timedelta(minutes=30)
+    activity.ms.clear()  # no pod has touched the shared dir ⇒ globally idle too
+
+    with pytest.raises(asyncio.CancelledError):
+        await registry.kill_idle(threshold=timedelta(minutes=15))
+
+    assert registry._sessions == {}, (
+        "the sandbox is already dead; leaving the session behind means close_all "
+        f"kills it a second time: {registry._sessions}"
     )
