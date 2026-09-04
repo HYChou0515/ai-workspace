@@ -33,7 +33,13 @@ from ..agent.context import AgentToolContext
 from ..apps.manifest import load_app_manifest
 from ..apps.skills import advertised_workspace_skills, effective_item_skills
 from ..apps.subagents import SubagentDef, load_subagents
-from ..context_budget import ContextLimit, ContextUsage, catalog_limit, estimate_tokens
+from ..context_budget import (
+    DEFAULT_MAX_TOKENS_WINDOW_RATIO,
+    ContextLimit,
+    ContextUsage,
+    catalog_limits,
+    estimate_tokens,
+)
 from ..entity.brief import entity_schema_brief
 from ..entity.catalog import discover_catalog
 from ..sandbox.protocol import Sandbox, SandboxSpec
@@ -69,6 +75,12 @@ RunSubagent = Callable[..., Awaitable[tuple[str, "list[Citation]"]]]
 RunAgent = Callable[..., Awaitable[str]]
 
 logger = logging.getLogger(__name__)
+
+#: Ceilings already announced, as (model, source, tokens) — so the line that
+#: says which rung answered is written once per distinct outcome per pod rather
+#: than once per turn. Module-level, like `_NUM_CTX_SEEN` beside it: the fact
+#: belongs to the process, and two builders in one pod should not each repeat it.
+_CEILING_SAID: set[tuple[str, str, int | None]] = set()
 
 
 async def resolve_item_tools(sandbox: Sandbox, locator: ItemLocator, item_id: str) -> ExternalTools:
@@ -145,6 +157,7 @@ class TurnContextBuilder:
         history_max_messages: int,
         history_max_context_tokens: int,
         context_limit: int | None = None,
+        max_tokens_window_ratio: float = DEFAULT_MAX_TOKENS_WINDOW_RATIO,
         wiki_coordinator: WikiMaintenanceCoordinator | None = None,
         run_agent: RunAgent | None = None,
         subagent_models: tuple[SubagentModel, ...] = (),
@@ -193,12 +206,26 @@ class TurnContextBuilder:
         # (tests, replay) has nothing to learn from. None ⇒ the ladder simply
         # skips that rung.
         self.learned_limit_fn: Callable[[str, str | None], int | None] | None = None
+        # The proxy rung, wired to the runner for the same reason as the one
+        # above: only the runner knows the deploy's endpoint, and an
+        # `AgentConfig` whose `llm_base_url` is "" is SAYING "use that one".
+        # Reading the config's field here instead is how the first version of
+        # this rung came to do nothing on the very deployment it was for.
+        # None ⇒ the ladder simply skips it (tests, replay).
+        self.endpoint_limits_fn: Callable[[str, str | None], Any] | None = None
         # #624 §9.12: the catalog rung, memoised per model and filled OFF the
         # event loop (see `deferred_lookup`). `_catalog_fn` is a plain attribute
         # rather than a direct call so a test can stand in for the slow, untimed
         # registry lookup — the hazard itself is what needs driving.
         self._catalog_cache: dict[str, int | None] = {}
-        self._catalog_fn: Callable[[str], int | None] = catalog_limit
+        # Returns BOTH registry figures, because they answer different rungs:
+        # `max_input_tokens` is exact, while `max_tokens` is documented upstream
+        # as meaning one of two things — so it is derived and labelled, exactly
+        # like a proxy's.
+        self._catalog_fn: Callable[[str], Any] = catalog_limits
+        # What fraction of a stated `max_tokens` to treat as the window, when
+        # that is the only figure the proxy gave us. See `history` settings.
+        self._max_tokens_window_ratio = max_tokens_window_ratio
 
     def _overhead_for(
         self,
@@ -229,27 +256,100 @@ class TurnContextBuilder:
         we budget against one window and are served another, which is exactly the
         shape of the silent truncation this resolves against.
         """
-        from ..context_budget import deferred_lookup, resolve_context_limit
+        from ..context_budget import (
+            deferred_lookup,
+            resolve_context_limit,
+            window_from_max_tokens,
+        )
 
         if agent_config is None:
             return ContextLimit(tokens=None, source="unknown")
-        return resolve_context_limit(
-            configured=self._context_limit,
-            # #624: what the endpoint told us in a past rejection. Wired to the
-            # runner's learner — the adversarial review caught this as a dangling
-            # `learned=None  # P3 feeds this` comment that nothing ever fed.
-            learned=self._learned_limit(agent_config),
-            # #624 §9.12: NOT a table lookup, whatever its name says — litellm
-            # resolves an `ollama/*` name by asking the daemon, untimed (measured
-            # 129,781 ms against an address that does not answer). This runs on
-            # every turn, inside `async def build_chat_turn`, so it is deferred
-            # off the loop like the probe.
-            catalog=deferred_lookup(
-                self._catalog_cache,
-                agent_config.model,
-                lambda: self._catalog_fn(agent_config.model),
+        endpoint = self._endpoint_limits(agent_config)
+        # #624 §9.12: NOT a table lookup, whatever its name says — litellm
+        # resolves an `ollama/*` name by asking the daemon, untimed (measured
+        # 129,781 ms against an address that does not answer). This runs on every
+        # turn, inside `async def build_chat_turn`, so it is deferred off the
+        # loop like the probe.
+        catalog = deferred_lookup(
+            self._catalog_cache,
+            agent_config.model,
+            lambda: self._catalog_fn(agent_config.model),
+        )
+        # A stated `max_tokens` is the same ambiguous figure whichever source
+        # holds it — litellm's registry documents its own as "LEGACY parameter.
+        # set to max_output_tokens if provider specifies it. IF not set to
+        # max_input_tokens" — so both feed the one DERIVED rung rather than one
+        # of them being read as exact. The endpoint's own wins: it describes this
+        # deployment, while the registry describes a model name.
+        ambiguous = getattr(endpoint, "max_tokens", None) or getattr(catalog, "max_tokens", None)
+        return self._announce(
+            agent_config.model,
+            resolve_context_limit(
+                configured=self._context_limit,
+                # #624: what the endpoint told us in a past rejection. Wired to the
+                # runner's learner — the adversarial review caught this as a dangling
+                # `learned=None  # P3 feeds this` comment that nothing ever fed.
+                learned=self._learned_limit(agent_config),
+                # What a proxy in front of the model says it was configured with.
+                # A relayed claim rather than the enforcer speaking, so it sits below
+                # `learned` — but above the registry, which is keyed on a model name
+                # this endpoint may not even use.
+                declared=getattr(endpoint, "max_input_tokens", None),
+                catalog=getattr(catalog, "max_input_tokens", None),
+                # Last, and derived rather than stated — see `window_from_max_tokens`
+                # for why the ratio cannot be a constant.
+                estimated=window_from_max_tokens(
+                    ambiguous,
+                    ratio=self._max_tokens_window_ratio,
+                ),
             ),
         )
+
+    def _announce(self, model: str, limit: ContextLimit) -> ContextLimit:
+        """Say once, per distinct outcome, which rung answered.
+
+        The rule this serves is the ladder's own: a number nobody stated must
+        never read like a measurement. Until this line, that held in the type
+        system and nowhere else — `ContextLimit.source` had no production reader,
+        so an estimate derived from an output cap and a window the endpoint
+        stated were the same integer with nothing to tell them apart.
+
+        It matters most where it is least visible. Production is reachable only
+        through the log aggregator, so this line IS how an operator checks
+        whether the ladder is working, and `unknown` is logged as loudly as the
+        rest: "nothing answered" is the diagnosis this whole feature exists for,
+        and it would be invisible if only the successes spoke.
+
+        Deduped per (model, source, tokens): one line per outcome per pod, not
+        one per turn. A per-turn line would bury the thing it exists to surface.
+        """
+        seen = (model, limit.source, limit.tokens)
+        if seen not in _CEILING_SAID:
+            _CEILING_SAID.add(seen)
+            logger.info(
+                "context ceiling for %s: %s (source=%s)",
+                model,
+                "unknown — history is not trimmed" if limit.tokens is None else limit.tokens,
+                limit.source,
+            )
+        return limit
+
+    def _endpoint_limits(self, agent_config: AgentConfig) -> Any:
+        """What a proxy in front of this model says it was configured with, or
+        None when nothing is wired or nothing answered.
+
+        The empty-string base_url is passed through UNTOUCHED: it means "the
+        deploy's endpoint", and resolving it is the runner's job. Turning it
+        into `None` here is what made this rung silent on a single-endpoint
+        deployment — the only shape it was written for."""
+        fn = self.endpoint_limits_fn
+        if fn is None:
+            return None
+        try:
+            return fn(agent_config.model, agent_config.llm_base_url or None)
+        except Exception:  # noqa: BLE001 — a probe must never break a turn
+            logger.debug("endpoint limits lookup failed", exc_info=True)
+            return None
 
     def _learned_limit(self, agent_config: AgentConfig) -> int | None:
         """What the endpoint stated in a past rejection, via the runner's
@@ -273,7 +373,30 @@ class TurnContextBuilder:
         from ..context_budget import context_usage
 
         return context_usage(
-            messages, limit=self._context_window(self._locator.resolve_agent_config(item_id))
+            messages, limit=self._credible_window(self._locator.resolve_agent_config(item_id))
+        )
+
+    def _credible_window(self, agent_config: AgentConfig | None) -> ContextLimit:
+        """The resolved ceiling, minus one that cannot be a window.
+
+        Three things read the ceiling — the history budget, the compaction
+        trigger, and the usage gauge — and every one of them does something
+        wrong with a derived number too small to hold the prompt: replay one
+        message, summarise the thread on every turn, or draw a bar past 100%
+        beside a chat that never compacts. The rule was written into the first
+        of those and immediately missed the other two, so it lives here, once,
+        and the three ask rather than each deciding.
+
+        `_budget_for` has its own call because it already holds the EXACT
+        overhead — prompt plus tool schemas — and should not re-estimate a
+        figure it measured. The other two size the system prompt only: cheap (no
+        schemas built, which is the 28 ms part) and the dominant term anyway.
+        """
+        from ..context_budget import estimate_tokens, usable_window
+
+        return usable_window(
+            self._context_window(agent_config),
+            overhead_tokens=estimate_tokens(getattr(agent_config, "system_prompt", "") or ""),
         )
 
     def compaction_plan_for(
@@ -293,7 +416,11 @@ class TurnContextBuilder:
         from .compaction import plan_for_budget
 
         cfg = self._locator.resolve_agent_config(item_id)
-        window = self._context_window(cfg)
+        # The same credibility test every other reader of the ceiling applies —
+        # and with the most at stake here, because a derived ceiling too small to
+        # hold the prompt would summarise the thread on EVERY turn, lossily and
+        # irreversibly, driven by a size measured against a number nobody stated.
+        window = self._credible_window(cfg)
         usage = self.usage_of(item_id, messages)
         # Deliberately NOT `_budget_for`. That budget is for HISTORY alone, so it
         # subtracts the system prompt and the tool schemas — and measuring those

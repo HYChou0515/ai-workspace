@@ -20,6 +20,7 @@ from ..agent.config_catalog import AgentConfigCatalog
 from ..agent.context import AgentToolContext
 from ..apps.subagents import SubagentDef
 from ..config.schema import EnhancementSettings, OffHoursSettings, PerUserResources
+from ..context_budget import DEFAULT_MAX_TOKENS_WINDOW_RATIO
 
 if TYPE_CHECKING:
     # Annotation-only: `factories` composes THIS module, so a runtime import
@@ -397,6 +398,7 @@ def create_app(
     # #624: the operator's declared context ceiling for this deploy's endpoint.
     # None ⇒ resolve per turn from the model registry; unknown ⇒ do not trim.
     context_limit: int | None = None,
+    max_tokens_window_ratio: float = DEFAULT_MAX_TOKENS_WINDOW_RATIO,
     # Operator-level KB retrieval enhancement defaults + LLM ceilings.
     # `None` ⇒ bundled `EnhancementSettings()` (light: expand=1, hyde=0,
     # rerank=on). __main__ threads `settings.kb.retrieval.enhancements`.
@@ -1698,6 +1700,10 @@ def create_app(
         # #624: the operator's declared ceiling for this endpoint (the escape
         # hatch); unset ⇒ resolved per turn, and unknown ⇒ no trimming.
         context_limit=context_limit,
+        # The last rung's fraction. Only reached when every stated source is
+        # silent, which is the normal state for a self-hosted model behind a
+        # proxy under a local alias.
+        max_tokens_window_ratio=max_tokens_window_ratio,
         # #397: lets the request_wiki_update tool submit a user's wiki correction.
         wiki_coordinator=wiki_coordinator,
         run_agent=_delegate,
@@ -1712,6 +1718,7 @@ def create_app(
     # after construction because the runner is injected, and duck-typed because
     # ScriptedAgentRunner (tests, replay) has nothing to learn from.
     turn_ctx.learned_limit_fn = getattr(runner, "learned_limit", None)
+    turn_ctx.endpoint_limits_fn = getattr(runner, "endpoint_limits", None)
 
     # ── replay diagnostics (#51 P4) ──────────────────────────────────
     # Read-only loaders: replay must never create/mutate anything, so

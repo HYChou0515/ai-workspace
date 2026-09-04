@@ -18,6 +18,9 @@ which never depended on an answer.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -25,6 +28,177 @@ logger = logging.getLogger(__name__)
 #: Kept short on purpose: this is a startup nicety, not a dependency. A slow or
 #: wrong endpoint must cost a moment, not a boot.
 PROBE_TIMEOUT_S = 3.0
+
+#: Refusals already reported, as (url, status) — see `_report`.
+_REFUSALS_SAID: set[tuple[str, Any]] = set()
+
+
+@dataclass(frozen=True)
+class EndpointLimits:
+    """What a litellm proxy says it was configured with for one model.
+
+    Two numbers, kept apart because they mean different things and only one of
+    them is an answer to our question. `max_input_tokens` IS the input window.
+    `max_tokens` is the OUTPUT cap for most entries — measured against litellm's
+    own registry, gpt-4o reports 16,384 beside a 128,000 window — so it is
+    returned raw and left to the caller to decide what, if anything, to make of
+    it. Interpreting it here would bury a guess inside something that reads like
+    a measurement.
+    """
+
+    max_input_tokens: int | None
+    max_tokens: int | None
+
+
+def probe_endpoint_limits(
+    *,
+    base_url: str | None,
+    model: str,
+    client: Any = None,
+    timeout: float = PROBE_TIMEOUT_S,
+) -> EndpointLimits | None:
+    """What the endpoint's own model list says about `model`, or `None`.
+
+    `/tokenize` asks the thing that ENFORCES the window, which is the best
+    source there is — and it is a vLLM extension, so it does not survive a
+    proxy. A deployment running self-hosted vLLM behind a litellm proxy
+    therefore has no rung at all: the request reaches the proxy, which has no
+    such route, and the model's name is a local alias no registry knows.
+
+    litellm's management route answers from the model list it was configured
+    with. That is a relayed declaration rather than the enforcer speaking, so it
+    is ranked below `/tokenize` and below what the traffic taught us — but it is
+    the only thing that answers at all in that topology.
+
+    Silent on every failure, like the probe beside it: most endpoints are not a
+    litellm proxy, and a 404 here is the ordinary case rather than a fault."""
+    if not base_url:
+        return None
+    root = base_url.rstrip("/")
+    # Both spellings, DEDUPED: `base_url` usually ends in `/v1` (the chat route
+    # lives there) but need not, and litellm mounts the management route at both
+    # `/model/info` and `/v1/model/info`. Deriving one variant by stripping and
+    # the other by appending covers either way the operator wrote it — while
+    # only stripping meant a url that did NOT end in `/v1` produced the same
+    # address twice, so the most common path (not a litellm proxy at all) paid
+    # two round trips and two timeouts to learn the same nothing, and the
+    # `/v1/model/info` spelling was never reached.
+    stripped = root.removesuffix("/v1")
+    urls = _unique(f"{root}/model/info", f"{stripped}/model/info", f"{stripped}/v1/model/info")
+    with _http(client, timeout) as http:
+        for url in urls:
+            found = _read_model_info(url, model=model, client=http)
+            if found is not None:
+                return found
+    return None
+
+
+def _unique(*urls: str) -> list[str]:
+    """Order-preserving dedupe — the variants collapse to one or two depending
+    on how the url was written, and asking the same address twice is waste
+    charged to the path that learns nothing."""
+    return list(dict.fromkeys(urls))
+
+
+@contextmanager
+def _http(client: Any, timeout: float) -> Iterator[Any]:
+    """Close what we opened; never close what we were handed.
+
+    A probe that opens a connection pool per request and drops it leaks the
+    socket until the GC happens to run — and this one runs per (model, endpoint)
+    on every pod, most often down the path that learns nothing at all. A caller
+    that lends us a client keeps ownership of it."""
+    if client is not None:
+        yield client
+        return
+    http = _default_client(timeout)
+    try:
+        yield http
+    finally:
+        closer = getattr(http, "close", None)
+        if callable(closer):
+            closer()
+
+
+def _read_model_info(url: str, *, model: str, client: Any) -> EndpointLimits | None:
+    """One address, asked with a client somebody else owns. No `timeout` here:
+    it belongs to the client now that one covers the whole probe, and a second
+    copy of it would be a number that looks like it does something."""
+    try:
+        resp = client.get(url)
+        status = getattr(resp, "status_code", 0)
+        if status != 200:
+            _report(url, status)
+            return None
+        body = resp.json()
+    except Exception as exc:  # noqa: BLE001 — a probe must never break anything
+        logger.debug("context probe: %s unavailable (%s)", url, type(exc).__name__)
+        return None
+    if not isinstance(body, dict):
+        return None
+    rows = body.get("data")
+    if not isinstance(rows, list):
+        return None
+    for row in rows:
+        if not isinstance(row, dict) or row.get("model_name") != model:
+            continue
+        info = row.get("model_info")
+        if not isinstance(info, dict):
+            return None
+        try:
+            return EndpointLimits(
+                max_input_tokens=_as_count(info.get("max_input_tokens")),
+                max_tokens=_as_count(info.get("max_tokens")),
+            )
+        except (OverflowError, ValueError):  # a body carrying Infinity / NaN
+            logger.debug("context probe: %s reported an unusable count", url)
+            return None
+    return None
+
+
+def _report(url: str, status: Any) -> None:
+    """A missing route and a refused one are opposite diagnoses.
+
+    404 is the ordinary answer — this endpoint is not a litellm proxy, nothing
+    is wrong, and a line per endpoint would be noise drowning the signal. But
+    401/403 says the route EXISTS and turned us away, which on litellm means the
+    key this app authenticates with does not reach the management routes. That
+    is a fixable misconfiguration, and logging it the same way as a 404 left it
+    indistinguishable from "no proxy here": both end as a silent `unknown`
+    ceiling and no compaction, on a deployment whose operator has already done
+    their half of the work and is waiting to see it take effect."""
+    if status in (401, 403):
+        # Once per address+status per process. The negative this produces now
+        # expires and is re-asked every ten minutes, so an unfixed permission
+        # would otherwise repeat this line forever — and a notice that fires
+        # every round becomes wallpaper. Only the LOGGING is deduped; the
+        # re-asking is what makes the operator's fix take effect on its own.
+        if (url, status) in _REFUSALS_SAID:
+            return
+        _REFUSALS_SAID.add((url, status))
+        logger.info(
+            "context probe: %s answered %s — the route exists but this key cannot read it, "
+            "so the endpoint's declared max_input_tokens cannot be used. Grant the app's key "
+            "access to the proxy's model-info route, or set history.context_limit.",
+            url,
+            status,
+        )
+        return
+    logger.debug("context probe: %s answered %s", url, status)
+
+
+def _as_count(value: Any) -> int | None:
+    """A positive whole number, or None.
+
+    Floats are accepted because litellm's own documented example reports
+    `16385.0`, and rejecting that on a technicality would drop a real answer.
+    The positivity check is applied AFTER truncation, or a fractional value
+    below one (`0.5`) survives as `0` — a number that is neither a count nor
+    absent, and which the field would then carry as if it were an answer."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    count = int(value)  # may raise on inf/nan; the caller treats that as silence
+    return count if count > 0 else None
 
 
 def probe_context_limit(
@@ -46,12 +220,14 @@ def probe_context_limit(
         return None
     url = f"{base_url.rstrip('/')}/tokenize"
     try:
-        http = client if client is not None else _default_client(timeout)
-        resp = http.post(url, json={"model": model, "prompt": "ping"})
-        if getattr(resp, "status_code", 0) != 200:
-            logger.debug("context probe: %s answered %s", url, getattr(resp, "status_code", "?"))
-            return None
-        body = resp.json()
+        with _http(client, timeout) as http:
+            resp = http.post(url, json={"model": model, "prompt": "ping"})
+            if getattr(resp, "status_code", 0) != 200:
+                logger.debug(
+                    "context probe: %s answered %s", url, getattr(resp, "status_code", "?")
+                )
+                return None
+            body = resp.json()
     except Exception as exc:  # noqa: BLE001 — a probe must never break anything
         logger.debug("context probe: %s unavailable (%s)", url, type(exc).__name__)
         return None

@@ -407,7 +407,12 @@ def register_chat_routes(
         investigation_id = locator.require_access(slug, item_id, "read_chat")
         _rid, conv = locator.require_chat(slug, item_id, chat_id)
         usage = context_usage_for(investigation_id, conv.messages)
-        return _ContextOut(used=usage.used, limit=usage.limit, measured=usage.measured)
+        return _ContextOut(
+            used=usage.used,
+            limit=usage.limit,
+            measured=usage.measured,
+            limit_source=usage.limit_source,
+        )
 
     @app.get("/a/{slug}/items/{item_id}/chats/{chat_id}/todos")
     async def get_chat_todos(slug: str, item_id: str, chat_id: str) -> _TodosOut:

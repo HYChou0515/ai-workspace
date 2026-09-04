@@ -380,6 +380,29 @@ class HistorySettings:
     `chars // 4` estimator that undercounts Traditional Chinese 3.6x. Left here
     as an override for deploys that want a hard ceiling of their own."""
 
+    max_tokens_window_ratio: float = 0.8
+    """What fraction of an endpoint's stated `max_tokens` to treat as its input
+    window, when that is the ONLY figure it gave us.
+
+    Last resort, and only reached when the operator config, what the traffic
+    taught us, the endpoint's own `/tokenize`, its proxy's `max_input_tokens`
+    and the model registry are all silent — which is the normal state for a
+    self-hosted model behind a litellm proxy under a local alias. There the
+    alternative is not a better number, it is `unknown`: the history is never
+    trimmed and compaction never runs, so a conversation grows until the
+    endpoint refuses it.
+
+    Configurable because `max_tokens` means different things in different
+    deployments — it is the OUTPUT cap for most registry entries (gpt-4o: 16,384
+    beside a 128,000 window) but equals the window for others (qwen3:14b: 40,960
+    for both), and in a proxy's own config it is whatever the operator put
+    there. A number derived from it is therefore never trusted over one somebody
+    stated, and it is reported with a distinguishable source so nothing
+    downstream can mistake it for a measurement.
+
+    NOT applied to a stated `max_input_tokens` — that already is the input
+    window, and scaling it would discount twice."""
+
     context_limit: int | None = None
     """The endpoint's context window in tokens, when the operator knows it.
 

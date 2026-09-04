@@ -178,11 +178,20 @@ class _ContextOut(BaseModel):
     `limit` is None when no ceiling could be resolved — the FE must then show the
     usage with NO denominator rather than draw a bar against an invented one.
     `measured` says whether a provider's own count anchored the figure or the
-    whole thing is an estimate, so the UI never presents a guess as a fact."""
+    whole thing is an estimate, so the UI never presents a guess as a fact.
+
+    `limit_source` is the same honesty for the DENOMINATOR: which rung of the
+    resolution ladder produced `limit` (#624). `measured` and it are independent
+    — the numerator can be a provider's exact count while the denominator is a
+    figure we derived from the endpoint's output cap. Without it an operator
+    checking whether the ladder works reads `limit: 104857` and cannot tell a
+    stated window from a guess, which is the single distinction the ladder
+    exists to preserve."""
 
     used: int
     limit: int | None
     measured: bool
+    limit_source: str = "unknown"
 
 
 class _CompactOut(BaseModel):

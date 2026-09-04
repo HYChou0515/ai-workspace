@@ -32,11 +32,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from .context_probe import EndpointLimits
 from .kb.tokens import count_tokens
 
 logger = logging.getLogger(__name__)
 
-LimitSource = Literal["config", "learned", "catalog", "unknown"]
+LimitSource = Literal["config", "learned", "declared", "catalog", "estimated", "unknown"]
 
 #: Strong refs to in-flight deferred lookups — asyncio keeps only a weak one, so
 #: an unreferenced task can be collected mid-flight.
@@ -110,17 +111,61 @@ class ContextLimit:
     def known(self) -> bool:
         return self.tokens is not None
 
+    @property
+    def derived(self) -> bool:
+        """True when nobody stated this number — we computed it from one that
+        means something else. Everything else on the ladder was said out loud by
+        an operator, the endpoint, or a registry; this one is our own arithmetic
+        and is the only rung allowed to be overruled by its own implausibility.
+        """
+        return self.source == "estimated"
+
 
 def _positive(value: int | None) -> int | None:
     """A limit must be a positive count; 0 / negative / None all mean absent."""
     return value if value is not None and value > 0 else None
 
 
+#: What fraction of a stated `max_tokens` to treat as the input window when it
+#: is the only figure an endpoint gave us. Configurable because the right
+#: fraction depends on what the operator put in that field, which only they
+#: know — see `window_from_max_tokens`.
+DEFAULT_MAX_TOKENS_WINDOW_RATIO = 0.8
+
+
+def window_from_max_tokens(max_tokens: int | None, *, ratio: float) -> int | None:
+    """An input window derived from a stated `max_tokens`, or ``None``.
+
+    A DERIVATION, not a reading. `max_tokens` is the OUTPUT cap for most
+    entries — measured against litellm's own registry, gpt-4o reports 16,384
+    beside a 128,000 window, while `ollama_chat/qwen3:14b` reports 40,960 for
+    both — so the ratio between them is not a constant and cannot be one. That
+    is exactly why the fraction is the operator's to set and why the result
+    ranks below every figure someone actually stated.
+
+    It earns its place only where every other rung is silent: a self-hosted
+    model behind a proxy, under a local alias no registry knows. There the
+    alternative is not a better number, it is `unknown` — which means the
+    history is never trimmed and compaction never runs, so a conversation grows
+    until the endpoint refuses it.
+
+    Never applied to `max_input_tokens`: that one already IS the input window,
+    and scaling it would discount twice, on top of the prompt, the tool schemas,
+    the reply reserve and the margin the budget already subtracts.
+
+    Absent or non-positive in, ``None`` out — never a floor and never a default.
+    A window of 0 is not "unlimited" and not "unknown"; it is a number that
+    would cut every conversation down to its last message."""
+    return _positive(int((max_tokens or 0) * max(0.0, ratio)))
+
+
 def resolve_context_limit(
     *,
     configured: int | None = None,
     learned: int | None = None,
+    declared: int | None = None,
     catalog: int | None = None,
+    estimated: int | None = None,
 ) -> ContextLimit:
     """The ceiling for this endpoint, by descending authority.
 
@@ -131,14 +176,30 @@ def resolve_context_limit(
        by evidence is a trap.)
     2. ``learned`` — what the endpoint actually accepted or reported. Beats a
        table, because it is an observation rather than a claim.
-    3. ``catalog`` — a registry lookup (litellm). Right for hosted models and
+    3. ``declared`` — what a proxy in front of the model says it was configured
+       with (`model_info.max_input_tokens`). A claim rather than an observation,
+       so it ranks below ``learned`` — but it is a claim about THIS endpoint,
+       which beats a table keyed on a model name the endpoint may not even use.
+    4. ``catalog`` — a registry lookup (litellm). Right for hosted models and
        ``ollama/*``; blank for a self-hosted model served under a custom name.
-    4. otherwise ``unknown`` — stated, never faked.
+    5. ``estimated`` — derived rather than stated (see `window_from_max_tokens`).
+       Last, below every figure anyone actually gave us, because it is the only
+       rung whose number nobody vouched for. It exists for the topology where
+       all four above are silent — self-hosted behind a proxy, under a local
+       alias — and there the alternative is not a better number, it is `unknown`,
+       which means the history is never trimmed and compaction never runs.
+    6. otherwise ``unknown`` — stated, never faked.
+
+    The SOURCE travels with the number for exactly this reason: a caller that
+    cannot tell an estimate from a measurement will eventually present one as
+    the other.
     """
     for value, source in (
         (configured, "config"),
         (learned, "learned"),
+        (declared, "declared"),
         (catalog, "catalog"),
+        (estimated, "estimated"),
     ):
         got = _positive(value)
         if got is not None:
@@ -146,8 +207,8 @@ def resolve_context_limit(
     return ContextLimit(tokens=None, source="unknown")
 
 
-def catalog_limit(model: str) -> int | None:
-    """The registry's input-token ceiling for ``model``, or None when unknown.
+def catalog_limits(model: str) -> EndpointLimits | None:
+    """Both figures the registry holds for ``model``, kept apart — or None.
 
     **This does network I/O.** It reads like a table lookup and mostly is one —
     hosted models really are in litellm's bundled map — but an ``ollama/*`` name
@@ -156,24 +217,58 @@ def catalog_limit(model: str) -> int | None:
     every caller on a request path must reach it through ``deferred_lookup``,
     never directly.
 
+    The two numbers are returned separately, and that is the whole point. This
+    used to answer with ``max_input_tokens`` **or**, failing that,
+    ``max_tokens`` — unscaled, and the ladder then labelled the result
+    ``catalog``, which reads as "a registry stated this". But litellm's own
+    registry documents that field as, verbatim:
+
+        LEGACY parameter. set to max_output_tokens if provider specifies it.
+        IF not set to max_input_tokens, if provider specifies it.
+
+    The upstream source is saying the field means one of two different things
+    and does not say which. Reading it as an input window is therefore a guess,
+    exactly like reading a proxy's `max_tokens` is a guess — so it goes to the
+    same rung, under the same ratio, with the same `estimated` label. One rule,
+    because two rules for one number is a rule that holds in one place only.
+
+    Measured against the bundled registry: 2,888 of 3,518 entries carry both
+    figures and only six carry `max_tokens` alone, so this narrows what the
+    ladder may CLAIM far more than what it can answer.
+
     A self-hosted model behind an OpenAI-compatible endpoint (the production
     shape) is in no registry, so None is the honest and expected answer there —
     never a fallback number. Import is local and every failure degrades to None:
-    a registry lookup must not be able to break a turn."""
+    a registry lookup must not be able to break a turn. That promise now covers
+    the numbers too — litellm ships an entry whose limits are prose describing
+    the field (`sample_spec`), and comparing one of those against zero raised
+    `TypeError` straight through a guard that only wrapped the lookup."""
     if not model:
         return None
     try:
         import litellm
 
         info = litellm.get_model_info(model)
+        if not isinstance(info, dict):
+            return None
+        window = _positive_count(info.get("max_input_tokens"))
+        output = _positive_count(info.get("max_tokens"))
+        # Neither figure usable is the same answer as "not in the registry" for
+        # every caller here, and saying it one way keeps them from having to
+        # check both. It is also what the entry whose limits are prose returns.
+        if window is None and output is None:
+            return None
+        return EndpointLimits(max_input_tokens=window, max_tokens=output)
     except Exception:  # noqa: BLE001 — unknown model / registry shape drift
         return None
-    if not isinstance(info, dict):
+
+
+def _positive_count(value: Any) -> int | None:  # noqa: ANN401 — registry data, any shape
+    """A positive whole number out of whatever the registry holds, or None."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    for key in ("max_input_tokens", "max_tokens"):
-        got = _positive(info.get(key))
-        if got is not None:
-            return got
+    count = int(value)
+    return count if count > 0 else None
     return None
 
 
@@ -206,6 +301,47 @@ def estimate_messages(messages: Any) -> int:
     return total
 
 
+def usable_window(
+    limit: ContextLimit,
+    *,
+    overhead_tokens: int,
+    reply_reserve: int = DEFAULT_REPLY_RESERVE,
+    margin_ratio: float = DEFAULT_MARGIN_RATIO,
+) -> ContextLimit:
+    """The ceiling, or ``unknown`` when a DERIVED one cannot be a window.
+
+    Most proxies report `max_tokens` as what it usually means: the output cap.
+    A well-behaved `max_tokens: 4096` derives a 3,276-token "window" — smaller
+    than the system prompt this deployment demonstrably sends in every request
+    and gets answers to. A number that cannot contain what the endpoint is
+    already accepting is not that endpoint's input window, and every consumer
+    that believes it does something destructive with it: the history budget
+    replays one message per turn, and the compaction trigger summarises the
+    thread on every turn, lossily and irreversibly.
+
+    So the test lives HERE, beside the ladder, rather than inside whichever
+    consumer was looked at — that is exactly how the first version of it came to
+    protect the budget and leave compaction firing on a fabricated ceiling.
+
+    A STATED ceiling is never second-guessed. `config`, `learned`, `declared`
+    and `catalog` were said out loud by an operator, the endpoint or a registry;
+    if one of those is genuinely too small for the prompt, that is the truth and
+    the caller needs to act on it."""
+    if limit.tokens is None or not limit.derived:
+        return limit
+    usable = int(limit.tokens * (1.0 - margin_ratio))
+    if usable - max(0, overhead_tokens) - max(0, reply_reserve) > 0:
+        return limit
+    logger.warning(
+        "context: a derived ceiling of %d leaves no room beside %d tokens of prompt and tools, "
+        "so it is not the input window — falling back to no ceiling. Set "
+        "model_info.max_input_tokens on the endpoint to fix this properly.",
+        limit.tokens,
+        overhead_tokens,
+    )
+    return ContextLimit(tokens=None, source="unknown")
+
+
 def history_budget(
     limit: ContextLimit,
     *,
@@ -220,7 +356,22 @@ def history_budget(
     prompt and the tool schemas. Both were entirely absent from the old
     arithmetic, which is why a deploy could aim 18.5k + 24k at a 40,960 model
     and only find out via silent truncation.
+
+    A DERIVED ceiling is first put through ``usable_window``, which refuses one
+    too small to be a window at all — so ``None`` here means either "no ceiling
+    known" or "the only candidate was not credible", and both mean the same
+    thing to the caller: do not trim.
+
+    A STATED ceiling that small is not second-guessed: 0 is then the truth
+    ("we know the ceiling and the prompt alone fills it"), and the caller
+    depends on being able to tell that from "we do not know".
     """
+    limit = usable_window(
+        limit,
+        overhead_tokens=overhead_tokens,
+        reply_reserve=reply_reserve,
+        margin_ratio=margin_ratio,
+    )
     if limit.tokens is None:
         return None
     usable = int(limit.tokens * (1.0 - margin_ratio))
@@ -245,6 +396,12 @@ class ContextUsage:
     used: int
     limit: int | None
     measured: bool
+    #: Which rung of the ladder produced `limit`. `measured` describes the
+    #: NUMERATOR — did a provider count the prompt, or did we estimate it — and
+    #: this one describes the DENOMINATOR. They are independently trustworthy,
+    #: and collapsing them would hide the difference the ladder is built around:
+    #: a window the endpoint stated versus one we derived from its output cap.
+    limit_source: LimitSource = "unknown"
 
     @property
     def ratio(self) -> float | None:
@@ -346,8 +503,14 @@ def context_usage(messages: Any, *, limit: ContextLimit) -> ContextUsage:
                 used=used,
                 limit=limit.tokens,
                 measured=bool(getattr(metrics, "exact", False)),
+                limit_source=limit.source,
             )
-    return ContextUsage(used=estimate_messages(_replayed(msgs)), limit=limit.tokens, measured=False)
+    return ContextUsage(
+        used=estimate_messages(_replayed(msgs)),
+        limit=limit.tokens,
+        measured=False,
+        limit_source=limit.source,
+    )
 
 
 # ── learning the ceiling from the traffic (#624 P3) ──────────────────

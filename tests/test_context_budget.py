@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from workspace_app.context_budget import (
     ContextLimit,
-    catalog_limit,
+    catalog_limits,
     context_usage,
     estimate_messages,
     estimate_tokens,
@@ -98,18 +98,20 @@ def test_catalog_knows_a_hosted_model():
     which is a different claim from the one this test was making, and not one a
     unit test can hold. `learned` and `probe` are the rungs that cover it.
     """
-    assert catalog_limit("gpt-4o") == 128_000
+    known = catalog_limits("gpt-4o")
+    assert known is not None
+    assert known.max_input_tokens == 128_000
 
 
 def test_catalog_returns_none_for_a_self_hosted_name():
     """The production shape: OpenAI provider + custom endpoint + a model name
     no registry has ever heard of. Must answer "I don't know", not a default."""
-    assert catalog_limit("openai/some-self-hosted-qwen") is None
+    assert catalog_limits("openai/some-self-hosted-qwen") is None
 
 
 def test_catalog_never_raises_on_a_junk_name():
-    assert catalog_limit("") is None
-    assert catalog_limit("!!! not a model !!!") is None
+    assert catalog_limits("") is None
+    assert catalog_limits("!!! not a model !!!") is None
 
 
 # ── counting ────────────────────────────────────────────────────────
@@ -372,3 +374,184 @@ def test_a_message_written_before_exactness_was_recorded_is_not_trusted():
     got = context_usage([_Old()], limit=ContextLimit(tokens=40_960, source="catalog"))
     assert got.measured is False
     assert got.used == 9_400, "the stored figure is still the best one available"
+
+
+# ── what a proxy relays, and what we derive from it ──────────────────────
+
+
+def test_a_declared_window_beats_the_catalog_but_not_what_we_learned():
+    """`declared` is the proxy relaying what an operator configured. That is a
+    real statement about THIS endpoint, so it outranks a registry keyed on a
+    model name the endpoint may not even use — but it is still a claim, and
+    what the traffic actually did outranks any claim."""
+    assert resolve_context_limit(learned=4096, declared=131072, catalog=40960) == ContextLimit(
+        tokens=4096, source="learned"
+    )
+    assert resolve_context_limit(learned=None, declared=131072, catalog=40960) == ContextLimit(
+        tokens=131072, source="declared"
+    )
+
+
+def test_an_estimate_ranks_below_every_stated_number():
+    """The estimate is derived from a figure that does not mean what we want it
+    to mean, so it may never displace something that was actually stated —
+    including a catalog entry, which is at least exact about the model it
+    names."""
+    assert resolve_context_limit(catalog=40960, estimated=104857) == ContextLimit(
+        tokens=40960, source="catalog"
+    )
+
+
+def test_an_estimate_is_used_when_nothing_else_answers_and_says_it_is_one():
+    """The rung that exists for the topology where every other one is silent.
+    Its source is distinguishable, because a number nobody stated must never
+    read like a measurement — `learned` carries the authority of "the endpoint
+    actually did this", and an estimate carries none of it."""
+    got = resolve_context_limit(estimated=104857)
+    assert got == ContextLimit(tokens=104857, source="estimated")
+    assert got.known is True
+
+
+def test_no_estimate_still_means_unknown():
+    """A silent proxy leaves the ladder exactly where it was: `unknown` — send
+    it all rather than trim on a guess."""
+    assert resolve_context_limit() == ContextLimit(tokens=None, source="unknown")
+
+
+# ── deriving a window from the one figure a proxy did state ──────────────
+
+
+def test_a_stated_output_cap_becomes_a_conservative_window_estimate():
+    """`max_tokens` is the OUTPUT cap for most entries, so this is a derivation
+    and not a reading. It is here because on a proxy that states nothing else it
+    is the only figure in the room, and the alternative is `unknown` — no
+    trimming and no compaction at all."""
+    from workspace_app.context_budget import window_from_max_tokens
+
+    assert window_from_max_tokens(131072, ratio=0.8) == 104857
+
+
+def test_the_ratio_is_the_operators_and_is_not_applied_to_a_stated_window():
+    """The knob exists because the right fraction depends on what the operator
+    put in that field, which only they know. And it is deliberately only ever
+    applied HERE: `max_input_tokens` is already the input window, so scaling
+    that one would discount twice — the budget already subtracts the prompt,
+    the tool schemas, a reply reserve and a margin."""
+    from workspace_app.context_budget import window_from_max_tokens
+
+    assert window_from_max_tokens(100_000, ratio=0.5) == 50_000
+    assert window_from_max_tokens(100_000, ratio=1.0) == 100_000
+
+
+def test_nothing_stated_derives_nothing():
+    """No figure, no estimate — never a floor, never a default. An invented
+    number here would govern every later turn on this endpoint."""
+    from workspace_app.context_budget import window_from_max_tokens
+
+    assert window_from_max_tokens(None, ratio=0.8) is None
+    assert window_from_max_tokens(0, ratio=0.8) is None
+
+
+def test_a_ratio_that_would_round_to_nothing_yields_nothing():
+    """A window of 0 is not "unlimited" and not "unknown" — it is a number that
+    would trim every conversation to its last message. Refuse to produce one."""
+    from workspace_app.context_budget import window_from_max_tokens
+
+    assert window_from_max_tokens(3, ratio=0.1) is None
+    assert window_from_max_tokens(100_000, ratio=0.0) is None
+
+
+# ── a derived ceiling that cannot hold a conversation is not a ceiling ────
+
+
+def test_a_derived_ceiling_too_small_to_hold_history_is_refused():
+    """The way this feature could make a deployment WORSE than before it.
+
+    Most proxies report `max_tokens` as what it usually means: the OUTPUT cap.
+    A well-behaved `max_tokens: 4096` derives a 3,276-token "window" — smaller
+    than the system prompt alone (11k-18.5k, measured) — and the arithmetic then
+    says history gets 0 tokens, which the caller floors at 1: every turn replays
+    exactly one message and the assistant appears to have lost its memory. That
+    is worse than the `unknown` it replaced, and silent.
+
+    The refusal is evidence-based rather than a magic threshold: the deployment
+    is up and answering with that overhead in every request, so a number too
+    small to contain the overhead is demonstrably not the input window. Falling
+    back to `unknown` restores exactly the behaviour that was working."""
+    from workspace_app.context_budget import ContextLimit, history_budget
+
+    derived = ContextLimit(tokens=3276, source="estimated")
+    assert history_budget(derived, overhead_tokens=11_000) is None
+
+
+def test_a_stated_ceiling_that_small_still_answers_zero():
+    """`0` and `None` are different answers and must stay different. When the
+    ceiling was STATED — an operator's config, the endpoint's own report — "the
+    prompt already fills it" is the truth, and the caller needs to hear it
+    rather than be told the ceiling is unknown."""
+    from workspace_app.context_budget import ContextLimit, history_budget
+
+    for source in ("config", "learned", "declared", "catalog"):
+        stated = ContextLimit(tokens=3276, source=source)
+        assert history_budget(stated, overhead_tokens=11_000) == 0, source
+
+
+def test_a_derived_ceiling_with_room_to_spare_is_used():
+    """The case this rung exists for: a proxy whose `max_tokens` really is the
+    window. It must not be refused along with the small ones."""
+    from workspace_app.context_budget import ContextLimit, history_budget
+
+    derived = ContextLimit(tokens=104857, source="estimated")  # 131072 * 0.8
+    assert history_budget(derived, overhead_tokens=18_500) == 73_871
+
+
+# ── the registry has the SAME ambiguous field, and was reading it raw ─────
+
+
+def test_the_registry_never_answers_the_exact_rung_with_max_tokens():
+    """The rule this PR exists for, applied to the rung next door.
+
+    litellm's own registry documents `max_tokens` as, verbatim: "LEGACY
+    parameter. set to max_output_tokens if provider specifies it. IF not set to
+    max_input_tokens" — the upstream source says the field means one of two
+    different things and does not say which. `catalog_limit` read it as an exact
+    input window anyway, unscaled, and `resolve_context_limit` then labelled the
+    result `catalog`, which reads as "a registry stated this".
+
+    So the same figure had two contradictory treatments in one ladder: derived
+    and labelled `estimated` when a proxy relayed it, exact and labelled
+    `catalog` when the registry held it. Two rules for one number is a rule that
+    will hold in one place only.
+
+    Measured against the bundled registry: 2,888 of 3,518 entries carry both
+    figures, and only SIX carry `max_tokens` alone — so this changes almost
+    nothing except what the ladder is allowed to claim."""
+    from workspace_app.context_budget import catalog_limits
+
+    got = catalog_limits("gemini/gemini-gemma-2-27b-it")  # one of those six
+    assert got is not None
+    assert got.max_input_tokens is None, "the registry did not state an input window"
+    assert got.max_tokens == 8192, "and the ambiguous figure is returned as itself"
+
+
+def test_the_registry_still_answers_exactly_when_it_actually_knows():
+    """The 2,888 entries that do state an input window are untouched — this is
+    about what we may claim, not about giving up a real answer."""
+    from workspace_app.context_budget import catalog_limits
+
+    got = catalog_limits("gpt-4o")
+    assert got is not None
+    assert got.max_input_tokens == 128_000
+    assert got.max_tokens == 16_384, "the output cap, kept apart from the window"
+
+
+def test_a_registry_entry_that_is_not_a_number_cannot_break_a_turn():
+    """`catalog_limit` promises in its own docstring that "every failure degrades
+    to None: a registry lookup must not be able to break a turn" — and then put
+    the numeric comparison OUTSIDE the guard. litellm ships an entry whose
+    limits are prose (`sample_spec`, whose value literally describes the field),
+    so the promise was already false against the bundled data, not against some
+    hypothetical drift. Same shape as the `inf` escape in the endpoint probe."""
+    from workspace_app.context_budget import catalog_limits
+
+    assert catalog_limits("sample_spec") is None
