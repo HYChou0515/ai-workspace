@@ -1,3 +1,5 @@
+from specstar import SpecStar
+
 from workspace_app.apps.catalog import AppCatalog
 from workspace_app.apps.rca.model import RcaInvestigation
 from workspace_app.apps.resolve import find_work_item, resolve_item_agent_config
@@ -166,3 +168,31 @@ def test_find_work_item_goes_straight_to_the_table_the_id_names():
     assert found is not None
     assert found[0] == "pm"
     assert looked_up == ["pm-project"], looked_up  # no other App was asked
+
+
+def test_an_unreadable_creator_does_not_fail_the_write_that_asked():
+    """R12-7. `debtor_of` reads the store only when `owner` says nothing, and it
+    swallows a failure there rather than propagating it.
+
+    That is deliberate — the callers are a quota gate and a notification, and
+    neither should turn a store hiccup into a 500 on somebody's write. But the
+    guard had no test, and it is the one branch that produces the outcome the
+    module says must not exist: a bill charged to nobody. Worth knowing it can
+    happen, and worth knowing it is the ONLY way it can.
+
+    `spec` is a parameter, so the seam needs no patching of module globals.
+    """
+    from workspace_app.apps.resolve import debtor_of
+
+    class _Boom(SpecStar):
+        """A real `SpecStar` whose store is down — subclassed rather than
+        duck-typed because `ty` rejects the stand-in otherwise, and a double
+        that implements less than the real thing is immune to exactly the
+        changes worth catching."""
+
+        def get_resource_manager(self, *_args: object, **_kwargs: object):  # noqa: ANN202
+            raise RuntimeError("store is down")
+
+    item = RcaInvestigation(title="t", owner="   ")
+
+    assert debtor_of(_Boom(), "rca", "rca-investigation:x", item) == ""

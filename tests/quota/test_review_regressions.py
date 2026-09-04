@@ -147,9 +147,12 @@ def test_no_per_user_limit_means_no_ledger_writes_and_no_extra_lookups(monkeypat
     calls: list[str] = []
     real = resolve_mod.find_work_item
 
-    def _counting(spec, item_id):
+    def _counting(spec, item_id, **kw):
+        # `**kw` forwarded, not swallowed: the seam grew an `include_deleted`
+        # flag, and a double that dropped it would have counted the calls of a
+        # function the app is not actually calling.
         calls.append(item_id)
-        return real(spec, item_id)
+        return real(spec, item_id, **kw)
 
     monkeypatch.setattr(resolve_mod, "find_work_item", _counting)
 

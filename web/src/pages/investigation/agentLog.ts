@@ -8,6 +8,7 @@
  *  - tool_call_parse_error is shown as a transient banner under the call
  */
 
+import type { QuotaHolder } from "../../lib/quotaHolding";
 import type { AgentEvent } from "../../events";
 import type { Message, MessageCitation } from "../../api/types";
 import { initialLocale, translate } from "../../lib/i18n";
@@ -107,6 +108,11 @@ export type AgentLog = {
   streamingBy: string | null;
   /** Non-null when the last terminal was an error. */
   error: string | null;
+  /** #P5: the environments a quota refusal says are holding the budget, so the
+   *  remedy is a click rather than a page the person has to know exists. Empty
+   *  for every other failure, and for a collaborator the backend withheld the
+   *  inventory from. */
+  holding?: QuotaHolder[];
   /** Whether `error` came from THIS turn's stream (an `error` event) rather than
    * from the send path. One slot, several owners: a quota refusal names the limit
    * that bound and links to it, a failed Stop says the turn may still be running,
@@ -139,6 +145,7 @@ export const EMPTY_LOG: AgentLog = {
   streaming: false,
   streamingBy: null,
   error: null,
+  holding: [],
   errorFromTurn: false,
   metrics: null,
   failover: null,
@@ -280,6 +287,7 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
     // one whose reply has not landed.
     streamingBy: awaitingReply ? (last?.author ?? null) : null,
     error: null,
+    holding: [],
     // A snapshot carries no live error, so it owns none either.
     errorFromTurn: false,
     metrics: null,
@@ -904,6 +912,7 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
         streaming: true,
         streamingBy: ev.author ?? null,
         error: null,
+    holding: [],
         metrics: null,
       };
     }

@@ -24,7 +24,7 @@ import {
   useSensor,
   useSensors,
 } from "@dnd-kit/core";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { EntityInstance } from "../../api/entities";
 import type { User } from "../../api/types";
@@ -51,6 +51,7 @@ import {
 import type { RefIndex } from "./refTraversal";
 import { fieldText, roleOf } from "./shared";
 import { usePersistentSet } from "../../hooks/usePersistentSet";
+import { actorPalette } from "./actorColor";
 import { type ChipColor, selectColor } from "./selectColor";
 import { sortRows } from "./sortRows";
 import type { EntityViewProps } from "./types";
@@ -154,11 +155,31 @@ export function GanttView({
   // left it wearing the ink of the solid blue slab it used to be — cream on a
   // 93%-white fill, 1.07:1, invisible in light mode (#690). The pair travels
   // together now, guarded by ganttBarContrast.test.ts.
+  // An ACTOR field is a directory, not a vocabulary: it has no fixed value list
+  // to pin colours to and no ceiling on how many values it holds, so it gets a
+  // GENERATED hue per person (`actorPalette`) instead of the six chip slots,
+  // which four people already collide in. Seats come from the records in number
+  // order — not the view's order — so re-sorting or regrouping the chart never
+  // repaints anybody, and a newly assigned person takes the next free seat.
+  const actorHues = useMemo(
+    () =>
+      colorField && colorSpec?.role === "actor"
+        ? actorPalette(
+            [...entities]
+              .sort((a, b) => a.number - b.number)
+              .map((e) => fieldText(e.fields[colorField]) ?? ""),
+            colorSpec,
+          )
+        : undefined,
+    [colorField, colorSpec, entities],
+  );
   const barColor = (e: EntityInstance): ChipColor | undefined => {
     if (!colorField) return undefined;
-    // The palette the chips already use. A second one would put one `status`
-    // value on two different colours in two places on the same screen.
-    return selectColor(fieldText(e.fields[colorField]) ?? "", colorSpec);
+    const value = fieldText(e.fields[colorField]) ?? "";
+    // Anything else is a closed vocabulary — keep the palette the chips already
+    // use. A second one would put one `status` value on two different colours in
+    // two places on the same screen.
+    return actorHues ? actorHues(value) : selectColor(value, colorSpec);
   };
   // null ⇒ auto-fit the whole project to the measured pane (fills the width on
   // open); a number ⇒ the user has taken over the zoom via the slider / anchors.
@@ -443,14 +464,22 @@ export function GanttView({
                   // this replaces was hiding the off-by-one: it made a same-day
                   // span look right while every longer bar stopped a day short.
                   const width = barColumns(ps, skip) * ppd;
-                  const c = barColor(row.e);
+                  const provisional = isProvisional(row.e);
+                  // A provisional bar is the schedule's GUESS for work with no
+                  // estimate, and its rule draws it hollow and dashed so it is
+                  // never mistaken for a real plan. That rule is in the
+                  // stylesheet and these are INLINE, which beats it — so the
+                  // colour has to decline to paint rather than the rule try to
+                  // win. Every paint below is withheld together: leaving any one
+                  // of them on hands the guess back a solid-bar cue.
+                  const c = provisional ? undefined : barColor(row.e);
                   return (
                     <div key={row.e.number} className="ev-gantt__bar-row" style={{ height: ROW_H }}>
                       <div
                         data-testid={`bar-${row.e.number}`}
                         title={spanValue(ps)}
                         className="ev-gantt__bar"
-                        data-provisional={isProvisional(row.e) ? "true" : undefined}
+                        data-provisional={provisional ? "true" : undefined}
                         data-busy={busy ? "1" : undefined}
                         onPointerDown={(e) => startDrag(row.e.number, "move", e)}
                         // #680 — a double-click opens the record. It coexists with
@@ -460,7 +489,22 @@ export function GanttView({
                         // arrive; and a zero-day drag commits nothing, so the two
                         // presses underneath write no span.
                         onDoubleClick={() => onOpenRecord?.(row.e.number)}
-                        style={{ left, width, background: c?.bg, color: c?.fg, borderColor: c?.fg }}
+                        // `--bar-ink` publishes the ink for furniture that
+                        // touches the FILL rather than inheriting onto it: the
+                        // avatar sets its own `color` for the initials, so
+                        // `currentColor` inside it is the avatar's, not the
+                        // bar's (P5). Pinning that furniture to one token
+                        // instead only held while every bar was a dark slab.
+                        style={
+                          {
+                            left,
+                            width,
+                            background: c?.bg,
+                            color: c?.fg,
+                            borderColor: c?.fg,
+                            "--bar-ink": c?.fg,
+                          } as React.CSSProperties
+                        }
                       >
                         <span className="ev-gantt__bar-label">
                           {fieldText(row.e.fields[labelField]) || `#${row.e.number}`}

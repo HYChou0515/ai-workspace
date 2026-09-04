@@ -232,6 +232,35 @@ describe("buildWuiDoc", () => {
     await expect(opening).rejects.not.toThrow(/no index\.html/);
   });
 
+  it("inlines a BUILT entry's assets from beside the entry, not the folder", async () => {
+    // The shape a bundler produces: `dist/index.html` referencing
+    // `./assets/x.js`. Resolved from the WUI folder those land one directory
+    // too high, nothing is inlined, and the page renders blank with no error.
+    const files = {
+      "/w/dist/index.html": '<html><head></head><body><script src="./assets/x.js"></script></body></html>',
+      "/w/dist/assets/x.js": "console.log('built')",
+    };
+    const fs = svc(files);
+
+    const built = await buildWuiDoc(fs, "/w", "dist/index.html");
+
+    expect(built.doc).toContain("console.log('built')");
+    expect(built.used).toContain("assets/x.js");
+  });
+
+  it("lets a built entry reach a file beside the view file", async () => {
+    // The boundary is the WUI folder, not the entry's directory — a built page
+    // pointing at `../logo.svg` is still inside its own WUI.
+    const fs = svc({
+      "/w/dist/index.html": '<html><head></head><body><img src="../logo.svg"></body></html>',
+      "/w/logo.svg": "<svg/>",
+    });
+
+    const built = await buildWuiDoc(fs, "/w", "dist/index.html");
+
+    expect(built.doc).toContain("data:image/svg+xml;base64,");
+  });
+
   it("still says it plainly when the entry really is absent", async () => {
     await expect(buildWuiDoc(failing(new HttpError(404, "nope")), "/w", "index.html")).rejects.toThrow(
       /no index\.html/,

@@ -90,10 +90,15 @@ class _SpyingSandbox(MockSandbox):
 
 async def test_registry_asks_for_the_items_own_spec():
     sandbox = _SpyingSandbox()
-    registry = InvestigationRegistry(
-        sandbox=sandbox,
-        spec_for=lambda item: SandboxSpec(cpu_cores=4.0 if item == "big" else 1.0),
-    )
+
+    async def _spec_for(item: str) -> SandboxSpec:
+        """Async because the real one is: an item's size now depends on its
+        OWNER's budget as well as its App's ceiling, and that is a store read.
+        A synchronous double here would be a double that cannot express the
+        contract it stands for."""
+        return SandboxSpec(cpu_cores=4.0 if item == "big" else 1.0)
+
+    registry = InvestigationRegistry(sandbox=sandbox, spec_for=_spec_for)
     await registry.session("big")
     await registry.ensure_handle(await registry.session("big"))
     assert sandbox.specs[-1][1].cpu_cores == 4.0

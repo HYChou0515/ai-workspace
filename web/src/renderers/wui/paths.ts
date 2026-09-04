@@ -43,6 +43,38 @@ export function resolveInFolder(folder: string, ref: string): string | null {
   return `${folder}/${out.join("/")}`;
 }
 
+/**
+ * A file an assembled page references, resolved against the ENTRY's directory
+ * and bounded by the WUI's folder.
+ *
+ * Those are two different things as soon as a page is BUILT: `dist/index.html`
+ * saying `./assets/x.js` means the file next to itself. Resolving from the WUI
+ * folder instead put every reference one directory too high and nothing was
+ * inlined — the page rendered blank, which is the same lost-origin mistake that
+ * broke markdown images (#717).
+ *
+ * The boundary stays the folder, not the entry's directory, so a built page can
+ * still reach a sibling of its view file (`../logo.png`) without being able to
+ * reach the item.
+ */
+export function resolveAssetPath(folder: string, entryDir: string, ref: string): string | null {
+  if (!ref || ref.startsWith("/")) return null;
+  const out = entryDir.split("/").filter(Boolean);
+  const floor = folder.split("/").filter(Boolean).length;
+  for (const seg of ref.split("/")) {
+    if (seg === "" || seg === ".") continue;
+    if (seg !== "..") {
+      out.push(seg);
+      continue;
+    }
+    // Counted against the FOLDER's depth, not the entry's: climbing back to the
+    // view file is ordinary; climbing past it is the escape this refuses.
+    if (out.length <= floor) return null;
+    out.pop();
+  }
+  return out.length > floor ? `/${out.join("/")}` : null;
+}
+
 /** Normalise a workspace-absolute path, or `null` if it climbs past the root or
  * names the root itself. Same segment walk as above, so `/sales/../notes.md`
  * cannot arrive somewhere a string comparison would later mistake for inside. */

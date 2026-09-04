@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../components/MonacoEditor", () => ({
@@ -18,7 +18,13 @@ vi.mock("../../components/MonacoEditor", () => ({
 import type { EntityInstance, EntityType } from "../../api/entities";
 import { FileServiceProvider, investigationFileService } from "../../api/fileService";
 import { OpenFileProvider } from "../../hooks/openFile";
+import { DialogProvider } from "../../components/Dialog";
 import { EntityRecordModal } from "./EntityRecordModal";
+
+// The confirm dialog is at the app root (#779); the modal asks through it before
+// a deliberate exit drops an in-progress edit.
+const render = (ui: Parameters<typeof rtlRender>[0]) =>
+  rtlRender(ui, { wrapper: DialogProvider });
 
 afterEach(cleanup);
 
@@ -118,9 +124,33 @@ describe("EntityRecordModal", () => {
     fireEvent.click(screen.getByTestId("entity-record-modal-backdrop"));
 
     expect(onClose).not.toHaveBeenCalled();
-    // Escape is a deliberate exit, so it still works.
+  });
+
+  // #779: Escape stays a working exit — a modal you cannot dismiss is worse than
+  // a lost draft — but while the form is open it asks once rather than dropping
+  // the edit silently. In here that matters more than most: the pane is a text
+  // editor, and Escape is what you press to dismiss its own popups.
+  it("asks before Escape drops an in-progress edit, and stays open when told to", async () => {
+    const { onClose } = modal();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+
     fireEvent.keyDown(document, { key: "Escape" });
-    expect(onClose).toHaveBeenCalledTimes(1);
+
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByTestId("dialog-action-keep"));
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+  });
+
+  it("closes on Escape once the edit is confirmed discarded", async () => {
+    const { onClose } = modal();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.click(await screen.findByTestId("dialog-action-discard"));
+
+    // The confirm resolves a promise, so the close lands a tick later.
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   });
 
   it("gives a read-only member no way in", () => {

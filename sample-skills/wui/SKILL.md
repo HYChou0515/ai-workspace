@@ -9,10 +9,48 @@ A **WUI** is a folder in this item's workspace whose `*.ai.yaml` file says
 `view: wui`. Opening that file runs the folder as a page. There is no publish
 step and nothing to register — write the files and it works.
 
-Read `reference.md` for the exact API before you write code. There is a complete,
-working example in `example/`; **start by copying it**, because it already gets
-the three things right that are easy to get wrong (saving without thrashing,
-hearing about someone else's edit, staying inside your own folder).
+Read `reference.md` for the exact API before you write code. **Start by copying
+one of the complete, working examples in `examples/`** — they already get
+right the things that are easy to get wrong, and copying beats generating.
+
+| copy | when | what it shows |
+|---|---|---|
+| `examples/dashboard/` | the data already exists and somebody wants to SEE it differently | listing then reading in parallel, parsing files people hand-edit, `openFile` to hand the user back to the real file |
+| `examples/editor/` | the page is where the data gets ENTERED or changed | saving without thrashing, hearing about someone else's edit without discarding what is half-typed, staying inside your own folder |
+| `examples/external/` | the answer lives in ANOTHER system | `callTool`, and telling the three refusals apart — not declared / not granted / the tool itself said no |
+| `examples/chart/` | somebody wants to SEE the shape of the numbers | a real charting library, and the one build step that fetches it into the folder |
+| `examples/react/` | hand-written DOM has stopped paying | a real build (`pnpm build` → `dist/`), the three settings that fail silently without them, and who rebuilds when |
+
+If a page both reads and writes, start from the dashboard and add saving — a
+page that reads wrongly is obvious, a page that writes wrongly is not.
+
+**A library is a file in the folder, not a CDN.** "No network" is about
+RUNTIME. `<script src="https://cdn…">` never arrives — but a UMD build sitting
+next to the page is inlined like `app.js` is, and the SANDBOX has a network to
+fetch it with (`npm pack chart.js@4`, copy the one file in; `examples/chart/`
+does this as its build step, so opening the page is enough). **Do not hand-draw
+a chart.** Axes that agree with their own scale, hit-testing, tooltips and tick
+spacing are a lot of code to get wrong, and the library costs nothing at
+runtime. Prefer small ones: the file is inlined into the document, so its size
+is paid on every open.
+
+**Prefer no build unless the page needs one.** Without one, the files you wrote
+ARE the page: edit, press Refresh, see it. With one, the page is `dist/` and
+editing `src/` changes nothing until somebody rebuilds. The pane covers the user
+— it rebuilds a built page when they open it, with the build's output on screen,
+and there is a **Rebuild** button beside Refresh — but it does not cover the
+person watching the page RIGHT NOW, who will press Refresh and see the old one.
+So still **rebuild in the same turn as the edit** (`pnpm build` in the page's
+folder), and say that you did. Libraries do not decide this — a UMD file in the
+folder (`<script src="./chart.umd.js">`) is inlined like anything else, no build
+needed.
+
+⚠️ **The external example is the one you cannot copy unchanged.** Its tool has
+to be one this app actually grants, and **"Tools this app offers its WUIs"** —
+appended to the end of this skill when you read it — is the only place that says
+which. You cannot tell from a tool's name: `read_file` and `lot-status` look
+alike to you, and only one of them a page can call. If that section is absent,
+say so and ask rather than guessing; a tool you invent fails at the call.
 
 ## What you are actually making
 
@@ -36,6 +74,8 @@ lot-tracker/
   data.json        ← whatever the page saves (your folder, your file)
 ```
 
+A read-only page has no `data.json` — it reads what the item already holds.
+
 `page.ai.yaml`:
 
 ```yaml
@@ -48,9 +88,12 @@ title: Lot tracker
 
 ## The rules that are enforced (not advice)
 
-- **No network.** `fetch`, XHR, WebSocket, a CDN `<script src>`, a Google Font —
-  all blocked. Everything the page uses is a file in its folder, or comes
-  through `workspace.*`. There is no workaround; do not spend a turn looking.
+- **No network AT RUNTIME.** `fetch`, XHR, WebSocket, a CDN `<script src>`, a
+  Google Font — all blocked once the page is running. Everything it uses is a
+  file in its folder, or comes through `workspace.*`. There is no workaround; do
+  not spend a turn looking.
+  **A build is not runtime.** `pnpm install` runs in the sandbox, where you have
+  a network like any other command. What must not need one is the finished page.
 - **Read anywhere in the item, write only your own folder.** `workspace.readFile`
   can read `/notes.md`; `workspace.writeFile` can only write under
   `lot-tracker/`.
@@ -62,7 +105,10 @@ title: Lot tracker
 - Edit the individual file — `app.js`, not the whole page. That is why a WUI is
   a folder.
 - **The page does not reload itself.** After you change a file, tell the user to
-  press **Refresh** above the page.
+  press **Refresh** above the page. On a page with a build there is **Rebuild**
+  next to it, and an **Auto-rebuild** switch that is on by
+  default — but Refresh alone never builds anything, so a `src/` edit you did
+  not build is still an old page.
 - When they say it is broken, ask them to press **Report a problem** and click
   the part that looks wrong, then **Tell the agent**. You get the markup, the
   size and the computed styles — which is how you see a layout you cannot look
@@ -72,10 +118,15 @@ title: Lot tracker
 
 Open it yourself in your head, in this order:
 
-1. Does `index.html` load `./app.js` and `./style.css` by relative path?
+1. Does `index.html` load `./app.js` and `./style.css` by relative path? **Is
+   there a stylesheet at all?** A page with none is not "unstyled", it is the
+   browser's 1995 defaults — Times New Roman headings, a grey submit button —
+   and that is the first thing the person who asked for it sees. With a build,
+   the equivalent is an `import "./styles.css"` in the source; the bundler
+   emits it and links it for you.
 2. Is every URL in the page either relative or a `data:` URI?
-3. Does the first render work with **no** saved data — an empty `data.json`, or
-   none at all?
+3. Does the first render work with **no** data — an empty `data.json`, none at
+   all, or an empty folder to read?
 4. Does every `workspace.*` call have a `.catch`, and does the page show that
    text rather than going blank?
 

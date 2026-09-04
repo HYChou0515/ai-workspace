@@ -22,17 +22,21 @@ page needing a platform capability gets an HTTP route, not a built-in tool.
 
 from __future__ import annotations
 
+import asyncio
+import codecs
 import json
 import logging
-from collections.abc import Callable, Sequence
+import shlex
+from collections.abc import AsyncIterator, Callable, Sequence
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from ..agent.context import AgentToolContext
-from ..sandbox.protocol import Sandbox, SandboxSpec
+from ..sandbox.protocol import ExecResult, Sandbox, SandboxSpec
 from ..tooling.external import ExternalTools
 from ..tooling.registry import PackageInfo, exec_package_command, find_allowed_command
 from .locator import ItemLocator
@@ -40,9 +44,74 @@ from .turn_context import resolve_item_tools
 
 logger = logging.getLogger(__name__)
 
+# What a backend returns when it killed the command on its own deadline
+# (`ExecResult.exit_code`'s documented convention).
+EXIT_TIMED_OUT = 124
+# Ours, for a stream that ended without the command reporting. The page needs a
+# non-zero code to show a failure, and inventing `1` would read as "the build
+# failed" when what failed was reaching it.
+EXIT_STREAM_BROKE = -1
+
 
 class CallToolBody(BaseModel):
     args: dict[str, Any] = {}
+
+
+class BuildBody(BaseModel):
+    """Which page to rebuild. The folder, not a command: `package.json`'s
+    `scripts.build` decides what a build IS, which is the standard place for
+    that and keeps a page — LLM-written — from choosing what a human's click
+    executes."""
+
+    folder: str
+
+
+def _build_dir(folder: str) -> str | None:
+    """The folder as a path RELATIVE to the workspace root, or `None`.
+
+    Relative because that is what the shell can use: `exec` runs with the
+    workspace root as its working directory (`Sandbox.exec`'s contract), so the
+    workspace path `/page` names the filesystem root instead — outside the
+    workspace entirely, and inside the userns jail it names the infra area
+    beside it, which EXISTS. Passing the workspace path through made every build
+    die with `sh: cd: can't cd to /built` before running anything; it took
+    opening a real page to see, because the string is present either way.
+
+    Checked on normalised SEGMENTS and interpolated into a shell command only
+    after passing: this string reaches `sh -c`, so "looks fine" is not the bar.
+    The workspace root itself is refused — a build there would run over the
+    whole item, and no page lives there anyway (a root-level view file cannot
+    write, so it cannot be a built page)."""
+    if not folder.startswith("/"):
+        return None
+    out: list[str] = []
+    for seg in folder.split("/"):
+        if seg in ("", "."):
+            continue
+        if seg == "..":
+            return None  # not "pop": a build path is not a place to be clever
+        out.append(seg)
+    return "/".join(out) or None
+
+
+# What a rebuild runs, once the shell is in the page's folder.
+#
+# The install is not optional politeness: `node_modules/` is in the mirror's
+# ignore list — derived, and huge — so a recycled sandbox comes back with the
+# source, `package.json` and the lockfile, and no dependencies. A build that
+# assumed them fails on the first click after a recycle, and the remedy would be
+# "get someone to run pnpm install", which is the friction a WUI exists to
+# remove. With `node_modules` already in place and the lock unchanged this costs
+# about a second, so it is not worth making conditional.
+#
+# `--frozen-lockfile` where there IS a lock: two installs from one lock that
+# resolve differently make the lock pointless. Where there is none — a page
+# installing for the first time — the plain install is what WRITES it, and
+# `--frozen-lockfile` would refuse instead.
+_BUILD = (
+    "if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; else pnpm install; fi"
+    " && pnpm run build"
+)
 
 
 class CallToolOut(BaseModel):
@@ -81,6 +150,117 @@ def register_wui_routes(
         if resolve_external is not None:
             return await resolve_external(item_id)
         return await resolve_item_tools(sandbox, locator, item_id)
+
+    @app.post("/a/{slug}/items/{item_id}/wui/build")
+    async def wui_build(slug: str, item_id: str, body: BuildBody) -> StreamingResponse:
+        """Rebuild a page, streaming the build's own output as it arrives.
+
+        A page written with a bundler has two halves — the source someone edits
+        and the `dist/` a viewer sees — and they go out of step the moment a
+        rebuild is forgotten: the page renders, unchanged, with nothing saying
+        why. This is how that stops being possible: the person looking at the
+        page can rebuild it themselves.
+
+        **Streaming is the feature, not a detail.** A build takes tens of
+        seconds and fails often while someone is iterating, and its compiler
+        errors are the whole value. A route that answered only at the end would
+        give a spinner and no idea whether anything was happening.
+
+        The verb is `execute`: this runs a command in the item's sandbox, the
+        same thing a notebook cell does.
+        """
+        investigation_id = locator.require_access(slug, item_id, "execute")
+        cwd = _build_dir(body.folder)
+        if cwd is None:
+            raise HTTPException(status_code=400, detail=f"{body.folder} is not a page folder.")
+
+        session = await registry.session(investigation_id)
+        handle = await registry.ensure_handle(session)
+        # `exec` takes no working directory, so the shell provides one — relative
+        # to the workspace root it already starts in. `./` and `--` so a folder
+        # named `-p` is a folder and not an option, and `shlex.quote` because
+        # `_build_dir` decided this is a workspace path, not that it is safe to
+        # paste into a shell.
+        script = f"cd -- {shlex.quote(f'./{cwd}')} && {_BUILD}"
+
+        queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+
+        def on_output(chunk: bytes) -> None:
+            # Called from whatever thread the backend reads on; hop to the loop
+            # rather than touching the queue directly.
+            loop.call_soon_threadsafe(queue.put_nowait, chunk)
+
+        async def run() -> ExecResult:
+            try:
+                return await sandbox.exec(handle, ["sh", "-c", script], on_output=on_output)
+            finally:
+                # The SAME hop the chunks take, so the order is right by
+                # construction rather than by luck. `call_soon_threadsafe` from
+                # this thread DEFERS, so a straight `put` here overtook output
+                # a backend had already handed us — the build's log arrived
+                # after the line saying it had finished, or not at all.
+                loop.call_soon_threadsafe(queue.put_nowait, None)
+
+        def frame(payload: dict[str, Any]) -> str:
+            return f"data: {json.dumps(payload)}\n\n"
+
+        async def gen() -> AsyncIterator[str]:
+            task = asyncio.ensure_future(run())
+            # A chunk is a byte FRAGMENT, not a string — the backend reads a
+            # fixed block at a time, so a multi-byte character lands astride the
+            # boundary. Decoding each chunk on its own turned vite's `✓`, which
+            # it prints on every build, into a replacement character.
+            decoder = codecs.getincrementaldecoder("utf-8")("replace")
+            try:
+                while (chunk := await queue.get()) is not None:
+                    if text := decoder.decode(chunk):
+                        yield frame({"type": "output", "text": text})
+                if tail := decoder.decode(b"", final=True):
+                    yield frame({"type": "output", "text": tail})
+
+                result = await task
+                if result.exit_code == EXIT_TIMED_OUT:
+                    # The backend explains itself in `stderr`, appended AFTER the
+                    # output pumps have stopped — so it never reaches `on_output`
+                    # and never reaches the page. Without this the reader watches
+                    # the log stop mid-install and gets a bare number.
+                    #
+                    # Both deadlines return 124 and the code cannot tell them
+                    # apart, so both are named. Naming only the total one sent a
+                    # reader to the wrong knob whenever a build went quiet for a
+                    # minute — which an install downloading a large package does.
+                    yield frame(
+                        {
+                            "type": "output",
+                            "text": (
+                                "\nThe build timed out and was killed. It has to finish "
+                                "inside the sandbox's `exec_timeout`, and never go quiet for "
+                                "longer than its `log_timeout` (60s each by default) — raise "
+                                "them for this deployment, or give the build less to do.\n"
+                            ),
+                        }
+                    )
+                yield frame({"type": "done", "exit_code": result.exit_code})
+            except Exception as exc:  # noqa: BLE001 — every path out posts a verdict
+                # The headers went out with the first byte, so this can never be
+                # a 500: it just ENDS the response. The page's `for await` then
+                # falls through with nothing said — partial output and no
+                # verdict, forever. A sentence and a non-zero code instead.
+                logger.warning("wui: build stream failed: %s", exc)
+                yield frame({"type": "output", "text": f"\nThe build could not finish: {exc}\n"})
+                yield frame({"type": "done", "exit_code": EXIT_STREAM_BROKE})
+            finally:
+                # The reader navigated away (the server cancels this generator,
+                # or closes it) — take the build down with them. Left alone, a
+                # `pnpm install` keeps running against a folder nobody is
+                # watching and the next open starts a second one beside it, both
+                # writing the same `dist/`. One guard, in the one place every
+                # exit passes through.
+                if not task.done():
+                    task.cancel()
+
+        return StreamingResponse(gen(), media_type="text/event-stream")
 
     @app.post("/a/{slug}/items/{item_id}/wui/tools/{name}/call")
     async def wui_call_tool(slug: str, item_id: str, name: str, body: CallToolBody) -> CallToolOut:

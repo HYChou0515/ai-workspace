@@ -26,14 +26,28 @@ from .chats import list_item_conversations
 def item_conversation_mirror(spec: SpecStar, item_id: str) -> dict[str, Any]:
     """The ``item_*`` Conversation mirror kwargs for a chat under ``item_id``, read
     from the item's LIVE permission + owner. An item with no ``Permission`` ≡ public.
-    A vanished item (created-then-deleted race) mirrors as public so an orphan thread
-    never becomes unreadable. Always sets all three EXPLICITLY so a re-stamp after an
-    item is loosened back to public resets a previously-restricted chat."""
-    found = find_work_item(spec, item_id)
-    if found is None:  # pragma: no cover — chats are created under a live item
+    An id that resolves to NOTHING mirrors as public so an orphan thread never
+    becomes unreadable. Always sets all three EXPLICITLY so a re-stamp after an
+    item is loosened back to public resets a previously-restricted chat.
+
+    A SOFT-DELETED item is read like any other, and the difference matters: it
+    still HAS a permission and that permission still applies, so reading it as
+    "nothing to honour" stamps a private item's thread ``public`` with an empty
+    ``item_created_by``. Reachable through the ordinary door — the positive
+    access memo holds for five seconds, so deleting the item you were just
+    working in is the case — and PERMANENT, because the item is gone and the
+    fan-out that re-stamps chats on a permission change can never run again.
+    Fail-open is the wrong direction for the one caller that decides who may
+    read a thread."""
+    found = find_work_item(spec, item_id, include_deleted=True)
+    if found is None:
         return {"item_visibility": "public", "item_read_chat": [], "item_created_by": ""}
     slug, item = found
-    created_by = spec.get_resource_manager(app_model(slug)).get_meta(item_id).created_by
+    created_by = (
+        spec.get_resource_manager(app_model(slug))
+        .get_meta(item_id, include_deleted=True)
+        .created_by
+    )
     perm = item.permission
     visibility = "public" if perm is None else perm.visibility
     read_chat = [] if perm is None else list(perm.read_chat)

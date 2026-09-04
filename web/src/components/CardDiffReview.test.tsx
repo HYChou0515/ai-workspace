@@ -106,6 +106,27 @@ describe("CardDiffReview", () => {
     expect(screen.getByTestId("diff-modified")).toHaveValue("## M4\nkeys: M4\n\nnew def");
   });
 
+  // #779: the right pane is a real editor and this modal is a human gate — an
+  // Escape meant for Monaco's autocomplete used to take the whole rewrite with it.
+  it("asks before dropping an edited proposal, and keeps it when told to keep editing", async () => {
+    const { svc } = fakeSvc({
+      [TODO_PATH]: "## M4\n\nnew def",
+      [CURRENT_PATH]: "## Metal 4\n\nold def",
+    });
+    render(svc);
+    fireEvent.click(await screen.findByTestId("card-diff-open"));
+    fireEvent.change(await screen.findByTestId("diff-modified"), {
+      target: { value: "## M4\n\nEDITED" },
+    });
+
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    fireEvent.click(await screen.findByTestId("dialog-action-keep"));
+    await waitFor(() =>
+      expect(screen.getByTestId("diff-modified")).toHaveValue("## M4\n\nEDITED"),
+    );
+  });
+
   it("saves right-pane edits to the todo file before approving", async () => {
     const { svc, writes } = fakeSvc({
       [TODO_PATH]: "## M4\nkeys: M4\n\nnew def",

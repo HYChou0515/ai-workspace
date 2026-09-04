@@ -550,22 +550,27 @@ class WorkflowExecutor:
 
     def notify_failure(self, run: WorkflowRun) -> None:
         """In-app failure notification to the item's owner (manual §17)."""
-        from ..apps.resolve import find_work_item
+        from ..apps.resolve import debtor_of, find_work_item
 
         found = find_work_item(self._spec, run.item_id)
         if found is None:  # pragma: no cover - a run always has a live item
             return
         slug, item = found
+        # The same resolution the quota uses, not `item.owner` raw: `owner` is a
+        # free-text field, and a padded one (`"alice "`) is a recipient no
+        # lookup matches — so the notification about a failed run would go
+        # nowhere while the bill for it went to the right person.
+        recipient = debtor_of(self._spec, slug, run.item_id, item)
         phase = run.current_phase or "?"
         logger.warning(
             "workflow_exec: workflow run failed at %r on item %s, notifying owner %s",
             phase,
             run.item_id,
-            item.owner,
+            recipient,
         )
         notify(
             self._spec,
-            recipient=item.owner,
+            recipient=recipient,
             kind="status",
             title=f"Workflow run failed at “{phase}”",
             link=f"/a/{slug}/items/{run.item_id}",

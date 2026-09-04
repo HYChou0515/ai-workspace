@@ -11,6 +11,7 @@ import { useWorkspaceWorkflows } from "../hooks/useWorkspaceWorkflows";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 import { Icon } from "./Icon";
+import { useDirtyClose } from "../hooks/useDirtyClose";
 import { useDialog } from "./Dialog";
 import { ModalShell } from "./ModalShell";
 
@@ -45,6 +46,9 @@ export function WorkflowsModal({
   const templates = useWorkflowTemplates(slug, itemId);
   const importRef = useRef<HTMLInputElement | null>(null);
   const [busy, setBusy] = useState(false);
+  // #779: an import/apply in flight. Closing does not cancel it — it just takes
+  // away the only place the result (or the failure) would have been shown.
+  const attemptClose = useDirtyClose(busy, onClose);
 
   /** #520: pull a shipped template in. A name clash comes back as a 409 rather than
    * quietly overwriting, so we ask before replacing — the copy in the workspace may
@@ -112,7 +116,7 @@ export function WorkflowsModal({
 
   return (
     <ModalShell
-      onClose={onClose}
+      onClose={attemptClose}
       ariaLabel={t("workflows.title")}
       data-testid="workflows-modal"
       width={480}
@@ -131,7 +135,7 @@ export function WorkflowsModal({
           <button
             type="button"
             aria-label={t("workflows.close")}
-            onClick={onClose}
+            onClick={attemptClose}
             style={{ border: "none", background: "transparent", cursor: "pointer" }}
           >
             <Icon name="x" size={14} />

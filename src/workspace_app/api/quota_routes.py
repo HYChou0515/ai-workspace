@@ -13,6 +13,7 @@ limit is a dead end.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 
 from fastapi import APIRouter, HTTPException
@@ -24,9 +25,13 @@ from ..files import WorkspaceFiles
 from ..quota.disk_ledger import DiskLedger
 from ..quota.limits import parse_size
 from ..quota.user_limits import UserLimits
+from ..resources.groups import groups_of
+from .item_authz import ANY_APP, check_access, load_access_facts, require_item_access
 from .locator import ItemLocator
 from .registry import InvestigationRegistry
 from .sandbox_activity import IActivityStore
+
+logger = logging.getLogger(__name__)
 
 
 class _LiveEnvironment(BaseModel):
@@ -126,10 +131,70 @@ def register_quota_routes(
 ) -> None:
     """Mount the resource-usage + per-user-limit routes."""
 
-    def _describe(item_id: str) -> tuple[str, str]:
-        return locator.slug_of(item_id) or "", locator.title_of(item_id) or ""
+    def _describer() -> Callable[[str], tuple[str, str]]:
+        """Build a per-REQUEST describer: slug and title, the title only when
+        the reader may see it.
 
-    async def _found_running(owner: str, already_listed: set[str]) -> list[_LiveEnvironment]:
+        The redaction is the point. The debtor is the `owner` FIELD, which
+        anyone with write access can PATCH (#687), so a row can name an item its
+        owner has no access to: point a private item at somebody and your title
+        is read back to them on a page they opened for an unrelated reason. The
+        row itself STAYS — they are being charged for it and closing it is the
+        remedy this page exists to offer, and an unnamed environment is still
+        closable while an invisible one is not.
+
+        The SHAPE is the other point, and it is the reason this is a closure
+        rather than a plain function. The first version called
+        `require_item_access` per row, which re-derives the facts and re-queries
+        the reader's groups with identical arguments EVERY time — reintroducing,
+        one file over, the exact N+1 that was removed from the 507 path a round
+        earlier, on a listing whose length is unbounded (every item a person
+        owns, not just the ones capped). Measured at 20 workspaces: 40 ->
+        60 `find_work_item` and 0 -> 20 group queries, all synchronous inside an
+        `async def`. The sibling twenty lines below warns about the same thing
+        in the same file (#657: "one page load measured 42 of them").
+
+        So: groups once per request, `check_access` (which is pure) per row, and
+        slug/title read off the facts already fetched instead of two more
+        lookups."""
+        viewer = get_user_id()
+        try:
+            groups = groups_of(spec, viewer)
+        except Exception:  # noqa: BLE001 — a listing must not 500 on this
+            logger.debug("resources: group lookup failed for %s", viewer, exc_info=True)
+            groups = frozenset()
+
+        def _describe(item_id: str) -> tuple[str, str]:
+            # A soft-deleted item can still hold a sandbox — that is why it is
+            # on this page at all — so it must degrade to an unnamed row rather
+            # than take the whole response down with it.
+            try:
+                facts = load_access_facts(spec, item_id, include_deleted=True)
+            except Exception:  # noqa: BLE001 — deleted / unknown are ordinary here
+                return "", ""
+            if facts is None:
+                return "", ""
+            try:
+                check_access(
+                    facts,
+                    facts.slug,
+                    item_id,
+                    "read_meta",
+                    user=viewer,
+                    groups=groups,
+                    superusers=superusers,
+                )
+            except Exception:  # noqa: BLE001 — no access is an ordinary answer
+                return facts.slug, ""
+            return facts.slug, getattr(facts.item, "title", "") or ""
+
+        return _describe
+
+    async def _found_running(
+        owner: str,
+        already_listed: set[str],
+        describe: Callable[[str], tuple[str, str]],
+    ) -> list[_LiveEnvironment]:
         """This person's environments that are RUNNING but that no ledger row
         names — and, on the way past, put them back in the ledger.
 
@@ -178,7 +243,7 @@ def register_quota_routes(
                 continue
             await registry.record_running(item_id)
             cost = await registry.would_cost(item_id)
-            slug, title = _describe(item_id)
+            slug, title = describe(item_id)
             found.append(
                 _LiveEnvironment(
                     item_id=item_id,
@@ -191,6 +256,9 @@ def register_quota_routes(
         return found
 
     async def _resources_of(owner: str) -> _MyResources:
+        # ONE describer per request: it holds the reader's groups, which are
+        # the same for every row and were being re-queried per row.
+        describe = _describer()
         limits = await user_limits.for_user(owner)
         live_rows = (
             await activity.live_for(owner, since_ms=now_ms() - idle_window_ms)
@@ -199,7 +267,7 @@ def register_quota_routes(
         )
         live = []
         for row in live_rows:
-            slug, title = _describe(row.item_id)
+            slug, title = describe(row.item_id)
             live.append(
                 _LiveEnvironment(
                     item_id=row.item_id,
@@ -209,10 +277,10 @@ def register_quota_routes(
                     memory_bytes=row.memory_bytes,
                 )
             )
-        live += await _found_running(owner, {row.item_id for row in live_rows})
+        live += await _found_running(owner, {row.item_id for row in live_rows}, describe)
         owned = []
         for item_id, used in await disk_ledger.per_item_for(owner):
-            slug, title = _describe(item_id)
+            slug, title = describe(item_id)
             owned.append(_OwnedWorkspace(item_id=item_id, slug=slug, title=title, bytes_used=used))
         return _MyResources(
             owner=owner,
@@ -243,9 +311,48 @@ def register_quota_routes(
         The machine resource is one thing, and a panel that freed the tally
         without freeing the machine would be lying about what it did — and would
         make the next person's limit meaningless."""
+        # The item record first, the LEDGER when it is gone. A soft-deleted
+        # item still holds its sandbox and still owes for it — the row is on
+        # this page for exactly that reason — so resolving the debtor only
+        # through the record made the one row that most needs closing the one
+        # row that could not be.
         owner = locator.owner_of(item_id)
+        if owner is None and activity is not None:
+            owner = await activity.owner_of(item_id)
+
+        # The debtor, a superuser, or someone the owner made a manager of this
+        # item. That last one is not generosity: `change_permission` is what
+        # lets a person resize the environment, §1.4 makes closing the ONLY way
+        # to resize a live one, and the panel draws them the button. Requiring
+        # the `owner` FIELD here handed them a 404 — a visible no-op, since the
+        # mutation has no error branch — for the one action their grant is for.
+        #
+        # Still 404 rather than 403 for everyone else: whether a given item has
+        # an environment running is not a fact a bystander is owed.
         if owner != get_user_id() and get_user_id() not in superusers:
-            raise HTTPException(status_code=404, detail="unknown environment")
+            # THE shared gate, with the two differences stated as arguments.
+            # `ANY_APP` because this route addresses the item by id alone —
+            # fabricating one from a lookup that reports a deleted item as
+            # absent is what refused a manager on the one row this page argues
+            # hardest for. `allow_deleted` because closing is a BILLING action:
+            # the machine is running and somebody is paying for it, so "the item
+            # is deleted" is not a reason to refuse.
+            #
+            # Inlining this gate's body to get those two was the first fix, and
+            # it was the same defect it had just repaired one file over: a copy
+            # the next rule added to the shared gate would never reach.
+            try:
+                require_item_access(
+                    spec,
+                    ANY_APP,
+                    item_id,
+                    "change_permission",
+                    user=get_user_id(),
+                    superusers=superusers,
+                    allow_deleted=True,
+                )
+            except Exception as exc:  # noqa: BLE001 — any refusal reads the same
+                raise HTTPException(status_code=404, detail="unknown environment") from exc
         # `close_session` owns the whole teardown, INCLUDING clearing the
         # heartbeat. Clearing it here as well was the shape of the bug: the close
         # could quietly do nothing — no session on this replica — and this line

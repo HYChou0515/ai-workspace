@@ -8,7 +8,7 @@
  */
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -18,6 +18,7 @@ import { MemoryRouter } from "react-router-dom";
 vi.mock("../api", () => ({
   api: {
     getMe: vi.fn(async () => ({ id: "alice", is_superuser: false, groups: [] })),
+    deleteAppItem: vi.fn(async () => {}),
     // The company directory the person-picker reads. Two people, so a test can
     // show that picking one targets THAT id rather than whatever was typed.
     getUsers: vi.fn(async () => [
@@ -174,6 +175,31 @@ describe("MyResourcesPage", () => {
   it("says how to free disk, because deleting happens in the item", async () => {
     render(<MyResourcesPage client={client()} />, { wrapper: Wrap });
     expect(await screen.findByText(/刪除永遠不受額度限制/)).toBeTruthy();
+  });
+
+  it("deletes an item and everything it owns from the disk row, after the cascade dialog", async () => {
+    // The page is where the person AT their limit sees which item eats the
+    // quota — so the delete lives here too, behind a dialog that says what
+    // dies, and the myResources query refetches so the gauge visibly drops.
+    const c = client();
+    render(<MyResourcesPage client={c} />, { wrapper: Wrap });
+    fireEvent.click(await screen.findByRole("button", { name: /刪除 Line 3 stoppage/ }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent(/檔案、對話、workflow 紀錄/);
+    expect(dialog).toHaveTextContent(/知識庫的知識會保留/);
+    fireEvent.click(within(dialog).getByRole("button", { name: "刪除" }));
+    await waitFor(() => expect(api.deleteAppItem).toHaveBeenCalledWith("rca", "i-1"));
+    await waitFor(() => expect(vi.mocked(c.get).mock.calls.length).toBeGreaterThan(1));
+  });
+
+  it("cancelling the disk-row delete dialog deletes nothing", async () => {
+    vi.mocked(api.deleteAppItem).mockClear();
+    render(<MyResourcesPage client={client()} />, { wrapper: Wrap });
+    fireEvent.click(await screen.findByRole("button", { name: /刪除 Line 3 stoppage/ }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(api.deleteAppItem).not.toHaveBeenCalled();
   });
 
   it("renders an empty state rather than a bare zero", async () => {

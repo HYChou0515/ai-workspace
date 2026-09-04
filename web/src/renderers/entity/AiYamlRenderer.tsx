@@ -199,9 +199,12 @@ export function AiYamlRenderer({ path }: { path: string }) {
   const groupOptions = fields
     .filter((f) => f.role === "status" || f.role === "actor" || f.role === "ref")
     .map((f) => ({ name: f.name, label: f.name }));
-  // #690 P3 — what a bar's colour may mean. Select-ish fields and people:
-  // both give `selectColor` a stable string to work from. `ref` is left out
-  // until it can resolve its display value (plan §7 R3).
+  // #690 P3 — what a bar's colour may mean. Select-ish fields and people: both
+  // give the chart a stable string to colour from, though not the same palette
+  // — a `status` takes the chip slots so it matches its chip in the table, and
+  // an `actor` takes a generated hue per person, since six slots cannot hold a
+  // directory (actorColor.ts). `ref` is left out until it can resolve its
+  // display value (plan §7 R3).
   const colorByOptions = fields
     .filter((f) => f.role === "status" || f.role === "actor")
     .map((f) => ({ name: f.name, label: f.name }));

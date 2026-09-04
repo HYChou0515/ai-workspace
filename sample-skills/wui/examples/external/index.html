@@ -1,0 +1,37 @@
+<!--
+  A WUI that reaches OUTSIDE the item. The page has no network of its own — it
+  asks the platform to run a tool, and the tool holds the credentials.
+
+  Unlike the other two examples, this one cannot be copied and just work: the
+  tool has to be one this app grants. So what it mostly demonstrates is the
+  three ways that goes wrong, visibly.
+-->
+<html>
+  <head>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Lot lookup</h1>
+      <span id="status" class="status"></span>
+    </header>
+
+    <section data-wui="lookup">
+      <input id="lot" placeholder="Lot number" />
+      <button id="go">Look up</button>
+      <button id="save" disabled>Save to this page</button>
+    </section>
+
+    <!-- The refusal goes HERE, on the page, not in a console nobody can open. -->
+    <section data-wui="result">
+      <p id="problem" class="problem" hidden></p>
+      <dl id="fields" class="fields"></dl>
+      <details id="raw" hidden>
+        <summary>What the tool actually returned</summary>
+        <pre id="rawtext"></pre>
+      </details>
+    </section>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

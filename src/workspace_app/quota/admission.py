@@ -19,10 +19,13 @@ Three properties this must have, each of which was a decision:
   service boundary, not where the agent first reaches for `exec` — otherwise a
   turn is spent rediscovering a limit we already knew about.
 
-The debtor is the item's `owner`. See #687: that field is currently rewritable
-by anyone with write access, so these limits bind only as far as that issue's
-lockdown. This module does not paper over it — it charges the owner, and #687
-makes the owner mean something.
+The debtor is the item's `owner`, or its CREATOR when `owner` says nothing
+(`apps.resolve.debtor_of`). See #687: `owner` is currently rewritable by anyone
+with write access, so these limits bind only as far as that issue's lockdown.
+This module does not paper over it — it charges the owner, and #687 makes the
+owner mean something. The `created_by` floor is not a second answer to "whose
+item is this"; it exists because a BLANK owner used to switch this gate off
+entirely, which is a different failure from charging the wrong person.
 """
 
 from __future__ import annotations
@@ -50,7 +53,14 @@ class SandboxQuotaExceeded(Exception):
     Carries which dimension bound and the numbers behind it, because the only
     useful thing to tell someone is what to close and how much it buys back."""
 
-    def __init__(self, owner: str, dimension: str, used: float, limit: float) -> None:
+    def __init__(
+        self,
+        owner: str,
+        dimension: str,
+        used: float,
+        limit: float,
+        holding: list[LiveSandbox] | None = None,
+    ) -> None:
         super().__init__(
             f"{owner} is at their sandbox limit: {dimension} {used} of {limit} "
             f"already in use by live environments"
@@ -59,16 +69,35 @@ class SandboxQuotaExceeded(Exception):
         self.dimension = dimension
         self.used = used
         self.limit = limit
+        #: WHICH environments are holding it. The docstring above has always
+        #: promised "what to close and how much it buys back", and the numbers
+        #: alone answer only the second half — leaving the person to work out who
+        #: is holding their quota, on a page they have to know exists. Ids and
+        #: figures only; a title is a store lookup and does not belong in an
+        #: exception constructor.
+        self.holding: list[LiveSandbox] = list(holding or [])
 
 
 class AdmissionGate:
     """Decides whether one more live sandbox may be opened for an item.
 
-    `has_live_sandbox` answers "is this item already holding a slot?" — wired to
-    the registry's liveness probe, which is authoritative across pods (#366).
+    "Is this item already holding a slot?" is answered by the LEDGER — the same
+    heartbeat rows this gate is about to count — and not by the registry's
+    liveness probe. With no address store (`kind: local`) that probe degrades to
+    "does the item's directory exist", and those dirs outlive the processes
+    until the eight-hour reaper: an item that ran once read as already-holding
+    for the rest of the day, so closing it and starting somebody else let it
+    back in for free, two live sandboxes under a limit of one.
+
+    `set_item_resources` had already rejected the same source for the same
+    reason, with the measurement in its docstring; the judgement did not travel
+    one file. Reading the ledger also means "does it hold a slot" and "what is
+    held" cannot disagree — they are the same row.
+
     `owner_of` resolves the debtor; an item with no resolvable owner is NOT
     gated, because charging a limit to nobody can only produce a refusal no
-    person can act on.
+    person can act on. (`owner` blank is not that case — see
+    `apps.resolve.debtor_of`, which falls back to the creator.)
     """
 
     def __init__(
@@ -77,7 +106,6 @@ class AdmissionGate:
         limits_for: Callable[[str], Awaitable[PerUserResources]],
         *,
         owner_of: Callable[[str], str | None],
-        has_live_sandbox: Callable[[str], Awaitable[bool]],
         cost_of: Callable[[str], Awaitable[ResourceLimits]] | None,
         window_ms: int,
         now_ms: Callable[[], int],
@@ -100,7 +128,6 @@ class AdmissionGate:
         # ledger.
         self._limits_for = limits_for
         self._owner_of = owner_of
-        self._has_live = has_live_sandbox
         self._window_ms = window_ms
         self._now_ms = now_ms
 
@@ -132,14 +159,19 @@ class AdmissionGate:
         limits = await self._limits_for(owner)
         if not self._configured(limits):
             return
-        if await self._has_live(item_id):
-            return  # already holding its slot — never refuse what is already open
+        since = self._now_ms() - self._window_ms
+        if await self._activity.is_live(item_id, since_ms=since):
+            # Already holding its slot — never refuse what is already open. This
+            # return is ALSO what keeps the item out of its own tally below:
+            # for its row to come back from `live_for` it would have to be
+            # undeleted with a heartbeat inside `since`, which is exactly what
+            # was just asked here. `live_for` therefore needs no self-filter —
+            # there was one, dead from the day this check moved above it.
+            # Narrow either predicate and the filter has to come back.
+            return
         if incoming is None and self._cost_of is not None:
             incoming = await self._cost_of(item_id)
-        since = self._now_ms() - self._window_ms
-        live = [
-            s for s in await self._activity.live_for(owner, since_ms=since) if s.item_id != item_id
-        ]
+        live = await self._activity.live_for(owner, since_ms=since)
         self._enforce(owner, live, incoming, limits)
 
     def _enforce(
@@ -178,4 +210,4 @@ class AdmissionGate:
                     would_be,
                     limit,
                 )
-                raise SandboxQuotaExceeded(owner, name, would_be, limit)
+                raise SandboxQuotaExceeded(owner, name, would_be, limit, holding=live)

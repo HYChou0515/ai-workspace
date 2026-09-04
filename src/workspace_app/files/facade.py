@@ -833,6 +833,22 @@ class WorkspaceFiles:
         if self._on_usage is not None:
             await self._publish_usage(workspace_id, await self.workspace_usage(workspace_id))
 
+    async def purge(self, workspace_id: str) -> None:
+        """FileStore-contract completeness. The item-delete cascade purges the
+        DURABLE store directly after tearing the sandbox down (item_routes) —
+        it never comes through this facade, because purging a workspace whose
+        sandbox is still warm would race the mirror. Delegates to the durable
+        store and drops the cached measurement; refuses a warm workspace loudly
+        rather than half-deleting under a live sandbox."""
+        if await self._warm(workspace_id) is not None:
+            raise RuntimeError(
+                f"purge({workspace_id!r}) with a warm sandbox — close the session first"
+            )
+        await self._fs.purge(workspace_id)
+        self._forget(workspace_id)
+        if self._on_usage is not None:
+            await self._publish_usage(workspace_id, 0)
+
     async def ls(self, workspace_id: str, prefix: str = "") -> list[str]:
         prefix = abs_path(prefix) if prefix else prefix
         warm = await self._warm(workspace_id)
