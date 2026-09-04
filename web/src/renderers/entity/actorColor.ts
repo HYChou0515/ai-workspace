@@ -16,10 +16,17 @@
  *
  * Each new seat lands in the middle of the largest remaining gap, so the hues
  * of `n` people are never closer than `360 / 2^⌈log₂ n⌉` degrees — they crowd as
- * the team grows but never repeat, and there is no head count at which the
- * palette runs out. `1` is deliberately absent: on a hue circle it IS `0`.
+ * the team grows but never repeat. `1` is deliberately absent: on a hue circle
+ * it IS `0`.
+ *
+ * The sequence itself never repeats at any length, but the COLOURS do run out
+ * eventually: past roughly 300 seats the hue steps are finer than 8-bit sRGB can
+ * express and two of them round to the same fill. That is far past any team a
+ * chart is legible for at all — the point of the bound above is that nothing
+ * degrades gracelessly on the way there — but it is a limit, not infinity.
  */
 
+import type { EntityFieldSpec } from "../../api/entities";
 import type { ChipColor } from "./selectColor";
 
 /**
@@ -44,6 +51,21 @@ const CHROMA = 0.16;
 /** Non-inverting by construction: `--ink` is one value in both themes, so a
  * bar's text cannot flip to the other theme's colour the way `--white` does. */
 const INK = "var(--ink)";
+
+/**
+ * A schema may PIN one person to a named hue (`colors: { alice: teal }`), the
+ * same key `selectColor` honours for a status value. The angles are each named
+ * chip colour's own OKLCH hue, so a pinned "teal" lands in the same family as
+ * the teal chip — one visual system, not two. A pinned person spends no seat,
+ * which leaves everyone else spread as widely as if they were not on the chart.
+ */
+const SLOT_HUE: readonly (number | null)[] = [148.1, 258.4, 75.1, 296.1, 185.3, 30.3, null];
+const PINNED_HUE: Record<string, number | null> = {
+  green: 148.1, blue: 258.4, amber: 75.1, yellow: 75.1, violet: 296.1,
+  purple: 296.1, teal: 185.3, cyan: 185.3, rose: 30.3, red: 30.3,
+  // the neutral slot has no hue to name
+  slate: null, gray: null, grey: null, neutral: null,
+};
 
 /** The k-th term of the van der Corput sequence, base 2, over `[0, 1)`. */
 export function hueFraction(k: number): number {
@@ -109,12 +131,40 @@ function fill(chroma: number, hue: number): string {
  * person" rather than as one more colour, and costs no seat: the people who ARE
  * on the chart keep the wider spacing.
  */
-export function actorPalette(valuesInRecordOrder: readonly string[]): (value: string) => ChipColor {
+export function actorPalette(
+  valuesInRecordOrder: readonly string[],
+  fieldSpec?: EntityFieldSpec,
+): (value: string) => ChipColor {
+  const pins = fieldSpec?.colors ?? {};
+  /**
+   * `undefined` means NOT PINNED — a distinct answer from `null`, which means
+   * pinned to something with no hue (the neutral slot, or a name we do not
+   * know, which `selectColor` also resolves to neutral). Flattening the two
+   * into one absence made an unrecognised pin fall through to seat allocation,
+   * i.e. behave as though the author had never written it.
+   */
+  const pinnedHue = (value: string): number | null | undefined => {
+    if (!(value in pins)) return undefined;
+    const key = String(pins[value]).trim().toLowerCase();
+    if (key in PINNED_HUE) return PINNED_HUE[key];
+    // `selectColor` also takes a slot number ("5" / "cat-2"); the same digits
+    // name the same hues here, and slot 7 is the neutral one.
+    const digit = /(\d)/.exec(key);
+    const slot = digit ? Number(digit[1]) : 0;
+    return slot >= 1 && slot <= SLOT_HUE.length ? SLOT_HUE[slot - 1] : null;
+  };
+
   const seats = new Map<string, number>();
   for (const value of valuesInRecordOrder) {
-    if (value && !seats.has(value)) seats.set(value, seats.size);
+    if (value && !seats.has(value) && pinnedHue(value) === undefined) seats.set(value, seats.size);
   }
   return (value: string): ChipColor => {
+    const pinned = value ? pinnedHue(value) : undefined;
+    if (pinned !== undefined) {
+      // A pin naming no hue we know (or the neutral one) is achromatic, the same
+      // answer `selectColor` gives it.
+      return { bg: pinned === null ? fill(0, 0) : fill(CHROMA, pinned), fg: INK };
+    }
     const seat = value ? seats.get(value) : undefined;
     return seat === undefined
       ? { bg: fill(0, 0), fg: INK }

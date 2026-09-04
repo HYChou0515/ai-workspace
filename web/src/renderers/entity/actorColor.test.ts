@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import type { EntityFieldSpec } from "../../api/entities";
 import { actorPalette, hueFraction } from "./actorColor";
 
 /**
@@ -45,10 +46,48 @@ describe("actorPalette", () => {
    * far enough they land on top of each other — distinctness fails here long
    * before anyone notices the bars look flat.
    */
-  it("still gives 64 people 64 distinct colours", () => {
-    const ids = Array.from({ length: 64 }, (_, i) => `u${i}`);
+  it("still gives 256 people 256 distinct colours", () => {
+    // 256 is far past a legible chart and still inside the sequence's useful
+    // range; the docstring's stated ceiling (~300, where 8-bit sRGB stops being
+    // able to tell two hue steps apart) is what this is walking toward, and a
+    // chroma raised past the gamut would fail here long before reaching it.
+    const ids = Array.from({ length: 256 }, (_, i) => `u${i}`);
     const colour = actorPalette(ids);
-    expect(new Set(ids.map((id) => colour(id).bg)).size).toBe(64);
+    expect(new Set(ids.map((id) => colour(id).bg)).size).toBe(256);
+  });
+
+  /**
+   * `colors:` is the schema's pin, and `selectColor` has always honoured it. An
+   * actor field taking a different palette must not make that key quietly stop
+   * working — a setting that silently does nothing is worse than one that is
+   * refused.
+   */
+  const pinned = (colors: Record<string, string>): EntityFieldSpec => ({
+    name: "assignee",
+    role: "actor",
+    colors,
+  });
+
+  it("honours a schema pin, in the named hue's own family", () => {
+    const colour = actorPalette(["ana", "bo"], pinned({ ana: "teal" }));
+    // teal is the cool green-blue the teal chip is: g strongest, r weakest.
+    const [, r, g, b] = /^#(\w\w)(\w\w)(\w\w)$/.exec(colour("ana").bg) ?? [];
+    const [R, G, B] = [r, g, b].map((h) => parseInt(h, 16));
+    expect(G).toBeGreaterThan(R);
+    expect(B).toBeGreaterThan(R);
+    expect(colour("ana").bg).not.toBe(colour("bo").bg);
+  });
+
+  it("spends no seat on a pinned person", () => {
+    // `bo` is the only unpinned name either way, so it must hold seat 0.
+    const withPin = actorPalette(["ana", "bo"], pinned({ ana: "teal" }))("bo");
+    const alone = actorPalette(["bo"])("bo");
+    expect(withPin).toEqual(alone);
+  });
+
+  it("gives a pin that names no hue the unowned treatment", () => {
+    const colour = actorPalette(["ana"], pinned({ ana: "chartreuse" }));
+    expect(colour("ana").bg).toBe(actorPalette([])("").bg);
   });
 
   it("draws unowned work with no hue at all", () => {

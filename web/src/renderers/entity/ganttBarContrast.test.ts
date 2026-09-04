@@ -12,6 +12,7 @@ import {
   LIGHT,
   TOKENS_CSS,
   contrast,
+  isDeclared,
   mixSrgb,
   over,
   paintedOver,
@@ -106,12 +107,13 @@ function inkHex(value: string, block: RegExp): string {
   const v = value.trim();
   const ref = /^var\(\s*(--[\w-]+)\s*(?:,([\s\S]+))?\)$/.exec(v);
   if (!ref) return v;
-  try {
-    return tokenIn(TOKENS_CSS, block, ref[1]);
-  } catch {
-    if (ref[2] === undefined) throw new Error(`${ref[1]} is neither declared nor given a fallback`);
-    return inkHex(ref[2], block);
-  }
+  // ONLY an undeclared property falls through to the fallback. A declared token
+  // that is not a hex colour must still raise: swallowing that too would mean a
+  // token re-tuned to `color-mix()` silently gets measured as its fallback, and
+  // the guard keeps passing over a colour it never looked at.
+  if (isDeclared(TOKENS_CSS, block, ref[1])) return tokenIn(TOKENS_CSS, block, ref[1]);
+  if (ref[2] === undefined) throw new Error(`${ref[1]} is neither declared nor given a fallback`);
+  return inkHex(ref[2], block);
 }
 
 /**
@@ -131,6 +133,23 @@ function resolvedInk(el: HTMLElement, bar: HTMLElement, chain: string[]): string
   if (own && own !== "inherit") return own; // the element's own rule
   if (bar.style.color) return bar.style.color; // inherited: inline on the bar
   return inheritedColor(ENTITY_VIEWS_CSS, chain.slice(1)) || ""; // inherited: from CSS
+}
+
+/**
+ * The ink the avatar's ring actually paints in.
+ *
+ * The RULE is the source and the element's custom properties only fill its
+ * variable in — that order matters, and getting it backwards is how a guard
+ * stops guarding: reading the bar's inline `--bar-ink` first short-circuits
+ * before the stylesheet is ever consulted, so the assertion re-measures the
+ * palette against itself and passes no matter what `border-color` says. Written
+ * this way, dropping either half — the rule's `var(--bar-ink, …)` or the inline
+ * value GanttView publishes — falls back to the cream ink and fails.
+ */
+function ringInk(bar: HTMLElement): string {
+  const rule = effective(ENTITY_VIEWS_CSS, ".ev-gantt__bar-avatar", "border-color") ?? "";
+  const named = /var\(\s*(--[\w-]+)/.exec(rule);
+  return (named && bar.style.getPropertyValue(named[1])) || rule;
 }
 
 /** Render one bar and hand back the element plus its label / assignee. */
@@ -308,10 +327,7 @@ describe("a gantt bar coloured by ACTOR", () => {
       const surface = tokenIn(TOKENS_CSS, block, "--white");
       for (const [i, bar] of renderTeam({ assignee_display: "avatar" }).entries()) {
         const avatar = bar.querySelector(".ev-gantt__bar-avatar") as HTMLElement;
-        const ring =
-          bar.style.getPropertyValue("--bar-ink") ||
-          effective(ENTITY_VIEWS_CSS, ".ev-gantt__bar-avatar", "border-color") ||
-          "";
+        const ring = ringInk(bar);
         expect(avatar, "the bar renders no avatar to ring").toBeTruthy();
 
         const fill = paintedOver(TOKENS_CSS, block, bar.style.background, surface);

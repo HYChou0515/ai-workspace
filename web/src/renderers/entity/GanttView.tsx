@@ -168,6 +168,7 @@ export function GanttView({
             [...entities]
               .sort((a, b) => a.number - b.number)
               .map((e) => fieldText(e.fields[colorField]) ?? ""),
+            colorSpec,
           )
         : undefined,
     [colorField, colorSpec, entities],
