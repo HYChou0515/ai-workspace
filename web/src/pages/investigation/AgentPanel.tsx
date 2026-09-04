@@ -19,6 +19,7 @@ import { ModelEffortPicker } from "../../components/ModelEffortPicker";
 import { SkillsModal } from "../../components/SkillsModal";
 import { WorkflowsModal } from "../../components/WorkflowsModal";
 import { EnvVarsModal } from "../../components/EnvVarsModal";
+import { ItemEnvironmentModal } from "../../components/ItemEnvironmentModal";
 import { ToolsPickerModal } from "../../components/ToolsPickerModal";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { UsageBar } from "./UsageBar";
@@ -33,12 +34,15 @@ import { UserPicker } from "../../components/UserPicker";
 import { docHref } from "../kb/kbLinks";
 import { type AgentState, useOptionalAgent } from "../../hooks/useAgent";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
+import { subscribeAgentDraft } from "../../lib/agentDraftBus";
 import { chatEmptyHint } from "../../lib/chatCopy";
 import { modCombo } from "../../lib/platform";
 import { nameForPreset, pickerModels, presetForName } from "./agentPicker";
 import { useStickToBottom } from "../../hooks/useStickToBottom";
 import { ConnectionNotice } from "../../components/ConnectionNotice";
+import { QuotaHoldingList } from "../../components/QuotaHoldingList";
 import { ResourceLinkText } from "../../components/ResourceLinkText";
+import { myResourcesApi } from "../../api/myResources";
 import { TurnStatus } from "../../components/TurnStatus";
 import { turnLooksSilent, turnsFromEntry } from "./agentLog";
 import type { CompactionReason } from "../../api/types";
@@ -142,6 +146,7 @@ export function AgentPanel({
   onSaveSkillPrefs,
   envVars,
   onSaveEnvVars,
+  environment,
   uploadDir = "uploads",
 }: {
   investigationId: string;
@@ -204,6 +209,11 @@ export function AgentPanel({
    * header's Env panel. Absent → no Env button (surfaces with no item). */
   envVars?: Record<string, string>;
   onSaveEnvVars?: (envVars: Record<string, string>) => void;
+  /** #P4: whether this App ever opens a sandbox (`function.sandbox`), and
+   *  whether this viewer may resize it (`change_permission`). Absent ⇒ the
+   *  button is not drawn: a control that can never do anything is worse than
+   *  a missing one, because it looks like a promise. */
+  environment?: { canResize: boolean };
   /** #198: the folder the composer's attach stages files into — the item's profile's
    * `upload_dir` (default `uploads/`), the same folder its workflows glob. */
   uploadDir?: string;
@@ -222,6 +232,9 @@ export function AgentPanel({
   // composer's own feedback channel (Enter during a turn, Stop). Cleared on the
   // next successful send.
   const [composerHint, setComposerHint] = useState<string | null>(null);
+  // Which environment's close is in flight, so a second click cannot queue a
+  // second teardown of the same sandbox.
+  const [closingItemId, setClosingItemId] = useState<string | null>(null);
   // …and when the turn ends, because every hint this channel carries is about a
   // turn that was running: 「正在停止這一輪…」 and 「回覆還在進行中…」 both describe
   // a state that is over, and both used to sit there until the next send. A
@@ -362,6 +375,16 @@ export function AgentPanel({
   const chatScrollRef = useStickToBottom<HTMLDivElement>(log);
   const t = useT();
   const [draft, setDraft] = useState("");
+  // A WUI hands its error/pick report over rather than making someone who
+  // cannot open a console retype it. Offered into the box, never sent: what to
+  // say next is still theirs.
+  useEffect(
+    () =>
+      subscribeAgentDraft(investigationId, (text) =>
+        setDraft((d) => (d.trim() ? `${d.replace(/\s+$/, "")}\n\n${text}` : text)),
+      ),
+    [investigationId],
+  );
   const [mentions, setMentions] = useState<string[]>([]);
   // #198: live upload state for the composer attach — null when idle, else the
   // aggregate byte/file progress driving the bar. `dragging` flags the drop overlay.
@@ -633,6 +656,7 @@ export function AgentPanel({
         onSaveSkillPrefs={onSaveSkillPrefs}
         envVars={envVars}
         onSaveEnvVars={onSaveEnvVars}
+        environment={environment}
         appliedSkills={appliedSkills}
         onToggleApplySkill={toggleApplySkill}
       />
@@ -732,6 +756,20 @@ export function AgentPanel({
                 #688 "refuse outright" trade-off resting on a page you have to
                 go and find. */}
             <ResourceLinkText text={log.error} />
+            {/* #P5: naming /my-resources tells someone where to go; this lets
+                them act without going. The list is empty for every refusal that
+                is not about environments, and for a collaborator the backend
+                withheld the inventory from — both render as nothing. */}
+            <QuotaHoldingList
+              holding={log.holding ?? []}
+              busyItemId={closingItemId ?? undefined}
+              onClose={(itemId) => {
+                setClosingItemId(itemId);
+                void myResourcesApi
+                  .closeEnvironment(itemId)
+                  .finally(() => setClosingItemId(null));
+              }}
+            />
           </div>
         )}
         </div>
@@ -1261,6 +1299,7 @@ export function AgentHeader({
   onSaveSkillPrefs,
   envVars,
   onSaveEnvVars,
+  environment,
   appliedSkills = [],
   onToggleApplySkill,
 }: {
@@ -1296,6 +1335,11 @@ export function AgentHeader({
   /** Persist them. Absent → no Env button, the same way the Tools picker is
    * withheld on a surface that cannot persist onto an item. */
   onSaveEnvVars?: (envVars: Record<string, string>) => void;
+  /** #P4: whether this App ever opens a sandbox (`function.sandbox`), and
+   *  whether this viewer may resize it (`change_permission`). Absent ⇒ the
+   *  button is not drawn: a control that can never do anything is worse than
+   *  a missing one, because it looks like a promise. */
+  environment?: { canResize: boolean };
   /** #380: skills queued (composer-owned) to apply this turn — lit in the panel. */
   appliedSkills?: string[];
   /** #380: toggle a skill in this turn's apply set (composer state lives in AgentPanel). */
@@ -1307,6 +1351,7 @@ export function AgentHeader({
   const [showWorkflows, setShowWorkflows] = useState(false);
   const [showTools, setShowTools] = useState(false);
   const [showEnv, setShowEnv] = useState(false);
+  const [showItemEnv, setShowItemEnv] = useState(false);
   const fileService = useMemo(
     () => investigationFileService(slug, investigationId),
     [slug, investigationId],
@@ -1341,6 +1386,14 @@ export function AgentHeader({
           itemId={investigationId}
           fileService={fileService}
           onClose={() => setShowWorkflows(false)}
+        />
+      )}
+      {showItemEnv && environment && (
+        <ItemEnvironmentModal
+          slug={slug}
+          itemId={investigationId}
+          canEdit={environment.canResize}
+          onClose={() => setShowItemEnv(false)}
         />
       )}
       {showEnv && onSaveEnvVars && (
@@ -1433,6 +1486,22 @@ export function AgentHeader({
           style={hdrBtn}
         >
           <Icon name="settings" size={13} /> {t("tools.button")}
+        </button>
+      )}
+      {environment && (
+        <button
+          type="button"
+          // The item's execution environment: is it running, what is it costing,
+          // how big may it be. Beside the variables button because both are
+          // per-item configuration of the same sandbox — but gated on the App
+          // HAVING one, not on who may edit the item.
+          data-testid="item-environment-button"
+          onClick={() => setShowItemEnv(true)}
+          title={t("itemenv.tip")}
+          aria-label={t("itemenv.tip")}
+          style={hdrBtn}
+        >
+          <Icon name="settings" size={13} /> {t("itemenv.button")}
         </button>
       )}
       {onSaveEnvVars && (

@@ -4,8 +4,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { AgentEvent } from "../events";
 import { eventId, eventSeq, isTerminal, isTurnProgress } from "../events";
 import { type AgentLog, logFromMessages, reduceAgent } from "../pages/investigation/agentLog";
+import { publishFileChanged } from "../lib/fileChangedBus";
 import type { MsgKey } from "../lib/i18n";
 import { type QuotaDetail, type QuotaKind, quotaMessage } from "../lib/quotaFailure";
+import { holdingFromSendError } from "./useChatSessionHolding";
 import { type ChatThread, useChatLog } from "./useChatLog";
 import { useCurrentUser } from "./useCurrentUser";
 import { useT } from "../lib/i18n";
@@ -54,6 +56,11 @@ export type BroadcastChatTransport = {
   queryKey: QueryKey;
   /** react-query key to invalidate when a `file_changed` event arrives. */
   filesKey: QueryKey;
+  /** The FileService scope the `file_changed` events belong to, so consumers
+   * that cannot re-read on demand (a WUI holding edited state) can be told
+   * WHICH file moved under them. Optional: a transport with no file surface of
+   * its own simply announces nothing. */
+  fileScopeId?: string;
   /** #613: react-query key the chat's todo checklist lives under — a
    * `todos_updated` event writes the new list straight into it (and a terminal
    * event invalidates it, the backstop for updates missed while disconnected).
@@ -311,6 +318,11 @@ export function useChatSession(
               // A human edited a workspace file — refetch the tree. Not a turn
               // event, so it never folds into the log.
               void qc.invalidateQueries({ queryKey: transport.filesKey });
+              // A tree can re-read whenever it likes; a WUI holding half-entered
+              // state cannot, so it is told which file moved and decides for
+              // itself. Announced here rather than from the tree's refetch,
+              // because that loses the path — and the path is the whole message.
+              if (transport.fileScopeId) publishFileChanged(transport.fileScopeId, ev.path);
               continue;
             }
             if (ev.type === "todos_updated") {
@@ -587,7 +599,15 @@ export function useChatSession(
               : String(err));
         // Not the turn's error: no turn ran. It says which limit bound and
         // links to it, and it must survive whatever the stream does next.
-        setLog((prev) => ({ ...prev, streaming: false, error: msg, errorFromTurn: false }));
+        setLog((prev) => ({
+          ...prev,
+          streaming: false,
+          error: msg,
+          errorFromTurn: false,
+          // The sentence above is lossy by design; the LIST survives beside it
+          // so the refusal can offer to act rather than only to explain.
+          holding: holdingFromSendError({ ...(err as object | null), status }),
+        }));
       }
     },
     [transport, t],

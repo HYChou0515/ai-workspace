@@ -10,6 +10,7 @@ import workspace_app.api.app as app_mod
 from workspace_app.api import create_app
 from workspace_app.api.events import RunDone
 from workspace_app.api.runner import ScriptedAgentRunner
+from workspace_app.api.turn_context import TurnContextBuilder
 from workspace_app.apps.playground.model import PlaygroundItem
 from workspace_app.apps.registry import app_model
 from workspace_app.filestore.specstar_impl import SpecstarFileStore
@@ -283,3 +284,62 @@ async def test_both_halves_of_the_turn_are_told_there_are_sub_agents(monkeypatch
     assert sized == [True]
     kwargs = LitellmAgentRunner()._agent_kwargs(ctx, None, lambda _m: LlmCredential())
     assert kwargs["has_subagents"] is True
+
+
+async def test_the_curated_models_ride_create_app_onto_every_turn_context(monkeypatch):
+    """plan-subagent-model-choice, the last mile: what the composition root is
+    handed (`create_app(subagent_models=...)` — production passes
+    `resolve_subagent_models(settings)`) lands on the turn context, which is
+    where `_agent_kwargs` reads it to shape run_agent's schema. Absent ⇒ ()."""
+    from workspace_app.factories import LlmEndpoint, SubagentModel
+
+    spec = make_spec()
+    filestore = SpecstarFileStore(spec)
+    captured: dict[str, TurnContextBuilder] = {}
+    real = app_mod.TurnContextBuilder
+
+    def _capture(**kw):
+        b = real(**kw)
+        captured["builder"] = b
+        return b
+
+    monkeypatch.setattr(app_mod, "TurnContextBuilder", _capture)
+    choice = SubagentModel(
+        name="fast",
+        description="Cheap local engine.",
+        endpoint=LlmEndpoint(
+            model="m-fast",
+            base_url=None,
+            api_key=None,
+            reasoning_effort=None,
+            ttft_s=8.0,
+            idle_s=120.0,
+            cooldown_s=30.0,
+        ),
+    )
+    create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=filestore,
+        runner=ScriptedAgentRunner([RunDone()]),
+        subagent_models=(choice,),
+    )
+    item_id = (
+        spec.get_resource_manager(PlaygroundItem)
+        .create(PlaygroundItem(title="t", owner="u", profile="echo"))
+        .resource_id
+    )
+    builder = captured["builder"]
+    ctx = await builder.build_chat_turn(
+        item_id,
+        agent_config=None,
+        run_subagent=_dummy_subagent,
+        history_messages=[],
+        reasoning_effort=None,
+        kb_enhancements=None,
+        collection_ids=[],
+        collection_tiers=[],
+        acting_user="u",
+        speaker=None,
+    )
+    assert ctx.subagent_models == (choice,)

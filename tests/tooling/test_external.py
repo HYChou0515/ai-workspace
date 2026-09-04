@@ -73,6 +73,49 @@ async def test_a_resolved_tool_becomes_a_package_the_agent_can_call() -> None:
     assert pkg.commands[0].params_json_schema == {"type": "object", "properties": {}}
 
 
+async def test_a_strangers_entry_that_cannot_name_a_variable_is_dropped() -> None:
+    """An entry that is not an object, or has no string `name`, cannot build an
+    `EnvNeed` at all — letting the `KeyError` out would cost the whole resolve
+    rather than that one row.
+
+    Only that. The VALUES are carried through as written: typing them is done
+    once, where the response model is built, because the first-party reader
+    feeds the same model and a rule here would have to be repeated there
+    (see `tools_routes._env_needs_of`, and the route test that pins it).
+    """
+    host = _Host(
+        {
+            "tools": {
+                "wafer-history": {
+                    **_ANSWER["tools"]["wafer-history"],
+                    "env": [
+                        {"name": "GOOD", "description": "fine", "required": True},
+                        {"name": "NULL_DESC", "description": None},
+                        {"name": "ODD_REQUIRED", "required": 3},
+                        {"name": "DICT_DESC", "description": {}},
+                        {"no_name": "dropped"},
+                        "not even a dict",
+                    ],
+                }
+            },
+            "refused": {},
+        }
+    )
+
+    external = await resolve_external_tools(host, {"wafer-history": "https://g/m"})
+
+    (pkg,) = external.packages
+    assert pkg.env_needs is not None
+    # The two unusable entries are gone; the four that can name a variable stay,
+    # values untouched.
+    assert [(n.name, n.description, n.required) for n in pkg.env_needs] == [
+        ("GOOD", "fine", True),
+        ("NULL_DESC", None, None),
+        ("ODD_REQUIRED", "", 3),
+        ("DICT_DESC", {}, None),
+    ]
+
+
 async def test_a_third_party_tools_env_declaration_survives_the_resolve() -> None:
     """#750 — the declaration reaches the panel for a THIRD-party tool too.
 

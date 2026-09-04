@@ -45,17 +45,19 @@ function fakeClient(overrides: Partial<Record<string, unknown>> = {}) {
 }
 
 function open(client: ReturnType<typeof fakeClient>, docGuidance?: string) {
+  const onClose = vi.fn();
   renderWithQuery(
     <TuneParsingModal
       collectionId="c1"
       docId="c1/u/a.pdf"
       docPath="a.pdf"
       docGuidance={docGuidance}
-      onClose={vi.fn()}
+      onClose={onClose}
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       client={client as any}
     />,
   );
+  return { onClose };
 }
 
 describe("TuneParsingModal", () => {
@@ -228,5 +230,30 @@ describe("TuneParsingModal", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: /關閉/ }));
     expect(onClose).toHaveBeenCalled();
+  });
+
+  // #779: a tuning session is minutes of LLM round-trips — the probe results and
+  // the edited prompt are all in memory, and closing rebuilds none of it.
+  it("asks before dropping a tuning session, and keeps it when told to", async () => {
+    const { onClose } = open(fakeClient());
+    fireEvent.change(await screen.findByLabelText("問題"), {
+      target: { value: "what is the recovery time" },
+    });
+
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByTestId("dialog-action-keep"));
+    expect(screen.getByLabelText("問題")).toHaveValue(
+      "what is the recovery time",
+    );
+  });
+
+  it("closes on Escape without asking when nothing has been tried yet", async () => {
+    const { onClose } = open(fakeClient());
+    await screen.findByLabelText("問題");
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).toHaveBeenCalled();
+    expect(screen.queryByTestId("dialog-action-keep")).toBeNull();
   });
 });

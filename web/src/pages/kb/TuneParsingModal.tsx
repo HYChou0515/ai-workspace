@@ -12,6 +12,7 @@ import { useEffect, useState } from "react";
 import { kbApi, type KbApi, type KbProbeResult, type KbProbeSide } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 import { ModalShell } from "../../components/ModalShell";
+import { useDirtyClose } from "../../hooks/useDirtyClose";
 import { useT } from "../../lib/i18n";
 import { pxToRem } from "../../lib/pxToRem";
 
@@ -65,6 +66,12 @@ export function TuneParsingModal({
   const [result, setResult] = useState<KbProbeResult | null>(null);
   const [beforeOpen, setBeforeOpen] = useState(false); // #356: Before collapsed by default
   const [answers, setAnswers] = useState<{ before?: AnswerState; after?: AnswerState }>({});
+
+  // #779: a tuning session is minutes of LLM round-trips. The question, the
+  // edited prompt and every probe result live only here — closing rebuilds none
+  // of it, and re-running costs the model time again.
+  const dirty = question.trim() !== "" || guidance !== effectiveGuidance || result !== null;
+  const attemptClose = useDirtyClose(dirty, onClose);
 
   const probeMut = useMutation({
     // Renders its own error in the modal (`probeMut.isError` below).
@@ -150,7 +157,7 @@ export function TuneParsingModal({
 
   return (
     <ModalShell
-      onClose={onClose}
+      onClose={attemptClose}
       ariaLabel={`${t("kb.tuneParsing.title")} — ${docPath}`}
       width={640}
       maxWidth="94vw"
@@ -167,7 +174,7 @@ export function TuneParsingModal({
             {docPath}
           </span>
           <span style={{ flex: 1 }} />
-          <button type="button" className="kb-btn" aria-label={t("kb.tuneParsing.close")} onClick={onClose}>
+          <button type="button" className="kb-btn" aria-label={t("kb.tuneParsing.close")} onClick={attemptClose}>
             {t("kb.tuneParsing.close")}
           </button>
         </div>

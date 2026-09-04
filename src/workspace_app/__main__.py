@@ -54,6 +54,7 @@ from workspace_app.factories import (
     get_sanity_models,
     get_spec,
     get_wiki_endpoint,
+    resolve_subagent_models,
 )
 from workspace_app.monitor import SpecstarMonitor
 from workspace_app.observability.boot import boot_step
@@ -268,6 +269,9 @@ def main() -> None:
             gc_t2=settings.filestore.gc_t2,
             runner=get_runner(settings),
             agent_config_catalog=get_agent_config_catalog(settings, config_dir=config_dir),
+            # plan-subagent-model-choice: the curated engines a run_agent call
+            # may pick; empty (unset knob) ⇒ the tool grows no `model` argument.
+            subagent_models=resolve_subagent_models(settings),
             kb_embedder=embedder,
             # P3.0: code-specialised embedder; None ⇒ code collections fall
             # back to the default embedder.

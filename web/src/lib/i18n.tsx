@@ -916,18 +916,100 @@ export const messages = {
   "resources.gauge.count": { "zh-TW": "環境數", en: "Environments" },
   "resources.gauge.cpu": { "zh-TW": "CPU", en: "CPU" },
   "resources.gauge.unlimited": { "zh-TW": "（無上限）", en: "(no limit)" },
+  // ── who may MANAGE an item (change_permission), shown apart from roles ──
+  "itemshare.managers.heading": { "zh-TW": "可以管理這個項目的人", en: "Who can manage this item" },
+  // The consequence, stated BEFORE the control. Both halves matter and the
+  // second is the easy one to miss: this grant now decides who may spend the
+  // owner's quota, not merely who may see the item.
+  "itemshare.managers.consequence": {
+    "zh-TW": "他們可以把這個項目的存取權再授權給任何人，也可以調整執行環境大小 —— 那花的是擁有者的額度。",
+    en: "They can re-share this item with anyone, and can resize its environment — which spends the owner's quota.",
+  },
+  "itemshare.managers.add": { "zh-TW": "加入使用者 ID", en: "Add a user id" },
+  "itemshare.managers.remove": { "zh-TW": "移除", en: "Remove" },
+  // ── the item page's own environment panel ────────────────────────────
+  "itemenv.button": { "zh-TW": "環境", en: "Environment" },
+  "itemenv.tip": {
+    "zh-TW": "這個項目的執行環境：狀態、用量、大小。",
+    en: "This item's environment — status, usage, size.",
+  },
+  "itemenv.heading": { "zh-TW": "執行環境", en: "Environment" },
+  "itemenv.status.running": { "zh-TW": "執行中", en: "Running" },
+  "itemenv.status.idle": { "zh-TW": "未啟動", en: "Not running" },
+  "itemenv.close": { "zh-TW": "關閉環境", en: "Close environment" },
+  // Says WHY the size is locked, so the disabled field is not read as broken.
+  "itemenv.close.hint": {
+    "zh-TW": "關閉後即可調整大小。關閉會結束正在執行的程序，檔案不受影響。",
+    en: "Close it to change the size. Running processes end; your files are untouched.",
+  },
+  "itemenv.size.heading": { "zh-TW": "這個項目的環境大小", en: "This item's environment size" },
+  // The label an UNSET value carries. Without it an empty field renders as a
+  // number with no provenance, and the person cannot tell what they chose from
+  // what was chosen for them.
+  "itemenv.size.default": { "zh-TW": "預設（依你目前的額度）", en: "Default (from your current quota)" },
+  "itemenv.size.stated": { "zh-TW": "你設定的", en: "Set by you" },
+  "itemenv.size.reset": { "zh-TW": "回到預設", en: "Back to default" },
+  // Both numbers, and which limit bound — never the smaller one alone.
+  "itemenv.size.clamped.quota": {
+    "zh-TW": "你設定 {stated}，實際生效 {effective}（受你的額度限制）",
+    en: "You set {stated}; {effective} is in effect (held down by your quota)",
+  },
+  "itemenv.size.clamped.app": {
+    "zh-TW": "你設定 {stated}，實際生效 {effective}（受這個 App 的上限限制）",
+    en: "You set {stated}; {effective} is in effect (held down by this App's ceiling)",
+  },
+  // The memory twin of the two above. Absent, the memory block showed
+  // "2 GiB · Set by you" to someone who set 8 GiB — the panel disagreeing with
+  // what the person typed, which is exactly what the cpu message prevents.
+  "itemenv.memory.clamped.quota": {
+    "zh-TW": "你設定 {stated}，實際生效 {effective}（受你的額度限制）",
+    en: "You set {stated}; {effective} is in effect (held down by your quota)",
+  },
+  "itemenv.memory.clamped.app": {
+    "zh-TW": "你設定 {stated}，實際生效 {effective}（受這個 App 的上限限制）",
+    en: "You set {stated}; {effective} is in effect (held down by this App's ceiling)",
+  },
+  "itemenv.usage.total": { "zh-TW": "你的總用量", en: "Your total" },
+  // Says CANNOT CONFIRM, not "not enforced": the backend reports an unreachable
+  // host identically to one that caps nothing, so claiming to know which would
+  // be inventing a distinction it cannot make.
+  "itemenv.unenforced": {
+    "zh-TW": "這個部署無法確認會套用 CPU 上限，所以這裡不提供調整。",
+    en: "This deployment can't confirm a CPU ceiling is applied, so there's nothing to set here.",
+  },
+  "itemenv.readonly": {
+    "zh-TW": "只有能變更這個項目存取權的人可以調整大小 —— 它花的是擁有者的額度。",
+    en: "Only someone who can change this item's access may resize it — it spends the owner's quota.",
+  },
   "resources.disk.heading": { "zh-TW": "儲存空間", en: "Storage" },
   "resources.disk.untracked": {
     "zh-TW": "這個部署沒有設定個人儲存空間上限,因此不統計用量。",
     en: "This deployment sets no personal storage limit, so usage isn't tracked.",
   },
   "resources.disk.empty": { "zh-TW": "還沒有任何項目佔用空間。", en: "Nothing stored yet." },
-  // Says WHERE deleting happens, because it deliberately does not happen here:
-  // the item's own file list is the only place that shows what is being deleted.
+  // Deleting can happen HERE now (plan-delete-item-cascade): each disk row
+  // carries a delete that removes the item and everything it owns and refunds
+  // the quota. The hint keeps the file-list path for partial clean-ups.
   "resources.disk.hint": {
-    "zh-TW": "要清出空間,開啟項目後在檔案清單中刪除 —— 刪除永遠不受額度限制。",
-    en: "To free space, open an item and delete from its file list — deleting is never blocked by a quota.",
+    "zh-TW": "要清出空間,可直接刪除整個項目,或開啟項目後在檔案清單中逐檔刪 —— 刪除永遠不受額度限制。",
+    en: "To free space, delete a whole item here, or open it and delete individual files — deleting is never blocked by a quota.",
   },
+  "resources.disk.delete": { "zh-TW": "刪除", en: "Delete" },
+  "resources.disk.delete.title": { "zh-TW": "刪除這個項目?", en: "Delete this item?" },
+  "resources.disk.delete.body1": {
+    "zh-TW": "會刪除這個項目與它名下的一切 —— 檔案、對話、workflow 紀錄 —— 並釋放它佔用的儲存額度。已升級進知識庫的知識會保留。",
+    en: "Deletes this item and everything it owns — its files, chats and workflow runs — and frees its storage quota. Knowledge already promoted to the knowledge base stays.",
+  },
+  "resources.disk.delete.body2": {
+    "zh-TW": "要備份請先開啟項目下載檔案。此動作無法復原。",
+    en: "To keep a copy, open it and download the files first. This can't be undone.",
+  },
+  "resources.disk.delete.cancel": { "zh-TW": "取消", en: "Cancel" },
+  "resources.disk.delete.usage": {
+    "zh-TW": "目前占用 {bytes},刪除後全數釋放。",
+    en: "Currently using {bytes} — all of it comes back when deleted.",
+  },
+  "resources.disk.delete.zip": { "zh-TW": "下載 zip 備份", en: "Download a zip backup" },
   "review.subtitle": {
     "zh-TW": "跨所有知識庫的待審核項目：自動生成的卡片提案與待釐清的問題。只顯示你有權查看的項目。",
     en: "Everything awaiting review across your knowledge bases — auto-generated card proposals and open questions. Only items you're allowed to see are shown.",
@@ -1352,10 +1434,6 @@ export const messages = {
     en: "From the cached copy — may not be the latest",
   },
   "tools.origin.unavailable": { "zh-TW": "目前無法取得：{reason}", en: "Unavailable: {reason}" },
-  "tools.discard": {
-    "zh-TW": "尚未儲存的變更會遺失，要關閉嗎？",
-    en: "Discard unsaved changes?",
-  },
 
   // Diagnostics page (#465) — AI health checks + model sanity + activity.
   "diag.crumb": { "zh-TW": "診斷", en: "Diagnostics" },
@@ -1513,10 +1591,14 @@ export const messages = {
     "zh-TW": "儲存失敗，請稍後再試。",
     en: "Couldn't save. Try again in a moment.",
   },
-  "colpicker.discardPrompt": { "zh-TW": "放棄未儲存的變更？", en: "Discard unsaved changes?" },
-  "colpicker.keepEditing": { "zh-TW": "繼續編輯", en: "Keep editing" },
-  "colpicker.discard": { "zh-TW": "放棄變更", en: "Discard changes" },
   "colpicker.saving": { "zh-TW": "儲存中…", en: "Saving…" },
+
+  // Leaving a modal that holds something unsaved (#779). ONE set of words for
+  // every modal — the tool picker and the collections picker each used to carry
+  // their own, which is how the same question ended up phrased three ways.
+  "dirtyClose.prompt": { "zh-TW": "放棄未儲存的變更？", en: "Discard unsaved changes?" },
+  "dirtyClose.keep": { "zh-TW": "繼續編輯", en: "Keep editing" },
+  "dirtyClose.discard": { "zh-TW": "放棄變更", en: "Discard changes" },
 } satisfies Record<string, Entry>;
 
 export type MsgKey = keyof typeof messages;

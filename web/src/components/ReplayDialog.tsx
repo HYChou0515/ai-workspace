@@ -132,6 +132,9 @@ export function ReplayDialog({
   return (
     <ModalShell
       onClose={onClose}
+      // #779: a replay is a pure probe — it holds no input and changes nothing,
+      // so the backdrop stays live.
+      closeOnBackdrop
       ariaLabel="Replay"
       width="min(680px, 100%)"
       panelStyle={{ padding: "18px 20px 22px" }}

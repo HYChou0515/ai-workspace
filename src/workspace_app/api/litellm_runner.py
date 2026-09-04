@@ -83,7 +83,7 @@ from .events import (
 from .llm_trace import build_trace, format_trace_line, redact_endpoint, trace_enabled
 
 if TYPE_CHECKING:
-    from ..factories import LlmEndpoint
+    from ..factories import LlmEndpoint, SubagentModel
     from ..failover.cooldown import CooldownRegistry
 
     # #196: per-config busy-aware failover chains, keyed by the primary endpoint
@@ -466,6 +466,7 @@ def _agent_for(
     template_profile: str | None = None,
     has_subagents: bool = False,
     skills_reachable: bool | None = None,
+    subagent_models: tuple[SubagentModel, ...] = (),
     fallback_chains: FallbackChains | None = None,
     cooldown_registry: CooldownRegistry | None = None,
     on_failover_switch: Callable[[str, str], None] | None = None,
@@ -496,6 +497,7 @@ def _agent_for(
             profile=template_profile,
             has_subagents=has_subagents,
             skills_reachable=skills_reachable,
+            subagent_models=subagent_models,
         )
     )
     # Same tri-state for package tools (the colon-syntax expansion):
@@ -1601,6 +1603,7 @@ class LitellmAgentRunner:
             "template_profile": ctx.template_profile,
             "has_subagents": bool(ctx.subagent_defs),
             "skills_reachable": ctx.skills_reachable,
+            "subagent_models": ctx.subagent_models,
             "fallback_chains": self._fallback_chains,
             "cooldown_registry": self._cooldown_registry,
             "resolve_credential": resolve_credential,

@@ -248,3 +248,71 @@ describe("WorkspaceShell — who may edit the item's fields", () => {
     );
   });
 });
+
+
+describe("WorkspaceShell — who may resize the environment", () => {
+  // Round-12 R12-10. The panel honours `canEdit` and that IS tested; what was
+  // not tested is that the right VALUE reaches it. Both links of the chain —
+  // `canResize: _canManageAccess` here and `canEdit={environment.canResize}` in
+  // AgentPanel — could be replaced with `true` and the whole 3205-test suite
+  // stayed green. A permission enforced only by the component being handed the
+  // right answer needs the handing-over asserted too.
+  const sandboxManifest = {
+    ...manifest,
+    function: { ...manifest.function, sandbox: true },
+  } as unknown as AppManifest;
+
+  /** Someone else's item, shared with me: I may talk to the agent, I may not
+   *  spend the owner's quota. */
+  const participantItem = {
+    ...item,
+    permission: {
+      visibility: "restricted",
+      read_meta: ["user:root"],
+      read_chat: ["user:root"],
+      read_content: ["user:root"],
+      converse: ["user:root"],
+    },
+  } as unknown as AppItem;
+
+  function openAs(withItem: AppItem, m: AppManifest = sandboxManifest) {
+    return renderWithQuery(
+      <MemoryRouter>
+        <WorkspaceShell manifest={m} item={withItem} files={[]} />
+      </MemoryRouter>,
+    );
+  }
+
+  it("withholds it from a Participant on someone else's item", async () => {
+    openAs(participantItem);
+    // Wait on the DENIED answer, exactly as the sibling suite does: every verb
+    // reads true until identity resolves, so asserting too early passes for the
+    // wrong reason. My first version of this test asserted on a stale
+    // `chatProps` call left by an earlier test and failed for a third reason
+    // again — the trap this whole round is about.
+    await waitFor(() =>
+      expect(chatProps).toHaveBeenLastCalledWith(
+        expect.objectContaining({ environment: { canResize: false } }),
+      ),
+    );
+    // Still a full participant otherwise — a narrow gate, not a lockout.
+    expect(chatReadOnly).toHaveBeenLastCalledWith(false);
+  });
+
+  it("grants it to the owner", async () => {
+    openAs({ ...participantItem, owner: "root", created_by: "root" } as unknown as AppItem);
+    await waitFor(() =>
+      expect(chatProps).toHaveBeenLastCalledWith(
+        expect.objectContaining({ environment: { canResize: true } }),
+      ),
+    );
+  });
+
+  it("offers no environment at all for an App with no sandbox", async () => {
+    openAs({ ...participantItem, owner: "root", created_by: "root" } as unknown as AppItem, manifest);
+    await waitFor(() => expect(screen.getByTestId("chat")).toBeInTheDocument());
+    expect(chatProps).toHaveBeenLastCalledWith(
+      expect.objectContaining({ environment: undefined }),
+    );
+  });
+});

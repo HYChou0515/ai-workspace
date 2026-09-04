@@ -87,3 +87,30 @@ def test_an_ordinary_high_exit_code_is_not_mistaken_for_a_signal():
     # 128 + N only means a signal above 128; a tool returning 130 of its own
     # accord would otherwise be reported as "killed", which is a lie.
     assert explain(200) is None
+
+
+def test_the_memory_kill_names_the_setting_a_person_can_now_change():
+    """The debt §1.7 of the per-item resources plan took on.
+
+    That plan refused to invent a minimum environment size, on the explicit
+    grounds that "whoever sets it low will notice" — which only holds if the
+    failure points back at the setting. It cannot point at itself: a process
+    killed by the memory cgroup exits with SIGKILL and no output, which is why
+    this sentence exists at all.
+
+    Before per-item sizing the only remedy was "use less data", because the
+    limit belonged to the App and nobody in the conversation could move it. Now
+    somebody may have typed the number themselves, and sending them to shrink
+    their data instead sends them down the path where the product simply looks
+    broken.
+    """
+    import signal
+
+    from workspace_app.agent.exit_codes import explain
+
+    note = explain(128 + int(signal.SIGKILL)) or ""
+
+    assert "memory" in note.lower(), "still says what killed it"
+    # …and now also where that ceiling comes from, for the case where the person
+    # reading this is the one who set it.
+    assert "environment" in note.lower()

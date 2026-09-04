@@ -30,7 +30,7 @@ import logging
 from collections.abc import Sequence
 from typing import Literal
 
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, FastAPI, HTTPException
 from pydantic import BaseModel
 from specstar import SpecStar
 
@@ -146,8 +146,29 @@ def _env_needs_of(unit_key: str, packages: Sequence[PackageInfo]) -> list[EnvNee
         return []
     if pkg.env_needs is None:
         return None
+    # Coerce HERE, once, because this is where the typed model is built and
+    # BOTH producers arrive at it: `packages` is `[*first-party, *third-party]`.
+    # `EnvNeedOut.description` is a `str` and Pydantic does not coerce, so an
+    # author writing `"description": null` used to raise inside the `rows`
+    # comprehension below — which sits outside the resolve guard, with no
+    # catch-all behind it, so one junk value returned 500 and took away the
+    # whole picker and env panel for an item whose owner cannot edit that
+    # package (#763).
+    #
+    # A guard on either producer alone leaves the other door open: the builder
+    # refuses this content loudly, but only for artifacts built AFTER that
+    # landed, and the first-party reader is deliberately lenient — it degrades
+    # a malformed FILE to "nobody said" while passing a well-formed one's junk
+    # VALUES straight through.
+    #
+    # Values, not rows: a name is what the panel is for, so a row keeps its
+    # name and loses only the prose it could not carry.
     return [
-        EnvNeedOut(name=n.name, description=n.description, required=n.required)
+        EnvNeedOut(
+            name=n.name,
+            description=n.description if isinstance(n.description, str) else "",
+            required=n.required if isinstance(n.required, bool) else None,
+        )
         for n in pkg.env_needs
     ]
 
@@ -172,9 +193,14 @@ def register_tools_routes(
 
     @app.get("/a/{slug}/items/{item_id}/tools")
     async def item_tools(slug: str, item_id: str) -> ItemTools:
-        locator.require_item(slug, item_id)  # 404s a wrong slug→item pairing
+        locator.require_item(slug, item_id)  # 404s a wrong slug→item pairing, 410s a deleted one
         found = find_work_item(spec, item_id)
-        assert found is not None  # require_item already validated it exists
+        if found is None:
+            # The gate said yes and this read says no: a delete landed between
+            # the two. `assert` here was an AssertionError → 500 for a race the
+            # caller can do nothing about, and it is the same answer the gate
+            # itself would have given a moment later.
+            raise HTTPException(status_code=410, detail=f"item {item_id!r} is gone")
         _, item = found
         prefs = item.attached_tool_prefs
         manifest = load_app_manifest(slug)

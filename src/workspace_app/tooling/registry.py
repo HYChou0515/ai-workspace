@@ -38,6 +38,7 @@ from ..agent.plot_review import run_review
 from ..agent.shown_files import declare_shown_files, describe_for_display
 from ..agent.tools import _exec_result_text
 from ..sandbox.protocol import ExecResult, SandboxHandle
+from .artifact import parse_env_declaration
 
 logger = logging.getLogger(__name__)
 
@@ -125,26 +126,37 @@ def _read_env_needs(pkg_dir: Path) -> tuple[EnvNeed, ...] | None:
 
     Absent is NOT empty — see ``PackageInfo.env_needs``. The file is optional
     precisely because every package that predates #750 lacks it, and a missing
-    hint must never be worse than the no-hint status quo."""
+    hint must never be worse than the no-hint status quo.
+
+    WHAT the file means is decided once, by ``parse_env_declaration`` — the
+    same function the two build paths use. Only WHAT TO DO ABOUT A BAD ONE
+    differs here, and that difference is the whole point of this wrapper (see
+    below). A second opinion on the parsing itself is what let a BOM'd file
+    build green and then arrive here as silence: the builder had been taught
+    to read one encoding and this had not (#763).
+
+    The FILE is the unit: one unusable entry degrades the whole declaration,
+    it does not get skipped. A list with the bad rows quietly dropped would
+    reach the panel looking complete, and "here is what this tool needs",
+    missing two names, is a worse answer than "this tool did not say" — the
+    same reason absent and empty are kept apart at all."""
     env_json = pkg_dir / "env.json"
     if not env_json.is_file():
         return None
     try:
         return tuple(
-            EnvNeed(
-                name=entry["name"],
-                description=entry.get("description", ""),
-                required=entry.get("required"),
-            )
-            for entry in json.loads(env_json.read_text())
+            EnvNeed(name=e.name, description=e.description, required=e.required)
+            for e in parse_env_declaration(env_json.read_text("utf-8-sig"))
         )
-    except (OSError, ValueError, TypeError, KeyError):
-        # Degrade to "nobody said" rather than raise. `commands.json` is strict
-        # because a missing command list means the tool cannot run; a malformed
-        # hint means only that the hint is missing, and raising here would let
-        # one third-party author's typo stop an operator's startup for EVERY
-        # package — the convenience turning itself into an outage. The author
-        # gets the loud failure at prebuild instead, on their own build.
+    except (OSError, ValueError):
+        # Degrade to "nobody said" rather than raise — this is the ONLY thing
+        # this reader does differently, and it is deliberate. `commands.json`
+        # is strict because a missing command list means the tool cannot run;
+        # a malformed hint means only that the hint is missing, and raising
+        # here would let one third-party author's typo stop an operator's
+        # startup for EVERY package — the convenience turning itself into an
+        # outage. The author gets the loud failure at prebuild instead, on
+        # their own build.
         logger.warning(
             "registry: package %r has an unreadable env.json; treating it as "
             "undeclared. The tool still runs; only its environment hint is lost.",
@@ -266,6 +278,58 @@ def build_function_tools(
     return cap_tool_outputs([_to_function_tool(pkg, cmd) for pkg, cmd in selected])
 
 
+def allowed_command_names(
+    packages: Sequence[PackageInfo],
+    allowed: list[str] | None,
+) -> list[str]:
+    """Every package command this allow-list grants, by the flat name a caller
+    invokes.
+
+    The model cannot tell one of these from a built-in by looking: `data-fetch`
+    and `read_file` are both just names in its toolset. So anything that has to
+    say WHICH of an agent's tools are package tools — a WUI's `tools:`
+    declaration is the case this exists for — has to be told, and told from the
+    same expansion the toolset itself was built from."""
+    every = [p.name for p in packages]
+    selected = _select_commands(packages, allowed if allowed is not None else every)
+    return sorted({cmd.name for _, cmd in selected})
+
+
+def find_allowed_command(
+    packages: Sequence[PackageInfo],
+    allowed: list[str] | None,
+    name: str,
+) -> tuple[PackageInfo, CommandInfo] | None:
+    """The package command called ``name``, if this allow-list grants it.
+
+    Resolution goes through the SAME expansion and collision check the model's
+    toolset is built from (`build_function_tools`), so a caller outside a turn
+    cannot reach a command the agent in that item could not — including the
+    `allowed=None` "the deploy did not restrict" case, which means everything
+    there and has to mean everything here.
+
+    Commands are matched on their FLAT name, which is what a caller sees: a
+    package is a delivery unit, but `data-fetch` is what gets invoked."""
+    every = [p.name for p in packages]
+    selected = _select_commands(packages, allowed if allowed is not None else every)
+    _check_collisions(selected)
+    return next(((pkg, cmd) for pkg, cmd in selected if cmd.name == name), None)
+
+
+async def exec_package_command(
+    actx: AgentToolContext,
+    handle: SandboxHandle,
+    pkg: PackageInfo,
+    cmd_name: str,
+    args_json: str,
+) -> ExecResult:
+    """Run one package command. The public face of `_exec_tool`, so a caller
+    outside a turn (a WUI's `callTool`) goes through the same launcher, the same
+    item environment and the same exit-code contract as the model's call —
+    "inject at the call site" was only one place until it was two."""
+    return await _exec_tool(actx, handle, pkg, cmd_name, args_json)
+
+
 def _select_commands(
     packages: Sequence[PackageInfo],
     allowed: Iterable[str],
@@ -344,9 +408,10 @@ async def _exec_tool(
 ) -> ExecResult:
     """Run one tool command, with the item's environment variables.
 
-    Both dispatch paths funnel through here — the agent's call and the #285
-    chart re-render — because "inject at the call site" is only one place until
-    it is two, and the second one is where it silently stops happening.
+    Every dispatch path funnels through here — the agent's call, the #285 chart
+    re-render, and a WUI's `callTool` — because "inject at the call site" is only
+    one place until it is two, and the second one is where it silently stops
+    happening.
 
     The variables are named PER CALL rather than left in the sandbox: the tool
     and the agent share a uid, so anything on disk is readable by both or by

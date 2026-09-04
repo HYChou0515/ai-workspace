@@ -40,6 +40,12 @@ export const qk = {
   chatContext: (slug: string, itemId: string, chatId: string) =>
     ["chatContext", slug, itemId, chatId] as const,
   file: (id: string, path: string) => ["file", id, path] as const,
+  // A WUI's assembled document. `generation` is the Refresh counter, not a
+  // cache-buster: a WUI is deliberately never reloaded on its own, so a NEW key
+  // is the only thing that rebuilds one — and it also drops the old frame,
+  // which is what makes Refresh mean "start over" rather than "re-render".
+  wuiDoc: (id: string, path: string, generation: number) =>
+    ["wuiDoc", id, path, generation] as const,
   activity: ["activity"] as const,
   conversation: (id: string) => ["conversation", id] as const,
 

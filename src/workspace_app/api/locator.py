@@ -25,15 +25,17 @@ from specstar.types import ResourceIDNotFoundError
 
 from ..apps.catalog import AppCatalog
 from ..apps.manifest import load_app_manifest
-from ..apps.resolve import find_work_item, resolve_item_agent_config
+from ..apps.resolve import debtor_of, find_work_item, resolve_item_agent_config
 from ..perm import Verb
 from ..resources import AgentConfig, Conversation
 from ..resources.groups import groups_of
 from .chats import find_default_conversation, resolve_default_conversation
 from .item_authz import (
     ItemAccessFacts,
+    app_matches,
     check_access,
     load_access_facts,
+    refuse_if_gone,
 )
 from .item_conversation_perm import item_conversation_mirror
 
@@ -41,6 +43,20 @@ from .item_conversation_perm import item_conversation_mirror
 # human one. Matches the other windows in this codebase (usage_window, the
 # facade's liveness memo) so there is one granularity to reason about.
 _ACCESS_WINDOW_S = 5.0
+
+#: How many items' access facts to keep. The window decides whether an entry is
+#: TRUSTED; this decides whether it is KEPT — without it the memo held a full
+#: copy of every item a pod had ever gated, for the life of the process, since
+#: `forget_access` is called from exactly one route. Its sibling `_item_facts`
+#: in `api/app.py` carries the same bound and the same reason: a cache, not a
+#: map. Sized to match it, because they hold the same kind of thing per item.
+_ACCESS_MAX = 4096
+
+#: The same bound for the caller-groups memo, the second thing `require_access`
+#: caches. Both arrived together on this branch; bounding one and not the other
+#: is how a rule stops being true. Keyed by person rather than item, so it grows
+#: more slowly — which is why it would have been the one to notice last.
+_GROUPS_MAX = 4096
 
 
 class TurnFacts(NamedTuple):
@@ -137,10 +153,18 @@ class ItemLocator:
         return dict(found[1].env_vars) if found is not None else {}
 
     def owner_of(self, item_id: str) -> str | None:
-        """The item's `owner` field — who its resources are charged to (#687).
-        Deliberately not specstar's `created_by`; see `quota.admission`."""
-        found = find_work_item(self._spec, item_id)
-        return found[1].owner if found is not None else None
+        """Who this item's resources are charged to — `owner`, falling back to
+        the creator when it is blank. The rule itself is `apps.resolve.debtor_of`,
+        shared with the quota facts memo so the two cannot disagree.
+
+        Reads a DELETED item too, because deleting an item does not stop its
+        sandbox: the machine keeps running until the reaper takes it, and
+        somebody has to be charged for it in the meantime. Returning `None`
+        here read as "nobody owes" at four gates at once."""
+        found = find_work_item(self._spec, item_id, include_deleted=True)
+        if found is None:
+            return None
+        return debtor_of(self._spec, found[0], item_id, found[1]) or None
 
     def slug_of(self, item_id: str) -> str | None:
         """The App slug owning an item — pairs with `profile_of` so the
@@ -152,13 +176,36 @@ class ItemLocator:
         """#95: the workspace routes nest under ``/a/{slug}/items/{item_id}``.
         Validate that ``item_id`` really belongs to App ``slug`` (404 otherwise)
         so a wrong slug can't operate on another App's item, and return the id
-        for the handler to use."""
+        for the handler to use. A SOFT-DELETED item of this App answers 410 Gone
+        — the same answer `require_access` gives, through the same function.
+
+        The first version of that 410 was hand-rolled here rather than shared,
+        and asked "does this id resolve at all?" instead of "is it deleted?" —
+        so a LIVE item addressed under the wrong App came back as Gone. The
+        wrong-slug branch is 404 and nothing else: this gate authorizes nobody,
+        so it must never tell a stranger that some other App holds this id.
+
+        ONE read when it lets you through. The second version resolved the full
+        access facts up front — an extra `get_meta` on every success, on the
+        routes that poll (`turn-alive` went 3 gets + 3 metas to 3 + 4) — and
+        justified it with "`require_access` already pays the same two reads",
+        which is false: `require_access` MEMOISES its facts, so inside the
+        window it pays nothing and this gate would re-read what the line above
+        it had just cached. Both branches of the answer are unchanged; only the
+        cost moved back onto the failure path, where a second round trip is
+        free."""
         found = find_work_item(self._spec, item_id)
-        if found is None or found[0] != slug:
-            raise HTTPException(
-                status_code=404, detail=f"item {item_id!r} not found in app {slug!r}"
-            )
-        return item_id
+        if found is not None and app_matches(found[0], slug):
+            return item_id
+        # A miss here is one of three things, and only ONE of them is Gone: a
+        # soft-deleted item OF THIS APP. An unknown id and an item of another
+        # App are both 404 — this gate authorizes nobody, so the difference
+        # between "no such id" and "another App holds it" is not a stranger's
+        # to learn.
+        facts = load_access_facts(self._spec, item_id, include_deleted=True)
+        if facts is not None and app_matches(facts.slug, slug):
+            refuse_if_gone(facts, item_id)
+        raise HTTPException(status_code=404, detail=f"item {item_id!r} not found in app {slug!r}")
 
     def require_access(self, slug: str, item_id: str, verb: Verb) -> str:
         """#306 PR3 — the authorizing sibling of ``require_item``: validate slug↔item,
@@ -179,13 +226,15 @@ class ItemLocator:
         now = self._now()
         cached = self._access.get(item_id)
         if cached is None or now - cached[1] >= self._access_window:
-            facts = load_access_facts(self._spec, item_id)
+            facts = load_access_facts(self._spec, item_id, include_deleted=True)
             # Cache the POSITIVE answer only. "No such item" is the one result
             # that goes stale in the direction that breaks things: an id looked
             # up moments before it exists — a workflow addressing the item it
             # just created — would keep 404-ing for the rest of the window. A
             # permission is a fact about a thing that exists; absence is not.
             if facts is not None:
+                if len(self._access) > _ACCESS_MAX:  # bounded: a cache, not a map
+                    self._access.clear()
                 self._access[item_id] = (facts, now)
         else:
             facts = cached[0]
@@ -193,6 +242,7 @@ class ItemLocator:
         check_access(
             facts, slug, item_id, verb, user=user, groups=groups, superusers=self._superusers
         )
+        refuse_if_gone(facts, item_id)
         return item_id
 
     def _groups_for(self, user: str, now: float) -> frozenset[str]:
@@ -201,6 +251,8 @@ class ItemLocator:
         cached = self._groups.get(user)
         if cached is None or now - cached[1] >= self._access_window:
             cached = (groups_of(self._spec, user), now)
+            if len(self._groups) > _GROUPS_MAX:  # bounded: a cache, not a map
+                self._groups.clear()
             self._groups[user] = cached
         return cached[0]
 
@@ -210,6 +262,24 @@ class ItemLocator:
         being hidden for up to a window. A cache that outlives a revocation is a
         security bug, not a slow one."""
         self._access.pop(item_id, None)
+
+    #: Called when an item's stored facts change under the memo that caches
+    #: them. Wired by `create_app`, which owns that cache; absent in the tests
+    #: and replay paths that construct a locator without one.
+    forget_item_facts: Callable[[str], None] | None = None
+
+    def forget_item(self, item_id: str) -> None:
+        """Drop the cached (slug, owner, environment size) for an item.
+
+        Called by whatever WRITES those facts, for the same reason
+        `forget_access` exists next door: the memo is five seconds wide, and a
+        person who has just saved a size does not experience that as caching —
+        they experience it as the setting not working, then working, with
+        nothing to explain either. Five seconds is the worst duration for that:
+        long enough to look broken, short enough to be gone before anyone can
+        look."""
+        if self.forget_item_facts is not None:
+            self.forget_item_facts(item_id)
 
     def resolve_agent_config(self, item_id: str) -> AgentConfig | None:
         """#89: a per-App WorkItem (RcaInvestigation, …) resolves its turn's

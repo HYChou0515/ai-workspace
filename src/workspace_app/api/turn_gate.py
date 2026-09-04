@@ -19,6 +19,7 @@ what to lose.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from ..files.facade import WorkspaceFull
@@ -44,18 +45,75 @@ def quota_code(exc: Exception) -> str:
     return _CODES[type(exc)]
 
 
-def quota_body(exc: Exception) -> dict[str, object]:
+def quota_body(
+    exc: Exception,
+    *,
+    viewer: str | None = None,
+    titles_of: Callable[[list[str]], dict[str, str]] | None = None,
+) -> dict[str, object]:
     """The 507 body for one refusal — the code plus the numbers behind it.
 
     The numbers are not decoration: "your workspace is full" is unfalsifiable to
     the person reading it, and a wrong one is indistinguishable from a right one
-    until someone reads the code."""
+    until someone reads the code.
+
+    `holding` says WHICH environments are using the quota, so the remedy is one
+    click rather than a page the person has to know exists. Defaulting to the
+    App's ceiling made hitting the limit ordinary rather than exceptional, so
+    this is the difference between a wall and a door.
+
+    It is included ONLY for the person whose quota it is. A collaborator can hit
+    the owner's ceiling, and naming the items would hand them that person's
+    working set — titles included — to explain one refusal. They still learn why
+    they were stopped; they do not learn what else that person is doing. Absent
+    `viewer` means no caller vouched for who is asking, and the list is withheld
+    rather than assumed safe.
+    """
     if isinstance(exc, SandboxQuotaExceeded):
+        # `viewer is not None and` was here too; `SandboxQuotaExceeded.owner` is
+        # typed and always constructed as `str`, so `None == exc.owner` was
+        # already False and the extra test could not change an answer.
+        mine = viewer == exc.owner
+        held = list(exc.holding) if mine else []
+        # Every held row is listed. `titles` covers all of them by construction —
+        # `_titles_of` assigns an entry on every branch, including "unknown" and
+        # "you may not see this one" — so the membership filter that used to sit
+        # on this comprehension could only ever have dropped rows in the case
+        # where it dropped ALL of them, which is the opposite of the rule the
+        # paragraph below states. Removed rather than kept as a belt: a guard
+        # that cannot change an answer is one nobody can test, and this one
+        # contradicted its own documentation.
+        #
+        # One batched lookup for the whole list rather than one per row: this
+        # runs on the failure path inside an exception handler, and the call
+        # count is the latency.
+        titles = titles_of([h.item_id for h in held]) if titles_of and held else {}
         return {
             "error": _CODES[SandboxQuotaExceeded],
             "dimension": exc.dimension,
             "used": exc.used,
             "limit": exc.limit,
+            # Every row, NAMED only where the reader may see it — `titles_of`
+            # returns an empty title rather than dropping the row. Each of these
+            # is charged to the reader (`held` is emptied above unless the
+            # viewer is the debtor), so an environment they cannot name is still
+            # one they must be able to close; dropping it left somebody at
+            # "1 of 1 in use" with nothing to act on. The title is the
+            # disclosure, and `owner` is a field anyone with write access can
+            # point at somebody else (#687), so the title stays gated on the
+            # READER's own `read_meta`.
+            #
+            # The membership test below therefore only survives for
+            # `titles_of is None`, where nothing can be named at all.
+            "holding": [
+                {
+                    "item_id": h.item_id,
+                    "title": titles.get(h.item_id, ""),
+                    "cpu_cores": h.cpu_milli / 1000,
+                    "memory_bytes": h.memory_bytes,
+                }
+                for h in held
+            ],
         }
     assert isinstance(exc, WorkspaceFull | UserDiskFull)
     return {
@@ -82,8 +140,16 @@ class TurnRefused(Exception):
         self.primary = primary
         self.also = also
 
-    def body(self) -> dict[str, object]:
-        return {**quota_body(self.primary), "also": [quota_code(e) for e in self.also]}
+    def body(
+        self,
+        *,
+        viewer: str | None = None,
+        titles_of: Callable[[list[str]], dict[str, str]] | None = None,
+    ) -> dict[str, object]:
+        return {
+            **quota_body(self.primary, viewer=viewer, titles_of=titles_of),
+            "also": [quota_code(e) for e in self.also],
+        }
 
 
 async def admit_turn(

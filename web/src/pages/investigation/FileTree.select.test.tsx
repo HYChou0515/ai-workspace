@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { FileInfo } from "../../api/types";
+import { DialogProvider } from "../../components/Dialog";
 import { FileTree } from "./FileTree";
 
 afterEach(() => {
@@ -20,18 +21,23 @@ const files: FileInfo[] = [
 
 /** Render FileTree in the opt-in controlled select mode. Deliberately WITHOUT a
  * <FileServiceProvider> — the picker (P2) has no writable service, so select
- * mode must run on the optional service. */
+ * mode must run on the optional service. The DialogProvider IS present, because
+ * it is at the app root in every real render (#779) — the picker sits inside the
+ * app tree like everything else, and pretending otherwise would test a wiring
+ * that does not exist. */
 function renderSelect(selected: Set<string> = new Set(), files_ = files) {
   const onChange = vi.fn();
   render(
-    <FileTree
-      files={files_}
-      dirs={[]}
-      activePath={null}
-      onOpen={vi.fn()}
-      scopeId="pick"
-      select={{ selected, onChange }}
-    />,
+    <DialogProvider>
+      <FileTree
+        files={files_}
+        dirs={[]}
+        activePath={null}
+        onOpen={vi.fn()}
+        scopeId="pick"
+        select={{ selected, onChange }}
+      />
+    </DialogProvider>,
   );
   return { onChange };
 }

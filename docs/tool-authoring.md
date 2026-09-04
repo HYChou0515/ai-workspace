@@ -259,6 +259,16 @@ https://gitlab.example/api/v4/projects/<id>/jobs/artifacts/<ref>/raw/dist/tool.m
 
   只有 `name` 是必要的,整份檔案也是選填的。
 
+  ⚠️ **`description` 要是字串,`required` 要是 `true` / `false` 或整個不寫。** 型別不對會讓
+  你的 build **當場失敗並指名是哪一項** —— 這是刻意的:那些值會一路被帶到使用者那邊的
+  介面,而在那裡沒有人有辦法修你的 artifact。`required` 不寫和寫 `false` 是**不同的**兩件
+  事(見上面的三態),所以不確定就別寫,不要用空字串或 `"no"` 之類的東西頂替。
+
+  ⚠️ **你的 CI 用的 builder 映像必須夠新。** 這份宣告是由 builder 讀進 artifact 的
+  manifest 的,而 builder 把平台的程式碼烤進映像裡 —— 舊映像**不會**帶,而且**不會報錯**:
+  build 成功、artifact 正常、宣告安靜消失。如果你寫了 `env.json` 卻在面板上看不到欄位,
+  先問我們你該用哪個 builder tag。
+
   ⚠️ **這是提示,不是閘門。** 沒列進來的變數**不會**被擋掉——你的 command 照樣拿得到
   使用者設的全部變數。漏寫一個名字的後果只是「面板少講一句話」,不是功能壞掉。
 

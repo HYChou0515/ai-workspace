@@ -65,6 +65,19 @@ def _builder(*, slug: str | None, sandbox: object) -> TurnContextBuilder:
     return builder
 
 
+def _ceilings(*, cpu_cores: float | None = None, memory_bytes: int | None = None):
+    """An async `spec_for` double.
+
+    Async because the real one is: an item's size now depends on its OWNER's
+    budget as well as its App's ceiling, and that is a store read. A synchronous
+    double would be one that cannot express the contract it stands for."""
+
+    async def _spec_for(_item: str) -> SandboxSpec:
+        return SandboxSpec(cpu_cores=cpu_cores, memory_bytes=memory_bytes)
+
+    return _spec_for
+
+
 async def test_an_app_that_declares_a_third_party_tool_gets_it_resolved(monkeypatch) -> None:
     from workspace_app.api import turn_context
 
@@ -192,7 +205,7 @@ async def test_the_shas_this_turn_resolved_reach_the_sandbox_it_creates() -> Non
         sandbox=sandbox,
         # Mirrors `create_app._spec_for`: the App's resolved ceilings, looked up
         # per item, with no idea what this turn resolved.
-        spec_for=lambda _item: SandboxSpec(cpu_cores=2.0, memory_bytes=1 << 30),
+        spec_for=_ceilings(cpu_cores=2.0, memory_bytes=1 << 30),
     )
     session = await registry.session("item-1")
     shas = {"wafer-history": "a" * 64}
@@ -235,7 +248,7 @@ async def test_a_sandbox_woken_without_a_turn_still_mounts_the_items_tools() -> 
 
     registry = InvestigationRegistry(
         sandbox=sandbox,
-        spec_for=lambda _item: SandboxSpec(cpu_cores=2.0),
+        spec_for=_ceilings(cpu_cores=2.0),
         tools_for=declared,
     )
     session = await registry.session("item-1")

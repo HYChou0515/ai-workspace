@@ -53,6 +53,7 @@ if TYPE_CHECKING:
     from specstar import SpecStar
 
     from ..entity.events import EntityOrigin, EntityWriteSink
+    from ..factories import SubagentModel
     from ..files import WorkspaceFiles
     from ..filestore.protocol import FileStore
     from ..kb.retriever import Enhancements
@@ -159,6 +160,7 @@ class TurnContextBuilder:
         max_tokens_window_ratio: float = DEFAULT_MAX_TOKENS_WINDOW_RATIO,
         wiki_coordinator: WikiMaintenanceCoordinator | None = None,
         run_agent: RunAgent | None = None,
+        subagent_models: tuple[SubagentModel, ...] = (),
     ) -> None:
         self._sandbox = sandbox
         self._filestore = filestore
@@ -189,6 +191,9 @@ class TurnContextBuilder:
         # is wired once here rather than passed per turn shape. None ⇒ no
         # delegation this deploy, and the tool is never built.
         self._run_agent = run_agent
+        # The operator's curated run_agent engines (resolve_subagent_models) —
+        # deploy-lifetime like the seam above, stamped onto every turn's ctx.
+        self._subagent_models = subagent_models
         # #429 P10: the event-dispatch sink stamped onto every agent turn's ctx so an
         # agent's entity write fires on_event workflows. Set after construction by the
         # composition root (the EventTriggerDispatcher is built later than this builder,
@@ -759,6 +764,7 @@ class TurnContextBuilder:
             # `build_tools` and the system-prompt index read.
             subagent_defs=subagent_defs,
             run_agent=self._run_agent,
+            subagent_models=self._subagent_models,
             # #29 / §A: whether anything is loadable this turn — what decides
             # `read_skill`. Carried rather than re-derived because only this
             # layer can see the workspace and the per-item toggles.

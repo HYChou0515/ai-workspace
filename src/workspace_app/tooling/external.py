@@ -103,6 +103,14 @@ def _package(name: str, described: dict[str, Any]) -> PackageInfo:
                     required=e.get("required"),
                 )
                 for e in described["env"]
+                # A stranger's JSON, so an entry that is not an object or has
+                # no string `name` cannot build an `EnvNeed` at all — dropping
+                # it costs that row, where letting the `KeyError` out would
+                # cost the whole resolve. TYPING the other fields is not done
+                # here: that belongs once, where the response model is built
+                # (`tools_routes._env_needs_of`), because the first-party
+                # reader feeds the same model and would need the same rule.
+                if isinstance(e, dict) and isinstance(e.get("name"), str)
             )
             if isinstance(described.get("env"), list)
             else None

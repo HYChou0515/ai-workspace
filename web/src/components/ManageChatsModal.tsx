@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { ItemChatSummary } from "../api/itemChats";
 import { relativeTime } from "../api/types";
 import { chatLabel } from "./chatLabel";
 import { chatStatusBadge } from "./chatStatusBadge";
 import { Icon } from "./Icon";
+import { useDirtyClose } from "../hooks/useDirtyClose";
 import { ModalShell } from "./ModalShell";
 
 /**
@@ -41,6 +42,7 @@ function ChatRow({
   onClose,
   onRename,
   onDelete,
+  onEditingChange,
 }: {
   chat: ItemChatSummary;
   active: boolean;
@@ -48,8 +50,27 @@ function ChatRow({
   onClose: () => void;
   onRename: (id: string, title: string) => void;
   onDelete: (id: string) => void;
+  /** #779: tell the modal a row is mid-rename, so leaving asks first. */
+  onEditingChange?: (editing: boolean) => void;
 }) {
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditingState] = useState(false);
+  const setEditing = (v: boolean) => {
+    setEditingState(v);
+    onEditingChange?.(v);
+  };
+  // Report "no longer editing" on unmount too. The row can vanish without ever
+  // calling setEditing(false) — start a rename, then type in the search box and
+  // this row falls out of the filtered list. Without this the modal believed a
+  // rename was still open forever after, and every exit raised a prompt about
+  // work that no longer existed. A guard that fires over nothing is one people
+  // learn to click through.
+  //
+  // Through a ref because the caller passes a fresh closure each render; as an
+  // effect dependency that would re-run the cleanup on every render and clear
+  // the flag while the rename is still open.
+  const notify = useRef(onEditingChange);
+  notify.current = onEditingChange;
+  useEffect(() => () => notify.current?.(false), []);
   const [draft, setDraft] = useState(chat.title);
   const [confirming, setConfirming] = useState(false);
 
@@ -115,6 +136,12 @@ function ChatRow({
             <button
               type="button"
               data-testid={`manage-switch-${id}`}
+              // dirty-close-exempt: `onClose` here IS the parent's attemptClose
+              // (see where ChatRow is rendered) — the guard reads names, not
+              // wiring, so it cannot tell. Switching selects first and then asks;
+              // choosing "keep editing" leaves the modal open on the newly
+              // selected chat, which is recoverable, while the rename draft the
+              // prompt is about is not.
               onClick={() => {
                 onSelect(id);
                 onClose();
@@ -163,12 +190,16 @@ export function ManageChatsModal({
   onDelete: (chatId: string) => void;
 }) {
   const [query, setQuery] = useState("");
+  // #779: which row is mid-rename (null = none). One id, not a set: only one
+  // row can hold the inline editor at a time.
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const attemptClose = useDirtyClose(renamingId !== null, onClose);
   const q = query.trim().toLowerCase();
   const shown = q ? chats.filter((c) => chatLabel(c).toLowerCase().includes(q)) : chats;
 
   return (
     <ModalShell
-      onClose={onClose}
+      onClose={attemptClose}
       ariaLabel="Manage chats"
       data-testid="manage-chats-modal"
       width={720}
@@ -182,7 +213,7 @@ export function ManageChatsModal({
           className="manage-chats__close"
           aria-label="Close"
           data-testid="manage-chats-close"
-          onClick={onClose}
+          onClick={attemptClose}
         >
           <Icon name="x" size={14} color="var(--text-paper-d)" />
         </button>
@@ -214,9 +245,18 @@ export function ManageChatsModal({
                 chat={chat}
                 active={chat.chat_id === activeChatId}
                 onSelect={onSelect}
-                onClose={onClose}
+                // The guarded one: Switch closes the modal from inside the row,
+                // and a rename in progress must be asked about there too.
+                onClose={attemptClose}
                 onRename={onRename}
                 onDelete={onDelete}
+                onEditingChange={(on) =>
+                  // Only this row may clear its own flag — an unmounting row
+                  // must not cancel a rename that another row now owns.
+                  setRenamingId((cur) =>
+                    on ? chat.chat_id : cur === chat.chat_id ? null : cur,
+                  )
+                }
               />
             ))}
           </tbody>

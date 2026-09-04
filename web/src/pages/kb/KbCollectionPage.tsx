@@ -33,7 +33,7 @@ import { qk } from "../../api/queryKeys";
 import { mergeBlocked, screenFiles, type BlockedUpload } from "../../kb/uploadChecks";
 import { UploadBlockedList } from "./UploadBlockedList";
 import { ImportModeDialog } from "./ImportModeDialog";
-import { DialogProvider, useDialog } from "../../components/Dialog";
+import { useDialog } from "../../components/Dialog";
 import { Icon, type IconName } from "../../components/Icon";
 import { PermissionDialog } from "../../components/PermissionDialog";
 import { Popover } from "../../components/Popover";
@@ -92,20 +92,11 @@ export function useCollectionOutlet(): KbCollectionCtx {
   return useOutletContext<KbCollectionCtx>();
 }
 
-// A DialogProvider wraps the body so the re-index confirm prompts (and any
-// future confirms on this page or its tab Outlet) can use the shared modal —
-// the same one the file-tree bulk re-index uses, so all three feel identical.
 import { ArchiveImportStatus } from "./ArchiveImportStatus";
 
-export function KbCollectionPage(props: { client?: KbApi }) {
-  return (
-    <DialogProvider>
-      <KbCollectionPageBody {...props} />
-    </DialogProvider>
-  );
-}
-
-function KbCollectionPageBody({ client = kbApi }: { client?: KbApi }) {
+// #779: this used to be a wrapper whose only job was mounting a DialogProvider
+// for the re-index confirms. The provider is at the app root now.
+export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
   const t = useT();
   const dialog = useDialog();
   const qc = useQueryClient();

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render as rtlRender, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { EntityHealthFinding, EntityInstance, EntityType } from "../../api/entities";
@@ -14,6 +14,13 @@ import {
   type ViewSpec,
 } from "./EntityViews";
 import { buildRefIndex } from "./refTraversal";
+import { DialogProvider } from "../../components/Dialog";
+
+// The confirm dialog lives at the app root (#779), and QuickCreate asks through
+// it before dropping a half-typed record — so every render here needs it, the
+// same way every real render has it.
+const render = (ui: Parameters<typeof rtlRender>[0]) =>
+  rtlRender(ui, { wrapper: DialogProvider });
 
 const issueType: EntityType = {
   name: "issue",
@@ -413,6 +420,26 @@ describe("QuickCreate", () => {
     const spec: ViewSpec = { view: "gantt", entity: "issue", span: "span", label: "title" };
     render(<EntityViewBody spec={spec} type={issueType} entities={[]} onCreate={vi.fn()} onPatch={vi.fn()} />);
     expect(screen.getByRole("button", { name: "+ New" })).toBeInTheDocument();
+  });
+
+  // #779: a create form is unsaved work by definition — Escape asks first, but
+  // only once something has actually been typed.
+  it("asks before dropping a half-typed new record, and keeps it when told to", async () => {
+    render(<EntityViewBody spec={tableSpec} type={issueType} entities={[]} onCreate={vi.fn()} onPatch={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "+ New" }));
+    fireEvent.change(screen.getByLabelText("title"), { target: { value: "Bug" } });
+
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    fireEvent.click(await screen.findByTestId("dialog-action-keep"));
+    expect(screen.getByLabelText("title")).toHaveValue("Bug");
+  });
+
+  it("closes an untouched create form on Escape without asking", () => {
+    render(<EntityViewBody spec={tableSpec} type={issueType} entities={[]} onCreate={vi.fn()} onPatch={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "+ New" }));
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("opens the create form in a modal dialog, not crammed into the header (#2)", () => {

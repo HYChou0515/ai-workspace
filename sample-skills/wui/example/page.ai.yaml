@@ -1,0 +1,4 @@
+view: wui
+title: Lot tracker
+# Uncomment and name a tool this app grants before calling it from the page.
+# tools: [lot-status]
