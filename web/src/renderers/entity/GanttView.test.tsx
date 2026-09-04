@@ -224,6 +224,38 @@ describe("GanttView", () => {
     expect(screen.getByTestId("bar-1").style.width).not.toBe(before);
   });
 
+  it("draws a part-day bar as part of a day once the columns are hours (#785)", () => {
+    // The WIRING check. An axis assertion is not one: `axisFor` works the grain
+    // out from the density itself, so the hour axis appears whether or not the
+    // view ever asked for hour columns — a probe that survives the view being
+    // hard-wired to days is measuring nothing.
+    //
+    // Geometry is the tell, and only for a bar that is part of a day: whole
+    // days occupy identical space at both grains (that continuity is the point
+    // — nothing jumps when the switch happens). So put an eight-hour task next
+    // to an all-day one.
+    render(
+      <GanttView
+        {...props({
+          entities: [
+            rec(1, { title: "All day", span: "2026-01-05/2026-01-05" }),
+            rec(2, { title: "Morning", span: "2026-01-05T09:00/2026-01-05T17:00" }),
+          ],
+        })}
+      />,
+    );
+    // In day columns the chart has no way to say one of them is eight hours.
+    expect(screen.getByTestId("bar-2").style.width).toBe(screen.getByTestId("bar-1").style.width);
+    expect(screen.queryByText("Mon 5 Jan")).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole("slider", { name: /zoom/i }), { target: { value: "1" } });
+
+    const allDay = Number.parseFloat(screen.getByTestId("bar-1").style.width);
+    const morning = Number.parseFloat(screen.getByTestId("bar-2").style.width);
+    expect(morning).toBeCloseTo(allDay / 3); // eight of the day's twenty-four hours
+    expect(screen.getByText("Mon 5 Jan")).toBeInTheDocument();
+  });
+
   it("renders a month context band above the fine ticks (two-tier axis)", () => {
     render(<GanttView {...props({ entities: [rec(1, { title: "A", span: "2026-01-05/2026-01-20" })] })} />);
     expect(screen.getByText("Jan 2026")).toBeInTheDocument();

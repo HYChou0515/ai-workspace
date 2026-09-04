@@ -8,7 +8,12 @@ import {
   axisFor,
   canvasWidthFor,
   clampPpd,
+  columnPx,
   daysBetween,
+  fitPpd,
+  grainFor,
+  PPD_HOUR_GRAIN,
+  PPD_MAX_FIT,
   deltaDays,
   PPD_ANCHORS,
   ppdToSlider,
@@ -185,22 +190,213 @@ describe("a span that names a clock still lands on the right day (#785)", () => 
   });
 });
 
+describe("hour columns (#785)", () => {
+  const HOURS = { grain: "hour", skipWeekends: false } as const;
+  const HOURS_SKIP = { grain: "hour", skipWeekends: true } as const;
+
+  it("turns one day column into twenty-four", () => {
+    expect(columnOf("2026-01-05", "2026-01-06", HOURS)).toBe(24);
+    expect(columnOf("2026-01-05T09:00", "2026-01-05T17:00", HOURS)).toBe(8);
+  });
+
+  it("still reads the bare boolean as day columns, which is what it always meant", () => {
+    expect(columnOf("2026-01-05", "2026-01-06", false)).toBe(1);
+    expect(columnOf("2026-01-05", "2026-01-06", { grain: "day", skipWeekends: false })).toBe(1);
+  });
+
+  it("gives a weekend no hours either", () => {
+    // Fri 09:00 → Mon 17:00: fifteen hours left of Friday, then Monday's
+    // seventeen. The weekend is 48 hours of nothing at both grains.
+    expect(columnOf("2026-01-09T09:00", "2026-01-12T17:00", HOURS_SKIP)).toBe(32);
+  });
+
+  it("collapses a weekend origin onto the next working hour, as the day grain does", () => {
+    // The day grain already puts Sat, Sun and Monday on one column; measuring
+    // from the Saturday's clock instead would make the two grains disagree —
+    // and it was exactly that disagreement that froze a tab in #690.
+    expect(columnOf("2026-01-10T10:00", "2026-01-12T05:00", HOURS_SKIP)).toBe(5);
+  });
+
+  it("places minutes inside their hour rather than snapping them away", () => {
+    // Spans are specified to the minute; the CHART is specified to the hour.
+    // A half-hour is half a column, not a rounding error.
+    expect(columnOf("2026-01-05T09:00", "2026-01-05T09:30", HOURS)).toBe(0.5);
+  });
+
+  it("is signed, like the day grain", () => {
+    expect(columnOf("2026-01-06", "2026-01-05", HOURS)).toBe(-24);
+  });
+
+  it("names the instant at an hour column, and is columnOf's inverse there", () => {
+    expect(dateAtColumn("2026-01-05", 9, HOURS)).toBe("2026-01-05T09:00");
+    expect(dateAtColumn("2026-01-05", 24, HOURS)).toBe("2026-01-06T00:00");
+    expect(dateAtColumn("2026-01-05", -1, HOURS)).toBe("2026-01-04T23:00");
+    for (const col of [0, 1, 30, 47, 168]) {
+      expect(columnOf("2026-01-05", dateAtColumn("2026-01-05", col, HOURS), HOURS)).toBe(col);
+    }
+  });
+
+  it("walks over the weekend at hour grain, so the round trip holds there too", () => {
+    // Fri 00:00 plus a working day's worth of hours is Monday, not Saturday.
+    expect(dateAtColumn("2026-01-09", 24, HOURS_SKIP)).toBe("2026-01-12T00:00");
+    for (const col of [0, 5, 24, 40, 120]) {
+      expect(columnOf("2026-01-09", dateAtColumn("2026-01-09", col, HOURS_SKIP), HOURS_SKIP)).toBe(
+        col,
+      );
+    }
+  });
+
+  it("measures a bar in hours, from its start to the moment it ends", () => {
+    expect(barColumns({ start: "2026-01-05", end: "2026-01-05" }, HOURS)).toBe(24);
+    expect(barColumns({ start: "2026-01-05", end: "2026-01-06" }, HOURS)).toBe(48);
+    expect(barColumns({ start: "2026-01-05T09:30", end: "2026-01-05T17:00" }, HOURS)).toBe(7.5);
+  });
+
+  it("stops a bar at the weekend rather than drawing through it", () => {
+    // Friday 09:00 to the end of Friday is fifteen hours; the Saturday and
+    // Sunday the plain end date runs up to are worth nothing.
+    expect(barColumns({ start: "2026-01-09T09:00", end: "2026-01-09" }, HOURS_SKIP)).toBe(15);
+  });
+
+  it("still counts whole days at day grain, inclusive as it always was", () => {
+    expect(barColumns({ start: "2026-07-13", end: "2026-07-15" }, false)).toBe(3);
+  });
+
+  it("keeps a bar's length when it is dragged at hour grain", () => {
+    // The trap: a plain end date denotes the midnight it runs UP TO, so
+    // shifting it as though it were that day's 00:00 leaves the instant it
+    // denotes exactly where it was — and the bar loses a day per drag.
+    const span = { start: "2026-01-05", end: "2026-01-07" };
+    const moved = applyDrag(span, "move", 24, HOURS);
+    expect(barColumns(moved, HOURS)).toBe(barColumns(span, HOURS));
+    expect(moved.start).toBe("2026-01-06T00:00");
+  });
+
+  it("nudges one end by hours without moving the other", () => {
+    expect(applyDrag({ start: "2026-01-05T09:00", end: "2026-01-05T17:00" }, "end", 2, HOURS)).toEqual(
+      { start: "2026-01-05T09:00", end: "2026-01-05T19:00" },
+    );
+  });
+
+  it("will not let a resize invert the bar at hour grain", () => {
+    const flat = applyDrag({ start: "2026-01-05T09:00", end: "2026-01-05T17:00" }, "end", -20, HOURS);
+    expect(instantOf(flat.end, "end")).toBeGreaterThanOrEqual(instantOf(flat.start, "start"));
+  });
+
+  it("carries the origin's own clock into the answer", () => {
+    // The origin is the chart's left edge, which is a record's start — it can
+    // be half past nine as easily as midnight.
+    expect(dateAtColumn("2026-01-05T09:30", 2, HOURS)).toBe("2026-01-05T11:30");
+    expect(dateAtColumn("2026-01-05T09:30", 15, HOURS)).toBe("2026-01-06T00:30");
+  });
+});
+
+describe("the slider reaches hours (#785)", () => {
+  it("keeps days until the density can actually show an hour", () => {
+    expect(grainFor(PPD_ANCHORS.month)).toBe("day");
+    expect(grainFor(PPD_ANCHORS.day)).toBe("day");
+    expect(grainFor(PPD_HOUR_GRAIN - 1)).toBe("day");
+    expect(grainFor(PPD_HOUR_GRAIN)).toBe("hour");
+  });
+
+  it("extends the track far enough to reach hours, anchors still inside it", () => {
+    expect(sliderToPpd(1)).toBeGreaterThanOrEqual(PPD_HOUR_GRAIN);
+    expect(sliderToPpd(0)).toBeLessThan(PPD_ANCHORS.month);
+    expect(sliderToPpd(1)).toBeGreaterThan(PPD_ANCHORS.day);
+  });
+
+  it("crosses the threshold without moving anything on screen", () => {
+    // A day is one column at day grain and twenty-four at hour grain, and an
+    // hour column is a twenty-fourth as wide — so the same date sits at the
+    // same x on both sides of the switch. Zooming must not teleport the chart,
+    // and building the hour count ON the day count is what guarantees it.
+    const ppd = PPD_HOUR_GRAIN;
+    const at = (grain: "day" | "hour") =>
+      columnOf("2026-01-05", "2026-01-08", { grain, skipWeekends: false }) * columnPx(ppd, grain);
+    expect(at("hour")).toBeCloseTo(at("day"));
+  });
+
+  it("never opens a short project in hours — fitting to the pane stops at days", () => {
+    // Two days in a 900px pane fits at 450 px/day, which is well past the
+    // threshold. Going finer than days is a deliberate drag, never something a
+    // project gets for being short.
+    expect(fitPpd(900, 2)).toBe(PPD_MAX_FIT);
+    expect(grainFor(fitPpd(900, 2))).toBe("day");
+    // And fitting still fits whenever fitting is the smaller number.
+    expect(fitPpd(900, 90)).toBeCloseTo(10);
+  });
+});
+
+describe("the axis at hour grain (#785)", () => {
+  const PPD = PPD_HOUR_GRAIN * 2; // 12px hour columns
+
+  it("labels hours on the fine row and names the day in the band above", () => {
+    const axis = axisFor("2026-01-05", 48, PPD);
+    expect(axis.unit).toBe("hour");
+    expect(axis.fine.map((t) => t.label)).toContain("09");
+    expect(axis.coarse.map((b) => b.label)).toContain("Mon 5 Jan");
+  });
+
+  it("gives each day a band exactly twenty-four columns wide", () => {
+    const axis = axisFor("2026-01-05", 48, PPD);
+    expect(axis.coarse[0]).toEqual({ day: 0, days: 24, label: "Mon 5 Jan" });
+    expect(axis.coarse[1].day).toBe(24);
+  });
+
+  it("never spaces two hour labels closer than the min label width", () => {
+    // The same rule the day axis has had since #448 — a row of labels that can
+    // collide is the bug this whole tier system exists to prevent.
+    const px = columnPx(PPD_HOUR_GRAIN, "hour");
+    const axis = axisFor("2026-01-05", 72, PPD_HOUR_GRAIN);
+    expect(axis.fine.length).toBeGreaterThan(1);
+    for (let i = 1; i < axis.fine.length; i++) {
+      expect((axis.fine[i].day - axis.fine[i - 1].day) * px).toBeGreaterThanOrEqual(
+        AXIS_MIN_LABEL_PX,
+      );
+    }
+  });
+
+  it("puts its labels on the hour even when the chart starts mid-morning", () => {
+    // The chart's left edge is a record's start, which is as likely to be 09:30
+    // as midnight. Labels running :30 past every hour would read as broken.
+    const axis = axisFor("2026-01-05T09:30", 24, PPD);
+    for (const t of axis.fine) expect(t.label).toMatch(/^\d\d$/);
+    expect(axis.fine[0].day).toBeCloseTo(0.5);
+  });
+
+  it("skips the weekend on the hour axis too", () => {
+    // 48 hour columns from Friday is Friday and Monday — Saturday and Sunday
+    // are worth no columns at either grain.
+    const axis = axisFor("2026-01-09", 48, PPD, undefined, "", true);
+    expect(axis.coarse.map((b) => b.label)).toEqual(["Fri 9 Jan", "Mon 12 Jan"]);
+  });
+});
+
 describe("instantOf (#785)", () => {
-  it("reads a plain date as the WHOLE day — first minute to last", () => {
+  it("reads a plain date as the WHOLE day, bounded by the next midnight", () => {
+    // The bound is EXCLUSIVE: the last minute you can be inside a plain date is
+    // 23:59, and the interval it names runs up to — not through — 00:00 the
+    // next day. Stated as the bound rather than as that last minute because
+    // every width in the chart is then just `end - start`; pinning it to 23:59
+    // makes each one need a "+ one more minute", which is the same fudge as the
+    // day grain's `+1` that P6 exists to delete.
     expect(instantOf("2026-01-05", "start")).toBe(Date.parse("2026-01-05T00:00:00Z"));
-    expect(instantOf("2026-01-05", "end")).toBe(Date.parse("2026-01-05T23:59:00Z"));
+    expect(instantOf("2026-01-05", "end")).toBe(Date.parse("2026-01-06T00:00:00Z"));
   });
 
-  it("reads a clock as exactly that minute at either end", () => {
+  it("reads a clock as exactly that minute — the moment work stops", () => {
+    // "09:30–17:00" is seven and a half hours to everyone who writes it, so a
+    // timed end is the bound itself, not the last minute worked.
     expect(instantOf("2026-01-05T09:30", "start")).toBe(Date.parse("2026-01-05T09:30:00Z"));
-    expect(instantOf("2026-01-05T09:30", "end")).toBe(Date.parse("2026-01-05T09:30:00Z"));
+    expect(instantOf("2026-01-05T17:00", "end")).toBe(Date.parse("2026-01-05T17:00:00Z"));
   });
 
-  it("makes a one-day span last a day, which is what the +1 was patching", () => {
-    // The inclusive reading the chart has always drawn, now said in the value:
-    // a plain single date spans 1439 minutes, not zero.
+  it("makes a one-day span last exactly a day, which is what the +1 was patching", () => {
     const oneDay = instantOf("2026-01-05", "end") - instantOf("2026-01-05", "start");
-    expect(oneDay).toBe(1439 * 60_000);
+    expect(oneDay).toBe(24 * 60 * 60_000);
+    const morning =
+      instantOf("2026-01-05T17:00", "end") - instantOf("2026-01-05T09:30", "start");
+    expect(morning).toBe(7.5 * 60 * 60_000);
   });
 });
 
