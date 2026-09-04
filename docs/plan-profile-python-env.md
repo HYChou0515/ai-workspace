@@ -284,12 +284,18 @@ per-call timeout 參數 —— 它吃 backend 實例層級的 `exec_timeout`,**�
   那是**每輪對話**建一個,所以使用者這輪手動裝的東西**下一輪就無聲消失**(實測
   `Uninstalled 1 package - idna==3.19`)。定案是「`uv add` 是我們建議的路」,不是「我們
   用刪掉別的做法來強制它」。用 uv 自己的 `--inexact`:lock 說要有的照裝,沒說的不動。
-- ⚠️ **正式環境的 uv 版本其實沒有釘。** P4 寫「釘 0.7.5,因為這個版本決定 lock 怎麼被讀」,
-  但那個釘子只在 `docker/Dockerfile.workspace` —— P7 自己證明那個映像沒人拿來啟動任何東西。
-  真正跑 uv 的每個映像用的都是浮動 tag `ghcr.io/astral-sh/uv:python3.12-bookworm-slim`
-  (`sandbox-host/Dockerfile:37` 是正式環境那個)。**這個 feature 讓 uv 版本第一次變成語意
-  上的關鍵**(它決定使用者的 lock 怎麼被讀),所以要不要改成
-  `0.7.5-python3.12-bookworm-slim` 是一個**要拍板的部署決定**,不是我能單方面改的。**未定案。**
+- ✅ **正式環境的 uv 版本已經釘住(原本沒有)。** P4 寫的「釘 0.7.5」只在
+  `docker/Dockerfile.workspace` —— P7 自己證明那個映像沒人拿來啟動任何東西。實際量到的是
+  **三個地方跑三個版本**:開發機 0.7.5、CI 0.12.9、而正式映像的浮動 base
+  `ghcr.io/astral-sh/uv:python3.12-bookworm-slim` 當天帶的是 **0.9.30**。這個 feature 讓
+  uv 版本第一次決定「使用者的 lock 怎麼被讀」,所以那是不能接受的。
+  ⚠️ **釘法不是直覺那個**:`ghcr.io/astral-sh/uv:0.12.9-python3.12-bookworm-slim`
+  **不存在**(registry 回 `manifest unknown`)。複合 tag 是最順手的猜法,而且**沒有任何
+  流水線會建 `sandbox-host/Dockerfile`**(GitLab 只建 `docker/Dockerfile`),所以寫錯不會
+  當場紅,只會在某天有人重建映像時炸。改成覆蓋執行檔
+  (`COPY --from=ghcr.io/astral-sh/uv:0.12.9 /uv /uvx /usr/local/bin/`,repo 既有的模式),
+  並**實際 build 過**驗證:`BEFORE: uv 0.9.30` → `AFTER: uv 0.12.9`,映像跑起來也是 0.12.9。
+  CI 的 `setup-uv` 同步釘同一版 —— 只釘一邊的話,CI 測的就不是正式環境跑的。
 - ⚠️ **shim 在 PATH 最前面,而 `uv sync` 從 PATH 挑基礎直譯器 —— 所以 venv 可能建在 shim 上面。**
   之後 shim 又指進那個 venv,`python` 就變成 exec 自己:**無限迴圈、零輸出、不會結束**,
   直到 exec timeout 把它殺掉。使用者看到的是 exit 124 加兩條空的流,裡面沒有任何線索
@@ -299,12 +305,17 @@ per-call timeout 參數 —— 它吃 backend 實例層級的 `exec_timeout`,**�
   退回 carrier。⚠️ 護欄本身第一版也錯了兩次 —— 先是只看 `realpath`(整條鏈解到最後,
   中間經過 shim 那跳看不見),再是相對連結一律以起點目錄為基準(於是在 venv 自己的
   `bin/` 裡造出假迴圈,把好的 venv 也擋掉)。兩次都是 e2e 測試抓到的。
-- **cache 沒有上界**,只會長,而且是**每個 uid 一份**(共用可寫是跨 item 改碼路徑,
-  不是節省 —— uv 會把 cache 檔 **hardlink** 進 venv,lock 的 hash 只在安裝當下驗一次)。
-  uid 由 item id 導出、數量被 `uid_range` 上界,所以**份數**有界、**每份的大小**沒有。
-  共用磁碟區只有 20Gi,所以這需要一個清理策略,而且是**營運面的取捨,不該由我單方面決定**:
-  照抄 blob GC 的形狀做個 sweeper、還是在每次 sync 後跑 uv 自己的 `uv cache prune --ci`
-  (用內建、不必新機制,但會加在冷啟路徑上)。**未定案。**
+- ⚠️ **cache 沒有上界,而且「份數被 `uid_range` 上界」這句話等於沒說** —— 預設
+  `uid_range = 2_000_000_000`。uid 由 item id 導出,所以實際上是**每個用過 uv 的 item
+  一份完整堆疊**,而且 **item 被刪掉之後那份還在**(host 不知道 item 的生死)。
+  以出貨的 `pydeps` 冷同步 382MB 算,**約 50 個 item 就把 20Gi 共享磁碟區吃滿**。
+  ⚠️ **共用一份不是選項,這是實測不是顧慮**:把共享 cache 裡的一個檔案動手腳之後,
+  uv 把被竄改的內容**原封不動裝進另一個全新的 venv 且完全沒有察覺**
+  (注入的符號 import 得到)。`UV_LINK_MODE=copy` 只解決 hardlink 別名
+  (量過:inode 由相同變獨立),**解決不了汙染**。所以 per-uid 是對的。
+  滿了的後果不是靜默壞掉:`uv sync` 失敗 → `ProjectEnvError` 帶著 uv 的原話 → 開不起來
+  但看得懂。**清理策略未定案**;要做的話按「最後存取時間」回收(blob GC 的形狀),
+  那不需要知道 item 還在不在。
 - **uv 的鎖在某些檔案系統上會退化**並印出 `Shared locking is not supported by the
   current platform or filesystem`。共享磁碟區若是 NFS,`uv cache clean` 的安全性沒有
   保證 —— 不影響一般安裝,但清 cache 那個動作要小心。
