@@ -464,14 +464,22 @@ export function GanttView({
                   // this replaces was hiding the off-by-one: it made a same-day
                   // span look right while every longer bar stopped a day short.
                   const width = barColumns(ps, skip) * ppd;
-                  const c = barColor(row.e);
+                  const provisional = isProvisional(row.e);
+                  // A provisional bar is the schedule's GUESS for work with no
+                  // estimate, and its rule draws it hollow and dashed so it is
+                  // never mistaken for a real plan. That rule is in the
+                  // stylesheet and these are INLINE, which beats it — so the
+                  // colour has to decline to paint rather than the rule try to
+                  // win. Every paint below is withheld together: leaving any one
+                  // of them on hands the guess back a solid-bar cue.
+                  const c = provisional ? undefined : barColor(row.e);
                   return (
                     <div key={row.e.number} className="ev-gantt__bar-row" style={{ height: ROW_H }}>
                       <div
                         data-testid={`bar-${row.e.number}`}
                         title={spanValue(ps)}
                         className="ev-gantt__bar"
-                        data-provisional={isProvisional(row.e) ? "true" : undefined}
+                        data-provisional={provisional ? "true" : undefined}
                         data-busy={busy ? "1" : undefined}
                         onPointerDown={(e) => startDrag(row.e.number, "move", e)}
                         // #680 — a double-click opens the record. It coexists with

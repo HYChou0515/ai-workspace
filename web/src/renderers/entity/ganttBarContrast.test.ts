@@ -49,6 +49,9 @@ const type: EntityType = {
     { name: "title", role: "text" },
     { name: "span", role: "daterange" },
     { name: "assignee", role: "actor" },
+    // named by the `schedule:` block a provisional bar needs to exist at all
+    { name: "exp_days", role: "number" },
+    { name: "schedule", role: "status", values: ["auto", "manual"] },
     {
       name: "urgency",
       role: "status",
@@ -355,6 +358,46 @@ describe("a gantt bar coloured by ACTOR", () => {
     expect(fillOf(bars[0], LIGHT)).toBeLessThan(3);
     expect(fillOf(bars[0], DARK)).toBeGreaterThanOrEqual(3);
     expect(edgeOf(bars[0], DARK)).toBeLessThan(3);
+  });
+});
+
+/**
+ * A provisional bar is the schedule's GUESS for work nobody has estimated. Its
+ * rule makes it hollow and dashed so it is, in that rule's own words, "never
+ * mistaken for the solid bars around it".
+ *
+ * But that rule lives in the stylesheet and the colour is an inline style, and
+ * inline wins — so on any `color_by` chart the guess paints as a solid, fully
+ * planned bar. Pre-existing since #690 P2, and invisible until now because
+ * every other guard renders bars that are not provisional.
+ */
+describe("a provisional bar on a coloured chart", () => {
+  const withSchedule = (colorBy: string) => ({
+    color_by: colorBy,
+    schedule: { span: "span", duration: "exp_days", flag: "schedule" },
+  });
+
+  for (const [field, value] of [
+    ["urgency", "critical"],
+    ["assignee", "alice"],
+  ] as const) {
+    it(`keeps the guess hollow when the chart is coloured by ${field}`, () => {
+      const { bar } = renderBar({ [field]: value }, withSchedule(field));
+
+      expect(bar.dataset.provisional, "the row is not provisional to begin with").toBe("true");
+      // All three inline paints have to stay off, or the stylesheet's hollow
+      // rule loses to them one by one: it sets a transparent fill, its own ink
+      // and a dashed edge, and an inline value beats each of those separately.
+      expect(bar.style.background, "a guess wearing a solid fill").toBe("");
+      expect(bar.style.color, "a guess wearing the fill's ink").toBe("");
+      expect(bar.style.borderColor, "a guess wearing a solid edge").toBe("");
+    });
+  }
+
+  it("still colours the same record once it has an estimate", () => {
+    const { bar } = renderBar({ assignee: "alice", exp_days: 3 }, withSchedule("assignee"));
+    expect(bar.dataset.provisional).toBeUndefined();
+    expect(bar.style.background).not.toBe("");
   });
 });
 
