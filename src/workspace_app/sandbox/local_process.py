@@ -704,8 +704,13 @@ class LocalProcessSandbox:
           deleting one mid-sync is a correctness one. If everything left is in
           use, that is a host needing more disk, and it says so.
         * **Oldest first**, where `_exec_argv` stamps a cache on every exec so
-          "oldest" means least recently USED — read hits do not move mtime on
-          their own."""
+          "oldest" means least recently USED.
+
+          ⚠️ The stamp is NOT there because reads leave mtime alone — measured
+          on uv 0.7.5 and 0.12.9, a cache HIT does move it (an `--offline`
+          install is enough). See the note at the `os.utime` call. It is there
+          for the case that does hold: an exec that never touches uv must not
+          let a busy item look idle to this sweep."""
         cache_root = self._root / _UV_CACHE
         if not cache_root.is_dir() or max_bytes is None:
             return []
@@ -746,12 +751,26 @@ class LocalProcessSandbox:
         return removed
 
     def _release_cache(self, handle: SandboxHandle) -> None:
-        """Hook: the base owns nothing to hand back. `IsolatedProcessSandbox`
-        overrides it, because the cache OUTLIVES the sandbox while carrying that
-        sandbox's uid — and on the host those uids are pooled and handed straight
-        back out. Left alone, the next tenant of that uid can read and rewrite
-        the previous item's cache, which is the inheritance the item key was
-        chosen to prevent, arriving one step later."""
+        """Hook: the base owns nothing to hand back.
+
+        One question decides whether a subclass overrides it: **does a uid
+        outlive the sandbox that held it?** The cache outlives the sandbox by
+        design while carrying that sandbox's uid, so where uids are recycled the
+        next holder of one can read and rewrite the previous item's cache — the
+        inheritance keying by ITEM was chosen to prevent, arriving one step
+        later.
+
+        The two backends answer differently, which is why only one overrides:
+
+        * the HOST service pools uids and frees them on kill (`_UidPool`,
+          "Freed ids are reused"), so it hands the cache back to the service —
+          and only when the item's LAST live sandbox goes, since `kill` is
+          per-handle while the cache is per-item;
+        * the app-side backend derives `uid_base + xxhash(item_id) % uid_range`,
+          the same on every pod and never freed. No next tenant exists, so it
+          does not override this and must not: de-owning a cache another live
+          sandbox for that item is filling breaks its `uv sync` with EACCES.
+        """
 
     def _exec_argv(
         self, handle: SandboxHandle, cmd: list[str]
@@ -864,10 +883,11 @@ class LocalProcessSandbox:
             # and carried on. Unreachable in practice (`create` validates), but
             # two copies of one function with two policies is exactly the drift
             # these paired files exist to prevent.
-            cache = root / _HOME / ".cache" / "uv"
+            in_sandbox = root / _HOME / ".cache" / "uv"
+            shared: Path | None = None
             try:
-                cache = self._root / _UV_CACHE / self._cache_key(handle)
-                cache.mkdir(parents=True, exist_ok=True)
+                shared = self._root / _UV_CACHE / self._cache_key(handle)
+                shared.mkdir(parents=True, exist_ok=True)
                 # Stamp it. The sweep evicts oldest-first, and mtime alone is not
                 # a "last used" signal: an exec that never touches uv does not
                 # move it, and writes DEEPER in the tree do not move the top dir.
@@ -876,16 +896,24 @@ class LocalProcessSandbox:
                 # where an `--offline` install does. The stamp stays for the
                 # case that does hold: an item busy doing something else must
                 # not look idle to the sweep.
-                os.utime(cache, None)
-                self._own_cache(handle, cache)
+                os.utime(shared, None)
+                self._own_cache(handle, shared)
+                cache = shared
             except (OSError, ValueError):
+                # Names the cache that FAILED, not the one about to be used. An
+                # earlier version pre-assigned the fallback and reported that,
+                # so a `_cache_key` that refused the id printed the path the
+                # sandbox was about to work with perfectly well — a message
+                # that says nothing is worse than none, and this is the only
+                # place the refusal is ever visible.
                 logger.warning(
-                    "local_process: cannot prepare the uv cache at %s; this sandbox "
-                    "will re-download instead",
-                    cache,
+                    "local_process: cannot prepare the shared uv cache (%s); this sandbox "
+                    "will use its own at %s and re-download instead",
+                    shared if shared is not None else f"{handle.id!r} is not a usable cache name",
+                    in_sandbox,
                     exc_info=True,
                 )
-                cache = root / _HOME / ".cache" / "uv"
+                cache = in_sandbox
             env["UV_CACHE_DIR"] = str(cache)
             # (Re)build + prepend the `python` shim so `python`/`python3*` route
             # to the python-stack carrier (or /usr/bin/python3), never the host's

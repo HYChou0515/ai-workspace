@@ -12,6 +12,7 @@ do we hand back the right concrete impl?
 from __future__ import annotations
 
 from dataclasses import replace
+from unittest.mock import patch
 
 import pytest
 
@@ -1132,3 +1133,70 @@ def test_the_docker_sandbox_says_the_uv_ceiling_is_dead(caplog):
     assert any("uv_cache_max_bytes" in r.message for r in caplog.records), [
         r.message for r in caplog.records
     ]
+
+
+def test_the_mock_sandbox_says_the_uv_ceiling_is_dead(caplog):
+    """The FOURTH entry point, missed by the fix for the other three.
+
+    `_warn_dead_uv_ceiling`'s own docstring counted mock among the backends
+    that cannot honour the number, and three documents then said every such
+    entry point warns — `factories.py` ("called from every entry point that
+    cannot honour the number"), `configs/config.example.yaml` ("logs a warning
+    at startup rather than pretending") and `docs/migrations.md` §5.5. `mock`
+    kept no cache and said nothing.
+
+    That is the same defect its own fix was for, one backend over — which is
+    why the call site is no longer a list to keep in step. See the test below.
+    """
+    import logging
+
+    from workspace_app.config.schema import Settings
+
+    settings = Settings()
+    object.__setattr__(settings.sandbox, "kind", "mock")
+    object.__setattr__(settings.sandbox, "uv_cache_max_bytes", 8_589_934_592)
+
+    with caplog.at_level(logging.WARNING):
+        get_sandbox(settings)
+
+    assert any("uv_cache_max_bytes" in r.message for r in caplog.records), [
+        r.message for r in caplog.records
+    ]
+
+
+def test_a_backend_that_cannot_bound_uv_caches_cannot_be_added_silently(caplog):
+    """The structural half: the answer comes from the BACKEND, once.
+
+    Hand-listing the entry points is what produced the bug above — three were
+    updated and the fourth was not, while the comment said all of them. So the
+    decision is made once, after the backend is built, by asking the object
+    whether it keeps per-item uv caches this process can sweep. A new backend
+    is therefore covered on the day it is added: it either answers yes and must
+    mean it, or the warning fires for it with no code written.
+
+    Driven through a `kind` nobody has taught the check about — the closest
+    thing to "a backend added next year" a test can hold.
+    """
+    import logging
+
+    from workspace_app import factories
+    from workspace_app.config.schema import Settings
+
+    class _FutureBackend:
+        """Keeps no per-item uv cache: no sweeper, no ceiling to apply."""
+
+    settings = Settings()
+    object.__setattr__(settings.sandbox, "kind", "mock")
+    object.__setattr__(settings.sandbox, "uv_cache_max_bytes", 8_589_934_592)
+
+    with (
+        caplog.at_level(logging.WARNING),
+        patch.object(factories, "_build_sandbox", lambda *a, **k: _FutureBackend()),
+    ):
+        built = get_sandbox(settings)
+
+    assert isinstance(built, _FutureBackend)
+    assert any("uv_cache_max_bytes" in r.message for r in caplog.records), (
+        "a backend nobody taught this about must still be caught: "
+        f"{[r.message for r in caplog.records]}"
+    )

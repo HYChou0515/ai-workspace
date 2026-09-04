@@ -17,7 +17,16 @@ def test_defaults_when_env_empty():
     assert s.cgroup_root is None
 
 
-def test_reads_all_sandbox_host_env_vars():
+def test_reads_the_env_vars_this_list_names():
+    """A hand-written list, and named as one.
+
+    It used to be called `..._reads_all_...`, which was a claim: it lists
+    thirteen of fifteen fields, and both cache ceilings were added after it and
+    never joined. The test below is the one that covers ALL of them, derived
+    from the dataclass so it cannot fall behind — this one stays because an
+    explicit expected value catches a field read with the wrong CONVERTER,
+    which a uniform sample cannot.
+    """
     env = {
         "SANDBOX_HOST_BIND": "127.0.0.1:9000",
         "SANDBOX_HOST_UID_MIN": "200000",

@@ -70,23 +70,29 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 #
 # What stops the walk-up is HAVING a table here, any table — measured: deleting
 # `[tool.ty.src]` below still checks every file, deleting `[tool.ty.rules]`
-# still checks every file (and reports the 53 debt diagnostics). An earlier
-# version of this comment credited `exclude = []` for it, which is why it is
-# now stated as something that was run rather than something that was reasoned.
+# still checks every file (and reports the debt below). An earlier version of
+# this comment credited `exclude = []` for it, which is why it is now stated as
+# something that was run rather than something that was reasoned.
 [tool.ty.src]
 exclude = []
 
 [tool.ty.rules]
-# ⚠️ DEBT, declared rather than hidden: turning the gate on surfaced 58
-# pre-existing diagnostics, 51 of them this one — overwhelmingly test doubles
-# passed where a real protocol type is expected, which the app side handles with
-# per-line `# ty: ignore[invalid-argument-type]`. Cleaning those is a separate
-# job from #775 and would bury this PR.
+# ⚠️ DEBT, declared rather than hidden: turning the gate on surfaced a pile of
+# pre-existing diagnostics, overwhelmingly this one — test doubles passed where
+# a real protocol type is expected, which the app side handles with per-line
+# `# ty: ignore[invalid-argument-type]`. Cleaning those is a separate job from
+# #775 and would bury this PR.
+#
+# No count here on purpose: two comments in this file quoted one (51, then 53
+# eight lines apart) and disagreed within a single commit, because every test
+# added since moves it. What matters is checkable in one command instead —
+# `uv run ty check src` with this line removed reports ZERO, and every
+# diagnostic is under `tests/`.
 invalid-argument-type = "ignore"
 
 # …but the debt is ENTIRELY in `tests`, so demoting it package-wide made the
 # gate green over a whole class of real defect in `src` — measured: with the
-# rule at `error`, `src` reports zero and `tests` reports all 51, and a
+# rule at `error`, `src` reports zero and every diagnostic is in `tests`, and a
 # genuinely wrong-type call injected into `src/sandbox_host/local_process.py`
 # passed as shipped. That is the same "green over nothing" this section exists
 # to fix, narrowed rather than removed. So the demotion is scoped to where the

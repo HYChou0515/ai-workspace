@@ -626,6 +626,21 @@ class InvestigationRegistry:
             s = self._sessions[inv_id]
             if s.last_active >= cutoff:
                 continue
+            # A session someone is INSIDE right now is not idle, whatever its
+            # timestamp says. `ensure_handle` holds this lock for the whole
+            # acquire — create, restore, mark_ready — and assigns
+            # `session.handle` only when that returns, so a tick landing in
+            # that window saw a session with no handle, took the "nothing to
+            # kill" path below, and dropped it. The sandbox `_acquire` had
+            # already built was then orphaned: no session refers to it, so
+            # neither this loop nor `close_all` can ever reap it.
+            #
+            # Measured, not reasoned: with a 0.1 s threshold this reddens
+            # `test_idle_killer_reaps_session_past_threshold` in ~4% of runs,
+            # always as `kill_calls == 0`. Production's threshold is 8 h, so
+            # what it costs there is the orphan rather than the flake.
+            if s.lock.locked():
+                continue
             try:
                 if s.handle is not None and not await self._globally_idle(inv_id, cutoff_ms):
                     logger.info(
@@ -664,6 +679,13 @@ class InvestigationRegistry:
                         inv_id,
                     )
                 else:
+                    # The only exit from this loop that used to say nothing —
+                    # which is why the race above took an instrumented run to
+                    # find rather than a reading of the log.
+                    logger.info(
+                        "registry: dropped idle session for item %s (no sandbox to reap)",
+                        inv_id,
+                    )
                     del self._sessions[inv_id]
                 killed.append(inv_id)
             except Exception:  # noqa: BLE001 — #366: one bad item must not abort the sweep

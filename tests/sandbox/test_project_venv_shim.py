@@ -428,3 +428,22 @@ async def test_a_cache_it_cannot_prepare_does_not_take_the_turn_down(tmp_path: P
     assert env["UV_CACHE_DIR"].endswith("/.home/.cache/uv"), (
         "and it falls back to the in-sandbox cache rather than naming one it could not make"
     )
+
+
+def test_a_jailed_sandbox_says_its_uv_cache_is_not_sweepable(tmp_path: Path) -> None:
+    """`keeps_item_uv_caches` is what the factory asks before warning that
+    `sandbox.uv_cache_max_bytes` reaches nothing on this backend.
+
+    In the twin because the predicate lives in both copies of
+    `local_process.py` and only one of them had a caller — a predicate tested
+    on one side only is exactly how these two files drift, which is the failure
+    they exist to prevent. It reads the RESOLVED flag, so no userns support is
+    needed to run it.
+    """
+    jailed = LocalProcessSandbox(root_dir=tmp_path / "a", isolate=True)
+    plain = LocalProcessSandbox(root_dir=tmp_path / "b", isolate=False)
+
+    assert plain.keeps_item_uv_caches, "unjailed keeps `{root}/.uv-cache`, which a sweep can walk"
+    assert not jailed.keeps_item_uv_caches, (
+        "jailed keeps it inside the sandbox, where no cross-sandbox sweep can reach it"
+    )

@@ -11,7 +11,7 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
-from sandbox_host.__main__ import _reaper_loop
+from sandbox_host.__main__ import _reaper_loop, _reaper_task
 from sandbox_host.app import check_cgroup_ready, make_host_app
 from sandbox_host.mock import MockSandbox
 
@@ -392,3 +392,56 @@ async def test_the_idle_tick_sweeps_the_uv_cache_with_the_configured_ceiling():
     assert controller.uv_ceilings == [4096], (
         f"the configured ceiling must reach the sweep on the tick: {controller.uv_ceilings}"
     )
+
+
+async def test_switching_the_reaper_off_says_which_ceilings_go_with_it():
+    """`SANDBOX_HOST_IDLE_TTL=0` is documented as switching off idle reaping.
+    It also switches off BOTH cache sweeps, because they ride that task — so an
+    operator who set a ceiling gets no eviction and, until now, no explanation.
+
+    Same class the app side just closed for `sandbox.uv_cache_max_bytes`: a
+    number that parses, is stored, and is handed to nobody. Said once, at the
+    point where the decision is actually made, rather than only in a YAML
+    comment nobody reads at 3am.
+    """
+    said: list[str] = []
+
+    class _Off:
+        idle_ttl = 0.0
+
+    task = _reaper_task(
+        _Off(),
+        tool_cache_max_bytes=None,
+        uv_cache_max_bytes=8_589_934_592,
+        say=said.append,
+    )
+
+    assert task is None, "ttl 0 means no reaper — that part is intended"
+    assert any("SANDBOX_HOST_UV_CACHE_MAX_BYTES" in s for s in said), (
+        f"and the ceiling it silently disables must be named: {said}"
+    )
+    assert not any("TOOL_CACHE" in s for s in said), (
+        f"but only the ceilings that were actually set: {said}"
+    )
+
+
+async def test_the_reaper_stays_quiet_when_it_is_running():
+    """The control. Warning on the healthy path is how an operator learns to
+    ignore the message on the deployments where it is true."""
+    said: list[str] = []
+
+    class _On:
+        idle_ttl = 600.0
+
+    task = _reaper_task(
+        _On(),
+        tool_cache_max_bytes=4096,
+        uv_cache_max_bytes=4096,
+        say=said.append,
+    )
+    assert task is not None
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+    assert said == [], f"the ceilings ARE applied here; nothing to report: {said}"

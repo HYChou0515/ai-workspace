@@ -50,7 +50,12 @@ class _Declared(MockSandbox):
 
     async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None) -> ExecResult:
         self.calls.append(list(cmd))
-        return ExecResult(exit_code=0, stdout=b"")
+        # A distinctive code for the NODE's own command, 0 for the preparation.
+        # `assert exit_code == 0` here could not fail — everything returned 0 —
+        # so it said nothing about whose result `run_sandbox` hands back, which
+        # is the one thing a caller depends on.
+        node = cmd[:2] == ["sh", "-lc"]
+        return ExecResult(exit_code=7 if node else 0, stdout=b"out" if node else b"")
 
 
 def _build(monkeypatch, sandbox: MockSandbox):
@@ -89,9 +94,11 @@ async def test_a_run_node_prepares_the_declared_environment_before_its_command(m
     sandbox = _Declared()
     executor, item_id = _build(monkeypatch, sandbox)
 
-    exit_code, _out = await executor.run_sandbox(item_id, "python analyze.py", "")
+    exit_code, out = await executor.run_sandbox(item_id, "python analyze.py", "")
 
-    assert exit_code == 0
+    assert (exit_code, out) == (7, "out"), (
+        "the NODE's result is what a caller acts on — not the preparation's"
+    )
     assert _SYNC in sandbox.calls, f"the node ran against an unprepared workspace: {sandbox.calls}"
     ran = [c for c in sandbox.calls if c and c[0] == "sh" and "-lc" in c]
     assert ran, f"the node's own command never ran: {sandbox.calls}"

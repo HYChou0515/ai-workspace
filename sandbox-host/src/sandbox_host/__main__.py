@@ -11,6 +11,7 @@ import asyncio
 import contextlib
 import os
 import signal
+from collections.abc import Callable
 
 import uvicorn
 
@@ -41,6 +42,51 @@ async def _reaper_loop(
             print(f"reaped idle sandboxes: {reaped}", flush=True)
 
 
+def _reaper_task(
+    controller,
+    *,
+    tool_cache_max_bytes: int | None = None,
+    uv_cache_max_bytes: int | None = None,
+    say: Callable[[str], None] = lambda line: print(line, flush=True),
+) -> asyncio.Task | None:
+    """The idle reaper, or None when `SANDBOX_HOST_IDLE_TTL` switches it off —
+    and, in that case, a word about what goes off WITH it.
+
+    Both cache sweeps ride this task, so `IDLE_TTL=0` means a configured
+    ceiling parses, is stored on the settings, and is applied by nobody. That
+    was recorded only in a comment in `deploy/sandbox-host.example.yaml`, which
+    is not where an operator looks when disk fills up. Same class the app side
+    closed for `sandbox.uv_cache_max_bytes`, said at the point where the
+    decision is actually made.
+
+    `say` is a seam so the decision can be tested without capturing stdout;
+    everything in this module reports through `print`, and so does this.
+    """
+    if controller.idle_ttl > 0:
+        return asyncio.create_task(
+            _reaper_loop(
+                controller,
+                tool_cache_max_bytes=tool_cache_max_bytes,
+                uv_cache_max_bytes=uv_cache_max_bytes,
+            )
+        )
+    dead = [
+        name
+        for name, value in (
+            ("SANDBOX_HOST_TOOL_CACHE_MAX_BYTES", tool_cache_max_bytes),
+            ("SANDBOX_HOST_UV_CACHE_MAX_BYTES", uv_cache_max_bytes),
+        )
+        if value is not None
+    ]
+    if dead:
+        say(
+            "⚠️ SANDBOX_HOST_IDLE_TTL=0 switches off the idle reaper, and the cache "
+            f"sweeps ride it — {', '.join(dead)} will not be applied. Set a non-zero "
+            "idle TTL if you want those ceilings enforced."
+        )
+    return None
+
+
 async def _serve(
     app,
     controller,
@@ -55,16 +101,10 @@ async def _serve(
     # pod terminates; a PreStop hook hitting POST /drain is the primary path.
     with contextlib.suppress(NotImplementedError):
         loop.add_signal_handler(signal.SIGTERM, controller.start_draining)
-    reaper = (
-        asyncio.create_task(
-            _reaper_loop(
-                controller,
-                tool_cache_max_bytes=tool_cache_max_bytes,
-                uv_cache_max_bytes=uv_cache_max_bytes,
-            )
-        )
-        if controller.idle_ttl > 0
-        else None
+    reaper = _reaper_task(
+        controller,
+        tool_cache_max_bytes=tool_cache_max_bytes,
+        uv_cache_max_bytes=uv_cache_max_bytes,
     )
     server = uvicorn.Server(uvicorn.Config(app, host=bind_host, port=bind_port))
     try:

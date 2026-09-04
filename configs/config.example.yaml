@@ -162,8 +162,12 @@
 #                              # cross-sandbox sweeper can see it. On `kind:
 #                              # http` the caches are the sandbox-host's:
 #                              # SANDBOX_HOST_UV_CACHE_MAX_BYTES is the live
-#                              # one there. Setting it where it does not apply
-#                              # logs a warning at startup rather than pretending.
+#                              # one there. `kind: docker` and `kind: mock` keep
+#                              # no per-item cache at all. Setting it where it
+#                              # does not apply logs a warning at startup rather
+#                              # than pretending — the check asks the backend
+#                              # that was built, so a new one cannot be added
+#                              # silently.
 #   # #345 per-item OS-user + cgroup isolation (ported from the HTTP sandbox host).
 #   # Off by default — needs CAP_SETUID/SETGID + a writable cgroup v2 tree, which
 #   # most clusters forbid; the shared-dir fix above cures the data loss without

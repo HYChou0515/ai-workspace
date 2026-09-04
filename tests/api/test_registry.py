@@ -1694,3 +1694,59 @@ async def test_a_reap_cancelled_after_the_kill_still_drops_the_session():
         "the sandbox is already dead; leaving the session behind means close_all "
         f"kills it a second time: {registry._sessions}"
     )
+
+
+async def test_a_session_being_acquired_right_now_is_not_idle():
+    """A sandbox mid-creation is not an idle sandbox.
+
+    `ensure_handle` holds `session.lock` for the whole acquire — create,
+    restore, mark_ready — and writes `session.handle` only when that returns.
+    `kill_idle` never consulted the lock, so a tick landing inside that window
+    saw a session with no handle, took the "nothing to kill" path, and dropped
+    it. The sandbox `_acquire` had already built was then orphaned: no session
+    refers to it, so neither the reaper nor `close_all` will ever kill it.
+
+    This is what actually reddened
+    `test_idle_kill.py::test_idle_killer_reaps_session_past_threshold`, ~4% of
+    runs — instrumented rather than guessed at, after an earlier fix on this
+    branch named a different mechanism (a double kill, `kill_calls == 2`) that
+    the surviving failures could not have produced: every one of them was
+    `kill_calls == 0`.
+
+    Production needs an 8-hour acquire to reach it, so the impact there is the
+    orphan, not the flake. It is still the wrong answer to "is this idle?".
+    """
+    sandbox = _CountingSandbox()
+    registry = InvestigationRegistry(sandbox=sandbox)
+    s = await registry.session("ws-1")
+    s.last_active = datetime.now(UTC) - timedelta(minutes=30)
+
+    async with s.lock:  # someone is inside `ensure_handle` right now
+        killed = await registry.kill_idle(threshold=timedelta(minutes=15))
+
+    assert killed == [], f"a session being acquired must not be reaped: {killed}"
+    assert "ws-1" in registry._sessions, "and it must still be there when the acquire finishes"
+    assert sandbox.kill_calls == 0
+
+
+async def test_a_handle_less_session_that_is_dropped_says_so(caplog):
+    """The drop that left no trace.
+
+    A session with no handle is dropped with no kill and no log line, which is
+    why the failure above needed an instrumented run to find rather than a
+    reading of the log. The loop's other two exits both log; this was the only
+    way a session could leave the registry silently.
+    """
+    import logging
+
+    registry = InvestigationRegistry(sandbox=_CountingSandbox())
+    s = await registry.session("ws-1")
+    s.last_active = datetime.now(UTC) - timedelta(minutes=30)
+
+    with caplog.at_level(logging.INFO, logger="workspace_app.api.registry"):
+        killed = await registry.kill_idle(threshold=timedelta(minutes=15))
+
+    assert killed == ["ws-1"]
+    assert any("no sandbox" in r.getMessage() for r in caplog.records), (
+        f"dropping a session has to be visible: {[r.getMessage() for r in caplog.records]}"
+    )

@@ -762,8 +762,13 @@ class LocalProcessSandbox:
           deleting one mid-sync is a correctness one. If everything left is in
           use, that is a host needing more disk, and it says so.
         * **Oldest first**, where `_exec_argv` stamps a cache on every exec so
-          "oldest" means least recently USED — read hits do not move mtime on
-          their own."""
+          "oldest" means least recently USED.
+
+          ⚠️ The stamp is NOT there because reads leave mtime alone — measured
+          on uv 0.7.5 and 0.12.9, a cache HIT does move it (an `--offline`
+          install is enough). See the note at the `os.utime` call. It is there
+          for the case that does hold: an exec that never touches uv must not
+          let a busy item look idle to this sweep."""
         cache_root = self._root / _UV_CACHE
         if not cache_root.is_dir() or max_bytes is None:
             return []
@@ -804,12 +809,26 @@ class LocalProcessSandbox:
         return removed
 
     def _release_cache(self, handle: SandboxHandle) -> None:
-        """Hook: the base owns nothing to hand back. `IsolatedProcessSandbox`
-        overrides it, because the cache OUTLIVES the sandbox while carrying that
-        sandbox's uid — and on the host those uids are pooled and handed straight
-        back out. Left alone, the next tenant of that uid can read and rewrite
-        the previous item's cache, which is the inheritance the item key was
-        chosen to prevent, arriving one step later."""
+        """Hook: the base owns nothing to hand back.
+
+        One question decides whether a subclass overrides it: **does a uid
+        outlive the sandbox that held it?** The cache outlives the sandbox by
+        design while carrying that sandbox's uid, so where uids are recycled the
+        next holder of one can read and rewrite the previous item's cache — the
+        inheritance keying by ITEM was chosen to prevent, arriving one step
+        later.
+
+        The two backends answer differently, which is why only one overrides:
+
+        * the HOST service pools uids and frees them on kill (`_UidPool`,
+          "Freed ids are reused"), so it hands the cache back to the service —
+          and only when the item's LAST live sandbox goes, since `kill` is
+          per-handle while the cache is per-item;
+        * the app-side backend derives `uid_base + xxhash(item_id) % uid_range`,
+          the same on every pod and never freed. No next tenant exists, so it
+          does not override this and must not: de-owning a cache another live
+          sandbox for that item is filling breaks its `uv sync` with EACCES.
+        """
 
     def _exec_argv(
         self, handle: SandboxHandle, cmd: list[str]
