@@ -312,6 +312,20 @@ per-call timeout 參數 —— 它吃 backend 實例層級的 `exec_timeout`,**�
     另一個全新 venv 且完全沒察覺**。那是跨 item 的程式碼注入路徑,而 per-item 隔離(#345)
     正是它會打破的東西。`UV_LINK_MODE=copy` 只解決 hardlink 別名(inode 由相同變獨立,
     也量過),解決不了這個。
+  - **per-uid 但留著,配一個 sweeper** —— 這條看起來最有道理,而且驅動者現成
+    (`sandbox-host/__main__.py` 的 `_reaper_loop` 每 300 秒一跳,同一跳已經在用
+    「留到上限 / 最舊優先淘汰 / 活著的絕不動」掃 tool cache)。**但鍵是錯的。**
+    正式環境的 host **不是**用 item id 導出 uid —— 它用 `_UidPool`
+    (「Freed ids are reused」),`kill` 時 `self._pool.free(...)` 把 uid **回收給下一個
+    item**。所以 `.uv-cache/{uid}` 不是「item X 的 cache」,是「現在誰拿著 uid U」:
+    A 汙染自己的 cache → A 被 kill → uid 回收 → B 拿到同一個 uid → **從 A 的 cache 安裝**。
+    ⚠️ 而「先確認那個 sandbox 還在不在這台 host」擋不住它,**方向還相反**:uid 被回收的
+    那一刻正是「沒有活著的 sandbox」,也正是下一個 item 最容易撿走的時刻。
+    再往下一層:host 的 handle 是 **per-pod uuid**(#366,不像 `kind: local` 用 item id
+    重新掛回),所以在正式環境的 backend 上**根本沒有穩定的 item 身分可以當鍵**。
+    這條不是加個 sweeper 能救的,是鍵的層次就不成立。
+    ⚠️ 兩個 backend 在這點不對稱:app 端的 `IsolatedProcessSandbox` 由 item id 導出 uid
+    (固定),host 端是 pool。**任何以 uid 為鍵的持久狀態,只在 app 端安全,正式環境不安全。**
   - **per-uid 但留著**:`uid_range` 預設 2,000,000,000,所以「份數有上界」等於沒說 ——
     實際是**每個用過 uv 的 item 一份完整堆疊,連 item 被刪掉都還在**。以出貨的 `pydeps`
     冷同步 382MB 算,**約 50 個 item 吃滿 20Gi**,而且永遠欠一個回收器。
