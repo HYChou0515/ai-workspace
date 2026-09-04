@@ -200,7 +200,7 @@ def test_every_gantt_view_reads_the_same_calendar():
     on one tab and another width on the next is the complaint. So this holds
     across every gantt view, including the roadmap over milestones."""
     axis = {
-        name: {k: spec.get(k) for k in ("week", "skip_weekends")}
+        name: {k: spec.get(k) for k in ("week", "skip_weekends", "work_hours")}
         for name, spec in _gantt_views().items()
     }
     first = next(iter(axis.values()))

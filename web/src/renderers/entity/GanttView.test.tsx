@@ -256,6 +256,34 @@ describe("GanttView", () => {
     expect(screen.getByText("Mon 5 Jan")).toBeInTheDocument();
   });
 
+  it("gives the night no width once the view names a working day (#785)", () => {
+    render(
+      <GanttView
+        {...props({
+          spec: {
+            view: "gantt" as const,
+            entity: "issue",
+            span: "span",
+            label: "title",
+            work_hours: { from: 7, to: 21 },
+          },
+          entities: [
+            rec(1, { title: "All day", span: "2026-01-05/2026-01-05" }),
+            rec(2, { title: "Overnight", span: "2026-01-05T20:00/2026-01-06T08:00" }),
+          ],
+        })}
+      />,
+    );
+    fireEvent.change(screen.getByRole("slider", { name: /zoom/i }), { target: { value: "1" } });
+
+    const allDay = Number.parseFloat(screen.getByTestId("bar-1").style.width);
+    const overnight = Number.parseFloat(screen.getByTestId("bar-2").style.width);
+    // A 07:00–21:00 day is fourteen columns. 20:00 → 08:00 spans twelve hours
+    // of clock and two of work — the night between them is not drawn, exactly
+    // as a weekend between two working days is not drawn.
+    expect(overnight).toBeCloseTo(allDay / 7);
+  });
+
   it("renders a month context band above the fine ticks (two-tier axis)", () => {
     render(<GanttView {...props({ entities: [rec(1, { title: "A", span: "2026-01-05/2026-01-20" })] })} />);
     expect(screen.getByText("Jan 2026")).toBeInTheDocument();

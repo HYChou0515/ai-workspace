@@ -94,6 +94,7 @@ export function parseViewSpec(text: string): ViewSpec | null {
     assignee: str(o.assignee),
     assignee_display: assigneeDisplay(o.assignee_display),
     skip_weekends: typeof o.skip_weekends === "boolean" ? o.skip_weekends : undefined,
+    work_hours: normalizeWorkHours(o.work_hours),
     columns: normalizeStringList(o.columns),
     card: normalizeCard(o.card),
     week: normalizeWeek(o.week),
@@ -104,6 +105,34 @@ export function parseViewSpec(text: string): ViewSpec | null {
     [RAW_DOC]: o,
   };
   return spec;
+}
+
+/** One end of a working-hours window: `"07:00"` → 7, `"08:30"` → 8.5. A bare
+ * number is accepted too, because `from: 7` is what a person writes when the
+ * hour is whole and YAML would hand it over unquoted anyway. */
+function clockHours(raw: unknown): number | undefined {
+  if (typeof raw === "number") return Number.isFinite(raw) && raw >= 0 && raw <= 24 ? raw : undefined;
+  const m = /^(\d{1,2}):([0-5]\d)$/.exec(String(raw).trim());
+  if (!m) return undefined;
+  const h = Number(m[1]);
+  return h <= 24 ? h + Number(m[2]) / 60 : undefined;
+}
+
+/** `work_hours:` is the part of the day the chart draws — the weekend rule at a
+ * finer scale.
+ *
+ * Dropped WHOLE unless both ends parse and the window actually contains time.
+ * Half a window, or one that closes before it opens, folds every hour of every
+ * day away: bars go to zero columns and the chart renders blank. A view file
+ * with a typo in it should fall back to drawing the whole day, not to drawing
+ * nothing — an empty timeline gives the reader nothing to diagnose from. */
+function normalizeWorkHours(raw: unknown): ViewSpec["work_hours"] {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const o = raw as Record<string, unknown>;
+  const from = clockHours(o.from);
+  const to = clockHours(o.to);
+  if (from === undefined || to === undefined || from >= to) return undefined;
+  return { from, to };
 }
 
 /** `week:` drives the gantt's time axis, and every field in it is a scalar the

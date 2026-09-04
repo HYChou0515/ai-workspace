@@ -31,6 +31,14 @@ describe("shipped PM gantt view — custom week rule", () => {
     expect(parseViewSpec(yaml)?.skip_weekends).toBe(true);
   });
 
+  it("ships a 07:00–21:00 working day, read through the real parser (#785)", () => {
+    // The window is dropped WHOLE on anything it cannot use, and it is dropped
+    // silently — the same failure mode this file exists to catch for `week:`.
+    // A quoting slip here would leave the chart drawing all twenty-four hours
+    // with nothing on screen to say so.
+    expect(parseViewSpec(yaml)?.work_hours).toEqual({ from: 7, to: 21 });
+  });
+
   it("yields the exact codes the file's own comment promises", () => {
     const rule = parseViewSpec(yaml)!.week!;
     expect(weekLabelOf("2026-01-01", rule, "2026-06-01")).toBe("W601"); // 2026 W01

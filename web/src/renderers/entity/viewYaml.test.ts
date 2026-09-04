@@ -20,6 +20,33 @@ describe("setViewScalar", () => {
   });
 });
 
+describe("work_hours (#785)", () => {
+  const spec = (body: string) =>
+    parseViewSpec(["view: gantt", "entity: issue", body, ""].join("\n"))?.work_hours;
+
+  it("reads a working-hours window off the view file", () => {
+    expect(spec('work_hours: {from: "07:00", to: "21:00"}')).toEqual({ from: 7, to: 21 });
+  });
+
+  it("reads a window that starts or ends on the half hour", () => {
+    expect(spec('work_hours: {from: "08:30", to: "17:30"}')).toEqual({ from: 8.5, to: 17.5 });
+  });
+
+  it("ignores a window it cannot use rather than folding the whole day away", () => {
+    // A half-written or inverted window would otherwise leave every bar zero
+    // columns wide — a silently blank chart is a worse answer than no folding.
+    expect(spec('work_hours: {from: "21:00", to: "07:00"}')).toBeUndefined();
+    expect(spec('work_hours: {from: "07:00"}')).toBeUndefined();
+    expect(spec('work_hours: {from: "07:00", to: "07:00"}')).toBeUndefined();
+    expect(spec('work_hours: "all day"')).toBeUndefined();
+    expect(spec('work_hours: {from: "25:00", to: "26:00"}')).toBeUndefined();
+  });
+
+  it("is absent when the view says nothing, so the day stays whole", () => {
+    expect(spec("title: Timeline")).toBeUndefined();
+  });
+});
+
 describe("setSkipWeekendsInYaml", () => {
   it("flips the value when the key already exists, keeping surrounding comments", () => {
     const text = ["view: gantt", "entity: issue", "# turn weekends off:", "skip_weekends: true", ""].join("\n");

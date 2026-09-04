@@ -327,6 +327,60 @@ describe("the slider reaches hours (#785)", () => {
   });
 });
 
+describe("non-working hours take no width (#785)", () => {
+  const WORK = { grain: "hour", skipWeekends: false, work: { from: 7, to: 21 } } as const;
+  const WORK_SKIP = { grain: "hour", skipWeekends: true, work: { from: 7, to: 21 } } as const;
+
+  it("makes a day fourteen columns instead of twenty-four", () => {
+    expect(barColumns({ start: "2026-01-05", end: "2026-01-05" }, WORK)).toBe(14);
+  });
+
+  it("gives an overnight gap no width at all", () => {
+    // 22:00 to 05:00 is seven hours of clock and no working time — the same
+    // thing a weekend is, one scale down.
+    expect(columnOf("2026-01-05T22:00", "2026-01-06T05:00", WORK)).toBe(0);
+  });
+
+  it("counts the working end of an evening and the working start of a morning", () => {
+    expect(columnOf("2026-01-05T20:00", "2026-01-06T08:00", WORK)).toBe(2);
+    expect(barColumns({ start: "2026-01-05T20:00", end: "2026-01-06T08:00" }, WORK)).toBe(2);
+  });
+
+  it("changes nothing at day grain — a day is still one column", () => {
+    const dayWithWindow = { grain: "day", skipWeekends: true, work: { from: 7, to: 21 } } as const;
+    expect(columnOf("2026-01-05", "2026-01-09", dayWithWindow)).toBe(
+      columnOf("2026-01-05", "2026-01-09", true),
+    );
+    expect(barColumns({ start: "2026-01-05", end: "2026-01-09" }, dayWithWindow)).toBe(5);
+  });
+
+  it("walks the weekend and the nights through the same machinery", () => {
+    // Fri 20:00 → Mon 08:00: one working hour left on Friday, one done on
+    // Monday, and everything between them is time the chart does not draw.
+    expect(columnOf("2026-01-09T20:00", "2026-01-12T08:00", WORK_SKIP)).toBe(2);
+  });
+
+  it("stays its own inverse, and opens column zero at the start of the working day", () => {
+    expect(dateAtColumn("2026-01-05", 0, WORK)).toBe("2026-01-05T07:00");
+    expect(dateAtColumn("2026-01-05", 14, WORK)).toBe("2026-01-06T07:00");
+    for (const col of [0, 1, 14, 20, 42]) {
+      expect(columnOf("2026-01-05", dateAtColumn("2026-01-05", col, WORK), WORK)).toBe(col);
+    }
+  });
+
+  it("gives the axis a band per working day, fourteen columns wide", () => {
+    const axis = axisFor("2026-01-05", 28, PPD_HOUR_GRAIN * 2, undefined, "", false, {}, {
+      from: 7,
+      to: 21,
+    });
+    expect(axis.coarse.map((b) => [b.day, b.days])).toEqual([
+      [0, 14],
+      [14, 14],
+    ]);
+    expect(axis.fine.map((t) => t.label)).not.toContain("03");
+  });
+});
+
 describe("the axis at hour grain (#785)", () => {
   const PPD = PPD_HOUR_GRAIN * 2; // 12px hour columns
 

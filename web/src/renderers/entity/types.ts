@@ -7,7 +7,7 @@
 
 import type { EntityInstance, EntityType } from "../../api/entities";
 import type { User } from "../../api/types";
-import type { DayOfMonth, WeekdayFormat, WeekRule } from "./ganttScale";
+import type { DayOfMonth, WeekdayFormat, WeekRule, WorkHours } from "./ganttScale";
 import type { ScheduleFields } from "./schedule";
 import type { RefIndex } from "./refTraversal";
 
@@ -79,6 +79,10 @@ export type ViewSpec = {
   /** gantt only — collapse Saturdays/Sundays so the timeline shows only working
    * days (bars, axis, drag all count Mon–Fri). Default off. */
   skip_weekends?: boolean;
+  /** gantt only — the part of the day the chart draws, so nights fold away the
+   * way weekends do (#785). Only visible at hour grain: a day is one column
+   * however many of its hours are worked. Absent ⇒ all twenty-four. */
+  work_hours?: WorkHours;
   /** gantt only — which fields carry the schedule, so the Timeline can lay the
    * work out on demand. Present ⇒ the chart offers Recalculate; absent ⇒ it is
    * a plain drawing of dates, as before. Named here rather than assumed because

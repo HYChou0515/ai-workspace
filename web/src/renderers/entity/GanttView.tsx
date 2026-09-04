@@ -279,7 +279,12 @@ export function GanttView({
   const maxDate = rows
     .map((r) => r.span.end)
     .reduce((m, e) => (instantOf(e, "end") > instantOf(m, "end") ? e : m));
-  const dayScale: Scale = { grain: "day", skipWeekends: skip };
+  // #785: the same "time the chart does not draw" rule as `skip_weekends`, one
+  // scale down. It has no effect at day grain — a day is one column however
+  // many of its hours are worked — so it is carried on both scales and simply
+  // does nothing until the columns are hours.
+  const work = spec.work_hours;
+  const dayScale: Scale = { grain: "day", skipWeekends: skip, work };
   const totalDays = barColumns({ start: minDate, end: maxDate }, dayScale);
   // Default density fits the whole project into the pane (fills the width with
   // no empty gap); once measured, the user's slider choice takes over. Fall back
@@ -297,7 +302,7 @@ export function GanttView({
   // in px, and every position below multiplies by it. At day grain it IS `ppd`,
   // which is why nothing on screen moves when the switch happens under it.
   const grain = grainFor(ppd);
-  const scale: Scale = { grain, skipWeekends: skip };
+  const scale: Scale = { grain, skipWeekends: skip, work };
   const cpx = columnPx(ppd, grain);
   const totalColumns = barColumns({ start: minDate, end: maxDate }, scale);
   const canvasWidth = canvasWidthFor(totalColumns, cpx, paneAvail);
@@ -372,7 +377,7 @@ export function GanttView({
     always_week: spec.always_week,
     weekday: spec.weekday,
     day_of_month: spec.day_of_month,
-  });
+  }, work);
   const fineH = FINE_H + (axis.fine.some((t) => t.sub) ? SUB_H : 0);
   const axisH = COARSE_H + fineH;
 
