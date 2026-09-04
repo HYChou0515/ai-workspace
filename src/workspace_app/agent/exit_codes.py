@@ -60,7 +60,9 @@ _BY_CODE = {
 _BY_SIGNAL = {
     signal.SIGKILL: (
         "The sandbox killed the tool. This is almost always the memory limit — "
-        "the same request over less data usually succeeds."
+        "the same request over less data usually succeeds. The limit may also "
+        "have been set by hand for this workspace: its environment panel shows "
+        "the size and who may change it."
     ),
     signal.SIGSEGV: (
         "The tool crashed. A bundle that segfaults was built for a different "

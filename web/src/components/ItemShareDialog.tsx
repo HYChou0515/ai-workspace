@@ -18,8 +18,10 @@ import {
   itemRoleDef,
 } from "../lib/itemPermission";
 import { useDirtyClose } from "../hooks/useDirtyClose";
+import { itemManagersFromPermission, withItemManagers } from "../lib/itemManagers";
 import { pxToRem } from "../lib/pxToRem";
 import { sameShape } from "../lib/sameShape";
+import { ItemShareManagers } from "./ItemShareManagers";
 import { Icon } from "./Icon";
 import { ModalActions } from "./ModalActions";
 import { ModalShell } from "./ModalShell";
@@ -58,6 +60,11 @@ export function ItemShareDialog({
 }) {
   const [visibility, setVisibility] = useState<ItemVisibility>(value.visibility);
   const [grants, setGrants] = useState<ItemGrant[]>(() => itemGrantsFromPermission(value, owner));
+  // Held apart from `grants` because it is a different KIND of grant, not
+  // another rung — see `ItemShareManagers`.
+  const [managers, setManagers] = useState<string[]>(() =>
+    itemManagersFromPermission(value, owner),
+  );
   const [groupGrants, setGroupGrants] = useState<ItemGroupGrant[]>(() =>
     itemGroupGrantsFromPermission(value),
   );
@@ -76,23 +83,33 @@ export function ItemShareDialog({
   const showPeople = !hasGroups || tab === "people";
   const showGroups = hasGroups && tab === "groups";
 
-  const next = () => itemPermissionFromGrants(visibility, grants, value, groupGrants);
+  // Composed in two steps on purpose: `itemPermissionFromGrants` rebuilds only
+  // the ladder verbs and preserves everything else, so the management grant is
+  // layered on afterwards rather than smuggled into the ladder's vocabulary.
+  const next = () =>
+    withItemManagers(itemPermissionFromGrants(visibility, grants, value, groupGrants), managers);
 
   // #779: compared against the seed the dialog opened with, not against what
   // `next()` would build — that goes through a normaliser, and a round-trip
   // difference would read as an edit nobody made. Closing here is the quiet
   // failure of the set: the dialog just vanishes, and the access silently
   // stayed as it was.
+  //
+  // `managers` arrived with #777 while this branch was open, and it is a fourth
+  // thing the user edits here — left out of this comparison, changing who can
+  // manage access and pressing Escape would close without a word, which is the
+  // exact failure the guard exists for.
   const initialRef = useRef({
     visibility: value.visibility,
     grants: itemGrantsFromPermission(value, owner),
     groupGrants: itemGroupGrantsFromPermission(value),
+    managers: itemManagersFromPermission(value, owner),
   });
   // sameShape, not JSON.stringify: `grants` reorders when a subject is removed
   // and re-added (a false "dirty"), and ItemGrant.verbs is a Set, which
   // stringifies to {} however full it is — so a whole custom-verb edit read as
   // unchanged and closed without asking.
-  const dirty = !sameShape({ visibility, grants, groupGrants }, initialRef.current);
+  const dirty = !sameShape({ visibility, grants, groupGrants, managers }, initialRef.current);
   const attemptClose = useDirtyClose(dirty, onClose);
   // Unresolvable (deleted / not visible) → "Unknown group", still removable (#608).
   const groupName = (id: string) =>
@@ -163,6 +180,14 @@ export function ItemShareDialog({
           </label>
         ))}
       </fieldset>
+
+      {/* OUTSIDE the restricted-only block: `authorize` consults the
+          `change_permission` grant list whatever the visibility, so the grant
+          is live on private and public items too — and those are the two most
+          common states (new items default to private, legacy ones are public).
+          Hiding the control there made P6's own acceptance impossible on a
+          freshly created item. */}
+      <ItemShareManagers managers={managers} onChange={setManagers} />
 
       {visibility === "restricted" && (
         // flexShrink 0, NOT minHeight 0: the panel is a flex column with a

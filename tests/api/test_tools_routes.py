@@ -345,3 +345,31 @@ def test_item_tools_still_answers_when_the_third_party_host_is_unreachable(
     by_key = {row["key"]: row for row in r.json()["tools"]}
     assert "connection refused" in by_key["wafer-history"]["unavailable"]
     assert by_key["exec"]["unavailable"] is None  # untouched
+
+
+def test_item_tools_says_gone_when_the_item_vanishes_after_the_gate(harness: Harness, monkeypatch):
+    """Round-10 finding 1 — I added a guard nothing could fail without.
+
+    The gate says the item is there, the route resolves it again, and a delete
+    landing between the two used to be a bare `AssertionError` → 500 for a race
+    the caller cannot avoid. Replacing that with 410 was right and UNTESTABLE by
+    ordinary means: the window is one synchronous request wide, so the line was
+    dead to every test and broke the 100% coverage gate. My own checklist says a
+    guard nothing fails without is a guard I only believe in.
+
+    So the race is SIMULATED at exactly its seam — this route's own reference to
+    `find_work_item`, not the locator's, which is what the gate uses. Patching
+    both would prove nothing; patching this one leaves the gate answering yes
+    while the re-read answers no, which is the state being guarded.
+
+    410 rather than the degraded 200 its neighbour `export_investigation` gives:
+    there the item's fields are decoration on a conversation dump, here the
+    item's tool preferences ARE the response, so there is nothing to degrade to.
+    """
+    from workspace_app.api import tools_routes
+
+    monkeypatch.setattr(tools_routes, "find_work_item", lambda *a, **kw: None)
+
+    gone = harness.client.get(harness.wpath("/tools"))
+
+    assert gone.status_code == 410, gone.text

@@ -756,7 +756,7 @@ export const mockApi: ApiClient = {
     return { resource_id };
   },
 
-  async deleteAppItem(_resourceRoute: string, id: string) {
+  async deleteAppItem(_slug: string, id: string) {
     await delay(10);
     const idx = _mockAppItems.findIndex((it) => it.resource_id === id);
     if (idx >= 0) _mockAppItems.splice(idx, 1);

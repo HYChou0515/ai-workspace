@@ -72,6 +72,14 @@ class FileStore(Protocol):
         parent directories intact (use `rmdir` to remove a folder subtree)."""
         ...
 
+    async def purge(self, workspace_id: str) -> None:
+        """Remove EVERYTHING the workspace owns — every file and every
+        directory record, permanently (so a blob-backed store's bytes become
+        collectable). Deleting an item calls this (plan-delete-item-cascade);
+        per-path `delete`/`rmdir` remain the ops for ordinary edits. Idempotent:
+        purging an unknown or already-empty workspace is a no-op."""
+        ...
+
     # Directories are first-class so empty folders can exist (no .keep
     # hack). write() auto-creates ancestor dirs; delete() of a file leaves
     # its parent dirs intact; rmdir() removes a dir and everything under it.

@@ -72,6 +72,30 @@ class IActivityStore(abc.ABC):
         """Drop the heartbeat (the item's dir was recycled / closed)."""
 
     @abc.abstractmethod
+    async def owner_of(self, item_id: str) -> str | None:
+        """Who this item's live sandbox is charged to, per the LEDGER.
+
+        The item record is the usual source, but a soft-deleted item still holds
+        its sandbox and still owes for it — that is why its row appears on the
+        resources page at all — and the record is gone. The heartbeat carries
+        the owner it was billed under, is keyed on the id, and outlives the
+        item, so it can still answer.
+
+        `None` when nothing has beaten for this id."""
+        ...
+
+    @abc.abstractmethod
+    async def is_live(self, item_id: str, *, since_ms: int) -> bool:
+        """Whether THIS item has beaten recently.
+
+        A point read, deliberately: the sibling `live_for` answers a question
+        about a PERSON, and asking it about one item means going through the
+        `owner` field — which anyone with write access can PATCH (#687), so
+        repointing it moves the query to somebody with no rows and the item
+        reads as stopped while its sandbox is still running. An item's own
+        heartbeat is keyed on the item, and nobody can rewrite that."""
+
+    @abc.abstractmethod
     async def live_for(self, owner: str, *, since_ms: int) -> list[LiveSandbox]:
         """Every sandbox charged to ``owner`` whose heartbeat is at least as
         recent as ``since_ms``.
@@ -97,9 +121,14 @@ class _SandboxActivity(Struct):
 
     item_id: str
     last_active_ms: int = 0
-    # The debtor. See #687: this mirrors the item's `owner` FIELD, which is
-    # today rewritable by anyone with write access — the reason the per-person
-    # limits are not yet tamper-proof.
+    # The debtor: the item's `owner` FIELD, or its creator when that field says
+    # nothing (`apps.resolve.debtor_of`). Written by whichever bump last
+    # RESOLVED one — a bump that could not is refused the right to blank this
+    # (see `_bump_sync`), so the name can be older than the row's timestamp.
+    # That is deliberate: a stale debtor still bills somebody, while an empty
+    # one bills nobody and hides the sandbox from the page that would close it.
+    # See #687 — `owner` is today rewritable by anyone with write access, the
+    # reason the per-person limits are not yet tamper-proof.
     owner: str = ""
     # What this item's sandbox may consume, from its App (`quota.limits`).
     # Milli-cores rather than a float so the index sorts and sums exactly.
@@ -154,6 +183,20 @@ class SpecstarActivityStore(IActivityStore):
 
     def _bump_sync(self, item_id: str, owner: str, cpu_milli: int, memory_bytes: int) -> None:
         rm = self._spec.get_resource_manager(_SandboxActivity)
+        # An empty owner is read as "I could not resolve the debtor", not as
+        # "nobody owes for this". Letting the two be one value made an
+        # unresolvable item's next heartbeat ERASE the name from a row that had
+        # one, and a sandbox charged to nobody is one the admission gate skips,
+        # the tally omits, and the resources page cannot show to the person who
+        # would close it. A debtor is only ever replaced by ANOTHER name.
+        #
+        # An item created through the API always states an owner, but `owner` is
+        # a plain writable field (#687) and could be PATCHed to "". That case
+        # lands here too, and keeping the previous name is still the answer to
+        # prefer: the alternative is that blanking one field sheds the bill for
+        # a machine that is still running.
+        if not owner:
+            owner = self._owner_sync(item_id) or ""
         rec = _SandboxActivity(
             item_id=item_id,
             last_active_ms=self._now(),
@@ -198,6 +241,39 @@ class SpecstarActivityStore(IActivityStore):
         logger.debug("activity: forget heartbeat for item %s", item_id)
         with contextlib.suppress(ResourceIDNotFoundError, ResourceIsDeletedError):
             rm.delete(item_id)
+
+    async def owner_of(self, item_id: str) -> str | None:
+        return await asyncio.to_thread(self._owner_sync, item_id)
+
+    def _owner_sync(self, item_id: str) -> str | None:
+        rm = self._spec.get_resource_manager(_SandboxActivity)
+        try:
+            # A FORGOTTEN row still names its debtor. `forget` soft-deletes, and
+            # the bump that brings the row back takes the restore branch — so
+            # reading without this flag made the backstop hold on one branch of
+            # `_bump_sync` and not the other, which is the same as not holding.
+            rev = rm.get(item_id, include_deleted=True)
+        except ResourceIDNotFoundError:
+            return None
+        data = rev.data
+        assert isinstance(data, _SandboxActivity)
+        return data.owner or None
+
+    async def is_live(self, item_id: str, *, since_ms: int) -> bool:
+        return await asyncio.to_thread(self._is_live_sync, item_id, since_ms)
+
+    def _is_live_sync(self, item_id: str, since_ms: int) -> bool:
+        # A point get on the item's own row — no owner in the question, so a
+        # rewritten `owner` cannot change the answer. `forget` soft-deletes, and
+        # a soft-deleted row must read as stopped: that is what "closed" means.
+        rm = self._spec.get_resource_manager(_SandboxActivity)
+        try:
+            rev = rm.get(item_id)
+        except (ResourceIDNotFoundError, ResourceIsDeletedError):
+            return False
+        data = rev.data
+        assert isinstance(data, _SandboxActivity)
+        return data.last_active_ms >= since_ms
 
     async def live_for(self, owner: str, *, since_ms: int) -> list[LiveSandbox]:
         return await asyncio.to_thread(self._live_sync, owner, since_ms)

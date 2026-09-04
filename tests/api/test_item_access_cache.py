@@ -12,6 +12,8 @@ That matters because the cost is CPU-bound Python, not SQL — a cached, zero-SQ
 
 from __future__ import annotations
 
+import contextlib
+
 from workspace_app.api.locator import ItemLocator
 from workspace_app.apps.catalog import AppCatalog
 from workspace_app.apps.pm.model import PmProject
@@ -79,3 +81,87 @@ def test_a_permission_change_is_not_hidden_by_the_cache() -> None:
         assert getattr(exc, "status_code", None) in (403, 404), exc
     else:
         raise AssertionError("a private item stayed readable to a stranger")
+
+
+def test_the_access_memo_is_a_cache_and_not_a_map() -> None:
+    """Round-12, and the one finding of that round an operator can reach.
+
+    This memo is new on the branch that added per-item sandbox sizing. It holds
+    a full copy of every item record it has ever gated, for the life of the
+    process: the 5-second window decides whether an entry is TRUSTED, not
+    whether it is kept, and `forget_access` is called from exactly one route.
+    A long-lived pod that gates many items therefore grows without limit.
+
+    Its sibling one file over got this right — `api/app.py`'s `_item_facts`
+    carries `_ITEM_FACT_MAX` and a comment reading "bounded: this is a cache,
+    not a map". Same rule, two carriers, and only one of them had it. That is
+    the shape this whole branch keeps producing.
+
+    Asserted as a CEILING on the dict, not on memory: what went wrong is
+    unbounded growth, and the cheapest true statement about it is that the
+    number of entries stops going up.
+    """
+    from workspace_app.api import locator as locator_mod
+
+    spec = make_spec(default_user="u")
+    rm = spec.get_resource_manager(PmProject)
+    locator = _locator(spec)
+
+    for _ in range(locator_mod._ACCESS_MAX + 50):
+        item_id = rm.create(PmProject(title="t", owner="u")).resource_id
+        assert locator.require_access("pm", item_id, "read_content") == item_id
+
+    assert len(locator._access) <= locator_mod._ACCESS_MAX, len(locator._access)
+
+
+def test_the_groups_memo_is_bounded_too() -> None:
+    """The SECOND carrier of the same rule, asked because the first one had it
+    wrong. `require_access` memoises two things — the item's facts and the
+    caller's groups — and both arrived on this branch (master's `require_access`
+    delegates straight through and caches nothing). Bounding one and not the
+    other is how a rule stops being true; a pod that serves many people grows
+    the group memo exactly the way the item memo grew.
+    """
+    from workspace_app.api import locator as locator_mod
+
+    spec = make_spec(default_user="u")
+    rm = spec.get_resource_manager(PmProject)
+    item_id = rm.create(PmProject(title="t", owner="u")).resource_id
+    who = {"id": "u"}
+    locator = ItemLocator(
+        spec,
+        AppCatalog(presets=Settings().agents.presets),
+        get_user_id=lambda: who["id"],
+    )
+
+    for n in range(locator_mod._GROUPS_MAX + 50):
+        who["id"] = f"person-{n}"
+        with contextlib.suppress(Exception):  # a stranger is refused; the memo still fills
+            locator.require_access("pm", item_id, "read_content")
+
+    assert len(locator._groups) <= locator_mod._GROUPS_MAX, len(locator._groups)
+
+
+def test_a_miss_is_not_cached_so_an_item_created_a_moment_later_is_seen() -> None:
+    """R12-6. The memo keeps POSITIVE answers only, and that asymmetry is the
+    whole reason it is safe to have at all.
+
+    "No such item" is the one result that goes stale in the direction that
+    breaks things: a workflow that addresses the item it just created would
+    keep 404-ing for the rest of the window. A permission is a fact about a
+    thing that exists; absence is not.
+
+    The guard was live and untested — six lines, so "unreachable anyway" was
+    never the reason.
+    """
+    spec = make_spec(default_user="u")
+    rm = spec.get_resource_manager(PmProject)
+    locator = _locator(spec)
+    item_id = "pm-project:not-yet"
+
+    with contextlib.suppress(Exception):
+        locator.require_access("pm", item_id, "read_content")
+
+    made = rm.create(PmProject(title="t", owner="u"), resource_id=item_id).resource_id
+
+    assert locator.require_access("pm", made, "read_content") == made

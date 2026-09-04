@@ -102,6 +102,11 @@ class MemoryFileStore:
             "max_files_per_ws": max(counts, default=0),
         }
 
+    async def purge(self, workspace_id: str) -> None:
+        async with self._lock:
+            self._files.pop(workspace_id, None)
+            self._dirs.pop(workspace_id, None)
+
     async def delete(self, workspace_id: str, path: str) -> None:
         async with self._lock:
             files = self._files.get(workspace_id)

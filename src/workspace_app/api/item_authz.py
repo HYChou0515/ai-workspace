@@ -1,6 +1,50 @@
 """Shared WorkItem authorization for the hand-written workspace routes (#306 /
 plan-permissions.md Rollout PR3).
 
+THREE gates stand in front of the item routes, and which one a route uses is
+not guessable from its path. **Ask the code, every time.** A hand-written table
+of "which route uses which gate" has now drifted TWICE in this branch — the
+second time in a commit that said the table was grepped rather than remembered,
+and it still listed a route that does not exist, omitted `/close`, and missed
+that `require_chat` puts the chat routes behind `require_item` as well. A list
+maintained by hand is a claim that rots; the command that generates it does not:
+
+    grep -rnE "require_item_access\(|_authorize_item\(|_gate\(|require_access\(" \
+         src/workspace_app/api/*.py | grep -v "def "
+    grep -rnE "require_item\(|require_chat\(" \
+         src/workspace_app/api/*.py | grep -v "def "
+
+What each gate IS, which is the part worth remembering:
+
+* ``require_item_access`` (here) — the authorizing gate for hand-written item
+  routes. Validates the slug pairing, then ``read_meta`` (404) and the verb
+  (403). Reached directly and through ``_authorize_item`` / ``_gate`` wrappers.
+* ``ItemLocator.require_access`` — the same decision behind a 5-second facts
+  MEMO, for the routes that are called in bursts (files, chat, streams).
+* ``ItemLocator.require_item`` — slug pairing ONLY, from a single read, and it
+  authorizes NOBODY. Anything behind it is unauthenticated as far as this file
+  is concerned. ``require_chat`` builds on it, so the chat-scoped endpoints sit
+  behind it too, in addition to their own ``require_access``.
+
+The item auto-CRUD (``PATCH /rca-investigation/{id}`` and friends) is behind
+none of these — it is storage-gated by ``work_item_access_scope``, which is why
+a rule added to this file does not reach it. That is the door `perm/checker.py`
+exists to hold.
+
+A difference a caller needs is a PARAMETER on ``require_item_access``
+(``slug=ANY_APP`` for a route with no slug in its path, ``allow_deleted`` for a
+billing action) rather than a copy of its body — a copy is how a rule added here
+later stops reaching every caller, which is how this file came to be missing
+`refuse_if_gone` at one gate a round after writing it.
+
+The other two gates are deliberate second compositions, for reasons that cannot
+be arguments here: `require_access` wraps the same steps in a 5-second facts
+MEMO (the facts are the thing being cached, and this function loads them), and
+`require_item` answers from ONE read because it needs no permission facts at
+all. So the RULES they share are extracted instead — ``app_matches`` below is
+the slug pairing, ``refuse_if_gone`` the deleted-item refusal — and each names
+every gate that must call it.
+
 The item auto-CRUD is storage-gated by ``work_item_access_scope`` (read_meta →
 404), but the workspace SUB-routes (files, chat, stream) resolve the item through
 ``ItemLocator.require_item`` / ``rm.get``, which bypasses that scope and — before
@@ -25,6 +69,30 @@ from ..perm import Actor, Verb, authorize
 from ..resources.groups import groups_of
 
 
+class AnyApp:
+    """Marker for a route that addresses an item by ID ALONE, where there is no
+    slug↔item pairing to validate — `/me/resources/live/{item_id}` is the case.
+
+    A distinct TYPE rather than ``None`` because `ItemLocator.slug_of` and
+    `TurnFacts.slug` are both ``str | None``: with ``None`` as the marker, any
+    one of them flowing into a gate would silently switch off #95 with no type
+    error and no red test. ``str | AnyApp`` makes that a `ty` failure instead.
+    Skipping the check has to be something a caller SAYS, not something that
+    happens to it."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        # The 404 detail interpolates whatever it was given. Today the only
+        # ANY_APP caller maps every refusal to "unknown environment", so the
+        # default `<AnyApp object at 0x…>` is invisible — until a second caller
+        # does not, and then it is in somebody's error body.
+        return "<any app>"
+
+
+ANY_APP = AnyApp()
+
+
 @dataclass(frozen=True)
 class ItemAccessFacts:
     """Everything deciding access needs about an item, and nothing else.
@@ -39,21 +107,80 @@ class ItemAccessFacts:
     slug: str
     item: WorkItemBase
     created_by: str
+    is_deleted: bool = False
+    """Whether the row is soft-deleted. Carried rather than filtered out because
+    the two answers a caller can want are different: a gate operating ON this
+    item wants 410 Gone (it existed, it is finished), while a page that lists or
+    bills across MANY items must never let one deleted row take the page down.
+    Both read the same facts and decide for themselves."""
 
 
-def load_access_facts(spec: SpecStar, item_id: str) -> ItemAccessFacts | None:
-    """The item's identity + permission inputs, or ``None`` for an unknown id."""
-    found = find_work_item(spec, item_id)
+def load_access_facts(
+    spec: SpecStar, item_id: str, *, include_deleted: bool = False
+) -> ItemAccessFacts | None:
+    """The item's identity + permission inputs, or ``None`` for an unknown id.
+
+    ``include_deleted`` relaxes what can be FOUND, never who may see it — the
+    reader's own `read_meta` is checked on the facts either way. Three kinds of
+    caller take it: the two that must still NAME a deleted item whose sandbox is
+    running (the resources page, and the `holding` list in a 507 refusal body),
+    and the gates, which resolve it in order to answer 410 rather than 404. The
+    returned facts say which case this is via ``is_deleted``."""
+    found = find_work_item(spec, item_id, include_deleted=include_deleted)
     if found is None:
         return None
     slug, item = found
-    created_by = spec.get_resource_manager(app_model(slug)).get_meta(item_id).created_by
-    return ItemAccessFacts(slug=slug, item=item, created_by=created_by)
+    meta = spec.get_resource_manager(app_model(slug)).get_meta(
+        item_id, include_deleted=include_deleted
+    )
+    return ItemAccessFacts(
+        slug=slug, item=item, created_by=meta.created_by, is_deleted=meta.is_deleted
+    )
+
+
+def refuse_if_gone(facts: ItemAccessFacts | None, item_id: str) -> None:
+    """410 Gone for a soft-deleted item, once the caller has passed ``check_access``.
+
+    ONE function because there are THREE gates in front of hand-written item
+    routes — `require_item_access` here, and `require_item` / `require_access` on
+    the locator — and this branch installed in the two I happened to be reading
+    is how the last six review rounds went. Call it right after the access check
+    in each.
+
+    AFTER the access check wherever there IS one — `require_item_access` here and
+    `ItemLocator.require_access` — because 410 says "this item existed" and only
+    somebody who could already have seen it may learn that.
+
+    `ItemLocator.require_item` calls it with no access check, because it has
+    none to make: it validates the slug↔item pairing and nothing else, and the
+    routes behind it (tools / entity / capability / export) authorize nobody at
+    all. The 410 there discloses strictly less than the 200 beside it. That is a
+    pre-existing hole in those routes rather than a licence — when they are
+    gated, this call moves after the gate like the other two.
+
+    404 and 410 are told apart deliberately. An outside system lists items and
+    then acts on them (#700), so "that one is finished, open a new one" and "no
+    such item, the platform may be broken" are different instructions."""
+    if facts is not None and facts.is_deleted:
+        raise HTTPException(status_code=410, detail=f"item {item_id!r} is gone")
+
+
+def app_matches(actual: str, wanted: str | AnyApp) -> bool:
+    """#95: does the App this item really belongs to satisfy how the caller
+    addressed it? ``ANY_APP`` for a route that carries no slug (see `AnyApp`).
+
+    One function because the pairing is tested at TWO gates and cannot be tested
+    at one: `check_access` has the item's access facts, `ItemLocator.require_item`
+    deliberately has only the item (one read, no meta). With the comparison
+    written out in both, a mutation of either left the other green — which is
+    how the rule came to have no test at `check_access` at all while a commit
+    message claimed otherwise."""
+    return isinstance(wanted, AnyApp) or actual == wanted
 
 
 def check_access(
     facts: ItemAccessFacts | None,
-    slug: str,
+    slug: str | AnyApp,
     item_id: str,
     verb: Verb,
     *,
@@ -63,8 +190,17 @@ def check_access(
 ) -> None:
     """Raise unless ``user`` may ``verb`` this item. Pure — no I/O — so the facts
     can come from a cache without the DECISION being cached with them: a verb the
-    caller has never asked for is still evaluated properly."""
-    if facts is None or facts.slug != slug:
+    caller has never asked for is still evaluated properly.
+
+    ``slug`` is ``ANY_APP`` for a route that addresses the item by ID ALONE (see
+    `AnyApp`). Passing a fabricated slug there is what made a deleted item's
+    environment unclosable: the fabrication came from a lookup that reports one
+    as absent, so the check refused every time."""
+    if facts is None or not app_matches(facts.slug, slug):
+        # One message, no branch. The ANY_APP rendering is never surfaced: its
+        # only caller maps every refusal here to "unknown environment", and a
+        # branch nothing can fail without is a branch this branch keeps having
+        # to delete.
         raise HTTPException(status_code=404, detail=f"item {item_id!r} not found in app {slug!r}")
     actor = Actor.human(user, groups=groups)
     perm = facts.item.permission
@@ -76,13 +212,14 @@ def check_access(
 
 def require_item_access(
     spec: SpecStar,
-    slug: str,
+    slug: str | AnyApp,
     item_id: str,
     verb: Verb,
     *,
     user: str,
     superusers: frozenset[str] = frozenset(),
     groups_provider: Callable[[str], frozenset[str]] | None = None,
+    allow_deleted: bool = False,
 ) -> tuple[WorkItemBase, str]:
     """Gate a hand-written workspace route: validate that ``item_id`` belongs to
     App ``slug`` (404), then check ``read_meta`` first (404 — an actor who can't
@@ -92,9 +229,20 @@ def require_item_access(
 
     ``groups_provider`` resolves the caller's groups so a ``group:`` grant matches;
     defaults to the live ``groups_of`` lookup, keeping this consistent with the
-    storage-layer ``work_item_access_scope`` (which honours groups)."""
-    facts = load_access_facts(spec, item_id)
+    storage-layer ``work_item_access_scope`` (which honours groups).
+
+    ``slug=ANY_APP`` for a route that addresses the item by id alone (see
+    `AnyApp`). ``allow_deleted`` for a BILLING action rather than an
+    operation on the item: a deleted item's sandbox keeps running and keeps
+    being charged for, so closing it must still work — the resources page exists
+    to offer exactly that. Both are PARAMETERS rather than a second copy of this
+    body somewhere else, because the copy is what stops the next rule added here
+    from reaching every caller — which is precisely how `refuse_if_gone` came to
+    be missing from a gate one round after it was written."""
+    facts = load_access_facts(spec, item_id, include_deleted=True)
     groups = groups_provider(user) if groups_provider is not None else groups_of(spec, user)
     check_access(facts, slug, item_id, verb, user=user, groups=groups, superusers=superusers)
+    if not allow_deleted:
+        refuse_if_gone(facts, item_id)
     assert facts is not None  # check_access raises on None
     return facts.item, facts.created_by
