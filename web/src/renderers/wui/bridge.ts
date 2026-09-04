@@ -71,6 +71,29 @@ function cannotWrite(folder: string, verb: string, target: string): string {
     : `This page's view file is at the workspace root, so it has no folder of its own to write in and cannot ${verb} ${target}. Move the page into a folder.`;
 }
 
+/**
+ * The workspace path a caller probably meant, when a bare reference starts with
+ * this page's own folder name.
+ *
+ * Only the FIRST segment counts. A folder name repeating deeper down
+ * (`reports/sales/q1.json` inside `/sales`) is an ordinary path that may well
+ * exist, and treating that as a mistake would second-guess a working read.
+ */
+function doubledFolder(folder: string, raw: string): string | null {
+  if (!folder) return null;
+  const name = folder.slice(folder.lastIndexOf("/") + 1);
+  // An ABSOLUTE path needs no clause of its own: its first segment is the empty
+  // string, which cannot equal a folder name. A `raw.startsWith("/")` guard here
+  // read as load-bearing and was not — deleting it changed no answer, which is
+  // the shape of a check that only looks like one.
+  const first = raw.split("/")[0];
+  // A bare filename that happens to BE the folder name (`readFile("sales")` in
+  // `/sales`) names the file `/sales/sales`, which is odd and perfectly legal —
+  // there is no second spelling to suggest, so there is nothing to say.
+  if (first !== name || !raw.includes("/")) return null;
+  return `${folder}/${raw.slice(first.length + 1)}`;
+}
+
 const str = (args: Record<string, unknown> | undefined, key: string): string | null => {
   const v = args?.[key];
   return typeof v === "string" ? v : null;
@@ -118,6 +141,25 @@ export async function dispatchWuiRequest(
       // expected. Both halves have to be wrong for that to happen, so this fixes
       // the half that can tell the difference.
       if (read.kind === "missing") {
+        // The reported shape, and the one the own-folder rule below would
+        // otherwise keep quiet: `/sales/sales/foo.json`. A tool that writes into
+        // the page's folder names the file the way the WORKSPACE names it —
+        // `sales/foo.json`, no leading slash, because that is what a workspace
+        // path looks like everywhere else — and a bare path here means "next to
+        // the page", so the folder goes on twice. The result is still INSIDE the
+        // page's own folder, which is why it read as an ordinary first run and
+        // said nothing at all.
+        //
+        // Nothing writes to a path that repeats the folder name on purpose, so
+        // absence there is never a first run. The path is NOT silently rewritten
+        // — guessing could read a different file — but the message names the two
+        // spellings that would have worked.
+        const doubled = doubledFolder(folder, raw);
+        if (doubled)
+          return refuse(
+            id,
+            `There is no file at ${path}. A path without a leading "/" is read from inside this page's own folder (${folder}), so "${raw}" became "${path}". Did you mean "${doubled}" (from the item's root) or "${raw.slice(raw.indexOf("/") + 1)}"?`,
+          );
         const mine = resolveWritePath(folder, raw) !== null;
         if (mine) return refuseExpected(id, `There is no file at ${path}.`);
         // Names the thing that is actually surprising. The reader cannot open a

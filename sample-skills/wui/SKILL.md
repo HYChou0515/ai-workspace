@@ -107,13 +107,26 @@ through `readFile`, and two things go wrong quietly:
 - **You parse the path.** `JSON.parse(res.output)` on `{"path": "out.json"}`
   succeeds and yields an object with no rows in it, so the page renders "nothing
   found" over a perfectly good answer.
-- **The path is not where you think.** `readFile` reads THIS item's workspace: a
-  leading `/` is the item's root, not a disk. A tool that wrote to a sandbox
-  `/tmp/out.json` and printed that path names a place the page cannot see, and
-  the read fails. The page must show that failure — do not `.catch(() => [])`
-  around a read of somebody else's path; that catch is for YOUR OWN data file on
-  its first run, and using it here is what turns a wrong path into a permanent,
-  silent "nothing found".
+- **The path is not where you think.** `readFile` reads THIS item's workspace,
+  and the two spellings mean different things:
+
+  | what the tool printed | what `readFile` reads |
+  |---|---|
+  | `/lot-tracker/out.json` | `/lot-tracker/out.json` — the item's root |
+  | `lot-tracker/out.json` | `/lot-tracker/`**`lot-tracker/out.json`** — next to the page |
+  | `out.json` | `/lot-tracker/out.json` — next to the page |
+  | `/tmp/out.json` | `/tmp/out.json` **in the item**, not the sandbox's `/tmp` |
+
+  A workspace path from a tool almost always arrives WITHOUT a leading slash,
+  because that is how the workspace names files everywhere else — and read as a
+  bare path it puts the folder on twice. That is the "no such file
+  `/x/x/foo.json`" you will see, and the doubled name is the tell.
+
+  **So give `readFile` a leading `/` for anything a tool named**, and keep bare
+  paths for your own files. And do not `.catch(() => [])` around a read of
+  somebody else's path: that catch is for YOUR OWN data file on its first run,
+  and using it here turns a wrong path into a permanent, silent "nothing
+  found".
 
 So when a tool answers with a path: check whether the file is really in the
 item's workspace, `readFile` it, and show the read's own error message when it

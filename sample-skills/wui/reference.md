@@ -40,6 +40,19 @@ await workspace.readFile("/notes.md");   // the item's notes
 `deleteFile` reach **only your folder** — `"/notes.md"` and `"../notes.md"` are
 both refused, and so is `/lot-tracker2/x` from inside `/lot-tracker`.
 
+⚠️ **A path someone else gave you needs the leading `/`.** Bare means "next to
+the page", so a workspace path handed over without one — which is how a tool
+names a file — has the folder put on twice:
+
+```js
+// a tool answered with "lot-tracker/out.json"
+await workspace.readFile("lot-tracker/out.json");  // reads /lot-tracker/lot-tracker/out.json
+await workspace.readFile("/lot-tracker/out.json"); // what it meant
+```
+
+The doubled name in the error is the tell, and the refusal names both spellings
+that would have worked.
+
 **Put the page in a folder.** A view file at the workspace root has no folder of
 its own, so it can read but every write is refused.
 

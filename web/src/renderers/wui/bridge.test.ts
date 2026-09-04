@@ -257,6 +257,69 @@ describe("dispatchWuiRequest", () => {
     expect(res.ok === false && res.error).toContain("this item");
   });
 
+  it("names the doubled folder when a workspace path was read as a bare one", async () => {
+    // The reported symptom, exactly: "/sales/sales/foo.json 無此檔案".
+    //
+    // A tool that writes into the page's folder names the file the way the
+    // workspace names it — `sales/foo.json`, no leading slash, because that is
+    // what a workspace path looks like everywhere else. `readFile` reads a bare
+    // path as one NEXT TO THE PAGE, so the folder goes on twice.
+    //
+    // And the doubled path is still INSIDE the page's folder, so the own-folder
+    // rule above would keep it quiet — a first draft of this fix did exactly
+    // that and left the reported symptom untouched. This is the one case where
+    // absence inside your own folder is not a first run: nothing writes to a
+    // path that repeats the folder name on purpose.
+    const res = await dispatchWuiRequest(req("readFile", { path: "sales/foo.json" }), ctx());
+
+    expect(res).toMatchObject({ ok: false });
+    expect(res.ok === false && res.expected).toBeUndefined();
+    const why = res.ok === false ? res.error : "";
+    expect(why).toContain("/sales/sales/foo.json");
+    // It must name the fix, not just the fact. The reader cannot open a console.
+    expect(why).toContain("/sales/foo.json");
+  });
+
+  it("still starts a page quietly when its own data file is simply not there", async () => {
+    // The doubling rule must not swallow the ordinary first run — that is the
+    // case `refuseExpected` exists for, and an alarm that fires on every new
+    // page is one nobody reads.
+    const res = await dispatchWuiRequest(req("readFile", { path: "data.json" }), ctx());
+
+    expect(res).toMatchObject({ ok: false, expected: true });
+  });
+
+  it("does not cry doubling when the folder name legitimately repeats deeper", async () => {
+    // `/sales/reports/sales/q1.json` really exists here, so nothing is wrong and
+    // a successful read must not be second-guessed.
+    const c = ctx({}, { "/sales/reports/sales/q1.json": "[1]" });
+    const res = await dispatchWuiRequest(req("readFile", { path: "reports/sales/q1.json" }), c);
+
+    expect(res).toMatchObject({ ok: true });
+  });
+
+  it("does not cry doubling for a deeper repeat that is merely absent", async () => {
+    // The test above cannot pin this: it SUCCEEDS, so it never reaches the
+    // missing branch at all, and a rule that matched any segment rather than the
+    // first passed it untouched. Only an absent one exercises the decision.
+    //
+    // `/sales/reports/sales/q1.json` is an ordinary path inside the page's own
+    // folder. Absent, it is an ordinary first run — quiet, and with no advice to
+    // give, because there is no second spelling that would have worked.
+    const res = await dispatchWuiRequest(req("readFile", { path: "reports/sales/q1.json" }), ctx());
+
+    expect(res).toMatchObject({ ok: false, expected: true });
+  });
+
+  it("says nothing clever about a file named after its own folder", async () => {
+    // `readFile("sales")` in `/sales` names `/sales/sales` — odd, legal, and with
+    // no alternative spelling to offer. Without the guard the message suggests
+    // "/sales/" and a second path built by slicing off a "/" that is not there.
+    const res = await dispatchWuiRequest(req("readFile", { path: "sales" }), ctx());
+
+    expect(res).toMatchObject({ ok: false, expected: true });
+  });
+
   it("answers on the id it was asked with, so replies cannot be crossed", async () => {
     const res = await dispatchWuiRequest({ ...req("whoami"), id: "abc" }, ctx());
 

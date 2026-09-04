@@ -243,7 +243,13 @@ def test_the_skill_makes_the_agent_look_at_a_tools_real_output():
     # the way a first run is caught, shows as a permanent silent "nothing
     # found". Naming the case is the only thing that stops both.
     assert "When the tool answers with a PATH" in body
-    assert "not a disk" in body
+    # The two failures that shape actually produces, both silent: parsing the
+    # path itself (which SUCCEEDS and yields no rows), and reading a workspace
+    # path as a bare one, which puts the page's folder on TWICE. The doubled name
+    # is the only thing on screen when it happens, so both docs must name it.
+    assert "puts the folder on twice" in body
+    assert "leading `/` for anything a tool named" in body
+    assert "reads /lot-tracker/lot-tracker/out.json" in reference
     # Not just "be careful": the instruction has to be an ACTION, and it has to
     # say what to do when running it is impossible, or the agent guesses anyway.
     assert "You hold the same tool" in body
