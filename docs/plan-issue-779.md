@@ -84,7 +84,7 @@ web/src/renderers/entity/EntityRecordModal.tsx:83:      closeOnBackdrop={!editin
 
 #### 維持現狀(7)
 
-`pages/investigation/CommandPalette.tsx`(⌘P,零輸入成本)、`components/Dialog.tsx`(背景 = `settle(null)` = 取消,落在最安全那一邊)、`components/OnboardingModal.tsx`(背景 = 軟關閉,不是永久關)、`components/ReplayDialog.tsx`(唯讀探針)、`components/GlobalSettings.tsx`(即時套用)、`components/WorkflowLaunchDialog.tsx`(唯讀 pre-flight)、`pages/SanityTable.tsx`(唯讀單列展開)。
+`pages/investigation/CommandPalette.tsx`(⌘P,零輸入成本 —— **行為**維持,但它的**實作**是手刻的,P5 一併搬上 `ModalShell`)、`components/Dialog.tsx`(背景 = `settle(null)` = 取消,落在最安全那一邊)、`components/OnboardingModal.tsx`(背景 = 軟關閉,不是永久關)、`components/ReplayDialog.tsx`(唯讀探針)、`components/GlobalSettings.tsx`(即時套用)、`components/WorkflowLaunchDialog.tsx`(唯讀 pre-flight)、`pages/SanityTable.tsx`(唯讀單列展開)。
 
 > 已排除、不是 modal:`ChatSwitcher` 下拉、`ModelEffortPicker` / `Popover` / `FileTree` 的 click-away 層、`AskAgentDrawer` / `ReviewDrawer` / `ViewSettingsPanel`(drawer/panel,另一種 pattern)、`ImportModeDialog`(inline 確認,沒有 backdrop)、`KbCollectionPage` 與 `AgentPanel` 的拖放提示層。
 > 已從初版盤點移除:`renderers/entity/BoardView.tsx` —— master 上它的 `editing` 是**卡片內 inline 編輯**(blur / Escape 收起),不是 modal。
@@ -185,7 +185,7 @@ web/src/renderers/entity/EntityRecordModal.tsx:83:      closeOnBackdrop={!editin
 
 **驗收.** `EntityRecordModal` 編輯中按 Escape 會問;註解與行為一致。
 
-### P5 — 三個手刻 overlay 收斂到 `ModalShell`
+### P5 — 手刻 overlay 收斂到 `ModalShell`
 
 **Goal.** `NewCollectionModal`、`WikiCorrectionDialog`、`GroupsPage` 的 New group 改用 `ModalShell`,規則從此只有一個位置。
 
@@ -194,14 +194,24 @@ web/src/renderers/entity/EntityRecordModal.tsx:83:      closeOnBackdrop={!editin
 
 **驗收.** 三個都有 focus trap 測試(Tab 在 panel 內循環);`grep -rn 'role="presentation"' web/src` 只剩 `ModalShell` 與 `Dialog`。
 
+**實際落地時多了第四個。** `CommandPalette` 也是手刻 overlay —— §1.4 把它列在「維持現狀」,那是對**行為**的判斷(⌘P 背景關是對的),我當時沒同時看它的**實作**。是 P6 的 guard 把它揪出來的,不是重讀清單。它一起搬上 `ModalShell`,顯式 `closeOnBackdrop` 保住原本的行為,順帶拿到它一樣沒有的 focus trap。
+
+**兩件只有真瀏覽器看得到的事(P5 已驗)。** 單元測試不載入 CSS,所以「`ModalShell` 的 inline panel 預設蓋掉 `kb-modal__card`」這個風險它一個字都看不到。實際開 Chromium 量過:panel 520px、`--paper` 底、12px 圓角、kb 的陰影、`display:flex`、`padding:0`,console 乾淨。
+而它當場抓到一個沒有任何單元測試會抓到的回歸:**`ModalShell` 無條件搶 focus 到第一個 focusable**,把 `NewCollectionModal` 的 `autoFocus`(Name 欄位)蓋掉,游標落到上面的分段控制項。React 的 `autoFocus` 不留 DOM 屬性(它在 mount 時直接呼叫 `.focus()`),所以判準是「focus 是不是已經在 panel 內」,不是「有沒有標記」。已修 + 補測試。
+
 ### P6 — 防回歸
 
 **Goal.** 讓下一個寫 modal 的人走不到舊路。
 
-- 一條 lint / 測試:`web/src` 底下除了 `ModalShell.tsx` 與 `Dialog.tsx`,不得出現 `position: "fixed", inset: 0` 帶 `onClick` 的 backdrop。既有的 click-away 層(`Popover`、`ModelEffortPicker`、`FileTree`)要在允許清單裡 —— 它們是 dropdown 的 click-away,不是 modal backdrop。
-- `docs/frontend.md`(或 `CLAUDE.md` 的 FE 慣例段)補一段:出口矩陣 + 「dirty 只透過 `onClose={attemptClose}` 表達」。
+- 一條 lint / 測試:`web/src` 底下除了 `ModalShell.tsx` 與 `Dialog.tsx`,不得出現 `position: "fixed", inset: 0` 帶 `onClick` 的 backdrop。既有的 click-away 層(`ModelEffortPicker`、`FileTree`、`WorkspaceShell` 的 dropdown)要在允許清單裡 —— 它們是 dropdown 的 click-away,不是 modal backdrop。
+- `CLAUDE.md` 的 FE 慣例段補一條:出口矩陣 + 「dirty 只透過 `useDirtyClose` 包 `onClose` 表達」+ 「dirty 要跟開啟時比,而且必須同時有 dirty 和 clean 兩條測試」。
 
 **驗收.** 新增一個手刻 backdrop 會讓測試紅。
+
+**落地細節(都已驗)。**
+- 判準是**逐個 opening tag** 比對,不是逐檔:`ItemMembersPanel` 有一個置中的 `inset: 0` 資訊框,檔案裡別處也有 `onClick` —— 逐檔比對會永遠誤報它,而一個會亂叫的 guard 只會換來一條允許清單,不是修正。
+- 突變探針做過:塞一個手刻 backdrop 進 `web/src`,**兩條** guard 都紅;移掉後全綠。沒有這一步,「測試綠」只證明它沒在叫,不證明它看得見。
+- 第一次跑就抓到 `CommandPalette`(見 P5),這條規則因此在寫完的當下就已經還了本。
 
 ---
 
