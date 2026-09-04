@@ -39,6 +39,10 @@ logger = logging.getLogger(__name__)
 
 # cgroup v2 cpu.max uses a fixed 100ms accounting period.
 _CPU_PERIOD = 100_000
+#: uv's download cache: BESIDE the sandboxes, one subdir per uid.
+#: Never inside a sandbox — a reap rmtrees the whole dir and would
+#: take the cache with it, so every cold start would re-fetch.
+_UV_CACHE = ".uv-cache"
 _SIZE_UNITS = {"K": 1024, "M": 1024**2, "G": 1024**3}
 # CAP_SETUID is capability bit 7 (linux/capability.h) — needed to drop to a
 # foreign uid without being root.
@@ -341,16 +345,28 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         # the item uid so the carrier launcher's HOME/caches + a user's `pip
         # --user` install land there. No default ACL — only the uid writes here.
         # Idempotent — a re-create chowns to the same derived uid (a no-op).
-        self._own_home(workspace.parent / _HOME, uid)
+        self._own_privately(workspace.parent / _HOME, uid)
         logger.debug(
             "isolated: provisioned %s -> uid=%d (chown 0700 + default ACL)", workspace, uid
         )
 
-    def _own_home(self, home: Path, uid: int) -> None:
+    def _own_privately(self, path: Path, uid: int) -> None:
         """Hand `.home` to the item uid, 0700. Idempotent — chowning to the same
         derived uid is a no-op, which is what lets the exec path redo it."""
-        os.chown(home, uid, -1)
-        os.chmod(home, 0o700)
+        os.chown(path, uid, -1)
+        os.chmod(path, 0o700)
+
+    def _ensure_venv(self, handle: SandboxHandle, root: Path) -> Path:
+        """The base makes the dir; here it also has to be OWNED correctly.
+
+        `uv sync` is the thing that fills it, and it runs as the sandbox uid via
+        `setpriv` — so a directory this pod owns is one uv cannot write, and the
+        profile's whole environment fails to build. Idempotent, like `.home`:
+        chowning to the same derived uid is a no-op, which is what lets the exec
+        path redo it every time."""
+        venv = super()._ensure_venv(handle, root)
+        self._own_privately(venv, self._uid_for(handle.id))
+        return venv
 
     def _ensure_home(self, handle: SandboxHandle, root: Path) -> Path:
         """The base makes the dir; here it also has to be OWNED correctly.
@@ -362,7 +378,7 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         same "User installation could not be completed", reached from the
         permission side instead of the missing-directory side."""
         home = super()._ensure_home(handle, root)
-        self._own_home(home, self._uid_for(handle.id))
+        self._own_privately(home, self._uid_for(handle.id))
         return home
 
     async def kill(self, handle: SandboxHandle) -> None:
@@ -383,6 +399,27 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         uid = self._uid_for(handle.id)
         cgroup = self._cgroup_root / handle.id
         env["TMPDIR"] = str(cwd)  # per-item tmp inside the workspace
+        # #775: uv's download cache, BESIDE the sandboxes rather than inside
+        # one. A reaped sandbox is rmtree'd whole, so a cache within it would
+        # buy nothing — every cold start would re-fetch the whole stack, and a
+        # failed sync stops the turn by design, so an index having a bad day
+        # would stop everyone.
+        #
+        # Per uid, never shared. The uid is derived from the item and stable
+        # across rebuilds, so this outlives the reap; and shared-and-writable
+        # would be a cross-item hole rather than a saving — uv HARDLINKS cache
+        # files into the venv, so one item could rewrite a file another is
+        # executing, and the lock's hashes are checked at install time and
+        # never again. (A shared cache is only safe read-only, which is a
+        # deploy-time decision, not this.)
+        #
+        # Set for EVERY exec, not just the sync: a user's own `uv add` must
+        # land in the same cache, or the second copy is pure waste.
+        cache = self._root / _UV_CACHE / str(uid)
+        cache.mkdir(parents=True, exist_ok=True)
+        self._chown_runner(cache, uid)
+        cache.chmod(0o700)
+        env["UV_CACHE_DIR"] = str(cache)
         wrapped = _setpriv_cgroup_argv(argv, uid=uid, gid=uid, cgroup=cgroup)
         logger.debug("isolated: exec sandbox %s as uid=%d in cgroup %s", handle.id, uid, cgroup)
         return wrapped, cwd, env

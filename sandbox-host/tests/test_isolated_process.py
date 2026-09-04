@@ -393,3 +393,51 @@ async def test_the_download_cache_is_per_uid_and_outlives_the_sandbox(isolated):
         "inside the sandbox it would be rmtree'd with it — not surviving the reap is the "
         "one thing this must not do"
     )
+
+
+async def test_the_project_venv_is_a_dir_the_dropped_uid_can_actually_fill(isolated) -> None:
+    """`uv sync` runs as the item uid, under `setpriv`. `<root>/.venv`'s parent
+    is the sandbox root, which this service created and still owns — so uv
+    cannot create the directory at all:
+
+        error: failed to create directory `…/.venv`: Permission denied (os error 13)
+
+    That is every declared profile failing to start, in production only, which
+    is why nothing here saw it: the unjailed dev path drops no uid and creates
+    it happily. It is the same failure `.home` had (#393) from the same side,
+    so it gets the same answer — made where it is USED, and owned.
+
+    Empty, and only when absent: uv accepts an existing EMPTY directory as the
+    target (measured) but refuses one holding anything else — "cannot be used
+    because it is not a valid Python environment" — so a real venv from an
+    earlier turn must survive untouched.
+    """
+    h = await isolated.create(SandboxSpec())
+
+    _argv, _cwd, env = isolated._exec_argv(h, ["true"])
+
+    venv = Path(env["UV_PROJECT_ENVIRONMENT"])
+    assert venv.is_dir(), "uv cannot make this itself: it does not own the parent"
+    assert venv.stat().st_uid == isolated._identities[h.id].uid, (
+        "and cannot fill one it does not own"
+    )
+    assert not any(venv.iterdir()), "uv refuses a target dir holding anything else"
+
+
+async def test_uvs_download_cache_is_named_for_every_exec(isolated) -> None:
+    """Not just the sync. A user's own `uv add` has to land in the same cache,
+    or the second copy is pure waste — and uv HARDLINKS out of it, so the copy
+    is not even cheap.
+
+    Beside the sandboxes rather than inside one: a reap rmtrees the whole
+    sandbox dir, so a cache within it would buy nothing and every cold start
+    would re-fetch the stack. Per uid, never shared: a shared writable cache is
+    a cross-item code-rewrite path, not a saving."""
+    h = await isolated.create(SandboxSpec())
+
+    _argv, _cwd, env = isolated._exec_argv(h, ["true"])
+
+    cache = Path(env["UV_CACHE_DIR"])
+    assert cache.is_dir()
+    uid = isolated._identities[h.id].uid
+    assert str(uid) in cache.parts, "shared-and-writable is a hole, not a saving"

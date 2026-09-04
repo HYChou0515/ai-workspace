@@ -187,3 +187,38 @@ async def test_uv_builds_the_env_where_the_shim_looks_for_it(tmp_path: Path) -> 
     # The literal path `_install_python_shim` probes. Spelled out rather than
     # imported so the two cannot drift apart while both still pass.
     assert built / "bin" / "python" == root / ".venv" / "bin" / "python"
+
+
+async def test_uv_pip_is_pointed_at_the_project_venv_too(tmp_path: Path) -> None:
+    """`UV_PROJECT_ENVIRONMENT` steers `uv sync`, `uv add` and `uv run`, and
+    NOTHING else — measured. `uv pip install` ignores it and answers "No
+    virtual environment found; run `uv venv`", and following that builds a
+    `.venv` beside `pyproject.toml` that the shim never looks at. Our own error
+    message walked people into the split this feature exists to close.
+
+    VIRTUAL_ENV is what that half of the ecosystem reads."""
+    sb, h = await _sandbox(tmp_path, None)
+    root = Path(sb._require(h))
+    _plant_venv(root)
+
+    _argv, _cwd, env = sb._exec_argv(h, ["true"])
+
+    assert env["VIRTUAL_ENV"] == str(root / ".venv")
+
+
+async def test_the_servers_own_virtualenv_never_reaches_a_sandbox(tmp_path: Path) -> None:
+    """The exec env starts as a copy of this process's, and a service run under
+    `uv run` carries a VIRTUAL_ENV naming ITS OWN venv — which would point a
+    sandbox's tooling at the server's interpreter. (This test process is such a
+    server: pytest runs under `uv run`, so the value really is set here.)
+
+    Production sets neither, so this is not a live leak — it is a value that
+    must never be a property of how the server happened to be launched."""
+    import os
+
+    assert "VIRTUAL_ENV" in os.environ, "the control: this process really does carry one"
+    sb, h = await _sandbox(tmp_path, None)
+
+    _argv, _cwd, env = sb._exec_argv(h, ["true"])
+
+    assert "VIRTUAL_ENV" not in env, "a workspace with no venv must be told there is none"

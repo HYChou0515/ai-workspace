@@ -104,7 +104,24 @@ mkdir -p "$ROOT/tmp/.jailbin"
 # tools' bundled launchers might use): agents commonly type `python3 -` in
 # heredocs, and a bare `python` shim alone would let `python3` fall through
 # to /usr/bin/python3 — the host Python with no pandas/numpy/scipy/matplotlib.
-if [ -x "$ROOT/.tools/python-stack/launch" ]; then
+# Tier 1 (#775): the WORKSPACE's own venv, when the profile declared its
+# dependencies and `uv sync` built one. A profile that says what it needs gets
+# exactly that; the carrier below is the fallback for profiles that said
+# nothing, never a layer underneath one that spoke.
+#
+# A WRAPPER, not a symlink — the same reason as the unjailed shim. CPython
+# resolves its own executable path to find `pyvenv.cfg`, so a link from outside
+# the venv resolves straight past it to the base interpreter and `python` runs
+# with none of the packages just installed. No `pip*`: a uv venv ships none, and
+# a shim that cannot work is worse than none.
+if [ -x "$ROOT/.venv/bin/python" ]; then
+  # `uv pip install` and friends read VIRTUAL_ENV, not UV_PROJECT_ENVIRONMENT.
+  export VIRTUAL_ENV=/.venv
+  for n in python python3 python3.10 python3.11 python3.12 python3.13; do
+    printf '#!/bin/sh\nexec /.venv/bin/python "$@"\n' > "$ROOT/tmp/.jailbin/$n"
+    chmod 755 "$ROOT/tmp/.jailbin/$n"
+  done
+elif [ -x "$ROOT/.tools/python-stack/launch" ]; then
   # `pip*` too: the launcher dispatches on the name it is invoked as, so these
   # are the same symlink and `pip install X` installs into the very interpreter
   # `python` runs. Carrier branch only — the /usr/bin/python3 fallback below
@@ -381,7 +398,7 @@ class LocalProcessSandbox:
                     in_use.add(target.name)
         return in_use
 
-    def _install_python_shim(self, root: Path) -> None:
+    def _install_python_shim(self, root: Path) -> bool:
         """Unjailed analogue of the jail bootstrap's two-tier `python` shim
         (#350), rebuilt per-exec like the bootstrap is. Build a `.jailbin` dir
         of `python`/`python3*` symlinks that route to the python-stack carrier's
@@ -463,6 +480,7 @@ class LocalProcessSandbox:
                 tmp.write_text(script)
                 tmp.chmod(0o755)
             os.replace(tmp, link)
+        return from_venv
 
     async def kill(self, handle: SandboxHandle) -> None:
         path = self._require(handle)
@@ -505,6 +523,32 @@ class LocalProcessSandbox:
         home.mkdir(exist_ok=True)
         return home
 
+    def _ensure_venv(self, handle: SandboxHandle, root: Path) -> Path:
+        """The project env's directory, guaranteed where it is USED.
+
+        `UV_PROJECT_ENVIRONMENT` names `<root>/.venv`, whose PARENT is the
+        sandbox root — a directory this service created and still owns. `uv
+        sync` runs as the sandbox uid, so on the isolated backend it cannot
+        create the dir at all:
+
+            error: failed to create directory `…/.venv`: Permission denied
+
+        which is every declared profile failing to start, in PRODUCTION only:
+        the unjailed dev path drops no uid and creates it happily. That is the
+        same failure `.home` had (#393), reached from the same side, so it gets
+        the same answer — made where it is used, per exec, and owned.
+
+        EMPTY, and only when absent. uv accepts an existing empty directory as
+        its target but refuses one holding anything else ("cannot be used
+        because it is not a valid Python environment"), so a real venv from an
+        earlier turn has to be left exactly as it is — and a `mkdir` that
+        clears anything would delete the very packages this feature installs.
+
+        `IsolatedProcessSandbox` extends this to own the dir to the exec uid."""
+        venv = root / _PROJECT_VENV
+        venv.mkdir(exist_ok=True)
+        return venv
+
     def _exec_argv(
         self, handle: SandboxHandle, cmd: list[str]
     ) -> tuple[list[str], Path, dict[str, str]]:
@@ -515,6 +559,7 @@ class LocalProcessSandbox:
         root = self._require(handle)
         ws = root / _WORKSPACE
         self._ensure_home(handle, root)
+        self._ensure_venv(handle, root)
         env = {**os.environ, "PYTHONUNBUFFERED": "1"}
         if self._isolate:
             # chroot onto the sandbox root; the bootstrap cds into /root + sets
@@ -546,6 +591,10 @@ class LocalProcessSandbox:
             # something they cannot delete and we discard anyway. Set for every
             # exec so a user's own `uv add` targets the same env as the sync.
             env["UV_PROJECT_ENVIRONMENT"] = f"/{_PROJECT_VENV}"
+            # The bootstrap exports VIRTUAL_ENV itself when it finds a venv —
+            # it is the one that probes, per exec, after the mounts exist. Drop
+            # any inherited value so the jail can never see the server's own.
+            env.pop("VIRTUAL_ENV", None)
             # The user-env file, in its chroot-relative spelling — the SAME file
             # the unjailed branch names below, a sibling of the `/root`
             # workspace. Set unconditionally: the launcher guards with `-f`, and
@@ -586,7 +635,24 @@ class LocalProcessSandbox:
             # it here — per-exec so a carrier provisioned after `create` is seen.
             # The PATH survives the `setpriv` wrap (no `--reset-env`) and is
             # inherited by any child the script spawns.
-            self._install_python_shim(root)
+            if self._install_python_shim(root):
+                # The rest of the ecosystem reads VIRTUAL_ENV, not
+                # UV_PROJECT_ENVIRONMENT — measured: `uv pip install` ignores
+                # the latter entirely and answers "No virtual environment
+                # found; run `uv venv`". Following THAT builds a `.venv` beside
+                # `pyproject.toml` which the shim never looks at, so our own
+                # error message walked people into the installed-into-A,
+                # running-in-B split this feature exists to close.
+                env["VIRTUAL_ENV"] = str(root / _PROJECT_VENV)
+            else:
+                # Never inherited. `env` starts as a copy of this process's
+                # environment, and a service started under `uv run` carries a
+                # VIRTUAL_ENV naming ITS OWN venv — which would point a
+                # sandbox's tooling at the service's interpreter. Production
+                # sets neither (both images exec a plain interpreter), so this
+                # is not a live leak; it is a value that must never be a
+                # property of how the server happened to be launched.
+                env.pop("VIRTUAL_ENV", None)
             env["SANDBOX_JAILBIN"] = str(root / _JAILBIN)
             env["PATH"] = f"{env['SANDBOX_JAILBIN']}{os.pathsep}{env.get('PATH', '')}"
             # A LOGIN shell (`bash -lc …`, and the `sh -lc` wrapper every
