@@ -252,7 +252,44 @@ web/src/renderers/entity/EntityRecordModal.tsx:83:      closeOnBackdrop={!editin
 
 ---
 
-## 7. 出處
+## 7. 對抗式 review 之後補的(全部已落地)
+
+P1–P6 做完、測試全綠之後跑的 review 找出 11 個問題,其中 3 個 high。它們有一個共同形狀:**我把規則寫對了,然後在只實作了規則的一半的地方停下來。**
+
+### 7.1 「接上 guard」不等於「這個 modal 安全了」
+
+我把 `useDirtyClose` 接到 `ModalShell` 的 `onClose`(涵蓋 Escape 和背景),然後就當那個 modal 完成了。但**五個 modal 自己還畫了 ✕ / Cancel 按鈕**,直接呼叫 `onClose`:`CardDiffReview`(Monaco 草稿)、`EnvVarsModal`(貼上的憑證)、`TuneParsingModal`(整個調參 session)、`AppNewItem`、`EntityViews` quick-create。Escape 會問,而**使用者真正會去按的那顆按鈕靜默丟掉一切**。
+
+已修,並加一條 guard:一個檔案若用了 `useDirtyClose`,就不得再有裸的 `onClick={onClose}`,除非上面三行內寫了 `dirty-close-exempt` 和理由(目前兩個豁免,都有真實理由)。
+
+### 7.2 我引用 ARIA 的那句話,自己違反了
+
+confirm 的兩個動作都不是 `primary`,而 `Dialog` 只 autofocus primary;`ModalShell` 的 Tab trap 又把焦點拉回下層 panel,而 confirm 的按鈕在那個 panel 外面。結果:**鍵盤使用者只按得到「繼續編輯」(Escape),永遠到不了「放棄變更」——modal 變成關不掉的**。這正是我拿 ARIA 來論證「刻意出口必須留著」時要避免的東西,只是繞了一圈。
+
+兩處都修:confirm 開啟時把焦點放進面板;`ModalShell` 的 Tab trap 只在自己是最上層 modal 時作用(DOM 中較後者為較上層)。
+
+### 7.3 修 7.2 的時候我造出一個新 bug,被既有測試抓到
+
+第一版把焦點放在**按鈕**上。於是「打字後按 Enter 送出 → 撞名 confirm 跳出 → 同一次按鍵的後續事件落在剛拿到焦點的按鈕上 → confirm 自己把自己答掉」。`FileTree` 三條既有測試立刻紅。改成聚焦**面板**:焦點仍在 prompt 內(Tab 到得了動作),但沒有任何東西被「上膛」。補了一條直接測這件事的測試,並做過突變探針。
+
+### 7.4 `JSON.stringify` 做 dirty 比較是錯的,而且錯兩次
+
+- **順序**:sparse override 在 toggle 時 delete/re-add 會把 key 移到尾端;grant 陣列在移除又加回時重排。兩者意義相同、字串不同 → **無中生有的 dirty**,而那正是 §6.2 說更危險的方向。
+- **`Set`**:`JSON.stringify(new Set(["read"]))` 是 `{}`。`ItemGrant.verbs` 是 `Set`,所以**整組 custom verb 的修改讀起來是「沒改」**,關掉不問、靜默丟失。這個 review 沒抓到,是我照著它的線索往下查才發現的。
+
+抽出 `lib/sameShape.ts`(順序無關、看得進 `Set`/`Map`),四處改用它,並把 `ToolsPickerModal` 私有的 `sameOverride` 退休 —— 全庫只留一種比較。
+
+### 7.5 其餘
+
+`ItemForm` 的 `profile` 沒算進 dirty(選了範本再按 Escape,選擇靜默消失);`ManageChatsModal` 的 `renamingId` 在該列被搜尋過濾掉而 unmount 時永遠不清,之後每次離開都跳一個「有未儲存變更」的假警報;`EnvVarsModal` 的 provider 密碼欄位沒算進 dirty;`FileTree` 一段說「沒有 provider 時會降級成 no-op」的註解,正上方就是會直接 throw 的 `useDialog()`。
+
+### 7.6 P6 的 guard 自己有洞
+
+`=>` 裡的 `>` 會提前結束 `[^>]*` 的 tag 比對,所以寫成 `<div onClick={() => onClose()} style={{position:"fixed",inset:0}}>` 的手刻 backdrop **兩條 guard 都放行**。我原本的突變探針之所以會紅,純粹是因為它剛好把 `style` 寫在前面 —— **探針證明的是你想得到的那種寫法,不是那條規則**。已修(比對前先遮蔽 `=>`),並用兩種寫法各驗一次。
+
+---
+
+## 8. 出處
 
 - [ARIA APG — Modal Dialog Pattern](https://www.w3.org/WAI/ARIA/apg/patterns/dialog-modal/):Escape 關閉是規範**要求**;點擊外側只寫成「某些實作會這樣做」,是選配。
 - [Material Design 3 — Dialogs](https://m3.material.io/components/dialogs/guidelines):scrim 點擊等同 Cancel,可以關掉;但「永遠要留一條讓使用者關閉的路」。

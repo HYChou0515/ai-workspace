@@ -6,6 +6,7 @@ import { qk } from "../api/queryKeys";
 import type { ApiClient, ItemToolState } from "../api/types";
 import { useDirtyClose } from "../hooks/useDirtyClose";
 import { useT } from "../lib/i18n";
+import { sameShape } from "../lib/sameShape";
 import { pxToRem } from "../lib/pxToRem";
 import { ModalShell } from "./ModalShell";
 import { ToolsChecklist } from "./ToolsChecklist";
@@ -61,7 +62,7 @@ export function ToolsPickerModal({
   }, [prefs, toolsQ.data]);
 
   const ready = prefs !== null && initial !== null && toolsQ.data !== undefined;
-  const dirty = ready && !sameOverride(prefs!, initial!);
+  const dirty = ready && !sameShape(prefs, initial);
 
   const attemptClose = useDirtyClose(dirty, onClose);
 
@@ -141,9 +142,4 @@ function overrideFromTools(tools: ItemToolState[]): Record<string, boolean> {
   return out;
 }
 
-function sameOverride(a: Record<string, boolean>, b: Record<string, boolean>): boolean {
-  const ka = Object.keys(a);
-  const kb = Object.keys(b);
-  if (ka.length !== kb.length) return false;
-  return ka.every((k) => k in b && a[k] === b[k]);
-}
+

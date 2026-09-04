@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { ItemChatSummary } from "../api/itemChats";
 import { relativeTime } from "../api/types";
@@ -58,6 +58,19 @@ function ChatRow({
     setEditingState(v);
     onEditingChange?.(v);
   };
+  // Report "no longer editing" on unmount too. The row can vanish without ever
+  // calling setEditing(false) — start a rename, then type in the search box and
+  // this row falls out of the filtered list. Without this the modal believed a
+  // rename was still open forever after, and every exit raised a prompt about
+  // work that no longer existed. A guard that fires over nothing is one people
+  // learn to click through.
+  //
+  // Through a ref because the caller passes a fresh closure each render; as an
+  // effect dependency that would re-run the cleanup on every render and clear
+  // the flag while the rename is still open.
+  const notify = useRef(onEditingChange);
+  notify.current = onEditingChange;
+  useEffect(() => () => notify.current?.(false), []);
   const [draft, setDraft] = useState(chat.title);
   const [confirming, setConfirming] = useState(false);
 
@@ -229,7 +242,13 @@ export function ManageChatsModal({
                 onClose={onClose}
                 onRename={onRename}
                 onDelete={onDelete}
-                onEditingChange={(on) => setRenamingId(on ? chat.chat_id : null)}
+                onEditingChange={(on) =>
+                  // Only this row may clear its own flag — an unmounting row
+                  // must not cancel a rename that another row now owns.
+                  setRenamingId((cur) =>
+                    on ? chat.chat_id : cur === chat.chat_id ? null : cur,
+                  )
+                }
               />
             ))}
           </tbody>

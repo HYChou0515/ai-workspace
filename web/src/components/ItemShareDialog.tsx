@@ -19,6 +19,7 @@ import {
 } from "../lib/itemPermission";
 import { useDirtyClose } from "../hooks/useDirtyClose";
 import { pxToRem } from "../lib/pxToRem";
+import { sameShape } from "../lib/sameShape";
 import { Icon } from "./Icon";
 import { ModalActions } from "./ModalActions";
 import { ModalShell } from "./ModalShell";
@@ -82,14 +83,16 @@ export function ItemShareDialog({
   // difference would read as an edit nobody made. Closing here is the quiet
   // failure of the set: the dialog just vanishes, and the access silently
   // stayed as it was.
-  const initialRef = useRef(
-    JSON.stringify({
-      visibility: value.visibility,
-      grants: itemGrantsFromPermission(value, owner),
-      groupGrants: itemGroupGrantsFromPermission(value),
-    }),
-  );
-  const dirty = JSON.stringify({ visibility, grants, groupGrants }) !== initialRef.current;
+  const initialRef = useRef({
+    visibility: value.visibility,
+    grants: itemGrantsFromPermission(value, owner),
+    groupGrants: itemGroupGrantsFromPermission(value),
+  });
+  // sameShape, not JSON.stringify: `grants` reorders when a subject is removed
+  // and re-added (a false "dirty"), and ItemGrant.verbs is a Set, which
+  // stringifies to {} however full it is — so a whole custom-verb edit read as
+  // unchanged and closed without asking.
+  const dirty = !sameShape({ visibility, grants, groupGrants }, initialRef.current);
   const attemptClose = useDirtyClose(dirty, onClose);
   // Unresolvable (deleted / not visible) → "Unknown group", still removable (#608).
   const groupName = (id: string) =>

@@ -133,7 +133,7 @@ export function AppNewItem() {
                 {create.error instanceof Error ? create.error.message : "Couldn’t create — please try again."}
               </div>
             )}
-            <button type="button" className="btn" data-variant="ghost" data-size="md" onClick={close}>
+            <button type="button" className="btn" data-variant="ghost" data-size="md" onClick={attemptClose}>
               Cancel
             </button>
             <button type="submit" form={FORM_ID} disabled={create.isPending} className="btn" data-variant="primary" data-size="md">

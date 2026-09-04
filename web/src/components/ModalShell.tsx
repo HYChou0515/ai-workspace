@@ -95,8 +95,19 @@ export function ModalShell({
       (focusables()[0] ?? panel).focus();
     }
 
+    // Only the topmost modal traps Tab (#779). Something can open ON TOP of this
+    // panel — the confirm this modal itself raises when it holds unsaved work —
+    // and that layer's buttons live outside this panel. A trap that keeps
+    // yanking focus home makes them unreachable, so the prompt asking "discard?"
+    // could only be answered with a mouse. Later in the DOM = higher layer,
+    // which is how the provider renders it (children first, then the dialog).
+    const isTopmost = () => {
+      const modals = document.querySelectorAll('[role="dialog"][aria-modal="true"]');
+      return modals.length === 0 || modals[modals.length - 1] === panel;
+    };
+
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Tab") return;
+      if (e.key !== "Tab" || !isTopmost()) return;
       const els = focusables();
       if (els.length === 0) {
         e.preventDefault();

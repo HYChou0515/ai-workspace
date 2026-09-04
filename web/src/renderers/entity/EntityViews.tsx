@@ -134,7 +134,7 @@ export function QuickCreate({
           ))}
         </div>
         <div className="ev-quickcreate__actions">
-          <button type="button" className="btn" data-variant="ghost" data-size="sm" onClick={close}>
+          <button type="button" className="btn" data-variant="ghost" data-size="sm" onClick={attemptClose}>
             Cancel
           </button>
           <button type="submit" className="btn" data-variant="primary" data-size="sm" disabled={busy}>

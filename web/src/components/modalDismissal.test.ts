@@ -46,10 +46,24 @@ function tsxFiles(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-const files = tsxFiles(SRC).map((f) => ({
-  path: relative(SRC, f).split("\\").join("/"),
-  text: readFileSync(f, "utf8"),
-}));
+/**
+ * `=>` inside a JSX attribute ends a naive `[^>]*` tag match early, so anything
+ * written after the first arrow function — very often the `style` — was never
+ * inspected. `<div onClick={() => onClose()} style={{position:"fixed",inset:0}}>`
+ * sailed past both guards until this existed. The first mutation probe missed it
+ * purely because it happened to put `style` first, which is the lesson: a probe
+ * proves the spelling you thought of, not the rule.
+ */
+const maskArrows = (s: string) => s.replace(/=>/g, "=\u0001");
+
+const files = tsxFiles(SRC).map((f) => {
+  const text = readFileSync(f, "utf8");
+  return {
+    path: relative(SRC, f).split("\\").join("/"),
+    text,
+    scan: maskArrows(text),
+  };
+});
 
 describe("#779 — modal dismissal has one owner", () => {
   it("finds source to scan (guards against a broken walker reporting all-clear)", () => {
@@ -60,7 +74,7 @@ describe("#779 — modal dismissal has one owner", () => {
   it("has no hand-rolled backdrop that closes on click", () => {
     const offenders = files
       .filter((f) => !SHELLS.includes(f.path))
-      .filter((f) => /role="presentation"[^>]*onClick|onClick[^>]*role="presentation"/s.test(f.text))
+      .filter((f) => /role="presentation"[^>]*onClick|onClick[^>]*role="presentation"/s.test(f.scan))
       .map((f) => f.path);
 
     expect(offenders).toEqual([]);
@@ -79,8 +93,37 @@ describe("#779 — modal dismissal has one owner", () => {
 
     const offenders = files
       .filter((f) => !SHELLS.includes(f.path) && !CLICK_AWAY.includes(f.path))
-      .filter((f) => hasBackdropTag(f.text))
+      .filter((f) => hasBackdropTag(f.scan))
       .map((f) => f.path);
+
+    expect(offenders).toEqual([]);
+  });
+
+  // Found by review, not by me: I wired useDirtyClose to ModalShell's onClose in
+  // five modals and left their OWN ✕ / Cancel buttons calling onClose directly.
+  // Escape asked; the button people actually click threw the work away in
+  // silence. Guarding the shell is not guarding the modal — every deliberate
+  // exit has to go through the same handler, including the ones the modal draws
+  // itself.
+  it("has no close button bypassing the guard in a modal that has one", () => {
+    const RAW_CLOSE = /onClick=\{(onClose|close)\}|onClick=\{\(\)\s*=>\s*(onClose|close)\(\)\}/;
+
+    const offenders: string[] = [];
+    for (const f of files) {
+      if (!f.text.includes("useDirtyClose(")) continue;
+      const lines = f.text.split("\n");
+      lines.forEach((line, i) => {
+        if (!RAW_CLOSE.test(line)) return;
+        // An exemption must be written down, right above the line, with a
+        // reason — a legitimate one exists (a branch rendered only after a
+        // successful submit has nothing left to lose), so the rule needs a door
+        // rather than an exception list somewhere else.
+        const preamble = lines.slice(Math.max(0, i - 3), i).join("\n");
+        if (!preamble.includes("dirty-close-exempt")) {
+          offenders.push(`${f.path}:${i + 1}`);
+        }
+      });
+    }
 
     expect(offenders).toEqual([]);
   });

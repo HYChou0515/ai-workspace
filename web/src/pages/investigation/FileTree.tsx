@@ -134,8 +134,10 @@ export function FileTree({
   const svc = useOptionalFileService() ?? NO_SERVICE;
   const caps = svc.caps;
   const t = useT();
-  // Select mode has no confirm prompts (they're on caps-gated mutations), so a
-  // no-op stands in when there's no <DialogProvider>.
+  // #779: this used to read the dialog optionally, with a no-op stand-in when
+  // no provider was in context. The provider is at the app root now, so there is
+  // no such case — and the stand-in was hiding the fact that a confirm could
+  // silently resolve to "cancel".
   const dialog = useDialog();
   const [query, setQuery] = useState("");
   // `query` lives here, so every keystroke re-renders this component — and so

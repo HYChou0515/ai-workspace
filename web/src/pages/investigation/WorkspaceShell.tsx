@@ -2210,6 +2210,8 @@ export function TabContextMenu({
   );
   return (
     <>
+      {/* dirty-close-exempt: a dropdown's click-away catcher, not a modal exit —
+          this component is not the guarded EditItemModal further up the file. */}
       <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 80 }} />
       <div
         style={{

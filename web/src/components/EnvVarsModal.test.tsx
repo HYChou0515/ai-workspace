@@ -499,14 +499,26 @@ describe("EnvVarsModal", () => {
     expect(onSave).toHaveBeenCalledWith({ API_KEY: "sk-1" });
   });
 
-  it("closes without saving when cancelled", () => {
+  // #779: Cancel asks first once the box has been edited — it is a deliberate
+  // exit, and this modal holds pasted credentials. It used to close outright.
+  it("asks before Cancel drops an edited box, then closes without saving", async () => {
     const { onSave, onClose } = open({ API_KEY: "sk-1" });
 
     type("API_KEY=changed\n");
     fireEvent.click(screen.getByTestId("env-cancel"));
+    expect(onClose).not.toHaveBeenCalled();
 
+    fireEvent.click(await screen.findByTestId("dialog-action-discard"));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
     expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("closes on Cancel without asking when the box is untouched", () => {
+    const { onSave, onClose } = open({ API_KEY: "sk-1" });
+    fireEvent.click(screen.getByTestId("env-cancel"));
     expect(onClose).toHaveBeenCalled();
+    expect(onSave).not.toHaveBeenCalled();
   });
 });
 

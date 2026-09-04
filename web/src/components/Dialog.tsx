@@ -26,6 +26,7 @@ const DialogContext = createContext<DialogContextValue | null>(null);
 export function DialogProvider({ children }: { children: React.ReactNode }) {
   const [opts, setOpts] = useState<DialogOptions | null>(null);
   const resolver = useRef<((r: string | null) => void) | null>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
 
   const settle = useCallback((r: string | null) => {
     resolver.current?.(r);
@@ -41,6 +42,24 @@ export function DialogProvider({ children }: { children: React.ReactNode }) {
       }),
     [],
   );
+
+  // Pull focus into the prompt when it opens (#779). It used to rely on
+  // `autoFocus` on a primary action, so a prompt with no primary — "keep
+  // editing" / "discard changes" is two non-primary choices — left focus in the
+  // modal underneath. That modal traps Tab inside its own panel, and these
+  // buttons are outside it, so the prompt became mouse-only: a keyboard user
+  // could answer "keep" (Escape) and nothing else. An undismissable modal by a
+  // longer route, which is the thing keeping Escape was supposed to prevent.
+  useEffect(() => {
+    if (!opts) return;
+    // The PANEL, not a button. Focusing a button means the keystroke that
+    // opened this prompt can finish on it: type a name and press Enter, the
+    // collision confirm appears mid-keypress, and the same Enter activates the
+    // freshly-focused action — the dialog answers itself before anyone reads it.
+    // Focusing the container puts focus inside the prompt (so Tab reaches the
+    // actions and it is answerable by keyboard) without arming anything.
+    panelRef.current?.focus();
+  }, [opts]);
 
   // While a confirm is up it is the TOP layer, so Escape is its alone (#779).
   // ModalShell listens on document too; without this both handlers run, and for
@@ -77,6 +96,8 @@ export function DialogProvider({ children }: { children: React.ReactNode }) {
           }}
         >
           <div
+            ref={panelRef}
+            tabIndex={-1}
             role="dialog"
             aria-modal="true"
             aria-label={opts.title}
@@ -112,7 +133,6 @@ export function DialogProvider({ children }: { children: React.ReactNode }) {
                   data-testid={`dialog-action-${a.id}`}
                   data-variant={a.variant === "primary" ? "primary" : a.variant === "danger" ? "danger" : "secondary"}
                   data-size="sm"
-                  autoFocus={a.variant === "primary"}
                   onClick={() => settle(a.id)}
                 >
                   {a.label}

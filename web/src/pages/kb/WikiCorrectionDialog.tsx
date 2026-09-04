@@ -123,6 +123,8 @@ export function WikiCorrectionDialog({
           <p>{t("wikiCorrection.done")}</p>
         </div>
         <footer className="kb-modal__foot">
+          {/* dirty-close-exempt: the correction is filed — this branch renders
+              only after a successful submit, so there is nothing left to lose. */}
           <button type="button" className="kb-btn kb-btn--primary" onClick={onClose}>
             {t("wikiCorrection.cancel")}
           </button>

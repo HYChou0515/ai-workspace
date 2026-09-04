@@ -174,7 +174,7 @@ export function TuneParsingModal({
             {docPath}
           </span>
           <span style={{ flex: 1 }} />
-          <button type="button" className="kb-btn" aria-label={t("kb.tuneParsing.close")} onClick={onClose}>
+          <button type="button" className="kb-btn" aria-label={t("kb.tuneParsing.close")} onClick={attemptClose}>
             {t("kb.tuneParsing.close")}
           </button>
         </div>

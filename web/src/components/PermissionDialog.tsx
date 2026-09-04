@@ -18,6 +18,7 @@ import {
 } from "../lib/permission";
 import { useDirtyClose } from "../hooks/useDirtyClose";
 import { pxToRem } from "../lib/pxToRem";
+import { sameShape } from "../lib/sameShape";
 import { Icon } from "./Icon";
 import { ModalActions } from "./ModalActions";
 import { ModalShell } from "./ModalShell";
@@ -83,14 +84,16 @@ export function PermissionDialog({
   // #779: against the opening seed rather than `next()`, which normalises — see
   // ItemShareDialog for the same reasoning. Same quiet failure too: the dialog
   // closes and the access is simply unchanged, with nothing said.
-  const initialRef = useRef(
-    JSON.stringify({
-      visibility: value.visibility,
-      grants: grantsFromPermission(value, owner),
-      groupGrants: groupGrantsFromPermission(value),
-    }),
-  );
-  const dirty = JSON.stringify({ visibility, grants, groupGrants }) !== initialRef.current;
+  const initialRef = useRef({
+    visibility: value.visibility,
+    grants: grantsFromPermission(value, owner),
+    groupGrants: groupGrantsFromPermission(value),
+  });
+  // sameShape, not JSON.stringify: `grants` reorders when a subject is removed
+  // and re-added (a false "dirty"), and ItemGrant.verbs is a Set, which
+  // stringifies to {} however full it is — so a whole custom-verb edit read as
+  // unchanged and closed without asking.
+  const dirty = !sameShape({ visibility, grants, groupGrants }, initialRef.current);
   const attemptClose = useDirtyClose(dirty, onClose);
   // A grant whose group we can't resolve (deleted, or not visible to us) reads as
   // "Unknown group" — the owner can still remove it — rather than a raw id (#608).

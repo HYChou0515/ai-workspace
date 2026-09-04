@@ -7,6 +7,7 @@ import { qk } from "../api/queryKeys";
 import type { ApiClient, ItemSkillState, ToolPref } from "../api/types";
 import { skillDir } from "../api/workspaceSkills";
 import { useT } from "../lib/i18n";
+import { sameShape } from "../lib/sameShape";
 import { pxToRem } from "../lib/pxToRem";
 import { Icon } from "./Icon";
 import { useDirtyClose } from "../hooks/useDirtyClose";
@@ -71,10 +72,10 @@ export function SkillsModal({
     }
   }, [prefs, skillsQ.data]);
 
-  const attemptClose = useDirtyClose(
-    initial !== null && JSON.stringify(prefs) !== JSON.stringify(initial),
-    onClose,
-  );
+  // sameShape, not JSON.stringify: setState deletes a key for "follow" and
+  // re-adds it for on/off, so toggling a skill away and back reorders the object
+  // and the modal would claim unsaved work over an identical set.
+  const attemptClose = useDirtyClose(initial !== null && !sameShape(prefs, initial), onClose);
 
   const list = skillsQ.data ?? [];
   const applied = new Set(appliedSkills);

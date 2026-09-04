@@ -30,6 +30,29 @@ function Harness({ onResult }: { onResult: (r: string | null) => void }) {
   );
 }
 
+
+/** Opens the confirm from an Enter keypress, the way a form submit does. */
+function EnterHarness({ onResult }: { onResult: (r: string | null) => void }) {
+  const dialog = useDialog();
+  return (
+    <input
+      aria-label="name"
+      onKeyDown={(e) => {
+        if (e.key !== "Enter") return;
+        void dialog
+          .confirm({
+            title: "Save changes?",
+            actions: [
+              { id: "save", label: "Save" },
+              { id: "discard", label: "Don't Save", variant: "danger" },
+            ],
+          })
+          .then(onResult);
+      }}
+    />
+  );
+}
+
 describe("<DialogProvider /> / useDialog", () => {
   it("shows the dialog and resolves with the chosen action id", async () => {
     const user = userEvent.setup();
@@ -90,5 +113,25 @@ describe("<DialogProvider /> / useDialog", () => {
 
     expect(screen.queryByText("Save changes?")).toBeNull();
     expect(shellSawEscape).not.toHaveBeenCalled();
+  });
+
+  it("does not answer itself with the keystroke that opened it", async () => {
+    // #779: raising the prompt from an Enter (submitting a form / committing a
+    // rename) used to focus an action button, and the rest of that same
+    // keystroke then activated it — the dialog resolved before it was readable.
+    // Focus belongs on the panel; the buttons are reached by Tab.
+    const user = userEvent.setup();
+    const onResult = vi.fn();
+    render(
+      <DialogProvider>
+        <EnterHarness onResult={onResult} />
+      </DialogProvider>,
+    );
+
+    await user.click(screen.getByRole("textbox"));
+    await user.keyboard("name{Enter}");
+
+    expect(await screen.findByText("Save changes?")).toBeInTheDocument();
+    expect(onResult).not.toHaveBeenCalled();
   });
 });

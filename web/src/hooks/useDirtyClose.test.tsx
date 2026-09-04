@@ -1,10 +1,11 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { DialogProvider } from "../components/Dialog";
+import { ModalShell } from "../components/ModalShell";
 import { useDirtyClose } from "./useDirtyClose";
 
 afterEach(cleanup);
@@ -68,5 +69,52 @@ describe("useDirtyClose", () => {
 
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  // The whole ARIA argument for keeping Escape is that a modal must stay
+  // dismissable. That fails if the prompt it raises can only be answered with a
+  // mouse: ModalShell traps Tab inside its own panel, and the confirm's buttons
+  // are outside it, so a keyboard user could reach "keep editing" (Escape) and
+  // nothing else — an undismissable modal by a longer route.
+  it("puts keyboard focus inside the prompt, so it can be answered without a mouse", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+
+    await user.click(open(true, onClose));
+    const prompt = await screen.findByRole("dialog");
+
+    expect(prompt.contains(document.activeElement)).toBe(true);
+  });
+
+  // Through a REAL ModalShell, because the trap is the half that bites: the
+  // shell pulls Tab back into its own panel whenever focus leaves it, and the
+  // prompt's buttons are outside that panel.
+  it("reaches the discard action by keyboard alone, through a real ModalShell", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+
+    function Shelled() {
+      const attemptClose = useDirtyClose(true, onClose);
+      return (
+        <ModalShell onClose={attemptClose} ariaLabel="m" data-testid="shelled">
+          <button type="button">inside one</button>
+          <button type="button">inside two</button>
+        </ModalShell>
+      );
+    }
+    render(
+      <DialogProvider>
+        <Shelled />
+      </DialogProvider>,
+    );
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    const discard = await screen.findByTestId("dialog-action-discard");
+
+    for (let i = 0; i < 8 && document.activeElement !== discard; i++) await user.tab();
+    expect(document.activeElement).toBe(discard);
+
+    await user.click(discard);
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   });
 });

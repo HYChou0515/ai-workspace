@@ -238,7 +238,7 @@ function CardDiffModal({
           <button
             type="button"
             data-testid="card-diff-close"
-            onClick={onClose}
+            onClick={attemptClose}
             style={{
               padding: "5px 12px",
               borderRadius: 6,

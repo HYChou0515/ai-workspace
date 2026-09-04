@@ -23,6 +23,7 @@ import { useUser } from "../hooks/useUsers";
 import { Icon } from "./Icon";
 import { UserAvatar } from "./UserChip";
 import { pxToRem } from "../lib/pxToRem";
+import { sameShape } from "../lib/sameShape";
 
 const inputStyle: CSSProperties = {
   width: "100%",
@@ -173,13 +174,21 @@ export function ItemForm({
   // The seed as it was on mount, to compare against. Captured once: re-seeding
   // from a changed `initialValues` would re-baseline mid-edit and call a form
   // with unsaved work clean.
-  const initialRef = useRef(JSON.stringify(seedValues()));
+  const initialRef = useRef({
+    values: seedValues(),
+    profile: defaultProfile || profiles?.[0]?.name || "",
+  });
   const set = (n: string, v: unknown) => setValues((prev) => ({ ...prev, [n]: v }));
   // #779: report whether leaving now would cost the user anything. Compared
   // against the mount-time seed rather than tracking "did anything get typed",
   // so typing a character and deleting it again reads as clean — which is what
   // a person means when they say they changed nothing.
-  const dirty = JSON.stringify(values) !== initialRef.current;
+  // `profile` counts too. It is submitted ({ ...values, profile }) and the
+  // template cards are usually the FIRST thing touched on a create form, so
+  // leaving it out meant picking a different template and pressing Escape closed
+  // with no prompt and the choice gone — dirty misread as clean, the silent-loss
+  // direction.
+  const dirty = !sameShape({ values, profile }, initialRef.current);
   useEffect(() => {
     onDirtyChange?.(dirty);
   }, [dirty, onDirtyChange]);
