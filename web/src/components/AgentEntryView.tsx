@@ -647,7 +647,7 @@ function StepLine({ step }: { step: StepView }) {
       {/* #178: live stdout from a running deterministic step, so a long command
           shows movement instead of looking dead. */}
       {step.liveOutput && (
-        <pre
+        <pre className="scrollable"
           data-testid="wf-step-output"
           style={{
             margin: "0 10px 4px 24px",
@@ -977,7 +977,7 @@ function ReasoningBlock({ text, answered = false }: { text: string; answered?: b
         <Icon name={open ? "chev_d" : "chev_r"} size={11} />
         {summary}
       </summary>
-      <pre
+      <pre className="scrollable"
         ref={preRef}
         style={{
           marginTop: 4,
@@ -1096,7 +1096,7 @@ function ToolCallCard({
         </div>
       )}
       {body !== undefined && (
-        <pre
+        <pre className="scrollable"
           ref={preRef}
           style={{
             color: "var(--text-paper-d)",

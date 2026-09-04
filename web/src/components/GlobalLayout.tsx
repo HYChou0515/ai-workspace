@@ -31,7 +31,10 @@ function GlobalLayoutInner() {
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
       {!hidden && <GlobalNav />}
-      <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+      {/* The page's own scroll, shared by every route — and until now the one
+          place using the browser's default bar while every panel used the
+          themed one, which is most of why the two look like different apps. */}
+      <div className="scrollable" style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
         <Outlet />
       </div>
       {/* Every route nests here, which is the only reason "a failed write is

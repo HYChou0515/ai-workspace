@@ -552,19 +552,24 @@ export function GanttView({
                   // day", which was not true. The record shows as a line
                   // pressed into the seam the folded time collapsed to.
                   const width = Math.max(columns * cpx, HAIRLINE);
-                  // Dashed and hollow means "this is a guess" whichever guess
-                  // it is — a length the scheduler had to invent, or dates the
-                  // chart proposed because the record states none. One cue,
-                  // because to a reader it is one fact.
+                  // Dashed means "this is a guess" whichever guess it is — a
+                  // length the scheduler had to invent, or dates the chart
+                  // proposed because the record states none. One cue, because
+                  // to a reader it is one fact.
                   const provisional = isProvisional(row.e) || row.source === "derived";
-                  // A provisional bar is the schedule's GUESS for work with no
-                  // estimate, and its rule draws it hollow and dashed so it is
-                  // never mistaken for a real plan. That rule is in the
-                  // stylesheet and these are INLINE, which beats it — so the
-                  // colour has to decline to paint rather than the rule try to
-                  // win. Every paint below is withheld together: leaving any one
-                  // of them on hands the guess back a solid-bar cue.
-                  const c = provisional ? undefined : barColor(row.e);
+                  // A provisional row keeps its colour (#786). The hollow rule
+                  // this used to defer to was written when a bar had no colour
+                  // of its own, and deferring to it cost far more than it was
+                  // worth: `exp_days` is optional and the Timeline ships a
+                  // `schedule:` block, so an ordinary unsized issue is
+                  // provisional — the COMMON case, which meant most of a real
+                  // project painted as identical dashed outlines and the
+                  // colouring was gone where it was most needed. #785 widens
+                  // `provisional` again, to records the chart dated itself, so
+                  // that reasoning now covers even more of the chart: the dashed
+                  // edge already says "a guess", it says it just as clearly over
+                  // a fill, and it is the only cue that has to survive.
+                  const c = barColor(row.e);
                   return (
                     <div key={row.e.number} className="ev-gantt__bar-row" style={{ height: ROW_H }}>
                       <div

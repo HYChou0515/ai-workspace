@@ -82,7 +82,7 @@ export function ToolsChecklist({
         </div>
       )}
 
-      <div
+      <div className="scrollable"
         style={{ overflowY: "auto", minHeight: 0, flex: 1, display: "flex", flexDirection: "column", gap: 2 }}
       >
         {visible.map((tool) => {
