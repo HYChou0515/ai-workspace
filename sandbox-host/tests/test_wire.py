@@ -58,6 +58,25 @@ async def test_upload_download_roundtrip_raw_bytes(client):
     assert r.content == payload
 
 
+async def test_reading_many_paths_answers_in_order_and_nulls_what_is_absent(client):
+    """The batch read the app uses to list a whole record type in one round trip.
+
+    Binary survives the base64 hop, the answers line up with what was asked, and
+    a path that is not there is `null` — an answer about THAT path. A 404 for
+    the whole batch instead would mean one deleted file turns a listing into an
+    error page, which is the opposite of what reading them one at a time did."""
+    rid = await _create(client)
+    for path, body in (("/a.bin", b"one \x00"), ("/b.bin", b"two")):
+        await client.put(f"/sandboxes/{rid}/file", params={"path": path}, content=body)
+
+    r = await client.post(
+        f"/sandboxes/{rid}/files", json={"paths": ["/a.bin", "/nope.bin", "/b.bin"]}
+    )
+
+    assert r.status_code == 200
+    assert r.json() == {"files": ["b25lIAA=", None, "dHdv"]}
+
+
 async def test_download_missing_maps_to_file_not_found(client):
     rid = await _create(client)
     r = await client.get(f"/sandboxes/{rid}/file", params={"path": "/nope.txt"})

@@ -130,6 +130,23 @@ class _FileEntryModel(BaseModel):
     version: str = ""
 
 
+class _ReadManyRequest(BaseModel):
+    paths: list[str]
+
+
+class _ReadManyReply(BaseModel):
+    """Many files in one answer, in the order asked.
+
+    `data` is base64 because a workspace file is arbitrary bytes and this reply
+    is JSON. `None` means THAT PATH is absent — an answer about the path, not a
+    failed batch, so a caller can raise for one it demanded and skip one a
+    listing merely named. A client that does not know this endpoint reads files
+    one at a time exactly as before; nothing above the sandbox can tell which
+    happened."""
+
+    files: list[str | None]
+
+
 class _DiskUsageReply(BaseModel):
     bytes: int
 
@@ -606,6 +623,25 @@ def make_host_app(
     async def download(rid: str, path: str) -> Response:
         data = await sandbox.download(SandboxHandle(id=rid), path)
         return Response(content=data, media_type="application/octet-stream")
+
+    @app.post("/sandboxes/{rid}/files")
+    async def download_many(rid: str, body: _ReadManyRequest) -> _ReadManyReply:
+        """Read a batch of paths in one round trip.
+
+        The app reads a whole record type / listing at a time, and doing that a
+        file at a time made the round trips the cost — a 68-record listing spent
+        ~70 of them where one would do. POST because the path list is a body,
+        not a query string a proxy will truncate."""
+        import base64
+
+        handle = SandboxHandle(id=rid)
+        out: list[str | None] = []
+        for path in body.paths:
+            try:
+                out.append(base64.b64encode(await sandbox.download(handle, path)).decode())
+            except FileNotFoundError:
+                out.append(None)
+        return _ReadManyReply(files=out)
 
     @app.get("/sandboxes/{rid}/exists")
     async def exists(rid: str, path: str) -> _ExistsReply:

@@ -37,6 +37,7 @@ sandbox。
 | `POST /sandboxes/{rid}/persist` | `{delete: bool}` | `204` | rsync 工作目錄 → NFS 封存(#492) |
 | `PUT /sandboxes/{rid}/file?path=` | raw octet-stream body | `204` | 上傳 |
 | `GET /sandboxes/{rid}/file?path=` | — | `200` octet-stream | 下載 |
+| `POST /sandboxes/{rid}/files` | `{paths: [str]}` | `200 {files: [base64\|null]}` | 一次下載多個檔(#781)。順序同 `paths`;**某個路徑不存在回 `null` 而不是整批失敗** —— 那是「這個路徑沒有」的答案,呼叫端才能為它要的檔案報錯、為列表順手略過。其他錯誤照常往上拋(目錄不是「檔案不存在」)。app 端分塊送,一次上限 200 個路徑 |
 | `GET /sandboxes/{rid}/exists?path=` | — | `200 {exists: bool}` | 存在性檢查 |
 | `GET /sandboxes/{rid}/disk-usage` | — | `200 {bytes: int}` | workspace 總用量(配額) |
 | `GET /sandboxes/{rid}/size?path=` | — | `200 {size: int\|null}` | 單檔大小(配額;不存在回 `null`) |

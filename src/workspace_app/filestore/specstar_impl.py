@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import quote
@@ -40,6 +41,12 @@ from .protocol import FileExists, FileNotFound, dir_ancestors
 
 _SLASH = "∕"  # division-slash look-alike (same convention as kb/doc_id.py)
 _CHUNK = 8 * 1024 * 1024  # 8 MB — read a source file into blob parts a chunk at a time
+#: How many paths one `path in (...)` predicate may carry (#781). The bound lives
+#: here rather than in the caller because THIS is where the unbounded thing is —
+#: the statement. Bounding it upstream instead made one read resolve the
+#: workspace's liveness once per chunk. Same reason `kb/graph/link.py` bounds its
+#: own ask at 500.
+_QUERY_PATHS = 200
 
 
 logger = logging.getLogger(__name__)
@@ -166,6 +173,23 @@ class SpecstarFileStore:
 
     async def read(self, workspace_id: str, path: str) -> bytes:
         return await asyncio.to_thread(self._read_sync, workspace_id, path)
+
+    async def read_many_existing(self, workspace_id: str, paths: Sequence[str]) -> dict[str, bytes]:
+        """`path -> bytes` for the paths that exist — a missing one is simply
+        absent, so a listing can skip it without a second fetch.
+
+        The QUERY IS BOUNDED HERE, because this is where the unbounded thing is:
+        the predicate becomes one SQL `IN (...)`, and `kb/graph/link.py` bounds
+        its own at 500 after a 40,000-id one built a 937 KB statement the
+        database refused. A bound in the caller instead made a single read
+        resolve liveness once per chunk — and a sandbox reaped mid-read would
+        then answer some chunks while the durable snapshot answered the rest."""
+        found: dict[str, bytes] = {}
+        wanted = list(paths)
+        for start in range(0, len(wanted), _QUERY_PATHS):
+            chunk = wanted[start : start + _QUERY_PATHS]
+            found.update(await asyncio.to_thread(self._read_many_sync, workspace_id, chunk))
+        return found
 
     async def read_to_file(self, workspace_id: str, path: str, dest: Path) -> None:
         """Stream a file's bytes out to ``dest`` a chunk at a time (never the
@@ -384,6 +408,28 @@ class SpecstarFileStore:
         if total == 0:
             return True  # nothing to backfill — a fresh deploy is ready
         return _count(QB["path"].starts_with("/").build()) >= total
+
+    def _read_many_sync(self, workspace_id: str, paths: list[str]) -> dict[str, bytes]:
+        """`path -> bytes` for the paths that exist, in ONE query.
+
+        Scoped by `workspace_id` as well as `path`: matching on path alone would
+        hand one item's records to another item that happens to hold the same
+        name. A path with no row is simply absent from the result — the caller
+        decides whether that is an error.
+
+        No empty-`paths` guard: the only caller chunks with
+        `range(0, len(paths), _QUERY_PATHS)`, which cannot hand down an empty
+        chunk — the guard was unreachable, and unreachable code is a claim
+        nothing can check."""
+        query = (QB["workspace_id"] == workspace_id) & QB["path"].in_(paths)
+        out: dict[str, bytes] = {}
+        for row in self._files.list_resources(query.build(), returns=["data"]):
+            if not isinstance(row.data, WorkspaceFile):
+                continue  # pragma: no cover — a projection cannot appear here
+            data = self._files.restore_binary(row.data).content.data
+            assert isinstance(data, bytes)
+            out[row.data.path] = data
+        return out
 
     def _stat_all_sync(self, workspace_id: str, prefix: str) -> list[tuple[str, int]]:
         # #362: `partial` projects ONLY path + the record's inline content.size,
