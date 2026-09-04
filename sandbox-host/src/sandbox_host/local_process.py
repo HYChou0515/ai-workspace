@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import os
 import shlex
 import shutil
@@ -53,6 +54,8 @@ from .tool_cache import BUILTIN_DIR, EXT_DIR
 # remaining args are the command. Device nodes are bind-mounted onto plain
 # files (an unprivileged tmpfs is `nodev`, so nodes there can't be opened);
 # the resulting /dev files are cleaned up by `exec` afterwards.
+logger = logging.getLogger(__name__)
+
 _JAIL_BOOTSTRAP = r"""
 ROOT="$1"; shift
 mkdir -p "$ROOT/usr" "$ROOT/proc" "$ROOT/dev" "$ROOT/etc" "$ROOT/tmp" "$ROOT/root" "$ROOT/.home"
@@ -88,7 +91,10 @@ mount -t tmpfs tmpfs "$ROOT/tmp" 2>/dev/null || true
 for d in null zero full random urandom tty; do
   if [ -e "/dev/$d" ]; then : > "$ROOT/dev/$d"; mount --bind "/dev/$d" "$ROOT/dev/$d"; fi
 done
-# `python` shim selection. Two-tier:
+# `python` shim selection. Three-tier (the first was added by #775;
+# it is the one an earlier pass here forgot, which is why the count
+# is spelled out rather than left to be inferred from the branches):
+#   0. The WORKSPACE's own venv when `uv sync` built one (see below).
 #   1. If the `python-stack` venv carrier was provisioned (its prebuilt
 #      bundle bind-mounted at /.tools/python-stack with the data-science
 #      stack inside .venv/), prefer its launcher — the agent's raw
@@ -720,6 +726,12 @@ class LocalProcessSandbox:
             total -= _dir_size(path)
             shutil.rmtree(path, ignore_errors=True)
             removed.append(path.name)
+        if total > max_bytes:
+            logger.warning(
+                "uv cache is %d bytes over its ceiling and every cache left belongs to a "
+                "live sandbox — this host needs more disk, not a smaller cache",
+                total - max_bytes,
+            )
         return removed
 
     def _exec_argv(
@@ -778,8 +790,12 @@ class LocalProcessSandbox:
             # it is the one that probes, per exec, after the mounts exist. Drop
             # any inherited value so the jail can never see the server's own.
             env.pop("VIRTUAL_ENV", None)
-            # Same rule as the unjailed branch below, in the chroot's spelling:
-            # the cache lives in the sandbox's own `.home` and dies with it.
+            # ⚠️ NOT the same rule as the unjailed branch below, which keeps the
+            # cache OUTSIDE the sandbox so the item's next one re-uses it. Here
+            # `$root/<id>` IS the chroot root, so a sibling is outside the jail
+            # entirely and would need a bind-mount of its own. The jail's cache
+            # therefore dies with its sandbox — a cost, not a policy, and only
+            # `kind: local` + `isolate` pays it; production does not.
             env["UV_CACHE_DIR"] = f"/{_HOME}/.cache/uv"
             # The user-env file, in its chroot-relative spelling — the SAME file
             # the unjailed branch names below, a sibling of the `/root`

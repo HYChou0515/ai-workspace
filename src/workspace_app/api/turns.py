@@ -903,7 +903,14 @@ class ChatTurnEngine:
             # a warm failure must never fail the turn (exec would still wake it).
             if ctx.ensure_sandbox_via is not None:
                 with contextlib.suppress(Exception):
-                    await ctx.ensure_sandbox()
+                    # `prepare_env=False`: the python env is NOT prepared here.
+                    # This runs before `_run_once` attaches `on_exec_output`, so
+                    # uv's progress would go to a sink that does not exist yet —
+                    # and a successful preparation is remembered, which also
+                    # silenced the stale-lock advisory for the whole turn. It
+                    # happens on the agent's first exec instead, where the tool
+                    # card can show it (#775).
+                    await ctx.ensure_sandbox(prepare_env=False)
             async for ev in self._events(content, ctx):
                 reducer.add(ev)
                 publish(ev)

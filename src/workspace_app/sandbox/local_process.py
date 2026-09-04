@@ -74,7 +74,10 @@ mount -t tmpfs tmpfs "$ROOT/tmp" 2>/dev/null || true
 for d in null zero full random urandom tty; do
   if [ -e "/dev/$d" ]; then : > "$ROOT/dev/$d"; mount --bind "/dev/$d" "$ROOT/dev/$d"; fi
 done
-# `python` shim selection. Two-tier:
+# `python` shim selection. Three-tier (the first was added by #775;
+# it is the one an earlier pass here forgot, which is why the count
+# is spelled out rather than left to be inferred from the branches):
+#   0. The WORKSPACE's own venv when `uv sync` built one (see below).
 #   1. If the `python-stack` venv carrier was provisioned (its prebuilt
 #      bundle bind-mounted at /.tools/python-stack with the data-science
 #      stack inside .venv/), prefer its launcher — the agent's raw
@@ -741,8 +744,12 @@ class LocalProcessSandbox:
             # it is the one that probes, per exec, after the mounts exist. Drop
             # any inherited value so the jail can never see the server's own.
             env.pop("VIRTUAL_ENV", None)
-            # Same rule as the unjailed branch below, in the chroot's spelling:
-            # the cache lives in the sandbox's own `.home` and dies with it.
+            # ⚠️ NOT the same rule as the unjailed branch below, which keeps the
+            # cache OUTSIDE the sandbox so the item's next one re-uses it. Here
+            # `$root/<id>` IS the chroot root, so a sibling is outside the jail
+            # entirely and would need a bind-mount of its own. The jail's cache
+            # therefore dies with its sandbox — a cost, not a policy, and only
+            # `kind: local` + `isolate` pays it; production does not.
             env["UV_CACHE_DIR"] = f"/{_HOME}/.cache/uv"
         else:
             # No chroot: run directly in the workspace subdir. cwd is the

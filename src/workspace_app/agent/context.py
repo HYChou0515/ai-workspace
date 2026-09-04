@@ -525,7 +525,22 @@ class AgentToolContext:
     #: and treating that as done is how the failure went unseen.
     _project_env_ready: bool = False
 
-    async def ensure_sandbox(self) -> SandboxHandle:
+    async def ensure_sandbox(self, *, prepare_env: bool = True) -> SandboxHandle:
+        """Wake this context's sandbox, and by default bring its declared python
+        environment in line with the workspace's lock.
+
+        `prepare_env=False` is for the turn's PRE-WARM (`turns.py`), which runs
+        before `_run_once` attaches `ctx.on_exec_output`. Preparing there sent
+        uv's progress to a sink that did not exist yet and — because a
+        successful preparation is remembered — meant the staleness advisory,
+        which is guarded on having somewhere to say it, never ran at all that
+        turn. Both were named deliverables (#775): the tool card was supposed to
+        show the wait, and `--frozen` was accepted only in exchange for saying
+        out loud when the lock had moved on.
+
+        So the pre-warm does what it is actually for — waking the sandbox — and
+        the environment is prepared on the agent's first exec, where a tool card
+        is on screen and a failure lands on the call whose error the user sees."""
         assert self.sandbox is not None  # file/exec tools imply an RCA context
         if self.handle is None:
             if self.ensure_sandbox_via is not None:
@@ -569,7 +584,7 @@ class AgentToolContext:
         # `turns.py`; the handle stayed set, so the agent's own exec — whose
         # error the user would actually have seen — never tried again, and the
         # turn ran against an environment nobody had prepared.
-        if not self._project_env_ready:
+        if prepare_env and not self._project_env_ready:
             from .python_env import ensure_project_env
 
             await ensure_project_env(self.sandbox, self.handle, on_output=self.on_exec_output)

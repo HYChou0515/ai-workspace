@@ -1,12 +1,12 @@
 # Profile 自帶 python 環境:`uv.lock` 決定 sandbox 裡有哪些套件
 
-> **狀態**:設計定案(grill-me 九題),**P1–P13 已實作**(#775 / PR #776)。
+> **狀態**:設計定案(grill-me 九題),**P1–P27 已實作**(#775 / PR #776)。
 >
 > 實作與對抗式 review 推翻了設計/宣稱裡的**很多處**,全部就地更正。本文用 ⚠️ 同時標
 > 「被推翻的宣稱」和「要當心的代價」兩種,所以那個記號的數量不是前者的計數 —— 不要
 > 只讀這段摘要,也不要用數 ⚠️ 來代替讀它們。
 >
-> 其中**四條各自足以讓功能對使用者完全無效**:venv 建在 shim 不看的地方、shim 用
+> 其中**五條各自足以讓功能對使用者完全無效**:venv 建在 shim 不看的地方、shim 用
 > symlink 指進 venv(CPython 會解析穿過去)、`uv sync` 因為父目錄權限根本建不出 venv、
 > 以及失敗時**錯誤訊息是空的**(讀 `stdout`,而 uv 全寫在 `stderr`)。四條的共通點一樣:
 > 兩邊單元測試全綠,而**替身都和被測程式一起錯**。真因是**全 repo 沒有任何測試真的在真
@@ -40,7 +40,7 @@
    **`uv sync --frozen`**
 3. venv 建在 **infra 區**(`root/` 的兄弟目錄,跟 `.ready` / `.home` 同層),
    跟著 sandbox 一起回收
-4. uv 的下載 cache 放在 **`{sandbox.root}/.uv-cache/{uid}/`** —— 在 sandbox 目錄
+4. uv 的下載 cache 放在 **`{sandbox.root}/.uv-cache/{item_id}/`** —— 在 sandbox 目錄
    **外面**,所以撐得過閒置回收
 5. `.jailbin` 加**第三層**:有 project venv 時,`python` / `python3` 指向它,優先於
    carrier。⚠️ **指法是 wrapper script,不是 symlink —— 這條當初寫錯,而且是致命的。**
@@ -186,33 +186,20 @@ turn 中途、SSE 串流上發生的,`GATEWAY_CUT` 根本不會被問到。
 (實測 `isolate=True` 時 `exec: uv: not found`,exit 127;`isolate=False` 拿得到
 `uv 0.7.5`)。不 jail 則繼承開發者的 PATH,沒問題。
 
-### cache 先只做 per-uid,**不做共用層**
+### cache 每個 **item** 一份,**不做共用層**
 
-`{sandbox.root}/.uv-cache/{uid}/`,owner 是該 uid、mode 0700。
+`{sandbox.root}/.uv-cache/{item_id}/`,owner 是當下那個 sandbox 的 uid、mode 0700,
+每次 exec 重建擁有權(目錄屬於 item,而 uid 是每個 sandbox 配一次的)。
 
-同時滿足:各自可寫、**沒有跨 item 的寫入路徑**、撐得過閒置回收(不在被 rmtree 的樹裡)、
-撐得過換 pod(`sandbox.root` 是共享 RWX 磁碟區)。uid 由 `item_id` 雜湊而來且**穩定**,
-所以「這個 uid 專屬的目錄」天生就是 per-item 的,不需要協調。
+⚠️ **原本這一節寫的是 per-uid,而且理由是「uid 由 `item_id` 雜湊而來且穩定,所以天生就是
+per-item 的」—— 那句話對 app 端成立、對正式環境是錯的,已在下面的實作地雷區更正。**
+正式環境的 host 用 `_UidPool`(「Freed ids are reused」),`kill` 就把 uid 還回去,所以
+uid 不是身分、是租約。鍵改成 item id 之後這一節的結論不變:**不共用**。
 
-> 否決(**暫緩**)**唯讀共用 + 部署時預填**:per-uid cache 撐得過回收,所以下載是
-> **每個 item 一次**,不是每次冷啟動一次 —— 共用層最大的賣點因此縮水。它換來的是
-> 「每個 item 的第一次」比較快、磁碟不重複,代價是一個**要跟 lock 保持同步的部署步驟**。
-> 在量到那個「第一次」實際上是幾秒之前,不該為沒量過的問題付永久的代價。
-
-⚠️ **如果之後要做共用層,那一份必須是唯讀的。** 理由不是「怕有人塞假 wheel」——
-lock 把**每一個 distribution 都用 sha256 釘死**,那條路走不通。(先前這裡寫「2353 個
-sha256」,那是**本 repo 自己的** lock;這段論證講的是 **profile 的** lock,它是 690 個。
-數字取錯檔案,而且它會隨依賴變動 —— 論證不需要那個數字。)真正的路徑是 **hardlink**:uv 為了效能會把
-cache 的檔案 **hardlink** 進 venv(官方文件明說 cache 必須和 venv 同一個檔案系統,
-否則會退化成慢速複製)。所以
-
-1. item A 下載某套件,cache 檔案 owner 是 A
-2. item B 同步,**hardlink 同一個 inode** 進自己的 venv
-3. A 事後改寫那個檔案(它是 owner)
-4. **B 下次 import 執行到的是 A 寫的東西**
-
-**lock 的雜湊是安裝當下驗的,擋不住安裝之後的竄改。** 共用那份必須 owner=root、
-mode 444,誰都改不動,別名才不再是問題。
+不做共用層的理由也更新了,而且是實測不是顧慮:uv 只在**下載時**驗 wheel 的 sha256,
+之後就信任自己那份已解壓的 `archive-v0/` —— 在共享 cache 裡動過手腳的檔案會被
+**原封不動裝進另一個全新 venv,uv 一聲不吭**。`UV_LINK_MODE=copy` 只解決 hardlink
+別名(inode 由相同變獨立,也量過),解決不了汙染。
 
 ### **不暖機**
 
@@ -251,9 +238,9 @@ per-call timeout 參數 —— 它吃 backend 實例層級的 `exec_timeout`,**�
   `sandbox-host/src/sandbox_host/local_process.py`(兩個 `isolated_process.py` 是子類別,
   exec 那條直接繼承)。⚠️ 這兩份**已漂了 440 行**且**沒有**逐位元相同的守衛(不像
   `artifact.py`),所以要各改各的。漏一份就是「本機會動、線上不會」。
-  ⚠️ **「440 行」這個數字是錯的**:它數的是 `diff` 的輸出行數(含 `NNcNN` 標記與 `---`
-  分隔線),不是程式碼差異。當時的真實值是 357 行,**現在是 422 行**(227 增 / 195 刪),
-  用 `git diff --no-index --stat` 量。
+  ⚠️ **不要在這裡記行數。** 原本寫「440 行」,那數的是 `diff` 的輸出行數(含 `NNcNN`
+  標記與分隔線),不是程式碼差異;更正成 422 之後,它又過期了一次。**要看就當場量**:
+  `git diff --no-index --stat <兩份檔案>`。一個會過期的數字,比沒有數字更會誤導人。
 - ⚠️ **但「兩份」只算了檔案,沒算決策點:決定 `python` 是什麼的地方有三個。**
   每份 `local_process.py` 裡的 `_install_python_shim`(unjailed)之外,`_JAIL_BOOTSTRAP`
   是**第三個**,而且是另一種語言(shell)。第一版只改了前兩個,jail 裡的 `python` 仍是

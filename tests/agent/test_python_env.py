@@ -337,3 +337,38 @@ async def test_the_sync_gets_a_budget_of_its_own_not_the_default_one() -> None:
 
     budget = next(b for c, b in zip(sb.calls, sb.budgets, strict=True) if c == _SYNC)
     assert budget is not None and budget > 60, "the default cap is what kills a cold start"
+
+
+async def test_the_prewarm_wakes_the_sandbox_without_preparing_the_env() -> None:
+    """Two named deliverables died here, and the same line killed both.
+
+    `turns.py` pre-warms `ensure_sandbox()` BEFORE `_run_once` attaches
+    `ctx.on_exec_output`, so at that moment the sink is None — and because a
+    successful preparation sets `_project_env_ready`, it never runs again that
+    turn. The consequences:
+
+    * the `ToolLog` progress the design promised ("準備過程串進當下那張工具卡")
+      goes nowhere, so a cold start is an invisible stall;
+    * `uv lock --check` is guarded by `if on_output is None: return`, so it is
+      NEVER RUN — and that advisory is the entire thing `--frozen` was accepted
+      in exchange for ("不擋他,但不騙他").
+
+    The pre-warm still wakes the sandbox: that is what it is for, and it is
+    worth doing early. Preparing the environment is not, because there is
+    nobody to tell. It moves to the agent's first exec, where a tool card is on
+    screen and a failure lands on the call whose error the user would see.
+    """
+    sb = _Recording(present={"pyproject.toml"})
+    ctx = AgentToolContext(sandbox=sb)  # ty: ignore[invalid-argument-type]
+
+    await ctx.ensure_sandbox(prepare_env=False)
+    assert sb.calls == [], "the pre-warm has nowhere to report; it must not sync"
+
+    seen: list[bytes] = []
+    ctx.on_exec_output = seen.append
+    await ctx.ensure_sandbox()
+
+    assert _SYNC in sb.calls, "the first exec prepares it, with somewhere to report"
+    assert ["uv", "lock", "--check"] in sb.calls, (
+        "and the staleness advisory finally runs — it is what `--frozen` was traded for"
+    )
