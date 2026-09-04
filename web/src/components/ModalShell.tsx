@@ -63,13 +63,38 @@ export function ModalShell({
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
 
+  /**
+   * Is this the layer a keystroke belongs to? (#779)
+   *
+   * More than one of these can be mounted at once — the workspace has both the
+   * Edit-details modal and the ⌘P palette, and ⌘P is a global keydown that
+   * fires while a modal is open — and a confirm can open on top of any of them.
+   * All of these listen on `document`, where `stopPropagation` does NOT stop a
+   * sibling listener on the same node; only the topmost may act.
+   *
+   * "Later in the DOM = higher layer" holds because nothing here portals: the
+   * provider renders children first and the confirm after, and every modal
+   * renders in place. A `createPortal` to document.body would land after both
+   * and break the ordering — if one ever appears, this needs a real z-index
+   * comparison instead.
+   */
+  const isTopmost = () => {
+    const panel = panelRef.current;
+    if (!panel) return false;
+    const modals = document.querySelectorAll('[role="dialog"][aria-modal="true"]');
+    return modals.length === 0 || modals[modals.length - 1] === panel;
+  };
+
   useEffect(() => {
     if (!closeOnEscape) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        onClose();
-      }
+      // Gated the same way Tab is. Without this, Escape aimed at the palette
+      // above also reached the form below — and for a form with unsaved work
+      // that is not a stray close any more, it is a "discard your edits?"
+      // prompt raised by a keystroke the user never pointed at it.
+      if (e.key !== "Escape" || !isTopmost()) return;
+      e.stopPropagation();
+      onClose();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
@@ -95,22 +120,11 @@ export function ModalShell({
       (focusables()[0] ?? panel).focus();
     }
 
-    // Only the topmost modal traps Tab (#779). Something can open ON TOP of this
-    // panel — the confirm this modal itself raises when it holds unsaved work —
-    // and that layer's buttons live outside this panel. A trap that keeps
-    // yanking focus home makes them unreachable, so the prompt asking "discard?"
-    // could only be answered with a mouse.
-    //
-    // "Later in the DOM = higher layer" holds because nothing here portals: the
-    // provider renders children first and the confirm after, and every modal
-    // renders in place. A `createPortal` to document.body would land after both
-    // and break the ordering — if one ever appears, this needs a real z-index
-    // comparison instead.
-    const isTopmost = () => {
-      const modals = document.querySelectorAll('[role="dialog"][aria-modal="true"]');
-      return modals.length === 0 || modals[modals.length - 1] === panel;
-    };
-
+    // Only the topmost modal traps Tab (#779) — see isTopmost above. The confirm
+    // this modal raises for unsaved work sits on top with its buttons OUTSIDE
+    // this panel, and a trap that keeps yanking focus home makes them
+    // unreachable: the prompt asking "discard?" could only be answered with a
+    // mouse.
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Tab" || !isTopmost()) return;
       const els = focusables();

@@ -134,4 +134,28 @@ describe("<DialogProvider /> / useDialog", () => {
     expect(await screen.findByText("Save changes?")).toBeInTheDocument();
     expect(onResult).not.toHaveBeenCalled();
   });
+
+  it("gives focus back to whatever had it when the prompt closes", async () => {
+    // APG: a dialog returns focus to the element that had it. ModalShell already
+    // does (restoreTo on cleanup); this did not. Choosing "keep editing" left
+    // the modal open as promised but dropped the caret to <body>, so the next
+    // keystroke went nowhere and Tab restarted from the panel's first control
+    // instead of the field being typed in.
+    const user = userEvent.setup();
+    render(
+      <DialogProvider>
+        <EnterHarness onResult={() => {}} />
+      </DialogProvider>,
+    );
+    const field = screen.getByRole("textbox");
+
+    await user.click(field);
+    await user.keyboard("name{Enter}");
+    await screen.findByText("Save changes?");
+    expect(document.activeElement).not.toBe(field);
+
+    await user.click(screen.getByTestId("dialog-action-save"));
+
+    expect(document.activeElement).toBe(field);
+  });
 });

@@ -140,4 +140,30 @@ describe("ModalShell", () => {
     fireEvent.keyDown(first, { key: "Tab", shiftKey: true });
     expect(last).toHaveFocus();
   });
+
+  // #779: two modals can be open at once (the workspace renders EditItemModal
+  // and the ⌘P palette, and ⌘P is a global keydown that fires while a modal is
+  // up). Escape aimed at the top one must not also reach the one underneath —
+  // for a modal holding unsaved work that turns a keystroke meant for the
+  // palette into a "discard your edits?" prompt, which a reflex answers
+  // destructively.
+  it("ignores Escape when it is not the topmost modal", () => {
+    const underneath = vi.fn();
+    const topmost = vi.fn();
+    render(
+      <>
+        <ModalShell onClose={underneath} ariaLabel="under">
+          <p>under</p>
+        </ModalShell>
+        <ModalShell onClose={topmost} ariaLabel="over">
+          <p>over</p>
+        </ModalShell>
+      </>,
+    );
+
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    expect(topmost).toHaveBeenCalledOnce();
+    expect(underneath).not.toHaveBeenCalled();
+  });
 });

@@ -106,23 +106,71 @@ describe("#779 — modal dismissal has one owner", () => {
   // exit has to go through the same handler, including the ones the modal draws
   // itself.
   it("has no close button bypassing the guard in a modal that has one", () => {
-    const RAW_CLOSE = /onClick=\{(onClose|close)\}|onClick=\{\(\)\s*=>\s*(onClose|close)\(\)\}/;
+    // Scans the BODY of each onClick, brace-matched, not one line at a time.
+    // Round 1 found five buttons bypassing the guard; the single-line version
+    // written to stop that recurring then missed a sixth in a file it already
+    // scanned — `onClick={() => { onSelect(id); onClose(); }}` spans lines and
+    // calls rather than binds. A guard for "people keep writing X" has to cover
+    // how X is actually written, not the one spelling that prompted it.
+    //
+    // Only onClick bodies: an `onClose()` at the end of a save handler is the
+    // success path, where there is nothing left to lose.
+    const bodies = (text: string): { body: string; line: number }[] => {
+      const out: { body: string; line: number }[] = [];
+      const re = /onClick=\{/g;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(text))) {
+        let depth = 1;
+        let i = m.index + m[0].length;
+        for (; i < text.length && depth > 0; i++) {
+          if (text[i] === "{") depth++;
+          else if (text[i] === "}") depth--;
+        }
+        out.push({
+          body: text.slice(m.index, i),
+          line: text.slice(0, m.index).split("\n").length,
+        });
+      }
+      return out;
+    };
+    const CLOSES = /onClick=\{(onClose|close)\}|(?<![.\w])(onClose|close)\(\)/;
 
     const offenders: string[] = [];
     for (const f of files) {
       if (!f.text.includes("useDirtyClose(")) continue;
       const lines = f.text.split("\n");
-      lines.forEach((line, i) => {
-        if (!RAW_CLOSE.test(line)) return;
-        // An exemption must be written down, right above the line, with a
-        // reason — a legitimate one exists (a branch rendered only after a
-        // successful submit has nothing left to lose), so the rule needs a door
-        // rather than an exception list somewhere else.
-        const preamble = lines.slice(Math.max(0, i - 3), i).join("\n");
-        if (!preamble.includes("dirty-close-exempt")) {
-          offenders.push(`${f.path}:${i + 1}`);
+      for (const { body, line } of bodies(f.text)) {
+        if (!CLOSES.test(body)) continue;
+        // An exemption must be written down immediately above, with a reason —
+        // legitimate ones exist (a branch rendered only after a successful
+        // submit; a handover that opens the record elsewhere) — so the rule
+        // needs a door rather than an exception list kept somewhere else.
+        //
+        // Walk up through the contiguous comment block rather than a fixed
+        // number of lines: a reason worth writing is often longer than the
+        // window, and a guard that rejects a well-explained exemption for being
+        // too well explained teaches people to write shorter reasons.
+        let cursor = line - 1;
+        let exempt = false;
+        while (cursor > 0) {
+          const text = lines[cursor - 1]?.trim() ?? "";
+          // JSX comments ({/* … */}) count too — inside JSX that is the only
+          // form available, and two of the exemptions live there.
+          const isComment =
+            text.startsWith("//") ||
+            text.startsWith("/*") ||
+            text.startsWith("*") ||
+            text.startsWith("{/*") ||
+            text.endsWith("*/}");
+          if (!isComment) break;
+          if (text.includes("dirty-close-exempt")) {
+            exempt = true;
+            break;
+          }
+          cursor--;
         }
-      });
+        if (!exempt) offenders.push(`${f.path}:${line}`);
+      }
     }
 
     expect(offenders).toEqual([]);

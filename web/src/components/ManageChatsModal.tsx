@@ -136,6 +136,12 @@ function ChatRow({
             <button
               type="button"
               data-testid={`manage-switch-${id}`}
+              // dirty-close-exempt: `onClose` here IS the parent's attemptClose
+              // (see where ChatRow is rendered) — the guard reads names, not
+              // wiring, so it cannot tell. Switching selects first and then asks;
+              // choosing "keep editing" leaves the modal open on the newly
+              // selected chat, which is recoverable, while the rename draft the
+              // prompt is about is not.
               onClick={() => {
                 onSelect(id);
                 onClose();
@@ -239,7 +245,9 @@ export function ManageChatsModal({
                 chat={chat}
                 active={chat.chat_id === activeChatId}
                 onSelect={onSelect}
-                onClose={onClose}
+                // The guarded one: Switch closes the modal from inside the row,
+                // and a rename in progress must be asked about there too.
+                onClose={attemptClose}
                 onRename={onRename}
                 onDelete={onDelete}
                 onEditingChange={(on) =>

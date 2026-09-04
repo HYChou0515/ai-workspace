@@ -35,6 +35,28 @@ function canonical(value: unknown): string {
   }
   if (Array.isArray(value)) return `[${value.map(canonical).sort().join(",")}]`;
   if (value && typeof value === "object") {
+    // A plain-object walk reproduces the very bug this file exists to fix:
+    // `Object.entries(new Date())` is `[]`, so every Date — and URL, RegExp, any
+    // class instance without own enumerable properties — would canonicalise to
+    // `{}` and compare equal to each other and to `{}`. Nothing here holds one
+    // today, but this is the project's dirty comparator now, and the first modal
+    // to snapshot a date field would read every change as unchanged and close
+    // without asking.
+    //
+    // Anything carrying its own primitive identity is compared by that. What
+    // remains — an unrecognised class instance — THROWS rather than silently
+    // collapsing: a loud failure at the call site is recoverable, a modal that
+    // quietly stops noticing edits is not.
+    const proto = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype && proto !== null) {
+      if (value instanceof Date) return `Date(${value.getTime()})`;
+      if (value instanceof RegExp) return `RegExp(${String(value)})`;
+      if (value instanceof URL) return `URL(${value.href})`;
+      throw new Error(
+        `sameShape: no canonical form for ${value.constructor?.name ?? "this object"} — ` +
+          "add one rather than letting it compare equal to everything else.",
+      );
+    }
     const entries = Object.entries(value as Record<string, unknown>)
       .map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`)
       .sort();

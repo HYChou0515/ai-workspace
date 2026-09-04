@@ -102,6 +102,10 @@ export function EntityRecordModal({
             className="btn"
             data-variant="ghost"
             data-size="sm"
+            // dirty-close-exempt: a handover, not an exit — the record opens in
+            // a file tab, so the work continues there rather than being dropped.
+            // The button is hidden while editing (`!editing` above), so there is
+            // never an unsaved form behind this click.
             onClick={() => {
               openFile(path);
               // Hand over rather than stack: the file tab now shows this record,

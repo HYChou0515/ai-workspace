@@ -294,6 +294,9 @@ export function EnvVarsModal({
                     key={group.key}
                     testId={`env-tool-${group.key}`}
                     selected={group.key === shownGroup.key}
+                    // dirty-close-exempt: this `close` is the Popover's, not the
+                    // modal's — a name collision, not a bypass. Picking a tool
+                    // shuts the popover and leaves the modal exactly where it was.
                     onClick={() => {
                       setPicked(group.key);
                       close();

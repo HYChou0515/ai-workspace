@@ -77,7 +77,12 @@ export function CommandPalette({
       align="top"
       width={560}
       maxWidth="92vw"
-      zIndex={200}
+      // The scale, not a number. This was a hand-written 200 before the move to
+      // ModalShell — above --z-dialog (150), so a confirm raised over the
+      // palette would have painted UNDERNEATH it, and equal to --z-splash, which
+      // tokens.css says to keep clear of. Nothing broke because the palette also
+      // happens to be last in the DOM; that is luck, not a reason.
+      zIndex="var(--z-modal)"
       panelStyle={{
         maxHeight: "60vh",
         background: "var(--white)",

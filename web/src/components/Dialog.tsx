@@ -58,7 +58,14 @@ export function DialogProvider({ children }: { children: React.ReactNode }) {
     // freshly-focused action — the dialog answers itself before anyone reads it.
     // Focusing the container puts focus inside the prompt (so Tab reaches the
     // actions and it is answerable by keyboard) without arming anything.
+    const restoreTo = document.activeElement as HTMLElement | null;
     panelRef.current?.focus();
+    // And hand it back on close, as APG requires and as ModalShell already did.
+    // Without this, "keep editing" kept the modal open exactly as promised but
+    // left the caret on <body> — the next keystroke went nowhere, and Tab
+    // restarted from the panel's first control instead of the field being typed
+    // in. A prompt that costs you your place is one people avoid raising.
+    return () => restoreTo?.focus?.();
   }, [opts]);
 
   // While a confirm is up it is the TOP layer, so Escape is its alone (#779).

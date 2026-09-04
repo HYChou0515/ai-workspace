@@ -48,4 +48,27 @@ describe("sameShape (dirty comparison for modal exits, #779)", () => {
     // no change and the modal would close without asking.
     expect(sameShape(["a", "b"], ["b", "a"])).toBe(true);
   });
+
+  it("sees a Date change — Object.entries(new Date()) is [], the Set bug again", () => {
+    // This comparator was written because JSON.stringify renders every Set as
+    // {}. A plain object walk reproduces that for every class instance with no
+    // own enumerable properties: Date, URL, RegExp. No caller holds one today,
+    // but this is now the project's dirty comparator, and the first modal to
+    // snapshot a date field would read every change as unchanged and close
+    // without asking — silent loss, the direction that matters.
+    expect(sameShape(new Date(1), new Date(2))).toBe(false);
+    expect(sameShape(new Date(1), new Date(1))).toBe(true);
+    expect(sameShape(new Date(0), {})).toBe(false);
+    expect(sameShape(/a/, /b/)).toBe(false);
+  });
+
+  it("refuses an unknown class instance instead of comparing it equal to everything", () => {
+    class Money {
+      constructor(readonly cents: number) {}
+    }
+    // Loud beats silent: a call site that hands this an unhandled type finds out
+    // at once, rather than getting a modal that has quietly stopped noticing
+    // edits to that field.
+    expect(() => sameShape(new Money(1), new Money(2))).toThrow(/no canonical form/);
+  });
 });

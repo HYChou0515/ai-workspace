@@ -2189,6 +2189,9 @@ export function TabContextMenu({
   const item = (label: string, fn: () => void) => (
     <button
       type="button"
+      // dirty-close-exempt: a dropdown MENU item closing its own menu. This
+      // `onClose` belongs to the menu, not to the guarded EditItemModal that
+      // also lives in this file.
       onClick={() => {
         fn();
         onClose();
@@ -2386,6 +2389,9 @@ function DirBrowser({
         <button
           key={e.path}
           type="button"
+          // dirty-close-exempt: this `close` belongs to the file PICKER — opening
+          // the chosen file is what the picker is for, and it holds nothing the
+          // user typed.
           onClick={() => {
             if (e.isDir) {
               setDir(e.path);
@@ -2612,6 +2618,8 @@ function TabClose({ path, onClose }: { path: string; onClose: () => void }) {
   return (
     <button
       type="button"
+      // dirty-close-exempt: a tab's ✕. Its `onClose` closes the TAB, and that
+      // path already has its own save-on-close prompt (see closeTab).
       onClick={(e) => {
         e.stopPropagation();
         onClose();
