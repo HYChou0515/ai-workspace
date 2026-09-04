@@ -1678,13 +1678,33 @@ function HistorySidebar({
 /* ----------------------------- Members sidebar ----------------------------- */
 
 /** The roster panel in its sidebar frame. The list + access management live in
- * the shared {@link ItemMembersPanel} — the top bar's popover renders the very
- * same component, so the two can never disagree about who is on the item or what
- * they may do. */
+ * the shared {@link ItemMembersPanel}.
+ *
+ * The top bar no longer renders a popover of the same component — its access
+ * chip opens {@link ItemAccessDialog} instead, and the roster lives only here.
+ * (The old comment still claimed the popover; going looking for a second copy
+ * of this bug on the strength of it cost a detour.) */
 function MembersSidebar({ manifest, item }: { manifest: AppManifest; item: AppItem }) {
+  const label = manifest.labels?.members ?? "Members";
   return (
     <aside style={sidebarStyle}>
-      <ItemMembersPanel manifest={manifest} item={item} />
+      {/* The frame is `overflow: hidden` (see `sidebarStyle`), so the roster
+          needs a body that scrolls or a long one is CLIPPED — the names past the
+          bottom unreachable rather than merely out of view. Every other rail tab
+          already had this; this one did not.
+          `tabIndex`/`role` because a roster of plain people contains nothing
+          focusable (`UserChip` is a <span>), and a scroll region a keyboard
+          cannot reach is one a keyboard cannot scroll (WCAG 2.1.1). */}
+      <div
+        data-testid="members-scroll"
+        className="scrollable"
+        tabIndex={0}
+        role="region"
+        aria-label={label}
+        style={{ flex: 1, minHeight: 0, overflowY: "auto" }}
+      >
+        <ItemMembersPanel manifest={manifest} item={item} />
+      </div>
     </aside>
   );
 }
@@ -2372,7 +2392,7 @@ function DirBrowser({
   const [dir, setDir] = useState(startDir);
   const entries = useMemo(() => dirChildren(paths, dir), [paths, dir]);
   return (
-    <div style={{ minWidth: 220, maxHeight: 320, overflowY: "auto" }}>
+    <div className="scrollable" style={{ minWidth: 220, maxHeight: 320, overflowY: "auto" }}>
       {dir && (
         <button
           type="button"

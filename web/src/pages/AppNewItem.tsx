@@ -107,7 +107,7 @@ export function AppNewItem() {
           </div>
 
           {/* Body (scrolls) */}
-          <div style={{ padding: "20px 22px", overflow: "auto" }}>
+          <div className="scrollable" style={{ padding: "20px 22px", overflow: "auto" }}>
             <ItemForm
               manifest={manifest}
               profiles={manifest.profiles}
