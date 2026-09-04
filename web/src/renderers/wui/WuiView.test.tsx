@@ -721,6 +721,62 @@ describe("WuiView: rebuilding a page when it is opened", () => {
     expect(log.textContent).not.toContain("[32m");
   });
 
+  it("does not show a page it is about to replace", async () => {
+    // Found by recording a demo. Opening a page and building it at the same
+    // time makes the page's own reads race the sandbox restore the build
+    // triggers: `app.js` and `style.css` come back missing for a moment, so the
+    // frame renders unstyled and inert, with three red lines under a log that
+    // is still working. Seconds later the build finishes and it all comes
+    // right — which is exactly why nobody should be shown the first version.
+    const { release } = (() => {
+      let go: () => void = () => {};
+      const gate = new Promise<void>((r) => (go = r));
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => {
+          const encode = new TextEncoder();
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              async start(c) {
+                c.enqueue(encode.encode(sse({ type: "output", text: "npm pack chart.js" })));
+                await gate;
+                c.enqueue(encode.encode(sse({ type: "done", exit_code: 0 })));
+                c.close();
+              },
+            }),
+            { status: 200, headers: { "content-type": "text/event-stream" } },
+          );
+        }),
+      );
+      return { release: () => go() };
+    })();
+    // The document reads perfectly well — this is not the missing-dist case.
+    renderIn({ ...BUILT });
+
+    await screen.findByText(/npm pack/);
+    expect(document.querySelector("iframe")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(/building/i);
+
+    release();
+    await waitFor(() => expect(document.querySelector("iframe")).toBeInTheDocument());
+  });
+
+  it("keeps the toolbar short and explains on hover", async () => {
+    // The pane is a strip above somebody's page; a sentence in it is a sentence
+    // taken from the page. The short form stays readable next to Rebuild
+    // ("Rebuild … on open") and the whole explanation is one hover away.
+    setWuiAutoBuild(autoBuildScope("item1", "/sales"), false);
+    serveBuild(sse({ type: "done", exit_code: 0 }));
+    renderIn({ ...BUILT });
+
+    const toggle = await screen.findByLabelText(/rebuild when i open this/i);
+    expect(toggle.closest("label")).toHaveAttribute(
+      "title",
+      expect.stringMatching(/rebuild this page whenever you open it/i),
+    );
+    expect(toggle.closest("label")).toHaveTextContent(/^on open$/);
+  });
+
   it("lets the viewer turn it off from the pane", async () => {
     // The user's own choice, in front of them — not a hidden default.
     serveBuild(sse({ type: "done", exit_code: 0 }));

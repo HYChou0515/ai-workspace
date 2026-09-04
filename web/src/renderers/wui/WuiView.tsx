@@ -148,6 +148,17 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
    * asks for it. */
   const [buildLog, setBuildLog] = useState<string[] | null>(null);
   const [building, setBuilding] = useState(false);
+  /** True while the build this pane started ON OPEN is still running.
+   *
+   * Opening a page and building it at once makes the page's own reads race the
+   * sandbox restore the build triggers: for a moment `app.js` and `style.css`
+   * come back missing, so nothing is inlined and the frame renders unstyled and
+   * inert under three red lines. It comes right when the build finishes and the
+   * folder is re-read — which is the reason not to show the first version at
+   * all. (The race itself is older and wider than this pane: `files/facade.py`'s
+   * `_warm` routes reads to a sandbox that merely EXISTS, without asking
+   * `is_ready`, so any read during a restore can answer "not there".) */
+  const [firstBuild, setFirstBuild] = useState(false);
   const logRef = useRef<HTMLDivElement | null>(null);
   const [autoBuild, setAutoBuild] = useWuiAutoBuild(autoBuildScope(fs.scopeId, folder));
   /** The page this pane has already rebuilt on open, so that "when I open this"
@@ -267,6 +278,7 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
   const runBuild = async ({ automatic = false } = {}) => {
     if (!slug) return;
     setBuilding(true);
+    if (automatic) setFirstBuild(true);
     setBuildLog([]);
     try {
       for await (const event of itemBuild(slug, fs.scopeId)(folder)) {
@@ -293,6 +305,7 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
       }
     } finally {
       setBuilding(false);
+      setFirstBuild(false);
     }
   };
 
@@ -346,6 +359,7 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
               {building ? "Building…" : "Rebuild"}
             </Btn>
             <label
+              title="Rebuild this page whenever you open it"
               style={{
                 display: "inline-flex",
                 alignItems: "center",
@@ -356,10 +370,15 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
             >
               <input
                 type="checkbox"
+                // Short on screen, whole sentence on hover — and the whole
+                // sentence is the accessible name, so nobody depends on the
+                // hover to know what it does. The strip sits above someone
+                // else's page: a sentence here is a sentence taken from them.
+                aria-label="Rebuild when I open this"
                 checked={autoBuild}
                 onChange={(e) => setAutoBuild(e.target.checked)}
               />
-              Rebuild when I open this
+              on open
             </label>
           </>
         )}
@@ -416,6 +435,14 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
       )}
       {built.isPending ? (
         <div style={{ padding: 12, color: "var(--text-paper-d)" }}>Opening…</div>
+      ) : firstBuild ? (
+        // Whatever the folder holds right now is about to be replaced by what
+        // the build produces, and mid-restore it may not even read correctly —
+        // so this waits rather than showing a page with a shelf life of
+        // seconds.
+        <div role="status" style={{ padding: 12, color: "var(--text-paper-d)" }}>
+          Building… the page appears when this finishes.
+        </div>
       ) : built.error && building ? (
         // The first open of a page nobody has built yet: `dist/` really is
         // absent, and saying so in red — under a log showing the build that is
