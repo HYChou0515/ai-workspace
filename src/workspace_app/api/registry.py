@@ -20,6 +20,7 @@ from typing import Protocol
 
 from ..quota.limits import ResourceLimits
 from ..sandbox.protocol import (
+    OutputSink,
     Sandbox,
     SandboxBusy,
     SandboxHandle,
@@ -68,6 +69,13 @@ class InvestigationSession:
     # Serializes sandbox creation (ensure_handle) for this investigation. Turn
     # lifecycle (the in-flight agent turn) lives in ChatTurnEngine, not here.
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    # #775: serializes preparing the item's python environment, which is a
+    # DIFFERENT resource from the handle and so gets its own lock rather than
+    # borrowing the one above. `uv sync` has a 900 s budget, and `ensure_handle`
+    # is what the file routes and the WUI call to reach a sandbox at all —
+    # sharing one lock would stall browsing an item's files behind its cold
+    # start. Nothing takes both, so there is no ordering to get wrong.
+    env_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 async def _bare_spec(_item: str) -> SandboxSpec:
@@ -525,6 +533,44 @@ class InvestigationRegistry:
         except SandboxNotFound:
             return True
         return False
+
+    async def prepare_project_env(
+        self,
+        session: InvestigationSession,
+        handle: SandboxHandle,
+        *,
+        on_output: OutputSink | None = None,
+    ) -> None:
+        """#775: bring the item's declared python environment in line with its
+        lock — ONE preparation at a time per item.
+
+        The lock is the ITEM's, and it has to be, because the thing being
+        protected is one directory (`UV_PROJECT_ENVIRONMENT`) that several
+        unrelated callers write: an agent turn, a WUI tool call, and a
+        workflow's `run:` nodes, which `wf.map` fans out eight-way over ONE
+        item by default. `AgentToolContext._wake` guards a CONTEXT, and a
+        context is built per turn — so it could not see any of the others.
+
+        Overlap is not merely duplicated work. `ensure_project_env` removes the
+        environment before it raises (a half-built venv is what the `python`
+        shim would otherwise adopt), so one caller's transient failure deletes
+        the venv the others are filling or already running against — and they
+        then fall back to the carrier and report success, which is the
+        confident wrong answer this whole design refuses.
+
+        `handle` is passed in rather than acquired here, so this never has to
+        take `session.lock` as well — the two locks stay independent and there
+        is no order between them to get wrong.
+
+        ⚠️ Per item and PER POD. Two app pods can still prepare one item's
+        environment at once on a shared root; that is the same cross-pod class
+        as #345/#366 and is not closed here. What is closed is the in-process
+        fan-out, which is where the eight-way `wf.map` lives.
+        """
+        from ..agent.python_env import ensure_project_env
+
+        async with session.env_lock:
+            await ensure_project_env(self.sandbox, handle, on_output=on_output)
 
     async def flush(self, investigation_id: str) -> None:
         """Mirror this investigation's live sandbox to the snapshot right now

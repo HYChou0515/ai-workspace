@@ -397,8 +397,18 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         ident = self._identities.pop(handle.id, None)
         if ident is not None:
             await asyncio.to_thread(self._cgroups.remove, ident.cgroup)
-            self._pool.free(ident.uid, ident.gid)
+        # The uid goes back to the pool only AFTER `super().kill()` has run
+        # `_release_cache`. While that release was unconditional the order did
+        # not matter — the cache returned to the service on the same tick — but
+        # it can now be DEFERRED (another sandbox for this item is still live),
+        # and a deferred release leaves the cache owned 0700 by a uid already
+        # back in the pool. Whoever takes that uid next could read the surviving
+        # item's downloads until its own next exec re-chowns them: the
+        # inheritance keying by ITEM was chosen to prevent, through the guard
+        # that was added to protect the same cache.
         await super().kill(handle)
+        if ident is not None:
+            self._pool.free(ident.uid, ident.gid)
 
     def _exec_argv(
         self, handle: SandboxHandle, cmd: list[str]

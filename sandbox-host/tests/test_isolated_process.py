@@ -29,7 +29,7 @@ from sandbox_host.isolated_process import (
     _setpriv_cgroup_argv,
     _UidPool,
 )
-from sandbox_host.protocol import SandboxSpec
+from sandbox_host.protocol import SandboxHandle, SandboxSpec
 
 
 @pytest.fixture
@@ -568,3 +568,47 @@ async def test_a_second_live_sandbox_for_one_item_keeps_its_cache(tmp_path) -> N
     assert (cache, os.getuid()) in released, (
         f"deferring it must not turn into never doing it: {released}"
     )
+
+
+async def test_a_uid_is_not_reusable_before_its_cache_has_been_dealt_with(tmp_path) -> None:
+    """The order matters, and the last-live guard is what made it matter.
+
+    `kill` freed the uid to the pool BEFORE `super().kill()` reached
+    `_release_cache`. That was harmless while the release was unconditional —
+    the cache went back to the service on the same tick. Now it can be
+    DEFERRED (another sandbox for the item is still live), and a deferred
+    release leaves the cache owned, 0700, by a uid that is already back in the
+    pool: whoever takes that uid next can read the surviving item's downloads
+    until its own next exec re-chowns them. That is precisely the inheritance
+    keying by ITEM was chosen to prevent.
+
+    So the uid goes back only after the cache decision has been made.
+    """
+    sandbox, released = _cache_sandbox(tmp_path)
+    winner = await sandbox.create(SandboxSpec(), item_id="item-a")
+    orphan = await sandbox.create(SandboxSpec(), item_id="item-a")
+    dying_uid = sandbox._identities[orphan.id].uid
+    order: list[str] = []
+    freed: list[int] = []
+    real_free, real_release = sandbox._pool.free, sandbox._release_cache
+
+    def _free(uid: int, gid: int) -> None:
+        order.append("free")
+        freed.append(uid)
+        real_free(uid, gid)
+
+    def _release(handle: SandboxHandle) -> None:
+        order.append("release")
+        real_release(handle)
+
+    sandbox._pool.free = _free
+    sandbox._release_cache = _release
+
+    await sandbox.kill(orphan)
+
+    assert freed == [dying_uid], f"the uid must still come back to the pool: {freed}"
+    assert order == ["release", "free"], (
+        f"but only after the cache it owns has been dealt with: {order}"
+    )
+    assert released == [], "and here the release is deferred — a sibling is still live"
+    assert winner.id in sandbox._dirs

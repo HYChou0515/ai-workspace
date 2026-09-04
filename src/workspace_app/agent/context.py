@@ -526,6 +526,21 @@ class AgentToolContext:
     #: and treating that as done is how the failure went unseen.
     _project_env_ready: bool = False
 
+    #: #775: prepare this ITEM's python environment, under the item's own lock.
+    #:
+    #: Wired by the API layer to `InvestigationRegistry.prepare_project_env`,
+    #: for the same reason `ensure_sandbox_via` exists: the thing being
+    #: protected belongs to the item, not to this context. `_wake` below is
+    #: per-context and a context is per turn, so it cannot see a workflow
+    #: `run:` node, a WUI tool call, or a second chat on the same item — and
+    #: they all write one `UV_PROJECT_ENVIRONMENT`, which a failed preparation
+    #: deletes before raising. Two locks on one directory is a guarantee that
+    #: only looks like one.
+    #:
+    #: None ⇒ not wired (tests, and any context with no registry behind it):
+    #: the preparation runs directly, exactly as it did before.
+    prepare_env_via: Callable[[SandboxHandle, OutputSink | None], Awaitable[None]] | None = None
+
     #: One wake at a time per context.
     #:
     #: Both `handle` and `_project_env_ready` are assigned only AFTER the await
@@ -543,6 +558,14 @@ class AgentToolContext:
     #: flag is written atomically. `dataclasses.replace` carries the reference,
     #: so a sub-agent working in the same workspace shares it — which is what
     #: is wanted, since it shares the sandbox the lock protects.
+    #:
+    #: ⚠️ Its reach is THIS CONTEXT, and a context is built per turn / per WUI
+    #: request. It cannot see a second chat on the same item, a workflow `run:`
+    #: node, or a WUI tool call beside a turn. That is fine for what it guards
+    #: — `create` and `provision_tools` are idempotent per item and the loser
+    #: only wastes work — but NOT for the project environment, whose failure
+    #: path deletes a directory all of them share. That one is guarded per
+    #: ITEM instead, through `prepare_env_via`; see it above.
     _wake: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False, compare=False)
 
     async def ensure_sandbox(self, *, prepare_env: bool = True) -> SandboxHandle:
@@ -606,8 +629,13 @@ class AgentToolContext:
             # error the user would actually have seen — never tried again, and the
             # turn ran against an environment nobody had prepared.
             if prepare_env and not self._project_env_ready:
-                from .python_env import ensure_project_env
+                if self.prepare_env_via is not None:
+                    await self.prepare_env_via(self.handle, self.on_exec_output)
+                else:
+                    from .python_env import ensure_project_env
 
-                await ensure_project_env(self.sandbox, self.handle, on_output=self.on_exec_output)
+                    await ensure_project_env(
+                        self.sandbox, self.handle, on_output=self.on_exec_output
+                    )
                 self._project_env_ready = True
         return self.handle

@@ -2,6 +2,7 @@ import asyncio
 import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -1750,3 +1751,61 @@ async def test_a_handle_less_session_that_is_dropped_says_so(caplog):
     assert any("no sandbox" in r.getMessage() for r in caplog.records), (
         f"dropping a session has to be visible: {[r.getMessage() for r in caplog.records]}"
     )
+
+
+async def test_preparing_the_environment_does_not_block_reaching_the_sandbox():
+    """Two resources, two locks.
+
+    The first version of `prepare_project_env` borrowed `session.lock` — the
+    one `ensure_handle` takes. That serialises the right thing and blocks the
+    wrong ones: `file_routes` and the WUI reach a sandbox through
+    `ensure_handle` too, so browsing an item's files would have stalled behind
+    its cold `uv sync`, whose budget is 900 seconds.
+
+    Nothing takes both locks, so there is no order between them to get wrong.
+    """
+    registry = InvestigationRegistry(sandbox=_CountingSandbox())
+    session = await registry.session("ws-1")
+    handle = await registry.ensure_handle(session)
+
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def slow_prepare(_sandbox, _handle, *, on_output=None):
+        started.set()
+        await release.wait()
+
+    with mock.patch("workspace_app.agent.python_env.ensure_project_env", slow_prepare):
+        preparing = asyncio.create_task(registry.prepare_project_env(session, handle))
+        await asyncio.wait_for(started.wait(), 1)
+
+        # A file route arriving at the same item while the sync runs.
+        again = await asyncio.wait_for(registry.ensure_handle(session), 1)
+
+        release.set()
+        await asyncio.wait_for(preparing, 1)
+
+    assert again == handle
+
+
+async def test_one_item_prepares_its_environment_once_at_a_time():
+    """The guarantee the lock exists for, at the registry rather than through a
+    workflow: `ensure_project_env` removes the environment before it raises, so
+    two overlapping preparations mean one caller's failure deletes what the
+    other is filling."""
+    registry = InvestigationRegistry(sandbox=_CountingSandbox())
+    session = await registry.session("ws-1")
+    handle = await registry.ensure_handle(session)
+    live = peak = 0
+
+    async def counting_prepare(_sandbox, _handle, *, on_output=None):
+        nonlocal live, peak
+        live += 1
+        peak = max(peak, live)
+        for _ in range(5):
+            await asyncio.sleep(0)
+        live -= 1
+
+    with mock.patch("workspace_app.agent.python_env.ensure_project_env", counting_prepare):
+        await asyncio.gather(*(registry.prepare_project_env(session, handle) for _ in range(8)))
+
+    assert peak == 1, f"eight callers, one item, one directory: peaked at {peak}"

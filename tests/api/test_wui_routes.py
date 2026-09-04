@@ -66,6 +66,7 @@ class _Registry:
     def __init__(self):
         self.asked: list[str] = []
         self.tools: list[dict[str, str] | None] = []
+        self.prepared: list[str] = []
 
     async def session(self, item_id: str) -> _Session:
         self.asked.append(item_id)
@@ -74,6 +75,13 @@ class _Registry:
     async def ensure_handle(self, session, *, tools=None, on_progress=None) -> SandboxHandle:
         self.tools.append(tools)
         return SandboxHandle(id="h1")
+
+    async def prepare_project_env(self, session, handle, *, on_output=None) -> None:
+        # #775: the WUI shares the item's ONE python environment with its turns,
+        # under the item's lock, exactly as it shares their sandbox. Recorded
+        # rather than ignored: a double that silently accepts anything cannot
+        # show that the route went through the registry instead of around it.
+        self.prepared.append(handle.id)
 
 
 class _Locator:
@@ -219,6 +227,13 @@ def test_shares_the_items_one_sandbox_rather_than_starting_a_second():
     client.post(URL, json={})
 
     assert registry.asked == ["i1"]
+    # #775: and its ONE python environment, prepared under the item's lock —
+    # going around that gives a WUI tool call its own `uv sync` racing whatever
+    # a turn or a workflow node on the same item is doing, in one directory
+    # whose failure path deletes it.
+    assert registry.prepared == ["h1"], (
+        f"the environment has to come from the registry too: {registry.prepared}"
+    )
 
 
 def test_mounts_the_bundles_the_item_resolved():

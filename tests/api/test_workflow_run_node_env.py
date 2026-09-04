@@ -18,6 +18,8 @@ That is precisely the outcome `ProjectEnvError` exists to refuse.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 import workspace_app.api.app as app_mod
@@ -117,3 +119,156 @@ async def test_a_run_node_in_a_workspace_that_declares_nothing_is_left_alone(mon
     await executor.run_sandbox(item_id, "echo hi", "")
 
     assert _SYNC not in sandbox.calls, f"nothing was declared; nothing to sync: {sandbox.calls}"
+
+
+class _Overlapping(_Declared):
+    """Records how many preparations are inside the sandbox AT ONCE.
+
+    The count, not the total: N nodes legitimately prepare N times (this
+    executor is app-scoped, so a remembered "prepared" would outlive the
+    sandbox it was true of). What must never happen is two of them OVERLAPPING,
+    because a failed one `rm -rf`s the shared project venv.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.live_syncs = 0
+        self.peak_syncs = 0
+
+    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None) -> ExecResult:
+        self.calls.append(list(cmd))
+        if cmd == _SYNC:
+            self.live_syncs += 1
+            self.peak_syncs = max(self.peak_syncs, self.live_syncs)
+            # A real sync is minutes of downloading, i.e. thousands of yields.
+            # ONE `sleep(0)` was not enough and made this test pass with no lock
+            # at all: the first caller's sync finished before the others got out
+            # of `ensure_handle`, so nothing ever overlapped and the assertion
+            # measured the double's timing rather than the guard.
+            for _ in range(20):
+                await asyncio.sleep(0)
+            self.live_syncs -= 1
+            return ExecResult(exit_code=0, stdout=b"")
+        await asyncio.sleep(0)
+        node = cmd[:2] == ["sh", "-lc"]
+        return ExecResult(exit_code=7 if node else 0, stdout=b"out" if node else b"")
+
+
+async def test_parallel_run_nodes_never_prepare_one_workspace_at_once(monkeypatch):
+    """`wf.map` runs a `run:` node over its elements 8-way by default
+    (`_DEFAULT_MAP_CONCURRENCY`), all on ONE item — so one
+    `UV_PROJECT_ENVIRONMENT`.
+
+    Preparing without a lock there is worse than the duplicated work it looks
+    like: `ensure_project_env` `rm -rf`s the project venv before raising, so a
+    single element's transient sync failure deletes the venv its siblings are
+    syncing into or already running against. They then fall back to the carrier
+    and report exit 0 — the confident wrong answer `ProjectEnvError` exists to
+    refuse, arriving through the commit that added it.
+
+    The lock is the ITEM's (`InvestigationSession.lock`), not the context's: an
+    agent turn and a workflow node touch the same directory, and two locks on
+    one resource is a guarantee that only looks like one.
+    """
+    sandbox = _Overlapping()
+    executor, item_id = _build(monkeypatch, sandbox)
+
+    await asyncio.gather(
+        *(executor.run_sandbox(item_id, f"python step{i}.py", "") for i in range(8))
+    )
+
+    assert sandbox.calls.count(_SYNC) == 8, "each node still prepares — that part is right"
+    assert sandbox.peak_syncs == 1, (
+        f"but never two at once in one project directory: peaked at {sandbox.peak_syncs}"
+    )
+
+
+async def test_an_unpreparable_environment_fails_the_node_not_the_run(monkeypatch):
+    """A `run:` node's failure is an EXIT CODE. `ProjectEnvError` escaping
+    `run_sandbox` leaves `run_step`'s `check:` / `retries:` loop with nothing to
+    act on, marks the whole run ERROR, and — inside a `wf.map` — leaves the
+    sibling elements running detached, because the gather has no
+    `return_exceptions`.
+
+    It is still a stop, not a degrade: the node does not run its command, and
+    uv's own words are what the operator gets.
+    """
+
+    class _Unbuildable(_Declared):
+        async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None):
+            self.calls.append(list(cmd))
+            if cmd == _SYNC:
+                return ExecResult(exit_code=2, stderr=b"error: no `uv.lock` found")
+            return ExecResult(exit_code=0, stdout=b"")
+
+    sandbox = _Unbuildable()
+    executor, item_id = _build(monkeypatch, sandbox)
+
+    exit_code, out = await executor.run_sandbox(item_id, "echo hi", "")
+
+    assert exit_code != 0, "an environment that cannot be prepared must fail the node"
+    assert "no `uv.lock` found" in out, f"with uv's own words, which is all an operator has: {out}"
+    assert not any(c[:2] == ["sh", "-lc"] for c in sandbox.calls), (
+        f"and the node's command must NOT have run: {sandbox.calls}"
+    )
+
+
+async def test_an_agent_turn_shares_the_items_preparation_lock(monkeypatch):
+    """The other half of the same resource.
+
+    `AgentToolContext._wake` guards a CONTEXT, and a context is built per turn
+    — so it cannot see a workflow `run:` node, a WUI tool call, or a second
+    chat on the same item. All of them write one `UV_PROJECT_ENVIRONMENT`, and
+    a failed preparation deletes it. Two locks on one resource is a guarantee
+    that only looks like one, so the turn's context is wired to the ITEM's lock
+    through the registry, the same one `run_sandbox` takes.
+
+    Asserted on the context the real composition root builds, not one this test
+    wires: a hook the builder forgets to set is exactly the failure mode.
+    """
+    from unittest import mock
+
+    from workspace_app.api.turn_context import TurnContextBuilder
+
+    spec = make_spec()
+    captured: dict[str, TurnContextBuilder] = {}
+    real = app_mod.TurnContextBuilder
+
+    def _capture(**kw):
+        builder = real(**kw)
+        captured["b"] = builder
+        return builder
+
+    with mock.patch.object(app_mod, "TurnContextBuilder", _capture):
+        create_app(
+            spec=spec,
+            sandbox=MockSandbox(),
+            filestore=SpecstarFileStore(spec),
+            runner=ScriptedAgentRunner([RunDone()]),
+        )
+    item_id = (
+        spec.get_resource_manager(PlaygroundItem)
+        .create(PlaygroundItem(title="t", owner="u", profile="echo"))
+        .resource_id
+    )
+
+    async def _dummy_subagent(*_a, **_k):
+        return "", []
+
+    ctx = await captured["b"].build_chat_turn(
+        item_id,
+        agent_config=None,
+        run_subagent=_dummy_subagent,
+        history_messages=[],
+        reasoning_effort=None,
+        kb_enhancements=None,
+        collection_ids=[],
+        collection_tiers=[],
+        acting_user="u",
+        speaker=None,
+    )
+
+    assert ctx.prepare_env_via is not None, (
+        "a turn that prepares the environment on its own holds a lock nothing "
+        "else on this item can see"
+    )

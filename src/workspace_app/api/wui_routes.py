@@ -309,6 +309,11 @@ def register_wui_routes(
             ensure_sandbox_via=lambda on_progress, tools: registry.ensure_handle(
                 session, tools=tools, on_progress=on_progress
             ),
+            # #775: the item's preparation lock too — this shares the item's ONE
+            # environment with its turns exactly as it shares their sandbox.
+            prepare_env_via=lambda handle, on_output: registry.prepare_project_env(
+                session, handle, on_output=on_output
+            ),
         )
         handle = await ctx.ensure_sandbox()
         result = await exec_package_command(ctx, handle, pkg, command.name, json.dumps(body.args))

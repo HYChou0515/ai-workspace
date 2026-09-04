@@ -26,7 +26,7 @@ import msgspec
 from specstar import SpecStar
 from specstar.types import ResourceIDNotFoundError
 
-from ..agent.python_env import ensure_project_env
+from ..agent.python_env import ProjectEnvError
 from ..resources import Conversation, Message
 from ..sandbox.protocol import OutputSink, Sandbox
 from ..workflow.capabilities import convert_upload, ingest_to_collection, upsert_context_card
@@ -294,7 +294,25 @@ class WorkflowExecutor:
         # the ones that do. `on_output` is the node's live stream, so uv's
         # progress and the staleness advisory land where someone is watching —
         # and not in the node's captured stdout, which is the exec's alone.
-        await ensure_project_env(self._sandbox, handle, on_output=on_output)
+        # Through the REGISTRY, which holds the item's lock: `wf.map` runs this
+        # node over its elements eight-way by default (`_DEFAULT_MAP_CONCURRENCY`)
+        # on one item, i.e. one `UV_PROJECT_ENVIRONMENT`, and a preparation that
+        # fails deletes that directory before it raises. Unserialised, one
+        # element's transient failure takes its siblings' environment with it and
+        # they carry on against the carrier reporting success.
+        try:
+            await self._registry.prepare_project_env(session, handle, on_output=on_output)
+        except ProjectEnvError as exc:
+            # A node's failure is an EXIT CODE here. Raising escapes `execute`
+            # before `run_step`'s check/retry loop can see it, marks the whole
+            # run ERROR over one node, and inside a `wf.map` leaves the sibling
+            # elements running detached (the gather has no `return_exceptions`).
+            # Still a stop, not a degrade: the command below does not run, and
+            # uv's own words are what the operator gets.
+            logger.warning(
+                "workflow_exec: item %s could not prepare its python environment", item_id
+            )
+            return 1, str(exc)
         import shlex
 
         env = f"export WF_TOKEN={shlex.quote(credential)}; " if credential else ""

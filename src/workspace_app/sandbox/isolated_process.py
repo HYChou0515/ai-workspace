@@ -378,13 +378,22 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
 
     # NOTE: no `_release_cache` override here, deliberately — see the base
     # class's hook. This backend's uid is `uid_base + xxhash(item_id) %
-    # uid_range`: a pure function of the item, identical on every pod, never
-    # freed and never handed to anyone else. There is no next tenant to protect
-    # the cache from, so handing it back would buy nothing and cost the window
-    # the host's version has to guard against (a second live sandbox for the
-    # same item losing access mid-sync). An override shipped here anyway,
-    # justified by a docstring that said this backend pools uids — which the
-    # class docstring 130 lines above flatly contradicts.
+    # uid_range`: a pure function of the item, identical on every pod, and never
+    # freed. Nothing INHERITS it when a sandbox dies, which is the whole thing
+    # the release protects against — so handing the cache back would buy nothing
+    # and cost the window the host's version has to guard (a second live sandbox
+    # for the same item losing access mid-sync).
+    #
+    # ⚠️ Not "never handed to anyone else", which an earlier version of this
+    # said: `% uid_range` can collide, and `_derive_uid`'s own docstring is the
+    # accurate statement — a collision "only lets two of OUR items share a uid
+    # (degraded isolation for that pair)". Negligible at the default 2e9 range,
+    # and stable rather than sequential, so it is not the inheritance case; but
+    # the sentence justifying a deletion should not be stronger than the code.
+    #
+    # An override shipped here anyway, justified by a docstring that said this
+    # backend pools uids — which the class docstring 130 lines above flatly
+    # contradicts.
 
     def _ensure_home(self, handle: SandboxHandle, root: Path) -> Path:
         """The base makes the dir; here it also has to be OWNED correctly.
