@@ -183,7 +183,7 @@ web/src/renderers/entity/EntityRecordModal.tsx:83:      closeOnBackdrop={!editin
 
 **Goal.** `NewCollectionModal`、`WikiCorrectionDialog`、`GroupsPage` 的 New group 改用 `ModalShell`,規則從此只有一個位置。
 
-- 順帶拿到 focus trap、focus 還原、Escape、z-index 都在同一條 scale 上 —— 這三個現在**都沒有 focus trap**(`ModalShell` 的 #467 那段它們照不到)。
+- Escape 它們三個各自都處理了,所以搬家真正拿到的是**focus trap 與 focus 還原**(`ModalShell` 的 #467 那段它們照不到 —— 三個都沒有任何 `Tab` 處理),外加 z-index 回到同一條 scale 上。三份各自寫的 Escape 監聽也一併退休。
 - `GroupsPage` 的 `modalOverlay` / `modalCard` 兩個 style 常數刪掉。
 
 **驗收.** 三個都有 focus trap 測試(Tab 在 panel 內循環);`grep -rn 'role="presentation"' web/src` 只剩 `ModalShell` 與 `Dialog`。
