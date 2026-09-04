@@ -557,20 +557,35 @@ class InvestigationRegistry:
         logger.debug("registry: mirror_warm swept, mirrored %d session(s)", len(mirrored))
         return mirrored
 
-    async def sweep_uv_cache(self, max_bytes: int | None) -> list[str]:
+    async def sweep_uv_cache(self, max_bytes: int | None, threshold: timedelta) -> list[str]:
         """#775: bound the per-item uv download caches.
 
-        Rides the idle tick because that is when a cache stops being written
-        to, and delegates to the backend, which owns the directory. The in-use
-        set comes from the live sandboxes themselves, so a cache a sync is
-        filling right now is never evicted however full the disk. Backends
-        without a persistent cache (mock, docker, http — where the HOST sweeps
-        its own) simply have no method and this is a no-op."""
+        Rides the idle tick because that is when a cache stops being written to,
+        and delegates to the backend, which owns the directory.
+
+        ⚠️ The in-use set is NOT just this pod's. `cache_keys_in_use` reads the
+        backend's own `_dirs` — one process's view — while `{sandbox.root}` is a
+        ReadWriteMany volume every replica writes to (#345). A pod that never
+        created a sandbox for item X saw X as free and deleted the cache a sync
+        on ANOTHER pod was filling, which is precisely the mistake `kill_idle`
+        four lines below already guards against with the cross-pod heartbeat.
+        So every candidate that is not locally live is checked against it too,
+        and "no heartbeat wired" means single-process, where local IS global.
+
+        Backends without a persistent cache (mock, docker, http — where the HOST
+        sweeps its own) have no method and this is a no-op."""
         sweep = getattr(self.sandbox, "sweep_uv_cache", None)
-        in_use = getattr(self.sandbox, "cache_keys_in_use", None)
-        if sweep is None or in_use is None:
+        local = getattr(self.sandbox, "cache_keys_in_use", None)
+        present = getattr(self.sandbox, "cache_keys_present", None)
+        if sweep is None or local is None or present is None:
             return []
-        return await asyncio.to_thread(sweep, in_use=in_use(), max_bytes=max_bytes)
+        in_use = set(local())
+        if self.activity is not None:
+            cutoff_ms = int((datetime.now(UTC) - threshold).timestamp() * 1000)
+            for key in await asyncio.to_thread(present) - in_use:
+                if not await self._globally_idle(key, cutoff_ms):
+                    in_use.add(key)
+        return await asyncio.to_thread(sweep, in_use=in_use, max_bytes=max_bytes)
 
     async def kill_idle(self, threshold: timedelta) -> list[str]:
         """Reap sandboxes idle past ``threshold``. #345: with a shared per-item

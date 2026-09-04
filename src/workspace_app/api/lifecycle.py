@@ -121,7 +121,14 @@ def build_lifespan(
                 # #775: and bound the per-item uv download caches on the same
                 # tick, for the same reason — a sandbox ending is when one
                 # stops being written to. Unset ceiling ⇒ no eviction.
-                await registry.sweep_uv_cache(uv_cache_max_bytes)
+                # Suppressed like the per-item resilience `kill_idle` and
+                # `mirror_warm` already have: this loop catches only
+                # CancelledError, so one raise here would stop idle reaping —
+                # and write-back, and scratch reclamation — for the pod's whole
+                # life. A cache we failed to sweep is a disk problem; a dead
+                # reaper is every problem.
+                with contextlib.suppress(Exception):
+                    await registry.sweep_uv_cache(uv_cache_max_bytes, idle_timeout)
         except asyncio.CancelledError:
             return
 

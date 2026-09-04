@@ -26,7 +26,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from .local_process import _HOME, LocalProcessSandbox
+from .local_process import _HOME, _UV_CACHE, LocalProcessSandbox
 from .protocol import EnforcedLimits, SandboxHandle, SandboxSpec
 
 # cgroup v2 cpu.max uses a fixed 100ms accounting period.
@@ -349,6 +349,20 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         0700 is what makes the key's guarantee real: a cache only the tenant
         that filled it can read is the entire argument for keeping one."""
         self._own_privately(cache, self._identities[handle.id].uid)
+
+    def _release_cache(self, handle: SandboxHandle) -> None:
+        """Hand the item's cache back to THIS SERVICE when its sandbox ends.
+
+        The cache outlives the sandbox deliberately, but `_own_cache` left it
+        owned by that sandbox's uid — and this backend hands uids back to a pool
+        on kill. Without this, the next tenant of that uid reads and writes the
+        previous item's cache: exactly the inheritance keying by item was chosen
+        to prevent, one step later. Owned by the service between sandboxes, and
+        re-chowned to the new uid the next time the item runs."""
+        cache = self._root / _UV_CACHE / self._cache_key(handle)
+        if cache.is_dir():
+            with contextlib.suppress(OSError):
+                self._own_privately(cache, os.getuid())
 
     def _ensure_home(self, handle: SandboxHandle, root: Path) -> Path:
         """The base makes the dir; here it also has to be OWNED correctly.

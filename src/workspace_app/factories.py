@@ -324,6 +324,17 @@ def get_sandbox(settings: Settings, tools_dir: Path | None = None) -> Sandbox:
                     sb.exec_timeout,
                     sb.log_timeout,
                 )
+            # #775: same shape, same rule. The per-item uv caches live on the
+            # HOST here, and this backend has no sweeper for them — the app-side
+            # ceiling would be read by nothing at all. `SANDBOX_HOST_UV_CACHE_MAX_BYTES`
+            # is the live one.
+            if sb.uv_cache_max_bytes is not None:
+                logger.warning(
+                    "sandbox.kind=http ignores sandbox.uv_cache_max_bytes/%d — the uv "
+                    "caches live in the sandbox-host service. Set "
+                    "SANDBOX_HOST_UV_CACHE_MAX_BYTES on the host instead.",
+                    sb.uv_cache_max_bytes,
+                )
 
             return HttpSandbox(
                 base_url=sb.http.base_url,

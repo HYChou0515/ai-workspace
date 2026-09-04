@@ -286,6 +286,11 @@ class _SweepingSandbox(MockSandbox):
     def cache_keys_in_use(self) -> set[str]:
         return {"live-item"}
 
+    def cache_keys_present(self) -> set[str]:
+        # The caller needs the candidates too, so it can ask the CROSS-POD
+        # heartbeat about the ones this process does not know are live.
+        return {"live-item", "gone-item"}
+
     def sweep_uv_cache(self, *, in_use: set[str], max_bytes: int | None = None) -> list[str]:
         self.swept.append((set(in_use), max_bytes))
         return []

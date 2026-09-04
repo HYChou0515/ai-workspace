@@ -78,6 +78,8 @@ spec:
             # ephemeral-storage limit — so leaving this unset trades a slow cold
             # start for a pod the kubelet may evict. Swept on the idle tick,
             # least-recently-used first, never one a live sandbox may write to.
+            # ⚠️ The sweep rides the idle reaper, so `SANDBOX_HOST_IDLE_TTL: 0`
+            # (documented as 'reaper off') switches this off with it.
             # - { name: SANDBOX_HOST_UV_CACHE_MAX_BYTES, value: "8589934592" }
           volumeMounts:
             # #492 the durable archive lives on a shared RWX (NFS) volume. It is

@@ -600,6 +600,11 @@ class LocalProcessSandbox:
 
     async def kill(self, handle: SandboxHandle) -> None:
         path = self._require(handle)
+        # #775: hand this item's uv cache back before the sandbox goes. It
+        # outlives the sandbox on purpose, but it carries that sandbox's uid —
+        # and where uids are pooled, the next tenant of that uid would be able
+        # to read and rewrite it.
+        self._release_cache(handle)
         # #366: unlink the `.ready` marker FIRST — rmtree's order is arbitrary, so
         # relying on it to remove `.ready` before the files would leave a window
         # where a racing mirror sees "ready + files half-gone" and wrongly
@@ -674,7 +679,19 @@ class LocalProcessSandbox:
         Absent (an older app, or a direct caller), the uuid still keys a cache
         nothing else can reach; it simply will not be re-used, and the sweeper
         collects it."""
-        return self._item_of.get(handle.id, handle.id)
+        key = self._item_of.get(handle.id, handle.id)
+        # Validated HERE, where the value becomes a path component. `item_id`
+        # arrives as a raw string in the POST body; the app-side twin has always
+        # run it through `_validate_sandbox_id`, and this side only checked it
+        # when an NFS archive happened to be wired. `mkdir(exist_ok=True)` then
+        # accepts an existing directory and `_own_cache` chowns it — so an
+        # unchecked `..` would have handed an arbitrary directory to the
+        # sandbox uid. Falling back to the handle keeps a bad id from taking
+        # the whole service down over something only an operator can fix.
+        if key in ("", ".", "..") or "/" in key or "\\" in key or "\x00" in key:
+            logger.warning("local_process: unsafe item id %r; caching by handle instead", key)
+            return handle.id
+        return key
 
     def _own_cache(self, handle: SandboxHandle, cache: Path) -> None:
         """Hook: the base needs no ownership work — every exec here runs as this
@@ -690,6 +707,21 @@ class LocalProcessSandbox:
         way nobody recorded, and drifting the wrong way here means deleting a
         cache out from under a running sync."""
         return {self._cache_key(SandboxHandle(id=hid)) for hid in self._dirs}
+
+    def cache_keys_present(self) -> set[str]:
+        """Every item that has a cache on disk here, live or not.
+
+        The sweep's caller needs this to ask a CROSS-POD question about each
+        candidate: `cache_keys_in_use` can only answer for this process, and on
+        a #345 shared root that is one pod's view of a directory every replica
+        writes to."""
+        cache_root = self._root / _UV_CACHE
+        if not cache_root.is_dir():
+            return set()
+        try:
+            return {p.name for p in cache_root.iterdir() if p.is_dir()}
+        except OSError:
+            return set()
 
     def sweep_uv_cache(self, *, in_use: set[str], max_bytes: int | None = None) -> list[str]:
         """Bring the uv cache under `max_bytes`, evicting least-recently-used
@@ -712,10 +744,24 @@ class LocalProcessSandbox:
         cache_root = self._root / _UV_CACHE
         if not cache_root.is_dir() or max_bytes is None:
             return []
-        caches = sorted(
-            (p for p in cache_root.iterdir() if p.is_dir()),
-            key=lambda p: p.stat().st_mtime,
-        )
+
+        # `stat` inside the sort key raises FileNotFoundError when something
+        # else removed a cache between the listing and the sort — reproducible
+        # with two sweeps overlapping in their deletion phase. The idle tick
+        # that calls this catches only CancelledError, so one raise would stop
+        # reaping for the pod's lifetime; `kill_idle` and `mirror_warm` are
+        # per-item resilient for exactly this reason. A vanished cache sorts
+        # oldest, which is also what it now is: gone.
+        def _age(path: Path) -> float:
+            try:
+                return path.stat().st_mtime
+            except OSError:
+                return 0.0
+
+        try:
+            caches = sorted((p for p in cache_root.iterdir() if p.is_dir()), key=_age)
+        except OSError:
+            return []
         total = sum(_dir_size(p) for p in caches)
         removed: list[str] = []
         for path in caches:
@@ -733,6 +779,14 @@ class LocalProcessSandbox:
                 total - max_bytes,
             )
         return removed
+
+    def _release_cache(self, handle: SandboxHandle) -> None:
+        """Hook: the base owns nothing to hand back. `IsolatedProcessSandbox`
+        overrides it, because the cache OUTLIVES the sandbox while carrying that
+        sandbox's uid — and on the host those uids are pooled and handed straight
+        back out. Left alone, the next tenant of that uid can read and rewrite
+        the previous item's cache, which is the inheritance the item key was
+        chosen to prevent, arriving one step later."""
 
     def _exec_argv(
         self, handle: SandboxHandle, cmd: list[str]
@@ -837,12 +891,31 @@ class LocalProcessSandbox:
             # sandbox re-uses what this one downloaded. NEVER keyed by uid —
             # this backend pools and recycles those.
             cache = self._root / _UV_CACHE / self._cache_key(handle)
-            cache.mkdir(parents=True, exist_ok=True)
-            # Stamp it: the sweep evicts oldest-first, and a cache getting read
-            # HITS never moves its own mtime — without this the sweep would
-            # collect exactly the caches that are earning their keep.
-            os.utime(cache, None)
-            self._own_cache(handle, cache)
+            # Degrade, never raise: `_exec_argv` runs BEFORE the try/except that
+            # turns a command's problems into an exit code, so an error here
+            # escapes `exec` as an exception and breaks its contract ("a
+            # non-zero exit is a normal result, not an error"). A cache we
+            # cannot prepare costs a re-download; a raise costs the turn.
+            try:
+                cache.mkdir(parents=True, exist_ok=True)
+                # Stamp it. The sweep evicts oldest-first, and mtime alone is not
+                # a "last used" signal: an exec that never touches uv does not
+                # move it, and writes DEEPER in the tree do not move the top dir.
+                # ⚠️ The first version of this comment also claimed a uv cache
+                # HIT never moves it — measured FALSE on both 0.7.5 and 0.12.9,
+                # where an `--offline` install does. The stamp stays for the
+                # case that does hold: an item busy doing something else must
+                # not look idle to the sweep.
+                os.utime(cache, None)
+                self._own_cache(handle, cache)
+            except OSError:
+                logger.warning(
+                    "local_process: cannot prepare the uv cache at %s; this sandbox "
+                    "will re-download instead",
+                    cache,
+                    exc_info=True,
+                )
+                cache = root / _HOME / ".cache" / "uv"
             env["UV_CACHE_DIR"] = str(cache)
             # The user-env file the tool launchers export from (same file, same
             # (Re)build + prepend the `python` shim so `python`/`python3*` route

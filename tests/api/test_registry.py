@@ -1,4 +1,5 @@
 import tempfile
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -1504,3 +1505,66 @@ async def test_close_all_carries_on_past_one_item_it_could_not_finish():
 
     assert sandbox.kill_calls == 2, "the second session was stranded by the first"
     assert registry._sessions == {}
+
+
+class _CacheSandbox(MockSandbox):
+    """A backend that owns a persistent per-item uv cache, like the local one."""
+
+    def __init__(self, *, live: set[str], present: set[str]) -> None:
+        super().__init__()
+        self._live, self._present = live, present
+        self.swept_with: set[str] | None = None
+
+    def cache_keys_in_use(self) -> set[str]:
+        return set(self._live)
+
+    def cache_keys_present(self) -> set[str]:
+        return set(self._present)
+
+    def sweep_uv_cache(self, *, in_use: set[str], max_bytes: int | None = None) -> list[str]:
+        self.swept_with = set(in_use)
+        return []
+
+
+class _Heartbeat:
+    """The cross-pod activity store, in the shape `_globally_idle` reads."""
+
+    def __init__(self, ms: dict[str, int]) -> None:
+        self._ms = ms
+
+    async def last_active_ms(self, item: str) -> int | None:
+        return self._ms.get(item)
+
+
+async def test_the_sweep_protects_a_cache_another_POD_is_filling():
+    """`cache_keys_in_use` is one PROCESS's view, and `{sandbox.root}` is a
+    ReadWriteMany volume every replica writes to (#345). A pod that never
+    created a sandbox for an item saw its cache as free and deleted it — while
+    a `uv sync` on another pod was filling it. Reproduced by review with two
+    backends on one root: `podB sweep removed: ['item-live']`.
+
+    `kill_idle`, four lines below the caller, has guarded exactly this since
+    #345/#366. The sweep now asks the same heartbeat about every candidate this
+    pod does not already know is live.
+    """
+    now_ms = int(datetime.now(UTC).timestamp() * 1000)
+    sandbox = _CacheSandbox(live=set(), present={"busy-elsewhere", "really-idle"})
+    registry = InvestigationRegistry(sandbox=sandbox)
+    registry.activity = _Heartbeat({"busy-elsewhere": now_ms})  # ty: ignore[invalid-assignment]
+
+    await registry.sweep_uv_cache(4096, timedelta(minutes=30))
+
+    assert sandbox.swept_with == {"busy-elsewhere"}, (
+        "an item live on ANOTHER pod must be protected; an idle one must not be"
+    )
+
+
+async def test_no_heartbeat_means_single_process_so_local_is_global():
+    """No activity store wired ⇒ one process ⇒ this pod's view IS the global
+    one. The same rule `_globally_idle` already states, not a second one."""
+    sandbox = _CacheSandbox(live={"mine"}, present={"mine", "other"})
+    registry = InvestigationRegistry(sandbox=sandbox)
+
+    await registry.sweep_uv_cache(4096, timedelta(minutes=30))
+
+    assert sandbox.swept_with == {"mine"}

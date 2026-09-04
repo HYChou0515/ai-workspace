@@ -324,7 +324,11 @@ async def test_a_caller_can_name_its_own_wall_clock_budget(tmp_path: Path) -> No
     assert quick.exit_code == 124, "the caller's budget must be the one that applies"
     assert b"0.4s" in quick.stderr, quick.stderr
 
-    control = await sb.exec(h, ["sleep", "0.1"])
+    # THE SAME command, with no override — the only difference that is being
+    # tested. A shorter command instead made the control vacuous: breaking the
+    # instance default outright still left this test green, because 0.1s beats
+    # any budget.
+    control = await sb.exec(h, ["sleep", "5"])
     assert control.exit_code == 0, "and without an override the instance default still rules"
 
 
@@ -378,7 +382,12 @@ async def test_the_cache_is_swept_oldest_first_and_never_out_from_under_a_live_i
     sb._exec_argv(live, ["true"])
 
     root = tmp_path / "sb" / ".uv-cache"
-    for name, age in (("old", 100), ("new", 10)):
+    # The live item's cache is the OLDEST and is NOT empty. Both matter: a
+    # first version made it newest and empty, so the eviction loop hit the
+    # ceiling and broke before ever considering it — deleting the `in_use`
+    # guard entirely left the test green. It has to be the first candidate the
+    # loop reaches, and big enough that skipping it costs the sweep something.
+    for name, age in (("live-item", 300), ("old", 100), ("new", 10)):
         d = root / name
         d.mkdir(parents=True, exist_ok=True)
         (d / "blob").write_bytes(b"x" * 4096)
@@ -389,6 +398,8 @@ async def test_the_cache_is_swept_oldest_first_and_never_out_from_under_a_live_i
     )
 
     removed = sb.sweep_uv_cache(in_use=sb.cache_keys_in_use(), max_bytes=4096)
-    assert removed == ["old"], removed
-    assert (root / "new").is_dir()
-    assert (root / "live-item").is_dir(), "a live item's cache is never collectable"
+    assert "live-item" not in removed, "a live item's cache is never collectable"
+    assert (root / "live-item").is_dir()
+    assert removed == ["old", "new"], (
+        f"and everything else goes oldest-first until the ceiling is met: {removed}"
+    )

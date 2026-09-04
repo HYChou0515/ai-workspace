@@ -234,6 +234,12 @@ per-call timeout 參數 —— 它吃 backend 實例層級的 `exec_timeout`,**�
 
 ## 實作要拆的地雷
 
+- ⚠️ **也不要在 commit 訊息裡記 pass 數,除非同時寫清楚跑了哪個子集。** 這條分支上有一次
+  差一(宣稱 1053、實測 1054),而且子集中途悄悄多了一個檔案。那些數字還跟環境綁死
+  (docker / userns / node / uv 四種 skipif),所以在別台機器上根本不是可重跑的斷言。
+- ⚠️ **宣稱「自動產生」之前,先把產生器放進 repo。** 有兩個 commit 說 shim 測試的雙胞胎是
+  產生的,而那個腳本只存在於跑它的那台機器上 —— 讀者無法查證也無法重跑。它現在在
+  `scripts/gen_host_shim_twin.py`。
 - **shim 有兩份**:`src/workspace_app/sandbox/local_process.py` 與
   `sandbox-host/src/sandbox_host/local_process.py`(兩個 `isolated_process.py` 是子類別,
   exec 那條直接繼承)。⚠️ 這兩份**已漂了 440 行**且**沒有**逐位元相同的守衛(不像

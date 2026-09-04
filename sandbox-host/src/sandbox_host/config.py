@@ -36,15 +36,15 @@ class SandboxHostSettings:
     # limit here as it does everywhere else in this repo; set a number to make
     # the reaper reclaim disk, oldest-unreferenced first.
     tool_cache_max_bytes: int | None = None
+    """#674: how much disk third-party bundles may hold. None ⇒ no ceiling,
+    and then nothing unreferenced is kept at all — with no bound, the cache
+    cannot also serve as the shelf a rollback comes off."""
     # #775: how much disk the per-item uv download caches may hold. None ⇒ no
     # ceiling, and then nothing is evicted — the same thing "unset" means for
     # every other limit here. These live on the pod's own disk, which has no
     # declared ephemeral-storage limit, so leaving this unset trades a slow cold
     # start for a pod the kubelet may evict.
     uv_cache_max_bytes: int | None = None
-    """#674: how much disk third-party bundles may hold. None ⇒ no ceiling,
-    and then nothing unreferenced is kept at all — with no bound, the cache
-    cannot also serve as the shelf a rollback comes off."""
     idle_ttl: float = 1800.0
     # #492: the durable NFS archive root. When set, a sandbox restores its
     # working dir from `{nfs_root}/{item}` on cold create and the host persists
