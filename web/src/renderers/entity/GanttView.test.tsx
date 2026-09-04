@@ -138,6 +138,43 @@ describe("GanttView", () => {
     expect(screen.getByTestId("bar-1")).toHaveAttribute("title", "2026-01-05/2026-01-11");
   });
 
+  it("keeps 'the DATES are a guess' apart from 'the LENGTH is a guess' (#785)", () => {
+    // Seen in a real browser, which is the only place it shows: the shipped
+    // Timeline carries a `schedule:` block and `exp_days` is optional, so an
+    // ordinary unsized issue is already provisional — #786 established that
+    // this is the COMMON case. Every bar on the chart wore the dashed edge, and
+    // a record with no dates looked exactly like one that simply has no
+    // estimate. That is requirement 7 not met: "visibly not specified yet" has
+    // to be visible NEXT TO the ordinary rows, not just in principle.
+    const spec = {
+      view: "gantt" as const,
+      entity: "issue",
+      span: "span",
+      label: "title",
+      schedule: { span: "span", duration: "exp_days", flag: "schedule" },
+    };
+    render(
+      <GanttView
+        {...props({
+          spec,
+          entities: [
+            rec(1, { title: "sized and dated", span: "2026-01-05/2026-01-07", exp_days: 3 }),
+            rec(2, { title: "dated, no estimate", span: "2026-01-05/2026-01-07" }),
+            rec(3, { title: "no dates at all" }),
+          ],
+        })}
+      />,
+    );
+    // Dashed says "a guess" and is worn by both of the last two.
+    expect(screen.getByTestId("bar-1")).not.toHaveAttribute("data-provisional");
+    expect(screen.getByTestId("bar-2")).toHaveAttribute("data-provisional", "true");
+    expect(screen.getByTestId("bar-3")).toHaveAttribute("data-provisional", "true");
+    // The second cue is what separates them: only the dates can be derived.
+    expect(screen.getByTestId("bar-1")).not.toHaveAttribute("data-derived");
+    expect(screen.getByTestId("bar-2")).not.toHaveAttribute("data-derived");
+    expect(screen.getByTestId("bar-3")).toHaveAttribute("data-derived", "true");
+  });
+
   it("shows a friendly note only when there are no records at all", () => {
     render(<GanttView {...props({ entities: [] })} />);
     expect(screen.getByText(/No records to chart yet/)).toBeInTheDocument();

@@ -611,11 +611,18 @@ export function GanttView({
                   // day", which was not true. The record shows as a line
                   // pressed into the seam the folded time collapsed to.
                   const width = Math.max(columns * cpx, HAIRLINE);
-                  // Dashed means "this is a guess" whichever guess it is — a
-                  // length the scheduler had to invent, or dates the chart
-                  // proposed because the record states none. One cue, because
-                  // to a reader it is one fact.
-                  const provisional = isProvisional(row.e) || row.source === "derived";
+                  // TWO cues, because there are two different guesses and
+                  // collapsing them cost the feature. Dashed says "a guess" and
+                  // covers both. But the shipped Timeline carries a `schedule:`
+                  // block while `exp_days` is optional, so an ordinary unsized
+                  // issue is provisional too — #786 established that this is the
+                  // COMMON case. Seen in a real browser, every bar on a real
+                  // project wore the dashes and a record with no dates looked
+                  // exactly like one that merely has no estimate. Requirement 7
+                  // asks for "not specified yet" to be visible NEXT TO the
+                  // ordinary rows, so the derived DATES get their own mark.
+                  const derived = row.source === "derived";
+                  const provisional = isProvisional(row.e) || derived;
                   // A provisional row keeps its colour (#786). The hollow rule
                   // this used to defer to was written when a bar had no colour
                   // of its own, and deferring to it cost far more than it was
@@ -636,6 +643,7 @@ export function GanttView({
                         title={spanValue(drawn)}
                         className="ev-gantt__bar"
                         data-provisional={provisional ? "true" : undefined}
+                        data-derived={derived ? "true" : undefined}
                         data-empty={columns === 0 ? "true" : undefined}
                         data-busy={busy ? "1" : undefined}
                         onPointerDown={(e) => startDrag(row.e.number, "move", e)}
