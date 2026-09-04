@@ -19,16 +19,23 @@ from workspace_app.sandbox.protocol import SandboxHandle, SandboxSpec
 
 
 class _CountingSandbox(MockSandbox):
-    """Counts what a read costs: single downloads, and batched ones."""
+    """Counts what a read costs: single downloads, batched ones, and the
+    per-operation liveness probe."""
 
     def __init__(self) -> None:
         super().__init__()
         self.downloads = 0
         self.batches = 0
+        self.liveness_probes = 0
 
     async def download(self, handle: SandboxHandle, remote_path: str) -> bytes:
         self.downloads += 1
         return await super().download(handle, remote_path)
+
+    async def exists(self, handle: SandboxHandle, path: str) -> bool:
+        if path == "/":
+            self.liveness_probes += 1
+        return await super().exists(handle, path)
 
 
 class _BatchingSandbox(_CountingSandbox):
@@ -117,6 +124,63 @@ async def test_neither_lane_asks_for_everything_at_once() -> None:
     assert len(got) == 450
     assert store.asks and max(store.asks) <= WorkspaceFiles._BATCH_PATHS, (
         f"largest ask was {max(store.asks)} paths, over the {WorkspaceFiles._BATCH_PATHS} bound"
+    )
+
+
+async def test_the_bound_holds_for_a_caller_handed_the_raw_store() -> None:
+    """`discover_catalog` is handed the durable store itself, not the facade
+    (`api/turn_context.py` → `create_app`'s filestore), so a bound that lived
+    only on the facade was not on the path that call takes — the batch it builds
+    is a SQL `IN`, which is precisely the ask that needs bounding."""
+    store = _ChunkRecordingStore()
+    paths = [f"/r/{i}.md" for i in range(450)]
+    for path in paths:
+        await store.write("ws1", path, b"x")
+
+    got = await read_all(store, "ws1", paths)  # the RAW store, no facade
+
+    assert len(got) == 450
+    assert store.asks and max(store.asks) <= WorkspaceFiles._BATCH_PATHS, (
+        f"largest ask was {max(store.asks)} paths, over the {WorkspaceFiles._BATCH_PATHS} bound"
+    )
+
+
+async def test_reading_nothing_costs_nothing() -> None:
+    """An empty listing must not resolve liveness at all.
+
+    `read_many` resolved it BEFORE looking at the paths, so an item with no
+    skills and no sub-agents paid an extra probe — on every turn, since both
+    indexes are rebuilt per message. The scaling tests could not see it: they
+    assert "the cost for 2 equals the cost for 20", which stays true while the
+    constant goes from one to two."""
+    sb = _CountingSandbox()
+    files = await _files(sb)
+    sb.liveness_probes = 0
+
+    assert await read_all(files, "ws1", []) == []
+    assert await read_all_existing(files, "ws1", []) == {}
+
+    assert sb.liveness_probes == 0, f"{sb.liveness_probes} liveness probes to read no files at all"
+
+
+async def test_one_vanished_file_does_not_re_fetch_the_whole_listing() -> None:
+    """The tolerant read must pay for the miss, not for the listing.
+
+    Letting the batch raise and then re-reading every path singly turns one
+    deleted file into a second full fetch — worse than the per-file loop this
+    replaced, on the exact path a listing takes. The sandbox already says WHICH
+    path was absent; throwing that away is what cost the re-read."""
+    sb = _BatchingSandbox()
+    files = await _files(sb)
+    paths = [f"/r/{i}.md" for i in range(10)]
+    sb.downloads = sb.batches = sb.liveness_probes = 0
+
+    got = await read_all_existing(files, "ws1", [*paths, "/r/gone.md"])
+
+    assert set(got) == set(paths)
+    assert (sb.batches, sb.downloads) == (1, 0), (
+        f"{sb.batches} batches + {sb.downloads} single downloads — the miss made "
+        "it fetch everything again"
     )
 
 
