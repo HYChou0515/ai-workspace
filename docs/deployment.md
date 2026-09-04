@@ -587,6 +587,144 @@ RCA 的 system prompt 是純 markdown，存在
   中斷。全新安裝不受影響(沒有舊列時 `readyz` 一開始就是綠的)。完整說明見
   [資料遷移](migrations.md) §8。
 
+### 上下文窗口與自動壓縮:誰決定、怎麼確認、什麼時候才需要你出手
+
+一個對話能塞多少、什麼時候會自動壓縮,全部由**端點的 context 窗口**決定。這個數字
+**不是設定出來的,是解出來的** —— 依序問五個地方,第一個答得出來的就算:
+
+| 順位 | 來源 | 適用 |
+|---|---|---|
+| 1 | `history.context_limit`(你設的) | 逃生口,永遠最大 |
+| 2 | 從流量學到的 | 端點拒絕時明講的上限;或它回報讀到的 token 遠低於我們估的(⇒ 靜默截斷) |
+| 3 | **問端點**:vLLM 的 `POST /tokenize` → `max_model_len` | 自架 vLLM。每個端點只問一次 |
+| 4 | 模型登錄檔(litellm) | hosted 模型、`ollama/*` |
+| 5 | 都答不出來 ⇒ `unknown` | 自架模型掛在 OpenAI 相容端點、又不是 vLLM |
+
+#### `unknown` 的後果 —— 最容易被誤解的一點
+
+解不出上限時:
+
+- 歷史**完全不裁切**(寧可全送,也不照猜的數字截肢);
+- **自動壓縮完全不會執行**。壓縮的觸發條件就是「裁切器即將開始丟東西」,沒有上限就沒有
+  那個時刻;
+- 手動那顆「壓縮」按鈕**仍然可以按**,它刻意跳過預算檢查(按的人有我們從 token 數看不到
+  的理由)。
+
+所以:**看不到任何自動壓縮,不代表壞掉,可能只是沒有上限可依據。** 這兩種狀態在畫面上
+長得一樣,下面兩個檢查可以分辨。
+
+#### 怎麼確認你是哪一種
+
+**一、看 log**(自架 vLLM 最快的一條):
+
+```bash
+grep "context probe" <backend log>
+```
+
+- `context probe: …/tokenize reports max_model_len=N` → **解出來了**,自動壓縮以 N 為準。
+- 沒有這行 → 探測沒有答案。這是**正常路徑**,不是錯誤:`/tokenize` 是 vLLM 的擴充,
+  不在 OpenAI 相容規格裡,Ollama 沒有這個端點。接著會往登錄檔找。
+
+> ⚠️ **自架 vLLM 但前面擺了 litellm proxy 的話,這個探測多半答不出來。** 探測打的是
+> `sandbox` 之外的那個 `base_url` —— 也就是 proxy —— 而 `/tokenize` 是 vLLM 的擴充,
+> proxy 沒有這條路由,回 404,探測就放棄(失敗只寫 debug,所以 log 上什麼都看不到)。
+> 於是「用了 vLLM」和「拿得到 max_model_len」**不是同一件事**,這是最容易誤判的一組。
+
+**二、看 API**(任何部署都適用):
+
+```
+GET /a/{slug}/items/{item_id}/chats/{chat_id}/context
+```
+
+回的 `limit`:
+
+- 有數字 → 自動壓縮在運作,門檻就是它;
+- `null` → **沒有上限,自動壓縮不會動**。
+
+同一份回應裡的 `measured` 是另一件事:`true` 代表這個用量數字是 provider 自己回報的,
+`false` 代表是我們估的。估法是 `CJK 字元數 + 其餘字元數 ÷ 4`,對中文特別重要,但終究是估。
+要讓它變成實測,需要在該 preset 上宣告 `reports_usage: true` —— **判定程序(三個 curl,
+含「為什麼兩個不夠」)寫在 `configs/config.example.yaml`,不在這裡重複**。
+
+> ⚠️ 剛壓縮完的那一刻,`measured` 會退回 `false`:壓縮前那個實測值是「還包含被摘要掉那段」
+> 的請求回報的,留著會讓數字卡在舊值,所以錨點被刻意丟掉。下一輪回答拿到新的實測值之後
+> 會再跳上來 —— 那不是對話又變長了,是量尺換回含系統提示與工具說明的那一把。這一段值得
+> 照抄給使用者,否則那個跳動看起來就像 bug。
+
+#### 什麼時候才需要你出手
+
+**只有上面兩個檢查都指向「沒有」時**,才需要自己設:
+
+```yaml
+history:
+  context_limit: 32768        # 端點真正的窗口,例如 vLLM 的 --max-model-len
+```
+
+設之前務必**確認數字是對的**。設太大 → 請求被端點拒絕(會被記下來並修正,但每次都白跑
+一趟);設太小 → 對話被無謂地砍短,而且沒有任何錯誤訊息。不確定就**不要設**,讓它維持
+`unknown`:全部送出去、從端點的回應學,比照一個沒人量過的數字截肢安全。
+
+> 這裡刻意不列預設值。`unknown` 就是 `unknown`,不會偷偷代入一個數字 —— 曾經有一個
+> 24,000 的常數在治理一個沒人量過的窗口,那正是這套階梯要取代的東西。
+
+#### `unknown` 到底會不會出事
+
+會,但形狀取決於端點怎麼處理過長的請求:
+
+- **端點會拒絕,而且訊息裡講出上限**:第一個超長的回合撞牆,那個數字被記下來,之後就
+  正常了。已在一個真實部署上量到:自架 vLLM 前面擺 litellm proxy,拒絕訊息**確實帶著
+  上限**,解析得出來。代價是那一趟 —— 而且 `LimitLearner` 是**每個 pod 各自記在記憶體
+  裡**,所以每次重啟、每次擴容出新 pod,都會再賠一次。
+- ⚠️ **端點會拒絕,但訊息裡沒有數字**:這一種**學不到任何東西**,所以不是「撞一次就好」,
+  而是**每次都撞**。中介層會改寫請求的部署尤其要當心 —— 同一個 proxy 會把
+  `max_tokens: 999999999` 靜靜吃掉而不是拒絕,能改寫請求的也能改寫錯誤。
+  **這種拓撲下 `context_limit` 不是優化,是唯一能讓那個數字到位的途徑。**
+- **端點會靜默截斷**(Ollama 的常態):沒有錯誤、沒有警告,模型從一段它其實沒看完的
+  prompt 流暢地作答。這個失敗**只有一個訊號**——provider 回報它實際讀了多少 token——
+  而串流路徑要拿到那個數字,需要該 preset 宣告 `reports_usage: true`。**沒宣告的話,
+  三道防線一道都不會啟動。**
+
+所以先確認你是哪一種,再決定要不要設 —— **而「會拒絕」不等於「學得到」**,要看訊息裡有
+沒有數字。一段可以直接跑的判別指令在下面。
+
+> ⚠️ **跑之前先確認模型是活的。** 端點掛掉時這支探測會回一個沒有上限的錯誤,長得跟
+> 「拒絕但不講數字」一模一樣 —— 一個停機中的服務會給你一個看似合法的否定答案。先送一
+> 個正常的短請求確認會回話,再跑這個。
+
+> 用越來越長的 prompt 送過去,第一個非 200 就停(所以多數情況第一輪就結束,不會白送幾 MB)。
+> 把 `BASE` / `KEY` / `MODEL` 換成該 preset 的 `llm.base_url` / `llm.api_key` / `model`
+> (去掉 `openai/` 前綴)。
+
+```bash
+BASE='http://your-litellm-proxy:4000/v1' KEY='sk-...' MODEL='your-model-name' \
+python3 - <<'PY'
+import json,os,re,urllib.error,urllib.request
+BASE,KEY,MODEL=os.environ['BASE'].rstrip('/'),os.environ['KEY'],os.environ['MODEL']
+F='這是一段用來測試上限的文字。'
+P=[r"maximum context length is (\d+)",r"max_model_len[^\d]{0,4}(\d+)",r"\d+\s*tokens?\s*>\s*(\d+)"]
+def go(n):
+    b=json.dumps({"model":MODEL,"messages":[{"role":"user","content":F*(n//len(F)+1)}],
+                  "max_tokens":16,"stream":False}).encode()
+    r=urllib.request.Request(f"{BASE}/chat/completions",data=b,method="POST",
+        headers={"content-type":"application/json","authorization":f"Bearer {KEY}"})
+    try:
+        with urllib.request.urlopen(r,timeout=180) as x: return x.status,x.read().decode('utf-8','replace')
+    except urllib.error.HTTPError as e: return e.code,e.read().decode('utf-8','replace')
+    except Exception as e: return 0,f"{type(e).__name__}: {e}"
+for n in (50_000,200_000,800_000,2_000_000):
+    s,t=go(n); print(f"\n--- {n:,} 字 → HTTP {s}")
+    if s==200: print("    正常回答,加大再試"); continue
+    print("    訊息:"," ".join(t.split())[:400])
+    for p in P:
+        m=re.search(p,t,re.I)
+        if m: print(f"\n✅ 上限 = {m.group(1)} — 學得到,不設也行"); raise SystemExit
+    if s==413: print("\n⚠️ 413 被 body 大小擋掉,不算,繼續"); continue
+    print("\n❌ 拒絕但沒講數字 → 學不到,必須自己設 context_limit"); raise SystemExit
+print("\n❌ 200 萬字仍正常回答 → 有東西在悄悄截斷,而且偵測不到")
+PY
+```
+
+
 ---
 
 ## 15. 第三方工具（#674）：上架、換版、退回
@@ -1044,143 +1182,6 @@ opencode 的變數替換是 `{env:VAR}`（**不是** `${PWD}`），而且變數�
   client 通常把它吃掉了。
 
 ---
-
-### 上下文窗口與自動壓縮:誰決定、怎麼確認、什麼時候才需要你出手
-
-一個對話能塞多少、什麼時候會自動壓縮,全部由**端點的 context 窗口**決定。這個數字
-**不是設定出來的,是解出來的** —— 依序問五個地方,第一個答得出來的就算:
-
-| 順位 | 來源 | 適用 |
-|---|---|---|
-| 1 | `history.context_limit`(你設的) | 逃生口,永遠最大 |
-| 2 | 從流量學到的 | 端點拒絕時明講的上限;或它回報讀到的 token 遠低於我們估的(⇒ 靜默截斷) |
-| 3 | **問端點**:vLLM 的 `POST /tokenize` → `max_model_len` | 自架 vLLM。每個端點只問一次 |
-| 4 | 模型登錄檔(litellm) | hosted 模型、`ollama/*` |
-| 5 | 都答不出來 ⇒ `unknown` | 自架模型掛在 OpenAI 相容端點、又不是 vLLM |
-
-#### `unknown` 的後果 —— 最容易被誤解的一點
-
-解不出上限時:
-
-- 歷史**完全不裁切**(寧可全送,也不照猜的數字截肢);
-- **自動壓縮完全不會執行**。壓縮的觸發條件就是「裁切器即將開始丟東西」,沒有上限就沒有
-  那個時刻;
-- 手動那顆「壓縮」按鈕**仍然可以按**,它刻意跳過預算檢查(按的人有我們從 token 數看不到
-  的理由)。
-
-所以:**看不到任何自動壓縮,不代表壞掉,可能只是沒有上限可依據。** 這兩種狀態在畫面上
-長得一樣,下面兩個檢查可以分辨。
-
-#### 怎麼確認你是哪一種
-
-**一、看 log**(自架 vLLM 最快的一條):
-
-```bash
-grep "context probe" <backend log>
-```
-
-- `context probe: …/tokenize reports max_model_len=N` → **解出來了**,自動壓縮以 N 為準。
-- 沒有這行 → 探測沒有答案。這是**正常路徑**,不是錯誤:`/tokenize` 是 vLLM 的擴充,
-  不在 OpenAI 相容規格裡,Ollama 沒有這個端點。接著會往登錄檔找。
-
-> ⚠️ **自架 vLLM 但前面擺了 litellm proxy 的話,這個探測多半答不出來。** 探測打的是
-> `sandbox` 之外的那個 `base_url` —— 也就是 proxy —— 而 `/tokenize` 是 vLLM 的擴充,
-> proxy 沒有這條路由,回 404,探測就放棄(失敗只寫 debug,所以 log 上什麼都看不到)。
-> 於是「用了 vLLM」和「拿得到 max_model_len」**不是同一件事**,這是最容易誤判的一組。
-
-**二、看 API**(任何部署都適用):
-
-```
-GET /a/{slug}/items/{item_id}/chats/{chat_id}/context
-```
-
-回的 `limit`:
-
-- 有數字 → 自動壓縮在運作,門檻就是它;
-- `null` → **沒有上限,自動壓縮不會動**。
-
-同一份回應裡的 `measured` 是另一件事:`true` 代表這個用量數字是 provider 自己回報的,
-`false` 代表是我們估的。估法是 `CJK 字元數 + 其餘字元數 ÷ 4`,對中文特別重要,但終究是估。
-要讓它變成實測,需要在該 preset 上宣告 `reports_usage: true` —— **判定程序(三個 curl,
-含「為什麼兩個不夠」)寫在 `configs/config.example.yaml`,不在這裡重複**。
-
-> ⚠️ 剛壓縮完的那一刻,`measured` 會退回 `false`:壓縮前那個實測值是「還包含被摘要掉那段」
-> 的請求回報的,留著會讓數字卡在舊值,所以錨點被刻意丟掉。下一輪回答拿到新的實測值之後
-> 會再跳上來 —— 那不是對話又變長了,是量尺換回含系統提示與工具說明的那一把。這一段值得
-> 照抄給使用者,否則那個跳動看起來就像 bug。
-
-#### 什麼時候才需要你出手
-
-**只有上面兩個檢查都指向「沒有」時**,才需要自己設:
-
-```yaml
-history:
-  context_limit: 32768        # 端點真正的窗口,例如 vLLM 的 --max-model-len
-```
-
-設之前務必**確認數字是對的**。設太大 → 請求被端點拒絕(會被記下來並修正,但每次都白跑
-一趟);設太小 → 對話被無謂地砍短,而且沒有任何錯誤訊息。不確定就**不要設**,讓它維持
-`unknown`:全部送出去、從端點的回應學,比照一個沒人量過的數字截肢安全。
-
-> 這裡刻意不列預設值。`unknown` 就是 `unknown`,不會偷偷代入一個數字 —— 曾經有一個
-> 24,000 的常數在治理一個沒人量過的窗口,那正是這套階梯要取代的東西。
-
-#### `unknown` 到底會不會出事
-
-會,但形狀取決於端點怎麼處理過長的請求:
-
-- **端點會拒絕,而且訊息裡講出上限**:第一個超長的回合撞牆,那個數字被記下來,之後就
-  正常了。已在一個真實部署上量到:自架 vLLM 前面擺 litellm proxy,拒絕訊息**確實帶著
-  上限**,解析得出來。代價是那一趟 —— 而且 `LimitLearner` 是**每個 pod 各自記在記憶體
-  裡**,所以每次重啟、每次擴容出新 pod,都會再賠一次。
-- ⚠️ **端點會拒絕,但訊息裡沒有數字**:這一種**學不到任何東西**,所以不是「撞一次就好」,
-  而是**每次都撞**。中介層會改寫請求的部署尤其要當心 —— 同一個 proxy 會把
-  `max_tokens: 999999999` 靜靜吃掉而不是拒絕,能改寫請求的也能改寫錯誤。
-  **這種拓撲下 `context_limit` 不是優化,是唯一能讓那個數字到位的途徑。**
-- **端點會靜默截斷**(Ollama 的常態):沒有錯誤、沒有警告,模型從一段它其實沒看完的
-  prompt 流暢地作答。這個失敗**只有一個訊號**——provider 回報它實際讀了多少 token——
-  而串流路徑要拿到那個數字,需要該 preset 宣告 `reports_usage: true`。**沒宣告的話,
-  三道防線一道都不會啟動。**
-
-所以先確認你是哪一種,再決定要不要設 —— **而「會拒絕」不等於「學得到」**,要看訊息裡有
-沒有數字。一段可以直接跑的判別指令在下面。
-
-> ⚠️ **跑之前先確認模型是活的。** 端點掛掉時這支探測會回一個沒有上限的錯誤,長得跟
-> 「拒絕但不講數字」一模一樣 —— 一個停機中的服務會給你一個看似合法的否定答案。先送一
-> 個正常的短請求確認會回話,再跑這個。
-
-> 用越來越長的 prompt 送過去,第一個非 200 就停(所以多數情況第一輪就結束,不會白送幾 MB)。
-> 把 `BASE` / `KEY` / `MODEL` 換成該 preset 的 `llm.base_url` / `llm.api_key` / `model`
-> (去掉 `openai/` 前綴)。
-
-```bash
-BASE='http://your-litellm-proxy:4000/v1' KEY='sk-...' MODEL='your-model-name' \
-python3 - <<'PY'
-import json,os,re,urllib.error,urllib.request
-BASE,KEY,MODEL=os.environ['BASE'].rstrip('/'),os.environ['KEY'],os.environ['MODEL']
-F='這是一段用來測試上限的文字。'
-P=[r"maximum context length is (\d+)",r"max_model_len[^\d]{0,4}(\d+)",r"\d+\s*tokens?\s*>\s*(\d+)"]
-def go(n):
-    b=json.dumps({"model":MODEL,"messages":[{"role":"user","content":F*(n//len(F)+1)}],
-                  "max_tokens":16,"stream":False}).encode()
-    r=urllib.request.Request(f"{BASE}/chat/completions",data=b,method="POST",
-        headers={"content-type":"application/json","authorization":f"Bearer {KEY}"})
-    try:
-        with urllib.request.urlopen(r,timeout=180) as x: return x.status,x.read().decode('utf-8','replace')
-    except urllib.error.HTTPError as e: return e.code,e.read().decode('utf-8','replace')
-    except Exception as e: return 0,f"{type(e).__name__}: {e}"
-for n in (50_000,200_000,800_000,2_000_000):
-    s,t=go(n); print(f"\n--- {n:,} 字 → HTTP {s}")
-    if s==200: print("    正常回答,加大再試"); continue
-    print("    訊息:"," ".join(t.split())[:400])
-    for p in P:
-        m=re.search(p,t,re.I)
-        if m: print(f"\n✅ 上限 = {m.group(1)} — 學得到,不設也行"); raise SystemExit
-    if s==413: print("\n⚠️ 413 被 body 大小擋掉,不算,繼續"); continue
-    print("\n❌ 拒絕但沒講數字 → 學不到,必須自己設 context_limit"); raise SystemExit
-print("\n❌ 200 萬字仍正常回答 → 有東西在悄悄截斷,而且偵測不到")
-PY
-```
 
 ## 12. 開發指令速查
 
