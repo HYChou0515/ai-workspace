@@ -158,6 +158,23 @@ export function deltaDays(dx: number, ppd: number): number {
  * it does know; what fills the other end is a scheduling decision, not a
  * parsing one. */
 export function spanToDates(value: unknown): Span | null {
+  const { start, end } = edgesOf(value);
+  if (start === null && end === null) return null;
+  const sa = start ?? (end as string);
+  const sb = end ?? sa;
+  // Compared as the instants they DENOTE, not as bytes: a plain end date runs
+  // to the next midnight, so `09:30/the same date` is a morning's work, not a
+  // reversed range. String order would have called it reversed and dropped it.
+  if (instantOf(sb, "end") < instantOf(sa, "start")) return null;
+  return { start: sa, end: sb };
+}
+
+/** The two canonical edges a `daterange` value carries, each `null` when it is
+ * absent or unreadable. The ONE place the accepted shapes (`"a/b"`, `[a, b]`,
+ * `{start,end}`, `{from,to}`) are taken apart — {@link spanToDates} folds a
+ * missing edge onto the other one, {@link resolveSpan} computes a week from it,
+ * and neither can disagree with the other about what was actually written. */
+function edgesOf(value: unknown): { start: string | null; end: string | null } {
   let a: unknown;
   let b: unknown;
   if (typeof value === "string" && value.includes("/")) {
@@ -169,18 +186,49 @@ export function spanToDates(value: unknown): Span | null {
     a = o.start ?? o.from;
     b = o.end ?? o.to;
   } else {
-    return null;
+    return { start: null, end: null };
   }
-  let sa = canonicalEdge(a);
-  let sb = canonicalEdge(b);
-  if (sa === null && sb === null) return null;
-  sa ??= sb as string;
-  sb ??= sa;
-  // Compared as the instants they DENOTE, not as bytes: a plain end date means
-  // that day's last minute, so `09:30/the same date` is a morning's work, not a
-  // reversed range. String order would have called it reversed and dropped it.
-  if (instantOf(sb, "end") < instantOf(sa, "start")) return null;
-  return { start: sa, end: sb };
+  return { start: canonicalEdge(a), end: canonicalEdge(b) };
+}
+
+/** Whether a bar's dates are the record's own or the chart's suggestion. */
+export type SpanSource = "given" | "derived";
+export type ResolvedSpan = { span: Span; source: SpanSource };
+
+/** How long the chart proposes a piece of work is, when nobody has said. Six,
+ * because a plain end date is inclusive of its own day: start + 6 is a week. */
+const PROPOSED_DAYS = 6;
+
+/** The span to DRAW for a record, and whether the record actually said it.
+ *
+ * Every record gets a bar. Dropping the ones with no dates does not say "this
+ * has no dates yet" — it says nothing at all, and an absent row reads as no
+ * such work, which is how an unscheduled issue quietly stops existing. A
+ * proposal can be seen, argued with, and dragged into place; `source` is what
+ * lets the chart draw it as a proposal rather than pass it off as a decision.
+ *
+ * One stated end anchors the proposal (a week out from a start, a week back
+ * from an end); with neither, the week starts today. A range that is back to
+ * front is the same silence as no range at all — it cannot be drawn as written
+ * — so it gets the same answer rather than vanishing, which is what it used
+ * to do. */
+export function resolveSpan(value: unknown, today: string): ResolvedSpan {
+  const { start, end } = edgesOf(value);
+  if (start !== null && end !== null) {
+    const span = spanToDates(value);
+    if (span) return { span, source: "given" };
+  } else if (start !== null) {
+    return { span: { start, end: withClockOf(start, PROPOSED_DAYS) }, source: "derived" };
+  } else if (end !== null) {
+    return { span: { start: withClockOf(end, -PROPOSED_DAYS), end }, source: "derived" };
+  }
+  return { span: { start: today, end: shiftDate(today, PROPOSED_DAYS) }, source: "derived" };
+}
+
+/** Shift an edge by whole days and put its clock back on — a proposal derived
+ * from "starts 09:30 on the 1st" ends at 09:30, not at midnight. */
+function withClockOf(edge: string, days: number): string {
+  return shiftDate(edge, days) + edge.slice(10);
 }
 
 /** A span edge that names only a day — the form every span had before #785, and
@@ -704,20 +752,25 @@ export function columnOf(from: string, date: string, scale: ScaleArg): number {
   return sign * wd;
 }
 
-/** How many columns a span COVERS — both ends included, because a `daterange`
- * is inclusive: 7/13–7/15 is a three-day task, not a two-day one. This is the
- * same counting the chart's own width uses (`columnOf(min, max) + 1`); a bar
- * measured with the bare `columnOf` stopped at the START of its end date, so
- * that day never got coloured and the range read a day short. Never below 1 —
- * `spanToDates` rejects a reversed range, so start ≤ end always. */
+/** How many columns a span COVERS: the distance from where it starts to where
+ * it ends, counted in columns the chart actually draws.
+ *
+ * The inclusive reading survives without a `+1` — a plain end date runs to the
+ * next midnight, so 7/13–7/15 measures three days on its own. Removing that
+ * `+1` also removes what it was hiding. It carried a "never below 1" floor, and
+ * a task lying entirely in folded time — a Saturday-to-Sunday issue on a
+ * working-day chart, a job booked at 22:00 on a 07:00–21:00 one — measures
+ * ZERO columns. The floor stretched it to exactly the width of a full working
+ * day, so the chart said a weekend task takes as long as a Monday one. It
+ * doesn't; it now measures nothing, and the view draws that nothing as a line
+ * so the record is still visibly there (#785 §1.3). */
 export function barColumns(span: Span, scale: ScaleArg): number {
   const s = toScale(scale);
-  // At hour grain there is nothing to patch: the end edge already names where
-  // the work stops (a plain date's bound is the next midnight), so the width is
-  // the distance to it — and the weekend walk comes free, because the bound
-  // goes through the same column machinery as any other edge.
-  if (s.grain === "hour") return columnOf(span.start, boundEdge(span.end), s);
-  return columnOf(span.start, span.end, s) + 1;
+  // At day grain a span occupies a whole day column even when it only uses part
+  // of one — the column IS the unit there, and an eight-hour task still happens
+  // on that day. Only the finer grain can say how much of it.
+  const end = s.grain === "hour" ? span.end : dayOf(span.end);
+  return columnOf(span.start, boundEdge(end), s);
 }
 
 /** The calendar date at working-day column `col` from `minDate` (inverse of

@@ -17,6 +17,7 @@ import {
   deltaDays,
   PPD_ANCHORS,
   ppdToSlider,
+  resolveSpan,
   pxPerDay,
   shiftDate,
   sliderToPpd,
@@ -423,6 +424,90 @@ describe("the axis at hour grain (#785)", () => {
     // are worth no columns at either grain.
     const axis = axisFor("2026-01-09", 48, PPD, undefined, "", true);
     expect(axis.coarse.map((b) => b.label)).toEqual(["Fri 9 Jan", "Mon 12 Jan"]);
+  });
+});
+
+describe("a bar is as wide as the work in it (#785)", () => {
+  const WORK = { grain: "hour", skipWeekends: false, work: { from: 7, to: 21 } } as const;
+
+  it("gives a weekend-only task no columns instead of a full working day", () => {
+    // Sat → Sun with weekends collapsed is zero working time, and the `+1`
+    // floor drew it exactly as wide as a Monday task. That is not a rounding
+    // choice — it is the chart stating something untrue about the schedule.
+    expect(barColumns({ start: "2026-01-10", end: "2026-01-11" }, true)).toBe(0);
+    // A real working day is still one column, which is the control.
+    expect(barColumns({ start: "2026-01-12", end: "2026-01-12" }, true)).toBe(1);
+  });
+
+  it("counts a Saturday-to-Monday task as the one working day it contains", () => {
+    expect(barColumns({ start: "2026-01-10", end: "2026-01-12" }, true)).toBe(1);
+  });
+
+  it("gives a task that falls entirely after hours no columns either", () => {
+    expect(barColumns({ start: "2026-01-05T22:00", end: "2026-01-05T23:00" }, WORK)).toBe(0);
+  });
+
+  it("still occupies a whole day column when it only uses part of the day", () => {
+    // At day grain the column IS the unit — an eight-hour task happens on that
+    // day, so it is drawn on it. Only the finer grain can say how much of it.
+    expect(barColumns({ start: "2026-01-05T09:00", end: "2026-01-05T17:00" }, false)).toBe(1);
+  });
+});
+
+describe("resolveSpan — every record gets a bar (#785)", () => {
+  const TODAY = "2026-01-05";
+
+  it("passes a fully stated span through untouched, and says so", () => {
+    expect(resolveSpan("2026-03-01/2026-03-10", TODAY)).toEqual({
+      span: { start: "2026-03-01", end: "2026-03-10" },
+      source: "given",
+    });
+  });
+
+  it("proposes a week from today when nothing is stated", () => {
+    // Leaving the record off the chart does not say "no dates yet" — it says
+    // nothing at all, which reads as no such work. A proposal can at least be
+    // seen, argued with, and dragged into place.
+    expect(resolveSpan(undefined, TODAY)).toEqual({
+      span: { start: "2026-01-05", end: "2026-01-11" },
+      source: "derived",
+    });
+    expect(resolveSpan("", TODAY).source).toBe("derived");
+  });
+
+  it("computes the missing end from the stated start, a week out", () => {
+    expect(resolveSpan("2026-03-01/", TODAY)).toEqual({
+      span: { start: "2026-03-01", end: "2026-03-07" },
+      source: "derived",
+    });
+  });
+
+  it("computes the missing start backwards from the stated end", () => {
+    expect(resolveSpan("/2026-03-10", TODAY)).toEqual({
+      span: { start: "2026-03-04", end: "2026-03-10" },
+      source: "derived",
+    });
+  });
+
+  it("keeps the clock on the end it was given", () => {
+    expect(resolveSpan("2026-03-01T09:30/", TODAY).span).toEqual({
+      start: "2026-03-01T09:30",
+      end: "2026-03-07T09:30",
+    });
+  });
+
+  it("proposes rather than vanishes when the range is back to front", () => {
+    // A reversed range used to make the record disappear, which is the same
+    // silence as having no dates at all — and the same answer serves both.
+    expect(resolveSpan("2026-03-10/2026-03-01", TODAY)).toEqual({
+      span: { start: "2026-01-05", end: "2026-01-11" },
+      source: "derived",
+    });
+  });
+
+  it("proposes a whole week — seven days, because a plain end date is inclusive", () => {
+    const { span } = resolveSpan(undefined, TODAY);
+    expect(barColumns(span, false)).toBe(7);
   });
 });
 

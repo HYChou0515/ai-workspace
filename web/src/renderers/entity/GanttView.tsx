@@ -47,7 +47,8 @@ import {
   ppdToSlider,
   type Span,
   sliderToPpd,
-  spanToDates,
+  resolveSpan,
+  type SpanSource,
   spanValue,
   visibleDaysFor,
   type Zoom,
@@ -71,6 +72,9 @@ function reportText(r: ScheduleReport): string {
 }
 
 const GUTTER = 150;
+/** The narrowest a bar is drawn, so a record whose work all falls in folded
+ * time is still visibly there (#785). */
+const HAIRLINE = 2;
 const COARSE_H = 18; // top context band (month / year)
 const FINE_H = 20; // fine tick row (weekdays / week codes / months)
 /** What a second line under the fine row costs. Charged only when a tick
@@ -81,7 +85,7 @@ const LANE_H = 24;
 const ROW_H = 26;
 const ZOOMS: Zoom[] = ["day", "week", "month"];
 
-type Row = { e: EntityInstance; span: Span };
+type Row = { e: EntityInstance; span: Span; source: SpanSource };
 type Lane = { key: string; label: string | null; rows: Row[] };
 type Drag = { number: number; mode: DragMode; cols: number };
 
@@ -209,13 +213,14 @@ export function GanttView({
 
   // #GH-projects — order rows by the view's sort tiers, or (with none) the manual
   // `rank`, exactly like the table/board, so the Timeline reads in the SAME order.
-  // Every record in Timeline order. `rows` is the subset that can be DRAWN; the
-  // scheduler works from `ordered`, because a record with no dates yet is
-  // exactly the one most in need of being given some.
+  // Every record in Timeline order, and every one of them gets a bar (#785).
+  // The subset that could be DRAWN used to be smaller than this, and dropping
+  // the rest did not read as "these have no dates yet" — it read as no such
+  // work, so the issue nobody had scheduled was the one that vanished. That is
+  // also why the scheduler always worked from `ordered`: a record with no dates
+  // is exactly the one most in need of being given some.
   const ordered = sortRows(entities, spec.sort, type ?? null, refIndex, users);
-  const rows: Row[] = ordered
-    .map((e) => ({ e, span: spanToDates(e.fields[spanField]) }))
-    .filter((r): r is Row => r.span !== null);
+  const rows: Row[] = ordered.map((e) => ({ e, ...resolveSpan(e.fields[spanField], today) }));
 
   // #PM auto-schedule — present only when the view names the fields that carry
   // the schedule, so a plain gantt stays a plain drawing of dates.
@@ -259,7 +264,7 @@ export function GanttView({
     return (
       <div>
         {scheduleBar}
-        <div style={{ color: "var(--text-paper-d)" }}>No records with a date range to chart yet.</div>
+        <div style={{ color: "var(--text-paper-d)" }}>No records to chart yet.</div>
       </div>
     );
   }
@@ -497,8 +502,21 @@ export function GanttView({
                   // Both ends of the range are coloured (barColumns) — the clamp
                   // this replaces was hiding the off-by-one: it made a same-day
                   // span look right while every longer bar stopped a day short.
-                  const width = barColumns(ps, scale) * cpx;
-                  const provisional = isProvisional(row.e);
+                  const columns = barColumns(ps, scale);
+                  // A bar with no working time in it — a Saturday-to-Sunday
+                  // issue on a working-day chart, a job booked for the middle
+                  // of the night — measures zero columns, and this is the only
+                  // floor left. It is a floor in PIXELS, at the point of
+                  // drawing, and it says "there is a record here"; the floor it
+                  // replaces was in the COLUMN COUNT and said "this takes a
+                  // day", which was not true. The record shows as a line
+                  // pressed into the seam the folded time collapsed to.
+                  const width = Math.max(columns * cpx, HAIRLINE);
+                  // Dashed and hollow means "this is a guess" whichever guess
+                  // it is — a length the scheduler had to invent, or dates the
+                  // chart proposed because the record states none. One cue,
+                  // because to a reader it is one fact.
+                  const provisional = isProvisional(row.e) || row.source === "derived";
                   // A provisional bar is the schedule's GUESS for work with no
                   // estimate, and its rule draws it hollow and dashed so it is
                   // never mistaken for a real plan. That rule is in the
@@ -514,6 +532,7 @@ export function GanttView({
                         title={spanValue(ps)}
                         className="ev-gantt__bar"
                         data-provisional={provisional ? "true" : undefined}
+                        data-empty={columns === 0 ? "true" : undefined}
                         data-busy={busy ? "1" : undefined}
                         onPointerDown={(e) => startDrag(row.e.number, "move", e)}
                         // #680 — a double-click opens the record. It coexists with

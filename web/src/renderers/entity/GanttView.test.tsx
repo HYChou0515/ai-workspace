@@ -109,19 +109,76 @@ describe("GanttView", () => {
     expect(() => fireEvent.doubleClick(screen.getByTestId("bar-1"))).not.toThrow();
   });
 
-  it("draws a bar only for records with a parseable span", () => {
+  it("draws a bar for every record, proposing dates for the ones without (#785)", () => {
+    // This reverses the rule it replaces. Leaving a dateless record off the
+    // chart does not read as "no dates yet" — it reads as no such work, so the
+    // issue nobody has scheduled is exactly the one that disappears. It gets a
+    // bar, drawn as a proposal rather than passed off as a plan.
     render(
       <GanttView
         {...props({ entities: [rec(1, { title: "A", span: "2026-01-01/2026-01-11" }), rec(2, { title: "B" })] })}
       />,
     );
     expect(screen.getByTestId("bar-1")).toBeInTheDocument();
-    expect(screen.queryByTestId("bar-2")).not.toBeInTheDocument();
+    expect(screen.getByTestId("bar-1")).not.toHaveAttribute("data-provisional");
+    expect(screen.getByTestId("bar-2")).toHaveAttribute("data-provisional", "true");
   });
 
-  it("shows a friendly note when nothing has a date range", () => {
+  it("proposes a week from today for a record with nothing at all", () => {
+    const today = new Date().toISOString().slice(0, 10);
     render(<GanttView {...props({ entities: [rec(1, { title: "A" })] })} />);
-    expect(screen.getByText(/No records with a date range/)).toBeInTheDocument();
+    // The title carries the span the bar stands for, so the proposal is legible
+    // without opening anything.
+    expect(screen.getByTestId("bar-1")).toHaveAttribute("title", expect.stringContaining(today));
+  });
+
+  it("marks a half-stated span as a proposal too", () => {
+    render(<GanttView {...props({ entities: [rec(1, { title: "A", span: "2026-01-05/" })] })} />);
+    expect(screen.getByTestId("bar-1")).toHaveAttribute("data-provisional", "true");
+    expect(screen.getByTestId("bar-1")).toHaveAttribute("title", "2026-01-05/2026-01-11");
+  });
+
+  it("shows a friendly note only when there are no records at all", () => {
+    render(<GanttView {...props({ entities: [] })} />);
+    expect(screen.getByText(/No records to chart yet/)).toBeInTheDocument();
+  });
+
+  it("draws a task lying entirely in folded time as a line, not as a working day", () => {
+    // §1.3 — the chart used to say a Saturday-to-Sunday issue took as long as a
+    // Monday one, because the width had a "never below 1" floor. It measures
+    // nothing now, and the view keeps it visible with a hairline instead: the
+    // record is still there, and its width no longer claims otherwise.
+    render(
+      <GanttView
+        {...props({
+          spec: { view: "gantt" as const, entity: "issue", span: "span", label: "title", skip_weekends: true },
+          entities: [
+            rec(1, { title: "Weekend", span: "2026-01-10/2026-01-11" }),
+            rec(2, { title: "Monday", span: "2026-01-12/2026-01-12" }),
+          ],
+        })}
+      />,
+    );
+    const weekend = Number.parseFloat(screen.getByTestId("bar-1").style.width);
+    const monday = Number.parseFloat(screen.getByTestId("bar-2").style.width);
+    expect(weekend).toBeGreaterThan(0); // still on screen
+    expect(weekend).toBeLessThan(monday); // but not a day's worth of work
+    expect(screen.getByTestId("bar-1")).toHaveAttribute("data-empty", "true");
+    expect(screen.getByTestId("bar-2")).not.toHaveAttribute("data-empty");
+  });
+
+  it("turns a proposal into the record's own dates the moment it is dragged (#785)", () => {
+    // What makes the proposal useful rather than noise: agreeing with it is a
+    // drag, and the drag writes it down. Nothing else has to know it was ever
+    // a guess — the record now states the span, so the dashes go away on their
+    // own the next time it is drawn.
+    const onPatch = vi.fn();
+    render(<GanttView {...props({ entities: [rec(1, { title: "A", span: "2026-01-05/" })], onPatch })} />);
+    const ppd = pxPerDay("week"); // default zoom
+    fireEvent.pointerDown(screen.getByTestId("bar-1"), { clientX: 0 });
+    fireEvent.pointerMove(window, { clientX: ppd * 2 });
+    fireEvent.pointerUp(window, { clientX: ppd * 2 });
+    expect(onPatch).toHaveBeenCalledWith(1, { span: "2026-01-07/2026-01-13" });
   });
 
   it("moves a bar by dragging its body and writes the shifted daterange", () => {
@@ -407,7 +464,10 @@ describe("GanttView", () => {
     expect(onPatch).toHaveBeenCalledWith(2, { span: "2026-07-06/2026-07-07" });
     // The milestone reaches across its issues.
     expect(onPatchAnchor).toHaveBeenCalledWith(1, { span: "2026-07-01/2026-07-07" });
-    expect(screen.getByRole("status")).toHaveTextContent("Scheduled 2");
+    // Queried by its text, not by role: now that a dateless record still gets a
+    // bar this renders the whole chart, and dnd-kit's own live region is a
+    // second role="status" on the page.
+    expect(screen.getByText(/Scheduled 2/)).toBeInTheDocument();
   });
 
   it("marks a bar whose length nobody chose, so a placeholder never reads as a plan", () => {
