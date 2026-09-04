@@ -56,6 +56,40 @@ function tsxFiles(dir: string, out: string[] = []): string[] {
  */
 const maskArrows = (s: string) => s.replace(/=>/g, "=\u0001");
 
+/**
+ * The body of every `onClick={…}`, brace-matched and STRING-AWARE.
+ *
+ * A naive counter is fooled by braces inside string and template literals: two
+ * `}` in a log line drop the depth to zero early, the body ends before the
+ * handler's real content, and a bypass after that point is never seen. Probed —
+ * one `}` still gets caught, two slip through. Exported at module scope so the
+ * matcher is testable on its own rather than only through whatever happens to
+ * be in the tree today.
+ */
+export function onClickBodies(text: string): { body: string; line: number }[] {
+  const out: { body: string; line: number }[] = [];
+  const re = /onClick=\{/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) {
+    let depth = 1;
+    let quote: string | null = null;
+    let i = m.index + m[0].length;
+    for (; i < text.length && depth > 0; i++) {
+      const c = text[i];
+      if (quote) {
+        if (c === "\\") i++; // skip the escaped character
+        else if (c === quote) quote = null;
+        continue;
+      }
+      if (c === '"' || c === "'" || c === "`") quote = c;
+      else if (c === "{") depth++;
+      else if (c === "}") depth--;
+    }
+    out.push({ body: text.slice(m.index, i), line: text.slice(0, m.index).split("\n").length });
+  }
+  return out;
+}
+
 const files = tsxFiles(SRC).map((f) => {
   const text = readFileSync(f, "utf8");
   return {
@@ -105,6 +139,27 @@ describe("#779 — modal dismissal has one owner", () => {
   // silence. Guarding the shell is not guarding the modal — every deliberate
   // exit has to go through the same handler, including the ones the modal draws
   // itself.
+  it("finds a close hidden behind braces in a string literal", () => {
+    // Probed with a real mutant: one `}` in a string still got caught, two did
+    // not — the depth hit zero before the handler's real content. A guard with a
+    // spelling it cannot see is worth less than its green tick suggests.
+    const src = [
+      "<button",
+      "  onClick={() => {",
+      '    console.log("}}");',
+      "    onClose();",
+      "  }}",
+      ">x</button>",
+    ].join("\n");
+
+    expect(onClickBodies(src)[0].body).toContain("onClose()");
+  });
+
+  it("is not fooled by an escaped quote inside that string", () => {
+    const src = '<button onClick={() => { f("a\\"}}"); onClose(); }}>x</button>';
+    expect(onClickBodies(src)[0].body).toContain("onClose()");
+  });
+
   it("has no close button bypassing the guard in a modal that has one", () => {
     // Scans the BODY of each onClick, brace-matched, not one line at a time.
     // Round 1 found five buttons bypassing the guard; the single-line version
@@ -115,31 +170,13 @@ describe("#779 — modal dismissal has one owner", () => {
     //
     // Only onClick bodies: an `onClose()` at the end of a save handler is the
     // success path, where there is nothing left to lose.
-    const bodies = (text: string): { body: string; line: number }[] => {
-      const out: { body: string; line: number }[] = [];
-      const re = /onClick=\{/g;
-      let m: RegExpExecArray | null;
-      while ((m = re.exec(text))) {
-        let depth = 1;
-        let i = m.index + m[0].length;
-        for (; i < text.length && depth > 0; i++) {
-          if (text[i] === "{") depth++;
-          else if (text[i] === "}") depth--;
-        }
-        out.push({
-          body: text.slice(m.index, i),
-          line: text.slice(0, m.index).split("\n").length,
-        });
-      }
-      return out;
-    };
     const CLOSES = /onClick=\{(onClose|close)\}|(?<![.\w])(onClose|close)\(\)/;
 
     const offenders: string[] = [];
     for (const f of files) {
       if (!f.text.includes("useDirtyClose(")) continue;
       const lines = f.text.split("\n");
-      for (const { body, line } of bodies(f.text)) {
+      for (const { body, line } of onClickBodies(f.text)) {
         if (!CLOSES.test(body)) continue;
         // An exemption must be written down immediately above, with a reason —
         // legitimate ones exist (a branch rendered only after a successful
