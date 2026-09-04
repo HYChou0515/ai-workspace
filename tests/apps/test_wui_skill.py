@@ -19,7 +19,7 @@ from workspace_app.apps.skill_payload import skill_payload
 
 #: The examples whose files ARE the page — no build, so the entry and its two
 #: siblings sit at the folder root.
-EXAMPLES = ("dashboard", "editor", "external")
+EXAMPLES = ("dashboard", "editor", "external", "chart")
 
 #: The built one. A different shape on purpose: its entry is the build OUTPUT,
 #: its source is `src/`, and its root `index.html` is the bundler's template
@@ -274,3 +274,40 @@ def test_no_example_names_a_class_that_does_not_exist(
             defined |= _classes_defined(body.decode())
 
     assert used <= defined, f"{name} uses classes nothing defines: {sorted(used - defined)}"
+
+
+def test_the_charting_example_gets_its_library_from_the_folder(payload: dict[str, bytes]):
+    """The question every dashboard starts with is "can I draw a chart", and the
+    honest answer needs two halves: the library is a FILE IN THE FOLDER (a CDN
+    reference never arrives), and the sandbox — which does have a network — is
+    what puts it there. An example that hand-drew its chart would answer the
+    first half by giving up on it."""
+    html = payload["examples/chart/index.html"].decode()
+    build = json.loads(payload["examples/chart/package.json"].decode())["scripts"]["build"]
+    readme = payload["examples/chart/README.md"].decode()
+
+    assert './chart.umd.js"' in html, "the page must reference the library beside it"
+    assert "npm pack chart.js" in build, "the build step is what fetches the library"
+    assert "chart.umd.js" in build
+    assert "do not hand-draw" in readme.lower()
+
+
+def test_the_charting_example_survives_a_library_that_is_not_there_yet(
+    payload: dict[str, bytes],
+):
+    """Copied but not yet built, the global does not exist. A page that throws
+    renders nothing, and the reader cannot tell whether the library or their own
+    data is what is wrong — so it says which, in a sentence, and still shows the
+    table."""
+    app = payload["examples/chart/app.js"].decode()
+
+    assert 'typeof Chart === "undefined"' in app
+    assert "chart.umd.js is not in this folder yet" in app
+
+
+def test_the_charting_example_gives_its_canvas_a_height(payload: dict[str, bytes]):
+    """A canvas has no intrinsic size: in a box with no height the chart
+    collapses to nothing, and nothing about that failure says so."""
+    css = payload["examples/chart/style.css"].decode()
+
+    assert re.search(r"\.plot\s*\{[^}]*height:", css, re.S), "the plot box needs a height"

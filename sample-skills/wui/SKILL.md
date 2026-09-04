@@ -18,10 +18,21 @@ right the things that are easy to get wrong, and copying beats generating.
 | `examples/dashboard/` | the data already exists and somebody wants to SEE it differently | listing then reading in parallel, parsing files people hand-edit, `openFile` to hand the user back to the real file |
 | `examples/editor/` | the page is where the data gets ENTERED or changed | saving without thrashing, hearing about someone else's edit without discarding what is half-typed, staying inside your own folder |
 | `examples/external/` | the answer lives in ANOTHER system | `callTool`, and telling the three refusals apart — not declared / not granted / the tool itself said no |
+| `examples/chart/` | somebody wants to SEE the shape of the numbers | a real charting library, and the one build step that fetches it into the folder |
 | `examples/react/` | hand-written DOM has stopped paying | a real build (`pnpm build` → `dist/`), the three settings that fail silently without them, and who rebuilds when |
 
 If a page both reads and writes, start from the dashboard and add saving — a
 page that reads wrongly is obvious, a page that writes wrongly is not.
+
+**A library is a file in the folder, not a CDN.** "No network" is about
+RUNTIME. `<script src="https://cdn…">` never arrives — but a UMD build sitting
+next to the page is inlined like `app.js` is, and the SANDBOX has a network to
+fetch it with (`npm pack chart.js@4`, copy the one file in; `examples/chart/`
+does this as its build step, so opening the page is enough). **Do not hand-draw
+a chart.** Axes that agree with their own scale, hit-testing, tooltips and tick
+spacing are a lot of code to get wrong, and the library costs nothing at
+runtime. Prefer small ones: the file is inlined into the document, so its size
+is paid on every open.
 
 **Prefer no build unless the page needs one.** Without one, the files you wrote
 ARE the page: edit, press Refresh, see it. With one, the page is `dist/` and

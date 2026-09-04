@@ -109,6 +109,24 @@ React app 丟進資料夾，元件掛載、state 隨點擊更新、在 `useEffec
 | `inlineDynamicImports: true` | lazy chunk 沒被進入點引用，不會內嵌，點下去才壞 |
 | `entry: dist/index.html` 寫進 yaml | 不寫的話預設找資料夾根目錄的 `index.html` |
 
+### 要畫圖?用真的圖表庫,不要自己刻
+
+「沒有網路」講的是**執行期**。CDN 上的 `<script src>` 到不了,但函式庫**只要是資料夾裡的一個檔**就行——folder-relative 的引用會和 `app.js`、`style.css` 一樣被內嵌。而 **sandbox 是有網路的**,所以「把檔案弄進資料夾」這件事本身可以自動化:
+
+```json
+{ "scripts": {
+    "build": "npm pack chart.js@4 --silent && tar xzf chart.js-*.tgz && cp package/dist/chart.umd.js . && rm -rf package chart.js-*.tgz"
+} }
+```
+
+把它寫成 `scripts.build`,**打開頁面就夠了**:有 build 的頁面開啟時會自動重建,build 去把函式庫抓下來,圖就畫出來了(旁邊的 **Rebuild** 也可以自己按,過程看得到)。
+
+實測(2026-09-04,真瀏覽器、真後端):**Chart.js 4.5.1**(UMD,208 KB)在 `default-src 'none'` 的 null-origin iframe 裡**載入、繪製、hit-testing、tooltip 全部正常,零 CSP 違規**;點柱子觸發頁面自己的下鑽也正常。它沒有用 `eval`/`new Function`,這點要留意——用了那些的函式庫會被 CSP 擋下。
+
+挑小的:檔案是被**內嵌進文件**的,所以它的大小每次開頁都要付一次。頁面大到需要打包工具時,改走 `pnpm add` + build(見 `examples/react/`)。
+
+範例在 `sample-skills/wui/examples/chart/`。
+
 ### 誰負責重建
 
 `src/` 改了、`dist/` 沒重建，頁面就會**安靜地**停在舊版本——這是這條路上唯一一種
