@@ -415,9 +415,12 @@ class SpecstarFileStore:
         Scoped by `workspace_id` as well as `path`: matching on path alone would
         hand one item's records to another item that happens to hold the same
         name. A path with no row is simply absent from the result — the caller
-        decides whether that is an error."""
-        if not paths:
-            return {}
+        decides whether that is an error.
+
+        No empty-`paths` guard: the only caller chunks with
+        `range(0, len(paths), _QUERY_PATHS)`, which cannot hand down an empty
+        chunk — the guard was unreachable, and unreachable code is a claim
+        nothing can check."""
         query = (QB["workspace_id"] == workspace_id) & QB["path"].in_(paths)
         out: dict[str, bytes] = {}
         for row in self._files.list_resources(query.build(), returns=["data"]):

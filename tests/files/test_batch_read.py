@@ -199,6 +199,47 @@ async def test_a_store_with_no_batch_at_all_is_read_one_path_at_a_time(tolerant:
         assert await read_all(store, "ws1", ["/r/1.md", "/r/0.md"]) == [b"body 1", b"body 0"]
 
 
+@pytest.mark.parametrize("sandbox_class", [_CountingSandbox, _BatchingSandbox])
+async def test_the_three_spellings_of_a_path_are_still_interchangeable(sandbox_class) -> None:
+    """`abs_path` promises `./a.md`, `a.md` and `/a.md` are the same file, and
+    every other entry point on the facade honours it.
+
+    `read_all` used to be positional — it zipped blobs back against the order it
+    asked in — so normalisation could not matter. Moving the strict wrap into it
+    turned that into a dict lookup, and a lookup by the AS-ASKED string misses a
+    dict keyed by the canonical one: the file is there and the caller is told it
+    is gone. Wrong answer over intact data, on the one entry point the module's
+    own docstring tells callers to route through."""
+    sb = sandbox_class()
+    files = await _files(sb)
+
+    for spelling in ("/r/0.md", "r/0.md", "./r/0.md"):
+        assert await read_all(files, "ws1", [spelling]) == [b"body 0"], spelling
+        assert await read_all_existing(files, "ws1", [spelling]), spelling
+
+
+@pytest.mark.parametrize("sandbox_class", [_CountingSandbox, _BatchingSandbox])
+async def test_an_empty_file_is_a_file_not_a_missing_one(sandbox_class) -> None:
+    """`b""` is falsy, and every lane decides "is this path here?" from a value.
+
+    Spelled `if not blob` instead of `if blob is None`, a legitimately empty file
+    becomes a missing one: the strict read raises for a file that exists and the
+    tolerant read drops it from the listing, silently, over intact data. The code
+    is right; a mutation showed nothing was holding it right — neither batch test
+    file ever wrote an empty file."""
+    sb = sandbox_class()
+    files = await _files(sb)
+    await files.write("ws1", "/r/empty.md", b"")
+
+    assert await read_all(files, "ws1", ["/r/0.md", "/r/empty.md", "/r/1.md"]) == [
+        b"body 0",
+        b"",
+        b"body 1",
+    ]
+    kept = await read_all_existing(files, "ws1", ["/r/empty.md"])
+    assert kept == {"/r/empty.md": b""}
+
+
 async def test_reading_nothing_costs_nothing() -> None:
     """An empty listing must not resolve liveness at all.
 

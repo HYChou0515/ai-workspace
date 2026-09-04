@@ -1184,8 +1184,9 @@ class WorkspaceFiles:
 
 
 async def read_all(store: FileStore, workspace_id: str, paths: Sequence[str]) -> list[bytes]:
-    """Read `paths` as ONE operation where the store can (`read_many` — the
-    WorkspaceFiles facade), else one at a time. Order matches `paths`.
+    """Read `paths` as ONE operation where the store can (`read_many_existing`
+    — the WorkspaceFiles facade has it, so does the durable store), else one at
+    a time. Order matches `paths`; a path with no file raises `FileNotFound`.
 
     THE place this rule is spelled. Reading a set of files a call at a time
     re-resolves the workspace's liveness per file, which against the hosted
@@ -1195,7 +1196,7 @@ async def read_all(store: FileStore, workspace_id: str, paths: Sequence[str]) ->
     store and the test doubles need not grow a method.
 
     Every caller that reads a batch of paths goes through here rather than
-    duck-typing `read_many` itself: two spellings of one rule drift, and the
+    duck-typing the capability itself: two spellings of one rule drift, and the
     one that drifts is the one nobody measured."""
     batch = getattr(store, "read_many_existing", None)
     if batch is None:
@@ -1208,7 +1209,20 @@ async def read_all(store: FileStore, workspace_id: str, paths: Sequence[str]) ->
     found = await batch(workspace_id, paths)
     out: list[bytes] = []
     for path in paths:
+        # Look up BOTH spellings. The facade keys its answer by `abs_path`, a
+        # raw store keys it by the path as asked, and `abs_path` is identity on
+        # an already-canonical one — so this is the only lookup that works for
+        # both without either side having to know which it is talking to.
+        #
+        # This used to be positional (zip the blobs back against the order asked)
+        # and normalisation could not matter. Turning it into a dict lookup made
+        # `read_all(files, ws, ["a.md"])` raise for a file that is plainly there:
+        # a wrong answer over intact data, on the entry point this module tells
+        # every caller to route through. `is None`, never falsy — an EMPTY file
+        # is a file.
         blob = found.get(path)
+        if blob is None:
+            blob = found.get(abs_path(path))
         if blob is None:
             raise FileNotFound(path)
         out.append(blob)

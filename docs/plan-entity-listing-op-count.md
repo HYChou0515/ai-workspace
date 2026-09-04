@@ -68,7 +68,7 @@ Phase 2 的 `GET /entities` 10→5 裡有 **4 次**來自一個計劃原本沒�
 Phase 1 後剩下的 81 次裡有 70 次是「一筆記錄一次檔案抓取」—— 那是 `download` 一次只拿一個
 檔案的硬下限,不是解析次數的問題。Phase 3 打破的就是這個下限。
 
-**量法**:把 `WorkspaceFiles.read_many` 從類別上拿掉再重跑,同一個行程內比對前後 —— 這樣兩個
+**量法**:把 facade 的批次能力從類別上拿掉再重跑,同一個行程內比對前後 —— 這樣兩個
 數字才是同一把尺。⚠️ 留在 `$CLAUDE_JOB_DIR/tmp/` 的那支探針**並沒有真的這樣做**:它把
 master 的數字寫死成常數來對照。結論經 veracity review 獨立重量後成立(把 `read_many` 藏起來
 會精確回到 10 / 148 / 164),但那支探針不能當成證據 —— 它連 master 真的漂移了都看不出來。
@@ -76,8 +76,10 @@ master 的數字寫死成常數來對照。結論經 veracity review 獨立重�
 
 ## Design
 
-`WorkspaceFiles.read_many(workspace_id, paths)` —— 一個操作解析一次活性,每一步保證打到
-同一個 store。這**不是新設計**,是多步驟寫入路徑已經在用的 `_read_with` 契約
+`WorkspaceFiles.read_many_existing(workspace_id, paths)` —— 一個操作解析一次活性,每一步保證
+打到同一個 store。⚠️ 收斂後這是**唯一**的批次能力:它回報「哪些路徑存在」,嚴不嚴格由
+`read_all` 決定一次。曾經還有一個嚴格版,它為了講不出「哪一個不見了」而需要一條修復路徑,
+那條路在正式環境走不到、也沒有任何測試守著 —— 兩個能力就是第四個近失躲藏的地方。這**不是新設計**,是多步驟寫入路徑已經在用的 `_read_with` 契約
 (`files/facade.py` 的 `_read_with`),`_parse_type` 只是沒用它。
 
 **它不是「把探測結果快取起來」**,那個做法程式碼裡已經評估過並否決:`_warm` 同時是
@@ -116,7 +118,7 @@ interface」「對 caller 應無感」。
   走真路由量:milestone 86→12、issue 76→8 次 sandbox 來回(直接呼叫 `EntityStore.query()`
   則是 81→8 / 71→4 —— 見上面 Measured ground truth 的標籤更正)。
 - **Phase 4 — 冷路徑**(已完成):沒有 live sandbox 的 item 是由 durable store 回答的,
-  那裡的來回是打資料庫,sandbox 的快速道路對它一點用都沒有。`SpecstarFileStore.read_many`
+  那裡的來回是打資料庫,sandbox 的快速道路對它一點用都沒有。`SpecstarFileStore.read_many_existing`
   用**一次** `path in (...)` 查詢取代逐列取得,同樣是選配能力、同樣呼叫端零改動。
   查詢**同時**用 `workspace_id` 收斂 —— 只比對 path 會把某個 item 的記錄交給另一個
   同名的 item。

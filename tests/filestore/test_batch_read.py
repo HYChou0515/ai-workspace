@@ -72,8 +72,41 @@ class _NoBatchStore:
 def _closed(store: SpecstarFileStore) -> FileStore:
     """The same store with the cold lane shut. `cast` rather than a subclass:
     the point is that the facade's duck-type finds NOTHING, which an override
-    could not express."""
+    could not express.
+
+    `test_the_closed_lane_is_really_closed` is its positive control, and it is
+    stated in terms of BEHAVIOUR (per-path reads actually happen) rather than
+    the name list — a control that checks the double against its own list of
+    names to hide cannot notice that list being wrong, which is the failure it
+    exists to catch."""
     return cast(FileStore, _NoBatchStore(store))
+
+
+async def test_the_closed_lane_is_really_closed(store: SpecstarFileStore, monkeypatch) -> None:
+    """The double is only worth something if the facade genuinely fails to find a
+    batch on it — otherwise every "lane-closed" case below runs the open lane and
+    passes anyway. That already happened once: the code grew a second capability
+    name, the double kept forwarding it, and the pairs silently became one path
+    asserted twice.
+
+    Three paths must therefore cost three per-path reads. A name-list assertion
+    would not do: it would be checking the double against the very list that was
+    wrong."""
+    await _seeded(store, 3)
+    singles = 0
+    original = store.read
+
+    async def counted(workspace_id: str, path: str):
+        nonlocal singles
+        singles += 1
+        return await original(workspace_id, path)
+
+    monkeypatch.setattr(store, "read", counted)
+
+    got = await read_all(WorkspaceFiles(_closed(store)), "ws1", ["/r/0.md", "/r/1.md", "/r/2.md"])
+
+    assert len(got) == 3
+    assert singles == 3, f"{singles} per-path reads for 3 paths — the lane is not closed"
 
 
 async def test_the_query_bounds_its_own_size(store: SpecstarFileStore, monkeypatch) -> None:
