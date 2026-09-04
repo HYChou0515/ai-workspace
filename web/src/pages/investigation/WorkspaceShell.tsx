@@ -96,6 +96,26 @@ export function initialIdeCollapsed(manifest: AppManifest): boolean {
   return manifest.layout.primary_surface === "chat";
 }
 
+/** #785: which state the file tree opens in. Narrow has always been a
+ * tap-to-open overlay so the editor keeps the full width. Wide now asks the
+ * same question the layout already answers elsewhere — what is this App read
+ * FROM? An ide-first App (RCA) is read from its files, so the tree opens
+ * docked. A views-first App (PM) is read from its charts, and a permanently
+ * docked tree spends 260px of the timeline on a drawer nobody opened. The
+ * 50px activity rail stays either way, so this is a collapse, not a removal —
+ * one click on Files, or ⌘B, brings it straight back.
+ *
+ * Deliberately NOT `initialIdeCollapsed`: that one hides the whole IDE, and a
+ * views-first App draws its views INSIDE it, so collapsing there would hide
+ * the very chart this exists to make room for. */
+export function initialSidebarState(
+  primarySurface: AppManifest["layout"]["primary_surface"],
+  isNarrow: boolean,
+): PanelState {
+  if (isNarrow) return "closed";
+  return primarySurface === "views" ? "closed" : "pinned";
+}
+
 /** #464: whether the agent panel renders beside the IDE. On a wide viewport it
  * always does. On a narrow one it only shows when the chat is already filling
  * the row (the IDE is collapsed) — side-by-side, the fixed agent width would
@@ -271,7 +291,12 @@ function ShellBody({
   // The file sidebar shares the log strip's three states, driven from the
   // activity rail: click an icon to glance, double-click to keep it. The rail
   // stays put whatever the sidebar does, so a collapsed tree is never lost.
-  const [sidebarState, setSidebarState] = useState<PanelState>("pinned");
+  // Before the shell has measured itself it reports wide; the breakpoint
+  // effect below corrects that on mount, as it always has.
+  const primarySurface = manifest.layout.primary_surface;
+  const [sidebarState, setSidebarState] = useState<PanelState>(() =>
+    initialSidebarState(primarySurface, false),
+  );
   const sidebarOpen = sidebarState !== "closed";
   const dispatchSidebar = useCallback(
     (action: PanelAction) => setSidebarState((s) => panelPeek(s, action)),
@@ -418,8 +443,15 @@ function ShellBody({
     // (only closing on narrow) would strand a pointer-only user with the desktop
     // sidebar collapsed after a wide→narrow→wide resize, since the only wide reopen
     // is ⌘B and the ActivityBar reopen is gated to narrow (#464).
-    setSidebarState(isNarrow ? "closed" : "pinned");
-  }, [isNarrow]);
+    //
+    // This runs on mount too, so it — not the useState initializer — is what
+    // actually decides the opening state. Both go through the one function so
+    // the rule cannot be true in one place and stale in the other. Depends on
+    // the extracted string, never the manifest object: a refetch that hands
+    // back an equal-but-new manifest would otherwise re-run this and snap the
+    // tree shut under a user who had just opened it.
+    setSidebarState(initialSidebarState(primarySurface, isNarrow));
+  }, [isNarrow, primarySurface]);
   const agentVisible = showAgentPanel(isNarrow, chatFills);
 
   const recentFiles = usePersistentDeque(

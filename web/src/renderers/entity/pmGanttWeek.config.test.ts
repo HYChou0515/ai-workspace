@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { weekLabelOf } from "./ganttScale";
-import { parseViewSpec } from "./shared";
+import { parseViewSpec, setViewScalar } from "./shared";
 
 // Pins the SHIPPED PM gantt view file: a YAML typo or a wrong value would
 // silently drop the `week:` rule (parseViewSpec never throws — it just omits
@@ -29,6 +29,29 @@ describe("shipped PM gantt view — custom week rule", () => {
 
   it("ships with the working-day (skip weekends) option on", () => {
     expect(parseViewSpec(yaml)?.skip_weekends).toBe(true);
+  });
+
+  it("ships a 07:00–21:00 working day, read through the real parser (#785)", () => {
+    // The window is dropped WHOLE on anything it cannot use, and it is dropped
+    // silently — the same failure mode this file exists to catch for `week:`.
+    // A quoting slip here would leave the chart drawing all twenty-four hours
+    // with nothing on screen to say so.
+    expect(parseViewSpec(yaml)?.work_hours).toEqual({ from: 7, to: 21 });
+  });
+
+  it("survives a gear edit to the working day, block form and all (#785)", () => {
+    // The panel edits this file's TEXT, and the window ships as an indented
+    // block sitting between the weekend flag and the time-axis comment. An edit
+    // that replaced only the `work_hours:` line would orphan its two children
+    // and make the whole file unparseable — which shows up not as a wrong
+    // setting but as a blank view.
+    const edited = setViewScalar(yaml, "work_hours", '{ from: "08:00", to: "18:00" }');
+    const spec = parseViewSpec(edited);
+    expect(spec?.work_hours).toEqual({ from: 8, to: 18 });
+    expect(spec?.skip_weekends).toBe(true);
+    expect(spec?.week?.label).toBe("W{y1}{ww}");
+    expect(spec?.schedule?.duration).toBe("exp_days");
+    expect(edited).toContain("# ── Working day");
   });
 
   it("yields the exact codes the file's own comment promises", () => {

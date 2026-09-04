@@ -69,6 +69,60 @@ describe("ViewSettingsPanel", () => {
     expect(screen.queryByText("Fields")).not.toBeInTheDocument();
   });
 
+  describe("the working-hours window (#785)", () => {
+    it("sits beside Skip weekends, off until asked for", () => {
+      render(
+        <ViewSettingsPanel
+          config={config({ skipWeekends: true, onToggleSkipWeekends: vi.fn(), onSetWorkHours: vi.fn() })}
+        />,
+      );
+      open();
+      expect(screen.getByRole("checkbox", { name: "Skip non-working hours" })).not.toBeChecked();
+      // No window, no times to pick — the inputs would be knobs wired to nothing.
+      expect(screen.queryByLabelText("day starts")).not.toBeInTheDocument();
+    });
+
+    it("turns on to a working day rather than to an empty one", () => {
+      // A checkbox that switched it on with no hours would fold the whole day
+      // away and blank the chart, so switching on has to mean something.
+      const onSetWorkHours = vi.fn();
+      render(<ViewSettingsPanel config={config({ onSetWorkHours })} />);
+      open();
+      fireEvent.click(screen.getByRole("checkbox", { name: "Skip non-working hours" }));
+      expect(onSetWorkHours).toHaveBeenCalledWith({ from: 7, to: 21 });
+    });
+
+    it("shows the window it is set to, and edits either end", () => {
+      const onSetWorkHours = vi.fn();
+      render(<ViewSettingsPanel config={config({ workHours: { from: 7, to: 21 }, onSetWorkHours })} />);
+      open();
+      expect(screen.getByRole("checkbox", { name: "Skip non-working hours" })).toBeChecked();
+      expect(screen.getByLabelText("day starts")).toHaveValue("07:00");
+      expect(screen.getByLabelText("day ends")).toHaveValue("21:00");
+
+      fireEvent.change(screen.getByLabelText("day starts"), { target: { value: "08:30" } });
+      expect(onSetWorkHours).toHaveBeenCalledWith({ from: 8.5, to: 21 });
+    });
+
+    it("switches off by clearing the window, not by narrowing it", () => {
+      const onSetWorkHours = vi.fn();
+      render(<ViewSettingsPanel config={config({ workHours: { from: 7, to: 21 }, onSetWorkHours })} />);
+      open();
+      fireEvent.click(screen.getByRole("checkbox", { name: "Skip non-working hours" }));
+      expect(onSetWorkHours).toHaveBeenCalledWith(undefined);
+    });
+
+    it("ignores an edit that would close the day before it opens", () => {
+      // The parser drops such a window anyway; refusing it here means the view
+      // file never holds one, so nobody has to know that.
+      const onSetWorkHours = vi.fn();
+      render(<ViewSettingsPanel config={config({ workHours: { from: 7, to: 21 }, onSetWorkHours })} />);
+      open();
+      fireEvent.change(screen.getByLabelText("day starts"), { target: { value: "22:00" } });
+      expect(onSetWorkHours).not.toHaveBeenCalled();
+    });
+  });
+
   it("shows a People display select when the config carries it, and changing it calls onSetAssigneeDisplay", () => {
     const onSetAssigneeDisplay = vi.fn();
     render(<ViewSettingsPanel config={config({ assigneeDisplay: "avatar", onSetAssigneeDisplay })} />);

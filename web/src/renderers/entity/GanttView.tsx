@@ -35,20 +35,26 @@ import {
   axisFor,
   barColumns,
   canvasWidthFor,
-  clampPpd,
+  fitPpd,
   columnOf,
+  columnPx,
+  instantOf,
   deltaDays,
+  grainFor,
+  type Scale,
   type DragMode,
   PPD_ANCHORS,
   ppdToSlider,
   type Span,
   sliderToPpd,
-  spanToDates,
+  resolveSpan,
+  type SpanSource,
+  unionSpan,
   spanValue,
   visibleDaysFor,
   type Zoom,
 } from "./ganttScale";
-import type { RefIndex } from "./refTraversal";
+import { backrefBuckets, type RefIndex } from "./refTraversal";
 import { fieldText, roleOf } from "./shared";
 import { usePersistentSet } from "../../hooks/usePersistentSet";
 import { actorPalette } from "./actorColor";
@@ -67,6 +73,9 @@ function reportText(r: ScheduleReport): string {
 }
 
 const GUTTER = 150;
+/** The narrowest a bar is drawn, so a record whose work all falls in folded
+ * time is still visibly there (#785). */
+const HAIRLINE = 2;
 const COARSE_H = 18; // top context band (month / year)
 const FINE_H = 20; // fine tick row (weekdays / week codes / months)
 /** What a second line under the fine row costs. Charged only when a tick
@@ -77,9 +86,12 @@ const LANE_H = 24;
 const ROW_H = 26;
 const ZOOMS: Zoom[] = ["day", "week", "month"];
 
-type Row = { e: EntityInstance; span: Span };
+type Row = { e: EntityInstance; span: Span; source: SpanSource; reach: Span };
+
+/** Stands in for an absent ref index so the reach lookup has one shape. */
+const NO_REFS: RefIndex = new Map();
 type Lane = { key: string; label: string | null; rows: Row[] };
-type Drag = { number: number; mode: DragMode; days: number };
+type Drag = { number: number; mode: DragMode; cols: number };
 
 function groupLanes(
   rows: Row[],
@@ -205,13 +217,58 @@ export function GanttView({
 
   // #GH-projects — order rows by the view's sort tiers, or (with none) the manual
   // `rank`, exactly like the table/board, so the Timeline reads in the SAME order.
-  // Every record in Timeline order. `rows` is the subset that can be DRAWN; the
-  // scheduler works from `ordered`, because a record with no dates yet is
-  // exactly the one most in need of being given some.
-  const ordered = sortRows(entities, spec.sort, type ?? null, refIndex, users);
-  const rows: Row[] = ordered
-    .map((e) => ({ e, span: spanToDates(e.fields[spanField]) }))
-    .filter((r): r is Row => r.span !== null);
+  // Every record in Timeline order, and every one of them gets a bar (#785).
+  // The subset that could be DRAWN used to be smaller than this, and dropping
+  // the rest did not read as "these have no dates yet" — it read as no such
+  // work, so the issue nobody had scheduled was the one that vanished. That is
+  // also why the scheduler always worked from `ordered`: a record with no dates
+  // is exactly the one most in need of being given some.
+  // Memoised, and not only for its own cost: `sortRows` copies the array, so an
+  // unmemoised call hands back a new identity every render and the `rows` memo
+  // below it can never hit. Measured at 0 hits in 22 renders of a drag — a memo
+  // that reads as protection and gives none is worse than no memo, because the
+  // next person believes it.
+  const ordered = useMemo(
+    () => sortRows(entities, spec.sort, type ?? null, refIndex, users),
+    [entities, spec.sort, type, refIndex, users],
+  );
+  // #785 — what a record REACHES over: its own span, widened to contain the
+  // spans of the records that point at it. A milestone's bar covers its issues,
+  // because that is when the milestone actually happens.
+  //
+  // Drawn, never written. Writing the union back onto `milestone.span` would
+  // make the milestone's own lower bound creep earlier every time one of its
+  // issues moved earlier, and the next Recalculate would take the crept value
+  // as the bound and schedule earlier still. Every step is just arithmetic on
+  // the data, and the schedule drifts anyway — so the chart tells the truth
+  // while the bound you set stays the bound you set.
+  //
+  // Only spans the records actually STATE count. An issue nobody has scheduled
+  // is drawn as a week from today (P6), and letting the chart's own guess reach
+  // into a milestone would move someone's roadmap on the strength of it.
+  //
+  // The pointing records are read through the view's own `span` field, which is
+  // the only span name a view file names. Nothing here is in a position to know
+  // that issues might keep their dates under a different key, and the schedule
+  // block makes the same assumption about the same two types.
+  //
+  // Bucketed in ONE pass over the corpus, not scanned per row: a roadmap is
+  // milestones × issues, so asking each milestone to filter every issue is
+  // quadratic in the two numbers that both grow with the project.
+  const index = refIndex ?? NO_REFS;
+  const buckets = useMemo(() => backrefBuckets(type ?? null, index), [type, index]);
+  const rows: Row[] = useMemo(
+    () =>
+      ordered.map((e) => {
+        const resolved = resolveSpan(e.fields[spanField], today);
+        const stated = (buckets.get(e.number) ?? [])
+          .map((r) => resolveSpan(r.fields[spanField], today))
+          .filter((r) => r.source === "given")
+          .map((r) => r.span);
+        return { e, ...resolved, reach: unionSpan([resolved.span, ...stated]) ?? resolved.span };
+      }),
+    [ordered, buckets, spanField, today],
+  );
 
   // #PM auto-schedule — present only when the view names the fields that carry
   // the schedule, so a plain gantt stays a plain drawing of dates.
@@ -251,33 +308,57 @@ export function GanttView({
     </div>
   ) : null;
 
-  if (rows.length === 0) {
-    return (
-      <div>
-        {scheduleBar}
-        <div style={{ color: "var(--text-paper-d)" }}>No records with a date range to chart yet.</div>
-      </div>
-    );
-  }
-
   // #648: `skip_weekends` collapses Sat/Sun — every position is a COLUMN offset
   // (working days when on, calendar days when off) via columnOf, so the whole
   // gantt — axis, bars, drag, today — counts only working days.
   const skip = spec.skip_weekends ?? false;
-  const minDate = rows.map((r) => r.span.start).reduce((m, s) => (s < m ? s : m));
-  const maxDate = rows.map((r) => r.span.end).reduce((m, e) => (e > m ? e : m));
-  const totalDays = columnOf(minDate, maxDate, skip) + 1;
+  // Compared as the instants the edges DENOTE. As text these agree with each
+  // other on which DAY is furthest out (the date part is fixed-width), which is
+  // all the chart used to need — but a whole-day "2026-01-05" runs to the next
+  // midnight while "2026-01-05T17:00" stops at five, and once columns are hours
+  // the difference is seven columns of canvas the bars still need.
+  // Measured over the REACH, not the stated spans: a milestone bar drawn wider
+  // than its record still has to fit on the canvas it is drawn on.
+  //
+  // Seeded from the first row rather than from `today`, and guarded for the
+  // empty case: React forbids a hook after a conditional return, so the
+  // "nothing to chart" branch has to come AFTER the axis memo below, and this
+  // arithmetic has to survive being reached with no rows at all.
+  const minDate = rows.length
+    ? rows.map((r) => r.reach.start).reduce((m, s) => (instantOf(s, "start") < instantOf(m, "start") ? s : m))
+    : today;
+  const maxDate = rows.length
+    ? rows.map((r) => r.reach.end).reduce((m, e) => (instantOf(e, "end") > instantOf(m, "end") ? e : m))
+    : today;
+  // #785: the same "time the chart does not draw" rule as `skip_weekends`, one
+  // scale down. It has no effect at day grain — a day is one column however
+  // many of its hours are worked — so it is carried on both scales and simply
+  // does nothing until the columns are hours.
+  const work = spec.work_hours;
+  const dayScale: Scale = { grain: "day", skipWeekends: skip, work };
+  const totalDays = barColumns({ start: minDate, end: maxDate }, dayScale);
   // Default density fits the whole project into the pane (fills the width with
   // no empty gap); once measured, the user's slider choice takes over. Fall back
   // to the week anchor before the pane is measured (first paint / SSR).
   const paneAvail = paneWidth - GUTTER;
-  const fitPpd = paneAvail > 0 ? clampPpd(paneAvail / totalDays) : PPD_ANCHORS.week;
-  const ppd = manualPpd ?? fitPpd;
+  // Capped at PPD_MAX_FIT rather than the slider's own ceiling: the track now
+  // runs on into hour columns (#785), and a short project must not be dropped
+  // into that grain just because it fits.
+  const fitted = paneAvail > 0 ? fitPpd(paneAvail, totalDays) : PPD_ANCHORS.week;
+  const ppd = manualPpd ?? fitted;
   // Fill the pane when the project is short, scroll when it's long; the dated
   // grid then spans the whole canvas so there is no empty gap.
-  const canvasWidth = canvasWidthFor(totalDays, ppd, paneAvail);
-  const visibleDays = visibleDaysFor(canvasWidth, ppd);
-  const xOf = (date: string) => columnOf(minDate, date, skip) * ppd;
+  // #785: the grain follows the slider — day columns until the density can
+  // actually show an hour, then hour columns. `cpx` is what ONE column is worth
+  // in px, and every position below multiplies by it. At day grain it IS `ppd`,
+  // which is why nothing on screen moves when the switch happens under it.
+  const grain = grainFor(ppd);
+  const scale: Scale = { grain, skipWeekends: skip, work };
+  const cpx = columnPx(ppd, grain);
+  const totalColumns = barColumns({ start: minDate, end: maxDate }, scale);
+  const canvasWidth = canvasWidthFor(totalColumns, cpx, paneAvail);
+  const visibleDays = visibleDaysFor(canvasWidth, cpx);
+  const xOf = (date: string) => columnOf(minDate, date, scale) * cpx;
 
   const lanes = groupLanes(rows, spec.group_by, type, refIndex, users);
   const grouped = Boolean(spec.group_by);
@@ -307,15 +388,16 @@ export function GanttView({
     const row = rows.find((r) => r.e.number === number);
     if (!row) return;
     const downX = e.clientX;
-    const dragPpd = ppd;
-    const onMove = (ev: PointerEvent) => setDrag({ number, mode, days: deltaDays(ev.clientX - downX, dragPpd) });
+    const dragCpx = cpx;
+    const onMove = (ev: PointerEvent) =>
+      setDrag({ number, mode, cols: deltaDays(ev.clientX - downX, dragCpx) });
     const onUp = (ev: PointerEvent) => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       setDrag(null);
-      const days = deltaDays(ev.clientX - downX, dragPpd);
-      if (days === 0) return;
-      const next = applyDrag(row.span, mode, days, skip);
+      const cols = deltaDays(ev.clientX - downX, dragCpx);
+      if (cols === 0) return;
+      const next = applyDrag(row.span, mode, cols, scale);
       // For a record the schedule owns, the bar's LENGTH is the duration it was
       // given and its POSITION is what the run worked out. So stretching the
       // right edge means "this takes longer", which survives the next run —
@@ -323,32 +405,78 @@ export function GanttView({
       // bar still writes dates, and still does NOT touch the flag: a gesture
       // never decides that the schedule may no longer move your work.
       if (mode === "end" && sched && isAutoRow(row.e)) {
-        onPatch(number, { [sched.duration]: barColumns(next, skip) });
+        // In DAYS whatever the chart is drawing: `exp_days` is a number of
+        // days, and measuring the stretched bar at hour grain would write 24
+        // into it for a one-day task.
+        //
+        // At least one. A span lying entirely in folded time measures zero
+        // columns, which is the right WIDTH for a bar and a meaningless
+        // ESTIMATE — nobody can mean "this takes no days", and the record would
+        // read "0 days" from then on. This floor is about what the number can
+        // say, not about how wide to draw it; that is why it lives here and not
+        // back inside `barColumns`.
+        onPatch(number, { [sched.duration]: Math.max(1, barColumns(next, dayScale)) });
         return;
       }
       onPatch(number, { [spanField]: spanValue(next) });
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
-    setDrag({ number, mode, days: 0 });
+    setDrag({ number, mode, cols: 0 });
   };
 
   const previewSpan = (row: Row): Span =>
-    drag && drag.number === row.e.number ? applyDrag(row.span, drag.mode, drag.days, skip) : row.span;
+    drag && drag.number === row.e.number ? applyDrag(row.span, drag.mode, drag.cols, scale) : row.span;
 
   // `today` also feeds the week axis's `by_today` cross-year boundary, so it is
   // computed before the axis. The clock is read here (the view shell) and
   // injected into the pure scale math — never read inside it.
-  const axis = axisFor(minDate, visibleDays, ppd, spec.week, today, skip, {
-    always_week: spec.always_week,
-    weekday: spec.weekday,
-    day_of_month: spec.day_of_month,
-  });
+  // Memoised because a bar drag calls `setDrag` on every pointer move, and the
+  // axis depends on none of what a drag changes. Building it walks the whole
+  // visible range; at hour grain over a long project that is thousands of ticks
+  // and bands, and doing it per pointer move is what makes dragging stutter.
+  const axis = useMemo(
+    () =>
+      axisFor(
+        minDate,
+        visibleDays,
+        ppd,
+        spec.week,
+        today,
+        skip,
+        { always_week: spec.always_week, weekday: spec.weekday, day_of_month: spec.day_of_month },
+        work,
+      ),
+    [
+      minDate,
+      visibleDays,
+      ppd,
+      spec.week,
+      today,
+      skip,
+      spec.always_week,
+      spec.weekday,
+      spec.day_of_month,
+      work,
+    ],
+  );
   const fineH = FINE_H + (axis.fine.some((t) => t.sub) ? SUB_H : 0);
   const axisH = COARSE_H + fineH;
 
-  const todayOffset = columnOf(minDate, today, skip);
+  const todayOffset = columnOf(minDate, today, scale);
   const todayInRange = todayOffset >= 0 && todayOffset < visibleDays;
+
+  // Below every hook, deliberately. React counts hooks per render, so a return
+  // above one makes the count depend on whether there is anything to chart —
+  // and the render after a record appears throws instead of drawing.
+  if (rows.length === 0) {
+    return (
+      <div>
+        {scheduleBar}
+        <div style={{ color: "var(--text-paper-d)" }}>No records to chart yet.</div>
+      </div>
+    );
+  }
 
   return (
     <DndContext sensors={sensors} onDragEnd={onRowDragEnd}>
@@ -426,7 +554,7 @@ export function GanttView({
           {/* right timeline: gridlines + axis ticks + today line + bars */}
           <div className="ev-gantt__canvas" style={{ width: canvasWidth }}>
             {axis.fine.map((t) => (
-              <div key={`grid-${t.day}`} className="ev-gantt__gridline" style={{ left: t.day * ppd }} />
+              <div key={`grid-${t.day}`} className="ev-gantt__gridline" style={{ left: t.day * cpx }} />
             ))}
             <div className="ev-gantt__axis" style={{ height: axisH }}>
               <div className="ev-gantt__axis-coarse" style={{ height: COARSE_H }}>
@@ -434,7 +562,7 @@ export function GanttView({
                   <span
                     key={`coarse-${b.day}`}
                     className="ev-gantt__coarse-band"
-                    style={{ left: b.day * ppd, width: b.days * ppd }}
+                    style={{ left: b.day * cpx, width: b.days * cpx }}
                   >
                     {b.label}
                   </span>
@@ -442,7 +570,7 @@ export function GanttView({
               </div>
               <div className="ev-gantt__axis-fine" style={{ height: fineH }}>
                 {axis.fine.map((t) => (
-                  <span key={`fine-${t.day}`} className="ev-gantt__tick" style={{ left: t.day * ppd }} title={t.title}>
+                  <span key={`fine-${t.day}`} className="ev-gantt__tick" style={{ left: t.day * cpx }} title={t.title}>
                     {t.label}
                     {t.sub && <span className="ev-gantt__tick-sub">{t.sub}</span>}
                   </span>
@@ -458,31 +586,65 @@ export function GanttView({
               <div key={lane.key}>
                 {grouped && <div className="ev-gantt__lane-band" style={{ height: LANE_H }} />}
                 {(collapsed.has(lane.key) ? [] : lane.rows).map((row) => {
+                  // At rest the bar is the REACH, computed once per row.
+                  // While dragging it is the record's OWN span — the thing the
+                  // gesture is moving. Keeping the reach during a drag pins the
+                  // left edge to the earliest record pointing at this one, so a
+                  // move reads as a stretch, the bar does not follow the
+                  // pointer, and the title shows a range that is not what gets
+                  // saved; someone who drags again because "it didn't take"
+                  // walks the stored dates further every time. The reach comes
+                  // back on release.
                   const ps = previewSpan(row);
-                  const left = xOf(ps.start);
+                  const drawn = drag?.number === row.e.number ? ps : row.reach;
+                  const left = xOf(drawn.start);
                   // Both ends of the range are coloured (barColumns) — the clamp
                   // this replaces was hiding the off-by-one: it made a same-day
                   // span look right while every longer bar stopped a day short.
-                  const width = barColumns(ps, skip) * ppd;
-                  const provisional = isProvisional(row.e);
-                  // A provisional row keeps its colour. The hollow rule this
-                  // used to defer to was written when a bar had no colour of its
-                  // own, and deferring to it cost far more than it was worth:
-                  // `exp_days` is optional and the Timeline ships a `schedule:`
-                  // block, so an ordinary unsized issue is provisional — the
-                  // COMMON case, which meant most of a real project painted as
-                  // identical dashed outlines and the colouring was gone where
-                  // it was most needed. The dashed edge already says "not sized
-                  // yet"; it says it just as clearly over a fill, and it is the
-                  // only cue that has to survive.
+                  const columns = barColumns(drawn, scale);
+                  // A bar with no working time in it — a Saturday-to-Sunday
+                  // issue on a working-day chart, a job booked for the middle
+                  // of the night — measures zero columns, and this is the only
+                  // floor left. It is a floor in PIXELS, at the point of
+                  // drawing, and it says "there is a record here"; the floor it
+                  // replaces was in the COLUMN COUNT and said "this takes a
+                  // day", which was not true. The record shows as a line
+                  // pressed into the seam the folded time collapsed to.
+                  const width = Math.max(columns * cpx, HAIRLINE);
+                  // TWO cues, because there are two different guesses and
+                  // collapsing them cost the feature. Dashed says "a guess" and
+                  // covers both. But the shipped Timeline carries a `schedule:`
+                  // block while `exp_days` is optional, so an ordinary unsized
+                  // issue is provisional too — #786 established that this is the
+                  // COMMON case. Seen in a real browser, every bar on a real
+                  // project wore the dashes and a record with no dates looked
+                  // exactly like one that merely has no estimate. Requirement 7
+                  // asks for "not specified yet" to be visible NEXT TO the
+                  // ordinary rows, so the derived DATES get their own mark.
+                  const derived = row.source === "derived";
+                  const provisional = isProvisional(row.e) || derived;
+                  // A provisional row keeps its colour (#786). The hollow rule
+                  // this used to defer to was written when a bar had no colour
+                  // of its own, and deferring to it cost far more than it was
+                  // worth: `exp_days` is optional and the Timeline ships a
+                  // `schedule:` block, so an ordinary unsized issue is
+                  // provisional — the COMMON case, which meant most of a real
+                  // project painted as identical dashed outlines and the
+                  // colouring was gone where it was most needed. #785 widens
+                  // `provisional` again, to records the chart dated itself, so
+                  // that reasoning now covers even more of the chart: the dashed
+                  // edge already says "a guess", it says it just as clearly over
+                  // a fill, and it is the only cue that has to survive.
                   const c = barColor(row.e);
                   return (
                     <div key={row.e.number} className="ev-gantt__bar-row" style={{ height: ROW_H }}>
                       <div
                         data-testid={`bar-${row.e.number}`}
-                        title={spanValue(ps)}
+                        title={spanValue(drawn)}
                         className="ev-gantt__bar"
                         data-provisional={provisional ? "true" : undefined}
+                        data-derived={derived ? "true" : undefined}
+                        data-empty={columns === 0 ? "true" : undefined}
                         data-busy={busy ? "1" : undefined}
                         onPointerDown={(e) => startDrag(row.e.number, "move", e)}
                         // #680 — a double-click opens the record. It coexists with

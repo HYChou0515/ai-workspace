@@ -712,7 +712,9 @@ describe("BoardView", () => {
 describe("GanttView", () => {
   const ganttSpec: ViewSpec = { view: "gantt", entity: "issue", span: "span", label: "title" };
 
-  it("draws a bar only for records that have a parseable span", () => {
+  it("draws a bar for every record, and marks the ones whose dates it proposed (#785)", () => {
+    // Reverses the rule it replaces. A record with no dates used to be dropped,
+    // which does not read as "not scheduled yet" — it reads as not existing.
     render(
       <EntityViewBody
         spec={ganttSpec}
@@ -722,13 +724,13 @@ describe("GanttView", () => {
         onPatch={vi.fn()}
       />,
     );
-    expect(screen.getByTestId("bar-1")).toBeInTheDocument();
-    expect(screen.queryByTestId("bar-2")).not.toBeInTheDocument();
+    expect(screen.getByTestId("bar-1")).not.toHaveAttribute("data-provisional");
+    expect(screen.getByTestId("bar-2")).toHaveAttribute("data-provisional", "true");
   });
 
-  it("shows a friendly note when no record has a date range", () => {
-    render(<EntityViewBody spec={ganttSpec} type={issueType} entities={[issue(1, { title: "A" })]} onCreate={vi.fn()} onPatch={vi.fn()} />);
-    expect(screen.getByText(/No records with a date range/)).toBeInTheDocument();
+  it("shows a friendly note only when there is nothing to chart at all", () => {
+    render(<EntityViewBody spec={ganttSpec} type={issueType} entities={[]} onCreate={vi.fn()} onPatch={vi.fn()} />);
+    expect(screen.getByText(/No records to chart yet/)).toBeInTheDocument();
   });
 });
 

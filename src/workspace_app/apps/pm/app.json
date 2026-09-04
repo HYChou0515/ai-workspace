@@ -45,8 +45,8 @@
     "list": ["status"],
     "form": ["status"],
     "views": [
-      "/views/board.ai.yaml", "/views/table.ai.yaml", "/views/gantt.ai.yaml",
-      "/views/workload.ai.yaml", "/views/roadmap.ai.yaml", "/views/health.ai.yaml"
+      "/views/gantt.ai.yaml", "/views/board.ai.yaml", "/views/table.ai.yaml",
+      "/views/roadmap.ai.yaml", "/views/health.ai.yaml"
     ],
     "primary_surface": "views"
   },

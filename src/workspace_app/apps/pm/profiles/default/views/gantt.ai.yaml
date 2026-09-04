@@ -58,6 +58,22 @@ week:
 # false → keep calendar days, weekends included (the default if this key is absent).
 skip_weekends: true
 
+# ── Working day (skip non-working hours) ─────────────────────────────────────
+# The part of the day the chart draws. Visible only once the zoom slider is far
+# enough in that a column is an HOUR rather than a day — a day is one column
+# however many of its hours are worked, so this changes nothing at the zoom you
+# normally read a project at.
+#
+# With the window below a working day is 14 columns instead of 24, and the night
+# between two of them takes no horizontal space at all. That is exactly what
+# `skip_weekends` above does to a weekend, one scale down, and it goes through
+# the same code.
+#
+# Delete this whole block to draw all twenty-four hours.
+work_hours:
+  from: "07:00"
+  to: "21:00"
+
 # ── Time axis (週別為主的時間軸) ──────────────────────────────────────────────
 # What the axis says at each zoom. Only meaningful alongside the `week:` block
 # above — without one there is no week code to show, and these are ignored.

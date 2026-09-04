@@ -109,19 +109,257 @@ describe("GanttView", () => {
     expect(() => fireEvent.doubleClick(screen.getByTestId("bar-1"))).not.toThrow();
   });
 
-  it("draws a bar only for records with a parseable span", () => {
+  it("draws a bar for every record, proposing dates for the ones without (#785)", () => {
+    // This reverses the rule it replaces. Leaving a dateless record off the
+    // chart does not read as "no dates yet" — it reads as no such work, so the
+    // issue nobody has scheduled is exactly the one that disappears. It gets a
+    // bar, drawn as a proposal rather than passed off as a plan.
     render(
       <GanttView
         {...props({ entities: [rec(1, { title: "A", span: "2026-01-01/2026-01-11" }), rec(2, { title: "B" })] })}
       />,
     );
     expect(screen.getByTestId("bar-1")).toBeInTheDocument();
-    expect(screen.queryByTestId("bar-2")).not.toBeInTheDocument();
+    expect(screen.getByTestId("bar-1")).not.toHaveAttribute("data-provisional");
+    expect(screen.getByTestId("bar-2")).toHaveAttribute("data-provisional", "true");
   });
 
-  it("shows a friendly note when nothing has a date range", () => {
+  it("proposes a week from today for a record with nothing at all", () => {
+    const today = new Date().toISOString().slice(0, 10);
     render(<GanttView {...props({ entities: [rec(1, { title: "A" })] })} />);
-    expect(screen.getByText(/No records with a date range/)).toBeInTheDocument();
+    // The title carries the span the bar stands for, so the proposal is legible
+    // without opening anything.
+    expect(screen.getByTestId("bar-1")).toHaveAttribute("title", expect.stringContaining(today));
+  });
+
+  it("marks a half-stated span as a proposal too", () => {
+    render(<GanttView {...props({ entities: [rec(1, { title: "A", span: "2026-01-05/" })] })} />);
+    expect(screen.getByTestId("bar-1")).toHaveAttribute("data-provisional", "true");
+    expect(screen.getByTestId("bar-1")).toHaveAttribute("title", "2026-01-05/2026-01-11");
+  });
+
+  it("keeps 'the DATES are a guess' apart from 'the LENGTH is a guess' (#785)", () => {
+    // Seen in a real browser, which is the only place it shows: the shipped
+    // Timeline carries a `schedule:` block and `exp_days` is optional, so an
+    // ordinary unsized issue is already provisional — #786 established that
+    // this is the COMMON case. Every bar on the chart wore the dashed edge, and
+    // a record with no dates looked exactly like one that simply has no
+    // estimate. That is requirement 7 not met: "visibly not specified yet" has
+    // to be visible NEXT TO the ordinary rows, not just in principle.
+    const spec = {
+      view: "gantt" as const,
+      entity: "issue",
+      span: "span",
+      label: "title",
+      schedule: { span: "span", duration: "exp_days", flag: "schedule" },
+    };
+    render(
+      <GanttView
+        {...props({
+          spec,
+          entities: [
+            rec(1, { title: "sized and dated", span: "2026-01-05/2026-01-07", exp_days: 3 }),
+            rec(2, { title: "dated, no estimate", span: "2026-01-05/2026-01-07" }),
+            rec(3, { title: "no dates at all" }),
+          ],
+        })}
+      />,
+    );
+    // Dashed says "a guess" and is worn by both of the last two.
+    expect(screen.getByTestId("bar-1")).not.toHaveAttribute("data-provisional");
+    expect(screen.getByTestId("bar-2")).toHaveAttribute("data-provisional", "true");
+    expect(screen.getByTestId("bar-3")).toHaveAttribute("data-provisional", "true");
+    // The second cue is what separates them: only the dates can be derived.
+    expect(screen.getByTestId("bar-1")).not.toHaveAttribute("data-derived");
+    expect(screen.getByTestId("bar-2")).not.toHaveAttribute("data-derived");
+    expect(screen.getByTestId("bar-3")).toHaveAttribute("data-derived", "true");
+  });
+
+  it("shows a friendly note only when there are no records at all", () => {
+    render(<GanttView {...props({ entities: [] })} />);
+    expect(screen.getByText(/No records to chart yet/)).toBeInTheDocument();
+  });
+
+  it("draws a task lying entirely in folded time as a line, not as a working day", () => {
+    // §1.3 — the chart used to say a Saturday-to-Sunday issue took as long as a
+    // Monday one, because the width had a "never below 1" floor. It measures
+    // nothing now, and the view keeps it visible with a hairline instead: the
+    // record is still there, and its width no longer claims otherwise.
+    render(
+      <GanttView
+        {...props({
+          spec: { view: "gantt" as const, entity: "issue", span: "span", label: "title", skip_weekends: true },
+          entities: [
+            rec(1, { title: "Weekend", span: "2026-01-10/2026-01-11" }),
+            rec(2, { title: "Monday", span: "2026-01-12/2026-01-12" }),
+          ],
+        })}
+      />,
+    );
+    const weekend = Number.parseFloat(screen.getByTestId("bar-1").style.width);
+    const monday = Number.parseFloat(screen.getByTestId("bar-2").style.width);
+    expect(weekend).toBeGreaterThan(0); // still on screen
+    expect(weekend).toBeLessThan(monday); // but not a day's worth of work
+    expect(screen.getByTestId("bar-1")).toHaveAttribute("data-empty", "true");
+    expect(screen.getByTestId("bar-2")).not.toHaveAttribute("data-empty");
+  });
+
+  it("turns a proposal into the record's own dates the moment it is dragged (#785)", () => {
+    // What makes the proposal useful rather than noise: agreeing with it is a
+    // drag, and the drag writes it down. Nothing else has to know it was ever
+    // a guess — the record now states the span, so the dashes go away on their
+    // own the next time it is drawn.
+    const onPatch = vi.fn();
+    render(<GanttView {...props({ entities: [rec(1, { title: "A", span: "2026-01-05/" })], onPatch })} />);
+    const ppd = pxPerDay("week"); // default zoom
+    fireEvent.pointerDown(screen.getByTestId("bar-1"), { clientX: 0 });
+    fireEvent.pointerMove(window, { clientX: ppd * 2 });
+    fireEvent.pointerUp(window, { clientX: ppd * 2 });
+    expect(onPatch).toHaveBeenCalledWith(1, { span: "2026-01-07/2026-01-13" });
+  });
+
+  describe("a milestone reaches over its issues (#785)", () => {
+    const milestoneType: EntityType = {
+      name: "milestone",
+      records_path: "milestones",
+      fields: [
+        { name: "title", role: "text" },
+        { name: "span", role: "daterange" },
+        { name: "issues", role: "backref", from: "issue.milestone" },
+      ],
+      form: [],
+    };
+    const roadmap = { view: "gantt" as const, entity: "milestone", span: "span", label: "title" };
+    const issues = (...fields: Record<string, unknown>[]) =>
+      buildRefIndex({
+        issue: fields.map((f, i) => ({
+          number: i + 1,
+          type_name: "issue",
+          fields: f,
+          body: "",
+          diagnostics: [],
+        })),
+      });
+
+    it("draws the bar over its own span AND its issues', not just its own", () => {
+      render(
+        <GanttView
+          {...props({
+            spec: roadmap,
+            type: milestoneType,
+            refIndex: issues(
+              { title: "early", span: "2026-06-20/2026-06-25", milestone: 1 },
+              { title: "late", span: "2026-07-10/2026-07-20", milestone: 1 },
+              { title: "someone else's", span: "2026-01-01/2026-12-31", milestone: 2 },
+            ),
+            entities: [rec(1, { title: "M1", span: "2026-07-01/2026-07-05" })],
+          })}
+        />,
+      );
+      expect(screen.getByTestId("bar-1")).toHaveAttribute("title", "2026-06-20/2026-07-20");
+    });
+
+    it("leaves the milestone's own file alone — the reach is drawn, never written", () => {
+      // Writing the union back would let the milestone's own lower bound creep
+      // earlier every time one of its issues moved earlier, and the next
+      // Recalculate would take the crept value as the bound. Every step looks
+      // like arithmetic; the schedule drifts anyway.
+      const onPatch = vi.fn();
+      const onPatchAnchor = vi.fn();
+      render(
+        <GanttView
+          {...props({
+            spec: roadmap,
+            type: milestoneType,
+            onPatch,
+            onPatchAnchor,
+            refIndex: issues({ title: "early", span: "2026-06-20/2026-06-25", milestone: 1 }),
+            entities: [rec(1, { title: "M1", span: "2026-07-01/2026-07-05" })],
+          })}
+        />,
+      );
+      expect(onPatch).not.toHaveBeenCalled();
+      expect(onPatchAnchor).not.toHaveBeenCalled();
+    });
+
+    it("moves the milestone's OWN dates when the bar is dragged, not the reach", () => {
+      // The bar you grab is wider than the record — dragging has to change what
+      // the record SAYS, or the milestone would swallow its own issues' extent
+      // on the first drag and never give it back.
+      const onPatch = vi.fn();
+      render(
+        <GanttView
+          {...props({
+            spec: roadmap,
+            type: milestoneType,
+            onPatch,
+            refIndex: issues({ title: "early", span: "2026-06-20/2026-06-25", milestone: 1 }),
+            entities: [rec(1, { title: "M1", span: "2026-07-01/2026-07-05" })],
+          })}
+        />,
+      );
+      const ppd = pxPerDay("week");
+      fireEvent.pointerDown(screen.getByTestId("bar-1"), { clientX: 0 });
+      fireEvent.pointerMove(window, { clientX: ppd * 2 });
+      fireEvent.pointerUp(window, { clientX: ppd * 2 });
+      expect(onPatch).toHaveBeenCalledWith(1, { span: "2026-07-03/2026-07-07" });
+    });
+
+    it("follows the cursor while dragging, showing the dates being written", () => {
+      // The bar at rest is wider than the record. If the drag keeps drawing the
+      // REACH, the left edge stays pinned to the earliest issue and a "move"
+      // reads as a stretch — the bar does not follow the pointer, and the title
+      // shows a range that is not what gets saved. Someone who drags again
+      // because "it didn't take" walks the stored dates further every time.
+      //
+      // So the drag draws the milestone's OWN span: the thing being moved, at
+      // the place the cursor put it. The reach comes back on release.
+      const onPatch = vi.fn();
+      render(
+        <GanttView
+          {...props({
+            spec: roadmap,
+            type: milestoneType,
+            onPatch,
+            refIndex: issues({ title: "early", span: "2026-06-20/2026-06-25", milestone: 1 }),
+            entities: [rec(1, { title: "M1", span: "2026-07-01/2026-07-05" })],
+          })}
+        />,
+      );
+      const bar = screen.getByTestId("bar-1");
+      const restWidth = bar.style.width;
+      const ppd = pxPerDay("week");
+
+      fireEvent.pointerDown(bar, { clientX: 0 });
+      fireEvent.pointerMove(window, { clientX: ppd * 3 });
+
+      const dragging = screen.getByTestId("bar-1");
+      // Five days wide — the record's own span — wherever the reach starts.
+      expect(Number.parseFloat(dragging.style.width)).toBeCloseTo(5 * ppd);
+      expect(Number.parseFloat(dragging.style.width)).toBeLessThan(Number.parseFloat(restWidth));
+      // And it says what it is about to write, not what it was drawing before.
+      expect(dragging).toHaveAttribute("title", "2026-07-04/2026-07-08");
+
+      fireEvent.pointerUp(window, { clientX: ppd * 3 });
+      expect(onPatch).toHaveBeenCalledWith(1, { span: "2026-07-04/2026-07-08" });
+    });
+
+    it("does not let an issue's PROPOSED dates stretch the milestone", () => {
+      // An unscheduled issue is drawn as a week from today. Letting that reach
+      // into the roadmap would move a milestone because of a record nobody has
+      // scheduled — the chart's own guess, fed back as if it were a plan.
+      render(
+        <GanttView
+          {...props({
+            spec: roadmap,
+            type: milestoneType,
+            refIndex: issues({ title: "unscheduled", milestone: 1 }),
+            entities: [rec(1, { title: "M1", span: "2026-07-01/2026-07-05" })],
+          })}
+        />,
+      );
+      expect(screen.getByTestId("bar-1")).toHaveAttribute("title", "2026-07-01/2026-07-05");
+    });
   });
 
   it("moves a bar by dragging its body and writes the shifted daterange", () => {
@@ -222,6 +460,66 @@ describe("GanttView", () => {
     const before = screen.getByTestId("bar-1").style.width;
     fireEvent.change(slider, { target: { value: "1" } }); // slide fully toward the day anchor
     expect(screen.getByTestId("bar-1").style.width).not.toBe(before);
+  });
+
+  it("draws a part-day bar as part of a day once the columns are hours (#785)", () => {
+    // The WIRING check. An axis assertion is not one: `axisFor` works the grain
+    // out from the density itself, so the hour axis appears whether or not the
+    // view ever asked for hour columns — a probe that survives the view being
+    // hard-wired to days is measuring nothing.
+    //
+    // Geometry is the tell, and only for a bar that is part of a day: whole
+    // days occupy identical space at both grains (that continuity is the point
+    // — nothing jumps when the switch happens). So put an eight-hour task next
+    // to an all-day one.
+    render(
+      <GanttView
+        {...props({
+          entities: [
+            rec(1, { title: "All day", span: "2026-01-05/2026-01-05" }),
+            rec(2, { title: "Morning", span: "2026-01-05T09:00/2026-01-05T17:00" }),
+          ],
+        })}
+      />,
+    );
+    // In day columns the chart has no way to say one of them is eight hours.
+    expect(screen.getByTestId("bar-2").style.width).toBe(screen.getByTestId("bar-1").style.width);
+    expect(screen.queryByText("Mon 5 Jan")).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole("slider", { name: /zoom/i }), { target: { value: "1" } });
+
+    const allDay = Number.parseFloat(screen.getByTestId("bar-1").style.width);
+    const morning = Number.parseFloat(screen.getByTestId("bar-2").style.width);
+    expect(morning).toBeCloseTo(allDay / 3); // eight of the day's twenty-four hours
+    expect(screen.getByText("Mon 5 Jan")).toBeInTheDocument();
+  });
+
+  it("gives the night no width once the view names a working day (#785)", () => {
+    render(
+      <GanttView
+        {...props({
+          spec: {
+            view: "gantt" as const,
+            entity: "issue",
+            span: "span",
+            label: "title",
+            work_hours: { from: 7, to: 21 },
+          },
+          entities: [
+            rec(1, { title: "All day", span: "2026-01-05/2026-01-05" }),
+            rec(2, { title: "Overnight", span: "2026-01-05T20:00/2026-01-06T08:00" }),
+          ],
+        })}
+      />,
+    );
+    fireEvent.change(screen.getByRole("slider", { name: /zoom/i }), { target: { value: "1" } });
+
+    const allDay = Number.parseFloat(screen.getByTestId("bar-1").style.width);
+    const overnight = Number.parseFloat(screen.getByTestId("bar-2").style.width);
+    // A 07:00–21:00 day is fourteen columns. 20:00 → 08:00 spans twelve hours
+    // of clock and two of work — the night between them is not drawn, exactly
+    // as a weekend between two working days is not drawn.
+    expect(overnight).toBeCloseTo(allDay / 7);
   });
 
   it("renders a month context band above the fine ticks (two-tier axis)", () => {
@@ -347,7 +645,10 @@ describe("GanttView", () => {
     expect(onPatch).toHaveBeenCalledWith(2, { span: "2026-07-06/2026-07-07" });
     // The milestone reaches across its issues.
     expect(onPatchAnchor).toHaveBeenCalledWith(1, { span: "2026-07-01/2026-07-07" });
-    expect(screen.getByRole("status")).toHaveTextContent("Scheduled 2");
+    // Queried by its text, not by role: now that a dateless record still gets a
+    // bar this renders the whole chart, and dnd-kit's own live region is a
+    // second role="status" on the page.
+    expect(screen.getByText(/Scheduled 2/)).toBeInTheDocument();
   });
 
   it("marks a bar whose length nobody chose, so a placeholder never reads as a plan", () => {
@@ -371,6 +672,41 @@ describe("GanttView", () => {
     );
     expect(screen.getByTestId("bar-1")).not.toHaveAttribute("data-provisional");
     expect(screen.getByTestId("bar-2")).toHaveAttribute("data-provisional", "true");
+  });
+
+  it("never writes an estimate of zero days, however far the end is dragged (#785)", () => {
+    // Losing the width floor means a span lying entirely in folded time
+    // measures zero columns — right for a BAR, meaningless for an ESTIMATE.
+    // "This takes no days" is not a thing anyone can mean, and the record would
+    // read "0 days" ever after. A day is the smallest estimate expressible.
+    const onPatch = vi.fn();
+    render(
+      <GanttView
+        {...props({
+          spec: {
+            view: "gantt" as const,
+            entity: "issue",
+            span: "span",
+            label: "title",
+            skip_weekends: true,
+            schedule: { span: "span", duration: "exp_days", flag: "schedule" },
+          },
+          onPatch,
+          // Starts on a SATURDAY. Dragging the end handle back clamps it to the
+          // start, and Sat→Sat is zero working columns — the case a span that
+          // starts on a working day can never reach, because the clamp lands it
+          // on that working day.
+          entities: [rec(1, { title: "A", span: "2026-01-10/2026-01-16", schedule: "auto" })],
+        })}
+      />,
+    );
+    const ppd = pxPerDay("week");
+    fireEvent.pointerDown(screen.getByTestId("bar-1-end"), { clientX: 0 });
+    fireEvent.pointerUp(window, { clientX: -ppd * 20 });
+
+    expect(onPatch).toHaveBeenCalledTimes(1);
+    const [, patch] = onPatch.mock.calls[0];
+    expect((patch as Record<string, number>).exp_days).toBeGreaterThanOrEqual(1);
   });
 
   it("dragging the right edge of an automatic bar changes its DURATION, not its dates", () => {
