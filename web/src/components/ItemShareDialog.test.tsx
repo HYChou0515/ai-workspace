@@ -178,4 +178,20 @@ describe("<ItemShareDialog /> layout — a long grant list must not eat the pick
     expect(onSubmit.onClose).toHaveBeenCalled();
     expect(screen.queryByTestId("dialog-action-keep")).toBeNull();
   });
+
+  // The merge that brought #777 in landed `managers` exactly where this dialog's
+  // dirty check lives. It is a FOURTH thing the user edits here, so leaving it
+  // out of the comparison would mean changing who can manage access and pressing
+  // Escape closes with no prompt — the failure this guard exists for,
+  // reintroduced by a merge rather than by anything anyone decided.
+  it("asks before dropping an unsent MANAGER change", async () => {
+    const onSubmit = open({ visibility: "restricted" });
+    fireEvent.change(screen.getByTestId("manager-add"), { target: { value: "dana" } });
+    fireEvent.submit(screen.getByTestId("manager-add-form"));
+
+    fireEvent.click(screen.getByTestId("item-share-cancel"));
+
+    expect(onSubmit.onClose).not.toHaveBeenCalled();
+    expect(await screen.findByTestId("dialog-action-keep")).toBeInTheDocument();
+  });
 });
