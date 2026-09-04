@@ -20,15 +20,6 @@ fields:
     colors: { critical: red, high: amber, medium: blue, low: slate }
   due: { role: date }
   span: { role: daterange }
-  # How long the work takes, and in whose days. The unit is per issue on
-  # purpose: "three days" means working days for most tasks and calendar days
-  # for the ones that run over a weekend regardless (a cure, a soak test).
-  exp_days: { role: number }
-  exp_days_unit: { role: status, values: [working, calendar] }
-  # Whether Recalculate may move this issue. `auto` = the span is the
-  # schedule's to decide; `manual` = the dates are yours, and the issue holds
-  # its assignee's time so automatic work routes around it.
-  schedule: { role: status, values: [auto, manual] }
   progress: { role: progress }
   milestone: { role: ref, to: milestone }
   # Manual board/table order (#GH-projects) — a fractional position the user sets

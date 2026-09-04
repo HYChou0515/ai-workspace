@@ -99,37 +99,3 @@ always_week: false
 weekday: number
 day_of_month: hidden
 
-# ── Automatic scheduling ─────────────────────────────────────────────────────
-# Naming these fields turns the Timeline from a drawing of dates into a
-# schedule: a "Recalculate" button appears, and pressing it lays the work out.
-# Delete this whole `schedule:` block and the chart goes back to showing only
-# the dates people typed.
-#
-# How it lays things out:
-#   · Work chains PER PERSON (`assignee`) — one thing at a time. Everything
-#     nobody owns shares one queue, which reads pessimistically on purpose.
-#   · The order within a queue is this view's order, so dragging a row up is
-#     also how you bring work forward.
-#   · A record is moved only while it says `auto`. Set it to `manual` and the
-#     dates are yours — and it then HOLDS that person's time, so automatic work
-#     routes around it instead of through it.
-#   · The `anchor` record's start date is a lower bound, not a start signal:
-#     nothing in that milestone is scheduled earlier, but a person who is still
-#     busy makes it slip. A late milestone is the truth; a cloned person isn't.
-#   · An `auto` anchor then reaches from the earliest start to the latest end
-#     of its own issues.
-#
-#   duration:  the `number` field holding how long the work takes.
-#   unit:      `working` (default) or `calendar` days, per record.
-#   flag:      `auto` (the schedule decides) or `manual` (you decide).
-#   anchor:    a `ref` field whose target supplies the lower bound.
-#   assignee:  who does the work; records sharing a value share a queue.
-# `span`, `duration` and `flag` are REQUIRED — leave any of them out and the
-# whole block is ignored, so Recalculate simply never appears.
-schedule:
-  span: span
-  duration: exp_days
-  unit: exp_days_unit
-  flag: schedule
-  anchor: milestone
-  assignee: assignee
