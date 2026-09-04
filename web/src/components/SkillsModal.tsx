@@ -9,6 +9,7 @@ import { skillDir } from "../api/workspaceSkills";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 import { Icon } from "./Icon";
+import { useDirtyClose } from "../hooks/useDirtyClose";
 import { ModalShell } from "./ModalShell";
 
 /**
@@ -54,13 +55,26 @@ export function SkillsModal({
   const [refreshNote, setRefreshNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [prefs, setPrefs] = useState<Record<string, boolean> | null>(null);
+  const [initial, setInitial] = useState<Record<string, boolean> | null>(null);
   const [saving, setSaving] = useState(false);
 
   // Seed the editable sparse override once the resolved state loads (present
   // on/off entries only — an absent key follows the profile/App default).
+  // `initial` keeps that seed so #779 can tell an edited list from an untouched
+  // one: this is a long list of tri-states, and re-picking through it is the
+  // whole cost of closing by mistake.
   useEffect(() => {
-    if (prefs === null && skillsQ.data) setPrefs(overrideFromSkills(skillsQ.data));
+    if (prefs === null && skillsQ.data) {
+      const seeded = overrideFromSkills(skillsQ.data);
+      setPrefs(seeded);
+      setInitial(seeded);
+    }
   }, [prefs, skillsQ.data]);
+
+  const attemptClose = useDirtyClose(
+    initial !== null && JSON.stringify(prefs) !== JSON.stringify(initial),
+    onClose,
+  );
 
   const list = skillsQ.data ?? [];
   const applied = new Set(appliedSkills);
@@ -128,7 +142,7 @@ export function SkillsModal({
 
   return (
     <ModalShell
-      onClose={onClose}
+      onClose={attemptClose}
       ariaLabel={t("skills.title")}
       data-testid="skills-modal"
       width={520}
@@ -147,7 +161,7 @@ export function SkillsModal({
           <button
             type="button"
             aria-label={t("skills.close")}
-            onClick={onClose}
+            onClick={attemptClose}
             style={{ border: "none", background: "transparent", cursor: "pointer" }}
           >
             <Icon name="x" size={14} />

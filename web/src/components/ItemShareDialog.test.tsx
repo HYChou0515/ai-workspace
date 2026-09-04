@@ -1,10 +1,16 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ItemPermission } from "../lib/itemPermission";
+import { DialogProvider } from "./Dialog";
 import { ItemShareDialog } from "./ItemShareDialog";
+
+// The confirm dialog is at the app root (#779); this dialog asks through it
+// before dropping an unsaved access change.
+const render = (ui: Parameters<typeof rtlRender>[0]) =>
+  rtlRender(ui, { wrapper: DialogProvider });
 
 vi.mock("./UserChip", () => ({ UserChip: ({ userId }: { userId: string }) => <span>{userId}</span> }));
 vi.mock("./UserPicker", () => ({
@@ -18,10 +24,11 @@ vi.mock("./UserPicker", () => ({
 afterEach(cleanup);
 
 function open(value: ItemPermission, onSubmit = vi.fn()) {
+  const onClose = vi.fn();
   render(
-    <ItemShareDialog itemName="INC-1" owner="bob" value={value} onSubmit={onSubmit} onClose={vi.fn()} />,
+    <ItemShareDialog itemName="INC-1" owner="bob" value={value} onSubmit={onSubmit} onClose={onClose} />,
   );
-  return onSubmit;
+  return Object.assign(onSubmit, { onClose });
 }
 
 describe("ItemShareDialog", () => {
@@ -149,5 +156,26 @@ describe("<ItemShareDialog /> layout — a long grant list must not eat the pick
     const list = screen.getByTestId("item-grant-list");
     expect(list.style.overflow).toBe("auto");
     expect(list.style.maxHeight).not.toBe("");
+  });
+
+  // #779: the worst of the set, because closing looks like it worked — the
+  // dialog vanishes with no hint that the access change was never sent.
+  it("asks before dropping an unsent access change, and keeps the picks", async () => {
+    const onSubmit = open({ visibility: "restricted" });
+    fireEvent.click(screen.getByText("add-alice"));
+
+    fireEvent.click(screen.getByTestId("item-share-cancel"));
+
+    expect(onSubmit.onClose).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByTestId("dialog-action-keep"));
+    expect(screen.getByTestId("item-role-alice")).toBeInTheDocument();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("closes without asking when the access was left exactly as found", () => {
+    const onSubmit = open({ visibility: "restricted", read_meta: ["user:carol"], read_chat: ["user:carol"] });
+    fireEvent.click(screen.getByTestId("item-share-cancel"));
+    expect(onSubmit.onClose).toHaveBeenCalled();
+    expect(screen.queryByTestId("dialog-action-keep")).toBeNull();
   });
 });

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import type { PickableGroup } from "../api/groups";
 import {
@@ -17,6 +17,7 @@ import {
   itemPermissionFromGrants,
   itemRoleDef,
 } from "../lib/itemPermission";
+import { useDirtyClose } from "../hooks/useDirtyClose";
 import { pxToRem } from "../lib/pxToRem";
 import { Icon } from "./Icon";
 import { ModalActions } from "./ModalActions";
@@ -75,6 +76,21 @@ export function ItemShareDialog({
   const showGroups = hasGroups && tab === "groups";
 
   const next = () => itemPermissionFromGrants(visibility, grants, value, groupGrants);
+
+  // #779: compared against the seed the dialog opened with, not against what
+  // `next()` would build — that goes through a normaliser, and a round-trip
+  // difference would read as an edit nobody made. Closing here is the quiet
+  // failure of the set: the dialog just vanishes, and the access silently
+  // stayed as it was.
+  const initialRef = useRef(
+    JSON.stringify({
+      visibility: value.visibility,
+      grants: itemGrantsFromPermission(value, owner),
+      groupGrants: itemGroupGrantsFromPermission(value),
+    }),
+  );
+  const dirty = JSON.stringify({ visibility, grants, groupGrants }) !== initialRef.current;
+  const attemptClose = useDirtyClose(dirty, onClose);
   // Unresolvable (deleted / not visible) → "Unknown group", still removable (#608).
   const groupName = (id: string) =>
     pickableGroups.find((g) => g.resource_id === id)?.name ?? "Unknown group";
@@ -117,7 +133,7 @@ export function ItemShareDialog({
 
   return (
     <ModalShell
-      onClose={onClose}
+      onClose={attemptClose}
       ariaLabel={`Share ${itemName}`}
       data-testid="item-share-dialog"
       width={480}
@@ -319,7 +335,7 @@ export function ItemShareDialog({
       )}
 
       <ModalActions>
-        <button type="button" data-testid="item-share-cancel" onClick={onClose} className="btn" data-variant="secondary" data-size="sm">
+        <button type="button" data-testid="item-share-cancel" onClick={attemptClose} className="btn" data-variant="secondary" data-size="sm">
           Cancel
         </button>
         <button

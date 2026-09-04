@@ -308,3 +308,42 @@ describe("PermissionDialog layout — a long grant list must not eat the picker"
     expect(list.style.maxHeight).not.toBe("");
   });
 });
+
+describe("PermissionDialog — leaving with an unsent change (#779)", () => {
+  it("asks before dropping it, and keeps the picks", async () => {
+    const onClose = vi.fn();
+    const onSubmit = vi.fn();
+    renderWithQuery(
+      <PermissionDialog
+        resourceName="Docs"
+        owner="bob"
+        value={shared()}
+        onSubmit={onSubmit}
+        onClose={onClose}
+      />,
+    );
+    fireEvent.change(screen.getByTestId("role-alice"), { target: { value: "editor" } });
+
+    fireEvent.click(screen.getByTestId("permission-cancel"));
+
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByTestId("dialog-action-keep"));
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect((screen.getByTestId("role-alice") as HTMLSelectElement).value).toBe("editor");
+  });
+
+  it("closes without asking when the access was left as found", () => {
+    const onClose = vi.fn();
+    renderWithQuery(
+      <PermissionDialog
+        resourceName="Docs"
+        owner="bob"
+        value={shared()}
+        onSubmit={vi.fn()}
+        onClose={onClose}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("permission-cancel"));
+    expect(onClose).toHaveBeenCalled();
+  });
+});
