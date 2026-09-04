@@ -16,6 +16,7 @@ import contextlib
 from collections.abc import Iterator
 
 import pytest
+from fastapi import FastAPI
 from specstar import SpecStar
 
 from workspace_app.api import ScriptedAgentRunner, create_app
@@ -2098,3 +2099,192 @@ def test_the_slug_must_match_the_item_at_every_gate():
         # pairing rather than "everything 404s".
         assert client.get(f"/a/rca/items/{item}/environment").status_code == 200
         assert client.post(f"/a/rca/items/{item}/exec", json={"cmd": ["echo"]}).status_code == 200
+
+
+def test_editing_the_member_roster_needs_more_than_editing_the_item():
+    """The guard-sweep's worst survivor: the rule was right and nothing pinned it.
+
+    `PUT /members` is gated on `change_permission`, and it has to be, because
+    `_reconcile_member_grants` writes PARTICIPANT GRANTS — `read_meta`,
+    `read_chat`, `read_content`, `converse` — for whoever is on the roster.
+    Editing members grants ACCESS.
+
+    Weaken it to `write_meta` and two doors open: on a restricted item a
+    collaborator who may edit fields but may NOT read the chat can put themselves
+    on the roster and hand themselves entry; on a PUBLIC item `write_meta` is
+    granted to everyone, so any stranger can rewrite the roster and strip the
+    people already on it.
+
+    Nothing in 499 tests noticed that mutation. The route's own docstring argues
+    for the verb ("editing members now grants ACCESS") — an argument is not an
+    assertion.
+    """
+    with _app(PerUserResources(cpu=100.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        WHO["id"] = "alice"
+        item = _mk(
+            spec,
+            "alice",
+            permission=_restricted(
+                read_meta=["user:bob"],
+                read_content=["user:bob"],
+                write_meta=["user:bob"],
+            ),
+        )
+
+        WHO["id"] = "bob"  # may edit the item; may not decide who gets in
+        refused = client.put(f"/a/rca/items/{item}/members", json={"members": ["bob"]})
+
+        assert refused.status_code == 403, (
+            f"a write_meta collaborator rewrote the roster: {refused.status_code} {refused.text}"
+        )
+
+        WHO["id"] = "alice"  # the owner may
+        allowed = client.put(f"/a/rca/items/{item}/members", json={"members": ["bob"]})
+        assert allowed.status_code == 200, allowed.text
+
+
+def test_a_stranger_cannot_rewrite_a_public_items_roster():
+    """The other door the same verb closes, and the wider one: `write_meta` on a
+    PUBLIC item is granted to anybody at all, so gating the roster on it would
+    let a passer-by grant themselves participant access — or drop everyone who
+    already had it."""
+    with _app(PerUserResources(cpu=100.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        WHO["id"] = "alice"
+        item = _mk(spec, "alice", permission=Permission(visibility="public"))
+
+        WHO["id"] = "mallory"
+        refused = client.put(f"/a/rca/items/{item}/members", json={"members": ["mallory"]})
+
+        assert refused.status_code == 403, (
+            f"a stranger rewrote a public item's roster: {refused.status_code} {refused.text}"
+        )
+
+
+def test_an_unknown_app_is_not_found_rather_than_a_crash():
+    """A bogus slug on the resize route must be refused BEFORE anything tries to
+    resolve the App — `app_model` raises `KeyError` for an unregistered slug, so
+    the order of these two lines is the difference between a 404 and a 500 on a
+    request anybody can send."""
+    with _app(PerUserResources(cpu=100.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        item = _mk(spec, WHO["id"])
+
+        got = client.put(f"/a/no-such-app/items/{item}/resources", json={"cpu_cores": 1.0})
+
+        assert got.status_code == 404, f"unknown app answered {got.status_code}: {got.text}"
+
+
+def test_a_create_cannot_name_somebody_else_as_the_debtor():
+    """`owner` comes from auth at create, never from the body — the same door
+    the sandbox sizes are barred at.
+
+    #687 concedes that `owner` can be repointed AFTERWARDS by anyone with write
+    access, so this guard does not make the debtor tamper-proof; it keeps the
+    create path from being a second, quieter way to do it, and it is the half
+    that is cheap to hold. A guard whose sibling rule is already accepted as
+    broken still deserves the test, or it will be removed as redundant by
+    somebody reading only §4."""
+    with _app(PerUserResources(cpu=100.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        WHO["id"] = "mallory"
+
+        made = client.post("/a/rca/items", json={"title": "t", "owner": "alice"})
+        assert made.status_code in (200, 201), made.text
+
+        item_id = made.json()["resource_id"]
+        rm = spec.get_resource_manager(RcaInvestigation)
+        stored = rm.get(item_id).data
+        assert isinstance(stored, RcaInvestigation)
+
+        assert stored.owner == "mallory", (
+            f"a create named somebody else as the debtor: {stored.owner!r}"
+        )
+
+
+def test_a_failing_group_lookup_still_produces_a_refusal_not_a_crash(monkeypatch):
+    """Two belts, one rule, and neither was pinned: "a refusal must not become a
+    500" (`_titles_of`, inside the 507 handler) and "a listing must not 500 on
+    this" (`_describer`, on `GET /me/resources`).
+
+    Both run a `groups_of` query to decide which held environments this reader
+    may NAME. A store hiccup or an unmigrated group index there turns the two
+    things a person at their limit has to work with — the refusal that explains
+    it and the page that lets them act — into 500s. The rows degrade to unnamed
+    instead; that is the whole point of the try/except, and it was written into
+    both comments and asserted in neither.
+    """
+    from workspace_app.api import app as app_mod
+    from workspace_app.api import quota_routes as quota_mod
+
+    def _boom(*_args: object, **_kwargs: object):
+        raise RuntimeError("group index is unavailable")
+
+    with _app(PerUserResources(count=1), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        first = _mk(spec, WHO["id"])
+        second = _mk(spec, WHO["id"])
+        _wake(client, first)
+
+        monkeypatch.setattr(app_mod, "groups_of", _boom)
+        monkeypatch.setattr(quota_mod, "groups_of", _boom)
+
+        refused = client.post(f"/a/rca/items/{second}/exec", json={"cmd": ["echo"]})
+        page = client.get("/me/resources")
+
+        assert refused.status_code == 507, (
+            f"a failing group lookup turned the refusal into {refused.status_code}: {refused.text}"
+        )
+        assert [h["item_id"] for h in refused.json()["detail"]["holding"]] == [first]
+        assert page.status_code == 200, (
+            f"a failing group lookup took down the usage page: {page.status_code} {page.text}"
+        )
+        assert any(e["item_id"] == first for e in page.json()["live"])
+
+
+def test_the_item_fact_memo_is_a_cache_and_not_a_map(monkeypatch):
+    """The THIRD unbounded-memo carrier, found by asking the same question of
+    the sibling that got it right.
+
+    `_item_facts` never evicts by TTL — an entry ages out of being TRUSTED but
+    stays in the dict — so this whole-dict clear is the only thing between a
+    long-lived pod and one entry per item id it has ever touched. Its bound was
+    the counter-example that found the other two (`ItemLocator._access` and
+    `_groups`), and it had no test of its own either.
+    """
+    from workspace_app.api import app as app_mod
+
+    monkeypatch.setattr(app_mod, "_ITEM_FACT_MAX", 8)
+    with _app(PerUserResources(cpu=100.0), app_resources={"rca": FOUR_CORES}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        for _ in range(app_mod._ITEM_FACT_MAX + 20):
+            item = _mk(spec, WHO["id"])
+            assert client.get(f"/a/rca/items/{item}/environment").status_code == 200
+
+        # `TestClient.app` is typed as a bare ASGI callable, so narrow it to the
+        # FastAPI it really is rather than reaching through an `Any`: `ty` is a
+        # third viewpoint here, and silencing it would give up the one check
+        # that noticed.
+        served = client.app
+        assert isinstance(served, FastAPI)
+        facts = served.state.item_facts
+        assert len(facts) <= app_mod._ITEM_FACT_MAX + 1, len(facts)

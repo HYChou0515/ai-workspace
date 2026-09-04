@@ -645,6 +645,12 @@ def create_app(
         bytes the user just deleted."""
         owner = _owner_of(item_id)
         if not owner:
+            # Near-unreachable since `debtor_of` gained the `created_by` floor:
+            # a blank `owner` field now resolves to the creator, so the only way
+            # here is a store failure inside that lookup (unit-tested in
+            # tests/apps/test_resolve.py). Kept as the last belt, and named as
+            # such rather than left looking like an ordinary case — charging a
+            # per-person cap to nobody refuses a write no person can act on.
             return
         limit = parse_size((await user_limits.for_user(owner)).disk)
         if not limit:
@@ -849,8 +855,6 @@ def create_app(
         the reader, so "an environment you cannot name" is still one they can
         close, while "no environments" beside "1 of 1 in use" is not something
         anybody can act on."""
-        from ..resources.groups import groups_of
-
         viewer = get_user_id()
         try:
             groups = groups_of(spec, viewer)
@@ -1255,6 +1259,11 @@ def create_app(
     # #54: the code-sync sweeper (in api/lifecycle.py) reads the ingestor off
     # app.state at startup — the ingestor is built after the FastAPI app, so the
     # lifespan can't capture it directly (symmetric with the coordinators below).
+    # The quota facts memo, exposed for ONE reason: its bound is a guard, and a
+    # guard no test can fail without is a guard nobody is holding. It lives in a
+    # closure, so without a seam the only way to assert "this is a cache, not a
+    # map" is not to. `app.state` is where this file already puts such handles.
+    app.state.item_facts = _item_facts
     app.state.ingestor = ingestor
     # #506 P8: the cluster sweeper (api/lifecycle.py) reads the KB text embedder off
     # app.state for the same reason — it is built here, after the FastAPI app, so the

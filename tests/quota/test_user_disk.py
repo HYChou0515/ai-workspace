@@ -181,3 +181,24 @@ def test_a_turn_does_not_invent_a_ledger_row_for_the_item_it_runs_in():
         assert asyncio.run(DiskLedger(spec).total_for("alice")) == before, (
             "the turn gate charged an item for bytes no one wrote"
         )
+
+
+def test_a_delete_writes_no_ledger_row_when_nobody_is_capped():
+    """One rule, two writers, and only one of them was tested.
+
+    "No per-person disk cap ⇒ no ledger" is asserted on a PUT, which reaches the
+    GATE's copy of the rule. `_record_usage` is the other writer, and it fires on
+    every DELETE — so without its own cap test an uncapped deploy pays a durable
+    upsert per deleted file, silently, forever. The guard sweep found the second
+    copy unheld precisely because the first one looked covered.
+    """
+    with _app("") as (client, spec):
+        item = _mk(spec, RcaInvestigation, "alice")
+        assert client.put(f"/a/rca/items/{item}/files/a.txt", content=b"hello").status_code == 204
+        assert client.delete(f"/a/rca/items/{item}/files/a.txt").status_code in (200, 204)
+
+        # PER-ITEM, not the sum: a delete leaves a row whose total is 0, so
+        # `total_for` reads 0 whether the row exists or not. The first version of
+        # this test used the sum and could not fail.
+        rows = DiskLedger(spec)._per_item_sync("alice")
+        assert rows == [], f"an uncapped deploy wrote a ledger row on delete: {rows}"

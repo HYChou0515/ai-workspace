@@ -70,8 +70,20 @@ def quota_body(
     rather than assumed safe.
     """
     if isinstance(exc, SandboxQuotaExceeded):
-        mine = viewer is not None and viewer == exc.owner
+        # `viewer is not None and` was here too; `SandboxQuotaExceeded.owner` is
+        # typed and always constructed as `str`, so `None == exc.owner` was
+        # already False and the extra test could not change an answer.
+        mine = viewer == exc.owner
         held = list(exc.holding) if mine else []
+        # Every held row is listed. `titles` covers all of them by construction —
+        # `_titles_of` assigns an entry on every branch, including "unknown" and
+        # "you may not see this one" — so the membership filter that used to sit
+        # on this comprehension could only ever have dropped rows in the case
+        # where it dropped ALL of them, which is the opposite of the rule the
+        # paragraph below states. Removed rather than kept as a belt: a guard
+        # that cannot change an answer is one nobody can test, and this one
+        # contradicted its own documentation.
+        #
         # One batched lookup for the whole list rather than one per row: this
         # runs on the failure path inside an exception handler, and the call
         # count is the latency.
@@ -96,12 +108,11 @@ def quota_body(
             "holding": [
                 {
                     "item_id": h.item_id,
-                    "title": titles[h.item_id],
+                    "title": titles.get(h.item_id, ""),
                     "cpu_cores": h.cpu_milli / 1000,
                     "memory_bytes": h.memory_bytes,
                 }
                 for h in held
-                if h.item_id in titles
             ],
         }
     assert isinstance(exc, WorkspaceFull | UserDiskFull)
