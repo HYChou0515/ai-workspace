@@ -317,7 +317,7 @@ class HttpSandbox:
 
     @staticmethod
     def _raise_mapped(
-        resp: httpx.Response, handle: SandboxHandle, method: str = "", suffix: str = ""
+        resp: httpx.Response, handle: SandboxHandle, method: str, suffix: str
     ) -> None:
         body = resp.json()
         exc_type = _ERRORS.get(body.get("error", ""), SandboxNotFound)

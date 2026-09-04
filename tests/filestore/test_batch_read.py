@@ -70,6 +70,31 @@ def _closed(store: SpecstarFileStore) -> FileStore:
     return cast(FileStore, _NoBatchStore(store))
 
 
+async def test_the_query_bounds_its_own_size(store: SpecstarFileStore, monkeypatch) -> None:
+    """The predicate becomes one SQL `IN (...)`, so THIS is where the ask has to
+    be bounded — `kb/graph/link.py` caps its own at 500 after a 40,000-id one
+    built a 937 KB statement the database refused.
+
+    It is bounded here rather than in the caller because a caller that chunks
+    calls the store once per chunk, and through the facade that resolved the
+    workspace's liveness once per chunk too."""
+    for i in range(450):
+        await store.write("ws1", f"/r/{i}.md", b"x")
+    asks: list[int] = []
+    original = store._read_many_sync
+
+    def counted(workspace_id: str, paths: list[str]):
+        asks.append(len(paths))
+        return original(workspace_id, paths)
+
+    monkeypatch.setattr(store, "_read_many_sync", counted)
+
+    got = await store.read_many("ws1", [f"/r/{i}.md" for i in range(450)])
+
+    assert len(got) == 450
+    assert asks and max(asks) <= 200, f"largest query carried {max(asks)} paths"
+
+
 @pytest.mark.parametrize("closed", [False, True], ids=["lane-open", "lane-closed"])
 async def test_the_batch_answers_in_the_order_asked(store: SpecstarFileStore, closed: bool) -> None:
     """A query answers in whatever order the backend likes; the result is

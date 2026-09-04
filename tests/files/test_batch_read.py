@@ -127,11 +127,37 @@ async def test_neither_lane_asks_for_everything_at_once() -> None:
     )
 
 
-async def test_the_bound_holds_for_a_caller_handed_the_raw_store() -> None:
-    """`discover_catalog` is handed the durable store itself, not the facade
-    (`api/turn_context.py` → `create_app`'s filestore), so a bound that lived
-    only on the facade was not on the path that call takes — the batch it builds
-    is a SQL `IN`, which is precisely the ask that needs bounding."""
+async def test_one_read_resolves_liveness_once_however_many_paths() -> None:
+    """A read is ONE operation, so it settles where the workspace lives once —
+    at 450 paths exactly as at 3.
+
+    Chunking in the free function called the facade once per chunk, so liveness
+    was resolved per chunk. That is not just a cost: a sandbox reaped mid-read
+    would answer the first chunk and the durable snapshot the rest, so one
+    listing would be assembled from two different stores — the thing
+    `_read_with` exists to make impossible."""
+    sb = _BatchingSandbox()
+    files = await _files(sb)
+    for i in range(30, 450):
+        await files.write("ws1", f"/r/{i}.md", f"body {i}".encode())
+    sb.liveness_probes = 0
+
+    await read_all(files, "ws1", [f"/r/{i}.md" for i in range(450)])
+
+    assert sb.liveness_probes == 1, (
+        f"{sb.liveness_probes} liveness resolutions for one read of 450 paths"
+    )
+
+
+async def test_the_whole_ask_goes_down_to_the_store_in_one_call() -> None:
+    """`read_all` hands the store the WHOLE ask and lets it bound its own
+    request — it does not chunk on the store's behalf.
+
+    Chunking here called the store (or, through the facade, the facade) once per
+    chunk, which is what made a single read resolve liveness repeatedly. Where
+    the bound belongs is where the unbounded thing is: the SQL `IN` is built in
+    `SpecstarFileStore`, and that is where it is capped
+    (`tests/filestore/test_batch_read.py`)."""
     store = _ChunkRecordingStore()
     paths = [f"/r/{i}.md" for i in range(450)]
     for path in paths:
@@ -140,9 +166,7 @@ async def test_the_bound_holds_for_a_caller_handed_the_raw_store() -> None:
     got = await read_all(store, "ws1", paths)  # the RAW store, no facade
 
     assert len(got) == 450
-    assert store.asks and max(store.asks) <= WorkspaceFiles._BATCH_PATHS, (
-        f"largest ask was {max(store.asks)} paths, over the {WorkspaceFiles._BATCH_PATHS} bound"
-    )
+    assert store.asks == [450]
 
 
 async def test_reading_nothing_costs_nothing() -> None:
