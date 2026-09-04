@@ -50,7 +50,11 @@ describe("shipped PM gantt view — custom week rule", () => {
     expect(spec?.work_hours).toEqual({ from: 8, to: 18 });
     expect(spec?.skip_weekends).toBe(true);
     expect(spec?.week?.label).toBe("W{y1}{ww}");
-    expect(spec?.schedule?.duration).toBe("exp_days");
+    // Something declared AFTER the edited block, so the assertion actually
+    // proves the edit did not swallow the rest of the file. This used to be
+    // `schedule.duration`; the time-axis keys are what sits there now.
+    expect(spec?.weekday).toBe("number");
+    expect(spec?.day_of_month).toBe("hidden");
     expect(edited).toContain("# ── Working day");
   });
 
