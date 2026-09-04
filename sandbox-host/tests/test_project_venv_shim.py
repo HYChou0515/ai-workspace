@@ -272,3 +272,31 @@ async def test_the_servers_python_choice_is_not_the_sandboxes(
 
     assert os.environ["UV_PYTHON"] == "3.99", "the control: this process really carries one"
     assert "UV_PYTHON" not in env
+
+
+async def test_a_venv_built_on_the_shim_is_refused_rather_than_looped(tmp_path: Path) -> None:
+    """`python` must never be able to exec itself.
+
+    `uv sync` picks its base interpreter off PATH, and `_exec_argv` puts
+    `.jailbin` FIRST on PATH — so uv can build the venv on top of the shim, and
+    the shim then points into that venv. Running `python` would exec the
+    wrapper, which execs the venv's python, which IS the wrapper: forever, with
+    no output and no exit until something kills it. A timeout with two empty
+    streams is all anyone downstream would ever see.
+
+    So a project interpreter that resolves back into the shim dir is not usable,
+    and the sandbox falls back to what a profile that declared nothing gets.
+    """
+    tools = tmp_path / "prebuilt"
+    _carrier(tools)
+    sb, h = await _sandbox(tmp_path, tools)
+    root = Path(sb._require(h))
+    sb._exec_argv(h, ["true"])  # build the shim dir first, as a real sync would
+
+    venv_python = root / ".venv" / "bin" / "python"
+    venv_python.parent.mkdir(parents=True)
+    venv_python.symlink_to(root / ".jailbin" / "python")
+
+    _argv, _cwd, env = sb._exec_argv(h, ["true"])
+
+    assert _run(Path(env["SANDBOX_JAILBIN"]) / "python") == _FROM_CARRIER

@@ -223,6 +223,20 @@ mode 444,誰都改不動,別名才不再是問題。
 > 而且會把成本推到一個看不見的地方。而在量到那個等待是幾秒之前,加暖機是替一個
 > 沒量過的問題付永久代價。
 
+**量到了(這台開發機):** 出貨的 `playground/pydeps` profile,**冷快取**(空的
+`UV_CACHE_DIR`)`uv sync --frozen --inexact` = **2 秒**,產生 382MB cache、8.4MB venv;
+快取熱的時候 `ensure_project_env` = **0.63 秒**。所以以這台機器而論,暖機要解的問題不存在。
+⚠️ 但這不是 k8s pod 的網路,也不是冷機器,**這個數字不能當作正式環境的結論**。
+
+⚠️ **而且有一條硬上限,原本沒記到帳上**:`uv sync` 走的是一般 `exec`,而 `exec` **沒有**
+per-call timeout 參數 —— 它吃 backend 實例層級的 `exec_timeout`,**預設 60 秒總時長**
+(另一條 `log_timeout` 是閒置上限,而 `uv sync` 一直有輸出,所以擋下來的一定是總時長那條)。
+也就是說:**在慢網路上,重的 profile 冷啟動會被砍成 exit 124**。
+行為本身是可接受的 —— 訊息會是 `` `uv sync` failed (exit 124): timed out after 60s ``,
+營運方看得懂 —— 但如果要讓重 profile 在慢環境也能起來,得**調高 `exec_timeout`,或給這條
+路徑自己的預算**(程式碼註解說「長工作設 `exec_timeout=0` 靠 `log_timeout`」,那是既有機制)。
+**未定案**,而且是部署決定。
+
 ⚠️ **workflow 是例外情境,要另外想**:它是排程/事件觸發的,沒有人在螢幕前看進度,
 而每個節點撞到冷啟動的時間是純粹的浪費。
 
@@ -276,6 +290,15 @@ mode 444,誰都改不動,別名才不再是問題。
   (`sandbox-host/Dockerfile:37` 是正式環境那個)。**這個 feature 讓 uv 版本第一次變成語意
   上的關鍵**(它決定使用者的 lock 怎麼被讀),所以要不要改成
   `0.7.5-python3.12-bookworm-slim` 是一個**要拍板的部署決定**,不是我能單方面改的。**未定案。**
+- ⚠️ **shim 在 PATH 最前面,而 `uv sync` 從 PATH 挑基礎直譯器 —— 所以 venv 可能建在 shim 上面。**
+  之後 shim 又指進那個 venv,`python` 就變成 exec 自己:**無限迴圈、零輸出、不會結束**,
+  直到 exec timeout 把它殺掉。使用者看到的是 exit 124 加兩條空的流,裡面沒有任何線索
+  ——「直譯器沒起來」和「起來了但在繞圈」長得一模一樣。這在 CI 上連續紅了兩輪才被抓到,
+  本機一直重現不出來(本機的 uv 每次都挑得到別的直譯器)。護欄是
+  `_usable_project_python`:**逐跳**走 symlink 鏈,任何一跳落在 `.jailbin` 就不採用,
+  退回 carrier。⚠️ 護欄本身第一版也錯了兩次 —— 先是只看 `realpath`(整條鏈解到最後,
+  中間經過 shim 那跳看不見),再是相對連結一律以起點目錄為基準(於是在 venv 自己的
+  `bin/` 裡造出假迴圈,把好的 venv 也擋掉)。兩次都是 e2e 測試抓到的。
 - **cache 沒有上界**,只會長,而且是**每個 uid 一份**(共用可寫是跨 item 改碼路徑,
   不是節省 —— uv 會把 cache 檔 **hardlink** 進 venv,lock 的 hash 只在安裝當下驗一次)。
   uid 由 item id 導出、數量被 `uid_range` 上界,所以**份數**有界、**每份的大小**沒有。

@@ -36,6 +36,7 @@ _CPU_PERIOD = 100_000
 # them instead of copying.
 _SIZE_UNITS = {"K": 1024, "M": 1024**2, "G": 1024**3}
 
+
 def _parse_size(text: str) -> str:
     """Friendly size ("512M") → the byte string cgroup `memory.max` wants.
 

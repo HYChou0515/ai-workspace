@@ -263,6 +263,48 @@ _PYTHON_SHIM_NAMES = ("python", "python3", "python3.10", "python3.11", "python3.
 _PIP_SHIM_NAMES = ("pip", "pip3", "pip3.10", "pip3.11", "pip3.12", "pip3.13")
 
 
+#: How far to follow a symlink chain before calling it a loop. Linux gives up at
+#: 40 (ELOOP); matching it means we never call "fine" something the kernel would
+#: refuse to run.
+_MAX_LINK_HOPS = 40
+
+
+def _usable_project_python(project: Path) -> bool:
+    """Is the workspace venv's interpreter something the shim may point at?
+
+    Executable, and NOT resolving back into the shim dir. A venv built on top of
+    the shim makes `python` exec ITSELF — wrapper -> venv/bin/python -> the same
+    wrapper — forever, with no output and no exit until something kills it. That
+    is reachable rather than theoretical: `uv sync` picks its base interpreter
+    off PATH and `_exec_argv` puts `.jailbin` first on PATH, so uv can build the
+    venv on the very shim that is about to point into it.
+
+    Falling back to the carrier is the right answer: a sandbox whose project
+    interpreter cannot be used should get the one a profile that declared
+    nothing would have had, not a `python` that hangs.
+    """
+    if not os.access(project, os.X_OK):
+        return False
+    # Every HOP, not just the destination. `os.path.realpath` follows the whole
+    # chain, so a venv python that links to the shim which links to the carrier
+    # resolves to the carrier and looks innocent — while executing it still goes
+    # through the shim, which is the loop. Walk the links instead.
+    seen = project
+    for _ in range(_MAX_LINK_HOPS):
+        if _JAILBIN in seen.parts:
+            return False
+        if not seen.is_symlink():
+            return True
+        target = Path(os.readlink(seen))
+        # Relative to the LINK'S OWN directory, not to where the walk started.
+        # Anchoring every hop at `project.parent` invents a cycle inside the
+        # venv's own `bin/`: a real `python3 -> python3.10` link elsewhere gets
+        # re-rooted to `<venv>/bin/python3.10`, which links back to
+        # `<venv>/bin/python`, and a perfectly good venv is refused.
+        seen = target if target.is_absolute() else seen.parent / target
+    return False  # a chain this long is itself a loop
+
+
 def _shim_is_current(link: Path, *, want: str, script: str | None) -> bool:
     """Is this shim entry already exactly what we would write?
 
@@ -441,7 +483,7 @@ class LocalProcessSandbox:
         # many commands.
         project = root / _PROJECT_VENV / "bin" / "python"
         has_carrier = os.access(carrier, os.X_OK)
-        if os.access(project, os.X_OK):
+        if _usable_project_python(project):
             target = project
             from_venv = True
             # A uv venv ships NO pip — measured: its `bin/` holds only

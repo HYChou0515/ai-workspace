@@ -33,6 +33,7 @@ gate, which is how the class got here.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -79,6 +80,34 @@ tinydep = { path = "dep" }
 """
 
 
+def _diagnose(sb: LocalProcessSandbox, h: SandboxHandle) -> str:
+    """What the next failure needs to say for itself.
+
+    CI failed twice with exit 124 and two empty streams, which is a symptom
+    carrying no information: nothing in it distinguishes "the interpreter never
+    started" from "it started and looped". Gathered BEFORE the exec so it
+    survives a timeout, and folded into the assertion message.
+    """
+    root = Path(sb._require(h))
+    py = root / ".venv" / "bin" / "python"
+    shim = root / ".jailbin" / "python"
+    bits = [f"venv python exists={py.exists()} x_ok={os.access(py, os.X_OK)}"]
+    if py.is_symlink():
+        bits.append(f"venv python -> {os.readlink(py)}")
+    if py.exists():
+        bits.append(f"realpath={os.path.realpath(py)}")
+    cfg = root / ".venv" / "pyvenv.cfg"
+    if cfg.is_file():
+        bits.append("pyvenv.cfg=" + " ".join(cfg.read_text().split()))
+    if shim.is_symlink():
+        bits.append(f"shim -> {os.readlink(shim)}")
+    elif shim.is_file():
+        bits.append("shim wrapper=" + shim.read_bytes()[:200].decode("utf-8", "replace").strip())
+    else:
+        bits.append("shim MISSING")
+    return " | ".join(bits)
+
+
 async def _sandbox(tmp_path: Path) -> tuple[LocalProcessSandbox, SandboxHandle]:
     sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False)
     return sb, await sb.create(SandboxSpec())
@@ -119,10 +148,13 @@ async def test_the_interpreter_reports_the_venv_it_is_actually_in(tmp_path: Path
 
     await ensure_project_env(sb, h)
 
+    facts = _diagnose(sb, h)
     res = await sb.exec(h, ["python", "-c", "import sys; print(sys.prefix)"])
-    assert res.exit_code == 0, res.stdout.decode() + res.stderr.decode()
+    assert res.exit_code == 0, f"{res.stdout.decode()}{res.stderr.decode()}\n{facts}"
     prefix = Path(res.stdout.decode().strip())
-    assert prefix == Path(sb._require(h)) / ".venv", "the shim must not resolve past the venv"
+    assert prefix == Path(sb._require(h)) / ".venv", (
+        f"the shim must not resolve past the venv\n{facts}"
+    )
 
 
 @_needs_uv
