@@ -62,6 +62,38 @@ _STALE = (
 )
 
 
+#: The sync, with the `python` shim taken off the front of PATH for this one
+#: command.
+#:
+#: `uv sync` picks its base interpreter off PATH, and the backend puts the shim
+#: FIRST there so the agent's `python` beats the host's own venv (#350). uv
+#: therefore built the project environment ON the shim and recorded it as the
+#: base — measured on CI with uv 0.12.9:
+#:
+#:     venv/bin/python -> <root>/.jailbin/python3
+#:     pyvenv.cfg:       home = <root>/.jailbin
+#:
+#: and the shim then points into that venv, so `python` execs itself: no
+#: output, no exit, killed at the exec timeout. The shim refuses such a venv
+#: (`_usable_project_python`), but refusing it costs the profile its packages,
+#: so the environment must not be built that way in the first place.
+#:
+#: `${PATH#…}` is pure POSIX parameter expansion — nothing to be missing from a
+#: minimal image, and a no-op when the variable is unset or the shim is not at
+#: the front. The argv stays visible as its own elements rather than being
+#: pasted into the shell string, so what runs is still readable and assertable.
+_SYNC = [
+    "sh",
+    "-c",
+    'PATH="${PATH#"$SANDBOX_JAILBIN:"}"; export PATH; exec "$@"',
+    "sh",
+    "uv",
+    "sync",
+    "--frozen",
+    "--inexact",
+]
+
+
 async def ensure_project_env(
     sandbox: Sandbox,
     handle: SandboxHandle,
@@ -95,9 +127,7 @@ async def ensure_project_env(
     # later with nothing said. The settled policy is that a user may install
     # what they like and `uv add` is the route we recommend — not that we quietly
     # undo them. uv's own flag, so nothing here has to model the difference.
-    result = await sandbox.exec(
-        handle, ["uv", "sync", "--frozen", "--inexact"], on_output=on_output
-    )
+    result = await sandbox.exec(handle, _SYNC, on_output=on_output)
     if result.exit_code != 0:
         # uv creates the environment BEFORE it fails — a missing lock still
         # leaves a working interpreter with none of the packages. That

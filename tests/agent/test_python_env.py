@@ -13,7 +13,7 @@ from __future__ import annotations
 import pytest
 
 from workspace_app.agent.context import AgentToolContext
-from workspace_app.agent.python_env import ProjectEnvError, ensure_project_env
+from workspace_app.agent.python_env import _SYNC, ProjectEnvError, ensure_project_env
 from workspace_app.sandbox.protocol import ExecResult, SandboxHandle, SandboxSpec
 
 
@@ -58,7 +58,7 @@ async def test_a_workspace_that_declares_dependencies_gets_them_synced() -> None
 
     await ensure_project_env(sb, SandboxHandle(id="s1"))  # ty: ignore[invalid-argument-type]
 
-    assert any(c[:2] == ["uv", "sync"] for c in sb.calls), "a declared project must be synced"
+    assert any(c == _SYNC for c in sb.calls), "a declared project must be synced"
 
 
 async def test_a_workspace_that_declares_nothing_is_left_completely_alone() -> None:
@@ -84,7 +84,7 @@ async def test_the_lock_decides_not_the_manifest() -> None:
 
     await ensure_project_env(sb, SandboxHandle(id="s1"))  # ty: ignore[invalid-argument-type]
 
-    (sync,) = [c for c in sb.calls if c[:2] == ["uv", "sync"]]
+    (sync,) = [c for c in sb.calls if c == _SYNC]
     assert "--frozen" in sync
 
 
@@ -100,7 +100,7 @@ async def test_an_environment_that_cannot_be_prepared_stops_the_turn() -> None:
     sb = _Recording(
         present={"pyproject.toml"},
         results={
-            ("uv", "sync", "--frozen", "--inexact"): ExecResult(
+            tuple(_SYNC): ExecResult(
                 exit_code=2,
                 stderr=b"error: Distribution `pandas==2.2.3` has no wheel for this platform",
             )
@@ -126,7 +126,7 @@ async def test_preparing_the_environment_is_visible_while_it_happens() -> None:
         on_output=seen.append,
     )
 
-    (sink,) = [k for c, k in zip(sb.calls, sb.sinks, strict=True) if c[:2] == ["uv", "sync"]]
+    (sink,) = [k for c, k in zip(sb.calls, sb.sinks, strict=True) if c == _SYNC]
     assert sink is not None, "the sync's progress must have somewhere to go"
 
 
@@ -153,7 +153,7 @@ async def test_a_lock_that_no_longer_matches_the_manifest_is_said_out_loud() -> 
 
     told = b"".join(said).decode()
     assert "uv add" in told, "the person needs the route, not just the diagnosis"
-    assert ["uv", "sync", "--frozen", "--inexact"] in sb.calls, "and the sync still happens"
+    assert _SYNC in sb.calls, "and the sync still happens"
 
 
 async def test_a_missing_uv_is_not_reported_as_a_stale_lock() -> None:
@@ -173,9 +173,7 @@ async def test_a_missing_uv_is_not_reported_as_a_stale_lock() -> None:
         present={"pyproject.toml"},
         results={
             ("uv", "lock", "--check"): ExecResult(exit_code=127, stderr=b"uv: not found"),
-            ("uv", "sync", "--frozen", "--inexact"): ExecResult(
-                exit_code=127, stderr=b"uv: not found"
-            ),
+            tuple(_SYNC): ExecResult(exit_code=127, stderr=b"uv: not found"),
         },
     )
 
@@ -203,7 +201,7 @@ async def test_a_failed_sync_takes_its_half_built_venv_with_it() -> None:
     sb = _Recording(
         present={"pyproject.toml"},
         results={
-            ("uv", "sync", "--frozen", "--inexact"): ExecResult(
+            tuple(_SYNC): ExecResult(
                 exit_code=2, stderr=b"error: Unable to find lockfile at `uv.lock`"
             )
         },
@@ -231,7 +229,7 @@ async def test_a_failure_is_not_forgotten_by_the_next_call() -> None:
         sandbox=_Recording(  # ty: ignore[invalid-argument-type]
             present={"pyproject.toml"},
             results={
-                ("uv", "sync", "--frozen", "--inexact"): ExecResult(exit_code=2, stderr=b"boom"),
+                tuple(_SYNC): ExecResult(exit_code=2, stderr=b"boom"),
             },
         ),
     )
@@ -256,7 +254,7 @@ async def test_the_operators_reason_comes_from_the_stream_uv_actually_uses() -> 
     sb = _Recording(
         present={"pyproject.toml"},
         results={
-            ("uv", "sync", "--frozen", "--inexact"): ExecResult(
+            tuple(_SYNC): ExecResult(
                 exit_code=2,
                 stderr=b"error: no wheel for this platform",
                 stdout=b"trailing note",
@@ -289,5 +287,34 @@ async def test_a_resync_does_not_delete_what_the_person_installed() -> None:
 
     await ensure_project_env(sb, SandboxHandle(id="s1"))  # ty: ignore[invalid-argument-type]
 
-    (sync,) = [c for c in sb.calls if c[:2] == ["uv", "sync"]]
+    (sync,) = [c for c in sb.calls if c == _SYNC]
     assert "--inexact" in sync, "the lock says what must be THERE, not what must be gone"
+
+
+async def test_the_sync_does_not_see_the_python_shim() -> None:
+    """`uv sync` picks its base interpreter off PATH, and the backend puts the
+    `python` shim FIRST there so the agent's `python` beats the host's own venv
+    (#350). So uv built the project environment ON the shim and recorded it as
+    the base — measured on CI, uv 0.12.9:
+
+        venv/bin/python -> <root>/.jailbin/python3
+        pyvenv.cfg:       home = <root>/.jailbin
+
+    The shim then points into that venv, so `python` execs itself: no output,
+    no exit, killed at the exec timeout. `_usable_project_python` refuses such a
+    venv, which stops the hang — but a refused venv is a profile with none of
+    its packages, so the environment must not be built that way at all.
+
+    Stripping is pure POSIX parameter expansion against the name the backend
+    exports, so there is no tool to be missing and no path for this side to know.
+    """
+    sb = _Recording(present={"pyproject.toml"})
+
+    await ensure_project_env(sb, SandboxHandle(id="s1"))  # ty: ignore[invalid-argument-type]
+
+    (sync,) = [c for c in sb.calls if c == _SYNC]
+    assert sync[0] == "sh", "the strip needs a shell"
+    assert "SANDBOX_JAILBIN" in sync[2], "and it strips the dir the backend names"
+    assert sync[-4:] == ["uv", "sync", "--frozen", "--inexact"], (
+        "what actually runs must stay readable, not be pasted into a shell string"
+    )

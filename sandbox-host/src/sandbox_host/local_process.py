@@ -160,6 +160,10 @@ elif [ -e /usr/bin/python3 ]; then
   ln -sf /usr/bin/python3 "$ROOT/tmp/.jailbin/python3"
 fi
 export PATH="/tmp/.jailbin:/usr/bin:/bin:/usr/sbin:/sbin"
+# Named so a command that must NOT see the shim can take it off the front —
+# `uv sync` does, or uv builds the project venv on the shim itself. The
+# unjailed path exports the same variable for the same reason.
+export SANDBOX_JAILBIN=/tmp/.jailbin
 # IMPORTANT — login-shell PATH guard. The agent commonly runs commands as
 # `bash -lc "python3 -c …"`; the `-l` makes bash source /etc/profile, which
 # on Debian/Ubuntu hard-resets PATH to "/usr/local/sbin:/usr/local/bin:..."

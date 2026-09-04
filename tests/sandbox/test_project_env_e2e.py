@@ -40,7 +40,7 @@ from pathlib import Path
 
 import pytest
 
-from workspace_app.agent.python_env import ProjectEnvError, ensure_project_env
+from workspace_app.agent.python_env import _SYNC, ProjectEnvError, ensure_project_env
 from workspace_app.sandbox.local_process import LocalProcessSandbox
 from workspace_app.sandbox.protocol import SandboxHandle, SandboxSpec
 
@@ -258,3 +258,28 @@ async def test_a_package_the_person_installed_survives_the_next_turn(tmp_path: P
 
     res = await sb.exec(h, ["python", "-c", "import extradep; print('survived')"])
     assert res.exit_code == 0, res.stdout.decode() + res.stderr.decode()
+
+
+@_needs_uv
+async def test_the_sync_really_runs_without_the_shim_on_path(tmp_path: Path) -> None:
+    """Mechanical proof, and independent of which uv is installed.
+
+    uv 0.7.5 resolves a PATH interpreter to its real path; uv 0.12.9 keeps the
+    path it was given — which is how the shim ended up recorded as the venv's
+    base on CI and nowhere here. Asserting "uv does the right thing" would
+    therefore be asserting a version. Assert the precondition instead: run the
+    exact command shape the sync uses, and look at the PATH it actually gets.
+    """
+    sb, h = await _sandbox(tmp_path)
+    jailbin = str(Path(sb._require(h)) / ".jailbin")
+
+    plain = await sb.exec(h, ["printenv", "PATH"])
+    assert jailbin in plain.stdout.decode().strip().split(":"), (
+        "the control: an ordinary command DOES get the shim first"
+    )
+
+    stripped = await sb.exec(h, [*_SYNC[:4], "printenv", "PATH"])
+    assert stripped.exit_code == 0, stripped.stderr.decode()
+    assert jailbin not in stripped.stdout.decode().strip().split(":"), (
+        "the sync must not be able to build the venv on the shim"
+    )
