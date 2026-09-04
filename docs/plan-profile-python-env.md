@@ -305,17 +305,23 @@ per-call timeout 參數 —— 它吃 backend 實例層級的 `exec_timeout`,**�
   退回 carrier。⚠️ 護欄本身第一版也錯了兩次 —— 先是只看 `realpath`(整條鏈解到最後,
   中間經過 shim 那跳看不見),再是相對連結一律以起點目錄為基準(於是在 venv 自己的
   `bin/` 裡造出假迴圈,把好的 venv 也擋掉)。兩次都是 e2e 測試抓到的。
-- ⚠️ **cache 沒有上界,而且「份數被 `uid_range` 上界」這句話等於沒說** —— 預設
-  `uid_range = 2_000_000_000`。uid 由 item id 導出,所以實際上是**每個用過 uv 的 item
-  一份完整堆疊**,而且 **item 被刪掉之後那份還在**(host 不知道 item 的生死)。
-  以出貨的 `pydeps` 冷同步 382MB 算,**約 50 個 item 就把 20Gi 共享磁碟區吃滿**。
-  ⚠️ **共用一份不是選項,這是實測不是顧慮**:把共享 cache 裡的一個檔案動手腳之後,
-  uv 把被竄改的內容**原封不動裝進另一個全新的 venv 且完全沒有察覺**
-  (注入的符號 import 得到)。`UV_LINK_MODE=copy` 只解決 hardlink 別名
-  (量過:inode 由相同變獨立),**解決不了汙染**。所以 per-uid 是對的。
-  滿了的後果不是靜默壞掉:`uv sync` 失敗 → `ProjectEnvError` 帶著 uv 的原話 → 開不起來
-  但看得懂。**清理策略未定案**;要做的話按「最後存取時間」回收(blob GC 的形狀),
-  那不需要知道 item 還在不在。
+- ✅ **uv cache 定案:不共用、也不留 —— 住在 sandbox 自己的 `.home` 裡,關掉就跟著刪。**
+  兩條被否決的路各自有實測支撐:
+  - **共用一份**:uv 只在**下載時**驗 wheel 的 sha256(lock 裡確實有),之後就**信任自己
+    那份已解壓的 `archive-v0/`**。實測把共享 cache 裡一個檔案動手腳,uv **原封不動裝進
+    另一個全新 venv 且完全沒察覺**。那是跨 item 的程式碼注入路徑,而 per-item 隔離(#345)
+    正是它會打破的東西。`UV_LINK_MODE=copy` 只解決 hardlink 別名(inode 由相同變獨立,
+    也量過),解決不了這個。
+  - **per-uid 但留著**:`uid_range` 預設 2,000,000,000,所以「份數有上界」等於沒說 ——
+    實際是**每個用過 uv 的 item 一份完整堆疊,連 item 被刪掉都還在**。以出貨的 `pydeps`
+    冷同步 382MB 算,**約 50 個 item 吃滿 20Gi**,而且永遠欠一個回收器。
+
+  代價是**每次冷啟動都要重抓**,而這讓前面那條硬上限變得更要緊:`uv sync` 走一般 `exec`,
+  吃 backend 的 **60 秒總時長**,慢網路上的重 profile 會被砍成 exit 124。訊息看得懂
+  (`` `uv sync` failed (exit 124): timed out after 60s ``),但如果要讓重 profile 在慢環境
+  也起得來,**調高這條路徑的 `exec_timeout` 是下一個該做的事**(既有機制:長工作設
+  `exec_timeout=0` 靠 `log_timeout`)。四份 backend copy 現在寫法一致,per-uid 的覆寫整個
+  移除 —— 沒有持久 cache 之後,那個覆寫沒有東西可以保護,留著只會讀起來像還在保護什麼。
 - **uv 的鎖在某些檔案系統上會退化**並印出 `Shared locking is not supported by the
   current platform or filesystem`。共享磁碟區若是 NFS,`uv cache clean` 的安全性沒有
   保證 —— 不影響一般安裝,但清 cache 那個動作要小心。

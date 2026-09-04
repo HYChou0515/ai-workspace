@@ -454,19 +454,19 @@ async def test_the_project_venv_is_a_dir_the_dropped_uid_can_actually_fill(isola
 
 
 async def test_uvs_download_cache_is_named_for_every_exec(isolated) -> None:
-    """Not just the sync. A user's own `uv add` has to land in the same cache,
-    or the second copy is pure waste — and uv HARDLINKS out of it, so the copy
-    is not even cheap.
+    """Named for EVERY exec, not just the sync: a user's own `uv add` has to
+    land in the same place or the second copy is pure waste.
 
-    Beside the sandboxes rather than inside one: a reap rmtrees the whole
-    sandbox dir, so a cache within it would buy nothing and every cold start
-    would re-fetch the stack. Per uid, never shared: a shared writable cache is
-    a cross-item code-rewrite path, not a saving."""
+    This backend used to narrow the cache to a per-uid dir beside the sandboxes,
+    because a shared PERSISTENT cache is a cross-item code path. There is no
+    persistent cache any more — it lives in the sandbox and dies with it — so
+    there is nothing left to narrow, and the override is gone rather than kept
+    as a no-op that reads like it still protects something.
+    """
     h = await isolated.create(SandboxSpec())
 
     _argv, _cwd, env = isolated._exec_argv(h, ["true"])
 
     cache = Path(env["UV_CACHE_DIR"])
-    assert cache.is_dir()
-    uid = isolated._uid_for(h.id)
-    assert str(uid) in cache.parts, "shared-and-writable is a hole, not a saving"
+    root = Path(isolated._require(h))
+    assert root in cache.parents, "a reap must take the cache with it"

@@ -227,25 +227,30 @@ async def test_the_servers_own_virtualenv_never_reaches_a_sandbox(tmp_path: Path
     assert "VIRTUAL_ENV" not in env, "a workspace with no venv must be told there is none"
 
 
-async def test_uvs_cache_outlives_the_sandbox_on_this_backend_too(tmp_path: Path) -> None:
-    """The cache has to sit OUTSIDE the sandbox dir, or a reap takes it and
-    every cold start re-downloads.
+async def test_uvs_cache_lives_and_dies_inside_the_sandbox(tmp_path: Path) -> None:
+    """Never shared, never persisted — and that is a decision, not an oversight.
 
-    It was set on the isolated backends only. Everywhere else uv fell back to
-    `$HOME/.cache/uv`, and HOME is the per-sandbox `.home` — so the "cache that
-    outlives the sandbox" outlived nothing here. CI is where that showed:
-    the runner's environment names a python version this machine does not have,
-    uv fetched a whole managed CPython **per sandbox**, and the 60s exec
-    timeout was hit by an `import sys` that never got to start.
+    Shared is out because uv verifies a wheel's hash when it DOWNLOADS and then
+    trusts its own unpacked cache: a tampered file in a shared cache was
+    installed verbatim into a different, fresh venv with uv raising nothing at
+    all. That is a cross-item code path, and per-item isolation (#345) is
+    exactly what it would break.
+
+    Persisted-but-per-uid is out too: that is one full dependency stack per item
+    that ever ran uv, outliving even the item's deletion (~50 items fills a 20Gi
+    volume), and it owes a reaper forever.
+
+    So the cache sits inside the sandbox and the reap takes it. The cost — a
+    cold start re-fetches — is paid where it can be seen.
     """
     sb, h = await _sandbox(tmp_path, None)
 
     _argv, _cwd, env = sb._exec_argv(h, ["true"])
 
     cache = Path(env["UV_CACHE_DIR"])
-    assert cache.is_dir()
     root = Path(sb._require(h))
-    assert root not in cache.parents and cache != root, "a reap would take it"
+    assert root in cache.parents, "a reap must take the cache with it"
+    assert str(root / ".home") in str(cache), "and it belongs to the uid that fills it"
 
 
 async def test_the_servers_python_choice_is_not_the_sandboxes(

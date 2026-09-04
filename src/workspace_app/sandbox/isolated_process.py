@@ -32,7 +32,7 @@ from pathlib import Path
 
 import xxhash
 
-from .local_process import _HOME, _UV_CACHE, LocalProcessSandbox, _validate_sandbox_id
+from .local_process import _HOME, LocalProcessSandbox, _validate_sandbox_id
 from .protocol import EnforcedLimits, SandboxHandle, SandboxSpec
 
 logger = logging.getLogger(__name__)
@@ -397,27 +397,6 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         uid = self._uid_for(handle.id)
         cgroup = self._cgroup_root / handle.id
         env["TMPDIR"] = str(cwd)  # per-item tmp inside the workspace
-        # #775: uv's download cache, BESIDE the sandboxes rather than inside
-        # one. A reaped sandbox is rmtree'd whole, so a cache within it would
-        # buy nothing — every cold start would re-fetch the whole stack, and a
-        # failed sync stops the turn by design, so an index having a bad day
-        # would stop everyone.
-        #
-        # Per uid, never shared. The uid is derived from the item and stable
-        # across rebuilds, so this outlives the reap; and shared-and-writable
-        # would be a cross-item hole rather than a saving — uv HARDLINKS cache
-        # files into the venv, so one item could rewrite a file another is
-        # executing, and the lock's hashes are checked at install time and
-        # never again. (A shared cache is only safe read-only, which is a
-        # deploy-time decision, not this.)
-        #
-        # Set for EVERY exec, not just the sync: a user's own `uv add` must
-        # land in the same cache, or the second copy is pure waste.
-        cache = self._root / _UV_CACHE / str(uid)
-        cache.mkdir(parents=True, exist_ok=True)
-        self._chown_runner(cache, uid)
-        cache.chmod(0o700)
-        env["UV_CACHE_DIR"] = str(cache)
         wrapped = _setpriv_cgroup_argv(argv, uid=uid, gid=uid, cgroup=cgroup)
         logger.debug("isolated: exec sandbox %s as uid=%d in cgroup %s", handle.id, uid, cgroup)
         return wrapped, cwd, env

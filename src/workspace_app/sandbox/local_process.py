@@ -309,13 +309,6 @@ _JAILBIN = ".jailbin"
 # as SANDBOX_HOME; this replaces the launcher's old shared-/tmp HOME that leaked
 # a user's `pip install --break-system-packages` across sandboxes.
 _HOME = ".home"
-#: uv's download cache. A sibling of the sandbox DIRS, never inside one: a reap
-#: rmtrees the whole sandbox, so a cache within it is thrown away and every cold
-#: start re-fetches — which is what `.home/.cache/uv` was doing, including a
-#: whole managed CPython when the environment names a python version we do not
-#: have. `IsolatedProcessSandbox` narrows this to a per-uid subdir; here there
-#: is no uid separation to protect, so the one dir is shared.
-_UV_CACHE = ".uv-cache"
 
 # #775: where `uv sync` builds the workspace's own environment. A sibling of
 # the workspace, like `.home` and `.jailbin` — outside it, so walk/sync never
@@ -655,12 +648,8 @@ class LocalProcessSandbox:
             # it is the one that probes, per exec, after the mounts exist. Drop
             # any inherited value so the jail can never see the server's own.
             env.pop("VIRTUAL_ENV", None)
-            # The cache CANNOT be a sandbox sibling here: `$root/<id>` is the
-            # chroot root, so anything beside it is outside the jail entirely
-            # and would need a bind-mount of its own. Named explicitly rather
-            # than left to `$HOME/.cache/uv` so the difference is visible: in
-            # the jail the cache is per-sandbox and does not survive a reap.
-            # Only `kind: local` + `isolate` runs this; production does not.
+            # Same rule as the unjailed branch below, in the chroot's spelling:
+            # the cache lives in the sandbox's own `.home` and dies with it.
             env["UV_CACHE_DIR"] = f"/{_HOME}/.cache/uv"
         else:
             # No chroot: run directly in the workspace subdir. cwd is the
@@ -690,15 +679,22 @@ class LocalProcessSandbox:
             # `export HOME="${SANDBOX_HOME:-…}"` (#393). Survives the `setpriv`
             # wrap (no `--reset-env`) so the dropped uid's launcher reads it.
             env["SANDBOX_HOME"] = str(root / _HOME)
-            # #775: uv's cache, OUTSIDE the sandbox so it survives the reap.
-            # Without it uv falls back to `$HOME/.cache/uv` — and HOME is the
-            # per-sandbox `.home`, so the cache died with the sandbox and every
-            # cold start re-downloaded the whole stack. `IsolatedProcessSandbox`
-            # overrides this with a per-uid subdir; unjailed there is no uid
-            # separation to protect, so one shared dir is the whole story.
-            cache = self._root / _UV_CACHE
-            cache.mkdir(parents=True, exist_ok=True)
-            env["UV_CACHE_DIR"] = str(cache)
+            # #775: uv's cache lives INSIDE the sandbox and dies with it.
+            #
+            # Never shared: uv verifies a wheel's hash when it downloads and
+            # then trusts its own unpacked cache, so anyone able to write a
+            # shared cache can inject code into everyone else's next install —
+            # measured, and uv raises nothing. That is a cross-item code path,
+            # and per-item isolation (#345) is the thing it would break.
+            #
+            # Never persisted either: a per-uid cache beside the sandboxes is
+            # one full dependency stack per item that ever ran uv, outliving
+            # even the item's deletion, and it owes a reaper forever.
+            #
+            # The cost is real and deliberate: a cold start re-fetches. Named
+            # explicitly rather than left to uv's `$HOME/.cache/uv` default so
+            # that choice is visible in the code that makes it.
+            env["UV_CACHE_DIR"] = str(root / _HOME / ".cache" / "uv")
             # (Re)build + prepend the `python` shim so `python`/`python3*` route
             # to the python-stack carrier (or /usr/bin/python3), never the host's
             # own venv that heads the inherited PATH (#350). The jail path does

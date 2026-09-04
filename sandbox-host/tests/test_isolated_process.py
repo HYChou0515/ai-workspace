@@ -366,33 +366,35 @@ async def test_the_tool_view_is_never_handed_to_the_sandboxs_own_uid(tmp_path):
     assert not any(str(view) in str(p) for p in chowned)
 
 
-async def test_the_download_cache_is_per_uid_and_outlives_the_sandbox(isolated):
-    """#775 — where uv keeps its downloads decides whether "sync on every cold
-    start" is cheap or a network round trip every time.
+async def test_the_download_cache_lives_and_dies_inside_the_sandbox(isolated):
+    """#775 — where uv keeps its downloads was settled the other way round.
 
-    A reaped sandbox is rmtree'd WHOLE, so a cache inside it buys nothing: each
-    cold start would re-fetch the stack, and a failed sync stops the turn by
-    design, so an index having a bad day would stop everyone. The cache
-    therefore lives beside the sandboxes rather than inside one.
+    This test used to assert the opposite: a per-uid cache BESIDE the sandboxes,
+    so a cold start would not re-fetch. Two measurements retired that.
 
-    Keyed by UID, never shared. The uid is derived from the item and stable
-    across rebuilds, so it survives the reap; and a shared WRITABLE cache would
-    be a cross-item hole rather than a saving — uv hardlinks cache files into
-    the venv, so one item could rewrite a file another is executing, and the
-    lock's hashes are checked at install time and never again.
+    Shared is out: uv verifies a wheel's sha256 when it DOWNLOADS and then
+    trusts its own unpacked `archive-v0/`, so a tampered file in a shared cache
+    was installed verbatim into a different, fresh venv with uv raising nothing.
+    Cross-item code execution is not a saving.
+
+    Per-uid-but-persistent is out too: `uid_range` defaults to 2_000_000_000, so
+    "bounded by uid_range" bounded nothing — it is one full dependency stack per
+    item that ever ran uv, outliving even the item's deletion, ~50 items to a
+    20Gi volume, and a reaper owed forever.
+
+    So the cache is inside the sandbox and the reap takes it. The cost is that a
+    cold start re-fetches, which makes the exec timeout the next thing to look
+    at for heavy profiles on slow links — a known, stated cost rather than an
+    accident.
     """
     h = await isolated.create(SandboxSpec())
-    uid = isolated._identities[h.id].uid
 
     _argv, _cwd, env = isolated._exec_argv(h, ["true"])
 
     cache = Path(env["UV_CACHE_DIR"])
-    assert cache.name == str(uid), "one cache per uid, so no item can write another's"
     root = Path(isolated._require(h))
-    assert root != cache and root not in cache.parents, (
-        "inside the sandbox it would be rmtree'd with it — not surviving the reap is the "
-        "one thing this must not do"
-    )
+    assert root in cache.parents, "a reap must take the cache with it"
+    assert str(root / ".home") in str(cache), "and it belongs to the uid that fills it"
 
 
 async def test_the_project_venv_is_a_dir_the_dropped_uid_can_actually_fill(isolated) -> None:
@@ -431,19 +433,19 @@ async def test_the_project_venv_is_a_dir_the_dropped_uid_can_actually_fill(isola
 
 
 async def test_uvs_download_cache_is_named_for_every_exec(isolated) -> None:
-    """Not just the sync. A user's own `uv add` has to land in the same cache,
-    or the second copy is pure waste — and uv HARDLINKS out of it, so the copy
-    is not even cheap.
+    """Named for EVERY exec, not just the sync: a user's own `uv add` has to
+    land in the same place or the second copy is pure waste.
 
-    Beside the sandboxes rather than inside one: a reap rmtrees the whole
-    sandbox dir, so a cache within it would buy nothing and every cold start
-    would re-fetch the stack. Per uid, never shared: a shared writable cache is
-    a cross-item code-rewrite path, not a saving."""
+    This backend used to narrow the cache to a per-uid dir beside the sandboxes,
+    because a shared PERSISTENT cache is a cross-item code path. There is no
+    persistent cache any more — it lives in the sandbox and dies with it — so
+    there is nothing left to narrow, and the override is gone rather than kept
+    as a no-op that reads like it still protects something.
+    """
     h = await isolated.create(SandboxSpec())
 
     _argv, _cwd, env = isolated._exec_argv(h, ["true"])
 
     cache = Path(env["UV_CACHE_DIR"])
-    assert cache.is_dir()
-    uid = isolated._identities[h.id].uid
-    assert str(uid) in cache.parts, "shared-and-writable is a hole, not a saving"
+    root = Path(isolated._require(h))
+    assert root in cache.parents, "a reap must take the cache with it"
