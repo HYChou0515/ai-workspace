@@ -12,6 +12,8 @@ import type { AgentEvent } from "../../events";
 import type { Message } from "../../api/types";
 import {
   EMPTY_LOG,
+  drawOwnAsk,
+  type AgentEntry,
   type AgentLog,
   type AgentMetricsState,
   formatMetrics,
@@ -1272,5 +1274,90 @@ describe("a question already on screen from the store is not drawn again", () =>
       (e) => e.kind === "message" && e.message.role === "user",
     );
     expect(asked).toHaveLength(2);
+  });
+});
+
+describe("the sender sees their own words at once", () => {
+  // The sender is the only viewer with a reference point: they know when they
+  // pressed send, so the wait until the broadcast returns reads as a composer
+  // that ate their message. Everyone else is receiving a message a moment later
+  // with nothing to measure it against. That asymmetry is why this is drawn
+  // locally rather than by publishing the broadcast earlier server-side.
+  //
+  // The local copy is PENDING: it holds the sender's own words but not the
+  // identity the backend gives them. `created_at` is stamped once, server-side,
+  // and every de-dupe rule above keys on it — so the local copy cannot carry it
+  // and cannot be matched by it. This matches on what a sender does know (their
+  // own words, under their own name) and then ADOPTS the server's stamp when
+  // the broadcast lands, which puts the entry back under the same key the rest
+  // of this fold already uses.
+
+  const asked = (log: AgentLog) =>
+    log.entries.filter(
+      (e): e is Extract<AgentEntry, { kind: "message" }> =>
+        e.kind === "message" && e.message.role === "user",
+    );
+
+  it("draws the message the moment it is sent", () => {
+    const sent = drawOwnAsk(EMPTY_LOG, { author: "alice", content: "yo" });
+    expect(asked(sent)).toHaveLength(1);
+  });
+
+  it("adopts the broadcast rather than drawing a second bubble", () => {
+    const sent = drawOwnAsk(EMPTY_LOG, { author: "alice", content: "yo" });
+    const after = reduceAgent(sent, {
+      type: "user_message",
+      author: "alice",
+      content: "yo",
+      created_at: 100,
+    } as never);
+
+    expect(asked(after)).toHaveLength(1);
+    // Adopted, not merely kept: the entry now carries the server's stamp, so
+    // the rules that key on it (the store de-dupe, banner staleness) see the
+    // same message the backend does rather than a browser clock.
+    expect(asked(after)[0].at).toBe(100);
+  });
+
+  it("does not let my pending message swallow someone else's identical one", () => {
+    // The hazard the author key exists for, from the local side: my own "ok"
+    // must not absorb the broadcast of somebody else's "ok".
+    const mine = drawOwnAsk(EMPTY_LOG, { author: "alice", content: "ok" });
+    const after = reduceAgent(mine, {
+      type: "user_message",
+      author: "bob",
+      content: "ok",
+      created_at: 100,
+    } as never);
+
+    expect(asked(after)).toHaveLength(2);
+  });
+
+  it("adopts once, so saying the same thing twice still shows twice", () => {
+    // One pending entry cannot answer for two broadcasts. The second finds
+    // nothing left to adopt and draws — the safe direction: this fold would
+    // rather show a duplicate than lose a message.
+    const mine = drawOwnAsk(EMPTY_LOG, { author: "alice", content: "again" });
+    const once = reduceAgent(mine, {
+      type: "user_message",
+      author: "alice",
+      content: "again",
+      created_at: 100,
+    } as never);
+    const twice = reduceAgent(once, {
+      type: "user_message",
+      author: "alice",
+      content: "again",
+      created_at: 900,
+    } as never);
+
+    expect(asked(twice)).toHaveLength(2);
+  });
+
+  it("still locks the composer, exactly as the broadcast did", () => {
+    // Drawing locally must not cost the state the event carries: a turn is in
+    // flight from the moment the message is sent.
+    const sent = drawOwnAsk(EMPTY_LOG, { author: "alice", content: "yo" });
+    expect(sent.streaming).toBe(true);
   });
 });

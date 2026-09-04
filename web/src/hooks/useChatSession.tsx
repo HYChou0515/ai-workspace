@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { AgentEvent } from "../events";
 import { eventId, eventSeq, isTerminal, isTurnProgress } from "../events";
-import { type AgentLog, logFromMessages, reduceAgent } from "../pages/investigation/agentLog";
+import { type AgentLog, drawOwnAsk, logFromMessages, reduceAgent } from "../pages/investigation/agentLog";
 import { publishFileChanged } from "../lib/fileChangedBus";
 import type { MsgKey } from "../lib/i18n";
 import { type QuotaDetail, type QuotaKind, quotaMessage } from "../lib/quotaFailure";
@@ -560,11 +560,24 @@ export function useChatSession(
     async (content: string, opts?: ChatSendOpts) => {
       const trimmed = content.trim();
       if (!trimmed) return;
-      // Flip into "streaming" eagerly so the composer locks, but DON'T push the
-      // user message — it arrives via the `user_message` broadcast (#43). Stamp
-      // activity so the #202 poll gives the live stream one cycle to start.
+      // Lock the composer AND draw the words at once. The `user_message`
+      // broadcast (#43) still carries this message to every viewer, but the
+      // backend publishes it only after the whole turn preamble, so waiting for
+      // it left the SENDER — the only person who knows when they pressed send —
+      // staring at a composer that had swallowed what they typed. `drawOwnAsk`
+      // explains why this is local rather than an earlier publish; the fold
+      // adopts this entry when the broadcast arrives, so it stays one bubble.
+      //
+      // `currentUser` is the placeholder until its query settles, and an author
+      // that disagrees with the one the backend stamps means the broadcast
+      // finds nothing to adopt and draws its own. That is the direction this
+      // fold already fails in everywhere else — a duplicate, never a message
+      // that never appears — and the window is one query on mount against a
+      // person who has yet to finish typing.
+      //
+      // Stamp activity so the #202 poll gives the live stream one cycle to start.
       lastEventAtRef.current = Date.now();
-      setLog((prev) => ({ ...prev, streaming: true, error: null, metrics: null }));
+      setLog((prev) => drawOwnAsk(prev, { author: currentUser, content: trimmed }));
       try {
         await transport.post(trimmed, opts);
       } catch (err: unknown) {
@@ -610,7 +623,7 @@ export function useChatSession(
         }));
       }
     },
-    [transport, t],
+    [transport, t, currentUser],
   );
 
   const cancel = useCallback(() => {

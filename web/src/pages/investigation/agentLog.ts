@@ -77,6 +77,13 @@ export type AgentEntry =
        * the same thing in the same millisecond, and both must show — but "did
        * this already arrive by the other route". */
       fromStore?: boolean;
+      /** Drawn from the sender's own composer, before the backend has confirmed
+       * it — see `drawOwnAsk`. It carries the sender's words but not the
+       * identity the backend gives them (`created_at` is stamped once,
+       * server-side), so it is the one user entry the rules above cannot key
+       * on. The `user_message` broadcast ADOPTS it, which retires the flag and
+       * puts the entry back under the shared key. */
+      pending?: boolean;
     }
   | { kind: "tool_call"; call: ToolCallView }
   | { kind: "mention"; by: string; users: string[]; note: string; at?: number }
@@ -153,6 +160,43 @@ export const EMPTY_LOG: AgentLog = {
   compacting: null,
   rateLimited: null,
 };
+
+/** Put the sender's own words on screen the moment they send them, and lock the
+ * composer, without waiting to hear back.
+ *
+ * The message reaches the screen by a broadcast the backend publishes only after
+ * the turn preamble — persisting, compaction (which may call an LLM), then
+ * building the turn context (a cold sandbox wake, context and skill file reads,
+ * a `/tokenize` probe). Seconds, on a bad day, and all of it in front of the
+ * sender seeing what they just typed.
+ *
+ * Only the sender is hurt by that. They know when they pressed send, so the gap
+ * is a gap; every other viewer is receiving a message slightly later with
+ * nothing to measure it against. So this is drawn locally rather than by
+ * publishing the broadcast earlier, which would have moved everyone's copy and
+ * still left the sender waiting on a round-trip.
+ *
+ * The entry is `pending`: the sender's words, without the `created_at` the
+ * backend stamps. `reduceAgent`'s `user_message` case adopts it when the
+ * broadcast lands. If that broadcast never comes the entry simply stays, and
+ * the next `reconcileSnapshot` replaces it with the stored copy — the message
+ * was persisted before it was ever broadcast, so the store is where it heals. */
+export function drawOwnAsk(log: AgentLog, ask: { author: string; content: string }): AgentLog {
+  return {
+    ...log,
+    streaming: true,
+    error: null,
+    metrics: null,
+    entries: [
+      ...log.entries,
+      {
+        kind: "message",
+        pending: true,
+        message: { role: "user", author: ask.author, content: ask.content },
+      },
+    ],
+  };
+}
 
 /** How long after asking we still believe a reply is on its way.
  *
@@ -870,21 +914,47 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
       // both broadcasts, because this is a scan and not a match-and-consume. It
       // heals itself on the next reconcile, once the snapshot carries both.
       const askedAt = ev.created_at || now;
-      const alreadyDrawn = entries.some(
+      // The sender drew this themselves the instant they sent it (`drawOwnAsk`),
+      // because they are the only viewer who knows when that was: to them the
+      // wait for this broadcast reads as a composer that ate their words, while
+      // to everyone else it is just a message arriving. That local copy is the
+      // same message, so ADOPT it rather than drawing a second one — it takes
+      // the server's stamp here and stops being pending, which is what puts it
+      // under the same key as every other rule in this fold.
+      //
+      // Keyed on author + content and NOT on the timestamp, which is the one
+      // thing a browser cannot know (stamped once, server-side — that is why
+      // the store rule below can use it and this one cannot). Adoption is
+      // by INDEX and consumes exactly one entry, so a second identical send
+      // finds nothing left and draws: the same safe direction as below.
+      const mine = entries.findIndex(
         (e) =>
           e.kind === "message" &&
-          e.fromStore &&
+          e.pending &&
           e.message.role === "user" &&
           e.message.content === ev.content &&
-          e.message.author === ev.author &&
-          e.at === askedAt,
+          e.message.author === ev.author,
       );
-      if (!alreadyDrawn) {
-        entries.push({
-          kind: "message",
-          at: askedAt,
-          message: { role: "user", author: ev.author, content: ev.content },
-        });
+      const own = mine >= 0 ? entries[mine] : undefined;
+      if (own !== undefined && own.kind === "message") {
+        entries[mine] = { kind: "message", at: askedAt, message: own.message };
+      } else {
+        const alreadyDrawn = entries.some(
+          (e) =>
+            e.kind === "message" &&
+            e.fromStore &&
+            e.message.role === "user" &&
+            e.message.content === ev.content &&
+            e.message.author === ev.author &&
+            e.at === askedAt,
+        );
+        if (!alreadyDrawn) {
+          entries.push({
+            kind: "message",
+            at: askedAt,
+            message: { role: "user", author: ev.author, content: ev.content },
+          });
+        }
       }
       // #721: and the previous turn's error stops describing anything. `error`
       // is sticky by design — nothing else clears it and `reconcileSnapshot`
