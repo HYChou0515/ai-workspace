@@ -145,6 +145,30 @@ Baymard 建議用來取代 inline scroll area 的那個方向(告知總量而不
 
 ---
 
+### P5 — 標題要留在上面(P1 的修正自己漏掉的)
+
+錄完 demo 之後使用者一眼看出來:捲下去之後 **`MEMBERS` 標題和「Manage access…」不見了**。
+
+P1 把**整個** `ItemMembersPanel`(標題 + 存取狀態 chip + 按鈕 + 名單)包進捲動體,而它的
+commit message 寫著「照 `HistorySidebar` 的形狀」——**那句話是假的**:
+
+| rail 分頁 | header 在捲動體外? |
+|---|---|
+| evidence / search / history / activity | ✅ 四個都是 |
+| **members(P1 之後)** | **❌** |
+
+**又是同一個 4/5。** 我修好了「沒有捲動體」,卻在下一層把同樣的不對稱複製了一遍。
+
+修法:把 header 做成 `position: sticky; top: 0` 並給它背景(沒有背景的話名單會從標題底下透出來
+捲過去)。**放在 `ItemMembersPanel` 自己身上而不是側欄**——因為 header 是這個元件擁有的,
+釘在元件裡就對每個渲染它的容器都成立,而不是只對「記得處理的那一個」。
+`ItemChatShell` 已經有一樣的 sticky 寫法,不是新發明;而且元件不在捲動容器裡時,
+`sticky` 的排版和 `static` 完全一樣,沒有代價。
+
+真瀏覽器確認:名單捲到最後一位時,`MEMBERS` / `Restricted` / `Manage access…` 仍在原位。
+
+---
+
 ## 3. 已知取捨
 
 - **P3 的資料檢視器留白**是刻意的:把平台捲軸樣式套進第二方內容(`WuiView`)可能越界,

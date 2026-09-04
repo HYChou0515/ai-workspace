@@ -432,4 +432,32 @@ describe("the Members rail — its roster has somewhere to scroll", () => {
     expect(region).toHaveAttribute("role", "region");
     expect(region).toHaveAccessibleName();
   });
+
+  it("keeps the title and Manage access pinned while the roster moves", () => {
+    // P1 wrapped the WHOLE panel — title, access chip, "Manage access…" and the
+    // roster — in one scrolling region, so scrolling took the header away with
+    // it. Its commit message said the fix copied `HistorySidebar`; it did not.
+    // HistorySidebar (and search, evidence, activity) all keep the header
+    // OUTSIDE the scrolling body. Four of five got it right and Members did
+    // not — the same asymmetry as the original bug, reproduced one level down
+    // by the fix for it.
+    //
+    // Structural again, and for the same reason: happy-dom does no layout, so
+    // "it actually stays put" is a real-browser question. What is asserted here
+    // is the declaration that makes it stay, and the background without which
+    // the rows would scroll visibly through it.
+    openShell();
+    fireEvent.click(screen.getByTitle("Members"));
+
+    const header = screen.getByTestId("members-header");
+
+    expect(header).toHaveStyle({ position: "sticky", top: "0px" });
+    // The inline declaration, not the computed value: happy-dom does not resolve
+    // the `background` shorthand, so asking the computed style would assert
+    // nothing while looking like it asserted something.
+    expect(header.style.background).not.toBe("");
+    // …and it is INSIDE the scroller, which is what makes sticky mean anything.
+    expect(header.closest("[data-testid='members-scroll']")).not.toBeNull();
+  });
 });
+
