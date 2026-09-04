@@ -57,8 +57,15 @@ describe("workspace chat composer height", () => {
     // the composer (chips, model picker) fixed.
     renderPanel();
     const handle = screen.getByRole("separator", { name: /composer/i });
-    const box = screen.getByTestId("agent-composer");
+    // The height belongs to the TYPING AREA, not the whole form: the form also
+    // carries the chips row, the usage/token lines and the button row, and
+    // pinning its height made that content overflow the panel — seen in a real
+    // browser while every unit test was green.
+    const box = screen.getByPlaceholderText(/Ask the agent/i);
     const before = Number.parseInt(box.style.height, 10);
+    // Guard the guard: with no height at all this is NaN, and NaN + 100 === NaN
+    // would let the whole assertion pass against a box that never resizes.
+    expect(Number.isFinite(before)).toBe(true);
 
     // Drag UP (negative delta) — the composer grows, taking room from the feed.
     fireEvent(handle, pointer("pointerdown", { clientY: 400 }));
@@ -74,11 +81,25 @@ describe("workspace chat composer height", () => {
     fireEvent(handle, pointer("pointerdown", { clientY: 400 }));
     fireEvent(handle, pointer("pointermove", { clientY: 340 }));
     fireEvent(handle, pointer("pointerup", { clientY: 340 }));
-    const dragged = Number.parseInt(screen.getByTestId("agent-composer").style.height, 10);
+    const dragged = Number.parseInt(
+      screen.getByPlaceholderText(/Ask the agent/i).style.height,
+      10,
+    );
+    expect(Number.isFinite(dragged)).toBe(true);
     unmount();
 
     renderPanel();
-    expect(Number.parseInt(screen.getByTestId("agent-composer").style.height, 10)).toBe(dragged);
+    expect(Number.parseInt(screen.getByPlaceholderText(/Ask the agent/i).style.height, 10)).toBe(
+      dragged,
+    );
+  });
+
+  it("leaves the composer form itself content-sized, so nothing overflows", () => {
+    // The regression this pins: a fixed height on the FORM squeezed the chips,
+    // the usage lines and the button row until they spilled past the panel's
+    // bottom edge, cutting the send row off screen entirely.
+    renderPanel();
+    expect(screen.getByTestId("agent-composer").style.height).toBe("");
   });
 
   it("drops the textarea's own resize grip — the handle replaces it", () => {

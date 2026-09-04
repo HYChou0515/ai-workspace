@@ -23,14 +23,20 @@ describe("kb chat composer height", () => {
   it("is dragged from a handle on the feed/composer seam", async () => {
     render(<KbChatPanel chatId={null} client={mockKbApi} />);
     const handle = await screen.findByRole("separator", { name: /composer/i });
-    const box = screen.getByTestId("kb-composer");
+    // The TYPING AREA carries the height — the composer block also holds the
+    // attachment chip and the button row, and pinning the block squeezed them.
+    const box = screen.getByPlaceholderText(/knowledge base|知識庫/i);
     const before = Number.parseInt(box.style.height, 10);
+    // NaN + 80 === NaN would make this assertion pass against a box that never
+    // resizes, so require a real number first.
+    expect(Number.isFinite(before)).toBe(true);
 
     fireEvent(handle, pointer("pointerdown", { clientY: 500 }));
     fireEvent(handle, pointer("pointermove", { clientY: 420 }));
     fireEvent(handle, pointer("pointerup", { clientY: 420 }));
 
     expect(Number.parseInt(box.style.height, 10)).toBe(before + 80);
+    expect(screen.getByTestId("kb-composer").style.height).toBe(""); // block stays content-sized
   });
 
   it("keeps its own height, separate from the workspace chat's", async () => {

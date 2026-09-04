@@ -64,11 +64,12 @@ import { extractClipboardFiles, isImage, readTransferEntries } from "./transfer"
  */
 export const CHAT_COLUMN_MAX_W = 860;
 
-/** Composer height bounds. The floor keeps one line of text plus the button
- * row reachable; the ceiling stops a drag from swallowing the whole feed. */
-const COMPOSER_H_DEFAULT = 132;
-const COMPOSER_H_MIN = 84;
-const COMPOSER_H_MAX = 520;
+/** Typing-area height bounds (px). The default is the old `rows={3}`; the floor
+ * keeps a line and a half visible; the ceiling stops a drag from swallowing the
+ * feed on a short window. */
+const COMPOSER_H_DEFAULT = 64;
+const COMPOSER_H_MIN = 40;
+const COMPOSER_H_MAX = 420;
 
 /** The centred, capped reading column shared by the feed, chips row and composer. */
 const chatColumn: React.CSSProperties = {
@@ -847,16 +848,24 @@ export function AgentPanel({
         </div>
       )}
 
-      <ResizeDivider
-        orientation="horizontal"
-        ariaLabel="resize composer"
-        onResizeStart={() => {
-          composerStart.current = composerH;
-        }}
-        // Dragging UP is a negative delta and must GROW the composer, so the
-        // delta is subtracted — the same anchoring the shell's bottom panel uses.
-        onResize={(d) => setComposerH(composerStart.current - d)}
-      />
+      {/* The handle floats on the seam via negative margins, and the form below
+          is `position: relative` (its drop overlay needs that) — a positioned
+          later sibling paints OVER it, which left only the top ~6px of the
+          handle hittable and its centre dead. This wrapper lifts the whole hit
+          area above the form. Found by hit-testing the real page: every unit
+          test passed because they dispatch events straight at the element. */}
+      <div style={{ position: "relative", zIndex: 1 }}>
+        <ResizeDivider
+          orientation="horizontal"
+          ariaLabel="resize composer"
+          onResizeStart={() => {
+            composerStart.current = composerH;
+          }}
+          // Dragging UP is a negative delta and must GROW the composer, so the
+          // delta is subtracted — the same anchoring the shell's bottom panel uses.
+          onResize={(d) => setComposerH(composerStart.current - d)}
+        />
+      </div>
       <form
         data-testid="agent-composer"
         onSubmit={(e) => {
@@ -886,8 +895,10 @@ export function AgentPanel({
           display: "flex",
           flexDirection: "column",
           position: "relative",
-          height: composerH,
-          minHeight: 0,
+          // NO fixed height here: the form also carries the chips row, the
+          // usage/token lines and the button row. Pinning it squeezed all of
+          // that until it spilled past the panel's bottom edge and the send row
+          // left the screen — visible only in a real browser.
         }}
       >
         {dragging && (
@@ -1159,12 +1170,13 @@ export function AgentPanel({
             borderRadius: "var(--radius-btn)",
             padding: 8,
             fontSize: pxToRem(13),
-            // The seam handle owns the height now. The corner grip resized only
-            // the textarea, leaving the chips and the model picker where they
-            // were, and two affordances for one box is one too many.
+            // The seam handle owns this height — and only this box grows, so
+            // the rows around it keep their natural size instead of being
+            // squeezed off screen.
+            height: composerH,
+            // The corner grip is gone: a 15px target in a corner, and it moved
+            // only this box while the seam handle moves the composer as a whole.
             resize: "none",
-            flex: 1,
-            minHeight: 0,
             outline: "none",
             fontFamily: "var(--font-body)",
           }}
