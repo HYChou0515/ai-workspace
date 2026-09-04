@@ -1,10 +1,16 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render as rtlRender, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { DialogProvider } from "../../components/Dialog";
 import { NewCollectionModal, repoNameFromUrl } from "./NewCollectionModal";
+
+// The confirm dialog is at the app root (#779) and this modal asks through it
+// before dropping a typed name, so every render needs it — as every real one has.
+const render = (ui: Parameters<typeof rtlRender>[0]) =>
+  rtlRender(ui, { wrapper: DialogProvider });
 
 describe("NewCollectionModal — Documents mode (#50)", () => {
   afterEach(cleanup);
@@ -109,5 +115,42 @@ describe("NewCollectionModal — Code repository mode (#355)", () => {
     );
     // The typed name is preserved (not overwritten by the URL suggestion).
     expect(screen.getByPlaceholderText("New collection name…")).toHaveValue("My Wiki");
+  });
+});
+
+describe("NewCollectionModal — leaving with something typed (#779)", () => {
+  afterEach(cleanup);
+
+  const renderIt = () => {
+    const onClose = vi.fn();
+    render(<NewCollectionModal open onClose={onClose} onCreate={() => {}} />);
+    return onClose;
+  };
+
+  it("ignores a click on the backdrop once something has been typed", async () => {
+    const onClose = renderIt();
+    await userEvent.type(screen.getByPlaceholderText("New collection name…"), "Process SOPs");
+
+    await userEvent.click(document.querySelector(".kb-modal") as HTMLElement);
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByPlaceholderText("New collection name…")).toHaveValue("Process SOPs");
+  });
+
+  it("asks before Escape drops a typed name, and keeps it when told to", async () => {
+    const onClose = renderIt();
+    await userEvent.type(screen.getByPlaceholderText("New collection name…"), "Process SOPs");
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(onClose).not.toHaveBeenCalled();
+    await userEvent.click(await screen.findByTestId("dialog-action-keep"));
+    expect(screen.getByPlaceholderText("New collection name…")).toHaveValue("Process SOPs");
+  });
+
+  it("still closes on a backdrop click while the form is untouched", async () => {
+    const onClose = renderIt();
+    await userEvent.click(document.querySelector(".kb-modal") as HTMLElement);
+    expect(onClose).toHaveBeenCalled();
   });
 });

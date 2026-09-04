@@ -15,6 +15,7 @@
 import { useEffect, useState } from "react";
 
 import { Icon } from "../../components/Icon";
+import { useDirtyClose } from "../../hooks/useDirtyClose";
 import { useT } from "../../lib/i18n";
 import { RetrievalToggles } from "./RetrievalToggles";
 
@@ -80,14 +81,24 @@ export function NewCollectionModal({
     }
   }, [open]);
 
+  // #779: everything here is typed by hand and none of it is stored until
+  // Create — the access token especially, which usually has to be re-minted.
+  const dirty =
+    name.trim() !== "" ||
+    description.trim() !== "" ||
+    gitUrl.trim() !== "" ||
+    gitBranch.trim() !== "" ||
+    gitToken.trim() !== "";
+  const attemptClose = useDirtyClose(dirty, onClose);
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") attemptClose();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  }, [open, attemptClose]);
 
   if (!open) return null;
 
@@ -128,8 +139,11 @@ export function NewCollectionModal({
     );
   };
 
+  // #779: the backdrop is the accidental exit, so while there is something typed
+  // it does nothing at all — raising a prompt about a click the user never meant
+  // to make is itself the interruption.
   return (
-    <div className="kb-modal" role="presentation" onClick={onClose}>
+    <div className="kb-modal" role="presentation" onClick={dirty ? undefined : onClose}>
       <form
         className="kb-modal__card"
         role="dialog"
@@ -257,7 +271,7 @@ export function NewCollectionModal({
         </div>
 
         <footer className="kb-modal__foot">
-          <button type="button" className="kb-btn" onClick={onClose}>
+          <button type="button" className="kb-btn" onClick={attemptClose}>
             Cancel
           </button>
           <button type="submit" className="kb-btn kb-btn--primary" disabled={!canCreate}>

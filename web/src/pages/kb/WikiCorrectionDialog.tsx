@@ -12,6 +12,7 @@ import { useEffect, useState } from "react";
 import type { KbApi, WikiCorrectionQA } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 import { Icon } from "../../components/Icon";
+import { useDirtyClose } from "../../hooks/useDirtyClose";
 import { useT } from "../../lib/i18n";
 
 export function WikiCorrectionDialog({
@@ -38,13 +39,22 @@ export function WikiCorrectionDialog({
   const [pending, setPending] = useState<string[]>([]);
   const [pendingAnswers, setPendingAnswers] = useState<string[]>([]);
 
+  // #779: the instruction is hand-written, the AI draft cost a model call, and
+  // the mini-grill answers are a conversation — none of it is stored until submit.
+  const dirty =
+    instruction.trim() !== "" ||
+    targetPage.trim() !== "" ||
+    answered.length > 0 ||
+    pendingAnswers.some((a) => a.trim() !== "");
+  const attemptClose = useDirtyClose(dirty, onClose);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") attemptClose();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [attemptClose]);
 
   const draftMut = useMutation({
     mutationFn: () => {
@@ -114,8 +124,10 @@ export function WikiCorrectionDialog({
     );
   }
 
+  // #779: the backdrop is the accidental exit — while there is something written
+  // it does nothing rather than raising a prompt about an unintended click.
   return (
-    <div className="kb-modal" role="presentation" onClick={onClose}>
+    <div className="kb-modal" role="presentation" onClick={dirty ? undefined : onClose}>
       <form
         className="kb-modal__card"
         role="dialog"
@@ -189,7 +201,7 @@ export function WikiCorrectionDialog({
         </div>
 
         <footer className="kb-modal__foot">
-          <button type="button" className="kb-btn" onClick={onClose}>
+          <button type="button" className="kb-btn" onClick={attemptClose}>
             {t("wikiCorrection.cancel")}
           </button>
           <button

@@ -15,6 +15,7 @@ import { Icon } from "../components/Icon";
 import { UserChip } from "../components/UserChip";
 import { UserPicker } from "../components/UserPicker";
 import { useCurrentUser } from "../hooks/useCurrentUser";
+import { useDirtyClose } from "../hooks/useDirtyClose";
 import { useIsSuperuser } from "../hooks/useIsSuperuser";
 import { groupCapabilities, groupRoleLabel } from "../lib/groupRole";
 import { pxToRem } from "../lib/pxToRem";
@@ -604,9 +605,13 @@ function CreateGroupModal({
     onSuccess: onCreated,
   });
   const canCreate = name.trim().length > 0 && owner.length > 0;
+  // #779: nothing here is stored until Create. The backdrop is the accidental
+  // exit, so with something typed it does nothing; Cancel still asks.
+  const dirty = name.trim() !== "" || description.trim() !== "" || owner !== "";
+  const attemptClose = useDirtyClose(dirty, onClose);
 
   return (
-    <div role="dialog" aria-label="New group" style={modalOverlay} onClick={onClose}>
+    <div role="dialog" aria-label="New group" style={modalOverlay} onClick={dirty ? undefined : onClose}>
       <div style={modalCard} onClick={(e) => e.stopPropagation()}>
         <h2 style={{ margin: "0 0 12px", fontSize: pxToRem(16) }}>New group</h2>
         <label style={field}>
@@ -655,7 +660,7 @@ function CreateGroupModal({
           )}
         </div>
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
-          <button type="button" className="btn" data-variant="ghost" onClick={onClose}>
+          <button type="button" className="btn" data-variant="ghost" onClick={attemptClose}>
             Cancel
           </button>
           <button

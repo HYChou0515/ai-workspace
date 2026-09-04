@@ -385,3 +385,27 @@ describe("GroupsPage last-updated column", () => {
     expect(rows()).toEqual(["Eleven", "Nine"]);
   });
 });
+
+describe("New group — leaving with something typed (#779)", () => {
+  const openIt = async () => {
+    superuser.mockReturnValue(true);
+    render(<GroupsPage client={client({ listGroups: async () => [] })} />);
+    await userEvent.click(await screen.findByTestId("groups-new"));
+    return screen.getByRole("dialog", { name: "New group" });
+  };
+
+  it("ignores a backdrop click once a name has been typed", async () => {
+    const dialog = await openIt();
+    await userEvent.type(screen.getByLabelText("Group name"), "Platform");
+
+    await userEvent.click(dialog);
+
+    expect(screen.getByLabelText("Group name")).toHaveValue("Platform");
+  });
+
+  it("still closes on a backdrop click while the form is untouched", async () => {
+    const dialog = await openIt();
+    await userEvent.click(dialog);
+    expect(screen.queryByRole("dialog", { name: "New group" })).not.toBeInTheDocument();
+  });
+});

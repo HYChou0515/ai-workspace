@@ -554,4 +554,24 @@ describe("EnvVarsModal import / export", () => {
     Object.defineProperty(URL, "createObjectURL", { configurable: true, value: origCreate });
     Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: origRevoke });
   });
+
+  // #779: these are pasted credentials — the values people least want to retype,
+  // and usually not still on the clipboard.
+  it("asks before dropping pasted credentials, and keeps them when told to", async () => {
+    const { onClose } = open({ API_KEY: "sk-1" });
+    type("API_KEY=sk-2\nDB_URL=postgres://x\n");
+
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByTestId("dialog-action-keep"));
+    expect(box().value).toBe("API_KEY=sk-2\nDB_URL=postgres://x\n");
+  });
+
+  it("closes on Escape without asking when the box is untouched", () => {
+    const { onClose } = open({ API_KEY: "sk-1" });
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).toHaveBeenCalled();
+    expect(screen.queryByTestId("dialog-action-keep")).toBeNull();
+  });
 });

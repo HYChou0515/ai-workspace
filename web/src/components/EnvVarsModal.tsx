@@ -49,6 +49,7 @@ import { useRef, useState } from "react";
 import { api as defaultApi } from "../api";
 import { qk } from "../api/queryKeys";
 import type { ApiClient } from "../api/types";
+import { useDirtyClose } from "../hooks/useDirtyClose";
 import { mergeEnv, parseEnvText, setEnvValue, toEnvText, unstorable } from "../lib/envFile";
 import { deriveEnvNeeds } from "../lib/envNeeds";
 import { fuzzyFilter } from "../lib/fuzzy";
@@ -78,6 +79,10 @@ export function EnvVarsModal({
   const t = useT();
   const [text, setText] = useState(() => toEnvText(envVars));
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // #779: nothing here is stored until Save, and these are pasted credentials —
+  // the values a person is least likely to still have on the clipboard.
+  const attemptClose = useDirtyClose(text !== toEnvText(envVars), onClose);
 
   // The picker's own query, by the same key: one answer to "which tools does
   // this item run", shared with the tool picker rather than re-resolved here.
@@ -207,7 +212,7 @@ export function EnvVarsModal({
 
   return (
     <ModalShell
-      onClose={onClose}
+      onClose={attemptClose}
       ariaLabel={t("env.title")}
       data-testid="env-modal"
       width={520}

@@ -14,7 +14,7 @@
  */
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import type { CSSProperties } from "react";
+import { useState, type CSSProperties } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { api } from "../api";
@@ -22,6 +22,7 @@ import { qk } from "../api/queryKeys";
 import { Icon } from "../components/Icon";
 import { ItemForm, pruneEmpty } from "../components/ItemForm";
 import { ModalShell } from "../components/ModalShell";
+import { useDirtyClose } from "../hooks/useDirtyClose";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { useAppManifest } from "../hooks/useResources";
 import { pxToRem } from "../lib/pxToRem";
@@ -69,12 +70,16 @@ export function AppNewItem() {
   });
 
   const close = () => navigate(`/a/${slug}`);
+  // #779: a create form is unsaved work by definition, so both deliberate exits
+  // (Escape via the shell, and the ✕ below) run through the same guard.
+  const [dirty, setDirty] = useState(false);
+  const attemptClose = useDirtyClose(dirty, close);
   const noun = manifest?.item.noun ?? "item";
   const article = /^[aeiou]/i.test(noun) ? "an" : "a";
 
   return (
     <ModalShell
-      onClose={close}
+      onClose={attemptClose}
       ariaLabel={`Start ${article} ${noun.toLowerCase()}`}
       data-testid="page-app-new"
       width={620}
@@ -96,7 +101,7 @@ export function AppNewItem() {
                 Start {article} {noun.toLowerCase()}
               </h2>
             </div>
-            <button type="button" aria-label="Close" onClick={close} style={{ ...ghostBtn, display: "inline-flex", alignItems: "center", height: 28, padding: "0 10px" }}>
+            <button type="button" aria-label="Close" onClick={attemptClose} style={{ ...ghostBtn, display: "inline-flex", alignItems: "center", height: 28, padding: "0 10px" }}>
               <Icon name="x" size={14} />
             </button>
           </div>
@@ -110,6 +115,7 @@ export function AppNewItem() {
               ownerId={me}
               formId={FORM_ID}
               hideFooter
+              onDirtyChange={setDirty}
               submitLabel="Create"
               onSubmit={(values) => {
                 if (!String(values.title ?? "").trim()) return;

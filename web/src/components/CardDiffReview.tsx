@@ -15,6 +15,7 @@ import { useEffect, useMemo, useState } from "react";
 import { type FileService, investigationFileService } from "../api/fileService";
 import { qk } from "../api/queryKeys";
 import { useT } from "../lib/i18n";
+import { useDirtyClose } from "../hooks/useDirtyClose";
 import { ModalShell } from "./ModalShell";
 import { MonacoDiffEditor } from "./MonacoDiffEditor";
 import { pxToRem } from "../lib/pxToRem";
@@ -168,9 +169,14 @@ function CardDiffModal({
 
   const allNew = loaded != null && loaded.current.trim() === "";
 
+  // #779: both panes of user work — the rewritten proposal and the revise note.
+  // Neither is persisted until a decision commits it, so leaving drops them.
+  const dirty = loaded != null && (draft !== loaded.todo || note.trim() !== "");
+  const attemptClose = useDirtyClose(dirty, onClose);
+
   return (
     <ModalShell
-      onClose={onClose}
+      onClose={attemptClose}
       ariaLabel={t("cardDiff.title")}
       data-testid="card-diff-modal"
       width={1100}

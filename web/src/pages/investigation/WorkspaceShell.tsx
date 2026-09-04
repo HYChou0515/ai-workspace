@@ -35,6 +35,7 @@ import { ItemAccessDialog, ItemMembersPanel } from "../../components/ItemMembers
 import { ShareChatDialog } from "../../components/ShareChatDialog";
 import { resolveUploadDir } from "./attach";
 import { useDialog } from "../../components/Dialog";
+import { useDirtyClose } from "../../hooks/useDirtyClose";
 import { FileServiceProvider, investigationFileService } from "../../api/fileService";
 import { WorkspaceSlugProvider, useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { EditModeProvider, useEditMode } from "../../hooks/editMode";
@@ -871,9 +872,13 @@ export function EditItemModal({
   // item's Edit modal yet had no button to change its access. Mirror the server's
   // rule exactly (public never confers change_permission — see the helper).
   const canManageAccess = canChangeItemPermission(perm, me, owner, isSuperuser, groups);
+  // #779: the form owns the values, so it is the only thing that can say whether
+  // leaving would drop an edit.
+  const [dirty, setDirty] = useState(false);
+  const attemptClose = useDirtyClose(dirty, onClose);
   return (
     <ModalShell
-      onClose={onClose}
+      onClose={attemptClose}
       labelledBy="edit-item-title"
       width={460}
       panelStyle={{ padding: 20 }}
@@ -887,6 +892,7 @@ export function EditItemModal({
         initialValues={item as Record<string, unknown>}
         submitLabel="Save"
         onSubmit={(values) => onSubmit(pruneEmpty(values))}
+        onDirtyChange={setDirty}
       />
       {/* #chat-private: a chat-first App shares from the toolbar / rail (simple
           share), not the role-ladder "manage access" — hide it here. */}
