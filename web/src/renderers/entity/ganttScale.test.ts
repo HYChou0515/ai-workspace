@@ -21,6 +21,7 @@ import {
   columnOf,
   dateAtColumn,
   formatWeekLabel,
+  instantOf,
   isWeekend,
   shiftWorkingDays,
   weekLabelOf,
@@ -79,6 +80,127 @@ describe("spanToDates", () => {
   it("returns null for junk or a reversed range", () => {
     expect(spanToDates("nope")).toBeNull();
     expect(spanToDates("2026-02-01/2026-01-01")).toBeNull();
+  });
+
+  it("keeps the time of day when the span names one (#785)", () => {
+    // The parser already read these — `Date.parse` accepts them — and then threw
+    // the clock away on the way out, so "09:30 to 17:00" was stored, reloaded,
+    // and silently redrawn as two whole days. Minutes are the stated precision.
+    expect(spanToDates("2026-01-05T09:30/2026-01-05T17:00")).toEqual({
+      start: "2026-01-05T09:30",
+      end: "2026-01-05T17:00",
+    });
+  });
+
+  it("reads a clock with no zone as UTC, like every other date in this module", () => {
+    // ES parses a zone-less date-TIME as LOCAL and a zone-less DATE as UTC, so
+    // taking the default would put the two halves of one span in two different
+    // calendars — and a 23:30 bar would jump a day for anyone east of London.
+    expect(spanToDates("2026-01-05T23:30/2026-01-06")).toEqual({
+      start: "2026-01-05T23:30",
+      end: "2026-01-06",
+    });
+    expect(spanToDates("2026-01-05T09:30:45.123Z/2026-01-05T17:00:00Z")).toEqual({
+      start: "2026-01-05T09:30",
+      end: "2026-01-05T17:00",
+    });
+  });
+
+  it("leaves a plain date plain, so nothing already on screen moves", () => {
+    // The whole of P2 rests on this: a plain-date span takes the identical path
+    // it always did, so the chart is pixel-for-pixel what it was.
+    expect(spanToDates("2026-01-10/2026-01-20")).toEqual({
+      start: "2026-01-10",
+      end: "2026-01-20",
+    });
+  });
+});
+
+describe("a span that names a clock still lands on the right day (#785)", () => {
+  // P2 keeps the chart day-granular on purpose — the columns get finer in P3.
+  // What has to hold NOW is that carrying a clock through the parser cannot
+  // break the day arithmetic: every one of these used to be handed a bare
+  // `YYYY-MM-DD` and would read `2026-01-05T09:30` as a local-time instant or,
+  // in `weekdayOf`'s case, as an Invalid Date.
+  it("measures the same columns as the plain-date span over those days", () => {
+    expect(columnOf("2026-01-05T09:30", "2026-01-07T17:00", false)).toBe(
+      columnOf("2026-01-05", "2026-01-07", false),
+    );
+    expect(barColumns({ start: "2026-01-05T09:30", end: "2026-01-07T17:00" }, false)).toBe(3);
+  });
+
+  it("counts DAYS, not rounded elapsed time — 01:00 to 23:00 next day is one day", () => {
+    // The measurement it replaces divided elapsed ms by a day and rounded, so a
+    // 46-hour span read as two days and an 11-hour one as none. Stated against
+    // the plain-date answer so it means the same thing in any TZ the suite runs
+    // in — which is also the bug: a zone-less clock parses as LOCAL.
+    expect(daysBetween("2026-01-05T01:00", "2026-01-06T23:00")).toBe(
+      daysBetween("2026-01-05", "2026-01-06"),
+    );
+    expect(columnOf("2026-01-05T01:00", "2026-01-06T23:00", false)).toBe(1);
+  });
+
+  it("knows a Saturday afternoon is still a weekend", () => {
+    expect(isWeekend("2026-01-10T14:00")).toBe(true);
+  });
+
+  it("counts working columns across a weekend from the clock's own day", () => {
+    // Fri 09:30 → Mon 17:00 is two working columns apart, weekend collapsed.
+    expect(columnOf("2026-01-09T09:30", "2026-01-12T17:00", true)).toBe(1);
+  });
+
+  it("shifts and measures from the day, not from an unparseable string", () => {
+    expect(shiftDate("2026-01-05T09:30", 1)).toBe("2026-01-06");
+    expect(daysBetween("2026-01-05T09:30", "2026-01-07T17:00")).toBe(2);
+    expect(weekStart("2026-01-07T17:00")).toBe("2026-01-05");
+  });
+
+  it("does not lose the clock when the bar is dragged", () => {
+    // Dragging measures in whole days here (P3 makes it finer), so a move is a
+    // change of DAY — the time of day is not the drag's to throw away. Every
+    // shift helper returns a bare date, so without this a single drag silently
+    // flattened "09:30–17:00" into a two-day bar.
+    expect(applyDrag({ start: "2026-01-05T09:30", end: "2026-01-05T17:00" }, "move", 1, false)).toEqual(
+      { start: "2026-01-06T09:30", end: "2026-01-06T17:00" },
+    );
+    expect(applyDrag({ start: "2026-01-05T09:30", end: "2026-01-07T17:00" }, "end", -1, false)).toEqual(
+      { start: "2026-01-05T09:30", end: "2026-01-06T17:00" },
+    );
+  });
+
+  it("names a column with a bare date even when the origin carries a clock", () => {
+    // `dateAtColumn` is `columnOf`'s inverse and its answers become dates the
+    // axis and the drag then shift. Column 0 of a timed origin is the only case
+    // that reaches the return without passing through a shift, so it is the one
+    // that could hand back a clock where the rest of the module expects a day.
+    expect(dateAtColumn("2026-01-05T09:30", 0, true)).toBe("2026-01-05");
+    expect(dateAtColumn("2026-01-05T09:30", 2, false)).toBe("2026-01-07");
+  });
+
+  it("still writes plain dates for a plain-date bar", () => {
+    expect(applyDrag({ start: "2026-01-05", end: "2026-01-07" }, "move", 1, false)).toEqual({
+      start: "2026-01-06",
+      end: "2026-01-08",
+    });
+  });
+});
+
+describe("instantOf (#785)", () => {
+  it("reads a plain date as the WHOLE day — first minute to last", () => {
+    expect(instantOf("2026-01-05", "start")).toBe(Date.parse("2026-01-05T00:00:00Z"));
+    expect(instantOf("2026-01-05", "end")).toBe(Date.parse("2026-01-05T23:59:00Z"));
+  });
+
+  it("reads a clock as exactly that minute at either end", () => {
+    expect(instantOf("2026-01-05T09:30", "start")).toBe(Date.parse("2026-01-05T09:30:00Z"));
+    expect(instantOf("2026-01-05T09:30", "end")).toBe(Date.parse("2026-01-05T09:30:00Z"));
+  });
+
+  it("makes a one-day span last a day, which is what the +1 was patching", () => {
+    // The inclusive reading the chart has always drawn, now said in the value:
+    // a plain single date spans 1439 minutes, not zero.
+    const oneDay = instantOf("2026-01-05", "end") - instantOf("2026-01-05", "start");
+    expect(oneDay).toBe(1439 * 60_000);
   });
 });
 

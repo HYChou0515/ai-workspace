@@ -3,9 +3,19 @@
  * `GanttView` component stays a thin pointer-event shell. The timeline is a
  * fixed px-per-day scale (zoom picks the density); a pixel drag converts to a
  * whole number of days, and a bar drag rewrites the record's `daterange` value.
- * Dates are day-resolution `YYYY-MM-DD` strings compared lexicographically
- * (== chronologically, since they're zero-padded) and shifted in UTC to dodge
- * timezone drift.
+ * A span edge is one of two shapes, both UTC, both fixed-width in their date
+ * part so a same-shape comparison is still chronological: `YYYY-MM-DD`, which
+ * names a WHOLE day, and `YYYY-MM-DDTHH:mm`, which names one minute of one
+ * (#785). The distinction is the point — a plain date has always been read
+ * inclusively (7/13–7/15 is three days), and that reading is only expressible
+ * if the value can still say "a day" rather than collapsing to midnight. Ask
+ * {@link instantOf} what an edge MEANS at a given end; ask {@link dayOf} which
+ * day it falls on. Comparing the two shapes as text does not work and is the
+ * one thing to avoid here.
+ *
+ * The chart itself is still day-granular: every position is a column offset in
+ * days, and the clock only decides which day an edge lands on. Finer columns
+ * are P3.
  */
 
 export type Zoom = "day" | "week" | "month";
@@ -13,6 +23,7 @@ export type DragMode = "move" | "start" | "end";
 export type Span = { start: string; end: string };
 
 const DAY_MS = 86_400_000;
+const MINUTE_MS = 60_000;
 
 /** The three named zoom stops, in px-per-day — labelled anchor points the slider
  * snaps to. They are NOT the ends of the track: it travels past `day` (zoom in
@@ -67,14 +78,21 @@ function toISODate(ms: number): string {
   return new Date(ms).toISOString().slice(0, 10);
 }
 
-/** Add (or subtract) whole days to a `YYYY-MM-DD` date, in UTC. */
+/** Add (or subtract) whole days to a date, in UTC. Takes the day out of an edge
+ * that also names a clock, and always returns a bare `YYYY-MM-DD`. */
 export function shiftDate(date: string, days: number): string {
-  return toISODate(Date.parse(date) + days * DAY_MS);
+  return toISODate(Date.parse(`${dayOf(date)}T00:00:00Z`) + days * DAY_MS);
 }
 
-/** Whole UTC days from `a` to `b` (negative if `b` precedes `a`). */
+/** Whole UTC days from `a` to `b` (negative if `b` precedes `a`).
+ *
+ * Counted between the two DAYS, not by dividing elapsed time: 01:00 to 23:00
+ * the next day is one day apart, though only 46 hours passed, and 09:00 to
+ * 20:00 the same day is zero though eleven hours did. Rounding the quotient
+ * got both wrong the moment spans could carry a clock. */
 export function daysBetween(a: string, b: string): number {
-  return Math.round((Date.parse(b) - Date.parse(a)) / DAY_MS);
+  const ms = Date.parse(`${dayOf(b)}T00:00:00Z`) - Date.parse(`${dayOf(a)}T00:00:00Z`);
+  return Math.round(ms / DAY_MS);
 }
 
 /** A horizontal pixel delta → the nearest whole number of days at this
@@ -107,20 +125,80 @@ export function spanToDates(value: unknown): Span | null {
   } else {
     return null;
   }
-  let sa = Date.parse(String(a));
-  let sb = Date.parse(String(b));
-  if (Number.isNaN(sa) && Number.isNaN(sb)) return null;
-  if (Number.isNaN(sa)) sa = sb;
-  if (Number.isNaN(sb)) sb = sa;
-  if (sb < sa) return null;
-  return { start: toISODate(sa), end: toISODate(sb) };
+  let sa = canonicalEdge(a);
+  let sb = canonicalEdge(b);
+  if (sa === null && sb === null) return null;
+  sa ??= sb as string;
+  sb ??= sa;
+  // Compared as the instants they DENOTE, not as bytes: a plain end date means
+  // that day's last minute, so `09:30/the same date` is a morning's work, not a
+  // reversed range. String order would have called it reversed and dropped it.
+  if (instantOf(sb, "end") < instantOf(sa, "start")) return null;
+  return { start: sa, end: sb };
+}
+
+/** A span edge that names only a day — the form every span had before #785, and
+ * still the form the chart writes back on a drag. */
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Whether a value already carries a UTC offset (`Z` or `±HH:MM`). */
+const ZONED = /(?:Z|[+-]\d{2}:?\d{2})$/;
+
+/** One span edge → its canonical text, or `null` if it is not a time at all.
+ *
+ * Canonical means: a day stays a bare `YYYY-MM-DD`, and a clock becomes
+ * `YYYY-MM-DDTHH:mm` — minutes, which is the precision a span is specified to.
+ * Keeping the two forms distinct is what lets a plain date go on meaning a
+ * WHOLE day (see {@link instantOf}) instead of silently becoming midnight. */
+function canonicalEdge(value: unknown): string | null {
+  const raw = String(value).trim().replace(" ", "T");
+  if (!raw) return null;
+  const ms = parseUtc(raw);
+  if (Number.isNaN(ms)) return null;
+  return DATE_ONLY.test(raw)
+    ? new Date(ms).toISOString().slice(0, 10)
+    : new Date(ms).toISOString().slice(0, 16);
+}
+
+/** Parse a span edge as UTC. ES reads a zone-less DATE as UTC but a zone-less
+ * DATE-TIME as LOCAL, which would put the two halves of one span in two
+ * different calendars and make a late-evening bar jump a day for anyone east
+ * of London. Every other date in this module is UTC; so is this. */
+function parseUtc(raw: string): number {
+  if (DATE_ONLY.test(raw)) return Date.parse(`${raw}T00:00:00Z`);
+  return Date.parse(ZONED.test(raw) ? raw : `${raw}Z`);
+}
+
+/** The instant a span edge DENOTES, in epoch ms.
+ *
+ * A plain `YYYY-MM-DD` names a whole DAY, so it means different things at the
+ * two ends — as a start, that day's first minute; as an end, its last. That is
+ * the same inclusive reading the chart has always drawn (7/13–7/15 is three
+ * days, not two), just said in the value instead of patched on afterwards with
+ * a `+1`. An edge that names a clock means exactly that minute at either end. */
+export function instantOf(value: string, edge: "start" | "end"): number {
+  const ms = parseUtc(value);
+  if (edge === "start" || !DATE_ONLY.test(value)) return ms;
+  return ms + DAY_MS - MINUTE_MS; // 23:59 — the day's last minute
+}
+
+/** The UTC calendar day an edge falls on. Every function that asks a question
+ * about a DAY (which column, which weekday, which week) reads this first, so a
+ * value carrying a clock lands on the day that clock is in rather than parsing
+ * as garbage. */
+export function dayOf(value: string): string {
+  return value.slice(0, 10);
 }
 
 /** Apply a drag of `days` to a span: `move` shifts both ends (keeps duration);
  * `start` / `end` resize one edge, clamped so the range never inverts. With
  * `skip`, `days` is a count of WORKING days so the drag hops over weekends. */
 export function applyDrag(span: Span, mode: DragMode, days: number, skip = false): Span {
-  const shift = (d: string) => shiftWorkingDays(d, days, skip);
+  // A drag moves the bar by whole DAYS (P3 makes the step finer), so the time
+  // of day rides along — it is not the drag's to discard. Every shift helper
+  // answers in bare dates, so without re-attaching the clock one drag would
+  // silently flatten a 09:30–17:00 bar into two whole days.
+  const shift = (d: string) => shiftWorkingDays(d, days, skip) + d.slice(10);
   if (mode === "move") {
     return { start: shift(span.start), end: shift(span.end) };
   }
@@ -352,7 +430,7 @@ const WEEKDAY_INDEX: Record<Weekday, number> = {
 
 /** The UTC day-of-week of a `YYYY-MM-DD` date, 0 = Sunday … 6 = Saturday. */
 function weekdayOf(date: string): number {
-  return new Date(`${date}T00:00:00Z`).getUTCDay();
+  return new Date(`${dayOf(date)}T00:00:00Z`).getUTCDay();
 }
 
 /** The first day of the week `date` falls in, for a week that begins on `start`
@@ -377,11 +455,17 @@ export function isWeekend(date: string): boolean {
  * calendar days. Signed; a weekend date collapses onto the following working
  * column (so Fri, Sat, Sun, next-Mon are cols n, n+1, n+1, n+1). */
 export function columnOf(from: string, date: string, skip: boolean): number {
-  if (!skip) return daysBetween(from, date);
-  if (date === from) return 0;
-  const sign = date > from ? 1 : -1;
-  const lo = sign > 0 ? from : date;
-  const total = daysBetween(lo, sign > 0 ? date : from); // ≥ 0
+  // Reduced to bare days FIRST. Both the ordering below and the week walk are
+  // string comparisons, and those are only sound between two edges of the same
+  // shape — `"2026-01-05"` sorts before `"2026-01-05T00:00"` though they name
+  // the same moment.
+  const a = dayOf(from);
+  const b = dayOf(date);
+  if (!skip) return daysBetween(a, b);
+  if (b === a) return 0;
+  const sign = b > a ? 1 : -1;
+  const lo = sign > 0 ? a : b;
+  const total = daysBetween(lo, sign > 0 ? b : a); // ≥ 0
   const fullWeeks = Math.floor(total / 7);
   let wd = fullWeeks * 5;
   const dow = weekdayOf(lo);
@@ -417,7 +501,7 @@ export function dateAtColumn(minDate: string, col: number, skip: boolean): strin
   // `columnOf` reports (weekend days contribute no working days, so measuring
   // from the Saturday or from the Monday gives the same answer for every date
   // at or after it) — it only makes this function its true inverse.
-  let d = minDate;
+  let d = dayOf(minDate);
   while (isWeekend(d)) d = shiftDate(d, 1);
   while (remaining > 0) {
     d = shiftDate(d, dir);
