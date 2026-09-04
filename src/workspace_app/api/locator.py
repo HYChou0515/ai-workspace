@@ -44,6 +44,20 @@ from .item_conversation_perm import item_conversation_mirror
 # facade's liveness memo) so there is one granularity to reason about.
 _ACCESS_WINDOW_S = 5.0
 
+#: How many items' access facts to keep. The window decides whether an entry is
+#: TRUSTED; this decides whether it is KEPT — without it the memo held a full
+#: copy of every item a pod had ever gated, for the life of the process, since
+#: `forget_access` is called from exactly one route. Its sibling `_item_facts`
+#: in `api/app.py` carries the same bound and the same reason: a cache, not a
+#: map. Sized to match it, because they hold the same kind of thing per item.
+_ACCESS_MAX = 4096
+
+#: The same bound for the caller-groups memo, the second thing `require_access`
+#: caches. Both arrived together on this branch; bounding one and not the other
+#: is how a rule stops being true. Keyed by person rather than item, so it grows
+#: more slowly — which is why it would have been the one to notice last.
+_GROUPS_MAX = 4096
+
 
 class TurnFacts(NamedTuple):
     """One item's turn-relevant fields, resolved together. See `ItemLocator.turn_facts`."""
@@ -189,7 +203,7 @@ class ItemLocator:
         # between "no such id" and "another App holds it" is not a stranger's
         # to learn.
         facts = load_access_facts(self._spec, item_id, include_deleted=True)
-        if facts is not None and facts.slug == slug:
+        if facts is not None and app_matches(facts.slug, slug):
             refuse_if_gone(facts, item_id)
         raise HTTPException(status_code=404, detail=f"item {item_id!r} not found in app {slug!r}")
 
@@ -219,6 +233,8 @@ class ItemLocator:
             # just created — would keep 404-ing for the rest of the window. A
             # permission is a fact about a thing that exists; absence is not.
             if facts is not None:
+                if len(self._access) > _ACCESS_MAX:  # bounded: a cache, not a map
+                    self._access.clear()
                 self._access[item_id] = (facts, now)
         else:
             facts = cached[0]
@@ -235,6 +251,8 @@ class ItemLocator:
         cached = self._groups.get(user)
         if cached is None or now - cached[1] >= self._access_window:
             cached = (groups_of(self._spec, user), now)
+            if len(self._groups) > _GROUPS_MAX:  # bounded: a cache, not a map
+                self._groups.clear()
             self._groups[user] = cached
         return cached[0]
 

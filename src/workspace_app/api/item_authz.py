@@ -2,25 +2,34 @@
 plan-permissions.md Rollout PR3).
 
 THREE gates stand in front of the item routes, and which one a route uses is
-not guessable from its path. Grepped, not remembered — three separate claims in
-this branch's own comments got it wrong:
+not guessable from its path. **Ask the code, every time.** A hand-written table
+of "which route uses which gate" has now drifted TWICE in this branch — the
+second time in a commit that said the table was grepped rather than remembered,
+and it still listed a route that does not exist, omitted `/close`, and missed
+that `require_chat` puts the chat routes behind `require_item` as well. A list
+maintained by hand is a claim that rots; the command that generates it does not:
 
-===========================  ==========================================
-gate                         routes
-===========================  ==========================================
-``require_item_access``      ``/resources`` ``/environment``
-(here; via ``_authorize_item``   ``/permission`` ``/members``, the item
- in `item_routes`, ``_gate``     PATCH, the env-provider routes, and
- in `env_provider_routes`)      ``DELETE /me/resources/live/{id}``
-``ItemLocator.require_access``  ``/exec`` ``/files`` ``/chats`` and the
-                                streams — 59 call sites across
-                                `file_routes`, `chat_routes`,
-                                `workflow_routes`
-``ItemLocator.require_item``    ``/tools`` ``/entities`` ``/export``
-                                (`tools_routes`, `entity_routes`,
-                                 `capability_routes`) — validates the
-                                 slug pairing and authorizes NOBODY
-===========================  ==========================================
+    grep -rnE "require_item_access\(|_authorize_item\(|_gate\(|require_access\(" \
+         src/workspace_app/api/*.py | grep -v "def "
+    grep -rnE "require_item\(|require_chat\(" \
+         src/workspace_app/api/*.py | grep -v "def "
+
+What each gate IS, which is the part worth remembering:
+
+* ``require_item_access`` (here) — the authorizing gate for hand-written item
+  routes. Validates the slug pairing, then ``read_meta`` (404) and the verb
+  (403). Reached directly and through ``_authorize_item`` / ``_gate`` wrappers.
+* ``ItemLocator.require_access`` — the same decision behind a 5-second facts
+  MEMO, for the routes that are called in bursts (files, chat, streams).
+* ``ItemLocator.require_item`` — slug pairing ONLY, from a single read, and it
+  authorizes NOBODY. Anything behind it is unauthenticated as far as this file
+  is concerned. ``require_chat`` builds on it, so the chat-scoped endpoints sit
+  behind it too, in addition to their own ``require_access``.
+
+The item auto-CRUD (``PATCH /rca-investigation/{id}`` and friends) is behind
+none of these — it is storage-gated by ``work_item_access_scope``, which is why
+a rule added to this file does not reach it. That is the door `perm/checker.py`
+exists to hold.
 
 A difference a caller needs is a PARAMETER on ``require_item_access``
 (``slug=ANY_APP`` for a route with no slug in its path, ``allow_deleted`` for a
@@ -72,6 +81,13 @@ class AnyApp:
     happens to it."""
 
     __slots__ = ()
+
+    def __repr__(self) -> str:
+        # The 404 detail interpolates whatever it was given. Today the only
+        # ANY_APP caller maps every refusal to "unknown environment", so the
+        # default `<AnyApp object at 0x…>` is invisible — until a second caller
+        # does not, and then it is in somebody's error body.
+        return "<any app>"
 
 
 ANY_APP = AnyApp()

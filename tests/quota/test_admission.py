@@ -183,6 +183,80 @@ async def test_no_configured_limit_never_refuses():
     await _gate(store, clock, PerUserResources()).check("a-new", ONE_CORE)
 
 
+class _CountingStore(IActivityStore):
+    """Wraps a store and counts the ledger reads. Round-12 M36/M37: the two
+    tests below were named after guards they did not pin — with either early
+    return deleted they still passed, because `_enforce`'s own `if limit and …`
+    refuses nothing when the limits are zero, and a stub `limits_for` that
+    ignores its argument answers happily for an owner of `None`.
+
+    What the guards actually buy is the QUERY that follows them, so that is what
+    is asserted. "A no-op" in the docstring means no work, not merely no
+    refusal — and no work is the observable half."""
+
+    def __init__(self, inner: IActivityStore) -> None:
+        self._inner = inner
+        self.reads = 0
+
+    async def live_for(self, owner: str, *, since_ms: int) -> list[LiveSandbox]:
+        self.reads += 1
+        return await self._inner.live_for(owner, since_ms=since_ms)
+
+    async def is_live(self, item_id: str, *, since_ms: int) -> bool:
+        self.reads += 1
+        return await self._inner.is_live(item_id, since_ms=since_ms)
+
+    # The rest of the contract, delegated explicitly. `__getattr__` would have
+    # been shorter and would NOT have satisfied the ABC — which `ty` said and no
+    # test would have: a double that implements less than the real thing is
+    # immune to exactly the changes worth catching.
+    async def bump(
+        self,
+        item_id: str,
+        *,
+        owner: str = "",
+        cpu_milli: int = 0,
+        memory_bytes: int = 0,
+    ) -> None:
+        await self._inner.bump(item_id, owner=owner, cpu_milli=cpu_milli, memory_bytes=memory_bytes)
+
+    async def last_active_ms(self, item_id: str) -> int | None:
+        return await self._inner.last_active_ms(item_id)
+
+    async def forget(self, item_id: str) -> None:
+        await self._inner.forget(item_id)
+
+    async def owner_of(self, item_id: str) -> str | None:
+        return await self._inner.owner_of(item_id)
+
+
+async def test_an_unconfigured_limit_does_not_even_ask_the_ledger():
+    """M37. Deleting `if not self._configured(limits): return` leaves the older
+    assertion green; it does not leave this one green."""
+    store, clock = _store()
+    for i in range(50):
+        await store.bump(f"a-{i}", owner="alice", cpu_milli=4000)
+    counting = _CountingStore(store)
+
+    await _gate(counting, clock, PerUserResources()).check("a-new", ONE_CORE)
+
+    assert counting.reads == 0, "queried the ledger for a deploy with no per-person limit"
+
+
+async def test_an_item_with_no_debtor_does_not_even_ask_the_ledger():
+    """M36. Same shape for `if not owner: return` — and the same reason it was
+    invisible: with no debtor the tally comes back empty, so nothing is refused
+    either way."""
+    store, clock = _store()
+    await store.bump("a-1", owner="alice", cpu_milli=4000)
+    counting = _CountingStore(store)
+
+    # `owner_of` answers None for ids outside the "a-" prefix in this harness.
+    await _gate(counting, clock, PerUserResources(count=1)).check("orphan-1", ONE_CORE)
+
+    assert counting.reads == 0, "queried the ledger for an item with no resolvable debtor"
+
+
 async def test_single_process_deploy_without_a_shared_store_is_not_gated():
     """No shared activity store ⇒ no cross-pod tally to enforce against. Gating
     on a pod-local guess would refuse people for sandboxes this pod cannot see."""

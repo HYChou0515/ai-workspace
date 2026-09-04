@@ -147,25 +147,26 @@ _MAX_BYTES = 1024**5  # 1 PiB
 
 
 def _within(value: float | int, ceiling: float | int) -> bool:
-    """A finite, positive number no larger than `ceiling`.
+    """A positive number no larger than `ceiling`.
 
-    Two guards, and the ORDER is the point. `math.isfinite` is what stops
-    `Infinity` and `NaN`: pydantic accepts both, neither is `<= 0`, and both
-    collapse to `None` on the store round trip — so a request to SET a size
-    performed a RESET and answered 200, doing something other than what was
-    asked and calling it success.
+    `Infinity` and `NaN` are refused BY THIS COMPARISON, and that is a fact
+    about the CEILING: pydantic accepts both, and against a finite ceiling
+    `inf <= ceiling` is False, `0 < -inf` is False, and every comparison with
+    `nan` is False. So the invariant this rests on is that every ceiling passed
+    here is finite — `_MAX_CORES` and `_MAX_BYTES`, both constants. Pass an
+    infinite ceiling and `inf` starts getting through.
 
-    But `isfinite` converts its argument to a float first, and `parse_size`
-    returns an int — so a 309-digit byte count raised `OverflowError` straight
-    out of the guard, and the check written to stop "a generic error that names
-    nothing" produced a 500 that names nothing. The magnitude test therefore
-    runs FIRST, on ints, where nothing can overflow; only a value already known
-    to be in range reaches the float conversion."""
-    import math
+    It used to say so with an explicit `math.isfinite`, added before those
+    ceilings existed and left in place after they subsumed it. Two rules for one
+    question, one of them dead — and the dead one still carried the whole
+    docstring. (It also had to run SECOND, because `isfinite` converts to float
+    and `parse_size` returns an int, so a 309-digit byte count raised
+    `OverflowError` out of the guard. That ordering constraint goes with it.)
 
-    if isinstance(value, int):
-        return 0 < value <= ceiling
-    return math.isfinite(value) and 0 < value <= ceiling
+    Refusing rather than clamping is the point: both `inf` and `nan` collapse to
+    `None` on the store round trip, so a request to SET a size would have
+    performed a RESET and answered 200."""
+    return 0 < value <= ceiling
 
 
 def _now_ms() -> int:

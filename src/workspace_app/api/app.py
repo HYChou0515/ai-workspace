@@ -900,8 +900,15 @@ def create_app(
         field anyone with write access can rewrite. `created_by` is NOT an
         alternative to it, only the FLOOR beneath it: an `owner` that says
         nothing would otherwise read as "nobody owes", which is not a debtor but
-        the absence of the whole rule."""
-        return _facts_of(item_id)[1] or None
+        the absence of the whole rule.
+
+        `""` IS the no-debtor answer, not `None`: every consumer
+        (`_person_disk_gate`, `_record_usage`, `AdmissionGate.check`,
+        `registry._bump`) tests falsiness, so a trailing `or None` was a second
+        spelling of one state that nothing downstream could tell apart — and one
+        spelling is the whole reason this branch spent two rounds on
+        "empty" versus "unresolvable"."""
+        return _facts_of(item_id)[1]
 
     registry = InvestigationRegistry(
         sandbox=sandbox,

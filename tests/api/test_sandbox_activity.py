@@ -114,3 +114,32 @@ async def test_the_owner_survives_the_branch_that_restores_a_forgotten_row():
 
     assert await store.owner_of("ws-1") == "alice"
     assert [s.item_id for s in await store.live_for("alice", since_ms=0)] == ["ws-1"]
+
+
+async def test_a_heartbeat_older_than_the_window_reads_as_stopped():
+    """Round-12 M43 — the guard with the widest blast radius and no test.
+
+    `is_live` is what the admission gate asks before it counts anything: a yes
+    makes it return early, on the rule "never refuse what is already open". So
+    if a STALE row read as live, that item would skip the per-person quota
+    entirely — and the resize route's 409, which asks the same question, would
+    never lift, telling the person to close an environment that stopped hours
+    ago.
+
+    Its twin in `live_for` was covered; this one, on the path that decides
+    whether the gate runs at all, was not. The window is the reaper's idle
+    threshold (8h in production), so "older than the window" is exactly the
+    state a forgotten sandbox ends up in.
+    """
+    store, clock = _store()
+    await store.bump("ws-1", owner="alice", cpu_milli=1000)
+
+    assert await store.is_live("ws-1", since_ms=clock["t"]) is True
+    assert await store.is_live("ws-1", since_ms=clock["t"] - 1) is True
+
+    clock["t"] += 10_000
+
+    assert await store.is_live("ws-1", since_ms=clock["t"]) is False, (
+        "a heartbeat older than the window read as live; the quota gate would skip this item"
+    )
+    assert await store.is_live("ws-1", since_ms=clock["t"] - 10_000) is True

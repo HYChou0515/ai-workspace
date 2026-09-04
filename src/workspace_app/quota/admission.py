@@ -161,12 +161,17 @@ class AdmissionGate:
             return
         since = self._now_ms() - self._window_ms
         if await self._activity.is_live(item_id, since_ms=since):
-            return  # already holding its slot — never refuse what is already open
+            # Already holding its slot — never refuse what is already open. This
+            # return is ALSO what keeps the item out of its own tally below:
+            # for its row to come back from `live_for` it would have to be
+            # undeleted with a heartbeat inside `since`, which is exactly what
+            # was just asked here. `live_for` therefore needs no self-filter —
+            # there was one, dead from the day this check moved above it.
+            # Narrow either predicate and the filter has to come back.
+            return
         if incoming is None and self._cost_of is not None:
             incoming = await self._cost_of(item_id)
-        live = [
-            s for s in await self._activity.live_for(owner, since_ms=since) if s.item_id != item_id
-        ]
+        live = await self._activity.live_for(owner, since_ms=since)
         self._enforce(owner, live, incoming, limits)
 
     def _enforce(
