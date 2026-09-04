@@ -1034,3 +1034,30 @@ def test_http_sandbox_warns_that_exec_timeout_is_not_its_to_enforce(caplog):
     assert any("SANDBOX_HOST_EXEC_TIMEOUT" in r.message for r in caplog.records), [
         r.message for r in caplog.records
     ]
+
+
+def test_http_sandbox_warns_that_the_uv_cache_ceiling_is_not_its_to_apply(caplog):
+    """Same shape, same rule, one knob later. `sandbox.uv_cache_max_bytes` is
+    read by the APP-side sweeper; on `kind: http` the caches live in the
+    sandbox-host service, which sweeps its own with
+    `SANDBOX_HOST_UV_CACHE_MAX_BYTES`. So an operator who sets the app-side one
+    gets no eviction and no explanation — the exact case the test above already
+    settled the policy for.
+    """
+    import logging
+
+    from workspace_app.config.schema import HttpSandboxSettings, Settings
+
+    settings = Settings()
+    object.__setattr__(settings.sandbox, "kind", "http")
+    object.__setattr__(settings.sandbox, "uv_cache_max_bytes", 8_589_934_592)
+    object.__setattr__(
+        settings.sandbox, "http", HttpSandboxSettings(base_url="http://sandbox-host:8000")
+    )
+
+    with caplog.at_level(logging.WARNING):
+        get_sandbox(settings)
+
+    assert any("uv_cache_max_bytes" in r.message for r in caplog.records), [
+        r.message for r in caplog.records
+    ]

@@ -1059,3 +1059,47 @@ async def test_the_jail_refuses_a_venv_built_on_its_own_shim(tmp_path):
     assert "ROUTED-TO-PYTHON-STACK" in r.stdout.decode(), (
         "a venv built on the shim must fall back, not loop"
     )
+
+
+async def test_an_item_id_that_would_escape_the_cache_root_is_refused(tmp_path):
+    """`item_id` arrives as a raw string in the POST body and becomes a path
+    component. `mkdir(exist_ok=True)` accepts an EXISTING directory and
+    `_own_cache` then chowns it 0700 to the sandbox uid — so `..` would hand an
+    arbitrary directory on this host to one item's uid.
+
+    The app-side twin has always validated it. This side only did when an NFS
+    archive happened to be wired."""
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False)
+    h = await sb.create(SandboxSpec(), item_id="../../escaped")
+
+    _argv, _cwd, env = sb._exec_argv(h, ["true"])
+
+    cache = Path(env["UV_CACHE_DIR"]).resolve()
+    root = (tmp_path / "sb").resolve()
+    assert root in cache.parents, f"the cache escaped its root: {cache}"
+    assert cache.name == h.id, "and an unusable id falls back to the handle"
+
+
+def test_a_cache_that_cannot_shrink_says_so(tmp_path, caplog):
+    """The sweep's own docstring promises it: "If everything left is in use,
+    that is a host needing more disk, and it says so rather than breaking
+    something." On THIS side that sentence was false for a while — the module
+    had no logger at all, so the branch existed and printed nothing. And this is
+    the deployment where it matters: the caches sit on the pod's ephemeral disk,
+    which has no declared limit, so the kubelet evicts rather than the sweep
+    reclaiming.
+    """
+    import logging
+
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False)
+    cache = tmp_path / "sb" / ".uv-cache" / "busy"
+    cache.mkdir(parents=True)
+    (cache / "blob").write_bytes(b"x" * 8192)
+
+    with caplog.at_level(logging.WARNING):
+        removed = sb.sweep_uv_cache(in_use={"busy"}, max_bytes=1)
+
+    assert removed == [], "a live item's cache is never evicted, however full"
+    assert any("needs more disk" in r.message for r in caplog.records), [
+        r.message for r in caplog.records
+    ]

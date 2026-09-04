@@ -472,3 +472,35 @@ async def test_uvs_download_cache_is_named_for_every_exec(isolated) -> None:
     assert root not in cache.parents, "it has to outlive the sandbox to be worth anything"
     assert cache.stat().st_uid == isolated._uid_for(h.id), "and the filler must own it"
     assert cache.stat().st_mode & 0o777 == 0o700, "and no other item may read it"
+
+
+async def test_a_dead_sandbox_hands_its_cache_back_to_the_service(isolated) -> None:
+    """The cache outlives the sandbox on purpose — but `_own_cache` leaves it
+    owned by that sandbox's uid, and the host hands uids straight back out.
+
+    Without this, the next tenant of a freed uid can read and rewrite the
+    previous item's cache: the inheritance that keying by ITEM was chosen to
+    prevent, arriving one step later. So `kill` hands it back to the service,
+    and the item's next sandbox takes ownership again.
+    """
+    h = await isolated.create(SandboxSpec())
+    _argv, _cwd, env = isolated._exec_argv(h, ["true"])
+    cache = Path(env["UV_CACHE_DIR"])
+    assert cache.is_dir()
+
+    # Asserted through the OWNERSHIP SEAM, not through `st_uid`. The fixture
+    # pins the derived uid to the caller's own (uid_range=1) so the directory
+    # already has that owner — `st_uid == getuid()` is satisfied whether or not
+    # the release ever happens, which is how the venv-ownership test in this
+    # same file was vacuous one round ago. This class of mistake is why the
+    # module seams every privileged op instead of relying on being root.
+    released: list[tuple[Path, int]] = []
+    isolated._own_privately = lambda path, uid: released.append((path, uid))
+
+    await isolated.kill(h)
+
+    assert cache.is_dir(), "the cache outlives the sandbox — that is the whole point"
+    assert (cache, os.getuid()) in released, (
+        "and it must be handed back to the SERVICE, not left owned by a uid that "
+        f"has just been returned to the pool: {released}"
+    )

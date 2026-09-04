@@ -327,3 +327,62 @@ async def test_the_idle_tick_bounds_the_uv_caches_with_the_configured_ceiling():
     in_use, ceiling = sandbox.swept[-1]
     assert ceiling == 4096, "the operator's number, not a default invented on the way"
     assert in_use == {"live-item"}, "and a live item's cache is never collectable"
+
+
+class _ExplodingSweepSandbox(_CountingSandbox):
+    """A backend whose uv-cache sweep raises, the way a real one does when a
+    peer pod removes a cache between this pod's listing and its `stat`."""
+
+    def cache_keys_in_use(self) -> set[str]:
+        return set()
+
+    def cache_keys_present(self) -> set[str]:
+        return {"whatever"}
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.sweep_calls = 0
+
+    def sweep_uv_cache(self, *, in_use: set[str], max_bytes: int | None = None) -> list[str]:
+        self.sweep_calls += 1
+        raise FileNotFoundError("a peer pod deleted it mid-walk")
+
+
+async def test_a_sweep_that_raises_does_not_stop_the_idle_reaper():
+    """`idle_killer` catches only `CancelledError`, so an exception from the new
+    sweep would end the loop — and with it idle reaping, turn-end write-back and
+    scratch reclamation, for the pod's whole life. Review measured the shape:
+    19 ticks in a second became 1.
+
+    `kill_idle` and `mirror_warm` are per-item resilient for exactly this
+    reason; the sweep that rides the same tick has to be too. A cache left
+    unswept is a disk problem. A dead reaper is every problem.
+    """
+    spec = make_spec(default_user="u")
+    sandbox = _ExplodingSweepSandbox()
+    app = create_app(
+        spec=spec,
+        sandbox=sandbox,
+        filestore=SpecstarFileStore(spec),
+        runner=_ExecRunner(),
+        idle_timeout=timedelta(seconds=0.1),
+        idle_check_interval=timedelta(seconds=0.05),
+        mirror_interval=timedelta(seconds=60),
+        uv_cache_max_bytes=4096,
+    )
+    iid = register_rca_item(spec)
+    async with _running_app(app) as client:
+        resp = await client.post(f"/a/rca/items/{iid}/messages", json={"content": "x"})
+        assert resp.status_code == 202
+        for _ in range(40):
+            await asyncio.sleep(0.05)
+            if sandbox.sweep_calls >= 3:
+                break
+
+    # Counting SWEEPS, not kills. `kill_idle` runs BEFORE the sweep on each
+    # tick, so a kill proves only that the loop reached the raise once —
+    # asserting on it passed with the guard removed, which is the same
+    # can-not-fail assertion this round exists to stop writing.
+    assert sandbox.sweep_calls >= 3, (
+        f"the loop must survive a raising sweep and tick again: {sandbox.sweep_calls}"
+    )
