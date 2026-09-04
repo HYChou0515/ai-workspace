@@ -16,18 +16,24 @@ export type BuildEvent =
   | { type: "output"; text: string }
   | { type: "done"; exit_code: number };
 
-/** Run a build for one folder, yielding its output as it arrives. */
-export type RunBuild = (folder: string) => AsyncGenerator<BuildEvent>;
+/** Run a build for one folder, yielding its output as it arrives.
+ *
+ * `signal` is not optional politeness: abandoning the generator stops the
+ * client READING, which tells the server nothing at all — the build runs to
+ * completion for a page nobody is watching, and the next open starts a second
+ * one beside it. Aborting is what turns "I have left" into a disconnect. */
+export type RunBuild = (folder: string, signal?: AbortSignal) => AsyncGenerator<BuildEvent>;
 
 /** Bind the build route to one item. */
 export function itemBuild(slug: string, itemId: string): RunBuild {
-  return async function* (folder: string) {
+  return async function* (folder: string, signal?: AbortSignal) {
     const resp = await apiFetch(
       `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}/wui/build`,
       {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ folder }),
+        signal,
       },
     );
     if (!resp.ok || !resp.body) {

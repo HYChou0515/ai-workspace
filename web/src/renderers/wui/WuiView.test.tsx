@@ -5,12 +5,13 @@ import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FileServiceProvider, type FileService } from "../../api/fileService";
+import { qk } from "../../api/queryKeys";
 import { WorkspaceSlugProvider } from "../../hooks/useWorkspaceSlug";
 import { autoBuildScope, getWuiAutoBuild, setWuiAutoBuild } from "../../lib/wuiAutoBuild";
 import type { FileContent } from "../../api/types";
 import { subscribeAgentDraft } from "../../lib/agentDraftBus";
 import { publishFileChanged } from "../../lib/fileChangedBus";
-import { QueryWrap } from "../../test/queryWrapper";
+import { makeTestQueryClient, QueryWrap } from "../../test/queryWrapper";
 import type { ViewSpec } from "../entity/types";
 import { WUI_CSP } from "./assemble";
 import { WUI_PROTOCOL } from "./protocol";
@@ -808,6 +809,55 @@ describe("WuiView: rebuilding a page that has a build step", () => {
     gates[1]();
   });
 
+  it("aborts the build when the pane moves to another page", async () => {
+    // `stale()` stops the pane ACTING on the build; on its own it leaves the
+    // build running on the server, because a client that stops reading a body
+    // has told the server nothing. Both matter: the second one is what stops a
+    // `pnpm install` from finishing into a folder nobody is watching, and what
+    // stops going back starting a second build beside the first.
+    const files = {
+      "/sales/index.html": "<html><body>sales</body></html>",
+      "/sales/package.json": JSON.stringify({ scripts: { build: "vite build" } }),
+      "/costs/index.html": "<html><body>costs</body></html>",
+    };
+    let signal: AbortSignal | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: unknown, init?: RequestInit) => {
+        if (!String(url).includes("/wui/build")) return new Response("{}", { status: 404 });
+        signal = init?.signal ?? undefined;
+        const encode = new TextEncoder();
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(c) {
+              c.enqueue(encode.encode(sse({ type: "output", text: "resolving" })));
+            },
+          }),
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        );
+      }),
+    );
+
+    const at = (path: string) => (
+      <QueryWrap>
+        <WorkspaceSlugProvider value="rca">
+          <FileServiceProvider value={svc(files)}>
+            <WuiView path={path} spec={{ view: "wui", entity: "" } as ViewSpec} />
+          </FileServiceProvider>
+        </WorkspaceSlugProvider>
+      </QueryWrap>
+    );
+
+    const view = render(at("/sales/page.ai.yaml"));
+    fireEvent.click(await screen.findByRole("button", { name: /rebuild/i }));
+    await screen.findByText(/resolving/);
+    expect(signal?.aborted).toBe(false);
+
+    view.rerender(at("/costs/page.ai.yaml"));
+
+    await waitFor(() => expect(signal?.aborted).toBe(true));
+  });
+
   it("unfolds again for the next build", async () => {
     // The fold is about a build that is OVER. Pressing Rebuild is asking to
     // watch one, and finding the log still folded would read as the button
@@ -931,7 +981,14 @@ describe("WuiView: rebuilding a page when it is opened", () => {
 
     await screen.findByText(/Build finished/);
     await new Promise((r) => setTimeout(r, 50));
-    expect(buildCalls()).toHaveLength(1);
+    const calls = buildCalls();
+    // eslint-disable-next-line no-console
+    console.log("DBG", calls.map(([, i]) => ({
+      hasInit: !!i, hasSignal: !!(i as RequestInit)?.signal,
+      aborted: (i as RequestInit)?.signal?.aborted,
+    })));
+    const live = buildCalls().filter(([, init]) => !(init as RequestInit)?.signal?.aborted);
+    expect(live).toHaveLength(1);
   });
 
   it("shows the freshly built page, not the one that was there", async () => {
@@ -1001,13 +1058,25 @@ describe("WuiView: rebuilding a page when it is opened", () => {
     expect(buildCalls()).toHaveLength(0);
   });
 
-  it("builds once, not twice, when React runs the effect twice", async () => {
-    // StrictMode double-invokes every effect on mount, and the app runs in it.
-    // Two builds in one folder race over `dist/` and interleave in the log.
+  it("leaves exactly one build alive when React runs the effect twice", async () => {
+    // StrictMode mounts, unmounts and mounts again, and the app runs in it. What
+    // must never happen is two builds ALIVE in one folder, racing over `dist/`
+    // and interleaving in the log — not two requests: the cleanup aborts the
+    // first pass's build, and the second pass starts one because a cleanup that
+    // could not be redone would leave the page never built at all.
+    //
+    // The manifest read is primed on purpose: with a COLD cache the two passes
+    // are separated by an await and none of this is exercised. Warm — every
+    // visit after the first — they run back to back.
+    const client = makeTestQueryClient();
+    client.setQueryData(
+      qk.wuiBuildable("item1", "/sales"),
+      JSON.stringify({ scripts: { build: "vite build" } }),
+    );
     serveBuild(sse({ type: "output", text: "built" }) + sse({ type: "done", exit_code: 0 }));
     render(
       <StrictMode>
-        <QueryWrap>
+        <QueryWrap client={client}>
           <WorkspaceSlugProvider value="rca">
             <FileServiceProvider value={svc({ ...BUILT })}>
               <WuiView path="/sales/page.ai.yaml" spec={{ view: "wui", entity: "" } as ViewSpec} />
@@ -1019,7 +1088,12 @@ describe("WuiView: rebuilding a page when it is opened", () => {
 
     await screen.findByText(/Build finished/);
     await new Promise((r) => setTimeout(r, 50));
-    expect(buildCalls()).toHaveLength(1);
+    // Not "one request": the cleanup between the two passes aborts the first
+    // build, and the second pass starts one because a cleanup that could not be
+    // redone would leave the page never built at all. What must never happen is
+    // two builds ALIVE in one folder.
+    const live = buildCalls().filter(([, init]) => !(init as RequestInit)?.signal?.aborted);
+    expect(live).toHaveLength(1);
   });
 
   it("does not shout about a missing dist/ while it is building one", async () => {

@@ -22,7 +22,7 @@
  * in sixty; per viewer because this is about how someone wants to open a thing,
  * not about how the page is configured.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 
 const KEY = "rca.wuiAutoBuild";
 
@@ -54,10 +54,23 @@ export function setWuiAutoBuild(scope: string, on: boolean): void {
  *
  * The state is DERIVED from the scope, not initialised from it: a pane that
  * moves from one page to another without unmounting would otherwise keep
- * showing — and acting on — the previous page's answer. */
+ * showing — and acting on — the previous page's answer.
+ *
+ * Derived DURING RENDER, not in an effect. An effect runs after the render that
+ * changed the scope, and other effects run before it — so on that one render
+ * the answer still belonged to the page just left, and the pane acted on it:
+ * arriving at a page whose switch is off rebuilt it anyway, taking the page
+ * away for the length of a build and waking the sandbox, which is the exact
+ * cost the switch exists to decline. (React's documented way to adjust state
+ * when a prop changes: set it during render, and the re-render happens before
+ * anything else sees the stale value.) */
 export function useWuiAutoBuild(scope: string): readonly [boolean, (on: boolean) => void] {
-  const [on, setOn] = useState(() => getWuiAutoBuild(scope));
-  useEffect(() => setOn(getWuiAutoBuild(scope)), [scope]);
+  const [state, setState] = useState(() => ({ scope, on: getWuiAutoBuild(scope) }));
+  // The stored state is only trusted for the scope it was stored FOR; for any
+  // other, the answer comes straight from storage on this very render. No
+  // effect, no extra render, and nothing that can be one render behind.
+  const on = state.scope === scope ? state.on : getWuiAutoBuild(scope);
+  const setOn = (value: boolean) => setState({ scope, on: value });
   const set = useCallback(
     (value: boolean) => {
       setOn(value);

@@ -59,6 +59,25 @@ describe("itemBuild", () => {
     ]);
   });
 
+  it("aborts the request when the caller stops caring", async () => {
+    // Abandoning the generator is not enough: stopping READING a response body
+    // sends the server nothing, so a `pnpm install` nobody is watching runs to
+    // completion — and the next open starts a second one beside it. The signal
+    // is what turns "I have left" into a disconnect the server can act on.
+    const { release } = streaming([
+      frame({ type: "output", text: "resolving...\n" }),
+      frame({ type: "done", exit_code: 0 }),
+    ]);
+    const controller = new AbortController();
+
+    const stream = itemBuild("rca", "i1")("/page", controller.signal);
+    await stream.next();
+
+    const [, init] = vi.mocked(fetch).mock.calls[0] as unknown as [string, RequestInit];
+    expect(init.signal).toBe(controller.signal);
+    release();
+  });
+
   it("posts the page's folder to the item's own route", async () => {
     const { release } = streaming([frame({ type: "done", exit_code: 0 })]);
     release();

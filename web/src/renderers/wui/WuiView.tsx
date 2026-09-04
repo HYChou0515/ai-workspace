@@ -184,6 +184,10 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
    * may render without committing, and a ref set by a render that was thrown
    * away would tell a running build it had been left when it had not. */
   const epoch = useRef(0);
+  /** The build in flight, so leaving can actually stop it. `stale()` only stops
+   * this pane ACTING on a build; the server hears nothing until the request is
+   * aborted. */
+  const inFlight = useRef<AbortController | null>(null);
 
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const openFile = useOpenFile();
@@ -280,12 +284,33 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
   // and until the log survived Refresh (P12), clearing it there hid this.
   useEffect(() => {
     epoch.current += 1;
+    inFlight.current?.abort();
+    inFlight.current = null;
     setBuildLog(null);
     setLogOpen(true);
     setBuilding(false);
     setFirstBuild(false);
-    autoBuiltFor.current = null;
+    // NOT `autoBuiltFor`. It already holds the FOLDER it built, so the guard is
+    // folder-aware without help — and clearing it here defeated that guard
+    // between StrictMode's two effect passes, which is two builds on mount.
   }, [folder]);
+
+  // Closing the pane is leaving too: without this the build outlives the whole
+  // view, not just the page.
+  //
+  // The guard goes with it. StrictMode mounts, unmounts and mounts again, so
+  // this cleanup runs between the two passes — aborting the build the first
+  // pass started while `autoBuiltFor` still said one had been done, which left
+  // the page never built at all. Clearing it makes the pair idempotent, and a
+  // real remount is somebody opening the page again, which is when rebuilding
+  // is exactly what was asked for.
+  useEffect(
+    () => () => {
+      inFlight.current?.abort();
+      autoBuiltFor.current = null;
+    },
+    [],
+  );
 
   // Keep the newest line in view. A build's interesting output is its last few
   // lines — where it failed, or how long it took — and a log that has to be
@@ -320,6 +345,12 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
     if (!slug) return;
     const mine = folder;
     const startedAt = epoch.current;
+    // Every path that could start a second build already stopped the first:
+    // leaving the page aborts it, closing the pane aborts it, and the button is
+    // disabled while one runs. A pre-emptive abort here guarded nothing that
+    // could be reached, so it is not here.
+    const control = new AbortController();
+    inFlight.current = control;
     /** Has the pane moved on? Then this build is answering a question nobody is
      * asking any more, and the page it would re-read is not the page it built. */
     const stale = () => epoch.current !== startedAt;
@@ -328,7 +359,7 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
     setBuildLog([]);
     setLogOpen(true);
     try {
-      for await (const event of itemBuild(slug, fs.scopeId)(mine)) {
+      for await (const event of itemBuild(slug, fs.scopeId)(mine, control.signal)) {
         if (stale()) return;
         if (event.type === "output") say(event.text);
         else if (event.exit_code === 0) {
@@ -340,7 +371,8 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
         } else note(`Build failed (exit ${event.exit_code}).`);
       }
     } catch (err) {
-      if (stale()) return;
+      // An abort is this pane's own doing, not something to report.
+      if (stale() || control.signal.aborted) return;
       // A build that could not be STARTED — a viewer without `execute`, a
       // folder the server refuses — arrives as a status, not as output. Unsaid,
       // the button looks like it did nothing at all.
@@ -356,6 +388,7 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
         note("Rebuilding on open has been turned off, because you cannot run things here.");
       }
     } finally {
+      if (inFlight.current === control) inFlight.current = null;
       // Gated like every other write. The page you left keeps building while
       // the page you arrived at starts its own; clearing these unconditionally
       // declared the SECOND build over while it was still running — Rebuild
