@@ -1678,9 +1678,26 @@ function HistorySidebar({
  * same component, so the two can never disagree about who is on the item or what
  * they may do. */
 function MembersSidebar({ manifest, item }: { manifest: AppManifest; item: AppItem }) {
+  const label = manifest.labels?.members ?? "Members";
   return (
     <aside style={sidebarStyle}>
-      <ItemMembersPanel manifest={manifest} item={item} />
+      {/* The frame is `overflow: hidden` (see `sidebarStyle`), so the roster
+          needs a body that scrolls or a long one is CLIPPED — the names past the
+          bottom unreachable rather than merely out of view. Every other rail tab
+          already had this; this one did not.
+          `tabIndex`/`role` because a roster of plain people contains nothing
+          focusable (`UserChip` is a <span>), and a scroll region a keyboard
+          cannot reach is one a keyboard cannot scroll (WCAG 2.1.1). */}
+      <div
+        data-testid="members-scroll"
+        className="scrollable"
+        tabIndex={0}
+        role="region"
+        aria-label={label}
+        style={{ flex: 1, minHeight: 0, overflowY: "auto" }}
+      >
+        <ItemMembersPanel manifest={manifest} item={item} />
+      </div>
     </aside>
   );
 }

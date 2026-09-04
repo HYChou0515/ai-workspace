@@ -387,3 +387,49 @@ describe("the chevron stays a one-click toggle", () => {
     expect(screen.getByTestId("bottom-body")).toBeInTheDocument();
   });
 });
+
+
+describe("the Members rail — its roster has somewhere to scroll", () => {
+  // The reported bug, and it is worse than "no scrollbar": `MembersSidebar`
+  // opened its OWN <aside style={sidebarStyle}>, and `sidebarStyle` carries
+  // `overflow: hidden`. With no scrolling body inside it, a roster longer than
+  // the frame is CLIPPED — the names past the bottom are not merely
+  // unscrollable, they are unreachable.
+  //
+  // Four of the five rail tabs already got this right (evidence/search/history
+  // /activity); Members was the one that did not. Same rule, five carriers,
+  // one missing it.
+  //
+  // What this test can and cannot hold: happy-dom does no layout, so it cannot
+  // observe that content actually overflows or that a wheel event scrolls. It
+  // pins the STRUCTURE — a scrolling, focusable region wrapping the roster —
+  // which is exactly what was absent. "It really scrolls" is P4's job, in a
+  // real browser. Written down because a test that looks stronger than it is
+  // becomes the reason nobody checks.
+  it("wraps the roster in a scrollable region", async () => {
+    openShell();
+    fireEvent.click(screen.getByTitle("Members"));
+
+    const roster = await screen.findByTestId("members-title");
+    const region = roster.closest("[data-testid='members-scroll']");
+
+    expect(region).not.toBeNull();
+    expect(region).toHaveStyle({ overflowY: "auto" });
+  });
+
+  it("lets a keyboard user reach it", async () => {
+    // A roster of plain people has NO focusable element in it — `UserChip`
+    // renders a <span> — so without `tabindex` the region is unreachable by
+    // keyboard and cannot be scrolled without a mouse (axe
+    // `scrollable-region-focusable`, WCAG 2.1.1 A). A named region rather than
+    // a bare tab stop, so a screen-reader user is told what they landed on.
+    openShell();
+    fireEvent.click(screen.getByTitle("Members"));
+
+    const region = await screen.findByTestId("members-scroll");
+
+    expect(region).toHaveAttribute("tabindex", "0");
+    expect(region).toHaveAttribute("role", "region");
+    expect(region).toHaveAccessibleName();
+  });
+});
