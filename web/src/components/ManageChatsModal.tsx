@@ -5,6 +5,7 @@ import { relativeTime } from "../api/types";
 import { chatLabel } from "./chatLabel";
 import { chatStatusBadge } from "./chatStatusBadge";
 import { Icon } from "./Icon";
+import { useDirtyClose } from "../hooks/useDirtyClose";
 import { ModalShell } from "./ModalShell";
 
 /**
@@ -41,6 +42,7 @@ function ChatRow({
   onClose,
   onRename,
   onDelete,
+  onEditingChange,
 }: {
   chat: ItemChatSummary;
   active: boolean;
@@ -48,8 +50,14 @@ function ChatRow({
   onClose: () => void;
   onRename: (id: string, title: string) => void;
   onDelete: (id: string) => void;
+  /** #779: tell the modal a row is mid-rename, so leaving asks first. */
+  onEditingChange?: (editing: boolean) => void;
 }) {
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditingState] = useState(false);
+  const setEditing = (v: boolean) => {
+    setEditingState(v);
+    onEditingChange?.(v);
+  };
   const [draft, setDraft] = useState(chat.title);
   const [confirming, setConfirming] = useState(false);
 
@@ -163,12 +171,16 @@ export function ManageChatsModal({
   onDelete: (chatId: string) => void;
 }) {
   const [query, setQuery] = useState("");
+  // #779: which row is mid-rename (null = none). One id, not a set: only one
+  // row can hold the inline editor at a time.
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const attemptClose = useDirtyClose(renamingId !== null, onClose);
   const q = query.trim().toLowerCase();
   const shown = q ? chats.filter((c) => chatLabel(c).toLowerCase().includes(q)) : chats;
 
   return (
     <ModalShell
-      onClose={onClose}
+      onClose={attemptClose}
       ariaLabel="Manage chats"
       data-testid="manage-chats-modal"
       width={720}
@@ -182,7 +194,7 @@ export function ManageChatsModal({
           className="manage-chats__close"
           aria-label="Close"
           data-testid="manage-chats-close"
-          onClick={onClose}
+          onClick={attemptClose}
         >
           <Icon name="x" size={14} color="var(--text-paper-d)" />
         </button>
@@ -217,6 +229,7 @@ export function ManageChatsModal({
                 onClose={onClose}
                 onRename={onRename}
                 onDelete={onDelete}
+                onEditingChange={(on) => setRenamingId(on ? chat.chat_id : null)}
               />
             ))}
           </tbody>
