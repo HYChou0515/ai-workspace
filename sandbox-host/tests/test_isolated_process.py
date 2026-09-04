@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
 
+from sandbox_host.app import _HostController
 from sandbox_host.isolated_process import (
     IsolatedProcessSandbox,
     _acl_argv,
@@ -440,3 +442,39 @@ async def test_uvs_download_cache_is_named_for_every_exec(isolated) -> None:
     root = Path(isolated._require(h))
     assert root not in cache.parents, "it has to outlive the sandbox to be worth anything"
     assert cache.stat().st_mode & 0o777 == 0o700, "and no other item may read it"
+
+
+async def test_the_controller_can_create_against_the_REAL_backend(tmp_path):
+    """The gate that was missing, and its absence shipped a `TypeError` into
+    production.
+
+    P25 gave `_HostController.create` an `item_id` to hand down, and every test
+    that exercised it used `MockSandbox` — which had been updated. The backend
+    this service actually builds (`service.build_sandbox` -> the isolated one)
+    kept the old two-argument `create`, so `POST /sandboxes` raised and a hosted
+    deployment could not open a single sandbox. Three gates missed it: the wire
+    tests use the double, the isolated tests call `create(spec)` directly and
+    never go through the controller, and this package's `ty` was excluded by the
+    parent config and checking nothing at all.
+
+    So this one wires the REAL class to the REAL controller. It is not about
+    `item_id`; it is about the seam between them being exercised by something
+    that cannot be updated into agreement.
+    """
+    sandbox = IsolatedProcessSandbox(
+        root_dir=tmp_path / "sb",
+        cgroup_root=tmp_path / "cg",
+        uid_min=os.getuid(),
+        uid_max=os.getuid(),
+        acl_runner=lambda argv: None,
+        chown_runner=lambda p, u: None,
+    )
+    controller = _HostController(sandbox, idle_ttl=0.0, clock=time.monotonic)
+
+    handle = await controller.create(SandboxSpec(), "item-a")
+
+    assert handle.id
+    assert sandbox._item_of.get(handle.id) == "item-a", (
+        "and the item id has to REACH the backend, or the cache falls back to a "
+        "per-sandbox uuid — the very thing keying by item was for"
+    )

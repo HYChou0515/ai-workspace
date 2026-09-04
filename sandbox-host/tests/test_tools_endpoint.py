@@ -30,7 +30,8 @@ class _Resolver:
         answer = self.answers[name]
         if isinstance(answer, Exception):
             raise answer
-        return answer
+        # Past the raise it is a ResolvedTool; the checker keeps the union.
+        return answer  # ty: ignore[invalid-return-type]
 
 
 def _tool(
@@ -245,4 +246,4 @@ async def test_create_mounts_the_third_party_bundles_the_app_resolved() -> None:
         )
 
     assert r.status_code == 200
-    assert sandbox.spec.tools == {"wafer-history": "a" * 64}
+    assert sandbox.spec.tools == {"wafer-history": "a" * 64}  # ty: ignore[unresolved-attribute]

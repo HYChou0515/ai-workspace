@@ -60,3 +60,22 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]
+
+[tool.ty.src]
+# This package is EXCLUDED by the repo-root config, and with no section of its
+# own `ty` walked up to that one and checked NOTHING — "WARN No python files
+# found under the given path(s)" followed by "All checks passed!". CI has been
+# running a green gate over zero files. It hid a `TypeError` in `POST
+# /sandboxes` (an override that kept the old signature) that would have stopped
+# this service creating any sandbox at all.
+exclude = []
+
+[tool.ty.rules]
+# ⚠️ DEBT, declared rather than hidden: turning the gate on surfaced 58
+# pre-existing diagnostics, 51 of them this one — overwhelmingly test doubles
+# passed where a real protocol type is expected, which the app side handles with
+# per-line `# ty: ignore[invalid-argument-type]`. Cleaning those is a separate
+# job from #775 and would bury this PR. Demoted so the gate is REAL for the
+# classes that actually bite (an override whose signature drifted from its base
+# is exactly what shipped broken), instead of staying green over nothing.
+invalid-argument-type = "ignore"

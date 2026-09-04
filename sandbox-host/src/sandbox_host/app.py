@@ -24,6 +24,7 @@ import os
 import time
 from collections.abc import AsyncIterator, Callable, Mapping
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -491,7 +492,10 @@ def make_host_app(
         Blocking work (an HTTP GET, a sha, a 150MB unpack) goes to a thread —
         this is the host's event loop, and other sandboxes are using it.
         """
-        resolved: dict[str, object] = {}
+        # `dict[str, Any]`, not `object`: the values are payload dicts this
+        # function indexes back into two lines later. `object` made that
+        # assignment untypeable — invisible while the checker was excluded.
+        resolved: dict[str, dict[str, Any]] = {}
         refused: dict[str, str] = {}
         for name, url in body.tools.items():
             if tool_resolver is None:

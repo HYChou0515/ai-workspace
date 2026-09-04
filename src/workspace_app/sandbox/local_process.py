@@ -699,7 +699,10 @@ class LocalProcessSandbox:
         ws = root / _WORKSPACE
         self._ensure_home(handle, root)
         self._ensure_venv(handle, root)
-        env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+        # Annotated: `pop(..., None)` below otherwise widens the inferred value
+        # type to `str | None`, and an env mapping carrying a None value is a
+        # TypeError at `create_subprocess_exec`, not a style problem.
+        env: dict[str, str] = {**os.environ, "PYTHONUNBUFFERED": "1"}
         # The server's own interpreter choice is not the sandbox's. `UV_PYTHON`
         # inherited from this process makes uv fetch and install a MANAGED
         # CPython inside the sandbox to satisfy a version the SERVER was

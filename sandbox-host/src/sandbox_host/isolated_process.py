@@ -251,9 +251,15 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         answer, so the number published is the number written to `cpu.max`."""
         return self._cgroups.effective(spec.cpu_cores, spec.memory_bytes)
 
-    async def create(self, spec: SandboxSpec) -> SandboxHandle:
+    async def create(self, spec: SandboxSpec, item_id: str | None = None) -> SandboxHandle:
+        # `item_id` is forwarded, not ignored: the base keys this sandbox's uv
+        # cache by it (#775), and a uid cannot stand in — this class POOLS uids
+        # and frees them on kill, so a uid-keyed cache would be handed to the
+        # next tenant. Dropping the argument here left `_item_of` empty and the
+        # cache back on a per-sandbox uuid; keeping the old SIGNATURE broke
+        # `POST /sandboxes` outright, because the controller passes it.
         async with self._alloc_lock:  # serialize uid allocation across handles
-            handle = await super().create(spec)
+            handle = await super().create(spec, item_id)
             uid, gid = self._pool.alloc()
             ws = self._workspace(handle)
             cgroup = await asyncio.to_thread(
