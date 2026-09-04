@@ -102,6 +102,7 @@ def build(
     sandbox: _Sandbox | None = None,
     registry: _Registry | None = None,
     locator: _Locator | None = None,
+    request_env=None,
 ):
     app = FastAPI()
     sb = sandbox or _Sandbox()
@@ -123,6 +124,8 @@ def build(
         packages=packages if packages is not None else [PKG],
         prebuilt_dir=None,
         resolve_external=_external,
+        request_env=request_env,
+        get_user_id=lambda: "default-user",
     )
     return TestClient(app), sb, reg, loc
 
@@ -538,3 +541,102 @@ def test_leaving_the_page_takes_the_build_with_it():
         assert sandbox.cancelled, "the build outlived the reader who asked for it"
 
     asyncio.run(drive())
+
+
+def test_the_build_gets_the_item_environment():
+    """A build is a command in the item's sandbox, and the item's environment is
+    what a command in it runs with — the registry token behind a private
+    package, a proxy, a flag. Without it a page that builds fine for the agent
+    fails for the person who presses Rebuild, and the difference is invisible.
+
+    Same authority, not more: pressing Rebuild needs `execute`, which is the
+    authority to run things here, and the agent's own `exec` already carries
+    this environment."""
+    sandbox = _BuildSandbox([b"ok\n"])
+    client, _, _, _ = build(sandbox=sandbox, env={"NPM_TOKEN": "s3cret", "HTTPS_PROXY": "http://p"})
+
+    client.post(BUILD_URL, json={"folder": "/page"})
+
+    assert sandbox.envs[0]["NPM_TOKEN"] == "s3cret"
+    assert sandbox.envs[0]["HTTPS_PROXY"] == "http://p"
+
+
+class _Env:
+    """A request→env seam, the way a deploy supplies one (#714)."""
+
+    def __init__(self, value: dict[str, str] | None = None, boom: bool = False):
+        self.value = value or {}
+        self.boom = boom
+        self.asked: list[tuple[str, str]] = []
+
+    async def env_for(self, request, *, user_id: str, item_id: str) -> dict[str, str]:
+        self.asked.append((user_id, item_id))
+        if self.boom:
+            raise RuntimeError("the token exchange refused")
+        return dict(self.value)
+
+
+def test_the_build_gets_the_environment_this_request_composed():
+    """#714 exists because a credential can belong to the REQUEST — a cookie
+    exchanged for a token — not to anything stored. A turn gets it; a build did
+    not, so a private registry that works for the agent 401s for the person who
+    presses Rebuild, and nothing on screen says why."""
+    sandbox = _BuildSandbox([b"ok\n"])
+    env = _Env({"NPM_TOKEN": "from-request"})
+    client, _, _, _ = build(sandbox=sandbox, request_env=env)
+
+    client.post(BUILD_URL, json={"folder": "/page"})
+
+    assert sandbox.envs[0]["NPM_TOKEN"] == "from-request"
+    assert env.asked == [("default-user", "i1")]
+
+
+def test_the_items_own_variables_win_over_the_requests():
+    """The same precedence a turn uses (`turn_context`: request first, item
+    spread over it). The item's are the ones a person set on purpose."""
+    sandbox = _BuildSandbox([b"ok\n"])
+    client, _, _, _ = build(
+        sandbox=sandbox,
+        env={"NPM_TOKEN": "from-item"},
+        request_env=_Env({"NPM_TOKEN": "from-request", "TRACE_ID": "abc"}),
+    )
+
+    client.post(BUILD_URL, json={"folder": "/page"})
+
+    assert sandbox.envs[0]["NPM_TOKEN"] == "from-item"
+    assert sandbox.envs[0]["TRACE_ID"] == "abc"
+
+
+def test_a_failing_env_source_refuses_the_build():
+    """Running WITHOUT the credential is worse than not running: the build would
+    go ahead as nobody in particular and fail somewhere further in, or quietly
+    fetch the wrong thing. `chat_send` refuses a send for the same reason."""
+    sandbox = _BuildSandbox([b"ok\n"])
+    client, _, _, _ = build(sandbox=sandbox, request_env=_Env(boom=True))
+
+    resp = client.post(BUILD_URL, json={"folder": "/page"})
+
+    # 500, and the same detail `chat_send` uses: the caller did nothing wrong,
+    # and one refusal shape across the two paths beats inventing a second.
+    assert resp.status_code == 500
+    assert resp.json()["detail"] == {"error": "request_env_failed"}
+    assert sandbox.calls == []
+
+
+def test_a_tool_called_from_a_page_gets_the_request_environment():
+    """The whole point of `callTool` is that credentials stay on the platform.
+    A deploy that mints them per request had none of that reach a page — the
+    same tool worked from the chat and not from the page it was written for."""
+    env = _Env({"MES_TOKEN": "from-request", "MES_HOST": "from-request"})
+    sandbox = _Sandbox(ExecResult(exit_code=0, stdout=b"{}"))
+    client, _, _, _ = build(sandbox=sandbox, env={"MES_HOST": "from-item"}, request_env=env)
+
+    resp = client.post(URL, json={"args": {}})
+
+    assert resp.status_code == 200
+    assert sandbox.envs[-1]["MES_TOKEN"] == "from-request"
+    # A NAME SET IN BOTH PLACES must resolve the way it does in a turn. Asserting
+    # only that both arrive leaves the order free: a first draft of this test used
+    # two names that could not collide, and flipping the merge kept it green.
+    assert sandbox.envs[-1]["MES_HOST"] == "from-item"
+    assert env.asked == [("default-user", "i1")]

@@ -31,7 +31,7 @@ from collections.abc import AsyncIterator, Callable, Sequence
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, FastAPI, HTTPException
+from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -40,6 +40,7 @@ from ..sandbox.protocol import ExecResult, Sandbox, SandboxSpec
 from ..tooling.external import ExternalTools
 from ..tooling.registry import PackageInfo, exec_package_command, find_allowed_command
 from .locator import ItemLocator
+from .request_env import IRequestEnv
 from .turn_context import resolve_item_tools
 
 logger = logging.getLogger(__name__)
@@ -134,11 +135,23 @@ def register_wui_routes(
     packages: list[PackageInfo] | None,
     prebuilt_dir: Path | None,
     resolve_external: Callable[[str], Any] | None = None,
+    request_env: IRequestEnv | None = None,
+    get_user_id: Callable[[], str] | None = None,
 ) -> None:
     """Mount the WUI tool-call route.
 
     ``resolve_external`` is a seam for tests; it defaults to the same host
-    round-trip a turn makes."""
+    round-trip a turn makes.
+
+    ``request_env`` is the SAME seam a chat send composes (#714), and both
+    routes here need it for the same reason a turn does: what it carries is the
+    caller's own credential — a cookie their gateway exchanged for a token — so
+    a deploy that mints one per request had none of it reach a page. The tool
+    that answers in the chat then 401s from the page written to call it, and a
+    build that pulls from a private registry fails on the one machine that
+    matters. Wiring it into ONE of the two would be worse than neither: the
+    page and its build would run as different people.
+    """
 
     # NOT "first party": in this codebase that names the bundled `sample-tools`
     # packages, which ARE reachable — the unreachable set is the agent's
@@ -146,13 +159,40 @@ def register_wui_routes(
     # themselves into the opposite rule.
     bundled: Sequence[PackageInfo] = packages or []
 
+    async def _request_env(request: Request, item_id: str) -> dict[str, str]:
+        """What the request behind this click contributes to the tool env.
+
+        Empty when the deploy named no impl — the seam ships unimplemented, and
+        every deploy that has not opted in must behave exactly as before.
+
+        A failing impl REFUSES, and does so before anything runs. Carrying on
+        with `{}` would run the build or the tool as nobody in particular:
+        `npm install` would resolve the public package where a private one was
+        meant, and a tool would answer from whatever identity the item's own
+        variables happen to describe. Both look like success. An impl that
+        would rather degrade catches its own errors and returns `{}` — only it
+        knows whether running without the value means anything. Its message is
+        not relayed: only the impl knows whether it built that string out of the
+        cookie it was reading.
+        """
+        if request_env is None:
+            return {}
+        uid = get_user_id() if get_user_id is not None else ""
+        try:
+            return await request_env.env_for(request, user_id=uid, item_id=item_id)
+        except Exception:
+            logger.exception("wui: request env source failed for item %s", item_id)
+            raise HTTPException(status_code=500, detail={"error": "request_env_failed"}) from None
+
     async def _external(item_id: str) -> ExternalTools:
         if resolve_external is not None:
             return await resolve_external(item_id)
         return await resolve_item_tools(sandbox, locator, item_id)
 
     @app.post("/a/{slug}/items/{item_id}/wui/build")
-    async def wui_build(slug: str, item_id: str, body: BuildBody) -> StreamingResponse:
+    async def wui_build(
+        slug: str, item_id: str, body: BuildBody, request: Request
+    ) -> StreamingResponse:
         """Rebuild a page, streaming the build's own output as it arrives.
 
         A page written with a bundler has two halves — the source someone edits
@@ -174,6 +214,14 @@ def register_wui_routes(
         if cwd is None:
             raise HTTPException(status_code=400, detail=f"{body.folder} is not a page folder.")
 
+        # Composed HERE, while the request is still open: the stream below
+        # outlives the route, and by the time the first chunk is asked for
+        # there is no request left to read a cookie from.
+        env = {
+            **await _request_env(request, investigation_id),
+            **locator.env_vars_of(investigation_id),
+        }
+
         session = await registry.session(investigation_id)
         handle = await registry.ensure_handle(session)
         # `exec` takes no working directory, so the shell provides one — relative
@@ -193,7 +241,9 @@ def register_wui_routes(
 
         async def run() -> ExecResult:
             try:
-                return await sandbox.exec(handle, ["sh", "-c", script], on_output=on_output)
+                return await sandbox.exec(
+                    handle, ["sh", "-c", script], on_output=on_output, env=env
+                )
             finally:
                 # The SAME hop the chunks take, so the order is right by
                 # construction rather than by luck. `call_soon_threadsafe` from
@@ -263,7 +313,9 @@ def register_wui_routes(
         return StreamingResponse(gen(), media_type="text/event-stream")
 
     @app.post("/a/{slug}/items/{item_id}/wui/tools/{name}/call")
-    async def wui_call_tool(slug: str, item_id: str, name: str, body: CallToolBody) -> CallToolOut:
+    async def wui_call_tool(
+        slug: str, item_id: str, name: str, body: CallToolBody, request: Request
+    ) -> CallToolOut:
         # A tool can write, so the caller needs the verb that lets them write —
         # the same authority they would need to make the change by hand.
         investigation_id = locator.require_access(slug, item_id, "edit_content")
@@ -302,7 +354,14 @@ def register_wui_routes(
             packages=list(available),
             agent_config=config,
             prebuilt_dir=prebuilt_dir,
-            user_env=locator.env_vars_of(investigation_id),
+            # The item's own win, exactly as they do in a turn
+            # (`turn_context`): those are the ones a person set on purpose,
+            # and a page must not be able to reach a different system from
+            # the one the agent reaches.
+            user_env={
+                **await _request_env(request, investigation_id),
+                **locator.env_vars_of(investigation_id),
+            },
             # The registry's own wake path, so this shares the item's ONE
             # sandbox with its turns rather than racing a second one into
             # existence beside it.

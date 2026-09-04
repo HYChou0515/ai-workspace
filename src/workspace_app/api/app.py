@@ -1976,6 +1976,8 @@ def create_app(
         registry=registry,
         packages=packages,
         prebuilt_dir=prebuilt_dir,
+        request_env=request_env,
+        get_user_id=get_user_id,
     )
 
     register_capability_routes(
