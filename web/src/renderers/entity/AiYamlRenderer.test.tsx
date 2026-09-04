@@ -101,7 +101,7 @@ describe("AiYamlRenderer", () => {
       invalid: [],
     });
 
-    renderView("/views/workload.ai.yaml", GANTT);
+    renderView("/views/gantt.ai.yaml", GANTT);
 
     fireEvent.doubleClick(await screen.findByTestId("bar-4"));
 

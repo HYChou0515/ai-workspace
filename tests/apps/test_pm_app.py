@@ -243,4 +243,31 @@ def test_the_check_covers_whatever_gantt_views_exist():
     on_disk = {p.stem for p in (_profiles_root("pm") / "default" / "views").glob("*.ai.yaml")}
 
     assert set(_gantt_views()) <= on_disk
-    assert "gantt.ai" in _gantt_views() and "workload.ai" in _gantt_views()
+    # The positive control: a filter bug that returned {} would satisfy every
+    # rule above vacuously. Two views over two DIFFERENT entities, so the
+    # per-entity rule has something to compare on at least one side.
+    assert "gantt.ai" in _gantt_views() and "roadmap.ai" in _gantt_views()
+
+
+def test_a_project_opens_on_its_timeline():
+    """The first tab is the one the App is read from, and a project is asked
+    "when does this land" far more often than "what exists". The board and the
+    table answer questions you go looking for; the timeline answers the one you
+    arrive with, so it is what the project opens on (#785)."""
+    m = load_app_manifest("pm")
+    assert m.layout.views[0] == "/views/gantt.ai.yaml"
+
+
+def test_grouping_by_assignee_is_a_setting_not_a_second_tab():
+    """Workload was Timeline with `group_by: assignee` and nothing else —
+    every other key, comment included, was a copy. The gear panel already
+    edits `group_by` in place, so it shipped a whole second file to keep in
+    step for a switch the user can flip inside the view they are in, and the
+    two drifted apart once already (#785)."""
+    from workspace_app.apps.profiles import _profiles_root
+
+    on_disk = {p.stem for p in (_profiles_root("pm") / "default" / "views").glob("*.ai.yaml")}
+    assert "workload.ai" not in on_disk
+
+    m = load_app_manifest("pm")
+    assert not any("workload" in v for v in m.layout.views)

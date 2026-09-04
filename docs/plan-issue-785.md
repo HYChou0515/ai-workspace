@@ -96,13 +96,17 @@ export function barColumns(span: Span, skip: boolean): number {
 
 ### P1 — 版面:最便宜、每天都看得到的三件事
 
-**Goal.** gantt 成為第一個 tab、PM 的 IDE 預設收起、workload 刪除。
+**Goal.** gantt 成為第一個 tab、PM 的檔案樹預設收起、workload 刪除。
 
 - `app.json` 的 `layout.views` 重排,`/views/gantt.ai.yaml` 移到最前。
 - 刪 `workload.ai.yaml`,並從 `layout.views` 移除。**理由是查證過的**:View settings 已能切 `group_by`,所以它就是「Timeline 預設選 assignee」,使用者在 Timeline 裡切一下就得到同一張圖。
-- `initialIdeCollapsed`:`primary_surface` 是 `chat` **或 `views`** 時預設收起。只影響 PM(唯一的 views app),不動沒設定的 app —— 不是 hardcode slug。
+- 新的純函式 `initialSidebarState(primary_surface, isNarrow)`:`views` → `closed`,其餘寬螢幕 → `pinned`,narrow 一律 `closed`(#464 既有規則)。只影響 PM(唯一的 views app),不動沒設定的 app —— 不是 hardcode slug。
 
-**驗收.** 開 PM 直接看到 Timeline 且左側收起;Timeline 的 View settings 切 assignee 得到原本 Workload 的畫面。
+**「左側」是檔案樹,不是 IDE —— 實作時查證後推翻了原本的寫法。** 原計畫寫的是改 `initialIdeCollapsed`,那是錯的:`EditorArea` 整個包在 `!ideCollapsed` 裡,而 views-first app 的 gantt 正是開在 `EditorArea` 當 tab,所以把 IDE 收起會**連甘特圖一起藏掉**,和需求 4 完全相反(既有測試 `opens the workspace up front for a views-first App (#419 §B5)` 也正好守著這件事,維持綠)。真正該收的是 `sidebarState` 那條 260px 的檔案樹;50px 的 activity rail 留著,所以是收起不是移除,點 Files 或 ⌘B 就回來。
+
+**判準要裝在值被算出來的地方。** `sidebarState` 的 `useState` 初值會被 `useEffect(…, [isNarrow])` 在 mount 當下蓋掉,只改初值等於加了一個靜默失效的死旋鈕。所以兩個寫入點共用同一個 `initialSidebarState`,且 effect 的相依是抽出來的字串而非 manifest 物件(refetch 換了物件 identity 會把使用者剛開的樹關掉)。突變探針驗過:把 effect 改回 `isNarrow ? "closed" : "pinned"`,行為測試紅、純函式測試全綠 —— 單靠單元測試看不見這件事。
+
+**驗收.** 開 PM 直接看到 Timeline 且檔案樹收起;Timeline 的 View settings 切 assignee 得到原本 Workload 的畫面。
 
 ### P2 — 時間值升級(零行為改變)
 

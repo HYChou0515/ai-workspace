@@ -61,10 +61,17 @@ const item = {
   permission: { visibility: "private" },
 } as unknown as AppItem;
 
-function openShell(files: { path: string; size: number }[] = []) {
+/** #785: PM opens its `layout.views` as the main stage instead of files. Same
+ * shell, different answer to "what did you come here to look at". */
+const viewsFirst = {
+  ...manifest,
+  layout: { ...manifest.layout, primary_surface: "views", views: ["/views/gantt.ai.yaml"] },
+} as unknown as AppManifest;
+
+function openShell(files: { path: string; size: number }[] = [], m: AppManifest = manifest) {
   return renderWithQuery(
     <MemoryRouter>
-      <WorkspaceShell manifest={manifest} item={item} files={files as never} />
+      <WorkspaceShell manifest={m} item={item} files={files as never} />
     </MemoryRouter>,
   );
 }
@@ -155,6 +162,15 @@ describe("the file sidebar answers to the activity rail", () => {
     openShell();
     await screen.findByTitle("Files");
     expect(pane()).toBeInTheDocument();
+  });
+
+  it("starts collapsed for a views-first App — the chart is the stage, not the tree (#785)", async () => {
+    // A views-first App is read from its charts; the file tree is a drawer you
+    // open when you want it, and 260px of it is 260px the gantt does not get.
+    // The rail stays, so this is a collapse, not a removal.
+    openShell([], viewsFirst);
+    await screen.findByTitle("Files");
+    expect(pane()).not.toBeInTheDocument();
   });
 
   it("collapses when the icon already on show is double-clicked, rail still there", async () => {
