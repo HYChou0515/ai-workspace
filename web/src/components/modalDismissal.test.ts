@@ -66,6 +66,32 @@ const maskArrows = (s: string) => s.replace(/=>/g, "=\u0001");
  * matcher is testable on its own rather than only through whatever happens to
  * be in the tree today.
  */
+/** Keywords a regex literal may directly follow — after these a `/` opens a
+ * pattern, not a division, even though the character before it is a letter. */
+const KEYWORDS = new Set([
+  "return",
+  "typeof",
+  "case",
+  "await",
+  "void",
+  "new",
+  "delete",
+  "in",
+  "of",
+  "yield",
+  "do",
+  "else",
+]);
+
+/** The identifier immediately before `idx`, ignoring whitespace. */
+function wordBefore(text: string, idx: number): string {
+  let j = idx - 1;
+  while (j >= 0 && /\s/.test(text[j])) j--;
+  const end = j + 1;
+  while (j >= 0 && /\w/.test(text[j])) j--;
+  return text.slice(j + 1, end);
+}
+
 export function onClickBodies(text: string, where = "(inline)"): { body: string; line: number }[] {
   const out: { body: string; line: number }[] = [];
   const re = /onClick=\{/g;
@@ -107,11 +133,15 @@ export function onClickBodies(text: string, where = "(inline)"): { body: string;
       }
       if (c === '"' || c === "'" || c === "`") quote = c;
       // A `/` starts a regex literal only where a VALUE may begin. After an
-      // identifier, a number, `)` or `]` it is division. Getting this wrong in
-      // the other direction (treating a divide as a regex) would swallow the
-      // rest of the body, and the depth assertion below would catch that — the
-      // loud direction, on purpose.
-      else if (c === "/" && !/[\w)\]]/.test(prev)) {
+      // identifier, a number, `)` or `]` it is division.
+      //
+      // The two misreads fail in OPPOSITE directions, which is why the keyword
+      // list matters. Divide-read-as-regex swallows to EOF and trips the
+      // assertion below — loud. Regex-read-as-divide truncates the body
+      // silently, and `return /…/` hits exactly that: the last character is `n`,
+      // a word character, so the character test alone calls it division. Hence
+      // the preceding WORD, not the preceding character.
+      else if (c === "/" && (!/[\w)\]]/.test(prev) || KEYWORDS.has(wordBefore(text, i)))) {
         inRegex = true;
       } else if (c === "{") depth++;
       else if (c === "}") depth--;
@@ -238,6 +268,24 @@ describe("#779 — modal dismissal has one owner", () => {
       "    openFile(path);",
       "    // hand over rather than stack; don't leave this up",
       "    /* block form too } { unbalanced on purpose */",
+      "    onClose();",
+      "  }}",
+      ">x</button>",
+    ].join("\n");
+
+    expect(onClickBodies(src)[0].body).toContain("onClose()");
+  });
+
+  it("is not truncated by a regex literal that follows a keyword", () => {
+    // The third control. `prev` is the last CHARACTER, so after `return` it is
+    // `n` — a word character — and the `/` reads as division. The regex is then
+    // scanned as code, its unpaired braces count, and the body truncates before
+    // a later onClose(). Same silent shape as the two cases above; only the
+    // preceding token differs.
+    const src = [
+      "<button",
+      "  onClick={() => {",
+      '    if (guard) return /\\}\\}/.test(raw);',
       "    onClose();",
       "  }}",
       ">x</button>",
