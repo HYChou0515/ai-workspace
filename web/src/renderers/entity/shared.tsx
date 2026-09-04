@@ -258,7 +258,13 @@ function normalizeCard(raw: unknown): ViewSpec["card"] {
  * strip the self-documenting `week:` comments). */
 export function setViewScalar(text: string, key: string, value: string | null): string {
   const esc = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const head = new RegExp(`^(\\s*)${esc}\\s*:`);
+  // Anchored at column 0, because every key this writes is a top-level view
+  // setting. Matching at any indent found the wrong line twice over: a
+  // same-named key nested under another (`card:` has its own `weekday`) was
+  // rewritten instead of the real one, so the control appeared to do nothing;
+  // and a line inside a `|` block scalar that merely looked like the key was
+  // treated as it.
+  const head = new RegExp(`^${esc}\\s*:`);
   const lines = text.split("\n");
   const at = lines.findIndex((l) => head.test(l));
   if (at === -1) {
@@ -274,19 +280,21 @@ export function setViewScalar(text: string, key: string, value: string | null): 
   //   · a more-indented line — a nested mapping's entries, and its comments;
   //   · a `-` item at the key's OWN indent — how a YAML list is ordinarily
   //     written, and `sort` is a list this panel writes;
-  //   · a blank line, but only when a line that belongs follows it. A blank
-  //     inside a block is formatting; a blank after one is the gap before the
-  //     next key, and eating it would pull that key's comment along.
-  const indent = (head.exec(lines[at]) as RegExpExecArray)[1].length;
+  //   · a blank line OR a comment, but only when a line that belongs follows
+  //     it. Both are undecided on their own: a blank or a `# note` between two
+  //     entries is formatting inside the block, while the same thing after the
+  //     last entry is the gap and banner introducing the NEXT key — and these
+  //     files are written almost entirely in column-0 comments, so reading one
+  //     as the end of the block orphaned everything after it.
   const indentOf = (l: string) => (/^\s*/.exec(l) as RegExpExecArray)[0].length;
+  const undecided = (l: string) => l.trim() === "" || l.trimStart().startsWith("#");
   let end = at + 1;
   for (let i = end; i < lines.length; i++) {
     const line = lines[i];
-    if (line.trim() === "") continue; // undecided until something below claims it
-    const ind = indentOf(line);
-    const isSeqItem = ind === indent && /^\s*-(\s|$)/.test(line);
-    if (ind <= indent && !isSeqItem) break;
-    end = i + 1; // commit this line, and any blanks skipped to reach it
+    if (undecided(line)) continue; // until something below claims it
+    const isSeqItem = /^-(\s|$)/.test(line);
+    if (indentOf(line) === 0 && !isSeqItem) break;
+    end = i + 1; // commit this line, and anything skipped to reach it
   }
   const rest = lines.slice(end);
   const replacement = value === null ? [] : [`${lines[at].slice(0, lines[at].indexOf(":") + 1)} ${value}`];

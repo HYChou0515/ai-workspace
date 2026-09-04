@@ -80,6 +80,64 @@ describe("setViewScalar over a BLOCK value (#785)", () => {
     expect(parseViewSpec(changed)?.label).toBe("title");
   });
 
+  it("keeps going past a comment at column 0 inside a block", () => {
+    // The shipped view files are written almost entirely in column-0 comments,
+    // so this is the likely shape, not an exotic one. An indent-only rule ends
+    // the block at the comment and orphans everything after it — the same
+    // "parse error → null → the whole view goes blank" this walk exists to
+    // prevent. A comment is undecided for the same reason a blank line is: what
+    // comes after it decides whether it was inside the block or before the next
+    // key.
+    const text = [
+      "view: gantt",
+      "entity: issue",
+      "work_hours:",
+      '  from: "07:00"',
+      "# raised in March",
+      '  to: "21:00"',
+      "label: title",
+      "",
+    ].join("\n");
+    const changed = setViewScalar(text, "work_hours", '{ from: "08:00", to: "18:00" }');
+    expect(parseViewSpec(changed)?.work_hours).toEqual({ from: 8, to: 18 });
+    expect(parseViewSpec(changed)?.label).toBe("title");
+  });
+
+  it("keeps a comment that introduces the NEXT key out of the block", () => {
+    // The other half of the same rule, and the reason a comment cannot simply
+    // be swallowed: the shipped files put a banner comment above each setting.
+    const text = [
+      "view: gantt",
+      "entity: issue",
+      "work_hours:",
+      '  from: "07:00"',
+      "",
+      "# ── Time axis ─────",
+      "weekday: number",
+      "",
+    ].join("\n");
+    const changed = setViewScalar(text, "work_hours", null);
+    expect(changed).toContain("# ── Time axis ─────");
+    expect(parseViewSpec(changed)?.weekday).toBe("number");
+    expect(parseViewSpec(changed)?.work_hours).toBeUndefined();
+  });
+
+  it("edits the TOP-LEVEL key, not a same-named one nested under another", () => {
+    // `weekday` also exists inside a `card:` block here. Rewriting that one
+    // leaves the real setting untouched, so the control appears to do nothing.
+    const text = [
+      "view: gantt",
+      "entity: issue",
+      "card:",
+      "  weekday: long",
+      "weekday: number",
+      "",
+    ].join("\n");
+    const changed = setViewScalar(text, "weekday", "short");
+    expect(parseViewSpec(changed)?.weekday).toBe("short");
+    expect(changed).toContain("  weekday: long");
+  });
+
   it("stops at the next key, not at the end of the file", () => {
     // The positive control for the two above: a greedier walk that ran to EOF
     // would satisfy them by eating everything.

@@ -223,7 +223,15 @@ export function GanttView({
   // work, so the issue nobody had scheduled was the one that vanished. That is
   // also why the scheduler always worked from `ordered`: a record with no dates
   // is exactly the one most in need of being given some.
-  const ordered = sortRows(entities, spec.sort, type ?? null, refIndex, users);
+  // Memoised, and not only for its own cost: `sortRows` copies the array, so an
+  // unmemoised call hands back a new identity every render and the `rows` memo
+  // below it can never hit. Measured at 0 hits in 22 renders of a drag — a memo
+  // that reads as protection and gives none is worse than no memo, because the
+  // next person believes it.
+  const ordered = useMemo(
+    () => sortRows(entities, spec.sort, type ?? null, refIndex, users),
+    [entities, spec.sort, type, refIndex, users],
+  );
   // #785 — what a record REACHES over: its own span, widened to contain the
   // spans of the records that point at it. A milestone's bar covers its issues,
   // because that is when the milestone actually happens.

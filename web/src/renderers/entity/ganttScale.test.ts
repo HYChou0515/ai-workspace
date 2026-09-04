@@ -407,8 +407,15 @@ describe("dateAtColumn jumps whole weeks instead of walking days (#785)", () => 
     // `skip_weekends` is on, which is what the shipped Timeline ships. Jumping
     // five working days per calendar week is O(1); this pins the arithmetic,
     // which is the part that can be wrong.
-    for (const origin of ["2026-01-05", "2026-01-10", "2026-01-11", "2026-02-27"]) {
-      for (const col of [0, 1, 4, 5, 6, 9, 10, 11, 260, -1, -5, -11, -260]) {
+    // Every weekday as an origin, and every remainder-mod-5 in both directions:
+    // the jump is `floor(n/5)` weeks plus a walk of `n % 5`, so a version that
+    // only ever saw remainders 0, 1 and 4 would leave the walk itself unpinned.
+    for (let d = 0; d < 9; d++) {
+      const origin = shiftDate("2026-02-23", d); // Mon … the Tuesday after next
+      for (let col = -12; col <= 12; col++) {
+        expect(dateAtColumn(origin, col, true)).toBe(naive(origin, col));
+      }
+      for (const col of [37, 138, 261, -37, -138, -261]) {
         expect(dateAtColumn(origin, col, true)).toBe(naive(origin, col));
       }
     }
