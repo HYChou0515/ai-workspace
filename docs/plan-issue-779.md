@@ -165,7 +165,13 @@ web/src/renderers/entity/EntityRecordModal.tsx:83:      closeOnBackdrop={!editin
 **Goal.** §1.4 第二張表。做法同 P2,dirty 的定義是「現在的選擇 ≠ 進來時的選擇」。
 
 - `ItemShareDialog` / `PermissionDialog` 已經有 `next()` 組出待送的 permission,dirty 可以拿它跟 `value` 比。
-- `RefTableSelectModal` 是 Mantine,不吃 `ModalShell`:顯式 `closeOnClickOutside={false}`,`onClose` 走同一個 `useDirtyClose`。**這個檔在 `autocrud/lib/` 底下** —— 動它等於動內嵌的 lib,commit 要分開,方便日後抽離。
+- `RefTableSelectModal` 是 Mantine,不吃 `ModalShell`:顯式 `closeOnClickOutside={false}`。**這個檔在 `autocrud/lib/` 底下** —— 動它等於動內嵌的 lib,commit 要分開,方便日後抽離。
+
+  **實作時的偏離(已落地):它只關掉背景,沒有接 `useDirtyClose`。** 兩個理由:
+  1. `useDirtyClose` 會去拿宿主 app 的 `DialogProvider`,把一個本來可以整包抽走的子樹綁在我們的 provider 上。
+  2. `autocrud/` 目錄**沒有任何測試**(零個測試檔),所以這一個改動無法照 TDD 走 —— 它是唯一一個沒有「會紅的新測試」護著的。改動本身是單一 prop、無分支,風險低,但這個落差要記著:如果之後 autocrud 長出測試基礎設施,補一條「勾了幾列後點背景,選擇還在」。
+
+  代價是 Escape / Cancel 在這裡仍然直接丟棄,跟 §2 的出口矩陣不一致。這是知情的取捨,不是遺漏。
 
 **驗收.** 5 個各有一條 dirty-Escape 測試;`ItemShareDialog` 額外一條:選了人之後點背景,選擇還在。
 
