@@ -18,14 +18,21 @@
  *    targets (WCAG 2.2 SC 2.5.8, Target Size (Minimum)). It stays off-layout
  *    via negative margins, so the extra reach costs no space.
  *    https://www.w3.org/WAI/WCAG22/Understanding/target-size-minimum.html
- *  - It is **operable from the keyboard**: focusable, arrow keys move it by
- *    `step`, and `value`/`min`/`max` (when the parent knows them) publish
- *    `aria-valuenow`/`min`/`max` — the window splitter pattern.
+ *  - It is **operable from the keyboard** — focusable, with arrow keys moving
+ *    it by `step` — but only for a parent that passes `value`/`min`/`max`.
+ *    The window splitter pattern REQUIRES `aria-valuenow`/`valuemin`/`valuemax`
+ *    on a focusable separator, and a tab stop that announces a separator with
+ *    no position is worse for a screen-reader user than no tab stop at all. So
+ *    the three props are what switch keyboard operation on, rather than every
+ *    divider becoming a half-compliant splitter.
  *    https://www.w3.org/WAI/ARIA/apg/patterns/windowsplitter/
+ *    (`aria-controls`, which the pattern also asks for, is NOT wired: the panes
+ *    these dividers size have no stable ids to point at.)
  *
- * Layout: 24px hit area (off-layout via negative margins). An absolutely-
- * positioned line + grip centre inside — faint at rest, paper-3 on hover,
- * accent while dragging or focused.
+ * Layout: 24px hit area (off-layout via negative margins), with an absolutely-
+ * positioned line and grip centred inside. The line is invisible at rest,
+ * paper-3 on hover, accent while dragging or focused; the grip — the resting
+ * affordance — is paper-3 at rest, text-paper-d on hover, accent with the line.
  */
 
 import { useRef, useState } from "react";
@@ -55,7 +62,11 @@ export function ResizeDivider({
   /** Cleanup hook (fired on pointerup). */
   onResizeEnd?: () => void;
   ariaLabel?: string;
-  /** Current size of the pane this divider sizes, for `aria-valuenow`. */
+  /**
+   * Current size of the pane this divider sizes, for `aria-valuenow`. Passing
+   * `value` + `min` + `max` is what makes the divider a keyboard-operable
+   * splitter; without all three it stays a pointer-only affordance.
+   */
   value?: number;
   min?: number;
   max?: number;
@@ -69,6 +80,10 @@ export function ResizeDivider({
   const [focused, setFocused] = useState(false);
   const vertical = orientation === "vertical";
 
+  // A separator may only be focusable if it can say where it is (ARIA requires
+  // aria-valuenow on a focusable separator, and min/max are what give the
+  // number meaning), so the parent wiring all three is the switch.
+  const publishesPosition = value != null && min != null && max != null;
   const lit = active || hover || focused;
   const lineColor = active || focused ? "var(--accent)" : hover ? "var(--paper-3)" : "transparent";
   const lineThickness = active ? 2 : 1;
@@ -92,10 +107,14 @@ export function ResizeDivider({
       role="separator"
       aria-label={ariaLabel}
       aria-orientation={orientation}
-      tabIndex={0}
-      {...(value != null ? { "aria-valuenow": Math.round(value) } : {})}
-      {...(min != null ? { "aria-valuemin": Math.round(min) } : {})}
-      {...(max != null ? { "aria-valuemax": Math.round(max) } : {})}
+      {...(publishesPosition
+        ? {
+            tabIndex: 0,
+            "aria-valuenow": Math.round(value),
+            "aria-valuemin": Math.round(min),
+            "aria-valuemax": Math.round(max),
+          }
+        : {})}
       onPointerDown={(e) => {
         e.currentTarget.setPointerCapture(e.pointerId);
         startCoord.current = vertical ? e.clientX : e.clientY;
@@ -114,6 +133,7 @@ export function ResizeDivider({
         onResizeEnd?.();
       }}
       onKeyDown={(e) => {
+        if (!publishesPosition) return; // not a tab stop, so not arrow-driven either
         const back = vertical ? "ArrowLeft" : "ArrowUp";
         const fwd = vertical ? "ArrowRight" : "ArrowDown";
         if (e.key !== back && e.key !== fwd) return;

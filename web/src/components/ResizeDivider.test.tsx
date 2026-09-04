@@ -80,6 +80,22 @@ describe("<ResizeDivider />", () => {
     expect(Number.parseInt(getV("separator").style.width, 10)).toBeGreaterThanOrEqual(24);
   });
 
+  it("stays out of the tab order when it cannot publish its position", () => {
+    // The window splitter pattern REQUIRES aria-valuenow/valuemin/valuemax on a
+    // focusable separator, so a divider whose parent hasn't wired them would be
+    // a tab stop that announces a separator with no position — worse for a
+    // screen-reader user than not being focusable at all. Keyboard operation
+    // therefore switches on exactly when the parent supplies the three.
+    // https://www.w3.org/WAI/ARIA/apg/patterns/windowsplitter/
+    const onResize = vi.fn();
+    const { getByRole } = render(<ResizeDivider orientation="horizontal" onResize={onResize} />);
+    const sep = getByRole("separator");
+    expect(sep.tabIndex).toBe(-1);
+    expect(sep.getAttribute("aria-valuenow")).toBeNull();
+    fireEvent.keyDown(sep, { key: "ArrowUp" });
+    expect(onResize).not.toHaveBeenCalled();
+  });
+
   it("is operable from the keyboard, as the splitter pattern requires", () => {
     // role="separator" that moves a pane must be focusable and driven by the
     // arrow keys — https://www.w3.org/WAI/ARIA/apg/patterns/windowsplitter/
@@ -90,6 +106,9 @@ describe("<ResizeDivider />", () => {
         orientation="horizontal"
         onResize={onResize}
         onResizeStart={onResizeStart}
+        value={120}
+        min={40}
+        max={400}
       />,
     );
     const sep = getByRole("separator");
