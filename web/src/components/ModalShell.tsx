@@ -2,9 +2,20 @@
  * Shared modal shell (#445 #14/#15/#18). Owns the concerns that every
  * hand-rolled overlay used to re-implement inconsistently: a dimmed fixed
  * backdrop on the one z-index scale (--z-modal, so modals stop colliding with
- * the brand splash / progress bar), Escape-to-close AND backdrop-click-to-close
- * (many overlays only had the latter), and a max-height + inner overflow safety
- * net so a tall modal never pushes its actions off a short viewport.
+ * the brand splash / progress bar), Escape-to-close, and a max-height + inner
+ * overflow safety net so a tall modal never pushes its actions off a short
+ * viewport.
+ *
+ * Backdrop-click-to-close is OFF by default (#779). It used to be on, and 20 of
+ * the 21 call sites simply inherited it — so a stray click beside the panel
+ * silently threw away half-typed forms, pasted credentials and unsent
+ * permission changes, in modals whose authors never chose that behaviour. The
+ * default now withdraws the one exit a user never means to take; a modal that
+ * genuinely wants it (a read-only viewer, a palette) asks by passing the prop.
+ *
+ * The deliberate exits — Escape, ✕, Cancel — all run through `onClose`, so a
+ * modal holding unsaved work guards them in one place by wrapping it with
+ * `useDirtyClose`, rather than the shell trying to know what "dirty" means.
  *
  * It deliberately does NOT impose an inner layout: a migrating modal passes its
  * existing panel styles (width / padding / display / gap) via `panelStyle`,
@@ -22,7 +33,7 @@ export function ModalShell({
   labelledBy,
   width,
   maxWidth = "90vw",
-  closeOnBackdrop = true,
+  closeOnBackdrop = false,
   closeOnEscape = true,
   align = "center",
   zIndex = "var(--z-modal)",

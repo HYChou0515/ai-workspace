@@ -31,10 +31,23 @@ describe("ModalShell", () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
-  it("closes on backdrop click but not on panel click", () => {
+  // #779: a stray click beside the panel is the one exit the user never meant
+  // to take, so the default withdraws it. A modal that wants it says so.
+  it("ignores a backdrop click by default", () => {
     const onClose = vi.fn();
     render(
       <ModalShell onClose={onClose} ariaLabel="m" data-testid="shell">
+        <button type="button">inside</button>
+      </ModalShell>,
+    );
+    fireEvent.click(screen.getByTestId("shell-backdrop"));
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("closes on backdrop click when closeOnBackdrop is asked for", () => {
+    const onClose = vi.fn();
+    render(
+      <ModalShell onClose={onClose} ariaLabel="m" data-testid="shell" closeOnBackdrop>
         <button type="button">inside</button>
       </ModalShell>,
     );
@@ -44,17 +57,6 @@ describe("ModalShell", () => {
     // clicking the backdrop (the presentation wrapper) closes
     fireEvent.click(screen.getByTestId("shell-backdrop"));
     expect(onClose).toHaveBeenCalledOnce();
-  });
-
-  it("does not close on backdrop when closeOnBackdrop is false", () => {
-    const onClose = vi.fn();
-    render(
-      <ModalShell onClose={onClose} ariaLabel="m" data-testid="shell" closeOnBackdrop={false}>
-        <p>x</p>
-      </ModalShell>,
-    );
-    fireEvent.click(screen.getByTestId("shell-backdrop"));
-    expect(onClose).not.toHaveBeenCalled();
   });
 
   it("does not close on Escape when closeOnEscape is false", () => {

@@ -98,6 +98,10 @@ export function DialogProvider({ children }: { children: React.ReactNode }) {
                   key={a.id}
                   type="button"
                   className="btn"
+                  // Addressable by action id, so a test picks the button by what
+                  // it DOES rather than by its wording — the labels are i18n and
+                  // the default locale differs between here and CI.
+                  data-testid={`dialog-action-${a.id}`}
                   data-variant={a.variant === "primary" ? "primary" : a.variant === "danger" ? "danger" : "secondary"}
                   data-size="sm"
                   autoFocus={a.variant === "primary"}
@@ -118,11 +122,4 @@ export function useDialog(): DialogContextValue {
   const ctx = useContext(DialogContext);
   if (!ctx) throw new Error("useDialog must be used inside <DialogProvider>");
   return ctx;
-}
-
-/** The dialog in context, or `null` when there's no provider. The read-only
- * FileTree select mode (#415 card-gen picker) has no confirm prompts (they're
- * all on caps-gated mutations), so it reads the dialog optionally. */
-export function useOptionalDialog(): DialogContextValue | null {
-  return useContext(DialogContext);
 }

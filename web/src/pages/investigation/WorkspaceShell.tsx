@@ -34,7 +34,7 @@ import { ItemChatShell } from "../../components/ItemChatShell";
 import { ItemAccessDialog, ItemMembersPanel } from "../../components/ItemMembersPanel";
 import { ShareChatDialog } from "../../components/ShareChatDialog";
 import { resolveUploadDir } from "./attach";
-import { DialogProvider, useDialog } from "../../components/Dialog";
+import { useDialog } from "../../components/Dialog";
 import { FileServiceProvider, investigationFileService } from "../../api/fileService";
 import { WorkspaceSlugProvider, useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { EditModeProvider, useEditMode } from "../../hooks/editMode";
@@ -151,9 +151,8 @@ export function WorkspaceShell({
   }, [service, queryClient]);
   return (
     <WorkspaceSlugProvider value={manifest.slug}>
-      <DialogProvider>
-        <FileServiceProvider value={service}>
-          <AgentProvider investigationId={item.resource_id}>
+      <FileServiceProvider value={service}>
+        <AgentProvider investigationId={item.resource_id}>
           <FileBufferProvider store={bufferStore}>
             <EditModeProvider>
               <ShellBody
@@ -169,9 +168,8 @@ export function WorkspaceShell({
               />
             </EditModeProvider>
           </FileBufferProvider>
-          </AgentProvider>
-        </FileServiceProvider>
-      </DialogProvider>
+        </AgentProvider>
+      </FileServiceProvider>
     </WorkspaceSlugProvider>
   );
 }

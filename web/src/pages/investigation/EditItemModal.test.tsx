@@ -46,16 +46,17 @@ describe("EditItemModal (#445 — ModalShell migration)", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("closes on a backdrop click but not on a panel click", async () => {
+  // #779: this modal holds a whole edit form, so neither click may close it —
+  // the panel because the click is inside, the backdrop because a stray click
+  // beside the panel is exactly how a half-finished edit used to vanish.
+  it("ignores clicks on the panel and on the backdrop", async () => {
     const onClose = vi.fn();
     renderWithQuery(
       <EditItemModal manifest={manifest()} item={item} onClose={onClose} onSubmit={() => {}} />,
     );
-    // A click that lands on the panel must NOT bubble out to a close.
     await userEvent.click(screen.getByTestId("edit-item"));
     expect(onClose).not.toHaveBeenCalled();
-    // A click on the dimmed backdrop dismisses the modal.
     await userEvent.click(screen.getByTestId("edit-item-backdrop"));
-    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
   });
 });

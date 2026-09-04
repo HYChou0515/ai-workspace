@@ -9,7 +9,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { kbApi, type KbApi, type KbChatSummary } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
-import { useOptionalDialog } from "../../components/Dialog";
+import { useDialog } from "../../components/Dialog";
 import { Icon } from "../../components/Icon";
 import { Popover } from "../../components/Popover";
 import { Skeleton } from "../../components/Skeleton";
@@ -60,7 +60,7 @@ export function KbChatsPage({
 
   const me = useCurrentUser();
   const isSuperuser = useIsSuperuser();
-  const dialog = useOptionalDialog();
+  const dialog = useDialog();
   const pinned = usePersistentSet("kb:pinned-chats");
   const [tab, setTab] = useState<Tab>("all");
 
@@ -75,20 +75,23 @@ export function KbChatsPage({
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.kb.chats }),
   });
 
-  // Deleting a whole conversation is irreversible — confirm first (#456). When no
-  // dialog is in context (bare render) the destructive guard degrades to direct.
+  // Deleting a whole conversation is irreversible — confirm first (#456).
+  //
+  // This used to degrade to deleting outright when no dialog was in context.
+  // Nothing in the app rendered without one; the only caller that did was a
+  // test, and the degrade is what let those tests pass while asserting a
+  // delete-without-asking that a real user could never trigger. The provider
+  // lives at the root now (#779), so the guard is unconditional.
   const requestDelete = async (chatId: string, label: string) => {
-    if (dialog) {
-      const choice = await dialog.confirm({
-        title: "Delete this conversation?",
-        body: `This permanently deletes “${label}” and can’t be undone.`,
-        actions: [
-          { id: "cancel", label: "Cancel" },
-          { id: "delete", label: "Delete", variant: "danger" },
-        ],
-      });
-      if (choice !== "delete") return;
-    }
+    const choice = await dialog.confirm({
+      title: "Delete this conversation?",
+      body: `This permanently deletes “${label}” and can’t be undone.`,
+      actions: [
+        { id: "cancel", label: "Cancel" },
+        { id: "delete", label: "Delete", variant: "danger" },
+      ],
+    });
+    if (choice !== "delete") return;
     removeMut.mutate(chatId);
   };
   const renameMut = useMutation({

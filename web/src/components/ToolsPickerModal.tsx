@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import { qk } from "../api/queryKeys";
 import type { ApiClient, ItemToolState } from "../api/types";
+import { useDirtyClose } from "../hooks/useDirtyClose";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 import { ModalShell } from "./ModalShell";
@@ -49,7 +50,6 @@ export function ToolsPickerModal({
   const [prefs, setPrefs] = useState<Record<string, boolean> | null>(null);
   const [initial, setInitial] = useState<Record<string, boolean> | null>(null);
   const [saving, setSaving] = useState(false);
-  const [confirming, setConfirming] = useState(false);
 
   // Seed the editable override once the resolved state has loaded.
   useEffect(() => {
@@ -63,10 +63,7 @@ export function ToolsPickerModal({
   const ready = prefs !== null && initial !== null && toolsQ.data !== undefined;
   const dirty = ready && !sameOverride(prefs!, initial!);
 
-  const attemptClose = () => {
-    if (dirty) setConfirming(true);
-    else onClose();
-  };
+  const attemptClose = useDirtyClose(dirty, onClose);
 
   const save = async () => {
     if (!ready || !dirty || saving) return;
@@ -106,58 +103,29 @@ export function ToolsPickerModal({
           <ToolsChecklist tools={toolsQ.data!} prefs={prefs!} onChange={setPrefs} />
         )}
 
-        {confirming ? (
-          <div
-            data-testid="tools-discard-confirm"
-            style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "flex-end" }}
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 2 }}>
+          <button
+            type="button"
+            className="btn"
+            data-variant="secondary"
+            data-size="sm"
+            data-testid="tools-cancel"
+            onClick={attemptClose}
           >
-            <span style={{ flex: 1, fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>{t("tools.discard")}</span>
-            <button
-              type="button"
-              className="btn"
-              data-variant="secondary"
-              data-size="sm"
-              data-testid="tools-discard-no"
-              onClick={() => setConfirming(false)}
-            >
-              {t("tools.cancel")}
-            </button>
-            <button
-              type="button"
-              className="btn"
-              data-variant="danger"
-              data-size="sm"
-              data-testid="tools-discard-yes"
-              onClick={onClose}
-            >
-              {t("tools.resetVisible")}
-            </button>
-          </div>
-        ) : (
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 2 }}>
-            <button
-              type="button"
-              className="btn"
-              data-variant="secondary"
-              data-size="sm"
-              data-testid="tools-cancel"
-              onClick={attemptClose}
-            >
-              {t("tools.cancel")}
-            </button>
-            <button
-              type="button"
-              className="btn"
-              data-variant="primary"
-              data-size="sm"
-              data-testid="tools-save"
-              onClick={save}
-              disabled={!ready || !dirty || saving}
-            >
-              {t("tools.save")}
-            </button>
-          </div>
-        )}
+            {t("tools.cancel")}
+          </button>
+          <button
+            type="button"
+            className="btn"
+            data-variant="primary"
+            data-size="sm"
+            data-testid="tools-save"
+            onClick={save}
+            disabled={!ready || !dirty || saving}
+          >
+            {t("tools.save")}
+          </button>
+        </div>
     </ModalShell>
   );
 }

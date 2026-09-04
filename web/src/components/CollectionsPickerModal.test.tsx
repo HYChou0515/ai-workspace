@@ -215,11 +215,10 @@ describe("CollectionsPickerModal", () => {
     await screen.findByTestId("collection-row-a");
     fireEvent.click(screen.getByTestId("collection-check-a")); // make it dirty
     fireEvent.click(screen.getByTestId("collections-cancel"));
-    // Does not close immediately — asks first.
+    // Does not close immediately — asks first, through the shared confirm (#779).
     expect(onClose).not.toHaveBeenCalled();
-    expect(screen.getByTestId("collections-discard-confirm")).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("discard-yes"));
-    expect(onClose).toHaveBeenCalled();
+    fireEvent.click(await screen.findByTestId("dialog-action-discard"));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 
   it("closes straight away on cancel when nothing changed", async () => {

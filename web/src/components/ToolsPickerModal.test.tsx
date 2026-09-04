@@ -60,5 +60,23 @@ describe("ToolsPickerModal", () => {
     );
     fireEvent.click(await screen.findByTestId("tools-cancel"));
     expect(onClose).toHaveBeenCalled();
+    expect(screen.queryByTestId("dialog-action-discard")).toBeNull();
+  });
+
+  // #779: the guard existed before but nothing covered it, so a regression here
+  // would have been silent — and this is the modal where losing the answer means
+  // re-picking every tool.
+  it("asks before dropping unsaved tool choices, and only closes once confirmed", async () => {
+    const onClose = vi.fn();
+    renderWithQuery(
+      <ToolsPickerModal slug="rca" itemId="i1" onSave={vi.fn()} onClose={onClose} client={fakeClient()} />,
+    );
+    fireEvent.click(await screen.findByTestId("tool-exec-off")); // pin exec off = dirty
+    fireEvent.click(screen.getByTestId("tools-cancel"));
+
+    expect(onClose).not.toHaveBeenCalled();
+    await screen.findByTestId("dialog-action-discard");
+    fireEvent.click(screen.getByTestId("dialog-action-discard"));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 });
