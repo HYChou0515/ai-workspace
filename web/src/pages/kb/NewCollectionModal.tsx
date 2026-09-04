@@ -15,6 +15,7 @@
 import { useEffect, useState } from "react";
 
 import { Icon } from "../../components/Icon";
+import { ModalShell } from "../../components/ModalShell";
 import { useDirtyClose } from "../../hooks/useDirtyClose";
 import { useT } from "../../lib/i18n";
 import { RetrievalToggles } from "./RetrievalToggles";
@@ -91,14 +92,8 @@ export function NewCollectionModal({
     gitToken.trim() !== "";
   const attemptClose = useDirtyClose(dirty, onClose);
 
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") attemptClose();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [open, attemptClose]);
+  // Escape used to be a hand-rolled listener here. ModalShell owns it now (#779
+  // P5), along with the focus trap and focus restore this overlay never had.
 
   if (!open) return null;
 
@@ -142,15 +137,34 @@ export function NewCollectionModal({
   // #779: the backdrop is the accidental exit, so while there is something typed
   // it does nothing at all — raising a prompt about a click the user never meant
   // to make is itself the interruption.
+  //
+  // The panel keeps `kb-modal__card`, and panelStyle/backdropStyle restate the
+  // few values that class and `.kb-modal` set, because ModalShell's own inline
+  // defaults would otherwise win over them. The form stays a form (ModalShell's
+  // panel is a div), so `onSubmit` and the Create button still behave as one.
   return (
-    <div className="kb-modal" role="presentation" onClick={dirty ? undefined : onClose}>
+    <ModalShell
+      onClose={attemptClose}
+      closeOnBackdrop={!dirty}
+      ariaLabel="New collection"
+      data-testid="new-collection"
+      panelClassName="kb-modal__card"
+      width="min(520px, 100%)"
+      maxWidth="100%"
+      panelStyle={{
+        padding: 0,
+        background: "var(--paper)",
+        boxShadow: "0 20px 60px rgba(20, 22, 28, 0.3)",
+      }}
+      backdropStyle={{
+        background: "rgba(20, 22, 28, 0.55)",
+        backdropFilter: "blur(4px)",
+        padding: 16,
+      }}
+    >
       <form
-        className="kb-modal__card"
-        role="dialog"
-        aria-modal
-        aria-label="New collection"
-        onClick={(e) => e.stopPropagation()}
         onSubmit={submit}
+        style={{ display: "flex", flexDirection: "column", minHeight: 0 }}
       >
         <header className="kb-modal__head">
           <div className="caps">Knowledge base</div>
@@ -279,6 +293,6 @@ export function NewCollectionModal({
           </button>
         </footer>
       </form>
-    </div>
+    </ModalShell>
   );
 }

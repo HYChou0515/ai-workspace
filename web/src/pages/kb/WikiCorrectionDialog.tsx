@@ -7,11 +7,12 @@
  */
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import type { KbApi, WikiCorrectionQA } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 import { Icon } from "../../components/Icon";
+import { ModalShell } from "../../components/ModalShell";
 import { useDirtyClose } from "../../hooks/useDirtyClose";
 import { useT } from "../../lib/i18n";
 
@@ -48,13 +49,8 @@ export function WikiCorrectionDialog({
     pendingAnswers.some((a) => a.trim() !== "");
   const attemptClose = useDirtyClose(dirty, onClose);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") attemptClose();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [attemptClose]);
+  // Escape was a hand-rolled listener here. ModalShell owns it now (#779 P5),
+  // together with the focus trap and focus restore this overlay never had.
 
   const draftMut = useMutation({
     mutationFn: () => {
@@ -103,39 +99,60 @@ export function WikiCorrectionDialog({
 
   if (submitMut.isSuccess) {
     return (
-      <div className="kb-modal" role="presentation" onClick={onClose}>
-        <div
-          className="kb-modal__card"
-          role="dialog"
-          aria-modal
-          aria-label={t("wikiCorrection.title")}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div className="kb-modal__body">
-            <p>{t("wikiCorrection.done")}</p>
-          </div>
-          <footer className="kb-modal__foot">
-            <button type="button" className="kb-btn kb-btn--primary" onClick={onClose}>
-              {t("wikiCorrection.cancel")}
-            </button>
-          </footer>
+      <ModalShell
+        onClose={onClose}
+        // The correction is filed; there is nothing left to lose, so this one
+        // keeps a live backdrop.
+        closeOnBackdrop
+        ariaLabel={t("wikiCorrection.title")}
+        panelClassName="kb-modal__card"
+        width="min(520px, 100%)"
+        maxWidth="100%"
+        panelStyle={{
+          padding: 0,
+          background: "var(--paper)",
+          boxShadow: "0 20px 60px rgba(20, 22, 28, 0.3)",
+        }}
+        backdropStyle={{
+          background: "rgba(20, 22, 28, 0.55)",
+          backdropFilter: "blur(4px)",
+          padding: 16,
+        }}
+      >
+        <div className="kb-modal__body">
+          <p>{t("wikiCorrection.done")}</p>
         </div>
-      </div>
+        <footer className="kb-modal__foot">
+          <button type="button" className="kb-btn kb-btn--primary" onClick={onClose}>
+            {t("wikiCorrection.cancel")}
+          </button>
+        </footer>
+      </ModalShell>
     );
   }
 
   // #779: the backdrop is the accidental exit — while there is something written
   // it does nothing rather than raising a prompt about an unintended click.
   return (
-    <div className="kb-modal" role="presentation" onClick={dirty ? undefined : onClose}>
-      <form
-        className="kb-modal__card"
-        role="dialog"
-        aria-modal
-        aria-label={t("wikiCorrection.title")}
-        onClick={(e) => e.stopPropagation()}
-        onSubmit={submit}
-      >
+    <ModalShell
+      onClose={attemptClose}
+      closeOnBackdrop={!dirty}
+      ariaLabel={t("wikiCorrection.title")}
+      panelClassName="kb-modal__card"
+      width="min(520px, 100%)"
+      maxWidth="100%"
+      panelStyle={{
+        padding: 0,
+        background: "var(--paper)",
+        boxShadow: "0 20px 60px rgba(20, 22, 28, 0.3)",
+      }}
+      backdropStyle={{
+        background: "rgba(20, 22, 28, 0.55)",
+        backdropFilter: "blur(4px)",
+        padding: 16,
+      }}
+    >
+      <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
         <header className="kb-modal__head">
           <div className="caps">Wiki</div>
           <h2 className="kb-modal__title">{t("wikiCorrection.title")}</h2>
@@ -214,6 +231,6 @@ export function WikiCorrectionDialog({
           </button>
         </footer>
       </form>
-    </div>
+    </ModalShell>
   );
 }

@@ -12,6 +12,7 @@ import { type Group, type GroupsApi, groupsApi } from "../api/groups";
 import { exactTime, relativeTime } from "../api/types";
 import { qk } from "../api/queryKeys";
 import { Icon } from "../components/Icon";
+import { ModalShell } from "../components/ModalShell";
 import { UserChip } from "../components/UserChip";
 import { UserPicker } from "../components/UserPicker";
 import { useCurrentUser } from "../hooks/useCurrentUser";
@@ -611,9 +612,16 @@ function CreateGroupModal({
   const attemptClose = useDirtyClose(dirty, onClose);
 
   return (
-    <div role="dialog" aria-label="New group" style={modalOverlay} onClick={dirty ? undefined : onClose}>
-      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
-        <h2 style={{ margin: "0 0 12px", fontSize: pxToRem(16) }}>New group</h2>
+    <ModalShell
+      onClose={attemptClose}
+      closeOnBackdrop={!dirty}
+      ariaLabel="New group"
+      data-testid="new-group"
+      width="min(440px, 100%)"
+      maxWidth="100%"
+      panelStyle={{ background: "var(--paper)", borderRadius: 10, padding: 20, display: "grid" }}
+    >
+      <h2 style={{ margin: "0 0 12px", fontSize: pxToRem(16) }}>New group</h2>
         <label style={field}>
           <span className="caps">Name</span>
           <input
@@ -659,22 +667,21 @@ function CreateGroupModal({
             </div>
           )}
         </div>
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
-          <button type="button" className="btn" data-variant="ghost" onClick={attemptClose}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="btn"
-            data-variant="primary"
-            disabled={!canCreate || create.isPending}
-            onClick={() => create.mutate()}
-          >
-            Create
-          </button>
-        </div>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
+        <button type="button" className="btn" data-variant="ghost" onClick={attemptClose}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          className="btn"
+          data-variant="primary"
+          disabled={!canCreate || create.isPending}
+          onClick={() => create.mutate()}
+        >
+          Create
+        </button>
       </div>
-    </div>
+    </ModalShell>
   );
 }
 
@@ -707,7 +714,5 @@ const memberPill: React.CSSProperties = {
   background: "var(--paper-2)",
   fontSize: pxToRem(12),
 };
-const modalOverlay: React.CSSProperties = { position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 };
-const modalCard: React.CSSProperties = { background: "var(--paper)", borderRadius: 10, padding: 20, width: "min(440px, 92vw)", display: "grid" };
 const field: React.CSSProperties = { display: "grid", gap: 4, marginBottom: 10 };
 const input: React.CSSProperties = { padding: "8px 10px", borderRadius: 6, border: "1px solid var(--paper-3)", background: "var(--paper)", color: "var(--text-paper)" };

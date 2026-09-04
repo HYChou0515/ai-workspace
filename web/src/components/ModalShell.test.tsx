@@ -70,6 +70,20 @@ describe("ModalShell", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  // #779 P5: a modal that says where focus belongs must win over "first
+  // focusable". Found by opening the moved NewCollectionModal in a browser —
+  // its Name field lost the caret to the segmented control above it, and no
+  // unit test looks at focus placement.
+  it("honours an autofocus target over the first focusable", () => {
+    render(
+      <ModalShell onClose={() => {}} ariaLabel="m">
+        <button type="button">first</button>
+        <input aria-label="name" autoFocus />
+      </ModalShell>,
+    );
+    expect(document.activeElement).toBe(screen.getByLabelText("name"));
+  });
+
   it("moves focus into the modal on open (#467)", () => {
     render(
       <ModalShell onClose={() => {}} ariaLabel="m">

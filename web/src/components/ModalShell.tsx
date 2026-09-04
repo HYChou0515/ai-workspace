@@ -84,7 +84,16 @@ export function ModalShell({
     const restoreTo = document.activeElement as HTMLElement | null;
     const focusables = () => Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE));
 
-    (focusables()[0] ?? panel).focus();
+    // Only claim focus if the content hasn't already placed it (#779 P5).
+    // React's `autoFocus` leaves no attribute behind — it calls .focus() while
+    // mounting, which is BEFORE this effect — so the check is "is focus already
+    // inside the panel", not "is anything marked". Without it the shell hands
+    // focus to whatever sits highest in the DOM, and a form whose first control
+    // is a segmented toggle never gets the caret into the field the person
+    // opened it to type in.
+    if (!panel.contains(document.activeElement)) {
+      (focusables()[0] ?? panel).focus();
+    }
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Tab") return;

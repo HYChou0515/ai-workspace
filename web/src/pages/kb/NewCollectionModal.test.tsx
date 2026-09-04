@@ -131,7 +131,7 @@ describe("NewCollectionModal — leaving with something typed (#779)", () => {
     const onClose = renderIt();
     await userEvent.type(screen.getByPlaceholderText("New collection name…"), "Process SOPs");
 
-    await userEvent.click(document.querySelector(".kb-modal") as HTMLElement);
+    await userEvent.click(screen.getByTestId("new-collection-backdrop"));
 
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.getByPlaceholderText("New collection name…")).toHaveValue("Process SOPs");
@@ -150,7 +150,26 @@ describe("NewCollectionModal — leaving with something typed (#779)", () => {
 
   it("still closes on a backdrop click while the form is untouched", async () => {
     const onClose = renderIt();
-    await userEvent.click(document.querySelector(".kb-modal") as HTMLElement);
+    await userEvent.click(screen.getByTestId("new-collection-backdrop"));
     expect(onClose).toHaveBeenCalled();
+  });
+});
+
+describe("NewCollectionModal — on the shared shell (#779 P5)", () => {
+  afterEach(cleanup);
+
+  it("traps Tab inside the panel, so keyboard focus cannot wander behind it", async () => {
+    render(<NewCollectionModal open onClose={vi.fn()} onCreate={() => {}} />);
+    const dialog = screen.getByRole("dialog", { name: "New collection" });
+
+    // Walk forward past the last control; focus must come back inside, never
+    // out to the page behind. This is what the hand-rolled overlay never had.
+    for (let i = 0; i < 25; i++) await userEvent.tab();
+    expect(dialog.contains(document.activeElement)).toBe(true);
+  });
+
+  it("keeps the kb card styling it had before the move", () => {
+    render(<NewCollectionModal open onClose={vi.fn()} onCreate={() => {}} />);
+    expect(screen.getByRole("dialog", { name: "New collection" })).toHaveClass("kb-modal__card");
   });
 });

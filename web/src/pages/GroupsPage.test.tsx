@@ -391,7 +391,9 @@ describe("New group — leaving with something typed (#779)", () => {
     superuser.mockReturnValue(true);
     render(<GroupsPage client={client({ listGroups: async () => [] })} />);
     await userEvent.click(await screen.findByTestId("groups-new"));
-    return screen.getByRole("dialog", { name: "New group" });
+    // The backdrop, not the panel — since #779 P5 the panel is ModalShell's
+    // role="dialog" and the backdrop is its sibling.
+    return screen.getByTestId("new-group-backdrop");
   };
 
   it("ignores a backdrop click once a name has been typed", async () => {
