@@ -73,6 +73,41 @@ which. You cannot tell from a tool's name: `read_file` and `lot-status` look
 alike to you, and only one of them a page can call. If that section is absent,
 say so and ask rather than guessing; a tool you invent fails at the call.
 
+## Run the tool before you parse it
+
+**A tool's output shape is the tool's contract, not the platform's.** `callTool`
+hands you `{ output, exit_code }` — `output` is whatever bytes the command
+printed, verbatim. It may be JSON, or JSON Lines, or a table a person was meant
+to read, or an empty string. Nothing here checks, and nothing will tell you: a
+page that guesses wrong renders blank or shows `undefined`, in front of somebody
+who cannot open a console and can only report "it's broken".
+
+**You hold the same tool.** A page can only call tools this item's agent can
+call, so before you write a line of parsing:
+
+1. **Call it, from this turn, with arguments a real user would send.**
+2. **Read what came back.** Is it JSON at all? Is the list at the top level or
+   under a key? Are the numbers numbers, or strings with units in them? Which
+   field is the one the user actually named?
+3. **Call it once more for the boring answer** — a lot that does not exist, a
+   date with nothing in it. That path is most of what the page will show, and it
+   is where a tool switches to prose or exits non-zero.
+4. **Paste the real output into your code as a comment**, trimmed. It is the
+   only record of what the parser was written against, and the next person to
+   touch the page has no other way to find out.
+
+Then write the parser against **that**, not against what the name suggested.
+
+If you cannot run it — it needs an identifier you do not have, or the data is
+not there yet — **say so and ask for one real example of its output.** Do not
+guess a shape and ship it; the guess fails in front of the user, not in front of
+you.
+
+Whatever you learn, keep the guards from `examples/external/`: check
+`exit_code !== 0` first and show `output` as-is when it is non-zero, and wrap
+`JSON.parse` in a `try` that shows the raw text rather than blanking the page.
+Those cover the day the tool changes under you.
+
 ## What you are actually making
 
 Someone who does not write software just described a job they redo by hand. The
@@ -150,6 +185,8 @@ Open it yourself in your head, in this order:
    all, or an empty folder to read?
 4. Does every `workspace.*` call have a `.catch`, and does the page show that
    text rather than going blank?
+5. For every `callTool`: did you RUN it and read the output, or did you assume
+   its shape? And does the page survive a non-zero exit and a non-JSON reply?
 
 Then tell the user which file to open, in their words: "open **Lot tracker** in
 `lot-tracker/page.ai.yaml`".

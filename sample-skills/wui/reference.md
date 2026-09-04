@@ -107,12 +107,24 @@ tools: [lot-status]
 ```js
 const res = await workspace.callTool("lot-status", { lot: "A1" });
 if (res.exit_code !== 0) show(res.output);   // the tool ran and failed
-const data = JSON.parse(res.output);
+let data;
+try {
+  data = JSON.parse(res.output);
+} catch (e) {
+  show(res.output);                          // it answered, just not in JSON
+  return;
+}
 ```
 
 `exit_code !== 0` is the tool's own failure, not a platform error, and `output`
-is verbatim — nothing is appended to it, so it is safe to parse (though whether
-it IS JSON is the tool's contract, not the platform's).
+is verbatim — nothing is appended to it, so it is safe to parse.
+
+**Whether it IS JSON is the tool's contract, and the platform makes no promise
+about it.** `output` is the bytes the command printed: JSON for one tool, a
+table for another, a sentence when there is nothing to report. This is why the
+`try` above is not defensive padding — it is the only thing between a shape you
+assumed and a blank page. **Run the tool yourself before writing the parser**;
+SKILL.md, "Run the tool before you parse it", says what to look at.
 
 A rejected `callTool` is a different thing again, and the message says which:
 

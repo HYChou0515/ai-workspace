@@ -224,6 +224,66 @@ def test_the_built_example_ships_the_bridge_typed(payload: dict[str, bytes]):
         assert f"{verb}(" in types, f"the bridge type omits {verb}"
 
 
+def test_the_skill_makes_the_agent_look_at_a_tools_real_output():
+    """`callTool` returns whatever the command printed. The shape is the tool's
+    contract and the platform promises nothing about it, so an agent that writes
+    `JSON.parse` against the tool's NAME ships a blank page to somebody who
+    cannot open a console and can only report "it's broken".
+
+    The agent holds the same tool — a page can only call what the item's agent
+    can call — so "run it and look" is available, cheap, and the only thing that
+    turns a guess into a fact."""
+    body = SHARED_SKILLS["wui"].joinpath("SKILL.md").read_text()
+    reference = SHARED_SKILLS["wui"].joinpath("reference.md").read_text()
+
+    assert "Run the tool before you parse it" in body
+    # Not just "be careful": the instruction has to be an ACTION, and it has to
+    # say what to do when running it is impossible, or the agent guesses anyway.
+    assert "You hold the same tool" in body
+    assert "ask for one real example of its output" in body
+    # And the reference must say the same thing at the same volume. It used to
+    # carry this in a trailing parenthesis after "so it is safe to parse", which
+    # is the sentence an agent acts on.
+    assert "Run the tool yourself before writing the parser" in reference
+    assert "the tool's contract, not the platform's)" not in reference
+
+
+def test_the_built_example_says_who_rebuilds_and_when(payload: dict[str, bytes]):
+    """The one silent failure on this path: editing `src/` changes nothing until
+    a rebuild, and the user is left looking at the old page.
+
+    The pane now covers the person who OPENS the page — it rebuilds on open, and
+    there is a button. It does not cover the person already looking at it while
+    the agent edits: they press Refresh and see the old build. So the README has
+    to say BOTH halves; saying only the automatic one would teach the agent it
+    can skip the step that protects the reader in front of it."""
+    readme = payload[f"examples/{BUILT}/README.md"].decode()
+
+    assert "rebuild in the same turn as the edit" in readme.lower()
+    assert "auto-rebuild" in readme.lower()
+    assert "--frozen-lockfile" in readme
+
+
+def test_the_built_example_reaches_the_bridge_the_same_way(payload: dict[str, bytes]):
+    """A build changes how the page is produced, not what it can do. If this
+    example implied a different API, it would teach one that does not exist."""
+    source = payload[f"examples/{BUILT}/src/main.tsx"].decode()
+    used = set(re.findall(r"workspace\s*\.?\s*\n?\s*\.?(\w+)\(", source))
+
+    assert used, "it would not need a WUI"
+    assert used <= VERBS, f"invents {sorted(used - VERBS)}"
+
+
+def test_the_skill_offers_the_built_example_too():
+    body = SHARED_SKILLS["wui"].joinpath("SKILL.md").read_text()
+
+    assert f"examples/{BUILT}/" in body
+    # And says which to prefer. This one is the DEFAULT now: auto-rebuild
+    # removed the cost that made a build worth avoiding, and what is left is a
+    # compiler on a page whose reader cannot open a console.
+    assert "Default to `examples/react/`" in body
+
+
 # ── the examples have to LOOK like something ──────────────────────────────
 
 
