@@ -110,12 +110,20 @@ export function parseViewSpec(text: string): ViewSpec | null {
 /** One end of a working-hours window: `"07:00"` → 7, `"08:30"` → 8.5. A bare
  * number is accepted too, because `from: 7` is what a person writes when the
  * hour is whole and YAML would hand it over unquoted anyway. */
-function clockHours(raw: unknown): number | undefined {
+export function clockHours(raw: unknown): number | undefined {
   if (typeof raw === "number") return Number.isFinite(raw) && raw >= 0 && raw <= 24 ? raw : undefined;
   const m = /^(\d{1,2}):([0-5]\d)$/.exec(String(raw).trim());
   if (!m) return undefined;
   const h = Number(m[1]);
   return h <= 24 ? h + Number(m[2]) / 60 : undefined;
+}
+
+/** The inverse of {@link clockHours}: 7 → `"07:00"`, 8.5 → `"08:30"`. Kept
+ * beside it deliberately — a formatter that drifts from its parser writes view
+ * files the parser then drops, and it drops them silently. */
+export function clockText(hours: number): string {
+  const total = Math.round(hours * 60);
+  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
 }
 
 /** `work_hours:` is the part of the day the chart draws — the weekend rule at a
@@ -250,12 +258,27 @@ function normalizeCard(raw: unknown): ViewSpec["card"] {
  * strip the self-documenting `week:` comments). */
 export function setViewScalar(text: string, key: string, value: string | null): string {
   const esc = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  if (value === null) {
-    return text.replace(new RegExp(`^\\s*${esc}\\s*:.*(\\r?\\n)?`, "m"), "");
+  const head = new RegExp(`^(\\s*)${esc}\\s*:`);
+  const lines = text.split("\n");
+  const at = lines.findIndex((l) => head.test(l));
+  if (at === -1) {
+    return value === null ? text : `${text.replace(/\s*$/, "")}\n${key}: ${value}\n`;
   }
-  const line = new RegExp(`^(\\s*${esc}\\s*:).*$`, "m");
-  if (line.test(text)) return text.replace(line, `$1 ${value}`);
-  return `${text.replace(/\s*$/, "")}\n${key}: ${value}\n`;
+  // A key whose value is a nested mapping OWNS the indented lines under it, and
+  // touching only its own line leaves those orphaned beneath a flow mapping.
+  // That is not a wrong setting but a YAML parse error, and `parseViewSpec`
+  // answers those with null — so the whole view would go blank because someone
+  // moved a control. Stops at the first blank line or the first line back at
+  // this key's own indent, which is where the block ends.
+  const indent = (head.exec(lines[at]) as RegExpExecArray)[1].length;
+  let end = at + 1;
+  while (end < lines.length && lines[end].trim() !== "") {
+    if ((/^\s*/.exec(lines[end]) as RegExpExecArray)[0].length <= indent) break;
+    end++;
+  }
+  const rest = lines.slice(end);
+  const replacement = value === null ? [] : [`${lines[at].slice(0, lines[at].indexOf(":") + 1)} ${value}`];
+  return [...lines.slice(0, at), ...replacement, ...rest].join("\n");
 }
 
 /** Convenience for the boolean `skip_weekends` flag. */

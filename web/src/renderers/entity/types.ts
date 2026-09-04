@@ -128,6 +128,11 @@ export type ViewConfig = {
    * shows a "Working days" section; toggling persists straight to the view file. */
   skipWeekends?: boolean;
   onToggleSkipWeekends?: (next: boolean) => void;
+  /** #785 — the working-hours window, in the same section as the weekend
+   * switch because it is the same idea a scale down. `undefined` ⇒ off, the
+   * whole day drawn. */
+  workHours?: WorkHours;
+  onSetWorkHours?: (next: WorkHours | undefined) => void;
   /** gantt only — which field a bar's colour means. "" = off, the single
    * default colour bars had before. Present ⇒ the panel shows a "Colour"
    * section; changing it persists to the view file, because what the chart is

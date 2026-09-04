@@ -20,6 +20,37 @@ describe("setViewScalar", () => {
   });
 });
 
+describe("setViewScalar over a BLOCK value (#785)", () => {
+  const text = [
+    "view: gantt",
+    "entity: issue",
+    "# the working day:",
+    "work_hours:",
+    '  from: "07:00"',
+    '  to: "21:00"',
+    "label: title",
+    "",
+  ].join("\n");
+
+  it("replaces the whole block, not just the line the key is on", () => {
+    // Rewriting only `work_hours:` leaves its two children orphaned under a
+    // flow mapping. That is not a wrong setting — it is a YAML parse error, and
+    // `parseViewSpec` answers those with null, so the entire view goes blank
+    // because someone moved a time picker.
+    const changed = setViewScalar(text, "work_hours", '{ from: "08:00", to: "18:00" }');
+    expect(parseViewSpec(changed)?.work_hours).toEqual({ from: 8, to: 18 });
+    expect(parseViewSpec(changed)?.label).toBe("title");
+    expect(changed).toContain("# the working day:");
+  });
+
+  it("takes the block's children with it when the key is removed", () => {
+    const dropped = setViewScalar(text, "work_hours", null);
+    expect(parseViewSpec(dropped)?.work_hours).toBeUndefined();
+    expect(parseViewSpec(dropped)?.label).toBe("title");
+    expect(dropped).not.toContain("07:00");
+  });
+});
+
 describe("work_hours (#785)", () => {
   const spec = (body: string) =>
     parseViewSpec(["view: gantt", "entity: issue", body, ""].join("\n"))?.work_hours;

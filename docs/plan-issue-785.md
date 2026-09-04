@@ -141,10 +141,15 @@ export function barColumns(span: Span, skip: boolean): number {
 
 **Goal.** skip-weekend 從 YAML 布林值變成面板上的 switch;工時視窗掛同一處。
 
-- 沿用既有的「本地改 → dirty 圓點 → Save to view」,**不新增偏好儲存機制**。
 - YAML 仍是持久化的家(`skip_weekends` 這個 key 不改名),面板只是它的編輯介面。
 
-**驗收.** 切換 switch 立即改變畫面且出現 dirty 點;按 Save to view 後 YAML 真的變了;Reset 回得去。
+**需求 3 在 master 上就已經做完了。** `ViewSettingsPanel` 的「Working days」區塊早就有 `Skip weekends (Mon–Fri only)` 這個 checkbox,經 `onToggleSkipWeekends` → `setViewScalar` 寫回 YAML。所以這個 phase 實際只剩「把工時視窗掛到同一個區塊」。
+
+**寫回機制原本寫錯了。** 原文說「本地改 → dirty 圓點 → Save to view」,但那是**非 gantt** 分支的機制;gantt 的齒輪是 `dirty: false` + `persistGantt` **立即寫回**,而且刻意做成針對單行的 comment-safe 文字編輯,而不是 `saveView` 的 js-yaml dump —— 否則那些自我說明的 `week:` 註解區塊會被整個吃掉。既然是「沿用既有的」,就沿用 gantt 這一套,不為單一控制項發明第二套。
+
+**做的時候撞到一個會讓整個 view 變空白的缺陷。** `setViewScalar` 只換掉 `key:` 那一行,而 `work_hours` 是縮排的 block —— 改寫會留下兩個孤兒子鍵、YAML 解析失敗、`parseViewSpec` 回 `null`,結果不是「設定沒生效」而是**整張圖不見**。已改成 block-aware(取到第一個空行或退回同縮排為止),`sort:` 之類未來寫成 block 的 key 也一併受惠。
+
+**驗收.** 面板上切「Skip non-working hours」→ 出貨的 `gantt.ai.yaml` 真的多出可被解析器讀回的 `work_hours`,且 `week:`/`schedule:`/`skip_weekends` 全部存活(有測試讀真檔驗證)。
 
 ### P6 — 畫出畫不出來的
 
