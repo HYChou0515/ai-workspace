@@ -136,7 +136,6 @@ export function WikiCorrectionDialog({
   return (
     <ModalShell
       onClose={attemptClose}
-      closeOnBackdrop={!dirty}
       ariaLabel={t("wikiCorrection.title")}
       panelClassName="kb-modal__card"
       width="min(520px, 100%)"

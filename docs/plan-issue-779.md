@@ -108,11 +108,15 @@ web/src/renderers/entity/EntityRecordModal.tsx:83:      closeOnBackdrop={!editin
 
 | 出口 | clean | dirty |
 |---|---|---|
-| 背景點擊 | 關 | **不反應** |
+| 背景點擊 | **不反應**(除非該 modal 顯式要) | **不反應** |
 | Escape | 關 | 問一次 |
 | ✕ | 關 | 問一次 |
 | Cancel | 關 | 問一次 |
 | 路由跳走 | 關 | 不在本次範圍(見 §5) |
+
+**背景那一列在實作後修正過。** 初稿寫「clean → 關」,而落地時我讓三個手刻搬過來的表單用了 `closeOnBackdrop={!dirty}`,其餘十個表單則是不傳(一律不關)—— 同一句規則長出兩種行為。統一成「表單一律不關」,理由是:**同一個手勢的結果不該取決於使用者記不記得自己改過什麼**。clean 會關、dirty 不會關,是在訓練「點外面可以關掉」這個習慣,再讓它在最需要它成立的那一刻失效,而失效的形式是「沒反應」——本來就最難讀的一種回饋。
+
+唯一的例外是 `EntityRecordModal` 的 `closeOnBackdrop={!editing}`,而那不是 dirty 判斷:它有**唯讀模式**,讀取時整個 modal 就是個 viewer(背景關完全正確),按下 Edit 才變成表單。模式切換,不是「改了沒」。
 
 ---
 

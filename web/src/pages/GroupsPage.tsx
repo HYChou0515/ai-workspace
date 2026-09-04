@@ -614,7 +614,6 @@ function CreateGroupModal({
   return (
     <ModalShell
       onClose={attemptClose}
-      closeOnBackdrop={!dirty}
       ariaLabel="New group"
       data-testid="new-group"
       width="min(440px, 100%)"

@@ -148,10 +148,14 @@ describe("NewCollectionModal — leaving with something typed (#779)", () => {
     expect(screen.getByPlaceholderText("New collection name…")).toHaveValue("Process SOPs");
   });
 
-  it("still closes on a backdrop click while the form is untouched", async () => {
+  // The backdrop is inert here whether or not anything is typed. A form whose
+  // stray-click behaviour depends on what the user has already changed is a form
+  // whose behaviour they cannot predict — and "nothing happened" is hard enough
+  // to read without it being conditional.
+  it("ignores a backdrop click even while the form is untouched", async () => {
     const onClose = renderIt();
     await userEvent.click(screen.getByTestId("new-collection-backdrop"));
-    expect(onClose).toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
   });
 });
 

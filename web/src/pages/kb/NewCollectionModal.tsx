@@ -145,7 +145,6 @@ export function NewCollectionModal({
   return (
     <ModalShell
       onClose={attemptClose}
-      closeOnBackdrop={!dirty}
       ariaLabel="New collection"
       data-testid="new-collection"
       panelClassName="kb-modal__card"

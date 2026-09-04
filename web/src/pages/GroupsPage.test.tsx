@@ -405,9 +405,9 @@ describe("New group — leaving with something typed (#779)", () => {
     expect(screen.getByLabelText("Group name")).toHaveValue("Platform");
   });
 
-  it("still closes on a backdrop click while the form is untouched", async () => {
+  it("ignores a backdrop click even while the form is untouched", async () => {
     const dialog = await openIt();
     await userEvent.click(dialog);
-    expect(screen.queryByRole("dialog", { name: "New group" })).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "New group" })).toBeInTheDocument();
   });
 });
