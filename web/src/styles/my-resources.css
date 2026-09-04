@@ -96,6 +96,185 @@
   transition: width 0.2s;
 }
 
+/* ── the live section ────────────────────────────────────────────────────
+   Everything below exists to answer one complaint: the section READ as a
+   single seven-row list whose first three rows happened to have no button.
+   The totals and the closable environments are different kinds of line, and
+   they had the same width, the same type size and the same hairline between
+   them, so nothing said which was which. */
+
+/* What Close gives back, in one sentence, before the numbers. Sits at body size
+   rather than the dimmer hint tier: it states the one fact that decides whether
+   pressing Close is worth it, so it is not an aside. */
+.page .lede {
+  margin: 0 0 var(--space-16);
+  max-width: 62ch;
+  font-size: var(--text-body);
+  color: var(--text-paper-d);
+}
+
+/* The three totals as ONE block, three columns — not three full-width bars
+   stacked in the same column as the rows beneath them. Three 712px accent bars
+   in a vertical run also read as three alarms; a third of the width each, in a
+   panel of their own, reads as a dashboard, which is what they are. */
+.page .stat-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-24);
+  margin-bottom: var(--space-24);
+  padding: var(--space-16);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+  background: var(--paper-2);
+}
+
+/* They are columns here, so the stacking margin that separates them elsewhere
+   would only push the second and third down out of line. */
+.page .stat-row .gauge + .gauge {
+  margin-top: 0;
+}
+
+/* Label above figure, not beside it: side by side in a third of the width, a
+   long label ("記憶體" plus "4.0 GB / 6.0 GB") had nowhere to go. */
+.page .stat-row .summary {
+  display: block;
+  margin: 0;
+}
+
+.page .stat-row .gauge-label {
+  display: block;
+  font-size: var(--text-small);
+  color: var(--text-paper-d);
+}
+
+.page .stat-row .gauge-value {
+  display: block;
+  margin-top: var(--space-4);
+  font-size: var(--text-body-lg);
+  line-height: var(--leading-body-lg);
+  color: var(--text-paper);
+}
+
+/* The bar belongs to the figure above it and to nothing else, so its trailing
+   margin — which exists to separate stacked gauges — is removed here. */
+.page .stat-row .meter {
+  margin: var(--space-8) 0 0;
+}
+
+/* An unlimited dimension has no bar, so without this its column ends higher
+   than its neighbours and the block goes ragged along the bottom. */
+.page .stat-row .gauge {
+  display: flex;
+  flex-direction: column;
+}
+
+.page .stat-row .detail {
+  margin-top: var(--space-4);
+}
+
+/* One card per running environment, rather than rows separated by a hairline.
+   The card is what makes this list look unlike the storage list below it —
+   which was the actual complaint: two sections with different meanings and one
+   appearance, distinguishable only by the word on their buttons. */
+.page .live-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+
+.page .live-list > li {
+  display: grid;
+  /* dot · title · App · spec · action. The title column is the only one that
+     may shrink; `minmax(0, 1fr)` is what lets it ellipsis instead of pushing
+     the spec and the button off the end.
+     The App column is a FIXED width rather than `auto`: sized to its content it
+     started at a different x on every row (the title column absorbs the slack,
+     so a short title pushed the tag left and a long one pushed it right), and a
+     column of tags that never line up is harder to scan than no column at all.
+     Sized for the longest App name this deploy has; a longer one ellipsises
+     rather than stealing width from the title. */
+  grid-template-columns: auto minmax(0, 1fr) 10rem auto auto;
+  align-items: center;
+  gap: var(--space-12);
+  padding: var(--space-12) var(--space-16);
+  /* Two classes beat the one-class `.page ul > li` below on specificity, so the
+     shared row's hairline `border-top` and `display: flex` lose here whatever
+     the order in this file. */
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+  background: var(--paper);
+}
+
+/* The row is a target — it links to the item and carries the action. */
+.page .live-list > li:hover {
+  border-color: var(--text-paper-d2);
+}
+
+/* The title is the row's subject. It keeps the shared rule's ellipsis (a grid
+   cell still needs `min-width: 0` to shrink, which that rule already sets); the
+   weight is what separates it from the App tag and the figures beside it. */
+.page .live-list > li > a {
+  font-weight: 500;
+}
+
+/* Running, right now. Solid rather than haloed so it needs no colour outside
+   the token set, and it breathes only where motion is welcome. */
+.page .live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .page .live-dot {
+    animation: live-pulse 2.4s ease-in-out infinite;
+  }
+}
+
+@keyframes live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* Which App this environment belongs to. The payload has always carried the
+   slug — the row links with it — and never showed it, so a list spanning three
+   Apps looked flat. Quiet: it groups rows, it is not the row's subject. */
+.page .app-tag {
+  /* Left edge of its own column, so the tags form a readable column instead of
+     drifting with the length of the title beside them. */
+  justify-self: start;
+  max-width: 100%;
+  padding: 2px var(--space-8);
+  border-radius: var(--radius-chip);
+  background: var(--paper-2);
+  font-size: var(--text-small);
+  color: var(--text-paper-d);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The specs are the reason to pick one row over another, so they get a column
+   of their own width and tabular figures: "0.5 核" under "2 核" only reads as
+   smaller if the digits line up. */
+.page .live-list .detail {
+  min-width: 9ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A failure belongs to the row, and a five-column grid would otherwise drop it
+   into the first cell of an implicit second row — under the dot, 8px wide. */
+.page .live-list .error {
+  grid-column: 1 / -1;
+}
+
 /* One row per environment / workspace: name grows, specs sit next to it, the
    action is pushed to the end. The gap is what stopped "quota demo A" and
    "1 core" reading as one word. */

@@ -18,9 +18,16 @@ import { Link } from "react-router-dom";
 import { formatBytes } from "../lib/bytes";
 import { useT } from "../lib/i18n";
 
-import { type MyResources, type MyResourcesApi, type OverrideList as OverrideListDTO, myResourcesApi } from "../api/myResources";
+import {
+  type LiveEnvironment,
+  type MyResources,
+  type MyResourcesApi,
+  type OverrideList as OverrideListDTO,
+  myResourcesApi,
+} from "../api/myResources";
 import { qk } from "../api/queryKeys";
 import { useIsSuperuser } from "../hooks/useIsSuperuser";
+import { useApps } from "../hooks/useResources";
 import { UserPicker } from "../components/UserPicker";
 import { DeleteItemBody } from "../components/DeleteItemConfirm";
 import { DialogProvider, useDialog } from "../components/Dialog";
@@ -84,20 +91,9 @@ function Gauge({
 
 export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResourcesApi }) {
   const t = useT();
-  const qc = useQueryClient();
   const { data, isLoading } = useQuery({
     queryKey: qk.myResources,
     queryFn: () => client.get(),
-  });
-
-  const close = useMutation({
-    mutationFn: (itemId: string) => client.closeEnvironment(itemId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.myResources }),
-    // This failure is reported on the row it happened to, below. Without the
-    // opt-out the query client ALSO routes it to the app-wide write-failure
-    // toast, so one press raises two messages — and the page-level one names no
-    // item, which is the thing the per-row alert exists to avoid.
-    meta: { silentError: true },
   });
 
   if (isLoading || !data) return <p>{t("resources.loading")}</p>;
@@ -110,64 +106,50 @@ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResour
 
       <section aria-labelledby="live-heading">
         <h2 id="live-heading">{t("resources.live.heading")}</h2>
+        {/* What Close actually refunds. The two halves of this page are freed by
+            DIFFERENT actions — closing returns cpu and memory at once and
+            returns no bytes at all — and the page never said so, so a person at
+            their STORAGE limit could close every environment, watch that gauge
+            not move, and conclude the button was broken. Saying it also removes
+            the reason to hesitate over the one action here that is safe. */}
+        <p className="lede">{t("resources.live.lede")}</p>
         {/* Three dimensions, three gauges. They used to share one line and ONE
             bar — and that bar tracked only `count`, so at "1 / 2 · CPU 1 / 4" it
             sat at 50% while cpu was at 25%: a reader takes the bar as "how full
             am I" and it answered one dimension of three. Any of them can refuse
-            a turn on its own, so each shows its own. */}
-        <Gauge
-          label={t("resources.gauge.count")}
-          used={data.live.length}
-          limit={limits.count}
-          format={(n) => t("resources.live.count", { n })}
-        />
-        <Gauge
-          label={t("resources.gauge.cpu")}
-          used={data.cpu_in_use}
-          limit={limits.cpu}
-          format={(n) => `${n}`}
-        />
-        <Gauge
-          label={t("resources.memory")}
-          used={data.memory_in_use}
-          limit={limits.memory_bytes}
-          format={formatBytes}
-        />
+            a turn on its own, so each shows its own.
+
+            Grouped, and named, because they are a different KIND of line from
+            the ones below: "how full am I" against "here is one thing you could
+            give back". Ungrouped they were seven rows of one column at one
+            width and one type size, and the section read as a single list whose
+            first three entries happened to have no button. */}
+        <div className="stat-row" role="group" aria-label={t("resources.live.totals")}>
+          <Gauge
+            label={t("resources.gauge.count")}
+            used={data.live.length}
+            limit={limits.count}
+            format={(n) => t("resources.live.count", { n })}
+          />
+          <Gauge
+            label={t("resources.gauge.cpu")}
+            used={data.cpu_in_use}
+            limit={limits.cpu}
+            format={(n) => `${n}`}
+          />
+          <Gauge
+            label={t("resources.memory")}
+            used={data.memory_in_use}
+            limit={limits.memory_bytes}
+            format={formatBytes}
+          />
+        </div>
         {data.live.length === 0 ? (
           <p className="empty">{t("resources.live.empty")}</p>
         ) : (
-          <ul>
+          <ul className="live-list">
             {data.live.map((env) => (
-              <li key={env.item_id}>
-                <Link to={`/a/${env.slug}/${env.item_id}`}>{env.title || env.item_id}</Link>
-                <span className="detail">
-                  {env.cpu_cores
-                    ? t(env.cpu_cores === 1 ? "resources.live.cores_one" : "resources.live.cores", {
-                        n: env.cpu_cores,
-                      })
-                    : ""}
-                  {env.memory_bytes ? ` · ${formatBytes(env.memory_bytes)}` : ""}
-                </span>
-                <button
-                  type="button"
-                  className="btn"
-                  data-variant="secondary"
-                  data-size="sm"
-                  onClick={() => close.mutate(env.item_id)}
-                  disabled={close.isPending}
-                >
-                  {t("resources.live.close")}
-                </button>
-                {/* On the row it is about, not above the list: a page-level
-                    message names no item, and with more than one environment
-                    the reader cannot tell which press failed. `variables` is
-                    the item id the failed mutation was called with. */}
-                {close.isError && close.variables === env.item_id ? (
-                  <p className="error" role="alert">
-                    {t("resources.live.close_failed")}
-                  </p>
-                ) : null}
-              </li>
+              <LiveEnvironmentRow key={env.item_id} env={env} client={client} />
             ))}
           </ul>
         )}
@@ -222,6 +204,82 @@ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResour
       <AdminOverrides client={client} />
       </div>
     </DialogProvider>
+  );
+}
+
+/** The App's own display name for `slug`, falling back to the slug itself.
+ *
+ * The fallback is not cosmetic. `listApps` is a separate near-static query, so
+ * it is EMPTY on the first paint and STAYS empty if that request fails —
+ * rendering nothing would flicker on every load and, on a failure, leave every
+ * row looking like it belongs to no App at all. The slug is the honest answer
+ * in that window: it is what the link already uses. Never a slug→name table in
+ * the FE; the name is the manifest's to state. */
+function useAppName(slug: string): string {
+  const apps = useApps();
+  return apps.find((a) => a.slug === slug)?.title || slug;
+}
+
+/** One live environment: what it is, what it is holding, and the button that
+ * gives it back.
+ *
+ * Its own component so the close mutation is the ROW'S, the way
+ * `DeleteItemButton` below already owns its delete. Shared by the whole list,
+ * `isPending` was a property of the page — pressing Close on one row disabled
+ * every other row's button until that request came back, which on a busy host
+ * (503 + Retry-After) is the slow case, on the page whose only job is getting
+ * somebody back under their limit. Per-row state also removes the need to
+ * match `mutation.variables` against this row's id to tell whose failure a
+ * message belongs to: there is only one row's failure in here. */
+function LiveEnvironmentRow({ env, client }: { env: LiveEnvironment; client: MyResourcesApi }) {
+  const t = useT();
+  const qc = useQueryClient();
+  const appName = useAppName(env.slug);
+  const close = useMutation({
+    mutationFn: () => client.closeEnvironment(env.item_id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.myResources }),
+    // This failure is reported on the row it happened to. Without the opt-out
+    // the query client ALSO routes it to the app-wide write-failure toast, so
+    // one press raises two messages — and the page-level one names no item,
+    // which is the thing the per-row alert exists to avoid.
+    meta: { silentError: true },
+  });
+  return (
+    <li>
+      {/* Decoration, and deliberately out of the a11y tree: the fact it states
+          — this one is running right now — is already carried by the section's
+          heading and lede. Its job is visual, and it is the thing that stops
+          this list reading as a second copy of the storage list below it. */}
+      <span className="live-dot" aria-hidden="true" />
+      <Link to={`/a/${env.slug}/${env.item_id}`}>{env.title || env.item_id}</Link>
+      <span className="app-tag">{appName}</span>
+      <span className="detail">
+        {env.cpu_cores
+          ? t(env.cpu_cores === 1 ? "resources.live.cores_one" : "resources.live.cores", {
+              n: env.cpu_cores,
+            })
+          : ""}
+        {env.memory_bytes ? ` · ${formatBytes(env.memory_bytes)}` : ""}
+      </span>
+      <button
+        type="button"
+        className="btn"
+        data-variant="secondary"
+        data-size="sm"
+        onClick={() => close.mutate()}
+        disabled={close.isPending}
+      >
+        {t("resources.live.close")}
+      </button>
+      {/* On the row it is about, not above the list: a page-level message names
+          no item, and with more than one environment the reader cannot tell
+          which press failed. */}
+      {close.isError ? (
+        <p className="error" role="alert">
+          {t("resources.live.close_failed")}
+        </p>
+      ) : null}
+    </li>
   );
 }
 

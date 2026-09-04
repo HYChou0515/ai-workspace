@@ -913,6 +913,17 @@ export const messages = {
     en: "No such user, or you don't have permission.",
   },
   "resources.memory": { "zh-TW": "記憶體", en: "Memory" },
+  // Names the block of three totals, so it is announced as a block rather than
+  // read as the first three entries of the list of closable environments.
+  "resources.live.totals": { "zh-TW": "目前合計", en: "In use now" },
+  // Action and outcome, both halves. The second half is the one that was
+  // missing: closing refunds no storage, so somebody out of DISK space needs to
+  // be told to go to the list below instead of pressing Close and waiting.
+  "resources.live.lede": {
+    "zh-TW":
+      "這些環境正在佔用你的 CPU 與記憶體。關閉會立刻還回這兩項,檔案都會保留,下次開啟還是原來的樣子。（儲存空間要靠下面那區清。）",
+    en: "These are holding your CPU and memory. Closing gives both back at once and keeps every file — the workspace reopens as you left it. (Storage is freed below, not here.)",
+  },
   "resources.gauge.count": { "zh-TW": "環境數", en: "Environments" },
   "resources.gauge.cpu": { "zh-TW": "CPU", en: "CPU" },
   "resources.gauge.unlimited": { "zh-TW": "（無上限）", en: "(no limit)" },
