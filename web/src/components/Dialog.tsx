@@ -42,13 +42,21 @@ export function DialogProvider({ children }: { children: React.ReactNode }) {
     [],
   );
 
+  // While a confirm is up it is the TOP layer, so Escape is its alone (#779).
+  // ModalShell listens on document too; without this both handlers run, and for
+  // a modal with unsaved work that means cancelling this confirm and opening a
+  // fresh one in the same keystroke. Capture + stopImmediatePropagation is what
+  // makes "the topmost layer takes the key" a rule rather than an accident of
+  // which listener happened to be registered first.
   useEffect(() => {
     if (!opts) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") settle(null);
+      if (e.key !== "Escape") return;
+      e.stopImmediatePropagation();
+      settle(null);
     };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
   }, [opts, settle]);
 
   return (

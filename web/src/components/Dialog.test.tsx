@@ -65,4 +65,30 @@ describe("<DialogProvider /> / useDialog", () => {
     });
     expect(onResult).toHaveBeenCalledWith(null);
   });
+
+  it("takes Escape for itself, so the modal underneath does not also act on it", async () => {
+    // #779: ModalShell and this both listen on document. With the confirm open
+    // it is the top layer, so Escape belongs to it alone — otherwise the modal's
+    // own handler runs too and (for a dirty modal) opens a SECOND confirm. That
+    // it currently cancels out is an accident of listener order, not a design.
+    const user = userEvent.setup();
+    const shellSawEscape = vi.fn();
+    render(
+      <DialogProvider>
+        <Harness onResult={() => {}} />
+      </DialogProvider>,
+    );
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") shellSawEscape();
+    });
+
+    await user.click(screen.getByRole("button", { name: "open" }));
+    await screen.findByText("Save changes?");
+    await act(async () => {
+      await user.keyboard("{Escape}");
+    });
+
+    expect(screen.queryByText("Save changes?")).toBeNull();
+    expect(shellSawEscape).not.toHaveBeenCalled();
+  });
 });
