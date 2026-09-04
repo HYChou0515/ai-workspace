@@ -294,6 +294,15 @@ class WorkspaceFiles:
             handle = await self._rebuild(workspace_id)  # http: reaped but warm → rebuild
         return (self._sb, handle)
 
+    #: How many paths one batched download may ask for at a time. A workspace
+    #: can hold thousands of files, and a single request for all of them is a
+    #: different failure (a huge body, a connection held open for it) from the
+    #: one batching fixes. A constant rather than a config option on purpose:
+    #: it is an internal chunking detail with no behaviour an operator could
+    #: reason about, and every knob is a row somebody has to keep in the
+    #: migration ledger.
+    _BATCH_PATHS = 200
+
     async def read(self, workspace_id: str, path: str) -> bytes:
         return await self._read_with(workspace_id, path, await self._warm(workspace_id))
 
@@ -317,9 +326,41 @@ class WorkspaceFiles:
         (resolve once, every step provably hits the same store), NOT a memo of
         the probe's answer: `_warm` is also the recovery trigger for a sandbox
         the host reaped, so remembering "alive" across operations turns that
-        recovery into a 500. One operation, one resolution."""
+        recovery into a 500. One operation, one resolution.
+
+        A sandbox that can hand back many files at once takes the fast lane
+        below; one that cannot is read a file at a time, and NOTHING above here
+        can tell which happened — same bytes, same order, same errors, only a
+        different number of round trips."""
         warm = await self._warm(workspace_id)
+        if warm is not None:
+            sb, handle = warm
+            batched = getattr(sb, "download_many", None)
+            if batched is not None:
+                return await self._download_batched(batched, handle, paths)
         return [await self._read_with(workspace_id, path, warm) for path in paths]
+
+    async def _download_batched(
+        self,
+        batched: Callable[[SandboxHandle, list[str]], Awaitable[Sequence[bytes | None]]],
+        handle: SandboxHandle,
+        paths: Sequence[str],
+    ) -> list[bytes]:
+        """The fast lane: whole chunks of paths per round trip.
+
+        `None` in the answer means THAT PATH is absent — an answer, not a failed
+        batch — so the miss raises exactly what reading it alone would, and the
+        tolerant `read_all_existing` keeps skipping it. Anything else would make
+        one deleted file the difference between a listing and an error page."""
+        out: list[bytes] = []
+        for start in range(0, len(paths), self._BATCH_PATHS):
+            chunk = [abs_path(p) for p in paths[start : start + self._BATCH_PATHS]]
+            answers = await batched(handle, chunk)
+            for path, blob in zip(chunk, answers, strict=True):
+                if blob is None:
+                    raise FileNotFound(path)
+                out.append(blob)
+        return out
 
     async def _read_with(self, workspace_id: str, path: str, warm) -> bytes:
         """`read` against an ALREADY-resolved liveness. Split out so a multi-step

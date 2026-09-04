@@ -43,7 +43,15 @@ rollup 就要建跨型別 corpus(`store.py` `_corpus`),把**每個型別的每�
 | `GET /entities`(型別目錄) | 2 型別 | 10 | 10(未處理) |
 
 Phase 1 後剩下的 81 次裡有 70 次是「一筆記錄一次檔案抓取」—— 那是 `download` 一次只拿一個
-檔案的硬下限,不是解析次數的問題。
+檔案的硬下限,不是解析次數的問題。Phase 3 打破的就是這個下限。
+
+**熱路徑(有 live sandbox = 正式環境的形狀)的 sandbox 來回次數**,快速道路關/開對照:
+
+| | milestone(7 筆) | issue(68 筆) |
+| --- | --- | --- |
+| master 原始 | ~164 | ~148 |
+| Phase 1 + 2 後 | 81 | 71 |
+| **Phase 3(快速道路)** | **8** | **4** |
 
 探針放在 `$CLAUDE_JOB_DIR/tmp/test_zzz_entity_fanout_probe.py`(刻意不進 repo:它是量尺,
 不是回歸守門員;守門員是下面 Test plan 那條會紅的測試)。
@@ -61,6 +69,21 @@ sandbox 被 host 回收後的重建觸發點,跨操作記住「還活著」會�
 呼叫端用 duck-type 取用,跟 `stat_all` / CAS 那組選配能力一樣
 (`filestore/protocol.py:64-68` 記載了這個慣例),所以 wiki store 和測試替身不必長出這個方法。
 
+## Locked decisions
+
+**Phase 3 是一條快速道路,不是新介面(使用者,2026-09-04)**:「P3 只是快速道路,不應該影響
+interface」「對 caller 應無感」。
+
+這條約束把幾件事一次定死:
+
+- **呼叫端一行都不用改**。`read_all` / `read_all_existing` 的簽章與語意不動;能不能批次是
+  在底下偵測的,偵測不到就走原本那條路(mock、local、還沒跟上的 host 都照常運作)。
+- **部分失敗不是我要選的東西**。有沒有走快速道路,行為必須一模一樣:`read_all` 照樣丟
+  例外,`read_all_existing` 照樣略過缺的那個、其餘照常回。
+- **驗收條件因此是「測不出差別」**:同一套測試在快速道路開與關之下都要綠,唯一能觀察到
+  差異的地方是操作數。這也順便是一個必紅對照組 —— 如果關掉快速道路測試仍然全綠,那代表
+  測試根本沒走到那條路。
+
 ## Phases(一階一 commit)
 
 - **Phase 1 — entity 列表**(已完成,PR #781):`_parse_type` 走 `read_many`。
@@ -68,9 +91,11 @@ sandbox 被 host 回收後的重建觸發點,跨操作記住「還活著」會�
 - **Phase 2 — 其餘 workspace 呼叫點**:`entity/catalog.py`、
   `workflow/workspace_store.py`、`apps/subagents.py`、`apps/skills.py` 套用同一個原語。
   這是把同一條規則下沉到所有算這個值的地方 —— 兩套並存保證會漂移。
-- **Phase 3 — sandbox 協定加批次讀取**:打破「一筆記錄一次下載」的下限。會動
-  `sandbox/protocol.py` + http client + `sandbox-host` + local/isolated/mock 四個實作。
-  **動手前必須先 /grill-me**(見下面待解問題)。
+- **Phase 3 — 批次讀取的快速道路**(已完成):`download_many` 作為**選配能力**加在
+  `HttpSandbox`(正式環境,POST `/sandboxes/{id}/files`,base64,缺檔回 `null`)、
+  `LocalProcessSandbox`(連帶 `IsolatedProcessSandbox`,一次 thread hop)、以及
+  `sandbox-host` 的對應端點。沒有這個能力的後端(mock / docker)照舊逐筆,呼叫端零改動。
+  milestone 81→8、issue 71→4 次來回。
 - **Phase 4 — 冷路徑**:沒有 live sandbox 的 item,`read_many` 目前仍逐筆打 durable
   store;改用 specstar 既有的批次讀取。
 
@@ -83,13 +108,18 @@ sandbox 被 host 回收後的重建觸發點,跨操作記住「還活著」會�
   sandbox 上一次噴 68 個併發請求,很可能只是把排隊從一個地方搬到另一個地方。Phase 3
   做完之後如果還需要,再單獨談。
 
-## 待解問題(Phase 3 動手前要在 grill 裡拍板)
+## 待解問題
 
-1. **批次讀取的部分失敗語意**。批次裡有一個檔案讀不到時要回什麼?整批失敗會讓一個壞掉的
-   hand-edit 弄垮整個列表(現在的逐筆版本是 skip 掉繼續);逐筆回報則要定義回傳形狀。
-2. **批次大小上限**。3000 個檔案的 workspace 不能一次要一整包。
-3. **host 契約**。`sandbox-host` 跟 API 同一條 CI/CD,所以「要重推 host」不是風險,也不該
-   為版本歪斜設計降級路徑 —— 但要確認這個前提在這次仍然成立。
+1. ~~**批次讀取的部分失敗語意**~~ —— 由上面的 locked decision 定了:語意不變,所以批次
+   原語必須能分辨「這個檔案沒有」和「整批失敗」,兩種既有行為才都保得住。
+2. **批次大小上限**。3000 個檔案的 workspace 不能一次要一整包。刻意**不做成 config 旋鈕**
+   (新旋鈕要記 migrations 帳,而這是純內部的分塊細節);用一個常數,分塊送。
+3. **host 契約**。`sandbox-host` 跟 API 同一條 CI/CD,所以「要重推 host」不是風險,也**不該
+   為版本歪斜設計降級路徑**。
+   ⚠️ 要講清楚退化的**邊界**:偵測是看後端有沒有這個能力(mock / docker 沒有 ⇒ 逐筆),
+   這擋得住「後端不支援」,擋不住「host 舊版但 client 新版」—— 那會是 404,不是靜默變慢。
+   依上面那條規則,這裡刻意不做 skew 的降級路徑;若哪天前提不成立,要改的是部署流程,不是
+   在 client 埋一條沒人測得到的回退路徑。
 
 ## Verified ground truth(檔案指標)
 

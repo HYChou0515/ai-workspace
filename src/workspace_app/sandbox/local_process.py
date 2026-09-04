@@ -677,6 +677,30 @@ class LocalProcessSandbox:
         target = self._resolve(cwd, remote_path)
         return await asyncio.to_thread(target.read_bytes)
 
+    async def download_many(
+        self, handle: SandboxHandle, remote_paths: list[str]
+    ) -> list[bytes | None]:
+        """Many files, ONE hop off the event loop (the facade's fast lane).
+
+        `None` for a path that is not there — absent is an answer about that
+        path, not a failure of the batch, so the facade can raise for a caller
+        that demanded it and skip it for a listing that merely named it. Any
+        other error still propagates: a permission problem is not a missing
+        file and must not be reported as one."""
+        cwd = self._workspace(handle)
+        targets = [self._resolve(cwd, path) for path in remote_paths]
+
+        def _read_them() -> list[bytes | None]:
+            out: list[bytes | None] = []
+            for target in targets:
+                try:
+                    out.append(target.read_bytes())
+                except (FileNotFoundError, IsADirectoryError, NotADirectoryError):
+                    out.append(None)
+            return out
+
+        return await asyncio.to_thread(_read_them)
+
     async def upload_file(self, handle: SandboxHandle, local_path: Path, remote_path: str) -> None:
         cwd = self._workspace(handle)
         target = self._resolve(cwd, remote_path)

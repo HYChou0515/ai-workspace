@@ -123,6 +123,23 @@ def _fake_host(backend: MockSandbox, advertise_url: str) -> FastAPI:
         data = await backend.download(SandboxHandle(id=rid), path)
         return Response(content=data, media_type="application/octet-stream")
 
+    @app.post("/sandboxes/{rid}/files")
+    async def download_many(rid: str, body: dict) -> dict:
+        # Mirrors the real host (`sandbox_host/app.py`): base64 per file, and
+        # `None` for a path that is not there — a double that answered some
+        # other way would agree with a broken client.
+        import base64
+
+        out: list[str | None] = []
+        for path in body["paths"]:
+            try:
+                data = await backend.download(SandboxHandle(id=rid), path)
+            except FileNotFoundError:
+                out.append(None)
+            else:
+                out.append(base64.b64encode(data).decode())
+        return {"files": out}
+
     @app.get("/sandboxes/{rid}/exists")
     async def exists(rid: str, path: str) -> dict[str, bool]:
         return {"exists": await backend.exists(SandboxHandle(id=rid), path)}
@@ -317,6 +334,21 @@ async def test_upload_download_roundtrip(http_sandbox: HttpSandbox):
     h = await http_sandbox.create(SandboxSpec())
     await http_sandbox.upload(h, b"hello \x00 world", "/data/x.bin")
     assert await http_sandbox.download(h, "/data/x.bin") == b"hello \x00 world"
+
+
+async def test_download_many_returns_bytes_in_order_and_none_for_what_is_absent(
+    http_sandbox: HttpSandbox,
+):
+    """The production fast lane. Binary survives the base64 hop, order matches
+    what was asked, and a path the sandbox does not have comes back as `None` —
+    an answer about that path, so one missing file cannot fail the batch."""
+    h = await http_sandbox.create(SandboxSpec())
+    await http_sandbox.upload(h, b"one \x00", "/a.md")
+    await http_sandbox.upload(h, b"two", "/b.md")
+
+    got = await http_sandbox.download_many(h, ["/a.md", "/nope.md", "/b.md"])
+
+    assert got == [b"one \x00", None, b"two"]
 
 
 async def test_upload_file_download_to_file_roundtrip(http_sandbox: HttpSandbox, tmp_path):

@@ -141,6 +141,22 @@ async def test_upload_download_roundtrip(sandbox: LocalProcessSandbox):
     assert await sandbox.download(h, "/notes.txt") == b"payload"
 
 
+async def test_download_many_answers_in_order_with_none_for_what_is_absent(
+    sandbox: LocalProcessSandbox,
+):
+    """The facade's fast lane, on the local backend: many files in one hop off
+    the event loop, `None` for a path that is not there (an answer about that
+    path, so one missing file cannot fail the batch), and a directory counted as
+    absent rather than raising."""
+    h = await sandbox.create(SandboxSpec())
+    await sandbox.upload(h, b"one", "/a.md")
+    await sandbox.upload(h, b"two", "/sub/b.md")
+
+    got = await sandbox.download_many(h, ["/a.md", "/nope.md", "/sub/b.md", "/sub"])
+
+    assert got == [b"one", None, b"two", None]
+
+
 async def test_upload_file_download_to_file_roundtrip(sandbox: LocalProcessSandbox, tmp_path):
     h = await sandbox.create(SandboxSpec())
     src = tmp_path / "src.bin"

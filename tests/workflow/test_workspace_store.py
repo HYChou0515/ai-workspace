@@ -135,6 +135,7 @@ async def test_a_workflow_that_vanishes_after_the_listing_does_not_empty_the_pan
     Reading them one at a time made this free (the loop skipped a `FileNotFound`
     and carried on). Batching them is what puts the whole listing at risk of one
     vanished file, so the tolerance has to be stated rather than inherited."""
+
     class _GhostListing(WorkspaceFiles):
         """A listing that names a file the reads can no longer find — the race,
         as the store sees it."""

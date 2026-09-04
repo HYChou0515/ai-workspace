@@ -496,6 +496,25 @@ class HttpSandbox:
         resp = await self._io_request(handle, "GET", "/file", params={"path": remote_path})
         return resp.content
 
+    async def download_many(
+        self, handle: SandboxHandle, remote_paths: list[str]
+    ) -> list[bytes | None]:
+        """A batch of paths in ONE round trip — the facade's fast lane, and the
+        only backend where it changes anything that matters.
+
+        `None` for a path the sandbox does not have: absent is an answer about
+        that path, so the facade raises for a caller that demanded it and skips
+        it for a listing that merely named it. POST because the path list is a
+        body — a query string of 200 paths is what a proxy truncates.
+
+        There is no old-host fallback here on purpose: `sandbox-host` ships on
+        the same pipeline as this app, so designing for version skew would be
+        designing for a state the deploy does not produce."""
+        import base64
+
+        resp = await self._io_request(handle, "POST", "/files", json={"paths": list(remote_paths)})
+        return [None if b is None else base64.b64decode(b) for b in resp.json()["files"]]
+
     async def upload_file(self, handle: SandboxHandle, local_path: Path, remote_path: str) -> None:
         # The host's /file endpoint takes a whole body; HttpSandbox doesn't yet
         # stream over the wire (a host-protocol change), so this satisfies the
