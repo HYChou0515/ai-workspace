@@ -20,8 +20,11 @@ import { useCurrentUser } from "../hooks/useCurrentUser";
 import { useIsNarrow, useMinWidth } from "../hooks/useMediaQuery";
 import { useAppItems, useAppManifest, useApps } from "../hooks/useResources";
 import { usePlatformDestinations } from "../hooks/usePlatformDestinations";
+import { useT } from "../lib/i18n";
 import { itemNouns } from "../lib/itemNoun";
 import { BREAKPOINTS } from "../lib/breakpoints";
+import { DeleteItemBody } from "./DeleteItemConfirm";
+import { DialogProvider, useDialog } from "./Dialog";
 import { ShareChatDialog } from "./ShareChatDialog";
 import { UserChip } from "./UserChip";
 
@@ -125,7 +128,7 @@ export function ChatListRail({
   }
 
   return (
-    <>
+    <DialogProvider>
       {/* Only mounted where the rail overlays, so it can carry the dismissal
           without a media query of its own. It sits UNDER the rail and over the
           chat, so one click closes the drawer rather than also firing whatever
@@ -244,7 +247,7 @@ export function ChatListRail({
           )}
         </div>
       </nav>
-    </>
+    </DialogProvider>
   );
 }
 
@@ -273,6 +276,8 @@ function ChatRailItem({
   const [editing, setEditing] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [draft, setDraft] = useState("");
+  const { confirm } = useDialog();
+  const t = useT();
   const me = useCurrentUser();
   const shared = item.owner !== me; // shared WITH me → I don't own it
   const title = item.title || `Untitled ${noun.toLowerCase()}`;
@@ -365,9 +370,24 @@ function ChatRailItem({
                   className="chat-rail__menu-item chat-rail__menu-item--danger"
                   onClick={() => {
                     setMenuOpen(false);
-                    if (window.confirm(`Delete “${title}”? This can't be undone.`)) {
-                      onDelete(item.resource_id);
-                    }
+                    // The dialog says what actually dies (plan-delete-item-cascade):
+                    // this is the cascade, not a row removal. The body is the
+                    // SHARED DeleteItemBody, so this dialog and My resources'
+                    // cannot drift — usage number and zip escape hatch included.
+                    void confirm({
+                      title: t("resources.disk.delete.title"),
+                      body: <DeleteItemBody slug={slug} itemId={item.resource_id} />,
+                      actions: [
+                        { id: "cancel", label: t("resources.disk.delete.cancel") },
+                        {
+                          id: "delete",
+                          label: t("resources.disk.delete"),
+                          variant: "danger",
+                        },
+                      ],
+                    }).then((choice) => {
+                      if (choice === "delete") onDelete(item.resource_id);
+                    });
                   }}
                 >
                   Delete

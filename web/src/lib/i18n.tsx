@@ -922,12 +922,29 @@ export const messages = {
     en: "This deployment sets no personal storage limit, so usage isn't tracked.",
   },
   "resources.disk.empty": { "zh-TW": "還沒有任何項目佔用空間。", en: "Nothing stored yet." },
-  // Says WHERE deleting happens, because it deliberately does not happen here:
-  // the item's own file list is the only place that shows what is being deleted.
+  // Deleting can happen HERE now (plan-delete-item-cascade): each disk row
+  // carries a delete that removes the item and everything it owns and refunds
+  // the quota. The hint keeps the file-list path for partial clean-ups.
   "resources.disk.hint": {
-    "zh-TW": "要清出空間,開啟項目後在檔案清單中刪除 —— 刪除永遠不受額度限制。",
-    en: "To free space, open an item and delete from its file list — deleting is never blocked by a quota.",
+    "zh-TW": "要清出空間,可直接刪除整個項目,或開啟項目後在檔案清單中逐檔刪 —— 刪除永遠不受額度限制。",
+    en: "To free space, delete a whole item here, or open it and delete individual files — deleting is never blocked by a quota.",
   },
+  "resources.disk.delete": { "zh-TW": "刪除", en: "Delete" },
+  "resources.disk.delete.title": { "zh-TW": "刪除這個項目?", en: "Delete this item?" },
+  "resources.disk.delete.body1": {
+    "zh-TW": "會刪除這個項目與它名下的一切 —— 檔案、對話、workflow 紀錄 —— 並釋放它佔用的儲存額度。已升級進知識庫的知識會保留。",
+    en: "Deletes this item and everything it owns — its files, chats and workflow runs — and frees its storage quota. Knowledge already promoted to the knowledge base stays.",
+  },
+  "resources.disk.delete.body2": {
+    "zh-TW": "要備份請先開啟項目下載檔案。此動作無法復原。",
+    en: "To keep a copy, open it and download the files first. This can't be undone.",
+  },
+  "resources.disk.delete.cancel": { "zh-TW": "取消", en: "Cancel" },
+  "resources.disk.delete.usage": {
+    "zh-TW": "目前占用 {bytes},刪除後全數釋放。",
+    en: "Currently using {bytes} — all of it comes back when deleted.",
+  },
+  "resources.disk.delete.zip": { "zh-TW": "下載 zip 備份", en: "Download a zip backup" },
   "review.subtitle": {
     "zh-TW": "跨所有知識庫的待審核項目：自動生成的卡片提案與待釐清的問題。只顯示你有權查看的項目。",
     en: "Everything awaiting review across your knowledge bases — auto-generated card proposals and open questions. Only items you're allowed to see are shown.",

@@ -28,7 +28,13 @@ from urllib.parse import quote
 
 from msgspec import Struct, field
 from specstar import QB, Count, Schema, SpecStar, Sum
-from specstar.types import Binary, IndexableField, ResourceIDNotFoundError, RevisionStatus
+from specstar.types import (
+    Binary,
+    IndexableField,
+    ResourceIDNotFoundError,
+    ResourceIsDeletedError,
+    RevisionStatus,
+)
 
 from .protocol import FileExists, FileNotFound, dir_ancestors
 
@@ -202,6 +208,20 @@ class SpecstarFileStore:
 
     async def delete(self, workspace_id: str, path: str) -> None:
         await asyncio.to_thread(self._delete_sync, workspace_id, path)
+
+    async def purge(self, workspace_id: str) -> None:
+        await asyncio.to_thread(self._purge_sync, workspace_id)
+
+    def _purge_sync(self, workspace_id: str) -> None:
+        # Permanent per-row deletes: that is what frees the blobs — the GC
+        # rescans revisions for live file_ids, and a soft-deleted row keeps its
+        # revisions (hence its bytes) forever. The dirs record goes the same
+        # way. Idempotent: an unknown workspace simply lists nothing.
+        for path in self._ls_sync(workspace_id, ""):
+            with contextlib.suppress(FileNotFound):
+                self._delete_sync(workspace_id, path)
+        with contextlib.suppress(ResourceIDNotFoundError, ResourceIsDeletedError):
+            self._dirsmgr.permanently_delete(_wsid(workspace_id))
 
     async def mkdir(self, workspace_id: str, path: str) -> None:
         await asyncio.to_thread(self._mkdir_sync, workspace_id, path)

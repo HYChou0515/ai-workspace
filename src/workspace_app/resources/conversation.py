@@ -225,7 +225,8 @@ class Conversation(Struct):
     """Opaque, indexed handle to the owning item (any App's WorkItem
     `resource_id`; #89). NOT a typed specstar `Ref` — Conversation must serve
     every App's resource, and a `Ref` binds to a single model. Cleanup on item
-    deletion is a per-App on-delete event_handler, not declarative cascade."""
+    deletion is the delete route's cascade (`item_routes.delete_app_item`),
+    which sweeps this index — not a declarative specstar cascade."""
 
     messages: list[Message] = field(default_factory=list)
 
