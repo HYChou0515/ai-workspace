@@ -32,17 +32,13 @@ from pathlib import Path
 
 import xxhash
 
-from .local_process import _HOME, LocalProcessSandbox, _validate_sandbox_id
+from .local_process import _HOME, _UV_CACHE, LocalProcessSandbox, _validate_sandbox_id
 from .protocol import EnforcedLimits, SandboxHandle, SandboxSpec
 
 logger = logging.getLogger(__name__)
 
 # cgroup v2 cpu.max uses a fixed 100ms accounting period.
 _CPU_PERIOD = 100_000
-#: uv's download cache: BESIDE the sandboxes, one subdir per uid.
-#: Never inside a sandbox — a reap rmtrees the whole dir and would
-#: take the cache with it, so every cold start would re-fetch.
-_UV_CACHE = ".uv-cache"
 _SIZE_UNITS = {"K": 1024, "M": 1024**2, "G": 1024**3}
 # CAP_SETUID is capability bit 7 (linux/capability.h) — needed to drop to a
 # foreign uid without being root.

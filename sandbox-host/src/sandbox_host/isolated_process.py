@@ -26,7 +26,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from .local_process import _HOME, LocalProcessSandbox
+from .local_process import _HOME, _UV_CACHE, LocalProcessSandbox
 from .protocol import EnforcedLimits, SandboxHandle, SandboxSpec
 
 # cgroup v2 cpu.max uses a fixed 100ms accounting period.
@@ -34,9 +34,7 @@ _CPU_PERIOD = 100_000
 # #775: uv's cache root, a sibling of the sandbox dirs on the same scratch
 # volume — same filesystem as the venvs, which is what lets uv hardlink into
 # them instead of copying.
-_UV_CACHE = ".uv-cache"
 _SIZE_UNITS = {"K": 1024, "M": 1024**2, "G": 1024**3}
-
 
 def _parse_size(text: str) -> str:
     """Friendly size ("512M") → the byte string cgroup `memory.max` wants.

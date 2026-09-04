@@ -19,9 +19,12 @@ a caller gets when they run it is the only thing that was ever in question.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
+
+import pytest
 
 from workspace_app.sandbox.local_process import LocalProcessSandbox
 from workspace_app.sandbox.protocol import SandboxHandle, SandboxSpec
@@ -222,3 +225,49 @@ async def test_the_servers_own_virtualenv_never_reaches_a_sandbox(tmp_path: Path
     _argv, _cwd, env = sb._exec_argv(h, ["true"])
 
     assert "VIRTUAL_ENV" not in env, "a workspace with no venv must be told there is none"
+
+
+async def test_uvs_cache_outlives_the_sandbox_on_this_backend_too(tmp_path: Path) -> None:
+    """The cache has to sit OUTSIDE the sandbox dir, or a reap takes it and
+    every cold start re-downloads.
+
+    It was set on the isolated backends only. Everywhere else uv fell back to
+    `$HOME/.cache/uv`, and HOME is the per-sandbox `.home` — so the "cache that
+    outlives the sandbox" outlived nothing here. CI is where that showed:
+    the runner's environment names a python version this machine does not have,
+    uv fetched a whole managed CPython **per sandbox**, and the 60s exec
+    timeout was hit by an `import sys` that never got to start.
+    """
+    sb, h = await _sandbox(tmp_path, None)
+
+    _argv, _cwd, env = sb._exec_argv(h, ["true"])
+
+    cache = Path(env["UV_CACHE_DIR"])
+    assert cache.is_dir()
+    root = Path(sb._require(h))
+    assert root not in cache.parents and cache != root, "a reap would take it"
+
+
+async def test_the_servers_python_choice_is_not_the_sandboxes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`UV_PYTHON` inherited from this process makes uv install a MANAGED
+    interpreter inside the sandbox to satisfy a version the SERVER was
+    configured with. Measured: with it, `ensure_project_env` took 2.91s and the
+    venv's python pointed into a freshly downloaded CPython under `.home`;
+    without it, 0.63s and the machine's existing interpreter.
+
+    Same argument as VIRTUAL_ENV: production sets neither, which is exactly why
+    neither may be inherited — otherwise the sandbox's toolchain is a property
+    of how the server happened to be launched.
+    """
+    # The variable has to be SET for the assertion to mean anything. Without
+    # this the test passes on any machine that simply does not have it — which
+    # it did, and a mutation probe that removed the pop stayed green.
+    monkeypatch.setenv("UV_PYTHON", "3.99")
+    sb, h = await _sandbox(tmp_path, None)
+
+    _argv, _cwd, env = sb._exec_argv(h, ["true"])
+
+    assert os.environ["UV_PYTHON"] == "3.99", "the control: this process really carries one"
+    assert "UV_PYTHON" not in env
