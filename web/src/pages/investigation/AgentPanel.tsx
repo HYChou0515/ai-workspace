@@ -16,6 +16,7 @@ import { EntryView } from "../../components/AgentEntryView";
 import { HealthDot } from "../../components/HealthDot";
 import { Icon } from "../../components/Icon";
 import { ModelEffortPicker } from "../../components/ModelEffortPicker";
+import { ResizeDivider } from "../../components/ResizeDivider";
 import { SkillsModal } from "../../components/SkillsModal";
 import { WorkflowsModal } from "../../components/WorkflowsModal";
 import { EnvVarsModal } from "../../components/EnvVarsModal";
@@ -47,6 +48,7 @@ import { TurnStatus } from "../../components/TurnStatus";
 import { turnLooksSilent, turnsFromEntry } from "./agentLog";
 import type { CompactionReason } from "../../api/types";
 import type { QuotaKind } from "../../lib/quotaFailure";
+import { usePersistentNumber } from "../../hooks/usePersistentNumber";
 import { pxToRem } from "../../lib/pxToRem";
 import { useT } from "../../lib/i18n";
 import { type AttachProgress, attachPrompt, runAttach, uploadPathFor } from "./attach";
@@ -61,6 +63,12 @@ import { extractClipboardFiles, isImage, readTransferEntries } from "./transfer"
  * KB doc viewer's `.kb-docpage__body` cap for a consistent reading measure.
  */
 export const CHAT_COLUMN_MAX_W = 860;
+
+/** Composer height bounds. The floor keeps one line of text plus the button
+ * row reachable; the ceiling stops a drag from swallowing the whole feed. */
+const COMPOSER_H_DEFAULT = 132;
+const COMPOSER_H_MIN = 84;
+const COMPOSER_H_MAX = 520;
 
 /** The centred, capped reading column shared by the feed, chips row and composer. */
 const chatColumn: React.CSSProperties = {
@@ -390,6 +398,20 @@ export function AgentPanel({
   // aggregate byte/file progress driving the bar. `dragging` flags the drop overlay.
   const [progress, setProgress] = useState<AttachProgress | null>(null);
   const [dragging, setDragging] = useState(false);
+  // How tall the composer stands. Persisted + clamped like every other panel
+  // size in this app (`rca:layout:*`), so a stored bad value cannot wedge the
+  // layout and the choice survives a reload. The feed is `flex: 1`, so every
+  // pixel the composer takes comes out of the message list — which is what a
+  // person dragging this seam is choosing between.
+  const [composerH, setComposerH] = usePersistentNumber(
+    "chat:composerHeight",
+    COMPOSER_H_DEFAULT,
+    COMPOSER_H_MIN,
+    COMPOSER_H_MAX,
+  );
+  // Anchored drag: ResizeDivider reports the delta from the START of the drag,
+  // so the parent snapshots the value it anchors to (see its docstring).
+  const composerStart = useRef(composerH);
   // #364: attached images show as removable preview chips instead of a raw path in
   // the box; each holds the uploaded workspace `path` (appended to the message on send
   // so the agent can read_image it) + an object-URL `url` for the thumbnail.
@@ -825,7 +847,18 @@ export function AgentPanel({
         </div>
       )}
 
+      <ResizeDivider
+        orientation="horizontal"
+        ariaLabel="resize composer"
+        onResizeStart={() => {
+          composerStart.current = composerH;
+        }}
+        // Dragging UP is a negative delta and must GROW the composer, so the
+        // delta is subtracted — the same anchoring the shell's bottom panel uses.
+        onResize={(d) => setComposerH(composerStart.current - d)}
+      />
       <form
+        data-testid="agent-composer"
         onSubmit={(e) => {
           e.preventDefault();
           submit();
@@ -847,11 +880,14 @@ export function AgentPanel({
         }}
         style={{
           padding: 12,
-          borderTop: "1px solid var(--paper-3)",
+          // The divider above draws the seam now, so the form's own top border
+          // would double it.
           background: "var(--white)",
           display: "flex",
           flexDirection: "column",
           position: "relative",
+          height: composerH,
+          minHeight: 0,
         }}
       >
         {dragging && (
@@ -1118,13 +1154,17 @@ export function AgentPanel({
                   ? "Add a note (optional)…"
                   : "Ask the agent…"
           }
-          rows={3}
           style={{
             border: "1px solid var(--paper-3)",
             borderRadius: "var(--radius-btn)",
             padding: 8,
             fontSize: pxToRem(13),
-            resize: "vertical",
+            // The seam handle owns the height now. The corner grip resized only
+            // the textarea, leaving the chips and the model picker where they
+            // were, and two affordances for one box is one too many.
+            resize: "none",
+            flex: 1,
+            minHeight: 0,
             outline: "none",
             fontFamily: "var(--font-body)",
           }}
