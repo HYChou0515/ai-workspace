@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { sameShape } from "./sameShape";
 
@@ -70,5 +70,22 @@ describe("sameShape (dirty comparison for modal exits, #779)", () => {
     // at once, rather than getting a modal that has quietly stopped noticing
     // edits to that field.
     expect(() => sameShape(new Money(1), new Money(2))).toThrow(/no canonical form/);
+  });
+
+  it("in production, an unhandled type reports 'different' instead of throwing", () => {
+    // The DEV branch is what every other test here exercises, so without this
+    // the production path — the one that actually runs for users — has no
+    // coverage at all. It must fail TOWARD asking: this app's only error
+    // boundary is entity-view-scoped, so throwing from a modal's dirty check
+    // blanks the page and destroys the form the check exists to protect.
+    class Money {
+      constructor(readonly cents: number) {}
+    }
+    vi.stubEnv("DEV", false);
+    try {
+      expect(sameShape(new Money(1), new Money(1))).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
