@@ -1,9 +1,10 @@
 # Profile 自帶 python 環境:`uv.lock` 決定 sandbox 裡有哪些套件
 
-> **狀態**:設計定案(grill-me 九題),**P1–P12 已實作**(#775 / PR #776)。
+> **狀態**:設計定案(grill-me 九題),**P1–P13 已實作**(#775 / PR #776)。
 >
-> 實作與對抗式 review 至今**推翻了設計/宣稱裡的十處**,全部就地更正並標 ⚠️。本文
-> 底下每一個 ⚠️ 都是其中一條;不要只讀這段摘要就以為數完了。
+> 實作與對抗式 review 推翻了設計/宣稱裡的**很多處**,全部就地更正。本文用 ⚠️ 同時標
+> 「被推翻的宣稱」和「要當心的代價」兩種,所以那個記號的數量不是前者的計數 —— 不要
+> 只讀這段摘要,也不要用數 ⚠️ 來代替讀它們。
 >
 > 其中**四條各自足以讓功能對使用者完全無效**:venv 建在 shim 不看的地方、shim 用
 > symlink 指進 venv(CPython 會解析穿過去)、`uv sync` 因為父目錄權限根本建不出 venv、
@@ -180,8 +181,10 @@ turn 中途、SSE 串流上發生的,`GATEWAY_CUT` 根本不會被問到。
 容器** —— 它只從 config 一路傳到 `AgentConfig` 就停了(docker 後端已於 #252 廢棄)。
 `Dockerfile.workspace` 仍然補上了 uv,讓那個映像自身一致,但**讓功能能動的不是它**。
 
-⚠️ **`kind: local` 是唯一有缺口的**:jail 只 bind-mount `/usr`,所以裝在開發者
-`$HOME` 底下的 uv 在 jail 裡看不到;不 jail 則繼承開發者的 PATH,沒問題。
+⚠️ **`kind: local` 是唯一有缺口的**:jail 只 bind-mount `/usr` 和 `/etc`(前一版漏寫了
+`/etc`),兩者都不含 `$HOME` —— 所以裝在開發者家目錄底下的 uv 在 jail 裡看不到
+(實測 `isolate=True` 時 `exec: uv: not found`,exit 127;`isolate=False` 拿得到
+`uv 0.7.5`)。不 jail 則繼承開發者的 PATH,沒問題。
 
 ### cache 先只做 per-uid,**不做共用層**
 
