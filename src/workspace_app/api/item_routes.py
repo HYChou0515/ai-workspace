@@ -11,8 +11,9 @@ import asyncio
 import contextlib
 import json
 import logging
+import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 import msgspec
 from fastapi import APIRouter, FastAPI, HTTPException, Response, status
@@ -26,8 +27,9 @@ from ..kb.ingest import Ingestor
 from ..perm import Actor, Permission, Verb, authorize
 from ..perm.model import user_subject
 from ..quota.disk_ledger import DiskLedger
+from ..quota.limits import parse_size
 from ..resources.groups import groups_of
-from ..sandbox.protocol import SandboxBusy
+from ..sandbox.protocol import SandboxBusy, SandboxSpec
 from .activity import ActivityLog
 from .item_authz import require_item_access
 from .item_conversation_perm import push_item_mirror_to_conversations
@@ -61,6 +63,157 @@ class ItemAccessRequestOut(BaseModel):
 
 class _MembersBody(BaseModel):
     members: list[str]
+
+
+class _ResourcesBody(BaseModel):
+    """How big this item's environment may be. Both dimensions optional and
+    independent — an item may state memory and leave cpu to resolve, exactly as
+    the config layer already lets an App do.
+
+    ``None`` CLEARS: it means "nobody has said", which is not zero and not a
+    number. Memory is a size string (``512M`` / ``2G``) so the wire matches
+    what the operator writes in config, parsed by the one parser that already
+    knows the spelling."""
+
+    cpu_cores: float | None = None
+    memory: str | None = None
+
+
+class _EnvironmentOut(BaseModel):
+    """This ONE item's environment — for whoever is in the workspace.
+
+    Deliberately not `/me/resources`. That payload is scoped to a person and
+    lists every environment they hold, with titles; a collaborator needs to know
+    why THIS item was refused, not what else its owner is working on. So there
+    is no total here and no other item, and the tests say so.
+
+    `stated_*` is what somebody typed (``None`` = nobody has). `effective_*` is
+    what will actually be applied, after the App's ceiling and the owner's
+    budget have both had their say. They are reported separately because when
+    they differ the UI has to explain WHICH one bound rather than silently
+    showing the smaller number — a setting that quietly disagrees with what it
+    does is the failure this whole design keeps circling."""
+
+    running: bool
+    stated_cpu_cores: float | None
+    stated_memory_bytes: int | None
+    effective_cpu_cores: float | None
+    effective_memory_bytes: int | None
+    #: What the BACKEND says it will really apply — `Sandbox.effective_limits`,
+    #: the same source the quota ledger reads. #712's first defect was billing
+    #: what was REQUESTED rather than what is applied, and an App that declared
+    #: nothing occupied a core for free. Here the gap would be worse, because a
+    #: PERSON set the number: they choose two cores, the panel shows two, and
+    #: the sandbox runs uncapped on a deploy that cannot apply one.
+    #:
+    #: `None` means no ceiling will be applied — and deliberately does NOT
+    #: distinguish "this backend caps nothing" from "we could not ask it".
+    #: `HttpSandbox` reports an unreachable host identically to one that caps
+    #: nothing (`warn_unenforceable_dimensions` says so in as many words), so a
+    #: field that claimed to tell them apart would be inventing a distinction
+    #: the backend cannot make. The UI says "cannot confirm" for both.
+    enforced_cpu_cores: float | None
+    enforced_memory_bytes: int | None
+    #: Which ceiling held each stated size down — `"app"`, `"quota"`, or `None`
+    #: when nothing did. Answered here because the resolver is the only place
+    #: that holds both ceilings: the panel used to infer it by comparing the
+    #: effective figure against the VIEWER's quota, and for a
+    #: `change_permission` delegate that is a different person from the owner
+    #: whose quota actually bound it.
+    #:
+    #: PER DIMENSION, because one scalar for both misattributes as soon as they
+    #: differ — an item whose cpu is held by the App and whose memory is held by
+    #: the quota reported "quota", and the panel then blamed the quota for a
+    #: number the App was holding.
+    cpu_bound_by: str | None = None
+    memory_bound_by: str | None = None
+
+
+class _ResourcesOut(BaseModel):
+    """What was stored. Bytes on the way out because that is what a
+    ``SandboxSpec`` carries and a cgroup is written with; the string spelling
+    belongs to the operator and the UI, not to the machinery."""
+
+    cpu_cores: float | None
+    memory_bytes: int | None
+
+
+#: Upper bounds, so a value that cannot be applied is refused HERE rather than
+#: three layers down. §1.7 deliberately has no floor — someone who sets a small
+#: environment chose it — but it made that trade on the promise that a bad value
+#: would point back at the setting, and `int(1e300 * 100000)` reaching `cpu.max`
+#: fails as a generic launch error that names nothing. Generous on purpose:
+#: these are "not a machine" rather than "more than we would like".
+_MAX_CORES = 1024.0
+_MAX_BYTES = 1024**5  # 1 PiB
+
+
+def _within(value: float | int, ceiling: float | int) -> bool:
+    """A positive number no larger than `ceiling`.
+
+    `Infinity` and `NaN` are refused BY THIS COMPARISON, and that is a fact
+    about the CEILING: pydantic accepts both, and against a finite ceiling
+    `inf <= ceiling` is False, `0 < -inf` is False, and every comparison with
+    `nan` is False. So the invariant this rests on is that every ceiling passed
+    here is finite — `_MAX_CORES` and `_MAX_BYTES`, both constants. Pass an
+    infinite ceiling and `inf` starts getting through.
+
+    It used to say so with an explicit `math.isfinite`, added before those
+    ceilings existed and left in place after they subsumed it. Two rules for one
+    question, one of them dead — and the dead one still carried the whole
+    docstring. (It also had to run SECOND, because `isfinite` converts to float
+    and `parse_size` returns an int, so a 309-digit byte count raised
+    `OverflowError` out of the guard. That ordering constraint goes with it.)
+
+    Refusing rather than clamping is the point: both `inf` and `nan` collapse to
+    `None` on the store round trip, so a request to SET a size would have
+    performed a RESET and answered 200."""
+    return 0 < value <= ceiling
+
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+def _validated_resources(body: _ResourcesBody) -> tuple[float | None, int | None]:
+    """The two numbers, or a 422 naming which one and why.
+
+    Only ``> 0`` is enforced, deliberately: there is no floor. Someone who sets
+    a small environment chose it, and the connection between their setting and a
+    slow environment is one they can make — inventing a minimum here would be a
+    number nobody vouched for, and shipping it as an unset knob would be a
+    protection that does not exist. What DOES have to hold up its end is the
+    failure: a sandbox that cannot start at this size must say so against this
+    setting rather than as a generic launch error.
+
+    Zero is refused rather than treated as "unlimited". Elsewhere in this
+    feature ``0`` means "no limit", but that reading belongs to an OPERATOR's
+    config; here it would let a person silently opt their item out of a ceiling
+    the deploy set for them."""
+    cpu = body.cpu_cores
+    if cpu is not None and not _within(cpu, _MAX_CORES):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"cpu_cores must be a real number greater than 0 and below {_MAX_CORES:g} "
+                f"(got {cpu}); omit it to use the default"
+            ),
+        )
+    memory: int | None = None
+    if body.memory is not None:
+        try:
+            memory = parse_size(body.memory)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=f"memory: {exc}") from exc
+        if not _within(memory, _MAX_BYTES):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"memory must be greater than 0 and below {_MAX_BYTES // 1024**4} TiB "
+                    f"(got {body.memory!r}); omit it to use the default"
+                ),
+            )
+    return cpu, memory
 
 
 # grill D7: a member is a Participant — the verbs that let them work in the item.
@@ -101,6 +254,15 @@ def register_item_routes(
     get_user_id: Callable[[], str],
     activity: ActivityLog,
     registry: InvestigationRegistry,
+    resolved_for: Callable[[str], Awaitable[tuple[SandboxSpec, str | None, str | None]]],
+    #: How far back a heartbeat still counts as running. Passed in rather than
+    #: chosen here so it is the SAME number the admission gate uses — the
+    #: reaper's idle threshold. A shorter one under-counts a live-but-idle
+    #: sandbox that is still holding memory, and the heartbeat is only bumped on
+    #: use, so a hardcoded 120 s let three minutes of thinking unlock a resize
+    #: on a genuinely running environment: the exact re-billing this refusal
+    #: exists to prevent.
+    live_window_ms: int,
     turn_engine: ChatTurnEngine,
     locator: ItemLocator,
     ingestor: Ingestor,
@@ -135,7 +297,21 @@ def register_item_routes(
             raise HTTPException(status_code=404, detail=f"unknown app: {slug!r}")
         manifest = load_app_manifest(slug)
         model = app_model(slug)
-        payload = {**body, "owner": get_user_id()}
+        # `owner` comes from auth, never the body — and the environment sizes
+        # go the same way, for a stronger reason: they are gated on
+        # `change_permission` at their own route, and merging them from a create
+        # body would let anyone who may create an item set one with no verb
+        # checked and no `> 0` validation run. `memory 0` was the sharp end —
+        # the cgroup reads it as `max` (unlimited) while admission charges
+        # `memory_bytes or 0`, i.e. nothing.
+        #
+        # Dropped rather than refused: a client sending them is not doing
+        # anything malicious, it is sending a field that has one correct place,
+        # and the panel is right there once the item exists.
+        payload = {
+            k: v for k, v in body.items() if k not in ("sandbox_cpu_cores", "sandbox_memory_bytes")
+        }
+        payload["owner"] = get_user_id()
         payload.setdefault("profile", manifest.default_profile)
         # #306 PR3 (grill D6): NEW items default to PRIVATE (owner-only) — a
         # workspace is the creator's until they share it. The owner is `created_by`,
@@ -255,6 +431,145 @@ def register_item_routes(
                 actor=me,
             )
         return PermissionOut(resource_id=item_id, visibility=new_perm.visibility, notified=notified)
+
+    async def _environment_is_running(item_id: str) -> bool:
+        """Whether something is RUNNING for this item — the heartbeat's answer.
+
+        Deliberately not `registry.has_live_sandbox`. That one is the admission
+        gate's question ("is this item already holding its slot") and on
+        `kind: local`, with no address store, it degrades to "does the item's dir
+        exist" — and those dirs live on a shared volume and outlive the
+        processes until the idle reaper rmtrees them. Measured: with the pod's
+        session gone and the dir still present it answers True, so a refusal
+        built on it never lifts. The person is told to close an environment that
+        is already gone, and the only way out is an eight-hour reaper.
+
+        The heartbeat is the source the QUOTA bills from, so refusing an edit
+        and charging for a sandbox now agree by construction: if nothing is
+        being billed, there is nothing whose cgroup could disagree with a new
+        number.
+
+        ONE answer serves two questions — "may I resize this" and "should the
+        page offer Close" — and merging them is deliberate rather than
+        incidental. They could differ: `close_session` clears the heartbeat even
+        when it killed nothing, so a sandbox can be running with no row, and the
+        page will then offer no Close for it.
+
+        The trade is taken knowingly, in this direction, because the errors are
+        not symmetric. Believing a stopped sandbox is running is what the old
+        source did on `kind: local` — permanently, since the item dir outlives
+        the processes — and it locked the setting behind an eight-hour reaper
+        with a message telling the person to close something already gone. The
+        opposite mistake ends the next time anything touches the item, which
+        bumps the heartbeat again. A recoverable wrong answer beats a permanent
+        one, and the recovery here is "use the item", not "wait"."""
+        store = registry.activity
+        if store is None:
+            return await registry.has_live_sandbox(item_id)
+        # The item's OWN heartbeat, not "is anything of this owner's alive".
+        # Looking it up under `owner_of(item)` made the answer depend on a field
+        # anyone with write access can PATCH (#687): repointing `owner` moved
+        # the query to a person with no rows and the 409 lifted on a sandbox
+        # that was still running. It also fired on an ordinary handover.
+        return await store.is_live(item_id, since_ms=_now_ms() - live_window_ms)
+
+    @app.get("/a/{slug}/items/{item_id}/environment")
+    async def get_item_environment(slug: str, item_id: str) -> _EnvironmentOut:
+        """Is this item's environment running, how big is it, and who said so.
+
+        Gated on ``read_chat`` — "may enter this workspace", which is where the
+        panel lives. Higher than ``read_meta`` on purpose: that verb only puts a
+        title in a dashboard list, so its holder has no screen for this and no
+        use for the answer, and opening the route to them would be attack
+        surface with no consumer. Aligning the gate with the screen it guards is
+        also what stops the two drifting apart later.
+
+        `running` comes from a real probe of THIS item, not from
+        ``running_sandboxes()`` — that one answers for whichever replica took
+        the request, so an item missing from it may simply be on another pod.
+        It is safe to FIND things with and never safe to conclude absence from.
+        """
+        item, _created_by = _authorize_item(slug, item_id, "read_chat")
+        effective, cpu_bound_by, memory_bound_by = await resolved_for(item_id)
+        enforced = await registry.sandbox.effective_limits(effective)
+        return _EnvironmentOut(
+            # The SAME source the resize refusal uses. Leaving this on
+            # `has_live_sandbox` made the fix backend-only: the route unblocked
+            # while the panel — which disables its inputs on this field — stayed
+            # grey, so the person clicked Close, nothing changed, and the
+            # setting was still unreachable. Two answers to "is it running" is
+            # how the screen and the server come to disagree.
+            running=await _environment_is_running(item_id),
+            stated_cpu_cores=getattr(item, "sandbox_cpu_cores", None),
+            stated_memory_bytes=getattr(item, "sandbox_memory_bytes", None),
+            effective_cpu_cores=effective.cpu_cores,
+            effective_memory_bytes=effective.memory_bytes,
+            enforced_cpu_cores=enforced.cpu_cores,
+            enforced_memory_bytes=enforced.memory_bytes,
+            cpu_bound_by=cpu_bound_by,
+            memory_bound_by=memory_bound_by,
+        )
+
+    @app.put("/a/{slug}/items/{item_id}/resources")
+    async def set_item_resources(slug: str, item_id: str, body: _ResourcesBody) -> _ResourcesOut:
+        """How big THIS item's environment may be.
+
+        Its own route rather than two more fields on the item PATCH, and the
+        reason is the same one that pulled `members` out: this looks like a
+        field and is actually a spending decision. It sets how much of the
+        OWNER's budget the item may consume, so it is gated on
+        ``change_permission`` — the only verb that is both semantically right
+        and in ``AI_FORBIDDEN``, which is what stops the item's own agent (which
+        runs inside that very sandbox) from raising its own ceiling.
+
+        Folding it into the item PATCH would have meant a per-FIELD check inside
+        a route that otherwise needs only ``write_meta`` — one rule in two
+        places, and the kind that fails open: miss it and the PATCH still
+        succeeds, with every existing test green.
+
+        ``null`` in either dimension clears it, which is not the same as zero:
+        cleared means "nobody has said", and the size resolves fresh from
+        ``min(App ceiling, owner budget)`` every time it is asked.
+
+        Persists AS THE OWNER for the same reason the permission setter does —
+        a ``change_permission`` delegate need not hold ``write_meta``, and it is
+        ``change_permission`` that was just verified."""
+        from ..apps.catalog import discover_app_slugs
+        from ..apps.registry import app_model
+
+        if slug not in discover_app_slugs():
+            raise HTTPException(status_code=404, detail=f"unknown app: {slug!r}")
+        model = app_model(slug)
+        item, created_by = _authorize_item(slug, item_id, "change_permission")
+        # Refused while the environment is LIVE, and this is a quota rule rather
+        # than a UI nicety. There is no resize op — the size is applied when the
+        # sandbox is created — but the heartbeat re-reads it on every bump, so
+        # accepting a change now would re-bill the NEW number against a cgroup
+        # still holding the old one. Lower it on a live item and the person is
+        # charged 0.1 cores for 4 real ones, which repeated per item makes the
+        # budget unbounded. Disabling the input alone left this door open.
+        if await _environment_is_running(item_id):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This item's environment is running, so its size cannot change — "
+                    "the running sandbox would keep the old one. Close the environment "
+                    "first; the new size applies the next time it starts."
+                ),
+            )
+        cpu, memory = _validated_resources(body)
+        rm = spec.get_resource_manager(model)
+        with rm.using(created_by):
+            rm.update(
+                item_id,
+                msgspec.structs.replace(item, sandbox_cpu_cores=cpu, sandbox_memory_bytes=memory),
+            )
+        # The size is memoised for a few seconds with the item's other facts,
+        # and the person who just saved it is the one who would meet the stale
+        # copy. Same position `set_item_permission` takes on a revocation: the
+        # write invalidates rather than the reader waiting it out.
+        locator.forget_item(item_id)
+        return _ResourcesOut(cpu_cores=cpu, memory_bytes=memory)
 
     @app.put("/a/{slug}/items/{item_id}/members")
     async def set_item_members(slug: str, item_id: str, body: _MembersBody) -> PermissionOut:
@@ -416,7 +731,12 @@ def register_item_routes(
             members = current.members
             if isinstance(members, msgspec.UnsetType):  # pragma: no cover - RCA enables members
                 members = []
-            for uid in {current.owner, *members} - {actor}:
+            # `debtor_of`, not `current.owner` raw, for the same reason the
+            # quota uses it: `owner` is free text, and a padded one is a
+            # recipient no lookup matches.
+            from ..apps.resolve import debtor_of
+
+            for uid in {debtor_of(spec, slug, item_id, current), *members} - {actor}:
                 notify(
                     spec,
                     recipient=uid,

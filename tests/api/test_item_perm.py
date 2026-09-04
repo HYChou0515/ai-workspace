@@ -347,3 +347,41 @@ def test_a_participant_can_list_workflow_runs():
     iid = _item(spec, by="bob", permission=_participant())
     holder["id"] = "carol"
     assert client.get(_wp(iid, "/runs")).status_code == 200  # read_chat granted
+
+
+def test_a_deleted_items_chat_mirror_keeps_the_items_restrictions():
+    """Round-7 finding 2 — a fail-open permission default, and one this branch
+    introduced.
+
+    The mirror reads the item to stamp each chat with the item's visibility.
+    Round 5 made a soft-deleted item report as absent, and this helper reads
+    absent as "no restrictions": it stamps `public`, with an EMPTY
+    `item_created_by`, so a private item's thread becomes readable by anyone.
+
+    It is reachable through the ordinary door — the positive access memo holds
+    for five seconds, so a person deleting the item they were just working in
+    is exactly the case — and it is PERMANENT: the item is gone, so the
+    permission fan-out that would re-stamp the chat can never run again.
+
+    A deleted item still has a permission, and it still applies. `public` is
+    only for an id that resolves to nothing at all, where there is no
+    restriction to honour and an orphan thread would otherwise be unreadable.
+    """
+    from workspace_app.api.item_conversation_perm import item_conversation_mirror
+
+    holder = {"id": "bob"}
+    _client, spec = _client_and_spec(holder)
+    iid = _item(
+        spec,
+        by="bob",
+        permission=Permission(visibility="restricted", read_chat=["user:carol"]),
+    )
+    spec.get_resource_manager(RcaInvestigation).delete(iid)
+
+    mirror = item_conversation_mirror(spec, iid)
+
+    assert mirror["item_visibility"] == "restricted", (
+        f"a deleted private item's chats would be stamped public: {mirror}"
+    )
+    assert mirror["item_read_chat"] == ["user:carol"], mirror
+    assert mirror["item_created_by"] == "bob", mirror

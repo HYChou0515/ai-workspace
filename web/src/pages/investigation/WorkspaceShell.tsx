@@ -243,6 +243,7 @@ function ShellBody({
     canSeeFiles: _canSeeFiles,
     canConverse: _canConverse,
     canWriteMeta: _canWriteMeta,
+    canManageAccess: _canManageAccess,
   } = useItemAccess(item);
 
   // Resizable + collapsible panels (VSCode-style). Sizes persist; ⌘B/⌘J
@@ -829,6 +830,16 @@ function ShellBody({
               envVars={(item as unknown as { env_vars?: Record<string, string> }).env_vars ?? {}}
               onSaveEnvVars={
                 _canWriteMeta ? (envVars) => setField("env_vars", envVars) : undefined
+              }
+              // Gated on the App HAVING an environment, not on who may edit the
+              // item: everyone in the workspace needs to see whether one is
+              // running and what it costs — that is what explains a refusal.
+              // Only RESIZING needs `change_permission`, because that spends the
+              // owner's quota rather than merely reading it.
+              environment={
+                manifest.function.sandbox
+                  ? { canResize: _canManageAccess }
+                  : undefined
               }
             />
             )}

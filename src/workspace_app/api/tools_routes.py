@@ -30,7 +30,7 @@ import logging
 from collections.abc import Sequence
 from typing import Literal
 
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, FastAPI, HTTPException
 from pydantic import BaseModel
 from specstar import SpecStar
 
@@ -193,9 +193,14 @@ def register_tools_routes(
 
     @app.get("/a/{slug}/items/{item_id}/tools")
     async def item_tools(slug: str, item_id: str) -> ItemTools:
-        locator.require_item(slug, item_id)  # 404s a wrong slug→item pairing
+        locator.require_item(slug, item_id)  # 404s a wrong slug→item pairing, 410s a deleted one
         found = find_work_item(spec, item_id)
-        assert found is not None  # require_item already validated it exists
+        if found is None:
+            # The gate said yes and this read says no: a delete landed between
+            # the two. `assert` here was an AssertionError → 500 for a race the
+            # caller can do nothing about, and it is the same answer the gate
+            # itself would have given a moment later.
+            raise HTTPException(status_code=410, detail=f"item {item_id!r} is gone")
         _, item = found
         prefs = item.attached_tool_prefs
         manifest = load_app_manifest(slug)

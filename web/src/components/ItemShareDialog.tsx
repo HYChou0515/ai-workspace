@@ -17,7 +17,9 @@ import {
   itemPermissionFromGrants,
   itemRoleDef,
 } from "../lib/itemPermission";
+import { itemManagersFromPermission, withItemManagers } from "../lib/itemManagers";
 import { pxToRem } from "../lib/pxToRem";
+import { ItemShareManagers } from "./ItemShareManagers";
 import { Icon } from "./Icon";
 import { ModalActions } from "./ModalActions";
 import { ModalShell } from "./ModalShell";
@@ -56,6 +58,11 @@ export function ItemShareDialog({
 }) {
   const [visibility, setVisibility] = useState<ItemVisibility>(value.visibility);
   const [grants, setGrants] = useState<ItemGrant[]>(() => itemGrantsFromPermission(value, owner));
+  // Held apart from `grants` because it is a different KIND of grant, not
+  // another rung — see `ItemShareManagers`.
+  const [managers, setManagers] = useState<string[]>(() =>
+    itemManagersFromPermission(value, owner),
+  );
   const [groupGrants, setGroupGrants] = useState<ItemGroupGrant[]>(() =>
     itemGroupGrantsFromPermission(value),
   );
@@ -74,7 +81,11 @@ export function ItemShareDialog({
   const showPeople = !hasGroups || tab === "people";
   const showGroups = hasGroups && tab === "groups";
 
-  const next = () => itemPermissionFromGrants(visibility, grants, value, groupGrants);
+  // Composed in two steps on purpose: `itemPermissionFromGrants` rebuilds only
+  // the ladder verbs and preserves everything else, so the management grant is
+  // layered on afterwards rather than smuggled into the ladder's vocabulary.
+  const next = () =>
+    withItemManagers(itemPermissionFromGrants(visibility, grants, value, groupGrants), managers);
   // Unresolvable (deleted / not visible) → "Unknown group", still removable (#608).
   const groupName = (id: string) =>
     pickableGroups.find((g) => g.resource_id === id)?.name ?? "Unknown group";
@@ -144,6 +155,14 @@ export function ItemShareDialog({
           </label>
         ))}
       </fieldset>
+
+      {/* OUTSIDE the restricted-only block: `authorize` consults the
+          `change_permission` grant list whatever the visibility, so the grant
+          is live on private and public items too — and those are the two most
+          common states (new items default to private, legacy ones are public).
+          Hiding the control there made P6's own acceptance impossible on a
+          freshly created item. */}
+      <ItemShareManagers managers={managers} onChange={setManagers} />
 
       {visibility === "restricted" && (
         // flexShrink 0, NOT minHeight 0: the panel is a flex column with a

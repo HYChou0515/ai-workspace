@@ -83,6 +83,7 @@ from .health_routes import (
     register_replay_routes,
     register_sanity_routes,
 )
+from .item_authz import check_access, load_access_facts
 from .item_routes import register_item_routes
 from .kb_chat_routes import (
     register_kb_chat_routes,
@@ -580,7 +581,7 @@ def create_app(
             "operation — durable write-back would silently no-op (data loss). Use "
             "sandbox.kind: http (with SANDBOX_HOST_NFS_ROOT on the host) or unset it."
         )
-    from ..apps.resolve import find_work_item
+    from ..apps.resolve import debtor_of, find_work_item
 
     # item -> (slug, owner), memoised. `find_work_item` is a store round-trip,
     # and its own docstring warns the call COUNT is the latency. Without this the
@@ -589,20 +590,39 @@ def create_app(
     # more inside the registry's heartbeat) — the #657 / #667 shape, on the
     # hottest path there is. Slug never changes; owner does, so the entry ages
     # out on the same window the usage measurement already trails by.
-    _item_facts: dict[str, tuple[float, str, str]] = {}
+    _item_facts: dict[str, tuple[float, str, str, float | None, int | None]] = {}
 
     def _facts_of(item_id: str) -> tuple[str, str]:
         """`(slug, owner)` for an item — one lookup, not one per question."""
+        return _all_facts_of(item_id)[:2]
+
+    def _all_facts_of(item_id: str) -> tuple[str, str, float | None, int | None]:
+        """`(slug, owner, cpu, memory)` — the item's own environment size rides
+        along on the lookup that was already happening.
+
+        Fetching it separately would have been a second store round trip on the
+        same hot path this cache exists to protect, for two fields that arrive
+        in the very record being read."""
         now = time.monotonic()
         hit = _item_facts.get(item_id)
         if hit is not None and now - hit[0] < _ITEM_FACT_TTL_S:
-            return hit[1], hit[2]
-        found = find_work_item(spec, item_id)
-        slug, owner = (found[0], found[1].owner) if found is not None else ("", "")
+            return hit[1], hit[2], hit[3], hit[4]
+        # A deleted item is read here (and only here, plus `owner_of` and the
+        # resources page): it still holds a live sandbox, so the debtor and the
+        # size it is charged at both still have answers. The route gates use
+        # the same seam WITHOUT this flag and keep refusing it.
+        found = find_work_item(spec, item_id, include_deleted=True)
+        if found is None:
+            slug, owner, cpu, mem = "", "", None, None
+        else:
+            slug, item = found[0], found[1]
+            owner = debtor_of(spec, slug, item_id, item)
+            cpu = getattr(item, "sandbox_cpu_cores", None)
+            mem = getattr(item, "sandbox_memory_bytes", None)
         if len(_item_facts) > _ITEM_FACT_MAX:  # bounded: this is a cache, not a map
             _item_facts.clear()
-        _item_facts[item_id] = (now, slug, owner)
-        return slug, owner
+        _item_facts[item_id] = (now, slug, owner, cpu, mem)
+        return slug, owner, cpu, mem
 
     def _limits_for(item_id: str) -> ResourceLimits | None:
         """This item's App's resolved ceilings, or None when the deploy passed
@@ -635,6 +655,12 @@ def create_app(
         bytes the user just deleted."""
         owner = _owner_of(item_id)
         if not owner:
+            # Near-unreachable since `debtor_of` gained the `created_by` floor:
+            # a blank `owner` field now resolves to the creator, so the only way
+            # here is a store failure inside that lookup (unit-tested in
+            # tests/apps/test_resolve.py). Kept as the last belt, and named as
+            # such rather than left looking like an ordinary case — charging a
+            # per-person cap to nobody refuses a write no person can act on.
             return
         limit = parse_size((await user_limits.for_user(owner)).disk)
         if not limit:
@@ -710,24 +736,193 @@ def create_app(
         limits = _limits_for(item_id)
         return workspace_quota if limits is None else limits.disk_bytes
 
-    def _spec_for(item_id: str) -> SandboxSpec:
-        """This item's sandbox spec: its App's resolved ceilings, looked up when
-        the sandbox is actually created. The item→App lookup is a store read, but
-        it only happens on a COLD acquire (once per sandbox lifetime), which is
-        already the expensive path."""
+    def _clamp_cpu(want: float | None, ceiling: float) -> float | None:
+        """`want` cores, held down to `ceiling` — where 0 means "no ceiling" and
+        None means "nobody stated a size", both of which pass straight through.
+
+        Never clamps on the way IN, only here on the way out: a stored value
+        above the budget is kept as written so the panel can say "you set 4,
+        2 is in effect", which is the difference between a setting that
+        disagrees with reality and one that explains itself."""
+        if want is None or not ceiling:
+            return want
+        return min(want, ceiling)
+
+    def _clamp_bytes(want: int | None, ceiling: int) -> int | None:
+        """The bytes twin of `_clamp_cpu`. Kept separate rather than made
+        generic over `float | int`: a union return would widen `memory_bytes`
+        from `int` to `int | float` and hand a fractional byte count to a cgroup
+        — which is precisely the check that caught this being written as one
+        helper."""
+        if want is None or not ceiling:
+            return want
+        return min(want, ceiling)
+
+    async def _resolved_for(item_id: str) -> tuple[SandboxSpec, str | None, str | None]:
+        """How big THIS item's sandbox may be — the one place that answers it.
+
+        Three inputs, in this order:
+
+        1. what the item itself asks for, when someone has said (`None` means
+           nobody has, and that is a real answer — see `WorkItemBase`);
+        2. otherwise the App's ceiling, which is the behaviour before per-item
+           sizing existed;
+        3. and either way, clamped by the OWNER's own budget.
+
+        The clamp is what stops a default from producing an item that can never
+        run: admission refuses when `incoming > limit`, so a 4-core App under a
+        2-core budget is a structural dead end rather than a queue — closing
+        other things would not help. Handing back the smaller number makes the
+        item runnable at the size the person can actually afford.
+
+        Clamping happens HERE, on the way out, and nowhere else. `would_cost`
+        and the create path both read this, so the gate weighs exactly what the
+        cgroup will get.
+
+        Returns the spec AND which ceiling bound it, because this is the only
+        place that holds both. The panel used to infer that by comparing the
+        effective figure against the VIEWER's quota — and for a
+        `change_permission` delegate the viewer and the owner are different
+        people, so the guess was normally wrong and pointed them at a setting
+        that was not holding them."""
         limits = _limits_for(item_id)
-        if limits is None:
-            return SandboxSpec()
-        return SandboxSpec(cpu_cores=limits.cpu_cores, memory_bytes=limits.memory_bytes)
+        _slug, owner, item_cpu, item_mem = _all_facts_of(item_id)
+        budget = await user_limits.for_user(owner) if owner else None
+
+        app_cpu = limits.cpu_cores if limits else None
+        app_mem = limits.memory_bytes if limits else None
+        cpu = item_cpu if item_cpu is not None else app_cpu
+        mem = item_mem if item_mem is not None else app_mem
+        # BOTH ceilings, in this order. The App's was previously only a
+        # fallback — read when the item stated nothing and ignored when it did —
+        # so "App declares 4, person types 999" resolved to 999 on any deploy
+        # with no per-user quota, which is the shipped default and therefore the
+        # common case rather than the corner. Three documents and an i18n string
+        # said otherwise, and that string was unreachable: with only a budget
+        # clamp, being clamped implied the budget was what bound it, so the
+        # panel could never name the App.
+        after_app = _clamp_cpu(cpu, app_cpu or 0.0)
+        after_app_mem = _clamp_bytes(mem, app_mem or 0)
+        final_cpu = _clamp_cpu(after_app, budget.cpu if budget else 0.0)
+        final_mem = _clamp_bytes(after_app_mem, parse_size(budget.memory) if budget else 0)
+
+        # WHICH ceiling bound, PER DIMENSION. One scalar for both misattributes
+        # the moment they differ: an item whose cpu is held by the App and whose
+        # memory is held by the quota reported "quota", and the panel — which
+        # renders the explanation for CPU — then told the person their quota was
+        # holding a number the App was holding. That is the wrong-setting
+        # failure this field exists to remove, produced by the field itself.
+        def _who(
+            stated: float | int | None,
+            after_app_v: float | int | None,
+            final: float | int | None,
+        ) -> str | None:
+            if stated is None or final == stated:
+                return None
+            return "app" if final == after_app_v else "quota"
+
+        return (
+            SandboxSpec(cpu_cores=final_cpu, memory_bytes=final_mem),
+            _who(cpu, after_app, final_cpu),
+            _who(mem, after_app_mem, final_mem),
+        )
+
+    async def _spec_for(item_id: str) -> SandboxSpec:
+        """The registry's seam: just the spec. One resolver, two readers — the
+        attribution is a second question about the same answer, not a second
+        answer."""
+        return (await _resolved_for(item_id))[0]
+
+    def _titles_of(item_ids: list[str]) -> dict[str, str]:
+        """Each item's headline, for the ones this reader may see.
+
+        An id is addressable but not recognisable — "close one of
+        rca-investigation:12cec732" is not an instruction anybody can follow.
+        But `find_work_item` is a point `get`, which no access scope filters, so
+        naming an item has to be gated on the READER's own access.
+
+        It cannot be gated on the debtor instead. `owner` is an ordinary string
+        anyone with write access can PATCH (#687), so someone could point it at
+        another person and have their own private titles read back to that
+        person the next time they were refused. The reader's `read_meta` is the
+        only test here that neither party can rewrite.
+
+        BATCHED, and that is not premature: this runs inside an exception
+        handler on the failure path, and the first version paid three store
+        round trips per held environment — a `slug_of` for a slug the fact set
+        already carried, the facts themselves, and the title read — plus a
+        groups query per row with identical arguments. Measured at four
+        environments: `find_work_item` 6 -> 14, `groups_of` 0 -> 4, all of it
+        synchronous specstar I/O inside an `async def`. This codebase prices
+        that in its own docstrings: one round trip measured ~219 ms in
+        production, and the call count IS the latency.
+
+        `check_access` is PURE, so one fact fetch per item and one groups
+        lookup per refusal is all the information the decision needs.
+
+        A row is never dropped: a missing item, or one this reader may not see,
+        comes back with an EMPTY title. Everything in this list is charged to
+        the reader, so "an environment you cannot name" is still one they can
+        close, while "no environments" beside "1 of 1 in use" is not something
+        anybody can act on."""
+        viewer = get_user_id()
+        try:
+            groups = groups_of(spec, viewer)
+        except Exception:  # noqa: BLE001 — a refusal must not become a 500
+            logger.debug("titles: group lookup failed for %s", viewer, exc_info=True)
+            groups = frozenset()
+        out: dict[str, str] = {}
+        for item_id in item_ids:
+            try:
+                facts = load_access_facts(spec, item_id, include_deleted=True)
+                if facts is None:
+                    # No record at all. A DELETED item is named normally — it
+                    # still holds the sandbox this list is about, and it is the
+                    # row most in need of closing — so this is only a genuinely
+                    # unknown id, where the row stays but unnamed: addressable
+                    # beats invisible.
+                    out[item_id] = ""
+                    continue
+                check_access(
+                    facts,
+                    facts.slug,
+                    item_id,
+                    "read_meta",
+                    user=viewer,
+                    groups=groups,
+                    superusers=superusers,
+                )
+            except Exception:  # noqa: BLE001 — no access is an ordinary answer
+                # KEPT, unnamed — the same answer `/me/resources` gives, and for
+                # the same reason. Every row here is charged to the viewer, so
+                # dropping it tells somebody "1 of 1 in use" and then hands them
+                # an empty list to act on. The title is the disclosure; the id
+                # is something they are already paying for. The two surfaces had
+                # opposite rules written into their own docstrings, which is how
+                # a rule stops being true.
+                out[item_id] = ""
+            else:
+                out[item_id] = getattr(facts.item, "title", "")
+        return out
 
     def _owner_of(item_id: str) -> str | None:
-        """The debtor for an item's resources: its `owner` field (#687).
+        """The debtor for an item's resources — the rule is
+        `apps.resolve.debtor_of`, shared with `ItemLocator.owner_of`.
 
-        Deliberately NOT specstar's `created_by`. `owner` is the field the
-        product treats as "whose item is this", and #687 is what makes it
-        trustworthy — until it lands, this is charged to a field anyone with
-        write access can rewrite."""
-        return _facts_of(item_id)[1] or None
+        `owner` is the field the product treats as "whose item is this", and
+        #687 is what makes it trustworthy — until it lands, this is charged to a
+        field anyone with write access can rewrite. `created_by` is NOT an
+        alternative to it, only the FLOOR beneath it: an `owner` that says
+        nothing would otherwise read as "nobody owes", which is not a debtor but
+        the absence of the whole rule.
+
+        `""` IS the no-debtor answer, not `None`: every consumer
+        (`_person_disk_gate`, `_record_usage`, `AdmissionGate.check`,
+        `registry._bump`) tests falsiness, so a trailing `or None` was a second
+        spelling of one state that nothing downstream could tell apart — and one
+        spelling is the whole reason this branch spent two rounds on
+        "empty" versus "unresolvable"."""
+        return _facts_of(item_id)[1]
 
     registry = InvestigationRegistry(
         sandbox=sandbox,
@@ -769,7 +964,6 @@ def create_app(
         activity_store,
         user_limits.for_user,
         owner_of=_owner_of,
-        has_live_sandbox=registry.has_live_sandbox,
         # The SAME number the ledger charges a live sandbox (`registry._bump`),
         # so "does one more fit?" and "what is already held?" cannot answer in
         # different units.
@@ -915,7 +1109,13 @@ def create_app(
 
         507 rather than 429: this is not "slow down", it is "you are at your
         limit" — the fix is to free something, not to wait."""
-        return JSONResponse(status_code=507, content={"detail": quota_body(exc)})
+        return JSONResponse(
+            status_code=507,
+            # WHO is asking decides whether the holding list is included: it is
+            # the owner's working set, and a collaborator who hit their ceiling
+            # is owed the reason, not the inventory.
+            content={"detail": quota_body(exc, viewer=get_user_id(), titles_of=_titles_of)},
+        )
 
     @app.exception_handler(TurnRefused)
     async def _turn_refused(_request: Request, exc: TurnRefused) -> JSONResponse:
@@ -923,7 +1123,10 @@ def create_app(
         `also` list, so a client that only knows `error` still behaves exactly as
         it did — and one that reads `also` can stop sending people to fix one
         limit at a time."""
-        return JSONResponse(status_code=507, content={"detail": exc.body()})
+        return JSONResponse(
+            status_code=507,
+            content={"detail": exc.body(viewer=get_user_id(), titles_of=_titles_of)},
+        )
 
     @app.exception_handler(SandboxBusy)
     async def _sandbox_busy(_request: Request, exc: SandboxBusy) -> JSONResponse:
@@ -1066,6 +1269,11 @@ def create_app(
     # #54: the code-sync sweeper (in api/lifecycle.py) reads the ingestor off
     # app.state at startup — the ingestor is built after the FastAPI app, so the
     # lifespan can't capture it directly (symmetric with the coordinators below).
+    # The quota facts memo, exposed for ONE reason: its bound is a guard, and a
+    # guard no test can fail without is a guard nobody is holding. It lives in a
+    # closure, so without a seam the only way to assert "this is a cache, not a
+    # map" is not to. `app.state` is where this file already puts such handles.
+    app.state.item_facts = _item_facts
     app.state.ingestor = ingestor
     # #506 P8: the cluster sweeper (api/lifecycle.py) reads the KB text embedder off
     # app.state for the same reason — it is built here, after the FastAPI app, so the
@@ -1433,6 +1641,21 @@ def create_app(
     # modules + the turn/mention/replay services call ``locator.<method>`` directly.
     locator = ItemLocator(spec, app_catalog, get_user_id=get_user_id, superusers=superusers)
 
+    # The write side of `_item_facts`: whoever changes an item's stored facts
+    # drops the entry, so the next read re-derives instead of serving a value
+    # the person has already replaced.
+    def _forget_item_facts(item_id: str) -> None:
+        """Drop one item's memoised facts. Returns nothing on purpose: the
+        contract is DISCARD, not "take it out and hand it over", and a lambda
+        that leaked `pop`'s return value said the opposite (ty refused it).
+
+        `pop(key, None)`, not `pop(key)`: "never cached" is the ORDINARY case —
+        nobody has opened this item's panel yet — and a bare `pop` would turn a
+        successful save into a 500 exactly then."""
+        _item_facts.pop(item_id, None)
+
+    locator.forget_item_facts = _forget_item_facts
+
     # #674: teach the registry what an item mounts, for the wakes with no turn
     # behind them (the human terminal, a workflow node, the file-op rebuild).
     # Assigned here rather than passed in because the locator this needs is built
@@ -1700,6 +1923,14 @@ def create_app(
 
     register_item_routes(
         api,
+        # The richer resolver, so the environment route can say WHICH ceiling
+        # bound the size rather than leaving the client to compare numbers it
+        # can see — which for a delegate were two different people's.
+        resolved_for=_resolved_for,
+        # The SAME window the admission gate is built with, passed rather than
+        # re-chosen: a second number here is a second rule, and the one I picked
+        # was 240x too short.
+        live_window_ms=int(idle_timeout.total_seconds() * 1000),
         spec=spec,
         filestore=filestore,
         get_user_id=get_user_id,

@@ -495,9 +495,24 @@ async def test_deleting_a_live_item_clears_both_my_resources_sections(monkeypatc
     assert client.delete(f"/a/playground/items/{other}").status_code == 204
     end = client.get("/me/resources").json()
     assert end["workspaces"] == [] and end["disk_in_use"] == 0
-    # A stale page pressing Close on a now-deleted item is told it is gone,
-    # not handed a 500.
-    assert client.delete(f"/me/resources/live/{other}").status_code == 404
+    # A stale page pressing Close on a now-deleted item gets a no-op, not a 500
+    # and not an error.
+    #
+    # This assertion was `== 404` when the cascade landed and `== 204` after the
+    # per-item sandbox sizing branch merged, because the two branches wrote
+    # DIFFERENT answers for the same request — and the answer had to be picked
+    # rather than left to whichever merged last.
+    #
+    # 204, because both branches' stated reasons are satisfied by it and only
+    # one is satisfied by 404. The cascade wanted "told it is gone, not handed a
+    # 500"; a no-op is not a 500. The sizing branch wanted Close to stay
+    # idempotent, since a stale page and a double click arrive identically and
+    # the FE mutation has no error branch — so a 404 there is a button that
+    # visibly does nothing, which is the one outcome both comments set out to
+    # avoid. What must NOT happen is a 500 or a resurrected sandbox, and both
+    # are asserted here and above.
+    assert client.delete(f"/me/resources/live/{other}").status_code == 204
+    assert client.get("/me/resources").json()["live"] == []
 
 
 async def test_a_turn_that_re_warms_mid_cascade_does_not_survive_the_delete(monkeypatch):
