@@ -6,9 +6,10 @@
  * permission endpoint, granting the read/converse verbs to the chosen subjects.
  */
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import type { AppItem } from "../api/types";
+import { useDirtyClose } from "../hooks/useDirtyClose";
 import { usePickableGroups } from "../hooks/usePickableGroups";
 import { useSetItemPermission } from "../hooks/useResources";
 import { type ItemPermission, parseItemPermission } from "../lib/itemPermission";
@@ -39,6 +40,16 @@ export function ShareChatDialog({
   const toggle = (set: (fn: (s: string[]) => string[]) => void, id: string) =>
     set((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
 
+  // #779: the picks are not sent until Share, so closing means the people you
+  // chose were simply never granted anything — and nothing says so.
+  const initialRef = useRef(
+    JSON.stringify({ users: subjectsFrom(current, "user:"), groupIds: subjectsFrom(current, "group:") }),
+  );
+  const attemptClose = useDirtyClose(
+    JSON.stringify({ users, groupIds }) !== initialRef.current,
+    onClose,
+  );
+
   const save = async () => {
     const subjects = [...users.map((u) => `user:${u}`), ...groupIds.map((g) => `group:${g}`)];
     // Grant read + converse to the chosen subjects; back to private if none.
@@ -57,7 +68,7 @@ export function ShareChatDialog({
   };
 
   return (
-    <ModalShell onClose={onClose} ariaLabel="Share chat">
+    <ModalShell onClose={attemptClose} ariaLabel="Share chat">
       <div className="chat-share">
         <div className="chat-share__title">Share this chat</div>
         <div className="chat-share__hint">
@@ -92,7 +103,7 @@ export function ShareChatDialog({
 
         {error && <div className="chat-share__error">{error}</div>}
         <div className="chat-share__actions">
-          <button type="button" className="btn" data-size="sm" onClick={onClose}>
+          <button type="button" className="btn" data-size="sm" onClick={attemptClose}>
             Cancel
           </button>
           <button

@@ -3,6 +3,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";
 import { queryClient } from "./api/queryClient";
+import { DialogProvider } from "./components/Dialog";
 import { ToolCatalogProvider } from "./components/toolCatalog";
 import { FontScaleProvider, initFontScale } from "./hooks/fontScale";
 import { initTheme } from "./hooks/theme";
@@ -45,7 +46,13 @@ createRoot(root).render(
       <LocaleProvider>
         <FontScaleProvider>
           <ToolCatalogProvider>
-            <App />
+            {/* #779: the confirm dialog belongs at the root, not per-surface.
+                It used to be mounted in five places, so a modal under
+                components/ could not reach useDialog() and had to hand-roll
+                its own "discard unsaved changes?" row instead. */}
+            <DialogProvider>
+              <App />
+            </DialogProvider>
           </ToolCatalogProvider>
         </FontScaleProvider>
       </LocaleProvider>

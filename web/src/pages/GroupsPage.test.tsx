@@ -385,3 +385,29 @@ describe("GroupsPage last-updated column", () => {
     expect(rows()).toEqual(["Eleven", "Nine"]);
   });
 });
+
+describe("New group — leaving with something typed (#779)", () => {
+  const openIt = async () => {
+    superuser.mockReturnValue(true);
+    render(<GroupsPage client={client({ listGroups: async () => [] })} />);
+    await userEvent.click(await screen.findByTestId("groups-new"));
+    // The backdrop, not the panel — since #779 P5 the panel is ModalShell's
+    // role="dialog" and the backdrop is its sibling.
+    return screen.getByTestId("new-group-backdrop");
+  };
+
+  it("ignores a backdrop click once a name has been typed", async () => {
+    const dialog = await openIt();
+    await userEvent.type(screen.getByLabelText("Group name"), "Platform");
+
+    await userEvent.click(dialog);
+
+    expect(screen.getByLabelText("Group name")).toHaveValue("Platform");
+  });
+
+  it("ignores a backdrop click even while the form is untouched", async () => {
+    const dialog = await openIt();
+    await userEvent.click(dialog);
+    expect(screen.getByRole("dialog", { name: "New group" })).toBeInTheDocument();
+  });
+});

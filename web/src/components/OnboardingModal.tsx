@@ -27,6 +27,10 @@ export function OnboardingModal({
   return (
     <ModalShell
       onClose={onGotIt}
+      // #779: one of the few modals where the backdrop stays live. Nothing here
+      // is the user's — dismissing costs them nothing, and the soft close above
+      // means a stray click can't even suppress the next showing.
+      closeOnBackdrop
       ariaLabel={content.title}
       width={460}
       maxWidth="92vw"

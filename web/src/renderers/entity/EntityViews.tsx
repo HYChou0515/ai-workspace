@@ -11,11 +11,12 @@
  * board / gantt) render records; `health` is cross-type (see `HealthView`).
  */
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 
 import type { EntityDiagnostic, EntityFormField } from "../../api/entities";
 import type { User } from "../../api/types";
 import { ModalShell } from "../../components/ModalShell";
+import { useDirtyClose } from "../../hooks/useDirtyClose";
 import { refOptionsForField, type RefOption } from "./refTraversal";
 import { RoleCreateInput, type WidgetKind } from "./roleWidget";
 import { ConflictBanner, fieldText, parseSpan, parseViewSpec } from "./shared";
@@ -51,6 +52,21 @@ export function QuickCreate({
 }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<Record<string, string>>({});
+  // The seeded draft the form opened with (see the daterange default below).
+  // Dirtiness is measured against THAT, not against "is the draft non-empty" —
+  // otherwise every form with a date field would claim unsaved work the instant
+  // it opened, and the prompt would become something people click through.
+  const [seed, setSeed] = useState<Record<string, string>>({});
+
+  const close = useCallback(() => {
+    setDraft({});
+    setOpen(false);
+  }, []);
+  // Declared before the early return below: hooks cannot run conditionally.
+  const attemptClose = useDirtyClose(
+    open && JSON.stringify(draft) !== JSON.stringify(seed),
+    close,
+  );
 
   if (!open) {
     return (
@@ -66,9 +82,10 @@ export function QuickCreate({
           // is a default you can see and change rather than one applied behind
           // your back.
           const today = new Date().toISOString().slice(0, 10);
-          const seed: Record<string, string> = {};
-          for (const f of form) if (f.widget === "daterange") seed[f.name] = `${today}/`;
-          setDraft(seed);
+          const seeded: Record<string, string> = {};
+          for (const f of form) if (f.widget === "daterange") seeded[f.name] = `${today}/`;
+          setDraft(seeded);
+          setSeed(seeded);
           setOpen(true);
         }}
       >
@@ -77,10 +94,6 @@ export function QuickCreate({
     );
   }
 
-  const close = () => {
-    setDraft({});
-    setOpen(false);
-  };
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -97,7 +110,7 @@ export function QuickCreate({
   // it floated as a lopsided card next to a vertically-centred title. It now opens
   // in a modal — the header keeps just the "+ New" button.
   return (
-    <ModalShell onClose={close} ariaLabel={`New ${entityLabel ?? "record"}`} width={560} align="top">
+    <ModalShell onClose={attemptClose} ariaLabel={`New ${entityLabel ?? "record"}`} width={560} align="top">
       <form onSubmit={submit} className="ev-quickcreate">
         <h3 className="ev-quickcreate__title">New {entityLabel ?? "record"}</h3>
         <div className="ev-quickcreate__grid">
@@ -121,7 +134,7 @@ export function QuickCreate({
           ))}
         </div>
         <div className="ev-quickcreate__actions">
-          <button type="button" className="btn" data-variant="ghost" data-size="sm" onClick={close}>
+          <button type="button" className="btn" data-variant="ghost" data-size="sm" onClick={attemptClose}>
             Cancel
           </button>
           <button type="submit" className="btn" data-variant="primary" data-size="sm" disabled={busy}>

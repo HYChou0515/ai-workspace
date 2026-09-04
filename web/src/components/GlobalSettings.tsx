@@ -36,6 +36,9 @@ export function GlobalSettings() {
       {open && (
         <ModalShell
           onClose={() => setOpen(false)}
+          // #779: every control here applies live, so there is no pending state
+          // a stray click could throw away — the backdrop stays live.
+          closeOnBackdrop
           ariaLabel={t("settings.title")}
           width={360}
           maxWidth="calc(100vw - 32px)"

@@ -34,7 +34,8 @@ import { ItemChatShell } from "../../components/ItemChatShell";
 import { ItemAccessDialog, ItemMembersPanel } from "../../components/ItemMembersPanel";
 import { ShareChatDialog } from "../../components/ShareChatDialog";
 import { resolveUploadDir } from "./attach";
-import { DialogProvider, useDialog } from "../../components/Dialog";
+import { useDialog } from "../../components/Dialog";
+import { useDirtyClose } from "../../hooks/useDirtyClose";
 import { FileServiceProvider, investigationFileService } from "../../api/fileService";
 import { WorkspaceSlugProvider, useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { EditModeProvider, useEditMode } from "../../hooks/editMode";
@@ -151,9 +152,8 @@ export function WorkspaceShell({
   }, [service, queryClient]);
   return (
     <WorkspaceSlugProvider value={manifest.slug}>
-      <DialogProvider>
-        <FileServiceProvider value={service}>
-          <AgentProvider investigationId={item.resource_id}>
+      <FileServiceProvider value={service}>
+        <AgentProvider investigationId={item.resource_id}>
           <FileBufferProvider store={bufferStore}>
             <EditModeProvider>
               <ShellBody
@@ -169,9 +169,8 @@ export function WorkspaceShell({
               />
             </EditModeProvider>
           </FileBufferProvider>
-          </AgentProvider>
-        </FileServiceProvider>
-      </DialogProvider>
+        </AgentProvider>
+      </FileServiceProvider>
     </WorkspaceSlugProvider>
   );
 }
@@ -884,9 +883,13 @@ export function EditItemModal({
   // item's Edit modal yet had no button to change its access. Mirror the server's
   // rule exactly (public never confers change_permission — see the helper).
   const canManageAccess = canChangeItemPermission(perm, me, owner, isSuperuser, groups);
+  // #779: the form owns the values, so it is the only thing that can say whether
+  // leaving would drop an edit.
+  const [dirty, setDirty] = useState(false);
+  const attemptClose = useDirtyClose(dirty, onClose);
   return (
     <ModalShell
-      onClose={onClose}
+      onClose={attemptClose}
       labelledBy="edit-item-title"
       width={460}
       panelStyle={{ padding: 20 }}
@@ -900,6 +903,7 @@ export function EditItemModal({
         initialValues={item as Record<string, unknown>}
         submitLabel="Save"
         onSubmit={(values) => onSubmit(pruneEmpty(values))}
+        onDirtyChange={setDirty}
       />
       {/* #chat-private: a chat-first App shares from the toolbar / rail (simple
           share), not the role-ladder "manage access" — hide it here. */}
@@ -2196,6 +2200,9 @@ export function TabContextMenu({
   const item = (label: string, fn: () => void) => (
     <button
       type="button"
+      // dirty-close-exempt: a dropdown MENU item closing its own menu. This
+      // `onClose` belongs to the menu, not to the guarded EditItemModal that
+      // also lives in this file.
       onClick={() => {
         fn();
         onClose();
@@ -2217,6 +2224,8 @@ export function TabContextMenu({
   );
   return (
     <>
+      {/* dirty-close-exempt: a dropdown's click-away catcher, not a modal exit —
+          this component is not the guarded EditItemModal further up the file. */}
       <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 80 }} />
       <div
         style={{
@@ -2391,6 +2400,9 @@ function DirBrowser({
         <button
           key={e.path}
           type="button"
+          // dirty-close-exempt: this `close` belongs to the file PICKER — opening
+          // the chosen file is what the picker is for, and it holds nothing the
+          // user typed.
           onClick={() => {
             if (e.isDir) {
               setDir(e.path);
@@ -2617,6 +2629,8 @@ function TabClose({ path, onClose }: { path: string; onClose: () => void }) {
   return (
     <button
       type="button"
+      // dirty-close-exempt: a tab's ✕. Its `onClose` closes the TAB, and that
+      // path already has its own save-on-close prompt (see closeTab).
       onClick={(e) => {
         e.stopPropagation();
         onClose();

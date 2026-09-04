@@ -26,6 +26,9 @@ export function KbCollectionsModal({
   return (
     <ModalShell
       onClose={onClose}
+      // #779: every toggle applies live (see the note above), so there is no
+      // pending selection a stray click could throw away.
+      closeOnBackdrop
       ariaLabel={t("collections.kbTitle")}
       data-testid="kb-collections-dialog"
       width={460}

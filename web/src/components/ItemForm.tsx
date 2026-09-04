@@ -16,13 +16,14 @@
  */
 
 import type { CSSProperties, ReactNode } from "react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { AppManifest, FieldSpec } from "../api/types";
 import { useUser } from "../hooks/useUsers";
 import { Icon } from "./Icon";
 import { UserAvatar } from "./UserChip";
 import { pxToRem } from "../lib/pxToRem";
+import { sameShape } from "../lib/sameShape";
 
 const inputStyle: CSSProperties = {
   width: "100%",
@@ -132,6 +133,7 @@ export function ItemForm({
   onCancel,
   formId,
   hideFooter = false,
+  onDirtyChange,
 }: {
   manifest: AppManifest;
   initialValues?: Record<string, unknown>;
@@ -143,6 +145,11 @@ export function ItemForm({
   defaultProfile?: string;
   /** Render a read-only owner box (current user on create, item.owner on edit). */
   ownerId?: string;
+  /** Fires when the form gains or loses unsaved edits (#779). The values live
+   * in here, so only this component can tell — the modal wrapping it needs to
+   * know whether leaving would cost the user anything. Mirrors
+   * EntityRecordPane's onEditingChange. */
+  onDirtyChange?: (dirty: boolean) => void;
   /** When given, render a Cancel/submit footer bar instead of a lone button. */
   onCancel?: () => void;
   /** `id` on the `<form>` so a pinned footer button outside it can `form=…` submit. */
@@ -155,15 +162,36 @@ export function ItemForm({
   const labelOf = (n: string) => manifest.labels[n] ?? byName.get(n)?.label ?? n;
 
   const [profile, setProfile] = useState(() => defaultProfile || profiles?.[0]?.name || "");
-  const [values, setValues] = useState<Record<string, unknown>>(() => {
+  const seedValues = () => {
     const seed: Record<string, unknown> = {};
     for (const n of ["title", "description", ...domainNames]) {
       const isTags = byName.get(n)?.kind === "tags";
       seed[n] = initialValues[n] ?? (isTags ? [] : "");
     }
     return seed;
+  };
+  const [values, setValues] = useState<Record<string, unknown>>(seedValues);
+  // The seed as it was on mount, to compare against. Captured once: re-seeding
+  // from a changed `initialValues` would re-baseline mid-edit and call a form
+  // with unsaved work clean.
+  const initialRef = useRef({
+    values: seedValues(),
+    profile: defaultProfile || profiles?.[0]?.name || "",
   });
   const set = (n: string, v: unknown) => setValues((prev) => ({ ...prev, [n]: v }));
+  // #779: report whether leaving now would cost the user anything. Compared
+  // against the mount-time seed rather than tracking "did anything get typed",
+  // so typing a character and deleting it again reads as clean — which is what
+  // a person means when they say they changed nothing.
+  // `profile` counts too. It is submitted ({ ...values, profile }) and the
+  // template cards are usually the FIRST thing touched on a create form, so
+  // leaving it out meant picking a different template and pressing Escape closed
+  // with no prompt and the choice gone — dirty misread as clean, the silent-loss
+  // direction.
+  const dirty = !sameShape({ values, profile }, initialRef.current);
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
   const [titleError, setTitleError] = useState(false);
   const titleRef = useRef<HTMLInputElement>(null);
 

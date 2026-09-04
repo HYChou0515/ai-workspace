@@ -1,10 +1,16 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ItemChatSummary } from "../api/itemChats";
+import { DialogProvider } from "./Dialog";
 import { ManageChatsModal } from "./ManageChatsModal";
+
+// The confirm dialog is at the app root (#779); this modal asks through it when
+// a row is mid-rename.
+const render = (ui: Parameters<typeof rtlRender>[0]) =>
+  rtlRender(ui, { wrapper: DialogProvider });
 
 afterEach(cleanup);
 
@@ -81,5 +87,27 @@ describe("ManageChatsModal", () => {
     render(<ManageChatsModal {...p} />);
     fireEvent.click(screen.getByTestId("manage-chats-close"));
     expect(p.onClose).toHaveBeenCalled();
+  });
+
+  // #779: the smallest of the set — one line of typing — but the rule is the
+  // same, and "it is only a little data" is how the exception starts.
+  it("asks before closing while a row is mid-rename", async () => {
+    const onClose = vi.fn();
+    render(
+      <ManageChatsModal
+        chats={[chat({ chat_id: "c1", title: "Old" })]}
+        activeChatId="c1"
+        onClose={onClose}
+        onSelect={vi.fn()}
+        onRename={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("manage-edit-c1"));
+
+    fireEvent.click(screen.getByTestId("manage-chats-close"));
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(await screen.findByTestId("dialog-action-keep")).toBeInTheDocument();
   });
 });
