@@ -1674,9 +1674,12 @@ function HistorySidebar({
 /* ----------------------------- Members sidebar ----------------------------- */
 
 /** The roster panel in its sidebar frame. The list + access management live in
- * the shared {@link ItemMembersPanel} — the top bar's popover renders the very
- * same component, so the two can never disagree about who is on the item or what
- * they may do. */
+ * the shared {@link ItemMembersPanel}.
+ *
+ * The top bar no longer renders a popover of the same component — its access
+ * chip opens {@link ItemAccessDialog} instead, and the roster lives only here.
+ * (The old comment still claimed the popover; going looking for a second copy
+ * of this bug on the strength of it cost a detour.) */
 function MembersSidebar({ manifest, item }: { manifest: AppManifest; item: AppItem }) {
   const label = manifest.labels?.members ?? "Members";
   return (

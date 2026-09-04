@@ -114,6 +114,35 @@ inline scroll area / 巢狀捲動——搶走頁面滾動、把上面的列藏�
 ⚠️ 這一步不能省。這是 layout 問題,而這個 repo 已經出貨過「單元測試全綠但畫面完全沒樣式」
 (#709 的 `.gauge`)。**做完 = 看得到 + 按得動。**
 
+#### P4 實測結果(真 Chromium,41 人的名單,1280×720)
+
+| 量測 | 值 | 意義 |
+|---|---|---|
+| `scrollHeight / clientHeight` | 1233 / 628 | 內容是框的兩倍,確實溢出 |
+| 捲到底 | `scrollTop 605`,`atBottom: true` | 捲得到 |
+| 最後一列 | `lastInsideRegion` ✅ `lastInViewport` ✅ | **搆得到了**——修好前這一列是被裁掉的 |
+| 鍵盤 | `focus` 命中 `members-scroll`,PageDown → 549 | 不用滑鼠也捲得動 |
+
+**P1 的驗收通過。** 這四個數字沒有一個是 happy-dom 量得出來的。
+
+#### 1.4 的未定案:答案是「不做」
+
+原本要問的是:光靠 `.scrollable` 夠不夠讓人看得出可以捲?不夠的話要不要上
+`scrollbar-gutter: stable`?兩題都用量的:
+
+- `.scrollable` **有生效**(`scrollbar-width: thin`、`scrollbar-color` 都在),但
+  **`offsetWidth - clientWidth = 0`**——捲軸佔零寬度,是浮動式的,不動就不顯示。所以
+  「看不出可以捲」這件事,`.scrollable` 解決不了。
+- 加上 `scrollbar-gutter: stable` 之後 `gutterPx` 變成 **10**,但截圖顯示那 10px 是**空白**,
+  **沒有出現任何 thumb**。它防的是內容長出來時的版面跳動,不是「看得出可以捲」。
+
+**結論:不做。** 它花掉每個面板 10px 寬度,而換不到使用者要的東西。
+
+**如果目標是「一眼看得出還有更多」,該做的是不依賴 OS 捲軸的提示** ——最便宜且最直接的是
+在標題列顯示人數(`Members · 41`):它在沒有溢出時同樣有用,不受平台捲軸行為影響,而且正是
+Baymard 建議用來取代 inline scroll area 的那個方向(告知總量而不是讓人捲著找)。
+這是一個**新提案**,不在原本的 1+2 範圍內,所以留給使用者決定而不是順手做掉。
+
 ---
 
 ## 3. 已知取捨
