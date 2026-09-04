@@ -85,6 +85,15 @@ export function onClickBodies(text: string): { body: string; line: number }[] {
       else if (c === "{") depth++;
       else if (c === "}") depth--;
     }
+    // An unbalanced scan is the SILENT failure mode: the body ends early and a
+    // close after that point is skipped without a word. Say so instead — the
+    // point of this file is that a gap in the rule cannot be invisible.
+    if (depth !== 0) {
+      throw new Error(
+        `onClickBodies: unbalanced braces from offset ${m.index}. The scanner lost ` +
+          "track (a construct it does not understand), so a bypass here would be skipped silently.",
+      );
+    }
     out.push({ body: text.slice(m.index, i), line: text.slice(0, m.index).split("\n").length });
   }
   return out;

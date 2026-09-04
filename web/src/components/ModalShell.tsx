@@ -23,6 +23,19 @@
  */
 import { useEffect, useRef, type CSSProperties, type ReactNode } from "react";
 
+/**
+ * Marks the elements that form the keystroke layer stack (#779).
+ *
+ * The check used to select `[role="dialog"][aria-modal="true"]`, which is
+ * app-wide and matches anything that spells ARIA correctly — `ReviewDrawer`
+ * does, and it is explicitly not a modal. A mounted drawer would then make a
+ * real modal read as not-topmost and stop answering Escape: keyboard-
+ * undismissable, caused by a component with nothing to do with this. An
+ * attribute only ModalShell and Dialog set makes the stack a CLOSED set rather
+ * than a naming coincidence.
+ */
+export const LAYER_ATTR = "data-modal-layer";
+
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
@@ -81,8 +94,8 @@ export function ModalShell({
   const isTopmost = () => {
     const panel = panelRef.current;
     if (!panel) return false;
-    const modals = document.querySelectorAll('[role="dialog"][aria-modal="true"]');
-    return modals.length === 0 || modals[modals.length - 1] === panel;
+    const layers = document.querySelectorAll(`[${LAYER_ATTR}]`);
+    return layers.length === 0 || layers[layers.length - 1] === panel;
   };
 
   useEffect(() => {
@@ -175,6 +188,7 @@ export function ModalShell({
         aria-label={ariaLabel}
         aria-labelledby={labelledBy}
         data-testid={testId}
+        {...{ [LAYER_ATTR]: "" }}
         className={panelClassName}
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}

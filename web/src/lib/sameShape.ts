@@ -68,5 +68,18 @@ function canonical(value: unknown): string {
 }
 
 export function sameShape(a: unknown, b: unknown): boolean {
-  return canonical(a) === canonical(b);
+  try {
+    return canonical(a) === canonical(b);
+  } catch (err) {
+    // In development, be loud: an unhandled type is a bug in the caller and the
+    // person who can fix it is looking at the screen.
+    if (import.meta.env.DEV) throw err;
+    // In production, fail toward ASKING. "Throw so it can't fail silently" was
+    // the first instinct and it is wrong here: the only error boundary in this
+    // app is scoped to entity-view rendering, so a throw from a modal's dirty
+    // check propagates to the root and blanks the page — destroying the unsaved
+    // form this comparator exists to protect. Reporting "different" costs one
+    // prompt over nothing; the alternative costs the work.
+    return false;
+  }
 }

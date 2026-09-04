@@ -6,6 +6,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { pxToRem } from "../lib/pxToRem";
+import { LAYER_ATTR } from "./ModalShell";
 
 export type DialogAction = {
   id: string;
@@ -105,6 +106,9 @@ export function DialogProvider({ children }: { children: React.ReactNode }) {
           <div
             ref={panelRef}
             tabIndex={-1}
+            // Part of the layer stack ModalShell reads, so a modal underneath
+            // knows to stand down while this is up (#779).
+            {...{ [LAYER_ATTR]: "" }}
             role="dialog"
             aria-modal="true"
             aria-label={opts.title}
