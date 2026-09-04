@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import quote
@@ -166,6 +167,31 @@ class SpecstarFileStore:
 
     async def read(self, workspace_id: str, path: str) -> bytes:
         return await asyncio.to_thread(self._read_sync, workspace_id, path)
+
+    async def read_many(self, workspace_id: str, paths: Sequence[str]) -> list[bytes]:
+        """Several files as ONE query (#781 P4) — the durable half of the batch.
+
+        A workspace with no live sandbox is answered from here, so the sandbox's
+        batch download does nothing for it: the round trips are to the database,
+        one row fetch per file. This is the same optional capability the facade
+        duck-types for the warm path, so a cold listing costs one query instead
+        of one fetch per record.
+
+        The predicate is `path in (...)` on the SAME indexed field `_ls_sync`
+        already pushes down — no new migration exposure: a workspace whose rows
+        cannot answer a `path` predicate already lists as empty, which is what
+        `/api/readyz` gates the rollout on.
+
+        A missing path raises `FileNotFound` exactly as reading it alone would;
+        the tolerant listing read stays tolerant by catching that."""
+        got = await asyncio.to_thread(self._read_many_sync, workspace_id, list(paths))
+        out: list[bytes] = []
+        for path in paths:
+            data = got.get(path)
+            if data is None:
+                raise FileNotFound(f"{workspace_id}:{path}")
+            out.append(data)
+        return out
 
     async def read_to_file(self, workspace_id: str, path: str, dest: Path) -> None:
         """Stream a file's bytes out to ``dest`` a chunk at a time (never the
@@ -384,6 +410,25 @@ class SpecstarFileStore:
         if total == 0:
             return True  # nothing to backfill — a fresh deploy is ready
         return _count(QB["path"].starts_with("/").build()) >= total
+
+    def _read_many_sync(self, workspace_id: str, paths: list[str]) -> dict[str, bytes]:
+        """`path -> bytes` for the paths that exist, in ONE query.
+
+        Scoped by `workspace_id` as well as `path`: matching on path alone would
+        hand one item's records to another item that happens to hold the same
+        name. A path with no row is simply absent from the result — the caller
+        decides whether that is an error."""
+        if not paths:
+            return {}
+        query = (QB["workspace_id"] == workspace_id) & QB["path"].in_(paths)
+        out: dict[str, bytes] = {}
+        for row in self._files.list_resources(query.build(), returns=["data"]):
+            if not isinstance(row.data, WorkspaceFile):
+                continue  # pragma: no cover — a projection cannot appear here
+            data = self._files.restore_binary(row.data).content.data
+            assert isinstance(data, bytes)
+            out[row.data.path] = data
+        return out
 
     def _stat_all_sync(self, workspace_id: str, prefix: str) -> list[tuple[str, int]]:
         # #362: `partial` projects ONLY path + the record's inline content.size,

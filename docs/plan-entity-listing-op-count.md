@@ -96,8 +96,19 @@ interface」「對 caller 應無感」。
   `LocalProcessSandbox`(連帶 `IsolatedProcessSandbox`,一次 thread hop)、以及
   `sandbox-host` 的對應端點。沒有這個能力的後端(mock / docker)照舊逐筆,呼叫端零改動。
   milestone 81→8、issue 71→4 次來回。
-- **Phase 4 — 冷路徑**:沒有 live sandbox 的 item,`read_many` 目前仍逐筆打 durable
-  store;改用 specstar 既有的批次讀取。
+- **Phase 4 — 冷路徑**(已完成):沒有 live sandbox 的 item 是由 durable store 回答的,
+  那裡的來回是打資料庫,sandbox 的快速道路對它一點用都沒有。`SpecstarFileStore.read_many`
+  用**一次** `path in (...)` 查詢取代逐列取得,同樣是選配能力、同樣呼叫端零改動。
+  查詢**同時**用 `workspace_id` 收斂 —— 只比對 path 會把某個 item 的記錄交給另一個
+  同名的 item。
+  ⚠️ 用的是 `_ls_sync` 已經在下推的**同一個** `path` 索引,所以沒有新增 migration 風險:
+  一個答不了 `path` 條件的 workspace,`ls` 本來就已經讀成空的 —— 那正是 `/api/readyz`
+  擋著 rollout 的原因。
+
+  **specstar 的公開 API 沒有整批取得完整資源的方法**(`get_many` 只在 meta store 上,
+  `read_metas_bulk` 在 `SimpleStorage` 上,兩者都是內部)。所以這裡走的是公開的
+  `list_resources` + `QB[...].in_()`,而不是伸手進內部 —— 若之後想要更省,該做的是去
+  specstar 開 Discussion,不是在這邊繞過它。
 
 ## 刻意不做的
 

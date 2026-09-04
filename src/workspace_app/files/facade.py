@@ -338,6 +338,11 @@ class WorkspaceFiles:
             batched = getattr(sb, "download_many", None)
             if batched is not None:
                 return await self._download_batched(batched, handle, paths)
+        elif (cold := getattr(self._fs, "read_many", None)) is not None:
+            # A workspace with no live sandbox is answered by the durable store,
+            # where the round trips are to the database — the sandbox's batch
+            # does nothing for it, so the store has a batch of its own.
+            return list(await cold(workspace_id, [abs_path(p) for p in paths]))
         return [await self._read_with(workspace_id, path, warm) for path in paths]
 
     async def _download_batched(
