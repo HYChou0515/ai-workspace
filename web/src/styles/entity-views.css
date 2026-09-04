@@ -1177,7 +1177,12 @@ button.ev-card__status:focus-visible {
   height: 16px;
   margin-left: auto;
   margin-right: 3px;
-  border-color: var(--text-dark);
+  /* The ring is the one piece of bar furniture that sits ON the fill, so it
+   * follows the bar's own ink (`--bar-ink`, published by GanttView) rather than
+   * a pinned token: a `color_by` actor bar is LIGHT and wears dark ink, and a
+   * cream ring on it reads at 2.45:1. The fallback is the default slab's ink,
+   * which is what an uncoloured bar still wants. */
+  border-color: var(--bar-ink, var(--text-dark));
   font-size: 0.5rem;
   pointer-events: none;
 }

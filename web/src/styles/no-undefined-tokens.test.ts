@@ -29,6 +29,12 @@ const RUNTIME_ASSIGNED = new Set([
   // #730: attachment tile size, set inline from the card's zoom slider so the
   // grid can be resized live. Not a design token — it is one reader's choice.
   "--kb-tile",
+  // The ink a gantt bar carries, published inline per bar by GanttView. Not a
+  // design token: a `color_by` bar's ink comes from its own palette entry, and
+  // which ink is right depends on that bar's fill, not on the theme. Every
+  // reference gives `--text-dark` (the default slab's ink) as its fallback, so
+  // an uncoloured bar still paints.
+  "--bar-ink",
 ]);
 
 /** Third-party custom-property namespaces we don't own (Mantine admin UI). */

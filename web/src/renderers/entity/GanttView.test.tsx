@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { EntityInstance, EntityType } from "../../api/entities";
 import { GanttView } from "./GanttView";
+import { actorPalette } from "./actorColor";
 import { selectColor } from "./selectColor";
 import { pxPerDay } from "./ganttScale";
 import { buildRefIndex } from "./refTraversal";
@@ -493,7 +494,25 @@ describe("GanttView colour source", () => {
       />,
     );
 
-    expect(screen.getByTestId("bar-1").style.background).toBe(selectColor("alice").bg);
+    expect(screen.getByTestId("bar-1").style.background).toBe(actorPalette(["alice"])("alice").bg);
+  });
+
+  it("does NOT colour people out of the select palette", () => {
+    // A directory is open-ended, so six slots cannot hold it: `selectColor`
+    // gives four people a 44% chance of a collision and seven a certainty, and
+    // a repeated colour is a bar claiming the wrong owner. The actor palette
+    // generates a hue per person instead — see actorColor.ts.
+    render(
+      <GanttView
+        {...props({
+          spec: { view: "gantt", entity: "issue", span: "span", label: "title", color_by: "assignee" },
+          entities: [rec(1, { title: "A", span, assignee: "alice" })],
+          users,
+        })}
+      />,
+    );
+
+    expect(screen.getByTestId("bar-1").style.background).not.toBe(selectColor("alice").bg);
   });
 });
 

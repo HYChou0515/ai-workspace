@@ -85,6 +85,17 @@ export function resolveValueIn(css: string, block: RegExp, name: string, depth =
   return resolveValueIn(css, block, alias[1], depth + 1);
 }
 
+/**
+ * Whether a custom property is declared at all — here or, failing that, in
+ * `:root`. Callers resolving a reference that carries a fallback need to tell
+ * "no such property, so the fallback paints" apart from "declared, but not
+ * something I can measure": catching both as one silently measures the fallback
+ * and keeps passing over a token that has changed shape.
+ */
+export function isDeclared(css: string, block: RegExp, name: string): boolean {
+  return declaredIn(css, block, name) !== undefined || declaredIn(css, LIGHT, name) !== undefined;
+}
+
 /** A hex token's value inside one block, following `var()` aliases. */
 export function tokenIn(css: string, block: RegExp, name: string): string {
   const v = resolveValueIn(css, block, name);
