@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import type { PickableGroup } from "../api/groups";
 import {
@@ -16,7 +16,9 @@ import {
   previewSubjects,
   roleDef,
 } from "../lib/permission";
+import { useDirtyClose } from "../hooks/useDirtyClose";
 import { pxToRem } from "../lib/pxToRem";
+import { sameShape } from "../lib/sameShape";
 import { Icon } from "./Icon";
 import { ModalActions } from "./ModalActions";
 import { ModalShell } from "./ModalShell";
@@ -78,6 +80,21 @@ export function PermissionDialog({
   const showGroups = hasGroups && tab === "groups";
 
   const next = () => permissionFromGrants(visibility, grants, value, groupGrants);
+
+  // #779: against the opening seed rather than `next()`, which normalises — see
+  // ItemShareDialog for the same reasoning. Same quiet failure too: the dialog
+  // closes and the access is simply unchanged, with nothing said.
+  const initialRef = useRef({
+    visibility: value.visibility,
+    grants: grantsFromPermission(value, owner),
+    groupGrants: groupGrantsFromPermission(value),
+  });
+  // sameShape, not JSON.stringify: `grants` reorders when a subject is removed
+  // and re-added (a false "dirty"), and ItemGrant.verbs is a Set, which
+  // stringifies to {} however full it is — so a whole custom-verb edit read as
+  // unchanged and closed without asking.
+  const dirty = !sameShape({ visibility, grants, groupGrants }, initialRef.current);
+  const attemptClose = useDirtyClose(dirty, onClose);
   // A grant whose group we can't resolve (deleted, or not visible to us) reads as
   // "Unknown group" — the owner can still remove it — rather than a raw id (#608).
   const groupName = (id: string) =>
@@ -105,7 +122,7 @@ export function PermissionDialog({
 
   return (
     <ModalShell
-      onClose={onClose}
+      onClose={attemptClose}
       ariaLabel={`Share ${resourceName}`}
       data-testid="permission-dialog"
       width={480}
@@ -299,7 +316,7 @@ export function PermissionDialog({
           <button
             type="button"
             data-testid="permission-cancel"
-            onClick={onClose}
+            onClick={attemptClose}
             className="btn"
             data-variant="secondary"
             data-size="sm"

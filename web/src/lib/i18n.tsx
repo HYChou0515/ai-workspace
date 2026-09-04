@@ -1434,10 +1434,6 @@ export const messages = {
     en: "From the cached copy — may not be the latest",
   },
   "tools.origin.unavailable": { "zh-TW": "目前無法取得：{reason}", en: "Unavailable: {reason}" },
-  "tools.discard": {
-    "zh-TW": "尚未儲存的變更會遺失，要關閉嗎？",
-    en: "Discard unsaved changes?",
-  },
 
   // Diagnostics page (#465) — AI health checks + model sanity + activity.
   "diag.crumb": { "zh-TW": "診斷", en: "Diagnostics" },
@@ -1595,10 +1591,14 @@ export const messages = {
     "zh-TW": "儲存失敗，請稍後再試。",
     en: "Couldn't save. Try again in a moment.",
   },
-  "colpicker.discardPrompt": { "zh-TW": "放棄未儲存的變更？", en: "Discard unsaved changes?" },
-  "colpicker.keepEditing": { "zh-TW": "繼續編輯", en: "Keep editing" },
-  "colpicker.discard": { "zh-TW": "放棄變更", en: "Discard changes" },
   "colpicker.saving": { "zh-TW": "儲存中…", en: "Saving…" },
+
+  // Leaving a modal that holds something unsaved (#779). ONE set of words for
+  // every modal — the tool picker and the collections picker each used to carry
+  // their own, which is how the same question ended up phrased three ways.
+  "dirtyClose.prompt": { "zh-TW": "放棄未儲存的變更？", en: "Discard unsaved changes?" },
+  "dirtyClose.keep": { "zh-TW": "繼續編輯", en: "Keep editing" },
+  "dirtyClose.discard": { "zh-TW": "放棄變更", en: "Discard changes" },
 } satisfies Record<string, Entry>;
 
 export type MsgKey = keyof typeof messages;

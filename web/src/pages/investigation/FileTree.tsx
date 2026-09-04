@@ -9,7 +9,7 @@ import { useMemo, useRef, useState } from "react";
 
 import { type FileCaps, type FileService, useOptionalFileService } from "../../api/fileService";
 import type { FileInfo } from "../../api/types";
-import { useOptionalDialog } from "../../components/Dialog";
+import { useDialog } from "../../components/Dialog";
 import { Icon } from "../../components/Icon";
 import { ResourceLinkText } from "../../components/ResourceLinkText";
 import { usePersistentSet } from "../../hooks/usePersistentSet";
@@ -134,9 +134,11 @@ export function FileTree({
   const svc = useOptionalFileService() ?? NO_SERVICE;
   const caps = svc.caps;
   const t = useT();
-  // Select mode has no confirm prompts (they're on caps-gated mutations), so a
-  // no-op stands in when there's no <DialogProvider>.
-  const dialog = useOptionalDialog() ?? { confirm: async () => null };
+  // #779: this used to read the dialog optionally, with a no-op stand-in when
+  // no provider was in context. The provider is at the app root now, so there is
+  // no such case — and the stand-in was hiding the fact that a confirm could
+  // silently resolve to "cancel".
+  const dialog = useDialog();
   const [query, setQuery] = useState("");
   // `query` lives here, so every keystroke re-renders this component — and so
   // did the whole tree build until it was memoised. The build only depends on

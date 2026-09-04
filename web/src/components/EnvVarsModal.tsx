@@ -49,6 +49,7 @@ import { useRef, useState } from "react";
 import { api as defaultApi } from "../api";
 import { qk } from "../api/queryKeys";
 import type { ApiClient } from "../api/types";
+import { useDirtyClose } from "../hooks/useDirtyClose";
 import { mergeEnv, parseEnvText, setEnvValue, toEnvText, unstorable } from "../lib/envFile";
 import { deriveEnvNeeds } from "../lib/envNeeds";
 import { fuzzyFilter } from "../lib/fuzzy";
@@ -78,6 +79,9 @@ export function EnvVarsModal({
   const t = useT();
   const [text, setText] = useState(() => toEnvText(envVars));
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // #779: nothing here is stored until Save, and these are pasted credentials —
+  // the values a person is least likely to still have on the clipboard.
 
   // The picker's own query, by the same key: one answer to "which tools does
   // this item run", shared with the tool picker rather than re-resolved here.
@@ -122,6 +126,17 @@ export function EnvVarsModal({
 
   const [dialog, setDialog] = useState<string | null>(null);
   const [creds, setCreds] = useState<Record<string, string>>({});
+
+  // The provider fields count as unsaved work too: they are password inputs the
+  // user typed for a credential exchange that has not happened yet, so leaving
+  // loses them exactly the way leaving loses the box — and this modal's whole
+  // argument is that these are the values least likely to still be on a
+  // clipboard.
+  const attemptClose = useDirtyClose(
+    text !== toEnvText(envVars) || Object.values(creds).some((v) => v.trim() !== ""),
+    onClose,
+  );
+
   const [credError, setCredError] = useState<string | null>(null);
   const [exchanging, setExchanging] = useState(false);
   const openProvider = offered.find((p) => p.id === dialog);
@@ -207,7 +222,7 @@ export function EnvVarsModal({
 
   return (
     <ModalShell
-      onClose={onClose}
+      onClose={attemptClose}
       ariaLabel={t("env.title")}
       data-testid="env-modal"
       width={520}
@@ -279,6 +294,9 @@ export function EnvVarsModal({
                     key={group.key}
                     testId={`env-tool-${group.key}`}
                     selected={group.key === shownGroup.key}
+                    // dirty-close-exempt: this `close` is the Popover's, not the
+                    // modal's — a name collision, not a bypass. Picking a tool
+                    // shuts the popover and leaves the modal exactly where it was.
                     onClick={() => {
                       setPicked(group.key);
                       close();
@@ -554,7 +572,7 @@ export function EnvVarsModal({
           data-variant="secondary"
           data-size="sm"
           data-testid="env-cancel"
-          onClick={onClose}
+          onClick={attemptClose}
         >
           {t("env.cancel")}
         </button>

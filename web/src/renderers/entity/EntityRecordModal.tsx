@@ -24,6 +24,7 @@ import { useState } from "react";
 import type { EntityInstance, EntityType } from "../../api/entities";
 import type { User } from "../../api/types";
 import { ModalShell } from "../../components/ModalShell";
+import { useDirtyClose } from "../../hooks/useDirtyClose";
 import { useOpenFile } from "../../hooks/openFile";
 import { EntityRecordPane } from "./EntityRecordPane";
 import type { RefOption } from "./refTraversal";
@@ -64,18 +65,27 @@ export function EntityRecordModal({
 }: EntityRecordModalProps) {
   const openFile = useOpenFile();
   // An unsaved edit lives in the pane, so every exit from this modal drops it.
-  // While the form is open the two ACCIDENTAL exits are withdrawn — the file
-  // route (which would swap the surface out from under the typing) and the
-  // backdrop (a stray click beside the panel). Escape and ✕ stay: those are
-  // deliberate, and a modal you can't dismiss is worse than a lost draft.
+  //
+  // The two ACCIDENTAL exits are withdrawn outright while the form is open: the
+  // file route (which would swap the surface out from under the typing) and the
+  // backdrop (a stray click beside the panel). Prompting about those would be
+  // its own interruption — the user never meant to trigger them.
+  //
+  // Escape and ✕ stay, because a modal you can't dismiss is worse than a lost
+  // draft. #779 keeps that and adds the missing half: they ask once instead of
+  // dropping the edit silently, and the prompt's own "discard" is the way out,
+  // so the modal is still dismissable. This pane is a text editor, and Escape
+  // is what people press to dismiss ITS popups — which is exactly how a
+  // deliberate keystroke ends up costing an edit nobody meant to abandon.
   const [editing, setEditing] = useState(false);
   const path = recordPath(type, record);
   const title = String(record.fields.title ?? type.name);
   const inConflict = (conflicts ?? []).includes(record.number);
+  const attemptClose = useDirtyClose(editing, onClose);
 
   return (
     <ModalShell
-      onClose={onClose}
+      onClose={attemptClose}
       // Several records get opened in one session, so the accessible name has to
       // say which one — "Record" alone tells a screen-reader user nothing.
       ariaLabel={`#${record.number} ${title}`}
@@ -92,6 +102,10 @@ export function EntityRecordModal({
             className="btn"
             data-variant="ghost"
             data-size="sm"
+            // dirty-close-exempt: a handover, not an exit — the record opens in
+            // a file tab, so the work continues there rather than being dropped.
+            // The button is hidden while editing (`!editing` above), so there is
+            // never an unsaved form behind this click.
             onClick={() => {
               openFile(path);
               // Hand over rather than stack: the file tab now shows this record,
@@ -108,7 +122,7 @@ export function EntityRecordModal({
           data-variant="ghost"
           data-size="sm"
           aria-label="close record"
-          onClick={onClose}
+          onClick={attemptClose}
         >
           ✕
         </button>

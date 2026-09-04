@@ -117,6 +117,8 @@ function CellModal({
   return (
     <ModalShell
       onClose={onClose}
+      // #779: a read-only expansion of one row — no input, nothing to lose.
+      closeOnBackdrop
       ariaLabel={`${levelLabel} · ${prompt}`}
       data-testid="sanity-cell-modal"
       width={720}

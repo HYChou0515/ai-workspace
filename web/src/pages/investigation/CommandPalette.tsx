@@ -9,6 +9,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { FileInfo } from "../../api/types";
 import { Icon } from "../../components/Icon";
+import { ModalShell } from "../../components/ModalShell";
 import { fuzzyFilter } from "../../lib/fuzzy";
 import { relPath } from "../../lib/relPath";
 import { basename } from "./renderer";
@@ -64,35 +65,40 @@ export function CommandPalette({
     }
   };
 
+  // #779 P6: on the shared shell like every other modal. Its backdrop STAYS
+  // live — a palette holds nothing but a search string you retype in a second,
+  // and dismissing it fast is the point of ⌘P. Being on the shell is what gets
+  // it a focus trap and focus restore, which the hand-rolled version lacked.
   return (
-    <div
-      role="dialog"
-      aria-label="Go to file"
-      onClick={onClose}
-      style={{
-        position: "fixed",
-        inset: 0,
+    <ModalShell
+      onClose={onClose}
+      closeOnBackdrop
+      ariaLabel="Go to file"
+      align="top"
+      width={560}
+      maxWidth="92vw"
+      // The scale, not a number. This was a hand-written 200 before the move to
+      // ModalShell — above --z-dialog (150), so a confirm raised over the
+      // palette would have painted UNDERNEATH it, and equal to --z-splash, which
+      // tokens.css says to keep clear of. Nothing broke because the palette also
+      // happens to be last in the DOM; that is luck, not a reason.
+      zIndex="var(--z-modal)"
+      panelStyle={{
+        maxHeight: "60vh",
+        background: "var(--white)",
+        border: "1px solid var(--paper-3)",
+        borderRadius: "var(--radius-modal)",
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+      }}
+      backdropStyle={{
         background: "rgba(20,22,28,0.55)",
         backdropFilter: "blur(4px)",
-        display: "flex",
-        justifyContent: "center",
+        alignItems: "flex-start",
         paddingTop: 80,
-        zIndex: 200,
       }}
     >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: 560,
-          maxHeight: "60vh",
-          background: "var(--white)",
-          border: "1px solid var(--paper-3)",
-          borderRadius: "var(--radius-modal)",
-          display: "flex",
-          flexDirection: "column",
-          overflow: "hidden",
-        }}
-      >
         <div
           style={{
             display: "flex",
@@ -185,7 +191,6 @@ export function CommandPalette({
             );
           })}
         </div>
-      </div>
-    </div>
+    </ModalShell>
   );
 }

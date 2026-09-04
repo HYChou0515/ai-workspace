@@ -109,4 +109,30 @@ describe("AppNewItem", () => {
       }),
     );
   });
+
+  // #779: a create form is all unsaved work by definition — there is nothing to
+  // come back to if it closes. Both deliberate exits ask first.
+  it("asks before dropping a half-filled create form, on Escape and on the close button", async () => {
+    // `navigate` is module-level and this file's afterEach only clears the DOM,
+    // so its calls accumulate across tests — and "did NOT navigate" is the whole
+    // assertion here.
+    navigate.mockClear();
+    render(
+      <QueryWrap>
+        <MemoryRouter>
+          <AppNewItem />
+        </MemoryRouter>
+      </QueryWrap>,
+    );
+    await userEvent.type(screen.getByLabelText(/title/i), "Oven drift");
+
+    await userEvent.keyboard("{Escape}");
+    await userEvent.click(await screen.findByTestId("dialog-action-keep"));
+    expect(navigate).not.toHaveBeenCalled();
+    expect(screen.getByLabelText(/title/i)).toHaveValue("Oven drift");
+
+    await userEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(await screen.findByTestId("dialog-action-discard")).toBeInTheDocument();
+    expect(navigate).not.toHaveBeenCalled();
+  });
 });

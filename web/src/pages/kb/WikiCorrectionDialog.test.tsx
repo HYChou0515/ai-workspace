@@ -102,4 +102,26 @@ describe("WikiCorrectionDialog (#397)", () => {
     await userEvent.type(screen.getByPlaceholderText(/Foo 成立於/), "x");
     expect(screen.getByRole("button", { name: /送出修正/ })).toBeEnabled();
   });
+
+  // #779: the instruction is hand-written and the AI draft costs a model call —
+  // both are gone the moment this closes.
+  it("asks before dropping a written correction, and keeps it when told to", async () => {
+    const onClose = vi.fn();
+    renderWithQuery(<WikiCorrectionDialog {...base} onClose={onClose} client={client()} />);
+    await userEvent.type(screen.getByPlaceholderText(/Foo 成立於/), "Founded in 1998");
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(onClose).not.toHaveBeenCalled();
+    await userEvent.click(await screen.findByTestId("dialog-action-keep"));
+    expect(screen.getByPlaceholderText(/Foo 成立於/)).toHaveValue("Founded in 1998");
+  });
+
+  it("closes on Escape without asking while nothing has been written", async () => {
+    const onClose = vi.fn();
+    renderWithQuery(<WikiCorrectionDialog {...base} onClose={onClose} client={client()} />);
+    await screen.findByPlaceholderText(/Foo 成立於/);
+    await userEvent.keyboard("{Escape}");
+    expect(onClose).toHaveBeenCalled();
+  });
 });

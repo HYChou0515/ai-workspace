@@ -156,6 +156,17 @@ export function RefTableSelectModal({
     <Modal
       opened={opened}
       onClose={onClose}
+      // #779: a click beside the panel discarded every row ticked so far. This
+      // picker can span pages of server-side results, so re-selecting is the
+      // expensive part — and the click that triggered it was never deliberate.
+      //
+      // Only the backdrop is withdrawn here. The app's `useDirtyClose` (which
+      // makes Escape/Cancel ask first) is deliberately NOT used: it reaches for
+      // a DialogProvider from the host app, and this subtree is meant to stay
+      // liftable on its own. Escape and Cancel are the deliberate exits and
+      // still discard outright, which is the same contract Mantine's Modal has
+      // everywhere else in this lib.
+      closeOnClickOutside={false}
       title={
         <Text fw={600}>
           選擇{config.label}

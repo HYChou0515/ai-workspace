@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import type { PickableGroup } from "../api/groups";
 import {
@@ -17,8 +17,10 @@ import {
   itemPermissionFromGrants,
   itemRoleDef,
 } from "../lib/itemPermission";
+import { useDirtyClose } from "../hooks/useDirtyClose";
 import { itemManagersFromPermission, withItemManagers } from "../lib/itemManagers";
 import { pxToRem } from "../lib/pxToRem";
+import { sameShape } from "../lib/sameShape";
 import { ItemShareManagers } from "./ItemShareManagers";
 import { Icon } from "./Icon";
 import { ModalActions } from "./ModalActions";
@@ -86,6 +88,29 @@ export function ItemShareDialog({
   // layered on afterwards rather than smuggled into the ladder's vocabulary.
   const next = () =>
     withItemManagers(itemPermissionFromGrants(visibility, grants, value, groupGrants), managers);
+
+  // #779: compared against the seed the dialog opened with, not against what
+  // `next()` would build — that goes through a normaliser, and a round-trip
+  // difference would read as an edit nobody made. Closing here is the quiet
+  // failure of the set: the dialog just vanishes, and the access silently
+  // stayed as it was.
+  //
+  // `managers` arrived with #777 while this branch was open, and it is a fourth
+  // thing the user edits here — left out of this comparison, changing who can
+  // manage access and pressing Escape would close without a word, which is the
+  // exact failure the guard exists for.
+  const initialRef = useRef({
+    visibility: value.visibility,
+    grants: itemGrantsFromPermission(value, owner),
+    groupGrants: itemGroupGrantsFromPermission(value),
+    managers: itemManagersFromPermission(value, owner),
+  });
+  // sameShape, not JSON.stringify: `grants` reorders when a subject is removed
+  // and re-added (a false "dirty"), and ItemGrant.verbs is a Set, which
+  // stringifies to {} however full it is — so a whole custom-verb edit read as
+  // unchanged and closed without asking.
+  const dirty = !sameShape({ visibility, grants, groupGrants, managers }, initialRef.current);
+  const attemptClose = useDirtyClose(dirty, onClose);
   // Unresolvable (deleted / not visible) → "Unknown group", still removable (#608).
   const groupName = (id: string) =>
     pickableGroups.find((g) => g.resource_id === id)?.name ?? "Unknown group";
@@ -128,7 +153,7 @@ export function ItemShareDialog({
 
   return (
     <ModalShell
-      onClose={onClose}
+      onClose={attemptClose}
       ariaLabel={`Share ${itemName}`}
       data-testid="item-share-dialog"
       width={480}
@@ -338,7 +363,7 @@ export function ItemShareDialog({
       )}
 
       <ModalActions>
-        <button type="button" data-testid="item-share-cancel" onClick={onClose} className="btn" data-variant="secondary" data-size="sm">
+        <button type="button" data-testid="item-share-cancel" onClick={attemptClose} className="btn" data-variant="secondary" data-size="sm">
           Cancel
         </button>
         <button

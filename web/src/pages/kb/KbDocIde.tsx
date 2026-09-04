@@ -20,7 +20,7 @@ import { kbApi, type KbApi, type KbDocument } from "../../api/kb";
 import { kbFileService } from "../../api/kbFileService";
 import { normPath } from "../../api/refPath";
 import { qk } from "../../api/queryKeys";
-import { DialogProvider, useDialog } from "../../components/Dialog";
+import { useDialog } from "../../components/Dialog";
 import { Icon } from "../../components/Icon";
 import { PermissionDialog } from "../../components/PermissionDialog";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
@@ -104,18 +104,10 @@ type KbDocIdeProps = {
   uploading?: boolean;
 };
 
-// The DialogProvider wraps the whole body (not just the file tree) so the bulk
-// re-index confirm — raised from `reindexPaths`, which resolves a tree
-// selection to its actual doc set — can reach the shared modal.
-export function KbDocIde(props: KbDocIdeProps) {
-  return (
-    <DialogProvider>
-      <KbDocIdeBody {...props} />
-    </DialogProvider>
-  );
-}
-
-function KbDocIdeBody({
+// #779: this used to be a wrapper whose only job was mounting a DialogProvider,
+// so the bulk re-index confirm could reach the shared modal. The provider is at
+// the app root now, so the wrapper is gone and the body IS the component.
+export function KbDocIde({
   collectionId,
   client = kbApi,
   onPickFiles,

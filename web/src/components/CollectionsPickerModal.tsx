@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import type { FileService } from "../api/fileService";
 import { kbApi, type KbApi } from "../api/kb";
 import { qk } from "../api/queryKeys";
+import { useDirtyClose } from "../hooks/useDirtyClose";
 import { useItemCollections, COLLECTIONS_PATH } from "../hooks/useItemCollections";
 import { CollectionsChecklist } from "./CollectionsChecklist";
 import {
@@ -50,7 +51,6 @@ export function CollectionsPickerModal({
   const [initialTierOf, setInitialTierOf] = useState<Map<string, number> | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveFailed, setSaveFailed] = useState(false);
-  const [confirming, setConfirming] = useState(false);
 
   // Seed the editable selection + tier ranks once the file has been read on open.
   useEffect(() => {
@@ -125,10 +125,7 @@ export function CollectionsPickerModal({
     liveChecked.filter((c) => (tierOf?.get(c.resource_id) ?? 0) === r),
   ).filter((g) => g.length > 0);
 
-  const attemptClose = () => {
-    if (dirty) setConfirming(true);
-    else onClose();
-  };
+  const attemptClose = useDirtyClose(dirty, onClose);
 
   const onSave = async () => {
     if (!checked) return;
@@ -322,60 +319,29 @@ export function CollectionsPickerModal({
           <div style={{ fontSize: pxToRem(12), color: "var(--err)" }}>{t("colpicker.saveError")}</div>
         )}
 
-        {confirming ? (
-          <div
-            data-testid="collections-discard-confirm"
-            style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "flex-end" }}
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 2 }}>
+          <button
+            type="button"
+            data-testid="collections-cancel"
+            onClick={attemptClose}
+            className="btn"
+            data-variant="secondary"
+            data-size="sm"
           >
-            <span style={{ flex: 1, fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>
-              {t("colpicker.discardPrompt")}
-            </span>
-            <button
-              type="button"
-              data-testid="discard-no"
-              onClick={() => setConfirming(false)}
-              className="btn"
-              data-variant="secondary"
-              data-size="sm"
-            >
-              {t("colpicker.keepEditing")}
-            </button>
-            <button
-              type="button"
-              data-testid="discard-yes"
-              onClick={onClose}
-              className="btn"
-              data-variant="danger"
-              data-size="sm"
-            >
-              {t("colpicker.discard")}
-            </button>
-          </div>
-        ) : (
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 2 }}>
-            <button
-              type="button"
-              data-testid="collections-cancel"
-              onClick={attemptClose}
-              className="btn"
-              data-variant="secondary"
-              data-size="sm"
-            >
-              {t("tools.cancel")}
-            </button>
-            <button
-              type="button"
-              data-testid="collections-save"
-              onClick={onSave}
-              disabled={!ready || !dirty || saving}
-              className="btn"
-              data-variant="primary"
-              data-size="sm"
-            >
-              {saving ? t("colpicker.saving") : t("tools.save")}
-            </button>
-          </div>
-        )}
+            {t("tools.cancel")}
+          </button>
+          <button
+            type="button"
+            data-testid="collections-save"
+            onClick={onSave}
+            disabled={!ready || !dirty || saving}
+            className="btn"
+            data-variant="primary"
+            data-size="sm"
+          >
+            {saving ? t("colpicker.saving") : t("tools.save")}
+          </button>
+        </div>
     </ModalShell>
   );
 }

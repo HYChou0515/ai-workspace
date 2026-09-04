@@ -26,6 +26,14 @@ function makeDeferred<T>() {
   return { promise, resolve };
 }
 
+/** Deleting a conversation always asks first (#456) — the confirm reaches every
+ * render now that DialogProvider sits at the app root, and the test wrapper
+ * mirrors it (#779). Say yes. */
+async function confirmDelete() {
+  const dialog = await screen.findByRole("dialog");
+  await userEvent.click(within(dialog).getByRole("button", { name: /^Delete$/ }));
+}
+
 describe("KbChatsPage", () => {
   beforeEach(() => _resetKbMock());
   afterEach(() => {
@@ -80,6 +88,7 @@ describe("KbChatsPage", () => {
     render(<KbChatsPage client={client} />);
     const del = await screen.findByRole("button", { name: /Delete Doomed/ });
     await userEvent.click(del);
+    await confirmDelete();
     await waitFor(() => expect(del).toBeDisabled());
     // a sibling row stays enabled — only the deleting row guards against double-submit
     expect(screen.getByRole("button", { name: /Delete Safe/ })).toBeEnabled();
@@ -91,6 +100,7 @@ describe("KbChatsPage", () => {
     render(<KbChatsPage client={mockKbApi} />);
     const del = await screen.findByRole("button", { name: /Delete Doomed/ });
     await userEvent.click(del);
+    await confirmDelete();
     await waitFor(() =>
       expect(screen.queryByRole("button", { name: /Doomed/ })).not.toBeInTheDocument(),
     );

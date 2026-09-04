@@ -261,4 +261,25 @@ describe("SkillsModal — refreshing a copy (#589)", () => {
     await screen.findByTestId("skill-row-my-skill");
     expect(screen.queryByTestId("skill-refresh-my-skill")).toBeNull();
   });
+
+  // #779: a long list of tri-states — re-picking through it is the cost, and
+  // nothing is written until Save.
+  it("asks before dropping unsaved skill picks, and keeps them", async () => {
+    const props = renderModal();
+    fireEvent.click(await screen.findByTestId("skill-author-skill-off"));
+
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    expect(props.onClose).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByTestId("dialog-action-keep"));
+    expect(screen.getByTestId("skill-author-skill-off")).toHaveAttribute("aria-pressed", "true");
+    expect(props.onSaveSkillPrefs).not.toHaveBeenCalled();
+  });
+
+  it("closes on Escape without asking when no pick was changed", async () => {
+    const props = renderModal();
+    await screen.findByTestId("skill-author-skill-follow");
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(props.onClose).toHaveBeenCalled();
+  });
 });

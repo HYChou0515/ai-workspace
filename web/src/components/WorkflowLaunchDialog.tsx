@@ -38,6 +38,8 @@ export function WorkflowLaunchDialog({
   return (
     <ModalShell
       onClose={onClose}
+      // #779: a read-only pre-flight summary — no input fields, nothing to lose.
+      closeOnBackdrop
       ariaLabel={p?.title || t("wf.launch.title")}
       data-testid="wf-launch-dialog"
       width={460}

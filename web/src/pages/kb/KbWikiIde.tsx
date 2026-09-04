@@ -19,7 +19,6 @@ import { qk } from "../../api/queryKeys";
 import { normPath } from "../../api/refPath";
 import { wikiFileService } from "../../api/wikiFileService";
 import { MonacoEditor } from "../../components/MonacoEditor";
-import { DialogProvider } from "../../components/Dialog";
 import { ResizeDivider } from "../../components/ResizeDivider";
 import { EditModeProvider, useEditMode } from "../../hooks/editMode";
 import {
@@ -146,43 +145,41 @@ export function KbWikiIde({
     <FileServiceProvider value={service}>
       <FileBufferProvider store={bufferStore}>
         <EditModeProvider>
-          <DialogProvider>
-            <div className="kb-ide">
-              <div className="kb-ide__main">
-                <div className="kb-ide__tree" style={{ width: treeW, flexShrink: 0 }}>
-                  <FileTree
-                    files={files}
-                    dirs={dirs}
-                    activePath={activePath}
-                    onOpen={openPath}
-                    onChanged={refetch}
-                    searchable
-                  />
-                </div>
-                <ResizeDivider
-                  orientation="vertical"
-                  ariaLabel="Resize page tree"
-                  onResizeStart={() => {
-                    treeStart.current = treeW;
-                  }}
-                  onResize={(d) => setTreeW(treeStart.current + d)}
+          <div className="kb-ide">
+            <div className="kb-ide__main">
+              <div className="kb-ide__tree" style={{ width: treeW, flexShrink: 0 }}>
+                <FileTree
+                  files={files}
+                  dirs={dirs}
+                  activePath={activePath}
+                  onOpen={openPath}
+                  onChanged={refetch}
+                  searchable
                 />
-                <div className="kb-ide__pane">
-                  {activePath ? (
-                    <WikiEditorPane
-                      path={activePath}
-                      pages={filePaths}
-                      docIdByPath={docIdByPath}
-                      onNavigate={followLink}
-                      onOpenDoc={onOpenDoc}
-                    />
-                  ) : (
-                    <div className="kb-ide__empty">Select a page to read or edit.</div>
-                  )}
-                </div>
+              </div>
+              <ResizeDivider
+                orientation="vertical"
+                ariaLabel="Resize page tree"
+                onResizeStart={() => {
+                  treeStart.current = treeW;
+                }}
+                onResize={(d) => setTreeW(treeStart.current + d)}
+              />
+              <div className="kb-ide__pane">
+                {activePath ? (
+                  <WikiEditorPane
+                    path={activePath}
+                    pages={filePaths}
+                    docIdByPath={docIdByPath}
+                    onNavigate={followLink}
+                    onOpenDoc={onOpenDoc}
+                  />
+                ) : (
+                  <div className="kb-ide__empty">Select a page to read or edit.</div>
+                )}
               </div>
             </div>
-          </DialogProvider>
+          </div>
         </EditModeProvider>
       </FileBufferProvider>
     </FileServiceProvider>
