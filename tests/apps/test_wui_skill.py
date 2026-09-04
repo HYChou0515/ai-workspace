@@ -195,8 +195,12 @@ def test_the_built_example_type_checks_before_it_bundles(payload: dict[str, byte
     is `vite build` alone type-checks nowhere — the compiler is present, shipped,
     configured, and silent, and the build goes green over code it rejects.
 
-    `strict` matters for the same reason: without it `readFile`'s union collapses
-    and the one mistake `wui.d.ts` exists to prevent compiles cleanly again."""
+    `strict` is pinned for `strictNullChecks` — `whoami()` really can answer
+    `null`, and so can `getElementById`. It is NOT what makes the `readFile`
+    union bite: narrowing a discriminated union works without it. The shipped
+    tsconfig said otherwise until a review ran `tsc` with `strict` off and got
+    the same `TS2339` either way, which is the difference between a reason and
+    a story."""
     pkg = json.loads(payload[f"examples/{BUILT}/package.json"])
     tsconfig = payload[f"examples/{BUILT}/tsconfig.json"].decode()
     build = pkg["scripts"]["build"]
@@ -222,6 +226,14 @@ def test_the_built_example_ships_the_bridge_typed(payload: dict[str, bytes]):
     assert "exit_code: number" in types
     for verb in VERBS:
         assert f"{verb}(" in types, f"the bridge type omits {verb}"
+    # Naming the verbs is not enough — a file that lied about every return type
+    # would pass that loop. `whoami` is the one that bit: the bridge answers
+    # `{user: ctx.me}` and `me` is `string | null` while the signed-in user is
+    # still being resolved, so a page that asked on a cold open was handed a
+    # `null` the compiler had certified as a `string`.
+    assert "user: string | null" in types
+    # And `read_only` is optional on the API type it passes straight through.
+    assert "read_only?: boolean" in types
 
 
 def test_the_skill_makes_the_agent_look_at_a_tools_real_output():

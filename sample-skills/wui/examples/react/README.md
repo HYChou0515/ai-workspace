@@ -12,9 +12,10 @@ pnpm build                       # → tsc --noEmit && vite build → dist/
 
 ## Why TypeScript here in particular
 
-A WUI cannot report its own bugs. Its reader does not open a console; when the
-page is wrong they can only say "it's broken". So the compiler is the only thing
-between a mistake and the person who asked for the page.
+A WUI reports the bugs that throw — the pane shows the error, with a **Tell the
+agent** button. What it cannot show is a page that renders and is quietly wrong,
+and its reader does not open a console, so all they can say is "it's broken".
+The compiler is what stands between that and the person who asked for the page.
 
 `src/wui.d.ts` types the whole `workspace` bridge — copy it unchanged, it
 describes the platform rather than your page — and `tsc --noEmit` runs BEFORE
@@ -22,7 +23,9 @@ Vite, because Vite strips types without checking them and would happily build
 code the compiler rejects. Two shapes are worth the whole exercise on their own:
 
 - `readFile` returns a **union**, so `JSON.parse(file.text)` against a binary
-  file is a compile error instead of the word `undefined` on screen.
+  file is a compile error. Untyped it throws at runtime, the `.catch` every
+  example teaches absorbs the throw, and the page renders its empty state —
+  "Nothing yet." over real data, which nobody can see is wrong.
 - `callTool` returns `{ output: string, exit_code: number }` — a **string**,
   with no promise it is JSON. The type says so; run the tool and look before you
   parse it (SKILL.md, "Run the tool before you parse it").

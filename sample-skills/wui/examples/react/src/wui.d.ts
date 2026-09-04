@@ -16,11 +16,12 @@
  * Copy this file unchanged. It describes the platform, not your page.
  */
 
-/** One entry from `listFiles`. `read_only` is snake_case: it comes from the API. */
+/** One entry from `listFiles`. `read_only` is snake_case: it comes from the API,
+ *  and it is OPTIONAL there — test it for truthiness, do not call methods on it. */
 export interface WuiFile {
   path: string;
   size: number;
-  read_only: boolean;
+  read_only?: boolean;
 }
 
 /** A text file. `kind` is the discriminant; narrow on it before reading `text`. */
@@ -66,11 +67,20 @@ export interface Workspace {
   /** ONLY inside this page's own folder. */
   deleteFile(path: string): Promise<{ path: string }>;
   /** Hands the user the real file, in the workspace beside the page. */
-  openFile(path: string): Promise<void>;
-  /** Who is looking at the page. */
-  whoami(): Promise<{ user: string }>;
-  /** The page's only reach outside the item. Declare the tool in `tools:` first. */
-  callTool(name: string, args: Record<string, unknown>): Promise<WuiToolResult>;
+  openFile(path: string): Promise<{ path: string }>;
+  /**
+   * Who is looking at the page.
+   *
+   * `null` is REAL: the platform is still resolving the signed-in user when a
+   * page opens, and a page that asks straight away gets it. Declaring this
+   * `string` is what a `.d.ts` must never do — the compiler would certify
+   * `who.user.trim()` and the page would throw on a cold open, blank, in front
+   * of somebody who cannot see why.
+   */
+  whoami(): Promise<{ user: string | null }>;
+  /** The page's only reach outside the item. Declare the tool in `tools:` first.
+   *  `args` is optional — a tool that takes none is called with just a name. */
+  callTool(name: string, args?: Record<string, unknown>): Promise<WuiToolResult>;
   /** Someone else — a colleague, or the agent — changed a file. Not a promise. */
   onFileChanged(handler: (path: string) => void): void;
 }

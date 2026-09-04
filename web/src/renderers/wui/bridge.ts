@@ -21,7 +21,7 @@ import type { FileService } from "../../api/fileService";
 import type { OpenFile } from "../../hooks/openFile";
 import { readAsset } from "./assets";
 import { ok, refuse, refuseExpected, type WuiRequest, type WuiResponse } from "./protocol";
-import { resolveReadPath, resolveWritePath } from "./paths";
+import { isOwnFile, resolveReadPath, resolveWritePath } from "./paths";
 
 export type CallTool = (
   name: string,
@@ -72,26 +72,52 @@ function cannotWrite(folder: string, verb: string, target: string): string {
 }
 
 /**
- * The workspace path a caller probably meant, when a bare reference starts with
- * this page's own folder name.
+ * Refuse a bare path whose first segment is this page's OWN folder name.
+ *
+ * The reported defect, in one line: "no such file /<name>/<name>/foo.json". A
+ * bare path means "next to the page", so `lot-tracker/out.json` inside
+ * `/lot-tracker` resolves to `/lot-tracker/lot-tracker/out.json` — and a tool
+ * that writes into the page's folder names the file the way the WORKSPACE names
+ * it, without the leading slash, because that is what a workspace path looks
+ * like everywhere else.
+ *
+ * It is ONE rule across every verb rather than a fix on the read that was
+ * reported, because the read is the least harmful member of the family. A read
+ * at least fails; `writeFile("lot-tracker/data.json")` SUCCEEDS, puts the file
+ * where nothing will look for it, and returns ok — so the save button works,
+ * the data is gone, and nothing anywhere says so. `listFiles` answers `[]`,
+ * which is a legitimate answer and therefore indistinguishable from the truth.
+ *
+ * Nothing becomes impossible: the absolute spelling still reaches
+ * `/lot-tracker/lot-tracker/…` for a page that really keeps files there. The
+ * ambiguous spelling just has to be said out loud, which is the only way a
+ * reader who cannot open a console gets to see the difference.
  *
  * Only the FIRST segment counts. A folder name repeating deeper down
- * (`reports/sales/q1.json` inside `/sales`) is an ordinary path that may well
- * exist, and treating that as a mistake would second-guess a working read.
+ * (`reports/sales/q1.json` inside `/sales`) is an ordinary path.
  */
-function doubledFolder(folder: string, raw: string): string | null {
-  if (!folder) return null;
+function startsWithOwnFolder(folder: string, raw: string): boolean {
+  if (!folder) return false;
   const name = folder.slice(folder.lastIndexOf("/") + 1);
   // An ABSOLUTE path needs no clause of its own: its first segment is the empty
   // string, which cannot equal a folder name. A `raw.startsWith("/")` guard here
   // read as load-bearing and was not — deleting it changed no answer, which is
   // the shape of a check that only looks like one.
   const first = raw.split("/")[0];
-  // A bare filename that happens to BE the folder name (`readFile("sales")` in
-  // `/sales`) names the file `/sales/sales`, which is odd and perfectly legal —
-  // there is no second spelling to suggest, so there is nothing to say.
-  if (first !== name || !raw.includes("/")) return null;
-  return `${folder}/${raw.slice(first.length + 1)}`;
+  // A bare name that IS the folder name (`readFile("sales")` in `/sales`) names
+  // the file `/sales/sales`. Odd, legal, and unambiguous — there is no second
+  // spelling to offer, so there is nothing to say.
+  return first === name && raw.includes("/");
+}
+
+/** The sentence for the above. Names both spellings; the reader picks. */
+function doubledRefusal(folder: string, raw: string): string {
+  const name = folder.slice(folder.lastIndexOf("/") + 1);
+  return (
+    `"${raw}" starts with this page's own folder name, and a path without a leading "/" ` +
+    `is read from INSIDE that folder — so it means "${folder}/${raw}", with "${name}" in it twice. ` +
+    `Write "/${raw}" for the file the workspace calls that, or "${folder}/${raw}" if you really meant it.`
+  );
 }
 
 const str = (args: Record<string, unknown> | undefined, key: string): string | null => {
@@ -105,6 +131,13 @@ export async function dispatchWuiRequest(
 ): Promise<WuiResponse> {
   const { id, verb, args } = req;
   const { fs, folder } = ctx;
+
+  // Before any verb runs. Checked here rather than per-branch so a verb added
+  // later cannot quietly opt out — the whole point is that this family of
+  // mistakes is silent, and the one on `writeFile` destroys data.
+  const rawPath = str(args, "path") ?? str(args, "prefix");
+  if (rawPath !== null && startsWithOwnFolder(folder, rawPath))
+    return refuse(id, doubledRefusal(folder, rawPath));
 
   switch (verb) {
     case "listFiles": {
@@ -141,32 +174,20 @@ export async function dispatchWuiRequest(
       // expected. Both halves have to be wrong for that to happen, so this fixes
       // the half that can tell the difference.
       if (read.kind === "missing") {
-        // The reported shape, and the one the own-folder rule below would
-        // otherwise keep quiet: `/sales/sales/foo.json`. A tool that writes into
-        // the page's folder names the file the way the WORKSPACE names it —
-        // `sales/foo.json`, no leading slash, because that is what a workspace
-        // path looks like everywhere else — and a bare path here means "next to
-        // the page", so the folder goes on twice. The result is still INSIDE the
-        // page's own folder, which is why it read as an ordinary first run and
-        // said nothing at all.
-        //
-        // Nothing writes to a path that repeats the folder name on purpose, so
-        // absence there is never a first run. The path is NOT silently rewritten
-        // — guessing could read a different file — but the message names the two
-        // spellings that would have worked.
-        const doubled = doubledFolder(folder, raw);
-        if (doubled)
-          return refuse(
-            id,
-            `There is no file at ${path}. A path without a leading "/" is read from inside this page's own folder (${folder}), so "${raw}" became "${path}". Did you mean "${doubled}" (from the item's root) or "${raw.slice(raw.indexOf("/") + 1)}"?`,
-          );
-        const mine = resolveWritePath(folder, raw) !== null;
-        if (mine) return refuseExpected(id, `There is no file at ${path}.`);
-        // Names the thing that is actually surprising. The reader cannot open a
-        // console, and "there is no file" leaves them nothing to act on.
+        // The doubled-folder spelling never reaches here — it is refused for
+        // every verb at the top of `dispatchWuiRequest`. What is left is a
+        // genuine absence, and only its LOCATION decides whether it is worth
+        // reporting.
+        if (isOwnFile(folder, raw)) return refuseExpected(id, `There is no file at ${path}.`);
+        // "Nothing could be read", not "there is no file": a service that cannot
+        // tell 403 from 404 lands here too (see `readAsset`), and a sentence
+        // asserting absence would name a cause we do not know. The hint is
+        // parenthetical and only offered for the spelling it applies to.
         return refuse(
           id,
-          `There is no file at ${path} in this item. A path starting with "/" is read from this item's root, not from a sandbox or a disk.`,
+          raw.startsWith("/")
+            ? `Nothing could be read at ${path}. (A path starting with "/" is read from this item's root, not from a sandbox or a disk.)`
+            : `Nothing could be read at ${path}.`,
         );
       }
       if (read.kind === "failed") return refuse(id, read.reason);

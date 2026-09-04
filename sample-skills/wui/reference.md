@@ -58,14 +58,27 @@ its own, so it can read but every write is refused.
 
 ### Reading a file that may not exist
 
-There is no "does it exist". A missing file rejects, and that is the normal
-first-run path:
+There is no "does it exist". A missing file rejects, and for **your own data
+file** that is the normal first-run path — the pane stays quiet about it:
 
 ```js
 const rows = await workspace
-  .readFile("data.json")
-  .then((f) => JSON.parse(f.text))
+  .readFile("data.json")     // YOUR file, in your folder
+  .then((f) => (f.kind === "text" ? JSON.parse(f.text) : []))
   .catch(() => []);          // first run — no file yet
+```
+
+⚠️ **Do not wrap somebody else's path in that `.catch`.** Absence is only
+ordinary in your own folder. A path from elsewhere in the item — one a tool
+handed you, one you built from a listing — that cannot be read is a mistake,
+the pane says so, and swallowing it renders an empty page that says "nothing
+found" forever over data that is right there. Show the error instead:
+
+```js
+const out = await workspace.readFile(pathFromTool).catch((e) => {
+  show(e.message);           // the platform's sentence names what to change
+  return null;
+});
 ```
 
 ### Saving

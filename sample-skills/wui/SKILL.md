@@ -39,13 +39,17 @@ is paid on every open.
 **Default to `examples/react/`** — React + TypeScript + Vite — for anything past
 one screen of static markup. Two reasons, and the second is the real one:
 
-- **A WUI cannot report its own bugs.** The person looking at it does not open a
-  console; if the page is wrong they can only say "it's broken". So a mistake
-  caught while building is worth far more here than in code somebody debugs.
+- **A WUI cannot report the bugs that matter most.** A page that THROWS is
+  covered: the pane shows the error, with a **Tell the agent** button. What it
+  cannot show is a page that renders and is quietly wrong — and its reader does
+  not open a console, so all they can say is "it's broken". A mistake caught
+  while building is worth far more here than in code somebody debugs.
   `src/wui.d.ts` types the whole bridge, and the build runs `tsc --noEmit` before
-  Vite, so `JSON.parse(file.text)` against a binary file — which renders as the
-  word `undefined` and nothing else — stops being shippable. Copy `wui.d.ts`
-  unchanged; it describes the platform, not your page.
+  Vite, so `JSON.parse(file.text)` against a binary file stops being shippable.
+  Untyped it throws, the `.catch` every example teaches absorbs the throw, and
+  the page renders its empty state — "Nothing yet." over real data, which is
+  the failure nobody can see. Copy `wui.d.ts` unchanged; it describes the
+  platform, not your page.
 - **The build is no longer a cost the reader pays.** Opening a built page
   rebuilds it, with the output on screen (Auto-rebuild, on by default, beside
   **Rebuild**).
@@ -130,8 +134,8 @@ through `readFile`, and two things go wrong quietly:
 
 So when a tool answers with a path: check whether the file is really in the
 item's workspace, `readFile` it, and show the read's own error message when it
-fails. A 13MB single-line JSON goes through the bridge fine (measured), so size
-is not what you are debugging — the path is.
+fails. The bridge carries multi-megabyte files without trouble, so size is not
+what you are debugging — the path is.
 
 If you cannot run it — it needs an identifier you do not have, or the data is
 not there yet — **say so and ask for one real example of its output.** Do not

@@ -104,6 +104,27 @@ export function resolveReadPath(folder: string, path: string): string | null {
 }
 
 /**
+ * Is this read asking for the page's OWN file — the one place absence is
+ * ordinary rather than a mistake?
+ *
+ * Deliberately NOT `resolveWritePath(...) !== null`. That function answers a
+ * WRITE question and opens with `if (folder === "") return null` — a security
+ * decision about a root-level page, which may not write anywhere. Borrowing it
+ * to answer a READ question imported that decision wholesale: a root page,
+ * which the reference documents as able to read, had EVERY missing read
+ * reported, including the bare read of its own data file on its very first
+ * open. An alarm that always fires is the failure this whole distinction exists
+ * to prevent.
+ *
+ * A root page has no folder, so "its own" is what it asked for relatively.
+ */
+export function isOwnFile(folder: string, raw: string): boolean {
+  if (folder === "") return !raw.startsWith("/");
+  const abs = raw.startsWith("/") ? normalizeAbsolute(raw) : resolveInFolder(folder, raw);
+  return abs !== null && abs.startsWith(`${folder}/`);
+}
+
+/**
  * A path the page may WRITE or DELETE: only inside its own folder.
  *
  * Both spellings are normalised FIRST and the containment is then checked on

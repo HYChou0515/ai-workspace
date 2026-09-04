@@ -182,7 +182,16 @@ def register_wui_routes(
             return await request_env.env_for(request, user_id=uid, item_id=item_id)
         except Exception:
             logger.exception("wui: request env source failed for item %s", item_id)
-            raise HTTPException(status_code=500, detail={"error": "request_env_failed"}) from None
+            raise HTTPException(
+                status_code=500,
+                # A SENTENCE, not `{"error": ...}`. The chat client maps that
+                # code into human words; the WUI clients keep `detail` only when
+                # it is a string, so a dict reached the page as "could not be run
+                # (500)" — on every open, with nothing to act on. The impl's OWN
+                # message is still not relayed: only the impl knows whether it
+                # built that string out of the cookie it was reading.
+                detail="This page could not confirm who you are. Sign in again, then reopen it.",
+            ) from None
 
     async def _external(item_id: str) -> ExternalTools:
         if resolve_external is not None:
@@ -214,13 +223,28 @@ def register_wui_routes(
         if cwd is None:
             raise HTTPException(status_code=400, detail=f"{body.folder} is not a page folder.")
 
-        # Composed HERE, while the request is still open: the stream below
-        # outlives the route, and by the time the first chunk is asked for
-        # there is no request left to read a cookie from.
-        env = {
-            **await _request_env(request, investigation_id),
-            **locator.env_vars_of(investigation_id),
-        }
+        # The item's variables ONLY — deliberately not the request's.
+        #
+        # A build writes `dist/`, which is mirrored to durable storage and
+        # inlined into the document served to EVERY viewer of this item. A
+        # bundler's whole job is to put its environment into that artifact:
+        # Vite's `loadEnv` picks `VITE_`-prefixed names out of `process.env`
+        # and `define`s them into the bundle. So a per-request credential
+        # reaching here would be baked into a file other people download —
+        # which is exactly what `IRequestEnv` promises never happens ("the
+        # values it returns are NEVER written back anywhere. They live for
+        # exactly one turn").
+        #
+        # A tool call is the opposite shape: its output goes to the one person
+        # who asked, and dies with the exec. That is why `wui_call_tool` DOES
+        # compose the request's env and this does not. They are not the same
+        # question wearing different hats — one produces a shared artifact and
+        # the other does not, so they run as different identities on purpose.
+        #
+        # A registry credential a build genuinely needs belongs on the item,
+        # where everyone the page is shared with is already entitled to what it
+        # builds.
+        env = locator.env_vars_of(investigation_id)
 
         session = await registry.session(investigation_id)
         handle = await registry.ensure_handle(session)

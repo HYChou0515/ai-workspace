@@ -1,4 +1,4 @@
-/* The page's looks. Imported from `main.jsx`, not linked from `index.html` —
+/* The page's looks. Imported from `main.tsx`, not linked from `index.html` —
    with a build step the bundler owns the stylesheet: it emits one file into
    `dist/assets/` and writes the `<link>` into `dist/index.html` for you.
    The assembler then inlines it like any other folder-relative reference.

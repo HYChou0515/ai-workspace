@@ -33,9 +33,10 @@ function useRows() {
     window.workspace
       .readFile(DATA)
       // `readFile` returns a UNION, and `.text` exists on only one arm — so
-      // this narrowing is not ceremony. Without it the compiler is right to
-      // complain, and untyped the same code silently parses `undefined` the
-      // day somebody drops an image where the data was.
+      // this narrowing is not ceremony. Untyped, the day somebody drops an
+      // image where the data was, `JSON.parse(undefined)` throws, the `.catch`
+      // below absorbs it, and the page shows "Nothing yet." over a file that is
+      // right there.
       .then((file) => setRows(file.kind === "text" ? (JSON.parse(file.text) as Row[]) : []))
       // First run: the file is not there yet. That is the documented way to
       // start empty, and the platform does not report it as a fault.
@@ -74,7 +75,10 @@ function App() {
   useEffect(() => {
     window.workspace
       .whoami()
-      .then((who) => setMe(who.user))
+      // `?? ""` because `user` is genuinely nullable while the platform is still
+      // resolving who is looking. Typed honestly, the compiler makes you say what
+      // to do about it here rather than letting `null` into a `string` state.
+      .then((who) => setMe(who.user ?? ""))
       .catch(() => setMe(""));
   }, []);
 

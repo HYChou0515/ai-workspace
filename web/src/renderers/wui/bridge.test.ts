@@ -246,38 +246,82 @@ describe("dispatchWuiRequest", () => {
     expect(res.ok === false && res.expected).toBeUndefined();
   });
 
-  it("says a path outside the folder was read from the item's root", async () => {
+  it("hints at the root spelling without claiming to know the cause", async () => {
     // The reader cannot open a console, so the sentence has to name what is
-    // actually wrong. "There is no file" is true and leaves them nothing to act
-    // on; the surprise is almost always that a leading `/` means the ITEM's
-    // root, not a sandbox's disk.
+    // actually surprising: a leading `/` means the ITEM's root, not a disk.
+    //
+    // But it must not ASSERT absence. `readAsset` files any error it cannot
+    // classify as `missing` — `kbFileService` throws a plain Error for every
+    // non-ok status, so a 403 lands here too — and this is the one sentence the
+    // reader forwards to the agent. "Nothing could be read" is true either way;
+    // "there is no file" would be a confident wrong diagnosis.
     const res = await dispatchWuiRequest(req("readFile", { path: "/tmp/out.json" }), ctx());
+    const why = res.ok === false ? res.error : "";
 
-    expect(res.ok === false && res.error).toContain("/tmp/out.json");
-    expect(res.ok === false && res.error).toContain("this item");
+    expect(why).toContain("/tmp/out.json");
+    expect(why).toContain("this item's root");
+    expect(why).not.toContain("There is no file");
   });
 
-  it("names the doubled folder when a workspace path was read as a bare one", async () => {
+  it("refuses a bare path that starts with the page's own folder name", async () => {
     // The reported symptom, exactly: "/sales/sales/foo.json 無此檔案".
     //
     // A tool that writes into the page's folder names the file the way the
-    // workspace names it — `sales/foo.json`, no leading slash, because that is
-    // what a workspace path looks like everywhere else. `readFile` reads a bare
-    // path as one NEXT TO THE PAGE, so the folder goes on twice.
-    //
-    // And the doubled path is still INSIDE the page's folder, so the own-folder
-    // rule above would keep it quiet — a first draft of this fix did exactly
-    // that and left the reported symptom untouched. This is the one case where
-    // absence inside your own folder is not a first run: nothing writes to a
-    // path that repeats the folder name on purpose.
+    // WORKSPACE names it — `sales/foo.json`, no leading slash, because that is
+    // what a workspace path looks like everywhere else. A bare path here means
+    // "next to the page", so the folder goes on twice.
     const res = await dispatchWuiRequest(req("readFile", { path: "sales/foo.json" }), ctx());
 
     expect(res).toMatchObject({ ok: false });
     expect(res.ok === false && res.expected).toBeUndefined();
     const why = res.ok === false ? res.error : "";
+    // Both spellings, because only the author knows which they meant.
     expect(why).toContain("/sales/sales/foo.json");
-    // It must name the fix, not just the fact. The reader cannot open a console.
     expect(why).toContain("/sales/foo.json");
+  });
+
+  it("refuses the same spelling on the verbs that would SUCCEED", async () => {
+    // The read is the least harmful member of the family and the only one that
+    // was reported. `writeFile` succeeds, puts the file where nothing will look
+    // for it, and returns ok — the save button works and the data is gone.
+    // `listFiles` answers `[]`, which is a legitimate answer and therefore
+    // indistinguishable from the truth. Hence ONE rule, before any verb runs.
+    const c = ctx();
+    for (const [verb, args] of [
+      ["writeFile", { path: "sales/out.json", text: "[]" }],
+      ["deleteFile", { path: "sales/out.json" }],
+      ["openFile", { path: "sales/out.json" }],
+      ["listFiles", { prefix: "sales/reports" }],
+    ] as const) {
+      const res = await dispatchWuiRequest(req(verb, args), c);
+      expect(res, verb).toMatchObject({ ok: false });
+      expect(res.ok === false && res.error, verb).toContain("in it twice");
+    }
+    // And nothing reached the workspace.
+    expect(c.fs.writeFile).not.toHaveBeenCalled();
+    expect(c.fs.deleteFile).not.toHaveBeenCalled();
+    expect(c.fs.listFiles).not.toHaveBeenCalled();
+  });
+
+  it("lets the absolute spelling through, so nothing becomes impossible", async () => {
+    // A page that really does keep files in `/sales/sales/` says so out loud.
+    const c = ctx({}, { "/sales/sales/foo.json": "[1]" });
+    const res = await dispatchWuiRequest(req("readFile", { path: "/sales/sales/foo.json" }), c);
+
+    expect(res).toMatchObject({ ok: true });
+  });
+
+  it("starts a ROOT page quietly too, and does not lecture it about a slash", async () => {
+    // A view file at the workspace root is a documented shape: it can read,
+    // and every write is refused. Answering "is absence ordinary here?" with
+    // `resolveWritePath` imported that write rule wholesale — it returns null
+    // unconditionally for a root page — so EVERY missing read went loud,
+    // including the bare read of its own data file on its very first open, with
+    // a sentence about a leading "/" the caller never wrote.
+    const res = await dispatchWuiRequest(req("readFile", { path: "data.json" }), ctx({ folder: "" }));
+
+    expect(res).toMatchObject({ ok: false, expected: true });
+    expect(res.ok === false && res.error).not.toContain("starting with");
   });
 
   it("still starts a page quietly when its own data file is simply not there", async () => {

@@ -576,51 +576,41 @@ class _Env:
         return dict(self.value)
 
 
-def test_the_build_gets_the_environment_this_request_composed():
-    """#714 exists because a credential can belong to the REQUEST — a cookie
-    exchanged for a token — not to anything stored. A turn gets it; a build did
-    not, so a private registry that works for the agent 401s for the person who
-    presses Rebuild, and nothing on screen says why."""
+def test_the_build_never_sees_the_requests_environment():
+    """A build writes `dist/`, which is mirrored to durable storage and inlined
+    into the document served to EVERY viewer of the item. Putting a bundler's
+    environment into its artifact is what a bundler DOES — Vite lifts
+    `VITE_`-prefixed names out of `process.env` and defines them into the
+    bundle — so a per-request credential reaching here would be baked into a
+    file other people download.
+
+    That is precisely what `IRequestEnv` promises never happens: "the values it
+    returns are NEVER written back anywhere. They live for exactly one turn."
+
+    So the seam is not even ASKED. Asking and discarding would still pay the
+    latency and still hit the impl's rate limit on every page open, and the
+    next person to read the code would have to work out which it was."""
     sandbox = _BuildSandbox([b"ok\n"])
-    env = _Env({"NPM_TOKEN": "from-request"})
+    env = _Env({"NPM_TOKEN": "from-request", "VITE_API_KEY": "s3cret"})
     client, _, _, _ = build(sandbox=sandbox, request_env=env)
 
     client.post(BUILD_URL, json={"folder": "/page"})
 
-    assert sandbox.envs[0]["NPM_TOKEN"] == "from-request"
-    assert env.asked == [("default-user", "i1")]
+    assert env.asked == []
+    assert "NPM_TOKEN" not in sandbox.envs[0]
+    assert "VITE_API_KEY" not in sandbox.envs[0]
 
 
-def test_the_items_own_variables_win_over_the_requests():
-    """The same precedence a turn uses (`turn_context`: request first, item
-    spread over it). The item's are the ones a person set on purpose."""
-    sandbox = _BuildSandbox([b"ok\n"])
-    client, _, _, _ = build(
-        sandbox=sandbox,
-        env={"NPM_TOKEN": "from-item"},
-        request_env=_Env({"NPM_TOKEN": "from-request", "TRACE_ID": "abc"}),
-    )
-
-    client.post(BUILD_URL, json={"folder": "/page"})
-
-    assert sandbox.envs[0]["NPM_TOKEN"] == "from-item"
-    assert sandbox.envs[0]["TRACE_ID"] == "abc"
-
-
-def test_a_failing_env_source_refuses_the_build():
-    """Running WITHOUT the credential is worse than not running: the build would
-    go ahead as nobody in particular and fail somewhere further in, or quietly
-    fetch the wrong thing. `chat_send` refuses a send for the same reason."""
+def test_a_failing_env_source_does_not_stop_a_build():
+    """Follows from the above rather than being a separate decision: a seam the
+    build never consults cannot fail it. A build refused because somebody's
+    cookie expired would be a page that stops rebuilding for everyone."""
     sandbox = _BuildSandbox([b"ok\n"])
     client, _, _, _ = build(sandbox=sandbox, request_env=_Env(boom=True))
 
     resp = client.post(BUILD_URL, json={"folder": "/page"})
 
-    # 500, and the same detail `chat_send` uses: the caller did nothing wrong,
-    # and one refusal shape across the two paths beats inventing a second.
-    assert resp.status_code == 500
-    assert resp.json()["detail"] == {"error": "request_env_failed"}
-    assert sandbox.calls == []
+    assert resp.status_code == 200
 
 
 def test_a_tool_called_from_a_page_gets_the_request_environment():
@@ -640,3 +630,24 @@ def test_a_tool_called_from_a_page_gets_the_request_environment():
     # two names that could not collide, and flipping the merge kept it green.
     assert sandbox.envs[-1]["MES_HOST"] == "from-item"
     assert env.asked == [("default-user", "i1")]
+
+
+def test_a_failing_env_source_refuses_a_tool_call():
+    """Here the refusal is right: a tool call answers ONE person, and running it
+    without their credential would answer as somebody else — an answer that looks
+    correct and is not. `chat_send` refuses a send for the same reason.
+
+    The detail is a SENTENCE. The chat client maps `{"error": ...}` into human
+    words; the WUI clients keep `detail` only when it is a string, so a dict
+    reached the page as "could not be run (500)" with nothing to act on. The
+    impl's own message is still not relayed."""
+    sandbox = _Sandbox(ExecResult(exit_code=0, stdout=b"{}"))
+    client, _, _, _ = build(sandbox=sandbox, request_env=_Env(boom=True))
+
+    resp = client.post(URL, json={"args": {}})
+
+    assert resp.status_code == 500
+    detail = resp.json()["detail"]
+    assert isinstance(detail, str)
+    assert "sign in again" in detail.lower()
+    assert sandbox.calls == []
