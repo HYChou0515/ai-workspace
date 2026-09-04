@@ -433,6 +433,25 @@ describe("WuiView: rebuilding a page that has a build step", () => {
     expect(await screen.findByRole("button", { name: /rebuild/i })).toBeInTheDocument();
   });
 
+  it("does not even look for a manifest at the workspace root", async () => {
+    // `canBuild` is false there whatever the answer, so the read is a 404
+    // nobody can use — once per session, in everyone's console.
+    const service = svc({ "/index.html": "<html><body>v1</body></html>" });
+    render(
+      <QueryWrap>
+        <WorkspaceSlugProvider value="rca">
+          <FileServiceProvider value={service}>
+            <WuiView path="/page.ai.yaml" spec={{ view: "wui", entity: "" } as ViewSpec} />
+          </FileServiceProvider>
+        </WorkspaceSlugProvider>
+      </QueryWrap>,
+    );
+
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+    const asked = vi.mocked(service.readFile).mock.calls.map(([path]) => path);
+    expect(asked).not.toContain("/package.json");
+  });
+
   it("does not offer a rebuild at the workspace root, which the server refuses", async () => {
     // A root-level page has no folder to build in, and the route says so with a
     // 400. Offering the button anyway makes the platform look broken.
@@ -538,6 +557,61 @@ describe("WuiView: rebuilding a page that has a build step", () => {
     expect(screen.getByText(/Build finished/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /show build output/i }));
     expect(await screen.findByText(/building for production/)).toBeInTheDocument();
+  });
+
+  it("keeps a failed build's log when Refresh is pressed", async () => {
+    // Refresh after a failure is the reflex — you fixed the file, now show me.
+    // It used to clear the log, taking the compiler error, the only explanation
+    // on screen, with it, while the same unchanged page re-rendered.
+    const { release } = serveGated([
+      sse({ type: "output", text: "src/main.jsx:12 Unexpected token" }),
+      sse({ type: "done", exit_code: 1 }),
+    ]);
+    renderIn({ ...BUILT });
+    fireEvent.click(await screen.findByRole("button", { name: /rebuild/i }));
+    release();
+    await screen.findByText(/failed/i);
+
+    fireEvent.click(screen.getByRole("button", { name: /refresh/i }));
+
+    expect(screen.getByText(/Unexpected token/)).toBeInTheDocument();
+  });
+
+  it("cleans the output as a whole, not chunk by chunk", async () => {
+    // An escape sequence is a byte fragment too: split across two chunks, a
+    // per-chunk clean leaves its tail as literal text — the exact artefact it
+    // exists to remove.
+    const esc = "\u001b[32m";
+    const { release } = serveGated([
+      sse({ type: "output", text: esc.slice(0, 2) }),
+      sse({ type: "output", text: esc.slice(2) + "built in 581ms" }),
+      sse({ type: "done", exit_code: 0 }),
+    ]);
+    renderIn({ ...BUILT });
+    fireEvent.click(await screen.findByRole("button", { name: /rebuild/i }));
+    release();
+
+    fireEvent.click(await screen.findByRole("button", { name: /show build output/i }));
+    const log = await screen.findByRole("log", { name: "Build output" });
+    await waitFor(() => expect(log).toHaveTextContent(/built in 581ms/));
+    expect(log.textContent).not.toContain("[32m");
+  });
+
+  it("does not narrate the whole build to a screen reader", async () => {
+    // Two polite live regions in one pane: the reports panel, which speaks
+    // rarely and matters, and a build log that emits a chunk every few
+    // milliseconds. Announcing every chunk drowns the one that matters.
+    const { release } = serveGated([
+      sse({ type: "output", text: "transforming..." }),
+      sse({ type: "done", exit_code: 0 }),
+    ]);
+    renderIn({ ...BUILT });
+    fireEvent.click(await screen.findByRole("button", { name: /rebuild/i }));
+    release();
+
+    fireEvent.click(await screen.findByRole("button", { name: /show build output/i }));
+    const log = await screen.findByRole("log", { name: "Build output" });
+    expect(log).toHaveAttribute("aria-live", "off");
   });
 
   it("unfolds again for the next build", async () => {
@@ -724,7 +798,7 @@ describe("WuiView: rebuilding a page when it is opened", () => {
     setWuiAutoBuild(autoBuildScope("item1", "/sales"), false);
     serveBuild(sse({ type: "done", exit_code: 0 }));
     renderIn({ ...BUILT });
-    const toggle = await screen.findByLabelText(/rebuild when i open this/i);
+    const toggle = await screen.findByLabelText(/rebuild this page whenever you open it/i);
 
     fireEvent.click(toggle); // on
     await new Promise((r) => setTimeout(r, 50));
@@ -859,10 +933,15 @@ describe("WuiView: rebuilding a page when it is opened", () => {
     serveBuild(sse({ type: "done", exit_code: 0 }));
     renderIn({ ...BUILT });
 
-    const toggle = await screen.findByLabelText(/rebuild when i open this/i);
+    const toggle = await screen.findByLabelText(/rebuild this page whenever you open it/i);
+    // A SWITCH, not a checkbox: it takes effect the moment it is flipped, and a
+    // checkbox reads as a choice that has not happened yet.
+    expect(toggle).toHaveAttribute("role", "switch");
+    // The tooltip and the accessible name are the SAME sentence: a mouse and a
+    // screen reader should not be told two different things about one control.
     expect(toggle.closest("label")).toHaveAttribute(
       "title",
-      expect.stringMatching(/rebuild this page whenever you open it/i),
+      toggle.getAttribute("aria-label"),
     );
     // Readable on its own: "on open" said nothing to anyone who had not just
     // read the code. The Rebuild button beside it establishes the word, so the
@@ -875,7 +954,7 @@ describe("WuiView: rebuilding a page when it is opened", () => {
     serveBuild(sse({ type: "done", exit_code: 0 }));
     renderIn({ ...BUILT });
 
-    const toggle = await screen.findByLabelText(/rebuild when i open this/i);
+    const toggle = await screen.findByLabelText(/rebuild this page whenever you open it/i);
     expect(toggle).toBeChecked();
     fireEvent.click(toggle);
 

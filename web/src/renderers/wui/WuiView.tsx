@@ -24,6 +24,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useFileService } from "../../api/fileService";
 import { qk } from "../../api/queryKeys";
 import { Btn } from "../../components/Btn";
+import { Switch } from "../../components/Switch";
 import { useCurrentUserState } from "../../hooks/useCurrentUser";
 import { useOpenFile } from "../../hooks/openFile";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
@@ -131,6 +132,9 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
    * platform look broken.
    */
   const buildable = useQuery({
+    // Never for a root-level page: `canBuild` is false there whatever the
+    // answer, so the read is a 404 nobody can use.
+    enabled: folder !== "",
     queryKey: qk.wuiBuildable(fs.scopeId, folder),
     queryFn: () =>
       fs
@@ -299,7 +303,7 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
     setLogOpen(true);
     try {
       for await (const event of itemBuild(slug, fs.scopeId)(folder)) {
-        if (event.type === "output") say(cleanBuildOutput(event.text));
+        if (event.type === "output") say(event.text);
         else if (event.exit_code === 0) {
           note("Build finished.");
           // Fold it away: the page below IS the result, and it is what the
@@ -347,7 +351,11 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canBuild, autoBuild, slug, folder]);
 
-  const logLines = (buildLog ?? []).join("").trimEnd().split("\n");
+  // Cleaned HERE, over the joined stream, not chunk by chunk: an escape
+  // sequence is a byte fragment too, and half of one arriving in the previous
+  // chunk left its tail on screen as literal text.
+  const logText = buildLog === null ? "" : cleanBuildOutput(buildLog.join(""));
+  const logLines = logText.trimEnd().split("\n");
   const logSummary = logLines[logLines.length - 1] || "Build output";
 
   const tellTheAgent = () => {
@@ -370,7 +378,9 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
         <Btn
           size="sm"
           onClick={() => {
-            setBuildLog(null);
+            // NOT the build log. Refresh after a failure is the reflex — you
+            // fixed the file, now show me — and clearing it took the compiler
+            // error, the only explanation on screen, along with the page.
             setGeneration((g) => g + 1);
           }}
         >
@@ -381,28 +391,18 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
             <Btn size="sm" disabled={building} onClick={() => void runBuild()}>
               {building ? "Building…" : "Rebuild"}
             </Btn>
-            <label
+            {/* A switch, not a checkbox: flipping it takes effect at once, and
+                a checkbox reads as a choice that has not happened yet. Short on
+                screen, whole sentence on hover AND as the accessible name — the
+                strip sits above someone else's page, so a sentence here is a
+                sentence taken from them. */}
+            <Switch
+              checked={autoBuild}
+              onChange={setAutoBuild}
               title="Rebuild this page whenever you open it"
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 4,
-                fontSize: pxToRem(12),
-                color: "var(--text-paper-d)",
-              }}
             >
-              <input
-                type="checkbox"
-                // Short on screen, whole sentence on hover — and the whole
-                // sentence is the accessible name, so nobody depends on the
-                // hover to know what it does. The strip sits above someone
-                // else's page: a sentence here is a sentence taken from them.
-                aria-label="Rebuild when I open this"
-                checked={autoBuild}
-                onChange={(e) => setAutoBuild(e.target.checked)}
-              />
               Auto-rebuild
-            </label>
+            </Switch>
           </>
         )}
         <Btn size="sm" onClick={() => toFrame({ proto: WUI_PROTOCOL, command: "pick", on: true })}>
@@ -455,6 +455,12 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
               ref={logRef}
               role="log"
               aria-label="Build output"
+              // Off, deliberately. The pane already has one polite live region
+              // — the reports panel, which speaks rarely and about something
+              // the reader must act on. A build emits a chunk every few
+              // milliseconds, and announcing each one drowns the other. The
+              // outcome is announced instead: it lands in the summary line.
+              aria-live="off"
               style={{
                 maxHeight: "30%",
                 overflowY: "auto",
@@ -465,7 +471,7 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
                 color: "var(--text-paper-d)",
               }}
             >
-              {buildLog.length === 0 ? "Starting the build…" : buildLog.join("")}
+              {buildLog.length === 0 ? "Starting the build…" : logText}
             </div>
           )}
         </div>
