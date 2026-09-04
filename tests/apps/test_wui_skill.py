@@ -201,7 +201,7 @@ def test_the_built_example_says_who_rebuilds_and_when(payload: dict[str, bytes])
     readme = payload[f"examples/{BUILT}/README.md"].decode()
 
     assert "rebuild in the same turn as the edit" in readme.lower()
-    assert "rebuild when i open this" in readme.lower()
+    assert "auto-rebuild" in readme.lower()
     assert "--frozen-lockfile" in readme
 
 
@@ -326,7 +326,9 @@ def test_the_skill_names_every_example_it_ships(payload: dict[str, bytes]):
     listed = set(re.findall(r"`examples/([a-z-]+)/`", skill))
 
     assert shipped <= listed, f"the skill never mentions {sorted(shipped - listed)}"
-    assert listed <= shipped, f"the skill points at folders it does not ship: {sorted(listed - shipped)}"
+    assert listed <= shipped, (
+        f"the skill points at folders it does not ship: {sorted(listed - shipped)}"
+    )
     # And no bare count to go stale beside the table.
     assert not re.search(r"the (?:two|three|four|five) complete", skill), (
         "a number in the prose will drift the next time an example is added"

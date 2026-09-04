@@ -10,7 +10,7 @@ A **WUI** is a folder in this item's workspace whose `*.ai.yaml` file says
 step and nothing to register — write the files and it works.
 
 Read `reference.md` for the exact API before you write code. **Start by copying
-one of the three complete, working examples in `examples/`** — they already get
+one of the complete, working examples in `examples/`** — they already get
 right the things that are easy to get wrong, and copying beats generating.
 
 | copy | when | what it shows |
@@ -106,7 +106,7 @@ title: Lot tracker
   a folder.
 - **The page does not reload itself.** After you change a file, tell the user to
   press **Refresh** above the page. On a page with a build there is **Rebuild**
-  next to it, and a **"Rebuild when I open this"** tick-box that is on by
+  next to it, and an **Auto-rebuild** switch that is on by
   default — but Refresh alone never builds anything, so a `src/` edit you did
   not build is still an old page.
 - When they say it is broken, ask them to press **Report a problem** and click

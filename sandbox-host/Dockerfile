@@ -59,7 +59,7 @@ RUN npm install -g pptxgenjs@^3.12
 # WUI skill ships). Debian's nodejs brings npm and not pnpm, and without this
 # every Rebuild ends at `sh: pnpm: not found` — which is what happened the first
 # time one was pressed against a real sandbox. It is pnpm rather than npm
-# because that is what the example's lockfile, the skill and `docs/wui.md` all
+# because that is what the examples, the skill and `docs/wui.md` all
 # say, and because a page's dependencies are hard-linked from one store rather
 # than copied per page.
 RUN npm install -g pnpm@^10

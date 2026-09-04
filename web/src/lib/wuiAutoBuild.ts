@@ -3,9 +3,15 @@
  *
  * A page with a build step has two halves — the `src/` someone edits and the
  * `dist/` a viewer sees — and nothing keeps them together. Rebuilding on open is
- * the only setting under which going stale is IMPOSSIBLE rather than merely
- * unlikely, so it is the default; the build's output is on screen while it runs,
- * so it is a visible cost rather than a mysterious pause.
+ * the setting that closes that gap for everyone who opens the page, so it is the
+ * default; the build's output is on screen while it runs, so it is a visible
+ * cost rather than a mysterious pause.
+ *
+ * It is not a GUARANTEE, and the code does not claim to be one: the manifest
+ * read that decides a page has a build is allowed to fail quietly (a page
+ * without one is the ordinary case), and a build that fails leaves the previous
+ * `dist/` up. Both leave a reader on an older page — with, in the second case,
+ * the failure on screen above it.
  *
  * It is a choice, not a rule, because the cost is real: a build takes tens of
  * seconds and wakes the item's sandbox. Whoever finds that a bad trade for a
