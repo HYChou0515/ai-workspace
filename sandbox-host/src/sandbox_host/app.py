@@ -291,7 +291,7 @@ class _HostController:
             self._last_active[rid] = self.clock()
 
     async def create(self, spec: SandboxSpec, item_id: str | None = None) -> SandboxHandle:
-        handle = await self.sandbox.create(spec)
+        handle = await self.sandbox.create(spec, item_id=item_id)
         self._last_active[handle.id] = self.clock()
         # Recorded whether or not an archive is wired. It began as `persist`'s
         # private lookup, so it was only filled on the archive path — but it is

@@ -457,11 +457,11 @@ async def test_uvs_download_cache_is_named_for_every_exec(isolated) -> None:
     """Named for EVERY exec, not just the sync: a user's own `uv add` has to
     land in the same place or the second copy is pure waste.
 
-    This backend used to narrow the cache to a per-uid dir beside the sandboxes,
-    because a shared PERSISTENT cache is a cross-item code path. There is no
-    persistent cache any more — it lives in the sandbox and dies with it — so
-    there is nothing left to narrow, and the override is gone rather than kept
-    as a no-op that reads like it still protects something.
+    And OWNED for every exec, which is the part this backend adds. The cache
+    belongs to the item, so it outlives any one sandbox — but the uid that has
+    to fill it is allocated per sandbox and freed on kill, so ownership has to
+    be re-established rather than assumed. Exactly the shape `.home` already
+    has, for exactly the same reason.
     """
     h = await isolated.create(SandboxSpec())
 
@@ -469,4 +469,6 @@ async def test_uvs_download_cache_is_named_for_every_exec(isolated) -> None:
 
     cache = Path(env["UV_CACHE_DIR"])
     root = Path(isolated._require(h))
-    assert root in cache.parents, "a reap must take the cache with it"
+    assert root not in cache.parents, "it has to outlive the sandbox to be worth anything"
+    assert cache.stat().st_uid == isolated._uid_for(h.id), "and the filler must own it"
+    assert cache.stat().st_mode & 0o777 == 0o700, "and no other item may read it"

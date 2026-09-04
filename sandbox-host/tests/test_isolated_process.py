@@ -366,26 +366,15 @@ async def test_the_tool_view_is_never_handed_to_the_sandboxs_own_uid(tmp_path):
     assert not any(str(view) in str(p) for p in chowned)
 
 
-async def test_the_download_cache_lives_and_dies_inside_the_sandbox(isolated):
-    """#775 — where uv keeps its downloads was settled the other way round.
+async def test_the_download_cache_is_owned_by_whoever_has_to_fill_it(isolated):
+    """Named for EVERY exec, not just the sync: a user's own `uv add` has to
+    land in the same place or the second copy is pure waste.
 
-    This test used to assert the opposite: a per-uid cache BESIDE the sandboxes,
-    so a cold start would not re-fetch. Two measurements retired that.
-
-    Shared is out: uv verifies a wheel's sha256 when it DOWNLOADS and then
-    trusts its own unpacked `archive-v0/`, so a tampered file in a shared cache
-    was installed verbatim into a different, fresh venv with uv raising nothing.
-    Cross-item code execution is not a saving.
-
-    Per-uid-but-persistent is out too: `uid_range` defaults to 2_000_000_000, so
-    "bounded by uid_range" bounded nothing — it is one full dependency stack per
-    item that ever ran uv, outliving even the item's deletion, ~50 items to a
-    20Gi volume, and a reaper owed forever.
-
-    So the cache is inside the sandbox and the reap takes it. The cost is that a
-    cold start re-fetches, which makes the exec timeout the next thing to look
-    at for heavy profiles on slow links — a known, stated cost rather than an
-    accident.
+    And OWNED for every exec, which is the part this backend adds. The cache
+    belongs to the item, so it outlives any one sandbox — but the uid that has
+    to fill it is allocated per sandbox and freed on kill, so ownership has to
+    be re-established rather than assumed. Exactly the shape `.home` already
+    has, for exactly the same reason.
     """
     h = await isolated.create(SandboxSpec())
 
@@ -393,8 +382,9 @@ async def test_the_download_cache_lives_and_dies_inside_the_sandbox(isolated):
 
     cache = Path(env["UV_CACHE_DIR"])
     root = Path(isolated._require(h))
-    assert root in cache.parents, "a reap must take the cache with it"
-    assert str(root / ".home") in str(cache), "and it belongs to the uid that fills it"
+    assert root not in cache.parents, "it has to outlive the sandbox to be worth anything"
+    assert cache.stat().st_uid == isolated._identities[h.id].uid, "and the filler must own it"
+    assert cache.stat().st_mode & 0o777 == 0o700, "and no other item may read it"
 
 
 async def test_the_project_venv_is_a_dir_the_dropped_uid_can_actually_fill(isolated) -> None:
@@ -436,11 +426,11 @@ async def test_uvs_download_cache_is_named_for_every_exec(isolated) -> None:
     """Named for EVERY exec, not just the sync: a user's own `uv add` has to
     land in the same place or the second copy is pure waste.
 
-    This backend used to narrow the cache to a per-uid dir beside the sandboxes,
-    because a shared PERSISTENT cache is a cross-item code path. There is no
-    persistent cache any more — it lives in the sandbox and dies with it — so
-    there is nothing left to narrow, and the override is gone rather than kept
-    as a no-op that reads like it still protects something.
+    Where it is named has moved twice on this branch, so what this pins is the
+    PROPERTY, not the path: it must outlive the sandbox (or a cold start
+    re-fetches the whole stack every time) while being reachable only by the
+    tenant that filled it (or a recycled key hands one item another's
+    downloads). Beside the sandboxes, keyed by the item, is what satisfies both.
     """
     h = await isolated.create(SandboxSpec())
 
@@ -448,4 +438,5 @@ async def test_uvs_download_cache_is_named_for_every_exec(isolated) -> None:
 
     cache = Path(env["UV_CACHE_DIR"])
     root = Path(isolated._require(h))
-    assert root in cache.parents, "a reap must take the cache with it"
+    assert root not in cache.parents, "it has to outlive the sandbox to be worth anything"
+    assert cache.stat().st_mode & 0o777 == 0o700, "and no other item may read it"

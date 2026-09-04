@@ -65,7 +65,7 @@ class MockSandbox:
             memory_bytes=self._memory_bytes if spec.memory_bytes is None else spec.memory_bytes,
         )
 
-    async def create(self, spec: SandboxSpec) -> SandboxHandle:
+    async def create(self, spec: SandboxSpec, item_id: str | None = None) -> SandboxHandle:
         handle = SandboxHandle(id=str(uuid.uuid4()))
         self._fs[handle.id] = {}
         return handle

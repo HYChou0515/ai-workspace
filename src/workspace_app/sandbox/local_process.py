@@ -309,6 +309,19 @@ _JAILBIN = ".jailbin"
 # as SANDBOX_HOME; this replaces the launcher's old shared-/tmp HOME that leaked
 # a user's `pip install --break-system-packages` across sandboxes.
 _HOME = ".home"
+#: uv's download cache, keyed by the ITEM and living beside the sandbox dirs so
+#: it outlives any one of them — a cold start then re-uses what this item
+#: already downloaded instead of re-fetching its whole stack.
+#:
+#: The key is load-bearing. It must be something NEVER recycled: production's
+#: host pools uids and frees them on kill, so a uid-keyed cache would hand the
+#: next tenant of that uid everything the previous one left there, poisoned or
+#: not (uv verifies a wheel's hash on DOWNLOAD and then trusts its own unpacked
+#: archive — measured). An item id is not recycled, and neither is the uuid a
+#: sandbox created without one gets; both are per-tenant, which is the property
+#: that matters. What stops the collection growing is the sweeper, not the key.
+_UV_CACHE = ".uv-cache"
+
 
 # #775: where `uv sync` builds the workspace's own environment. A sibling of
 # the workspace, like `.home` and `.jailbin` — outside it, so walk/sync never
@@ -592,6 +605,21 @@ class LocalProcessSandbox:
         venv.mkdir(exist_ok=True)
         return venv
 
+    def _cache_key(self, handle: SandboxHandle) -> str:
+        """The never-recycled name this sandbox's downloads belong to.
+
+        Here the handle id IS the item id (#345 keys each item to a fixed dir),
+        and a sandbox created without one gets a fresh uuid — which is not
+        shared with anything either. Both are per-tenant, which is the whole
+        requirement."""
+        return _validate_sandbox_id(handle.id)
+
+    def _own_cache(self, handle: SandboxHandle, cache: Path) -> None:
+        """Hook: the base needs no ownership work — every exec here runs as this
+        process. `IsolatedProcessSandbox` overrides it, because the uid that has
+        to fill the cache changes from sandbox to sandbox while the item, and so
+        the directory, does not."""
+
     def _exec_argv(
         self, handle: SandboxHandle, cmd: list[str]
     ) -> tuple[list[str], Path, dict[str, str]]:
@@ -679,22 +707,15 @@ class LocalProcessSandbox:
             # `export HOME="${SANDBOX_HOME:-…}"` (#393). Survives the `setpriv`
             # wrap (no `--reset-env`) so the dropped uid's launcher reads it.
             env["SANDBOX_HOME"] = str(root / _HOME)
-            # #775: uv's cache lives INSIDE the sandbox and dies with it.
-            #
-            # Never shared: uv verifies a wheel's hash when it downloads and
-            # then trusts its own unpacked cache, so anyone able to write a
-            # shared cache can inject code into everyone else's next install —
-            # measured, and uv raises nothing. That is a cross-item code path,
-            # and per-item isolation (#345) is the thing it would break.
-            #
-            # Never persisted either: a per-uid cache beside the sandboxes is
-            # one full dependency stack per item that ever ran uv, outliving
-            # even the item's deletion, and it owes a reaper forever.
-            #
-            # The cost is real and deliberate: a cold start re-fetches. Named
-            # explicitly rather than left to uv's `$HOME/.cache/uv` default so
-            # that choice is visible in the code that makes it.
-            env["UV_CACHE_DIR"] = str(root / _HOME / ".cache" / "uv")
+            # #775: uv's cache, keyed by the ITEM (see `_UV_CACHE`) and beside
+            # the sandbox dirs rather than inside one, so a later sandbox for
+            # the same item re-uses what it already downloaded. NEVER keyed by
+            # uid: production recycles those, and the next holder would inherit
+            # whatever the previous one left in there.
+            cache = self._root / _UV_CACHE / self._cache_key(handle)
+            cache.mkdir(parents=True, exist_ok=True)
+            self._own_cache(handle, cache)
+            env["UV_CACHE_DIR"] = str(cache)
             # (Re)build + prepend the `python` shim so `python`/`python3*` route
             # to the python-stack carrier (or /usr/bin/python3), never the host's
             # own venv that heads the inherited PATH (#350). The jail path does

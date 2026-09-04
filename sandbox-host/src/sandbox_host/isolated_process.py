@@ -334,6 +334,16 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         self._own_privately(venv, self._identities[handle.id].uid)
         return venv
 
+    def _own_cache(self, handle: SandboxHandle, cache: Path) -> None:
+        """The cache belongs to the ITEM, so it outlives any one sandbox — but
+        the uid that must fill it is per sandbox (derived here, POOLED on the
+        host) and cannot be assumed. Re-established every exec, the same shape
+        `.home` has, for the same reason.
+
+        0700 is what makes the key's guarantee real: a cache only the tenant
+        that filled it can read is the entire argument for keeping one."""
+        self._own_privately(cache, self._identities[handle.id].uid)
+
     def _ensure_home(self, handle: SandboxHandle, root: Path) -> Path:
         """The base makes the dir; here it also has to be OWNED correctly.
 

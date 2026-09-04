@@ -222,7 +222,7 @@ class _RecordingSandbox:
     def __init__(self) -> None:
         self.spec: object = None
 
-    async def create(self, spec):
+    async def create(self, spec, item_id=None):
         from sandbox_host.protocol import SandboxHandle
 
         self.spec = spec

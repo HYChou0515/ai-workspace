@@ -227,30 +227,30 @@ async def test_the_servers_own_virtualenv_never_reaches_a_sandbox(tmp_path: Path
     assert "VIRTUAL_ENV" not in env, "a workspace with no venv must be told there is none"
 
 
-async def test_uvs_cache_lives_and_dies_inside_the_sandbox(tmp_path: Path) -> None:
-    """Never shared, never persisted — and that is a decision, not an oversight.
+async def test_the_cache_is_never_keyed_by_something_that_gets_recycled(
+    tmp_path: Path,
+) -> None:
+    """The one property that makes a persistent cache safe.
 
-    Shared is out because uv verifies a wheel's hash when it DOWNLOADS and then
-    trusts its own unpacked cache: a tampered file in a shared cache was
-    installed verbatim into a different, fresh venv with uv raising nothing at
-    all. That is a cross-item code path, and per-item isolation (#345) is
-    exactly what it would break.
+    uv verifies a wheel's sha256 when it DOWNLOADS and then trusts its own
+    unpacked archive: a tampered file in a cache is installed verbatim into a
+    fresh venv with nothing raised (measured). So a cache may only ever be
+    reachable by the tenant that filled it.
 
-    Persisted-but-per-uid is out too: that is one full dependency stack per item
-    that ever ran uv, outliving even the item's deletion (~50 items fills a 20Gi
-    volume), and it owes a reaper forever.
-
-    So the cache sits inside the sandbox and the reap takes it. The cost — a
-    cold start re-fetches — is paid where it can be seen.
+    That rules out keying by uid, which is what production RECYCLES —
+    `_UidPool`: "Freed ids are reused", and `kill` frees them. The moment a uid
+    is released is both when a sweeper would consider its cache collectable and
+    when the next item is most likely to be handed it. The item id is not
+    recycled; neither is the uuid a sandbox created without one gets.
     """
-    sb, h = await _sandbox(tmp_path, None)
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False)
+    h = await sb.create(SandboxSpec(), sandbox_id="item-a")
 
     _argv, _cwd, env = sb._exec_argv(h, ["true"])
 
     cache = Path(env["UV_CACHE_DIR"])
-    root = Path(sb._require(h))
-    assert root in cache.parents, "a reap must take the cache with it"
-    assert str(root / ".home") in str(cache), "and it belongs to the uid that fills it"
+    assert cache.name == "item-a", "keyed by the tenant, not by anything reassignable"
+    assert cache.is_dir()
 
 
 async def test_the_servers_python_choice_is_not_the_sandboxes(
@@ -324,3 +324,32 @@ async def test_a_caller_can_name_its_own_wall_clock_budget(tmp_path: Path) -> No
 
     control = await sb.exec(h, ["sleep", "0.1"])
     assert control.exit_code == 0, "and without an override the instance default still rules"
+
+
+async def test_the_cache_is_keyed_by_the_item_so_it_outlives_one_sandbox(tmp_path: Path) -> None:
+    """A cold start re-fetching the whole stack every time is the price P20 paid
+    for safety. It does not have to be: the unsafe thing was the KEY, not the
+    persistence.
+
+    `uid` is unusable — production pools and RECYCLES it (`_UidPool`: "Freed ids
+    are reused"), so `.uv-cache/{uid}` means "whoever holds that uid now", and a
+    poisoned cache would be inherited by the next tenant. The item id is never
+    recycled, so a cache keyed by it can only ever be reached by the tenant that
+    filled it.
+
+    Two sandboxes for the same item must therefore land on the same cache, and
+    two different items must not.
+    """
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False)
+    first = await sb.create(SandboxSpec(), sandbox_id="item-a")
+    again = await sb.create(SandboxSpec(), sandbox_id="item-a")
+    other = await sb.create(SandboxSpec(), sandbox_id="item-b")
+
+    a1 = Path(sb._exec_argv(first, ["true"])[2]["UV_CACHE_DIR"])
+    a2 = Path(sb._exec_argv(again, ["true"])[2]["UV_CACHE_DIR"])
+    b = Path(sb._exec_argv(other, ["true"])[2]["UV_CACHE_DIR"])
+
+    assert a1 == a2, "the same item must reuse what it already downloaded"
+    assert a1 != b, "and must never reach another item's"
+    root = Path(sb._require(first))
+    assert root not in a1.parents, "it has to outlive the sandbox to be worth anything"

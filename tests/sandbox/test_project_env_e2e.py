@@ -283,3 +283,38 @@ async def test_the_sync_really_runs_without_the_shim_on_path(tmp_path: Path) -> 
     assert jailbin not in stripped.stdout.decode().strip().split(":"), (
         "the sync must not be able to build the venv on the shim"
     )
+
+
+@_needs_uv
+@pytest.mark.integration
+async def test_the_next_sandbox_for_this_item_reuses_what_this_one_downloaded(
+    tmp_path: Path,
+) -> None:
+    """The entire point of keeping a cache, asserted the only way that cannot
+    lie: the SECOND sync runs `--offline`.
+
+    If the cache did not survive the first sandbox, or the new one were pointed
+    somewhere else, uv has nothing to install from and the command fails. No
+    counting of downloads, no timing — either it resolves from what is already
+    there or it does not.
+    """
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False)
+    first = await sb.create(SandboxSpec(), sandbox_id="item-x")
+    _declare_a_dependency(sb._workspace(first))
+    await ensure_project_env(sb, first)
+    cache = Path(sb._exec_argv(first, ["true"])[2]["UV_CACHE_DIR"])
+    assert any(cache.iterdir()), "the first sync must have filled it"
+
+    await sb.kill(first)
+    assert any(cache.iterdir()), "and the reap must not have taken it"
+
+    second = await sb.create(SandboxSpec(), sandbox_id="item-x")
+    assert Path(sb._exec_argv(second, ["true"])[2]["UV_CACHE_DIR"]) == cache
+    _declare_a_dependency(sb._workspace(second))
+
+    offline = await sb.exec(
+        second, [*_SYNC[:4], "uv", "sync", "--frozen", "--inexact", "--offline"]
+    )
+    assert offline.exit_code == 0, offline.stderr.decode()
+    res = await sb.exec(second, ["python", "-c", "import tinydep; print(tinydep.MARK)"])
+    assert _MARK in res.stdout.decode(), res.stderr.decode()
