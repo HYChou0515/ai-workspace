@@ -465,14 +465,17 @@ export function GanttView({
                   // span look right while every longer bar stopped a day short.
                   const width = barColumns(ps, skip) * ppd;
                   const provisional = isProvisional(row.e);
-                  // A provisional bar is the schedule's GUESS for work with no
-                  // estimate, and its rule draws it hollow and dashed so it is
-                  // never mistaken for a real plan. That rule is in the
-                  // stylesheet and these are INLINE, which beats it — so the
-                  // colour has to decline to paint rather than the rule try to
-                  // win. Every paint below is withheld together: leaving any one
-                  // of them on hands the guess back a solid-bar cue.
-                  const c = provisional ? undefined : barColor(row.e);
+                  // A provisional row keeps its colour. The hollow rule this
+                  // used to defer to was written when a bar had no colour of its
+                  // own, and deferring to it cost far more than it was worth:
+                  // `exp_days` is optional and the Timeline ships a `schedule:`
+                  // block, so an ordinary unsized issue is provisional — the
+                  // COMMON case, which meant most of a real project painted as
+                  // identical dashed outlines and the colouring was gone where
+                  // it was most needed. The dashed edge already says "not sized
+                  // yet"; it says it just as clearly over a fill, and it is the
+                  // only cue that has to survive.
+                  const c = barColor(row.e);
                   return (
                     <div key={row.e.number} className="ev-gantt__bar-row" style={{ height: ROW_H }}>
                       <div
