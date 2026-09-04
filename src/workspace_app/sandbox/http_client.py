@@ -278,7 +278,7 @@ class HttpSandbox:
             )
             raise SandboxNotFound(handle.id) from exc
         if resp.status_code == 404:
-            self._raise_mapped(resp, handle)
+            self._raise_mapped(resp, handle, method, suffix)
         resp.raise_for_status()
         logger.debug("sandbox-http: %s %s -> %d", method, suffix, resp.status_code)
         return resp
@@ -316,10 +316,26 @@ class HttpSandbox:
         raise AssertionError("unreachable")  # pragma: no cover — AsyncRetrying returns or raises
 
     @staticmethod
-    def _raise_mapped(resp: httpx.Response, handle: SandboxHandle) -> None:
+    def _raise_mapped(
+        resp: httpx.Response, handle: SandboxHandle, method: str = "", suffix: str = ""
+    ) -> None:
         body = resp.json()
         exc_type = _ERRORS.get(body.get("error", ""), SandboxNotFound)
         message = body.get("detail") or handle.id
+        if "error" not in body:
+            # The host answers a real miss with its own `{"error": ...}`. A 404
+            # WITHOUT that key is the framework's route-not-found, i.e. this host
+            # does not implement this endpoint — an app pod ahead of a host pod
+            # during a rollout. Same exception (nothing degrades, by decision:
+            # `sandbox-host` ships on this pipeline), but the message has to say
+            # which it was: an operator reading "sandbox not found" about a
+            # sandbox that is plainly alive learns nothing.
+            message = (
+                f"{method} {suffix} is not implemented by this sandbox-host "
+                f"(404 with no error body) — the host is likely older than this app"
+            )
+            logger.warning("sandbox-http: %s", message)
+            raise exc_type(message)
         logger.warning(
             "sandbox-http: 404 for sandbox %s -> %s (rebuild)", handle.id, exc_type.__name__
         )

@@ -336,6 +336,25 @@ async def test_upload_download_roundtrip(http_sandbox: HttpSandbox):
     assert await http_sandbox.download(h, "/data/x.bin") == b"hello \x00 world"
 
 
+async def test_an_endpoint_the_host_does_not_have_says_so(http_sandbox: HttpSandbox):
+    """A 404 from the host means one of two very different things, and they used
+    to arrive as the same sentence.
+
+    The host answers a real miss with its own `{"error": ...}`. A 404 WITHOUT
+    that key is the framework's route-not-found — an app pod ahead of a host pod
+    during a rollout. Nothing degrades (that is a deliberate decision: the host
+    ships on this pipeline), but an operator reading "sandbox not found" about a
+    sandbox that is plainly alive learns nothing at all."""
+    h = await http_sandbox.create(SandboxSpec())
+
+    with pytest.raises(SandboxNotFound) as caught:
+        await http_sandbox._io_request(h, "GET", "/no-such-endpoint")
+
+    said = str(caught.value)
+    assert "/no-such-endpoint" in said
+    assert "not implemented" in said and "older" in said
+
+
 async def test_download_many_returns_bytes_in_order_and_none_for_what_is_absent(
     http_sandbox: HttpSandbox,
 ):
