@@ -83,6 +83,7 @@ def build_lifespan(
     run_consumers: bool,
     idle_timeout: timedelta,
     idle_check_interval: timedelta,
+    uv_cache_max_bytes: int | None,
     mirror_interval: timedelta,
     code_sync_check_interval: timedelta | None,
     code_daily_sync: str | None = None,
@@ -117,6 +118,10 @@ def build_lifespan(
             while True:
                 await asyncio.sleep(idle_check_interval.total_seconds())
                 await registry.kill_idle(idle_timeout)
+                # #775: and bound the per-item uv download caches on the same
+                # tick, for the same reason — a sandbox ending is when one
+                # stops being written to. Unset ceiling ⇒ no eviction.
+                await registry.sweep_uv_cache(uv_cache_max_bytes)
         except asyncio.CancelledError:
             return
 

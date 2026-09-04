@@ -369,6 +369,24 @@ class _HostController:
             return []
         return await asyncio.to_thread(cache.sweep, in_use=in_use(), max_bytes=max_bytes)
 
+    async def sweep_uv_cache(self, *, max_bytes: int | None = None) -> list[str]:
+        """#775: reclaim the download caches of items nothing is running here.
+
+        Rides the idle reaper for the same reason `sweep_tool_cache` does — a
+        sandbox ending is when a cache stops being written to. The in-use set
+        comes from the live sandboxes themselves, so a cache a sync is filling
+        right now can never be evicted, however full the disk.
+
+        The key is the ITEM, never the uid: uids here are pooled and freed on
+        kill, so a uid-keyed cache would be handed to the next tenant of that
+        uid — and "no live sandbox for it" is precisely the moment that happens,
+        which is the moment a sweeper would also call it collectable."""
+        sweep = getattr(self.sandbox, "sweep_uv_cache", None)
+        in_use = getattr(self.sandbox, "cache_keys_in_use", None)
+        if sweep is None or in_use is None:
+            return []
+        return await asyncio.to_thread(sweep, in_use=in_use(), max_bytes=max_bytes)
+
     async def reap_idle(self) -> list[str]:
         """Kill sandboxes with no activity for `idle_ttl` — the backstop for an
         app pod that crashed without calling kill (`idle_ttl <= 0` disables it).

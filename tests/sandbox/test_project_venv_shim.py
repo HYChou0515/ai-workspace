@@ -22,6 +22,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -353,3 +354,40 @@ async def test_the_cache_is_keyed_by_the_item_so_it_outlives_one_sandbox(tmp_pat
     assert a1 != b, "and must never reach another item's"
     root = Path(sb._require(first))
     assert root not in a1.parents, "it has to outlive the sandbox to be worth anything"
+
+
+async def test_the_cache_is_swept_oldest_first_and_never_out_from_under_a_live_item(
+    tmp_path: Path,
+) -> None:
+    """A cache that outlives its sandbox has to be bounded by something, and
+    the policy is the one the tool cache already settled (#674):
+
+    * no ceiling means NO eviction — "unset" means "no limit" here as it does
+      everywhere else in this repo, and the tool cache learned the hard way
+      that the opposite default empties the cache minutes after each reap;
+    * `in_use` is ABSOLUTE. An over-full cache is a capacity problem; deleting
+      one out from under a running sync is a correctness one;
+    * oldest first, and `_exec_argv` stamps the directory on every exec so
+      "oldest" means least recently USED. Read hits never move mtime on their
+      own, so without the stamp the sweep would evict exactly the caches that
+      are working.
+    """
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False)
+    live = await sb.create(SandboxSpec(), sandbox_id="live-item")
+    sb._exec_argv(live, ["true"])
+
+    root = tmp_path / "sb" / ".uv-cache"
+    for name, age in (("old", 100), ("new", 10)):
+        d = root / name
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "blob").write_bytes(b"x" * 4096)
+        os.utime(d, (time.time() - age, time.time() - age))
+
+    assert sb.sweep_uv_cache(in_use=sb.cache_keys_in_use(), max_bytes=None) == [], (
+        "no ceiling must mean no eviction"
+    )
+
+    removed = sb.sweep_uv_cache(in_use=sb.cache_keys_in_use(), max_bytes=4096)
+    assert removed == ["old"], removed
+    assert (root / "new").is_dir()
+    assert (root / "live-item").is_dir(), "a live item's cache is never collectable"

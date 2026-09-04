@@ -308,50 +308,26 @@ per-call timeout 參數 —— 它吃 backend 實例層級的 `exec_timeout`,**�
   退回 carrier。⚠️ 護欄本身第一版也錯了兩次 —— 先是只看 `realpath`(整條鏈解到最後,
   中間經過 shim 那跳看不見),再是相對連結一律以起點目錄為基準(於是在 venv 自己的
   `bin/` 裡造出假迴圈,把好的 venv 也擋掉)。兩次都是 e2e 測試抓到的。
-- ✅ **uv cache 定案:不共用、也不留 —— 住在 sandbox 自己的 `.home` 裡,關掉就跟著刪。**
-  兩條被否決的路各自有實測支撐:
-  - **共用一份**:uv 只在**下載時**驗 wheel 的 sha256(lock 裡確實有),之後就**信任自己
-    那份已解壓的 `archive-v0/`**。實測把共享 cache 裡一個檔案動手腳,uv **原封不動裝進
-    另一個全新 venv 且完全沒察覺**。那是跨 item 的程式碼注入路徑,而 per-item 隔離(#345)
-    正是它會打破的東西。`UV_LINK_MODE=copy` 只解決 hardlink 別名(inode 由相同變獨立,
-    也量過),解決不了這個。
-  - **per-uid 但留著,配一個 sweeper** —— 這條看起來最有道理,而且驅動者現成
-    (`sandbox-host/__main__.py` 的 `_reaper_loop` 每 300 秒一跳,同一跳已經在用
-    「留到上限 / 最舊優先淘汰 / 活著的絕不動」掃 tool cache)。**但鍵是錯的。**
-    正式環境的 host **不是**用 item id 導出 uid —— 它用 `_UidPool`
-    (「Freed ids are reused」),`kill` 時 `self._pool.free(...)` 把 uid **回收給下一個
-    item**。所以 `.uv-cache/{uid}` 不是「item X 的 cache」,是「現在誰拿著 uid U」:
-    A 汙染自己的 cache → A 被 kill → uid 回收 → B 拿到同一個 uid → **從 A 的 cache 安裝**。
-    ⚠️ 而「先確認那個 sandbox 還在不在這台 host」擋不住它,**方向還相反**:uid 被回收的
-    那一刻正是「沒有活著的 sandbox」,也正是下一個 item 最容易撿走的時刻。
-    ⚠️ **「所以正式環境根本沒有穩定的身分可以當鍵」—— 這句我一開始寫太滿,更正。**
-    host 的 handle 確實是 per-pod uuid(#366),但 `create` **收得到 `item_id`**
-    (`controller.create(spec, body.item_id)` → `self._item_of[handle.id]`),
-    `nfs_archive` 就是拿它當鍵的。精確的說法是:**uid 是錯的鍵;`item_id` 拿得到,
-    但它是選用的**(`item_id: str | None = None`,只在接了 NFS archive 時才會送)。
-    所以 per-**item** 的持久快取是成立的,而且查證後比我一開始評估的更成立:
-    `http_client.create` **無條件**把 item id 當 `item_id` 送出去(註解:沒接 archive 的
-    host 就忽略它),所以正式環境一定拿得到這個鍵;host 那邊的 `str | None` 是向後相容,
-    不是正常路徑。
-    ⚠️ **我對它提過的一個疑慮也要收回**:我說「鍵是 `None` 時會依設定旋鈕靜默切換安全
-    姿態」——不對,退路是「退回 per-sandbox 快取」,那是**更嚴格**的一邊,退化的是速度
-    不是安全。
-    真正剩下的是:同一個 item 換 sandbox 時 uid 會變,擁有權要每次重建(和 `.home`
-    同一個形狀);它仍然需要回收器(驅動者現成 —— `_reaper_loop`,in-use 用
-    `self._item_of` 裡有活 sandbox 的 item,而 item id 不像 uid 會被回收);而「最舊」
-    不能用 mtime(只讀命中不會更新它,會剛好刪掉最有價值的),要由使用端蓋章。
-    `exec_timeout` 那半**已經做了**(見上),所以現在的狀態是:慢網路上的冷啟動會
-    **等**,不會失敗。要不要再讓它**變快**,才是這個快取要回答的問題。
-    ⚠️ 兩個 backend 在這點不對稱:app 端的 `IsolatedProcessSandbox` 由 item id 導出 uid
-    (固定),host 端是 pool。**任何以 uid 為鍵的持久狀態,只在 app 端安全,正式環境不安全。**
-  - **per-uid 但留著**:`uid_range` 預設 2,000,000,000,所以「份數有上界」等於沒說 ——
-    實際是**每個用過 uv 的 item 一份完整堆疊,連 item 被刪掉都還在**。以出貨的 `pydeps`
-    冷同步 382MB 算,**約 50 個 item 吃滿 20Gi**,而且永遠欠一個回收器。
-
-  代價是**每次冷啟動都要重抓**,而這本來會撞上那條 60 秒硬上限 —— ✅ **那條已經修掉**:
-  sync 現在帶自己的 900 秒預算(見上),所以慢網路上的重 profile 是**等**而不是被砍。
-  四份 backend copy 現在寫法一致,per-uid 的覆寫整個
-  移除 —— 沒有持久 cache 之後,那個覆寫沒有東西可以保護,留著只會讀起來像還在保護什麼。
+- ✅ **uv cache 定案(第三版,也是最後一版):不共用、但**留**—— 每個 **item** 一份,
+  放在 sandbox 目錄旁邊,活得比 sandbox 久,由既有的 idle tick 依上限淘汰。**
+  三個版本各自被什麼推翻,記在這裡免得有人再繞一圈:
+  1. **per-uid 且留著** —— 錯在**鍵**。正式環境的 host 用 `_UidPool`(「Freed ids are
+     reused」),`kill` 就把 uid 還回去,所以 `.uv-cache/{uid}` 是「現在誰拿著這個 uid」;
+     A 汙染自己的 cache → 被 kill → B 拿到同一個 uid → **從 A 的 cache 安裝**。
+     而且「先確認那個 sandbox 還在不在這台 host」擋不住,**極性還相反**:uid 被釋放的
+     那一刻正是 sweeper 覺得可以刪、也是下一個 item 最容易撿走的時刻。
+  2. **跟著 sandbox 一起死** —— 安全但貴:每次冷啟動重抓整包。
+  3. **per-item 且留著**(現行)—— item id **不會被回收**,所以只有填它的那個租戶碰得到;
+     `.jailbin` 那條路只有 jail 沒有(chroot root 就是 sandbox 目錄),jail 維持 in-sandbox。
+     ⚠️ 共用一份**仍然不行**,而且是實測不是顧慮:uv 只在**下載時**驗 sha256,之後就信任
+     自己那份已解壓的 `archive-v0/` —— 動過手腳的檔案被**原封不動裝進另一個全新 venv**,
+     uv 一聲不吭。`UV_LINK_MODE=copy` 只解決 hardlink 別名,解決不了汙染。
+  **回收器的驅動者不用新造**:host 是 `_reaper_loop`(每 300 秒,同一跳已經在掃 tool
+  cache),app 是 `idle_killer`。政策照抄 tool cache(#674):**沒設上限就不淘汰**、
+  **in_use 絕對優先**(活著的 sandbox 可能還在寫的那份永遠不動)、**最舊優先**——而
+  `_exec_argv` 每次 exec 會蓋一次章,否則只讀命中不會更新 mtime,會剛好把最有價值的刪掉。
+  旋鈕:`sandbox.uv_cache_max_bytes` / `SANDBOX_HOST_UV_CACHE_MAX_BYTES`,已記進
+  `docs/migrations.md` §5.5(含「不設會怎樣」)。
 - **uv 的鎖在某些檔案系統上會退化**並印出 `Shared locking is not supported by the
   current platform or filesystem`。共享磁碟區若是 NFS,`uv cache clean` 的安全性沒有
   保證 —— 不影響一般安裝,但清 cache 那個動作要小心。

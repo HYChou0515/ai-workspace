@@ -19,7 +19,12 @@ from .config import load_settings
 from .service import build_host_app, resolve_cgroup_root
 
 
-async def _reaper_loop(controller, *, tool_cache_max_bytes: int | None = None) -> None:
+async def _reaper_loop(
+    controller,
+    *,
+    tool_cache_max_bytes: int | None = None,
+    uv_cache_max_bytes: int | None = None,
+) -> None:
     interval = max(60.0, min(controller.idle_ttl, 300.0))
     while True:
         await asyncio.sleep(interval)
@@ -29,12 +34,21 @@ async def _reaper_loop(controller, *, tool_cache_max_bytes: int | None = None) -
         # while there is room — that is what makes a rollback a remount
         # instead of a download — and evicted oldest-first over the ceiling.
         await controller.sweep_tool_cache(max_bytes=tool_cache_max_bytes)
+        # #775: and the per-item uv download caches, for the same reason on the
+        # same tick — a sandbox ending is when one stops being written to.
+        await controller.sweep_uv_cache(max_bytes=uv_cache_max_bytes)
         if reaped:
             print(f"reaped idle sandboxes: {reaped}", flush=True)
 
 
 async def _serve(
-    app, controller, bind_host: str, bind_port: int, *, tool_cache_max_bytes: int | None = None
+    app,
+    controller,
+    bind_host: str,
+    bind_port: int,
+    *,
+    tool_cache_max_bytes: int | None = None,
+    uv_cache_max_bytes: int | None = None,
 ) -> None:
     loop = asyncio.get_running_loop()
     # SIGTERM (scale-down/rollout) → drain so no new sandboxes land while the
@@ -42,7 +56,13 @@ async def _serve(
     with contextlib.suppress(NotImplementedError):
         loop.add_signal_handler(signal.SIGTERM, controller.start_draining)
     reaper = (
-        asyncio.create_task(_reaper_loop(controller, tool_cache_max_bytes=tool_cache_max_bytes))
+        asyncio.create_task(
+            _reaper_loop(
+                controller,
+                tool_cache_max_bytes=tool_cache_max_bytes,
+                uv_cache_max_bytes=uv_cache_max_bytes,
+            )
+        )
         if controller.idle_ttl > 0
         else None
     )
@@ -87,6 +107,7 @@ def main() -> None:
             bind_host,
             int(bind_port),
             tool_cache_max_bytes=settings.tool_cache_max_bytes,
+            uv_cache_max_bytes=settings.uv_cache_max_bytes,
         )
     )
 

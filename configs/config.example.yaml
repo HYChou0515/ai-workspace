@@ -145,6 +145,16 @@
 #                              # for this long (assumed hung); 0 = disabled.
 #                              # Long jobs: set exec_timeout: 0 + a log_timeout.
 #   isolate: null              # null = auto-detect userns
+#   uv_cache_max_bytes: null   # #775 ceiling for the per-ITEM uv download
+#                              # caches, TOGETHER. null = no ceiling and
+#                              # nothing is evicted (what unset means for
+#                              # every other limit here). The caches outlive
+#                              # their sandboxes on purpose — a cold start
+#                              # re-uses what that item already downloaded —
+#                              # so nothing else reclaims them. Swept on the
+#                              # idle tick, least-recently-used first, and a
+#                              # cache a live sandbox may still write to is
+#                              # never evicted however full the disk.
 #   # #345 per-item OS-user + cgroup isolation (ported from the HTTP sandbox host).
 #   # Off by default — needs CAP_SETUID/SETGID + a writable cgroup v2 tree, which
 #   # most clusters forbid; the shared-dir fix above cures the data loss without

@@ -310,6 +310,8 @@ def create_app(
     # __main__ passes factories.get_event_bus(settings) (memory | rabbitmq fanout).
     event_bus: IEventBus | None = None,
     idle_timeout: timedelta = timedelta(hours=8),
+    # #775: ceiling for the per-item uv download caches; None ⇒ no eviction.
+    uv_cache_max_bytes: int | None = None,
     idle_check_interval: timedelta = timedelta(seconds=60),
     mirror_interval: timedelta = timedelta(seconds=5),
     # #345: soft cap (bytes) on ONE item's shared scratch dir; the idle reaper's
@@ -826,6 +828,7 @@ def create_app(
         run_consumers=run_consumers,
         idle_timeout=idle_timeout,
         idle_check_interval=idle_check_interval,
+        uv_cache_max_bytes=uv_cache_max_bytes,
         mirror_interval=mirror_interval,
         code_sync_check_interval=code_sync_check_interval,
         code_daily_sync=code_daily_sync,

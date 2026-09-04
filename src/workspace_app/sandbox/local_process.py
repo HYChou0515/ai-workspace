@@ -269,6 +269,19 @@ def _usable_project_python(project: Path) -> bool:
     return False  # a chain this long is itself a loop
 
 
+def _dir_size(path: Path) -> int:
+    """Bytes under `path`, symlinks never followed (a cache is uv's own tree,
+    but a size walk that follows links can be aimed anywhere)."""
+    total = 0
+    for dirpath, _dirnames, filenames in os.walk(path, followlinks=False):
+        for name in filenames:
+            f = Path(dirpath) / name
+            if not f.is_symlink():
+                with contextlib.suppress(OSError):
+                    total += f.stat().st_size
+    return total
+
+
 def _validate_sandbox_id(sandbox_id: str) -> str:
     """#345: the id becomes a single path component under the (shared) sandbox
     root, so reject anything that could traverse out of / between sandboxes —
@@ -620,6 +633,58 @@ class LocalProcessSandbox:
         to fill the cache changes from sandbox to sandbox while the item, and so
         the directory, does not."""
 
+    def cache_keys_in_use(self) -> set[str]:
+        """The cache names a live sandbox may still write to.
+
+        Read from the live sandboxes themselves rather than a counter, for the
+        reason `tools_in_use` gives: a counter drifts the moment one dies in a
+        way nobody recorded, and drifting the wrong way here means deleting a
+        cache out from under a running sync."""
+        return {self._cache_key(SandboxHandle(id=hid)) for hid in self._dirs}
+
+    def sweep_uv_cache(self, *, in_use: set[str], max_bytes: int | None = None) -> list[str]:
+        """Bring the uv cache under `max_bytes`, evicting least-recently-used
+        item caches first. Returns the names removed.
+
+        Policy copied from the tool cache (#674), including the parts it learned
+        the hard way:
+
+        * **No ceiling means no eviction.** "Unset" means "no limit" here as it
+          does everywhere else in this repo. The tool cache once meant the
+          opposite BY DEFAULT and so emptied itself minutes after every reap,
+          which is the whole value of a cache gone.
+        * **`in_use` is absolute.** A cache a live sandbox may still write to is
+          never evicted, however full: over-full is a capacity problem, and
+          deleting one mid-sync is a correctness one. If everything left is in
+          use, that is a host needing more disk, and it says so.
+        * **Oldest first**, where `_exec_argv` stamps a cache on every exec so
+          "oldest" means least recently USED — read hits do not move mtime on
+          their own."""
+        cache_root = self._root / _UV_CACHE
+        if not cache_root.is_dir() or max_bytes is None:
+            return []
+        caches = sorted(
+            (p for p in cache_root.iterdir() if p.is_dir()),
+            key=lambda p: p.stat().st_mtime,
+        )
+        total = sum(_dir_size(p) for p in caches)
+        removed: list[str] = []
+        for path in caches:
+            if total <= max_bytes:
+                break
+            if path.name in in_use:
+                continue
+            total -= _dir_size(path)
+            shutil.rmtree(path, ignore_errors=True)
+            removed.append(path.name)
+        if total > max_bytes:
+            logger.warning(
+                "uv cache is %d bytes over its ceiling and every cache left belongs to a "
+                "live sandbox — this host needs more disk, not a smaller cache",
+                total - max_bytes,
+            )
+        return removed
+
     def _exec_argv(
         self, handle: SandboxHandle, cmd: list[str]
     ) -> tuple[list[str], Path, dict[str, str]]:
@@ -714,6 +779,10 @@ class LocalProcessSandbox:
             # whatever the previous one left in there.
             cache = self._root / _UV_CACHE / self._cache_key(handle)
             cache.mkdir(parents=True, exist_ok=True)
+            # Stamp it: the sweep evicts oldest-first, and a cache getting read
+            # HITS never moves its own mtime — without this the sweep would
+            # collect exactly the caches that are earning their keep.
+            os.utime(cache, None)
             self._own_cache(handle, cache)
             env["UV_CACHE_DIR"] = str(cache)
             # (Re)build + prepend the `python` shim so `python`/`python3*` route

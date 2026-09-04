@@ -557,6 +557,21 @@ class InvestigationRegistry:
         logger.debug("registry: mirror_warm swept, mirrored %d session(s)", len(mirrored))
         return mirrored
 
+    async def sweep_uv_cache(self, max_bytes: int | None) -> list[str]:
+        """#775: bound the per-item uv download caches.
+
+        Rides the idle tick because that is when a cache stops being written
+        to, and delegates to the backend, which owns the directory. The in-use
+        set comes from the live sandboxes themselves, so a cache a sync is
+        filling right now is never evicted however full the disk. Backends
+        without a persistent cache (mock, docker, http — where the HOST sweeps
+        its own) simply have no method and this is a no-op."""
+        sweep = getattr(self.sandbox, "sweep_uv_cache", None)
+        in_use = getattr(self.sandbox, "cache_keys_in_use", None)
+        if sweep is None or in_use is None:
+            return []
+        return await asyncio.to_thread(sweep, in_use=in_use(), max_bytes=max_bytes)
+
     async def kill_idle(self, threshold: timedelta) -> list[str]:
         """Reap sandboxes idle past ``threshold``. #345: with a shared per-item
         dir, tearing it down (``rmtree`` via ``sandbox.kill``) on pod-local

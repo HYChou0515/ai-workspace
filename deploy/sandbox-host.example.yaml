@@ -71,6 +71,14 @@ spec:
             # persists it back via rsync (host-local, so no app↔host network in
             # the bulk path). Unset ⇒ no archive (transitional / local-dev).
             - { name: SANDBOX_HOST_NFS_ROOT, value: "/mnt/workspaces" }
+            # #775: ceiling for the per-ITEM uv download caches, together.
+            # Unset = no ceiling and nothing is evicted. They outlive their
+            # sandboxes on purpose (a cold start re-uses what that item already
+            # fetched) and live on the pod's OWN disk, which has no declared
+            # ephemeral-storage limit — so leaving this unset trades a slow cold
+            # start for a pod the kubelet may evict. Swept on the idle tick,
+            # least-recently-used first, never one a live sandbox may write to.
+            # - { name: SANDBOX_HOST_UV_CACHE_MAX_BYTES, value: "8589934592" }
           volumeMounts:
             # #492 the durable archive lives on a shared RWX (NFS) volume. It is
             # the ARCHIVE, written by this root process via rsync WITHOUT

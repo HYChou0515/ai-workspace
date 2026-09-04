@@ -274,3 +274,51 @@ async def test_default_idle_timeout_matches_rca_pivot():
     sig = inspect.signature(create_app)
     default = sig.parameters["idle_timeout"].default
     assert default == timedelta(hours=8)
+
+
+class _SweepingSandbox(MockSandbox):
+    """A backend that owns a persistent uv cache, like the local one does."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.swept: list[tuple[set[str], int | None]] = []
+
+    def cache_keys_in_use(self) -> set[str]:
+        return {"live-item"}
+
+    def sweep_uv_cache(self, *, in_use: set[str], max_bytes: int | None = None) -> list[str]:
+        self.swept.append((set(in_use), max_bytes))
+        return []
+
+
+async def test_the_idle_tick_bounds_the_uv_caches_with_the_configured_ceiling():
+    """#775: the per-item uv caches outlive their sandboxes on purpose, so
+    something has to bound them — and a ceiling nothing ever reads is worse than
+    none, because it reads like a limit.
+
+    Asserted through the real entry point: the value goes in at `create_app`
+    where an operator's config lands, and the assertion is that the BACKEND was
+    asked, with that number and with the live items protected.
+    """
+    spec = make_spec(default_user="u")
+    sandbox = _SweepingSandbox()
+    app = create_app(
+        spec=spec,
+        sandbox=sandbox,
+        filestore=SpecstarFileStore(spec),
+        runner=_ExecRunner(),
+        idle_timeout=timedelta(seconds=5),
+        idle_check_interval=timedelta(seconds=0.05),
+        mirror_interval=timedelta(seconds=60),
+        uv_cache_max_bytes=4096,
+    )
+    async with _running_app(app):
+        for _ in range(40):
+            await asyncio.sleep(0.05)
+            if sandbox.swept:
+                break
+
+    assert sandbox.swept, "a ceiling nobody reads is worse than no ceiling"
+    in_use, ceiling = sandbox.swept[-1]
+    assert ceiling == 4096, "the operator's number, not a default invented on the way"
+    assert in_use == {"live-item"}, "and a live item's cache is never collectable"

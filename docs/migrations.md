@@ -156,6 +156,7 @@ uv run python scripts/run_migrate.py --dry-run \
 | --- | --- | --- | --- |
 | `failover.rate_limit_budget_s` | #759（2026-09-03） | ⚠️ **行為有變**：agent 鏈碰到 429 從「快速燒完重試然後 giving up」變成「在原端點等它聲明的窗口」，等待秒數每次 agent run 共用一池，預設上限 2 小時；畫面會出現「請求過於頻繁，N 秒後自動重試」。設 `0` 回到一律切換的舊行為 | configuration.md §11 |
 | `agents.subagent_models` | #770（2026-09-03） | **完全不變**：`run_agent` 不長 `model` 參數，sub-agent 照舊跟 parent turn 同一顆模型（review 以逐位元比對驗證） | configuration.md §7 |
+| `sandbox.uv_cache_max_bytes` / `SANDBOX_HOST_UV_CACHE_MAX_BYTES` | #775（2026-09-04） | ⚠️ **行為有變,但方向是省事的**:profile 帶 `pyproject.toml` 時,uv 的下載快取現在**活得比 sandbox 久**(每個 item 一份,放在 sandbox 目錄旁邊),所以同一個 item 的下一次冷啟動不必重抓。**不設就沒有上限、不會淘汰**——和這裡每個其他限制的「unset = 無限」一致。因此不設的風險是**磁碟只增不減**:host 那份在 pod 的 ephemeral 磁碟(沒有宣告 ephemeral-storage 上限,塞爆會被 kubelet 驅逐),app 那份在共用 scratch 磁碟區(連 rollout 都不會清)。設一個數字,idle tick 就會依「最近最少使用」淘汰,而**活著的 sandbox 正在用的那份永遠不動** | configuration.md §sandbox |
 
 ---
 
