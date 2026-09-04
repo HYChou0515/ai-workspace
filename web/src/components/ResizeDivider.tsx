@@ -50,9 +50,7 @@ export function ResizeDivider({
   onResizeStart,
   onResizeEnd,
   ariaLabel,
-  value,
-  min,
-  max,
+  position,
   step = KEY_STEP,
 }: {
   orientation: "vertical" | "horizontal"; // vertical = resizes width, horizontal = resizes height
@@ -63,13 +61,17 @@ export function ResizeDivider({
   onResizeEnd?: () => void;
   ariaLabel?: string;
   /**
-   * Current size of the pane this divider sizes, for `aria-valuenow`. Passing
-   * `value` + `min` + `max` is what makes the divider a keyboard-operable
-   * splitter; without all three it stays a pointer-only affordance.
+   * Where the pane this divider sizes currently sits, and the range it may move
+   * through. Supplying it is what makes the divider a keyboard-operable
+   * splitter; without it the divider stays a pointer-only affordance.
+   *
+   * The three travel together deliberately. As three separate optional props a
+   * caller could pass two of them — and get a divider that silently publishes
+   * no position AND silently stops being keyboard operable, with nothing to
+   * fail. `max` is the one that invites it: the agent panel's is computed from
+   * the viewport, the split divider's is a ratio. Grouped, that is unwriteable.
    */
-  value?: number;
-  min?: number;
-  max?: number;
+  position?: { value: number; min: number; max: number };
   /** Pixels moved per arrow-key press. */
   step?: number;
 }) {
@@ -82,8 +84,7 @@ export function ResizeDivider({
 
   // A separator may only be focusable if it can say where it is (ARIA requires
   // aria-valuenow on a focusable separator, and min/max are what give the
-  // number meaning), so the parent wiring all three is the switch.
-  const publishesPosition = value != null && min != null && max != null;
+  // number meaning), so the parent supplying `position` is the switch.
   const lit = active || hover || focused;
   const lineColor = active || focused ? "var(--accent)" : hover ? "var(--paper-3)" : "transparent";
   const lineThickness = active ? 2 : 1;
@@ -107,12 +108,12 @@ export function ResizeDivider({
       role="separator"
       aria-label={ariaLabel}
       aria-orientation={orientation}
-      {...(publishesPosition
+      {...(position
         ? {
             tabIndex: 0,
-            "aria-valuenow": Math.round(value),
-            "aria-valuemin": Math.round(min),
-            "aria-valuemax": Math.round(max),
+            "aria-valuenow": Math.round(position.value),
+            "aria-valuemin": Math.round(position.min),
+            "aria-valuemax": Math.round(position.max),
           }
         : {})}
       onPointerDown={(e) => {
@@ -133,7 +134,7 @@ export function ResizeDivider({
         onResizeEnd?.();
       }}
       onKeyDown={(e) => {
-        if (!publishesPosition) return; // not a tab stop, so not arrow-driven either
+        if (!position) return; // not a tab stop, so not arrow-driven either
         const back = vertical ? "ArrowLeft" : "ArrowUp";
         const fwd = vertical ? "ArrowRight" : "ArrowDown";
         if (e.key !== back && e.key !== fwd) return;

@@ -80,6 +80,17 @@ describe("<ResizeDivider />", () => {
     expect(Number.parseInt(getV("separator").style.width, 10)).toBeGreaterThanOrEqual(24);
   });
 
+  it("cannot be given HALF a position (the compiler is the assertion)", () => {
+    // A splitter needs all three of value/min/max or none of them: with two of
+    // the three it would silently publish nothing and silently stop being
+    // keyboard operable, and no test would go red. Three optional props let a
+    // caller write that; one grouped prop cannot. `max` is the one a caller
+    // would plausibly leave for later — the agent panel's is computed, the
+    // split divider's is a ratio — so this is the shape to make unwriteable.
+    // @ts-expect-error — `position` is all-or-nothing; a partial one must not compile.
+    render(<ResizeDivider orientation="horizontal" onResize={vi.fn()} position={{ value: 10, min: 0 }} />);
+  });
+
   it("stays out of the tab order when it cannot publish its position", () => {
     // The window splitter pattern REQUIRES aria-valuenow/valuemin/valuemax on a
     // focusable separator, so a divider whose parent hasn't wired them would be
@@ -106,9 +117,7 @@ describe("<ResizeDivider />", () => {
         orientation="horizontal"
         onResize={onResize}
         onResizeStart={onResizeStart}
-        value={120}
-        min={40}
-        max={400}
+        position={{ value: 120, min: 40, max: 400 }}
       />,
     );
     const sep = getByRole("separator");
@@ -129,9 +138,7 @@ describe("<ResizeDivider />", () => {
       <ResizeDivider
         orientation="horizontal"
         onResize={vi.fn()}
-        value={120}
-        min={40}
-        max={400}
+        position={{ value: 120, min: 40, max: 400 }}
       />,
     );
     const sep = getByRole("separator");

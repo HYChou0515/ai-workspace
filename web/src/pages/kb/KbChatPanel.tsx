@@ -324,9 +324,7 @@ export function KbChatPanel({
           <ResizeDivider
             orientation="horizontal"
             ariaLabel="resize composer"
-            value={composerH}
-            min={KB_COMPOSER_H_MIN}
-            max={KB_COMPOSER_H_MAX}
+            position={{ value: composerH, min: KB_COMPOSER_H_MIN, max: KB_COMPOSER_H_MAX }}
             onResizeStart={() => {
               composerStart.current = composerH;
             }}
