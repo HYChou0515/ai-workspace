@@ -858,6 +858,11 @@ export function AgentPanel({
         <ResizeDivider
           orientation="horizontal"
           ariaLabel="resize composer"
+          // Published for assistive tech (window splitter pattern) — and it is
+          // what makes the arrow keys mean something to a screen reader.
+          value={composerH}
+          min={COMPOSER_H_MIN}
+          max={COMPOSER_H_MAX}
           onResizeStart={() => {
             composerStart.current = composerH;
           }}

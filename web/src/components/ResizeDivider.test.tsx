@@ -56,6 +56,71 @@ describe("<ResizeDivider />", () => {
     expect(hLine?.style.right).toBe("0px");
   });
 
+  it("shows a grip at REST, not only on hover (nobody hovers what looks inert)", () => {
+    // The whole finding: an affordance that appears only on hover asks the
+    // person to discover it by accident. Guidance for drag targets that are not
+    // obviously draggable is a PERSISTENT handle — hover then confirms it.
+    // https://smart-interface-design-patterns.com/articles/drag-and-drop-ux/
+    const { getByRole } = render(<ResizeDivider orientation="horizontal" onResize={vi.fn()} />);
+    const grip = getByRole("separator").querySelector("[data-grip]") as HTMLElement | null;
+    expect(grip).not.toBeNull();
+    // Visible without any pointer having gone near it.
+    expect(grip!.style.opacity === "" || Number(grip!.style.opacity)).toBeTruthy();
+  });
+
+  it("meets the 24px minimum target size (WCAG 2.2 SC 2.5.8)", () => {
+    // 12px was under the AA floor for pointer targets:
+    // https://www.w3.org/WAI/WCAG22/Understanding/target-size-minimum.html
+    const { getByRole: getH } = render(
+      <ResizeDivider orientation="horizontal" onResize={vi.fn()} />,
+    );
+    expect(Number.parseInt(getH("separator").style.height, 10)).toBeGreaterThanOrEqual(24);
+    cleanup();
+    const { getByRole: getV } = render(<ResizeDivider orientation="vertical" onResize={vi.fn()} />);
+    expect(Number.parseInt(getV("separator").style.width, 10)).toBeGreaterThanOrEqual(24);
+  });
+
+  it("is operable from the keyboard, as the splitter pattern requires", () => {
+    // role="separator" that moves a pane must be focusable and driven by the
+    // arrow keys — https://www.w3.org/WAI/ARIA/apg/patterns/windowsplitter/
+    const onResize = vi.fn();
+    const onResizeStart = vi.fn();
+    const { getByRole } = render(
+      <ResizeDivider
+        orientation="horizontal"
+        onResize={onResize}
+        onResizeStart={onResizeStart}
+      />,
+    );
+    const sep = getByRole("separator");
+    expect(sep.tabIndex).toBe(0);
+
+    fireEvent.keyDown(sep, { key: "ArrowUp" });
+    // Anchored the same way a drag is, then moved by one step in the negative
+    // direction (up = smaller y = negative delta, exactly like a pointer drag).
+    expect(onResizeStart).toHaveBeenCalled();
+    expect(onResize).toHaveBeenCalledWith(-8);
+
+    fireEvent.keyDown(sep, { key: "ArrowDown" });
+    expect(onResize).toHaveBeenLastCalledWith(8);
+  });
+
+  it("publishes its position for assistive tech when the parent knows it", () => {
+    const { getByRole } = render(
+      <ResizeDivider
+        orientation="horizontal"
+        onResize={vi.fn()}
+        value={120}
+        min={40}
+        max={400}
+      />,
+    );
+    const sep = getByRole("separator");
+    expect(sep.getAttribute("aria-valuenow")).toBe("120");
+    expect(sep.getAttribute("aria-valuemin")).toBe("40");
+    expect(sep.getAttribute("aria-valuemax")).toBe("400");
+  });
+
   it("reports each pointermove as an absolute delta from the DRAG START position", () => {
     // Anchored to drag-start (not last event) so:
     //  - coalesced pointer events at high speed don't accumulate error
