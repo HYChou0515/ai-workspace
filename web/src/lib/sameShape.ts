@@ -80,6 +80,14 @@ export function sameShape(a: unknown, b: unknown): boolean {
     // check propagates to the root and blanks the page — destroying the unsaved
     // form this comparator exists to protect. Reporting "different" costs one
     // prompt over nothing; the alternative costs the work.
+    //
+    // But say so. The trigger would be structural — a field whose type this
+    // cannot canonicalise — so it would not misfire once, it would misfire on
+    // every close of that modal forever, and the plan (§6.2) ranks a prompt
+    // that fires over nothing as the MORE corrosive direction: people learn to
+    // click through it. A silent permanent degradation is one nobody can even
+    // report. This line is how it becomes traceable.
+    console.error("sameShape: falling back to 'different'", err);
     return false;
   }
 }

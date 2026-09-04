@@ -66,13 +66,15 @@ const maskArrows = (s: string) => s.replace(/=>/g, "=\u0001");
  * matcher is testable on its own rather than only through whatever happens to
  * be in the tree today.
  */
-export function onClickBodies(text: string): { body: string; line: number }[] {
+export function onClickBodies(text: string, where = "(inline)"): { body: string; line: number }[] {
   const out: { body: string; line: number }[] = [];
   const re = /onClick=\{/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text))) {
     let depth = 1;
     let quote: string | null = null;
+    let inRegex = false;
+    let prev = ""; // last significant character, to tell `/`-as-regex from divide
     let i = m.index + m[0].length;
     for (; i < text.length && depth > 0; i++) {
       const c = text[i];
@@ -81,17 +83,48 @@ export function onClickBodies(text: string): { body: string; line: number }[] {
         else if (c === quote) quote = null;
         continue;
       }
+      if (inRegex) {
+        if (c === "\\") i++;
+        else if (c === "/") inRegex = false;
+        continue;
+      }
+      // Comments first. Skipping them is not tidiness: a `//` that is not
+      // recognised leaves its SECOND slash looking like the start of a regex
+      // literal, which then swallows the rest of the handler — that is exactly
+      // what a real file (EntityRecordModal's "Open file" button, whose body
+      // carries two comment lines) did the moment regex support was added. And
+      // it is what makes an apostrophe in a comment harmless: "don't" no longer
+      // opens a phantom string.
+      if (c === "/" && text[i + 1] === "/") {
+        while (i < text.length && text[i] !== "\n") i++;
+        continue;
+      }
+      if (c === "/" && text[i + 1] === "*") {
+        i += 2;
+        while (i < text.length && !(text[i] === "*" && text[i + 1] === "/")) i++;
+        i++; // land on the `/` so the loop's i++ steps past it
+        continue;
+      }
       if (c === '"' || c === "'" || c === "`") quote = c;
-      else if (c === "{") depth++;
+      // A `/` starts a regex literal only where a VALUE may begin. After an
+      // identifier, a number, `)` or `]` it is division. Getting this wrong in
+      // the other direction (treating a divide as a regex) would swallow the
+      // rest of the body, and the depth assertion below would catch that — the
+      // loud direction, on purpose.
+      else if (c === "/" && !/[\w)\]]/.test(prev)) {
+        inRegex = true;
+      } else if (c === "{") depth++;
       else if (c === "}") depth--;
+      if (!/\s/.test(c)) prev = c;
     }
     // An unbalanced scan is the SILENT failure mode: the body ends early and a
     // close after that point is skipped without a word. Say so instead — the
     // point of this file is that a gap in the rule cannot be invisible.
     if (depth !== 0) {
       throw new Error(
-        `onClickBodies: unbalanced braces from offset ${m.index}. The scanner lost ` +
-          "track (a construct it does not understand), so a bypass here would be skipped silently.",
+        `onClickBodies: unbalanced braces in ${where} at line ${text.slice(0, m.index).split("\n").length}. ` +
+          "The scanner lost track (a construct it does not understand), so a bypass there would be " +
+          "skipped silently.",
       );
     }
     out.push({ body: text.slice(m.index, i), line: text.slice(0, m.index).split("\n").length });
@@ -169,6 +202,49 @@ describe("#779 — modal dismissal has one owner", () => {
     expect(onClickBodies(src)[0].body).toContain("onClose()");
   });
 
+
+  it("is not truncated by a brace inside a regex literal", () => {
+    // The positive control the depth assertion was missing. A stray CLOSING
+    // brace lands on depth === 0 exactly, so the body is cut short and nothing
+    // is thrown — the assertion is loud about the direction that was already
+    // loud, and silent about the one that was already silent. A guarded modal
+    // written this way would report clean while dropping the user's work:
+    //
+    // It takes UNPAIRED closing braces to reach zero early — `/[{}]/` balances
+    // and is harmless, and one `\}` only undoes the arrow's own block. Two
+    // does it, and the scan then stops before the handler's real content
+    // WITHOUT tripping the depth assertion, because it lands on zero exactly.
+    const src = [
+      "<button",
+      "  onClick={() => {",
+      '    setName(raw.replace(/\\}/g, "").replace(/\\}/g, ""));',
+      "    onClose();",
+      "  }}",
+      ">x</button>",
+    ].join("\n");
+
+    expect(onClickBodies(src)[0].body).toContain("onClose()");
+  });
+
+  it("is not derailed by comments inside the handler", () => {
+    // Not hypothetical: adding regex support broke on a REAL file
+    // (EntityRecordModal's "Open file" button) because the second slash of a
+    // `//` comment looked like the start of a regex literal and swallowed the
+    // rest of the body. The apostrophe case rides along — "don't" inside a
+    // comment no longer opens a phantom string.
+    const src = [
+      "<button",
+      "  onClick={() => {",
+      "    openFile(path);",
+      "    // hand over rather than stack; don't leave this up",
+      "    /* block form too } { unbalanced on purpose */",
+      "    onClose();",
+      "  }}",
+      ">x</button>",
+    ].join("\n");
+
+    expect(onClickBodies(src)[0].body).toContain("onClose()");
+  });
   it("has no close button bypassing the guard in a modal that has one", () => {
     // Scans the BODY of each onClick, brace-matched, not one line at a time.
     // Round 1 found five buttons bypassing the guard; the single-line version
@@ -185,7 +261,7 @@ describe("#779 — modal dismissal has one owner", () => {
     for (const f of files) {
       if (!f.text.includes("useDirtyClose(")) continue;
       const lines = f.text.split("\n");
-      for (const { body, line } of onClickBodies(f.text)) {
+      for (const { body, line } of onClickBodies(f.text, f.path)) {
         if (!CLOSES.test(body)) continue;
         // An exemption must be written down immediately above, with a reason —
         // legitimate ones exist (a branch rendered only after a successful
