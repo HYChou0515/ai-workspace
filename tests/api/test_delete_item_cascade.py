@@ -421,3 +421,76 @@ async def test_nfs_purge_propagates_real_failures(tmp_path, monkeypatch):
     await store.purge("ws1")  # real purge works
     await store.purge("ws1")  # and absence is tolerated (idempotent)
     assert await store.ls("ws1") == []
+
+
+async def test_deleting_a_live_item_clears_both_my_resources_sections(monkeypatch):
+    """My resources lists an item TWICE when it is both live and stored: an
+    environment row (heartbeat-backed, released by Close) and a storage row
+    (ledger-backed, released by Delete). Delete is the one that must cover
+    BOTH — its cascade tears the environment down first — or a person would
+    free their bytes and stay charged for a sandbox nothing can reach.
+
+    The reverse order is the other half of the contract: closing frees
+    cpu/memory but deliberately NOT the bytes, so the storage row must remain
+    and the delete must still work afterwards."""
+    import workspace_app.api.app as app_mod
+    from workspace_app.api.registry import InvestigationRegistry
+    from workspace_app.config.schema import PerUserResources
+    from workspace_app.quota.disk_ledger import DiskLedger
+
+    captured: dict[str, InvestigationRegistry] = {}
+    real = app_mod.InvestigationRegistry
+
+    def _capture(*a, **kw):
+        r = real(*a, **kw)
+        captured["registry"] = r
+        return r
+
+    monkeypatch.setattr(app_mod, "InvestigationRegistry", _capture)
+    spec = make_spec(default_user="default-user")
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=_Runner(),
+        agent_config_catalog=AgentConfigCatalog(),
+        # A disk cap is what makes the page track storage at all.
+        per_user_resources=PerUserResources(disk="50M"),
+    )
+    client = TestClient(app)
+    registry = captured["registry"]
+    ledger = DiskLedger(spec)
+
+    async def live_and_stored(title: str) -> str:
+        resp = client.post("/a/playground/items", json={"title": title})
+        assert resp.status_code == 200, resp.text
+        item_id = resp.json()["resource_id"]
+        session = await registry.session(item_id)
+        await registry.ensure_handle(session)  # an environment is now running
+        await ledger.record(item_id, "default-user", 7_000_000)  # and bytes are stored
+        return item_id
+
+    item_id = await live_and_stored("live and stored")
+    before = client.get("/me/resources").json()
+    assert [e["item_id"] for e in before["live"]] == [item_id]
+    assert [w["item_id"] for w in before["workspaces"]] == [item_id]
+
+    assert client.delete(f"/a/playground/items/{item_id}").status_code == 204
+
+    after = client.get("/me/resources").json()
+    assert after["live"] == [] and after["cpu_in_use"] == 0
+    assert after["workspaces"] == [] and after["disk_in_use"] == 0
+
+    # Closing first frees the environment ONLY — the bytes stay until deleted.
+    other = await live_and_stored("closed first")
+    assert client.delete(f"/me/resources/live/{other}").status_code == 204
+    mid = client.get("/me/resources").json()
+    assert mid["live"] == []
+    assert [w["item_id"] for w in mid["workspaces"]] == [other]
+
+    assert client.delete(f"/a/playground/items/{other}").status_code == 204
+    end = client.get("/me/resources").json()
+    assert end["workspaces"] == [] and end["disk_in_use"] == 0
+    # A stale page pressing Close on a now-deleted item is told it is gone,
+    # not handed a 500.
+    assert client.delete(f"/me/resources/live/{other}").status_code == 404
