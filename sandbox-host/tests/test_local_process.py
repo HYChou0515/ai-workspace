@@ -953,7 +953,10 @@ async def test_isolated_python_shim_prefers_the_workspaces_own_venv(tmp_path):
     has to be bind-mounted for it to survive the exec.
     """
     tools = tmp_path / "prebuilt"
-    stack = tools / "python-stack"
+    # `builtin/`: this backend reads its tools dir through that layer, so a
+    # carrier planted a level up is never found — and a test whose fallback
+    # target does not exist proves nothing about the fallback.
+    stack = tools / "builtin" / "python-stack"
     stack.mkdir(parents=True)
     (stack / "launch").write_text("#!/bin/sh\necho ROUTED-TO-PYTHON-STACK\n")
     (stack / "launch").chmod(0o755)
@@ -1021,3 +1024,38 @@ async def test_the_jail_announces_no_virtual_env_when_there_is_none(tmp_path):
     r = await sb.exec(h, ["sh", "-c", "echo [$VIRTUAL_ENV]"])
 
     assert r.stdout.decode().strip() == "[]"
+
+
+@_needs_userns
+async def test_the_jail_refuses_a_venv_built_on_its_own_shim(tmp_path):
+    """Same cycle as unjailed, same route: this bootstrap puts /tmp/.jailbin
+    first on PATH, `uv sync` picks its base interpreter off PATH, and /tmp is a
+    fresh tmpfs each exec — so next time the shim is rebuilt as tier 1 pointing
+    into a venv that points back at it, and `python` execs itself forever.
+
+    Shell cannot walk the link chain hop by hop, so the guard reads the venv's
+    own record of what it was built on: `pyvenv.cfg`'s `home =`.
+    """
+    tools = tmp_path / "prebuilt"
+    # `builtin/`: this backend reads its tools dir through that layer, so a
+    # carrier planted a level up is never found — and a test whose fallback
+    # target does not exist proves nothing about the fallback.
+    stack = tools / "builtin" / "python-stack"
+    stack.mkdir(parents=True)
+    (stack / "launch").write_text("#!/bin/sh\necho ROUTED-TO-PYTHON-STACK\n")
+    (stack / "launch").chmod(0o755)
+
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=True, tools_dir=tools)
+    h = await sb.create(SandboxSpec())
+    venv = tmp_path / "sb" / h.id / ".venv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "python").write_text("#!/bin/sh\necho ROUTED-TO-PROJECT-VENV\n")
+    (venv / "bin" / "python").chmod(0o755)
+    (venv / "pyvenv.cfg").write_text("home = /tmp/.jailbin\nversion_info = 3.12.0\n")
+
+    r = await sb.exec(h, ["python", "-c", "ignored"])
+
+    assert r.exit_code == 0, r.stderr.decode()
+    assert "ROUTED-TO-PYTHON-STACK" in r.stdout.decode(), (
+        "a venv built on the shim must fall back, not loop"
+    )

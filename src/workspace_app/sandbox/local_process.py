@@ -100,7 +100,25 @@ mkdir -p "$ROOT/tmp/.jailbin"
 # the venv resolves straight past it to the base interpreter and `python` runs
 # with none of the packages just installed. No `pip*`: a uv venv ships none, and
 # a shim that cannot work is worse than none.
+# The same cycle the unjailed shim guards against, reachable the same way: this
+# bootstrap puts /tmp/.jailbin FIRST on PATH, `uv sync` picks its base
+# interpreter off PATH, so the venv can be built on the shim — and /tmp is a
+# FRESH tmpfs every exec, so next time the shim is rebuilt as tier 1 pointing
+# into that venv and `python` execs itself forever, silently.
+#
+# Shell cannot walk a symlink chain hop by hop the way the unjailed guard does
+# (`readlink -f` resolves the whole thing and hides the hop that matters), so
+# this reads the venv's own record of the interpreter it was built on. `home =`
+# is exactly that, and uv writes it.
+_venv_ok=""
 if [ -x "$ROOT/.venv/bin/python" ]; then
+  _venv_ok=yes
+  _cfg="$ROOT/.venv/pyvenv.cfg"
+  if [ -f "$_cfg" ] && grep -q '^home = /tmp/\.jailbin' "$_cfg"; then
+    _venv_ok=""
+  fi
+fi
+if [ -n "$_venv_ok" ]; then
   # `uv pip install` and friends read VIRTUAL_ENV, not UV_PROJECT_ENVIRONMENT.
   export VIRTUAL_ENV=/.venv
   for n in python python3 python3.10 python3.11 python3.12 python3.13; do
