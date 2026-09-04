@@ -175,6 +175,15 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
    * changes — and in StrictMode, twice on mount — and neither is somebody
    * opening the page. */
   const autoBuiltFor = useRef<string | null>(null);
+  /** Bumped whenever the pane moves to another page. A build started for one
+   * page can still be running when `path` changes without unmounting, and
+   * everything it does on the way out — the log, the verdict, the re-read that
+   * swaps the frame — would land on a page that never asked for it.
+   *
+   * A counter bumped in an EFFECT, not the folder written during render: React
+   * may render without committing, and a ref set by a render that was thrown
+   * away would tell a running build it had been left when it had not. */
+  const epoch = useRef(0);
 
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const openFile = useOpenFile();
@@ -266,6 +275,18 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
     [fs.scopeId],
   );
 
+  // Moving to another page starts clean. Its log, its fold, and the fact that
+  // one has already been built on open are all facts about the page that left —
+  // and until the log survived Refresh (P12), clearing it there hid this.
+  useEffect(() => {
+    epoch.current += 1;
+    setBuildLog(null);
+    setLogOpen(true);
+    setBuilding(false);
+    setFirstBuild(false);
+    autoBuiltFor.current = null;
+  }, [folder]);
+
   // Keep the newest line in view. A build's interesting output is its last few
   // lines — where it failed, or how long it took — and a log that has to be
   // scrolled to be read is a log nobody reads.
@@ -297,12 +318,18 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
    */
   const runBuild = async ({ automatic = false } = {}) => {
     if (!slug) return;
+    const mine = folder;
+    const startedAt = epoch.current;
+    /** Has the pane moved on? Then this build is answering a question nobody is
+     * asking any more, and the page it would re-read is not the page it built. */
+    const stale = () => epoch.current !== startedAt;
     setBuilding(true);
     if (automatic) setFirstBuild(true);
     setBuildLog([]);
     setLogOpen(true);
     try {
-      for await (const event of itemBuild(slug, fs.scopeId)(folder)) {
+      for await (const event of itemBuild(slug, fs.scopeId)(mine)) {
+        if (stale()) return;
         if (event.type === "output") say(event.text);
         else if (event.exit_code === 0) {
           note("Build finished.");
@@ -313,6 +340,7 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
         } else note(`Build failed (exit ${event.exit_code}).`);
       }
     } catch (err) {
+      if (stale()) return;
       // A build that could not be STARTED — a viewer without `execute`, a
       // folder the server refuses — arrives as a status, not as output. Unsaid,
       // the button looks like it did nothing at all.
@@ -328,6 +356,8 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
         note("Rebuilding on open has been turned off, because you cannot run things here.");
       }
     } finally {
+      // Not gated on `stale()`: the effect above already reset these for the
+      // new page, and leaving them set would strand it on "Building…".
       setBuilding(false);
       setFirstBuild(false);
     }

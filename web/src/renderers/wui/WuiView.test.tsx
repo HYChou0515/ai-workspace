@@ -614,6 +614,116 @@ describe("WuiView: rebuilding a page that has a build step", () => {
     expect(log).toHaveAttribute("aria-live", "off");
   });
 
+  it("does not open a gap when the build's last line ended in a carriage return", async () => {
+    // Regression from moving the cleaning to render time. The glue check reads
+    // the log as STORED, and stored used to mean cleaned — where `\r` had
+    // already become `\n`. Reading raw text, a progress line ending in `\r`
+    // now looks unterminated, so our own line gets an extra break before it and
+    // the log ends with a blank gap.
+    const { release } = serveGated([
+      sse({ type: "output", text: "Progress: resolved 115\r" }),
+      sse({ type: "done", exit_code: 0 }),
+    ]);
+    renderIn({ ...BUILT });
+    fireEvent.click(await screen.findByRole("button", { name: /rebuild/i }));
+    release();
+
+    fireEvent.click(await screen.findByRole("button", { name: /show build output/i }));
+    const log = await screen.findByRole("log", { name: "Build output" });
+    await waitFor(() => expect(log).toHaveTextContent(/Build finished/));
+    expect(log.textContent).toBe("Progress: resolved 115\nBuild finished.\n");
+  });
+
+  it("does not carry one page's build log onto another page", async () => {
+    // The log used to be cleared by Refresh, which hid this: nothing resets the
+    // build state when the pane moves to a different folder without
+    // unmounting, so the previous page's build — its log, and the fact that it
+    // has already auto-built — belonged to the new one.
+    const files = {
+      "/sales/index.html": "<html><body>sales</body></html>",
+      "/sales/package.json": JSON.stringify({ scripts: { build: "vite build" } }),
+      "/costs/index.html": "<html><body>costs</body></html>",
+    };
+    const { release } = serveGated([
+      sse({ type: "output", text: "vite building sales" }),
+      sse({ type: "done", exit_code: 0 }),
+    ]);
+    const view = render(
+      <QueryWrap>
+        <WorkspaceSlugProvider value="rca">
+          <FileServiceProvider value={svc(files)}>
+            <WuiView path="/sales/page.ai.yaml" spec={{ view: "wui", entity: "" } as ViewSpec} />
+          </FileServiceProvider>
+        </WorkspaceSlugProvider>
+      </QueryWrap>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /rebuild/i }));
+    release();
+    await screen.findByText(/Build finished/);
+
+    view.rerender(
+      <QueryWrap>
+        <WorkspaceSlugProvider value="rca">
+          <FileServiceProvider value={svc(files)}>
+            <WuiView path="/costs/page.ai.yaml" spec={{ view: "wui", entity: "" } as ViewSpec} />
+          </FileServiceProvider>
+        </WorkspaceSlugProvider>
+      </QueryWrap>,
+    );
+
+    await waitFor(() => expect(frame()?.getAttribute("srcdoc")).toContain("costs"));
+    expect(screen.queryByText(/Build finished/)).not.toBeInTheDocument();
+  });
+
+  it("lets a build finish into a page that has already been left", async () => {
+    // The pane can move to another page without unmounting, and the build it
+    // started keeps running. Everything it does on the way out — the log, the
+    // verdict, the re-read that swaps the frame — would land on a page that
+    // never asked for it.
+    const files = {
+      "/sales/index.html": "<html><body>sales</body></html>",
+      "/sales/package.json": JSON.stringify({ scripts: { build: "vite build" } }),
+      "/costs/index.html": "<html><body>costs</body></html>",
+    };
+    const { release } = serveGated([
+      sse({ type: "output", text: "vite building sales" }),
+      sse({ type: "done", exit_code: 0 }),
+    ]);
+    const at = (path: string) => (
+      <QueryWrap>
+        <WorkspaceSlugProvider value="rca">
+          <FileServiceProvider value={svc(files)}>
+            <WuiView path={path} spec={{ view: "wui", entity: "" } as ViewSpec} />
+          </FileServiceProvider>
+        </WorkspaceSlugProvider>
+      </QueryWrap>
+    );
+
+    const view = render(at("/sales/page.ai.yaml"));
+    fireEvent.click(await screen.findByRole("button", { name: /rebuild/i }));
+    await screen.findByText(/vite building sales/);
+
+    // Leave while it is still running, then let it finish.
+    view.rerender(at("/costs/page.ai.yaml"));
+    await waitFor(() => expect(frame()?.getAttribute("srcdoc")).toContain("costs"));
+    release();
+    await new Promise((r) => setTimeout(r, 60));
+
+    expect(screen.queryByText(/vite building sales/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Build finished/)).not.toBeInTheDocument();
+    expect(frame()?.getAttribute("srcdoc")).toContain("costs");
+    // And the build it ran was the one it was asked for, not whatever is on
+    // screen when the request is made.
+    const [url, init] = vi
+      .mocked(fetch)
+      .mock.calls.find(([u]) => String(u).includes("/wui/build")) as unknown as [
+      string,
+      RequestInit,
+    ];
+    expect(url).toContain("/wui/build");
+    expect(JSON.parse(String(init.body))).toEqual({ folder: "/sales" });
+  });
+
   it("unfolds again for the next build", async () => {
     // The fold is about a build that is OVER. Pressing Rebuild is asking to
     // watch one, and finding the log still folded would read as the button
