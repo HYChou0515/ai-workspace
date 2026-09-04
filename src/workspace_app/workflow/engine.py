@@ -111,7 +111,18 @@ async def run_step(
     feedback: str | None = None
     reason = ""
     for attempt in range(retries + 1):
-        result = await execute(feedback)
+        try:
+            result = await execute(feedback)
+        except StepFailed as exc:
+            # The step could not RUN, as distinct from running and failing its
+            # gate. No retry — nothing about the input changed — and no journal,
+            # so a transient failure cannot record the node as done forever. But
+            # it is emitted like any other step failure: without this the step
+            # simply vanished from the live stream, which is worse than the
+            # gate-failure path it sits beside.
+            _emit(wf, StepFailedEv(phase=phase, name=name, reason=str(exc), key=key))
+            logger.warning("step: fail %s/%s (could not run): %s", name, key, exc)
+            raise
         verdict = await check(wf, result) if check is not None else CheckResult(True)
         if verdict.ok:
             # The step's effects are already done; this only records that. See

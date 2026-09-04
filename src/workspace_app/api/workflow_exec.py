@@ -30,6 +30,7 @@ from ..agent.python_env import ProjectEnvError
 from ..resources import Conversation, Message
 from ..sandbox.protocol import OutputSink, Sandbox
 from ..workflow.capabilities import convert_upload, ingest_to_collection, upsert_context_card
+from ..workflow.engine import StepFailed
 from ..workflow.handle import WorkflowHandle
 from ..workflow.run import RunStatus, WorkflowRun
 from .notifications import notification_sent, notify
@@ -303,16 +304,30 @@ class WorkflowExecutor:
         try:
             await self._registry.prepare_project_env(session, handle, on_output=on_output)
         except ProjectEnvError as exc:
-            # A node's failure is an EXIT CODE here. Raising escapes `execute`
-            # before `run_step`'s check/retry loop can see it, marks the whole
-            # run ERROR over one node, and inside a `wf.map` leaves the sibling
-            # elements running detached (the gather has no `return_exceptions`).
-            # Still a stop, not a degrade: the command below does not run, and
-            # uv's own words are what the operator gets.
+            # `StepFailed`, not an exit code and not the raw error.
+            #
+            # An exit code hands the decision to the node's GATE, and
+            # `sandbox_node` applies its safe `exit_zero()` default only when
+            # the author declared none: `produces:` passes if the glob matches
+            # anything (a previous run's files will do), and `check:`'s whole
+            # vocabulary — `file_nonempty` / `choice_in` / `collection_has` —
+            # cannot read an exit code at all. So "the environment could not be
+            # built" was reported as a run that finished, and journalled, which
+            # skips the node on every re-run.
+            #
+            # The raw `ProjectEnvError` was un-swallowable but escaped `execute`
+            # as a type the workflow does not know: `wf.map`'s gather has no
+            # `return_exceptions` and catches only `StepFailed`, so the sibling
+            # elements were left running detached.
+            #
+            # `StepFailed` is the engine's own word for "this step aborted". It
+            # never reaches the gate, `wf.map` collects it per element, and at
+            # top level it ends the run — carrying uv's words, which is all the
+            # operator has to act on.
             logger.warning(
                 "workflow_exec: item %s could not prepare its python environment", item_id
             )
-            return 1, str(exc)
+            raise StepFailed(str(exc)) from exc
         import shlex
 
         env = f"export WF_TOKEN={shlex.quote(credential)}; " if credential else ""

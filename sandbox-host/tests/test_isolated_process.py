@@ -14,6 +14,7 @@ import os
 import subprocess
 import time
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -29,6 +30,7 @@ from sandbox_host.isolated_process import (
     _setpriv_cgroup_argv,
     _UidPool,
 )
+from sandbox_host.local_process import LocalProcessSandbox
 from sandbox_host.protocol import SandboxHandle, SandboxSpec
 
 
@@ -612,3 +614,36 @@ async def test_a_uid_is_not_reusable_before_its_cache_has_been_dealt_with(tmp_pa
     )
     assert released == [], "and here the release is deferred — a sibling is still live"
     assert winner.id in sandbox._dirs
+
+
+async def test_a_kill_that_fails_still_returns_the_uid_to_the_pool(tmp_path) -> None:
+    """Moving `free` after `super().kill()` bought the cache ordering; without a
+    `finally` it would have cost this.
+
+    `_identities.pop` happens first, so once `super().kill()` raises there is
+    nothing left that could ever free the uid — it stays allocated forever, and
+    invisibly, because a leaked uid is simply never handed out again. The
+    realistic trigger is a `CancelledError` during the `rmtree` (a client
+    disconnect, a SIGTERM), not a bug in the teardown.
+
+    Before the reorder the uid was freed first and this could not happen. The
+    reorder must not trade one narrow hole for another.
+    """
+    sandbox, _released = _cache_sandbox(tmp_path)
+    handle = await sandbox.create(SandboxSpec(), item_id="item-a")
+    uid = sandbox._identities[handle.id].uid
+    free_before = len(sandbox._pool._free)
+
+    async def _boom(_self, _handle):
+        raise RuntimeError("device or resource busy")
+
+    with (
+        mock.patch.object(LocalProcessSandbox, "kill", _boom),
+        pytest.raises(RuntimeError, match="device or resource busy"),
+    ):
+        await sandbox.kill(handle)
+
+    assert len(sandbox._pool._free) == free_before + 1, (
+        "a teardown that failed must still hand the uid back"
+    )
+    assert uid in sandbox._pool._free

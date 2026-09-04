@@ -32,6 +32,7 @@ from workspace_app.filestore.specstar_impl import SpecstarFileStore
 from workspace_app.resources import make_spec
 from workspace_app.sandbox.mock import MockSandbox
 from workspace_app.sandbox.protocol import ExecResult, SandboxHandle, SandboxSpec
+from workspace_app.workflow.engine import StepFailed
 
 pytestmark = pytest.mark.anyio
 
@@ -204,10 +205,20 @@ async def test_an_unpreparable_environment_fails_the_node_not_the_run(monkeypatc
     sandbox = _Unbuildable()
     executor, item_id = _build(monkeypatch, sandbox)
 
-    exit_code, out = await executor.run_sandbox(item_id, "echo hi", "")
+    with pytest.raises(StepFailed, match="no `uv.lock` found") as caught:
+        await executor.run_sandbox(item_id, "echo hi", "")
 
-    assert exit_code != 0, "an environment that cannot be prepared must fail the node"
-    assert "no `uv.lock` found" in out, f"with uv's own words, which is all an operator has: {out}"
+    # `StepFailed`, not an exit code: `sandbox_node` hands an exit code to the
+    # node's GATE, and `produces:` / `check:` never read one — so returning
+    # `(1, reason)` reported the run as finished and journalled the node as
+    # passed. And not the raw `ProjectEnvError` either: `wf.map`'s gather has
+    # no `return_exceptions` and catches only `StepFailed`, so the siblings
+    # would be left running detached. The half that can only be asserted
+    # through the DSL is in `tests/workflow/test_dsl.py`, named
+    # `..._whose_environment_fails_cannot_pass_its_produces_gate`.
+    assert "uv sync" in str(caught.value), (
+        f"and it carries uv's own words, which is all an operator has: {caught.value}"
+    )
     assert not any(c[:2] == ["sh", "-lc"] for c in sandbox.calls), (
         f"and the node's command must NOT have run: {sandbox.calls}"
     )

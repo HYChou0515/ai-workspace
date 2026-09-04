@@ -406,9 +406,16 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         # item's downloads until its own next exec re-chowns them: the
         # inheritance keying by ITEM was chosen to prevent, through the guard
         # that was added to protect the same cache.
-        await super().kill(handle)
-        if ident is not None:
-            self._pool.free(ident.uid, ident.gid)
+        try:
+            await super().kill(handle)
+        finally:
+            # In a `finally` because `_identities.pop` above already happened:
+            # once the teardown raises — a `CancelledError` during the rmtree
+            # is the realistic one, from a client disconnect or SIGTERM —
+            # nothing else could ever free this uid, and a leaked uid is
+            # invisible because it is simply never handed out again.
+            if ident is not None:
+                self._pool.free(ident.uid, ident.gid)
 
     def _exec_argv(
         self, handle: SandboxHandle, cmd: list[str]
