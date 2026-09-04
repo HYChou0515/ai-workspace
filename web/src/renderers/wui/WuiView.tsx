@@ -486,7 +486,20 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
         )}
       </div>
       {buildLog !== null && (
-        <div style={{ flex: "0 0 auto", borderBottom: "1px solid var(--paper-3)" }}>
+        <div
+          style={{
+            // The cap lives HERE, on the pane's flex item, because that is the
+            // box with a definite height to take a percentage of. With it on the
+            // log inside, the wrapper sized itself to the log's UNCLAMPED
+            // content and then clamped the log against that — 270px of blank in
+            // a 692px pane, with the page squeezed into a third of it.
+            flex: "0 0 auto",
+            display: "flex",
+            flexDirection: "column",
+            maxHeight: "30%",
+            borderBottom: "1px solid var(--paper-3)",
+          }}
+        >
           <button
             type="button"
             onClick={() => setLogOpen((open) => !open)}
@@ -496,6 +509,7 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
             // indistinguishable from the one that starts a build.
             aria-label={logOpen ? "Hide build output" : "Show build output"}
             style={{
+              flex: "0 0 auto",
               display: "flex",
               width: "100%",
               alignItems: "baseline",
@@ -539,7 +553,11 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
               // outcome is announced instead: it lands in the summary line.
               aria-live="off"
               style={{
-                maxHeight: "30%",
+                // Takes what the strip has left, and scrolls. `minHeight: 0`
+                // because a flex item will not shrink below its content without
+                // it, which puts the overflow straight back on the pane.
+                flex: "1 1 auto",
+                minHeight: 0,
                 overflowY: "auto",
                 padding: "0 8px 6px",
                 fontFamily: "var(--font-mono, ui-monospace, monospace)",

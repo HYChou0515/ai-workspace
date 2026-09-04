@@ -858,6 +858,41 @@ describe("WuiView: rebuilding a page that has a build step", () => {
     await waitFor(() => expect(signal?.aborted).toBe(true));
   });
 
+  it("caps the log against the pane, not against a box the log itself sizes", async () => {
+    // Measured in a browser: the strip was 424px tall in a 692px pane while
+    // holding a 28px button and a 127px log — 270px of blank, and the page
+    // squeezed into a third of the pane.
+    //
+    // `max-height: 30%` needs a containing block with a DEFINITE height. Wrapping
+    // the log to give it a summary line put the cap on a box whose own height
+    // comes from its content, so the browser sized the wrapper to the log's
+    // UNCLAMPED content, then clamped the log against that — and never went back.
+    //
+    // The cap belongs on the flex ITEM (the pane's height is definite); the log
+    // takes what is left and scrolls. `minHeight: 0` because a flex item's
+    // default `min-height: auto` refuses to shrink below its content, which
+    // would put the overflow back on the pane.
+    const { release } = serveGated([
+      sse({ type: "output", text: "vite build" }),
+      sse({ type: "done", exit_code: 0 }),
+    ]);
+    renderIn({ ...BUILT });
+    fireEvent.click(await screen.findByRole("button", { name: /rebuild/i }));
+    release();
+    fireEvent.click(await screen.findByRole("button", { name: /show build output/i }));
+
+    const log = await screen.findByRole("log", { name: "Build output" });
+    const strip = log.parentElement as HTMLElement;
+
+    expect(strip.style.maxHeight).toBe("30%");
+    expect(strip.style.display).toBe("flex");
+    expect(strip.style.flexDirection).toBe("column");
+    // The log is sized by the strip, not by a percentage of it.
+    expect(log.style.maxHeight).toBe("");
+    expect(log.style.minHeight).toBe("0");
+    expect(log.style.overflowY).toBe("auto");
+  });
+
   it("unfolds again for the next build", async () => {
     // The fold is about a build that is OVER. Pressing Rebuild is asking to
     // watch one, and finding the log still folded would read as the button
