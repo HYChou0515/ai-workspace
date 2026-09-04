@@ -326,10 +326,19 @@ per-call timeout 參數 —— 它吃 backend 實例層級的 `exec_timeout`,**�
     (`controller.create(spec, body.item_id)` → `self._item_of[handle.id]`),
     `nfs_archive` 就是拿它當鍵的。精確的說法是:**uid 是錯的鍵;`item_id` 拿得到,
     但它是選用的**(`item_id: str | None = None`,只在接了 NFS archive 時才會送)。
-    所以 per-**item** 的持久快取在鍵的層次是成立的 —— 要做的話還得處理三件事:
-    鍵可能是 `None` 時的退路(一個會依設定旋鈕靜默切換安全姿態的設計,正是會咬人的那種)、
-    同一個 item 換 sandbox 時 uid 會變所以擁有權要重新建立、以及它仍然需要一個回收器。
-    **未評估,也不是這個 PR 要做的。**
+    所以 per-**item** 的持久快取是成立的,而且查證後比我一開始評估的更成立:
+    `http_client.create` **無條件**把 item id 當 `item_id` 送出去(註解:沒接 archive 的
+    host 就忽略它),所以正式環境一定拿得到這個鍵;host 那邊的 `str | None` 是向後相容,
+    不是正常路徑。
+    ⚠️ **我對它提過的一個疑慮也要收回**:我說「鍵是 `None` 時會依設定旋鈕靜默切換安全
+    姿態」——不對,退路是「退回 per-sandbox 快取」,那是**更嚴格**的一邊,退化的是速度
+    不是安全。
+    真正剩下的是:同一個 item 換 sandbox 時 uid 會變,擁有權要每次重建(和 `.home`
+    同一個形狀);它仍然需要回收器(驅動者現成 —— `_reaper_loop`,in-use 用
+    `self._item_of` 裡有活 sandbox 的 item,而 item id 不像 uid 會被回收);而「最舊」
+    不能用 mtime(只讀命中不會更新它,會剛好刪掉最有價值的),要由使用端蓋章。
+    **不是這個 PR 要做的**,而且在量到冷啟動的等待真的會痛之前,先做的應該是放寬這條
+    路徑的 `exec_timeout` —— 那把「失敗」變成「等待」,比快取更確定、也更便宜。
     ⚠️ 兩個 backend 在這點不對稱:app 端的 `IsolatedProcessSandbox` 由 item id 導出 uid
     (固定),host 端是 pool。**任何以 uid 為鍵的持久狀態,只在 app 端安全,正式環境不安全。**
   - **per-uid 但留著**:`uid_range` 預設 2,000,000,000,所以「份數有上界」等於沒說 ——
