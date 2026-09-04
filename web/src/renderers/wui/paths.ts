@@ -116,10 +116,17 @@ export function resolveReadPath(folder: string, path: string): string | null {
  * open. An alarm that always fires is the failure this whole distinction exists
  * to prevent.
  *
- * A root page has no folder, so "its own" is what it asked for relatively.
+ * A ROOT page is quiet for every read, and that is not a shortcut. Its folder
+ * IS the item, so there is no boundary for a path to be outside of and no basis
+ * for calling any absence a mistake: `/data.json` and `/tmp/out.json` are the
+ * same kind of thing to it. Answering `!raw.startsWith("/")` instead looked
+ * careful and split one FILE in two — `readFile("data.json")` quiet,
+ * `readFile("/data.json")` loud, same file, same page — so an author who
+ * spelled it out got lectured about a slash they had used correctly. Quiet
+ * everywhere is also exactly what a root page did before any of this.
  */
 export function isOwnFile(folder: string, raw: string): boolean {
-  if (folder === "") return !raw.startsWith("/");
+  if (folder === "") return true;
   const abs = raw.startsWith("/") ? normalizeAbsolute(raw) : resolveInFolder(folder, raw);
   return abs !== null && abs.startsWith(`${folder}/`);
 }

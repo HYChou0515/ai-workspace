@@ -143,14 +143,15 @@ def register_wui_routes(
     ``resolve_external`` is a seam for tests; it defaults to the same host
     round-trip a turn makes.
 
-    ``request_env`` is the SAME seam a chat send composes (#714), and both
-    routes here need it for the same reason a turn does: what it carries is the
-    caller's own credential — a cookie their gateway exchanged for a token — so
-    a deploy that mints one per request had none of it reach a page. The tool
-    that answers in the chat then 401s from the page written to call it, and a
-    build that pulls from a private registry fails on the one machine that
-    matters. Wiring it into ONE of the two would be worse than neither: the
-    page and its build would run as different people.
+    ``request_env`` is the SAME seam a chat send composes (#714). What it
+    carries is the caller's own credential — a cookie their gateway exchanged
+    for a token — so without it a tool that answers in the chat 401s from the
+    page written to call it.
+
+    It reaches ``wui_call_tool`` and DELIBERATELY NOT ``wui_build``. A tool call
+    answers one person and dies with the exec; a build writes ``dist/``, which
+    is durable and is served to every viewer of the item. The two run as
+    different identities on purpose — see the note at the composition itself.
     """
 
     # NOT "first party": in this codebase that names the bundled `sample-tools`
@@ -165,15 +166,16 @@ def register_wui_routes(
         Empty when the deploy named no impl — the seam ships unimplemented, and
         every deploy that has not opted in must behave exactly as before.
 
+        Only ``wui_call_tool`` calls this; a build takes the item's variables
+        alone (see the note there).
+
         A failing impl REFUSES, and does so before anything runs. Carrying on
-        with `{}` would run the build or the tool as nobody in particular:
-        `npm install` would resolve the public package where a private one was
-        meant, and a tool would answer from whatever identity the item's own
-        variables happen to describe. Both look like success. An impl that
-        would rather degrade catches its own errors and returns `{}` — only it
-        knows whether running without the value means anything. Its message is
-        not relayed: only the impl knows whether it built that string out of the
-        cookie it was reading.
+        with `{}` would run the tool as nobody in particular, answering from
+        whatever identity the item's own variables happen to describe — which
+        looks like success. An impl that would rather degrade catches its own
+        errors and returns `{}`; only it knows whether running without the value
+        means anything. Its message is not relayed: only the impl knows whether
+        it built that string out of the cookie it was reading.
         """
         if request_env is None:
             return {}
@@ -199,9 +201,9 @@ def register_wui_routes(
         return await resolve_item_tools(sandbox, locator, item_id)
 
     @app.post("/a/{slug}/items/{item_id}/wui/build")
-    async def wui_build(
-        slug: str, item_id: str, body: BuildBody, request: Request
-    ) -> StreamingResponse:
+    # No `request` parameter: this route composes no per-request environment,
+    # and a `Request` in the signature would advertise that it does.
+    async def wui_build(slug: str, item_id: str, body: BuildBody) -> StreamingResponse:
         """Rebuild a page, streaming the build's own output as it arrives.
 
         A page written with a bundler has two halves — the source someone edits

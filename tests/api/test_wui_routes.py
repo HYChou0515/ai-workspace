@@ -606,11 +606,16 @@ def test_a_failing_env_source_does_not_stop_a_build():
     build never consults cannot fail it. A build refused because somebody's
     cookie expired would be a page that stops rebuilding for everyone."""
     sandbox = _BuildSandbox([b"ok\n"])
-    client, _, _, _ = build(sandbox=sandbox, request_env=_Env(boom=True))
+    env = _Env(boom=True)
+    client, _, _, _ = build(sandbox=sandbox, request_env=env)
 
     resp = client.post(BUILD_URL, json={"folder": "/page"})
 
     assert resp.status_code == 200
+    # A 200 alone would also be true of a route that answered without building.
+    # The claim is that the build RAN, untouched by a seam it never consults.
+    assert env.asked == []
+    assert len(sandbox.calls) == 1
 
 
 def test_a_tool_called_from_a_page_gets_the_request_environment():
