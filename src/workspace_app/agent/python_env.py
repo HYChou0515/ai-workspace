@@ -94,6 +94,21 @@ _SYNC = [
 ]
 
 
+#: The sync's own TOTAL wall-clock budget, in seconds.
+#:
+#: `exec` otherwise applies the backend's instance default — 60s — and a cold
+#: start of a declared profile downloads its whole dependency stack. On a slow
+#: link that is a KILL (exit 124) where a wait belongs: the environment could
+#: have been built, and the person is told their sandbox failed instead.
+#:
+#: Generous rather than unbounded, because unbounded means a turn can hang for
+#: as long as something keeps talking. The IDLE cap is untouched and does the
+#: real work here — a download that actually STOPS is killed in 60s regardless,
+#: so this budget is only ever reached by a command that is still making
+#: progress the whole way.
+_SYNC_BUDGET = 900.0
+
+
 async def ensure_project_env(
     sandbox: Sandbox,
     handle: SandboxHandle,
@@ -127,7 +142,7 @@ async def ensure_project_env(
     # later with nothing said. The settled policy is that a user may install
     # what they like and `uv add` is the route we recommend — not that we quietly
     # undo them. uv's own flag, so nothing here has to model the difference.
-    result = await sandbox.exec(handle, _SYNC, on_output=on_output)
+    result = await sandbox.exec(handle, _SYNC, on_output=on_output, exec_timeout=_SYNC_BUDGET)
     if result.exit_code != 0:
         # uv creates the environment BEFORE it fails — a missing lock still
         # leaves a working interpreter with none of the packages. That

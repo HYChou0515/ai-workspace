@@ -305,3 +305,23 @@ async def test_a_venv_built_on_the_shim_is_refused_rather_than_looped(tmp_path: 
     _argv, _cwd, env = sb._exec_argv(h, ["true"])
 
     assert _run(Path(env["SANDBOX_JAILBIN"]) / "python") == _FROM_CARRIER
+
+
+async def test_a_caller_can_name_its_own_wall_clock_budget(tmp_path: Path) -> None:
+    """`exec` had no per-call timeout, so every command took the instance
+    default. `uv sync` needs a far larger one — a cold start downloads a whole
+    dependency stack, and on a slow link 60s is a KILL where a wait belongs.
+
+    Asserted the other way round because it is cheap and unambiguous: a budget
+    SHORTER than the instance default must also be honoured. The control is the
+    same command with no override, which the same instance lets run.
+    """
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False, exec_timeout=30.0)
+    h = await sb.create(SandboxSpec())
+
+    quick = await sb.exec(h, ["sleep", "5"], exec_timeout=0.4)
+    assert quick.exit_code == 124, "the caller's budget must be the one that applies"
+    assert b"0.4s" in quick.stderr, quick.stderr
+
+    control = await sb.exec(h, ["sleep", "0.1"])
+    assert control.exit_code == 0, "and without an override the instance default still rules"

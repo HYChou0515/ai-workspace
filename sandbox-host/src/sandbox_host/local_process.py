@@ -786,8 +786,15 @@ class LocalProcessSandbox:
         cmd: list[str],
         on_output: OutputSink | None = None,
         env: Mapping[str, str] | None = None,
+        exec_timeout: float | None = None,
     ) -> ExecResult:
         argv, sub_cwd, base_env = self._exec_argv(handle, cmd)
+        # A caller may name its own TOTAL wall-clock budget for one command.
+        # `uv sync` does: a cold start downloads a whole dependency stack, and
+        # the instance default (60s) turned a slow link into exit 124 instead of
+        # a wait. The IDLE cap is untouched, so a download that actually stops is
+        # still killed promptly rather than waiting the whole budget out.
+        budget = self._exec_timeout if exec_timeout is None else exec_timeout
         # The caller's variables land LAST, so they win over the exec path's own
         # settings — the precedence the tools have always had.
         env = {**base_env, **env} if env else base_env
@@ -874,8 +881,8 @@ class LocalProcessSandbox:
             while True:
                 now = loop.time()
                 waits: list[float] = []
-                if self._exec_timeout > 0:
-                    waits.append(self._exec_timeout - (now - start))
+                if budget > 0:
+                    waits.append(budget - (now - start))
                 if self._log_timeout > 0:
                     waits.append(self._log_timeout - (now - last_output))
                 # Both timeouts disabled (0) ⇒ no deadline; park and re-check
@@ -885,7 +892,7 @@ class LocalProcessSandbox:
                     await asyncio.sleep(delay)
                     continue
                 now = loop.time()
-                if self._exec_timeout > 0 and now - start >= self._exec_timeout:
+                if budget > 0 and now - start >= budget:
                     return "exec"
                 return "log"
 
@@ -919,7 +926,7 @@ class LocalProcessSandbox:
         if timed_out is not None:
             # Keep the partial output the command produced before the kill.
             if timed_out == "exec":
-                note = f"timed out after {self._exec_timeout:g}s (total) and was killed\n"
+                note = f"timed out after {budget:g}s (total) and was killed\n"
             else:
                 note = f"no output for {self._log_timeout:g}s; assumed hung and killed\n"
             return ExecResult(

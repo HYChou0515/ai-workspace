@@ -28,6 +28,7 @@ class _Recording:
         results: dict[tuple[str, ...], ExecResult] | None = None,
     ) -> None:
         self.calls: list[list[str]] = []
+        self.budgets: list[float | None] = []
         self.envs: list[dict[str, str]] = []
         self.sinks: list[object] = []
         self._present = present or set()
@@ -41,8 +42,9 @@ class _Recording:
     async def exists(self, handle: SandboxHandle, path: str) -> bool:
         return path in self._present
 
-    async def exec(self, handle, cmd, on_output=None, env=None) -> ExecResult:
+    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None) -> ExecResult:
         self.calls.append(cmd)
+        self.budgets.append(exec_timeout)
         self.envs.append(dict(env) if env else {})
         self.sinks.append(on_output)
         return self._results.get(tuple(cmd), ExecResult(exit_code=0, stdout=b"ok"))
@@ -318,3 +320,20 @@ async def test_the_sync_does_not_see_the_python_shim() -> None:
     assert sync[-4:] == ["uv", "sync", "--frozen", "--inexact"], (
         "what actually runs must stay readable, not be pasted into a shell string"
     )
+
+
+async def test_the_sync_gets_a_budget_of_its_own_not_the_default_one() -> None:
+    """A cold start of a heavy profile downloads the whole stack, and `exec`
+    has no per-call timeout — so the sync inherited the backend's 60s TOTAL
+    cap and a slow link killed it as exit 124 before it could finish.
+
+    That is a failure where a wait belongs. The sync therefore names its own,
+    far larger budget; the idle cap still applies, so a download that actually
+    STOPS is still killed promptly rather than waiting the whole budget out.
+    """
+    sb = _Recording(present={"pyproject.toml"})
+
+    await ensure_project_env(sb, SandboxHandle(id="s1"))  # ty: ignore[invalid-argument-type]
+
+    budget = next(b for c, b in zip(sb.calls, sb.budgets, strict=True) if c == _SYNC)
+    assert budget is not None and budget > 60, "the default cap is what kills a cold start"

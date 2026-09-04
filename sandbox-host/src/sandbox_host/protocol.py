@@ -127,6 +127,7 @@ class Sandbox(Protocol):
         cmd: list[str],
         on_output: OutputSink | None = None,
         env: Mapping[str, str] | None = None,
+        exec_timeout: float | None = None,
     ) -> ExecResult:
         """`env` is added to the command's environment and WINS over anything
         the backend sets itself — the app names the item's user-set variables

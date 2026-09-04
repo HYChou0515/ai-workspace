@@ -232,10 +232,13 @@ mode 444,誰都改不動,別名才不再是問題。
 per-call timeout 參數 —— 它吃 backend 實例層級的 `exec_timeout`,**預設 60 秒總時長**
 (另一條 `log_timeout` 是閒置上限,而 `uv sync` 一直有輸出,所以擋下來的一定是總時長那條)。
 也就是說:**在慢網路上,重的 profile 冷啟動會被砍成 exit 124**。
-行為本身是可接受的 —— 訊息會是 `` `uv sync` failed (exit 124): timed out after 60s ``,
-營運方看得懂 —— 但如果要讓重 profile 在慢環境也能起來,得**調高 `exec_timeout`,或給這條
-路徑自己的預算**(程式碼註解說「長工作設 `exec_timeout=0` 靠 `log_timeout`」,那是既有機制)。
-**未定案**,而且是部署決定。
+✅ **已修**:`exec` 現在收一個**每次呼叫自己的**總時長預算,而 sync 帶
+`_SYNC_BUDGET = 900 秒`。做法照 `env` 那條先例:選用參數、沒有就不放進 HTTP body、
+舊 host 忽略。**IDLE 上限完全沒動**,所以真的卡住的下載照樣 60 秒被殺 —— 這個大預算
+只有「一路都在前進」的指令才碰得到,不是把守衛拆掉。
+兩半各自釘了測試(app 端 `tests/sandbox/test_http.py`、host 端
+`sandbox-host/tests/test_wire.py`):只要有一半吞掉這個 key,整個 hosted 部署就會**安靜地
+沒生效** —— 和當年 env 那次同一個形狀,所以兩半都要有人守。
 
 ⚠️ **workflow 是例外情境,要另外想**:它是排程/事件觸發的,沒有人在螢幕前看進度,
 而每個節點撞到冷啟動的時間是純粹的浪費。
@@ -337,19 +340,17 @@ per-call timeout 參數 —— 它吃 backend 實例層級的 `exec_timeout`,**�
     同一個形狀);它仍然需要回收器(驅動者現成 —— `_reaper_loop`,in-use 用
     `self._item_of` 裡有活 sandbox 的 item,而 item id 不像 uid 會被回收);而「最舊」
     不能用 mtime(只讀命中不會更新它,會剛好刪掉最有價值的),要由使用端蓋章。
-    **不是這個 PR 要做的**,而且在量到冷啟動的等待真的會痛之前,先做的應該是放寬這條
-    路徑的 `exec_timeout` —— 那把「失敗」變成「等待」,比快取更確定、也更便宜。
+    `exec_timeout` 那半**已經做了**(見上),所以現在的狀態是:慢網路上的冷啟動會
+    **等**,不會失敗。要不要再讓它**變快**,才是這個快取要回答的問題。
     ⚠️ 兩個 backend 在這點不對稱:app 端的 `IsolatedProcessSandbox` 由 item id 導出 uid
     (固定),host 端是 pool。**任何以 uid 為鍵的持久狀態,只在 app 端安全,正式環境不安全。**
   - **per-uid 但留著**:`uid_range` 預設 2,000,000,000,所以「份數有上界」等於沒說 ——
     實際是**每個用過 uv 的 item 一份完整堆疊,連 item 被刪掉都還在**。以出貨的 `pydeps`
     冷同步 382MB 算,**約 50 個 item 吃滿 20Gi**,而且永遠欠一個回收器。
 
-  代價是**每次冷啟動都要重抓**,而這讓前面那條硬上限變得更要緊:`uv sync` 走一般 `exec`,
-  吃 backend 的 **60 秒總時長**,慢網路上的重 profile 會被砍成 exit 124。訊息看得懂
-  (`` `uv sync` failed (exit 124): timed out after 60s ``),但如果要讓重 profile 在慢環境
-  也起得來,**調高這條路徑的 `exec_timeout` 是下一個該做的事**(既有機制:長工作設
-  `exec_timeout=0` 靠 `log_timeout`)。四份 backend copy 現在寫法一致,per-uid 的覆寫整個
+  代價是**每次冷啟動都要重抓**,而這本來會撞上那條 60 秒硬上限 —— ✅ **那條已經修掉**:
+  sync 現在帶自己的 900 秒預算(見上),所以慢網路上的重 profile 是**等**而不是被砍。
+  四份 backend copy 現在寫法一致,per-uid 的覆寫整個
   移除 —— 沒有持久 cache 之後,那個覆寫沒有東西可以保護,留著只會讀起來像還在保護什麼。
 - **uv 的鎖在某些檔案系統上會退化**並印出 `Shared locking is not supported by the
   current platform or filesystem`。共享磁碟區若是 NFS,`uv cache clean` 的安全性沒有

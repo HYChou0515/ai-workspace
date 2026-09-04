@@ -168,6 +168,11 @@ class _ExecBody(BaseModel):
     # The item's user-set variables for THIS command. Absent on an older client;
     # the backend treats absent and empty the same way.
     env: dict[str, str] | None = None
+    # This command's own TOTAL wall-clock budget, when the caller has one
+    # (`uv sync` does — a cold start must be waited for, not killed at the
+    # instance default). Absent on an older client, which then gets the
+    # instance default exactly as before.
+    exec_timeout: float | None = None
 
 
 def _frame(obj: dict[str, object]) -> bytes:
@@ -179,6 +184,7 @@ async def _exec_ndjson(
     handle: SandboxHandle,
     cmd: list[str],
     env: Mapping[str, str] | None = None,
+    exec_timeout: float | None = None,
 ) -> AsyncIterator[bytes]:
     """Run `exec` and yield NDJSON frames as output arrives.
 
@@ -197,7 +203,9 @@ async def _exec_ndjson(
 
     async def run() -> None:
         try:
-            result = await sandbox.exec(handle, cmd, on_output=on_output, env=env)
+            result = await sandbox.exec(
+                handle, cmd, on_output=on_output, env=env, exec_timeout=exec_timeout
+            )
             queue.put_nowait(("done", result))
         except Exception as exc:  # noqa: BLE001 — relayed in-band as an error frame
             queue.put_nowait(("error", exc))
@@ -632,7 +640,7 @@ def make_host_app(
     @app.post("/sandboxes/{rid}/exec")
     async def exec_(rid: str, body: _ExecBody) -> StreamingResponse:
         return StreamingResponse(
-            _exec_ndjson(sandbox, SandboxHandle(id=rid), body.cmd, body.env),
+            _exec_ndjson(sandbox, SandboxHandle(id=rid), body.cmd, body.env, body.exec_timeout),
             media_type="application/x-ndjson",
         )
 
