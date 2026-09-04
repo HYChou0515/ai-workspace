@@ -30,7 +30,6 @@ from sandbox_host.isolated_process import (
     _setpriv_cgroup_argv,
     _UidPool,
 )
-from sandbox_host.local_process import LocalProcessSandbox
 from sandbox_host.protocol import SandboxHandle, SandboxSpec
 
 
@@ -629,16 +628,23 @@ async def test_a_kill_that_fails_still_returns_the_uid_to_the_pool(tmp_path) -> 
     Before the reorder the uid was freed first and this could not happen. The
     reorder must not trade one narrow hole for another.
     """
-    sandbox, _released = _cache_sandbox(tmp_path)
+    sandbox, released = _cache_sandbox(tmp_path)
     handle = await sandbox.create(SandboxSpec(), item_id="item-a")
+    sandbox._exec_argv(handle, ["true"])  # so the cache exists to be released
     uid = sandbox._identities[handle.id].uid
     free_before = len(sandbox._pool._free)
+    released.clear()
 
-    async def _boom(_self, _handle):
+    def _boom(*_a, **_k):
         raise RuntimeError("device or resource busy")
 
+    # `rmtree`, not the whole of `kill`: patching the base method out entirely
+    # would skip `_release_cache` too, and then this test could say nothing
+    # about the ORDER the `finally` exists to preserve — only that a raise
+    # still frees. Raising here leaves the real teardown intact up to the point
+    # the cache has already been handed back.
     with (
-        mock.patch.object(LocalProcessSandbox, "kill", _boom),
+        mock.patch("sandbox_host.local_process.shutil.rmtree", _boom),
         pytest.raises(RuntimeError, match="device or resource busy"),
     ):
         await sandbox.kill(handle)
@@ -647,3 +653,7 @@ async def test_a_kill_that_fails_still_returns_the_uid_to_the_pool(tmp_path) -> 
         "a teardown that failed must still hand the uid back"
     )
     assert uid in sandbox._pool._free
+    assert released, (
+        "and it must not have been freed BEFORE the cache was released — the "
+        "whole reason P34 moved this call after `super().kill()`"
+    )

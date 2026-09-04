@@ -118,8 +118,19 @@ async def run_step(
             # gate. No retry — nothing about the input changed — and no journal,
             # so a transient failure cannot record the node as done forever. But
             # it is emitted like any other step failure: without this the step
-            # simply vanished from the live stream, which is worse than the
+            # simply vanished from the live stream (measured: the parent left a
+            # permanently-"running" card on the board), which is worse than the
             # gate-failure path it sits beside.
+            #
+            # ⚠️ Known, pre-existing, and widened by one path here: a `_emit`
+            # hook that RAISES escapes as its own exception rather than as
+            # `StepFailed`, so `wf.map`'s `except StepFailed` cannot tolerate
+            # the element and its `gather` (no `return_exceptions`) leaves the
+            # siblings detached. The gate-failure path below has had this since
+            # it was written. The honest fix is to suppress inside `_emit` for
+            # BOTH — but `_on_event` also PERSISTS the run's state, so making it
+            # swallow is a decision about run bookkeeping, not observability,
+            # and it does not belong in a change about python environments.
             _emit(wf, StepFailedEv(phase=phase, name=name, reason=str(exc), key=key))
             logger.warning("step: fail %s/%s (could not run): %s", name, key, exc)
             raise
