@@ -44,6 +44,12 @@ SHARED_SKILLS: dict[str, Path] = {
     # no prompt in the system said anything about computational correctness.
     # Tune it against your own model with `python -m workspace_app.skill_eval`.
     "verify-number": SHARED_SKILLS_DIR / "verify-number",
+    # wui: build a folder in the item's workspace that renders as a live page.
+    # Registered but declared by NO app yet — the renderer ships to everyone, so
+    # a hand-written `view: wui` file already works, and what is held back is
+    # whether the agent proposes one. An app opts in with a line in its
+    # `agent.skills` when it is ready to have people find this.
+    "wui": SHARED_SKILLS_DIR / "wui",
 }
 
 

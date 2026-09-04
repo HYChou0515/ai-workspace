@@ -1227,3 +1227,64 @@ def test_host_managed_durable_check_survives_an_empty_sandbox_block(tmp_path: Pa
     )
     s = load(config_path=cfg, env={})  # host_managed_durable unset ⇒ nothing to refuse
     assert s.sandbox.kind == "http"
+
+
+def test_subagent_models_loads_as_an_ordered_preset_name_list(tmp_path: Path):
+    """`agents.subagent_models` is the operator's curated list of presets the
+    `run_agent` caller may pick (plan-subagent-model-choice). It must survive
+    the loader — NOT be swallowed into `sub_agents` as a bogus purpose — and
+    keep its order (order = display order). Unset ⇒ empty ⇒ feature off."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        dedent("""
+            agents:
+              presets:
+                fast: { model: "m-fast" }
+                deep: { model: "m-deep" }
+              subagent_models: [deep, fast]
+        """),
+        encoding="utf-8",
+    )
+    s = load(config_path=cfg, env={})
+    assert s.agents.subagent_models == ("deep", "fast")
+    assert "subagent_models" not in s.agents.sub_agents  # not a purpose
+
+    assert load(config_path=None, env={}).agents.subagent_models == ()
+
+
+def test_subagent_models_with_an_unknown_preset_refuses_to_load(tmp_path: Path):
+    """A typo'd preset name must fail AT LOAD, naming the bad entry and the
+    known presets — not at the first run_agent call hours later."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        dedent("""
+            agents:
+              presets:
+                fast: { model: "m-fast" }
+              subagent_models: [fast, no-such-preset]
+        """),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match=r"no-such-preset") as err:
+        load(config_path=cfg, env={})
+    assert "subagent_models" in str(err.value)
+    assert "fast" in str(err.value)  # the known presets are named
+
+
+def test_subagent_models_left_null_loads_as_empty(tmp_path: Path):
+    """A bare `subagent_models:` (every entry commented out — routine YAML) is
+    null, not a typo. The other agents lists tolerate null, so this one must
+    too — before this test it died at construction with a bare TypeError,
+    bypassing the loader's own ValueError contract."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        dedent("""
+            agents:
+              presets:
+                fast: { model: "m-fast" }
+              subagent_models:
+        """),
+        encoding="utf-8",
+    )
+    s = load(config_path=cfg, env={})
+    assert s.agents.subagent_models == ()

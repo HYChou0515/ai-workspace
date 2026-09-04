@@ -83,7 +83,7 @@ from .events import (
 from .llm_trace import build_trace, format_trace_line, redact_endpoint, trace_enabled
 
 if TYPE_CHECKING:
-    from ..factories import LlmEndpoint
+    from ..factories import LlmEndpoint, SubagentModel
     from ..failover.cooldown import CooldownRegistry
 
     # #196: per-config busy-aware failover chains, keyed by the primary endpoint
@@ -447,9 +447,11 @@ def _agent_for(
     template_profile: str | None = None,
     has_subagents: bool = False,
     skills_reachable: bool | None = None,
+    subagent_models: tuple[SubagentModel, ...] = (),
     fallback_chains: FallbackChains | None = None,
     cooldown_registry: CooldownRegistry | None = None,
     on_failover_switch: Callable[[str, str], None] | None = None,
+    on_rate_limit_hold: Callable[[str, float], None] | None = None,
     resolve_credential: Callable[[str | None], LlmCredential] = LlmCredential,
     stream_deadlines: tuple[float, float] | None = None,
 ) -> Agent[AgentToolContext]:
@@ -476,6 +478,7 @@ def _agent_for(
             profile=template_profile,
             has_subagents=has_subagents,
             skills_reachable=skills_reachable,
+            subagent_models=subagent_models,
         )
     )
     # Same tri-state for package tools (the colon-syntax expansion):
@@ -715,6 +718,11 @@ def _agent_for(
                 e.model, e.base_url, resolve_credential(e.api_key), e.idle_s
             ),
             on_switch=on_switch,
+            # #742's visibility rule, inside the chain: the hold happens mid-turn
+            # and can last minutes, so it must SAY so — the FE shows the same
+            # transient "rate limited, retrying in Ns" notice the turn loop's own
+            # holds get.
+            on_hold=on_rate_limit_hold,
         )
     else:
         model = _build_model(config.model, eff_base_url, eff_credential)
@@ -765,6 +773,22 @@ def ask_user_stop_behaviour(
     if tool_names and ASK_USER_TOOL in tool_names:
         return StopAtTools(stop_at_tool_names=[ASK_USER_TOOL])
     return "run_llm_again"
+
+
+def _rate_limit_hold_emitter(
+    queue: asyncio.Queue[AgentEvent | object],
+) -> Callable[[str, float], None]:
+    """A per-turn sink that turns a FallbackModel rate-limit hold into a live
+    ``RateLimited`` event on this turn's stream — the same transient notice the
+    turn loop's own holds emit (#742: a held turn must say it is held, because a
+    stated window can be minutes and silent minutes read as a hang).
+    ``put_nowait`` is safe — the hold fires on the same event loop that drains
+    the queue."""
+
+    def emit(_from_model: str, seconds: float) -> None:
+        queue.put_nowait(RateLimited(seconds=seconds))
+
+    return emit
 
 
 def _failover_emitter(queue: asyncio.Queue[AgentEvent | object]) -> Callable[[str, str], None]:
@@ -1488,7 +1512,7 @@ class LitellmAgentRunner:
         resolve_credential: Callable[[str | None], LlmCredential],
     ) -> dict[str, Any]:
         """Everything both turn shapes hand `_agent_for` — the streamed turn adds
-        only its `on_failover_switch`.
+        only its per-turn event sinks (`on_failover_switch`, `on_rate_limit_hold`).
 
         One list, because two copies is how the shapes drift: every axis added
         since (`app_slug`, `has_subagents`, `skills_reachable`) had to be written
@@ -1505,6 +1529,7 @@ class LitellmAgentRunner:
             "template_profile": ctx.template_profile,
             "has_subagents": bool(ctx.subagent_defs),
             "skills_reachable": ctx.skills_reachable,
+            "subagent_models": ctx.subagent_models,
             "fallback_chains": self._fallback_chains,
             "cooldown_registry": self._cooldown_registry,
             "resolve_credential": resolve_credential,
@@ -1554,6 +1579,7 @@ class LitellmAgentRunner:
             ctx.packages,
             ctx.unavailable_tools,
             on_failover_switch=_failover_emitter(queue),
+            on_rate_limit_hold=_rate_limit_hold_emitter(queue),
             **self._agent_kwargs(ctx, feedback, resolve_credential),
         )
         t0 = time.monotonic()

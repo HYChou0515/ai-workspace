@@ -1,0 +1,37 @@
+<!--
+  A WUI that EDITS. The awkward parts of a page that saves are all here:
+  saving without thrashing, hearing about someone else's edit without throwing
+  away what the user is typing, and never going blank when something fails.
+
+  Every reference is relative — the page has no network.
+-->
+<html>
+  <head>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Lot tracker</h1>
+      <span id="status" class="status"></span>
+    </header>
+
+    <!-- data-wui labels the section, so "this bit is wrong" arrives named. -->
+    <section data-wui="new-lot">
+      <input id="lot" placeholder="Lot number" />
+      <input id="note" placeholder="What happened" />
+      <button id="add">Add</button>
+    </section>
+
+    <section data-wui="lots">
+      <table>
+        <thead>
+          <tr><th>Lot</th><th>Note</th><th>Added by</th><th></th></tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <p id="empty" class="empty">Nothing tracked yet.</p>
+    </section>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

@@ -528,7 +528,7 @@ RCA 的 system prompt 是純 markdown，存在
   ```
 
   pg_trgm 擴充與該 GIN 由 specstar 開機時自動確保存在，不需手動建。細節與
-  回填前後的行為對照見 [資料遷移](migrations.md) §6。
+  回填前後的行為對照見 [資料遷移](migrations.md) §7。
 - **索引回填（知識圖譜 reconcile，升級後一次性，不擋部署）**：每週的詞彙 pass
   以前要整張表撈回來才讀得到 mention 的 `surface` / `kind` / `occurrences`，
   以及 relationship 的 `predicate`、entity 的 `canonical_name`、link 的
@@ -548,6 +548,44 @@ RCA 的 system prompt 是純 markdown，存在
   沒帶這些欄位時,會退回去讀它的 blob——因為把「沒有這個索引格」當成「名字是
   空字串」,會讓舊列被拿去當實體的顯示名稱,那是安靜的錯而不是大聲的失敗。
   所以遷移只是把那條退路關掉、換回全速,**部署順序不需要跟它對齊**。
+- **索引回填(知識圖譜的比對鍵,升級後一次性,⚠️ 這一條會影響結果)**:`GraphClaim`
+  升到 `v3`,它的 step **不是重抽索引,而是依當前規則重算比對鍵**
+  (`norm_subject` / `norm_attribute` / `norm_period` / `norm_unit`)。
+
+  ```bash
+  uv run python scripts/run_migrate.py --dry-run graph-claim
+  uv run python scripts/run_migrate.py graph-claim
+  ```
+
+  **上一條那句「不跑也不會有錯的結果」不適用於這一條。** 沒回填的列還帶著舊規則算出來
+  的鍵,依現行規則本該視為同一件事的兩列可能還是兩件。好消息是每一列都記著產生它的
+  schema 版本,所以「哪些還停在舊規則上」查得出來,不是猜的。細節見
+  [資料遷移](migrations.md) §9。
+- **索引回填(`workspace-file` 的 `path`,升級後一次性,🚨 不做的話 rollout 會停住)**:
+  `WorkspaceFile` 升到 `v3`,把 `path` 加進索引讓 `ls(prefix=…)` 能下推。**這一條和上面
+  每一條都不同 —— 它不是「變慢」或「少給答案」,而是會擋住部署。** 沒回填的列答不出
+  `path` 述詞,檔案樹和每一份 entity 列表都會在資料完好的情況下讀成**空的**;所以
+  `/api/readyz` 在回填完成前一律回 **503**,而 k8s 的 readinessProbe 就指著它 ——
+  **新 pod 永遠不會 ready,rollout 停在那裡**(liveness 故意走靜態路由,讓那些 pod 活著
+  給你用)。
+
+  ⚠️ **回填不能打 Service。** Service 只導流量給 ready 的 pod,而卡住的時候 ready 的
+  全是**舊 pod**;migrate 只會把每列帶到「該 pod 認得的最新版」= `v2`,而 `v2` 沒有
+  `path`。打在 Service 上會**回報一整排成功、什麼都沒改**。要直接連一個新 pod:
+
+  ```bash
+  kubectl get pods -l app=rca-app                      # 找一個新的、還沒 ready 的
+  kubectl port-forward pod/<新 pod 名稱> 8000:8000      # 不經過 Service,不 ready 也連得到
+
+  uv run python scripts/run_migrate.py --dry-run --base-url http://localhost:8000 workspace-file
+  uv run python scripts/run_migrate.py           --base-url http://localhost:8000 workspace-file
+
+  curl -i http://localhost:8000/api/readyz             # 200 "ok" = 好了,新 pod 會自己 ready
+  ```
+
+  順序是**先 rollout、再回填**:新 pod 起來但不 ready 是預期的,舊 pod 繼續服務,沒有
+  中斷。全新安裝不受影響(沒有舊列時 `readyz` 一開始就是綠的)。完整說明見
+  [資料遷移](migrations.md) §8。
 
 ---
 
@@ -673,6 +711,46 @@ command」。
 
 作者 `pyproject` 的 `name`、`[project.scripts]` 的進入點名稱**刻意不要求**跟上面一致——
 體積檢查和簽發者查詢都是不帶名字做的，綁了名字反而會出現「在一道閘門過、在下一道被拒」。
+
+#### 這支工具需要哪些環境變數(#750)
+
+工具作者可以在 bundle 裡放一份 `env.json`,說出這支工具需要哪些變數。**你這端不用做任何事**
+就會生效:使用者打開環境變數視窗時,上面會多出一份對照表,標出哪些還沒填 ——
+在 #750 之前那裡是**沒有對照表的自由填空**,使用者只能跑下去看它爆。
+
+三態要分清楚,UI 一路守著它:
+
+| bundle 裡的 `env` | 意思 |
+| --- | --- |
+| **鍵不存在** | 作者**沒講**(#750 之前發布的 artifact 全是這樣)——不等於不需要 |
+| **空陣列** | 作者**看過而且不需要** |
+| 有內容 | 這些是它要的;`required` 只是標示,**不擋執行** |
+
+**這是便民工具,不是閘門。** 平台不會因為變數沒填就拒絕跑那支工具 —— 沒宣告的工具照舊能跑,
+`required` 也不擋。作者宣告格式錯的話,**錯在作者自己的 prebuild**(當場失敗並指名檔案),
+不會變成你的問題。
+
+#### 讓使用者用帳號密碼換出變數(#750,選用)
+
+有些變數其實是 token,叫使用者「去某某系統撈一個貼過來」很不實際。你可以掛自己的登入實作:
+
+```yaml
+server:
+  env_providers:
+    - "mycorp.plugins.SapLogin"      # 你寫的 IEnvProvider
+```
+
+實作長怎樣見[擴充平台](extending-the-platform.md)。掛上之後,環境變數視窗會出現登入表單;
+**換出來的值是填進表單、不自動存**,帳號密碼本身不落地。**沒設 = 完全沒有這顆按鈕**,
+每個變數仍然可以手動填——那條路永遠有效。
+
+⚠️ **工具從不指名要用哪個登入方法,平台是用「變數名字」比對決定給不給那顆按鈕。** 這是刻意的:
+讓第三方指名方法,等於讓它決定你的 UI 向使用者要哪一組憑證,而那個畫面帶著的是**你的**可信度。
+撞名的落點會是登入視窗——A 廠的密碼打進 B 廠的表單,全程不報錯。
+
+⚠️ **信任邊界有個既有的洞,這個功能沒有讓它變寬,但你要知道**:密碼只有第二方實作看得到,
+可是**換出來的值**會跟著整份 `user_env` 交給**每一支**工具。所以這裡不做許可清單——擋了按鈕
+沒擋值,只會讓人以為擋住了。
 
 ### 15.3 一支工具什麼時候真的進到 sandbox 裡
 

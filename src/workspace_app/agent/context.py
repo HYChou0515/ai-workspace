@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 
     from ..apps.subagents import SubagentDef
     from ..entity.events import EntityOrigin, EntityWriteSink
+    from ..factories import SubagentModel
     from ..kb.retriever import Enhancements, Retriever
     from ..kb.vlm import IVlm, VlmDescriber
     from ..kb.wiki.sources import IWikiSources
@@ -436,6 +437,12 @@ class AgentToolContext:
     # `.agent/` plus the workspace's, merged and tool-clamped. Also what the
     # system prompt advertises, so the model knows which names are callable.
     subagent_defs: tuple[SubagentDef, ...] = ()
+    # The operator's `agents.subagent_models` allowlist, resolved
+    # (plan-subagent-model-choice): the engines a `run_agent` call may pick for
+    # a delegation. Empty ⇒ the tool grows no `model` argument. A sub-agent's
+    # own child context inherits it, and that is inert by construction:
+    # `run_agent` is forbidden on a child, so nothing there can read it.
+    subagent_models: tuple[SubagentModel, ...] = ()
     # #537: the KB agent's SECOND knowledge source — consult the wiki. Given a
     # question, a wiki reader navigates the wiki index-first (index → the pages the
     # index points at → the source documents behind them) and returns its answer

@@ -109,7 +109,10 @@ export function KbChatView({
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${name.replace(/[^\w.-]+/g, "-")}.chat.json`;
+    // `\w` is ASCII-only in JavaScript, so this used to fold a Chinese title to
+    // "-" and save every such chat under one name. Unicode-aware classes keep
+    // letters and digits of any script; only separators and punctuation fold.
+    a.download = `${name.replace(/[^\p{L}\p{N}._-]+/gu, "-").replace(/^-+|-+$/g, "") || "chat"}.chat.json`;
     a.click();
     URL.revokeObjectURL(url);
   };

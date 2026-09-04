@@ -44,6 +44,29 @@ export default defineConfig({
     // happy-dom turns an unmocked relative fetch into a real socket, whose
     // late rejection makes vitest exit 1 with all tests passing.
     setupFiles: ["./src/test/setup.ts"],
+    // The other half of that guard. `setup.ts` can only stub the fetch a TEST
+    // calls; happy-dom loads a `<link rel=stylesheet>` / `<script src>` through
+    // its own internal fetch, which no stub sees. A real browser never does
+    // this for a document with no browsing context (what `DOMParser` builds),
+    // so switching it off both matches the browser and closes the last way a
+    // test can reach a socket — markup that merely NAMES a file.
+    environmentOptions: {
+      happyDOM: {
+        settings: {
+          disableCSSFileLoading: true,
+          disableJavaScriptFileLoading: true,
+          // Refusing quietly. Without this happy-dom still logs a DOMException
+          // per skipped file, which is noise in the one place a real failure
+          // has to be readable.
+          handleDisabledFileLoadingAsSuccess: true,
+          // NOT `disableIframePageLoading`. It would also close the `<iframe src>`
+          // preview tests' sockets — the ones `KbDocViewer.test.tsx` still opens,
+          // so this is not the last of them — but happy-dom implements `srcDoc`
+          // as a page load too, so switching it off makes a self-contained frame
+          // with no URL at all throw. A worse trade than the sockets it saves.
+        },
+      },
+    },
     include: ["src/**/*.test.{ts,tsx}"],
     coverage: {
       provider: "v8",

@@ -19,6 +19,7 @@
 my-wafer-tools/
   pyproject.toml          # 一個 [project.scripts] 進入點 + version（+ authors）
   uv.lock                 # 依賴釘死 —— 沒有它就沒有可重現的 build
+  env.json                # 選填：這支工具需要哪些環境變數（§7）
   src/wafer_tools/
     cli.py                # 三段式契約（見下）
     commands/…
@@ -238,8 +239,50 @@ https://gitlab.example/api/v4/projects/<id>/jobs/artifacts/<ref>/raw/dist/tool.m
   或先跟我們說一聲。
 
 - **不要把 secret 放進 bundle。** 同一台機器上所有 sandbox 共用同一份 bundle。
-  需要金鑰的話走環境變數（見
-  [擴充平台的 Tool 一節](extending-the-platform.md)）。
+  需要金鑰的話走環境變數——你的 command 直接讀 `os.environ`,值由使用者在他們的
+  workspace 設定。
+
+- **說出你需要哪些變數(選填,但請寫)。** 使用者沒有別的辦法知道要設什麼:不寫的話,
+  他只能跑下去看它爆、再從錯誤訊息反推名字。在 **package 根目錄**(和 `pyproject.toml`
+  同一層)放一份 `env.json`,build 時會自動帶進 artifact,使用者的環境變數面板就會長出
+  對應欄位:
+
+  ```json
+  [
+    { "name": "WAFER_API_TOKEN",
+      "description": "在 https://internal/tokens 產生的個人 token",
+      "required": true },
+    { "name": "WAFER_API_BASE",
+      "description": "自架站台才要改;預設打正式站" }
+  ]
+  ```
+
+  只有 `name` 是必要的,整份檔案也是選填的。
+
+  ⚠️ **`description` 要是字串,`required` 要是 `true` / `false` 或整個不寫。** 型別不對會讓
+  你的 build **當場失敗並指名是哪一項** —— 這是刻意的:那些值會一路被帶到使用者那邊的
+  介面,而在那裡沒有人有辦法修你的 artifact。`required` 不寫和寫 `false` 是**不同的**兩件
+  事(見上面的三態),所以不確定就別寫,不要用空字串或 `"no"` 之類的東西頂替。
+
+  ⚠️ **你的 CI 用的 builder 映像必須夠新。** 這份宣告是由 builder 讀進 artifact 的
+  manifest 的,而 builder 把平台的程式碼烤進映像裡 —— 舊映像**不會**帶,而且**不會報錯**:
+  build 成功、artifact 正常、宣告安靜消失。如果你寫了 `env.json` 卻在面板上看不到欄位,
+  先問我們你該用哪個 builder tag。
+
+  ⚠️ **這是提示,不是閘門。** 沒列進來的變數**不會**被擋掉——你的 command 照樣拿得到
+  使用者設的全部變數。漏寫一個名字的後果只是「面板少講一句話」,不是功能壞掉。
+
+  ⚠️ **`required` 有三態,不要亂標。** `true` 會被算進使用者看到的「還缺幾個」;`false`
+  不會;**不標**則兩者都不是——面板列出它但不催。只在你真的想清楚時才標。同樣地,
+  **整份檔案缺席 ≠ 不需要變數**:面板會照實說「這個工具沒有列出它需要什麼」。
+
+  ⚠️ **格式錯會在你自己的 CI 當場失敗**,並指名這個檔(必須是 JSON 陣列、每一項要有字串
+  `name`)——所以壞掉的宣告不會流到使用者那邊。反過來,如果一份壞檔真的上線了,平台端會
+  **降級成「沒宣告」並記一條 warning**,不會讓對方的服務開不起來。
+
+  ⚠️ **你不能指定「用哪個方法」把值填進去。** 有些部署會提供登入鈕(使用者輸入帳密,換出
+  token 填進表單),但那是**部署方**自己實作、自己決定的;你只宣告變數**名字**,平台用名字
+  比對。這是刻意的:否則工具作者就能決定別人的介面要向使用者索取哪一組憑證。
 
 - **`source` 欄位是給人看的溯源。** 平台不會回頭 clone 你的 repo，也不會因為
   「它來自 git」就更信任它。

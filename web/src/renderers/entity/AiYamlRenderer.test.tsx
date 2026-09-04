@@ -34,6 +34,7 @@ const ISSUE_TYPE = {
 
 const BOARD = "view: board\nentity: issue\ngroup_by: status\ncard:\n  title: title\n";
 const HEALTH = "view: health\ntitle: Data issues\n";
+const WUI = "view: wui\ntitle: Yield board\n";
 const GANTT = "view: gantt\nentity: issue\nspan: span\nlabel: title\n";
 
 function storeWith(text: string, path: string): FileBufferStore {
@@ -68,6 +69,22 @@ afterEach(() => {
 });
 
 describe("AiYamlRenderer", () => {
+  // A WUI needs the view FILE's path (its folder is the unit) and wants the pane
+  // to itself, so the container renders it ahead of the entity dispatcher — the
+  // same route `health` takes. Reaching the dispatcher would strip both.
+  it("renders a `view: wui` file as the WUI pane, not as a YAML tree", async () => {
+    renderView("/sales/page.ai.yaml", WUI);
+
+    expect(await screen.findByRole("button", { name: /refresh/i })).toBeInTheDocument();
+  });
+
+  it("does not run the entity queries for a WUI, which draws no records", async () => {
+    renderView("/sales/page.ai.yaml", WUI);
+
+    await screen.findByRole("button", { name: /refresh/i });
+    expect(mock.list).not.toHaveBeenCalled();
+  });
+
   // #680 — the seam: a view asks to open a record, the CONTAINER owns the modal.
   it("opens the record modal from a gantt bar double-click, and closes it again", async () => {
     mock.catalog.mockResolvedValue({ types: [ISSUE_TYPE], diagnostics: [] });

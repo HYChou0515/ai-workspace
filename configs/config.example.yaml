@@ -79,6 +79,11 @@
 #                              # (`GET .../stream?since=<seq>`). 0 disables replay
 #                              # (a reconnect degrades to store re-hydrate).
 #                              # ~200KB/session, only while a session is live.
+#   trigger_check_interval_sec: 0  # #429 P7: how often the sweeper polls each
+#                              # profile's `triggers.json` for due headless runs.
+#                              # 0 (default) = OFF; time-triggered workflows are
+#                              # opt-in per deploy. A CAS lease per (trigger,
+#                              # window) means only one pod fires each window.
 #   cors_allowed_origins: []   # #700: browser origins allowed to call this API
 #                              # cross-site — needed when an outside system hands
 #                              # work over FROM ITS OWN PAGE (e.g. a legacy
@@ -106,6 +111,24 @@
 #                              # workflow step, the goal driver, a scheduled job
 #                              # — get none. A raising impl fails the send.
 #                              # Empty (default) = no such seam at all.
+#   env_providers: []          # #750: dotted paths to YOUR `IEnvProvider`
+#                              # implementations (`workspace_app.api.env_provider`),
+#                              # e.g. ["mycorp.plugins.SapLogin"]. Each one is a
+#                              # "log in, get the variables" seam: a person who
+#                              # knows their account + password fills a variable
+#                              # that is really a token, instead of pasting one.
+#                              # A LIST, unlike `request_env` above — one deploy
+#                              # can have an SAP login, an AD login and an
+#                              # API-key exchange, unrelated to each other.
+#                              # A tool declares only variable NAMES (#750
+#                              # `env.json`); the platform joins tool to provider
+#                              # BY NAME, so a third-party tool author can never
+#                              # name — or choose — which credential your UI asks
+#                              # for. Exchanged values are filled into the form,
+#                              # not auto-saved, and credentials are never stored.
+#                              # Empty (default) = no login buttons anywhere;
+#                              # every variable stays typeable by hand, which is
+#                              # the path that always works.
 
 # ─── sandbox (agent execution environment) ──── [MUST] · [SCALE] ────
 # sandbox:
@@ -712,6 +735,11 @@
 #       #   api_key: ${OPENAI_API_KEY}      #   narrates instead of calling write_file (the
 #     maintainer_max_turns: 40              #   agent-wiki-* health probe flags this) — point it at
 #     reader_max_turns: 24                  #   a stronger tool-calling model. Reuse an existing
+#     reflect_daily: "04:00"                #   #479: server-local HH:MM the DAILY REFLECTION
+#                                           #   (consolidation) fires for every PROSE wiki
+#                                           #   collection, reusing the `llm` above. "" / null =
+#                                           #   off (manual POST /wiki/reflect only). Code
+#                                           #   collections are never reflected.
 #                                           #   hosted preset to avoid restating the creds.
 #   # wiki:                                 # ← off switch: `wiki.llm: null` disables wiki
 #   #   llm: null                           #   maintenance on ingest + the KB-chat wiki route
@@ -725,6 +753,26 @@
 #                                           #   register custom + disable bundled, e.g.
 #                                           #   parsers: ["my.pkg.DoclingParser"]
 #                                           #   parsers_disabled: ["PdfParser"]
+#   graph:                                  # #534: knowledge-graph metric extraction —
+#     chunk_budget: 20                      #   how a pass is CUT INTO JOBS. A batch does one
+#                                           #   model call per CHUNK, so batching by document
+#                                           #   count bounded nothing (20 short notes vs 20 long
+#                                           #   decks differ by 100x) and the tail ran past the
+#                                           #   30-minute job ceiling, where work is REDELIVERED
+#                                           #   rather than finished — so it never completed.
+#                                           #   Lower it if the model is slow; the only cost is
+#                                           #   more (cheaper, parallel) jobs. A single document
+#                                           #   bigger than the budget still travels alone.
+#                                           #   Whether a collection uses the graph at all is
+#                                           #   per-collection (`use_graph`), not set here.
+#   image_embedder:                         # #519: what populates/queries DocChunk.embedding_img
+#     kind: none                            #   none (default) = no image embedder, retrieval stays
+#                                           #   text-only and byte-for-byte the pre-#513 path.
+#                                           #   perceptual = dependency-light placeholder that
+#                                           #   clusters visually-similar images, so query-by-image
+#                                           #   works before the real model lands (image-only, so
+#                                           #   text retrieval is still unchanged).
+#                                           #   hash = byte-hash stub, exact match only; for tests.
 
 # ─── agents (presets + the picker / KB-chat) ──── [MUST] ────────────
 #
@@ -742,6 +790,34 @@
 #     the catalog refuses to start otherwise (without that tool, the
 #     KB sub-agent can't search collections and silently degrades to
 #     "I can't access the KB" natural-language refusals).
+#
+# A preset's full field set (all optional bar the model — write only what you
+# override; the mental model above mentions `suggestions` and the sandbox image,
+# these are the keys):
+#
+#   presets:
+#     my-preset:
+#       model: openai/gpt-4o-mini
+#       prompt: pkg:.../rca/prompts/system.md   # (or `prompt_file:`)
+#       description: "cheap, good for a first pass"   # one-line picker blurb under
+#                                               # the entry name; "" = none shown
+#       suggestions:                            # the quick-prompt chips on the panel
+#         - label: SPC                          #   what the BUTTON reads
+#           prompt: "Show me the SPC analysis of ..."   # what pressing it SENDS,
+#                                               #   verbatim. Split on purpose (#91)
+#       allowed_tools: null                     # null = unspecified (standard agent
+#                                               # tools); [] = no tools; [...] = exact
+#       env: {}
+#       sandbox_image: workspace-app/sandbox:py312-ds
+#                                               # built from docker/Dockerfile.workspace —
+#                                               # ipykernel + numpy/pandas/matplotlib/scipy
+#                                               # pre-installed (not bare python:3.12-slim)
+#       idle_timeout_seconds: 28800             # 8h before the sandbox is reaped. RCA is an
+#                                               # open-it, leave, come-back workflow; the old
+#                                               # workspace-app default of 900 (15 min) is
+#                                               # wrong for it
+#       llm: { ... }                            # base_url / api_key / temperature — and the
+#                                               # failover keys documented further up
 #
 # Bundled defaults ship 8 presets and the standard wiring:
 #
@@ -889,6 +965,14 @@
 #     # model: openai/gpt-4o-mini           # ← optional inline model override
 #     # reasoning_effort: low               # ← none|low|medium|high
 #   # judge_llm: null                       # ← off (default): no AI scoring
+#   checks: []                              # ← #51: YOUR in-house check classes — dotted paths
+#                                           #   to ISanityCheck subclasses (zero-arg), appended
+#                                           #   AFTER the bundled seven. Same pattern as
+#                                           #   `kb.parsers`.
+#   checks_disabled: []                     # ← bundled check_ids to skip. An UNKNOWN id raises at
+#                                           #   startup: a typo must not silently leave a check
+#                                           #   running (or missing) while the config claims
+#                                           #   otherwise.
 
 
 # ─── Chat goals: turn-end checker + auto-continue budget (#613) ─ [OPT] ──
@@ -907,6 +991,30 @@
 #     # model: openai/gpt-4o-mini           # ← optional inline model override
 #     # reasoning_effort: low               # ← none|low|medium|high
 #   max_rounds: 3                           # ← auto-continue budget per goal
+#                                           #   WORK-HOURS only — the off-hours budget below is
+#                                           #   counted separately, or one night's spending would
+#                                           #   make the goal read as exhausted the next morning.
+#   offhours:                               # ← #615: may a goal keep working unattended?
+#     window: "20:00-07:00"                 #   "HH:MM-HH:MM" in `timezone`; wrapping past
+#                                           #   midnight is the normal case. EMPTY (default) =
+#                                           #   off-hours autonomy is OFF, and the chat panel
+#                                           #   says so rather than offering a dead checkbox.
+#     timezone: Asia/Taipei                 #   IANA name. NOT the container clock — a window
+#                                           #   that moves when the base image changes is
+#                                           #   untraceable.
+#     max_rounds: 30                        #   budget for ONE goal across ALL its nights, not
+#                                           #   per night: cumulative is what lets a multi-night
+#                                           #   task finish while still ending on its own.
+#     yield_after_human_minutes: 30         #   a goal whose chat has a human message this recent
+#                                           #   is left alone entirely.
+#     max_concurrent: 3                     #   how many goals one pod starts per sweep, so the
+#                                           #   window opening does not wake every goal at once.
+#     poll_seconds: 60                      #   how often the sweeper looks; also the retry
+#                                           #   granularity for a goal that yielded.
+#                                           # WHICH DAYS is deliberately not here — working days
+#                                           # and holidays live in the `WorkCalendar` resource,
+#                                           # because recording next Saturday as a workday must
+#                                           # not mean editing this file and restarting pods.
 
 # ─── prompt_file value forms ────────────────────────────────────────
 #   pkg:<dotted-package>/<file.md>   bundled (ships with the wheel)

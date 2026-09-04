@@ -30,6 +30,7 @@ import { useItemCanWrite } from "../../hooks/useItemCanWrite";
 import { useUsers } from "../../hooks/useUsers";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { TextRenderer } from "../TextRenderer";
+import { WuiView } from "../wui/WuiView";
 import { YamlTree } from "../YamlTree";
 import { EntityRecordModal } from "./EntityRecordModal";
 import { EntityViewBody, HealthView, parseViewSpec } from "./EntityViews";
@@ -124,6 +125,12 @@ export function AiYamlRenderer({ path }: { path: string }) {
     return <div style={{ color: "var(--err)" }}>{entry.error ?? "load failed"}</div>;
   }
   if (!spec) return <YamlTree text={entry.text} />;
+
+  // A WUI is the view file's FOLDER, run as a page — so it is rendered here,
+  // ahead of the dispatcher, for the two things the dispatcher would take away:
+  // the file's own path (which is how the folder is found) and the whole pane
+  // (the entity panel's title bar and empty-state chrome mean nothing here).
+  if (spec.view === VIEW_KIND.wui) return <WuiView path={path} spec={spec} />;
 
   if (spec.view === VIEW_KIND.health) {
     // Click-to-fix: resolve the finding's type → `records_path` from the catalog

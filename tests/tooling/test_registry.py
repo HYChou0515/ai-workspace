@@ -311,6 +311,67 @@ def test_discover_packages_reads_a_declared_env_need(tmp_path: Path):
     assert need.required is True
 
 
+def test_discover_packages_reads_a_declaration_saved_with_a_byte_order_mark(tmp_path: Path):
+    """The build accepts a BOM, so this must too — they read the SAME file.
+
+    While they disagreed, a Windows-authored declaration built green, was
+    copied into the bundle byte for byte, and then arrived here as
+    undecodable: degraded to "nobody said", with nothing on screen and
+    nothing in the build to say why. One parser, one encoding, no gap.
+    """
+    pre = tmp_path / "prebuilt"
+    _seed_package(pre, "sap-tools", [_cmd("query", "Query SAP")])
+    (pre / "sap-tools" / "env.json").write_bytes(
+        b"\xef\xbb\xbf" + json.dumps([{"name": "SAP_HOST"}]).encode()
+    )
+
+    (pkg,) = discover_packages(pre)
+    assert pkg.env_needs is not None, "a BOM must not read as 'the author said nothing'"
+    assert [n.name for n in pkg.env_needs] == ["SAP_HOST"]
+
+
+def test_discover_packages_refuses_to_invent_a_need_out_of_junk_values(tmp_path: Path):
+    """A well-formed array whose VALUES are junk used to pass straight through.
+
+    Nothing raised — so the degrade path never fired — and the row reached the
+    response model, where `description: str` meeting `None` is a 500 that takes
+    the whole tool picker down for an item whose owner cannot edit the bundle.
+    Now it fails the shared parse and degrades like any other bad file.
+    """
+    pre = tmp_path / "prebuilt"
+    _seed_package(pre, "sap-tools", [_cmd("query", "Query SAP")])
+    (pre / "sap-tools" / "env.json").write_text(
+        json.dumps([{"name": "SAP_HOST", "description": None}])
+    )
+
+    (pkg,) = discover_packages(pre)
+    assert pkg.env_needs is None, "a hint we cannot read is 'nobody said', never a made-up one"
+
+
+def test_one_unusable_entry_degrades_the_whole_declaration(tmp_path: Path):
+    """The file is the unit — do not "improve" this into skipping bad rows.
+
+    A list with the junk quietly dropped arrives at the panel looking
+    complete, and "here is what this tool needs", two names short, is a worse
+    answer than "this tool did not say". Same reason absent and empty are kept
+    apart in the first place.
+    """
+    pre = tmp_path / "prebuilt"
+    _seed_package(pre, "sap-tools", [_cmd("query", "Query SAP")])
+    (pre / "sap-tools" / "env.json").write_text(
+        json.dumps(
+            [
+                {"name": "GOOD_ONE", "description": "perfectly fine", "required": True},
+                {"name": "ALSO_GOOD"},
+                {"name": "THE_TYPO", "description": None},
+            ]
+        )
+    )
+
+    (pkg,) = discover_packages(pre)
+    assert pkg.env_needs is None, "a partial list would read as a complete one"
+
+
 def test_discover_packages_keeps_undeclared_distinct_from_declared_nothing(tmp_path: Path):
     """No `env.json` is `None`; an empty one is `()` — and they must not merge.
 

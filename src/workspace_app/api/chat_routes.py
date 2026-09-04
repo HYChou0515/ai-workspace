@@ -15,6 +15,7 @@ from typing import Any, Protocol, cast
 
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
+from msgspec import to_builtins
 from specstar import SpecStar
 
 from ..kb.ingest import Ingestor
@@ -585,29 +586,39 @@ def register_chat_routes(
         )
         return {"insight_ids": ids}
 
-    @app.get("/a/{slug}/items/{item_id}/export-chat")
-    async def export_chat(slug: str, item_id: str) -> Response:
-        """Download the conversation in the `.chat.json` round-trip
-        format — the KB upload path runs the same insight extraction
-        the promote button does on these files (debug / out-of-band
-        re-ingestion). The filename guarantees the suffix contract."""
-        investigation_id = locator.require_access(slug, item_id, "read_chat")
-        from ..kb.chat_export import CHAT_EXPORT_SUFFIX, build_chat_export
+    @app.get("/a/{slug}/items/{item_id}/chats/{chat_id}/export-chat")
+    async def export_chat(slug: str, item_id: str, chat_id: str) -> Response:
+        """Download THIS chat in the `.chat.json` round-trip format — the KB
+        upload path runs the same insight extraction the promote button does on
+        these files (debug / out-of-band re-ingestion). The filename guarantees
+        the suffix contract.
 
-        title = locator.title_of(investigation_id)
-        if title is None:
-            raise HTTPException(status_code=404, detail=f"unknown item: {investigation_id!r}")
-        _rid, conv = locator.conversation_for(investigation_id)
+        Chat-scoped like every other chat endpoint. It used to hang off the item
+        and resolve `conversation_for` — the item's DEFAULT chat — so whichever
+        chat you had open, you downloaded the earliest one, under the ITEM's
+        title and id. Nothing in the file disagreed with what you expected, which
+        is what made it worth fixing rather than documenting."""
+        investigation_id = locator.require_access(slug, item_id, "read_chat")
+        from ..kb.chat_export import build_chat_export, chat_export_disposition
+
+        _rid, conv = locator.require_chat(slug, item_id, chat_id)
+        # An unnamed chat has no title of its own; the item it belongs to is the
+        # honest fallback — and it is what a single-chat item exported before.
+        title = conv.title or locator.title_of(investigation_id) or "chat"
+        # The whole message, not a hand-picked three of it. This file is for
+        # debugging, so it is a faithful archive: the model's own reasoning, the
+        # timings and token counts, the tool call's arguments, the citations.
+        # Listing fields is what produced the defect's whole family — a field is
+        # added to Message and nothing reminds anyone to add it here — and it is
+        # also how a `tool_name or ""` came to write a value the message did not
+        # hold. `to_builtins` carries whatever the message carries, including
+        # every field added after this line was written.
         payload = build_chat_export(
             title=title,
-            messages=[
-                {"role": m.role, "content": m.content, "tool_name": m.tool_name or ""}
-                for m in conv.messages
-            ],
+            messages=[to_builtins(m) for m in conv.messages],
         )
-        filename = f"{investigation_id}{CHAT_EXPORT_SUFFIX}"
         return Response(
             content=payload,
             media_type="application/json",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            headers={"Content-Disposition": chat_export_disposition(title)},
         )

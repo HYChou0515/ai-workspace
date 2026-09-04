@@ -873,6 +873,7 @@ class Preset:
     # total wall-clock budget for the turn before surfacing a busy failure.
     round_backoff_s: tuple[float, ...] | None = None
     total_deadline_s: float | None = None
+    rate_limit_budget_s: float | None = None
 
 
 # Bundled default presets — these populate `Settings().agents.presets`
@@ -1122,6 +1123,12 @@ class AgentsSettings:
 
     presets: dict[str, Preset] = field(default_factory=_bundled_presets)
     sub_agents: dict[str, list[dict[str, Any]]] = field(default_factory=_bundled_sub_agents)
+    # The curated presets a `run_agent` caller may pick for a sub-agent
+    # (plan-subagent-model-choice): preset NAMES, order = display order.
+    # Empty ⇒ the feature does not exist (run_agent grows no `model`
+    # parameter). Reserved at YAML level like `presets` — every OTHER
+    # `agents.<key>` is a sub-agent usage list; this one is not.
+    subagent_models: tuple[str, ...] = ()
 
     @property
     def kb_chat(self) -> list[dict[str, Any]]:
@@ -1241,12 +1248,18 @@ class FailoverSettings:
     # quick same-endpoint retries before switching; ``round_backoff_s`` re-sweeps
     # the whole chain once per entry (cooldown-aware wait — at least this long, but
     # until a parked endpoint un-cools; ``[]`` = a single sweep, the original #196
-    # behaviour); ``total_deadline_s`` caps the whole turn so it fails readably
-    # instead of hanging forever. Per-preset overridable (num_retries per endpoint;
-    # round_backoff_s / total_deadline_s from the chain head).
+    # behaviour); ``total_deadline_s`` caps the busy/broken sweeps so they fail
+    # readably instead of hanging forever — with one exception: a 429 hold draws
+    # on ``rate_limit_budget_s`` instead, its own pool of held seconds per agent
+    # run (#759): a rate limit is the one failure whose honest cure — waiting the
+    # stated window at the same, healthy endpoint — can far outlast a deadline
+    # sized for busy sweeps. Two hours by the operator's call. Per-preset
+    # overridable (num_retries per endpoint; round_backoff_s / total_deadline_s /
+    # rate_limit_budget_s from the chain head).
     num_retries: int = 2
     round_backoff_s: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0, 16.0)
     total_deadline_s: float = 120.0
+    rate_limit_budget_s: float = 7200.0
 
 
 @dataclass(frozen=True)

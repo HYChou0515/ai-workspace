@@ -98,8 +98,12 @@ _DEFAULT = Source("default")
 
 
 def _is_branch(value: Any) -> bool:
-    """A non-empty dict/list recurses; an empty one is a leaf (`parsers: []`)."""
-    return bool(value) and isinstance(value, dict | list)
+    """A non-empty dict/list/tuple recurses; an empty one is a leaf
+    (`parsers: []`). Tuples are how `asdict` hands over tuple-backed settings
+    (`round_backoff_s`, `subagent_models`) — treated as leaves they rendered
+    on one line annotated by a path the provenance walk never wrote, so an
+    operator-set value read `# ← default`."""
+    return bool(value) and isinstance(value, dict | list | tuple)
 
 
 def _value(path: str, value: Any, src: Source, reveal: bool) -> str:
@@ -150,11 +154,11 @@ def _scalar(value: Any) -> str:
         return value if bare else json.dumps(value, ensure_ascii=False)
     if isinstance(value, dict):
         return "{}"
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple)):
         return "[]"
     return json.dumps(
         value, ensure_ascii=False, default=str
-    )  # pragma: no cover — asdict leaves are scalar/dict/list only
+    )  # pragma: no cover — asdict leaves are scalar/dict/list/tuple only
 
 
 def _join(prefix: str, key: str) -> str:
