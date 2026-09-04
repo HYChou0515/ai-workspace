@@ -321,9 +321,15 @@ per-call timeout 參數 —— 它吃 backend 實例層級的 `exec_timeout`,**�
     A 汙染自己的 cache → A 被 kill → uid 回收 → B 拿到同一個 uid → **從 A 的 cache 安裝**。
     ⚠️ 而「先確認那個 sandbox 還在不在這台 host」擋不住它,**方向還相反**:uid 被回收的
     那一刻正是「沒有活著的 sandbox」,也正是下一個 item 最容易撿走的時刻。
-    再往下一層:host 的 handle 是 **per-pod uuid**(#366,不像 `kind: local` 用 item id
-    重新掛回),所以在正式環境的 backend 上**根本沒有穩定的 item 身分可以當鍵**。
-    這條不是加個 sweeper 能救的,是鍵的層次就不成立。
+    ⚠️ **「所以正式環境根本沒有穩定的身分可以當鍵」—— 這句我一開始寫太滿,更正。**
+    host 的 handle 確實是 per-pod uuid(#366),但 `create` **收得到 `item_id`**
+    (`controller.create(spec, body.item_id)` → `self._item_of[handle.id]`),
+    `nfs_archive` 就是拿它當鍵的。精確的說法是:**uid 是錯的鍵;`item_id` 拿得到,
+    但它是選用的**(`item_id: str | None = None`,只在接了 NFS archive 時才會送)。
+    所以 per-**item** 的持久快取在鍵的層次是成立的 —— 要做的話還得處理三件事:
+    鍵可能是 `None` 時的退路(一個會依設定旋鈕靜默切換安全姿態的設計,正是會咬人的那種)、
+    同一個 item 換 sandbox 時 uid 會變所以擁有權要重新建立、以及它仍然需要一個回收器。
+    **未評估,也不是這個 PR 要做的。**
     ⚠️ 兩個 backend 在這點不對稱:app 端的 `IsolatedProcessSandbox` 由 item id 導出 uid
     (固定),host 端是 pool。**任何以 uid 為鍵的持久狀態,只在 app 端安全,正式環境不安全。**
   - **per-uid 但留著**:`uid_range` 預設 2,000,000,000,所以「份數有上界」等於沒說 ——
