@@ -439,7 +439,7 @@ export function AppDashboard() {
         </div>
 
         {/* table */}
-        <div style={{ flex: 1, overflow: "auto", padding: isNarrow ? "0 16px 16px" : "0 28px 28px" }}>
+        <div className="scrollable" style={{ flex: 1, overflow: "auto", padding: isNarrow ? "0 16px 16px" : "0 28px 28px" }}>
           <div role="table" data-testid="dash-items" style={{ minWidth: isNarrow ? 640 : undefined, background: "var(--white)", border: "1px solid var(--paper-3)", borderRadius: "var(--radius-card)", overflow: "hidden" }}>
             <div role="row" style={{ display: "grid", gridTemplateColumns: GRID, padding: "10px 16px", borderBottom: "1px solid var(--paper-3)", alignItems: "center", gap: 10 }}>
               <div />

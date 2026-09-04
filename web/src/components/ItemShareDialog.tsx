@@ -206,7 +206,7 @@ export function ItemShareDialog({
             // Capped + scrollable so the tenth person cannot push the picker,
             // the group section and the buttons off the panel: the list grows
             // inside its own box, everything around it stays where it was.
-            <ul data-testid="item-grant-list" style={{ ...grantList, gap: 6 }}>
+            <ul className="scrollable" data-testid="item-grant-list" style={{ ...grantList, gap: 6 }}>
               {grants.map((g) => {
                 const custom = g.verbs.size > 0;
                 return (
@@ -282,7 +282,7 @@ export function ItemShareDialog({
                 />
               </div>
               {groupGrants.length > 0 && (
-                <ul data-testid="item-group-list" style={{ ...grantList, gap: 4 }}>
+                <ul className="scrollable" data-testid="item-group-list" style={{ ...grantList, gap: 4 }}>
                   {groupGrants.map((g) => (
                     <li key={g.groupId} style={{ display: "grid", gap: 2 }}>
                       <div style={grantRow}>

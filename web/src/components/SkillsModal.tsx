@@ -173,7 +173,7 @@ export function SkillsModal({
             {refreshNote}
           </p>
         )}
-        <div
+        <div className="scrollable"
           style={{ overflowY: "auto", display: "flex", flexDirection: "column", gap: 4, flex: 1 }}
         >
           {list.length === 0 ? (

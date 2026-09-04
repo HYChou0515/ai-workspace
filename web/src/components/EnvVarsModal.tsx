@@ -273,7 +273,7 @@ export function EnvVarsModal({
               {/* Capped and scrollable, like every other list of this shape
                   here: the search box stays outside the scroll area so it can
                   never be scrolled out of reach. */}
-              <div style={{ maxHeight: "min(240px, 30vh)", overflowY: "auto" }}>
+              <div className="scrollable" style={{ maxHeight: "min(240px, 30vh)", overflowY: "auto" }}>
                 {offeredGroups.map((group) => (
                   <PopoverItem
                     key={group.key}

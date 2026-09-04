@@ -79,7 +79,7 @@ export function CollectionsChecklist({
         </div>
       )}
 
-      <div
+      <div className="scrollable"
         style={{
           overflowY: "auto",
           minHeight: 0,

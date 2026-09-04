@@ -207,7 +207,7 @@ export function ReplayDialog({
                       call={{ name: original.tool_name, arguments: original.tool_args ?? {} }}
                     />
                     {original.content && (
-                      <pre
+                      <pre className="scrollable"
                         style={{
                           margin: "6px 0 0",
                           fontFamily: "var(--font-mono)",
@@ -256,7 +256,7 @@ export function ReplayDialog({
                 </button>
               )}
               {showThinking && data.reasoning && (
-                <pre
+                <pre className="scrollable"
                   style={{
                     margin: "0 0 8px",
                     fontFamily: "var(--font-mono)",

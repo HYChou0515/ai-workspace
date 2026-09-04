@@ -2380,7 +2380,7 @@ function DirBrowser({
   const [dir, setDir] = useState(startDir);
   const entries = useMemo(() => dirChildren(paths, dir), [paths, dir]);
   return (
-    <div style={{ minWidth: 220, maxHeight: 320, overflowY: "auto" }}>
+    <div className="scrollable" style={{ minWidth: 220, maxHeight: 320, overflowY: "auto" }}>
       {dir && (
         <button
           type="button"

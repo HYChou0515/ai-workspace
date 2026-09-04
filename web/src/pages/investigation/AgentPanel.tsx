@@ -954,7 +954,7 @@ export function AgentPanel({
           </div>
         )}
         {imageChips.length > 0 && (
-          <div
+          <div className="scrollable"
             data-testid="image-chips"
             style={{
               display: "flex",

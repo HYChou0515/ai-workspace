@@ -60,7 +60,7 @@ export function GroupPicker({
           screen and most of the budget on a laptop, so cap it against the
           viewport as well — the search box above stays outside this scroll
           area, so it can never be scrolled out of reach. */}
-      <ul style={{ listStyle: "none", margin: 0, padding: 0, maxHeight: "min(240px, 22vh)", overflowY: "auto" }}>
+      <ul className="scrollable" style={{ listStyle: "none", margin: 0, padding: 0, maxHeight: "min(240px, 22vh)", overflowY: "auto" }}>
         {shown.map((g) => (
           <li key={g.resource_id}>
             <button
