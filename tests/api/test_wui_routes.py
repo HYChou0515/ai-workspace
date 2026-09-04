@@ -16,7 +16,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from workspace_app.api.locator import ItemLocator
-from workspace_app.api.wui_routes import register_wui_routes
+from workspace_app.api.wui_routes import BUILD_STEP_MARK, register_wui_routes
 from workspace_app.resources import AgentConfig
 from workspace_app.sandbox.protocol import (
     ExecResult,
@@ -399,6 +399,34 @@ def test_build_provisions_the_dependencies_the_mirror_never_kept():
     script = " ".join(sandbox.calls[0])
     assert "pnpm install" in script
     assert script.index("pnpm install") < script.index("pnpm run build")
+
+
+def test_the_log_says_where_installing_stopped_and_building_started():
+    """One command, two steps, and the pane gives ONE verdict for both.
+
+    The steps are chained with `&&`, so a failed install means the build never
+    ran at all — but the pane says "Build failed (exit 1)", which reads as "the
+    build ran and rejected my code". The natural place to look instead cannot
+    answer it either: a page with no dependencies installs successfully and
+    leaves `node_modules` holding a single metadata file, indistinguishable from
+    an install that died on its first write. (Both were seen in production, and
+    the second was diagnosed as the first.)
+
+    So the log draws the line itself. Because the marker is chained the same
+    way, its ABSENCE is the signal: no marker means the install is what failed.
+    """
+    sandbox = _BuildSandbox([b"ok\n"])
+    client, _, _, _ = build(sandbox=sandbox)
+
+    client.post(BUILD_URL, json={"folder": "/page"})
+    script = sandbox.calls[0][-1]
+
+    assert BUILD_STEP_MARK in script
+    assert script.index("pnpm install") < script.index(BUILD_STEP_MARK)
+    assert script.index(BUILD_STEP_MARK) < script.index("pnpm run build")
+    # Chained, not sequenced: `;` would print it even when the install failed,
+    # which is the one case the marker exists to distinguish.
+    assert ";" not in script.split("fi")[-1]
     # With a lockfile, the install must be the reproducible one: two installs
     # from one lock that resolve differently make the lock pointless.
     assert "--frozen-lockfile" in script

@@ -109,8 +109,23 @@ def _build_dir(folder: str) -> str | None:
 # resolve differently make the lock pointless. Where there is none — a page
 # installing for the first time — the plain install is what WRITES it, and
 # `--frozen-lockfile` would refuse instead.
+#: What the log says between the two halves.
+#:
+#: One command, two steps, and before this ONE verdict for both: a failed
+#: install reads as "Build failed (exit 1)" and you have to know that
+#: `&&` means the build never ran at all. Worse, the natural place to look
+#: instead — `node_modules` in the file tree — cannot answer it either: a page
+#: with no dependencies installs successfully and leaves a single metadata file,
+#: which is indistinguishable from an install that died on its first write.
+#:
+#: So the log says so itself. Printed by the shell between the halves, it costs
+#: nothing, every page gets it without its author remembering anything, and the
+#: line is there whether the build then succeeds or fails.
+BUILD_STEP_MARK = "--- dependencies ready, running the build ---"
+
 _BUILD = (
     "if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; else pnpm install; fi"
+    f" && echo {shlex.quote(BUILD_STEP_MARK)}"
     " && pnpm run build"
 )
 

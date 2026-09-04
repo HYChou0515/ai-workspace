@@ -297,3 +297,77 @@ screenshot — which is the argument for doing that before calling a feature don
 - Cross-item access, `exec`, and asking the agent from inside a page — the last
   would arrive as a tool if it ever does (7).
 - Any second manifest format, registry, or "publish" action (2, 5).
+
+---
+
+# 上線後的第二輪(2026-09-04)
+
+PR #773 合併後,實際在 prod 用起來才浮出的東西。順序是「回報 → 診斷 → 修」,每一條都註明
+是**已修**、**卡在誰身上**,還是**知情不做**。
+
+## PR #788(8 commits,CI 綠,ready,未合併)
+
+| | 回報的話 | 真因 |
+|---|---|---|
+| P1 | log 伸展高度比 pane 還高,半個版面空白 | `max-height: 30%` 掛在內層,對著一個被無上限內容撐大的容器算百分比。真瀏覽器量:舊結構 strip 1592px、頁面 **0px** |
+| P2 | 「IRequestEnv 沒有注入」 | 兩條 WUI 路由都沒接。`callTool` 已接;**`build` 刻意不接**(見下) |
+| P3 | 「AI 好像沒有被推薦使用 react and ts」 | skill 寫「Prefer no build」,把所有頁面導向 vanilla JS。已改為預設 React+TS,附 `wui.d.ts` |
+| P4 | 「skill 不夠仔細,應該讓 AI 檢查 tool 的 output」 | `callTool` 的輸出格式是 tool 的契約,平台不保證。已加「先跑一次再寫解析」 |
+| P5·P6 | 「13mb 單行 json 過不了 readFile 橋」→ 實際症狀「一直說沒有查到東西」 | **不是大小問題**(13.6MB 實測 232ms 通過)。真因:bare 路徑會把頁面資料夾疊兩次,而那個失敗被當成「第一次開頁」靜音 |
+| P7·P8 | 兩輪對抗式 review | 兩輪最嚴重的發現**都是前一輪修法造成的**——見下面的教訓 |
+
+### 這輪最貴的兩個教訓
+
+1. **修了整類,卻沒打到回報的那個實例。** P5 修好「頁面資料夾**以外**的缺檔」,但使用者
+   看到的 `/x/x/foo.json` 疊加路徑**還在資料夾裡面**,所以照樣靜音。commit 宣稱結案,
+   症狀原封不動。**修完要把使用者貼的那個字串原樣跑一次。**
+2. **規則搬家沒把測試帶走。** 判準從 `resolveWritePath` 搬到新的 `isOwnFile`,舊函式的
+   測試留在原地繼續綠,新函式守衛是零——三個突變通過了全部 196 條測試。
+
+### 一個被 review 擋下來的安全問題
+
+`IRequestEnv` **不可以進 build**。`dist/` 會落到永久儲存並被組進每一位看這個 item 的人拿到
+的文件,而 bundler 的工作就是把環境變數烤進產出物(Vite 的 `loadEnv` 會撈 `VITE_` 開頭的
+名字)。per-request 憑證進到那裡 = 一個人的憑證寫進別人下載得到的檔案。
+
+**判準:這條路徑的產出是回給問的那個人,還是變成共享的東西?** 前者注入,後者不注入。
+
+## prod 回報的第二批(進行中,未 commit)
+
+1. ✅ **install 和 build 分開報。** 兩步一個 `&&`、一個結論,失敗在哪一半看不出來;而
+   `node_modules` 也答不了(沒有依賴的頁面裝完只剩一個中繼檔,跟裝到一半死掉長一樣)。
+   已在兩步之間印 `BUILD_STEP_MARK`,用 `&&` 串,所以**它沒出現就代表 install 是失敗的那半**。
+2. ✅ **下載來的函式庫是 build 產物,不可以改。** `chart.umd.js` 躺在資料夾裡跟原始碼長得
+   一樣,AI 去改它,下次 Rebuild 直接覆蓋,改動無聲消失。已在 SKILL.md 與 chart 的 README
+   明寫。⚠️ 這個陷阱**只存在於不用打包器的流程**;用 Vite 的話函式庫是正常依賴、被編譯進
+   `dist/`,沒有散落的副本可以被誤認。
+3. ✅ **「任何 npm 套件都能這樣抓」。** skill 只示範 chart.js,AI 就以為能用的只有那一個。
+4. ✅ **chart 範例的圖表生命週期缺陷。** 資料變空時 `draw()` 提早 return **沒有 destroy**
+   舊圖表,Chart.js 仍在監看 canvas 母節點,版面一動就讀到不存在的 `parentNode`。
+   這很可能就是 prod 回報的那個錯誤,而 AI 會把它說成「chart.js 本身的問題」。
+5. 🔨 **一個演示完整功能的範例**(`examples/complete/`)。一頁用過整個介面:讀 item 真實
+   檔案、真的圖表庫、寫自己的資料、`callTool`(**含 tool 回傳路徑那個實際踩到的案例**)、
+   `openFile`、`whoami`、`onFileChanged`、每種失敗都是一句話。React + TS + Vite。
+   **還缺**:`styles.css`、`README.md`、實際 build 驗證、釘住用的測試、加進範例表與本文件。
+
+## 已定案、還沒做:給頁面一個自己的網址
+
+**決定(2026-09-04,使用者拍板):打開網址的人必須本來就看得到那個 item。**
+
+所以這是小功能:同一個 app 上一條「沒有外殼」的路由(例如 `/w/{item}/{資料夾}`),整個視窗
+就是那一頁。沿用同一個登入、同一組權限檢查、同一個組裝器、同一個 sandbox + CSP +
+`frame-src` 信封。**不需要新伺服器、不需要匯出、不需要第二套安全模型。**
+
+⚠️ 網址本身不多給也不少給權限。要發給看不到 item 的人是**另一個層級**的設計(頁面需要比
+item 更窄的身分和資料範圍),不在這個決定裡。
+
+## 知情不做
+
+- `listFiles` 對不存在的前綴回空陣列,靜音。平台分不出「空資料夾」和「沒這個資料夾」
+  (`walk` 只回檔案),所以沒有依據拒絕。
+- item 的 `env_vars` 會蓋過後端自己設的 `PATH`/`HOME`/`NODE_ENV`(`Sandbox.exec` 的契約
+  就是使用者的值贏),所以 item 上設 `NODE_ENV=production` 會讓 pnpm 跳過 devDependencies、
+  `tsc` 消失、Rebuild 全壞。要不要擋保留字是平台層級政策,不塞在 WUI 的 PR 裡。
+- **知識庫那組 tool(9 個)頁面碰不到**,沒被考慮過,是最有機會被要求的一組。設計上的規矩
+  是:新能力一律以 **package tool** 的形式出現,不加新的 bridge 動詞——要信任的程式碼面積
+  才不會長大。所以正確形狀是一個 `ask_kb` 的 package tool,不是 `workspace.askKnowledgeBase()`。

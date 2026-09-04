@@ -27,12 +27,27 @@ page that reads wrongly is obvious, a page that writes wrongly is not.
 **A library is a file in the folder, not a CDN.** "No network" is about
 RUNTIME. `<script src="https://cdn…">` never arrives — but a UMD build sitting
 next to the page is inlined like `app.js` is, and the SANDBOX has a network to
-fetch it with (`npm pack chart.js@4`, copy the one file in; `examples/chart/`
-does this as its build step, so opening the page is enough). **Do not hand-draw
-a chart.** Axes that agree with their own scale, hit-testing, tooltips and tick
-spacing are a lot of code to get wrong, and the library costs nothing at
-runtime. Prefer small ones: the file is inlined into the document, so its size
-is paid on every open.
+fetch it with. **Do not hand-draw a chart.** Axes that agree with their own
+scale, hit-testing, tooltips and tick spacing are a lot of code to get wrong,
+and the library costs nothing at runtime.
+
+**Any package on npm works this way — `chart.js` is the example, not the
+menu.** A date library, a table, a spreadsheet grid, a diagram renderer: if it
+publishes a UMD build, `npm pack <name>@<version>` fetches it and you copy the
+one file in. With a bundler (below) you do not even do that — you `pnpm add` it
+like anywhere else. You are not limited to what these examples happen to use.
+
+⚠️ **A library you fetched is BUILD OUTPUT. Never edit it.** After the build,
+`chart.umd.js` sits in the folder looking exactly like a file you wrote — and
+the next Rebuild overwrites it, so an edit there disappears without a word and
+takes the evening with it. If the library misbehaves, change how you CALL it, or
+pin a different version in the build step. (This trap only exists without a
+bundler. With one, the library is an ordinary dependency compiled into `dist/`,
+and there is no loose copy to mistake for source — one more reason the built
+setup is the default.)
+
+Prefer small libraries in the no-build case: the file is inlined into the
+document, so its size is paid on every open.
 
 ## Write it in React and TypeScript
 
