@@ -392,6 +392,29 @@ describe("WuiView: rebuilding a page that has a build step", () => {
   // The label says "Building…" while it runs — that IS the progress signal, so
   // the helper has to accept both.
   const rebuild = () => screen.getByRole("button", { name: /rebuild|building/i });
+  /** A build whose output arrives in pieces, with a gate before the last one. */
+  function serveGated(chunks: string[]) {
+    let go: () => void = () => {};
+    const gate = new Promise<void>((r) => (go = r));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        const encode = new TextEncoder();
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            async start(c) {
+              for (const chunk of chunks.slice(0, -1)) c.enqueue(encode.encode(chunk));
+              await gate;
+              c.enqueue(encode.encode(chunks[chunks.length - 1]));
+              c.close();
+            },
+          }),
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        );
+      }),
+    );
+    return { release: () => go() };
+  }
 
   afterEach(() => vi.unstubAllGlobals());
 
@@ -436,6 +459,9 @@ describe("WuiView: rebuilding a page that has a build step", () => {
     expect(screen.queryByText(/615ms/)).not.toBeInTheDocument();
 
     release();
+    // The log folds away when the build succeeds, so this opens it again — the
+    // point of the test is that the output ARRIVED, not where it sits after.
+    fireEvent.click(await screen.findByRole("button", { name: /show build output/i }));
     expect(await screen.findByText(/615ms/)).toBeInTheDocument();
   });
 
@@ -489,6 +515,68 @@ describe("WuiView: rebuilding a page that has a build step", () => {
     fireEvent.click(await screen.findByRole("button", { name: /rebuild/i }));
 
     expect(await screen.findByText(/cannot run things here/)).toBeInTheDocument();
+  });
+
+  it("puts a finished build's log away, because the page is the answer", async () => {
+    // The log earns the top of the pane while it is running and for as long as
+    // something went wrong. A build that succeeded has already said everything
+    // it has to say — leaving twelve lines of vite output above somebody's page
+    // is taking their pane for a receipt.
+    const { release } = serveGated([
+      sse({ type: "output", text: "vite v6.4.3 building for production..." }),
+      sse({ type: "done", exit_code: 0 }),
+    ]);
+    renderIn({ ...BUILT });
+    fireEvent.click(await screen.findByRole("button", { name: /rebuild/i }));
+
+    // Running: the output is the progress, so it is on screen.
+    expect(await screen.findByText(/building for production/)).toBeInTheDocument();
+
+    release();
+    await waitFor(() => expect(screen.queryByText(/building for production/)).not.toBeInTheDocument());
+    // Not gone without trace: one line says what happened, and opens it again.
+    expect(screen.getByText(/Build finished/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /show build output/i }));
+    expect(await screen.findByText(/building for production/)).toBeInTheDocument();
+  });
+
+  it("unfolds again for the next build", async () => {
+    // The fold is about a build that is OVER. Pressing Rebuild is asking to
+    // watch one, and finding the log still folded would read as the button
+    // doing nothing.
+    const first = serveGated([
+      sse({ type: "output", text: "first pass" }),
+      sse({ type: "done", exit_code: 0 }),
+    ]);
+    renderIn({ ...BUILT });
+    fireEvent.click(await screen.findByRole("button", { name: /rebuild/i }));
+    first.release();
+    await screen.findByText(/Build finished/);
+    expect(screen.queryByText(/first pass/)).not.toBeInTheDocument();
+
+    const { release } = serveGated([
+      sse({ type: "output", text: "second pass" }),
+      sse({ type: "done", exit_code: 0 }),
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: /rebuild/i }));
+
+    expect(await screen.findByText(/second pass/)).toBeInTheDocument();
+    release();
+  });
+
+  it("leaves a failed build's log open, which is the whole reason to look", async () => {
+    const { release } = serveGated([
+      sse({ type: "output", text: "src/main.jsx:12 Unexpected token" }),
+      sse({ type: "done", exit_code: 1 }),
+    ]);
+    renderIn({ ...BUILT });
+    fireEvent.click(await screen.findByRole("button", { name: /rebuild/i }));
+    await screen.findByText(/Unexpected token/);
+
+    release();
+    await screen.findByText(/failed/i);
+
+    expect(screen.getByText(/Unexpected token/)).toBeInTheDocument();
   });
 
   it("cannot be started twice over", async () => {
@@ -562,7 +650,7 @@ describe("WuiView: rebuilding a page when it is opened", () => {
     serveBuild(sse({ type: "output", text: "> vite build" }) + sse({ type: "done", exit_code: 0 }));
     renderIn(files);
 
-    expect(await screen.findByText(/vite build/)).toBeInTheDocument();
+    expect(await screen.findByText(/Build finished/)).toBeInTheDocument();
   });
 
   it("builds ONCE, though its own success re-reads the folder", async () => {
@@ -573,7 +661,7 @@ describe("WuiView: rebuilding a page when it is opened", () => {
     serveBuild(sse({ type: "output", text: "built" }) + sse({ type: "done", exit_code: 0 }));
     renderIn(files);
 
-    await screen.findByText(/built/);
+    await screen.findByText(/Build finished/);
     await new Promise((r) => setTimeout(r, 50));
     expect(buildCalls()).toHaveLength(1);
   });
@@ -661,7 +749,7 @@ describe("WuiView: rebuilding a page when it is opened", () => {
       </StrictMode>,
     );
 
-    await screen.findByText(/built/);
+    await screen.findByText(/Build finished/);
     await new Promise((r) => setTimeout(r, 50));
     expect(buildCalls()).toHaveLength(1);
   });
@@ -716,6 +804,8 @@ describe("WuiView: rebuilding a page when it is opened", () => {
     );
     renderIn({ ...BUILT });
 
+    // Folded away on success, so open it: this is about what the output SAYS.
+    fireEvent.click(await screen.findByRole("button", { name: /show build output/i }));
     const log = await screen.findByRole("log", { name: "Build output" });
     await waitFor(() => expect(log).toHaveTextContent(/built in 565ms/));
     expect(log.textContent).not.toContain("[32m");

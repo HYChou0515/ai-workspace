@@ -159,6 +159,11 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
    * `_warm` routes reads to a sandbox that merely EXISTS, without asking
    * `is_ready`, so any read during a restore can answer "not there".) */
   const [firstBuild, setFirstBuild] = useState(false);
+  /** Whether the log is unfolded. It earns the top of the pane while the build
+   * runs and for as long as something went wrong; a build that SUCCEEDED has
+   * already said everything it has to say, and leaving twelve lines of vite
+   * output above somebody's page is taking their pane for a receipt. */
+  const [logOpen, setLogOpen] = useState(true);
   const logRef = useRef<HTMLDivElement | null>(null);
   const [autoBuild, setAutoBuild] = useWuiAutoBuild(autoBuildScope(fs.scopeId, folder));
   /** The page this pane has already rebuilt on open, so that "when I open this"
@@ -265,7 +270,18 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
     if (el) el.scrollTop = el.scrollHeight;
   }, [buildLog]);
 
-  const say = (line: string) => setBuildLog((lines) => [...(lines ?? []), line]);
+  /** A chunk of the build's own output, exactly as it arrived. */
+  const say = (chunk: string) => setBuildLog((lines) => [...(lines ?? []), chunk]);
+
+  /** One of OUR lines, which always gets a line to itself. A build whose last
+   * chunk did not end in a newline — normal, since chunks are byte fragments —
+   * would otherwise read "…built in 581msBuild finished." */
+  const note = (line: string) =>
+    setBuildLog((lines) => {
+      const prev = lines ?? [];
+      const glued = prev.length > 0 && !prev[prev.length - 1].endsWith("\n");
+      return [...prev, `${glued ? "\n" : ""}${line}\n`];
+    });
 
   /**
    * Rebuild the page, showing the build's output as it arrives.
@@ -280,19 +296,23 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
     setBuilding(true);
     if (automatic) setFirstBuild(true);
     setBuildLog([]);
+    setLogOpen(true);
     try {
       for await (const event of itemBuild(slug, fs.scopeId)(folder)) {
         if (event.type === "output") say(cleanBuildOutput(event.text));
         else if (event.exit_code === 0) {
-          say("Build finished.");
+          note("Build finished.");
+          // Fold it away: the page below IS the result, and it is what the
+          // reader came for. One line stays, and opens it again.
+          setLogOpen(false);
           setGeneration((g) => g + 1);
-        } else say(`Build failed (exit ${event.exit_code}).`);
+        } else note(`Build failed (exit ${event.exit_code}).`);
       }
     } catch (err) {
       // A build that could not be STARTED — a viewer without `execute`, a
       // folder the server refuses — arrives as a status, not as output. Unsaid,
       // the button looks like it did nothing at all.
-      say(err instanceof Error ? err.message : "The build could not be run.");
+      note(err instanceof Error ? err.message : "The build could not be run.");
       // A 403 is permanent for this person: they may read the item and not run
       // things in it. Left on, rebuilding on open would greet them with that
       // same refusal every single time they open the page — so it turns itself
@@ -301,7 +321,7 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
       // must not quietly disable itself forever.
       if (automatic && err instanceof HttpError && err.status === 403) {
         setAutoBuild(false);
-        say("Rebuilding on open has been turned off, because you cannot run things here.");
+        note("Rebuilding on open has been turned off, because you cannot run things here.");
       }
     } finally {
       setBuilding(false);
@@ -326,6 +346,9 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
     // and the guard above is what decides when this may run.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canBuild, autoBuild, slug, folder]);
+
+  const logLines = (buildLog ?? []).join("").trimEnd().split("\n");
+  const logSummary = logLines[logLines.length - 1] || "Build output";
 
   const tellTheAgent = () => {
     publishAgentDraft(fs.scopeId, formatReportsForAgent(folder, reports));
@@ -392,25 +415,59 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
         )}
       </div>
       {buildLog !== null && (
-        // The build's own words, verbatim and monospaced, because they are a
-        // compiler's and their columns mean something.
-        <div
-          ref={logRef}
-          role="log"
-          aria-label="Build output"
-          style={{
-            flex: "0 0 auto",
-            maxHeight: "30%",
-            overflowY: "auto",
-            padding: "6px 8px",
-            borderBottom: "1px solid var(--paper-3)",
-            fontFamily: "var(--font-mono, ui-monospace, monospace)",
-            fontSize: pxToRem(12),
-            whiteSpace: "pre-wrap",
-            color: "var(--text-paper-d)",
-          }}
-        >
-          {buildLog.length === 0 ? "Starting the build…" : buildLog.join("")}
+        <div style={{ flex: "0 0 auto", borderBottom: "1px solid var(--paper-3)" }}>
+          <button
+            type="button"
+            onClick={() => setLogOpen((open) => !open)}
+            aria-expanded={logOpen}
+            // The control's name is what it DOES. Naming it after the status
+            // line it carries made it a second button called "Building…",
+            // indistinguishable from the one that starts a build.
+            aria-label={logOpen ? "Hide build output" : "Show build output"}
+            style={{
+              display: "flex",
+              width: "100%",
+              alignItems: "baseline",
+              justifyContent: "space-between",
+              gap: 8,
+              padding: "4px 8px",
+              border: 0,
+              background: "none",
+              color: "var(--text-paper-d)",
+              fontFamily: "var(--font-mono, ui-monospace, monospace)",
+              fontSize: pxToRem(12),
+              textAlign: "left",
+              cursor: "pointer",
+            }}
+          >
+            {/* A fixed word while it runs, not the newest line: the line is
+                already on screen underneath, and two copies of it make the
+                pane look like it is stuttering. */}
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {building ? "Building…" : logOpen ? "Build output" : logSummary}
+            </span>
+            <span style={{ flex: "0 0 auto", opacity: 0.7 }}>{logOpen ? "Hide" : "Show"}</span>
+          </button>
+          {logOpen && (
+            // The build's own words, verbatim and monospaced, because they are
+            // a compiler's and their columns mean something.
+            <div
+              ref={logRef}
+              role="log"
+              aria-label="Build output"
+              style={{
+                maxHeight: "30%",
+                overflowY: "auto",
+                padding: "0 8px 6px",
+                fontFamily: "var(--font-mono, ui-monospace, monospace)",
+                fontSize: pxToRem(12),
+                whiteSpace: "pre-wrap",
+                color: "var(--text-paper-d)",
+              }}
+            >
+              {buildLog.length === 0 ? "Starting the build…" : buildLog.join("")}
+            </div>
+          )}
         </div>
       )}
       {reports.length > 0 && (
