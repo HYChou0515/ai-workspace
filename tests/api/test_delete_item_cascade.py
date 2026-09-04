@@ -398,28 +398,32 @@ async def test_a_failed_sweep_leaves_the_row_so_the_delete_can_be_retried(monkey
     assert await filestore.ls(item_id) == []
 
 
-async def test_nfs_purge_propagates_real_failures(tmp_path, monkeypatch):
-    """`ignore_errors=True` was the review's finding: an EACCES or NFS hiccup
-    became 204 + quota refund with the bytes still on disk — and the route's
-    "retry to resume" contract voided, because nothing ever reported failure.
-    Only ABSENCE is tolerated; anything else propagates (→ the route's 500)."""
-    import shutil
+async def test_nfs_purge_propagates_real_failures(tmp_path):
+    """`ignore_errors=True` was the review's finding: an EACCES or a corrupted
+    archive became 204 + quota refund with the bytes still on disk, and the
+    route's "retry to resume" contract silently voided.
 
+    The failure has to come from the REAL `shutil.rmtree` — `ignore_errors` is
+    handled INSIDE it, so a stubbed rmtree that raises would bypass the very
+    mechanism under test (the first version of this test did exactly that and
+    passed against the unfixed code). A file where the workspace directory
+    should be makes the real call raise NotADirectoryError, deterministically
+    and without depending on the uid the suite runs as."""
     from workspace_app.filestore.nfs_tree import NfsTreeFileStore
 
     store = NfsTreeFileStore(tmp_path)
+    (tmp_path / "corrupt").write_bytes(b"not a directory")
+
+    with pytest.raises(OSError):
+        await store.purge("corrupt")
+
+    # Absence stays tolerated — purging what is already gone is a no-op, which
+    # is what makes the route's retry idempotent.
+    await store.purge("never-existed")
+
+    # And the ordinary path still removes everything.
     await store.write("ws1", "/a.txt", b"x")
-
-    def boom(path, *a, **kw):
-        raise PermissionError(f"EACCES: {path}")
-
-    monkeypatch.setattr(shutil, "rmtree", boom)
-    with pytest.raises(PermissionError):
-        await store.purge("ws1")
-
-    monkeypatch.undo()
-    await store.purge("ws1")  # real purge works
-    await store.purge("ws1")  # and absence is tolerated (idempotent)
+    await store.purge("ws1")
     assert await store.ls("ws1") == []
 
 
@@ -494,3 +498,60 @@ async def test_deleting_a_live_item_clears_both_my_resources_sections(monkeypatc
     # A stale page pressing Close on a now-deleted item is told it is gone,
     # not handed a 500.
     assert client.delete(f"/me/resources/live/{other}").status_code == 404
+
+
+async def test_a_turn_that_re_warms_mid_cascade_does_not_survive_the_delete(monkeypatch):
+    """The window P6 exists for, pinned at last (it shipped with only an
+    assertion edit behind it — a test that could not fail).
+
+    `close_session` runs first, but the turn forgets come after it, and #345's
+    designed recovery means an in-flight turn's next file op re-acquires a
+    fresh session for the same shared dir in between. That resurrected sandbox
+    would outlive the delete: it races the purge and hands the mirror sweeper
+    something to write back. So the cascade closes a SECOND time, after the
+    forgets — and with only one close this test is red, because My resources
+    still lists an environment for an item that no longer exists."""
+    import workspace_app.api.app as app_mod
+    from workspace_app.api.registry import InvestigationRegistry
+
+    captured: dict[str, InvestigationRegistry] = {}
+    real = app_mod.InvestigationRegistry
+
+    def _capture(*a, **kw):
+        r = real(*a, **kw)
+        captured["registry"] = r
+        return r
+
+    monkeypatch.setattr(app_mod, "InvestigationRegistry", _capture)
+    spec = make_spec(default_user="default-user")
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=_Runner(),
+        agent_config_catalog=AgentConfigCatalog(),
+    )
+    client = TestClient(app)
+    item_id = _create_item(client)
+    registry = captured["registry"]
+    turn_engine = app.state.turn_engines[0]
+
+    # A turn is mid-flight: the moment the cascade tells it to stop, its next
+    # file op warms the shared dir again (exactly what #345 says it should do).
+    real_forget = turn_engine.forget
+    raced = {"done": False}
+
+    async def forget_and_race(key: str) -> None:
+        await real_forget(key)
+        if not raced["done"]:
+            raced["done"] = True
+            session = await registry.session(item_id)
+            await registry.ensure_handle(session)
+
+    monkeypatch.setattr(turn_engine, "forget", forget_and_race)
+
+    assert client.delete(f"/a/rca/items/{item_id}").status_code == 204
+    assert raced["done"], "the race never happened — the test proves nothing"
+
+    # Nothing may outlive the delete: no environment listed, none running.
+    assert client.get("/me/resources").json()["live"] == []
