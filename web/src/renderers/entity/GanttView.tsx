@@ -480,7 +480,22 @@ export function GanttView({
                         // arrive; and a zero-day drag commits nothing, so the two
                         // presses underneath write no span.
                         onDoubleClick={() => onOpenRecord?.(row.e.number)}
-                        style={{ left, width, background: c?.bg, color: c?.fg, borderColor: c?.fg }}
+                        // `--bar-ink` publishes the ink for furniture that
+                        // touches the FILL rather than inheriting onto it: the
+                        // avatar sets its own `color` for the initials, so
+                        // `currentColor` inside it is the avatar's, not the
+                        // bar's (P5). Pinning that furniture to one token
+                        // instead only held while every bar was a dark slab.
+                        style={
+                          {
+                            left,
+                            width,
+                            background: c?.bg,
+                            color: c?.fg,
+                            borderColor: c?.fg,
+                            "--bar-ink": c?.fg,
+                          } as React.CSSProperties
+                        }
                       >
                         <span className="ev-gantt__bar-label">
                           {fieldText(row.e.fields[labelField]) || `#${row.e.number}`}

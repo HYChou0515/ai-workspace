@@ -94,10 +94,24 @@ const THEMES = [
   ["dark", DARK],
 ] as const;
 
-/** The opaque colour a resolved ink value denotes. */
+/**
+ * The opaque colour a resolved ink value denotes.
+ *
+ * `var(--a, <fallback>)` is resolved the way a browser would when nothing sets
+ * `--a`: some of these values name a custom property published at RUNTIME (the
+ * bar's own `--bar-ink`), which by definition is not declared in tokens.css, so
+ * on an element that does not set it the FALLBACK is what paints.
+ */
 function inkHex(value: string, block: RegExp): string {
-  const ref = /^var\(\s*(--[\w-]+)\s*\)$/.exec(value.trim());
-  return ref ? tokenIn(TOKENS_CSS, block, ref[1]) : value.trim();
+  const v = value.trim();
+  const ref = /^var\(\s*(--[\w-]+)\s*(?:,([\s\S]+))?\)$/.exec(v);
+  if (!ref) return v;
+  try {
+    return tokenIn(TOKENS_CSS, block, ref[1]);
+  } catch {
+    if (ref[2] === undefined) throw new Error(`${ref[1]} is neither declared nor given a fallback`);
+    return inkHex(ref[2], block);
+  }
 }
 
 /**
@@ -276,6 +290,35 @@ describe("a gantt bar coloured by ACTOR", () => {
         expect(
           Math.max(byEdge, byFill),
           `person ${i} in ${themeName}: edge ${byEdge.toFixed(2)}:1, fill ${byFill.toFixed(2)}:1`,
+        ).toBeGreaterThanOrEqual(3);
+      }
+    });
+  }
+
+  /**
+   * The avatar's ring is the only part of the bar's furniture that touches the
+   * FILL rather than sitting on the avatar's own disc, so it has to contrast
+   * with whatever the bar is wearing. P5 pinned it to `--text-dark` — right
+   * while every bar was a dark blue slab, wrong the moment a bar can be light,
+   * which is what an actor fill is. The guard for it only ever rendered the
+   * default bar, so the hole is exactly where this change lands.
+   */
+  for (const [themeName, block] of THEMES) {
+    it(`keeps the avatar's ring readable on a person-coloured bar in ${themeName} mode`, () => {
+      const surface = tokenIn(TOKENS_CSS, block, "--white");
+      for (const [i, bar] of renderTeam({ assignee_display: "avatar" }).entries()) {
+        const avatar = bar.querySelector(".ev-gantt__bar-avatar") as HTMLElement;
+        const ring =
+          bar.style.getPropertyValue("--bar-ink") ||
+          effective(ENTITY_VIEWS_CSS, ".ev-gantt__bar-avatar", "border-color") ||
+          "";
+        expect(avatar, "the bar renders no avatar to ring").toBeTruthy();
+
+        const fill = paintedOver(TOKENS_CSS, block, bar.style.background, surface);
+        const ratio = contrast(inkHex(ring, block), fill);
+        expect(
+          ratio,
+          `person ${i}'s ring in ${themeName}: ${ring} on ${fill} = ${ratio.toFixed(2)}:1`,
         ).toBeGreaterThanOrEqual(3);
       }
     });
