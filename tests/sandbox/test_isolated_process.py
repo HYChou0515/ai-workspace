@@ -474,33 +474,44 @@ async def test_uvs_download_cache_is_named_for_every_exec(isolated) -> None:
     assert cache.stat().st_mode & 0o777 == 0o700, "and no other item may read it"
 
 
-async def test_a_dead_sandbox_hands_its_cache_back_to_the_service(isolated) -> None:
-    """The cache outlives the sandbox on purpose — but `_own_cache` leaves it
-    owned by that sandbox's uid, and the host hands uids straight back out.
+async def test_a_dead_sandbox_does_not_de_own_this_backends_cache(isolated) -> None:
+    """This backend has no next tenant to protect the cache from.
 
-    Without this, the next tenant of a freed uid can read and rewrite the
-    previous item's cache: the inheritance that keying by ITEM was chosen to
-    prevent, arriving one step later. So `kill` hands it back to the service,
-    and the item's next sandbox takes ownership again.
+    The host's `IsolatedProcessSandbox` allocates uids from a pool and frees
+    them on kill, so a cache left owned by a dead sandbox's uid is a cache the
+    NEXT holder of that uid can read — and it hands ownership back for exactly
+    that reason. THIS one derives the uid as `uid_base + xxhash(item_id) %
+    uid_range`: a pure function of the item, the same on every pod, never freed.
+
+    So handing it back here would buy nothing, and it is not free. On a #345
+    shared root the item's dirs are siblings every replica writes to, and
+    de-owning a cache another live sandbox for the same item is filling breaks
+    its `uv sync` with EACCES. An override shipped here anyway, its docstring
+    asserting that this backend pools uids — the opposite of what the class
+    docstring says twelve methods above it.
     """
     h = await isolated.create(SandboxSpec())
     _argv, _cwd, env = isolated._exec_argv(h, ["true"])
     cache = Path(env["UV_CACHE_DIR"])
     assert cache.is_dir()
 
-    # Asserted through the OWNERSHIP SEAM, not through `st_uid`. The fixture
-    # pins the derived uid to the caller's own (uid_range=1) so the directory
-    # already has that owner — `st_uid == getuid()` is satisfied whether or not
-    # the release ever happens, which is how the venv-ownership test in this
-    # same file was vacuous one round ago. This class of mistake is why the
-    # module seams every privileged op instead of relying on being root.
+    # Through the OWNERSHIP SEAM, never `st_uid`: the fixture pins the derived
+    # uid to the caller's own (uid_range=1 ⇒ hash%1==0), so the directory
+    # already has that owner and `st_uid == getuid()` holds whether or not
+    # anything happened. That is how the venv-ownership test in this same file
+    # was vacuous one round ago.
     released: list[tuple[Path, int]] = []
     isolated._own_privately = lambda path, uid: released.append((path, uid))
+    # The positive control, first: the seam IS the one a release would go
+    # through, and this recorder does capture it. Without this the assertion
+    # below passes just as happily against a misspelt attribute name.
+    isolated._own_cache(h, cache)
+    assert released == [(cache, isolated._uid_for(h.id))], released
+    released.clear()
 
     await isolated.kill(h)
 
     assert cache.is_dir(), "the cache outlives the sandbox — that is the whole point"
-    assert (cache, os.getuid()) in released, (
-        "and it must be handed back to the SERVICE, not left owned by a uid that "
-        f"has just been returned to the pool: {released}"
+    assert released == [], (
+        f"nothing to hand back to: this backend's uid is a pure function of the item: {released}"
     )

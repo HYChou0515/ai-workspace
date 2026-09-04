@@ -26,6 +26,7 @@ import msgspec
 from specstar import SpecStar
 from specstar.types import ResourceIDNotFoundError
 
+from ..agent.python_env import ensure_project_env
 from ..resources import Conversation, Message
 from ..sandbox.protocol import OutputSink, Sandbox
 from ..workflow.capabilities import convert_upload, ingest_to_collection, upsert_context_card
@@ -274,6 +275,26 @@ class WorkflowExecutor:
         (#178) so a long command shows movement instead of looking dead."""
         session = await self._registry.session(item_id)
         handle = await self._registry.ensure_handle(session)
+        # #775: `ensure_handle` wakes the sandbox and nothing more, so a node in
+        # a workspace that declares its own dependencies would run against an
+        # interpreter that has none of them — silently, because the `python`
+        # shim refuses the empty `.venv` and falls back to the carrier. That is
+        # the confident-wrong-answer this design refuses everywhere else.
+        #
+        # It used to be hidden: an agent turn's pre-warm prepared the item's
+        # environment whether or not that turn ran a command, so a `run:` node
+        # after any agent node inherited one. The pre-warm no longer prepares,
+        # which makes the hole visible and puts the case that never worked — a
+        # `run:` node with no agent node before it — in the same place.
+        #
+        # Every node, not once per run: this executor is app-scoped, and a
+        # remembered "prepared" would outlive the sandbox it was true of. The
+        # cost is one `exists` for the workspaces that declare nothing (all of
+        # the ones that predate this) and an audit of an already-built env for
+        # the ones that do. `on_output` is the node's live stream, so uv's
+        # progress and the staleness advisory land where someone is watching —
+        # and not in the node's captured stdout, which is the exec's alone.
+        await ensure_project_env(self._sandbox, handle, on_output=on_output)
         import shlex
 
         env = f"export WF_TOKEN={shlex.quote(credential)}; " if credential else ""

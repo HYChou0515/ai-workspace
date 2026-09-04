@@ -569,8 +569,10 @@ class InvestigationRegistry:
         created a sandbox for item X saw X as free and deleted the cache a sync
         on ANOTHER pod was filling, which is precisely the mistake `kill_idle`
         four lines below already guards against with the cross-pod heartbeat.
-        So every candidate that is not locally live is checked against it too,
-        and "no heartbeat wired" means single-process, where local IS global.
+        So every candidate that is not locally live is checked against it too.
+        With no heartbeat wired, this pod's view is the only view there is —
+        `create_app` always wires one, so that branch is what the tests that
+        construct a registry directly get, not a deployment mode.
 
         Backends without a persistent cache (mock, docker, http — where the HOST
         sweeps its own) have no method and this is a no-op."""
@@ -579,12 +581,29 @@ class InvestigationRegistry:
         present = getattr(self.sandbox, "cache_keys_present", None)
         if sweep is None or local is None or present is None:
             return []
+        # No ceiling ⇒ nothing is ever evicted, so every question below is
+        # asked to decide something already decided. `max_bytes is None` is the
+        # DEFAULT, the cross-pod check is one specstar read per cached item on
+        # every tick, and with no ceiling the cache grows one directory per item
+        # forever — so the cost of asking grows without bound precisely where
+        # the answer cannot matter. The backend returns `[]` here too; this
+        # stops us paying to hear it.
+        if max_bytes is None:
+            return []
         in_use = set(local())
         if self.activity is not None:
             cutoff_ms = int((datetime.now(UTC) - threshold).timestamp() * 1000)
             for key in await asyncio.to_thread(present) - in_use:
                 if not await self._globally_idle(key, cutoff_ms):
                     in_use.add(key)
+        # Re-read our OWN view last. Everything above is a sequential round
+        # trip, and the backend then walks the directory itself, so the first
+        # answer can be many hundreds of milliseconds old by the time anything
+        # is deleted. An item this pod woke inside that window was answered
+        # "idle" before it existed, and would be deleted mid-`uv sync` — the
+        # failure the cross-pod check exists to prevent, arriving through it.
+        # We cannot make the other pods' half fresh; this half is a dict lookup.
+        in_use |= set(local())
         return await asyncio.to_thread(sweep, in_use=in_use, max_bytes=max_bytes)
 
     async def kill_idle(self, threshold: timedelta) -> list[str]:

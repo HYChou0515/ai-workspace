@@ -403,3 +403,29 @@ async def test_the_cache_is_swept_oldest_first_and_never_out_from_under_a_live_i
     assert removed == ["old", "new"], (
         f"and everything else goes oldest-first until the ceiling is met: {removed}"
     )
+
+
+async def test_a_cache_it_cannot_prepare_does_not_take_the_turn_down(tmp_path: Path) -> None:
+    """`_exec_argv` runs BEFORE the try/except that turns a command's problems
+    into an exit code, so anything raising there escapes `exec` and breaks its
+    contract — "a non-zero exit is a normal result, not an error".
+
+    Preparing a cache is best-effort by nature: failing to means a re-download,
+    which is a cost. Raising means the turn dies over a cache.
+    """
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False)
+    h = await sb.create(SandboxSpec(), item_id="item-a")
+    # A FILE where the cache dir belongs: mkdir cannot proceed, exactly as an
+    # unwritable or already-occupied path would behave in the field.
+    cache_root = tmp_path / "sb" / ".uv-cache"
+    cache_root.mkdir(parents=True, exist_ok=True)
+    (cache_root / "item-a").write_text("in the way")
+
+    res = await sb.exec(h, ["echo", "still ran"])
+
+    assert res.exit_code == 0, res.stderr.decode()
+    assert b"still ran" in res.stdout
+    _argv, _cwd, env = sb._exec_argv(h, ["true"])
+    assert env["UV_CACHE_DIR"].endswith("/.home/.cache/uv"), (
+        "and it falls back to the in-sandbox cache rather than naming one it could not make"
+    )

@@ -351,15 +351,33 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         self._own_privately(cache, self._identities[handle.id].uid)
 
     def _release_cache(self, handle: SandboxHandle) -> None:
-        """Hand the item's cache back to THIS SERVICE when its sandbox ends.
+        """Hand the item's cache back to THIS SERVICE when its LAST sandbox ends.
 
         The cache outlives the sandbox deliberately, but `_own_cache` left it
         owned by that sandbox's uid — and this backend hands uids back to a pool
         on kill. Without this, the next tenant of that uid reads and writes the
         previous item's cache: exactly the inheritance keying by item was chosen
         to prevent, one step later. Owned by the service between sandboxes, and
-        re-chowned to the new uid the next time the item runs."""
-        cache = self._root / _UV_CACHE / self._cache_key(handle)
+        re-chowned to the new uid the next time the item runs.
+
+        The last, because `kill` is per-HANDLE and the cache is per-ITEM. This
+        host mints a fresh uuid handle per create, so one item can have two live
+        sandboxes here — which is not exotic, it is what the #366 rebuild race
+        produces every time two app pods wake one cold item: the loser kills its
+        orphan while the winner is running. Releasing on that kill revoked the
+        WINNER's access to a cache its `uv sync` was filling, so the sync died
+        of EACCES and took the turn with it. The orphan usually never exec'd, so
+        it had taken no ownership to hand back and the release was pure damage.
+        """
+        key = self._cache_key(handle)
+        still_live = any(
+            self._cache_key(SandboxHandle(id=other)) == key
+            for other in self._dirs
+            if other != handle.id
+        )
+        if still_live:
+            return
+        cache = self._root / _UV_CACHE / key
         if cache.is_dir():
             with contextlib.suppress(OSError):
                 self._own_privately(cache, os.getuid())

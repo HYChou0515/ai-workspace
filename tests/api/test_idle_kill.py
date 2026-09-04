@@ -12,6 +12,7 @@ assertions stay fast.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import timedelta
@@ -385,4 +386,48 @@ async def test_a_sweep_that_raises_does_not_stop_the_idle_reaper():
     # can-not-fail assertion this round exists to stop writing.
     assert sandbox.sweep_calls >= 3, (
         f"the loop must survive a raising sweep and tick again: {sandbox.sweep_calls}"
+    )
+
+
+async def test_a_ceiling_that_stopped_being_applied_says_so(caplog):
+    """Surviving silently is how a ceiling stops existing without anyone noticing.
+
+    The test above pins that the reaper lives through a raising sweep, which is
+    right — but a bare `contextlib.suppress` also means an operator who set a
+    number never learns it is doing nothing. What raises here is no longer only
+    a racing `FileNotFoundError`: the cross-pod check is a specstar call, so an
+    outage of it turns the ceiling off indefinitely, and the over-ceiling
+    warning cannot cover that because it only fires when a sweep COMPLETES.
+
+    `kill_idle` and `mirror_warm` — the two precedents this suppression was
+    modelled on — both log with `exc_info`. This one did not.
+    """
+    spec = make_spec(default_user="u")
+    sandbox = _ExplodingSweepSandbox()
+    app = create_app(
+        spec=spec,
+        sandbox=sandbox,
+        filestore=SpecstarFileStore(spec),
+        runner=_ExecRunner(),
+        idle_timeout=timedelta(seconds=0.1),
+        idle_check_interval=timedelta(seconds=0.05),
+        mirror_interval=timedelta(seconds=60),
+        uv_cache_max_bytes=4096,
+    )
+    iid = register_rca_item(spec)
+    with caplog.at_level(logging.WARNING, logger="workspace_app.api.lifecycle"):
+        async with _running_app(app) as client:
+            await client.post(f"/a/rca/items/{iid}/messages", json={"content": "x"})
+            for _ in range(40):
+                await asyncio.sleep(0.05)
+                if sandbox.sweep_calls >= 1:
+                    break
+
+    said = [r for r in caplog.records if "uv cache" in r.getMessage()]
+    assert said, (
+        "a ceiling that has stopped being applied must reach the log: "
+        f"{[r.getMessage() for r in caplog.records]}"
+    )
+    assert said[0].exc_info is not None, (
+        "and with the traceback — the reason is the whole value of the line"
     )

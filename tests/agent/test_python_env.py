@@ -10,6 +10,8 @@ The design and its rejected alternatives are in
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from workspace_app.agent.context import AgentToolContext
@@ -371,4 +373,73 @@ async def test_the_prewarm_wakes_the_sandbox_without_preparing_the_env() -> None
     assert _SYNC in sb.calls, "the first exec prepares it, with somewhere to report"
     assert ["uv", "lock", "--check"] in sb.calls, (
         "and the staleness advisory finally runs — it is what `--frozen` was traded for"
+    )
+
+
+class _Slow(_Recording):
+    """A double whose slow operations actually YIELD.
+
+    Without this the test above it is vacuous: `asyncio.gather` over two
+    coroutines that never suspend runs them one after the other, so the second
+    caller arrives to find the work already done and any assertion about
+    overlap passes with no guard in place at all. A real `create` restores a
+    snapshot and a real `uv sync` downloads a dependency stack; both suspend
+    many times, and the window is the whole of that.
+    """
+
+    def __init__(self, **kw: object) -> None:
+        super().__init__(**kw)  # ty: ignore[invalid-argument-type]
+        self.creates = 0
+
+    async def create(self, spec: SandboxSpec, sandbox_id: str | None = None) -> SandboxHandle:
+        self.creates += 1
+        await asyncio.sleep(0)
+        return SandboxHandle(id="s1")
+
+    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None) -> ExecResult:
+        self.calls.append(cmd)
+        await asyncio.sleep(0)
+        return ExecResult(exit_code=0, stdout=b"ok")
+
+
+async def test_parallel_tool_calls_do_not_start_two_syncs_in_one_workspace() -> None:
+    """One preparation per context, however many tool calls arrive at once.
+
+    The turn's pre-warm used to prepare the environment, so by the time any
+    tool ran the flag was already set and this could not happen. Moving the
+    preparation onto the agent's first exec — right, for the reasons above —
+    put it back inside the window, and the model may call several tools in ONE
+    assistant message: the SDK runs each in its own task with no bound, and
+    production serves a backend that does emit parallel calls.
+
+    Two `uv sync --frozen --inexact` in one project directory is at best the
+    whole cold-start install done twice; the flag is set only after the await
+    returns, so nothing stopped it.
+    """
+    sb = _Slow(present={"pyproject.toml"})
+    ctx = AgentToolContext(sandbox=sb, on_exec_output=lambda _b: None)  # ty: ignore[invalid-argument-type]
+
+    await asyncio.gather(ctx.ensure_sandbox(), ctx.ensure_sandbox())
+
+    assert sb.calls.count(_SYNC) == 1, (
+        f"the second caller must wait for the first, not start its own: {sb.calls}"
+    )
+
+
+async def test_parallel_tool_calls_do_not_wake_two_sandboxes() -> None:
+    """The same window, one step earlier — and this one predates this branch.
+
+    `self.handle` is likewise assigned only after `create` returns, so two tool
+    calls racing a cold sandbox each build one, and the loser's is orphaned
+    with the tools it provisioned. The guard is the same guard, so it is worth
+    saying that it covers both rather than leaving the older half to be
+    rediscovered.
+    """
+    sb = _Slow()
+    ctx = AgentToolContext(sandbox=sb)  # ty: ignore[invalid-argument-type]
+
+    await asyncio.gather(ctx.ensure_sandbox(), ctx.ensure_sandbox())
+
+    assert sb.creates == 1, (
+        f"one sandbox per context, not one per concurrent tool call: {sb.creates}"
     )

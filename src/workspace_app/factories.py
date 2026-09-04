@@ -250,6 +250,20 @@ def _build_isolated_sandbox(
     )
 
 
+def _warn_dead_uv_ceiling(max_bytes: int | None, why: str) -> None:
+    """#775: say so when `sandbox.uv_cache_max_bytes` reaches nothing here.
+
+    Three of the four backends never apply it, and the first version of this
+    warning was written for one of them — so the other two stayed silent, which
+    is the failure the warning exists to prevent. One function, called from
+    every entry point that cannot honour the number, so a new backend has one
+    obvious thing to do rather than a precedent to notice.
+    """
+    if max_bytes is None:
+        return
+    logger.warning("sandbox.uv_cache_max_bytes/%d is not applied here — %s", max_bytes, why)
+
+
 def get_sandbox(settings: Settings, tools_dir: Path | None = None) -> Sandbox:
     sb = settings.sandbox
     match sb.kind:
@@ -289,16 +303,28 @@ def get_sandbox(settings: Settings, tools_dir: Path | None = None) -> Sandbox:
                     )
             if want_uid_isolation:
                 return _build_isolated_sandbox(sb, iso, tools_dir)
-            return LocalProcessSandbox(
+            plain = LocalProcessSandbox(
                 root_dir=Path(sb.root) if sb.root else None,
                 exec_timeout=sb.exec_timeout,
                 log_timeout=sb.log_timeout,
                 isolate=isolate,
                 tools_dir=tools_dir,
             )
+            if not plain.keeps_item_uv_caches:
+                _warn_dead_uv_ceiling(
+                    sb.uv_cache_max_bytes,
+                    "the userns jail keeps each sandbox's uv cache inside it, where no "
+                    "cross-sandbox sweeper can see it. Set sandbox.isolate: false (or "
+                    "sandbox.isolation.enabled: true) if you want the ceiling applied.",
+                )
+            return plain
         case "docker":
             from .sandbox.docker import DockerSandbox
 
+            _warn_dead_uv_ceiling(
+                sb.uv_cache_max_bytes,
+                "this backend keeps no per-item uv cache on the pod, so there is nothing to bound.",
+            )
             return DockerSandbox()
         case "http":
             if sb.http is None or not sb.http.base_url:
@@ -328,13 +354,11 @@ def get_sandbox(settings: Settings, tools_dir: Path | None = None) -> Sandbox:
             # HOST here, and this backend has no sweeper for them — the app-side
             # ceiling would be read by nothing at all. `SANDBOX_HOST_UV_CACHE_MAX_BYTES`
             # is the live one.
-            if sb.uv_cache_max_bytes is not None:
-                logger.warning(
-                    "sandbox.kind=http ignores sandbox.uv_cache_max_bytes/%d — the uv "
-                    "caches live in the sandbox-host service. Set "
-                    "SANDBOX_HOST_UV_CACHE_MAX_BYTES on the host instead.",
-                    sb.uv_cache_max_bytes,
-                )
+            _warn_dead_uv_ceiling(
+                sb.uv_cache_max_bytes,
+                "the uv caches live in the sandbox-host service. Set "
+                "SANDBOX_HOST_UV_CACHE_MAX_BYTES on the host instead.",
+            )
 
             return HttpSandbox(
                 base_url=sb.http.base_url,

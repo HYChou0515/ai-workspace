@@ -641,6 +641,23 @@ class LocalProcessSandbox:
         to fill the cache changes from sandbox to sandbox while the item, and so
         the directory, does not."""
 
+    @property
+    def keeps_item_uv_caches(self) -> bool:
+        """Does `{root}/.uv-cache` exist for a sweeper to bound?
+
+        Only when this backend is NOT jailed. Inside the userns jail
+        `UV_CACHE_DIR` points at the sandbox's own `/.home/.cache/uv`, which
+        goes with the sandbox and which no cross-sandbox sweeper can see — so a
+        configured ceiling there evicts nothing, the same way it evicts nothing
+        on `kind: http`, where the caches are the host service's.
+
+        A predicate rather than the factory re-deriving "is this one jailed?":
+        `isolate=None` resolves HERE (auto = whether the host supports userns),
+        and a second copy of that resolution is a second rule to disagree with
+        this one.
+        """
+        return not self._isolate
+
     def cache_keys_in_use(self) -> set[str]:
         """The cache names a live sandbox may still write to.
 
@@ -716,8 +733,8 @@ class LocalProcessSandbox:
             removed.append(path.name)
         if total > max_bytes:
             logger.warning(
-                "uv cache is %d bytes over its ceiling and every cache left belongs to a "
-                "live sandbox — this host needs more disk, not a smaller cache",
+                "uv cache is %d bytes over its ceiling and every cache left is in use — "
+                "this host needs more disk, not a smaller cache",
                 total - max_bytes,
             )
         return removed
@@ -829,13 +846,21 @@ class LocalProcessSandbox:
             # the same item re-uses what it already downloaded. NEVER keyed by
             # uid: production recycles those, and the next holder would inherit
             # whatever the previous one left in there.
-            cache = self._root / _UV_CACHE / self._cache_key(handle)
             # Degrade, never raise: `_exec_argv` runs BEFORE the try/except that
             # turns a command's problems into an exit code, so an error here
             # escapes `exec` as an exception and breaks its contract ("a
             # non-zero exit is a normal result, not an error"). A cache we
             # cannot prepare costs a re-download; a raise costs the turn.
+            #
+            # `_cache_key` is INSIDE this, not above it. It validates the id,
+            # and it sat one line outside the guard whose own comment says this
+            # must not raise — while the host twin, for the same input, warned
+            # and carried on. Unreachable in practice (`create` validates), but
+            # two copies of one function with two policies is exactly the drift
+            # these paired files exist to prevent.
+            cache = root / _HOME / ".cache" / "uv"
             try:
+                cache = self._root / _UV_CACHE / self._cache_key(handle)
                 cache.mkdir(parents=True, exist_ok=True)
                 # Stamp it. The sweep evicts oldest-first, and mtime alone is not
                 # a "last used" signal: an exec that never touches uv does not
@@ -847,7 +872,7 @@ class LocalProcessSandbox:
                 # not look idle to the sweep.
                 os.utime(cache, None)
                 self._own_cache(handle, cache)
-            except OSError:
+            except (OSError, ValueError):
                 logger.warning(
                     "local_process: cannot prepare the uv cache at %s; this sandbox "
                     "will re-download instead",

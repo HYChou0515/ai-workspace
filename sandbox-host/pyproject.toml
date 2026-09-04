@@ -61,13 +61,19 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]
 
-[tool.ty.src]
-# This package is EXCLUDED by the repo-root config, and with no section of its
-# own `ty` walked up to that one and checked NOTHING — "WARN No python files
-# found under the given path(s)" followed by "All checks passed!". CI has been
-# running a green gate over zero files. It hid a `TypeError` in `POST
+# ⚠️ This package is EXCLUDED by the repo-root config, and with no `[tool.ty*]`
+# table of its OWN, `ty` walked up to that one and checked NOTHING — "WARN No
+# python files found under the given path(s)" followed by "All checks passed!".
+# CI ran a green gate over zero files, which hid a `TypeError` in `POST
 # /sandboxes` (an override that kept the old signature) that would have stopped
 # this service creating any sandbox at all.
+#
+# What stops the walk-up is HAVING a table here, any table — measured: deleting
+# `[tool.ty.src]` below still checks every file, deleting `[tool.ty.rules]`
+# still checks every file (and reports the 53 debt diagnostics). An earlier
+# version of this comment credited `exclude = []` for it, which is why it is
+# now stated as something that was run rather than something that was reasoned.
+[tool.ty.src]
 exclude = []
 
 [tool.ty.rules]
@@ -75,7 +81,18 @@ exclude = []
 # pre-existing diagnostics, 51 of them this one — overwhelmingly test doubles
 # passed where a real protocol type is expected, which the app side handles with
 # per-line `# ty: ignore[invalid-argument-type]`. Cleaning those is a separate
-# job from #775 and would bury this PR. Demoted so the gate is REAL for the
-# classes that actually bite (an override whose signature drifted from its base
-# is exactly what shipped broken), instead of staying green over nothing.
+# job from #775 and would bury this PR.
 invalid-argument-type = "ignore"
+
+# …but the debt is ENTIRELY in `tests`, so demoting it package-wide made the
+# gate green over a whole class of real defect in `src` — measured: with the
+# rule at `error`, `src` reports zero and `tests` reports all 51, and a
+# genuinely wrong-type call injected into `src/sandbox_host/local_process.py`
+# passed as shipped. That is the same "green over nothing" this section exists
+# to fix, narrowed rather than removed. So the demotion is scoped to where the
+# debt actually is.
+[[tool.ty.overrides]]
+include = ["src/**"]
+
+[tool.ty.overrides.rules]
+invalid-argument-type = "error"

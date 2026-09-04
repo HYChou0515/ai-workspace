@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import os
+from unittest.mock import patch
 
 import httpx
 import pytest
 from httpx import ASGITransport
 
+from sandbox_host.__main__ import _reaper_loop
 from sandbox_host.app import check_cgroup_ready, make_host_app
 from sandbox_host.mock import MockSandbox
 
@@ -295,3 +299,96 @@ async def test_one_sandbox_that_will_not_die_does_not_strand_the_rest():
 
     clock["t"] = 201.0
     assert await ctrl.reap_idle() == [second], "the second sandbox was stranded by the first"
+
+
+# --- #775: the uv-cache ceiling, from the env var to the sweep -----------------
+#
+# The leaf — `LocalProcessSandbox.sweep_uv_cache` — is covered in
+# `test_project_venv_shim.py`. Everything BETWEEN the knob and the leaf was not,
+# on either the app or the host side, and this is the only one of the two live
+# in production: `kind: http` runs here. A ceiling that parses into settings and
+# is then handed to nobody is a knob that does nothing, and the whole chain
+# would still have been green.
+
+
+async def test_the_controller_asks_the_live_sandboxes_which_caches_are_busy():
+    """Who fills `in_use` is the interesting half.
+
+    The leaf test proves the sweep obeys the set it is given. It says nothing
+    about where the set comes from in production — and that matters here
+    because this host POOLS uids and frees them on kill, so a uid-keyed set
+    would hand a live item's cache to whoever inherits its uid next. It has to
+    come from the live sandboxes' own ITEM keys."""
+
+    class _Backend:
+        def __init__(self) -> None:
+            self.swept: list[tuple[set[str], int | None]] = []
+
+        def cache_keys_in_use(self) -> set[str]:
+            return {"busy-item"}
+
+        def sweep_uv_cache(self, *, in_use: set[str], max_bytes: int | None = None) -> list[str]:
+            self.swept.append((in_use, max_bytes))
+            return ["evicted-item"]
+
+    backend = _Backend()
+    app = make_host_app(backend, advertise_url="http://h")
+
+    removed = await app.state.controller.sweep_uv_cache(max_bytes=999)
+
+    assert removed == ["evicted-item"]
+    assert backend.swept == [({"busy-item"}, 999)], (
+        f"the ceiling and the live set must both reach the backend: {backend.swept}"
+    )
+
+
+async def test_a_backend_that_keeps_no_uv_cache_sweeps_nothing():
+    """`MockSandbox` and any future backend without a cache must answer the
+    sweeper with an empty list, not an AttributeError — that would kill the
+    tick, and with it the idle reap and the tool-cache sweep that share it."""
+    app = make_host_app(MockSandbox(), advertise_url="http://h")
+
+    assert await app.state.controller.sweep_uv_cache(max_bytes=1) == []
+
+
+async def test_the_idle_tick_sweeps_the_uv_cache_with_the_configured_ceiling():
+    """The top link, entered where the pod enters it.
+
+    Everything below was reachable through its own call, which is how a ceiling
+    could be read from the env, stored on the settings, and then handed to
+    nobody. This drives one tick of the real `_reaper_loop`."""
+
+    class _Controller:
+        idle_ttl = 600.0
+
+        def __init__(self) -> None:
+            self.uv_ceilings: list[int | None] = []
+
+        async def reap_idle(self) -> list[str]:
+            return []
+
+        async def sweep_tool_cache(self, *, max_bytes: int | None = None) -> list[str]:
+            return []
+
+        async def sweep_uv_cache(self, *, max_bytes: int | None = None) -> list[str]:
+            self.uv_ceilings.append(max_bytes)
+            return []
+
+    ticks = 0
+
+    async def one_tick_then_stop(_interval: float) -> None:
+        nonlocal ticks
+        ticks += 1
+        if ticks > 1:  # the body has run once; end the loop the way SIGTERM does
+            raise asyncio.CancelledError
+
+    controller = _Controller()
+    with (
+        patch.object(asyncio, "sleep", one_tick_then_stop),
+        contextlib.suppress(asyncio.CancelledError),
+    ):
+        await _reaper_loop(controller, uv_cache_max_bytes=4096)
+
+    assert controller.uv_ceilings == [4096], (
+        f"the configured ceiling must reach the sweep on the tick: {controller.uv_ceilings}"
+    )

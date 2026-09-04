@@ -699,6 +699,23 @@ class LocalProcessSandbox:
         to fill the cache is allocated per sandbox while the item, and so the
         directory, outlives it."""
 
+    @property
+    def keeps_item_uv_caches(self) -> bool:
+        """Does `{root}/.uv-cache` exist for a sweeper to bound?
+
+        Only when this backend is NOT jailed. Inside the userns jail
+        `UV_CACHE_DIR` points at the sandbox's own `/.home/.cache/uv`, which
+        goes with the sandbox and which no cross-sandbox sweeper can see — so a
+        configured ceiling there evicts nothing, the same way it evicts nothing
+        on `kind: http`, where the caches are the host service's.
+
+        A predicate rather than the factory re-deriving "is this one jailed?":
+        `isolate=None` resolves HERE (auto = whether the host supports userns),
+        and a second copy of that resolution is a second rule to disagree with
+        this one.
+        """
+        return not self._isolate
+
     def cache_keys_in_use(self) -> set[str]:
         """The cache names a live sandbox may still write to.
 
@@ -774,8 +791,8 @@ class LocalProcessSandbox:
             removed.append(path.name)
         if total > max_bytes:
             logger.warning(
-                "uv cache is %d bytes over its ceiling and every cache left belongs to a "
-                "live sandbox — this host needs more disk, not a smaller cache",
+                "uv cache is %d bytes over its ceiling and every cache left is in use — "
+                "this host needs more disk, not a smaller cache",
                 total - max_bytes,
             )
         return removed

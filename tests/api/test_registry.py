@@ -1514,15 +1514,21 @@ class _CacheSandbox(MockSandbox):
         super().__init__()
         self._live, self._present = live, present
         self.swept_with: set[str] | None = None
+        self.swept_ceiling: int | None = None
+        self.live_reads = 0
+        self.present_reads = 0
 
     def cache_keys_in_use(self) -> set[str]:
+        self.live_reads += 1
         return set(self._live)
 
     def cache_keys_present(self) -> set[str]:
+        self.present_reads += 1
         return set(self._present)
 
     def sweep_uv_cache(self, *, in_use: set[str], max_bytes: int | None = None) -> list[str]:
         self.swept_with = set(in_use)
+        self.swept_ceiling = max_bytes
         return []
 
 
@@ -1568,3 +1574,67 @@ async def test_no_heartbeat_means_single_process_so_local_is_global():
     await registry.sweep_uv_cache(4096, timedelta(minutes=30))
 
     assert sandbox.swept_with == {"mine"}
+
+
+async def test_no_ceiling_asks_nobody_anything():
+    """`None` is the DEFAULT, and with it nothing is ever evicted — so every
+    question the sweep asks to decide what to evict is a question asked for a
+    guaranteed no-op.
+
+    It is not a small no-op either: the cross-pod check is one specstar read
+    per cached item, on every idle tick, and with no ceiling `.uv-cache` grows
+    one directory per item forever. The cost of the check therefore grows
+    without bound exactly in the configuration where it can do nothing.
+    """
+    now_ms = int(datetime.now(UTC).timestamp() * 1000)
+    sandbox = _CacheSandbox(live=set(), present={f"item-{n}" for n in range(50)})
+    registry = InvestigationRegistry(sandbox=sandbox)
+    reads: list[str] = []
+
+    class _Counting:
+        async def last_active_ms(self, item: str) -> int | None:
+            reads.append(item)
+            return now_ms
+
+    registry.activity = _Counting()  # ty: ignore[invalid-assignment]
+
+    await registry.sweep_uv_cache(None, timedelta(minutes=30))
+
+    assert reads == [], f"no ceiling means nothing is evicted; nothing to decide: {reads}"
+    assert sandbox.present_reads == 0, "and no directory walk either"
+
+
+async def test_an_item_woken_while_the_sweep_was_asking_is_still_protected():
+    """The liveness answer must be fresh at the moment it is ACTED on.
+
+    The cross-pod check is a sequential await per candidate, so on a host with
+    many caches the first answer is many round trips old by the time the
+    backend deletes anything — and the backend then does its own `iterdir`, so
+    the delete is later still. An item this pod woke during that window was
+    answered "idle" before it existed and is removed mid-`uv sync`: the exact
+    failure the check was added to prevent, arriving through the check.
+
+    Re-reading the pod's OWN view costs nothing (it is a dict of live
+    sandboxes) and closes the half we can close.
+    """
+    sandbox = _CacheSandbox(live=set(), present={"woken-later", "really-idle"})
+    registry = InvestigationRegistry(sandbox=sandbox)
+
+    class _WakesOneMidFlight:
+        """A turn lands on this pod while the sweep is still asking around."""
+
+        async def last_active_ms(self, item: str) -> int | None:
+            sandbox._live.add("woken-later")
+            return None  # nobody has heartbeated; every candidate reads as idle
+
+    registry.activity = _WakesOneMidFlight()  # ty: ignore[invalid-assignment]
+
+    await registry.sweep_uv_cache(4096, timedelta(minutes=30))
+
+    assert sandbox.swept_with is not None
+    assert "woken-later" in sandbox.swept_with, (
+        f"woken before the delete, so it must survive it: {sandbox.swept_with}"
+    )
+    assert "really-idle" not in sandbox.swept_with, (
+        "and the freshness must not turn into protecting everything"
+    )

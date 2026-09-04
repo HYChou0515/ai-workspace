@@ -1061,3 +1061,74 @@ def test_http_sandbox_warns_that_the_uv_cache_ceiling_is_not_its_to_apply(caplog
     assert any("uv_cache_max_bytes" in r.message for r in caplog.records), [
         r.message for r in caplog.records
     ]
+
+
+def test_a_jailed_local_sandbox_also_says_the_uv_ceiling_is_dead(caplog):
+    """The rule was applied to one of three entry points.
+
+    On `kind: local` with the userns jail, `UV_CACHE_DIR` points INSIDE the
+    sandbox — there is no `{root}/.uv-cache` for a sweeper to walk, so
+    `sandbox.uv_cache_max_bytes` evicts nothing, exactly as on `kind: http`.
+    And `isolate` defaults to `null` = auto, so this is what a userns-capable
+    host WITHOUT CAP_SETUID gets by default, in silence.
+
+    The predicate is the backend's own — asking it beats re-deriving "is this
+    one jailed?" in a second place, which is how two rules end up disagreeing.
+    """
+    import logging
+
+    from workspace_app.config.schema import Settings
+
+    settings = Settings()
+    object.__setattr__(settings.sandbox, "kind", "local")
+    object.__setattr__(settings.sandbox, "isolate", True)  # the jail, explicitly
+    object.__setattr__(settings.sandbox.isolation, "enabled", False)
+    object.__setattr__(settings.sandbox, "uv_cache_max_bytes", 8_589_934_592)
+
+    with caplog.at_level(logging.WARNING):
+        get_sandbox(settings)
+
+    assert any("uv_cache_max_bytes" in r.message for r in caplog.records), [
+        r.message for r in caplog.records
+    ]
+
+
+def test_an_unjailed_local_sandbox_says_nothing_because_the_ceiling_works(caplog):
+    """The control. This is the backend the ceiling was BUILT for — warning
+    here would train an operator to ignore the message on the deployments where
+    it is true."""
+    import logging
+
+    from workspace_app.config.schema import Settings
+
+    settings = Settings()
+    object.__setattr__(settings.sandbox, "kind", "local")
+    object.__setattr__(settings.sandbox, "isolate", False)
+    object.__setattr__(settings.sandbox.isolation, "enabled", False)
+    object.__setattr__(settings.sandbox, "uv_cache_max_bytes", 8_589_934_592)
+
+    with caplog.at_level(logging.WARNING):
+        get_sandbox(settings)
+
+    assert not any("uv_cache_max_bytes" in r.message for r in caplog.records), [
+        r.message for r in caplog.records
+    ]
+
+
+def test_the_docker_sandbox_says_the_uv_ceiling_is_dead(caplog):
+    """Third entry point, same silence: `DockerSandbox` keeps no per-item uv
+    cache on this pod at all, so the number is read by nobody."""
+    import logging
+
+    from workspace_app.config.schema import Settings
+
+    settings = Settings()
+    object.__setattr__(settings.sandbox, "kind", "docker")
+    object.__setattr__(settings.sandbox, "uv_cache_max_bytes", 8_589_934_592)
+
+    with caplog.at_level(logging.WARNING):
+        get_sandbox(settings)
+
+    assert any("uv_cache_max_bytes" in r.message for r in caplog.records), [
+        r.message for r in caplog.records
+    ]

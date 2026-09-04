@@ -478,3 +478,93 @@ async def test_the_controller_can_create_against_the_REAL_backend(tmp_path):
         "and the item id has to REACH the backend, or the cache falls back to a "
         "per-sandbox uuid — the very thing keying by item was for"
     )
+
+
+def _cache_sandbox(tmp_path):
+    """A sandbox with room in the pool for TWO live uids, recording every
+    ownership handover through the seam rather than through `st_uid`.
+
+    The shared `isolated` fixture pins the pool to a single uid (the caller's),
+    which cannot express the case below at all — and would also make an
+    `st_uid == getuid()` assertion true before anything ran, the way an app-side
+    test in this family was vacuous a round ago."""
+    sandbox = IsolatedProcessSandbox(
+        root_dir=tmp_path / "sb",
+        cgroup_root=tmp_path / "cg",
+        uid_min=os.getuid(),
+        uid_max=os.getuid() + 4,
+        acl_runner=lambda argv: None,
+        chown_runner=lambda p, u: None,
+    )
+    released: list[tuple[Path, int]] = []
+    sandbox._own_privately = lambda path, uid: released.append((path, uid))  # ty: ignore[invalid-assignment]
+    # `_provision` is the one privileged step with no runner seam — a raw
+    # `os.chown`, which only works non-root when the uid IS the caller's, which
+    # is why the shared fixture can only ever hold one sandbox. Nothing below
+    # asks anything of it, so it is stubbed rather than worked around; `create`,
+    # `_exec_argv`, `_cache_key`, `kill` and `_release_cache` all stay real.
+    sandbox._provision = lambda workspace, uid: None  # ty: ignore[invalid-assignment]
+    return sandbox, released
+
+
+async def test_the_items_last_sandbox_hands_its_cache_back_to_the_service(tmp_path) -> None:
+    """The cache outlives the sandbox on purpose — but `_own_cache` leaves it
+    owned by that sandbox's uid, and THIS host hands uids straight back to a
+    pool on kill (`_UidPool.free`, "Freed ids are reused").
+
+    Without the release, the next tenant of that uid reads and rewrites the
+    previous item's cache: the inheritance keying by ITEM was chosen to prevent,
+    arriving one step later.
+
+    The fix for it shipped with no test on this side at all — the app-side twin
+    had one, and this is the copy production runs. A `coverage report` over the
+    whole host suite named the two lines as never executed, and the host CI step
+    has no `--fail-under`, so nothing was ever going to say so.
+    """
+    sandbox, released = _cache_sandbox(tmp_path)
+    handle = await sandbox.create(SandboxSpec(), item_id="item-a")
+    _argv, _cwd, env = sandbox._exec_argv(handle, ["true"])
+    cache = Path(env["UV_CACHE_DIR"])
+    assert cache.is_dir()
+    released.clear()  # the exec's own `_own_cache` is not what is under test
+
+    await sandbox.kill(handle)
+
+    assert cache.is_dir(), "the cache outlives the sandbox — that is the whole point"
+    assert (cache, os.getuid()) in released, (
+        "and it must go back to the SERVICE, not stay owned by a uid this host "
+        f"has just returned to the pool: {released}"
+    )
+
+
+async def test_a_second_live_sandbox_for_one_item_keeps_its_cache(tmp_path) -> None:
+    """`kill` is per-HANDLE; the cache is per-ITEM. This host mints a fresh uuid
+    per create, so one item can have two live sandboxes here.
+
+    That is not exotic — it is what the #366 rebuild race produces every time
+    two app pods wake one cold item: the loser kills its orphan (`registry`:
+    "lost the race — drop our orphan") while the winner is running. Releasing on
+    that kill revoked the WINNER's access to the cache its `uv sync` was
+    filling: EACCES, `ProjectEnvError`, and a turn dead over a download cache.
+    The orphan has usually never exec'd, so it took no ownership to hand back
+    and the release was pure damage.
+    """
+    sandbox, released = _cache_sandbox(tmp_path)
+    winner = await sandbox.create(SandboxSpec(), item_id="item-a")
+    orphan = await sandbox.create(SandboxSpec(), item_id="item-a")
+    assert winner.id != orphan.id, "two handles, one item — that is the whole case"
+    _argv, _cwd, env = sandbox._exec_argv(winner, ["true"])
+    cache = Path(env["UV_CACHE_DIR"])
+    released.clear()
+
+    await sandbox.kill(orphan)
+
+    assert released == [], (
+        f"the winner is still filling {cache.name}; its access must survive: {released}"
+    )
+
+    # And the release is deferred, not dropped: the last one out still does it.
+    await sandbox.kill(winner)
+    assert (cache, os.getuid()) in released, (
+        f"deferring it must not turn into never doing it: {released}"
+    )
