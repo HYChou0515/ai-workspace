@@ -231,6 +231,26 @@ describe("MyResourcesPage", () => {
     expect(within(row).getByText("rca")).toBeTruthy();
   });
 
+  it("shows no App tag at all for a row the backend could not name", async () => {
+    // `/me/resources` degrades a row it cannot resolve to empty strings rather
+    // than dropping it — the environment is running and being charged for, so
+    // it has to stay closable even when its item is gone or the reader may not
+    // see its title. An empty slug must therefore render NO tag: a chip has
+    // padding and a fill, so an empty one is a visible grey smudge in the
+    // column where every other row says something.
+    const d = data({
+      live: [{ item_id: "i-9", slug: "", title: "", cpu_cores: 1, memory_bytes: 800 }],
+      workspaces: [],
+    });
+    render(<MyResourcesPage client={client({ get: vi.fn(async () => d) })} />, { wrapper: Wrap });
+
+    const live = await screen.findByRole("region", { name: "執行環境" });
+    const row = within(live).getByText("i-9").closest("li")!;
+    expect(row.querySelector(".app-tag")).toBeNull();
+    // …and it is still closable, which is the whole reason the row is here.
+    expect(within(row).getByRole("button", { name: "關閉" })).toBeEnabled();
+  });
+
   it("keeps the three totals out of the list of things you can close", async () => {
     // They are two different KINDS of line — "how full am I" and "here is one
     // thing you could give back" — and they shipped as one undifferentiated

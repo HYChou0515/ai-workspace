@@ -252,7 +252,13 @@ function LiveEnvironmentRow({ env, client }: { env: LiveEnvironment; client: MyR
           this list reading as a second copy of the storage list below it. */}
       <span className="live-dot" aria-hidden="true" />
       <Link to={`/a/${env.slug}/${env.item_id}`}>{env.title || env.item_id}</Link>
-      <span className="app-tag">{appName}</span>
+      {/* Nothing at all, not an empty chip, when the backend could not name the
+          row: `/me/resources` degrades an item it cannot resolve to empty
+          strings rather than dropping it (it is running and being charged for,
+          so it must stay closable), and a chip has a fill and padding — an
+          empty one is a grey smudge in the column where every other row speaks.
+          The grid cell stays, so the rows below still line up. */}
+      {appName ? <span className="app-tag">{appName}</span> : <span />}
       <span className="detail">
         {env.cpu_cores
           ? t(env.cpu_cores === 1 ? "resources.live.cores_one" : "resources.live.cores", {
