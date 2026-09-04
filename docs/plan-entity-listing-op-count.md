@@ -106,7 +106,7 @@ interface」「對 caller 應無感」。
 
 - **Phase 1 — entity 列表**(已完成,PR #781):`_parse_type` 走 `read_many`。
   148→81 / 164→91。
-- **Phase 2 — 其餘 workspace 呼叫點**:`entity/catalog.py`、
+- **Phase 2 — 其餘 workspace 呼叫點**(已完成):`entity/catalog.py`、
   `workflow/workspace_store.py`、`apps/subagents.py`、`apps/skills.py` 套用同一個原語。
   這是把同一條規則下沉到所有算這個值的地方 —— 兩套並存保證會漂移。
 - **Phase 3 — 批次讀取的快速道路**(已完成):`download_many` 作為**選配能力**加在
