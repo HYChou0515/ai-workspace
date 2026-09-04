@@ -10,7 +10,12 @@ that is not there, and no caller told which way it was answered.
 
 from __future__ import annotations
 
+from typing import cast
+
+import pytest
+
 from workspace_app.files.facade import WorkspaceFiles, read_all, read_all_existing
+from workspace_app.filestore.protocol import FileStore
 from workspace_app.filestore.specstar_impl import SpecstarFileStore
 
 
@@ -41,14 +46,59 @@ async def test_reading_a_listing_costs_one_query_not_one_fetch_per_file(
     assert fetches == 0, f"{fetches} single-row fetches — the batch read is not being used"
 
 
-async def test_the_batch_answers_in_the_order_asked(store: SpecstarFileStore) -> None:
-    """A query answers in whatever order the backend likes; the caller zips the
-    result against the paths it asked for, so the order has to be restored."""
-    await _seeded(store, 5)
+class _NoBatchStore:
+    """The same durable store with the cold lane CLOSED — every assertion below
+    has to hold on this one too, or the lane is observable from outside.
 
-    got = await store.read_many("ws1", ["/r/3.md", "/r/0.md", "/r/4.md"])
+    A plain wrapper rather than a subclass: `read_many` has to be genuinely
+    absent for the facade's duck-type to miss it, and an override that raises
+    would still be found."""
+
+    def __init__(self, inner: SpecstarFileStore) -> None:
+        self._inner = inner
+
+    def __getattr__(self, name: str):
+        if name == "read_many":
+            raise AttributeError(name)
+        return getattr(self._inner, name)
+
+
+def _closed(store: SpecstarFileStore) -> FileStore:
+    """The same store with the cold lane shut. `cast` rather than a subclass:
+    the point is that the facade's duck-type finds NOTHING, which an override
+    could not express."""
+    return cast(FileStore, _NoBatchStore(store))
+
+
+@pytest.mark.parametrize("closed", [False, True], ids=["lane-open", "lane-closed"])
+async def test_the_batch_answers_in_the_order_asked(store: SpecstarFileStore, closed: bool) -> None:
+    """A query answers in whatever order the backend likes; the result is
+    re-ordered against the paths asked for. True on both lanes — the per-path
+    loop is trivially in order, so only the batch could lose it."""
+    await _seeded(store, 5)
+    files = WorkspaceFiles(_closed(store) if closed else store)
+
+    got = await read_all(files, "ws1", ["/r/3.md", "/r/0.md", "/r/4.md"])
 
     assert got == [b"body 3", b"body 0", b"body 4"]
+
+
+@pytest.mark.parametrize("closed", [False, True], ids=["lane-open", "lane-closed"])
+async def test_one_workspace_cannot_read_another_ones_file_either_way(
+    store: SpecstarFileStore, closed: bool
+) -> None:
+    """Scoping is not a property of the fast lane. A batch that matched on path
+    alone would hand one item's records to another item holding the same name —
+    and the per-path lane, which keys by workspace, would not."""
+    import pytest as _pytest
+
+    from workspace_app.filestore.protocol import FileNotFound
+
+    await store.write("ws1", "/r/secret.md", b"mine")
+    files = WorkspaceFiles(_closed(store) if closed else store)
+
+    with _pytest.raises(FileNotFound):
+        await read_all(files, "ws2", ["/r/secret.md"])
 
 
 async def test_a_path_that_is_not_there_keeps_the_two_existing_behaviours(

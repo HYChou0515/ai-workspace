@@ -231,3 +231,26 @@ async def test_reading_the_definitions_costs_one_resolution_not_one_per_definiti
         f"{few} probes for 2 definitions but {many} for 20 — every turn pays for "
         "locating the workspace once per sub-agent the item declares"
     )
+
+
+async def test_a_definition_that_vanishes_mid_listing_still_raises():
+    """Batching the reads must not quietly change WHICH races this tolerates.
+
+    The per-file loop did a bare `read`, so a definition deleted between the
+    listing and the read raised out of here — and a batch that skipped it
+    instead would silently hand the turn a smaller set of sub-agents than the
+    item declares, which is worse than an error nobody can miss."""
+    import pytest
+
+    from workspace_app.filestore.protocol import FileNotFound
+
+    class _GhostListing(WorkspaceFiles):
+        async def ls(self, workspace_id: str, prefix: str = "") -> list[str]:
+            got = await super().ls(workspace_id, prefix)
+            return [*got, "/.agent/ghost/AGENT.md"]  # listed, never written
+
+    files = _GhostListing(MemoryFileStore())
+    await _put(files, "inv-1", "real", "---\nname: real\ndescription: d\n---\n\nbody\n")
+
+    with pytest.raises(FileNotFound):
+        await workspace_subagent_defs(files, "inv-1")

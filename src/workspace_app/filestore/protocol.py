@@ -63,7 +63,9 @@ class FileStore(Protocol):
 
     # `workspace_usage` / `file_size` (the #245 quota basis) are NOT on this
     # core Protocol — they're an optional capability the WorkspaceFiles facade
-    # duck-types, exactly like the CAS pair (`read_with_etag` / `write_cas`).
+    # duck-types, exactly like the CAS pair (`read_with_etag` / `write_cas`)
+    # and `read_many` (#781: a set of paths in ONE query instead of a row fetch
+    # each; the facade chunks the ask and falls back to per-path `read`).
     # Only the workspace-backing stores (SpecstarFileStore / MemoryFileStore)
     # implement them; the wiki-page store and test doubles need not.
 

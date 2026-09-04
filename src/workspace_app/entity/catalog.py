@@ -132,7 +132,7 @@ async def discover_catalog(
 ) -> tuple[EntityCatalog, list[Diagnostic]]:
     """Scan `.entity/<type>/` into the item's `EntityCatalog`. No `.entity/`
     dir → empty catalog (opt-in guard)."""
-    from ..files.facade import read_all
+    from ..files.facade import read_all_existing
 
     paths = await store.ls(workspace_id, prefix=_ENTITY_ROOT)
     # Whether a type's files are there falls straight out of the listing we
@@ -157,12 +157,21 @@ async def discover_catalog(
         if has_skeleton:
             to_read.append(skeleton_path)
 
-    blob = dict(zip(to_read, await read_all(store, workspace_id, to_read), strict=True))
+    # Tolerant, because the `exists`-per-type this replaced was: a type whose
+    # `schema.yaml` disappeared between the listing and here was skipped, and
+    # the rest of the catalog still loaded. Batching widened that window (one
+    # listing at the top, the reads at the bottom), so the tolerance matters
+    # MORE than it did, not less.
+    blob = await read_all_existing(store, workspace_id, to_read)
     types: dict[str, EntityType] = {}
     diagnostics: list[Diagnostic] = []
     for name, schema_path, skeleton_path in wanted:
+        if schema_path not in blob:
+            continue  # vanished since the listing — skip the type, keep the rest
         skeleton = (
-            blob[skeleton_path].decode("utf-8", "replace") if skeleton_path is not None else ""
+            blob[skeleton_path].decode("utf-8", "replace")
+            if skeleton_path is not None and skeleton_path in blob
+            else ""
         )
         entity_type, diags = _load_type(name, blob[schema_path], skeleton)
         diagnostics.extend(diags)

@@ -171,7 +171,7 @@ async def workspace_skill_metas(files: WorkspaceFiles, workspace_id: str) -> lis
         for p in paths
         if p.endswith(f"/{ORIGIN_FILE}")
     }
-    from ..files.facade import read_all_existing
+    from ..files.facade import read_all
 
     wanted = [
         path
@@ -180,8 +180,11 @@ async def workspace_skill_metas(files: WorkspaceFiles, workspace_id: str) -> lis
     ]
     # The index is rendered every turn, so reading each SKILL.md with its own
     # call put a sandbox round trip per skill in front of every message.
+    # STRICT, matching the per-file loop this replaced (a bare `read`, so a skill
+    # that vanished mid-listing raised out of here). A performance fix is not the
+    # place to start tolerating a race nobody agreed to tolerate.
     out: list[SkillMeta] = []
-    for path, raw in (await read_all_existing(files, workspace_id, wanted)).items():
+    for path, raw in zip(wanted, await read_all(files, workspace_id, wanted), strict=True):
         dir_name = path[len(prefix) : -len("/SKILL.md")]
         meta = _workspace_skill_meta(raw, dir_name)
         if meta is not None:

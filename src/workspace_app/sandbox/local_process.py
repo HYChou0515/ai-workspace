@@ -682,11 +682,14 @@ class LocalProcessSandbox:
     ) -> list[bytes | None]:
         """Many files, ONE hop off the event loop (the facade's fast lane).
 
-        `None` for a path that is not there — absent is an answer about that
-        path, not a failure of the batch, so the facade can raise for a caller
-        that demanded it and skip it for a listing that merely named it. Any
-        other error still propagates: a permission problem is not a missing
-        file and must not be reported as one."""
+        The contract is exactly "N calls to `download`, in one hop": ONLY a
+        missing file becomes `None` (absent is an answer about that path, so the
+        facade can raise for a caller that demanded it and skip it for a listing
+        that merely named it). Every other error propagates, including the
+        `IsADirectoryError` a directory path raises — a directory is not a
+        missing file, and reporting it as one made the batch answer differently
+        from the single read it stands in for, on a path the tolerant listing
+        read would then silently drop."""
         cwd = self._workspace(handle)
         targets = [self._resolve(cwd, path) for path in remote_paths]
 
@@ -695,7 +698,7 @@ class LocalProcessSandbox:
             for target in targets:
                 try:
                     out.append(target.read_bytes())
-                except (FileNotFoundError, IsADirectoryError, NotADirectoryError):
+                except FileNotFoundError:
                     out.append(None)
             return out
 

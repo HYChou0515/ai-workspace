@@ -86,6 +86,40 @@ async def test_the_fast_lane_reads_thirty_files_in_one_round_trip() -> None:
     assert (fast.batches, fast.downloads) == (1, 0)
 
 
+class _ChunkRecordingStore(MemoryFileStore):
+    """A durable store that CAN batch — and remembers how big each ask was."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.asks: list[int] = []
+
+    async def read_many(self, workspace_id: str, paths: list[str]) -> list[bytes]:
+        self.asks.append(len(paths))
+        return [await self.read(workspace_id, p) for p in paths]
+
+
+async def test_neither_lane_asks_for_everything_at_once() -> None:
+    """A batch bounds the SIZE OF THE ASK, not just the number of asks.
+
+    A workspace holds thousands of files, and handing all of them to one request
+    is a different failure from the one batching fixes: `kb/graph/link.py` chunks
+    at 500 because a 40,000-id predicate built a 937 KB statement the database
+    refused outright. The cold lane's ask becomes one SQL `IN (...)`, so it needs
+    the same bound the sandbox lane already has — one rule, both lanes."""
+    store = _ChunkRecordingStore()
+    files = WorkspaceFiles(store)  # cold: no sandbox
+    paths = [f"/r/{i}.md" for i in range(450)]
+    for path in paths:
+        await files.write("ws1", path, b"x")
+
+    got = await read_all(files, "ws1", paths)
+
+    assert len(got) == 450
+    assert store.asks and max(store.asks) <= WorkspaceFiles._BATCH_PATHS, (
+        f"largest ask was {max(store.asks)} paths, over the {WorkspaceFiles._BATCH_PATHS} bound"
+    )
+
+
 @pytest.mark.parametrize("sandbox_class", [_CountingSandbox, _BatchingSandbox])
 async def test_a_missing_path_is_an_error_either_way(sandbox_class) -> None:
     """`read_all` is the strict one: a caller that named a path it needs gets an

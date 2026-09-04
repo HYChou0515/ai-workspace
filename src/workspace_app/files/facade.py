@@ -329,43 +329,64 @@ class WorkspaceFiles:
         recovery into a 500. One operation, one resolution.
 
         A sandbox that can hand back many files at once takes the fast lane
-        below; one that cannot is read a file at a time, and NOTHING above here
-        can tell which happened — same bytes, same order, same errors, only a
-        different number of round trips."""
+        below; so does a durable store that can answer a set of paths in one
+        query. One that can do neither is read a file at a time, and NOTHING
+        above here can tell which happened — same bytes, same order, same
+        errors, only a different number of round trips.
+
+        Whichever lane answers, the ask is CHUNKED by the same bound: a batch
+        exists to cut round trips, not to build one unbounded request."""
         warm = await self._warm(workspace_id)
-        if warm is not None:
-            sb, handle = warm
-            batched = getattr(sb, "download_many", None)
-            if batched is not None:
-                return await self._download_batched(batched, handle, paths)
-        elif (cold := getattr(self._fs, "read_many", None)) is not None:
-            # A workspace with no live sandbox is answered by the durable store,
-            # where the round trips are to the database — the sandbox's batch
-            # does nothing for it, so the store has a batch of its own.
-            return list(await cold(workspace_id, [abs_path(p) for p in paths]))
-        return [await self._read_with(workspace_id, path, warm) for path in paths]
-
-    async def _download_batched(
-        self,
-        batched: Callable[[SandboxHandle, list[str]], Awaitable[Sequence[bytes | None]]],
-        handle: SandboxHandle,
-        paths: Sequence[str],
-    ) -> list[bytes]:
-        """The fast lane: whole chunks of paths per round trip.
-
-        `None` in the answer means THAT PATH is absent — an answer, not a failed
-        batch — so the miss raises exactly what reading it alone would, and the
-        tolerant `read_all_existing` keeps skipping it. Anything else would make
-        one deleted file the difference between a listing and an error page."""
+        fetch = self._batch_lane(warm)
+        if fetch is None:
+            return [await self._read_with(workspace_id, path, warm) for path in paths]
         out: list[bytes] = []
         for start in range(0, len(paths), self._BATCH_PATHS):
             chunk = [abs_path(p) for p in paths[start : start + self._BATCH_PATHS]]
-            answers = await batched(handle, chunk)
-            for path, blob in zip(chunk, answers, strict=True):
-                if blob is None:
-                    raise FileNotFound(path)
-                out.append(blob)
+            out.extend(await fetch(workspace_id, chunk))
         return out
+
+    def _batch_lane(
+        self, warm: tuple[Sandbox, SandboxHandle] | None
+    ) -> Callable[[str, list[str]], Awaitable[list[bytes]]] | None:
+        """Whoever can answer a whole chunk at once, or None for "read singly".
+
+        Both lanes are wrapped to the SAME shape so `read_many` holds the
+        chunking once. Two copies of that loop is how the cold lane came to hand
+        3,000 paths to one SQL `IN` while the warm one was chunking at 200."""
+        if warm is not None:
+            sb, handle = warm
+            batched = getattr(sb, "download_many", None)
+            if batched is None:
+                return None
+
+            async def _from_sandbox(_ws: str, chunk: list[str]) -> list[bytes]:
+                answers = await batched(handle, chunk)
+                out: list[bytes] = []
+                for path, blob in zip(chunk, answers, strict=True):
+                    # `None` means THAT PATH is absent — an answer, not a failed
+                    # batch — so the miss raises exactly what reading it alone
+                    # would, and the tolerant `read_all_existing` keeps skipping
+                    # it. Anything else would make one deleted file the
+                    # difference between a listing and an error page.
+                    if blob is None:
+                        raise FileNotFound(path)
+                    out.append(blob)
+                return out
+
+            return _from_sandbox
+
+        cold = getattr(self._fs, "read_many", None)
+        if cold is None:
+            return None
+
+        # A workspace with no live sandbox is answered by the durable store,
+        # where the round trips are to the database — the sandbox's batch does
+        # nothing for it, so the store has a batch of its own.
+        async def _from_store(ws: str, chunk: list[str]) -> list[bytes]:
+            return list(await cold(ws, chunk))
+
+        return _from_store
 
     async def _read_with(self, workspace_id: str, path: str, warm) -> bytes:
         """`read` against an ALREADY-resolved liveness. Split out so a multi-step

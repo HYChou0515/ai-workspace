@@ -149,7 +149,7 @@ async def workspace_subagent_defs(
     so the `tools:` it names is a REQUEST. Clamping here (rather than at the call
     site) is what keeps a hand-written file from granting itself `exec` on an App
     that has no sandbox."""
-    from ..files.facade import read_all_existing
+    from ..files.facade import read_all
 
     prefix = f"/{WORKSPACE_AGENT_DIR}/"
     wanted = [
@@ -159,10 +159,12 @@ async def workspace_subagent_defs(
     ]
     # This index is rebuilt every turn, so reading each definition with its own
     # call put a sandbox round trip per sub-agent in front of every message.
-    # `_existing` keeps the read tolerant of a file the IDE deleted between the
-    # listing and here.
+    # STRICT, because the per-file loop this replaced was: it did a bare `read`,
+    # so a definition that vanished mid-listing raised out of here. Making the
+    # batch tolerant would have been a behaviour change nobody asked for, hidden
+    # inside a performance fix.
     out: list[SubagentDef] = []
-    for path, blob in (await read_all_existing(files, workspace_id, wanted)).items():
+    for path, blob in zip(wanted, await read_all(files, workspace_id, wanted), strict=True):
         defn = _def_from(blob, path[len(prefix) : -len("/AGENT.md")])
         if defn is not None:
             out.append(clamp_tools(defn, ceiling))
