@@ -124,4 +124,36 @@ describe("ModalShell", () => {
     fireEvent.keyDown(first, { key: "Tab", shiftKey: true });
     expect(last).toHaveFocus();
   });
+
+  it("carries the themed scrollbar, and keeps the caller's class", () => {
+    // This panel IS the scrolling body of every modal in the app — it sets
+    // `maxHeight: 85vh` + `overflowY: auto` — and it was one of the 30 scroll
+    // containers using the browser's default bar while the side panels used the
+    // themed thin one. Putting `scrollable` here fixes every modal at once,
+    // which is the only reason it is worth a test: the class is easy to drop
+    // when someone next touches `className`.
+    //
+    // Asserted TOGETHER with the caller's own class, because the obvious
+    // regression is not "the class vanished" but "the caller's class replaced
+    // it" — which is what a plain `className={panelClassName}` does.
+    render(
+      <ModalShell onClose={() => {}} ariaLabel="M" panelClassName="mine">
+        <p>body</p>
+      </ModalShell>,
+    );
+
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveClass("scrollable");
+    expect(dialog).toHaveClass("mine");
+  });
+
+  it("is themed even when the caller passes no class of its own", () => {
+    render(
+      <ModalShell onClose={() => {}} ariaLabel="M">
+        <p>body</p>
+      </ModalShell>,
+    );
+
+    expect(screen.getByRole("dialog")).toHaveClass("scrollable");
+  });
 });

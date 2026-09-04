@@ -125,7 +125,11 @@ export function ModalShell({
         aria-label={ariaLabel}
         aria-labelledby={labelledBy}
         data-testid={testId}
-        className={panelClassName}
+        // `scrollable` always, plus whatever the caller asked for: this panel
+        // is the scrolling body of every modal in the app (`maxHeight: 85vh` +
+        // `overflowY: auto` below), so the themed thin bar belongs here rather
+        // than being remembered at each of the callers.
+        className={panelClassName ? `scrollable ${panelClassName}` : "scrollable"}
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
         style={{
