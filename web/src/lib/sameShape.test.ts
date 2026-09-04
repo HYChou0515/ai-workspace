@@ -39,4 +39,13 @@ describe("sameShape (dirty comparison for modal exits, #779)", () => {
     expect(sameShape(null, undefined)).toBe(false);
     expect(sameShape(1, "1")).toBe(false);
   });
+
+  it("treats arrays as sets — the documented limit", () => {
+    // Every caller today holds a set-like array (grants, group grants, tag
+    // fields whose input only appends and de-duplicates). This test exists so
+    // the trade-off is visible rather than discovered: a deliberately ordered
+    // list must NOT be compared with this, because a reordering would read as
+    // no change and the modal would close without asking.
+    expect(sameShape(["a", "b"], ["b", "a"])).toBe(true);
+  });
 });

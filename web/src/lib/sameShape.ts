@@ -18,6 +18,15 @@
  *
  * Order-insensitive by construction: everything is rendered to a canonical
  * string with object keys and array elements sorted.
+ *
+ * THE LIMIT THAT COMES WITH THAT: arrays are compared as SETS. `[a, b]` equals
+ * `[b, a]`. That is right for every caller today — grant lists, group grants,
+ * and `ItemForm`'s tag fields, whose input only appends and de-duplicates, so a
+ * user cannot reorder one on purpose. It would be WRONG for an array whose order
+ * the user arranges deliberately (a ranked list, an ordered pipeline): a
+ * reordering would read as no change and close without asking. Don't reach for
+ * this on one of those — the failure is silent, which is the direction that
+ * matters.
  */
 function canonical(value: unknown): string {
   if (value instanceof Set) return `Set(${[...value].map(canonical).sort().join(",")})`;

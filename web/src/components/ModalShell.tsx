@@ -99,8 +99,13 @@ export function ModalShell({
     // panel — the confirm this modal itself raises when it holds unsaved work —
     // and that layer's buttons live outside this panel. A trap that keeps
     // yanking focus home makes them unreachable, so the prompt asking "discard?"
-    // could only be answered with a mouse. Later in the DOM = higher layer,
-    // which is how the provider renders it (children first, then the dialog).
+    // could only be answered with a mouse.
+    //
+    // "Later in the DOM = higher layer" holds because nothing here portals: the
+    // provider renders children first and the confirm after, and every modal
+    // renders in place. A `createPortal` to document.body would land after both
+    // and break the ordering — if one ever appears, this needs a real z-index
+    // comparison instead.
     const isTopmost = () => {
       const modals = document.querySelectorAll('[role="dialog"][aria-modal="true"]');
       return modals.length === 0 || modals[modals.length - 1] === panel;
