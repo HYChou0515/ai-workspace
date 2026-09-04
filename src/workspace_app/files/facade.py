@@ -23,7 +23,7 @@ import contextlib
 import logging
 import time
 from collections import defaultdict
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import Protocol
 
@@ -296,6 +296,26 @@ class WorkspaceFiles:
 
     async def read(self, workspace_id: str, path: str) -> bytes:
         return await self._read_with(workspace_id, path, await self._warm(workspace_id))
+
+    async def read_many(self, workspace_id: str, paths: Sequence[str]) -> list[bytes]:
+        """Read several paths as ONE operation — liveness resolved once, every
+        path read against that same answer, in the order given.
+
+        Calling `read` per path re-resolves it per path, and each resolution is
+        a liveness probe: against the hosted sandbox that is a second network
+        round trip in front of every single file. Measured on the entity
+        listings, which read a whole record type at a time: a 68-issue listing
+        cost ~150 round trips where ~70 would do, and a milestone listing —
+        rolling up every issue — cost MORE to return 7 records than the issue
+        listing did to return 68.
+
+        This is the `_read_with` contract the multi-step writers already use
+        (resolve once, every step provably hits the same store), NOT a memo of
+        the probe's answer: `_warm` is also the recovery trigger for a sandbox
+        the host reaped, so remembering "alive" across operations turns that
+        recovery into a 500. One operation, one resolution."""
+        warm = await self._warm(workspace_id)
+        return [await self._read_with(workspace_id, path, warm) for path in paths]
 
     async def _read_with(self, workspace_id: str, path: str, warm) -> bytes:
         """`read` against an ALREADY-resolved liveness. Split out so a multi-step

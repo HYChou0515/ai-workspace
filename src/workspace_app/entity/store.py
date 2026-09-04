@@ -209,10 +209,24 @@ class EntityStore:
         entity_type = self._catalog.get(type_name)
         paths = await self._fs.ls(self._ws, prefix=f"/{entity_type.records_path}/")
         numbered = sorted((n, p) for p in paths if (n := _record_number(p)) is not None)
+        blobs = await self._read_all([p for _, p in numbered])
         return [
-            parse_entity(await self._fs.read(self._ws, path), number, type_name, entity_type.schema)
-            for number, path in numbered
+            parse_entity(blob, number, type_name, entity_type.schema)
+            for (number, _), blob in zip(numbered, blobs, strict=True)
         ]
+
+    async def _read_all(self, paths: list[str]) -> list[bytes]:
+        """Every record of one type, as ONE read operation where the store can
+        do that (`read_many` — the WorkspaceFiles facade), else one at a time.
+
+        Duck-typed like the store's other optional capabilities (`stat_all`,
+        the CAS pair): the workspace facade has it, the plain test/wiki stores
+        need not. Reading a whole type a file at a time is what made listing
+        cost a round trip PER RECORD to settle where the workspace lives."""
+        read_many = getattr(self._fs, "read_many", None)
+        if read_many is not None:
+            return list(await read_many(self._ws, paths))
+        return [await self._fs.read(self._ws, path) for path in paths]
 
     async def _corpus(self, prefetched: dict[str, list[ParsedEntity]] | None = None) -> Corpus:
         """Every type's clean records, keyed type → number → entity — the input
