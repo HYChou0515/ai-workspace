@@ -12,6 +12,8 @@ import { kbApi, type KbApi, type KbCitation } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 import { EntryView } from "../../components/AgentEntryView";
 import { Icon } from "../../components/Icon";
+import { ResizeDivider } from "../../components/ResizeDivider";
+import { usePersistentNumber } from "../../hooks/usePersistentNumber";
 import { ModelEffortPicker } from "../../components/ModelEffortPicker";
 import { ReplayDialog, type ReplayRequest } from "../../components/ReplayDialog";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
@@ -42,6 +44,13 @@ function nearestUserQuestion(entries: AgentEntry[], i: number): string {
   return "";
 }
 
+/** Typing-area height bounds for the KB drawer (px) — shorter than the
+ * workspace chat's, because this panel is usually narrower and shares its
+ * column with the collection picker. The default is the old `rows={2}`. */
+const KB_COMPOSER_H_DEFAULT = 44;
+const KB_COMPOSER_H_MIN = 32;
+const KB_COMPOSER_H_MAX = 360;
+
 export function KbChatPanel({
   chatId = null,
   collectionIds: fixedCollectionIds,
@@ -66,6 +75,17 @@ export function KbChatPanel({
   const me = useCurrentUser();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [draft, setDraft] = useState("");
+  // Remembered + clamped like every other panel size (`usePersistentNumber`),
+  // under its OWN key: the KB drawer and the workspace chat are different
+  // shapes, and one shared key would let resizing here reshape the other.
+  const [composerH, setComposerH] = usePersistentNumber(
+    "kb:chat:composerHeight",
+    KB_COMPOSER_H_DEFAULT,
+    KB_COMPOSER_H_MIN,
+    KB_COMPOSER_H_MAX,
+  );
+  // Anchored drag — ResizeDivider reports the delta from the drag START.
+  const composerStart = useRef(composerH);
   const [pickerOpen, setPickerOpen] = useState(false);
   // #513 P10: one transient image staged for the next message. The server
   // VLM-describes it into the query; it's never uploaded as a KB document.
@@ -297,7 +317,22 @@ export function KbChatPanel({
             ))}
           </div>
         )}
-        <div className="kb-composer">
+        {/* Lifted above the composer block for the same reason as the workspace
+            chat's: a handle that floats on the seam loses its lower half to
+            whatever paints after it. */}
+        <div style={{ position: "relative", zIndex: 1 }}>
+          <ResizeDivider
+            orientation="horizontal"
+            ariaLabel="resize composer"
+            position={{ value: composerH, min: KB_COMPOSER_H_MIN, max: KB_COMPOSER_H_MAX }}
+            onResizeStart={() => {
+              composerStart.current = composerH;
+            }}
+            // Dragging UP is a negative delta and must GROW the composer.
+            onResize={(d) => setComposerH(composerStart.current - d)}
+          />
+        </div>
+        <div className="kb-composer" data-testid="kb-composer">
           {image && (
             <div className="kb-composer__attach">
               <img className="kb-composer__thumb" src={stagedImagePreview(image)} alt="" />
@@ -314,7 +349,11 @@ export function KbChatPanel({
           )}
           <textarea
             className="kb-composer__input"
-            rows={2}
+            // The seam handle owns this height. It replaces `rows`, which only
+            // ever set the INITIAL box — and it sits on the TEXTAREA, not the
+            // composer block, so the attachment chip and the button row below
+            // keep their natural size instead of being squeezed out of view.
+            style={{ height: composerH }}
             placeholder="Ask the knowledge base…"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}

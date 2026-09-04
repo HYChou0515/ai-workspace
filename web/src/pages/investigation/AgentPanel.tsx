@@ -16,6 +16,7 @@ import { EntryView } from "../../components/AgentEntryView";
 import { HealthDot } from "../../components/HealthDot";
 import { Icon } from "../../components/Icon";
 import { ModelEffortPicker } from "../../components/ModelEffortPicker";
+import { ResizeDivider } from "../../components/ResizeDivider";
 import { SkillsModal } from "../../components/SkillsModal";
 import { WorkflowsModal } from "../../components/WorkflowsModal";
 import { EnvVarsModal } from "../../components/EnvVarsModal";
@@ -47,6 +48,7 @@ import { TurnStatus } from "../../components/TurnStatus";
 import { turnLooksSilent, turnsFromEntry } from "./agentLog";
 import type { CompactionReason } from "../../api/types";
 import type { QuotaKind } from "../../lib/quotaFailure";
+import { usePersistentNumber } from "../../hooks/usePersistentNumber";
 import { pxToRem } from "../../lib/pxToRem";
 import { useT } from "../../lib/i18n";
 import { type AttachProgress, attachPrompt, runAttach, uploadPathFor } from "./attach";
@@ -61,6 +63,13 @@ import { extractClipboardFiles, isImage, readTransferEntries } from "./transfer"
  * KB doc viewer's `.kb-docpage__body` cap for a consistent reading measure.
  */
 export const CHAT_COLUMN_MAX_W = 860;
+
+/** Typing-area height bounds (px). The default is the old `rows={3}`; the floor
+ * keeps a line and a half visible; the ceiling stops a drag from swallowing the
+ * feed on a short window. */
+const COMPOSER_H_DEFAULT = 64;
+const COMPOSER_H_MIN = 40;
+const COMPOSER_H_MAX = 420;
 
 /** The centred, capped reading column shared by the feed, chips row and composer. */
 const chatColumn: React.CSSProperties = {
@@ -390,6 +399,20 @@ export function AgentPanel({
   // aggregate byte/file progress driving the bar. `dragging` flags the drop overlay.
   const [progress, setProgress] = useState<AttachProgress | null>(null);
   const [dragging, setDragging] = useState(false);
+  // How tall the composer stands. Persisted + clamped like every other panel
+  // size in this app (`rca:layout:*`), so a stored bad value cannot wedge the
+  // layout and the choice survives a reload. The feed is `flex: 1`, so every
+  // pixel the composer takes comes out of the message list — which is what a
+  // person dragging this seam is choosing between.
+  const [composerH, setComposerH] = usePersistentNumber(
+    "chat:composerHeight",
+    COMPOSER_H_DEFAULT,
+    COMPOSER_H_MIN,
+    COMPOSER_H_MAX,
+  );
+  // Anchored drag: ResizeDivider reports the delta from the START of the drag,
+  // so the parent snapshots the value it anchors to (see its docstring).
+  const composerStart = useRef(composerH);
   // #364: attached images show as removable preview chips instead of a raw path in
   // the box; each holds the uploaded workspace `path` (appended to the message on send
   // so the agent can read_image it) + an object-URL `url` for the thumbnail.
@@ -825,7 +848,29 @@ export function AgentPanel({
         </div>
       )}
 
+      {/* The handle floats on the seam via negative margins, and the form below
+          is `position: relative` (its drop overlay needs that) — a positioned
+          later sibling paints OVER it, which left only the top ~6px of the
+          handle hittable and its centre dead. This wrapper lifts the whole hit
+          area above the form. Found by hit-testing the real page: every unit
+          test passed because they dispatch events straight at the element. */}
+      <div style={{ position: "relative", zIndex: 1 }}>
+        <ResizeDivider
+          orientation="horizontal"
+          ariaLabel="resize composer"
+          // Published for assistive tech (window splitter pattern) — and it is
+          // what makes the arrow keys mean something to a screen reader.
+          position={{ value: composerH, min: COMPOSER_H_MIN, max: COMPOSER_H_MAX }}
+          onResizeStart={() => {
+            composerStart.current = composerH;
+          }}
+          // Dragging UP is a negative delta and must GROW the composer, so the
+          // delta is subtracted — the same anchoring the shell's bottom panel uses.
+          onResize={(d) => setComposerH(composerStart.current - d)}
+        />
+      </div>
       <form
+        data-testid="agent-composer"
         onSubmit={(e) => {
           e.preventDefault();
           submit();
@@ -847,11 +892,16 @@ export function AgentPanel({
         }}
         style={{
           padding: 12,
-          borderTop: "1px solid var(--paper-3)",
+          // The divider above draws the seam now, so the form's own top border
+          // would double it.
           background: "var(--white)",
           display: "flex",
           flexDirection: "column",
           position: "relative",
+          // NO fixed height here: the form also carries the chips row, the
+          // usage/token lines and the button row. Pinning it squeezed all of
+          // that until it spilled past the panel's bottom edge and the send row
+          // left the screen — visible only in a real browser.
         }}
       >
         {dragging && (
@@ -1118,13 +1168,18 @@ export function AgentPanel({
                   ? "Add a note (optional)…"
                   : "Ask the agent…"
           }
-          rows={3}
           style={{
             border: "1px solid var(--paper-3)",
             borderRadius: "var(--radius-btn)",
             padding: 8,
             fontSize: pxToRem(13),
-            resize: "vertical",
+            // The seam handle owns this height — and only this box grows, so
+            // the rows around it keep their natural size instead of being
+            // squeezed off screen.
+            height: composerH,
+            // The corner grip is gone: a 15px target in a corner, and it moved
+            // only this box while the seam handle moves the composer as a whole.
+            resize: "none",
             outline: "none",
             fontFamily: "var(--font-body)",
           }}
