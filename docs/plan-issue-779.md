@@ -287,6 +287,22 @@ confirm 的兩個動作都不是 `primary`,而 `Dialog` 只 autofocus primary;`M
 
 `=>` 裡的 `>` 會提前結束 `[^>]*` 的 tag 比對,所以寫成 `<div onClick={() => onClose()} style={{position:"fixed",inset:0}}>` 的手刻 backdrop **兩條 guard 都放行**。我原本的突變探針之所以會紅,純粹是因為它剛好把 `style` 寫在前面 —— **探針證明的是你想得到的那種寫法,不是那條規則**。已修(比對前先遮蔽 `=>`),並用兩種寫法各驗一次。
 
+### 7.7 第二輪:修第一輪的時候,我造出一個更糟的東西
+
+**Escape 沒拿到 Tab 剛拿到的 topmost 檢查。** 兩者都掛在 `document` 上,而 `stopPropagation` 擋不住同一個節點上的其他 listener(這正是 `Dialog` 需要 capture 的原因,我自己寫過)。工作區同時掛著 Edit details 和 ⌘P palette,而 ⌘P 是個在 modal 開著時也會觸發的全域 keydown。所以:**編輯欄位 → 習慣性按 ⌘P → 按 Escape 想關掉 palette → Edit modal 跳出「放棄未儲存的變更?」**。#779 之前這只是誤關,而我的改動把它變成一個**反射性一按就會毀掉東西的 prompt**。`isTopmost` 現在兩個 handler 共用。
+
+**第一輪寫的那條 guard,漏掉了它掃過的同一個檔案裡的第六個 bypass。** `ManageChatsModal` 的「Switch」是 `onClick={() => { onSelect(id); onClose(); }}` —— 跨行、而且是呼叫不是綁定,單行正則看不到。rename 開著時按 Switch,草稿靜默消失。guard 改成配對 `onClick` 的 body。**為「大家一直這樣寫」而設的 guard,必須涵蓋那件事實際被寫出來的樣子,不是當初觸發它的那一種寫法。**
+
+**`Dialog` 拿走焦點卻沒還。** 選「繼續編輯」之後 modal 如承諾般留著,但游標掉到 `<body>` —— 下一個按鍵不知道去哪,Tab 也從面板第一個控制項重來而不是回到正在打字的欄位。APG 要求還原,`ModalShell` 早就做了。
+
+**`sameShape` 重現了它自己要修的那個 bug。** `Object.entries(new Date())` 是 `[]`,所以每個 `Date`(以及 `URL`、`RegExp`、任何沒有 own enumerable 屬性的 class instance)都會被正規化成 `{}`,彼此相等也等於 `{}`。目前沒有呼叫端持有 Date,但它現在是全專案的 dirty 比較器。已加明確分支;其餘不認得的 class instance **直接 throw**,而不是安靜地跟所有東西相等 —— 呼叫端當場炸掉是可回復的,一個悄悄不再察覺編輯的 modal 不是。
+
+**`CommandPalette` 的 `zIndex={200}`** 是 P5 搬遷時我把舊數字帶過來的:高於 `--z-dialog`(150),所以在它之上的 confirm 會被它蓋住,而且撞上 `--z-splash`。已回到 scale 上。
+
+### 7.8 第三輪之前,我自己先探自己的 guard
+
+配對 `onClick` body 的 depth counter 會把**字串裡的 `}`** 當成結構。一個還會僥倖抓到,**兩個就讓 body 提前結束,後面的 bypass 完全看不到** —— `onClick={() => { console.log("}}"); onClose(); }}` 讀起來是乾淨的。兩種寫法都用 mutant 驗過。matcher 現在認得字串 / 樣板字面值與跳脫,而且被抽到 module scope **可以單獨測**,不再只能透過「樹裡剛好有什麼」來驗證 —— 那正是這個盲點活下來的原因。
+
 ---
 
 ## 8. 出處
