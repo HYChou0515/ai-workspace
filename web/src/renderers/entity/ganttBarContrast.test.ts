@@ -174,6 +174,69 @@ describe("a coloured gantt bar's text (#690)", () => {
   }
 });
 
+/**
+ * `color_by` on an ACTOR field draws its fills from a generated palette
+ * (`actorColor`) rather than the six chip slots, so the pairing the guard above
+ * checks for `status` has to be re-checked here: those fills are OPAQUE oklch
+ * rather than translucent chip fills, and there are as many of them as there
+ * are people, not six.
+ *
+ * The floor is the same 3:1 — one pairing, one promise — and the team is walked
+ * up to a size no chip palette could have served, because "readable" has to
+ * hold for the sixteenth person, not just the first.
+ */
+describe("a gantt bar coloured by ACTOR", () => {
+  const TEAM = 16;
+
+  /** One bar per person, so every seat in the palette is actually painted. */
+  function renderTeam() {
+    render(
+      createElement(
+        GanttView,
+        props({
+          spec: {
+            view: "gantt",
+            entity: "issue",
+            span: "span",
+            label: "title",
+            assignee: "assignee",
+            assignee_display: "name",
+            color_by: "assignee",
+          } as EntityViewProps["spec"],
+          entities: Array.from({ length: TEAM }, (_, i) =>
+            rec(i + 1, { title: `Task ${i + 1}`, span: SPAN, assignee: `u${i}` }),
+          ),
+          users: Array.from({ length: TEAM }, (_, i) => ({
+            id: `u${i}`, name: `Person ${i}`, section: "", email: "", photo_url: "",
+          })),
+        }),
+      ),
+    );
+    return Array.from({ length: TEAM }, (_, i) => screen.getByTestId(`bar-${i + 1}`));
+  }
+
+  for (const [themeName, block] of THEMES) {
+    it(`keeps every one of ${TEAM} people's labels ≥3:1 on their own fill in ${themeName} mode`, () => {
+      const surface = tokenIn(TOKENS_CSS, block, "--white");
+      for (const [i, bar] of renderTeam().entries()) {
+        const label = bar.querySelector(".ev-gantt__bar-label") as HTMLElement;
+        const fill = paintedOver(TOKENS_CSS, block, bar.style.background, surface);
+        const ink = resolvedInk(label, bar, [".ev-gantt__bar-label", ".ev-gantt__bar"]);
+        const ratio = contrast(inkHex(ink, block), fill);
+        expect(
+          ratio,
+          `person ${i} in ${themeName}: ${ink} on ${fill} = ${ratio.toFixed(2)}:1`,
+        ).toBeGreaterThanOrEqual(3);
+      }
+    });
+  }
+
+  it("paints no two of them the same colour", () => {
+    const fills = new Set(renderTeam().map((b) => b.style.background));
+    expect(fills.size).toBe(TEAM);
+  });
+});
+
 describe("a coloured gantt bar's extent", () => {
   // A chip fill is translucent, and in a GROUPED chart it lands on the lane
   // band — which for the neutral slot is literally the same token. The bar
