@@ -67,11 +67,26 @@ class FileStore(Protocol):
     # Only the workspace-backing stores (SpecstarFileStore / MemoryFileStore)
     # implement them; the wiki-page store and test doubles need not.
     #
-    # `read_many` (#781 — a set of paths in ONE query instead of a row fetch
-    # each) is the same kind of capability, but so far **only
-    # `SpecstarFileStore` has it**. Everything else, `MemoryFileStore`
-    # included, is read per path by the facade's fallback: correct, and one
-    # round trip per file.
+    # `read_many_existing(workspace_id, paths) -> dict[str, bytes]` (#781) is the
+    # same kind of capability: a set of paths in ONE query instead of a row fetch
+    # each. So far **only `SpecstarFileStore` has it**; everything else,
+    # `MemoryFileStore` included, is read per path by the facade's fallback —
+    # correct, and one round trip per file.
+    #
+    # Two obligations come with implementing it, and both were learned the hard
+    # way:
+    #
+    # 1. **Name the misses.** A path with no file is simply absent from the
+    #    result — never an exception, never a hole the caller has to guess at.
+    #    Strictness is the caller's decision (`read_all` raises, `read_all_existing`
+    #    skips), made once, above. A strict-only batch forced a repair path that
+    #    re-read everything to find out WHICH path was gone.
+    # 2. **Bound your own request.** The caller hands you the whole ask, because a
+    #    caller that chunks calls you once per chunk — and through the facade that
+    #    re-resolved the workspace's liveness per chunk, so one listing could be
+    #    assembled from a live sandbox and a durable snapshot at once. Whatever is
+    #    unbounded in YOUR implementation (a SQL `IN`, an HTTP body) is yours to
+    #    cap; see `_QUERY_PATHS` in `specstar_impl.py`.
 
     async def delete(self, workspace_id: str, path: str) -> None:
         """Delete the file at `path`; raise `FileNotFound` if absent. Leaves the

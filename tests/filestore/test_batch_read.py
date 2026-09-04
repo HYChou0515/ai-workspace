@@ -40,9 +40,9 @@ async def test_reading_a_listing_costs_one_query_not_one_fetch_per_file(
         return original(*a, **k)
 
     monkeypatch.setattr(store._files, "get", counted)
-    got = await store.read_many("ws1", [f"/r/{i}.md" for i in range(20)])
+    got = await store.read_many_existing("ws1", [f"/r/{i}.md" for i in range(20)])
 
-    assert got == [f"body {i}".encode() for i in range(20)]
+    assert got == {f"/r/{i}.md": f"body {i}".encode() for i in range(20)}
     assert fetches == 0, f"{fetches} single-row fetches — the batch read is not being used"
 
 
@@ -50,15 +50,21 @@ class _NoBatchStore:
     """The same durable store with the cold lane CLOSED — every assertion below
     has to hold on this one too, or the lane is observable from outside.
 
-    A plain wrapper rather than a subclass: `read_many` has to be genuinely
+    A plain wrapper rather than a subclass: the batch method has to be genuinely
     absent for the facade's duck-type to miss it, and an override that raises
     would still be found."""
 
     def __init__(self, inner: SpecstarFileStore) -> None:
         self._inner = inner
 
+    #: Every name the facade duck-types to find a batch. Hiding only some of
+    #: them is how "lane closed" quietly became "lane open": the code started
+    #: looking for `read_many_existing` first, the double still forwarded it, and
+    #: both halves of every pair asserted the SAME path while claiming not to.
+    _BATCH_NAMES = ("read_many", "read_many_existing")
+
     def __getattr__(self, name: str):
-        if name == "read_many":
+        if name in self._BATCH_NAMES:
             raise AttributeError(name)
         return getattr(self._inner, name)
 
@@ -89,7 +95,7 @@ async def test_the_query_bounds_its_own_size(store: SpecstarFileStore, monkeypat
 
     monkeypatch.setattr(store, "_read_many_sync", counted)
 
-    got = await store.read_many("ws1", [f"/r/{i}.md" for i in range(450)])
+    got = await store.read_many_existing("ws1", [f"/r/{i}.md" for i in range(450)])
 
     assert len(got) == 450
     assert asks and max(asks) <= 200, f"largest query carried {max(asks)} paths"
@@ -148,11 +154,33 @@ async def test_a_path_that_is_not_there_keeps_the_two_existing_behaviours(
 async def test_one_workspace_cannot_read_another_ones_file(store: SpecstarFileStore) -> None:
     """The batch is scoped to the workspace like every other read here. A query
     that matched on path alone would hand one item's records to another."""
-    import pytest
-
-    from workspace_app.filestore.protocol import FileNotFound
-
     await store.write("ws1", "/r/secret.md", b"mine")
 
-    with pytest.raises(FileNotFound):
-        await store.read_many("ws2", ["/r/secret.md"])
+    assert await store.read_many_existing("ws2", ["/r/secret.md"]) == {}
+
+
+async def test_a_vanished_file_does_not_re_fetch_the_cold_listing(
+    store: SpecstarFileStore, monkeypatch
+) -> None:
+    """The cold lane's own guard, which it did not have.
+
+    A mutation check showed the whole cold lane could be reverted to the old
+    strict-batch-plus-repair shape with every test still green — the lenient
+    contract was asserted nowhere. Its point is that a miss costs the miss: one
+    query, no per-path re-read, whatever is gone simply absent."""
+    await _seeded(store, 10)
+    singles = 0
+    original = store.read
+
+    async def counted(workspace_id: str, path: str):
+        nonlocal singles
+        singles += 1
+        return await original(workspace_id, path)
+
+    monkeypatch.setattr(store, "read", counted)
+    files = WorkspaceFiles(store)
+
+    kept = await read_all_existing(files, "ws1", [f"/r/{i}.md" for i in range(10)] + ["/r/gone.md"])
+
+    assert len(kept) == 10
+    assert singles == 0, f"{singles} per-path reads — the miss re-fetched the listing"

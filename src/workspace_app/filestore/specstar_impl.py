@@ -174,31 +174,6 @@ class SpecstarFileStore:
     async def read(self, workspace_id: str, path: str) -> bytes:
         return await asyncio.to_thread(self._read_sync, workspace_id, path)
 
-    async def read_many(self, workspace_id: str, paths: Sequence[str]) -> list[bytes]:
-        """Several files as ONE query (#781 P4) — the durable half of the batch.
-
-        A workspace with no live sandbox is answered from here, so the sandbox's
-        batch download does nothing for it: the round trips are to the database,
-        one row fetch per file. This is the same optional capability the facade
-        duck-types for the warm path, so a cold listing costs one query instead
-        of one fetch per record.
-
-        The predicate is `path in (...)` on the SAME indexed field `_ls_sync`
-        already pushes down — no new migration exposure: a workspace whose rows
-        cannot answer a `path` predicate already lists as empty, which is what
-        `/api/readyz` gates the rollout on.
-
-        A missing path raises `FileNotFound` exactly as reading it alone would;
-        the tolerant listing read stays tolerant by catching that."""
-        got = await self.read_many_existing(workspace_id, paths)
-        out: list[bytes] = []
-        for path in paths:
-            data = got.get(path)
-            if data is None:
-                raise FileNotFound(f"{workspace_id}:{path}")
-            out.append(data)
-        return out
-
     async def read_many_existing(self, workspace_id: str, paths: Sequence[str]) -> dict[str, bytes]:
         """`path -> bytes` for the paths that exist — a missing one is simply
         absent, so a listing can skip it without a second fetch.

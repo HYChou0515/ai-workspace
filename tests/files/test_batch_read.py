@@ -94,15 +94,19 @@ async def test_the_fast_lane_reads_thirty_files_in_one_round_trip() -> None:
 
 
 class _ChunkRecordingStore(MemoryFileStore):
-    """A durable store that CAN batch — and remembers how big each ask was."""
+    """A durable store that CAN batch — and remembers how big each ask was.
+
+    It deliberately does NOT bound its own request, so a test can see the size
+    the caller handed down. A real implementation must (see `FileStore`); this
+    one exists to observe the caller, not to model a good citizen."""
 
     def __init__(self) -> None:
         super().__init__()
         self.asks: list[int] = []
 
-    async def read_many(self, workspace_id: str, paths: list[str]) -> list[bytes]:
+    async def read_many_existing(self, workspace_id: str, paths: list[str]) -> dict[str, bytes]:
         self.asks.append(len(paths))
-        return [await self.read(workspace_id, p) for p in paths]
+        return {p: await self.read(workspace_id, p) for p in paths}
 
 
 async def test_neither_lane_asks_for_everything_at_once() -> None:
@@ -167,6 +171,32 @@ async def test_the_whole_ask_goes_down_to_the_store_in_one_call() -> None:
 
     assert len(got) == 450
     assert store.asks == [450]
+
+
+@pytest.mark.parametrize("tolerant", [False, True], ids=["strict", "tolerant"])
+async def test_a_store_with_no_batch_at_all_is_read_one_path_at_a_time(tolerant: bool) -> None:
+    """The floor. A store that never grew the capability — the wiki page store,
+    a test double, anything but the workspace-backing one — is read per path and
+    keeps both semantics: strict raises for what is gone, tolerant omits it.
+
+    This is what "duck-typed optional capability" has to mean, and it is only
+    true if somebody exercises it: the batch lanes are what production takes, so
+    without this the fallback is a paragraph rather than a behaviour."""
+    store = MemoryFileStore()  # no `read_many_existing`
+    assert getattr(store, "read_many_existing", None) is None
+    await store.write("ws1", "/r/0.md", b"body 0")
+    await store.write("ws1", "/r/1.md", b"body 1")
+    asked = ["/r/0.md", "/r/gone.md", "/r/1.md"]
+
+    if tolerant:
+        assert await read_all_existing(store, "ws1", asked) == {
+            "/r/0.md": b"body 0",
+            "/r/1.md": b"body 1",
+        }
+    else:
+        with pytest.raises(FileNotFound):
+            await read_all(store, "ws1", asked)
+        assert await read_all(store, "ws1", ["/r/1.md", "/r/0.md"]) == [b"body 1", b"body 0"]
 
 
 async def test_reading_nothing_costs_nothing() -> None:

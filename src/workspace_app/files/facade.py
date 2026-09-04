@@ -69,12 +69,18 @@ logger = logging.getLogger(__name__)
 #: internal chunking detail with no behaviour an operator could reason about,
 #: and every knob is a row somebody has to keep in the migration ledger.
 #:
-#: Each lane bounds its OWN request, where the unbounded thing actually is: this
-#: one covers the HTTP body, and `_QUERY_PATHS` in `filestore/specstar_impl.py`
-#: covers the SQL `IN`. Bounding in the shared caller instead looked tidier and
-#: was wrong — it called the lane once per chunk, so one read resolved the
-#: workspace's liveness repeatedly, and a sandbox reaped mid-read would have had
-#: some chunks answered by it and the rest by the durable snapshot.
+#: Applied by the facade to WHICHEVER lane it drives — the sandbox's HTTP body
+#: and the store's query alike — because the facade is one boundary and this is
+#: its bound. The store bounds itself as well (`_QUERY_PATHS` in
+#: `filestore/specstar_impl.py`), which is not a duplicate rule but the same rule
+#: at the OTHER boundary: `discover_catalog` is handed the raw store, so the
+#: facade's bound is not on that path. The tighter of the two wins where both
+#: apply, which is the safe direction.
+#:
+#: What must NOT happen is bounding in the shared caller above the facade. That
+#: looked tidier and was wrong: it called the lane once per chunk, so one read
+#: resolved the workspace's liveness repeatedly — and a sandbox reaped mid-read
+#: had some chunks answered by it and the rest by the durable snapshot.
 BATCH_PATHS = 200
 
 # How many times an etag-guarded edit re-bases…
@@ -320,80 +326,32 @@ class WorkspaceFiles:
     # degrades for stores that do not have it. Do not duck-type it a second
     # time at a call site; two spellings of one rule drift.
 
-    async def read_many(self, workspace_id: str, paths: Sequence[str]) -> list[bytes]:
-        """Read several paths as ONE operation — liveness resolved once, every
-        path read against that same answer, in the order given.
+    async def read_many_existing(self, workspace_id: str, paths: Sequence[str]) -> dict[str, bytes]:
+        """The paths that are THERE, read as ONE operation — liveness resolved
+        once, every path read against that same answer.
 
-        Calling `read` per path re-resolves it per path, and each resolution is
-        a liveness probe: against the hosted sandbox that is a second network
-        round trip in front of every single file. Measured on the entity
+        Reading a set of files a call at a time re-resolves liveness per file,
+        and each resolution is a probe: against the hosted sandbox a second
+        network round trip in front of every single file. Measured on the entity
         listings, which read a whole record type at a time: a 68-issue listing
-        cost ~150 round trips where ~70 would do, and a milestone listing —
-        rolling up every issue — cost MORE to return 7 records than the issue
-        listing did to return 68.
+        cost ~150 round trips where ~70 would do.
 
         This is the `_read_with` contract the multi-step writers already use
         (resolve once, every step provably hits the same store), NOT a memo of
         the probe's answer: `_warm` is also the recovery trigger for a sandbox
         the host reaped, so remembering "alive" across operations turns that
-        recovery into a 500. One operation, one resolution.
+        recovery into a 500.
 
-        A sandbox that can hand back many files at once takes the fast lane
-        below; so does a durable store that can answer a set of paths in one
-        query. One that can do neither is read a file at a time, and NOTHING
-        above here can tell which happened — same bytes, same order, same
-        errors, only a different number of round trips.
-
-        Whichever lane answers, the ask is CHUNKED by the same bound: a batch
-        exists to cut round trips, not to build one unbounded request."""
+        A path that is gone is simply ABSENT from the result — never an
+        exception. Whether that is an error is the caller's decision, made once
+        in `read_all` / `read_all_existing`; a batch that raised instead had to
+        re-read everything to find out which path it was."""
         if not paths:
             # Before `_warm`, deliberately. Resolving liveness to read nothing
             # cost a round trip on every turn for an item with no skills and no
             # sub-agents — both indexes are rebuilt per message — and the
             # "cost does not scale" tests stayed green through it, because a
             # constant going 1 → 2 is not a slope.
-            return []
-        warm = await self._warm(workspace_id)
-        fetch = self._batch_lane(warm)
-        if fetch is None:
-            return [await self._read_with(workspace_id, path, warm) for path in paths]
-        got = await self._fetch_chunked(fetch, workspace_id, paths, skip_missing=False)
-        return [blob for _, blob in got]
-
-    async def _fetch_chunked(
-        self,
-        fetch: Callable[[str, list[str]], Awaitable[list[bytes | None]]],
-        workspace_id: str,
-        paths: Sequence[str],
-        skip_missing: bool,
-    ) -> list[tuple[str, bytes]]:
-        """`(path, bytes)` for each chunk of the ask, in order.
-
-        `skip_missing` is the whole difference between the strict read and the
-        tolerant one: a path the lane could not find either raises exactly what
-        reading it alone would, or is simply omitted. The decision is made HERE,
-        once, because the lanes report a miss (`None` in that position) rather
-        than raising — recovering it from an exception is what used to cost a
-        second full fetch of the listing."""
-        out: list[tuple[str, bytes]] = []
-        for start in range(0, len(paths), self._BATCH_PATHS):
-            chunk = [abs_path(p) for p in paths[start : start + self._BATCH_PATHS]]
-            for path, blob in zip(chunk, await fetch(workspace_id, chunk), strict=True):
-                if blob is None:
-                    if not skip_missing:
-                        raise FileNotFound(path)
-                    continue
-                out.append((path, blob))
-        return out
-
-    async def read_many_existing(self, workspace_id: str, paths: Sequence[str]) -> dict[str, bytes]:
-        """`read_many`, but a path that is gone is OMITTED rather than an error.
-
-        Same single resolution and the same chunking; the only difference is who
-        answers for a miss. Kept beside `read_many` rather than layered on top of
-        it because a miss is something the LANE already knows — recovering it
-        from an exception meant reading everything a second time."""
-        if not paths:
             return {}
         warm = await self._warm(workspace_id)
         fetch = self._batch_lane(warm)
@@ -405,7 +363,13 @@ class WorkspaceFiles:
                 except (FileNotFound, FileNotFoundError):
                     continue
             return got
-        return dict(await self._fetch_chunked(fetch, workspace_id, paths, skip_missing=True))
+        found: dict[str, bytes] = {}
+        for start in range(0, len(paths), self._BATCH_PATHS):
+            chunk = [abs_path(p) for p in paths[start : start + self._BATCH_PATHS]]
+            for path, blob in zip(chunk, await fetch(workspace_id, chunk), strict=True):
+                if blob is not None:
+                    found[path] = blob
+        return found
 
     def _batch_lane(
         self, warm: tuple[Sandbox, SandboxHandle] | None
@@ -431,43 +395,21 @@ class WorkspaceFiles:
 
         # A workspace with no live sandbox is answered by the durable store,
         # where the round trips are to the database — the sandbox's batch does
-        # nothing for it, so the store has a batch of its own. It names the
-        # misses (`read_many_existing`) so this lane needs no repair path; a
-        # store with only the strict batch pays a per-path re-read of THAT
-        # CHUNK, and says so, because silently costing N+1 to paper over a batch
-        # that always fails is how a broken predicate stays invisible.
-        cold_existing = getattr(self._fs, "read_many_existing", None)
-        if cold_existing is not None:
-
-            async def _from_store_existing(ws: str, chunk: list[str]) -> list[bytes | None]:
-                found = await cold_existing(ws, chunk)
-                return [found.get(path) for path in chunk]
-
-            return _from_store_existing
-
-        cold = getattr(self._fs, "read_many", None)
+        # nothing for it, so the store has a batch of its own.
+        #
+        # ONE capability, not two. A strict variant alongside it needed a repair
+        # path for the miss it could not name, and that path was both unreachable
+        # in production (the durable store has the lenient one) and unguarded by
+        # any test — a branch nothing could reach and nothing defended. Naming
+        # the misses is the whole contract; strictness is the caller's decision,
+        # made once, above.
+        cold = getattr(self._fs, "read_many_existing", None)
         if cold is None:
             return None
 
         async def _from_store(ws: str, chunk: list[str]) -> list[bytes | None]:
-            try:
-                return list(await cold(ws, chunk))
-            except (FileNotFound, FileNotFoundError):
-                logger.warning(
-                    "files: %s's batch read failed for a chunk of %d in %s — falling back to "
-                    "one path at a time. Correct, but N+1: if this repeats, the batch itself "
-                    "is broken rather than the files being absent.",
-                    type(self._fs).__name__,
-                    len(chunk),
-                    ws,
-                )
-                out: list[bytes | None] = []
-                for path in chunk:
-                    try:
-                        out.append(await self._fs.read(ws, path))
-                    except (FileNotFound, FileNotFoundError):
-                        out.append(None)
-                return out
+            found = await cold(ws, chunk)
+            return [found.get(path) for path in chunk]
 
         return _from_store
 
@@ -1255,15 +1197,22 @@ async def read_all(store: FileStore, workspace_id: str, paths: Sequence[str]) ->
     Every caller that reads a batch of paths goes through here rather than
     duck-typing `read_many` itself: two spellings of one rule drift, and the
     one that drifts is the one nobody measured."""
-    read_many = getattr(store, "read_many", None)
-    if read_many is None:
+    batch = getattr(store, "read_many_existing", None)
+    if batch is None:
         return [await store.read(workspace_id, path) for path in paths]
     # The WHOLE ask goes down in one call, deliberately. Chunking here called
-    # the facade once per chunk, so a single read resolved liveness repeatedly —
-    # and a sandbox reaped mid-read would have had some chunks answered by it and
-    # the rest by the durable snapshot. Each lane bounds its own request where
-    # the unbounded thing actually is.
-    return list(await read_many(workspace_id, paths))
+    # the store once per chunk, and through the facade that resolved the
+    # workspace's liveness once per chunk — a sandbox reaped mid-read would then
+    # have had some chunks answered by it and the rest by the durable snapshot.
+    # A store that batches BOUNDS ITS OWN REQUEST (see `FileStore`).
+    found = await batch(workspace_id, paths)
+    out: list[bytes] = []
+    for path in paths:
+        blob = found.get(path)
+        if blob is None:
+            raise FileNotFound(path)
+        out.append(blob)
+    return out
 
 
 async def read_all_existing(
@@ -1283,9 +1232,9 @@ async def read_all_existing(
     batch raise and then re-reading every path singly was worse than the
     per-file loop it replaced: measured, one vanished file among ten turned one
     batch into a second full fetch."""
-    lenient = getattr(store, "read_many_existing", None)
-    if lenient is not None:
-        return dict(await lenient(workspace_id, paths))
+    batch = getattr(store, "read_many_existing", None)
+    if batch is not None:
+        return dict(await batch(workspace_id, paths))
     got: dict[str, bytes] = {}
     for path in paths:
         try:
