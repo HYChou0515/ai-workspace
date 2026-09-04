@@ -10,6 +10,7 @@ deleted by the next change with nothing turning red.
 from __future__ import annotations
 
 import json
+import pathlib
 import re
 
 import pytest
@@ -332,4 +333,19 @@ def test_the_skill_names_every_example_it_ships(payload: dict[str, bytes]):
     # And no bare count to go stale beside the table.
     assert not re.search(r"the (?:two|three|four|five) complete", skill), (
         "a number in the prose will drift the next time an example is added"
+    )
+
+
+def test_the_user_facing_page_names_every_example_too(payload: dict[str, bytes]):
+    """`docs/wui.md` carries its own table of examples, for the person the skill
+    is NOT written for. It listed three while five shipped — and removing a
+    stale count from the skill did nothing for it, because the skill's test only
+    ever reads the skill."""
+    doc = (pathlib.Path(__file__).resolve().parents[2] / "docs/wui.md").read_text()
+    shipped = {p.split("/")[1] for p in payload if p.startswith("examples/")}
+    listed = set(re.findall(r"`examples/([a-z-]+)/`", doc))
+
+    assert shipped <= listed, f"docs/wui.md never mentions {sorted(shipped - listed)}"
+    assert listed <= shipped, (
+        f"docs/wui.md points at folders nothing ships: {sorted(listed - shipped)}"
     )

@@ -241,9 +241,10 @@ might be out of date is worse than either rebuilding it or leaving it alone.
 - **P3 — the pane.** A **Rebuild** button for pages that have a build, the log on
   screen while it runs, and an **Auto-rebuild** switch — on by default,
   per page and per viewer, turning itself off for a viewer a 403 says may not run
-  things here. Rebuilding on open is the only setting under which staleness is
-  impossible rather than unlikely; it is a choice because the cost (a sandbox
-  waking, tens of seconds) is real.
+  things here. Rebuilding on open is what closes the gap for everyone who opens
+  the page — not a guarantee, since the manifest read may fail quietly and a
+  failed build leaves the old `dist/` up; it is a choice because the cost (a
+  sandbox waking, tens of seconds) is real.
 - **P4 — the claim ledger.** The skill, the react example's README and
   `docs/wui.md` all said the AI rebuilding in the same turn was the only defence.
   It is still worth doing — the automatic build protects the next person to OPEN

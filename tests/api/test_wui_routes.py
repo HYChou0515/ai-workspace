@@ -416,8 +416,13 @@ def test_a_build_killed_by_the_deadline_says_which_deadline():
 
     assert "124" not in said or "timed out" in said.lower()
     assert "timed out" in said.lower(), said
-    # And it names the knob, because the reader cannot act on a number alone.
+    # And it names the knobs, because the reader cannot act on a number alone —
+    # BOTH of them, since the total deadline and the idle one both come back as
+    # 124 and nothing in the result says which fired. Naming only the total sent
+    # a reader to the wrong one whenever a build went quiet for a minute, which
+    # an install downloading a large package does.
     assert "exec_timeout" in said
+    assert "log_timeout" in said
     assert events[-1] == {"type": "done", "exit_code": 124}
 
 

@@ -16,7 +16,7 @@ re-reads the folder; it does not build.
 
 The pane covers the user: a built page has a **Rebuild** button beside Refresh,
 its output shows while it runs, and **Auto-rebuild** is on by
-default — so opening the page cannot show a stale one. What that does NOT cover
+default — so opening the page rebuilds it first. What that does NOT cover
 is the person already looking at the page while you edit it: they will press
 Refresh and see the old build. So **rebuild in the same turn as the edit**, and
 say that you did.

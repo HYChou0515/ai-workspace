@@ -369,10 +369,12 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
     }
   };
 
-  // Rebuild on open, when this page is set to. This is the setting under which
-  // going stale is IMPOSSIBLE rather than unlikely — and it is a setting, not a
-  // rule, because the cost (tens of seconds, and waking the item's sandbox) is
-  // real enough that someone may not want to pay it on every open.
+  // Rebuild on open, when this page is set to. This is what closes the gap for
+  // everyone who OPENS the page — not a guarantee: the manifest read below is
+  // allowed to fail quietly, and a build that fails leaves the previous `dist/`
+  // up. It is a setting, not a rule, because the cost (tens of seconds, and
+  // waking the item's sandbox) is real enough that someone may not want to pay
+  // it on every open.
   useEffect(() => {
     if (!canBuild || !slug) return; // not a built page, or not known yet
     if (autoBuiltFor.current === folder) return;
@@ -479,7 +481,13 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
             {/* A fixed word while it runs, not the newest line: the line is
                 already on screen underneath, and two copies of it make the
                 pane look like it is stuttering. */}
-            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            <span
+              // The one line that IS worth announcing: it changes twice a build
+              // and it carries the verdict. The log itself is `aria-live="off"`
+              // precisely so this can be heard.
+              aria-live="polite"
+              style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+            >
               {building ? "Building…" : logOpen ? "Build output" : logSummary}
             </span>
             <span style={{ flex: "0 0 auto", opacity: 0.7 }}>{logOpen ? "Hide" : "Show"}</span>

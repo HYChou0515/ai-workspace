@@ -597,6 +597,23 @@ describe("WuiView: rebuilding a page that has a build step", () => {
     expect(log.textContent).not.toContain("[32m");
   });
 
+  it("announces the verdict, since the log itself is silent", async () => {
+    // The log is `aria-live="off"` on purpose — it emits a chunk every few
+    // milliseconds. That only works if the ONE line that carries the outcome is
+    // announced instead; otherwise a screen reader is told nothing at all about
+    // a build it watched start.
+    const { release } = serveGated([
+      sse({ type: "output", text: "vite build" }),
+      sse({ type: "done", exit_code: 0 }),
+    ]);
+    renderIn({ ...BUILT });
+    fireEvent.click(await screen.findByRole("button", { name: /rebuild/i }));
+    release();
+
+    const summary = await screen.findByText(/Build finished/);
+    expect(summary).toHaveAttribute("aria-live", "polite");
+  });
+
   it("does not narrate the whole build to a screen reader", async () => {
     // Two polite live regions in one pane: the reports panel, which speaks
     // rarely and matters, and a build log that emits a chunk every few
@@ -618,8 +635,11 @@ describe("WuiView: rebuilding a page that has a build step", () => {
     // Regression from moving the cleaning to render time. The glue check reads
     // the log as STORED, and stored used to mean cleaned — where `\r` had
     // already become `\n`. Reading raw text, a progress line ending in `\r`
-    // now looks unterminated, so our own line gets an extra break before it and
-    // the log ends with a blank gap.
+    // looks unterminated, so our own line gets an extra break before it.
+    //
+    // It does not show, because the cleaning collapses the `\r\n` that
+    // results. So this pins the CLEANING half only: remove the glue and it
+    // still passes, which is why the glue has its own test above.
     const { release } = serveGated([
       sse({ type: "output", text: "Progress: resolved 115\r" }),
       sse({ type: "done", exit_code: 0 }),

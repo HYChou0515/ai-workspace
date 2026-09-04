@@ -225,13 +225,19 @@ def register_wui_routes(
                     # output pumps have stopped — so it never reaches `on_output`
                     # and never reaches the page. Without this the reader watches
                     # the log stop mid-install and gets a bare number.
+                    #
+                    # Both deadlines return 124 and the code cannot tell them
+                    # apart, so both are named. Naming only the total one sent a
+                    # reader to the wrong knob whenever a build went quiet for a
+                    # minute — which an install downloading a large package does.
                     yield frame(
                         {
                             "type": "output",
                             "text": (
-                                "\nThe build timed out and was killed. It has to finish inside "
-                                "the sandbox's `exec_timeout` (60s by default) — raise it for "
-                                "this deployment, or give the build less to do.\n"
+                                "\nThe build timed out and was killed. It has to finish "
+                                "inside the sandbox's `exec_timeout`, and never go quiet for "
+                                "longer than its `log_timeout` (60s each by default) — raise "
+                                "them for this deployment, or give the build less to do.\n"
                             ),
                         }
                     )
