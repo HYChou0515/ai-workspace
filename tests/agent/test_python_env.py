@@ -100,9 +100,9 @@ async def test_an_environment_that_cannot_be_prepared_stops_the_turn() -> None:
     sb = _Recording(
         present={"pyproject.toml"},
         results={
-            ("uv", "sync", "--frozen"): ExecResult(
+            ("uv", "sync", "--frozen", "--inexact"): ExecResult(
                 exit_code=2,
-                stdout=b"error: Distribution `pandas==2.2.3` has no wheel for this platform",
+                stderr=b"error: Distribution `pandas==2.2.3` has no wheel for this platform",
             )
         },
     )
@@ -142,7 +142,7 @@ async def test_a_lock_that_no_longer_matches_the_manifest_is_said_out_loud() -> 
     said: list[bytes] = []
     sb = _Recording(
         present={"pyproject.toml"},
-        results={("uv", "lock", "--check"): ExecResult(exit_code=1, stdout=b"stale")},
+        results={("uv", "lock", "--check"): ExecResult(exit_code=1, stderr=b"stale")},
     )
 
     await ensure_project_env(
@@ -153,7 +153,7 @@ async def test_a_lock_that_no_longer_matches_the_manifest_is_said_out_loud() -> 
 
     told = b"".join(said).decode()
     assert "uv add" in told, "the person needs the route, not just the diagnosis"
-    assert ["uv", "sync", "--frozen"] in sb.calls, "and the sync still happens"
+    assert ["uv", "sync", "--frozen", "--inexact"] in sb.calls, "and the sync still happens"
 
 
 async def test_a_missing_uv_is_not_reported_as_a_stale_lock() -> None:
@@ -172,8 +172,10 @@ async def test_a_missing_uv_is_not_reported_as_a_stale_lock() -> None:
     sb = _Recording(
         present={"pyproject.toml"},
         results={
-            ("uv", "lock", "--check"): ExecResult(exit_code=127, stdout=b"uv: not found"),
-            ("uv", "sync", "--frozen"): ExecResult(exit_code=127, stdout=b"uv: not found"),
+            ("uv", "lock", "--check"): ExecResult(exit_code=127, stderr=b"uv: not found"),
+            ("uv", "sync", "--frozen", "--inexact"): ExecResult(
+                exit_code=127, stderr=b"uv: not found"
+            ),
         },
     )
 
@@ -201,8 +203,8 @@ async def test_a_failed_sync_takes_its_half_built_venv_with_it() -> None:
     sb = _Recording(
         present={"pyproject.toml"},
         results={
-            ("uv", "sync", "--frozen"): ExecResult(
-                exit_code=2, stdout=b"error: Unable to find lockfile at `uv.lock`"
+            ("uv", "sync", "--frozen", "--inexact"): ExecResult(
+                exit_code=2, stderr=b"error: Unable to find lockfile at `uv.lock`"
             )
         },
     )
@@ -229,7 +231,7 @@ async def test_a_failure_is_not_forgotten_by_the_next_call() -> None:
         sandbox=_Recording(  # ty: ignore[invalid-argument-type]
             present={"pyproject.toml"},
             results={
-                ("uv", "sync", "--frozen"): ExecResult(exit_code=2, stdout=b"boom"),
+                ("uv", "sync", "--frozen", "--inexact"): ExecResult(exit_code=2, stderr=b"boom"),
             },
         ),
     )
@@ -238,3 +240,54 @@ async def test_a_failure_is_not_forgotten_by_the_next_call() -> None:
         await ctx.ensure_sandbox()
     with pytest.raises(ProjectEnvError):
         await ctx.ensure_sandbox()  # the swallowed first one must not count as done
+
+
+async def test_the_operators_reason_comes_from_the_stream_uv_actually_uses() -> None:
+    """uv writes its errors — and its progress — to **stderr**, and nothing at
+    all to stdout. Reading `stdout` gave the operator a header with an empty
+    body: "`uv sync` failed (exit 2):" and not one word about why, for the one
+    failure class this feature deliberately refuses to degrade around.
+
+    Nine tests in this file missed it because their doubles put uv's words on
+    stdout, so the stand-in agreed with the code under test. They now put them
+    where the real thing does. This one pins the choice on its own, and covers
+    the case a different backend could produce: something on both streams.
+    """
+    sb = _Recording(
+        present={"pyproject.toml"},
+        results={
+            ("uv", "sync", "--frozen", "--inexact"): ExecResult(
+                exit_code=2,
+                stderr=b"error: no wheel for this platform",
+                stdout=b"trailing note",
+            )
+        },
+    )
+
+    with pytest.raises(ProjectEnvError) as caught:
+        await ensure_project_env(sb, SandboxHandle(id="s1"))  # ty: ignore[invalid-argument-type]
+
+    said = str(caught.value)
+    assert "no wheel for this platform" in said, "stderr is where uv puts the reason"
+    assert "trailing note" in said, "and nothing a backend did say may be dropped"
+
+
+async def test_a_resync_does_not_delete_what_the_person_installed() -> None:
+    """`uv sync` makes the environment match the lock EXACTLY, which means it
+    uninstalls anything the person added themselves — measured:
+
+        uv pip install idna   ->  idna OK
+        uv sync --frozen      ->  Uninstalled 1 package  - idna==3.19
+
+    Preparation is keyed to the `AgentToolContext`, which is built once per
+    TURN, so without `--inexact` a hand-installed package vanishes one turn
+    later and nothing says why. The settled policy is that people may install
+    what they like — `uv add` is the route we recommend, not a rule we enforce
+    by deleting the alternative behind their back.
+    """
+    sb = _Recording(present={"pyproject.toml"})
+
+    await ensure_project_env(sb, SandboxHandle(id="s1"))  # ty: ignore[invalid-argument-type]
+
+    (sync,) = [c for c in sb.calls if c[:2] == ["uv", "sync"]]
+    assert "--inexact" in sync, "the lock says what must be THERE, not what must be gone"

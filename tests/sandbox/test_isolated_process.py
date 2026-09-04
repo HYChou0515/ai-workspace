@@ -444,6 +444,12 @@ async def test_the_project_venv_is_a_dir_the_dropped_uid_can_actually_fill(isola
     venv = Path(env["UV_PROJECT_ENVIRONMENT"])
     assert venv.is_dir(), "uv cannot make this itself: it does not own the parent"
     assert venv.stat().st_uid == isolated._uid_for(h.id), "and cannot fill one it does not own"
+    # The mode is what gives this test teeth. The fixture pins the derived uid
+    # to the caller's own (uid_range=1), so `st_uid` is satisfied by the
+    # directory's natural owner whether or not the chown ever happened —
+    # deleting the whole of `_own_privately` left this file green. 0700 is the
+    # observable half, and it is also the point: nobody else may read it.
+    assert venv.stat().st_mode & 0o777 == 0o700, "and no other item may read it"
     assert not any(venv.iterdir()), "uv refuses a target dir holding anything else"
 
 

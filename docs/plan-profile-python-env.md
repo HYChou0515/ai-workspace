@@ -2,11 +2,16 @@
 
 > **狀態**:設計定案(grill-me 九題),**P1–P12 已實作**(#775 / PR #776)。
 >
-> 實作與對抗式 review **推翻了設計裡的五處**,已就地更正並標 ⚠️:`pip` 那條、shim 的
-> 份數、`uv venv` 會不會聽 `UV_PROJECT_ENVIRONMENT`、shim 該用 symlink 還是 wrapper、
-> 以及 venv 目錄的**擁有者**。後兩處各自足以讓整個功能在正式環境完全不會動,而且都是
-> 「兩邊測試全綠、功能是死的」那種 —— 真因是**全 repo 沒有任何測試真的在真 sandbox 裡
-> 跑過一次 `uv sync`**。那個測試現在有了:`tests/sandbox/test_project_env_e2e.py`。
+> 實作與對抗式 review 至今**推翻了設計/宣稱裡的十處**,全部就地更正並標 ⚠️。本文
+> 底下每一個 ⚠️ 都是其中一條;不要只讀這段摘要就以為數完了。
+>
+> 其中**四條各自足以讓功能對使用者完全無效**:venv 建在 shim 不看的地方、shim 用
+> symlink 指進 venv(CPython 會解析穿過去)、`uv sync` 因為父目錄權限根本建不出 venv、
+> 以及失敗時**錯誤訊息是空的**(讀 `stdout`,而 uv 全寫在 `stderr`)。四條的共通點一樣:
+> 兩邊單元測試全綠,而**替身都和被測程式一起錯**。真因是**全 repo 沒有任何測試真的在真
+> sandbox 裡跑過一次 `uv sync`**。那個測試現在有了 ——
+> `tests/sandbox/test_project_env_e2e.py`,而且它的**大部分會在 CI 跑**(零依賴的專案
+> 完全不需要網路),不是只留在 release gate 的 integration 套件裡。
 >
 > 這份文件記的是**為什麼這樣設計、當初考慮過哪些路、為什麼不走**。要改其中任何一條之前,
 > 先看它原本被否決的理由。
@@ -65,8 +70,12 @@
 
     error: No virtual environment found; run `uv venv` to create an environment
 
-—— 也就是說,在**有宣告**的 workspace 裡,我們自己的錯誤訊息會叫使用者去做那件唯一會
-把事情弄壞的事(在 workspace 裡建一個 shim 根本不看的 `.venv`,又是「裝到 A、跑在 B」)。
+⚠️ **而且「照做會建一個沒人讀的 `.venv`」這句也是錯的,再更正一次,實測**:`uv venv`
+**在 cwd 是專案根時其實會聽 `UV_PROJECT_ENVIRONMENT`** —— 只有在沒有 `pyproject.toml`
+時才忽略。所以在**有宣告**的 workspace 裡,照著我們自己的錯誤訊息打 `uv venv`,不是留下
+一個沒人讀的目錄,而是**就地把剛同步好的環境整個重建、清空**:實測 `import tinydep`
+之前可以、之後 `ModuleNotFoundError`。設 `VIRTUAL_ENV` 不能阻止這件事,它移除的是
+「非得去打 `uv venv` 不可」的理由。
 所以有 project venv 時,exec 環境會同時設 **`VIRTUAL_ENV`** —— 那才是生態系另外半邊讀的
 變數。沒有 venv 時它被**主動移除**,不是放著不管:`env` 是 `os.environ` 的複本,而用
 `uv run` 起的服務身上帶著指向**服務自己 venv** 的 `VIRTUAL_ENV`。正式環境兩個映像都是
@@ -222,6 +231,9 @@ mode 444,誰都改不動,別名才不再是問題。
   `sandbox-host/src/sandbox_host/local_process.py`(兩個 `isolated_process.py` 是子類別,
   exec 那條直接繼承)。⚠️ 這兩份**已漂了 440 行**且**沒有**逐位元相同的守衛(不像
   `artifact.py`),所以要各改各的。漏一份就是「本機會動、線上不會」。
+  ⚠️ **「440 行」這個數字是錯的**:它數的是 `diff` 的輸出行數(含 `NNcNN` 標記與 `---`
+  分隔線),不是程式碼差異。當時的真實值是 357 行,**現在是 422 行**(227 增 / 195 刪),
+  用 `git diff --no-index --stat` 量。
 - ⚠️ **但「兩份」只算了檔案,沒算決策點:決定 `python` 是什麼的地方有三個。**
   每份 `local_process.py` 裡的 `_install_python_shim`(unjailed)之外,`_JAIL_BOOTSTRAP`
   是**第三個**,而且是另一種語言(shell)。第一版只改了前兩個,jail 裡的 `python` 仍是
@@ -246,6 +258,21 @@ mode 444,誰都改不動,別名才不再是問題。
   cache 那個 `iterdir` 有 `_SHA256.match` 過濾,`.uv-cache` 不會命中。
 - ⚠️ **`UV_CACHE_DIR` 一開始只設在兩份 isolated backend 的其中一份**(host 那份),
   另一份每次冷啟都重抓整包。兩份都設了。
+- ⚠️ **`ProjectEnvError` 讀錯了流。** uv 把錯誤**和進度**全寫在 `stderr`,`stdout` 一個字
+  都沒有,而錯誤訊息格式化的是 `stdout` —— 所以營運方拿到的是
+  `` `uv sync` failed (exit 2): `` 後面空白一片,正是「直接失敗但要有足夠 error message」
+  這條要求唯一在乎的東西。九條單元測試沒抓到,因為**每個替身都把 uv 的話放在 stdout**,
+  跟 bug 一起錯。現在兩條流都帶、`stderr` 在前,而且由真 uv 的 e2e 測試釘住。
+- ⚠️ **`uv sync` 預設會把不在 lock 裡的套件移除。** 而準備狀態掛在 `AgentToolContext` 上,
+  那是**每輪對話**建一個,所以使用者這輪手動裝的東西**下一輪就無聲消失**(實測
+  `Uninstalled 1 package - idna==3.19`)。定案是「`uv add` 是我們建議的路」,不是「我們
+  用刪掉別的做法來強制它」。用 uv 自己的 `--inexact`:lock 說要有的照裝,沒說的不動。
+- ⚠️ **正式環境的 uv 版本其實沒有釘。** P4 寫「釘 0.7.5,因為這個版本決定 lock 怎麼被讀」,
+  但那個釘子只在 `docker/Dockerfile.workspace` —— P7 自己證明那個映像沒人拿來啟動任何東西。
+  真正跑 uv 的每個映像用的都是浮動 tag `ghcr.io/astral-sh/uv:python3.12-bookworm-slim`
+  (`sandbox-host/Dockerfile:37` 是正式環境那個)。**這個 feature 讓 uv 版本第一次變成語意
+  上的關鍵**(它決定使用者的 lock 怎麼被讀),所以要不要改成
+  `0.7.5-python3.12-bookworm-slim` 是一個**要拍板的部署決定**,不是我能單方面改的。**未定案。**
 - **cache 沒有上界**,只會長,而且是**每個 uid 一份**(共用可寫是跨 item 改碼路徑,
   不是節省 —— uv 會把 cache 檔 **hardlink** 進 venv,lock 的 hash 只在安裝當下驗一次)。
   uid 由 item id 導出、數量被 `uid_range` 上界,所以**份數**有界、**每份的大小**沒有。

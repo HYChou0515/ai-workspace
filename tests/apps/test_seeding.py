@@ -77,5 +77,20 @@ async def test_a_declaring_profile_seeds_the_files_the_sync_reads():
     # The carrier is REPLACED, not layered under, so a profile that declares
     # anything must carry the stack the carrier would have given it — or an
     # author adding one package silently loses pandas.
-    for pkg in ("ipykernel", "numpy", "pandas", "matplotlib", "scipy"):
+    # The reference set is `sample-tools/python-stack/pyproject.toml` — the
+    # CARRIER. The first version of this list was taken from
+    # `docker/Dockerfile.workspace` instead, an image nothing starts, so the
+    # office half was missing from both the example and this assertion and
+    # `import openpyxl` broke in the one profile shipped to demonstrate that it
+    # would not.
+    for pkg in (
+        "ipykernel",
+        "numpy",
+        "pandas",
+        "matplotlib",
+        "scipy",
+        "openpyxl",
+        "XlsxWriter",
+        "python-pptx",
+    ):
         assert pkg in declared, f"{pkg} must survive the carrier being replaced"

@@ -316,8 +316,10 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         self._own_privately(workspace.parent / _HOME, uid)
 
     def _own_privately(self, path: Path, uid: int) -> None:
-        """Hand `.home` to the sandbox uid, 0700. Idempotent — chowning to the
-        same uid is a no-op, which is what lets the exec path redo it."""
+        """Hand one infra-area dir to the sandbox uid, 0700 — `.home` (#393) and
+        the project venv (#775), both of which the dropped uid has to write and
+        neither of which anyone else may read. Idempotent: chowning to the same
+        uid is a no-op, which is what lets the exec path redo it."""
         os.chown(path, uid, -1)
         os.chmod(path, 0o700)
 

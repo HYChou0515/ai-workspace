@@ -104,6 +104,13 @@ if [ -x "$ROOT/.venv/bin/python" ]; then
   # `uv pip install` and friends read VIRTUAL_ENV, not UV_PROJECT_ENVIRONMENT.
   export VIRTUAL_ENV=/.venv
   for n in python python3 python3.10 python3.11 python3.12 python3.13; do
+    # `rm -f` FIRST. `>` writes THROUGH a symlink, and the other two tiers use
+    # `ln -sf`, which unlinks. `/tmp` here is a fresh tmpfs per exec — except
+    # that its mount is the one line in this bootstrap allowed to fail quietly
+    # (`|| true`), and when it does, a previous exec's `python -> /usr/bin/python3`
+    # is still sitting there. The redirect then resolves through it and rewrites
+    # the HOST's interpreter, as root: `--map-root-user` maps root to root.
+    rm -f "$ROOT/tmp/.jailbin/$n"
     printf '#!/bin/sh\nexec /.venv/bin/python "$@"\n' > "$ROOT/tmp/.jailbin/$n"
     chmod 755 "$ROOT/tmp/.jailbin/$n"
   done
@@ -347,7 +354,7 @@ class LocalProcessSandbox:
         return SandboxHandle(id=hid)
 
     def _install_python_shim(self, root: Path) -> bool:
-        """Unjailed analogue of the jail bootstrap's two-tier `python` shim
+        """Unjailed analogue of the jail bootstrap's three-tier `python` shim
         (#350), rebuilt per-exec like the bootstrap is. Build a `.jailbin` dir
         of `python`/`python3*` symlinks that route to the python-stack carrier's
         launcher when present, else to `/usr/bin/python3` — never the host's own
@@ -404,12 +411,19 @@ class LocalProcessSandbox:
             link = jailbin / name
             if _shim_is_current(link, want=want, script=script):
                 continue
-            # Atomic swap: create a uniquely-named temp entry, then rename it
-            # over `link`. `os.replace` is atomic, so concurrent execs on a #345
-            # shared dir never race into FileExistsError or a window with no
-            # `python`; it also replaces an entry of the other SHAPE, so gaining
-            # or losing a venv rewrites the shim instead of leaving it stale.
-            tmp = jailbin / f".{name}.{os.getpid()}.tmp"
+            # Atomic swap: create a temp entry under a name nobody else can
+            # pick, then rename it over `link`. `os.replace` is atomic, so
+            # there is never a window with no `python`, and it replaces an entry
+            # of the other SHAPE too — so gaining or losing a venv rewrites the
+            # shim instead of leaving it stale.
+            #
+            # The suffix used to be `os.getpid()`, which is NOT unique here: the
+            # #345 dir is shared between pods, and two containers routinely hold
+            # the same pid. Measured on one shared dir, ~0.3-0.5% of concurrent
+            # calls then raised FileExistsError or FileNotFoundError straight
+            # out of `_exec_argv`, failing the agent's command. A random suffix
+            # is what makes the "uniquely-named" half of that sentence true.
+            tmp = jailbin / f".{name}.{uuid.uuid4().hex}.tmp"
             tmp.unlink(missing_ok=True)
             if script is None:
                 tmp.symlink_to(target)
@@ -597,10 +611,15 @@ class LocalProcessSandbox:
                 # The rest of the ecosystem reads VIRTUAL_ENV, not
                 # UV_PROJECT_ENVIRONMENT — measured: `uv pip install` ignores
                 # the latter entirely and answers "No virtual environment
-                # found; run `uv venv`". Following THAT builds a `.venv` beside
-                # `pyproject.toml` which the shim never looks at, so our own
-                # error message walked people into the installed-into-A,
-                # running-in-B split this feature exists to close.
+                # found; run `uv venv`, or pass --system".
+                #
+                # Following that advice is WORSE than it sounds. `uv venv` DOES
+                # honour UV_PROJECT_ENVIRONMENT when cwd is a project root, so
+                # in a declared workspace it does not leave a stray `.venv`
+                # beside `pyproject.toml` — it rebuilds the synced environment
+                # in place, emptying it. Measured: `import tinydep` works
+                # before, `ModuleNotFoundError` after. Setting VIRTUAL_ENV does
+                # not prevent that; it removes the reason to reach for it.
                 env["VIRTUAL_ENV"] = str(root / _PROJECT_VENV)
             else:
                 # Never inherited. `env` starts as a copy of this process's

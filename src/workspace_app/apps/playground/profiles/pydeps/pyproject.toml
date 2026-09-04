@@ -2,11 +2,21 @@
 name = "workspace"
 version = "0.0.0"
 requires-python = ">=3.12"
+# A declaration REPLACES the `python-stack` carrier rather than layering on top
+# of it, so this list has to carry everything the carrier would have given the
+# sandbox — otherwise an author who adds one package silently loses the rest.
+# The office half (#252) was missed the first time round: the list was matched
+# against `docker/Dockerfile.workspace`, an image nothing actually starts, and
+# not against the carrier it displaces. `sample-tools/python-stack/pyproject.toml`
+# is the thing to diff against when either side changes.
 dependencies = [
     "ipykernel",
     "jupyter-client",
     "matplotlib",
     "numpy",
+    "openpyxl",
     "pandas",
+    "python-pptx",
     "scipy",
+    "XlsxWriter",
 ]

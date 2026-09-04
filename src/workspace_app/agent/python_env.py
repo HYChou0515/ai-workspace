@@ -29,13 +29,21 @@ class ProjectEnvError(RuntimeError):
 
     Carries uv's own output: the person who can act needs the actual reason,
     not our paraphrase of it.
+
+    BOTH streams, stderr first, because stderr is the one uv uses. uv writes
+    its errors AND its progress there and nothing at all to stdout, so
+    formatting `stdout` alone produced a header with an empty body: the
+    operator got "`uv sync` failed (exit 2):" and not one word about why. That
+    survived nine unit tests because every double in them put uv's words on
+    stdout and so agreed with the bug -- `tests/sandbox/test_project_env_e2e.py`
+    asserts it against real uv, where the two streams cannot be confused.
     """
 
     def __init__(self, result: ExecResult) -> None:
         self.result = result
+        said = b"\n".join(part for part in (result.stderr, result.stdout) if part)
         super().__init__(
-            f"`uv sync` failed (exit {result.exit_code}):\n"
-            f"{result.stdout.decode('utf-8', errors='replace')}"
+            f"`uv sync` failed (exit {result.exit_code}):\n{said.decode('utf-8', errors='replace')}"
         )
 
 
@@ -74,7 +82,22 @@ async def ensure_project_env(
     # produce different versions on two cold starts, which is the whole thing
     # a lock is for. A hand-edited `pyproject.toml` therefore does not take
     # effect — silently, unless someone says so, which is the advisory below.
-    result = await sandbox.exec(handle, ["uv", "sync", "--frozen"], on_output=on_output)
+    #
+    # `--inexact`: bring the lock's packages IN, take nothing else OUT. A plain
+    # `uv sync` makes the environment match the lock exactly, which means it
+    # UNINSTALLS whatever the person put there themselves — measured:
+    #
+    #     uv pip install idna   ->  idna OK
+    #     uv sync --frozen      ->  Uninstalled 1 package  - idna==3.19
+    #
+    # This preparation is keyed to the AgentToolContext, which is built once per
+    # TURN, so without the flag a package installed by hand disappears one turn
+    # later with nothing said. The settled policy is that a user may install
+    # what they like and `uv add` is the route we recommend — not that we quietly
+    # undo them. uv's own flag, so nothing here has to model the difference.
+    result = await sandbox.exec(
+        handle, ["uv", "sync", "--frozen", "--inexact"], on_output=on_output
+    )
     if result.exit_code != 0:
         # uv creates the environment BEFORE it fails — a missing lock still
         # leaves a working interpreter with none of the packages. That
