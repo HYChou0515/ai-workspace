@@ -162,7 +162,7 @@ def test_the_skill_points_at_both_examples():
 def test_the_built_example_points_at_its_build_output(payload: dict[str, bytes]):
     """`entry:` is the whole difference. Without it the renderer opens the
     folder's root `index.html` — the bundler's TEMPLATE, which loads
-    `/src/main.jsx`, a dev-server path nothing can inline. The page renders
+    `/src/main.tsx`, a dev-server path nothing can inline. The page renders
     empty and nothing says why."""
     yaml = payload[f"examples/{BUILT}/page.ai.yaml"].decode()
 
@@ -190,39 +190,38 @@ def test_the_built_example_declares_its_dependencies(payload: dict[str, bytes]):
     assert "build" in pkg["scripts"]
 
 
-def test_the_built_example_says_who_rebuilds_and_when(payload: dict[str, bytes]):
-    """The one silent failure on this path: editing `src/` changes nothing until
-    a rebuild, and the user is left looking at the old page.
+def test_the_built_example_type_checks_before_it_bundles(payload: dict[str, bytes]):
+    """Vite STRIPS types; it never checks them. So a TypeScript page whose build
+    is `vite build` alone type-checks nowhere — the compiler is present, shipped,
+    configured, and silent, and the build goes green over code it rejects.
 
-    The pane now covers the person who OPENS the page — it rebuilds on open, and
-    there is a button. It does not cover the person already looking at it while
-    the agent edits: they press Refresh and see the old build. So the README has
-    to say BOTH halves; saying only the automatic one would teach the agent it
-    can skip the step that protects the reader in front of it."""
-    readme = payload[f"examples/{BUILT}/README.md"].decode()
+    `strict` matters for the same reason: without it `readFile`'s union collapses
+    and the one mistake `wui.d.ts` exists to prevent compiles cleanly again."""
+    pkg = json.loads(payload[f"examples/{BUILT}/package.json"])
+    tsconfig = payload[f"examples/{BUILT}/tsconfig.json"].decode()
+    build = pkg["scripts"]["build"]
 
-    assert "rebuild in the same turn as the edit" in readme.lower()
-    assert "auto-rebuild" in readme.lower()
-    assert "--frozen-lockfile" in readme
-
-
-def test_the_built_example_reaches_the_bridge_the_same_way(payload: dict[str, bytes]):
-    """A build changes how the page is produced, not what it can do. If this
-    example implied a different API, it would teach one that does not exist."""
-    source = payload[f"examples/{BUILT}/src/main.jsx"].decode()
-    used = set(re.findall(r"workspace\s*\.?\s*\n?\s*\.?(\w+)\(", source))
-
-    assert used, "it would not need a WUI"
-    assert used <= VERBS, f"invents {sorted(used - VERBS)}"
+    assert "typescript" in pkg["devDependencies"]
+    assert "tsc" in build and build.index("tsc") < build.index("vite build")
+    assert '"strict": true' in tsconfig
 
 
-def test_the_skill_offers_the_built_example_too():
-    body = SHARED_SKILLS["wui"].joinpath("SKILL.md").read_text()
+def test_the_built_example_ships_the_bridge_typed(payload: dict[str, bytes]):
+    """`window.workspace` is injected by the renderer, so there is no import to
+    follow and nothing to infer from: without a declaration TypeScript here is
+    ceremony. The two shapes it has to get right are the two that fail SILENTLY —
+    a page that renders and is wrong is the worst outcome a WUI has, because its
+    reader cannot open a console."""
+    types = payload[f"examples/{BUILT}/src/wui.d.ts"].decode()
 
-    assert f"examples/{BUILT}/" in body
-    # And says which to prefer, because "you can build" is not the same as
-    # "you should": the build step is the only thing here that can be forgotten.
-    assert "Prefer no build" in body
+    # The union is the point: `.text` must not exist on the binary arm.
+    assert 'kind: "text"' in types and 'kind: "binary"' in types
+    assert "WuiReadResult" in types
+    # And a tool's output is a STRING with no promise of JSON.
+    assert "output: string" in types
+    assert "exit_code: number" in types
+    for verb in VERBS:
+        assert f"{verb}(" in types, f"the bridge type omits {verb}"
 
 
 # ── the examples have to LOOK like something ──────────────────────────────
@@ -260,7 +259,7 @@ def test_every_example_ships_its_own_looks(payload: dict[str, bytes], name: str)
 @pytest.mark.parametrize(
     ("name", "markup"),
     [(e, f"examples/{e}/index.html") for e in EXAMPLES]
-    + [(BUILT, f"examples/{BUILT}/src/main.jsx")],
+    + [(BUILT, f"examples/{BUILT}/src/main.tsx")],
 )
 def test_no_example_names_a_class_that_does_not_exist(
     payload: dict[str, bytes], name: str, markup: str

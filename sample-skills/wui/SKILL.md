@@ -19,7 +19,7 @@ right the things that are easy to get wrong, and copying beats generating.
 | `examples/editor/` | the page is where the data gets ENTERED or changed | saving without thrashing, hearing about someone else's edit without discarding what is half-typed, staying inside your own folder |
 | `examples/external/` | the answer lives in ANOTHER system | `callTool`, and telling the three refusals apart — not declared / not granted / the tool itself said no |
 | `examples/chart/` | somebody wants to SEE the shape of the numbers | a real charting library, and the one build step that fetches it into the folder |
-| `examples/react/` | hand-written DOM has stopped paying | a real build (`pnpm build` → `dist/`), the three settings that fail silently without them, and who rebuilds when |
+| `examples/react/` | **the default toolchain** | React + TypeScript, `wui.d.ts` (the bridge, typed), and the three build settings that fail silently without them |
 
 If a page both reads and writes, start from the dashboard and add saving — a
 page that reads wrongly is obvious, a page that writes wrongly is not.
@@ -34,16 +34,37 @@ spacing are a lot of code to get wrong, and the library costs nothing at
 runtime. Prefer small ones: the file is inlined into the document, so its size
 is paid on every open.
 
-**Prefer no build unless the page needs one.** Without one, the files you wrote
-ARE the page: edit, press Refresh, see it. With one, the page is `dist/` and
-editing `src/` changes nothing until somebody rebuilds. The pane covers the user
-— it rebuilds a built page when they open it, with the build's output on screen,
-and there is a **Rebuild** button beside Refresh — but it does not cover the
-person watching the page RIGHT NOW, who will press Refresh and see the old one.
-So still **rebuild in the same turn as the edit** (`pnpm build` in the page's
-folder), and say that you did. Libraries do not decide this — a UMD file in the
-folder (`<script src="./chart.umd.js">`) is inlined like anything else, no build
-needed.
+## Write it in React and TypeScript
+
+**Default to `examples/react/`** — React + TypeScript + Vite — for anything past
+one screen of static markup. Two reasons, and the second is the real one:
+
+- **A WUI cannot report its own bugs.** The person looking at it does not open a
+  console; if the page is wrong they can only say "it's broken". So a mistake
+  caught while building is worth far more here than in code somebody debugs.
+  `src/wui.d.ts` types the whole bridge, and the build runs `tsc --noEmit` before
+  Vite, so `JSON.parse(file.text)` against a binary file — which renders as the
+  word `undefined` and nothing else — stops being shippable. Copy `wui.d.ts`
+  unchanged; it describes the platform, not your page.
+- **The build is no longer a cost the reader pays.** Opening a built page
+  rebuilds it, with the output on screen (Auto-rebuild, on by default, beside
+  **Rebuild**).
+
+The other examples are still what you copy for the SHAPE of the page — reading
+in parallel, saving without thrashing, telling three refusals apart. They are
+written in plain JS to keep that shape readable. Take the logic from them and
+the setup from `examples/react/`.
+
+**Still rebuild in the same turn as the edit** (`pnpm build` in the page's
+folder), and say that you did. Auto-rebuild covers the person who opens the page
+LATER; it does nothing for the one watching it right now, who presses Refresh and
+sees the old one. A type error fails the build, so `dist/` stays as it was and
+the log says why — the page does not silently become wrong.
+
+**Plain files are still right for a genuinely small page** — one screen, no
+state worth naming. Then the files you wrote ARE the page: edit, press Refresh,
+see it. Libraries do not decide this either way: a UMD file in the folder
+(`<script src="./chart.umd.js">`) is inlined like anything else, no build needed.
 
 ⚠️ **The external example is the one you cannot copy unchanged.** Its tool has
 to be one this app actually grants, and **"Tools this app offers its WUIs"** —
