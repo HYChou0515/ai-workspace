@@ -9,17 +9,28 @@ Without this tier, `uv sync` builds a venv nobody uses: `python` still resolves
 to the carrier, the workspace's own dependency is missing from it, and the
 symptom is a `ModuleNotFoundError` that names the package but not the reason.
 That is #581 ("installed into A, running in B") arriving through a new door.
+
+These tests RUN the shim rather than inspecting its shape. The first version
+asserted `is_symlink()` and `resolve()`, which is how the shim shipped pointing
+at a venv that CPython then resolved straight past: the link was exactly what
+the assertions described, and `python` still could not import the package. What
+a caller gets when they run it is the only thing that was ever in question.
 """
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 from pathlib import Path
 
 from workspace_app.sandbox.local_process import LocalProcessSandbox
-from workspace_app.sandbox.protocol import SandboxSpec
+from workspace_app.sandbox.protocol import SandboxHandle, SandboxSpec
+
+_FROM_VENV = "ROUTED-TO-PROJECT-VENV"
+_FROM_CARRIER = "ROUTED-TO-PYTHON-STACK"
 
 
-async def _sandbox(tmp_path: Path, tools: Path | None) -> tuple[LocalProcessSandbox, object]:
+async def _sandbox(tmp_path: Path, tools: Path | None) -> tuple[LocalProcessSandbox, SandboxHandle]:
     sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False, tools_dir=tools)
     return sb, await sb.create(SandboxSpec())
 
@@ -29,16 +40,48 @@ def _plant_venv(root: Path) -> Path:
     infra area, so it is never walked, synced, or charged to the quota."""
     python = root / ".venv" / "bin" / "python"
     python.parent.mkdir(parents=True)
-    python.write_text("#!/bin/sh\necho ROUTED-TO-PROJECT-VENV\n")
+    python.write_text(f"#!/bin/sh\necho {_FROM_VENV}\n")
     python.chmod(0o755)
     return python
 
 
 def _carrier(tools: Path) -> None:
-    stack = tools / "builtin" / "python-stack"
+    """The provisioned `python-stack` bundle, where the shim actually probes
+    for it: `<root>/.tools/python-stack/launch`.
+
+    ⚠️ The two backends assemble `.tools` differently — app-side it symlinks
+    straight at the tools dir, host-side it points at a per-sandbox view built
+    from `<tools>/builtin/` — so THIS plant path is the one line that differs
+    between this file and its host twin.
+
+    The app copy shipped with the host's layout, and nothing failed:
+    `has_carrier` was simply always False, so the test claiming the venv "wins
+    over the carrier" was deciding an election with one candidate, and the pip
+    test passed because there had never been a pip shim to remove.
+    `test_the_carrier_is_actually_reachable_from_this_fixture` is the control
+    that keeps that from coming back."""
+    stack = tools / "python-stack"
     stack.mkdir(parents=True)
-    (stack / "launch").write_text("#!/bin/sh\necho ROUTED-TO-PYTHON-STACK\n")
+    (stack / "launch").write_text(f"#!/bin/sh\necho {_FROM_CARRIER}\n")
     (stack / "launch").chmod(0o755)
+
+
+def _run(shim: Path) -> str:
+    return subprocess.run([shim], capture_output=True, text=True, timeout=30).stdout.strip()
+
+
+async def test_the_carrier_is_actually_reachable_from_this_fixture(tmp_path: Path) -> None:
+    """The positive control for every test below.
+
+    Each of them means "the venv beat the carrier", which says nothing unless
+    the carrier could have won. Plant one with NO venv and it must answer."""
+    tools = tmp_path / "prebuilt"
+    _carrier(tools)
+    sb, h = await _sandbox(tmp_path, tools)
+
+    _argv, _cwd, env = sb._exec_argv(h, ["true"])
+
+    assert _run(Path(env["SANDBOX_JAILBIN"]) / "python") == _FROM_CARRIER
 
 
 async def test_the_workspaces_own_interpreter_wins_over_the_carrier(tmp_path: Path) -> None:
@@ -48,19 +91,39 @@ async def test_the_workspaces_own_interpreter_wins_over_the_carrier(tmp_path: Pa
     tools = tmp_path / "prebuilt"
     _carrier(tools)
     sb, h = await _sandbox(tmp_path, tools)
-    venv_python = _plant_venv(Path(sb._require(h)))  # ty: ignore[invalid-argument-type]
+    _plant_venv(Path(sb._require(h)))
 
-    _argv, _cwd, env = sb._exec_argv(h, ["true"])  # ty: ignore[invalid-argument-type]
+    _argv, _cwd, env = sb._exec_argv(h, ["true"])
     jailbin = Path(env["SANDBOX_JAILBIN"])
 
-    assert (jailbin / "python").resolve() == venv_python.resolve()
-    assert (jailbin / "python3").resolve() == venv_python.resolve()
+    assert _run(jailbin / "python") == _FROM_VENV
+    assert _run(jailbin / "python3") == _FROM_VENV, "agents type `python3` at least as often"
+
+
+async def test_the_shim_does_not_resolve_past_the_venv(tmp_path: Path) -> None:
+    """The defect the shape assertions could not see.
+
+    A symlink from `.jailbin` into the venv is what CPython resolves to find
+    `pyvenv.cfg` — and from outside, it resolves straight THROUGH to the base
+    interpreter, so `python` ran with none of the installed packages. The shim
+    for this tier must therefore keep argv[0] inside the venv, which a wrapper
+    does and a link cannot. `tests/sandbox/test_project_env_e2e.py` proves the
+    consequence against a real `uv sync`; this pins the mechanism.
+    """
+    sb, h = await _sandbox(tmp_path, None)
+    venv_python = _plant_venv(Path(sb._require(h)))
+
+    _argv, _cwd, env = sb._exec_argv(h, ["true"])
+    shim = Path(env["SANDBOX_JAILBIN"]) / "python"
+
+    assert not shim.is_symlink(), "a link would resolve past the venv it points into"
+    assert str(venv_python) in shim.read_text(), "and it must still be the venv it runs"
 
 
 async def test_a_venv_brings_no_pip_so_none_is_shimmed(tmp_path: Path) -> None:
     """A `uv` venv ships python and no pip — verified, not assumed.
 
-    So there is nothing correct to point `pip` at. Symlinking it to the venv's
+    So there is nothing correct to point `pip` at. Pointing it at the venv's
     `python` would run `python install X`, which is not a command; that is the
     same "a shim that cannot work is worse than none" the no-carrier tier
     already decided, so `pip` is left to the image.
@@ -75,13 +138,34 @@ async def test_a_venv_brings_no_pip_so_none_is_shimmed(tmp_path: Path) -> None:
     tools = tmp_path / "prebuilt"
     _carrier(tools)
     sb, h = await _sandbox(tmp_path, tools)
-    _plant_venv(Path(sb._require(h)))  # ty: ignore[invalid-argument-type]
+    _plant_venv(Path(sb._require(h)))
 
-    _argv, _cwd, env = sb._exec_argv(h, ["true"])  # ty: ignore[invalid-argument-type]
+    _argv, _cwd, env = sb._exec_argv(h, ["true"])
     jailbin = Path(env["SANDBOX_JAILBIN"])
 
-    assert (jailbin / "python").is_symlink(), "the interpreter is still shimmed"
+    assert _run(jailbin / "python") == _FROM_VENV, "the interpreter is still shimmed"
     assert not (jailbin / "pip").exists(), "no pip shim beats one that cannot work"
+
+
+async def test_a_sandbox_that_loses_its_venv_stops_pointing_at_it(tmp_path: Path) -> None:
+    """The shim is rebuilt per exec, and the two tiers are different SHAPES —
+    a wrapper for the venv, a symlink for the carrier. So the rewrite has to
+    replace one shape with the other, not skip because "something is already
+    there".
+
+    A failed `uv sync` removes the venv it half-built, which is exactly this
+    transition, arriving on the very next command."""
+    tools = tmp_path / "prebuilt"
+    _carrier(tools)
+    sb, h = await _sandbox(tmp_path, tools)
+    root = Path(sb._require(h))
+    _plant_venv(root)
+    sb._exec_argv(h, ["true"])
+
+    shutil.rmtree(root / ".venv")
+    _argv, _cwd, env = sb._exec_argv(h, ["true"])
+
+    assert _run(Path(env["SANDBOX_JAILBIN"]) / "python") == _FROM_CARRIER
 
 
 async def test_uv_builds_the_env_where_the_shim_looks_for_it(tmp_path: Path) -> None:
@@ -94,9 +178,9 @@ async def test_uv_builds_the_env_where_the_shim_looks_for_it(tmp_path: Path) -> 
     and the feature would not work.
     """
     sb, h = await _sandbox(tmp_path, None)
-    root = Path(sb._require(h))  # ty: ignore[invalid-argument-type]
+    root = Path(sb._require(h))
 
-    _argv, _cwd, env = sb._exec_argv(h, ["true"])  # ty: ignore[invalid-argument-type]
+    _argv, _cwd, env = sb._exec_argv(h, ["true"])
 
     built = Path(env["UV_PROJECT_ENVIRONMENT"])
     assert built == root / ".venv", "not the `.venv` beside pyproject.toml, which is the point"

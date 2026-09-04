@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import shlex
 import shutil
 import signal
 import subprocess
@@ -230,6 +231,23 @@ _PYTHON_SHIM_NAMES = ("python", "python3", "python3.10", "python3.11", "python3.
 _PIP_SHIM_NAMES = ("pip", "pip3", "pip3.10", "pip3.11", "pip3.12", "pip3.13")
 
 
+def _shim_is_current(link: Path, *, want: str, script: str | None) -> bool:
+    """Is this shim entry already exactly what we would write?
+
+    Cheap, and it makes the per-exec rewrite race-free on reruns. A shim of the
+    OTHER shape is never current — that is what rewrites a sandbox which has
+    just gained (or lost) its project venv, rather than leaving a stale entry
+    pointing at an interpreter nobody wants."""
+    if script is None:
+        return link.is_symlink() and os.readlink(link) == want
+    if link.is_symlink():
+        return False
+    try:
+        return link.read_text() == script
+    except OSError:
+        return False
+
+
 def _kill_process_group(proc: asyncio.subprocess.Process) -> None:
     """SIGKILL the command's whole process group, then leave reaping to the
     caller. `start_new_session=True` at spawn made the child a group leader, so
@@ -393,10 +411,31 @@ class LocalProcessSandbox:
         has_carrier = os.access(carrier, os.X_OK)
         if os.access(project, os.X_OK):
             target = project
-            has_carrier = False  # the venv brings its own pip; see below
+            from_venv = True
+            # A uv venv ships NO pip — measured: its `bin/` holds only
+            # `python`, `python3`, `python3.N` and the activate scripts. So
+            # there is nothing correct to point `pip` at, and the shims below
+            # are removed rather than aimed at an interpreter that would answer
+            # `python install X`. The route for a declared workspace is
+            # `uv add`, which the sandbox prompt says.
+            has_carrier = False
         else:
             target = carrier if has_carrier else Path("/usr/bin/python3")
+            from_venv = False
         want = os.fspath(target)
+        # A SYMLINK is right for the carrier: its launcher does `readlink -f
+        # "$0"` to find its own bundle and dispatches on the name it was invoked
+        # as, so the link is load-bearing. It is WRONG for a venv. CPython
+        # resolves its own executable path to locate `pyvenv.cfg`, and a link
+        # from outside the venv resolves straight PAST it to the base
+        # interpreter — so `python` came up with none of the packages `uv sync`
+        # had just installed, which is #581 ("installed into A, running in B")
+        # arriving through a new door, and silently. A one-line `exec` wrapper
+        # keeps argv[0] inside the venv, so `sys.prefix` — and `sys.executable`,
+        # which the agent can read — name the venv. Both shapes were measured
+        # against a real `uv sync`; `tests/sandbox/test_project_env_e2e.py` in
+        # the app repo is that measurement kept.
+        script = f'#!/bin/sh\nexec {shlex.quote(want)} "$@"\n' if from_venv else None
         jailbin = root / _JAILBIN
         jailbin.mkdir(exist_ok=True)
         if not has_carrier:
@@ -409,14 +448,20 @@ class LocalProcessSandbox:
                 (jailbin / name).unlink(missing_ok=True)
         for name in _PYTHON_SHIM_NAMES + (_PIP_SHIM_NAMES if has_carrier else ()):
             link = jailbin / name
-            if link.is_symlink() and os.readlink(link) == want:
-                continue  # already correct — no write (cheap + race-free on reruns)
-            # Atomic swap: create a uniquely-named temp link, then rename it over
-            # `link`. `os.replace` is atomic, so concurrent execs on a #345 shared
-            # dir never race into FileExistsError or a window with no `python`.
+            if _shim_is_current(link, want=want, script=script):
+                continue
+            # Atomic swap: create a uniquely-named temp entry, then rename it
+            # over `link`. `os.replace` is atomic, so concurrent execs on a #345
+            # shared dir never race into FileExistsError or a window with no
+            # `python`; it also replaces an entry of the other SHAPE, so gaining
+            # or losing a venv rewrites the shim instead of leaving it stale.
             tmp = jailbin / f".{name}.{os.getpid()}.tmp"
             tmp.unlink(missing_ok=True)
-            tmp.symlink_to(target)
+            if script is None:
+                tmp.symlink_to(target)
+            else:
+                tmp.write_text(script)
+                tmp.chmod(0o755)
             os.replace(tmp, link)
 
     async def kill(self, handle: SandboxHandle) -> None:
