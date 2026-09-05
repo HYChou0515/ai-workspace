@@ -192,7 +192,13 @@ describe("MyResourcesPage", () => {
     render(<MyResourcesPage client={client()} />, { wrapper: Wrap });
     const live = await screen.findByRole("region", { name: "執行環境" });
     expect(live).toHaveTextContent(/CPU 與記憶體/);
-    expect(live).toHaveTextContent(/檔案(都|)會保留|不會刪掉任何檔案/);
+    expect(live).toHaveTextContent(/檔案會保留/);
+    // …and what it does NOT keep. The first version of this sentence said the
+    // workspace "reopens as you left it", which is false: the mirror does not
+    // persist `node_modules/`, `.venv/` or `.git/`, so an install is gone after
+    // a recycle. The reader this line exists for is the one hesitating over
+    // Close having just run one, so the omission pointed the wrong way.
+    expect(live).toHaveTextContent(/套件與版本紀錄不會/);
   });
 
   it("names the App each environment belongs to, not its slug", async () => {

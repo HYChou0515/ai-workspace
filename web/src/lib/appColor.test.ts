@@ -75,16 +75,34 @@ describe("App pill palette", () => {
       const p = appTagPalette(color)!;
       const declared = toOklch(color).hue;
       for (const ink of [p.inkLight, p.inkDark]) {
-        // Shortest distance around the hue circle. Written the long way because
-        // the first version took the COMPLEMENT of it and reported every App as
-        // 180° off its own colour — a guard that fails on correct output is
-        // still a broken guard.
+        // Shortest distance around the hue circle. Two ways to get this wrong
+        // have already been written here: the first took the COMPLEMENT and
+        // reported every App as 180° off its own colour, and the second used
+        // `((raw + 180) % 360) - 180`, which is wrong whenever `raw < -180`
+        // because JS `%` keeps the DIVIDEND's sign — a true 10° delta across
+        // the 0°/360° wrap came back as 350. No shipped colour sits near the
+        // wrap today, so that one was green on correct output and would have
+        // failed the first App to declare a magenta. `+ 540` before the second
+        // modulo is what forces a non-negative dividend.
         const raw = toOklch(ink).hue - declared;
-        const delta = Math.abs(((raw + 180) % 360) - 180);
+        const delta = Math.abs((((raw % 360) + 540) % 360) - 180);
         expect(delta).toBeLessThanOrEqual(12);
       }
     });
   }
+
+  it("keeps a hue that sits ON the 0°/360° wrap recognisable too", () => {
+    // The case no shipped App exercises, and the one the distance formula above
+    // used to get wrong. A pink near 0° re-lights to a hue on the other side of
+    // the wrap, which a naive modulo reports as ~350° of error.
+    const pink = "#FF0080";
+    const declared = toOklch(pink).hue;
+    const p = appTagPalette(pink)!;
+    for (const ink of [p.inkLight, p.inkDark]) {
+      const raw = toOklch(ink).hue - declared;
+      expect(Math.abs((((raw % 360) + 540) % 360) - 180)).toBeLessThanOrEqual(12);
+    }
+  });
 
   it("carries the App's own colour into the fill", () => {
     // The fill is the App's declared colour, not a re-lit one — it is what makes

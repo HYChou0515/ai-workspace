@@ -259,7 +259,14 @@ function AppTag({ slug }: { slug: string }) {
       }
     >
       {app?.icon ? <AppIcon icon={app.icon} slug={app.slug} color="currentColor" size={13} /> : null}
-      {name}
+      {/* The label owns its own overflow. `text-overflow` applies to a block
+          container, and bare text inside the `inline-flex` pill becomes an
+          anonymous flex item that never inherits it — so a name too long for
+          the column was hard-clipped mid-word with no ellipsis at all. `title`
+          because an ellipsis says a name was cut and not what it was. */}
+      <span className="app-tag-label" title={name}>
+        {name}
+      </span>
     </span>
   );
 }

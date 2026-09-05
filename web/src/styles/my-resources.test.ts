@@ -90,6 +90,28 @@ describe("my-resources: the live panel's layout", () => {
     expect(third).toMatch(/^\d+(\.\d+)?(rem|px|ch|em)$/);
   });
 
+  it("reflows the rows before the fixed columns eat the title", () => {
+    // The columns reserve ~400px before the title gets any, and the title is
+    // the only shrinkable track — measured in Chromium it reached width 0 at a
+    // 390px viewport, leaving rows nobody can identify and a Close button that
+    // still works on them. Nothing else here can see that: happy-dom lays
+    // nothing out, and the guards above read declarations, not geometry.
+    //
+    // So this pins the ESCAPE HATCH's existence. Whether it is wide enough is a
+    // measurement, and the measurement lives outside CI — but a media query
+    // deleted in a refactor is the failure this can actually catch.
+    const narrow = css.match(/@media \(max-width: \d+px\) \{([\s\S]*?)\n\}/);
+    expect(narrow).not.toBeNull();
+    const block = narrow![1];
+    // Both lists have to let go of the wide fixed tracks, or the reflow only
+    // fixes the half somebody happened to test.
+    expect(block).toMatch(/\.page \.live-list[\s\S]*display:\s*flex/);
+    expect(block).toMatch(/\.page \.disk-list > li \{[\s\S]*grid-template-columns:/);
+    // …and the title must stop sharing a line with the App tag, which is what
+    // gives it the width back.
+    expect(block).toMatch(/\.page \.live-list \.app-tag \{[\s\S]*grid-row:\s*2/);
+  });
+
   it("actually APPLIES the dark ink, not just computes one", () => {
     // Found by mutation: deleting this rule left all the other guards green.
     // `appColor.test.ts` proves both inks clear the contrast floor and says

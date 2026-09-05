@@ -161,22 +161,12 @@
   margin: var(--space-8) 0 0;
 }
 
-/* An unlimited dimension has no bar, so without this its column ends higher
-   than its neighbours and the block goes ragged along the bottom. */
-.page .stat-row .gauge {
-  display: flex;
-  flex-direction: column;
-}
-
-.page .stat-row .detail {
-  margin-top: var(--space-4);
-}
-
-/* One card per running environment, rather than rows separated by a hairline.
-   The card is what makes this list look unlike the storage list below it —
-   which was the actual complaint: two sections with different meanings and one
-   appearance, distinguishable only by the word on their buttons. */
-/* The COLUMNS belong to the list, not to each row.
+/* One card per running environment, rather than rows separated by a hairline —
+ * the card is what makes this list look unlike the storage list below it, which
+ * was the actual complaint: two sections with different meanings and one
+ * appearance, distinguishable only by the word on their buttons.
+ *
+ * The COLUMNS belong to the list, not to each row.
  *
  * dot · title · App · spec · action. The title column is the only one that may
  * shrink; `minmax(0, 1fr)` is what lets it ellipsis instead of pushing the spec
@@ -273,6 +263,15 @@
   color: var(--app-ink, var(--text-paper-d));
   white-space: nowrap;
   overflow: hidden;
+}
+
+/* The ellipsis lives on the LABEL, not on the pill. `text-overflow` applies to
+   a block container; bare text in the `inline-flex` pill is an anonymous flex
+   item that never inherits it, so a long App name was hard-clipped mid-word
+   with no "…" and nothing to recover it from. */
+.page .app-tag-label {
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
 }
 
@@ -311,12 +310,17 @@
   grid-column: 1 / -1;
 }
 
-/* The storage list takes the SAME column grid as the live one, minus the
-   running dot — the two lists name the same items and answer the same "which of
-   my things is this?", so their App columns have to line up with each other or
-   the page reads as two unrelated tables. It keeps the hairline row rather than
-   the card: these are not running, and that difference is the one the two
-   sections exist to draw. */
+/* The storage list gets the same KIND of column grid as the live one — title,
+   App, figure, action — so its App tags form a scannable column of their own.
+ *
+ * They do NOT line up with the live list's, and an earlier version of this
+ * comment claimed they had to. Measured at the 760px page width the two columns
+ * sit 41px apart, because each list is its own grid whose content-sized figure
+ * and action tracks differ ("20.9 KB" against "2 核 · 1.0 GB") and the live rows
+ * carry 16px of card padding besides. Forcing them together would mean pinning
+ * the figure column to a fixed width in both, which clips the moment a number
+ * grows. The offset is the same thing the dot and the card are saying: these
+ * rows are running and those ones are not. */
 .page .disk-list {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 10rem auto auto;
@@ -371,6 +375,89 @@
   margin: var(--space-16) 0 0;
   font-size: var(--text-body-sm);
   color: var(--text-paper-d);
+}
+
+/* ── narrow viewports ────────────────────────────────────────────────────
+   The columns above reserve about 400px before the title gets any: 8px of dot,
+   four 12px gaps, a 10rem App track, the spec, the button and the card's own
+   32px of padding. The title is the ONLY shrinkable track, so it absorbs every
+   shortfall — measured at a 390px viewport it reached **width 0**, leaving rows
+   that cannot be identified and a Close button that still works on them. The
+   figures either side: 700px → 282px of title, 560px → 142px, 390px → 0.
+
+   So below the point where the one-line shape stops fitting, the row wraps
+   instead of squeezing: title and action stay on the first line (they are what
+   you read and what you press), the App tag and the spec drop to a second.
+   Nothing is hidden — a phone reader needs the App name as much as anyone. */
+@media (max-width: 640px) {
+  /* The list stops owning the tracks: with the rows reflowed there is no shared
+     column to align, and leaving `subgrid` in place would keep reserving the
+     five wide tracks that caused this. */
+  .page .live-list,
+  .page .disk-list {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .page .live-list > li {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    row-gap: var(--space-4);
+  }
+
+  .page .live-list > li > a {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .page .live-list > li > button {
+    grid-column: 3;
+    grid-row: 1;
+  }
+
+  .page .live-list .app-tag {
+    grid-column: 2;
+    grid-row: 2;
+  }
+
+  .page .live-list .detail {
+    grid-column: 3;
+    grid-row: 2;
+    min-width: 0;
+  }
+
+  .page .disk-list > li {
+    grid-template-columns: minmax(0, 1fr) auto;
+    row-gap: var(--space-4);
+  }
+
+  .page .disk-list > li > a {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .page .disk-list > li > button {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .page .disk-list .app-tag {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .page .disk-list .detail {
+    grid-column: 2;
+    grid-row: 2;
+    min-width: 0;
+  }
+
+  /* Three totals side by side in 342px is 114px each — narrower than
+     "4.0 GB / 6.0 GB" — so they stack rather than truncate the figures they
+     exist to show. */
+  .page .stat-row {
+    grid-template-columns: 1fr;
+    gap: var(--space-16);
+  }
 }
 
 /* ── superuser: per-person overrides ─────────────────────────────────────
