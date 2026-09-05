@@ -395,6 +395,15 @@ def main() -> None:
                 if settings.server.trigger_check_interval_sec > 0
                 else None
             ),
+            # #WUI P15: the per-step cap. `create_app` has accepted this since the
+            # step timeout was written and NOTHING ever passed it, so the cap was
+            # infinite everywhere and `steps.py` always took its `is None` branch —
+            # a mechanism that exists, is tested, and never runs. 0 ⇒ off.
+            workflow_step_timeout=(
+                timedelta(seconds=settings.server.workflow_step_timeout_sec)
+                if settings.server.workflow_step_timeout_sec > 0
+                else None
+            ),
         )
     if packages:
         names = ", ".join(f"{p.name}({','.join(c.name for c in p.commands)})" for p in packages)

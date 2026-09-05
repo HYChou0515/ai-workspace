@@ -83,6 +83,12 @@ uv run python -m workspace_app            # API + SPA 一起跑在 127.0.0.1:800
 | **讓外部系統的網頁把工作交棒進來** | `server.cors_allowed_origins: ["https://legacy-rca.corp"]`；沒設的話瀏覽器會在請求送出前就擋掉（串接方式見[從外部系統交棒進來](external-handoff.md)） |
 | **讓使用者用帳號密碼換出工具要的變數** | `server.env_providers: ["你的套件.YourLogin"]`——一份 `IEnvProvider` 清單(可以有好幾個:SAP 登入、AD 登入、API key 交換)。工具只宣告變數**名字**,平台用名字比對決定給哪顆登入鈕,所以第三方工具作者無從決定你的 UI 向使用者要哪組憑證。沒設 = 沒有登入鈕,變數仍可手填。見[擴充平台](extending-the-platform.md)與[部署指南](deployment.md) §15.2 |
 | **讓工具以「按下送出的那個人」的身分打外部系統** | `server.request_env: "你的套件.YourRequestEnv"`——自己寫一個 `IRequestEnv`,從該次請求的 cookie/header 組出環境變數給那一輪的工具(值不落地、只活一輪;item 自己設的環境變數會蓋過同名的)。見[擴充平台](extending-the-platform.md) |
+| **讓頁面自己排的工作真的會跑** | `server.trigger_check_interval_sec`（掃描間隔秒數，**預設 `0` = 完全不掃**）。這一顆同時管工程師寫的 `triggers.json` 和頁面寫的 `schedules.json`——**沒開的話兩者都不會動，而且不會有錯誤訊息**。這個數字就是「最晚會遲到多久」；60 是合理起點 |
+| **不讓某一步永遠轉下去** | `server.workflow_step_timeout_sec`（預設 `600` = 10 分鐘）。工作流裡**單一 agent 步驟**的上限,超過就中止那一步,而且**錯誤訊息會寫出這個數字**——「永遠轉」是唯一連使用者都描述不出來的壞法(畫面沒有錯,只是還沒好),含糊的「太久」讓人以為是隨機,寫出數字才知道那是可以改的設定。設 `0` = 沒有上限（這也是這顆選項出現前每個部署的實際行為:機制早就在,但沒有人把值傳進去）|
+| **一個頁面最多能排幾件事** | `server.max_page_schedules`（預設 `1000`）。這是**失控護欄不是政策限制**:正常的頁面碰不到，碰到代表那個頁面有 bug。它擋的是耐久狀態——每個排程觸發過就在視窗帳本留一列。整個檔案超過就整份不跑，並在 log 寫出兩個數字 |
+| **把通知送出站（email / IM）** | `server.notification_channel: "你的套件.YourChannel"`——一份 `INotificationChannel`。平台**永遠**先寫站內信那一列，有指名通道才再交給它;**送信失敗不算排程失敗**（否則一次兩小時的郵件故障會變成全公司排程集體自我關閉）。平台不出貨實作:relay、寄件網域、合規都是你們的。沒設 = 行為跟今天完全一樣。見[擴充平台](extending-the-platform.md) |
+| **反向代理掛在子路徑下** | `server.root_path`（例如 `/workspace`）——FastAPI 的 `root_path`，讓 OpenAPI 與 SPA 的資源路徑帶上前綴 |
+| **調 SSE 的重連緩衝與取消輪詢** | `server.turn_replay_buffer_events`（重連時最多補送幾個事件）/ `server.turn_cancel_poll_seconds`（跨 pod 取消的輪詢間隔）。兩顆都有堪用的預設，只有在觀察到「重連掉事件」或「按停止太慢」時才需要動 |
 | **限制上傳大小 / 每工作區配額** | `filestore.max_file_size` / `filestore.workspace_quota` |
 | **依 App 種類給不同的 cpu / 記憶體 / 硬碟** | App 自己宣告 `apps/<slug>/app.json` 的 `resources`；部署端用 `resources.per_app.default` 給預設、`resources.per_app.max` 設天花板（超過**開機失敗**）。見 §6.5 |
 | **限制一個人總共能用多少** | `resources.per_user`（`count` / `cpu` / `memory` 為同時活著的 sandbox，`disk` 為名下所有 item 的工作區總和；記在 item 的 `owner` 上）。見 §6.5 |

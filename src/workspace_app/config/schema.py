@@ -63,6 +63,14 @@ class ServerSettings:
     # due headless runs. 0 (default) ⇒ off — time-triggered workflows are opt-in per deploy.
     # A CAS lease per (trigger, window) means only one pod fires each window when several run.
     trigger_check_interval_sec: int = 0
+    # #WUI P15: the hard cap on ONE agent step inside a workflow run, in seconds.
+    # A step that never returns is the only failure a person cannot even
+    # describe: nothing is wrong on screen, the run is simply still going, and
+    # "it seems slow" is all they can report. The refusal names this number, so
+    # a reader learns it is a setting rather than randomness.
+    # The mechanism existed and nothing ever passed it a value, so the cap was
+    # infinite in every deploy. 0 restores that.
+    workflow_step_timeout_sec: int = 600
     # #700: browser origins allowed to call this API cross-site, for outside systems
     # that hand work over from their own page (e.g. a legacy analysis site whose
     # button creates or adds to a work item). Empty (default) ⇒ no CORS layer at
