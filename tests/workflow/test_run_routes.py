@@ -6,6 +6,7 @@ The run is a background task, so these use ``with TestClient(app) as client:`` â
 keeps a persistent event-loop thread alive so the run progresses while the test
 thread polls (a bare ``TestClient`` tears its loop down between requests)."""
 
+import contextlib
 import time
 
 from fastapi import FastAPI
@@ -338,6 +339,42 @@ def test_takeover_conflicts_when_the_chat_already_has_an_active_run():
         _poll(client, item_id, first["run_id"], "awaiting_human")
         conflict = client.post(f"{_base(item_id)}/run?chat_id={prep}")
         assert conflict.status_code == 409
+
+
+def test_a_launch_that_fails_leaves_no_chat_behind(monkeypatch):
+    """The chat is opened BEFORE the run is asked for, because `start` needs its
+    id. So when `start` fails, that chat has no run and never will.
+
+    A conversation with no `run_id` is a FREE chat, and the earliest free chat is
+    what the item opens as its DEFAULT. So this is not litter: a failed launch
+    can hand everyone on the item a different default conversation, and each
+    retry adds another one ahead of it.
+
+    Driven by making the real `start` fail rather than by a double, because the
+    thing under test is what the ROUTE does with the failure â€” and the route is
+    where the chat was created.
+    """
+    from workspace_app.api.chats import list_item_conversations
+    from workspace_app.workflow.orchestrator import WorkflowOrchestrator
+
+    app, spec, item_id = _app()
+    conv_rm = spec.get_resource_manager(Conversation)
+
+    async def _boom(self, **kw):
+        raise RuntimeError("the run could not be created")
+
+    monkeypatch.setattr(WorkflowOrchestrator, "start", _boom)
+
+    with TestClient(app) as client:
+        before = sorted(rid for rid, _ in list_item_conversations(conv_rm, item_id))
+
+        # The route does not catch this, so it surfaces as a 500 to the caller.
+        # What it must NOT do is keep the chat it opened on the way in.
+        with contextlib.suppress(RuntimeError):
+            client.post(f"{_base(item_id)}/run")
+
+        after = sorted(rid for rid, _ in list_item_conversations(conv_rm, item_id))
+        assert after == before, "the failed launch left its chat on the item"
 
 
 def test_relaunch_in_the_same_chat_after_the_previous_run_finished():

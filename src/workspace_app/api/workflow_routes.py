@@ -320,17 +320,16 @@ def register_workflow_routes(
         # that existing chat; otherwise open a fresh workflow chat (the legacy path).
         if chat_id:
             target_chat_id, _conv = locator.require_chat(slug, item_id, chat_id)
+            ours = False
         else:
-            title = manifest.title or workflow_id or "Workflow"
-            target_chat_id = conv_rm.create(
-                Conversation(
-                    item_id=investigation_id,
-                    title=title,
-                    created_ms=now_ms(),
-                    # #306 PR3: stamp the item read-chat mirror on the workflow chat.
-                    **item_conversation_mirror(spec, investigation_id),
-                )
-            ).resource_id
+            # ONE way to open a run's chat, shared with the page-started entrance
+            # (`wui_routes.wui_run`). Two spellings of "open a workflow chat"
+            # eventually disagree, and the half that gets the next fix is not
+            # predictable from the outside.
+            target_chat_id = locator.open_run_chat(
+                investigation_id, manifest.title or workflow_id or "Workflow"
+            )
+            ours = True
         try:
             run_id = await workflow_orchestrator.start(
                 slug=slug,
@@ -341,16 +340,25 @@ def register_workflow_routes(
                 chat_id=target_chat_id,
             )
         except ActiveRunExists as exc:
+            if ours:
+                locator.settle_run_chat(target_chat_id, None)
             logger.warning(
                 "workflow_routes: run rejected on item %s, active run exists: %s",
                 investigation_id,
                 exc,
             )
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        chat = conv_rm.get(target_chat_id).data
-        assert isinstance(chat, Conversation)
-        chat.run_id = run_id
-        conv_rm.update(target_chat_id, chat)
+        except Exception:
+            # The chat was opened only because `start` needs an id up front, and
+            # a chat with no `run_id` is a FREE chat — the earliest free chat is
+            # what the item opens as its DEFAULT. So a failed launch that keeps
+            # its chat hands everyone on the item a different default
+            # conversation, and each retry adds another one ahead of it. A chat
+            # the CALLER supplied is theirs and is left alone.
+            if ours:
+                locator.settle_run_chat(target_chat_id, None)
+            raise
+        locator.settle_run_chat(target_chat_id, run_id)
         activity.record(
             "workflow_started",
             "Started a workflow run",

@@ -89,6 +89,8 @@ class _Locator:
         self.allowed = allowed
         self.env = env or {}
         self.asked_verb: list[str] = []
+        self.opened: list[tuple[str, str]] = []
+        self.settled: list[tuple[str, str | None]] = []
 
     def require_access(self, slug: str, item_id: str, verb: str) -> str:
         self.asked_verb.append(verb)
@@ -107,6 +109,13 @@ class _Locator:
         # A scheduled or page-started run acts as the item's owner: there is no
         # request behind it, so there is no personal credential to inherit.
         return "alice"
+
+    def open_run_chat(self, item_id: str, title: str) -> str:
+        self.opened.append((item_id, title))
+        return f"chat-{len(self.opened)}"
+
+    def settle_run_chat(self, chat_id: str, run_id: str | None) -> None:
+        self.settled.append((chat_id, run_id))
 
 
 #: `allowed=None` is a MEANINGFUL value here — "this deploy did not restrict" —
@@ -751,6 +760,14 @@ class _Engine:
     def __init__(self, order: list[str] | None = None) -> None:
         self.keys: list[str] = []
         self.order = order
+        #: `subscribe_sse` attaches the subscriber EAGERLY — the outer call is
+        #: not a generator — so a stream nobody ever iterates keeps its queue and
+        #: its session forever. Releasing it is part of the contract, so the
+        #: double carries it and the tests can see whether it happened.
+        self.forgotten: list[str] = []
+
+    async def forget(self, key: str) -> None:
+        self.forgotten.append(key)
 
     def subscribe_sse(self, key: str, user_id: str = "", **kw):
         if self.order is not None:
@@ -788,6 +805,47 @@ def test_the_stream_is_scoped_to_this_one_invocation():
 
     assert engine.keys and engine.keys[0] == orch.started[0]["chat_id"]
     assert engine.keys[0] != "i1"
+
+
+def test_the_run_is_started_on_a_conversation_that_exists():
+    """`chat_id` is not a label — it is looked UP. `workflow_exec.drive_turn`
+    resolves it and, finding nothing, falls back to the item's DEFAULT chat: the
+    page's run would then read the user's own chat history as its context and
+    append its turns there, in a conversation nobody opened it from.
+
+    The same id is what `active_run_for_chat` matches on, so a minted uuid also
+    means the one-run-per-item rule never applies to a page at all. Click twice
+    and two runs write into one conversation with no CAS between them, and each
+    loses the other's messages.
+    """
+    orch, engine, loc = _Orchestrator(), _Engine(), _Locator(["mes"])
+    client, _, _, _ = build(
+        orchestrator=orch, turn_engine=engine, workflows=["judge"], locator=loc
+    )
+
+    client.post(RUN_URL, json={"workflow": "judge"})
+
+    assert loc.opened == [("i1", "judge")], "the route minted its own key"
+    assert orch.started[0]["chat_id"] == "chat-1"
+    assert engine.keys == ["chat-1"]
+
+
+def test_a_run_that_never_started_leaves_no_chat_behind():
+    """A conversation with no `run_id` is a FREE chat, and the earliest free
+    chat is what the item opens as its default. So a page whose workflow refused
+    to start would silently install a new default chat for everyone on the item
+    — and every retry would install another.
+    """
+    orch, engine, loc = _Orchestrator(fail=True), _Engine(), _Locator(["mes"])
+    client, _, _, _ = build(
+        orchestrator=orch, turn_engine=engine, workflows=["judge"], locator=loc
+    )
+
+    resp = client.post(RUN_URL, json={"workflow": "judge"})
+
+    assert resp.status_code == 502
+    assert loc.settled == [("chat-1", None)], "the chat outlived the run it was opened for"
+    assert engine.forgotten == ["chat-1"], "the stream nobody will read stayed subscribed"
 
 
 def test_it_subscribes_before_it_starts():

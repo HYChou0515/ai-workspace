@@ -402,14 +402,20 @@ def register_wui_routes(
                 detail=f"This app does not offer {body.workflow} to its pages.",
             )
 
+        # A REAL conversation, not a minted label. `chat_id` is looked up by
+        # `workflow_exec.drive_turn`, and one that resolves to nothing falls back
+        # to the item's DEFAULT chat — so the page's run would read the user's own
+        # chat history as its context and append its turns there. It is also what
+        # `active_run_for_chat` matches on, so an invented id quietly exempts
+        # pages from the one-run-per-item rule.
+        key = locator.open_run_chat(investigation_id, body.workflow)
         # SUBSCRIBE FIRST. A run that begins before anyone is listening loses its
         # opening events — exactly the ones that say something is happening — so
         # the page would show nothing at all for the first second of every call.
-        key = f"wui:{uuid4().hex}"
         stream = turn_engine.subscribe_sse(key)
 
         try:
-            await orchestrator.start(
+            run_id = await orchestrator.start(
                 slug=slug,
                 item_id=investigation_id,
                 profile=locator.profile_of(investigation_id),
@@ -418,9 +424,18 @@ def register_wui_routes(
                 chat_id=key,
                 payload=body.payload,
             )
-        except HTTPException:
-            raise
         except Exception as exc:
+            # Take the chat back down with the run that never started. A chat with
+            # no `run_id` is a FREE chat, and the earliest free chat is the item's
+            # default — a refused run would otherwise install a new default
+            # conversation for everyone on the item, once per retry.
+            locator.settle_run_chat(key, None)
+            # And release the stream. `subscribe_sse` attaches the subscriber
+            # eagerly, before the generator is ever iterated, so a response we
+            # never return leaves its queue and its session in memory for good.
+            await turn_engine.forget(key)
+            if isinstance(exc, HTTPException):
+                raise
             # A 200 with an empty stream is indistinguishable from "still
             # thinking", and a page waiting on that waits forever. A refusal has
             # to arrive as a refusal.
@@ -429,6 +444,7 @@ def register_wui_routes(
                 status_code=502, detail=f"{body.workflow} could not be started."
             ) from exc
 
+        locator.settle_run_chat(key, run_id)
         return StreamingResponse(stream, media_type="text/event-stream")
 
     @app.post("/a/{slug}/items/{item_id}/wui/tools/{name}/call")
