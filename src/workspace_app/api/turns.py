@@ -503,6 +503,7 @@ _QueueItem = tuple[
     Callable[[list[TurnMessage]], None],
     "OnTurnEnd | None",
     "asyncio.Future[None]",
+    "int | None",  # the caller's cancel-epoch stamp; see `enqueue`
 ]
 
 
@@ -760,6 +761,7 @@ class ChatTurnEngine:
         *,
         on_complete: Callable[[list[TurnMessage]], None],
         on_turn_end: OnTurnEnd | None = None,
+        epoch: int | None = None,
     ) -> asyncio.Future[None]:
         """#43: append a message to the investigation's FIFO turn queue and
         ensure its worker is running. Unlike `stream()`, a new message does NOT
@@ -767,6 +769,18 @@ class ChatTurnEngine:
         each other's work (Stop is the explicit `cancel_current`). Returns a
         future that resolves when THIS message's turn ends, so the caller can
         await its own turn while later messages queue behind it.
+
+        `epoch` is the caller's own cancel-epoch stamp, taken BEFORE whatever
+        preparation it did to get here (`cancel_epoch`). Preparing a turn takes
+        real time — compaction, a cold sandbox wake, context and skill file
+        reads — and a Stop pressed during it has nothing to cancel: the turn
+        does not exist yet, so the same-pod fast-path finds nothing and the
+        epoch bump is the only record it happened. Stamping at dequeue reads
+        that bump BACK as the starting value, so `> my_epoch` never trips and
+        the turn runs as though Stop had never been pressed. A stamp taken
+        before the preparation makes the bump visible, and the worker stands the
+        turn down instead of running it. Omit it and the epoch is stamped at
+        dequeue as before — right for a caller with no preparation to speak of.
 
         #492: `on_turn_end` (optional) runs once after the turn's messages are
         persisted — the surface flushes the item's live sandbox to durable
@@ -776,7 +790,7 @@ class ChatTurnEngine:
         if session.worker is None or session.worker.done():
             session.worker = asyncio.create_task(self._worker(session, key))
         fut: asyncio.Future[None] = asyncio.get_running_loop().create_future()
-        session.queue.put_nowait((content, ctx, on_complete, on_turn_end, fut))
+        session.queue.put_nowait((content, ctx, on_complete, on_turn_end, fut, epoch))
         logger.info("turns: enqueued turn for %s", key)
         return fut
 
@@ -786,7 +800,20 @@ class ChatTurnEngine:
         cancellable task so `cancel_current` stops only the running turn and the
         worker proceeds to the next; its completion future is then resolved."""
         while True:
-            content, ctx, on_complete, on_turn_end, fut = await session.queue.get()
+            content, ctx, on_complete, on_turn_end, fut, stamped = await session.queue.get()
+            # A Stop that landed while the caller was still PREPARING this turn
+            # (see `enqueue`): there was nothing to cancel then, so honouring it
+            # is entirely a matter of not starting now. Checked before the turn
+            # task exists, so the runner is never reached at all — and the
+            # subscriber still gets the terminal event a cancelled turn would
+            # have produced, or the composer waits for a reply nobody will send.
+            if stamped is not None and await self._turn_control.current(key) > stamped:
+                logger.info("turns: worker %s stood a turn down (stop during prep)", key)
+                session.publish(RunCancelled())
+                if not fut.done():
+                    fut.set_result(None)
+                session.queue.task_done()
+                continue
             # Make the turn cancellable BEFORE reading the epoch. `current()` awaits
             # (a specstar round-trip); a Stop landing in that window must find the
             # turn via the same-pod fast-path (`cancel_current` reads `current_turn`)
@@ -804,7 +831,11 @@ class ChatTurnEngine:
             # message must NOT supersede the running turn (they serialize via this
             # queue), but an explicit Stop (which DOES bump) on any pod still aborts
             # it through the watcher.
-            my_epoch = await self._turn_control.current(key)
+            # A caller that stamped its own epoch has already had it compared
+            # above, and epochs only advance — so it equals `current()` here and
+            # re-reading would only pay for the round trip and re-open the very
+            # window the ordering above exists to close.
+            my_epoch = stamped if stamped is not None else await self._turn_control.current(key)
             self._spawn_watcher(key, my_epoch, turn)
             logger.info("turns: worker %s turn started (epoch %d)", key, my_epoch)
             # The turn persists its own (partial) result via on_complete even

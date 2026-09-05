@@ -706,6 +706,18 @@ class ChatSendService:
             )
         )
         self._conv_rm.update(rid, conv)
+        # Stamp the cancel epoch HERE — before any of the preparation below.
+        #
+        # Everything from this point to `enqueue` is preparation that takes real
+        # time: compaction (which may call an LLM), a cold sandbox wake, context
+        # and skill file reads, the `/tokenize` probe. It is exactly the window
+        # in which someone gives up and presses Stop — and in that window there
+        # is no turn to cancel, so the same-pod fast-path finds nothing and the
+        # epoch bump is the only record the Stop happened. Stamped at dequeue
+        # instead, the worker reads that bump back as its own starting value and
+        # the whole turn runs as though Stop had never been pressed. See
+        # `ChatTurnEngine.enqueue`.
+        epoch = await self._turn_engine.cancel_epoch(engine_key)
         # #739: compact BEFORE the turn is built — the thread is final for this
         # turn (the user's message is in) and the model has not been called yet.
         #
@@ -983,6 +995,7 @@ class ChatSendService:
             ctx,
             on_complete=persist,
             on_turn_end=lambda: self._flush_item(investigation_id),
+            epoch=epoch,
         )
         # #493 symptom 1 (504): await THIS turn's completion, but only up to a
         # deadline — then DETACH it so a long turn can't hang the POST until the

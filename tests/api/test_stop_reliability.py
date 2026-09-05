@@ -41,12 +41,15 @@ class _GatedTurnControl(InMemoryTurnControl):
 
 class _HangingRunner:
     """Streams one delta then hangs, so the turn is unmistakably RUNNING until it
-    is cancelled. ``completed`` flips only if the turn is NOT cancelled."""
+    is cancelled. ``completed`` flips only if the turn is NOT cancelled;
+    ``started`` flips the moment the turn reaches the model at all."""
 
     def __init__(self) -> None:
         self.completed = False
+        self.started = False
 
     async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+        self.started = True
         yield MessageDelta(text="working")
         await asyncio.sleep(30)
         self.completed = True  # pragma: no cover — reached only if the Stop is lost
@@ -91,3 +94,117 @@ async def test_a_stop_in_the_stamp_window_finds_and_cancels_the_turn():
         assert turn.done()  # and the fast-path cancelled it
     finally:
         await engine.forget(key)
+
+
+class _QuickRunner:
+    """Reaches the model and finishes. For the cases that assert a turn DID run:
+    a runner that hangs would leave the turn to be torn down at teardown, which
+    is a second thing for the test to be about."""
+
+    def __init__(self) -> None:
+        self.started = False
+
+    async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+        self.started = True
+        yield RunDone()
+
+
+async def test_a_stop_during_the_preamble_is_not_lost():
+    """P1: a Stop pressed BEFORE the turn is queued must still stop it.
+
+    `chat_send` persists the user's message and then spends real time preparing
+    the turn — compaction (which may call an LLM), a cold sandbox wake, context
+    and skill file reads, the `/tokenize` probe. Seconds, on a bad day, and it is
+    exactly the window in which someone gives up and presses Stop.
+
+    Nothing is queued yet, so there is no `current_turn` for the same-pod
+    fast-path to find, and the epoch bump is the ONLY record that the Stop
+    happened. Stamping the epoch when the turn is finally dequeued reads that
+    already-bumped value back, so `> my_epoch` never trips and the whole turn
+    then runs as though Stop had never been pressed. Stamping it when the
+    MESSAGE IS PERSISTED — before the preamble — is what makes the bump mean
+    something.
+    """
+    control = InMemoryTurnControl()
+    runner = _HangingRunner()
+    engine = ChatTurnEngine(runner, turn_control=control)
+    key = "inv"
+    try:
+        # The message is persisted; the caller stamps here, before the preamble.
+        stamped = await engine.cancel_epoch(key)
+
+        # …the preamble runs, and the user hits Stop while it does.
+        await engine.cancel_current(key)
+
+        # …the preamble finishes and queues the turn it had been preparing.
+        fut = engine.enqueue(
+            key, "go", AgentToolContext(), on_complete=lambda _: None, epoch=stamped
+        )
+
+        # Bounded: without the fix the turn runs and hangs for 30s, so a lost
+        # Stop is a timeout (a failure) rather than a test that waits it out.
+        await asyncio.wait_for(fut, 2)
+        assert not runner.started
+    finally:
+        await engine.forget(key)
+
+
+async def test_a_turn_queued_after_the_stop_still_runs():
+    """The other half, and the reason this keys on the stamp rather than on "has
+    anyone ever pressed Stop": the NEXT message must not inherit the last Stop.
+
+    Its stamp is taken after the bump, so the same comparison that stands the
+    interrupted turn down lets this one through — which is what keeps Stop from
+    quietly becoming "this conversation is over".
+    """
+    control = InMemoryTurnControl()
+    runner = _QuickRunner()
+    engine = ChatTurnEngine(runner, turn_control=control)
+    key = "inv"
+    try:
+        await engine.cancel_current(key)  # an earlier Stop
+        stamped = await engine.cancel_epoch(key)  # a NEW message, stamped after it
+
+        fut = engine.enqueue(
+            key, "go", AgentToolContext(), on_complete=lambda _: None, epoch=stamped
+        )
+
+        await asyncio.wait_for(fut, 2)
+        assert runner.started
+    finally:
+        await engine.forget(key)
+
+
+async def test_a_stop_during_the_preamble_is_not_lost_through_the_real_send_path():
+    """The same invariant, entered through `POST /messages` instead of the engine.
+
+    The engine can only honour a stamp somebody hands it, and for a long time
+    nobody did — an engine-level test would have passed against a `chat_send`
+    that never passed one. Patching `build_chat_turn` puts the Stop exactly where
+    the report puts it: inside the preparation, before any turn exists to cancel.
+    """
+    from workspace_app.api import create_app
+    from workspace_app.filestore.memory import MemoryFileStore
+    from workspace_app.resources import make_spec
+    from workspace_app.sandbox.mock import MockSandbox
+
+    from ._client import TestClient
+    from .conftest import register_rca_item
+
+    spec = make_spec(default_user="u")
+    iid = register_rca_item(spec)
+    runner = _QuickRunner()
+    app = create_app(spec=spec, sandbox=MockSandbox(), filestore=MemoryFileStore(), runner=runner)
+    engine = app.state.turn_engine
+    builder = app.state.chat_send._turn_ctx
+    real_build = builder.build_chat_turn
+
+    async def stop_while_preparing(*a, **kw):
+        await engine.cancel_current(iid)
+        return await real_build(*a, **kw)
+
+    builder.build_chat_turn = stop_while_preparing
+
+    TestClient(app).post(f"/a/rca/items/{iid}/messages", json={"content": "yo"})
+
+    assert not runner.started
