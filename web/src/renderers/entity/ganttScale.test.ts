@@ -8,19 +8,27 @@ import {
   axisFor,
   canvasWidthFor,
   clampPpd,
+  columnPx,
   daysBetween,
+  fitPpd,
+  grainFor,
+  PPD_HOUR_GRAIN,
+  PPD_MAX_FIT,
   deltaDays,
   PPD_ANCHORS,
   ppdToSlider,
+  resolveSpan,
   pxPerDay,
   shiftDate,
   sliderToPpd,
   spanToDates,
+  unionSpan,
   visibleDaysFor,
   barColumns,
   columnOf,
   dateAtColumn,
   formatWeekLabel,
+  instantOf,
   isWeekend,
   shiftWorkingDays,
   weekLabelOf,
@@ -79,6 +87,563 @@ describe("spanToDates", () => {
   it("returns null for junk or a reversed range", () => {
     expect(spanToDates("nope")).toBeNull();
     expect(spanToDates("2026-02-01/2026-01-01")).toBeNull();
+  });
+
+  it("keeps the time of day when the span names one (#785)", () => {
+    // The parser already read these — `Date.parse` accepts them — and then threw
+    // the clock away on the way out, so "09:30 to 17:00" was stored, reloaded,
+    // and silently redrawn as two whole days. Minutes are the stated precision.
+    expect(spanToDates("2026-01-05T09:30/2026-01-05T17:00")).toEqual({
+      start: "2026-01-05T09:30",
+      end: "2026-01-05T17:00",
+    });
+  });
+
+  it("reads a clock with no zone as UTC, like every other date in this module", () => {
+    // ES parses a zone-less date-TIME as LOCAL and a zone-less DATE as UTC, so
+    // taking the default would put the two halves of one span in two different
+    // calendars — and a 23:30 bar would jump a day for anyone east of London.
+    expect(spanToDates("2026-01-05T23:30/2026-01-06")).toEqual({
+      start: "2026-01-05T23:30",
+      end: "2026-01-06",
+    });
+    expect(spanToDates("2026-01-05T09:30:45.123Z/2026-01-05T17:00:00Z")).toEqual({
+      start: "2026-01-05T09:30",
+      end: "2026-01-05T17:00",
+    });
+  });
+
+  it("leaves a plain date plain, so nothing already on screen moves", () => {
+    // The whole of P2 rests on this: a plain-date span takes the identical path
+    // it always did, so the chart is pixel-for-pixel what it was.
+    expect(spanToDates("2026-01-10/2026-01-20")).toEqual({
+      start: "2026-01-10",
+      end: "2026-01-20",
+    });
+  });
+});
+
+describe("a span that names a clock still lands on the right day (#785)", () => {
+  // P2 keeps the chart day-granular on purpose — the columns get finer in P3.
+  // What has to hold NOW is that carrying a clock through the parser cannot
+  // break the day arithmetic: every one of these used to be handed a bare
+  // `YYYY-MM-DD` and would read `2026-01-05T09:30` as a local-time instant or,
+  // in `weekdayOf`'s case, as an Invalid Date.
+  it("measures the same columns as the plain-date span over those days", () => {
+    expect(columnOf("2026-01-05T09:30", "2026-01-07T17:00", false)).toBe(
+      columnOf("2026-01-05", "2026-01-07", false),
+    );
+    expect(barColumns({ start: "2026-01-05T09:30", end: "2026-01-07T17:00" }, false)).toBe(3);
+  });
+
+  it("counts DAYS, not rounded elapsed time — 01:00 to 23:00 next day is one day", () => {
+    // The measurement it replaces divided elapsed ms by a day and rounded, so a
+    // 46-hour span read as two days and an 11-hour one as none. Stated against
+    // the plain-date answer so it means the same thing in any TZ the suite runs
+    // in — which is also the bug: a zone-less clock parses as LOCAL.
+    expect(daysBetween("2026-01-05T01:00", "2026-01-06T23:00")).toBe(
+      daysBetween("2026-01-05", "2026-01-06"),
+    );
+    expect(columnOf("2026-01-05T01:00", "2026-01-06T23:00", false)).toBe(1);
+  });
+
+  it("knows a Saturday afternoon is still a weekend", () => {
+    expect(isWeekend("2026-01-10T14:00")).toBe(true);
+  });
+
+  it("counts working columns across a weekend from the clock's own day", () => {
+    // Fri 09:30 → Mon 17:00 is two working columns apart, weekend collapsed.
+    expect(columnOf("2026-01-09T09:30", "2026-01-12T17:00", true)).toBe(1);
+  });
+
+  it("shifts and measures from the day, not from an unparseable string", () => {
+    expect(shiftDate("2026-01-05T09:30", 1)).toBe("2026-01-06");
+    expect(daysBetween("2026-01-05T09:30", "2026-01-07T17:00")).toBe(2);
+    expect(weekStart("2026-01-07T17:00")).toBe("2026-01-05");
+  });
+
+  it("does not lose the clock when the bar is dragged", () => {
+    // Dragging measures in whole days here (P3 makes it finer), so a move is a
+    // change of DAY — the time of day is not the drag's to throw away. Every
+    // shift helper returns a bare date, so without this a single drag silently
+    // flattened "09:30–17:00" into a two-day bar.
+    expect(applyDrag({ start: "2026-01-05T09:30", end: "2026-01-05T17:00" }, "move", 1, false)).toEqual(
+      { start: "2026-01-06T09:30", end: "2026-01-06T17:00" },
+    );
+    expect(applyDrag({ start: "2026-01-05T09:30", end: "2026-01-07T17:00" }, "end", -1, false)).toEqual(
+      { start: "2026-01-05T09:30", end: "2026-01-06T17:00" },
+    );
+  });
+
+  it("names a column with a bare date even when the origin carries a clock", () => {
+    // `dateAtColumn` is `columnOf`'s inverse and its answers become dates the
+    // axis and the drag then shift. Column 0 of a timed origin is the only case
+    // that reaches the return without passing through a shift, so it is the one
+    // that could hand back a clock where the rest of the module expects a day.
+    expect(dateAtColumn("2026-01-05T09:30", 0, true)).toBe("2026-01-05");
+    expect(dateAtColumn("2026-01-05T09:30", 2, false)).toBe("2026-01-07");
+  });
+
+  it("still writes plain dates for a plain-date bar", () => {
+    expect(applyDrag({ start: "2026-01-05", end: "2026-01-07" }, "move", 1, false)).toEqual({
+      start: "2026-01-06",
+      end: "2026-01-08",
+    });
+  });
+});
+
+describe("hour columns (#785)", () => {
+  const HOURS = { grain: "hour", skipWeekends: false } as const;
+  const HOURS_SKIP = { grain: "hour", skipWeekends: true } as const;
+
+  it("turns one day column into twenty-four", () => {
+    expect(columnOf("2026-01-05", "2026-01-06", HOURS)).toBe(24);
+    expect(columnOf("2026-01-05T09:00", "2026-01-05T17:00", HOURS)).toBe(8);
+  });
+
+  it("still reads the bare boolean as day columns, which is what it always meant", () => {
+    expect(columnOf("2026-01-05", "2026-01-06", false)).toBe(1);
+    expect(columnOf("2026-01-05", "2026-01-06", { grain: "day", skipWeekends: false })).toBe(1);
+  });
+
+  it("gives a weekend no hours either", () => {
+    // Fri 09:00 → Mon 17:00: fifteen hours left of Friday, then Monday's
+    // seventeen. The weekend is 48 hours of nothing at both grains.
+    expect(columnOf("2026-01-09T09:00", "2026-01-12T17:00", HOURS_SKIP)).toBe(32);
+  });
+
+  it("collapses a weekend origin onto the next working hour, as the day grain does", () => {
+    // The day grain already puts Sat, Sun and Monday on one column; measuring
+    // from the Saturday's clock instead would make the two grains disagree —
+    // and it was exactly that disagreement that froze a tab in #690.
+    expect(columnOf("2026-01-10T10:00", "2026-01-12T05:00", HOURS_SKIP)).toBe(5);
+  });
+
+  it("places minutes inside their hour rather than snapping them away", () => {
+    // Spans are specified to the minute; the CHART is specified to the hour.
+    // A half-hour is half a column, not a rounding error.
+    expect(columnOf("2026-01-05T09:00", "2026-01-05T09:30", HOURS)).toBe(0.5);
+  });
+
+  it("is signed, like the day grain", () => {
+    expect(columnOf("2026-01-06", "2026-01-05", HOURS)).toBe(-24);
+  });
+
+  it("names the instant at an hour column, and is columnOf's inverse there", () => {
+    expect(dateAtColumn("2026-01-05", 9, HOURS)).toBe("2026-01-05T09:00");
+    expect(dateAtColumn("2026-01-05", 24, HOURS)).toBe("2026-01-06T00:00");
+    expect(dateAtColumn("2026-01-05", -1, HOURS)).toBe("2026-01-04T23:00");
+    for (const col of [0, 1, 30, 47, 168]) {
+      expect(columnOf("2026-01-05", dateAtColumn("2026-01-05", col, HOURS), HOURS)).toBe(col);
+    }
+  });
+
+  it("walks over the weekend at hour grain, so the round trip holds there too", () => {
+    // Fri 00:00 plus a working day's worth of hours is Monday, not Saturday.
+    expect(dateAtColumn("2026-01-09", 24, HOURS_SKIP)).toBe("2026-01-12T00:00");
+    for (const col of [0, 5, 24, 40, 120]) {
+      expect(columnOf("2026-01-09", dateAtColumn("2026-01-09", col, HOURS_SKIP), HOURS_SKIP)).toBe(
+        col,
+      );
+    }
+  });
+
+  it("measures a bar in hours, from its start to the moment it ends", () => {
+    expect(barColumns({ start: "2026-01-05", end: "2026-01-05" }, HOURS)).toBe(24);
+    expect(barColumns({ start: "2026-01-05", end: "2026-01-06" }, HOURS)).toBe(48);
+    expect(barColumns({ start: "2026-01-05T09:30", end: "2026-01-05T17:00" }, HOURS)).toBe(7.5);
+  });
+
+  it("stops a bar at the weekend rather than drawing through it", () => {
+    // Friday 09:00 to the end of Friday is fifteen hours; the Saturday and
+    // Sunday the plain end date runs up to are worth nothing.
+    expect(barColumns({ start: "2026-01-09T09:00", end: "2026-01-09" }, HOURS_SKIP)).toBe(15);
+  });
+
+  it("still counts whole days at day grain, inclusive as it always was", () => {
+    expect(barColumns({ start: "2026-07-13", end: "2026-07-15" }, false)).toBe(3);
+  });
+
+  it("keeps a bar's length when it is dragged at hour grain", () => {
+    // The trap: a plain end date denotes the midnight it runs UP TO, so
+    // shifting it as though it were that day's 00:00 leaves the instant it
+    // denotes exactly where it was — and the bar loses a day per drag.
+    const span = { start: "2026-01-05", end: "2026-01-07" };
+    const moved = applyDrag(span, "move", 24, HOURS);
+    expect(barColumns(moved, HOURS)).toBe(barColumns(span, HOURS));
+    expect(moved.start).toBe("2026-01-06T00:00");
+  });
+
+  it("nudges one end by hours without moving the other", () => {
+    expect(applyDrag({ start: "2026-01-05T09:00", end: "2026-01-05T17:00" }, "end", 2, HOURS)).toEqual(
+      { start: "2026-01-05T09:00", end: "2026-01-05T19:00" },
+    );
+  });
+
+  it("will not let a resize invert the bar at hour grain", () => {
+    const flat = applyDrag({ start: "2026-01-05T09:00", end: "2026-01-05T17:00" }, "end", -20, HOURS);
+    expect(instantOf(flat.end, "end")).toBeGreaterThanOrEqual(instantOf(flat.start, "start"));
+  });
+
+  it("carries the origin's own clock into the answer", () => {
+    // The origin is the chart's left edge, which is a record's start — it can
+    // be half past nine as easily as midnight.
+    expect(dateAtColumn("2026-01-05T09:30", 2, HOURS)).toBe("2026-01-05T11:30");
+    expect(dateAtColumn("2026-01-05T09:30", 15, HOURS)).toBe("2026-01-06T00:30");
+  });
+});
+
+describe("the slider reaches hours (#785)", () => {
+  it("keeps days until the density can actually show an hour", () => {
+    expect(grainFor(PPD_ANCHORS.month)).toBe("day");
+    expect(grainFor(PPD_ANCHORS.day)).toBe("day");
+    expect(grainFor(PPD_HOUR_GRAIN - 1)).toBe("day");
+    expect(grainFor(PPD_HOUR_GRAIN)).toBe("hour");
+  });
+
+  it("extends the track far enough to reach hours, anchors still inside it", () => {
+    expect(sliderToPpd(1)).toBeGreaterThanOrEqual(PPD_HOUR_GRAIN);
+    expect(sliderToPpd(0)).toBeLessThan(PPD_ANCHORS.month);
+    expect(sliderToPpd(1)).toBeGreaterThan(PPD_ANCHORS.day);
+  });
+
+  it("crosses the threshold without moving anything on screen", () => {
+    // A day is one column at day grain and twenty-four at hour grain, and an
+    // hour column is a twenty-fourth as wide — so the same date sits at the
+    // same x on both sides of the switch. Zooming must not teleport the chart,
+    // and building the hour count ON the day count is what guarantees it.
+    const ppd = PPD_HOUR_GRAIN;
+    const at = (grain: "day" | "hour") =>
+      columnOf("2026-01-05", "2026-01-08", { grain, skipWeekends: false }) * columnPx(ppd, grain);
+    expect(at("hour")).toBeCloseTo(at("day"));
+  });
+
+  it("never opens a short project in hours — fitting to the pane stops at days", () => {
+    // Two days in a 900px pane fits at 450 px/day, which is well past the
+    // threshold. Going finer than days is a deliberate drag, never something a
+    // project gets for being short.
+    expect(fitPpd(900, 2)).toBe(PPD_MAX_FIT);
+    expect(grainFor(fitPpd(900, 2))).toBe("day");
+    // And fitting still fits whenever fitting is the smaller number.
+    expect(fitPpd(900, 90)).toBeCloseTo(10);
+  });
+});
+
+describe("non-working hours take no width (#785)", () => {
+  const WORK = { grain: "hour", skipWeekends: false, work: { from: 7, to: 21 } } as const;
+  const WORK_SKIP = { grain: "hour", skipWeekends: true, work: { from: 7, to: 21 } } as const;
+
+  it("makes a day fourteen columns instead of twenty-four", () => {
+    expect(barColumns({ start: "2026-01-05", end: "2026-01-05" }, WORK)).toBe(14);
+  });
+
+  it("gives an overnight gap no width at all", () => {
+    // 22:00 to 05:00 is seven hours of clock and no working time — the same
+    // thing a weekend is, one scale down.
+    expect(columnOf("2026-01-05T22:00", "2026-01-06T05:00", WORK)).toBe(0);
+  });
+
+  it("counts the working end of an evening and the working start of a morning", () => {
+    expect(columnOf("2026-01-05T20:00", "2026-01-06T08:00", WORK)).toBe(2);
+    expect(barColumns({ start: "2026-01-05T20:00", end: "2026-01-06T08:00" }, WORK)).toBe(2);
+  });
+
+  it("changes nothing at day grain — a day is still one column", () => {
+    const dayWithWindow = { grain: "day", skipWeekends: true, work: { from: 7, to: 21 } } as const;
+    expect(columnOf("2026-01-05", "2026-01-09", dayWithWindow)).toBe(
+      columnOf("2026-01-05", "2026-01-09", true),
+    );
+    expect(barColumns({ start: "2026-01-05", end: "2026-01-09" }, dayWithWindow)).toBe(5);
+  });
+
+  it("walks the weekend and the nights through the same machinery", () => {
+    // Fri 20:00 → Mon 08:00: one working hour left on Friday, one done on
+    // Monday, and everything between them is time the chart does not draw.
+    expect(columnOf("2026-01-09T20:00", "2026-01-12T08:00", WORK_SKIP)).toBe(2);
+  });
+
+  it("stays its own inverse, and opens column zero at the start of the working day", () => {
+    expect(dateAtColumn("2026-01-05", 0, WORK)).toBe("2026-01-05T07:00");
+    expect(dateAtColumn("2026-01-05", 14, WORK)).toBe("2026-01-06T07:00");
+    for (const col of [0, 1, 14, 20, 42]) {
+      expect(columnOf("2026-01-05", dateAtColumn("2026-01-05", col, WORK), WORK)).toBe(col);
+    }
+  });
+
+  it("gives the axis a band per working day, fourteen columns wide", () => {
+    const axis = axisFor("2026-01-05", 28, PPD_HOUR_GRAIN * 2, undefined, "", false, {}, {
+      from: 7,
+      to: 21,
+    });
+    expect(axis.coarse.map((b) => [b.day, b.days])).toEqual([
+      [0, 14],
+      [14, 14],
+    ]);
+    expect(axis.fine.map((t) => t.label)).not.toContain("03");
+  });
+});
+
+// Just above the `DETAIL_PPD` cutoff inside axisFor, so the middle tier (day
+// numbers, no week rule) is exercised — that is the branch that printed "NaN".
+const DETAIL_PPD_PROBE = 10;
+
+describe("dateAtColumn jumps whole weeks instead of walking days (#785)", () => {
+  /** What it replaces: one calendar day at a time. Kept here as the oracle. */
+  const naive = (origin: string, col: number): string => {
+    const dir = col >= 0 ? 1 : -1;
+    let left = Math.abs(col);
+    let d = origin.slice(0, 10);
+    while (isWeekend(d)) d = shiftDate(d, 1);
+    while (left > 0) {
+      d = shiftDate(d, dir);
+      if (!isWeekend(d)) left -= 1;
+    }
+    return d;
+  };
+
+  it("agrees with the day-by-day walk over a year, in both directions", () => {
+    // The walk was O(columns), and the hour axis calls it once per tick with a
+    // column that grows linearly — so the axis was quadratic exactly when
+    // `skip_weekends` is on, which is what the shipped Timeline ships. Jumping
+    // five working days per calendar week is O(1); this pins the arithmetic,
+    // which is the part that can be wrong.
+    // Every weekday as an origin, and every remainder-mod-5 in both directions:
+    // the jump is `floor(n/5)` weeks plus a walk of `n % 5`, so a version that
+    // only ever saw remainders 0, 1 and 4 would leave the walk itself unpinned.
+    for (let d = 0; d < 9; d++) {
+      const origin = shiftDate("2026-02-23", d); // Mon … the Tuesday after next
+      for (let col = -12; col <= 12; col++) {
+        expect(dateAtColumn(origin, col, true)).toBe(naive(origin, col));
+      }
+      for (const col of [37, 138, 261, -37, -138, -261]) {
+        expect(dateAtColumn(origin, col, true)).toBe(naive(origin, col));
+      }
+    }
+  });
+});
+
+describe("the axis survives an origin that carries a clock (#785)", () => {
+  // `ymd` builds `${date}T00:00:00Z`, so an edge that already has a T makes an
+  // Invalid Date: y/m come back NaN, `firstOfMonth` yields "NaN-NaN-01", and
+  // `columnOf` answers NaN. `monthTicks`' only exit is `day >= visibleDays`,
+  // and every comparison against NaN is false — a pure, allocation-free
+  // infinite loop. No error, no memory growth, just a frozen tab, and it
+  // happens as the chart OPENS because auto-fit puts a long project in the
+  // month zone. This became reachable the moment P2 let `minDate` keep a clock.
+  const TIMED = "2026-01-05T09:30";
+
+  it("terminates at the month zoom instead of hanging the tab", () => {
+    const axis = axisFor(TIMED, 300, PPD_ANCHORS.month);
+    expect(axis.fine.length).toBeGreaterThan(0);
+  }, 3000);
+
+  it("terminates with weekends collapsed and a week rule, the shipped shape", () => {
+    const axis = axisFor(TIMED, 300, PPD_ANCHORS.month, WW, "2026-06-01", true);
+    expect(axis.coarse.length).toBeGreaterThan(0);
+  }, 3000);
+
+  it("labels the axis with dates rather than NaN", () => {
+    // The same root cause one tier up, where it is visible instead of fatal.
+    for (const ppd of [PPD_ANCHORS.month, DETAIL_PPD_PROBE, PPD_ANCHORS.day]) {
+      const axis = axisFor(TIMED, 100, ppd);
+      for (const t of axis.fine) expect(t.label).not.toContain("NaN");
+      for (const b of axis.coarse) expect(b.label).not.toContain("NaN");
+    }
+  }, 3000);
+});
+
+describe("the axis at hour grain (#785)", () => {
+  const PPD = PPD_HOUR_GRAIN * 2; // 12px hour columns
+
+  it("labels hours on the fine row and names the day in the band above", () => {
+    const axis = axisFor("2026-01-05", 48, PPD);
+    expect(axis.unit).toBe("hour");
+    expect(axis.fine.map((t) => t.label)).toContain("09");
+    expect(axis.coarse.map((b) => b.label)).toContain("Mon 5 Jan");
+  });
+
+  it("gives each day a band exactly twenty-four columns wide", () => {
+    const axis = axisFor("2026-01-05", 48, PPD);
+    expect(axis.coarse[0]).toEqual({ day: 0, days: 24, label: "Mon 5 Jan" });
+    expect(axis.coarse[1].day).toBe(24);
+  });
+
+  it("never spaces two hour labels closer than the min label width", () => {
+    // The same rule the day axis has had since #448 — a row of labels that can
+    // collide is the bug this whole tier system exists to prevent.
+    const px = columnPx(PPD_HOUR_GRAIN, "hour");
+    const axis = axisFor("2026-01-05", 72, PPD_HOUR_GRAIN);
+    expect(axis.fine.length).toBeGreaterThan(1);
+    for (let i = 1; i < axis.fine.length; i++) {
+      expect((axis.fine[i].day - axis.fine[i - 1].day) * px).toBeGreaterThanOrEqual(
+        AXIS_MIN_LABEL_PX,
+      );
+    }
+  });
+
+  it("puts its labels on the hour even when the chart starts mid-morning", () => {
+    // The chart's left edge is a record's start, which is as likely to be 09:30
+    // as midnight. Labels running :30 past every hour would read as broken.
+    const axis = axisFor("2026-01-05T09:30", 24, PPD);
+    for (const t of axis.fine) expect(t.label).toMatch(/^\d\d$/);
+    expect(axis.fine[0].day).toBeCloseTo(0.5);
+  });
+
+  it("skips the weekend on the hour axis too", () => {
+    // 48 hour columns from Friday is Friday and Monday — Saturday and Sunday
+    // are worth no columns at either grain.
+    const axis = axisFor("2026-01-09", 48, PPD, undefined, "", true);
+    expect(axis.coarse.map((b) => b.label)).toEqual(["Fri 9 Jan", "Mon 12 Jan"]);
+  });
+});
+
+describe("a bar is as wide as the work in it (#785)", () => {
+  const WORK = { grain: "hour", skipWeekends: false, work: { from: 7, to: 21 } } as const;
+
+  it("gives a weekend-only task no columns instead of a full working day", () => {
+    // Sat → Sun with weekends collapsed is zero working time, and the `+1`
+    // floor drew it exactly as wide as a Monday task. That is not a rounding
+    // choice — it is the chart stating something untrue about the schedule.
+    expect(barColumns({ start: "2026-01-10", end: "2026-01-11" }, true)).toBe(0);
+    // A real working day is still one column, which is the control.
+    expect(barColumns({ start: "2026-01-12", end: "2026-01-12" }, true)).toBe(1);
+  });
+
+  it("counts a Saturday-to-Monday task as the one working day it contains", () => {
+    expect(barColumns({ start: "2026-01-10", end: "2026-01-12" }, true)).toBe(1);
+  });
+
+  it("gives a task that falls entirely after hours no columns either", () => {
+    expect(barColumns({ start: "2026-01-05T22:00", end: "2026-01-05T23:00" }, WORK)).toBe(0);
+  });
+
+  it("still occupies a whole day column when it only uses part of the day", () => {
+    // At day grain the column IS the unit — an eight-hour task happens on that
+    // day, so it is drawn on it. Only the finer grain can say how much of it.
+    expect(barColumns({ start: "2026-01-05T09:00", end: "2026-01-05T17:00" }, false)).toBe(1);
+  });
+});
+
+describe("resolveSpan — every record gets a bar (#785)", () => {
+  const TODAY = "2026-01-05";
+
+  it("passes a fully stated span through untouched, and says so", () => {
+    expect(resolveSpan("2026-03-01/2026-03-10", TODAY)).toEqual({
+      span: { start: "2026-03-01", end: "2026-03-10" },
+      source: "given",
+    });
+  });
+
+  it("proposes a week from today when nothing is stated", () => {
+    // Leaving the record off the chart does not say "no dates yet" — it says
+    // nothing at all, which reads as no such work. A proposal can at least be
+    // seen, argued with, and dragged into place.
+    expect(resolveSpan(undefined, TODAY)).toEqual({
+      span: { start: "2026-01-05", end: "2026-01-11" },
+      source: "derived",
+    });
+    expect(resolveSpan("", TODAY).source).toBe("derived");
+  });
+
+  it("computes the missing end from the stated start, a week out", () => {
+    expect(resolveSpan("2026-03-01/", TODAY)).toEqual({
+      span: { start: "2026-03-01", end: "2026-03-07" },
+      source: "derived",
+    });
+  });
+
+  it("computes the missing start backwards from the stated end", () => {
+    expect(resolveSpan("/2026-03-10", TODAY)).toEqual({
+      span: { start: "2026-03-04", end: "2026-03-10" },
+      source: "derived",
+    });
+  });
+
+  it("keeps the clock on the end it was given", () => {
+    expect(resolveSpan("2026-03-01T09:30/", TODAY).span).toEqual({
+      start: "2026-03-01T09:30",
+      end: "2026-03-07T09:30",
+    });
+  });
+
+  it("proposes rather than vanishes when the range is back to front", () => {
+    // A reversed range used to make the record disappear, which is the same
+    // silence as having no dates at all — and the same answer serves both.
+    expect(resolveSpan("2026-03-10/2026-03-01", TODAY)).toEqual({
+      span: { start: "2026-01-05", end: "2026-01-11" },
+      source: "derived",
+    });
+  });
+
+  it("proposes a whole week — seven days, because a plain end date is inclusive", () => {
+    const { span } = resolveSpan(undefined, TODAY);
+    expect(barColumns(span, false)).toBe(7);
+  });
+});
+
+describe("unionSpan (#785)", () => {
+  it("reaches from the earliest start to the latest end", () => {
+    expect(
+      unionSpan([
+        { start: "2026-03-05", end: "2026-03-10" },
+        { start: "2026-03-01", end: "2026-03-04" },
+        { start: "2026-03-02", end: "2026-03-20" },
+      ]),
+    ).toEqual({ start: "2026-03-01", end: "2026-03-20" });
+  });
+
+  it("compares what the edges MEAN, not how they are written", () => {
+    // A plain end date runs to the next midnight, so it reaches FURTHER than a
+    // 17:00 on the same day — though as text it sorts earlier, being shorter.
+    expect(
+      unionSpan([
+        { start: "2026-03-01T09:00", end: "2026-03-01T17:00" },
+        { start: "2026-03-01", end: "2026-03-01" },
+      ]),
+    ).toEqual({ start: "2026-03-01", end: "2026-03-01" });
+  });
+
+  it("keeps the edges as they were written, rather than rewriting them", () => {
+    // The union is a DRAWING. Nothing about it should look like a decision
+    // someone made about a record's dates.
+    expect(
+      unionSpan([
+        { start: "2026-03-01T09:00", end: "2026-03-02T17:00" },
+        { start: "2026-03-05", end: "2026-03-06" },
+      ]),
+    ).toEqual({ start: "2026-03-01T09:00", end: "2026-03-06" });
+  });
+
+  it("is nothing over nothing", () => {
+    expect(unionSpan([])).toBeNull();
+  });
+});
+
+describe("instantOf (#785)", () => {
+  it("reads a plain date as the WHOLE day, bounded by the next midnight", () => {
+    // The bound is EXCLUSIVE: the last minute you can be inside a plain date is
+    // 23:59, and the interval it names runs up to — not through — 00:00 the
+    // next day. Stated as the bound rather than as that last minute because
+    // every width in the chart is then just `end - start`; pinning it to 23:59
+    // makes each one need a "+ one more minute", which is the same fudge as the
+    // day grain's `+1` that P6 exists to delete.
+    expect(instantOf("2026-01-05", "start")).toBe(Date.parse("2026-01-05T00:00:00Z"));
+    expect(instantOf("2026-01-05", "end")).toBe(Date.parse("2026-01-06T00:00:00Z"));
+  });
+
+  it("reads a clock as exactly that minute — the moment work stops", () => {
+    // "09:30–17:00" is seven and a half hours to everyone who writes it, so a
+    // timed end is the bound itself, not the last minute worked.
+    expect(instantOf("2026-01-05T09:30", "start")).toBe(Date.parse("2026-01-05T09:30:00Z"));
+    expect(instantOf("2026-01-05T17:00", "end")).toBe(Date.parse("2026-01-05T17:00:00Z"));
+  });
+
+  it("makes a one-day span last exactly a day, which is what the +1 was patching", () => {
+    const oneDay = instantOf("2026-01-05", "end") - instantOf("2026-01-05", "start");
+    expect(oneDay).toBe(24 * 60 * 60_000);
+    const morning =
+      instantOf("2026-01-05T17:00", "end") - instantOf("2026-01-05T09:30", "start");
+    expect(morning).toBe(7.5 * 60 * 60_000);
   });
 });
 

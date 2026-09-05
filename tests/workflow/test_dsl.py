@@ -2689,3 +2689,60 @@ async def test_run_create_entity_capability() -> None:
     assert validate_def(d) == []
     assert await build_run(d)(wf, None) == {"status": "done"}
     assert "title: Ship it" in (await store.read("ws", "/tasks/1.md")).decode()
+
+
+async def test_a_run_node_whose_environment_fails_cannot_pass_its_produces_gate():
+    """#775: an unpreparable python environment must not be swallowed by the gate.
+
+    `sandbox_node` applies the safe `exit_zero()` default ONLY when the author
+    declared no gate — `check=check or exit_zero()`. Two of the three ways the
+    user-side DSL declares one for a `run:` node never look at `exit_code`:
+    `produces:` passes if the glob matches ANYTHING (including files an earlier
+    run left), and `check:`'s whole vocabulary is `file_nonempty` /
+    `choice_in` / `collection_has` — a closed set, so an author has no way to
+    write a gate that reads the exit code at all.
+
+    So returning `(1, reason)` when the environment could not be built reported
+    the run as DONE, journalled the node as passed (skipping it on re-run), and
+    inside a `wf.map` let all eight elements "succeed" without one of them
+    running. That is the confident wrong answer `ProjectEnvError` exists to
+    refuse — and the test written for the previous attempt could not see it,
+    because it asserted on `run_sandbox`'s return tuple and never entered
+    `run_step` or the DSL at all.
+
+    `StepFailed` is the engine's own word for "this step aborted": it reaches
+    the gate not at all, `wf.map` catches it per element rather than leaving the
+    siblings detached, and at top level it ends the run.
+    """
+    store = MemoryFileStore()
+    await store.write("ws", "/out/stale.json", b'{"from": "an earlier run"}')
+
+    async def run_sandbox(cmd: str, on_output: Any) -> tuple[int, str]:
+        raise StepFailed("`uv sync` failed (exit 2): error: no `uv.lock` found")
+
+    wf = make_wf(store, run_sandbox=run_sandbox)
+    d = parse_def(
+        json.dumps(
+            {
+                "id": "wf",
+                "phases": [{"id": "p"}],
+                "steps": [
+                    {
+                        "type": "sandbox",
+                        "run": "python gen.py",
+                        "phase": "p",
+                        "name": "generate",
+                        "produces": "out/*.json",
+                    }
+                ],
+            }
+        )
+    )
+    assert validate_def(d) == []
+
+    with pytest.raises(StepFailed, match="no `uv.lock` found"):
+        await build_run(d)(wf, None)
+
+    assert not await wf.exists("/.workflow/_default/generate.json"), (
+        "and nothing is journalled, or one transient failure records the node as done forever"
+    )

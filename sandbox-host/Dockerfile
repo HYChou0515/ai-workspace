@@ -17,6 +17,13 @@
 # it is discarded — only the resulting self-contained tool bundles are copied
 # into the runtime image below.
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS tools
+# uv PINNED (#775). This version decides how a user's `uv.lock` is read, so it
+# must not change under a base-image rebuild with no code change to show for
+# it. The base's own uv floats — it ships 0.9.30 today while CI runs 0.12.9 —
+# and no compound `<version>-python3.12-...` tag exists, so the binary is
+# overwritten instead of the tag being pinned. `.github/workflows/ci.yml`
+# names the same version, or CI stops testing what production runs.
+COPY --from=ghcr.io/astral-sh/uv:0.12.9 /uv /uvx /usr/local/bin/
 WORKDIR /build
 ENV UV_LINK_MODE=copy \
     WORKSPACE_TOOLS_DIR=/build/.workspace-tools
@@ -35,6 +42,13 @@ RUN uv sync --frozen --no-dev --no-editable \
 
 # ---- stage 2: the lean host runtime ----
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS host
+# uv PINNED (#775). This version decides how a user's `uv.lock` is read, so it
+# must not change under a base-image rebuild with no code change to show for
+# it. The base's own uv floats — it ships 0.9.30 today while CI runs 0.12.9 —
+# and no compound `<version>-python3.12-...` tag exists, so the binary is
+# overwritten instead of the tag being pinned. `.github/workflows/ci.yml`
+# names the same version, or CI stops testing what production runs.
+COPY --from=ghcr.io/astral-sh/uv:0.12.9 /uv /uvx /usr/local/bin/
 # Isolation tooling — util-linux: setpriv + unshare (privilege drop /
 # namespaces); acl: setfacl (default ACL so root-written files stay writable by
 # the uid).

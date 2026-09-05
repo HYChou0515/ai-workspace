@@ -24,6 +24,7 @@ import os
 import time
 from collections.abc import AsyncIterator, Callable, Mapping
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -129,6 +130,23 @@ class _FileEntryModel(BaseModel):
     version: str = ""
 
 
+class _ReadManyRequest(BaseModel):
+    paths: list[str]
+
+
+class _ReadManyReply(BaseModel):
+    """Many files in one answer, in the order asked.
+
+    `data` is base64 because a workspace file is arbitrary bytes and this reply
+    is JSON. `None` means THAT PATH is absent — an answer about the path, not a
+    failed batch, so a caller can raise for one it demanded and skip one a
+    listing merely named. A client that does not know this endpoint reads files
+    one at a time exactly as before; nothing above the sandbox can tell which
+    happened."""
+
+    files: list[str | None]
+
+
 class _DiskUsageReply(BaseModel):
     bytes: int
 
@@ -168,6 +186,11 @@ class _ExecBody(BaseModel):
     # The item's user-set variables for THIS command. Absent on an older client;
     # the backend treats absent and empty the same way.
     env: dict[str, str] | None = None
+    # This command's own TOTAL wall-clock budget, when the caller has one
+    # (`uv sync` does — a cold start must be waited for, not killed at the
+    # instance default). Absent on an older client, which then gets the
+    # instance default exactly as before.
+    exec_timeout: float | None = None
 
 
 def _frame(obj: dict[str, object]) -> bytes:
@@ -179,6 +202,7 @@ async def _exec_ndjson(
     handle: SandboxHandle,
     cmd: list[str],
     env: Mapping[str, str] | None = None,
+    exec_timeout: float | None = None,
 ) -> AsyncIterator[bytes]:
     """Run `exec` and yield NDJSON frames as output arrives.
 
@@ -197,7 +221,9 @@ async def _exec_ndjson(
 
     async def run() -> None:
         try:
-            result = await sandbox.exec(handle, cmd, on_output=on_output, env=env)
+            result = await sandbox.exec(
+                handle, cmd, on_output=on_output, env=env, exec_timeout=exec_timeout
+            )
             queue.put_nowait(("done", result))
         except Exception as exc:  # noqa: BLE001 — relayed in-band as an error frame
             queue.put_nowait(("error", exc))
@@ -283,7 +309,7 @@ class _HostController:
             self._last_active[rid] = self.clock()
 
     async def create(self, spec: SandboxSpec, item_id: str | None = None) -> SandboxHandle:
-        handle = await self.sandbox.create(spec)
+        handle = await self.sandbox.create(spec, item_id=item_id)
         self._last_active[handle.id] = self.clock()
         # Recorded whether or not an archive is wired. It began as `persist`'s
         # private lookup, so it was only filled on the archive path — but it is
@@ -360,6 +386,24 @@ class _HostController:
         if cache is None or in_use is None:
             return []
         return await asyncio.to_thread(cache.sweep, in_use=in_use(), max_bytes=max_bytes)
+
+    async def sweep_uv_cache(self, *, max_bytes: int | None = None) -> list[str]:
+        """#775: reclaim the download caches of items nothing is running here.
+
+        Rides the idle reaper for the same reason `sweep_tool_cache` does — a
+        sandbox ending is when a cache stops being written to. The in-use set
+        comes from the live sandboxes themselves, so a cache a sync is filling
+        right now can never be evicted, however full the disk.
+
+        The key is the ITEM, never the uid: uids here are pooled and freed on
+        kill, so a uid-keyed cache would be handed to the next tenant of that
+        uid — and "no live sandbox for it" is precisely the moment that happens,
+        which is the moment a sweeper would also call it collectable."""
+        sweep = getattr(self.sandbox, "sweep_uv_cache", None)
+        in_use = getattr(self.sandbox, "cache_keys_in_use", None)
+        if sweep is None or in_use is None:
+            return []
+        return await asyncio.to_thread(sweep, in_use=in_use(), max_bytes=max_bytes)
 
     async def reap_idle(self) -> list[str]:
         """Kill sandboxes with no activity for `idle_ttl` — the backstop for an
@@ -465,7 +509,10 @@ def make_host_app(
         Blocking work (an HTTP GET, a sha, a 150MB unpack) goes to a thread —
         this is the host's event loop, and other sandboxes are using it.
         """
-        resolved: dict[str, object] = {}
+        # `dict[str, Any]`, not `object`: the values are payload dicts this
+        # function indexes back into two lines later. `object` made that
+        # assignment untypeable — invisible while the checker was excluded.
+        resolved: dict[str, dict[str, Any]] = {}
         refused: dict[str, str] = {}
         for name, url in body.tools.items():
             if tool_resolver is None:
@@ -577,6 +624,25 @@ def make_host_app(
         data = await sandbox.download(SandboxHandle(id=rid), path)
         return Response(content=data, media_type="application/octet-stream")
 
+    @app.post("/sandboxes/{rid}/files")
+    async def download_many(rid: str, body: _ReadManyRequest) -> _ReadManyReply:
+        """Read a batch of paths in one round trip.
+
+        The app reads a whole record type / listing at a time, and doing that a
+        file at a time made the round trips the cost — a 68-record listing spent
+        ~70 of them where one would do. POST because the path list is a body,
+        not a query string a proxy will truncate."""
+        import base64
+
+        handle = SandboxHandle(id=rid)
+        out: list[str | None] = []
+        for path in body.paths:
+            try:
+                out.append(base64.b64encode(await sandbox.download(handle, path)).decode())
+            except FileNotFoundError:
+                out.append(None)
+        return _ReadManyReply(files=out)
+
     @app.get("/sandboxes/{rid}/exists")
     async def exists(rid: str, path: str) -> _ExistsReply:
         ok = await sandbox.exists(SandboxHandle(id=rid), path)
@@ -632,7 +698,7 @@ def make_host_app(
     @app.post("/sandboxes/{rid}/exec")
     async def exec_(rid: str, body: _ExecBody) -> StreamingResponse:
         return StreamingResponse(
-            _exec_ndjson(sandbox, SandboxHandle(id=rid), body.cmd, body.env),
+            _exec_ndjson(sandbox, SandboxHandle(id=rid), body.cmd, body.env, body.exec_timeout),
             media_type="application/x-ndjson",
         )
 

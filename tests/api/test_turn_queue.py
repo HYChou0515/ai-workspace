@@ -11,6 +11,7 @@ import asyncio
 from workspace_app.agent import AgentToolContext
 from workspace_app.api import MessageDelta, RunDone
 from workspace_app.api.turns import ChatTurnEngine
+from workspace_app.sandbox.protocol import ExecResult, SandboxHandle
 
 
 async def test_enqueue_runs_queued_turns_in_fifo_order_without_cancelling():
@@ -349,3 +350,55 @@ async def test_cancel_current_when_idle_is_a_noop():
     await asyncio.wait_for(finished.wait(), 3)
     await engine.cancel_current("inv")  # session exists, current_turn is None → no-op
     await engine.forget("inv")
+
+
+async def test_the_turn_start_warm_does_not_prepare_the_python_env():
+    """Through `turns.py`, not through the flag.
+
+    The fix for #775 was `ensure_sandbox(prepare_env=False)` at the pre-warm —
+    and the test written for it PASSED THE FLAG ITSELF, so reverting `turns.py`
+    to the broken call left the whole suite green. That is the same
+    assert-where-the-test-reaches defect the fix was for, sitting on the fix.
+
+    What must hold: the pre-warm wakes the sandbox and runs NO `uv sync`. Doing
+    it there sends uv's progress to a sink `_run_once` has not attached yet, and
+    a successful preparation is remembered — which also means `uv lock --check`,
+    guarded on having somewhere to say it, never runs at all that turn. Both
+    were named deliverables; both died on that one line.
+    """
+
+    class _Sandbox:
+        def __init__(self) -> None:
+            self.calls: list[list[str]] = []
+
+        async def exists(self, handle, path):  # a workspace that DECLARES deps
+            return path == "pyproject.toml"
+
+        async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None):
+            self.calls.append(cmd)
+            return ExecResult(exit_code=0, stdout=b"")
+
+    class _Runner:
+        async def run(self, content, ctx):
+            yield MessageDelta(text="hi")
+            yield RunDone()
+
+    sandbox = _Sandbox()
+    warmed: list[object] = []
+
+    async def fake_warm(_on_progress, _tools=None):
+        handle = SandboxHandle(id="item-1")
+        warmed.append(handle)
+        return handle
+
+    engine = ChatTurnEngine(_Runner())  # ty: ignore[invalid-argument-type]
+    done = asyncio.Event()
+    ctx = AgentToolContext(sandbox=sandbox, ensure_sandbox_via=fake_warm)  # ty: ignore[invalid-argument-type]
+    engine.enqueue("inv", "q", ctx, on_complete=lambda m: done.set())
+    await asyncio.wait_for(done.wait(), 3)
+    await engine.forget("inv")
+
+    assert warmed, "the pre-warm still wakes the sandbox — that is what it is for"
+    assert sandbox.calls == [], (
+        f"but it must not prepare the environment where nothing can report it: {sandbox.calls}"
+    )

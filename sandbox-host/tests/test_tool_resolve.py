@@ -512,7 +512,9 @@ def test_the_credential_does_not_follow_a_redirect_to_another_host(monkeypatch) 
             self.end_headers()
             self.wfile.write(b"{}")
 
-        def log_message(self, *a):
+        # `BaseHTTPRequestHandler.log_message(format, *args)` — silenced on
+        # purpose so the test output is not a server log.
+        def log_message(self, *a):  # ty: ignore[invalid-method-override]
             pass
 
     class _First(http.server.BaseHTTPRequestHandler):
@@ -522,7 +524,9 @@ def test_the_credential_does_not_follow_a_redirect_to_another_host(monkeypatch) 
             self.send_header("Location", f"http://127.0.0.1:{second.server_port}/x")
             self.end_headers()
 
-        def log_message(self, *a):
+        # `BaseHTTPRequestHandler.log_message(format, *args)` — silenced on
+        # purpose so the test output is not a server log.
+        def log_message(self, *a):  # ty: ignore[invalid-method-override]
             pass
 
     second = http.server.HTTPServer(("127.0.0.1", 0), _Second)

@@ -1448,3 +1448,38 @@ def test_a_picked_presets_failover_chain_is_found_for_the_child():
         cooldown_registry=CooldownRegistry(clock=time.monotonic),
     )
     assert not isinstance(plain_agent.model, FallbackModel)
+
+
+async def test_the_non_streaming_turn_says_it_has_nowhere_to_report():
+    """`on_exec_output` is how the rest of the app asks "will anyone SEE this?".
+
+    This path cannot stream, so it set a sink that throws every byte away — a
+    truthful description of what happens to exec output, but the wrong answer
+    to that question, because a discarding sink is not None. `#775` reads it:
+    the `uv lock --check` staleness advisory is guarded on having somewhere to
+    say it, and with a swallowing lambda it ran an extra command in the sandbox
+    every turn and wrote the result into a black hole.
+
+    Nothing else changes — every consumer already guards on `is not None`,
+    which is exactly how a KB turn (no sandbox, no sink) has always worked.
+    """
+    from workspace_app.resources import AgentConfig
+    from workspace_app.sandbox.mock import MockSandbox
+
+    ctx = AgentToolContext(
+        investigation_id="ws-1",
+        agent_config=AgentConfig(name="workspace-agent"),
+        sandbox=MockSandbox(),
+    )
+    ctx.on_exec_output = lambda _b: None  # whatever the previous turn left
+
+    # Annotated `AsyncIterator`, which is what callers need; it is an async
+    # GENERATOR, which is what lets the test stop it before it calls the model.
+    gen = cast(Any, LitellmAgentRunner()._run_once_nonstream("hi", ctx, None))
+    first = await anext(gen)  # the "up" metrics, yielded before the model is called
+    await gen.aclose()
+
+    assert type(first).__name__ == "AgentMetrics"
+    assert ctx.on_exec_output is None, (
+        "a sink that discards claims a listener this turn does not have"
+    )

@@ -209,9 +209,12 @@ class EntityStore:
         entity_type = self._catalog.get(type_name)
         paths = await self._fs.ls(self._ws, prefix=f"/{entity_type.records_path}/")
         numbered = sorted((n, p) for p in paths if (n := _record_number(p)) is not None)
+        from ..files.facade import read_all
+
+        blobs = await read_all(self._fs, self._ws, [p for _, p in numbered])
         return [
-            parse_entity(await self._fs.read(self._ws, path), number, type_name, entity_type.schema)
-            for number, path in numbered
+            parse_entity(blob, number, type_name, entity_type.schema)
+            for (number, _), blob in zip(numbered, blobs, strict=True)
         ]
 
     async def _corpus(self, prefetched: dict[str, list[ParsedEntity]] | None = None) -> Corpus:

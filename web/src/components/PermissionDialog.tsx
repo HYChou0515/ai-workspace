@@ -187,7 +187,7 @@ export function PermissionDialog({
             {grants.length > 0 && (
               // Capped + scrollable: the list grows inside its own box, so the
               // picker, the group section and the buttons stay put.
-              <ul data-testid="grant-list" style={grantList}>
+              <ul className="scrollable" data-testid="grant-list" style={grantList}>
                 {grants.map((g) => (
                   <li key={g.userId} style={{ display: "grid", gap: 2 }}>
                     <div style={grantRow}>
@@ -244,7 +244,7 @@ export function PermissionDialog({
                   />
                 </div>
                 {groupGrants.length > 0 && (
-                  <ul data-testid="group-grant-list" style={grantList}>
+                  <ul className="scrollable" data-testid="group-grant-list" style={grantList}>
                     {groupGrants.map((g) => (
                       <li key={g.groupId} style={{ display: "grid", gap: 2 }}>
                         <div style={grantRow}>

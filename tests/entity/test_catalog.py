@@ -161,3 +161,64 @@ async def test_loads_status_colors_map() -> None:
     title = schema.field("title")
     assert title is not None and title.colors is None
     assert diagnostics == []
+
+
+async def _ship_types(files, count: int) -> None:
+    for i in range(count):
+        await files.write("ws1", f"/.entity/t{i}/schema.yaml", _SCHEMA)
+        await files.write("ws1", f"/.entity/t{i}/skeleton.md", _SKELETON)
+
+
+async def test_discovery_cost_does_not_scale_with_how_many_types() -> None:
+    """Discovery is ONE operation, so settling where the workspace lives is paid
+    once — not twice per type for the two `exists` questions and twice more for
+    the two reads.
+
+    Whether a type's `schema.yaml` / `skeleton.md` are there falls straight out
+    of the listing discovery already has, exactly as `workspace_skill_metas`
+    derives which folders are copies; asking the store again is a round trip
+    spent re-learning what we were just told."""
+    from tests.warm_workspace import warm_files
+
+    few, sb_few = await warm_files()
+    await _ship_types(few, 2)
+    sb_few.liveness_probes = 0
+    await discover_catalog(few, "ws1")
+    probes_few = sb_few.liveness_probes
+
+    many, sb_many = await warm_files()
+    await _ship_types(many, 8)
+    sb_many.liveness_probes = 0
+    await discover_catalog(many, "ws1")
+    probes_many = sb_many.liveness_probes
+
+    assert probes_many == probes_few, (
+        f"{probes_few} probes for 2 types but {probes_many} for 8 — discovery's "
+        "cost is scaling with how many types the item declares"
+    )
+
+
+async def test_a_type_that_vanishes_after_the_listing_does_not_empty_the_catalog() -> None:
+    """Discovery used to ask `exists` for each type's schema immediately before
+    reading it, so a type deleted mid-scan was skipped and the rest of the
+    catalog still loaded. Reading the whole set in one batch widened that window
+    — one listing at the top, the reads at the bottom — so the tolerance has to
+    be stated here rather than inherited from a check that no longer happens.
+
+    An empty catalog is not a small matter: with no types, the item's entity
+    views have nothing to render, over intact data."""
+    from workspace_app.files.facade import WorkspaceFiles
+    from workspace_app.filestore.memory import MemoryFileStore
+
+    class _GhostListing(WorkspaceFiles):
+        async def ls(self, workspace_id: str, prefix: str = "") -> list[str]:
+            got = await super().ls(workspace_id, prefix)
+            return [*got, "/.entity/ghost/schema.yaml"]  # listed, never written
+
+    files = _GhostListing(MemoryFileStore())
+    await files.write("ws1", "/.entity/issue/schema.yaml", _SCHEMA)
+    await files.write("ws1", "/.entity/issue/skeleton.md", _SKELETON)
+
+    catalog, _diags = await discover_catalog(files, "ws1")
+
+    assert catalog.names() == ["issue"]

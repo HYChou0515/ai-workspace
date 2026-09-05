@@ -252,6 +252,10 @@ def main() -> None:
             max_file_size=settings.filestore.max_file_size,
             # #245: per-workspace total-size quota (protects the shared disk root).
             workspace_quota=settings.filestore.workspace_quota,
+            # #775: ceiling for the per-item uv download caches. They outlive the
+            # sandboxes on purpose (a cold start re-uses what that item already
+            # fetched), so on this backend nothing else reclaims them.
+            uv_cache_max_bytes=settings.sandbox.uv_cache_max_bytes,
             app_resources=app_resources,
             per_user_resources=settings.resources.per_user,
             # #345: scratch-vol soft cap — the idle reaper recycles any item whose

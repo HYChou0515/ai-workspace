@@ -1765,8 +1765,14 @@ class LitellmAgentRunner:
         t0 = time.monotonic()
         prompt_tok = _live_prompt_tokens(ctx, prompt)
         # No stream → exec stdout can't interleave live; it still lands in the
-        # tool's result. Swallow mid-turn pushes so a long exec doesn't error.
-        ctx.on_exec_output = lambda b: None
+        # tool's result. `None`, not a lambda that throws the bytes away: this
+        # attribute is how the rest of the app asks "will anyone SEE this?", and
+        # every consumer already guards on `is not None` — which is how a KB
+        # turn, with no sandbox and no sink, has always worked. A discarding
+        # sink answered yes, so #775's `uv lock --check` advisory (guarded on
+        # having somewhere to say it) ran an extra sandbox command every turn
+        # and wrote its answer into a black hole.
+        ctx.on_exec_output = None
         yield AgentMetrics(phase="up", prompt_tokens=prompt_tok, elapsed_ms=0)
         run_config = RunConfig(
             workflow_name=_trace_workflow_name(ctx), group_id=ctx.investigation_id

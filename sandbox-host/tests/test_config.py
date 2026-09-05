@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 from sandbox_host.config import SandboxHostSettings, load_settings
 
 
@@ -15,7 +17,16 @@ def test_defaults_when_env_empty():
     assert s.cgroup_root is None
 
 
-def test_reads_all_sandbox_host_env_vars():
+def test_reads_the_env_vars_this_list_names():
+    """A hand-written list, and named as one.
+
+    It used to be called `..._reads_all_...`, which was a claim: it lists
+    thirteen of fifteen fields, and both cache ceilings were added after it and
+    never joined. The test below is the one that covers ALL of them, derived
+    from the dataclass so it cannot fall behind — this one stays because an
+    explicit expected value catches a field read with the wrong CONVERTER,
+    which a uniform sample cannot.
+    """
     env = {
         "SANDBOX_HOST_BIND": "127.0.0.1:9000",
         "SANDBOX_HOST_UID_MIN": "200000",
@@ -47,6 +58,31 @@ def test_reads_all_sandbox_host_env_vars():
         idle_ttl=900.0,
         nfs_root="/mnt/nfs/workspaces",
     )
+
+
+def test_every_setting_is_reachable_from_its_env_var():
+    """A knob nobody can set is not a knob.
+
+    The test above says "all" and lists thirteen of fifteen: both cache
+    ceilings were added later and never joined the list, so a misspelt key in
+    `load_settings` would have read as a silent default on every pod, with the
+    suite green and the test's own name asserting otherwise. Deriving the keys
+    from the dataclass covers the next field the day it is added, or says so.
+    """
+    sample = {"str": "sample", "int": "424242", "float": "42.5"}
+    cast = {"str": str, "int": int, "float": float}
+
+    env: dict[str, str] = {}
+    want: dict[str, object] = {}
+    for field in dataclasses.fields(SandboxHostSettings):
+        kind = str(field.type).replace(" | None", "")
+        raw = sample[kind]
+        env[f"SANDBOX_HOST_{field.name.upper()}"] = raw
+        want[field.name] = cast[kind](raw)
+
+    got = load_settings(env)
+    missed = [name for name, value in want.items() if getattr(got, name) != value]
+    assert not missed, f"set by no SANDBOX_HOST_* key: {missed}"
 
 
 def test_ignores_unrelated_env_keys():

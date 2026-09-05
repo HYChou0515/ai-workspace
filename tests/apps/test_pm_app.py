@@ -98,30 +98,38 @@ def test_date_and_daterange_fields_serialize_as_strings_for_the_frontend():
     assert created["fields"]["span"] == "2026-01-01/2026-02-01"
 
 
-def test_a_new_issue_is_schedulable_out_of_the_box():
-    """The scheduler needs three things from an issue that the schema had no way
-    to say: how long the work takes, whether those days are working days, and
-    whether the system is allowed to move it. A new issue is `auto` from birth —
-    otherwise every issue has to be opted in by hand before the Timeline can lay
-    anything out at all."""
+def test_a_new_record_carries_no_scheduling_fields():
+    """The Timeline used to compute dates: you gave an issue a duration and a
+    flag, pressed Recalculate, and it laid the work out. That is gone — dates
+    are the `span` you set, and re-arranging them is something the agent can do
+    with `query_entity` + `update_entity`, which needs no schema of its own.
+
+    Left in, the three fields are dead weight on every issue: a column nobody
+    fills, and a `schedule: auto` that no longer authorises anything. Worse,
+    `exp_days` being optional made EVERY unsized issue read as provisional, so
+    the dashed cue was worn by the whole chart and distinguished nothing (#786,
+    #785 P10)."""
     c = _client()
     item = c.post("/api/a/pm/items", json={"title": "P"}).json()["resource_id"]
-    made = c.post(
-        f"/api/a/pm/items/{item}/entities/issue",
-        json={"args": {"title": "Cut the release", "exp_days": 3, "exp_days_unit": "working"}},
+
+    issue = c.post(
+        f"/api/a/pm/items/{item}/entities/issue", json={"args": {"title": "Cut the release"}}
     ).json()
-    assert made["fields"]["exp_days"] == 3
-    assert made["fields"]["exp_days_unit"] == "working"
-    assert made["fields"]["schedule"] == "auto"
-
-
-def test_a_new_milestone_is_auto_too_so_its_span_follows_its_issues():
-    c = _client()
-    item = c.post("/api/a/pm/items", json={"title": "P"}).json()["resource_id"]
-    made = c.post(
+    milestone = c.post(
         f"/api/a/pm/items/{item}/entities/milestone", json={"args": {"title": "M1"}}
     ).json()
-    assert made["fields"]["schedule"] == "auto"
+
+    for record, name in ((issue, "issue"), (milestone, "milestone")):
+        for gone in ("exp_days", "exp_days_unit", "schedule"):
+            assert gone not in record["fields"], f"a new {name} still carries {gone}"
+
+
+def test_the_timeline_no_longer_offers_to_recalculate():
+    """The button appears iff the view names a `schedule:` block, so the block
+    going is what removes it. Asserted on the shipped view rather than on the
+    renderer: the renderer keeps the capability for any app that wants it."""
+    for name, spec in _gantt_views().items():
+        assert "schedule" not in spec, f"{name} still declares a schedule block"
 
 
 def test_a_milestone_may_state_only_when_it_starts():
@@ -200,7 +208,7 @@ def test_every_gantt_view_reads_the_same_calendar():
     on one tab and another width on the next is the complaint. So this holds
     across every gantt view, including the roadmap over milestones."""
     axis = {
-        name: {k: spec.get(k) for k in ("week", "skip_weekends")}
+        name: {k: spec.get(k) for k in ("week", "skip_weekends", "work_hours")}
         for name, spec in _gantt_views().items()
     }
     first = next(iter(axis.values()))
@@ -243,4 +251,31 @@ def test_the_check_covers_whatever_gantt_views_exist():
     on_disk = {p.stem for p in (_profiles_root("pm") / "default" / "views").glob("*.ai.yaml")}
 
     assert set(_gantt_views()) <= on_disk
-    assert "gantt.ai" in _gantt_views() and "workload.ai" in _gantt_views()
+    # The positive control: a filter bug that returned {} would satisfy every
+    # rule above vacuously. Two views over two DIFFERENT entities, so the
+    # per-entity rule has something to compare on at least one side.
+    assert "gantt.ai" in _gantt_views() and "roadmap.ai" in _gantt_views()
+
+
+def test_a_project_opens_on_its_timeline():
+    """The first tab is the one the App is read from, and a project is asked
+    "when does this land" far more often than "what exists". The board and the
+    table answer questions you go looking for; the timeline answers the one you
+    arrive with, so it is what the project opens on (#785)."""
+    m = load_app_manifest("pm")
+    assert m.layout.views[0] == "/views/gantt.ai.yaml"
+
+
+def test_grouping_by_assignee_is_a_setting_not_a_second_tab():
+    """Workload was Timeline with `group_by: assignee` and nothing else —
+    every other key, comment included, was a copy. The gear panel already
+    edits `group_by` in place, so it shipped a whole second file to keep in
+    step for a switch the user can flip inside the view they are in, and the
+    two drifted apart once already (#785)."""
+    from workspace_app.apps.profiles import _profiles_root
+
+    on_disk = {p.stem for p in (_profiles_root("pm") / "default" / "views").glob("*.ai.yaml")}
+    assert "workload.ai" not in on_disk
+
+    m = load_app_manifest("pm")
+    assert not any("workload" in v for v in m.layout.views)

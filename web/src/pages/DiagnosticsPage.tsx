@@ -108,7 +108,7 @@ export function DiagnosticsPage({ client = healthApi }: { client?: HealthApi }) 
   const checks = data?.checks ?? [];
 
   return (
-    <div
+    <div className="scrollable"
       data-testid="page-diagnostics"
       style={{ minHeight: "100%", background: "var(--paper)", overflow: "auto" }}
     >

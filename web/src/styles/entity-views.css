@@ -1375,6 +1375,28 @@ button.ev-finding:hover {
   border: 1px dashed var(--info);
   color: var(--text-paper);
 }
+
+/* Dates the CHART proposed, because the record states none or only one end
+   (#785). It is already dashed — that cue says "a guess" and it is shared with
+   a bar whose LENGTH the scheduler invented. Sharing it was not enough: the
+   shipped Timeline declares a `schedule:` block and `exp_days` is optional, so
+   most ordinary issues are dashed already, and a record with no dates at all
+   was indistinguishable from one that simply has no estimate. Translucency is
+   the second half of the pair, and it is the one that means the DATES are not
+   real yet — which is what "visibly not specified" was asking for. */
+.ev-gantt__bar[data-derived] {
+  opacity: 0.55;
+}
+
+/* A record whose work falls entirely in time the chart does not draw — a
+   Saturday-to-Sunday issue on a working-day chart, a job booked for the middle
+   of the night on one with working hours. It measures zero columns, and the
+   view floors its WIDTH so it stays on screen (#785). Square, because a rounded
+   two-pixel pill reads as a very small bar; this is a line pressed into the
+   seam the folded time collapsed to, which is what it is. */
+.ev-gantt__bar[data-empty] {
+  border-radius: 0;
+}
 .ev-gantt__schedule {
   display: flex;
   align-items: center;

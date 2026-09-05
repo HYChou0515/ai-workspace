@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 
+from tests.warm_workspace import ProbeCountingSandbox, warm_files
 from workspace_app.entity.catalog import EntityCatalog, EntityType
 from workspace_app.entity.schema import EntitySchema, FieldSpec, Role
 from workspace_app.entity.store import EntityStore
@@ -374,3 +375,40 @@ async def test_query_corpus_sees_pre_derived_fields_of_its_own_type() -> None:
 
     rows = {e.number: e for e in (await store.query("node")).entities}
     assert rows[1].fields["kid_avg"] == 30
+
+
+async def _warm_store(records: int) -> tuple[EntityStore, ProbeCountingSandbox]:
+    """A store whose workspace has a LIVE sandbox holding `records` issues —
+    the state a real item is in while somebody is working in it."""
+    files, sb = await warm_files()
+    store = EntityStore(files, "ws1", EntityCatalog({"issue": _issue_type()}))
+    for i in range(1, records + 1):
+        await files.write(
+            "ws1", f"/issues/{i}.md", f"---\ntitle: I{i}\nstatus: open\n---\n".encode()
+        )
+    return store, sb
+
+
+async def test_listing_resolves_where_the_workspace_lives_once_not_per_record() -> None:
+    """Reading a type is ONE operation, so it settles where the workspace lives
+    once and reads every record against that same answer.
+
+    Resolving it per record put a second sandbox round trip in front of every
+    single file: measured, a 68-issue listing cost ~150 of them where ~70 would
+    do, and a milestone listing — which rolls up every issue — cost MORE to
+    return 7 records than the issue listing did to return 68. Invisible against
+    a local sandbox, and the whole of the latency against the hosted one."""
+    few, sb_few = await _warm_store(3)
+    sb_few.liveness_probes = 0  # the seeding writes are not what is under test
+    await few.query("issue")
+    probes_few = sb_few.liveness_probes
+
+    many, sb_many = await _warm_store(30)
+    sb_many.liveness_probes = 0
+    await many.query("issue")
+    probes_many = sb_many.liveness_probes
+
+    assert probes_many == probes_few, (
+        f"{probes_few} probes for 3 records but {probes_many} for 30 — the cost "
+        "of locating the workspace is scaling with how much it holds"
+    )
