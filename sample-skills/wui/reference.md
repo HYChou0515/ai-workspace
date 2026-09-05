@@ -18,6 +18,7 @@ await workspace.deleteFile(path)     // → { path }
 await workspace.openFile(path)       // opens it in the workspace beside the page
 await workspace.whoami()             // → { user }
 await workspace.callTool(name, args) // → { output, exit_code }
+await workspace.startRun(workflow, input, onEvent)  // → { run_id }
 ```
 
 Plus one subscription, which is not a call:
@@ -151,6 +152,42 @@ table for another, a sentence when there is nothing to report. This is why the
 `try` above is not defensive padding — it is the only thing between a shape you
 assumed and a blank page. **Run the tool yourself before writing the parser**;
 SKILL.md, "Run the tool before you parse it", says what to look at.
+
+### Work that takes minutes
+
+`callTool` runs one command and answers once. When the thing you need is longer
+— read a folder of records, ask an agent to judge them, write a summary back —
+that is a **run**, and `startRun` is how a page begins one.
+
+```js
+const { run_id } = await workspace.startRun("judge", { lot: "A1" }, function (event) {
+  // Called repeatedly WHILE it runs. Draw whatever you like with it.
+  if (event && event.type === "step") show(event.text);
+});
+```
+
+Three things follow from it being a run and not a bigger tool call:
+
+- **It reports progress.** The promise settles at the end; `onEvent` fires
+  throughout. A page that shows nothing for two minutes looks broken, and the
+  person watching cannot tell it apart from one that is.
+- **Closing the page does not lose the work.** The run keeps going and its
+  result is written back, so "I got bored and closed the tab" costs nothing.
+- **It is the same engine a schedule uses.** The only difference is whether
+  somebody is watching.
+
+⚠️ **Ignore events you do not recognise.** The platform's event set grows, and
+your page will not be edited again. A handler that switches on every known type
+and throws on the rest breaks the day a new one appears; one that ignores the
+unknown keeps working forever.
+
+Declare each workflow in the view file, exactly like a tool:
+
+```yaml
+view: wui
+title: Scrap review
+workflows: [judge]
+```
 
 A rejected `callTool` is a different thing again, and the message says which:
 

@@ -30,10 +30,11 @@ import shlex
 from collections.abc import AsyncIterator, Callable, Sequence
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..agent.context import AgentToolContext
 from ..sandbox.protocol import ExecResult, Sandbox, SandboxSpec
@@ -130,6 +131,22 @@ _BUILD = (
 )
 
 
+class RunBody(BaseModel):
+    """Which workflow to start, and what to hand it.
+
+    ``payload`` is opaque — the platform passes it through untouched. Everything
+    domain-shaped lives in there, which is what keeps the platform from learning
+    what any of this means.
+    """
+
+    workflow: str
+    # `with` on the wire, because that is how it reads to a page author and it
+    # is the word `schedules.json` already uses — one vocabulary for "start this
+    # workflow with this", whether now or on a clock. `payload` in Python
+    # because `with` is a keyword.
+    payload: dict[str, Any] = Field(default_factory=dict, alias="with")
+
+
 class CallToolOut(BaseModel):
     """What the page gets back.
 
@@ -152,6 +169,9 @@ def register_wui_routes(
     resolve_external: Callable[[str], Any] | None = None,
     request_env: IRequestEnv | None = None,
     get_user_id: Callable[[], str] | None = None,
+    orchestrator: Any = None,
+    turn_engine: Any = None,
+    workflows_for: Callable[[str], Sequence[str]] = lambda _item: (),
 ) -> None:
     """Mount the WUI tool-call route.
 
@@ -352,6 +372,64 @@ def register_wui_routes(
                     task.cancel()
 
         return StreamingResponse(gen(), media_type="text/event-stream")
+
+    @app.post("/a/{slug}/items/{item_id}/wui/run")
+    async def wui_run(slug: str, item_id: str, body: RunBody) -> StreamingResponse:
+        """Start one run from the page and stream its events back.
+
+        The SAME engine a schedule uses, started now instead of when the clock
+        says so — because once a page's judgement can read files and call tools
+        it is not "a question with an answer", it is a piece of work that takes
+        minutes. Making it a run is what gives it a record, a stop button, and
+        the progress the page draws, all of which already exist.
+
+        The page gets the platform's events VERBATIM and decides what to show.
+        The pane's own chrome does not know which row somebody clicked, and the
+        whole premise of a WUI is that its author owns the experience.
+
+        The verb is `execute`: this runs work in the item, like a notebook cell.
+        """
+        investigation_id = locator.require_access(slug, item_id, "execute")
+
+        allowed = list(workflows_for(investigation_id))
+        if body.workflow not in allowed:
+            # Named, because this reaches a person through the page's own error
+            # panel and "which one, and why not" is all they can act on. Same
+            # ceiling shape as `tools:` — the app's list is the gate; the page's
+            # own declaration is disclosure enforced in the bridge.
+            raise HTTPException(
+                status_code=403,
+                detail=f"This app does not offer {body.workflow} to its pages.",
+            )
+
+        # SUBSCRIBE FIRST. A run that begins before anyone is listening loses its
+        # opening events — exactly the ones that say something is happening — so
+        # the page would show nothing at all for the first second of every call.
+        key = f"wui:{uuid4().hex}"
+        stream = turn_engine.subscribe_sse(key)
+
+        try:
+            await orchestrator.start(
+                slug=slug,
+                item_id=investigation_id,
+                profile=locator.profile_of(investigation_id),
+                captured_user=locator.owner_of(investigation_id) or "",
+                workflow_id=body.workflow,
+                chat_id=key,
+                payload=body.payload,
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            # A 200 with an empty stream is indistinguishable from "still
+            # thinking", and a page waiting on that waits forever. A refusal has
+            # to arrive as a refusal.
+            logger.exception("wui: item %s could not start %s", investigation_id, body.workflow)
+            raise HTTPException(
+                status_code=502, detail=f"{body.workflow} could not be started."
+            ) from exc
+
+        return StreamingResponse(stream, media_type="text/event-stream")
 
     @app.post("/a/{slug}/items/{item_id}/wui/tools/{name}/call")
     async def wui_call_tool(

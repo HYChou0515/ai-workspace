@@ -1800,7 +1800,7 @@ def create_app(
     # ── Workflows (#100) ─────────────────────────────────────────────
     # A run drives its own WORKFLOW CHAT (§3): agent nodes stream into that chat and
     # the orchestrator overlays phase/step events on the same per-chat stream.
-    from ..apps.profiles import load_profile_workflow
+    from ..apps.profiles import load_profile_workflow, profile_workflows
     from ..workflow.dsl import build_run
     from ..workflow.workspace_store import load_workspace_workflow
 
@@ -2037,6 +2037,33 @@ def create_app(
         sandbox=sandbox,
     )
 
+    class _LateOrchestrator:
+        """Reaches the orchestrator when a run actually starts.
+
+        It is constructed after these routes are registered, so holding a
+        reference here would capture `None`. A late lookup keeps ONE orchestrator
+        rather than a second one built to satisfy an ordering problem.
+        """
+
+        def __init__(self, get: Callable[[], Any]) -> None:
+            self._get = get
+
+        async def start(self, **kw: Any) -> str:
+            return await self._get().start(**kw)
+
+    def _workflows_for_item(item_id: str) -> Sequence[str]:
+        """Which workflows a page in this item may start.
+
+        The profile's list — the same ceiling shape `tools:` uses, so there is
+        one way to ask "may this page do that" rather than a second scoping model
+        to keep in step.
+        """
+        profile = locator.profile_of(item_id)
+        slug = locator.slug_of(item_id)
+        if not slug:
+            return ()
+        return [w.id for w in profile_workflows(slug, profile)]
+
     register_wui_routes(
         api,
         locator=locator,
@@ -2046,6 +2073,12 @@ def create_app(
         prebuilt_dir=prebuilt_dir,
         request_env=request_env,
         get_user_id=get_user_id,
+        # #WUI P18: a page can start a run and watch it live. Resolved at CALL
+        # time — the orchestrator is built later than this registration, the same
+        # deferred wiring the schedule sweep uses.
+        orchestrator=_LateOrchestrator(lambda: workflow_orchestrator),
+        turn_engine=turn_engine,
+        workflows_for=_workflows_for_item,
     )
 
     register_capability_routes(

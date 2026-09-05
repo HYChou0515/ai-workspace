@@ -86,6 +86,14 @@ class _Locator:
     def env_vars_of(self, item_id: str) -> dict[str, str]:
         return dict(self.env)
 
+    def profile_of(self, item_id: str) -> str:
+        return "default"
+
+    def owner_of(self, item_id: str) -> str | None:
+        # A scheduled or page-started run acts as the item's owner: there is no
+        # request behind it, so there is no personal credential to inherit.
+        return "alice"
+
 
 #: `allowed=None` is a MEANINGFUL value here — "this deploy did not restrict" —
 #: so it cannot double as "the caller said nothing", and the default needs a
@@ -103,6 +111,9 @@ def build(
     registry: _Registry | None = None,
     locator: _Locator | None = None,
     request_env=None,
+    orchestrator=None,
+    turn_engine=None,
+    workflows: list[str] | None = None,
 ):
     app = FastAPI()
     sb = sandbox or _Sandbox()
@@ -126,6 +137,9 @@ def build(
         resolve_external=_external,
         request_env=request_env,
         get_user_id=lambda: "default-user",
+        orchestrator=orchestrator,
+        turn_engine=turn_engine,
+        workflows_for=lambda _item: workflows or [],
     )
     return TestClient(app), sb, reg, loc
 
@@ -684,3 +698,117 @@ def test_a_failing_env_source_refuses_a_tool_call():
     assert isinstance(detail, str)
     assert "sign in again" in detail.lower()
     assert sandbox.calls == []
+
+
+# ── starting a run from the page (#WUI P18) ──────────────────────────────────
+
+RUN_URL = "/a/rca/items/i1/wui/run"
+
+
+class _Orchestrator:
+    """Records what was launched and on which stream key. The key matters as
+    much as the launch: subscribing to the wrong one is a page that waits
+    forever with no error."""
+
+    def __init__(self, fail: bool = False, order: list[str] | None = None):
+        self.started: list[dict] = []
+        self.fail = fail
+        self.order = order
+
+    async def start(self, **kw) -> str:
+        if self.order is not None:
+            self.order.append("start")
+        if self.fail:
+            raise RuntimeError("the workflow could not start")
+        self.started.append(kw)
+        return "run-1"
+
+
+class _Engine:
+    """The turn engine's SSE relay, as a double."""
+
+    def __init__(self, order: list[str] | None = None) -> None:
+        self.keys: list[str] = []
+        self.order = order
+
+    def subscribe_sse(self, key: str, user_id: str = "", **kw):
+        if self.order is not None:
+            self.order.append("subscribe")
+        self.keys.append(key)
+
+        async def gen():
+            yield 'data: {"type":"done"}\n\n'
+
+        return gen()
+
+
+def test_a_page_can_start_a_declared_workflow_and_watch_it():
+    """The synchronous half of the same engine: one run, started now, watched
+    live. Not a second mechanism — a click and a schedule differ only in whether
+    somebody is looking."""
+    orch, engine = _Orchestrator(), _Engine()
+    client, _, _, _ = build(orchestrator=orch, turn_engine=engine, workflows=["judge"])
+
+    resp = client.post(RUN_URL, json={"workflow": "judge", "with": {"lot": "A1"}})
+
+    assert resp.status_code == 200
+    assert orch.started[0]["workflow_id"] == "judge"
+    assert orch.started[0]["payload"] == {"lot": "A1"}
+
+
+def test_the_stream_is_scoped_to_this_one_invocation():
+    """Without its own key the page would receive every event on the item — the
+    agent's chat, somebody else's run — and have to filter events it was never
+    given a contract for."""
+    orch, engine = _Orchestrator(), _Engine()
+    client, _, _, _ = build(orchestrator=orch, turn_engine=engine, workflows=["judge"])
+
+    client.post(RUN_URL, json={"workflow": "judge"})
+
+    assert engine.keys and engine.keys[0] == orch.started[0]["chat_id"]
+    assert engine.keys[0] != "i1"
+
+
+def test_it_subscribes_before_it_starts():
+    """Ordering, and it is not cosmetic: a run that begins before anyone is
+    listening loses its first events — exactly the ones that tell the page
+    something is happening — so the page shows nothing for the first second of
+    every call, every time.
+
+    Both doubles write into ONE list rather than the test patching methods onto
+    instances: what is under test is the order the route does two things in, and
+    a recording double says that directly.
+    """
+    order: list[str] = []
+    orch, engine = _Orchestrator(order=order), _Engine(order=order)
+    client, _, _, _ = build(orchestrator=orch, turn_engine=engine, workflows=["judge"])
+
+    client.post(RUN_URL, json={"workflow": "judge"})
+
+    assert order == ["subscribe", "start"]
+
+
+def test_a_workflow_this_app_does_not_have_is_refused_by_name():
+    """The same ceiling shape as `tools:` — the app's list is the gate, and the
+    refusal names what was asked for, because it reaches a person through the
+    page's own error panel."""
+    orch, engine = _Orchestrator(), _Engine()
+    client, _, _, _ = build(orchestrator=orch, turn_engine=engine, workflows=["judge"])
+
+    resp = client.post(RUN_URL, json={"workflow": "something-else"})
+
+    assert resp.status_code == 403
+    assert "something-else" in resp.json()["detail"]
+    assert orch.started == []
+
+
+def test_a_run_that_will_not_start_is_a_sentence_not_a_stream():
+    """A page that got a 200 and an empty stream cannot tell "it failed to
+    start" from "it is still thinking". The refusal has to arrive as a refusal."""
+    orch, engine = _Orchestrator(fail=True), _Engine()
+    client, _, _, _ = build(orchestrator=orch, turn_engine=engine, workflows=["judge"])
+
+    resp = client.post(RUN_URL, json={"workflow": "judge"})
+
+    assert resp.status_code == 502
+    assert "judge" in resp.json()["detail"]

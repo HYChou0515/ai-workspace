@@ -28,6 +28,22 @@ export type CallTool = (
   args: Record<string, unknown>,
 ) => Promise<{ output: string; exit_code: number }>;
 
+/**
+ * Start one run and receive its events as they arrive.
+ *
+ * The events are the platform's own, verbatim. The page decides what to draw
+ * with them — the pane's chrome does not know which row somebody clicked, and a
+ * WUI's author owns the experience. A page that recognises nothing simply shows
+ * nothing extra, which is why the reducer in the skill's example ignores
+ * anything it does not know: that is what keeps a new event type from breaking
+ * pages nobody will ever go back and edit.
+ */
+export type StartRun = (
+  workflow: string,
+  payload: Record<string, unknown>,
+  onEvent: (event: unknown) => void,
+) => Promise<{ run_id: string }>;
+
 export type BridgeContext = {
   fs: FileService;
   /** The page's own folder — the write boundary. */
@@ -47,6 +63,24 @@ export type BridgeContext = {
   declaredTools: string[];
   /** Run one package tool, or `null` where no backend is wired. */
   callTool: CallTool | null;
+  /**
+   * The workflows this page's view file declares (`workflows:` in the yaml).
+   *
+   * Disclosure, not the security boundary — the app's own list is enforced on
+   * the server and a page can never exceed it. What this adds is that a page
+   * cannot QUIETLY start something it did not announce, which is what makes
+   * reading the declaration worth anything before opening one.
+   */
+  declaredWorkflows: string[];
+  /** Start a run and stream its events, or `null` where no backend is wired. */
+  startRun: StartRun | null;
+  /**
+   * Hand one of a run's events to the page, tagged with the CALL's id.
+   *
+   * The id matters: a page may have two judgements in flight and has no other
+   * way to tell whose progress it is looking at.
+   */
+  onRunEvent: (id: string, event: unknown) => void;
   /**
    * Called after this page changes a file, with the resolved path.
    *
@@ -192,6 +226,21 @@ export async function dispatchWuiRequest(
       }
       if (read.kind === "failed") return refuse(id, read.reason);
       return ok(id, { path, ...read.asset });
+    }
+
+    case "startRun": {
+      const workflow = str(args, "workflow");
+      if (workflow === null) return refuse(id, "startRun needs a `workflow`.");
+      if (!ctx.declaredWorkflows.includes(workflow))
+        return refuse(
+          id,
+          `This page did not declare ${workflow}. Add it to \`workflows:\` in the view file.`,
+        );
+      if (!ctx.startRun)
+        return refuse(id, "Runs cannot be started from where this page is shown.");
+      const payload = (args?.["with"] ?? {}) as Record<string, unknown>;
+      const started = await ctx.startRun(workflow, payload, (event) => ctx.onRunEvent(id, event));
+      return ok(id, started);
     }
 
     case "writeFile": {

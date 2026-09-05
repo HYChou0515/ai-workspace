@@ -36,6 +36,7 @@ import { autoBuildScope, useWuiAutoBuild } from "../../lib/wuiAutoBuild";
 import { viewParam, viewParamString } from "../entity/shared";
 import { itemCallTool } from "./api";
 import { cleanBuildOutput, hasBuildScript, itemBuild } from "./build";
+import { itemRun } from "./run";
 import type { ViewSpec } from "../entity/types";
 import { buildWuiDoc } from "./assets";
 import { dispatchWuiRequest } from "./bridge";
@@ -209,6 +210,29 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
     [slug, fs.scopeId],
   );
 
+  /** What the view file declared it may start. Disclosure, not the gate — the
+   *  app's own list is enforced on the server. Same shape as `tools:`. */
+  const declaredWorkflows = useMemo(() => {
+    const raw = viewParam(spec, "workflows");
+    return Array.isArray(raw) ? raw.filter((w): w is string => typeof w === "string") : [];
+  }, [spec]);
+
+  const startRun = useMemo(() => {
+    if (!slug) return null;
+    const run = itemRun(slug, fs.scopeId);
+    return async (
+      workflow: string,
+      payload: Record<string, unknown>,
+      onEvent: (event: unknown) => void,
+    ) => {
+      // The stream is pumped here and each event handed straight on, so the page
+      // sees progress WHILE the run is happening rather than a single answer at
+      // the end. That is the whole point of making this a run.
+      for await (const event of run(workflow, payload)) onEvent(event);
+      return { run_id: "" };
+    };
+  }, [slug, fs.scopeId]);
+
   /** Post to the frame. `"*"` because an opaque origin cannot be named as a
    * target; what makes that safe is `SPA_CSP` (see the note on the reply path
    * below), not this handle. */
@@ -240,6 +264,12 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
         me: meReady ? me : null,
         declaredTools,
         callTool,
+        declaredWorkflows,
+        startRun,
+        // Each event carries the CALL's id: a page may have two judgements in
+        // flight and has no other way to tell whose progress it is looking at.
+        onRunEvent: (id, event) =>
+          win.postMessage({ proto: WUI_PROTOCOL, id, event: "run_event", payload: event }, "*"),
         onWrote: (written) => selfWrites.current.record(written),
       })
         // A file op can reject for reasons the gate cannot see — a 403 for a
@@ -261,7 +291,7 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [fs, folder, openFile, me, meReady, declaredTools, callTool]);
+  }, [fs, folder, openFile, me, meReady, declaredTools, callTool, declaredWorkflows, startRun]);
 
   // Forwarded, not acted on: the platform cannot know whether a half-finished
   // form should be thrown away, and only the page does.

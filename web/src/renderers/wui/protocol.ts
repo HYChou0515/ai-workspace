@@ -9,6 +9,17 @@
  *
  * Messages carry `proto` because a page shares its window with nothing else we
  * control: anything without the tag is somebody else's message and is ignored.
+ *
+ * **The verb set is closed to CAPABILITIES.** Anything that reaches an outside
+ * system arrives as another `callTool` target, so the amount of code that has to
+ * be trusted here stays the size it is. What may still be added is a platform
+ * PRIMITIVE — something in the same class as reading a file — and only when it
+ * cannot be expressed as a tool call.
+ *
+ * `startRun` (#WUI P18) is the one such addition so far, and the reason is
+ * mechanical rather than a matter of taste: `callTool` answers exactly once, and
+ * a run reports progress for minutes before it answers. Every future addition
+ * owes the same argument in writing, or this rule has quietly become nothing.
  */
 
 export const WUI_PROTOCOL = "wui/1";

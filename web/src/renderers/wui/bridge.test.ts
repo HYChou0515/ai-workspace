@@ -37,6 +37,9 @@ function ctx(over: Partial<BridgeContext> = {}, files: Record<string, string> = 
     me: "alice",
     declaredTools: [],
     callTool: null,
+    declaredWorkflows: ["judge"],
+    startRun: null,
+    onRunEvent: () => {},
     ...over,
   };
 }
@@ -362,6 +365,59 @@ describe("dispatchWuiRequest", () => {
     const res = await dispatchWuiRequest(req("readFile", { path: "sales" }), ctx());
 
     expect(res).toMatchObject({ ok: false, expected: true });
+  });
+
+  it("starts a run and reports every event back under the call's id", async () => {
+    /**
+     * The page gets the platform's events VERBATIM and decides what to draw.
+     * The pane's chrome does not know which row somebody clicked, and the whole
+     * premise of a WUI is that its author owns the experience.
+     *
+     * Each event carries the CALL's id, because a page may have two judgements
+     * in flight and has no other way to tell whose progress it is looking at.
+     */
+    const events: unknown[] = [];
+    const res = await dispatchWuiRequest(
+      req("startRun", { workflow: "judge", with: { lot: "A1" } }),
+      ctx({
+        startRun: async (_workflow, _payload, onEvent) => {
+          onEvent({ type: "step", text: "reading 12 files" });
+          onEvent({ type: "done", exit_code: 0 });
+          return { run_id: "run-1" };
+        },
+        onRunEvent: (id, event) => events.push([id, event]),
+      }),
+    );
+
+    expect(res).toMatchObject({ ok: true, value: { run_id: "run-1" } });
+    expect(events).toEqual([
+      ["1", { type: "step", text: "reading 12 files" }],
+      ["1", { type: "done", exit_code: 0 }],
+    ]);
+  });
+
+  it("refuses a workflow the page did not declare", async () => {
+    /**
+     * Disclosure, exactly as with `tools:`. The app's list is the real gate on
+     * the server; this stops a page QUIETLY using something it never announced,
+     * which is what makes reading the declaration worth anything.
+     */
+    const res = await dispatchWuiRequest(
+      req("startRun", { workflow: "undeclared" }),
+      ctx({ declaredWorkflows: ["judge"], startRun: async () => ({ run_id: "x" }) }),
+    );
+
+    expect(res).toMatchObject({ ok: false });
+    expect(res.ok === false && res.error).toContain("undeclared");
+  });
+
+  it("says so when this page is shown somewhere runs cannot start", async () => {
+    const res = await dispatchWuiRequest(
+      req("startRun", { workflow: "judge" }),
+      ctx({ startRun: null }),
+    );
+
+    expect(res).toMatchObject({ ok: false });
   });
 
   it("answers on the id it was asked with, so replies cannot be crossed", async () => {
