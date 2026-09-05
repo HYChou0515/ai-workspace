@@ -15,6 +15,7 @@ import { KbDocPage } from "./pages/kb/KbDocPage";
 import { kbRoutes } from "./pages/kb/kbRoutes";
 import { ReviewPage } from "./pages/kb/ReviewPage";
 import { Launcher } from "./pages/Launcher";
+import { WuiPage } from "./pages/WuiPage";
 import { ReleasesPage } from "./pages/ReleasesPage";
 
 /**
@@ -33,6 +34,13 @@ import { ReleasesPage } from "./pages/ReleasesPage";
 export function AppRoutes() {
   return (
     <Routes>
+      {/* A WUI at its own URL, OUTSIDE the shell (#WUI P17). A nav bar and a
+          breadcrumb trail are for navigating a workspace; somebody who followed
+          a link to one page has nowhere to navigate to and no context for the
+          crumbs. Whoever opens it must already be able to see the item — the
+          address is a shortcut, not a grant, and the API refuses exactly what it
+          would have refused inside the workspace. */}
+      <Route path="/w/:slug/:itemId/*" element={<WuiPage />} />
       <Route element={<GlobalLayout />}>
         <Route path="/" element={<Launcher />} />
         {/* `new` is a CHILD of the dashboard so the create form renders as a modal
