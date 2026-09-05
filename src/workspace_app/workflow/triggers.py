@@ -292,6 +292,20 @@ def window_key(every: str, now: datetime) -> str:
         return f"{iso.year}-W{iso.week:02d}"
     if every == "monthly":
         return f"{now.year:04d}-{now.month:02d}"
+    if every == "hourly":
+        return now.strftime("%Y-%m-%dT%H")
+    # `minutes:N` — a page's poller (`workflow.user_schedules`), the one thing
+    # that legitimately runs often. Bucketed to N so every tick inside the same
+    # N-minute window claims the same lease and fires once.
+    #
+    # The DEFAULT is unchanged on purpose: anything unrecognised still buckets by
+    # day. This function is shared with #435's `send_notification` per-window
+    # fingerprint, so a "daily" schedule and a "daily" notify must keep bucketing
+    # identically — a new period here must add a case, never move the fallback.
+    if every.startswith("minutes:"):
+        _, _, width = every.partition(":")
+        n = int(width) if width.isdigit() and int(width) > 0 else 1
+        return f"{now.strftime('%Y-%m-%dT%H:')}{(now.minute // n) * n:02d}"
     return now.strftime("%Y-%m-%d")
 
 
@@ -313,7 +327,22 @@ def period_target(s: Schedule, now: datetime) -> datetime:
         last = calendar.monthrange(now.year, now.month)[1]
         dom = min(s.dom or 1, last)  # clamp to month-end
         return datetime(now.year, now.month, dom, hh, mm)
+    if s.every == "hourly" or s.every.startswith("minutes:"):
+        # A sub-daily period targets the START of its own bucket, not a wall
+        # time. Falling through to "today at `at`" would make a poller
+        # not-yet-due until 00:00 had passed, i.e. due once and then never
+        # again within the day.
+        return _bucket_start(s.every, now)
     return datetime(now.year, now.month, now.day, hh, mm)
+
+
+def _bucket_start(every: str, now: datetime) -> datetime:
+    """The first instant of the sub-daily period containing ``now``."""
+    if every == "hourly":
+        return now.replace(minute=0, second=0, microsecond=0)
+    _, _, width = every.partition(":")
+    n = int(width) if width.isdigit() and int(width) > 0 else 1
+    return now.replace(minute=(now.minute // n) * n, second=0, microsecond=0)
 
 
 def is_due(s: Schedule, now: datetime, last_window: str) -> bool:
