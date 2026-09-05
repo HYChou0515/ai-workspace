@@ -43,6 +43,7 @@ from workspace_app.factories import (
     get_kb_describer,
     get_kb_llm,
     get_kb_quality_judge_llm,
+    get_notification_channel,
     get_parser_registry,
     get_replay_service,
     get_request_env,
@@ -233,6 +234,11 @@ def main() -> None:
             # chat send's cookies/headers can become that turn's tool env. None
             # when unconfigured ⇒ no such seam.
             request_env=get_request_env(settings.server.request_env),
+            # The deploy's outbound channel for notifications. Empty ⇒ in-app
+            # only, which is where they have always been.
+            notification_channel=get_notification_channel(settings.server.notification_channel),
+            # A runaway guard on how many schedules one page may declare.
+            max_page_schedules=settings.server.max_page_schedules,
             # #750: the deploy's own credential->variable implementations.
             # Empty is the ordinary case — no buttons, and every variable
             # still typeable by hand.
@@ -387,6 +393,15 @@ def main() -> None:
             trigger_check_interval=(
                 timedelta(seconds=settings.server.trigger_check_interval_sec)
                 if settings.server.trigger_check_interval_sec > 0
+                else None
+            ),
+            # #WUI P15: the per-step cap. `create_app` has accepted this since the
+            # step timeout was written and NOTHING ever passed it, so the cap was
+            # infinite everywhere and `steps.py` always took its `is None` branch —
+            # a mechanism that exists, is tested, and never runs. 0 ⇒ off.
+            workflow_step_timeout=(
+                timedelta(seconds=settings.server.workflow_step_timeout_sec)
+                if settings.server.workflow_step_timeout_sec > 0
                 else None
             ),
         )

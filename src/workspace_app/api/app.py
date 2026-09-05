@@ -61,6 +61,7 @@ from ..workflow.discovery import load_run_callable
 from ..workflow.orchestrator import (
     WorkflowOrchestrator,
 )
+from ..workflow.user_schedule_sweep import DEFAULT_MAX_ROWS, UserScheduleSweeper
 from . import perf_trace
 from .activity import ActivityLog
 from .agent_progress import progress_line
@@ -93,6 +94,7 @@ from .lifecycle import build_lifespan
 from .locator import ItemLocator
 from .mention import MentionService
 from .meta_routes import register_meta_routes
+from .notification_delivery import INotificationChannel
 from .notifications import register_notification_routes
 from .quota_routes import register_quota_routes
 from .registry import InvestigationRegistry
@@ -102,6 +104,10 @@ from .review_inbox_routes import register_review_inbox_routes
 from .runner import AgentRunner
 from .sandbox_activity import IActivityStore, SpecstarActivityStore, register_sandbox_activity
 from .sandbox_address import IAddressStore, SpecstarAddressStore
+from .schedule_index import (
+    ScheduleIndex,
+    is_schedule_file,
+)
 from .spa import SpaStaticFiles
 from .subagent_bridge import SubagentBridge
 from .subagent_run import run_agent_task
@@ -275,6 +281,12 @@ def create_app(
     # the item's shared `env_vars` cannot carry. None (default) ⇒ no such seam.
     # __main__ passes factories.get_request_env(settings.server.request_env).
     request_env: IRequestEnv | None = None,
+    # A deploy's outbound notification channel (`server.notification_channel`).
+    # None ⇒ notifications stay in-app, exactly as before this seam existed.
+    notification_channel: INotificationChannel | None = None,
+    # Most schedules ONE PAGE may declare (`server.max_page_schedules`). A
+    # runaway guard, not a policy limit — see the sweeper's constant.
+    max_page_schedules: int = DEFAULT_MAX_ROWS,
     # #750: the deploy's credential->variable implementations. Empty is the
     # ordinary case — no buttons, and every variable still typeable by hand.
     # __main__ passes factories.get_env_providers(settings.server.env_providers).
@@ -947,6 +959,15 @@ def create_app(
     # of a cold durable write the host's `--delete` mirror would reconcile away;
     # local shared-vol has no host reconcile, so it keeps the cold-dir→durable
     # fallback (rebuild=None). Resolution never wakes a cold sandbox — only exec does.
+    schedule_index = ScheduleIndex(spec)
+
+    def _note_schedule_file(item_id: str, path: str) -> None:
+        """Record that this item now has schedules. Runs on EVERY write in the
+        platform, so the test is exact and cheap and the work only happens for
+        the one filename that means anything here."""
+        if is_schedule_file(path):
+            schedule_index.record(item_id, path)
+
     files = WorkspaceFiles(
         filestore,
         sandbox,
@@ -960,6 +981,11 @@ def create_app(
         quota=_quota_for,
         person_gate=_person_disk_gate,
         on_usage=_record_usage,
+        # #WUI P14: note which items have page-declared schedules, so the sweep
+        # reads a short list instead of every item that has ever existed. At the
+        # write chokepoint rather than in a route, because the agent's
+        # `write_file` never touches one.
+        on_write=_note_schedule_file,
     )
 
     admission = AdmissionGate(
@@ -1012,6 +1038,56 @@ def create_app(
             enforced=await sandbox.effective_limits(SandboxSpec()),
         )
 
+    def _owner_of_item(item_id: str) -> str:
+        """The identity a page's scheduled run acts as.
+
+        The item's OWNER, not whoever last edited the schedules file: a
+        scheduled run has no request, so there is no personal credential to
+        inherit, and the item is already the boundary its tools authenticate
+        with. Empty when the item has no owner on record — `orchestrator.start`
+        refuses that rather than falling back to a system identity, which is the
+        behaviour we want and not one to paper over here.
+        """
+        return _owner_of(item_id) or ""
+
+    async def _start_page_schedule(
+        *, item_id: str, workflow_id: str, acting_user: str, payload: dict[str, Any]
+    ) -> str | None:
+        """Launch one page-declared schedule.
+
+        Resolved at CALL time on purpose: the orchestrator is constructed later
+        than this, and a closure reading it when the sweep fires is the same
+        deferred wiring `entity_write_sink` uses.
+
+        It opens its OWN conversation, exactly as the interactive entrance does.
+        Without a `chat_id` the run keys on the item, `workflow_exec.drive_turn`
+        looks that up, finds no conversation and falls back to the item's DEFAULT
+        chat — so a scheduled page run would read the user's own chat history as
+        its context and append its turns there, every night, on the entrance
+        nobody is watching. Fixing the interactive half and not this one left the
+        same defect where it is hardest to notice.
+        """
+        chat_id = locator.open_run_chat(item_id, workflow_id)
+        try:
+            run_id = await workflow_orchestrator.start(
+                slug=locator.slug_of(item_id) or "",
+                item_id=item_id,
+                profile=locator.profile_of(item_id),
+                captured_user=acting_user,
+                workflow_id=workflow_id,
+                chat_id=chat_id,
+                payload=payload,
+            )
+        except Exception:
+            # Take the chat down with the run that never started: a chat with no
+            # `run_id` is a FREE chat, and the earliest free chat is what the item
+            # opens as its default. A schedule that fails nightly would otherwise
+            # install a new default conversation every night.
+            locator.settle_run_chat(chat_id, None)
+            raise
+        locator.settle_run_chat(chat_id, run_id)
+        return run_id
+
     lifespan = build_lifespan(
         registry=registry,
         spec=spec,
@@ -1031,6 +1107,39 @@ def create_app(
         gc_t1=gc_t1,
         gc_t2=gc_t2,
         trigger_check_interval=trigger_check_interval,
+        # #WUI P15: fires the schedules pages declared. Built here so it shares
+        # the one `spec`, the one index and the item-owner lookup the rest of the
+        # app already resolved.
+        user_schedule_sweeper=UserScheduleSweeper(
+            spec=spec,
+            index=schedule_index,
+            # The DURABLE snapshot, not the facade. `files.read` routes warm-first,
+            # and on the hosted backend that probe is also the recovery trigger:
+            # an address the reaper did not clear plus a sandbox it did take away
+            # means the read REBUILDS it. Right for a person opening a file, wrong
+            # for a sweep — it would resurrect the sandbox of every item with a
+            # `schedules.json` once per tick on every pod, permanently undoing
+            # idle reap for exactly those items, with nothing to look at. The
+            # snapshot lags by at most one mirror interval (5s), which for a
+            # declaration that fires on the hour is no lag at all.
+            read=filestore.read,
+            # Asked ONLY when the snapshot says a schedules.json is missing, to
+            # tell "the mirror has not caught up" apart from "somebody deleted
+            # it" — identical from the snapshot, opposite right answers. Rare by
+            # construction, so the ordinary tick still wakes nothing.
+            read_live=files.read,
+            start=_start_page_schedule,
+            owner_of=_owner_of_item,
+            # The SAME ceiling the page's own `startRun` is held to. Without it
+            # the two entrances disagreed about what a page may start, and the
+            # scheduled one said nothing at all when the answer was no.
+            # Through a lambda because the resolver is defined further down and
+            # this is built here — resolved when the sweep fires, the same
+            # deferred wiring `_start_page_schedule` explains above.
+            workflows_for=lambda item_id: _workflows_for_item(item_id),
+            max_rows=max_page_schedules,
+        ),
+        notification_channel=notification_channel,
         offhours=goal_offhours,  # #615: the after-hours goal sweeper
         cluster_sweep_seconds=kb_cluster_sweep_seconds,
         cluster_tau=kb_cluster_tau,
@@ -1735,7 +1844,7 @@ def create_app(
     # ── Workflows (#100) ─────────────────────────────────────────────
     # A run drives its own WORKFLOW CHAT (§3): agent nodes stream into that chat and
     # the orchestrator overlays phase/step events on the same per-chat stream.
-    from ..apps.profiles import load_profile_workflow
+    from ..apps.profiles import load_profile_workflow, profile_workflows
     from ..workflow.dsl import build_run
     from ..workflow.workspace_store import load_workspace_workflow
 
@@ -1972,6 +2081,33 @@ def create_app(
         sandbox=sandbox,
     )
 
+    class _LateOrchestrator:
+        """Reaches the orchestrator when a run actually starts.
+
+        It is constructed after these routes are registered, so holding a
+        reference here would capture `None`. A late lookup keeps ONE orchestrator
+        rather than a second one built to satisfy an ordering problem.
+        """
+
+        def __init__(self, get: Callable[[], Any]) -> None:
+            self._get = get
+
+        async def start(self, **kw: Any) -> str:
+            return await self._get().start(**kw)
+
+    def _workflows_for_item(item_id: str) -> Sequence[str]:
+        """Which workflows a page in this item may start.
+
+        The profile's list — the same ceiling shape `tools:` uses, so there is
+        one way to ask "may this page do that" rather than a second scoping model
+        to keep in step.
+        """
+        profile = locator.profile_of(item_id)
+        slug = locator.slug_of(item_id)
+        if not slug:
+            return ()
+        return [w.id for w in profile_workflows(slug, profile)]
+
     register_wui_routes(
         api,
         locator=locator,
@@ -1979,6 +2115,14 @@ def create_app(
         registry=registry,
         packages=packages,
         prebuilt_dir=prebuilt_dir,
+        request_env=request_env,
+        get_user_id=get_user_id,
+        # #WUI P18: a page can start a run and watch it live. Resolved at CALL
+        # time — the orchestrator is built later than this registration, the same
+        # deferred wiring the schedule sweep uses.
+        orchestrator=_LateOrchestrator(lambda: workflow_orchestrator),
+        turn_engine=turn_engine,
+        workflows_for=_workflows_for_item,
     )
 
     register_capability_routes(

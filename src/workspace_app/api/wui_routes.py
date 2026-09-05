@@ -31,15 +31,16 @@ from collections.abc import AsyncIterator, Callable, Sequence
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, FastAPI, HTTPException
+from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..agent.context import AgentToolContext
 from ..sandbox.protocol import ExecResult, Sandbox, SandboxSpec
 from ..tooling.external import ExternalTools
 from ..tooling.registry import PackageInfo, exec_package_command, find_allowed_command
 from .locator import ItemLocator
+from .request_env import IRequestEnv
 from .turn_context import resolve_item_tools
 
 logger = logging.getLogger(__name__)
@@ -108,10 +109,41 @@ def _build_dir(folder: str) -> str | None:
 # resolve differently make the lock pointless. Where there is none — a page
 # installing for the first time — the plain install is what WRITES it, and
 # `--frozen-lockfile` would refuse instead.
+#: What the log says between the two halves.
+#:
+#: One command, two steps, and before this ONE verdict for both: a failed
+#: install reads as "Build failed (exit 1)" and you have to know that
+#: `&&` means the build never ran at all. Worse, the natural place to look
+#: instead — `node_modules` in the file tree — cannot answer it either: a page
+#: with no dependencies installs successfully and leaves a single metadata file,
+#: which is indistinguishable from an install that died on its first write.
+#:
+#: So the log says so itself. Printed by the shell between the halves, it costs
+#: nothing, every page gets it without its author remembering anything, and the
+#: line is there whether the build then succeeds or fails.
+BUILD_STEP_MARK = "--- dependencies ready, running the build ---"
+
 _BUILD = (
     "if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; else pnpm install; fi"
+    f" && echo {shlex.quote(BUILD_STEP_MARK)}"
     " && pnpm run build"
 )
+
+
+class RunBody(BaseModel):
+    """Which workflow to start, and what to hand it.
+
+    ``payload`` is opaque — the platform passes it through untouched. Everything
+    domain-shaped lives in there, which is what keeps the platform from learning
+    what any of this means.
+    """
+
+    workflow: str
+    # `with` on the wire, because that is how it reads to a page author and it
+    # is the word `schedules.json` already uses — one vocabulary for "start this
+    # workflow with this", whether now or on a clock. `payload` in Python
+    # because `with` is a keyword.
+    payload: dict[str, Any] = Field(default_factory=dict, alias="with")
 
 
 class CallToolOut(BaseModel):
@@ -134,11 +166,27 @@ def register_wui_routes(
     packages: list[PackageInfo] | None,
     prebuilt_dir: Path | None,
     resolve_external: Callable[[str], Any] | None = None,
+    request_env: IRequestEnv | None = None,
+    get_user_id: Callable[[], str] | None = None,
+    orchestrator: Any = None,
+    turn_engine: Any = None,
+    workflows_for: Callable[[str], Sequence[str]] = lambda _item: (),
 ) -> None:
     """Mount the WUI tool-call route.
 
     ``resolve_external`` is a seam for tests; it defaults to the same host
-    round-trip a turn makes."""
+    round-trip a turn makes.
+
+    ``request_env`` is the SAME seam a chat send composes (#714). What it
+    carries is the caller's own credential — a cookie their gateway exchanged
+    for a token — so without it a tool that answers in the chat 401s from the
+    page written to call it.
+
+    It reaches ``wui_call_tool`` and DELIBERATELY NOT ``wui_build``. A tool call
+    answers one person and dies with the exec; a build writes ``dist/``, which
+    is durable and is served to every viewer of the item. The two run as
+    different identities on purpose — see the note at the composition itself.
+    """
 
     # NOT "first party": in this codebase that names the bundled `sample-tools`
     # packages, which ARE reachable — the unreachable set is the agent's
@@ -146,12 +194,49 @@ def register_wui_routes(
     # themselves into the opposite rule.
     bundled: Sequence[PackageInfo] = packages or []
 
+    async def _request_env(request: Request, item_id: str) -> dict[str, str]:
+        """What the request behind this click contributes to the tool env.
+
+        Empty when the deploy named no impl — the seam ships unimplemented, and
+        every deploy that has not opted in must behave exactly as before.
+
+        Only ``wui_call_tool`` calls this; a build takes the item's variables
+        alone (see the note there).
+
+        A failing impl REFUSES, and does so before anything runs. Carrying on
+        with `{}` would run the tool as nobody in particular, answering from
+        whatever identity the item's own variables happen to describe — which
+        looks like success. An impl that would rather degrade catches its own
+        errors and returns `{}`; only it knows whether running without the value
+        means anything. Its message is not relayed: only the impl knows whether
+        it built that string out of the cookie it was reading.
+        """
+        if request_env is None:
+            return {}
+        uid = get_user_id() if get_user_id is not None else ""
+        try:
+            return await request_env.env_for(request, user_id=uid, item_id=item_id)
+        except Exception:
+            logger.exception("wui: request env source failed for item %s", item_id)
+            raise HTTPException(
+                status_code=500,
+                # A SENTENCE, not `{"error": ...}`. The chat client maps that
+                # code into human words; the WUI clients keep `detail` only when
+                # it is a string, so a dict reached the page as "could not be run
+                # (500)" — on every open, with nothing to act on. The impl's OWN
+                # message is still not relayed: only the impl knows whether it
+                # built that string out of the cookie it was reading.
+                detail="This page could not confirm who you are. Sign in again, then reopen it.",
+            ) from None
+
     async def _external(item_id: str) -> ExternalTools:
         if resolve_external is not None:
             return await resolve_external(item_id)
         return await resolve_item_tools(sandbox, locator, item_id)
 
     @app.post("/a/{slug}/items/{item_id}/wui/build")
+    # No `request` parameter: this route composes no per-request environment,
+    # and a `Request` in the signature would advertise that it does.
     async def wui_build(slug: str, item_id: str, body: BuildBody) -> StreamingResponse:
         """Rebuild a page, streaming the build's own output as it arrives.
 
@@ -174,6 +259,29 @@ def register_wui_routes(
         if cwd is None:
             raise HTTPException(status_code=400, detail=f"{body.folder} is not a page folder.")
 
+        # The item's variables ONLY — deliberately not the request's.
+        #
+        # A build writes `dist/`, which is mirrored to durable storage and
+        # inlined into the document served to EVERY viewer of this item. A
+        # bundler's whole job is to put its environment into that artifact:
+        # Vite's `loadEnv` picks `VITE_`-prefixed names out of `process.env`
+        # and `define`s them into the bundle. So a per-request credential
+        # reaching here would be baked into a file other people download —
+        # which is exactly what `IRequestEnv` promises never happens ("the
+        # values it returns are NEVER written back anywhere. They live for
+        # exactly one turn").
+        #
+        # A tool call is the opposite shape: its output goes to the one person
+        # who asked, and dies with the exec. That is why `wui_call_tool` DOES
+        # compose the request's env and this does not. They are not the same
+        # question wearing different hats — one produces a shared artifact and
+        # the other does not, so they run as different identities on purpose.
+        #
+        # A registry credential a build genuinely needs belongs on the item,
+        # where everyone the page is shared with is already entitled to what it
+        # builds.
+        env = locator.env_vars_of(investigation_id)
+
         session = await registry.session(investigation_id)
         handle = await registry.ensure_handle(session)
         # `exec` takes no working directory, so the shell provides one — relative
@@ -193,7 +301,9 @@ def register_wui_routes(
 
         async def run() -> ExecResult:
             try:
-                return await sandbox.exec(handle, ["sh", "-c", script], on_output=on_output)
+                return await sandbox.exec(
+                    handle, ["sh", "-c", script], on_output=on_output, env=env
+                )
             finally:
                 # The SAME hop the chunks take, so the order is right by
                 # construction rather than by luck. `call_soon_threadsafe` from
@@ -262,8 +372,84 @@ def register_wui_routes(
 
         return StreamingResponse(gen(), media_type="text/event-stream")
 
+    @app.post("/a/{slug}/items/{item_id}/wui/run")
+    async def wui_run(slug: str, item_id: str, body: RunBody) -> StreamingResponse:
+        """Start one run from the page and stream its events back.
+
+        The SAME engine a schedule uses, started now instead of when the clock
+        says so — because once a page's judgement can read files and call tools
+        it is not "a question with an answer", it is a piece of work that takes
+        minutes. Making it a run is what gives it a record, a stop button, and
+        the progress the page draws, all of which already exist.
+
+        The page gets the platform's events VERBATIM and decides what to show.
+        The pane's own chrome does not know which row somebody clicked, and the
+        whole premise of a WUI is that its author owns the experience.
+
+        The verb is `execute`: this runs work in the item, like a notebook cell.
+        """
+        investigation_id = locator.require_access(slug, item_id, "execute")
+
+        allowed = list(workflows_for(investigation_id))
+        if body.workflow not in allowed:
+            # Named, because this reaches a person through the page's own error
+            # panel and "which one, and why not" is all they can act on. Same
+            # ceiling shape as `tools:` — the app's list is the gate; the page's
+            # own declaration is disclosure enforced in the bridge.
+            raise HTTPException(
+                status_code=403,
+                detail=f"This app does not offer {body.workflow} to its pages.",
+            )
+
+        # A REAL conversation, not a minted label. `chat_id` is looked up by
+        # `workflow_exec.drive_turn`, and one that resolves to nothing falls back
+        # to the item's DEFAULT chat — so the page's run would read the user's own
+        # chat history as its context and append its turns there. It is also what
+        # `active_run_for_chat` matches on, so an invented id quietly exempts
+        # pages from the one-run-per-item rule.
+        key = locator.open_run_chat(investigation_id, body.workflow)
+        # SUBSCRIBE FIRST. A run that begins before anyone is listening loses its
+        # opening events — exactly the ones that say something is happening — so
+        # the page would show nothing at all for the first second of every call.
+        stream = turn_engine.subscribe_sse(key)
+
+        try:
+            run_id = await orchestrator.start(
+                slug=slug,
+                item_id=investigation_id,
+                profile=locator.profile_of(investigation_id),
+                captured_user=locator.owner_of(investigation_id) or "",
+                workflow_id=body.workflow,
+                chat_id=key,
+                payload=body.payload,
+            )
+        except Exception as exc:
+            # Take the chat back down with the run that never started. A chat with
+            # no `run_id` is a FREE chat, and the earliest free chat is the item's
+            # default — a refused run would otherwise install a new default
+            # conversation for everyone on the item, once per retry.
+            locator.settle_run_chat(key, None)
+            # And release the stream. `subscribe_sse` attaches the subscriber
+            # eagerly, before the generator is ever iterated, so a response we
+            # never return leaves its queue and its session in memory for good.
+            await turn_engine.forget(key)
+            if isinstance(exc, HTTPException):
+                raise
+            # A 200 with an empty stream is indistinguishable from "still
+            # thinking", and a page waiting on that waits forever. A refusal has
+            # to arrive as a refusal.
+            logger.exception("wui: item %s could not start %s", investigation_id, body.workflow)
+            raise HTTPException(
+                status_code=502, detail=f"{body.workflow} could not be started."
+            ) from exc
+
+        locator.settle_run_chat(key, run_id)
+        return StreamingResponse(stream, media_type="text/event-stream")
+
     @app.post("/a/{slug}/items/{item_id}/wui/tools/{name}/call")
-    async def wui_call_tool(slug: str, item_id: str, name: str, body: CallToolBody) -> CallToolOut:
+    async def wui_call_tool(
+        slug: str, item_id: str, name: str, body: CallToolBody, request: Request
+    ) -> CallToolOut:
         # A tool can write, so the caller needs the verb that lets them write —
         # the same authority they would need to make the change by hand.
         investigation_id = locator.require_access(slug, item_id, "edit_content")
@@ -302,7 +488,14 @@ def register_wui_routes(
             packages=list(available),
             agent_config=config,
             prebuilt_dir=prebuilt_dir,
-            user_env=locator.env_vars_of(investigation_id),
+            # The item's own win, exactly as they do in a turn
+            # (`turn_context`): those are the ones a person set on purpose,
+            # and a page must not be able to reach a different system from
+            # the one the agent reaches.
+            user_env={
+                **await _request_env(request, investigation_id),
+                **locator.env_vars_of(investigation_id),
+            },
             # The registry's own wake path, so this shares the item's ONE
             # sandbox with its turns rather than racing a second one into
             # existence beside it.

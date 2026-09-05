@@ -63,6 +63,14 @@ class ServerSettings:
     # due headless runs. 0 (default) ⇒ off — time-triggered workflows are opt-in per deploy.
     # A CAS lease per (trigger, window) means only one pod fires each window when several run.
     trigger_check_interval_sec: int = 0
+    # #WUI P15: the hard cap on ONE agent step inside a workflow run, in seconds.
+    # A step that never returns is the only failure a person cannot even
+    # describe: nothing is wrong on screen, the run is simply still going, and
+    # "it seems slow" is all they can report. The refusal names this number, so
+    # a reader learns it is a setting rather than randomness.
+    # The mechanism existed and nothing ever passed it a value, so the cap was
+    # infinite in every deploy. 0 restores that.
+    workflow_step_timeout_sec: int = 600
     # #700: browser origins allowed to call this API cross-site, for outside systems
     # that hand work over from their own page (e.g. a legacy analysis site whose
     # button creates or adds to a work item). Empty (default) ⇒ no CORS layer at
@@ -79,6 +87,28 @@ class ServerSettings:
     # and what the values mean all belong to the deploy's gateway, so the whole
     # decision lives in the impl rather than in a mapping table here.
     request_env: str = ""
+
+    # A dotted path to an `INotificationChannel` implementation: "and also send
+    # it somewhere other than the bell". Empty (default) ⇒ notifications stay
+    # in-app only, exactly as before this seam existed.
+    #
+    # The platform ships no implementation and never will — which relay, which
+    # from-address, which retention and compliance rules are the deploy's.
+    #
+    # ⚠️ Delivery is best-effort and completely decoupled: a failing channel
+    # NEVER fails whatever produced the notification. Otherwise a two-hour mail
+    # outage becomes "every scheduled job stopped itself", because a scheduled
+    # job that ends in a send would count the relay's failure as its own.
+    notification_channel: str = ""
+
+    # Most schedules ONE PAGE may declare in its `schedules.json`. A runaway
+    # guard, not a policy limit: the default is far above any real use, so
+    # hitting it means the page has a bug.
+    #
+    # ⚠️ Not setting it changes nothing — 1000 is the default in code too. What
+    # it bounds is durable state: every schedule that fires leaves a row in the
+    # window ledger, and nothing else caps how many a page can create.
+    max_page_schedules: int = 1000
 
     # #750 — dotted paths to `IEnvProvider` implementations: the deploy's own
     # code for "log in, get the variables", so a person who knows their account

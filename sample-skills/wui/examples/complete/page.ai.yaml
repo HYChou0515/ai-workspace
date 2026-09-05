@@ -1,0 +1,15 @@
+view: wui
+title: Scrap review
+# The page is the BUILD OUTPUT, not the source. `index.html` at the folder root
+# is Vite's template and loads `/src/main.tsx`, a dev-server path nothing can
+# inline — point `entry` at what the build wrote or the page renders blank.
+entry: dist/index.html
+# Only tools listed here can be called, and only ones this app also grants.
+# `lot-status` is a placeholder: replace it with a tool from "Tools this app
+# offers its WUIs" at the end of SKILL.md. The page still works with none — the
+# tool section says so instead of breaking.
+tools: [lot-status]
+# Same shape for runs: declared here, and capped by what this app's profile
+# actually has. The page works with none — the review section just reports the
+# refusal instead of breaking.
+workflows: [judge]

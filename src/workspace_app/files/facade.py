@@ -207,11 +207,25 @@ class WorkspaceFiles:
         quota: int | Callable[[str], int] = 0,
         person_gate: PersonDiskGate | None = None,
         on_usage: Callable[[str, int], Awaitable[None]] | None = None,
+        on_write: Callable[[str, str], None] | None = None,
         usage_window: float = _USAGE_WINDOW_S,
         now: Callable[[], float] = time.monotonic,
     ) -> None:
         self._fs = filestore
         self._sb = sandbox
+        # Called after every committed write, with (workspace_id, path).
+        #
+        # Here rather than in a route because this is the chokepoint EVERY write
+        # shares — the same reason the quota gate lives here. A page writes
+        # through the file PUT route; the agent's `write_file` tool does not
+        # touch a route at all; a workflow uses neither. A hook per route would
+        # catch some of those and miss the rest, silently.
+        #
+        # Deliberately sync and deliberately not awaited: it runs on the write
+        # path, so anything slow here is felt on every save in the platform. Its
+        # one production use records "this item has schedules" (#WUI P14), which
+        # is a point write against an in-memory-cached row.
+        self._on_write = on_write
         # #538: bytes one workspace may occupy; 0 ⇒ unlimited (the default, so the
         # wiki-page stores and other non-workspace uses are never gated).
         #
@@ -431,6 +445,33 @@ class WorkspaceFiles:
         previous = await self._ensure_headroom(workspace_id, path, len(data), warm)
         await self._write_unchecked(workspace_id, path, data, warm, previous)
 
+    def _landed(self, workspace_id: str, path: str) -> None:
+        """Bytes are now at `path`. Tell whoever asked to be told.
+
+        ONE definition, called by every write path there is. It used to be a
+        paragraph copy-pasted into `_write_unchecked`, and the copy is why the
+        schedule index shipped blind: `write_from_path` (the streaming upload
+        behind the file PUT route — which is how a WUI page's `writeFile` saves)
+        and `create_exclusive` both land bytes without going through that one
+        function, so they told nothing. A page's `schedules.json` was indexed
+        nowhere and its schedules fired never, in silence.
+
+        Deliberately NOT the place the usage accounting lives: each path
+        measures its delta differently (some know the previous size, some
+        proved the file absent), and folding that in here would hide a real
+        difference behind a shared name.
+
+        A failing hook must never fail the write. The bytes are committed by the
+        time this runs, so raising would report a failure for something that
+        SUCCEEDED, and the caller would reasonably retry a write that landed.
+        """
+        if self._on_write is None:
+            return
+        try:
+            self._on_write(workspace_id, path)
+        except Exception:
+            logger.exception("files: on_write hook failed for %s %s", workspace_id, path)
+
     async def _write_unchecked(
         self,
         workspace_id: str,
@@ -455,6 +496,7 @@ class WorkspaceFiles:
             self._forget(workspace_id)
         else:
             self._adjust(workspace_id, len(data) - previous)
+        self._landed(workspace_id, path)
 
     async def move(self, workspace_id: str, src: str, dst: str) -> None:
         """Relocate one file. **Not** quota-gated, and deliberately so: the bytes
@@ -532,6 +574,7 @@ class WorkspaceFiles:
             await self._ensure_headroom(workspace_id, path, len(data), warm)
             await sb.upload(h, data, path)
             self._adjust(workspace_id, len(data))  # proven absent above
+            self._landed(workspace_id, path)
             return
         if await self._fs.exists(workspace_id, path):
             raise FileExists(path)
@@ -539,8 +582,10 @@ class WorkspaceFiles:
         native = getattr(self._fs, "create_exclusive", None)
         if native is not None:
             await native(workspace_id, path, data)
+            self._landed(workspace_id, path)
             return
         await self._fs.write(workspace_id, path, data)
+        self._landed(workspace_id, path)
 
     async def write_from_path(
         self, workspace_id: str, path: str, source: Path, content_type: str | None = None
@@ -566,6 +611,7 @@ class WorkspaceFiles:
             self._forget(workspace_id)
         else:
             self._adjust(workspace_id, size - previous)
+        self._landed(workspace_id, path)
 
     async def read_to_file(self, workspace_id: str, path: str, dest: Path) -> None:
         """Like `read`, but stream the bytes out to the on-disk `dest` — RAM-free
@@ -1175,6 +1221,11 @@ class WorkspaceFiles:
             await self._ensure_headroom(workspace_id, path, len(updated), None)
             applied = await write_cas(workspace_id, path, updated, etag)
             if applied:
+                # Bytes landed, so whoever asked to be told is told — the same
+                # rule every other write path here keeps. This branch was the one
+                # `_landed` did NOT reach, which is the very shape it was
+                # extracted to close.
+                self._landed(workspace_id, path)
                 return None
             # A concurrent writer bumped the etag between our read and write —
             # loop to re-read and re-apply against the new content.

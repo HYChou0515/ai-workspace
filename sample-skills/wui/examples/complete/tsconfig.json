@@ -1,0 +1,29 @@
+{
+  "//": [
+    "Vite strips types and never type-checks, so without `tsc --noEmit` in the",
+    "build script (see package.json) TypeScript here would be decoration: the",
+    "build would go green over code the compiler rejects.",
+    "",
+    "`strict` is on for `strictNullChecks`, which is what makes the nullable",
+    "halves of this API mean anything: `whoami()`'s user, and `getElementById`",
+    "returning null. It is NOT what makes the `readFile` union bite — narrowing",
+    "a discriminated union works without it — so do not remove it believing",
+    "the union is what you are keeping."
+  ],
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": ["src"]
+}

@@ -58,10 +58,77 @@ describe("the WUI runtime", () => {
     expect(() => new Function(`return (${WUI_RUNTIME_SOURCE})`)()).not.toThrow();
   });
 
-  it("gives the page the seven verbs and nothing else", () => {
-    // The set is closed: another name here would be a capability nobody
-    // reviewed, and the page would have found it before we did. Everything
-    // added from now on is a `callTool` target, not an eighth verb.
+  it("keeps a run's call open while its progress arrives", async () => {
+    /**
+     * The whole reason `startRun` exists. Progress events arrive under the SAME
+     * id as the call, many of them, long before the one answer — so delivering
+     * one must NOT settle the promise.
+     *
+     * Untested, a mutation that treated a progress event like the answer passed
+     * everything: the page would resolve on the first "reading 12 files", show a
+     * result that is not one, and never hear the rest.
+     */
+    const { sent, fire, ws } = boot();
+    const seen: unknown[] = [];
+    let settled = false;
+
+    const call = ws()
+      .startRun("judge", { lot: "A1" }, (e: unknown) => seen.push(e))
+      .then((v: unknown) => {
+        settled = true;
+        return v;
+      });
+
+    const id = String(sent[0].id);
+
+    fire("message", { data: { proto: "wui/1", id, event: "run_event", payload: { step: 1 } } });
+    fire("message", { data: { proto: "wui/1", id, event: "run_event", payload: { step: 2 } } });
+    await Promise.resolve();
+
+    expect(seen).toEqual([{ step: 1 }, { step: 2 }]);
+    expect(settled).toBe(false); // still running — this is the point
+
+    // A bare `ok` reply, which is what the parent actually sends for `startRun`.
+    // A `{run_id}` here was a shape the platform never produces — the same
+    // double-invents-the-contract mistake the example was written against.
+    fire("message", { data: { proto: "wui/1", id, ok: true, value: undefined } });
+
+    // Resolves with nothing. What the test is for is that it resolves HERE —
+    // at the reply — and not at the first progress event.
+    await expect(call).resolves.toBeUndefined();
+  });
+
+  it("a throwing progress handler is reported, not swallowed", async () => {
+    /**
+     * The handler is the page author's code, and a page is written by an LLM. A
+     * throw here must reach the pane the way any other page error does — silence
+     * would leave a run that IS progressing looking frozen.
+     */
+    const { sent, fire, ws } = boot();
+
+    void ws().startRun("judge", {}, () => {
+      throw new Error("bad draw");
+    });
+    const id = String(sent[0].id);
+
+    fire("message", { data: { proto: "wui/1", id, event: "run_event", payload: {} } });
+
+    expect(sent.some((m) => m.report === "error" && String(m.message).includes("bad draw"))).toBe(
+      true,
+    );
+  });
+
+  it("gives the page these verbs and nothing else", () => {
+    // The set is closed to CAPABILITIES: another name that reaches an outside
+    // system would be one nobody reviewed, and the page would have found it
+    // before we did. Those arrive as `callTool` targets, never as a verb.
+    //
+    // `startRun` is the exception, and it is one on purpose (#WUI P18): a run is
+    // the platform's own execution primitive, in the same class as `readFile`,
+    // and it CANNOT be a `callTool` target because `callTool` answers once and a
+    // run reports progress for minutes. Adding it as a verb is a deliberate
+    // widening of the trusted surface; adding the next one needs the same
+    // argument, in writing, or the rule has quietly become nothing.
     const { ws } = boot();
 
     expect(Object.keys(ws()).sort()).toEqual([
@@ -71,6 +138,7 @@ describe("the WUI runtime", () => {
       "onFileChanged", // a subscription, not a verb
       "openFile",
       "readFile",
+      "startRun",
       "whoami",
       "writeFile",
     ]);

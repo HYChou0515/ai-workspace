@@ -1,12 +1,13 @@
-// A WUI written with a build step. Copy this when the page is complex enough
-// that hand-written DOM stops paying — a form with real validation, a table
-// with sorting and filtering, anything with state worth naming.
+// A WUI written with a build step, in TypeScript. Copy this one by default:
+// with auto-rebuild the build costs the reader nothing, and the types catch the
+// class of mistake a WUI cannot afford — one that renders a page which is
+// quietly wrong for somebody who cannot open a console.
 //
 // The bridge needs nothing special here. `window.workspace` is a plain global
-// that exists before your first line runs, so it is read in an effect and
-// nothing about React changes how it behaves.
+// that exists before your first line runs; `src/wui.d.ts` is what tells the
+// compiler its shape. Copy that file unchanged.
 
-import React, { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 // With a build step the bundler owns the stylesheet: import it here and Vite
@@ -17,15 +18,26 @@ import "./styles.css";
 
 const DATA = "data.json"; // in THIS page's folder — the only place it may write
 
+/** A row of this page's own data. Your page's shape goes here. */
+interface Row {
+  text: string;
+  by: string;
+}
+
 /** Read this page's own data, treating absence as the empty start. */
 function useRows() {
-  const [rows, setRows] = useState(null); // null = still reading
+  const [rows, setRows] = useState<Row[] | null>(null); // null = still reading
   const [problem, setProblem] = useState("");
 
   const reload = useCallback(() => {
     window.workspace
       .readFile(DATA)
-      .then((file) => setRows(JSON.parse(file.text)))
+      // `readFile` returns a UNION, and `.text` exists on only one arm — so
+      // this narrowing is not ceremony. Untyped, the day somebody drops an
+      // image where the data was, `JSON.parse(undefined)` throws, the `.catch`
+      // below absorbs it, and the page shows "Nothing yet." over a file that is
+      // right there.
+      .then((file) => setRows(file.kind === "text" ? (JSON.parse(file.text) as Row[]) : []))
       // First run: the file is not there yet. That is the documented way to
       // start empty, and the platform does not report it as a fault.
       .catch(() => setRows([]));
@@ -42,14 +54,14 @@ function useRows() {
     });
   }, [reload]);
 
-  const save = useCallback((next) => {
+  const save = useCallback((next: Row[]) => {
     setRows(next);
     window.workspace
       .writeFile(DATA, JSON.stringify(next, null, 2))
       // Show the platform's sentence, not one of your own: it names the thing
       // the reader can change.
       .then(() => setProblem(""))
-      .catch((err) => setProblem(err.message));
+      .catch((err: Error) => setProblem(err.message));
   }, []);
 
   return { rows, problem, save };
@@ -61,7 +73,13 @@ function App() {
   const [draft, setDraft] = useState("");
 
   useEffect(() => {
-    window.workspace.whoami().then((who) => setMe(who.user)).catch(() => setMe(""));
+    window.workspace
+      .whoami()
+      // `?? ""` because `user` is genuinely nullable while the platform is still
+      // resolving who is looking. Typed honestly, the compiler makes you say what
+      // to do about it here rather than letting `null` into a `string` state.
+      .then((who) => setMe(who.user ?? ""))
+      .catch(() => setMe(""));
   }, []);
 
   if (rows === null) return <p>Reading…</p>;
@@ -69,7 +87,11 @@ function App() {
   return (
     <div>
       <h1>Built page</h1>
-      {problem ? <p role="alert" className="problem">{problem}</p> : null}
+      {problem ? (
+        <p role="alert" className="problem">
+          {problem}
+        </p>
+      ) : null}
 
       <section data-wui="add">
         <input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Note" />
@@ -102,4 +124,6 @@ function App() {
   );
 }
 
-createRoot(document.getElementById("root")).render(<App />);
+// `!` because the element is right there in `index.html`. If you ever move it,
+// the compiler cannot help you — the check is the template, not the type.
+createRoot(document.getElementById("root")!).render(<App />);

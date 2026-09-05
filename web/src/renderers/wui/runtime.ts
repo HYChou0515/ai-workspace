@@ -87,10 +87,12 @@ function wuiRuntime(window: any, parent: any, document: any): void {
     });
   }
 
-  function send(verb: any, args?: any) {
+  function send(verb: any, args?: any, onEvent?: any) {
     return new Promise(function (resolve: any, reject: any) {
       var id = String(++seq);
-      pending[id] = { resolve: resolve, reject: reject };
+      // `onEvent` rides along on the pending entry rather than in a second map:
+      // it lives exactly as long as the call, and it goes away with it.
+      pending[id] = { resolve: resolve, reject: reject, onEvent: onEvent };
       post({ proto: PROTO, id: id, verb: verb, args: args || {} });
     });
   }
@@ -118,6 +120,22 @@ function wuiRuntime(window: any, parent: any, document: any): void {
 
     var p = pending[m.id];
     if (!p) return;
+
+    // A run's progress: many of these arrive before the one answer does, so it
+    // must NOT clear the pending entry. Reported to the page as-is — it decides
+    // what to draw, and one it does not recognise is one it can ignore.
+    if (m.event === "run_event") {
+      if (p.onEvent) {
+        try {
+          p.onEvent(m.payload);
+        } catch (thrown: any) {
+          var why2 = thrown && thrown.message ? thrown.message : thrown;
+          report("error", "A progress handler threw: " + why2);
+        }
+      }
+      return;
+    }
+
     delete pending[m.id];
     if (m.ok) {
       p.resolve(m.value);
@@ -265,6 +283,9 @@ function wuiRuntime(window: any, parent: any, document: any): void {
   window.workspace = {
     listFiles: function (prefix?: any) { return send("listFiles", { prefix: prefix || "" }); },
     readFile: function (path: any) { return send("readFile", { path: path }); },
+    startRun: function (workflow: any, payload: any, onEvent: any) {
+      return send("startRun", { workflow: workflow, with: payload || {} }, onEvent);
+    },
     writeFile: function (path: any, text: any) { return send("writeFile", { path: path, text: text }); },
     deleteFile: function (path: any) { return send("deleteFile", { path: path }); },
     openFile: function (path: any) { return send("openFile", { path: path }); },

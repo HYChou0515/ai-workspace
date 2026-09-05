@@ -16,7 +16,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from workspace_app.api.locator import ItemLocator
-from workspace_app.api.wui_routes import register_wui_routes
+from workspace_app.api.wui_routes import BUILD_STEP_MARK, register_wui_routes
 from workspace_app.resources import AgentConfig
 from workspace_app.sandbox.protocol import (
     ExecResult,
@@ -89,6 +89,8 @@ class _Locator:
         self.allowed = allowed
         self.env = env or {}
         self.asked_verb: list[str] = []
+        self.opened: list[tuple[str, str]] = []
+        self.settled: list[tuple[str, str | None]] = []
 
     def require_access(self, slug: str, item_id: str, verb: str) -> str:
         self.asked_verb.append(verb)
@@ -99,6 +101,21 @@ class _Locator:
 
     def env_vars_of(self, item_id: str) -> dict[str, str]:
         return dict(self.env)
+
+    def profile_of(self, item_id: str) -> str:
+        return "default"
+
+    def owner_of(self, item_id: str) -> str | None:
+        # A scheduled or page-started run acts as the item's owner: there is no
+        # request behind it, so there is no personal credential to inherit.
+        return "alice"
+
+    def open_run_chat(self, item_id: str, title: str) -> str:
+        self.opened.append((item_id, title))
+        return f"chat-{len(self.opened)}"
+
+    def settle_run_chat(self, chat_id: str, run_id: str | None) -> None:
+        self.settled.append((chat_id, run_id))
 
 
 #: `allowed=None` is a MEANINGFUL value here — "this deploy did not restrict" —
@@ -116,6 +133,10 @@ def build(
     sandbox: _Sandbox | None = None,
     registry: _Registry | None = None,
     locator: _Locator | None = None,
+    request_env=None,
+    orchestrator=None,
+    turn_engine=None,
+    workflows: list[str] | None = None,
 ):
     app = FastAPI()
     sb = sandbox or _Sandbox()
@@ -137,6 +158,11 @@ def build(
         packages=packages if packages is not None else [PKG],
         prebuilt_dir=None,
         resolve_external=_external,
+        request_env=request_env,
+        get_user_id=lambda: "default-user",
+        orchestrator=orchestrator,
+        turn_engine=turn_engine,
+        workflows_for=lambda _item: workflows or [],
     )
     return TestClient(app), sb, reg, loc
 
@@ -417,6 +443,34 @@ def test_build_provisions_the_dependencies_the_mirror_never_kept():
     script = " ".join(sandbox.calls[0])
     assert "pnpm install" in script
     assert script.index("pnpm install") < script.index("pnpm run build")
+
+
+def test_the_log_says_where_installing_stopped_and_building_started():
+    """One command, two steps, and the pane gives ONE verdict for both.
+
+    The steps are chained with `&&`, so a failed install means the build never
+    ran at all — but the pane says "Build failed (exit 1)", which reads as "the
+    build ran and rejected my code". The natural place to look instead cannot
+    answer it either: a page with no dependencies installs successfully and
+    leaves `node_modules` holding a single metadata file, indistinguishable from
+    an install that died on its first write. (Both were seen in production, and
+    the second was diagnosed as the first.)
+
+    So the log draws the line itself. Because the marker is chained the same
+    way, its ABSENCE is the signal: no marker means the install is what failed.
+    """
+    sandbox = _BuildSandbox([b"ok\n"])
+    client, _, _, _ = build(sandbox=sandbox)
+
+    client.post(BUILD_URL, json={"folder": "/page"})
+    script = sandbox.calls[0][-1]
+
+    assert BUILD_STEP_MARK in script
+    assert script.index("pnpm install") < script.index(BUILD_STEP_MARK)
+    assert script.index(BUILD_STEP_MARK) < script.index("pnpm run build")
+    # Chained, not sequenced: `;` would print it even when the install failed,
+    # which is the one case the marker exists to distinguish.
+    assert ";" not in script.split("fi")[-1]
     # With a lockfile, the install must be the reproducible one: two installs
     # from one lock that resolve differently make the lock pointless.
     assert "--frozen-lockfile" in script
@@ -559,3 +613,277 @@ def test_leaving_the_page_takes_the_build_with_it():
         assert sandbox.cancelled, "the build outlived the reader who asked for it"
 
     asyncio.run(drive())
+
+
+def test_the_build_gets_the_item_environment():
+    """A build is a command in the item's sandbox, and the item's environment is
+    what a command in it runs with — the registry token behind a private
+    package, a proxy, a flag. Without it a page that builds fine for the agent
+    fails for the person who presses Rebuild, and the difference is invisible.
+
+    Same authority, not more: pressing Rebuild needs `execute`, which is the
+    authority to run things here, and the agent's own `exec` already carries
+    this environment."""
+    sandbox = _BuildSandbox([b"ok\n"])
+    client, _, _, _ = build(sandbox=sandbox, env={"NPM_TOKEN": "s3cret", "HTTPS_PROXY": "http://p"})
+
+    client.post(BUILD_URL, json={"folder": "/page"})
+
+    assert sandbox.envs[0]["NPM_TOKEN"] == "s3cret"
+    assert sandbox.envs[0]["HTTPS_PROXY"] == "http://p"
+
+
+class _Env:
+    """A request→env seam, the way a deploy supplies one (#714)."""
+
+    def __init__(self, value: dict[str, str] | None = None, boom: bool = False):
+        self.value = value or {}
+        self.boom = boom
+        self.asked: list[tuple[str, str]] = []
+
+    async def env_for(self, request, *, user_id: str, item_id: str) -> dict[str, str]:
+        self.asked.append((user_id, item_id))
+        if self.boom:
+            raise RuntimeError("the token exchange refused")
+        return dict(self.value)
+
+
+def test_the_build_never_sees_the_requests_environment():
+    """A build writes `dist/`, which is mirrored to durable storage and inlined
+    into the document served to EVERY viewer of the item. Putting a bundler's
+    environment into its artifact is what a bundler DOES — Vite lifts
+    `VITE_`-prefixed names out of `process.env` and defines them into the
+    bundle — so a per-request credential reaching here would be baked into a
+    file other people download.
+
+    That is precisely what `IRequestEnv` promises never happens: "the values it
+    returns are NEVER written back anywhere. They live for exactly one turn."
+
+    So the seam is not even ASKED. Asking and discarding would still pay the
+    latency and still hit the impl's rate limit on every page open, and the
+    next person to read the code would have to work out which it was."""
+    sandbox = _BuildSandbox([b"ok\n"])
+    env = _Env({"NPM_TOKEN": "from-request", "VITE_API_KEY": "s3cret"})
+    client, _, _, _ = build(sandbox=sandbox, request_env=env)
+
+    client.post(BUILD_URL, json={"folder": "/page"})
+
+    assert env.asked == []
+    assert "NPM_TOKEN" not in sandbox.envs[0]
+    assert "VITE_API_KEY" not in sandbox.envs[0]
+
+
+def test_a_failing_env_source_does_not_stop_a_build():
+    """Follows from the above rather than being a separate decision: a seam the
+    build never consults cannot fail it. A build refused because somebody's
+    cookie expired would be a page that stops rebuilding for everyone."""
+    sandbox = _BuildSandbox([b"ok\n"])
+    env = _Env(boom=True)
+    client, _, _, _ = build(sandbox=sandbox, request_env=env)
+
+    resp = client.post(BUILD_URL, json={"folder": "/page"})
+
+    assert resp.status_code == 200
+    # A 200 alone would also be true of a route that answered without building.
+    # The claim is that the build RAN, untouched by a seam it never consults.
+    assert env.asked == []
+    assert len(sandbox.calls) == 1
+
+
+def test_a_tool_called_from_a_page_gets_the_request_environment():
+    """The whole point of `callTool` is that credentials stay on the platform.
+    A deploy that mints them per request had none of that reach a page — the
+    same tool worked from the chat and not from the page it was written for."""
+    env = _Env({"MES_TOKEN": "from-request", "MES_HOST": "from-request"})
+    sandbox = _Sandbox(ExecResult(exit_code=0, stdout=b"{}"))
+    client, _, _, _ = build(sandbox=sandbox, env={"MES_HOST": "from-item"}, request_env=env)
+
+    resp = client.post(URL, json={"args": {}})
+
+    assert resp.status_code == 200
+    assert sandbox.envs[-1]["MES_TOKEN"] == "from-request"
+    # A NAME SET IN BOTH PLACES must resolve the way it does in a turn. Asserting
+    # only that both arrive leaves the order free: a first draft of this test used
+    # two names that could not collide, and flipping the merge kept it green.
+    assert sandbox.envs[-1]["MES_HOST"] == "from-item"
+    assert env.asked == [("default-user", "i1")]
+
+
+def test_a_failing_env_source_refuses_a_tool_call():
+    """Here the refusal is right: a tool call answers ONE person, and running it
+    without their credential would answer as somebody else — an answer that looks
+    correct and is not. `chat_send` refuses a send for the same reason.
+
+    The detail is a SENTENCE. The chat client maps `{"error": ...}` into human
+    words; the WUI clients keep `detail` only when it is a string, so a dict
+    reached the page as "could not be run (500)" with nothing to act on. The
+    impl's own message is still not relayed."""
+    sandbox = _Sandbox(ExecResult(exit_code=0, stdout=b"{}"))
+    client, _, _, _ = build(sandbox=sandbox, request_env=_Env(boom=True))
+
+    resp = client.post(URL, json={"args": {}})
+
+    assert resp.status_code == 500
+    detail = resp.json()["detail"]
+    assert isinstance(detail, str)
+    assert "sign in again" in detail.lower()
+    assert sandbox.calls == []
+
+
+# ── starting a run from the page (#WUI P18) ──────────────────────────────────
+
+RUN_URL = "/a/rca/items/i1/wui/run"
+
+
+class _Orchestrator:
+    """Records what was launched and on which stream key. The key matters as
+    much as the launch: subscribing to the wrong one is a page that waits
+    forever with no error."""
+
+    def __init__(self, fail: bool = False, order: list[str] | None = None):
+        self.started: list[dict] = []
+        self.fail = fail
+        self.order = order
+
+    async def start(self, **kw) -> str:
+        if self.order is not None:
+            self.order.append("start")
+        if self.fail:
+            raise RuntimeError("the workflow could not start")
+        self.started.append(kw)
+        return "run-1"
+
+
+class _Engine:
+    """The turn engine's SSE relay, as a double."""
+
+    def __init__(self, order: list[str] | None = None) -> None:
+        self.keys: list[str] = []
+        self.order = order
+        #: `subscribe_sse` attaches the subscriber EAGERLY — the outer call is
+        #: not a generator — so a stream nobody ever iterates keeps its queue and
+        #: its session forever. Releasing it is part of the contract, so the
+        #: double carries it and the tests can see whether it happened.
+        self.forgotten: list[str] = []
+
+    async def forget(self, key: str) -> None:
+        self.forgotten.append(key)
+
+    def subscribe_sse(self, key: str, user_id: str = "", **kw):
+        if self.order is not None:
+            self.order.append("subscribe")
+        self.keys.append(key)
+
+        async def gen():
+            yield 'data: {"type":"done"}\n\n'
+
+        return gen()
+
+
+def test_a_page_can_start_a_declared_workflow_and_watch_it():
+    """The synchronous half of the same engine: one run, started now, watched
+    live. Not a second mechanism — a click and a schedule differ only in whether
+    somebody is looking."""
+    orch, engine = _Orchestrator(), _Engine()
+    client, _, _, _ = build(orchestrator=orch, turn_engine=engine, workflows=["judge"])
+
+    resp = client.post(RUN_URL, json={"workflow": "judge", "with": {"lot": "A1"}})
+
+    assert resp.status_code == 200
+    assert orch.started[0]["workflow_id"] == "judge"
+    assert orch.started[0]["payload"] == {"lot": "A1"}
+
+
+def test_the_stream_is_scoped_to_this_one_invocation():
+    """Without its own key the page would receive every event on the item — the
+    agent's chat, somebody else's run — and have to filter events it was never
+    given a contract for."""
+    orch, engine = _Orchestrator(), _Engine()
+    client, _, _, _ = build(orchestrator=orch, turn_engine=engine, workflows=["judge"])
+
+    client.post(RUN_URL, json={"workflow": "judge"})
+
+    assert engine.keys and engine.keys[0] == orch.started[0]["chat_id"]
+    assert engine.keys[0] != "i1"
+
+
+def test_the_run_is_started_on_a_conversation_that_exists():
+    """`chat_id` is not a label — it is looked UP. `workflow_exec.drive_turn`
+    resolves it and, finding nothing, falls back to the item's DEFAULT chat: the
+    page's run would then read the user's own chat history as its context and
+    append its turns there, in a conversation nobody opened it from.
+
+    The same id is what `active_run_for_chat` matches on, so a minted uuid also
+    means the one-run-per-item rule never applies to a page at all. Click twice
+    and two runs write into one conversation with no CAS between them, and each
+    loses the other's messages.
+    """
+    orch, engine, loc = _Orchestrator(), _Engine(), _Locator(["mes"])
+    client, _, _, _ = build(orchestrator=orch, turn_engine=engine, workflows=["judge"], locator=loc)
+
+    client.post(RUN_URL, json={"workflow": "judge"})
+
+    assert loc.opened == [("i1", "judge")], "the route minted its own key"
+    assert orch.started[0]["chat_id"] == "chat-1"
+    assert engine.keys == ["chat-1"]
+
+
+def test_a_run_that_never_started_leaves_no_chat_behind():
+    """A conversation with no `run_id` is a FREE chat, and the earliest free
+    chat is what the item opens as its default. So a page whose workflow refused
+    to start would silently install a new default chat for everyone on the item
+    — and every retry would install another.
+    """
+    orch, engine, loc = _Orchestrator(fail=True), _Engine(), _Locator(["mes"])
+    client, _, _, _ = build(orchestrator=orch, turn_engine=engine, workflows=["judge"], locator=loc)
+
+    resp = client.post(RUN_URL, json={"workflow": "judge"})
+
+    assert resp.status_code == 502
+    assert loc.settled == [("chat-1", None)], "the chat outlived the run it was opened for"
+    assert engine.forgotten == ["chat-1"], "the stream nobody will read stayed subscribed"
+
+
+def test_it_subscribes_before_it_starts():
+    """Ordering, and it is not cosmetic: a run that begins before anyone is
+    listening loses its first events — exactly the ones that tell the page
+    something is happening — so the page shows nothing for the first second of
+    every call, every time.
+
+    Both doubles write into ONE list rather than the test patching methods onto
+    instances: what is under test is the order the route does two things in, and
+    a recording double says that directly.
+    """
+    order: list[str] = []
+    orch, engine = _Orchestrator(order=order), _Engine(order=order)
+    client, _, _, _ = build(orchestrator=orch, turn_engine=engine, workflows=["judge"])
+
+    client.post(RUN_URL, json={"workflow": "judge"})
+
+    assert order == ["subscribe", "start"]
+
+
+def test_a_workflow_this_app_does_not_have_is_refused_by_name():
+    """The same ceiling shape as `tools:` — the app's list is the gate, and the
+    refusal names what was asked for, because it reaches a person through the
+    page's own error panel."""
+    orch, engine = _Orchestrator(), _Engine()
+    client, _, _, _ = build(orchestrator=orch, turn_engine=engine, workflows=["judge"])
+
+    resp = client.post(RUN_URL, json={"workflow": "something-else"})
+
+    assert resp.status_code == 403
+    assert "something-else" in resp.json()["detail"]
+    assert orch.started == []
+
+
+def test_a_run_that_will_not_start_is_a_sentence_not_a_stream():
+    """A page that got a 200 and an empty stream cannot tell "it failed to
+    start" from "it is still thinking". The refusal has to arrive as a refusal."""
+    orch, engine = _Orchestrator(fail=True), _Engine()
+    client, _, _, _ = build(orchestrator=orch, turn_engine=engine, workflows=["judge"])
+
+    resp = client.post(RUN_URL, json={"workflow": "judge"})
+
+    assert resp.status_code == 502
+    assert "judge" in resp.json()["detail"]

@@ -3,6 +3,6 @@ title: Built page
 
 # The BUILD OUTPUT is the page. Without this line the renderer looks for
 # `index.html` at the folder root and finds the pre-build one Vite uses as its
-# template — which loads `/src/main.jsx`, a path nothing can inline. The page
+# template — which loads `/src/main.tsx`, a path nothing can inline. The page
 # renders empty and nothing says why.
 entry: dist/index.html

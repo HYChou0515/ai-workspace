@@ -15,13 +15,14 @@ item's default chat.
 
 from __future__ import annotations
 
+import contextlib
 import time
 from collections.abc import Callable
 from typing import NamedTuple
 
 from fastapi import HTTPException
 from specstar import SpecStar
-from specstar.types import ResourceIDNotFoundError
+from specstar.types import ResourceIDNotFoundError, ResourceIsDeletedError
 
 from ..apps.catalog import AppCatalog
 from ..apps.manifest import load_app_manifest
@@ -38,6 +39,7 @@ from .item_authz import (
     refuse_if_gone,
 )
 from .item_conversation_perm import item_conversation_mirror
+from .timeutil import now_ms
 
 # Permission facts change on an administrative timescale, requests arrive on a
 # human one. Matches the other windows in this codebase (usage_window, the
@@ -332,3 +334,46 @@ class ItemLocator:
         if not isinstance(conv, Conversation) or conv.item_id != investigation_id:
             raise HTTPException(status_code=404, detail=f"unknown chat: {chat_id!r}")
         return chat_id, conv
+
+    def open_run_chat(self, item_id: str, title: str) -> str:
+        """Open a conversation for a run that is about to start, and return its id.
+
+        A run's ``chat_id`` is not a label — `workflow_exec.drive_turn` LOOKS IT
+        UP, and one that resolves to nothing falls back to the item's default
+        chat. A page-started run would then read the user's own chat history as
+        its context and append its turns there. The same id is what
+        `active_run_for_chat` matches on, so an invented one also means the
+        one-run-per-item rule silently stops applying.
+        """
+        return self._conv_rm.create(
+            Conversation(
+                item_id=item_id,
+                title=title,
+                created_ms=now_ms(),
+                # #306 PR3: the item read-chat mirror gates the thread.
+                **item_conversation_mirror(self._spec, item_id),
+            )
+        ).resource_id
+
+    def settle_run_chat(self, chat_id: str, run_id: str | None) -> None:
+        """Link the chat to the run it was opened for — or, when the run never
+        started, remove it.
+
+        A conversation with no ``run_id`` is a FREE chat, and the earliest free
+        chat is what the item opens as its default (`find_default_conversation`).
+        So a chat left behind by a refused run does not merely litter: it can
+        become the default conversation for everyone on the item, and each retry
+        leaves another.
+        """
+        if run_id is None:
+            # Both errors, because specstar deletes SOFTLY: a second cleanup of
+            # the same chat reports "already deleted", not "not found", and a
+            # cleanup that raises turns one failed run into a second, unrelated
+            # failure for whoever happened to be second.
+            with contextlib.suppress(ResourceIDNotFoundError, ResourceIsDeletedError):
+                self._conv_rm.delete(chat_id)
+            return
+        chat = self._conv_rm.get(chat_id).data
+        assert isinstance(chat, Conversation)
+        chat.run_id = run_id
+        self._conv_rm.update(chat_id, chat)
