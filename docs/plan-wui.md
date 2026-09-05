@@ -563,8 +563,35 @@ union 形狀、`acting_user` 必填、workflow run 的紀錄與取消、`Sandbox
 本、`handle.py` 的 `step_timeout_s`、`tools:` 的宣告+天花板形狀(第三次沿用:tools / workflows /
 agents 都同一套)。
 
-**新建:** 讀 item 層級宣告的 sweeper 分支 + 索引表、內容導出的 `trigger_id`、
-`INotificationChannel`、頁面開 run 的入口與事件回傳、無外殼路由、排程列數護欄(config)。
+**新建(2026-09-05 全部完成,P12–P18):**
+
+| 做什麼 | P | 落在哪 |
+|---|---|---|
+| `INotificationChannel` 出站接縫 | P12 | `api/notification_delivery.py` |
+| item 層級的排程宣告 + 內容導出的 `trigger_id` | P13 | `workflow/user_schedules.py` |
+| 索引表 + 寫入路徑上的維護 | P14 | `api/schedule_index.py`、`files/facade.py` 的 `on_write` |
+| sweeper 讀 item 宣告並驅動 | P15 | `workflow/user_schedule_sweep.py` |
+| 排程列數護欄(config) | P16 | `server.max_page_schedules`,接進 lifespan |
+| 無外殼路由 | P17 | `web/src/pages/WuiPage.tsx`,`/w/:slug/:itemId/*` |
+| 頁面開 run 的入口與事件回傳 | P18 | `wui/run` 路由、`startRun` 動詞、`renderers/wui/run.ts` |
+
+⚠️ **P18 動了一條寫死的規矩。** `protocol.ts` 原本寫「介面永遠不再長新動詞」,而 `startRun`
+是一個新動詞。規矩已改寫成它現在真正的樣子:**對「能力」關閉**(碰得到外部系統的東西一律是
+`callTool` 目標),可以再加的是**平台原語**,而且必須是 tool call 表達不了的。`startRun` 是:
+`callTool` 只答一次,run 要報告幾分鐘的進度。**下一個要加的欠同樣一段書面理由,否則這條規矩
+就等於沒有了。**
+
+⚠️ **每個 phase 的突變測試帳(綠的都是我的測試太弱,不是程式碼錯):**
+
+| P | 洞 | 最貴的那個 |
+|---|---|---|
+| P12 | 0 / 6 | — |
+| P13 | 1 / 10 | 分支在預設值下永遠等價,對錯兩種寫法都讓 `is_due` 說是 |
+| P14 | 1 / 8 | 測試斷言的是清單,而守衛真正防的是「每次存檔多一次寫入」 |
+| P15 | **4 / 8** | **鎖和帳本互相掩護**——單行程裡兩者之間沒有 await,連併發測試都照樣綠 |
+| P16 | — | 設定守門在欄位沒人讀時自己咬 |
+| P17 | 1 / 4 | 兩個錯誤訊息都含路徑,只斷言路徑就分不出「檔案不在」和「不是頁面」 |
+| P18 | 2 / 8 | **runtime 的事件分支完全沒測試**——把進度當成答案,頁面會在第一個事件就以為跑完 |
 
 ## 知情不做
 
