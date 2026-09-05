@@ -321,3 +321,34 @@ describe("useChatSession", () => {
     );
   });
 });
+
+describe("the sender's own message", () => {
+  // The bubble used to be drawn only by the `user_message` broadcast, which
+  // `chat_send` publishes after the entire turn preamble — compaction, a cold
+  // sandbox wake, context and skill file reads, the `/tokenize` probe. So the
+  // one person who knows when they pressed send watched their words vanish for
+  // as long as all that took.
+  //
+  // `post` here NEVER resolves: the failure at its extreme, and the reason this
+  // cannot be tested by letting the fake transport return quickly. Nothing the
+  // backend does may stand between typing and seeing.
+  it("appears without waiting for the backend", async () => {
+    const t = fakeTransport({ post: vi.fn(() => new Promise<void>(() => {})) });
+    const { result } = render(t);
+    await waitFor(() => expect(result.current.log.entries).toHaveLength(1));
+
+    act(() => {
+      void result.current.send("hello");
+    });
+
+    await waitFor(() => expect(result.current.log.entries).toHaveLength(2));
+    const drawn = result.current.log.entries.at(-1);
+    expect(drawn?.kind === "message" && drawn.message.content).toBe("hello");
+    // Under the sender's own id, not a placeholder: the broadcast adopts this
+    // entry by author + content, so an id that disagrees with the one the
+    // backend stamps means the broadcast draws a second bubble instead.
+    expect(drawn?.kind === "message" && drawn.message.author).toBe("tester");
+    // And the composer is locked, which the broadcast used to be what did.
+    expect(result.current.log.streaming).toBe(true);
+  });
+});

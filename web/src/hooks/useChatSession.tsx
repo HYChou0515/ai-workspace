@@ -37,8 +37,14 @@ export type { ChatThread };
  *
  * Broadcast semantics (#43): the POST only ENQUEUES the turn — the user's own
  * message and every turn event come back over the shared subscription, so all
- * viewers see the turn, and nothing is pushed optimistically here (that would
- * double it).
+ * viewers see the turn.
+ *
+ * The sender's own message is the one exception, and it is drawn locally the
+ * moment they send it (`drawOwnAsk`). Everything else waits for the broadcast
+ * because the broadcast is what tells a viewer it happened; the sender already
+ * knows, and they are the only one who can measure how long the answer took to
+ * come back. That local copy is `pending` until the broadcast adopts it, so it
+ * stays one bubble rather than becoming two.
  */
 
 export type ChatSendOpts = {
