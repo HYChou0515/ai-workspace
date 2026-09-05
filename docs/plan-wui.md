@@ -672,6 +672,14 @@ cover it」的那個 commit 裡)、`startRun` 的 `run_id` 永遠是空字串、
 
 ### 知情未做(這一輪沒補,理由寫在這裡)
 
+- **「自動跑的走背景 lane,遇到 429 不等」沒有實作。** 上面憑證那一節把它寫得像設計的一部分,
+  但 `failover/model.py` 的等待判斷只比 `_held_s` 和 `rate_limit_budget_s`,**完全不看 lane**
+  ——`failover/` 底下沒有任何地方引用 `CallLane`。所以排程跑的 turn 碰到 429 一樣會等,
+  預設上限兩小時,而它等的時候佔著那個 item 的沙盒容量。
+  **為什麼不在這一輪做:** lane 是每個 turn 解出來的(`turn_context`),等待預算是端點屬性
+  (`factories._endpoint`,從 settings+preset 建),要接起來是**穿過整條 LLM 呼叫路徑的跨層改動**,
+  而那條路徑是平台每一次 LLM 呼叫共用的。做錯的方向是「互動 turn 不再等待」,那是使用者看得到的
+  退步。它該有自己的一輪,不是十三個修正 commit 之後順手加的。
 - **Q5「全 item 看得到所有排程,任何人可取消」沒有介面。** 頁面可以 `readFile` 自己的
   `schedules.json` 並畫出來(reference.md 已經教了),所以**單一頁面內**看得到;但「item 上有哪些
   幽靈排程」仍然要先知道是哪個資料夾。這是一個**新功能**不是缺陷修復,規模是一個 FE 視圖 +
