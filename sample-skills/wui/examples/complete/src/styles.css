@@ -1,0 +1,166 @@
+/*
+ * A page with no stylesheet is not "unstyled" — it is the browser's 1995
+ * defaults, and that is the first thing the person who asked for the page sees.
+ *
+ * Deliberately plain and deliberately SHORT: this is here so the page looks
+ * finished on the first open, not so anyone copies a design system out of it.
+ * Change the colours; the structure is what matters.
+ */
+
+.page {
+  font:
+    14px/1.5 system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
+  color: #1c2530;
+  padding: 16px 20px;
+  max-width: 68rem;
+  margin: 0 auto;
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid #dde3ea;
+  padding-bottom: 8px;
+  margin-bottom: 16px;
+}
+
+h1 {
+  font-size: 1.25rem;
+  margin: 0;
+}
+
+h2 {
+  font-size: 0.95rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #5b6875;
+  margin: 20px 0 8px;
+}
+
+.muted {
+  color: #5b6875;
+}
+
+/* Every failure this page can show, in one place. Loud enough to notice and
+   quiet enough not to look like a crash — a person who cannot open a console
+   has only this. */
+.problems {
+  background: #fdf0ec;
+  border: 1px solid #e8b9a8;
+  border-radius: 4px;
+  padding: 8px 12px;
+  margin: 0 0 16px;
+  list-style: none;
+}
+
+.problems li + li {
+  margin-top: 4px;
+}
+
+/* The chart needs a HEIGHT from CSS. Chart.js with `maintainAspectRatio: false`
+   fills its container, and a container with no height is zero pixels tall — a
+   chart that renders perfectly and is invisible. */
+.plot {
+  position: relative;
+  height: 260px;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid #eef1f5;
+  vertical-align: middle;
+}
+
+th {
+  font-weight: 600;
+  color: #5b6875;
+  font-size: 0.85rem;
+}
+
+td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+input {
+  font: inherit;
+  padding: 4px 6px;
+  border: 1px solid #cfd7e0;
+  border-radius: 3px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+button {
+  font: inherit;
+  padding: 4px 10px;
+  border: 1px solid #cfd7e0;
+  border-radius: 3px;
+  background: #fff;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: #f4f7fa;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+pre {
+  background: #f4f7fa;
+  border: 1px solid #e3e9ef;
+  border-radius: 4px;
+  padding: 8px 10px;
+  overflow-x: auto;
+  font-size: 12px;
+  margin: 0;
+}
+
+/* Progress from a run. The page draws this itself — the platform hands over its
+   events and says nothing about how they should look. */
+.progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #5b6875;
+  font-size: 0.9rem;
+}
+
+.progress .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #33506e;
+  animation: pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress .dot {
+    animation: none;
+  }
+}

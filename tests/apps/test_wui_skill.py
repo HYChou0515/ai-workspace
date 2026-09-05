@@ -18,29 +18,59 @@ import pytest
 from workspace_app.apps.shared_skills import SHARED_SKILLS
 from workspace_app.apps.skill_payload import skill_payload
 
+#: Every example that ships, DERIVED from what is on disk rather than typed out.
+#:
+#: A hand-written list drifts the moment somebody adds an example: the new folder
+#: reaches every user's workspace while the checks below quietly skip it. That
+#: happened — `complete/` shipped and was covered by exactly one test, the one
+#: that asks whether the docs mention it, because the per-example checks were
+#: parameterised over a tuple nobody remembered to extend.
+_EXAMPLE_DIR = SHARED_SKILLS["wui"] / "examples"
+
+
+def _example_names() -> tuple[str, ...]:
+    return tuple(sorted(p.name for p in _EXAMPLE_DIR.iterdir() if p.is_dir()))
+
+
+#: The built ones — a different SHAPE on purpose: the entry is the build OUTPUT,
+#: the source is `src/`, and the root `index.html` is the bundler's template
+#: rather than the page. Asserting the plain shape on these would either fail or,
+#: worse, be loosened until it stopped holding for the others. Detected by the
+#: presence of a `package.json` with a build script, so this list cannot drift
+#: either.
+def _is_built(name: str) -> bool:
+    pkg = _EXAMPLE_DIR / name / "package.json"
+    return pkg.is_file() and '"build"' in pkg.read_text()
+
+
 #: The examples whose files ARE the page — no build, so the entry and its two
 #: siblings sit at the folder root.
-EXAMPLES = ("dashboard", "editor", "external", "chart")
+EXAMPLES = tuple(n for n in _example_names() if not _is_built(n))
 
-#: The built one. A different shape on purpose: its entry is the build OUTPUT,
-#: its source is `src/`, and its root `index.html` is the bundler's template
-#: rather than the page. Asserting the plain shape on it would either fail or,
-#: worse, be loosened until it stopped holding for the other three.
+#: The first built one, for the tests that assert on a single built example.
 BUILT = "react"
+
+#: Every built example, for the checks that apply to all of them.
+BUILT_ALL = tuple(n for n in _example_names() if _is_built(n))
+
 
 #: What `dispatchWuiRequest` answers to. An example calling anything else would
 #: be teaching the agent an API that does not exist — the one mistake a copied
 #: example makes unrecoverable, because it looks authoritative.
-VERBS = {
-    "listFiles",
-    "readFile",
-    "writeFile",
-    "deleteFile",
-    "openFile",
-    "whoami",
-    "callTool",
-    "onFileChanged",  # the subscription, not a verb
-}
+#: Read from the SHIPPED runtime rather than typed out. A hand-written copy of a
+#: set defined in another file goes stale silently: `startRun` was added to the
+#: bridge and this list did not hear about it, so a correct example would have
+#: been reported as inventing an API.
+def _verbs_from_runtime() -> set[str]:
+    src = (
+        pathlib.Path(__file__).resolve().parents[2] / "web/src/renderers/wui/runtime.ts"
+    ).read_text()
+    # The page-facing object literal — `name: function (…)` inside `workspace`.
+    body = src.split("window.workspace = {", 1)[-1]
+    return set(re.findall(r"^\s{4}(\w+):", body, re.MULTILINE))
+
+
+VERBS = _verbs_from_runtime()
 
 
 @pytest.fixture(scope="module")
@@ -236,6 +266,21 @@ def test_the_built_example_ships_the_bridge_typed(payload: dict[str, bytes]):
     assert "read_only?: boolean" in types
 
 
+def test_every_shipped_copy_of_the_bridge_type_is_identical(payload: dict[str, bytes]):
+    """`wui.d.ts` describes the PLATFORM and is copied verbatim into pages. More
+    than one copy ships, and two copies that may disagree eventually will — one
+    gains a verb and the other does not, and an author copying the stale one is
+    told an API does not exist when it does.
+
+    Caught for real: `startRun` was added to one example's copy and not the
+    other's, and only a check like this notices.
+    """
+    copies = {p: b for p, b in payload.items() if p.endswith("/wui.d.ts")}
+
+    assert len(copies) > 1, "only one copy — this guard is measuring nothing"
+    assert len(set(copies.values())) == 1, f"these disagree: {sorted(copies)}"
+
+
 def test_the_skill_makes_the_agent_look_at_a_tools_real_output():
     """`callTool` returns whatever the command printed. The shape is the tool's
     contract and the platform promises nothing about it, so an agent that writes
@@ -292,8 +337,21 @@ def test_the_built_example_says_who_rebuilds_and_when(payload: dict[str, bytes])
 def test_the_built_example_reaches_the_bridge_the_same_way(payload: dict[str, bytes]):
     """A build changes how the page is produced, not what it can do. If this
     example implied a different API, it would teach one that does not exist."""
-    source = payload[f"examples/{BUILT}/src/main.tsx"].decode()
-    used = set(re.findall(r"workspace\s*\.?\s*\n?\s*\.?(\w+)\(", source))
+    # EVERY source file of every example, not one path. `complete/` keeps its
+    # bridge calls in `src/workspace.ts`, so a check reading only `main.tsx`
+    # skipped the file where all of them live — and an invented verb there is
+    # the one mistake a copied example makes unrecoverable, because it looks
+    # authoritative.
+    used: set[str] = set()
+    for name in (*EXAMPLES, *BUILT_ALL):
+        for path, body in payload.items():
+            if not path.startswith(f"examples/{name}/"):
+                continue
+            if not path.endswith((".js", ".ts", ".tsx", ".html")):
+                continue
+            used |= set(
+                re.findall(r"workspace\s*\.?\s*\n?\s*\.?(\w+)\(", body.decode("utf-8", "replace"))
+            )
 
     assert used, "it would not need a WUI"
     assert used <= VERBS, f"invents {sorted(used - VERBS)}"
@@ -324,7 +382,7 @@ def _classes_defined(css: str) -> set[str]:
     return set(re.findall(r"\.([A-Za-z][\w-]*)", css))
 
 
-@pytest.mark.parametrize("name", (*EXAMPLES, BUILT))
+@pytest.mark.parametrize("name", (*EXAMPLES, *BUILT_ALL))
 def test_every_example_ships_its_own_looks(payload: dict[str, bytes], name: str):
     """A page with no stylesheet is not "unstyled" — it is the browser's 1995
     defaults, and that is the FIRST thing the person who asked for the page
@@ -340,11 +398,29 @@ def test_every_example_ships_its_own_looks(payload: dict[str, bytes], name: str)
     assert css, f"{name} ships no stylesheet"
     assert len(payload[css[0]]) > 300, f"{name}'s stylesheet is a stub"
 
+    # And something has to REACH it. A file sitting in the folder that nothing
+    # links or imports is the same as no stylesheet at all — which is exactly
+    # how the react example first shipped looking like 1995 while this check
+    # was green. Asserted on the whole example, because which file does the
+    # referencing depends on its shape: `index.html` links it, or the source
+    # imports it and the bundler emits the link.
+    stem = css[0].rsplit("/", 1)[-1]
+    referenced = any(
+        stem in payload[p].decode("utf-8", "replace")
+        for p in payload
+        if p.startswith(f"examples/{name}/") and not p.endswith(".css")
+    )
+    assert referenced, f"{name} ships {stem} but nothing references it"
+
 
 @pytest.mark.parametrize(
     ("name", "markup"),
+    # Every example, whichever shape it has: a no-build one declares its classes
+    # in `index.html`, a built one in its source. Listing only ONE built example
+    # here is how `complete/` shipped with this check skipping it entirely.
     [(e, f"examples/{e}/index.html") for e in EXAMPLES]
-    + [(BUILT, f"examples/{BUILT}/src/main.tsx")],
+    + [(b, f"examples/{b}/src/main.tsx") for b in BUILT_ALL if b != "chart"]
+    + [("chart", "examples/chart/index.html")],
 )
 def test_no_example_names_a_class_that_does_not_exist(
     payload: dict[str, bytes], name: str, markup: str

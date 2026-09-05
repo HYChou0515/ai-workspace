@@ -208,6 +208,7 @@ AI。它讀的是 `wui` 這個 shared skill（`sample-skills/wui/`），裡面�
 
 | 範例 | 什麼時候抄 |
 |---|---|
+| `examples/complete/` | **先讀這一份**——一頁把整個介面用過一遍:讀、畫圖、存、呼叫 tool、開一個要跑幾分鐘的 run、以及每一種失敗都是一句話 |
 | `examples/dashboard/` | 資料已經在 item 裡，有人想換個方式**看** |
 | `examples/editor/` | 頁面就是資料被**輸入或修改**的地方 |
 | `examples/external/` | 答案在**另一個系統**裡——`callTool` |

@@ -15,6 +15,7 @@ right the things that are easy to get wrong, and copying beats generating.
 
 | copy | when | what it shows |
 |---|---|---|
+| `examples/complete/` | **read this one first** | the whole surface in one page — reading, charting, saving, a tool, a run that takes minutes, and every failure as a sentence |
 | `examples/dashboard/` | the data already exists and somebody wants to SEE it differently | listing then reading in parallel, parsing files people hand-edit, `openFile` to hand the user back to the real file |
 | `examples/editor/` | the page is where the data gets ENTERED or changed | saving without thrashing, hearing about someone else's edit without discarding what is half-typed, staying inside your own folder |
 | `examples/external/` | the answer lives in ANOTHER system | `callTool`, and telling the three refusals apart — not declared / not granted / the tool itself said no |
@@ -23,6 +24,12 @@ right the things that are easy to get wrong, and copying beats generating.
 
 If a page both reads and writes, start from the dashboard and add saving — a
 page that reads wrongly is obvious, a page that writes wrongly is not.
+
+**`examples/complete/` is the one to read before any of the others.** The rest
+each teach one shape; that one is a page doing the whole job, so you can see how
+the pieces sit together before taking any of them apart. Its `src/workspace.ts`
+is the platform half — nearly the same for every WUI, and where the mistakes
+that cannot be SEEN are prevented.
 
 **A library is a file in the folder, not a CDN.** "No network" is about
 RUNTIME. `<script src="https://cdn…">` never arrives — but a UMD build sitting
