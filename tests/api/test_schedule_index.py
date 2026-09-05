@@ -9,8 +9,13 @@ uses for per-item facts it must look up without a session (`_SandboxActivity`,
 It is maintained on the WRITE path, not in a route. A page writes its
 `schedules.json` through the file PUT route; the agent writes the same file
 through its `write_file` tool, which never touches a route. Hooking routes would
-catch one and miss the other — so the hook sits at the chokepoint every write
-already shares, exactly where the quota gate sits.
+catch one and miss the other.
+
+There is no ONE call every write makes — believing there was is what shipped this
+index blind, because the PUT route's streaming upload does not go through
+`_write_unchecked`. So the coverage test below derives the write paths from the
+facade's own source instead of naming them, and one test enters where a page
+does: the PUT route itself.
 
 The index is allowed to be stale in ONE direction: it may name a file that has
 since been deleted. That is why the sweep re-reads and drops what it cannot
@@ -21,10 +26,12 @@ from __future__ import annotations
 
 import pytest
 from specstar import SpecStar
+from specstar.types import PreconditionFailedError, RevisionStatus
 
 from workspace_app.api.schedule_index import (
     SCHEDULES_FILE,
     ScheduleIndex,
+    _ScheduleIndex,
     is_schedule_file,
     register_schedule_index,
 )
@@ -135,7 +142,7 @@ def test_forgetting_something_never_recorded_is_quiet(index: ScheduleIndex):
     assert index.items() == []
 
 
-# ── the hook, at the chokepoint every write shares ───────────────────────────
+# ── the hook, on every path that lands bytes ─────────────────────────────────
 
 
 def test_the_index_is_fed_by_the_write_path_itself():
@@ -145,7 +152,9 @@ def test_the_index_is_fed_by_the_write_path_itself():
     one and miss the others, and the miss would be silent — the schedule simply
     never fires and nothing says why.
 
-    So the hook sits where the quota gate sits: the one call every write makes.
+    There is no single call every write makes — that belief is what shipped
+    this index blind. The coverage test further down derives the write paths
+    from the facade's source; this one pins the ordinary case.
     """
     import asyncio
 
@@ -181,6 +190,87 @@ def test_a_failing_hook_never_fails_the_write():
     asyncio.run(files.write("i1", "/scrap-review/schedules.json", b"{}"))  # must not raise
 
     assert asyncio.run(files.read("i1", "/scrap-review/schedules.json")) == b"{}"
+
+
+def test_a_concurrent_record_does_not_lose_the_other_pods_path(index: ScheduleIndex) -> None:
+    """Read-modify-write on a row two pods share. Both read `["p1"]`, one writes
+    `["p1","p2"]` and the other `["p1","p3"]` — and one page's schedules stop
+    existing, permanently, because only a WRITE of that file puts it back.
+
+    Simulated rather than raced: the in-memory backend's etag is not atomic, so
+    a real race here proves nothing either way. What is asserted is that a
+    REFUSED write is re-read and retried instead of being the last word.
+    """
+    index.record("i1", "/a/schedules.json")
+
+    rm = index._spec.get_resource_manager(_ScheduleIndex)
+    real_modify = rm.modify
+    refused: list[int] = []
+
+    def _lose_once(*args, **kw):
+        if not refused:
+            refused.append(1)
+            # Another pod committed between our read and our write, and added
+            # its own path while doing so.
+            real_modify(
+                "i1",
+                _ScheduleIndex(paths=["/a/schedules.json", "/b/schedules.json"]),
+                status=RevisionStatus.draft,
+            )
+            raise PreconditionFailedError("i1", "ours", "theirs")
+        return real_modify(*args, **kw)
+
+    rm.modify = _lose_once  # ty: ignore[invalid-assignment]
+    try:
+        index.record("i1", "/c/schedules.json")
+    finally:
+        rm.modify = real_modify  # ty: ignore[invalid-assignment]
+
+    assert refused, "the test never made anyone lose — it is measuring nothing"
+    assert index.paths("i1") == [
+        "/a/schedules.json",
+        "/b/schedules.json",
+        "/c/schedules.json",
+    ]
+
+
+def test_a_backend_that_is_down_is_not_mistaken_for_a_lost_race(index: ScheduleIndex) -> None:
+    """`record` swallowed every exception around its create, so "another pod got
+    there first" and "the store is broken" produced the same silence — and the
+    index simply had no row, which the sweep reads as "this item has no
+    schedules". That is the failure this whole module exists to make impossible,
+    arriving through its own error handling.
+    """
+    rm = index._spec.get_resource_manager(_ScheduleIndex)
+    real_create = rm.create
+
+    def _down(*args, **kw):
+        raise RuntimeError("the database is unreachable")
+
+    rm.create = _down  # ty: ignore[invalid-assignment]
+    try:
+        with pytest.raises(RuntimeError):
+            index.record("i1", "/a/schedules.json")
+    finally:
+        rm.create = real_create  # ty: ignore[invalid-assignment]
+
+
+def test_a_page_in_a_nested_folder_counts_too() -> None:
+    """A page is a folder, and nothing says that folder must sit at the top.
+    `wuiFolder` accepts any depth and `writeFile`'s boundary is the page's OWN
+    folder, so a page at `/reports/scrap/` writes `/reports/scrap/schedules.json`
+    quite legitimately — and a depth-2 rule dropped it on the floor with no
+    error anywhere. The page saves, sees its file, and nothing ever runs."""
+    assert is_schedule_file(f"/reports/scrap/{SCHEDULES_FILE}")
+    assert is_schedule_file(f"/a/b/c/{SCHEDULES_FILE}")
+
+
+def test_the_workspace_root_still_does_not_count() -> None:
+    """The control for the loosening above: a schedule belongs to a page, a page
+    is a folder, and a view file at the root has no folder of its own — it
+    cannot write, so it cannot be a page."""
+    assert not is_schedule_file(f"/{SCHEDULES_FILE}")
+    assert not is_schedule_file(SCHEDULES_FILE)
 
 
 # ── every path that lands bytes, not just the one we happened to hook ────────

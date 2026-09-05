@@ -147,6 +147,18 @@ def validate_user_schedules(raw: str) -> list[str]:
         if every == "minutes":
             if not isinstance(n, int) or n < 1:
                 problems.append(f"{where}: `every: minutes` needs `n` — how many minutes apart.")
+            elif 60 % n:
+                # The bucket is `(minute // n) * n`, anchored to the top of the
+                # hour, so only a divisor of 60 is honest. `n: 90` makes
+                # `minute // 90` always 0 — "every 90 minutes" fires HOURLY, and
+                # so does `n: 1440`. `n: 7` gives :00 :07 … :56 with a four
+                # minute last bucket, which is nine fires an hour, not eight and
+                # a half. Silently, in every case: the only way to notice the
+                # cadence you did not ask for is to sit and watch a clock.
+                problems.append(
+                    f"{where}: `n` must divide 60 (1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30), "
+                    f"got {n}. For anything longer use `every: hourly` or `every: daily`."
+                )
         elif n:
             problems.append(f"{where}: `n` applies only to `every: minutes`.")
         if every == "weekly" and row.get("dow") not in _DOW:

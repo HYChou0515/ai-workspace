@@ -382,6 +382,21 @@ class ITriggerStore(abc.ABC):
         run slot (``run_id``/``attempts``) — a fresh window is a fresh run."""
 
     @abc.abstractmethod
+    def release_claim(self, trigger_id: str, claimed: str, back_to: str) -> None:
+        """Give back a claim whose run never started, so the window can be tried again.
+
+        The claim is taken BEFORE the run is asked for — that ordering is what makes two
+        pods produce one run — so a start that then fails leaves the ledger saying a window
+        fired for a run that does not exist. Nothing else recovers it: catch-up covers a
+        sweeper that was DOWN at the moment, not a window that was claimed and dropped, so
+        the report silently misses that day.
+
+        ``claimed`` is the window that was just taken and ``back_to`` is what the row held
+        before, and the write happens ONLY if the row still reads ``claimed`` — otherwise
+        another pod has moved on and giving it back would re-fire a window that really did
+        run."""
+
+    @abc.abstractmethod
     def record_run(self, trigger_id: str, run_id: str) -> None:
         """Record the run this trigger just started for the current window (#429 P8), so a
         later sweep can find it if the driving pod dies. Resets the resume counter to 1."""
@@ -458,6 +473,15 @@ class SpecstarTriggerStore(ITriggerStore):
     def last_window(self, trigger_id: str) -> str:
         row = self._row(trigger_id)
         return row.last_window if row is not None else ""
+
+    def release_claim(self, trigger_id: str, claimed: str, back_to: str) -> None:
+        row = self._row(trigger_id)
+        if row is None or row.last_window != claimed:
+            # Somebody else has already moved this trigger on. Handing the window
+            # back now would re-fire one that really did run.
+            return
+        _log.info("trigger %s: releasing window %s — its run never started", trigger_id, claimed)
+        self._write_fields(trigger_id, last_window=back_to, run_id="", attempts=0)
 
     def record_run(self, trigger_id: str, run_id: str) -> None:
         self._write_fields(trigger_id, run_id=run_id, attempts=1)

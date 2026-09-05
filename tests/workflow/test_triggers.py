@@ -47,6 +47,13 @@ class FakeStore(ITriggerStore):
         self._run.pop(trigger_id, None)  # a fresh window resets the run slot
         return True
 
+    def release_claim(self, trigger_id: str, claimed: str, back_to: str) -> None:
+        # Only when the row still reads what we claimed — the same rule the real
+        # store keeps, so a fake cannot make a caller look correct that isn't.
+        if self._last.get(trigger_id) == claimed:
+            self._last[trigger_id] = back_to
+            self._run.pop(trigger_id, None)
+
     def record_run(self, trigger_id: str, run_id: str) -> None:
         self._run[trigger_id] = (run_id, 1)
 
@@ -259,6 +266,7 @@ async def test_sweeper_keys_the_store_by_the_globally_qualified_trigger_id():
             claimed.append(trigger_id)
             return True
 
+        def release_claim(self, trigger_id: str, claimed: str, back_to: str) -> None: ...
         def record_run(self, trigger_id: str, run_id: str) -> None: ...
         def note_resume(self, trigger_id: str) -> None: ...
         def clear_run(self, trigger_id: str) -> None: ...

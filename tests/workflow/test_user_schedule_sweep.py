@@ -28,7 +28,10 @@ from workspace_app.api.schedule_index import (
 )
 from workspace_app.resources import make_spec
 from workspace_app.workflow.triggers import register_trigger_store
-from workspace_app.workflow.user_schedule_sweep import UserScheduleSweeper
+from workspace_app.workflow.user_schedule_sweep import (
+    MAX_START_ATTEMPTS,
+    UserScheduleSweeper,
+)
 
 ITEM = "i1"
 PAGE = "/scrap-review"
@@ -274,6 +277,43 @@ def test_a_deleted_file_drops_out_of_the_index():
     assert index.items() == []
 
 
+def test_a_schedule_fires_in_the_zone_it_named():
+    """`tz` was accepted, copied onto the Schedule and hashed into the lease key
+    — and then never used to decide anything. The sweep asked the server what
+    time it was.
+
+    So a page saying "09:00, Asia/Taipei" on a UTC pod got 09:00 UTC, which is
+    17:00 in Taipei. Nothing warned, and the schedule DID fire — at the wrong
+    time, every day, which is the version of this bug that survives longest
+    because the report keeps arriving.
+    """
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    started = _Started()
+    row = {"every": "daily", "at": "09:00", "run": "build-report", "tz": "Asia/Taipei"}
+    files = _Files(**{f"{ITEM}{PATH}": _file(row)})
+
+    # 01:30 UTC is 09:30 in Taipei: past this schedule's moment.
+    asyncio.run(_sweeper(spec, files, started, datetime(2026, 9, 5, 1, 30)).tick())
+
+    assert [r[1] for r in started.runs] == ["build-report"]
+
+
+def test_a_schedule_in_a_zone_does_not_fire_before_its_moment_there():
+    """The control for the test above. Reading `tz` as "always fire" would pass
+    that one and break every schedule that has a zone."""
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    started = _Started()
+    row = {"every": "daily", "at": "09:00", "run": "build-report", "tz": "Asia/Taipei"}
+    files = _Files(**{f"{ITEM}{PATH}": _file(row)})
+
+    # 23:00 UTC is 07:00 the next day in Taipei — before nine.
+    asyncio.run(_sweeper(spec, files, started, datetime(2026, 9, 5, 23, 0)).tick())
+
+    assert started.runs == []
+
+
 def test_the_sweep_never_sits_on_the_event_loop():
     """Every store call here is blocking specstar I/O, and on Postgres each one
     is a network round trip. The sweep it is modelled on offloads all of them,
@@ -346,6 +386,85 @@ def test_a_blip_reading_the_file_is_not_a_deletion():
     asyncio.run(_sweeper(spec, _Busy(), _Started(), datetime(2026, 9, 5, 9, 30)).tick())
 
     assert index.items() == [ITEM], "a transient read error unregistered the schedule"
+
+
+def test_a_window_whose_run_never_started_is_tried_again():
+    """The claim is taken BEFORE the run is asked for, because that is what makes
+    two pods produce one run. So when the start then fails, the window has been
+    consumed by a run that does not exist — and the ledger says it fired.
+
+    Nothing retries it. The catch-up rule, which is the property this design is
+    sold on, covers a sweeper that was DOWN at nine; it cannot see a window that
+    was claimed and then dropped. So a daily report silently misses a day for
+    any transient reason — an item briefly without an owner, one long run
+    holding the item, a DB blip — and the next sweep is a minute later.
+    """
+
+    class _BoomOnce(_Started):
+        def __init__(self) -> None:
+            super().__init__()
+            self.attempts = 0
+
+        async def __call__(self, **kw):
+            self.attempts += 1
+            if self.attempts == 1:
+                raise RuntimeError("the item had no owner just then")
+            return await super().__call__(**kw)
+
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    started = _BoomOnce()
+    files = _Files(**{f"{ITEM}{PATH}": _file(DAILY)})
+
+    asyncio.run(_sweeper(spec, files, started, datetime(2026, 9, 5, 9, 30)).tick())
+    asyncio.run(_sweeper(spec, files, started, datetime(2026, 9, 5, 9, 31)).tick())
+
+    assert [r[1] for r in started.runs] == ["build-report"], "the window was burned"
+
+
+def test_a_schedule_that_never_starts_stops_being_retried():
+    """The other half of handing the window back. A start that fails for a
+    PERMANENT reason — an item with no owner, a workflow somebody deleted —
+    would otherwise be retried once a minute for as long as the period lasts.
+
+    So the release is capped, and the last log line says so once rather than a
+    thousand times. Trying forever is how a channel becomes noise, and a channel
+    that is noise is one where the message that mattered is not read either.
+    """
+
+    class _AlwaysBoom(_Started):
+        def __init__(self) -> None:
+            super().__init__()
+            self.attempts = 0
+
+        async def __call__(self, **kw):
+            self.attempts += 1
+            raise RuntimeError("this item has no owner")
+
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    started = _AlwaysBoom()
+    files = _Files(**{f"{ITEM}{PATH}": _file(DAILY)})
+    sweeper = _sweeper(spec, files, started, datetime(2026, 9, 5, 9, 30))
+
+    for _ in range(10):
+        asyncio.run(sweeper.tick())
+
+    assert started.attempts == MAX_START_ATTEMPTS
+
+
+def test_a_window_that_did_start_is_not_fired_a_second_time():
+    """The control. Releasing the claim unconditionally would pass the test
+    above and re-run every schedule on every sweep — sixty reports an hour."""
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    started = _Started()
+    files = _Files(**{f"{ITEM}{PATH}": _file(DAILY)})
+
+    for minute in (30, 31, 32):
+        asyncio.run(_sweeper(spec, files, started, datetime(2026, 9, 5, 9, minute)).tick())
+
+    assert len(started.runs) == 1
 
 
 def test_a_failing_start_does_not_stop_the_sweep():

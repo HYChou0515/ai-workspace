@@ -25,8 +25,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Protocol
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from specstar import SpecStar
 
@@ -49,8 +50,50 @@ logger = logging.getLogger(__name__)
 #: window ledger, and nothing else caps how many a page can create.
 DEFAULT_MAX_ROWS = 1000
 
+#: How many times running a due schedule may fail before its window is left spent.
+#:
+#: The claim is taken before the run is asked for, so a failed start has to hand
+#: the window back or the schedule silently misses that period. Handing it back
+#: without a limit is the other failure: an item with no owner, or a workflow
+#: somebody deleted, becomes one attempt a minute for as long as the period
+#: lasts. A few tries absorbs a blip; after that the window is spent and the log
+#: says so once instead of a thousand times.
+#:
+#: Counted in memory, per pod: it is a property of "this run of the sweep",
+#: resets on restart, and needs no durable row of its own.
+MAX_START_ATTEMPTS = 3
+
 ReadFile = Callable[[str, str], Awaitable[bytes]]
 OwnerOf = Callable[[str], str]
+
+
+def _utc_now() -> datetime:
+    """Now, in UTC, naive — the period math here is naive-local, so each row is
+    converted into ITS zone before any of it runs.
+
+    Deliberately not `datetime.now`: a server-local clock makes a schedule fire
+    at a different moment depending on which pod ran the sweep, and a page that
+    named no zone would silently mean "wherever this happens to be deployed".
+    """
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
+def _in_zone(now_utc: datetime, tz: str) -> datetime:
+    """`now` as the wall clock in `tz`, naive. An empty zone means UTC, which is
+    the same rule the engineer-authored triggers use (`TriggerSweeper._local_now`)
+    so the two engines cannot disagree about what "09:00" means.
+
+    An unknown zone falls back to UTC rather than raising: the row already
+    passed validation, and taking down one page's whole file — or the sweep —
+    over a typo in a zone name is a worse answer than firing an hour out.
+    """
+    if not tz:
+        return now_utc
+    try:
+        return now_utc.replace(tzinfo=UTC).astimezone(ZoneInfo(tz)).replace(tzinfo=None)
+    except ZoneInfoNotFoundError:
+        logger.warning("user schedules: unknown time zone %r — using UTC", tz)
+        return now_utc
 
 
 class StartRun(Protocol):
@@ -73,7 +116,7 @@ class UserScheduleSweeper:
         read: ReadFile,
         start: StartRun,
         owner_of: OwnerOf,
-        now: Callable[[], datetime] = datetime.now,
+        now: Callable[[], datetime] = _utc_now,
         max_rows: int = DEFAULT_MAX_ROWS,
     ) -> None:
         self._index = index
@@ -83,6 +126,7 @@ class UserScheduleSweeper:
         self._now = now
         self._max_rows = max_rows
         self._store = SpecstarTriggerStore(spec)
+        self._failures: dict[str, int] = {}
 
     async def tick(self) -> int:
         """Fire everything due. Returns how many runs were launched."""
@@ -155,11 +199,17 @@ class UserScheduleSweeper:
 
         folder = path.rsplit("/", 1)[0]
         owner = await asyncio.to_thread(self._owner_of, item_id)
-        now = self._now()
+        now_utc = self._now()
         fired = 0
         for row in rows:
             trigger_id = trigger_id_for(item_id, folder, row)
             schedule = row.as_schedule()
+            # PER ROW, in the zone that row named. `tz` used to be accepted,
+            # copied onto the Schedule and hashed into the lease key, and then
+            # never consulted — the sweep asked the server what time it was. A
+            # page saying "09:00, Asia/Taipei" on a UTC pod fired at 17:00 Taipei
+            # time, every day, with nothing to notice: the report still arrived.
+            now = _in_zone(now_utc, row.tz)
             last = await asyncio.to_thread(self._store.last_window, trigger_id)
             if not is_due(schedule, now, last):
                 continue
@@ -181,12 +231,43 @@ class UserScheduleSweeper:
                     payload=row.payload,
                 )
             except Exception:
-                logger.exception(
-                    "user schedules: %s could not start %s for window %s",
-                    trigger_id,
-                    row.run,
-                    window,
-                )
+                # Hand the window BACK, up to a point. The claim is taken before
+                # the run is asked for — that ordering is what makes two pods
+                # produce one run — so a failed start otherwise leaves the ledger
+                # saying this window fired for a run that does not exist, and
+                # nothing ever retries it. Catch-up covers a sweeper that was
+                # DOWN at nine; it cannot see a window that was claimed and
+                # dropped, so the report simply misses that day.
+                #
+                # BOUNDED, because releasing unconditionally turns a permanent
+                # failure — an item with no owner, a workflow that was deleted —
+                # into one attempt a minute forever. After the cap the window is
+                # left spent and the log says so once, loudly, rather than a
+                # thousand times quietly.
+                tries = self._failures.get(trigger_id, 0) + 1
+                self._failures[trigger_id] = tries
+                if tries < MAX_START_ATTEMPTS:
+                    await asyncio.to_thread(self._store.release_claim, trigger_id, window, last)
+                    logger.exception(
+                        "user schedules: %s could not start %s for window %s "
+                        "(attempt %d of %d) — window released to try again",
+                        trigger_id,
+                        row.run,
+                        window,
+                        tries,
+                        MAX_START_ATTEMPTS,
+                    )
+                else:
+                    logger.error(
+                        "user schedules: %s could not start %s %d times running — "
+                        "giving up on window %s. Nothing will run for it.",
+                        trigger_id,
+                        row.run,
+                        tries,
+                        window,
+                    )
                 continue
+            # A run started, so whatever was wrong is over.
+            self._failures.pop(trigger_id, None)
             fired += 1
         return fired

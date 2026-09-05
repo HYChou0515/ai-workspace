@@ -85,6 +85,37 @@ def test_minutes_needs_a_count_and_the_others_must_not_have_one():
     assert any("n" in p for p in validate_user_schedules(_file({**DAILY, "n": 5})))
 
 
+def test_a_minutes_interval_the_hour_cannot_hold_is_refused():
+    """The bucket is `(minute // n) * n`, anchored to the top of each hour. That
+    is exact for a divisor of 60 and a lie for anything else:
+
+    * `n: 90` → `minute // 90` is always 0, so "every 90 minutes" fires HOURLY.
+      So does `n: 1440`, which is how somebody spells "daily" in minutes.
+    * `n: 7` → buckets at :00 :07 … :56, and the last one is four minutes long,
+      so "every 7 minutes" is nine fires an hour rather than eight and a half.
+
+    Neither says anything. The page gets a cadence it did not ask for and the
+    only way to notice is to watch a clock, so this is refused at the door with
+    the alternative named.
+    """
+    # `n: 60` is NOT in this list: it divides 60, so its bucket is the top of
+    # each hour and "every 60 minutes" means exactly what it says. Redundant
+    # with `every: hourly`, not wrong.
+    for bad in (90, 1440, 7, 45):
+        problems = validate_user_schedules(_file({"every": "minutes", "n": bad, "run": "x"}))
+        assert problems, f"n={bad} was accepted"
+        assert "60" in problems[0], f"n={bad} was refused without saying what would work"
+
+
+def test_every_interval_that_divides_the_hour_is_accepted():
+    """The positive control. A rule that refused every `n` would pass the test
+    above and delete the feature."""
+    for good in (1, 2, 3, 5, 10, 15, 20, 30):
+        assert validate_user_schedules(_file({"every": "minutes", "n": good, "run": "x"})) == [], (
+            f"n={good} should be fine"
+        )
+
+
 def test_a_valid_file_has_nothing_to_say():
     assert validate_user_schedules(_file(DAILY, POLLER)) == []
 

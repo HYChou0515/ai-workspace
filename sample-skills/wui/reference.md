@@ -240,12 +240,18 @@ await workspace.writeFile("schedules.json", JSON.stringify({
 | word | means |
 |---|---|
 | `every` | `minutes` · `hourly` · `daily` · `weekly` · `monthly` |
-| `n` | required by `every: "minutes"`, ignored by the rest |
+| `n` | required by `every: "minutes"`; must divide 60 (1·2·3·4·5·6·10·12·15·20·30) |
 | `at` | `"HH:MM"`, for daily/weekly/monthly |
 | `dow` | `mon`…`sun`, for weekly |
 | `dom` | 1–28, for monthly |
+| `tz` | an IANA zone (`"Asia/Taipei"`); **defaults to UTC** |
 | `run` | a workflow id — the same ids `workflows:` lists |
 | `with` | the payload, handed to the workflow exactly as `startRun` does |
+
+`tz` is optional and defaults to **UTC**, not to wherever the server happens to
+be. Name the zone whenever the time is one a person chose — `"Asia/Taipei"`,
+`"Europe/Berlin"` — or "09:00" will mean something different to the reader than
+it does to the platform.
 
 Read it back with `readFile` and render it: the file IS the state, so a page that
 shows what it wrote is showing the truth. Cancelling a schedule is removing its
