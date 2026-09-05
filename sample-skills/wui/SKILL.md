@@ -217,6 +217,25 @@ title: Lot tracker
 - **`workspace.callTool` only reaches tools listed in `tools:`** in the yaml, and
   only ones this app grants. Declaring one you were not given fails at the call.
 
+## Work the page does not have to be open for
+
+Two capabilities, one engine. `workspace.startRun("judge", {...}, onEvent)`
+starts a workflow now and streams its progress back. Writing a
+**`schedules.json`** in the page's own folder makes the platform start the same
+workflow on a clock — every 15 minutes, weekdays at nine, the first of the
+month. Both are how "email me when the shipment lands" and "build this report
+every Monday" get built without anyone touching the repo.
+
+The declaration is an ordinary file the page writes with `writeFile`, so the
+page can show it, edit it and cancel a row by writing the file again. Shape,
+words and the guarantees are in **reference.md**; read it before writing either
+one.
+
+⚠️ **When a schedule fires, nobody is signed in.** There is no request and no
+personal token. A page or tool written as if one is always there works while
+somebody is clicking and fails every night — the "it worked when I tested it"
+bug. Anything a scheduled run needs comes from the item's own environment.
+
 ## Working on one
 
 - Edit the individual file — `app.js`, not the whole page. That is why a WUI is

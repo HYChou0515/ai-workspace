@@ -381,18 +381,21 @@ describe("dispatchWuiRequest", () => {
       req("startRun", { workflow: "judge", with: { lot: "A1" } }),
       ctx({
         startRun: async (_workflow, _payload, onEvent) => {
-          onEvent({ type: "step", text: "reading 12 files" });
-          onEvent({ type: "done", exit_code: 0 });
-          return { run_id: "run-1" };
+          // Real event shapes. A double emitting types nothing sends is how the
+          // shipped example came to switch on `type: "step"`, which no part of
+          // the platform emits, and read `exit_code` off an event that has no
+          // such field — both green here for as long as the double agreed.
+          onEvent({ type: "step_started", phase: "read", name: "reading 12 files" });
+          onEvent({ type: "done" });
         },
         onRunEvent: (id, event) => events.push([id, event]),
       }),
     );
 
-    expect(res).toMatchObject({ ok: true, value: { run_id: "run-1" } });
+    expect(res).toMatchObject({ ok: true });
     expect(events).toEqual([
-      ["1", { type: "step", text: "reading 12 files" }],
-      ["1", { type: "done", exit_code: 0 }],
+      ["1", { type: "step_started", phase: "read", name: "reading 12 files" }],
+      ["1", { type: "done" }],
     ]);
   });
 
@@ -404,7 +407,7 @@ describe("dispatchWuiRequest", () => {
      */
     const res = await dispatchWuiRequest(
       req("startRun", { workflow: "undeclared" }),
-      ctx({ declaredWorkflows: ["judge"], startRun: async () => ({ run_id: "x" }) }),
+      ctx({ declaredWorkflows: ["judge"], startRun: async () => {} }),
     );
 
     expect(res).toMatchObject({ ok: false });

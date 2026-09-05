@@ -228,8 +228,11 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
       // The stream is pumped here and each event handed straight on, so the page
       // sees progress WHILE the run is happening rather than a single answer at
       // the end. That is the whole point of making this a run.
+      // Draining the stream IS the wait: the promise settles when the run's
+      // events stop. It returns nothing — there was a `{ run_id }` in the
+      // contract that this could only ever answer with "", because the route
+      // replies with a stream and the id it discards never reaches a page.
       for await (const event of run(workflow, payload)) onEvent(event);
-      return { run_id: "" };
     };
   }, [slug, fs.scopeId]);
 

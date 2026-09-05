@@ -57,8 +57,19 @@ export async function readAll<T>(
   const rows: T[] = [];
   const problems: Problem[] = [];
   for (const s of settled) {
-    if ("row" in s && s.row !== null && s.row !== undefined) rows.push(s.row);
-    else if ("skip" in s && s.skip) problems.push({ where: s.path, message: s.skip });
+    if ("row" in s && s.row !== null && s.row !== undefined) {
+      rows.push(s.row);
+    } else if ("skip" in s && s.skip) {
+      problems.push({ where: s.path, message: s.skip });
+    } else {
+      // `parse` returned null: the file was readable and its contents were not
+      // what we expected. That is a PROBLEM, not a non-event — and without this
+      // branch it was neither: not a row, and not carrying a `skip`, so it fell
+      // out of both and vanished. A folder with one malformed file rendered a
+      // short table and an empty problem list, which is the one outcome a reader
+      // cannot tell apart from "there is less data than I thought".
+      problems.push({ where: s.path, message: "Not in the shape this page expects." });
+    }
   }
   return { rows, problems };
 }
@@ -176,12 +187,24 @@ export type RunProgress = { note: string; done: boolean; failed: boolean };
  */
 export function reduceRunEvent(prev: RunProgress, event: unknown): RunProgress {
   if (!event || typeof event !== "object") return prev;
-  const e = event as { type?: unknown; text?: unknown; exit_code?: unknown };
-  if (e.type === "done") {
-    return { note: "Finished.", done: true, failed: e.exit_code !== 0 && e.exit_code !== undefined };
-  }
+  const e = event as { type?: unknown; text?: unknown; message?: unknown; name?: unknown };
   if (e.type === "error") {
-    return { note: typeof e.text === "string" ? e.text : "It failed.", done: true, failed: true };
+    // `message`, which is the field `RunError` carries. Reading `text` here
+    // always missed and fell through to our own wording — throwing away the one
+    // sentence that says what actually went wrong.
+    return { note: typeof e.message === "string" ? e.message : "It failed.", done: true, failed: true };
+  }
+  if (e.type === "awaiting_human") {
+    // An end state of its own: the run is parked until somebody decides, and
+    // the promise will not settle while it waits.
+    return { ...prev, note: "Waiting for a decision.", done: true };
+  }
+  // NOT `done`. That event fires at the end of every TURN, so a workflow with
+  // three agent steps sends three of them — a page that treats the first as the
+  // finish re-enables its button while the run is still going. The run is over
+  // when the stream ends, which is when `startRun`'s promise resolves.
+  if (e.type === "step_started" && typeof e.name === "string") {
+    return { ...prev, note: e.name };
   }
   if (typeof e.text === "string" && e.text.trim()) {
     return { ...prev, note: e.text.trim() };

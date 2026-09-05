@@ -35,23 +35,55 @@ def _example_names() -> tuple[str, ...]:
 #: The built ones — a different SHAPE on purpose: the entry is the build OUTPUT,
 #: the source is `src/`, and the root `index.html` is the bundler's template
 #: rather than the page. Asserting the plain shape on these would either fail or,
-#: worse, be loosened until it stopped holding for the others. Detected by the
-#: presence of a `package.json` with a build script, so this list cannot drift
-#: either.
+#: worse, be loosened until it stopped holding for the others.
+#:
+#: Detected by the SHAPE — does it have a source folder — and not by the word
+#: "build" in a `package.json`. `chart/`'s build script runs `npm pack chart.js@4`:
+#: it vendors a library rather than bundling anything, its files ARE the page, and
+#: reading the word moved it into the built set where six guards silently stopped
+#: applying to it. A misclassification here removes assertions instead of failing
+#: one, which is the worst way for a check to be wrong.
 def _is_built(name: str) -> bool:
-    pkg = _EXAMPLE_DIR / name / "package.json"
-    return pkg.is_file() and '"build"' in pkg.read_text()
+    return (_EXAMPLE_DIR / name / "src").is_dir()
 
 
 #: The examples whose files ARE the page — no build, so the entry and its two
 #: siblings sit at the folder root.
 EXAMPLES = tuple(n for n in _example_names() if not _is_built(n))
 
+
 #: The first built one, for the tests that assert on a single built example.
 BUILT = "react"
 
 #: Every built example, for the checks that apply to all of them.
 BUILT_ALL = tuple(n for n in _example_names() if _is_built(n))
+
+
+def test_an_example_counts_as_built_only_when_it_has_a_source_to_build() -> None:
+    """The split decides which guards an example gets, so getting it wrong
+    removes assertions rather than failing one.
+
+    `chart/` has a `package.json` whose "build" runs `npm pack chart.js@4` — it
+    vendors a library, it is not a bundler. It has no `src/`, and its
+    `index.html` IS the page. Classifying on the WORD "build" therefore moved it
+    into the built set, where it silently stopped being checked for: shipping
+    whole, declaring `view: wui`, loading its siblings by relative path, calling
+    only verbs that exist, declaring the tools it calls, handling a failed call
+    — and NOT REACHING THE NETWORK, which is the guard `chart` is the only
+    example that needs, since it is the only one that pulls a third-party
+    library. All of that went green by no longer running.
+
+    So the predicate is the SHAPE: a built example is one with a source folder.
+    The hand-written `if b != "chart"` that used to paper over this was the
+    diagnosis arriving and being ignored.
+    """
+    for name in BUILT_ALL:
+        assert (_EXAMPLE_DIR / name / "src").is_dir(), (
+            f"{name} is classed as built but has no src/ — its guards were dropped"
+        )
+    for name in EXAMPLES:
+        assert not (_EXAMPLE_DIR / name / "src").is_dir(), f"{name} has a src/ but is not built"
+        assert (_EXAMPLE_DIR / name / "index.html").is_file()
 
 
 #: What `dispatchWuiRequest` answers to. An example calling anything else would
@@ -281,6 +313,88 @@ def test_every_shipped_copy_of_the_bridge_type_is_identical(payload: dict[str, b
     assert len(set(copies.values())) == 1, f"these disagree: {sorted(copies)}"
 
 
+def _fields_the_platform_actually_emits() -> set[str]:
+    """Every field name declared on any event the page can receive, read from
+    the platform's own event modules.
+
+    Derived, because the failure this guards against is invisible from inside
+    the example: reading `e.exit_code` off an event that has no such field
+    yields `undefined` forever, so the branch is permanently false and the page
+    silently never reports a failure. TypeScript cannot see it either — the
+    event arrives as `unknown` and the example casts it.
+    """
+    import ast
+
+    root = pathlib.Path(__file__).resolve().parents[2] / "src" / "workspace_app"
+    out: set[str] = set()
+    for mod in (root / "api" / "events.py", root / "workflow" / "events.py"):
+        for node in ast.walk(ast.parse(mod.read_text())):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            for stmt in node.body:
+                if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+                    out.add(stmt.target.id)
+    return out
+
+
+def test_the_worked_reducer_only_reads_fields_that_exist(payload: dict[str, bytes]):
+    """The example is COPIED into pages. A field it reads that no event carries
+    is a branch that can never be true, in code that looks authoritative.
+
+    Caught for real: `done` was tested for `exit_code`, which `RunDone` does not
+    have — so `failed` was always false and a failed run rendered as a finished
+    one. Nothing could have failed except a check like this.
+    """
+    source = payload["examples/complete/src/workspace.ts"].decode()
+    body = source.split("export function reduceRunEvent", 1)[-1].split("\nexport ", 1)[0]
+
+    read = set(re.findall(r"\be\.(\w+)", body))
+    declared = _fields_the_platform_actually_emits()
+
+    assert read, "the reducer reads nothing — this guard is measuring nothing"
+    assert read <= declared, f"reads fields no event declares: {sorted(read - declared)}"
+
+
+def test_the_worked_reducer_relays_the_platforms_own_sentence(payload: dict[str, bytes]):
+    """`RunError` carries `message`. A reducer reading `text` there always falls
+    through to its own wording, which throws away the one sentence that says
+    what went wrong — the exact thing this file's `sentence()` helper exists to
+    preserve, and which its docstring claims it does."""
+    source = payload["examples/complete/src/workspace.ts"].decode()
+    error_branch = source.split('e.type === "error"', 1)[-1].split("}", 1)[0]
+
+    assert "e.message" in error_branch, "the error branch does not read `message`"
+
+
+def test_the_skill_tells_a_page_how_to_declare_a_schedule():
+    """The whole point of the third round is that a domain expert can say "every
+    weekday at 09:00, build my report" without anyone editing the repo. The only
+    way that happens is a PAGE writing `schedules.json` — and the page is written
+    by an LLM reading this skill.
+
+    So a schedule engine the skill never mentions is an engine nothing will ever
+    use. It shipped that way: the filename, its shape and its words appeared in
+    the plan and the Python source and NOWHERE a page author could find them.
+    """
+    body = SHARED_SKILLS["wui"].joinpath("SKILL.md").read_text()
+    reference = SHARED_SKILLS["wui"].joinpath("reference.md").read_text()
+
+    assert "schedules.json" in body, "the skill never names the file"
+    # The words the parser actually accepts. A page that invents `cron:` or
+    # `time:` writes a file that lints clean row-by-row and never fires.
+    for word in ("every", "run", "with"):
+        assert f"`{word}`" in reference, f"reference.md never names `{word}`"
+    assert "minutes" in reference and "weekly" in reference
+    # `n` is required by `every: minutes` and by nothing else — the one shape a
+    # page gets wrong without being told.
+    assert "`n`" in reference
+
+    # The credential rule, which is invisible until it is 3am. A page written as
+    # if a personal token is always there works perfectly while somebody is
+    # clicking and fails every night — the "it worked when I tested it" bug.
+    assert "personal token" in body or "personal token" in reference
+
+
 def test_the_skill_makes_the_agent_look_at_a_tools_real_output():
     """`callTool` returns whatever the command printed. The shape is the tool's
     contract and the platform promises nothing about it, so an agent that writes
@@ -419,8 +533,7 @@ def test_every_example_ships_its_own_looks(payload: dict[str, bytes], name: str)
     # in `index.html`, a built one in its source. Listing only ONE built example
     # here is how `complete/` shipped with this check skipping it entirely.
     [(e, f"examples/{e}/index.html") for e in EXAMPLES]
-    + [(b, f"examples/{b}/src/main.tsx") for b in BUILT_ALL if b != "chart"]
-    + [("chart", "examples/chart/index.html")],
+    + [(b, f"examples/{b}/src/main.tsx") for b in BUILT_ALL],
 )
 def test_no_example_names_a_class_that_does_not_exist(
     payload: dict[str, bytes], name: str, markup: str

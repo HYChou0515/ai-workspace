@@ -171,6 +171,12 @@ function App() {
       await window.workspace.startRun(JUDGE, { lines: byStep.map(([s]) => s) }, (event) =>
         setProgress((p) => reduceRunEvent(p ?? { note: "", done: false, failed: false }, event)),
       );
+      // The RUN is over here, and only here. The `done` EVENT fires at the end
+      // of every turn, so a multi-step workflow sends several and a page that
+      // believed the first one re-enabled this button while the run was still
+      // going — one more click, one more run. The promise settling is the only
+      // signal that means what it looks like.
+      setProgress((p) => (p?.failed ? p : { note: "Finished.", done: true, failed: false }));
     } catch (err) {
       setProgress({ note: sentence(err), done: true, failed: true });
     }

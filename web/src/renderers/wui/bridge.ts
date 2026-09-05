@@ -42,7 +42,7 @@ export type StartRun = (
   workflow: string,
   payload: Record<string, unknown>,
   onEvent: (event: unknown) => void,
-) => Promise<{ run_id: string }>;
+) => Promise<void>;
 
 export type BridgeContext = {
   fs: FileService;

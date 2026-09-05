@@ -92,12 +92,17 @@ export interface Workspace {
    *
    * `onEvent` receives the platform's events verbatim. **Ignore the ones you do
    * not recognise** — the set grows, and your page will not be edited again.
+   *
+   * The promise resolves when the run's stream ENDS. Do not use the `done`
+   * event for that — it fires at the end of every turn, so a workflow with
+   * three agent steps sends three. A workflow that parks on `awaiting_human`
+   * does not resolve at all while it waits.
    */
   startRun(
     workflow: string,
     input: Record<string, unknown>,
     onEvent: (event: unknown) => void,
-  ): Promise<{ run_id: string }>;
+  ): Promise<void>;
   /** Someone else — a colleague, or the agent — changed a file. Not a promise. */
   onFileChanged(handler: (path: string) => void): void;
 }

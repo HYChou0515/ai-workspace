@@ -18,7 +18,7 @@ await workspace.deleteFile(path)     // → { path }
 await workspace.openFile(path)       // opens it in the workspace beside the page
 await workspace.whoami()             // → { user }
 await workspace.callTool(name, args) // → { output, exit_code }
-await workspace.startRun(workflow, input, onEvent)  // → { run_id }
+await workspace.startRun(workflow, input, onEvent)  // resolves when it ends
 ```
 
 Plus one subscription, which is not a call:
@@ -160,17 +160,34 @@ SKILL.md, "Run the tool before you parse it", says what to look at.
 that is a **run**, and `startRun` is how a page begins one.
 
 ```js
-const { run_id } = await workspace.startRun("judge", { lot: "A1" }, function (event) {
+await workspace.startRun("judge", { lot: "A1" }, function (event) {
   // Called repeatedly WHILE it runs. Draw whatever you like with it.
-  if (event && event.type === "step") show(event.text);
+  if (!event) return;
+  if (event.type === "step_started") show(event.name);     // which step
+  if (event.type === "message_delta") append(event.text);  // the model, live
+  if (event.type === "error") show(event.message);         // the platform's sentence
 });
 ```
 
+The types you will actually see are `phase_entered`, `step_started`,
+`step_output`, `awaiting_human`, `message_delta`, `tool_start`, `tool_end`,
+`error` and `done`. Copy names from that list rather than guessing: a handler
+keyed on a type nothing emits is dead code that looks like a feature.
+
+⚠️ **`done` is per TURN, not per run.** A workflow with three agent steps emits
+it three times. The run is over when the stream ends — which is when the promise
+resolves — so use that, not `done`, to re-enable a button.
+
+⚠️ **A workflow that waits for a person does not resolve.** `awaiting_human`
+parks the run until somebody decides, and the promise stays pending for as long
+as that takes. If your page can start such a workflow, drive its UI from
+`onEvent` and treat `awaiting_human` as an end state of its own.
+
 Three things follow from it being a run and not a bigger tool call:
 
-- **It reports progress.** The promise settles at the end; `onEvent` fires
-  throughout. A page that shows nothing for two minutes looks broken, and the
-  person watching cannot tell it apart from one that is.
+- **It reports progress.** `onEvent` fires throughout, and the promise settles
+  when the run ends. A page that shows nothing for two minutes looks broken, and
+  the person watching cannot tell it apart from one that is.
 - **Closing the page does not lose the work.** The run keeps going and its
   result is written back, so "I got bored and closed the tab" costs nothing.
 - **It is the same engine a schedule uses.** The only difference is whether
@@ -199,6 +216,60 @@ A rejected `callTool` is a different thing again, and the message says which:
 
 Show the message as it arrives. Collapsing these into "it failed" sends the
 reader to the wrong place most of the time. `examples/external/` does this.
+
+### Work that happens without anyone there
+
+The same runs, on a clock. A page declares them by WRITING A FILE — there is no
+API for this, and that is the point: `writeFile` replaces the whole file, so
+saving five times leaves one set of schedules rather than five.
+
+Write `schedules.json` **next to your page**, in the page's own folder:
+
+```js
+await workspace.writeFile("schedules.json", JSON.stringify({
+  schedules: [
+    { every: "daily",   at: "09:00", run: "build-report", with: { line: "A" } },
+    { every: "weekly",  dow: "mon",  at: "08:00", run: "build-report" },
+    { every: "monthly", dom: 1,      at: "07:30", run: "close-month" },
+    { every: "hourly",  run: "check-arrivals" },
+    { every: "minutes", n: 15,       run: "check-arrivals" }
+  ]
+}, null, 2));
+```
+
+| word | means |
+|---|---|
+| `every` | `minutes` · `hourly` · `daily` · `weekly` · `monthly` |
+| `n` | required by `every: "minutes"`, ignored by the rest |
+| `at` | `"HH:MM"`, for daily/weekly/monthly |
+| `dow` | `mon`…`sun`, for weekly |
+| `dom` | 1–28, for monthly |
+| `run` | a workflow id — the same ids `workflows:` lists |
+| `with` | the payload, handed to the workflow exactly as `startRun` does |
+
+Read it back with `readFile` and render it: the file IS the state, so a page that
+shows what it wrote is showing the truth. Cancelling a schedule is removing its
+row and writing the file again.
+
+What the platform guarantees, so you do not build it yourself:
+
+- **It fires once**, however many pods are running and however often the sweep
+  wakes.
+- **A missed window fires late** rather than being dropped — a machine that was
+  down at 09:00 still sends the report at 10:30.
+- **Editing a row does not re-fire what already ran today**, because the
+  platform derives the identity from what you wrote.
+
+⚠️ **A bad row is skipped, not shouted about.** Get `every` or `n` wrong and that
+one row silently never fires while the others keep working. Show the file back to
+the reader so a typo is visible on the page instead of in a log they cannot see.
+
+⚠️ **Do not assume a personal token is there.** When a schedule fires, nobody is
+signed in — there is no request and no personal credential. A page or tool
+written as if one is always present works perfectly while somebody is clicking
+and fails every night, which is the "it worked when I tested it" bug in its
+purest form. Anything a scheduled run needs must come from the item's own
+environment.
 
 ## Blocked, by design
 
