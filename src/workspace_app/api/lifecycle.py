@@ -38,6 +38,7 @@ from . import perf_trace
 from .notification_delivery import INotificationChannel, deliver_pending
 from .registry import InvestigationRegistry
 from .sandbox_address import register_sandbox_address
+from .schedule_index import register_schedule_index
 
 if TYPE_CHECKING:
     from ..filestore.protocol import FileStore
@@ -469,6 +470,10 @@ def build_lifespan(
         if registry.address is not None:
             register_sandbox_address(spec)
             logger.debug("lifespan: registered sandbox-address model")
+        # #WUI P14: which items have page-declared schedules. Same post-apply
+        # timing and the same reason — this is platform bookkeeping, not
+        # something any authenticated caller may PUT.
+        register_schedule_index(spec)
         # #429 P9: the event-trigger processing high-water model (idempotent + the D2d
         # discoverable-lag ledger). Registered post-apply so its CRUD routes are never emitted,
         # like the coordination models above. Event dispatch is in-request (not swept), so this

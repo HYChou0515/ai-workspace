@@ -103,6 +103,10 @@ from .review_inbox_routes import register_review_inbox_routes
 from .runner import AgentRunner
 from .sandbox_activity import IActivityStore, SpecstarActivityStore, register_sandbox_activity
 from .sandbox_address import IAddressStore, SpecstarAddressStore
+from .schedule_index import (
+    ScheduleIndex,
+    is_schedule_file,
+)
 from .spa import SpaStaticFiles
 from .subagent_bridge import SubagentBridge
 from .subagent_run import run_agent_task
@@ -949,6 +953,15 @@ def create_app(
     # of a cold durable write the host's `--delete` mirror would reconcile away;
     # local shared-vol has no host reconcile, so it keeps the cold-dir→durable
     # fallback (rebuild=None). Resolution never wakes a cold sandbox — only exec does.
+    schedule_index = ScheduleIndex(spec)
+
+    def _note_schedule_file(item_id: str, path: str) -> None:
+        """Record that this item now has schedules. Runs on EVERY write in the
+        platform, so the test is exact and cheap and the work only happens for
+        the one filename that means anything here."""
+        if is_schedule_file(path):
+            schedule_index.record(item_id, path)
+
     files = WorkspaceFiles(
         filestore,
         sandbox,
@@ -962,6 +975,11 @@ def create_app(
         quota=_quota_for,
         person_gate=_person_disk_gate,
         on_usage=_record_usage,
+        # #WUI P14: note which items have page-declared schedules, so the sweep
+        # reads a short list instead of every item that has ever existed. At the
+        # write chokepoint rather than in a route, because the agent's
+        # `write_file` never touches one.
+        on_write=_note_schedule_file,
     )
 
     admission = AdmissionGate(

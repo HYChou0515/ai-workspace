@@ -186,11 +186,25 @@ class WorkspaceFiles:
         quota: int | Callable[[str], int] = 0,
         person_gate: PersonDiskGate | None = None,
         on_usage: Callable[[str, int], Awaitable[None]] | None = None,
+        on_write: Callable[[str, str], None] | None = None,
         usage_window: float = _USAGE_WINDOW_S,
         now: Callable[[], float] = time.monotonic,
     ) -> None:
         self._fs = filestore
         self._sb = sandbox
+        # Called after every committed write, with (workspace_id, path).
+        #
+        # Here rather than in a route because this is the chokepoint EVERY write
+        # shares — the same reason the quota gate lives here. A page writes
+        # through the file PUT route; the agent's `write_file` tool does not
+        # touch a route at all; a workflow uses neither. A hook per route would
+        # catch some of those and miss the rest, silently.
+        #
+        # Deliberately sync and deliberately not awaited: it runs on the write
+        # path, so anything slow here is felt on every save in the platform. Its
+        # one production use records "this item has schedules" (#WUI P14), which
+        # is a point write against an in-memory-cached row.
+        self._on_write = on_write
         # #538: bytes one workspace may occupy; 0 ⇒ unlimited (the default, so the
         # wiki-page stores and other non-workspace uses are never gated).
         #
@@ -339,6 +353,15 @@ class WorkspaceFiles:
             self._forget(workspace_id)
         else:
             self._adjust(workspace_id, len(data) - previous)
+        if self._on_write is not None:
+            # A failing hook must never fail the write. The bytes are already
+            # committed at this point, so raising here would report a failure
+            # for something that succeeded — and the caller would reasonably
+            # retry it.
+            try:
+                self._on_write(workspace_id, path)
+            except Exception:
+                logger.exception("files: on_write hook failed for %s %s", workspace_id, path)
 
     async def move(self, workspace_id: str, src: str, dst: str) -> None:
         """Relocate one file. **Not** quota-gated, and deliberately so: the bytes
