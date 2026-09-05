@@ -243,3 +243,59 @@ P1 (epoch 提前) → P2 (exec 真的被殺) → P3 (compaction 拆 task) → P4
   全套交給 CI（一輪 20–30 分，別本機空等）
 - 秒級的閘門過了、只剩唯讀工作（review / 寫 PR 內文）就**先推、開 draft PR**，讓 CI 跟你平行跑
 - **P2 的前置實測沒做完之前，不要開始寫 P2 的程式碼**
+
+---
+
+## 執行結果（全部完成）
+
+| Phase | commit | 結果 |
+|---|---|---|
+| P1 | `e11c34f2` | epoch stamp 提前到訊息持久化；preamble 期間的 Stop 不再被靜默吃掉 |
+| P2 | `d95b811b` | **前提實測成立 → 走修法 A**（見下）；`finally` 改成 cancel |
+| P3 | `38543720` | `run_interruptible` + compaction 拆 task；新增 `stopped` outcome |
+| P4 | `b8f3f6e4` | Send/Stop 拆兩顆 icon 按鈕 + `stopping` 狀態；兩處都改 |
+| P5 | `cabfe5e8` | `on_chunk` 當取消點；洩漏從整個呼叫壓到一個 chunk |
+
+### P2 的前置實測 — 答案是「會」
+
+用和 `_exec_ndjson` 一樣的形狀（背景 task 餵 queue、generator 讀、`finally: await task`）
+對真的 uvicorn 量：
+
+```
+--- chatty (指令持續有輸出) ---  finally: 斷線後 0.03s 觸達
+--- quiet  (第一個 frame 之後全靜音) ---  finally: 斷線後 0.03s 觸達
+```
+
+兩種都觸達，而且觸達時 task 還在跑。所以**斷線偵測不是問題**，備案的
+`POST /exec/cancel` 端點不需要做。這是計畫裡唯一「不實測就不准寫程式」的關卡。
+
+### 每個 Phase 的驗證
+
+全部都對**未修版本**驗過紅，且突變探針各自咬到預期的測試：
+
+- **P1** — 拿掉 stand-down → 兩條 preamble 測試紅；拿掉 `chat_send` 的 `epoch=` →
+  **只有走真入口那條紅**（engine 層那條照樣綠，這正是它存在的理由）；`>` 改 `>=` →
+  「下一則訊息不該繼承上次的 Stop」那條紅。
+- **P2** — 未修版本 `aclose()` 等完整個指令 → `TimeoutError`。
+- **P3** — 未修版本 Stop 碰不到 summariser → `TimeoutError`。⚠️ 前兩次的紅是**用錯
+  engine_key** 跑的（預設對話 key 是 item_id 不是 chat id），證據被污染，已用正確的 key 重驗。
+- **P4** — `cancel()` 改回 `streaming: false` → `stopping` 兩條紅。⚠️ 「終止事件忘了清
+  `stopping`」這個突變**第一次沒被抓到**——hook 那條測試的終止路徑會順便重新補水，
+  `reconcileSnapshot` 幫忙清掉了。補了一條直接打 reducer 的測試才咬得到。
+- **P5** — 拿掉 `stopped.set()` → 紅。未修版本量到 Stop 後又多跑 **147 個 chunk**。
+
+### 順手修掉的（原計畫沒列）
+
+- `max_turns_exceeded` 是唯一只清 `streaming` 的終止事件，沒有註解說明；四處重複的重置
+  收斂成 `TURN_OVER` 一處。跑完 render+review 中途用光步數的 turn 原本會一直宣稱自己在壓縮。
+- `reconcileSnapshot.test.ts` 手刻了一份完整的 `AgentLog` 字面值，加第一個新欄位就壞；
+  改成展開 `EMPTY_LOG`。
+- 四條釘住舊規則的既有測試**沒有刪除**，各自遷移到取代它們的規則上。
+
+### 仍未做
+
+- **沒有 push、沒有開 PR**（照使用者規矩）。因此 **CI 未跑**，本機只跑了 targeted。
+- **沒有在真瀏覽器按過 P4 的新按鈕。** 測試綠不等於畫面對。
+- `uv run ty check` 有 1 個 diagnostic：`pandera.pandas` 解不到，是這棵 worktree 沒跑
+  `uv sync --all-extras`（CLAUDE.md 有記），與本次改動無關；`tests/agent/` 有 5 條
+  `test_infer_modules` 因同一原因紅。
