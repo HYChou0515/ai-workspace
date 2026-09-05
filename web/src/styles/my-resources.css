@@ -170,8 +170,11 @@
  *
  * dot · title · App · spec · action. The title column is the only one that may
  * shrink; `minmax(0, 1fr)` is what lets it ellipsis instead of pushing the spec
- * and the button off the end. The App column is a fixed width rather than
- * `auto` so a long App name cannot steal from the title.
+ * and the button off the end. The App column is `fit-content(10rem)`: `auto`
+ * would let a long App name steal from the title without limit, and a hard
+ * `10rem` reserved 160px whether or not any name needed it — the shipped names
+ * render ~82px, and the 78px left over came straight out of the title (193px of
+ * it at a 641px viewport). The cap is the property; the slack goes back.
  *
  * The grid lives HERE and each row takes `subgrid`, because a grid declared on
  * the row makes every row size its own tracks: the spec column is as wide as
@@ -182,7 +185,7 @@
  * once for the list. */
 .page .live-list {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) 10rem auto auto;
+  grid-template-columns: auto minmax(0, 1fr) fit-content(10rem) auto auto;
   column-gap: var(--space-12);
   row-gap: var(--space-8);
 }
@@ -323,7 +326,7 @@
  * rows are running and those ones are not. */
 .page .disk-list {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 10rem auto auto;
+  grid-template-columns: minmax(0, 1fr) fit-content(10rem) auto auto;
   column-gap: var(--space-12);
 }
 
@@ -412,6 +415,11 @@
   .page .live-list > li > button {
     grid-column: 3;
     grid-row: 1;
+    /* The rows are independent grids again here, so the action track is sized
+       by THAT row's spec text ("0.5 核 · 1.0 GB" against "2 核 · 1.0 GB") and a
+       stretched button came out 93px on one row and 81px on the next, with
+       ragged left edges. It is its natural width, pinned to the end. */
+    justify-self: end;
   }
 
   .page .live-list .app-tag {
@@ -438,6 +446,11 @@
   .page .disk-list > li > button {
     grid-column: 2;
     grid-row: 1;
+    /* The rows are independent grids again here, so the action track is sized
+       by THAT row's spec text ("0.5 核 · 1.0 GB" against "2 核 · 1.0 GB") and a
+       stretched button came out 93px on one row and 81px on the next, with
+       ragged left edges. It is its natural width, pinned to the end. */
+    justify-self: end;
   }
 
   .page .disk-list .app-tag {

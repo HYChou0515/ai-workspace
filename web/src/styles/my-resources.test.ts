@@ -79,15 +79,20 @@ describe("my-resources: the live panel's layout", () => {
     },
   );
 
-  it("holds the App column to a fixed width so a long name cannot eat the title", () => {
-    // `auto` here would size the column to the longest App name in view, which
-    // is both variable and unbounded — the title is what must give way, and
-    // only because it can ellipsis.
+  it("BOUNDS the App column so a long name cannot eat the title", () => {
+    // `auto` would size the column to the longest App name in view, which is
+    // both variable and unbounded — the title is what must give way, and only
+    // because it can ellipsis. The property is the CEILING, not a fixed width:
+    // a hard `10rem` also reserved 78px that the shipped names never use, and
+    // `minmax(0, 1fr)` — the only shrinkable track — paid for it (193px of
+    // title at a 641px viewport). `fit-content(10rem)` keeps the cap and hands
+    // the slack back, and still gives every row one shared track.
     const tracks = rule(".page .live-list").match(/grid-template-columns:([^;]*);/)?.[1];
     expect(tracks).toBeTruthy();
-    // dot · title · App · spec · action — the third track is a fixed length.
+    // dot · title · App · spec · action.
     const third = tracks!.trim().split(/\s+(?![^(]*\))/)[2];
-    expect(third).toMatch(/^\d+(\.\d+)?(rem|px|ch|em)$/);
+    const LENGTH = String.raw`\d+(\.\d+)?(rem|px|ch|em)`;
+    expect(third).toMatch(new RegExp(`^(${LENGTH}|fit-content\\(${LENGTH}\\))$`));
   });
 
   it("reflows the rows before the fixed columns eat the title", () => {
@@ -105,11 +110,16 @@ describe("my-resources: the live panel's layout", () => {
     const block = narrow![1];
     // Both lists have to let go of the wide fixed tracks, or the reflow only
     // fixes the half somebody happened to test.
-    expect(block).toMatch(/\.page \.live-list[\s\S]*display:\s*flex/);
-    expect(block).toMatch(/\.page \.disk-list > li \{[\s\S]*grid-template-columns:/);
+    expect(block).toMatch(/\.page \.live-list[^{}]*\{[^}]*display:\s*flex/);
+    // `[^}]*`, never `[\s\S]*`: the greedy form runs past this rule's closing
+    // brace and satisfies itself from a later rule in the same media block, so
+    // deleting the declaration it names changes nothing. Verified: with
+    // `[\s\S]*` the storage row lost its narrow tracks and rendered a 256px
+    // 刪除 button on the first line, with the suite green.
+    expect(block).toMatch(/\.page \.disk-list > li \{[^}]*grid-template-columns:/);
     // …and the title must stop sharing a line with the App tag, which is what
     // gives it the width back.
-    expect(block).toMatch(/\.page \.live-list \.app-tag \{[\s\S]*grid-row:\s*2/);
+    expect(block).toMatch(/\.page \.live-list \.app-tag \{[^}]*grid-row:\s*2/);
   });
 
   it("actually APPLIES the dark ink, not just computes one", () => {
@@ -122,7 +132,12 @@ describe("my-resources: the live panel's layout", () => {
     expect(rule('[data-theme="dark"] .page .app-tag')).toMatch(/color:\s*var\(--app-ink-dark/);
     // …and the light rule reaches for the other one, so the two cannot collapse
     // into a single value that is wrong in one theme.
-    expect(rule(".page .app-tag")).toMatch(/color:\s*var\(--app-ink\b/);
+    // `[,)]` and NOT `\b`: a word boundary matches at the hyphen, so
+    // `var(--app-ink\b` is satisfied by `var(--app-ink-dark` — this guard
+    // accepted the very collapse it exists to forbid, and pointing BOTH rules
+    // at the dark ink left all 3547 tests green while every light-theme pill
+    // wore #ffb19f on cream (~1.5:1, unreadable).
+    expect(rule(".page .app-tag")).toMatch(/color:\s*var\(--app-ink[,)]/);
   });
 
   it("stops the row's failure message landing in the 8px dot column", () => {
