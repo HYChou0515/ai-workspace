@@ -43,6 +43,7 @@ from workspace_app.factories import (
     get_kb_describer,
     get_kb_llm,
     get_kb_quality_judge_llm,
+    get_notification_channel,
     get_parser_registry,
     get_replay_service,
     get_request_env,
@@ -233,6 +234,9 @@ def main() -> None:
             # chat send's cookies/headers can become that turn's tool env. None
             # when unconfigured ⇒ no such seam.
             request_env=get_request_env(settings.server.request_env),
+            # The deploy's outbound channel for notifications. Empty ⇒ in-app
+            # only, which is where they have always been.
+            notification_channel=get_notification_channel(settings.server.notification_channel),
             # #750: the deploy's own credential->variable implementations.
             # Empty is the ordinary case — no buttons, and every variable
             # still typeable by hand.

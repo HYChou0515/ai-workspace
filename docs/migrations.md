@@ -126,6 +126,7 @@ REINDEX TABLE CONCURRENTLY cluster_member_meta;
 | `graph-entity` | v1 | `e21369fb`（2026-08-03） | 走訪要逐列解 blob，慢 | §9 |
 | `graph-entity-link` | v1 | `e21369fb`（2026-08-03） | 走訪要逐列解 blob，慢 | §9 |
 | `graph-relationship` | v1 | `e21369fb`（2026-08-03） | 走訪要逐列解 blob，慢 | §9 |
+| `notification` | — | 待填（WUI 第三輪） | **想要的行為,不用回填**：舊通知不帶 `outbound` 索引值,所以外送掃描永遠看不到它們——第一次接上寄信通道時,不會把平台歷史上所有通知都寄出去一遍 | §5.6 |
 
 一次盤點全部（**dry-run 不寫回，安全**，§3）：
 
@@ -156,6 +157,24 @@ uv run python scripts/run_migrate.py --dry-run \
 | --- | --- | --- | --- |
 | `failover.rate_limit_budget_s` | #759（2026-09-03） | ⚠️ **行為有變**：agent 鏈碰到 429 從「快速燒完重試然後 giving up」變成「在原端點等它聲明的窗口」，等待秒數每次 agent run 共用一池，預設上限 2 小時；畫面會出現「請求過於頻繁，N 秒後自動重試」。設 `0` 回到一律切換的舊行為 | configuration.md §11 |
 | `agents.subagent_models` | #770（2026-09-03） | **完全不變**：`run_agent` 不長 `model` 參數，sub-agent 照舊跟 parent turn 同一顆模型（review 以逐位元比對驗證） | configuration.md §7 |
+| `server.notification_channel` | 待填（WUI 第三輪） | **完全不變**：通知只寫站內信,跟這個接縫出現之前一模一樣。沒有背景外送迴圈會被啟動(空值連 timer 都不建),也沒有任何查詢會多跑 | configuration.md |
+
+---
+
+## 5.6 案例：`notification.outbound`——**故意不回填**
+
+WUI 第三輪替 `Notification` 加了 `outbound`(`""` 待送 / `sent` / `無法送達`)並把它加進
+`indexed_fields`,外送掃描就是查 `outbound == ""`。
+
+specstar 不會自動回填,所以**這個欄位出現之前寫下的每一列都對不上任何值**,掃描永遠看不到
+它們。
+
+**這正是要的行為,不要去回填它。** 一個部署第一次接上 email 通道的那一刻,如果舊資料也被
+掃到,平台歷史上每一則通知都會在那一分鐘內被寄出去一次。
+
+⚠️ 所以這一列存在的目的跟其他列相反:**它是提醒你「不要跑」**,而不是提醒你「記得跑」。
+如果哪天真的需要補送某一段期間的通知,那要是一次有明確時間範圍的一次性動作,不是
+`migrate/execute`。
 
 ---
 

@@ -35,12 +35,18 @@ from ..health.service import HealthService
 from ..kernels import KernelService
 from ..observability.boot import boot_step
 from . import perf_trace
+from .notification_delivery import INotificationChannel, deliver_pending
 from .registry import InvestigationRegistry
 from .sandbox_address import register_sandbox_address
 
 if TYPE_CHECKING:
     from ..filestore.protocol import FileStore
     from ..monitor import IMonitor
+
+#: How often pending notifications are offered to the deploy's outbound channel.
+#: Short, because this is the delay between "the bell lit up" and "the mail went
+#: out" — a person who was told to expect mail is already waiting by then.
+_NOTIFY_DELIVERY_INTERVAL = timedelta(seconds=30)
 
 # #227: how often the background index-sweeper recovers stuck fan-out runs, and
 # how long a run may go without progress before its missing batches are declared
@@ -91,6 +97,8 @@ def build_lifespan(
     gc_t1: str,
     gc_t2: str,
     trigger_check_interval: timedelta | None = None,
+    notification_channel: INotificationChannel | None = None,
+    notification_delivery_interval: timedelta = _NOTIFY_DELIVERY_INTERVAL,
     offhours: OffHoursSettings | None = None,
     cluster_sweep_seconds: float = _CLUSTER_SWEEP_INTERVAL_S,
     cluster_tau: float = _CLUSTER_SWEEP_TAU,
@@ -339,6 +347,29 @@ def build_lifespan(
         except asyncio.CancelledError:
             return
 
+    async def notification_delivery_sweeper() -> None:
+        """Hand pending notifications to the deploy's outbound channel.
+
+        A sweep rather than a call inside ``notify()``, for two reasons that are
+        structural rather than a rule anyone has to remember: ``notify()`` has
+        both sync and async callers (a network call there would either block the
+        event loop — this codebase has had that incident — or force ten
+        signatures to change), and a decoupled sweep makes "a failing relay
+        cannot fail anything else" true by construction. A two-hour mail outage
+        leaves rows pending; they go out afterwards, and nothing that produced
+        them ever hears about it.
+        """
+        assert notification_channel is not None  # gated by caller
+        try:
+            while True:
+                await asyncio.sleep(notification_delivery_interval.total_seconds())
+                # One bad sweep must not end the loop: the next one retries, and
+                # every row it could not place is still pending.
+                with contextlib.suppress(Exception):
+                    await deliver_pending(spec, notification_channel)
+        except asyncio.CancelledError:
+            return
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # Issue #51 / Q2: the fast (connectivity-grade) probes block
@@ -487,6 +518,12 @@ def build_lifespan(
             register_stretch_claims(spec)
             bg.append(asyncio.create_task(goal_offhours_sweeper(app)))
             logger.debug("lifespan: goal off-hours sweeper enabled")
+        if notification_channel is not None:
+            # Only when a deploy named one. Without a channel there is nowhere to
+            # deliver, and the loop would be a timer that wakes forever to do
+            # nothing.
+            bg.append(asyncio.create_task(notification_delivery_sweeper()))
+
         if trigger_check_interval is not None:
             # #429 P7: register the shared window-ledger model (post-apply, so its CRUD
             # routes are never emitted — same reason as the blob-GC lease above), then run

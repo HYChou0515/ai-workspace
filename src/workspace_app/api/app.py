@@ -93,6 +93,7 @@ from .lifecycle import build_lifespan
 from .locator import ItemLocator
 from .mention import MentionService
 from .meta_routes import register_meta_routes
+from .notification_delivery import INotificationChannel
 from .notifications import register_notification_routes
 from .quota_routes import register_quota_routes
 from .registry import InvestigationRegistry
@@ -275,6 +276,9 @@ def create_app(
     # the item's shared `env_vars` cannot carry. None (default) ⇒ no such seam.
     # __main__ passes factories.get_request_env(settings.server.request_env).
     request_env: IRequestEnv | None = None,
+    # A deploy's outbound notification channel (`server.notification_channel`).
+    # None ⇒ notifications stay in-app, exactly as before this seam existed.
+    notification_channel: INotificationChannel | None = None,
     # #750: the deploy's credential->variable implementations. Empty is the
     # ordinary case — no buttons, and every variable still typeable by hand.
     # __main__ passes factories.get_env_providers(settings.server.env_providers).
@@ -1028,6 +1032,7 @@ def create_app(
         gc_t1=gc_t1,
         gc_t2=gc_t2,
         trigger_check_interval=trigger_check_interval,
+        notification_channel=notification_channel,
         offhours=goal_offhours,  # #615: the after-hours goal sweeper
         cluster_sweep_seconds=kb_cluster_sweep_seconds,
         cluster_tau=kb_cluster_tau,

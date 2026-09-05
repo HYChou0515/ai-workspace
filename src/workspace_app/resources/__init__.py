@@ -693,7 +693,7 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     )
     # recipient indexed so "my notifications" is a query, not a full scan; dedup_key
     # indexed so a workflow send_notification's "already sent?" is a query (#435 P5).
-    spec.add_model(Notification, indexed_fields=["recipient", "dedup_key"])
+    spec.add_model(Notification, indexed_fields=["recipient", "dedup_key", "outbound"])
     # #100: workflow runs. item_id indexed so "an item's runs" is a query; status
     # so "active runs" (the concurrency cap) is a query, not a full scan. The
     # filesystem is the journal (manual §9), so this resource holds status, not

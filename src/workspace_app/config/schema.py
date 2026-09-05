@@ -80,6 +80,19 @@ class ServerSettings:
     # decision lives in the impl rather than in a mapping table here.
     request_env: str = ""
 
+    # A dotted path to an `INotificationChannel` implementation: "and also send
+    # it somewhere other than the bell". Empty (default) ⇒ notifications stay
+    # in-app only, exactly as before this seam existed.
+    #
+    # The platform ships no implementation and never will — which relay, which
+    # from-address, which retention and compliance rules are the deploy's.
+    #
+    # ⚠️ Delivery is best-effort and completely decoupled: a failing channel
+    # NEVER fails whatever produced the notification. Otherwise a two-hour mail
+    # outage becomes "every scheduled job stopped itself", because a scheduled
+    # job that ends in a send would count the relay's failure as its own.
+    notification_channel: str = ""
+
     # #750 — dotted paths to `IEnvProvider` implementations: the deploy's own
     # code for "log in, get the variables", so a person who knows their account
     # and password can fill a variable that is really a token.
