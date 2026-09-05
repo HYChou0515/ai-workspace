@@ -22,6 +22,7 @@ an item whose last path goes stops being read at all.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import datetime
@@ -30,6 +31,7 @@ from typing import Any, Protocol
 from specstar import SpecStar
 
 from ..api.schedule_index import ScheduleIndex
+from ..filestore.protocol import FileNotFound
 from .triggers import SpecstarTriggerStore, fire_window, is_due
 from .user_schedules import trigger_id_for, usable_rows
 
@@ -85,8 +87,14 @@ class UserScheduleSweeper:
     async def tick(self) -> int:
         """Fire everything due. Returns how many runs were launched."""
         fired = 0
-        for item_id in self._index.items():
-            for path in self._index.paths(item_id):
+        # Every store call below is BLOCKING specstar I/O — on Postgres, a network
+        # round trip each. The sweep this one is modelled on offloads all of them,
+        # and `SpecstarTriggerStore`'s docstring states the contract: the store is
+        # sync, the sweeper is what puts it on a thread. This loop runs on every
+        # API pod, un-gated by `run_consumers`, at O(items × paths × rows) per
+        # tick, so a loop it holds is holding every request that pod is serving.
+        for item_id in await asyncio.to_thread(self._index.items):
+            for path in await asyncio.to_thread(self._index.paths, item_id):
                 try:
                     fired += await self._one_file(item_id, path)
                 except Exception:
@@ -100,12 +108,27 @@ class UserScheduleSweeper:
     async def _one_file(self, item_id: str, path: str) -> int:
         try:
             raw = (await self._read(item_id, path)).decode("utf-8", "replace")
-        except Exception:
-            # The file is gone, or unreadable. Drop it: the index is allowed to
-            # be stale only in this direction, and correcting it here is what
-            # lets a delete need no hook of its own.
+        except (FileNotFound, FileNotFoundError):
+            # GONE, specifically. Drop it: the index is allowed to be stale only
+            # in this direction, and correcting it here is what lets a delete
+            # need no hook of its own.
             logger.info("user schedules: %s %s is gone — dropping from the index", item_id, path)
             self._index.forget(item_id, path)
+            return 0
+        except Exception:
+            # "Could not read it just now" is a DIFFERENT answer, and it must not
+            # unregister anything. `files.read` raises for reasons that are not
+            # deletion — `SandboxBusy`, which the facade propagates on purpose; a
+            # 502 or timeout from the sandbox host; a sandbox mid-restore. And
+            # `forget` is destructive: the last path takes the whole index row
+            # with it, and only a WRITE of `schedules.json` ever re-creates it.
+            # Reading a blip as a deletion stops a daily report forever and
+            # leaves one log line saying the file is gone.
+            logger.exception(
+                "user schedules: %s %s could not be read this pass — leaving it indexed",
+                item_id,
+                path,
+            )
             return 0
 
         rows, problems = usable_rows(raw)
@@ -131,19 +154,20 @@ class UserScheduleSweeper:
             logger.warning("user schedules: %s %s: %s", item_id, path, "; ".join(problems[:3]))
 
         folder = path.rsplit("/", 1)[0]
-        owner = self._owner_of(item_id)
+        owner = await asyncio.to_thread(self._owner_of, item_id)
         now = self._now()
         fired = 0
         for row in rows:
             trigger_id = trigger_id_for(item_id, folder, row)
             schedule = row.as_schedule()
-            if not is_due(schedule, now, self._store.last_window(trigger_id)):
+            last = await asyncio.to_thread(self._store.last_window, trigger_id)
+            if not is_due(schedule, now, last):
                 continue
             window = fire_window(schedule, now)
             # CLAIM BEFORE FIRING. Two pods sweep the same item at the same
             # second; the CAS lets exactly one of them through, and the loser
             # does nothing rather than sending a second copy of the mail.
-            if not self._store.try_claim(trigger_id, window):
+            if not await asyncio.to_thread(self._store.try_claim, trigger_id, window):
                 continue
             try:
                 await self._start(

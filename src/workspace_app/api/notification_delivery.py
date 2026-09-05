@@ -29,6 +29,7 @@ delivery failure counts as the job's failure.
 from __future__ import annotations
 
 import abc
+import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -118,9 +119,19 @@ async def deliver_pending(spec: SpecStar, channel: INotificationChannel | None) 
     # re-reads rows nothing will ever do anything with.
     # `returns=["data", "info"]` because the id lives on `info`, and the sweep
     # needs both: the fields to send and the id to mark.
-    pending = list(rm.list_resources((QB["outbound"] == "").build(), returns=["data", "info"]))[
-        :BATCH
-    ]
+    # Bounded in the QUERY. Slicing a materialised list bounds the delivery and
+    # not the read: every pending row would still be transferred and decoded,
+    # every sweep, on every pod — and the case that makes the backlog large is
+    # the one this module exists for, a multi-hour outage. So the expensive half
+    # would scale with exactly the incident it is meant to survive.
+    #
+    # Offloaded because specstar is blocking I/O and this runs on the API's loop
+    # (`project_api_sync_specstar_blocks_loop` / PR#657 is the same shape).
+    pending = await asyncio.to_thread(
+        lambda: list(
+            rm.list_resources((QB["outbound"] == "").limit(BATCH).build(), returns=["data", "info"])
+        )
+    )
 
     sent = 0
     for res in pending:

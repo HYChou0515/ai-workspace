@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from datetime import datetime
 
 import pytest
@@ -271,6 +272,80 @@ def test_a_deleted_file_drops_out_of_the_index():
     asyncio.run(_sweeper(spec, _Files(), started, datetime(2026, 9, 5, 9, 30)).tick())
 
     assert index.items() == []
+
+
+def test_the_sweep_never_sits_on_the_event_loop():
+    """Every store call here is blocking specstar I/O, and on Postgres each one
+    is a network round trip. The sweep it is modelled on offloads all of them,
+    and `SpecstarTriggerStore`'s own docstring states the contract: the store is
+    sync, the SWEEPER is what puts it on a thread.
+
+    Not a style point. This runs on every API pod, un-gated by `run_consumers`,
+    at O(items × paths × rows) per tick — and a loop it holds is holding every
+    request that pod is serving. That was the incident PR#657 fixed.
+
+    Measured by racing the tick against a task that only wants the loop back. An
+    in-memory spec makes a blocked loop invisible, which is why nothing caught
+    this: the block has to be REAL for the test to be able to see it.
+    """
+    spec = _spec()
+    index = ScheduleIndex(spec)
+    index.record(ITEM, PATH)
+    files = _Files(**{f"{ITEM}{PATH}": _file(DAILY)})
+    sweeper = _sweeper(spec, files, _Started(), datetime(2026, 9, 5, 9, 30))
+
+    slow = sweeper._store
+    real_last_window = slow.last_window
+
+    def _blocking(trigger_id: str) -> str:
+        time.sleep(0.05)  # a round trip, as it is on a real backend
+        return real_last_window(trigger_id)
+
+    slow.last_window = _blocking  # type: ignore[method-assign]
+
+    async def _race() -> int:
+        beats = 0
+
+        async def _heartbeat() -> None:
+            nonlocal beats
+            for _ in range(40):
+                await asyncio.sleep(0.001)
+                beats += 1
+
+        pulse = asyncio.create_task(_heartbeat())
+        await sweeper.tick()
+        pulse.cancel()
+        return beats
+
+    beats = asyncio.run(_race())
+
+    assert beats > 0, "the loop was held for the whole sweep — nothing else could run"
+
+
+def test_a_blip_reading_the_file_is_not_a_deletion():
+    """ "Gone" and "could not read it just now" are different answers, and only
+    one of them may unregister a schedule.
+
+    `files.read` raises for reasons that are not deletion: `SandboxBusy`, which
+    the facade documents as deliberately propagating; any 502 or timeout from the
+    sandbox host; a sandbox mid-restore. Treating those as "gone" calls `forget`,
+    and `forget` is destructive — the last path takes the whole index row with
+    it, and nothing re-creates it but a WRITE of `schedules.json`. So a five
+    second blip stops a daily report forever, and the only trace is one log line
+    that says the file is gone.
+    """
+
+    class _Busy(_Files):
+        async def read(self, item_id: str, path: str) -> bytes:
+            raise RuntimeError("sandbox busy")
+
+    spec = _spec()
+    index = ScheduleIndex(spec)
+    index.record(ITEM, PATH)
+
+    asyncio.run(_sweeper(spec, _Busy(), _Started(), datetime(2026, 9, 5, 9, 30)).tick())
+
+    assert index.items() == [ITEM], "a transient read error unregistered the schedule"
 
 
 def test_a_failing_start_does_not_stop_the_sweep():

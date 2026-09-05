@@ -20,7 +20,6 @@ from specstar.types import ResourceIDNotFoundError
 from starlette.datastructures import UploadFile
 
 from ..files import WorkspaceFiles, rel_path
-from ..resources import Conversation
 from ..workflow.event_backfill import backfill_trigger_lag, find_trigger_lag
 from ..workflow.event_dispatch import EventTriggerDispatcher
 from ..workflow.handle import WorkflowHandle
@@ -35,7 +34,6 @@ from ..workflow.preflight import can_run as _preflight_can_run
 from ..workflow.run import WorkflowRun
 from .activity import ActivityLog
 from .events import FileChanged
-from .item_conversation_perm import item_conversation_mirror
 from .locator import ItemLocator
 from .schemas import (
     _DecisionBody,
@@ -47,7 +45,6 @@ from .schemas import (
     _SteerConfirmBody,
     _SteerConfirmOut,
 )
-from .timeutil import now_ms
 from .turns import ChatTurnEngine
 from .workflow_exec import WorkflowExecutor
 
@@ -107,7 +104,6 @@ def register_workflow_routes(
     event_dispatcher: EventTriggerDispatcher,
 ) -> None:
     """Mount the workflow profile + run routes onto ``app``."""
-    conv_rm = spec.get_resource_manager(Conversation)
 
     async def _item_entities_of(investigation_id: str):
         """A ``type_name -> current parsed records`` resolver over the item's entity store —

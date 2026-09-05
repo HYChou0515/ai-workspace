@@ -30,7 +30,6 @@ import shlex
 from collections.abc import AsyncIterator, Callable, Sequence
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse

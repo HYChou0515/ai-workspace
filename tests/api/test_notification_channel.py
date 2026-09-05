@@ -153,6 +153,47 @@ def test_one_bad_row_does_not_stop_the_others(spec: SpecStar):
     assert sorted(channel.sent) == ["alice", "carol"]
 
 
+def test_the_backlog_is_bounded_in_the_QUERY_not_after_it(spec: SpecStar):
+    """`BATCH` claims "a backlog drains over several sweeps rather than making
+    one of them unbounded". Slicing a materialised list bounds the DELIVERY and
+    not the read: every pending row is still transferred and decoded, every 30
+    seconds, on every pod.
+
+    And the case that makes the backlog large is the one this module exists for
+    — a two-hour outage — so the expensive half scales with exactly the incident
+    it is supposed to survive.
+
+    Measured on what the backend hands back, not on the query object: a limit
+    that the query carries but the backend ignores would satisfy an assertion
+    about the query and change nothing about the cost.
+    """
+    import workspace_app.api.notification_delivery as mod
+
+    for _ in range(mod.BATCH + 5):
+        _one(spec)
+
+    rm = spec.get_resource_manager(Notification)
+    real = rm.list_resources
+    handed: list[int] = []
+
+    def _spy(query, **kw):
+        rows = list(real(query, **kw))
+        handed.append(len(rows))
+        return rows
+
+    rm.list_resources = _spy  # ty: ignore[invalid-assignment]
+    try:
+        asyncio.run(deliver_pending(spec, _Channel()))
+    finally:
+        rm.list_resources = real  # ty: ignore[invalid-assignment]
+
+    assert handed, "the sweep asked the store for nothing"
+    assert max(handed) <= mod.BATCH, (
+        f"the store handed back {max(handed)} rows for a batch of {mod.BATCH} — "
+        "the bound is applied after the read, so the read is unbounded"
+    )
+
+
 def test_nothing_is_swept_when_the_deploy_named_no_channel(spec: SpecStar):
     """`None` is the default and must cost nothing — not a query, not a mark.
     A deploy that never opted in should not even be able to tell this exists."""

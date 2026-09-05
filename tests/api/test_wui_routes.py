@@ -819,9 +819,7 @@ def test_the_run_is_started_on_a_conversation_that_exists():
     loses the other's messages.
     """
     orch, engine, loc = _Orchestrator(), _Engine(), _Locator(["mes"])
-    client, _, _, _ = build(
-        orchestrator=orch, turn_engine=engine, workflows=["judge"], locator=loc
-    )
+    client, _, _, _ = build(orchestrator=orch, turn_engine=engine, workflows=["judge"], locator=loc)
 
     client.post(RUN_URL, json={"workflow": "judge"})
 
@@ -837,9 +835,7 @@ def test_a_run_that_never_started_leaves_no_chat_behind():
     — and every retry would install another.
     """
     orch, engine, loc = _Orchestrator(fail=True), _Engine(), _Locator(["mes"])
-    client, _, _, _ = build(
-        orchestrator=orch, turn_engine=engine, workflows=["judge"], locator=loc
-    )
+    client, _, _, _ = build(orchestrator=orch, turn_engine=engine, workflows=["judge"], locator=loc)
 
     resp = client.post(RUN_URL, json={"workflow": "judge"})
 

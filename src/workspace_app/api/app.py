@@ -1093,7 +1093,16 @@ def create_app(
         user_schedule_sweeper=UserScheduleSweeper(
             spec=spec,
             index=schedule_index,
-            read=files.read,
+            # The DURABLE snapshot, not the facade. `files.read` routes warm-first,
+            # and on the hosted backend that probe is also the recovery trigger:
+            # an address the reaper did not clear plus a sandbox it did take away
+            # means the read REBUILDS it. Right for a person opening a file, wrong
+            # for a sweep — it would resurrect the sandbox of every item with a
+            # `schedules.json` once per tick on every pod, permanently undoing
+            # idle reap for exactly those items, with nothing to look at. The
+            # snapshot lags by at most one mirror interval (5s), which for a
+            # declaration that fires on the hour is no lag at all.
+            read=filestore.read,
             start=_start_page_schedule,
             owner_of=_owner_of_item,
             max_rows=max_page_schedules,
