@@ -11,6 +11,7 @@ the intermittent "Stop sometimes does nothing" report.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import AsyncIterator
 
 from workspace_app.agent.context import AgentToolContext
@@ -208,3 +209,153 @@ async def test_a_stop_during_the_preamble_is_not_lost_through_the_real_send_path
     TestClient(app).post(f"/a/rca/items/{iid}/messages", json={"content": "yo"})
 
     assert not runner.started
+
+
+async def test_stop_cancels_interruptible_preparation():
+    """P3: work a caller runs BEFORE the turn can still be reached by Stop, if it
+    asks to be.
+
+    Compaction is the case: it calls an LLM and can take many seconds, but it
+    runs in `chat_send._send` rather than in a turn, and `cancel_current` only
+    ever knew about `current_turn`. Running it through here gives Stop something
+    to cancel without touching the rest of the preparation around it — which must
+    NOT be cancelled, because it is not atomic (see P1).
+    """
+    engine = ChatTurnEngine(_QuickRunner())
+    key = "inv"
+    started = asyncio.Event()
+    outcome: list[str] = []
+
+    async def slow_preparation() -> None:
+        started.set()
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            outcome.append("cancelled")
+            raise
+        outcome.append("finished")  # pragma: no cover — only if the Stop is lost
+
+    try:
+        running = asyncio.create_task(engine.run_interruptible(key, slow_preparation()))
+        await asyncio.wait_for(started.wait(), 2)
+
+        await engine.cancel_current(key)
+
+        # Bounded: an unreachable preparation hangs for 30s, so a lost Stop is a
+        # timeout rather than a test that waits it out.
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.wait_for(running, 2)
+        assert outcome == ["cancelled"]
+    finally:
+        await engine.forget(key)
+
+
+async def test_preparation_that_finishes_is_forgotten():
+    """The registry must not accumulate finished work — a chat left open all day
+    would otherwise hold every preparation it ever ran, and a later Stop would
+    spend its time cancelling tasks that ended hours ago."""
+    engine = ChatTurnEngine(_QuickRunner())
+    key = "inv"
+
+    async def quick() -> str:
+        return "done"
+
+    try:
+        assert await engine.run_interruptible(key, quick()) == "done"
+        assert not engine._ws_session(key).preparing
+    finally:
+        await engine.forget(key)
+
+
+async def test_a_stop_during_compaction_cancels_the_summariser():
+    """P3 through the real send path: compaction is an LLM call standing between
+    a person and their answer, and Stop must reach it.
+
+    It runs in `chat_send._send`, before any turn exists, so `cancel_current`
+    could not see it however long it took — the composer said the turn had
+    stopped while a summariser kept going.
+
+    Nothing is half-written when it is cancelled: the summary is inserted in one
+    step after the call returns, so the store is either untouched or complete.
+    That is what makes this safe to cancel where the rest of the preparation
+    around it is not (P1).
+    """
+    from httpx import ASGITransport
+
+    from workspace_app.api import create_app
+    from workspace_app.filestore.memory import MemoryFileStore
+    from workspace_app.resources import Conversation, Message, make_spec
+    from workspace_app.sandbox.mock import MockSandbox
+
+    from ._client import AsyncClient
+    from .conftest import register_rca_item
+
+    class _HangingCompactor:
+        """The summariser hangs, so the send is unmistakably INSIDE compaction
+        when the Stop lands."""
+
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.cancelled = False
+
+        async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+            self.started.set()
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                self.cancelled = True
+                raise
+            yield RunDone()  # pragma: no cover — only if the Stop is lost
+
+    spec = make_spec(default_user="u")
+    iid = register_rca_item(spec)
+    runner = _HangingCompactor()
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=runner,
+        get_user_id=lambda: "alice",
+        context_limit=6_000,
+    )
+    rm = spec.get_resource_manager(Conversation)
+    seeded = [Message(role="user", content=f"很久以前的第{i}個問題" * 40) for i in range(12)]
+    conv = rm.create(Conversation(item_id=iid, created_ms=1, messages=seeded))
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+        post = asyncio.create_task(
+            client.post(
+                f"/a/rca/items/{iid}/chats/{conv.resource_id}/messages",
+                json={"content": "接下來呢"},
+            )
+        )
+        await asyncio.wait_for(runner.started.wait(), 5)
+
+        # Asked rather than assumed: the DEFAULT chat keys on the item id, not on
+        # its own, so a Stop aimed at `conv.resource_id` would quietly land on a
+        # session nobody is using and the test would report the defect it is
+        # meant to catch (`engine_key`, manual §3).
+        key = app.state.chat_send._locator.engine_key(iid, conv.resource_id)
+        await app.state.turn_engine.cancel_current(key)
+
+        # Bounded: unreachable, the summariser runs its full 30s, so a lost Stop
+        # is a timeout rather than a test that waits it out.
+        async def let_go() -> None:
+            while not runner.cancelled:
+                await asyncio.sleep(0.01)
+
+        await asyncio.wait_for(let_go(), 5)
+
+        # What the POST does AFTERWARDS is P1's subject, not this one's: the send
+        # runs on to the end and the epoch stamp stands the turn down. Asserting
+        # both here would make one failure look like the other.
+        post.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await post
+
+    assert runner.cancelled
+    after = rm.get(conv.resource_id).data
+    assert isinstance(after, Conversation)
+    assert "summary" not in [m.role for m in after.messages], (
+        "a cancelled summariser must leave the thread exactly as it found it"
+    )

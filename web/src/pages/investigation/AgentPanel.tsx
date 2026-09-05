@@ -309,6 +309,10 @@ export function AgentPanel({
               "這個環境的提示詞本身已經佔滿模型的可讀範圍,整理對話幫不上忙 —— 需要調大模型視窗或縮短提示詞。",
           failed: "整理沒有成功,對話沒有更動。可以再試一次。",
           unavailable: "這個環境沒有開啟整理功能。",
+          // Its own wording rather than `failed`: nothing went wrong, the person
+          // stopped it — and being told their own Stop was a failure is how a
+          // control stops being trusted.
+          stopped: "整理已中止,對話沒有更動。",
         };
         setComposerHint(said[r.reason] ?? "這段對話還沒有需要壓縮的內容。");
         return;

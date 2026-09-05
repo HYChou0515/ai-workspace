@@ -127,7 +127,9 @@ def compaction_plan(
 #: and "compaction cannot help this deployment" are opposite diagnoses and only
 #: the second is actionable — collapsing them told a user with eleven thousand
 #: tokens of history that there was nothing to compact.
-CompactionOutcome = Literal["compacted", "fits", "empty", "no-room", "failed", "unavailable"]
+CompactionOutcome = Literal[
+    "compacted", "fits", "empty", "no-room", "failed", "unavailable", "stopped"
+]
 
 
 @dataclass(frozen=True)

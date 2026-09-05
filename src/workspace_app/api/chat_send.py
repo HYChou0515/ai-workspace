@@ -315,7 +315,26 @@ class ChatSendService:
                 agent_config=self._locator.resolve_agent_config(item_id),
             )
             try:
-                text = await self._compactor.summarise(span, ctx=ctx)
+                # Run where a Stop can reach it. This is an LLM call standing
+                # between a person and their answer, and it happens before any
+                # turn exists — so `cancel_current`, which only ever knew about
+                # `current_turn`, could not touch it however long it took.
+                text = await self._turn_engine.run_interruptible(
+                    engine_key, self._compactor.summarise(span, ctx=ctx)
+                )
+            except asyncio.CancelledError:
+                # Ours to catch: `run_interruptible` cancels the task it made,
+                # so this arrives as that task's result — THIS coroutine has not
+                # been cancelled and must carry on. The send continues to the
+                # end; P1's epoch stamp is what stands the turn down. Cancelling
+                # the rest of the preparation is the thing P1 established must
+                # not happen.
+                #
+                # Nothing to undo: the insert below is the only write and it is
+                # all at once, so a cancelled summariser leaves the thread
+                # exactly as it found it.
+                logger.info("chat_send: compaction stopped for item %s", item_id)
+                return "stopped"
             except Exception:  # noqa: BLE001 — a failed summary must not fail the turn
                 logger.warning("chat_send: compaction failed for item %s", item_id, exc_info=True)
                 return "failed"

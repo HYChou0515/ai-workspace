@@ -524,6 +524,12 @@ class _WorkspaceSession:
     queue: asyncio.Queue[_QueueItem] = field(default_factory=asyncio.Queue)
     worker: asyncio.Task | None = None
     current_turn: asyncio.Task | None = None
+    # Work a caller runs BEFORE the turn and has asked Stop to be able to reach —
+    # compaction, which calls an LLM (see `run_interruptible`). A set, because a
+    # shared item's collaborators each prepare their own message, and Stop means
+    # all of it. Entries remove themselves when they end, so this holds only what
+    # is actually in flight.
+    preparing: set[asyncio.Task] = field(default_factory=set)
     # queue → the subscriber's user id ("" for an anonymous stream, e.g. per-chat /
     # workflow streams that don't participate in presence). #455 tracks it here so
     # a join/leave can broadcast the roster. Each queue element is a `(seq, event)`
@@ -987,6 +993,29 @@ class ChatTurnEngine:
                 with contextlib.suppress(Exception):
                     await on_turn_end()
 
+    async def run_interruptible[T](self, key: str, coro: Coroutine[Any, Any, T]) -> T:
+        """Run `coro` as work a Stop on `key` can cancel, and return its result.
+
+        For the work a caller does BEFORE the turn exists. `cancel_current` only
+        ever knew about `current_turn`, so anything upstream of the queue was
+        beyond Stop's reach however long it took — compaction most of all, which
+        calls an LLM and can hold a send for many seconds.
+
+        Its OWN task, deliberately, rather than registering the caller's: the
+        rest of a send's preparation must survive a Stop, because it is not
+        atomic (a cold sandbox restore cancelled halfway leaves a sandbox that is
+        alive but only partly restored, and nothing on the read path notices).
+        Cancelling the caller's task would take that down with it. So the caller
+        wraps only the part that is safe to lose, and P1's epoch stamp is what
+        stops the turn the rest of it was preparing."""
+        task = asyncio.create_task(coro)
+        session = self._ws_session(key)
+        session.preparing.add(task)
+        try:
+            return await task
+        finally:
+            session.preparing.discard(task)
+
     async def cancel_current(self, key: str) -> None:
         """#43 Stop: interrupt the investigation's in-flight turn (anyone may do
         this). Queued messages are untouched — the worker runs the next one. A
@@ -1000,6 +1029,13 @@ class ChatTurnEngine:
         session = self._ws_sessions.get(key)
         if session is None:
             return
+        # Pre-turn work that asked to be reachable (`run_interruptible`) — the
+        # LLM call inside compaction, above all. Cancelled first: it stands
+        # BETWEEN the person and their answer, so leaving it running would let a
+        # stopped send carry on paying for a summary nobody is waiting for.
+        # Iterated over a copy — each task's own cleanup discards it from the set.
+        for prep in list(session.preparing):
+            prep.cancel()
         turn = session.current_turn
         if turn is not None and not turn.done():
             turn.cancel()
