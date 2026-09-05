@@ -292,6 +292,28 @@ def test_a_backend_that_is_down_is_not_mistaken_for_a_lost_race(index: ScheduleI
         rm.create = real_create  # ty: ignore[invalid-assignment]
 
 
+def test_a_soft_deleted_row_comes_back_rather_than_stalling(index: ScheduleIndex) -> None:
+    """specstar deletes SOFTLY, and `exists` is deletion-blind — so a deleted row
+    answers "duplicate" to a create and "absent" to a read. Anything that does
+    not resolve that disagreement stalls: the create refuses, the read says
+    nothing is there, and asking again changes neither.
+
+    The first attempt at this recursed instead, which would have spent the stack
+    on a thousand store round trips and been swallowed whole by `_landed`'s
+    `except Exception`. The second attempt caught the error where `_res` had
+    already hidden it, so the branch could never run at all — `pragma: no cover`
+    was the tell, and it is gone now because this exercises it.
+    """
+    index.record("i1", "/a/schedules.json")
+    index._spec.get_resource_manager(_ScheduleIndex).delete("i1")
+
+    wrote = index.record("i1", "/b/schedules.json")
+
+    assert wrote is True
+    assert index.paths("i1") == ["/a/schedules.json", "/b/schedules.json"]
+    assert index.items() == ["i1"]
+
+
 def test_a_page_in_a_nested_folder_counts_too() -> None:
     """A page is a folder, and nothing says that folder must sit at the top.
     `wuiFolder` accepts any depth and `writeFile`'s boundary is the page's OWN

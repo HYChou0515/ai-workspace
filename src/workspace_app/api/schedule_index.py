@@ -125,6 +125,23 @@ class ScheduleIndex:
             return None
         return data if isinstance(data, _ScheduleIndex) else None
 
+    def _restore_if_deleted(self, item_id: str) -> None:
+        """Bring a soft-deleted row back, so a later `record` can write to it.
+
+        specstar deletes softly and `exists` is deletion-blind, so a deleted row
+        answers "duplicate" to a create and "absent" to a read. Anything that
+        does not resolve that stalls: the create refuses, the read says nothing
+        is there, and the two disagree forever.
+        """
+        rm = self._spec.get_resource_manager(_ScheduleIndex)
+        try:
+            rm.get(item_id)
+        except ResourceIsDeletedError:
+            logger.info("schedule index: restoring the deleted row for item %s", item_id)
+            rm.restore(item_id)
+        except ResourceIDNotFoundError:
+            pass  # hard-gone; the caller's next read re-creates it
+
     def record(self, item_id: str, path: str) -> bool:
         """Note that this item has a schedule file at ``path``. Returns whether
         it actually wrote.
@@ -147,27 +164,23 @@ class ScheduleIndex:
             rm.create(_ScheduleIndex(paths=[path]), resource_id=item_id, if_not_exists=True)  # ty: ignore[unknown-argument]
             return True
         except DuplicateResourceError:
-            pass  # a row exists — CAS-merge into it below
+            # A row exists — possibly SOFT-DELETED, which `create(if_not_exists=True)`
+            # reports as a duplicate just the same (existence is deletion-blind by
+            # contract). Restore it HERE, where that state is still visible: `_res`
+            # answers `None` for a deleted row, so the loop below cannot tell it
+            # apart from "absent" and would keep asking a question already answered.
+            # `SpecstarTriggerStore.try_claim`, the pattern this copies, has the
+            # same branch for the same reason.
+            self._restore_if_deleted(item_id)
 
         for _ in range(_MAX_CAS_RETRIES):
-            try:
-                res = self._res(item_id)
-            except ResourceIsDeletedError:  # pragma: no cover - nothing deletes these now
-                # RESTORE, never recurse. `create(if_not_exists=True)` raises
-                # `DuplicateResourceError` for a soft-deleted id too (existence is
-                # deletion-blind by contract), so a self-call here loops until the
-                # stack ends — a thousand round trips, swallowed by `_landed`'s
-                # `except Exception`, with the index quietly never updated. The
-                # pattern this was copied from (`SpecstarTriggerStore.try_claim`)
-                # has exactly this branch; dropping it was the whole bug.
-                rm.restore(item_id)
-                continue
+            res = self._res(item_id)
             if res is None:
-                # Genuinely absent between the create and the read.
-                res = self._res(item_id)
-                if res is None:
-                    rm.create(_ScheduleIndex(paths=[path]), resource_id=item_id)
-                    return True
+                # Genuinely absent between the create and the read — somebody
+                # hard-removed it. Re-create rather than loop: the read has
+                # already answered, and asking again cannot change it.
+                rm.create(_ScheduleIndex(paths=[path]), resource_id=item_id)
+                return True
             row, etag = res
             if path in row.paths:
                 return False
