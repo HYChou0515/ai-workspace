@@ -136,6 +136,7 @@ class UserScheduleSweeper:
         spec: SpecStar,
         index: ScheduleIndex,
         read: ReadFile,
+        read_live: ReadFile | None = None,
         start: StartRun,
         owner_of: OwnerOf,
         workflows_for: WorkflowsFor | None = None,
@@ -144,6 +145,13 @@ class UserScheduleSweeper:
     ) -> None:
         self._index = index
         self._read = read
+        #: Consulted ONLY to confirm a deletion. `read` is the durable snapshot,
+        #: which is what keeps the ordinary tick from waking a reaped sandbox —
+        #: but the snapshot LAGS the workspace, so "not there yet" and "deleted"
+        #: arrive as the same answer, and unregistering is not undoable. This is
+        #: the live workspace, asked once, on the one path where being wrong
+        #: costs a schedule.
+        self._read_live = read_live
         self._start = start
         self._owner_of = owner_of
         self._workflows_for = workflows_for
@@ -174,16 +182,51 @@ class UserScheduleSweeper:
                     logger.exception("user schedules: item %s path %s failed", item_id, path)
         return fired
 
+    async def _still_there(self, item_id: str, path: str) -> bytes | None:
+        """The file's bytes from the LIVE workspace, or None when it is really gone.
+
+        A read error that is not "missing" answers None too — logged, and the
+        caller was already about to drop this path, so the worst case is one lost
+        schedule rather than a sweep that stops.
+        """
+        if self._read_live is None:
+            return None  # no live reader wired: the snapshot is all there is
+        try:
+            return await self._read_live(item_id, path)
+        except (FileNotFound, FileNotFoundError):
+            return None
+        except Exception:
+            logger.exception(
+                "user schedules: could not confirm whether %s %s still exists", item_id, path
+            )
+            return None
+
     async def _one_file(self, item_id: str, path: str) -> int:
         try:
             raw = (await self._read(item_id, path)).decode("utf-8", "replace")
         except (FileNotFound, FileNotFoundError):
-            # GONE, specifically. Drop it: the index is allowed to be stale only
-            # in this direction, and correcting it here is what lets a delete
-            # need no hook of its own.
-            logger.info("user schedules: %s %s is gone — dropping from the index", item_id, path)
-            await asyncio.to_thread(self._index.forget, item_id, path)
-            return 0
+            # MISSING FROM THE SNAPSHOT, which is not the same as gone. A page's
+            # save lands in the warm sandbox and the snapshot catches up on the
+            # next mirror, so a tick inside that window sees exactly this for a
+            # file that is right there — and unregistering it stops the schedule
+            # until somebody saves again, with a log line saying it was deleted.
+            #
+            # Two fixes that were each right alone made this reachable: narrowing
+            # the catch to `FileNotFound` (so a blip is not read as a deletion)
+            # and reading the snapshot (so the sweep stops resurrecting reaped
+            # sandboxes) together made `FileNotFound` an ordinary transient state
+            # for the first time.
+            #
+            # So ask the LIVE workspace before believing it — only here, so the
+            # ordinary tick still reads the snapshot and wakes nothing.
+            found = await self._still_there(item_id, path)
+            if found is None:
+                logger.info(
+                    "user schedules: %s %s is gone — dropping from the index", item_id, path
+                )
+                await asyncio.to_thread(self._index.forget, item_id, path)
+                return 0
+            raw = found.decode("utf-8", "replace")
         except Exception:
             # "Could not read it just now" is a DIFFERENT answer, and it must not
             # unregister anything. `files.read` raises for reasons that are not

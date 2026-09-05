@@ -88,9 +88,14 @@ describe("the WUI runtime", () => {
     expect(seen).toEqual([{ step: 1 }, { step: 2 }]);
     expect(settled).toBe(false); // still running — this is the point
 
-    fire("message", { data: { proto: "wui/1", id, ok: true, value: { run_id: "run-1" } } });
+    // A bare `ok` reply, which is what the parent actually sends for `startRun`.
+    // A `{run_id}` here was a shape the platform never produces — the same
+    // double-invents-the-contract mistake the example was written against.
+    fire("message", { data: { proto: "wui/1", id, ok: true, value: undefined } });
 
-    await expect(call).resolves.toEqual({ run_id: "run-1" });
+    // Resolves with nothing. What the test is for is that it resolves HERE —
+    // at the reply — and not at the first progress event.
+    await expect(call).resolves.toBeUndefined();
   });
 
   it("a throwing progress handler is reported, not swallowed", async () => {

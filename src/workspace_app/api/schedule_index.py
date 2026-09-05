@@ -41,6 +41,8 @@ from specstar.types import (
     RevisionStatus,
 )
 
+from ..sync.ignore import DEFAULT_IGNORES, should_ignore
+
 logger = logging.getLogger(__name__)
 
 #: The file a page writes its schedules into, inside its own folder.
@@ -86,7 +88,15 @@ def is_schedule_file(path: str) -> bool:
     saw its file, and nothing ever ran.
     """
     parts = path.strip("/").split("/")
-    return len(parts) > 1 and parts[-1] == SCHEDULES_FILE
+    if len(parts) <= 1 or parts[-1] != SCHEDULES_FILE:
+        return False
+    # Not inside a derivative. `node_modules/`, `.venv/` and the caches hold
+    # other people's files, and a vendored or unpacked `schedules.json` there is
+    # not a declaration anybody made — it would fire work nobody asked for, from
+    # a folder they have never opened. The list is the mirror's, shared rather
+    # than re-spelled: a file the platform declines to BACK UP is not one it
+    # should take instructions from, and one list cannot disagree with itself.
+    return not should_ignore(path, DEFAULT_IGNORES)
 
 
 class ScheduleIndex:
@@ -140,9 +150,24 @@ class ScheduleIndex:
             pass  # a row exists — CAS-merge into it below
 
         for _ in range(_MAX_CAS_RETRIES):
-            res = self._res(item_id)
-            if res is None:  # deleted between the create and the read
-                return self.record(item_id, path)
+            try:
+                res = self._res(item_id)
+            except ResourceIsDeletedError:  # pragma: no cover - nothing deletes these now
+                # RESTORE, never recurse. `create(if_not_exists=True)` raises
+                # `DuplicateResourceError` for a soft-deleted id too (existence is
+                # deletion-blind by contract), so a self-call here loops until the
+                # stack ends — a thousand round trips, swallowed by `_landed`'s
+                # `except Exception`, with the index quietly never updated. The
+                # pattern this was copied from (`SpecstarTriggerStore.try_claim`)
+                # has exactly this branch; dropping it was the whole bug.
+                rm.restore(item_id)
+                continue
+            if res is None:
+                # Genuinely absent between the create and the read.
+                res = self._res(item_id)
+                if res is None:
+                    rm.create(_ScheduleIndex(paths=[path]), resource_id=item_id)
+                    return True
             row, etag = res
             if path in row.paths:
                 return False
@@ -213,9 +238,17 @@ class ScheduleIndex:
         for res in rm.list_resources(query, returns=["data", "info"]):
             data = res.data
             # An EMPTIED row is not an item to sweep. `forget` empties rather
-            # than deletes (a delete cannot be made conditional, so it races),
-            # and reading those back would keep the item in the sweep's input
-            # forever — the one cost this index exists to avoid.
+            # than deletes, because a delete cannot be made conditional and so
+            # races a concurrent `record` — it would take the peer's freshly
+            # added path with it, and nothing puts that back.
+            #
+            # ⚠️ THE COST, stated rather than implied away: the row survives, so
+            # this listing fetches one row per item that has EVER had a schedule,
+            # every tick, for the life of the deployment. The old delete removed
+            # it at the query level. That set is bounded by "items that ever
+            # scheduled something", which is the set this index was designed to
+            # hold — but nothing reclaims it, and if it ever stops being small
+            # the answer is an indexed flag to filter on, not a racy delete.
             if isinstance(data, _ScheduleIndex) and data.paths:
                 out.append(res.info.resource_id)  # ty: ignore[unresolved-attribute]
         return sorted(out)

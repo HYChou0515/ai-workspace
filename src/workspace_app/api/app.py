@@ -1058,15 +1058,35 @@ def create_app(
         Resolved at CALL time on purpose: the orchestrator is constructed later
         than this, and a closure reading it when the sweep fires is the same
         deferred wiring `entity_write_sink` uses.
+
+        It opens its OWN conversation, exactly as the interactive entrance does.
+        Without a `chat_id` the run keys on the item, `workflow_exec.drive_turn`
+        looks that up, finds no conversation and falls back to the item's DEFAULT
+        chat — so a scheduled page run would read the user's own chat history as
+        its context and append its turns there, every night, on the entrance
+        nobody is watching. Fixing the interactive half and not this one left the
+        same defect where it is hardest to notice.
         """
-        return await workflow_orchestrator.start(
-            slug=locator.slug_of(item_id) or "",
-            item_id=item_id,
-            profile=locator.profile_of(item_id),
-            captured_user=acting_user,
-            workflow_id=workflow_id,
-            payload=payload,
-        )
+        chat_id = locator.open_run_chat(item_id, workflow_id)
+        try:
+            run_id = await workflow_orchestrator.start(
+                slug=locator.slug_of(item_id) or "",
+                item_id=item_id,
+                profile=locator.profile_of(item_id),
+                captured_user=acting_user,
+                workflow_id=workflow_id,
+                chat_id=chat_id,
+                payload=payload,
+            )
+        except Exception:
+            # Take the chat down with the run that never started: a chat with no
+            # `run_id` is a FREE chat, and the earliest free chat is what the item
+            # opens as its default. A schedule that fails nightly would otherwise
+            # install a new default conversation every night.
+            locator.settle_run_chat(chat_id, None)
+            raise
+        locator.settle_run_chat(chat_id, run_id)
+        return run_id
 
     lifespan = build_lifespan(
         registry=registry,
@@ -1103,6 +1123,11 @@ def create_app(
             # snapshot lags by at most one mirror interval (5s), which for a
             # declaration that fires on the hour is no lag at all.
             read=filestore.read,
+            # Asked ONLY when the snapshot says a schedules.json is missing, to
+            # tell "the mirror has not caught up" apart from "somebody deleted
+            # it" — identical from the snapshot, opposite right answers. Rare by
+            # construction, so the ordinary tick still wakes nothing.
+            read_live=files.read,
             start=_start_page_schedule,
             owner_of=_owner_of_item,
             # The SAME ceiling the page's own `startRun` is held to. Without it

@@ -302,6 +302,35 @@ def test_a_page_in_a_nested_folder_counts_too() -> None:
     assert is_schedule_file(f"/a/b/c/{SCHEDULES_FILE}")
 
 
+def test_a_derivative_folder_cannot_schedule_work() -> None:
+    """Any depth is allowed, so anything NAMED `schedules.json` anywhere could
+    start runs — including one vendored into `node_modules/` or unpacked from
+    somebody's archive. That is work nobody declared, fired from a folder they
+    have never opened.
+
+    The list is the mirror's: a file the platform declines to BACK UP is not one
+    it should take instructions from, and sharing it means the two cannot
+    disagree.
+    """
+    for path in (
+        f"/page/node_modules/some-lib/{SCHEDULES_FILE}",
+        f"/page/.venv/lib/{SCHEDULES_FILE}",
+        f"/page/__pycache__/{SCHEDULES_FILE}",
+    ):
+        assert not is_schedule_file(path), path
+
+
+def test_a_real_page_folder_still_counts() -> None:
+    """The control. A rule that refused anything with a dot or a nested path
+    would pass the test above and switch the feature off."""
+    for path in (
+        f"/reports/{SCHEDULES_FILE}",
+        f"/reports/scrap/{SCHEDULES_FILE}",
+        f"/my.page/{SCHEDULES_FILE}",
+    ):
+        assert is_schedule_file(path), path
+
+
 def test_the_workspace_root_still_does_not_count() -> None:
     """The control for the loosening above: a schedule belongs to a page, a page
     is a folder, and a view file at the root has no folder of its own — it

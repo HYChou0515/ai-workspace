@@ -115,9 +115,13 @@ def _with_trigger_payload(inputs: Any, payload: dict[str, Any]) -> Any:
 
     The payload WINS: `input.json` is the profile's standing default and the
     payload is what this particular invocation asked for. An empty payload
-    changes nothing at all, which is what keeps every existing run identical.
-    `input.json` holding something other than an object is left alone — there is
-    no sensible merge, and quietly replacing it would lose the file.
+    changes nothing at all — `inputs` is returned unchanged, by identity — which
+    is what keeps every existing run byte-identical.
+
+    When `input.json` holds something OTHER than an object (a list, a number)
+    and a payload is present, the payload REPLACES it: there is no sensible
+    merge between the two, and this can only happen through the two new
+    entrances, which are the ones that sent a payload on purpose.
     """
     if not payload:
         return inputs

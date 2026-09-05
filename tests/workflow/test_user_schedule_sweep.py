@@ -406,6 +406,69 @@ def test_the_sweep_never_holds_the_event_loop():
     )
 
 
+def test_a_file_the_snapshot_has_not_caught_up_with_is_not_gone():
+    """The durable snapshot is BEHIND the workspace, and "behind" looks exactly
+    like "deleted" from where the sweep stands.
+
+    A page's save lands in the warm sandbox; the snapshot catches up on the next
+    mirror. Reading the snapshot is what keeps the sweep from waking reaped
+    sandboxes — but it means a tick inside that window sees `FileNotFound` for a
+    file that is right there, and the previous answer to `FileNotFound` was to
+    UNREGISTER the schedule. Which nothing undoes but another save.
+
+    Two fixes, each correct alone, that broke each other: narrowing the catch to
+    `FileNotFound` (so a blip stops being read as a deletion) and switching to the
+    snapshot (so the sweep stops resurrecting sandboxes) made `FileNotFound` a
+    NORMAL transient state for the first time.
+
+    So a deletion is now CONFIRMED against the live workspace before it counts.
+    Only on the missing path, so the ordinary tick still wakes nothing.
+    """
+    spec = _spec()
+    index = ScheduleIndex(spec)
+    index.record(ITEM, PATH)
+    started = _Started()
+
+    snapshot = _Files()  # the mirror has not run yet
+    live = _Files(**{f"{ITEM}{PATH}": _file(DAILY)})  # the page saved a moment ago
+
+    sweeper = UserScheduleSweeper(
+        spec=spec,
+        index=index,
+        read=snapshot.read,
+        read_live=live.read,
+        start=started,
+        owner_of=lambda _item: "alice",
+        now=lambda: datetime(2026, 9, 5, 9, 30),
+    )
+    asyncio.run(sweeper.tick())
+
+    assert index.items() == [ITEM], "a schedule was unregistered for lagging the mirror"
+    assert [r[1] for r in started.runs] == ["build-report"], "and it did not fire either"
+
+
+def test_a_file_gone_from_both_is_really_gone():
+    """The control. Never forgetting would leave every deleted page in the sweep's
+    input for the life of the deployment — the one cost this index exists to
+    avoid — so the confirmation has to be able to say yes."""
+    spec = _spec()
+    index = ScheduleIndex(spec)
+    index.record(ITEM, PATH)
+
+    sweeper = UserScheduleSweeper(
+        spec=spec,
+        index=index,
+        read=_Files().read,
+        read_live=_Files().read,
+        start=_Started(),
+        owner_of=lambda _item: "alice",
+        now=lambda: datetime(2026, 9, 5, 9, 30),
+    )
+    asyncio.run(sweeper.tick())
+
+    assert index.items() == []
+
+
 def test_a_blip_reading_the_file_is_not_a_deletion():
     """ "Gone" and "could not read it just now" are different answers, and only
     one of them may unregister a schedule.
