@@ -54,24 +54,38 @@ describe("my-resources: the live panel's layout", () => {
   it("gives a live environment a different row shape from a stored one", () => {
     // The complaint underneath all of this: two sections that mean different
     // things looked identical, and the only thing separating them was the word
-    // on their buttons. The live rows are cards on a grid; the storage rows
-    // keep the shared hairline-separated flex row.
+    // on their buttons. The live rows are cards; the storage rows keep the
+    // shared hairline-separated row.
     const live = rule(".page .live-list > li");
     expect(live).toMatch(/display:\s*grid/);
     expect(live).toMatch(/border-radius:/);
     expect(rule(".page ul > li")).toMatch(/display:\s*flex/);
   });
 
-  it("holds the App column to a fixed width so the tags line up", () => {
-    // Sized to its content, the App column started at a different x on every
-    // row: the title column absorbs the slack, so a short title pushed the tag
-    // left and a long one pushed it right. A column of tags that never line up
-    // is harder to scan than no column at all — and nothing in the DOM tests
-    // can tell the two apart, since the tag renders either way.
-    const tracks = rule(".page .live-list > li").match(/grid-template-columns:([^;]*);/)?.[1];
+  it.each([".page .live-list", ".page .disk-list"])(
+    "declares %s's columns ONCE for the whole list, so the rows line up",
+    (selector) => {
+      // Declared on the ROW instead, every row sizes its own tracks: the spec
+      // column is as wide as that row's own text, so "0.5 核 · 1.0 GB" and
+      // "2 核 · 1.0 GB" produced different widths and pushed the fixed App
+      // column to a different x on each row. The tags visibly failed to line
+      // up in a column whose whole point is being scannable — and every DOM
+      // test stayed green, because the tag renders either way.
+      const list = rule(selector);
+      expect(list).toMatch(/display:\s*grid/);
+      expect(list).toMatch(/grid-template-columns:/);
+      // …and the row defers to it rather than re-declaring its own.
+      expect(rule(`${selector} > li`)).toMatch(/grid-template-columns:\s*subgrid/);
+    },
+  );
+
+  it("holds the App column to a fixed width so a long name cannot eat the title", () => {
+    // `auto` here would size the column to the longest App name in view, which
+    // is both variable and unbounded — the title is what must give way, and
+    // only because it can ellipsis.
+    const tracks = rule(".page .live-list").match(/grid-template-columns:([^;]*);/)?.[1];
     expect(tracks).toBeTruthy();
-    // dot · title · App · spec · action — the third track is a fixed length,
-    // not `auto`.
+    // dot · title · App · spec · action — the third track is a fixed length.
     const third = tracks!.trim().split(/\s+(?![^(]*\))/)[2];
     expect(third).toMatch(/^\d+(\.\d+)?(rem|px|ch|em)$/);
   });

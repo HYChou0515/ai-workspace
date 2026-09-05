@@ -176,26 +176,32 @@
    The card is what makes this list look unlike the storage list below it —
    which was the actual complaint: two sections with different meanings and one
    appearance, distinguishable only by the word on their buttons. */
+/* The COLUMNS belong to the list, not to each row.
+ *
+ * dot · title · App · spec · action. The title column is the only one that may
+ * shrink; `minmax(0, 1fr)` is what lets it ellipsis instead of pushing the spec
+ * and the button off the end. The App column is a fixed width rather than
+ * `auto` so a long App name cannot steal from the title.
+ *
+ * The grid lives HERE and each row takes `subgrid`, because a grid declared on
+ * the row makes every row size its own tracks: the spec column is as wide as
+ * that row's text, so "0.5 核 · 1.0 GB" and "2 核 · 1.0 GB" produced different
+ * track widths and pushed the fixed App column to a different x on every row —
+ * tags that visibly failed to line up, in a column whose whole point is being
+ * scannable. Same width in every row is the property, so it has to be stated
+ * once for the list. */
 .page .live-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-8);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 10rem auto auto;
+  column-gap: var(--space-12);
+  row-gap: var(--space-8);
 }
 
 .page .live-list > li {
+  grid-column: 1 / -1;
   display: grid;
-  /* dot · title · App · spec · action. The title column is the only one that
-     may shrink; `minmax(0, 1fr)` is what lets it ellipsis instead of pushing
-     the spec and the button off the end.
-     The App column is a FIXED width rather than `auto`: sized to its content it
-     started at a different x on every row (the title column absorbs the slack,
-     so a short title pushed the tag left and a long one pushed it right), and a
-     column of tags that never line up is harder to scan than no column at all.
-     Sized for the longest App name this deploy has; a longer one ellipsises
-     rather than stealing width from the title. */
-  grid-template-columns: auto minmax(0, 1fr) 10rem auto auto;
+  grid-template-columns: subgrid;
   align-items: center;
-  gap: var(--space-12);
   padding: var(--space-12) var(--space-16);
   /* Two classes beat the one-class `.page ul > li` below on specificity, so the
      shared row's hairline `border-top` and `display: flex` lose here whatever
@@ -242,22 +248,52 @@
   }
 }
 
-/* Which App this environment belongs to. The payload has always carried the
-   slug — the row links with it — and never showed it, so a list spanning three
-   Apps looked flat. Quiet: it groups rows, it is not the row's subject. */
+/* Which App a row belongs to, in that App's own colour, with that App's own
+   mark. The payload has always carried the slug — both lists link with it — and
+   never showed it, so a page spanning three Apps read as one flat list.
+ *
+ * `--app-tint` / `--app-ink` / `--app-ink-dark` are published per pill by
+ * `AppTag` from the manifest colour (see `lib/appColor.ts`); the fallbacks are
+ * what a pill wears when its App declares no colour, or declares a malformed
+ * one. The ink is re-lit to a fixed lightness per theme rather than used as
+ * declared — four of the five shipped App colours are under the contrast floor
+ * as raw ink on cream, and a fifth is under it on ink. */
 .page .app-tag {
   /* Left edge of its own column, so the tags form a readable column instead of
      drifting with the length of the title beside them. */
   justify-self: start;
   max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   padding: 2px var(--space-8);
   border-radius: var(--radius-chip);
-  background: var(--paper-2);
+  background: var(--app-tint, var(--paper-2));
   font-size: var(--text-small);
-  color: var(--text-paper-d);
+  color: var(--app-ink, var(--text-paper-d));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* A mid-tone ink tuned for cream reads as a hole on ink — the same asymmetry
+   the categorical chip tokens carry, and the reason `--app-ink-dark` exists at
+   all rather than one value doing both. */
+[data-theme="dark"] .page .app-tag {
+  color: var(--app-ink-dark, var(--text-paper-d));
+}
+
+/* The App's mark takes the pill's ink (`color="currentColor"`), so it is re-lit
+   with the label instead of staying the raw declared hex beside a corrected
+   one. A file icon (a PNG an App ships) ignores that and keeps its own colours,
+   which is right — a logo is not a glyph. */
+.page .app-tag svg {
+  flex: none;
+}
+
+.page .app-tag img {
+  flex: none;
+  border-radius: 2px;
 }
 
 /* The specs are the reason to pick one row over another, so they get a column
@@ -273,6 +309,31 @@
    into the first cell of an implicit second row — under the dot, 8px wide. */
 .page .live-list .error {
   grid-column: 1 / -1;
+}
+
+/* The storage list takes the SAME column grid as the live one, minus the
+   running dot — the two lists name the same items and answer the same "which of
+   my things is this?", so their App columns have to line up with each other or
+   the page reads as two unrelated tables. It keeps the hairline row rather than
+   the card: these are not running, and that difference is the one the two
+   sections exist to draw. */
+.page .disk-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 10rem auto auto;
+  column-gap: var(--space-12);
+}
+
+.page .disk-list > li {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: subgrid;
+  align-items: center;
+}
+
+.page .disk-list .detail {
+  min-width: 9ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 /* One row per environment / workspace: name grows, specs sit next to it, the

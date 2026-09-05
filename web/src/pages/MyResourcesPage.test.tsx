@@ -27,9 +27,15 @@ vi.mock("../api", () => ({
     ]),
     // The App manifests the rows name themselves by. Two Apps, so a test can
     // show a row picks ITS OWN App rather than whichever came back first.
+    //
+    // `color` is a raw hex and `icon` a named-icon key because that is what the
+    // shipped `app.json` files actually carry (`#F0502E` / `flame`). An earlier
+    // version of this double used `"cat-1"`, a chip-token name — a format the
+    // backend never sends, which would have let colour handling be written and
+    // tested against a shape that does not exist.
     listApps: vi.fn(async () => [
-      { slug: "rca", title: "根因分析", description: "", icon: "", color: "cat-1" },
-      { slug: "pm", title: "專案管理", description: "", icon: "", color: "cat-2" },
+      { slug: "rca", title: "根因分析", description: "", icon: "flame", color: "#F0502E" },
+      { slug: "pm", title: "專案管理", description: "", icon: "kanban", color: "#3B82F6" },
     ]),
   },
 }));
@@ -210,6 +216,51 @@ describe("MyResourcesPage", () => {
     const rowOf = (title: string) => within(live).getByText(title).closest("li")!;
     await waitFor(() => expect(within(rowOf("Line 3 stoppage")).getByText("根因分析")).toBeTruthy());
     expect(within(rowOf("Q4 roadmap")).getByText("專案管理")).toBeTruthy();
+  });
+
+  it("names the App on the STORAGE rows too, not just the live ones", async () => {
+    // The two lists answer the same question about the same items — which of my
+    // things is this? — so naming the App on one and not the other left the
+    // reader able to tell a pm workspace from an rca one while deciding what to
+    // close, and unable to while deciding what to DELETE, which is the
+    // irreversible half.
+    const d = data({
+      live: [],
+      workspaces: [
+        { item_id: "i-1", slug: "rca", title: "Line 3 stoppage", bytes_used: 900 },
+        { item_id: "i-2", slug: "pm", title: "Q4 roadmap", bytes_used: 100 },
+      ],
+    });
+    render(<MyResourcesPage client={client({ get: vi.fn(async () => d) })} />, { wrapper: Wrap });
+
+    const disk = await screen.findByRole("region", { name: "儲存空間" });
+    const rowOf = (title: string) => within(disk).getByText(title).closest("li")!;
+    await waitFor(() => expect(within(rowOf("Line 3 stoppage")).getByText("根因分析")).toBeTruthy());
+    expect(within(rowOf("Q4 roadmap")).getByText("專案管理")).toBeTruthy();
+  });
+
+  it("tints each pill with its OWN App's declared colour", async () => {
+    // "The pill's colour is the App's colour" — so it has to come from the
+    // manifest hex, per row, not from one shared accent. Asserted on both rows
+    // because a single-row test passes just as well when every pill is painted
+    // with whichever App happened to load first.
+    const d = data({
+      live: [
+        { item_id: "i-1", slug: "rca", title: "Line 3 stoppage", cpu_cores: 1, memory_bytes: 800 },
+        { item_id: "i-2", slug: "pm", title: "Q4 roadmap", cpu_cores: 1, memory_bytes: 800 },
+      ],
+      workspaces: [],
+    });
+    render(<MyResourcesPage client={client({ get: vi.fn(async () => d) })} />, { wrapper: Wrap });
+
+    const live = await screen.findByRole("region", { name: "執行環境" });
+    const tagIn = (title: string) =>
+      within(live).getByText(title).closest("li")!.querySelector(".app-tag") as HTMLElement;
+
+    await waitFor(() => expect(tagIn("Line 3 stoppage")).not.toBeNull());
+    // #F0502E and #3B82F6 — the two `app.json` colours the double declares.
+    expect(tagIn("Line 3 stoppage").style.getPropertyValue("--app-tint")).toMatch(/240,\s*80,\s*46/);
+    expect(tagIn("Q4 roadmap").style.getPropertyValue("--app-tint")).toMatch(/59,\s*130,\s*246/);
   });
 
   it("falls back to the slug for an App the manifest list does not name", async () => {
