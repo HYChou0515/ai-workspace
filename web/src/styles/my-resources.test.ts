@@ -90,6 +90,19 @@ describe("my-resources: the live panel's layout", () => {
     expect(third).toMatch(/^\d+(\.\d+)?(rem|px|ch|em)$/);
   });
 
+  it("actually APPLIES the dark ink, not just computes one", () => {
+    // Found by mutation: deleting this rule left all the other guards green.
+    // `appColor.test.ts` proves both inks clear the contrast floor and says
+    // nothing about whether the stylesheet ever reaches for the dark one — and
+    // without it every pill wears the ink tuned for cream on an ink surface,
+    // which is the entire reason a second value exists. The defect is invisible
+    // in light mode, so it is also invisible to anyone not looking for it.
+    expect(rule('[data-theme="dark"] .page .app-tag')).toMatch(/color:\s*var\(--app-ink-dark/);
+    // …and the light rule reaches for the other one, so the two cannot collapse
+    // into a single value that is wrong in one theme.
+    expect(rule(".page .app-tag")).toMatch(/color:\s*var\(--app-ink\b/);
+  });
+
   it("stops the row's failure message landing in the 8px dot column", () => {
     // The alert is a fifth child of a five-column grid, so without an explicit
     // span it drops into the first cell of an implicit second row — which is
