@@ -41,13 +41,16 @@ const TOOL = "lot-status";
 /** Must appear in `workflows:` in page.ai.yaml AND exist in this app's profile. */
 const JUDGE = "judge";
 
-type Record = { lot: string; step: string; qty: number };
+// NOT `Record`: that is a TypeScript built-in, and shadowing it in a file
+// people copy means the first author who writes `Record<string, string>` is told
+// it is not generic.
+type ScrapRecord = { lot: string; step: string; qty: number };
 type Notes = { [lot: string]: string };
 
 /** One record file, parsed. Files people hand-edit are allowed to be wrong. */
-function parseRecord(text: string, path: string): Record | null {
+function parseRecord(text: string, path: string): ScrapRecord | null {
   try {
-    const raw = JSON.parse(text) as Partial<Record>;
+    const raw = JSON.parse(text) as Partial<ScrapRecord>;
     if (!raw || typeof raw.lot !== "string") return null;
     return { lot: raw.lot, step: String(raw.step ?? "unknown"), qty: Number(raw.qty ?? 0) };
   } catch {
@@ -59,13 +62,22 @@ function parseRecord(text: string, path: string): Record | null {
 }
 
 function App() {
-  const [records, setRecords] = useState<Record[] | null>(null); // null = still reading
+  const [records, setRecords] = useState<ScrapRecord[] | null>(null); // null = still reading
   const [notes, setNotes] = useState<Notes>({});
   const [problems, setProblems] = useState<Problem[]>([]);
   const [me, setMe] = useState("");
   const [answer, setAnswer] = useState<ToolAnswer | null>(null);
   const [asking, setAsking] = useState(false);
-  const mine = useRef(false); // a write we just made, so its echo is not "somebody else"
+  // How many of OUR OWN writes are still echoing back. A boolean cannot count:
+  // three writes in flight produce three `file_changed` events, the first clears
+  // the flag and the other two read as somebody else's edit — so the page
+  // reloads and replaces what is being typed.
+  const mine = useRef(0);
+  // The debounce, and the latest text it holds. `writeFile` replaces the whole
+  // file and is broadcast to everyone else looking at this item, so a write per
+  // keystroke is a broadcast per keystroke.
+  const timer = useRef<number | null>(null);
+  const latest = useRef<Notes | null>(null);
 
   // ── read the item ────────────────────────────────────────────────────────
   const load = useCallback(async () => {
@@ -107,8 +119,8 @@ function App() {
   // ── somebody else changed something ──────────────────────────────────────
   useEffect(() => {
     window.workspace.onFileChanged((path) => {
-      if (mine.current && path.endsWith("/" + NOTES)) {
-        mine.current = false; // our own echo
+      if (mine.current > 0 && path.endsWith("/" + NOTES)) {
+        mine.current -= 1; // one of our own echoes
         return;
       }
       if (path.endsWith("/" + NOTES)) void loadNotes();
@@ -117,16 +129,25 @@ function App() {
   }, [load, loadNotes]);
 
   // ── write, into this page's folder only ──────────────────────────────────
-  const note = async (lot: string, text: string) => {
-    const next = { ...notes, [lot]: text };
-    setNotes(next); // optimistic: the field must not jump while they type
-    mine.current = true;
-    try {
-      await save(NOTES, next);
-    } catch (err) {
-      mine.current = false;
-      setProblems((p) => [...p, { where: NOTES, message: sentence(err) }]);
-    }
+  const note = (lot: string, text: string) => {
+    // Built from the PREVIOUS state, not from this render's `notes`: two fields
+    // edited in quick succession otherwise read the same stale closure, and the
+    // second write drops the first one's edit.
+    setNotes((prev) => {
+      const next = { ...prev, [lot]: text };
+      latest.current = next; // optimistic: the field must not jump while they type
+      return next;
+    });
+    if (timer.current !== null) clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => {
+      const body = latest.current;
+      if (body === null) return;
+      mine.current += 1;
+      save(NOTES, body).catch((err) => {
+        mine.current = Math.max(0, mine.current - 1);
+        setProblems((p) => [...p, { where: NOTES, message: sentence(err) }]);
+      });
+    }, 500);
   };
 
   // ── ask a tool, then read what it points at ──────────────────────────────
@@ -274,7 +295,7 @@ function App() {
                     <input
                       value={notes[r.lot] ?? ""}
                       placeholder="why?"
-                      onChange={(e) => void note(r.lot, e.target.value)}
+                      onChange={(e) => note(r.lot, e.target.value)}
                     />
                   </td>
                   <td>

@@ -74,7 +74,8 @@ export async function readAll<T>(
   return { rows, problems };
 }
 
-/** Files under a prefix, newest spelling first. Absence is an empty list. */
+/** Files under a prefix, in whatever order the platform lists them — nothing
+ * here sorts, so do not rely on one. Absence is an empty list. */
 export async function list(prefix: string): Promise<WuiFile[]> {
   const { files } = await window.workspace.listFiles(prefix);
   return files;
@@ -149,8 +150,15 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
       // data. Recognise that BEFORE treating the object as the answer: parsing
       // it succeeds, and a page that then looks for rows in it finds none and
       // says "nothing found" over a file it never opened.
-      if (value && typeof value === "object" && typeof (value as { path?: unknown }).path === "string") {
-        return { kind: "path", path: (value as { path: string }).path };
+      // ...and ONLY when the path is all it answered. A tool replying
+      // `{"path": "/out.json", "rows": [...]}` has handed over the data AND
+      // said where it lives; classifying that as a path throws the rows away
+      // and sends the page off to read a file for something it already had.
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        const obj = value as { path?: unknown };
+        if (typeof obj.path === "string" && Object.keys(obj).length === 1) {
+          return { kind: "path", path: obj.path };
+        }
       }
       return { kind: "json", value };
     } catch {
