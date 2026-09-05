@@ -13,8 +13,10 @@
  * can no longer measure (`reference_happydom_drops_oklch`).
  */
 
-/** Oklab → linear sRGB (Björn Ottosson's matrices). */
-export function linearRgb(lightness: number, a: number, b: number): [number, number, number] {
+/** Oklab → linear sRGB (Björn Ottosson's matrices). Private: `toHex` is the
+ * only thing that should be reached for, and an exported helper with no caller
+ * is public surface nothing guards. */
+function linearRgb(lightness: number, a: number, b: number): [number, number, number] {
   const l = (lightness + 0.3963377774 * a + 0.2158037573 * b) ** 3;
   const m = (lightness - 0.1055613458 * a - 0.0638541728 * b) ** 3;
   const s = (lightness - 0.0894841775 * a - 1.291485548 * b) ** 3;
@@ -25,11 +27,11 @@ export function linearRgb(lightness: number, a: number, b: number): [number, num
   ];
 }
 
-export const inGamut = (rgb: readonly number[]): boolean =>
+const inGamut = (rgb: readonly number[]): boolean =>
   rgb.every((c) => c >= -1e-4 && c <= 1 + 1e-4);
 
 /** Linear-light channel → sRGB, clamped. */
-export const gamma = (c: number): number => {
+const gamma = (c: number): number => {
   const v = Math.min(1, Math.max(0, c));
   return v <= 0.0031308 ? 12.92 * v : 1.055 * v ** (1 / 2.4) - 0.055;
 };

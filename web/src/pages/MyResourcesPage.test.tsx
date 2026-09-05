@@ -306,6 +306,29 @@ describe("MyResourcesPage", () => {
     expect(row.querySelector(".app-tag")).toBeNull();
     // …and it is still closable, which is the whole reason the row is here.
     expect(within(row).getByRole("button", { name: "關閉" })).toBeEnabled();
+    // The title must NOT be a link. With an empty slug it built `/a//i-9`,
+    // which matches no route, so the catch-all `*` navigates to `/` with
+    // `replace` — one click on the title ejects the reader from the page and
+    // Back does not bring them back. The row exists to be closed; its only
+    // other affordance must not throw the reader off the one page that offers
+    // the remedy.
+    expect(within(row).queryByRole("link")).toBeNull();
+  });
+
+  it("does not link a storage row the backend could not name either", async () => {
+    // The delete button is already gated on the slug ("a GHOST row has nothing
+    // this button could delete"), which left the ungated link as the row's ONLY
+    // clickable thing — and it navigates nowhere.
+    const d = data({
+      live: [],
+      workspaces: [{ item_id: "i-9", slug: "", title: "", bytes_used: 400 }],
+    });
+    render(<MyResourcesPage client={client({ get: vi.fn(async () => d) })} />, { wrapper: Wrap });
+
+    const disk = await screen.findByRole("region", { name: "儲存空間" });
+    const row = within(disk).getByText("i-9").closest("li")!;
+    expect(within(row).queryByRole("link")).toBeNull();
+    expect(within(row).queryByRole("button")).toBeNull();
   });
 
   it("keeps the three totals out of the list of things you can close", async () => {

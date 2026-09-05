@@ -48,7 +48,12 @@ describe("my-resources: the live panel's layout", () => {
     // does not.
     const block = rule(".page .stat-row");
     expect(block).toMatch(/display:\s*grid/);
-    expect(block).toMatch(/grid-template-columns:\s*repeat\(3,/);
+    // A `repeat(...)`, not a pinned count: the storage section puts ONE gauge in
+    // this same panel, so `repeat(3, 1fr)` would leave it in the left third with
+    // two empty columns. What has to hold is that the totals get their own
+    // columns instead of stacking full-width in the list's column — which is
+    // the shape the whole section was rewritten to escape.
+    expect(block).toMatch(/grid-template-columns:\s*repeat\(/);
   });
 
   it("gives a live environment a different row shape from a stored one", () => {

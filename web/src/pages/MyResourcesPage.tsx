@@ -164,14 +164,21 @@ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResour
           // Reporting zero would state something false on a page anyone can open.
           <p className="empty">{t("resources.disk.untracked")}</p>
         ) : (
-          <>
+          // The same panel the live totals sit in. Left bare, this gauge was
+          // full-width in the same column as the list below it, at the same
+          // type size, separated by the same hairline — which is precisely the
+          // "the totals are indistinguishable from the list" complaint the
+          // live section was rewritten to answer. Fixing one instance of that
+          // and leaving the other on the same page is worse than either.
+          // No `role="group"`: a group of one names nothing a heading does not.
+          <div className="stat-row">
             <Gauge
               label={t("resources.disk.heading")}
               used={data.disk_in_use}
               limit={limits.disk_bytes}
               format={formatBytes}
             />
-          </>
+          </div>
         )}
         {!data.disk_tracked ? null : data.workspaces.length === 0 ? (
           <p className="empty">{t("resources.disk.empty")}</p>
@@ -184,7 +191,14 @@ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResour
                     refunds the quota, and this page is where the person at
                     their limit sees which item is worth the trade. Per-file
                     clean-up still lives in the item's own file view. */}
-                <Link to={`/a/${ws.slug}/${ws.item_id}`}>{ws.title || ws.item_id}</Link>
+                {/* Same empty-slug case. The delete button below is already
+                    gated on the slug, which left this link as the ghost row's
+                    only clickable thing — and it navigates nowhere. */}
+                {ws.slug ? (
+                  <Link to={`/a/${ws.slug}/${ws.item_id}`}>{ws.title || ws.item_id}</Link>
+                ) : (
+                  <span className="row-title">{ws.title || ws.item_id}</span>
+                )}
                 <AppTag slug={ws.slug} />
                 <span className="detail">{formatBytes(ws.bytes_used)}</span>
                 {/* A GHOST row (its item already hard-deleted, slug unknown —
@@ -301,7 +315,18 @@ function LiveEnvironmentRow({ env, client }: { env: LiveEnvironment; client: MyR
           heading and lede. Its job is visual, and it is the thing that stops
           this list reading as a second copy of the storage list below it. */}
       <span className="live-dot" aria-hidden="true" />
-      <Link to={`/a/${env.slug}/${env.item_id}`}>{env.title || env.item_id}</Link>
+      {/* A row the backend could not name has an empty slug, and the link it
+          built (`/a//i-9`) matches no route — the catch-all navigates to `/`
+          with `replace`, so one click ejects the reader from the page and Back
+          does not bring them back. This row exists to be CLOSED; sending the
+          person away from the only page offering that remedy is the opposite.
+          The name still shows, so the row is still something rather than a
+          blank. */}
+      {env.slug ? (
+        <Link to={`/a/${env.slug}/${env.item_id}`}>{env.title || env.item_id}</Link>
+      ) : (
+        <span className="row-title">{env.title || env.item_id}</span>
+      )}
       <AppTag slug={env.slug} />
       <span className="detail">
         {env.cpu_cores
