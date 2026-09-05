@@ -18,9 +18,18 @@ import { Link } from "react-router-dom";
 import { formatBytes } from "../lib/bytes";
 import { useT } from "../lib/i18n";
 
-import { type MyResources, type MyResourcesApi, type OverrideList as OverrideListDTO, myResourcesApi } from "../api/myResources";
+import {
+  type LiveEnvironment,
+  type MyResources,
+  type MyResourcesApi,
+  type OverrideList as OverrideListDTO,
+  myResourcesApi,
+} from "../api/myResources";
 import { qk } from "../api/queryKeys";
 import { useIsSuperuser } from "../hooks/useIsSuperuser";
+import { useApps } from "../hooks/useResources";
+import { appTagPalette } from "../lib/appColor";
+import { AppIcon } from "../components/AppIcon";
 import { UserPicker } from "../components/UserPicker";
 import { DeleteItemBody } from "../components/DeleteItemConfirm";
 import { DialogProvider, useDialog } from "../components/Dialog";
@@ -84,20 +93,9 @@ function Gauge({
 
 export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResourcesApi }) {
   const t = useT();
-  const qc = useQueryClient();
   const { data, isLoading } = useQuery({
     queryKey: qk.myResources,
     queryFn: () => client.get(),
-  });
-
-  const close = useMutation({
-    mutationFn: (itemId: string) => client.closeEnvironment(itemId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.myResources }),
-    // This failure is reported on the row it happened to, below. Without the
-    // opt-out the query client ALSO routes it to the app-wide write-failure
-    // toast, so one press raises two messages — and the page-level one names no
-    // item, which is the thing the per-row alert exists to avoid.
-    meta: { silentError: true },
   });
 
   if (isLoading || !data) return <p>{t("resources.loading")}</p>;
@@ -110,64 +108,50 @@ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResour
 
       <section aria-labelledby="live-heading">
         <h2 id="live-heading">{t("resources.live.heading")}</h2>
+        {/* What Close actually refunds. The two halves of this page are freed by
+            DIFFERENT actions — closing returns cpu and memory at once and
+            returns no bytes at all — and the page never said so, so a person at
+            their STORAGE limit could close every environment, watch that gauge
+            not move, and conclude the button was broken. Saying it also removes
+            the reason to hesitate over the one action here that is safe. */}
+        <p className="lede">{t("resources.live.lede")}</p>
         {/* Three dimensions, three gauges. They used to share one line and ONE
             bar — and that bar tracked only `count`, so at "1 / 2 · CPU 1 / 4" it
             sat at 50% while cpu was at 25%: a reader takes the bar as "how full
             am I" and it answered one dimension of three. Any of them can refuse
-            a turn on its own, so each shows its own. */}
-        <Gauge
-          label={t("resources.gauge.count")}
-          used={data.live.length}
-          limit={limits.count}
-          format={(n) => t("resources.live.count", { n })}
-        />
-        <Gauge
-          label={t("resources.gauge.cpu")}
-          used={data.cpu_in_use}
-          limit={limits.cpu}
-          format={(n) => `${n}`}
-        />
-        <Gauge
-          label={t("resources.memory")}
-          used={data.memory_in_use}
-          limit={limits.memory_bytes}
-          format={formatBytes}
-        />
+            a turn on its own, so each shows its own.
+
+            Grouped, and named, because they are a different KIND of line from
+            the ones below: "how full am I" against "here is one thing you could
+            give back". Ungrouped they were seven rows of one column at one
+            width and one type size, and the section read as a single list whose
+            first three entries happened to have no button. */}
+        <div className="stat-row" role="group" aria-label={t("resources.live.totals")}>
+          <Gauge
+            label={t("resources.gauge.count")}
+            used={data.live.length}
+            limit={limits.count}
+            format={(n) => t("resources.live.count", { n })}
+          />
+          <Gauge
+            label={t("resources.gauge.cpu")}
+            used={data.cpu_in_use}
+            limit={limits.cpu}
+            format={(n) => `${n}`}
+          />
+          <Gauge
+            label={t("resources.memory")}
+            used={data.memory_in_use}
+            limit={limits.memory_bytes}
+            format={formatBytes}
+          />
+        </div>
         {data.live.length === 0 ? (
           <p className="empty">{t("resources.live.empty")}</p>
         ) : (
-          <ul>
+          <ul className="live-list">
             {data.live.map((env) => (
-              <li key={env.item_id}>
-                <Link to={`/a/${env.slug}/${env.item_id}`}>{env.title || env.item_id}</Link>
-                <span className="detail">
-                  {env.cpu_cores
-                    ? t(env.cpu_cores === 1 ? "resources.live.cores_one" : "resources.live.cores", {
-                        n: env.cpu_cores,
-                      })
-                    : ""}
-                  {env.memory_bytes ? ` · ${formatBytes(env.memory_bytes)}` : ""}
-                </span>
-                <button
-                  type="button"
-                  className="btn"
-                  data-variant="secondary"
-                  data-size="sm"
-                  onClick={() => close.mutate(env.item_id)}
-                  disabled={close.isPending}
-                >
-                  {t("resources.live.close")}
-                </button>
-                {/* On the row it is about, not above the list: a page-level
-                    message names no item, and with more than one environment
-                    the reader cannot tell which press failed. `variables` is
-                    the item id the failed mutation was called with. */}
-                {close.isError && close.variables === env.item_id ? (
-                  <p className="error" role="alert">
-                    {t("resources.live.close_failed")}
-                  </p>
-                ) : null}
-              </li>
+              <LiveEnvironmentRow key={env.item_id} env={env} client={client} />
             ))}
           </ul>
         )}
@@ -180,19 +164,26 @@ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResour
           // Reporting zero would state something false on a page anyone can open.
           <p className="empty">{t("resources.disk.untracked")}</p>
         ) : (
-          <>
+          // The same panel the live totals sit in. Left bare, this gauge was
+          // full-width in the same column as the list below it, at the same
+          // type size, separated by the same hairline — which is precisely the
+          // "the totals are indistinguishable from the list" complaint the
+          // live section was rewritten to answer. Fixing one instance of that
+          // and leaving the other on the same page is worse than either.
+          // No `role="group"`: a group of one names nothing a heading does not.
+          <div className="stat-row">
             <Gauge
               label={t("resources.disk.heading")}
               used={data.disk_in_use}
               limit={limits.disk_bytes}
               format={formatBytes}
             />
-          </>
+          </div>
         )}
         {!data.disk_tracked ? null : data.workspaces.length === 0 ? (
           <p className="empty">{t("resources.disk.empty")}</p>
         ) : (
-          <ul>
+          <ul className="disk-list">
             {data.workspaces.map((ws) => (
               <li key={ws.item_id}>
                 {/* This row can delete the WHOLE item (plan-delete-item-cascade):
@@ -200,7 +191,15 @@ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResour
                     refunds the quota, and this page is where the person at
                     their limit sees which item is worth the trade. Per-file
                     clean-up still lives in the item's own file view. */}
-                <Link to={`/a/${ws.slug}/${ws.item_id}`}>{ws.title || ws.item_id}</Link>
+                {/* Same empty-slug case. The delete button below is already
+                    gated on the slug, which left this link as the ghost row's
+                    only clickable thing — and it navigates nowhere. */}
+                {ws.slug ? (
+                  <Link to={`/a/${ws.slug}/${ws.item_id}`}>{ws.title || ws.item_id}</Link>
+                ) : (
+                  <span className="row-title">{ws.title || ws.item_id}</span>
+                )}
+                <AppTag slug={ws.slug} />
                 <span className="detail">{formatBytes(ws.bytes_used)}</span>
                 {/* A GHOST row (its item already hard-deleted, slug unknown —
                     the pre-cascade orphans #778 tracks) has nothing this
@@ -222,6 +221,140 @@ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResour
       <AdminOverrides client={client} />
       </div>
     </DialogProvider>
+  );
+}
+
+/** Which App a row belongs to, as a pill.
+ *
+ * ONE component for both lists. They answer the same question about the same
+ * items — which of my things is this? — and naming the App only on the live
+ * half left a reader able to tell a pm workspace from an rca one while deciding
+ * what to CLOSE and unable to while deciding what to DELETE, which is the
+ * irreversible half.
+ *
+ * The name falls back to the slug, and that is not cosmetic: `listApps` is a
+ * separate near-static query, so it is EMPTY on the first paint and STAYS empty
+ * if that request fails — rendering nothing would flicker on every load and, on
+ * a failure, leave every row looking like it belongs to no App at all. The slug
+ * is the honest answer in that window; it is what the row's link already uses.
+ * Never a slug→name table in the FE — the name is the manifest's to state.
+ *
+ * Nothing at all (an empty cell, so the rows below still line up) when the
+ * backend could not name the row: `/me/resources` degrades an item it cannot
+ * resolve to empty strings rather than dropping it (it is running and being
+ * charged for, so it must stay closable), and a pill is a fill plus padding —
+ * an empty one is a grey smudge in the column where every other row speaks. */
+function AppTag({ slug }: { slug: string }) {
+  const apps = useApps();
+  const app = apps.find((a) => a.slug === slug);
+  const name = app?.title || slug;
+  if (!name) return <span />;
+  // The App's own mark and its own colour. `AppIcon` because an App may ship a
+  // PNG, an emoji or a named icon and only it knows the difference — a pill that
+  // handled one of the three would look right on this deploy and blank on the
+  // next. Both are absent until `listApps` resolves, which is why the pill
+  // renders from `name` alone and dresses itself when the manifest arrives.
+  const palette = appTagPalette(app?.color);
+  return (
+    <span
+      className="app-tag"
+      // Published as custom properties rather than as `color`/`background`
+      // directly: the ink has to differ per theme, and only CSS knows which
+      // theme is on. Plain rgba/hex values, never `oklch()` — happy-dom drops
+      // that from an inline style, which would blind every colour guard.
+      style={
+        palette
+          ? ({
+              "--app-tint": palette.tint,
+              "--app-ink": palette.inkLight,
+              "--app-ink-dark": palette.inkDark,
+            } as React.CSSProperties)
+          : undefined
+      }
+    >
+      {app?.icon ? <AppIcon icon={app.icon} slug={app.slug} color="currentColor" size={13} /> : null}
+      {/* The label owns its own overflow. `text-overflow` applies to a block
+          container, and bare text inside the `inline-flex` pill becomes an
+          anonymous flex item that never inherits it — so a name too long for
+          the column was hard-clipped mid-word with no ellipsis at all. `title`
+          because an ellipsis says a name was cut and not what it was. */}
+      <span className="app-tag-label" title={name}>
+        {name}
+      </span>
+    </span>
+  );
+}
+
+/** One live environment: what it is, what it is holding, and the button that
+ * gives it back.
+ *
+ * Its own component so the close mutation is the ROW'S, the way
+ * `DeleteItemButton` below already owns its delete. Shared by the whole list,
+ * `isPending` was a property of the page — pressing Close on one row disabled
+ * every other row's button until that request came back, which on a busy host
+ * (503 + Retry-After) is the slow case, on the page whose only job is getting
+ * somebody back under their limit. Per-row state also removes the need to
+ * match `mutation.variables` against this row's id to tell whose failure a
+ * message belongs to: there is only one row's failure in here. */
+function LiveEnvironmentRow({ env, client }: { env: LiveEnvironment; client: MyResourcesApi }) {
+  const t = useT();
+  const qc = useQueryClient();
+  const close = useMutation({
+    mutationFn: () => client.closeEnvironment(env.item_id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.myResources }),
+    // This failure is reported on the row it happened to. Without the opt-out
+    // the query client ALSO routes it to the app-wide write-failure toast, so
+    // one press raises two messages — and the page-level one names no item,
+    // which is the thing the per-row alert exists to avoid.
+    meta: { silentError: true },
+  });
+  return (
+    <li>
+      {/* Decoration, and deliberately out of the a11y tree: the fact it states
+          — this one is running right now — is already carried by the section's
+          heading and lede. Its job is visual, and it is the thing that stops
+          this list reading as a second copy of the storage list below it. */}
+      <span className="live-dot" aria-hidden="true" />
+      {/* A row the backend could not name has an empty slug, and the link it
+          built (`/a//i-9`) matches no route — the catch-all navigates to `/`
+          with `replace`, so one click ejects the reader from the page and Back
+          does not bring them back. This row exists to be CLOSED; sending the
+          person away from the only page offering that remedy is the opposite.
+          The name still shows, so the row is still something rather than a
+          blank. */}
+      {env.slug ? (
+        <Link to={`/a/${env.slug}/${env.item_id}`}>{env.title || env.item_id}</Link>
+      ) : (
+        <span className="row-title">{env.title || env.item_id}</span>
+      )}
+      <AppTag slug={env.slug} />
+      <span className="detail">
+        {env.cpu_cores
+          ? t(env.cpu_cores === 1 ? "resources.live.cores_one" : "resources.live.cores", {
+              n: env.cpu_cores,
+            })
+          : ""}
+        {env.memory_bytes ? ` · ${formatBytes(env.memory_bytes)}` : ""}
+      </span>
+      <button
+        type="button"
+        className="btn"
+        data-variant="secondary"
+        data-size="sm"
+        onClick={() => close.mutate()}
+        disabled={close.isPending}
+      >
+        {t("resources.live.close")}
+      </button>
+      {/* On the row it is about, not above the list: a page-level message names
+          no item, and with more than one environment the reader cannot tell
+          which press failed. */}
+      {close.isError ? (
+        <p className="error" role="alert">
+          {t("resources.live.close_failed")}
+        </p>
+      ) : null}
+    </li>
   );
 }
 

@@ -25,6 +25,18 @@ vi.mock("../api", () => ({
       { id: "bob", name: "Bob Chen", section: "Reflow", email: "bob@example.com" },
       { id: "carol", name: "Carol Wu", section: "Etch", email: "carol@example.com" },
     ]),
+    // The App manifests the rows name themselves by. Two Apps, so a test can
+    // show a row picks ITS OWN App rather than whichever came back first.
+    //
+    // `color` is a raw hex and `icon` a named-icon key because that is what the
+    // shipped `app.json` files actually carry (`#F0502E` / `flame`). An earlier
+    // version of this double used `"cat-1"`, a chip-token name — a format the
+    // backend never sends, which would have let colour handling be written and
+    // tested against a shape that does not exist.
+    listApps: vi.fn(async () => [
+      { slug: "rca", title: "根因分析", description: "", icon: "flame", color: "#F0502E" },
+      { slug: "pm", title: "專案管理", description: "", icon: "kanban", color: "#3B82F6" },
+    ]),
   },
 }));
 
@@ -170,6 +182,173 @@ describe("MyResourcesPage", () => {
     expect(screen.getAllByText("（無上限）").length).toBeGreaterThan(0);
     // no bar where there is nothing to be a fraction of: count + storage only
     expect(document.querySelectorAll(".meter")).toHaveLength(2);
+  });
+
+  it("says what closing actually gives back, and what it does not", async () => {
+    // Closing returns cpu and memory at once and returns NO bytes — the two
+    // halves of this page are refunded by different actions. The page never
+    // said so, so somebody at their STORAGE limit could press Close on every
+    // row, watch that gauge not move, and conclude the button was broken.
+    render(<MyResourcesPage client={client()} />, { wrapper: Wrap });
+    const live = await screen.findByRole("region", { name: "執行環境" });
+    expect(live).toHaveTextContent(/CPU 與記憶體/);
+    expect(live).toHaveTextContent(/檔案會保留/);
+    // …and what it does NOT keep. The first version of this sentence said the
+    // workspace "reopens as you left it", which is false: the mirror does not
+    // persist `node_modules/`, `.venv/` or `.git/`, so an install is gone after
+    // a recycle. The reader this line exists for is the one hesitating over
+    // Close having just run one, so the omission pointed the wrong way.
+    expect(live).toHaveTextContent(/套件與版本紀錄不會/);
+  });
+
+  it("names the App each environment belongs to, not its slug", async () => {
+    // Titles alone do not say what an environment IS. The payload has carried
+    // the slug all along (the row links with it) and the row spent it without
+    // showing it, so a list spanning three Apps looked like one flat list and
+    // the reader had to guess from the wording of a title.
+    //
+    // The App's own title, from its manifest — never a slug hardcoded in the
+    // FE, and never the slug shown raw when a real name is available.
+    const d = data({
+      live: [
+        { item_id: "i-1", slug: "rca", title: "Line 3 stoppage", cpu_cores: 1, memory_bytes: 800 },
+        { item_id: "i-2", slug: "pm", title: "Q4 roadmap", cpu_cores: 1, memory_bytes: 800 },
+      ],
+      workspaces: [],
+    });
+    render(<MyResourcesPage client={client({ get: vi.fn(async () => d) })} />, { wrapper: Wrap });
+
+    const live = await screen.findByRole("region", { name: "執行環境" });
+    const rowOf = (title: string) => within(live).getByText(title).closest("li")!;
+    await waitFor(() => expect(within(rowOf("Line 3 stoppage")).getByText("根因分析")).toBeTruthy());
+    expect(within(rowOf("Q4 roadmap")).getByText("專案管理")).toBeTruthy();
+  });
+
+  it("names the App on the STORAGE rows too, not just the live ones", async () => {
+    // The two lists answer the same question about the same items — which of my
+    // things is this? — so naming the App on one and not the other left the
+    // reader able to tell a pm workspace from an rca one while deciding what to
+    // close, and unable to while deciding what to DELETE, which is the
+    // irreversible half.
+    const d = data({
+      live: [],
+      workspaces: [
+        { item_id: "i-1", slug: "rca", title: "Line 3 stoppage", bytes_used: 900 },
+        { item_id: "i-2", slug: "pm", title: "Q4 roadmap", bytes_used: 100 },
+      ],
+    });
+    render(<MyResourcesPage client={client({ get: vi.fn(async () => d) })} />, { wrapper: Wrap });
+
+    const disk = await screen.findByRole("region", { name: "儲存空間" });
+    const rowOf = (title: string) => within(disk).getByText(title).closest("li")!;
+    await waitFor(() => expect(within(rowOf("Line 3 stoppage")).getByText("根因分析")).toBeTruthy());
+    expect(within(rowOf("Q4 roadmap")).getByText("專案管理")).toBeTruthy();
+  });
+
+  it("tints each pill with its OWN App's declared colour", async () => {
+    // "The pill's colour is the App's colour" — so it has to come from the
+    // manifest hex, per row, not from one shared accent. Asserted on both rows
+    // because a single-row test passes just as well when every pill is painted
+    // with whichever App happened to load first.
+    const d = data({
+      live: [
+        { item_id: "i-1", slug: "rca", title: "Line 3 stoppage", cpu_cores: 1, memory_bytes: 800 },
+        { item_id: "i-2", slug: "pm", title: "Q4 roadmap", cpu_cores: 1, memory_bytes: 800 },
+      ],
+      workspaces: [],
+    });
+    render(<MyResourcesPage client={client({ get: vi.fn(async () => d) })} />, { wrapper: Wrap });
+
+    const live = await screen.findByRole("region", { name: "執行環境" });
+    const tagIn = (title: string) =>
+      within(live).getByText(title).closest("li")!.querySelector(".app-tag") as HTMLElement;
+
+    await waitFor(() => expect(tagIn("Line 3 stoppage")).not.toBeNull());
+    // #F0502E and #3B82F6 — the two `app.json` colours the double declares.
+    expect(tagIn("Line 3 stoppage").style.getPropertyValue("--app-tint")).toMatch(/240,\s*80,\s*46/);
+    expect(tagIn("Q4 roadmap").style.getPropertyValue("--app-tint")).toMatch(/59,\s*130,\s*246/);
+  });
+
+  it("falls back to the slug for an App the manifest list does not name", async () => {
+    // `listApps` is a separate near-static query: it is EMPTY on first paint and
+    // stays empty if that request fails. Rendering nothing for the App would
+    // make the label flicker in and, on a failure, silently leave every row
+    // looking like it belongs to nothing at all.
+    vi.mocked(api.listApps).mockResolvedValueOnce([]);
+    const d = data({
+      live: [
+        { item_id: "i-1", slug: "rca", title: "Line 3 stoppage", cpu_cores: 1, memory_bytes: 800 },
+      ],
+      workspaces: [],
+    });
+    render(<MyResourcesPage client={client({ get: vi.fn(async () => d) })} />, { wrapper: Wrap });
+
+    const live = await screen.findByRole("region", { name: "執行環境" });
+    const row = within(live).getByText("Line 3 stoppage").closest("li")!;
+    expect(within(row).getByText("rca")).toBeTruthy();
+  });
+
+  it("shows no App tag at all for a row the backend could not name", async () => {
+    // `/me/resources` degrades a row it cannot resolve to empty strings rather
+    // than dropping it — the environment is running and being charged for, so
+    // it has to stay closable even when its item is gone or the reader may not
+    // see its title. An empty slug must therefore render NO tag: a chip has
+    // padding and a fill, so an empty one is a visible grey smudge in the
+    // column where every other row says something.
+    const d = data({
+      live: [{ item_id: "i-9", slug: "", title: "", cpu_cores: 1, memory_bytes: 800 }],
+      workspaces: [],
+    });
+    render(<MyResourcesPage client={client({ get: vi.fn(async () => d) })} />, { wrapper: Wrap });
+
+    const live = await screen.findByRole("region", { name: "執行環境" });
+    const row = within(live).getByText("i-9").closest("li")!;
+    expect(row.querySelector(".app-tag")).toBeNull();
+    // …and it is still closable, which is the whole reason the row is here.
+    expect(within(row).getByRole("button", { name: "關閉" })).toBeEnabled();
+    // The title must NOT be a link. With an empty slug it built `/a//i-9`,
+    // which matches no route, so the catch-all `*` navigates to `/` with
+    // `replace` — one click on the title ejects the reader from the page and
+    // Back does not bring them back. The row exists to be closed; its only
+    // other affordance must not throw the reader off the one page that offers
+    // the remedy.
+    expect(within(row).queryByRole("link")).toBeNull();
+  });
+
+  it("does not link a storage row the backend could not name either", async () => {
+    // The delete button is already gated on the slug ("a GHOST row has nothing
+    // this button could delete"), which left the ungated link as the row's ONLY
+    // clickable thing — and it navigates nowhere.
+    const d = data({
+      live: [],
+      workspaces: [{ item_id: "i-9", slug: "", title: "", bytes_used: 400 }],
+    });
+    render(<MyResourcesPage client={client({ get: vi.fn(async () => d) })} />, { wrapper: Wrap });
+
+    const disk = await screen.findByRole("region", { name: "儲存空間" });
+    const row = within(disk).getByText("i-9").closest("li")!;
+    expect(within(row).queryByRole("link")).toBeNull();
+    expect(within(row).queryByRole("button")).toBeNull();
+  });
+
+  it("keeps the three totals out of the list of things you can close", async () => {
+    // They are two different KINDS of line — "how full am I" and "here is one
+    // thing you could give back" — and they shipped as one undifferentiated
+    // column: same width, same type, one hairline between them, so the section
+    // read as seven rows of one list. Grouping the totals is what lets the
+    // stylesheet treat them as a block, and it is what a screen reader
+    // announces before the numbers instead of running them into the list.
+    const d = data({
+      limits: { count: 2, cpu: 4, memory_bytes: 2048, disk_bytes: 1024 },
+    });
+    render(<MyResourcesPage client={client({ get: vi.fn(async () => d) })} />, { wrapper: Wrap });
+
+    const live = await screen.findByRole("region", { name: "執行環境" });
+    const totals = within(live).getByRole("group", { name: "目前合計" });
+    expect(within(totals).getAllByRole("progressbar")).toHaveLength(3);
+    // …and none of them inside the list, where every entry must be a thing the
+    // Close button can act on.
+    expect(within(within(live).getByRole("list")).queryByRole("progressbar")).toBeNull();
   });
 
   it("says how to free disk, because deleting happens in the item", async () => {
@@ -404,5 +583,43 @@ describe("a close that could not be done", () => {
     const alerts = await screen.findAllByRole("alert");
     expect(alerts).toHaveLength(1);
     expect(within(alerts[0].closest("li")!).getByText("Line 9 stoppage")).toBeTruthy();
+  });
+
+  it("leaves the OTHER rows pressable while one close is in flight", async () => {
+    // The sibling of the assertion above, for the pending state rather than the
+    // failed one. One `useMutation` shared by every row made `isPending` a
+    // property of the PAGE: pressing Close on one row greyed out every other
+    // row's button until that request came back — on the page whose entire job
+    // is getting somebody back under their limit, and where a close that has to
+    // reach a busy host is exactly the slow case (503 + Retry-After).
+    let release: () => void = () => {};
+    const closeEnvironment = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const two = data({
+      live: [
+        { item_id: "i-1", slug: "rca", title: "Line 3 stoppage", cpu_cores: 1, memory_bytes: 800 },
+        { item_id: "i-2", slug: "rca", title: "Line 9 stoppage", cpu_cores: 1, memory_bytes: 800 },
+      ],
+    });
+    render(
+      <MyResourcesPage client={client({ get: vi.fn(async () => two), closeEnvironment })} />,
+      { wrapper: Wrap },
+    );
+    // Scoped to the live region: the same item is listed again under Storage,
+    // so an unscoped lookup by title matches two rows in two different lists.
+    const live = () => screen.getByRole("region", { name: "執行環境" });
+    const closeIn = (title: string) =>
+      within(within(live()).getByText(title).closest("li")!).getByRole("button", { name: "關閉" });
+
+    await waitFor(() => expect(closeIn("Line 3 stoppage")).toBeTruthy());
+    await userEvent.click(closeIn("Line 3 stoppage"));
+
+    await waitFor(() => expect(closeIn("Line 3 stoppage")).toBeDisabled());
+    expect(closeIn("Line 9 stoppage")).toBeEnabled();
+    release();
   });
 });

@@ -26,6 +26,8 @@
  * degrades gracelessly on the way there — but it is a limit, not infinity.
  */
 
+import { toHex } from "../../lib/oklch";
+
 import type { EntityFieldSpec } from "../../api/entities";
 import type { ChipColor } from "./selectColor";
 
@@ -74,52 +76,6 @@ export function hueFraction(k: number): number {
   return (2 * (k - 2 ** (level - 1)) + 1) / 2 ** level;
 }
 
-/** Oklab → linear sRGB (Björn Ottosson's matrices). */
-function linearRgb(lightness: number, a: number, b: number): [number, number, number] {
-  const l = (lightness + 0.3963377774 * a + 0.2158037573 * b) ** 3;
-  const m = (lightness - 0.1055613458 * a - 0.0638541728 * b) ** 3;
-  const s = (lightness - 0.0894841775 * a - 1.291485548 * b) ** 3;
-  return [
-    4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
-    -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
-    -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s,
-  ];
-}
-
-const inGamut = (rgb: readonly number[]): boolean =>
-  rgb.every((c) => c >= -1e-4 && c <= 1 + 1e-4);
-
-const gamma = (c: number): number => {
-  const v = Math.min(1, Math.max(0, c));
-  return v <= 0.0031308 ? 12.92 * v : 1.055 * v ** (1 / 2.4) - 0.055;
-};
-
-/**
- * The sRGB hex for one hue, holding LIGHTNESS and giving up chroma if that is
- * what it takes to land inside the gamut — never the other way round, because
- * lightness is what the contrast floor rests on.
- */
-function fill(chroma: number, hue: number): string {
-  const rad = (hue * Math.PI) / 180;
-  const at = (c: number) => linearRgb(LIGHTNESS, c * Math.cos(rad), c * Math.sin(rad));
-  let lo = 0;
-  let hi = chroma;
-  if (!inGamut(at(hi))) {
-    // 20 halvings resolve chroma far finer than 8-bit output can express.
-    for (let i = 0; i < 20; i++) {
-      const mid = (lo + hi) / 2;
-      if (inGamut(at(mid))) lo = mid;
-      else hi = mid;
-    }
-    hi = lo;
-  }
-  const hex = at(hi)
-    .map((c) => Math.round(gamma(c) * 255).toString(16).padStart(2, "0"))
-    .join("");
-  return `#${hex}`;
-}
-
-
 /**
  * Build the palette for one chart from its records' actor values, IN RECORD
  * ORDER. Order matters and appearance order is the kind that churns least:
@@ -163,11 +119,11 @@ export function actorPalette(
     if (pinned !== undefined) {
       // A pin naming no hue we know (or the neutral one) is achromatic, the same
       // answer `selectColor` gives it.
-      return { bg: pinned === null ? fill(0, 0) : fill(CHROMA, pinned), fg: INK };
+      return { bg: pinned === null ? toHex(LIGHTNESS, 0, 0) : toHex(LIGHTNESS, CHROMA, pinned), fg: INK };
     }
     const seat = value ? seats.get(value) : undefined;
     return seat === undefined
-      ? { bg: fill(0, 0), fg: INK }
-      : { bg: fill(CHROMA, hueFraction(seat) * 360), fg: INK };
+      ? { bg: toHex(LIGHTNESS, 0, 0), fg: INK }
+      : { bg: toHex(LIGHTNESS, CHROMA, hueFraction(seat) * 360), fg: INK };
   };
 }
