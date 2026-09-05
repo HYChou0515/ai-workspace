@@ -77,13 +77,26 @@ def test_an_example_counts_as_built_only_when_it_has_a_source_to_build() -> None
     The hand-written `if b != "chart"` that used to paper over this was the
     diagnosis arriving and being ignored.
     """
+
+    # Checked against an INDEPENDENT signal, not against the predicate. `_is_built`
+    # IS `src/.is_dir()`, so asserting that a built example has a `src/` restates
+    # the definition and cannot fail — which is how this test first shipped. A
+    # bundler dependency is the thing that actually makes an example "built", and
+    # it is decided in a different file by a different person.
+    def _bundled(name: str) -> bool:
+        pkg = _EXAMPLE_DIR / name / "package.json"
+        return pkg.is_file() and '"vite"' in pkg.read_text()
+
     for name in BUILT_ALL:
-        assert (_EXAMPLE_DIR / name / "src").is_dir(), (
-            f"{name} is classed as built but has no src/ — its guards were dropped"
+        assert _bundled(name), (
+            f"{name} is classed as built but pulls no bundler — its EXAMPLES guards "
+            "were dropped and nothing failed"
         )
     for name in EXAMPLES:
-        assert not (_EXAMPLE_DIR / name / "src").is_dir(), f"{name} has a src/ but is not built"
-        assert (_EXAMPLE_DIR / name / "index.html").is_file()
+        assert not _bundled(name), f"{name} bundles but is checked as a plain page"
+        # And its files really ARE the page: the entry references its siblings
+        # directly, rather than being a template the bundler rewrites.
+        assert './app.js"' in (_EXAMPLE_DIR / name / "index.html").read_text(), name
 
 
 #: What `dispatchWuiRequest` answers to. An example calling anything else would

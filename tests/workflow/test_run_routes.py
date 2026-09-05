@@ -341,6 +341,37 @@ def test_takeover_conflicts_when_the_chat_already_has_an_active_run():
         assert conflict.status_code == 409
 
 
+def test_a_conflict_leaves_the_callers_own_chat_alone():
+    """The cleanup removes the chat the ROUTE opened. A chat the CALLER handed
+    over is theirs, and this is the one case where it is holding something: a
+    live run parked at a human gate.
+
+    Deleting it would take that run's conversation with it — and
+    `workflow_exec.drive_turn` catches `ResourceIDNotFoundError` only, not
+    `ResourceIsDeletedError`, so the resume after the decision would crash rather
+    than fall back to anything.
+
+    The rule (`if ours`) was correct and entirely unpinned: mutating both
+    branches to `if True` left every neighbouring test green, which is why this
+    exists.
+    """
+    app, spec, item_id = _app()
+    conv_rm = spec.get_resource_manager(Conversation)
+    with TestClient(app) as client:
+        _put_input(client, item_id, '{"gate": true}')  # parks at the gate → active
+        prep = client.post(f"{_base(item_id)}/chats", json={"title": "prep"}).json()["chat_id"]
+        first = client.post(f"{_base(item_id)}/run?chat_id={prep}").json()
+        _poll(client, item_id, first["run_id"], "awaiting_human")
+
+        conflict = client.post(f"{_base(item_id)}/run?chat_id={prep}")
+
+        assert conflict.status_code == 409
+        # Untouched: still there, still pointing at the run it hosts.
+        chat = conv_rm.get(prep).data
+        assert isinstance(chat, Conversation)
+        assert chat.run_id == first["run_id"]
+
+
 def test_a_launch_that_fails_leaves_no_chat_behind(monkeypatch):
     """The chat is opened BEFORE the run is asked for, because `start` needs its
     id. So when `start` fails, that chat has no run and never will.
