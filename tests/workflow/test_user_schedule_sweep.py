@@ -277,6 +277,32 @@ def test_a_deleted_file_drops_out_of_the_index():
     assert index.items() == []
 
 
+def test_one_bad_zone_does_not_take_the_whole_file_down():
+    """`ZoneInfo` raises `ValueError` — not `ZoneInfoNotFoundError` — for an
+    absolute path or a traversal, and the sweep caught only the latter. So a
+    single typo'd zone raised out of the row loop, `_one_file` never returned,
+    and every OTHER schedule in that file silently stopped firing.
+
+    That is the module's stated property ("one page's mistake costs that page
+    only") failing on the row that was supposed to be linted rather than fatal.
+    """
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    started = _Started()
+    files = _Files(
+        **{
+            f"{ITEM}{PATH}": _file(
+                {"every": "daily", "at": "09:00", "run": "broken", "tz": "/absolute"},
+                {"every": "daily", "at": "09:00", "run": "build-report"},
+            )
+        }
+    )
+
+    asyncio.run(_sweeper(spec, files, started, datetime(2026, 9, 5, 9, 30)).tick())
+
+    assert [r[1] for r in started.runs] == ["build-report"]
+
+
 def test_a_schedule_fires_in_the_zone_it_named():
     """`tz` was accepted, copied onto the Schedule and hashed into the lease key
     — and then never used to decide anything. The sweep asked the server what
@@ -314,52 +340,70 @@ def test_a_schedule_in_a_zone_does_not_fire_before_its_moment_there():
     assert started.runs == []
 
 
-def test_the_sweep_never_sits_on_the_event_loop():
-    """Every store call here is blocking specstar I/O, and on Postgres each one
-    is a network round trip. The sweep it is modelled on offloads all of them,
-    and `SpecstarTriggerStore`'s own docstring states the contract: the store is
-    sync, the SWEEPER is what puts it on a thread.
+def test_the_sweep_never_holds_the_event_loop():
+    """Every blocking call the sweep makes must be off the loop — all of them,
+    not most of them.
 
     Not a style point. This runs on every API pod, un-gated by `run_consumers`,
-    at O(items × paths × rows) per tick — and a loop it holds is holding every
+    at O(items × paths × rows) per tick, so a loop it holds is holding every
     request that pod is serving. That was the incident PR#657 fixed.
 
-    Measured by racing the tick against a task that only wants the loop back. An
-    in-memory spec makes a blocked loop invisible, which is why nothing caught
-    this: the block has to be REAL for the test to be able to see it.
+    Measured as the LONGEST GAP between heartbeats, not as a count of them.
+    A count is the wrong instrument: with six of seven calls offloaded the
+    heartbeat still ticks a few times, so `beats > 0` passed while one call was
+    still blocking — the test would have reported the property as held while it
+    was broken. The gap is the property itself: if any call runs on the loop,
+    nothing else runs for as long as that call takes, and that shows up here
+    whichever call it is.
+
+    Every store call is slowed, so the test does not depend on knowing which one
+    somebody forgets next.
     """
     spec = _spec()
     index = ScheduleIndex(spec)
     index.record(ITEM, PATH)
     files = _Files(**{f"{ITEM}{PATH}": _file(DAILY)})
-    sweeper = _sweeper(spec, files, _Started(), datetime(2026, 9, 5, 9, 30))
+    started = _Started()
+    sweeper = _sweeper(spec, files, started, datetime(2026, 9, 5, 9, 30))
 
-    slow = sweeper._store
-    real_last_window = slow.last_window
+    BLOCK = 0.05  # a round trip, as it is on a real backend
 
-    def _blocking(trigger_id: str) -> str:
-        time.sleep(0.05)  # a round trip, as it is on a real backend
-        return real_last_window(trigger_id)
+    def _slow(fn):
+        def go(*a, **kw):
+            time.sleep(BLOCK)
+            return fn(*a, **kw)
 
-    slow.last_window = _blocking  # type: ignore[method-assign]
+        return go
 
-    async def _race() -> int:
-        beats = 0
+    sweeper._store.last_window = _slow(sweeper._store.last_window)  # type: ignore[method-assign]
+    sweeper._store.try_claim = _slow(sweeper._store.try_claim)  # type: ignore[method-assign]
+    sweeper._index.items = _slow(sweeper._index.items)  # type: ignore[method-assign]
+    sweeper._index.paths = _slow(sweeper._index.paths)  # type: ignore[method-assign]
+    sweeper._owner_of = _slow(sweeper._owner_of)
+
+    async def _race() -> float:
+        beats: list[float] = [time.monotonic()]
+        running = True
 
         async def _heartbeat() -> None:
-            nonlocal beats
-            for _ in range(40):
+            while running:
                 await asyncio.sleep(0.001)
-                beats += 1
+                beats.append(time.monotonic())
 
         pulse = asyncio.create_task(_heartbeat())
         await sweeper.tick()
+        running = False
         pulse.cancel()
-        return beats
+        beats.append(time.monotonic())
+        return max(b - a for a, b in zip(beats, beats[1:], strict=False))
 
-    beats = asyncio.run(_race())
+    worst = asyncio.run(_race())
 
-    assert beats > 0, "the loop was held for the whole sweep — nothing else could run"
+    assert started.runs, "the sweep did not fire — this is measuring nothing"
+    assert worst < BLOCK / 2, (
+        f"the loop was held for {worst * 1000:.0f}ms at once, and one blocking call "
+        f"takes {BLOCK * 1000:.0f}ms — so at least one is still running on it"
+    )
 
 
 def test_a_blip_reading_the_file_is_not_a_deletion():
@@ -498,6 +542,60 @@ def test_a_schedule_that_never_starts_stops_being_retried():
         asyncio.run(sweeper.tick())
 
     assert started.attempts == MAX_START_ATTEMPTS
+
+
+def test_yesterdays_failures_do_not_spend_todays_attempts():
+    """The cap is "how many tries THIS window gets", not "how many times this
+    schedule may ever fail".
+
+    Counted per trigger and never cleared except by a success, a report that
+    failed three times in January would be abandoned on its FIRST stumble in
+    February — and every month after — with the log line saying it had failed
+    three times running. The blip absorption the cap exists for would be gone
+    for good, silently, on exactly the schedules that had already had a bad day.
+    """
+
+    class _BoomThenFine(_Started):
+        def __init__(self) -> None:
+            super().__init__()
+            self.attempts = 0
+            self.fail = True
+
+        async def __call__(self, **kw):
+            self.attempts += 1
+            if self.fail:
+                raise RuntimeError("a bad day")
+            return await super().__call__(**kw)
+
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    started = _BoomThenFine()
+    files = _Files(**{f"{ITEM}{PATH}": _file(DAILY)})
+
+    # Day one: it fails until the cap and the window is given up on.
+    day_one = _sweeper(spec, files, started, datetime(2026, 9, 5, 9, 30))
+    for _ in range(6):
+        asyncio.run(day_one.tick())
+    assert started.attempts == MAX_START_ATTEMPTS
+
+    # Day two, same pod. It stumbles ONCE and then the cause clears — which is
+    # the whole scenario the cap is written for.
+    sweeper = UserScheduleSweeper(
+        spec=spec,
+        index=ScheduleIndex(spec),
+        read=files.read,
+        start=started,
+        owner_of=lambda _item: "alice",
+        now=lambda: datetime(2026, 9, 6, 9, 30),
+    )
+    sweeper._failures = day_one._failures  # the same pod remembers yesterday
+    asyncio.run(sweeper.tick())  # one stumble
+    started.fail = False
+    asyncio.run(sweeper.tick())  # the cause is gone — this must still get a turn
+
+    assert [r[1] for r in started.runs] == ["build-report"], (
+        "yesterday's failures spent today's attempts, so one stumble burned the window"
+    )
 
 
 def test_a_window_that_did_start_is_not_fired_a_second_time():

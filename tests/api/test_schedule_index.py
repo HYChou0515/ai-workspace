@@ -35,6 +35,8 @@ from workspace_app.api.schedule_index import (
     is_schedule_file,
     register_schedule_index,
 )
+from workspace_app.files import WorkspaceFiles
+from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.resources import make_spec
 
 from .conftest import Harness
@@ -158,7 +160,6 @@ def test_the_index_is_fed_by_the_write_path_itself():
     """
     import asyncio
 
-    from workspace_app.files import WorkspaceFiles
     from workspace_app.filestore.memory import MemoryFileStore
 
     seen: list[tuple[str, str]] = []
@@ -179,7 +180,6 @@ def test_a_failing_hook_never_fails_the_write():
     a write that already landed."""
     import asyncio
 
-    from workspace_app.files import WorkspaceFiles
     from workspace_app.filestore.memory import MemoryFileStore
 
     def _boom(_wid: str, _path: str) -> None:
@@ -232,6 +232,43 @@ def test_a_concurrent_record_does_not_lose_the_other_pods_path(index: ScheduleIn
         "/b/schedules.json",
         "/c/schedules.json",
     ]
+
+
+def test_the_merge_is_conditional_on_what_it_read(index: ScheduleIndex) -> None:
+    """The retry loop is only half the mechanism. Re-reading after a conflict is
+    worth nothing if the write never ASKS to be conditional — and a
+    read-modify-write with no etag simply overwrites the peer, so there is no
+    conflict to retry and nothing to notice.
+
+    Asserted with a store that ENFORCES the precondition rather than one that
+    records it: dropping `expected_etag` leaves every other test in this file
+    green, because the in-memory backend accepts an unconditional write happily.
+    The only thing that can tell the difference is a writer that refuses one.
+    """
+    index.record("i1", "/a/schedules.json")
+    rm = index._spec.get_resource_manager(_ScheduleIndex)
+    real_modify = rm.modify
+    asked: list[str | None] = []
+
+    def _enforcing(resource_id, data, /, **kw):
+        etag = kw.get("expected_etag")
+        asked.append(etag)
+        current = rm.get(resource_id).info.etag
+        if etag != current:
+            # What a real backend does to an unconditional or stale write when
+            # another writer holds the row.
+            raise PreconditionFailedError(resource_id, etag or "<none>", current)
+        return real_modify(resource_id, data, **kw)
+
+    rm.modify = _enforcing  # ty: ignore[invalid-assignment]
+    try:
+        wrote = index.record("i1", "/b/schedules.json")
+    finally:
+        rm.modify = real_modify  # ty: ignore[invalid-assignment]
+
+    assert asked, "nothing was written — this guard is measuring nothing"
+    assert wrote is True
+    assert index.paths("i1") == ["/a/schedules.json", "/b/schedules.json"]
 
 
 def test_a_backend_that_is_down_is_not_mistaken_for_a_lost_race(index: ScheduleIndex) -> None:
@@ -287,8 +324,13 @@ def _methods_that_land_bytes() -> set[str]:
     the schedules never fired, in silence.
 
     A method lands bytes if it names a byte-writing primitive itself, or defers
-    to the one private tail that does. Add a sixth write path and this set grows
+    to the one private tail that does. Add another write path and this set grows
     on its own, and the test below fails until that path is covered.
+
+    It returns SEVEN today (`create`, `create_exclusive`, `edit`, `move`,
+    `write`, `write_from_path`, `write_record`). Only two of those were ever
+    blind; the value of driving the rest is that it PROVES they were not,
+    which reading could not.
     """
     import ast
     import inspect
@@ -317,6 +359,26 @@ def _methods_that_land_bytes() -> set[str]:
     return {n for n in out if not n.startswith("_")}
 
 
+class _CasStore(MemoryFileStore):
+    """A store with optimistic concurrency, like the wiki store.
+
+    `MemoryFileStore` has no `read_with_etag`/`write_cas`, so `edit` against it
+    always takes the delegating branch — which is why driving `edit` proved
+    nothing about the branch that writes for itself.
+    """
+
+    async def read_with_etag(self, workspace_id: str, path: str):
+        try:
+            data = await self.read(workspace_id, path)
+        except Exception:
+            return None
+        return data, str(len(data))
+
+    async def write_cas(self, workspace_id: str, path: str, data: bytes, etag: str | None) -> bool:
+        await self.write(workspace_id, path, data)
+        return True
+
+
 def test_every_public_write_path_feeds_the_index() -> None:
     """`schedule_index.py` states the invariant "it may never miss one that
     exists". That is a claim about EVERY way bytes reach a path, and the facade
@@ -329,7 +391,6 @@ def test_every_public_write_path_feeds_the_index() -> None:
     from pathlib import Path
     from tempfile import TemporaryDirectory
 
-    from workspace_app.files import WorkspaceFiles
     from workspace_app.filestore.memory import MemoryFileStore
 
     def _drive(name: str) -> list[str]:
@@ -360,6 +421,18 @@ def test_every_public_write_path_feeds_the_index() -> None:
             asyncio.run(files.write("i1", target, b'[{"every": "weekly"}]'))
             seen.clear()
             asyncio.run(files.edit("i1", target, "weekly", "daily"))
+        elif name == "edit_cas":
+            # `edit` has TWO branches and they land bytes in different places. A
+            # store exposing `read_with_etag`/`write_cas` (the wiki store, here)
+            # takes the optimistic-concurrency path, which never goes through
+            # `write` — so driving `edit` against a plain store exercised the
+            # delegating half and reported the whole method covered. That is the
+            # same "one of several tails" mistake this guard exists to catch,
+            # one level further down.
+            files = WorkspaceFiles(_CasStore(), on_write=lambda _w, p: seen.append(p))
+            asyncio.run(files.write("i1", target, b'[{"every": "weekly"}]'))
+            seen.clear()
+            asyncio.run(files.edit("i1", target, "weekly", "daily"))
         else:
             return [f"UNCOVERED:{name}"]
         return seen
@@ -367,7 +440,11 @@ def test_every_public_write_path_feeds_the_index() -> None:
     landing = _methods_that_land_bytes()
     assert landing, "the derivation found nothing — it is measuring nothing"
 
-    covered = {name: _drive(name) for name in sorted(landing)}
+    # `edit_cas` is not a method name — it is `edit`'s SECOND branch, which lands
+    # bytes somewhere else entirely. The derivation works on methods, so a branch
+    # like that has to be named here; that is a real limit of the derivation and
+    # is why it is written down rather than left implicit.
+    covered = {name: _drive(name) for name in [*sorted(landing), "edit_cas"]}
     missed = [n for n, seen in covered.items() if SCHEDULES_FILE not in str(seen)]
 
     assert not missed, f"these land bytes without telling the index: {missed}"

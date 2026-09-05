@@ -77,9 +77,12 @@ def test_a_run_that_never_started_takes_its_chat_with_it() -> None:
 
 
 def test_dropping_a_chat_twice_is_not_an_error() -> None:
-    """Two pods can answer the same refusal, and a cleanup that raises turns one
-    failed run into a second, unrelated failure — reported to whoever happened
-    to be second."""
+    """A cleanup that raises turns one failed run into a SECOND, unrelated
+    failure — and the second one is the only one the caller sees.
+
+    Both calls happen inside a single request on a single pod today, so this
+    is not a race; it is the ordinary shape of a cleanup path, which must be
+    safe to reach twice because it is reached from several places."""
     _spec, locator, item_id = _locator_and_item()
     chat_id = locator.open_run_chat(item_id, "judge")
     locator.settle_run_chat(chat_id, None)

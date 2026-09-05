@@ -59,8 +59,15 @@ DEFAULT_MAX_ROWS = 1000
 #: lasts. A few tries absorbs a blip; after that the window is spent and the log
 #: says so once instead of a thousand times.
 #:
-#: Counted in memory, per pod: it is a property of "this run of the sweep",
-#: resets on restart, and needs no durable row of its own.
+#: Counted per (trigger, WINDOW) — "how many tries this window gets", not "how
+#: many times this schedule may ever fail". Counted per trigger instead, a report
+#: that had a bad day in January would be abandoned on its first stumble in
+#: February and every month after, with the log still saying "3 times running":
+#: the blip absorption gone for good on exactly the schedules that had already
+#: had trouble.
+#:
+#: In memory, per pod. It is a property of "this run of the sweep", resets on
+#: restart, and needs no durable row of its own.
 MAX_START_ATTEMPTS = 3
 
 ReadFile = Callable[[str, str], Awaitable[bytes]]
@@ -87,16 +94,27 @@ def _in_zone(now_utc: datetime, tz: str) -> datetime:
     the same rule the engineer-authored triggers use (`TriggerSweeper._local_now`)
     so the two engines cannot disagree about what "09:00" means.
 
-    An unknown zone falls back to UTC rather than raising: the row already
-    passed validation, and taking down one page's whole file — or the sweep —
-    over a typo in a zone name is a worse answer than firing an hour out.
+    A zone that cannot be resolved falls back to UTC rather than raising, because
+    taking down one page's whole file — every other row in it included — over a
+    typo in a zone name is a worse answer than firing an hour out.
+
+    THE FULL SET, not just "not found". `ZoneInfo` raises `ValueError` for an
+    absolute path or a traversal (`"/absolute"`, `"../x"`) and `OSError` for a key
+    long enough to reach the filesystem. Catching only `ZoneInfoNotFoundError` is
+    what made a single bad row raise out of the loop and stop every good schedule
+    in the same file — the exact outcome this fallback exists to prevent, and the
+    opposite of this module's "one page's mistake costs that page only".
+
+    `validate_user_schedules` now lints `tz` too, so a bad zone should never get
+    this far. Both, deliberately: the lint is what TELLS the author, and this is
+    what keeps a miss from being fatal. Neither alone is enough.
     """
     if not tz:
         return now_utc
     try:
         return now_utc.replace(tzinfo=UTC).astimezone(ZoneInfo(tz)).replace(tzinfo=None)
-    except ZoneInfoNotFoundError:
-        logger.warning("user schedules: unknown time zone %r — using UTC", tz)
+    except (ZoneInfoNotFoundError, ValueError, OSError):
+        logger.warning("user schedules: unusable time zone %r — using UTC", tz)
         return now_utc
 
 
@@ -132,13 +150,14 @@ class UserScheduleSweeper:
         self._now = now
         self._max_rows = max_rows
         self._store = SpecstarTriggerStore(spec)
-        self._failures: dict[str, int] = {}
+        self._failures: dict[tuple[str, str], int] = {}
 
     async def tick(self) -> int:
         """Fire everything due. Returns how many runs were launched."""
         fired = 0
-        # Every store call below is BLOCKING specstar I/O — on Postgres, a network
-        # round trip each. The sweep this one is modelled on offloads all of them,
+        # Every store call in this sweep — here and in `_one_file` — is BLOCKING
+        # specstar I/O; on Postgres, a network round trip each. The sweep this
+        # one is modelled on offloads all of them,
         # and `SpecstarTriggerStore`'s docstring states the contract: the store is
         # sync, the sweeper is what puts it on a thread. This loop runs on every
         # API pod, un-gated by `run_consumers`, at O(items × paths × rows) per
@@ -163,15 +182,15 @@ class UserScheduleSweeper:
             # in this direction, and correcting it here is what lets a delete
             # need no hook of its own.
             logger.info("user schedules: %s %s is gone — dropping from the index", item_id, path)
-            self._index.forget(item_id, path)
+            await asyncio.to_thread(self._index.forget, item_id, path)
             return 0
         except Exception:
             # "Could not read it just now" is a DIFFERENT answer, and it must not
             # unregister anything. `files.read` raises for reasons that are not
             # deletion — `SandboxBusy`, which the facade propagates on purpose; a
             # 502 or timeout from the sandbox host; a sandbox mid-restore. And
-            # `forget` is destructive: the last path takes the whole index row
-            # with it, and only a WRITE of `schedules.json` ever re-creates it.
+            # `forget` is destructive: it empties the row, and only a WRITE of
+            # `schedules.json` ever puts the path back.
             # Reading a blip as a deletion stops a daily report forever and
             # leaves one log line saying the file is gone.
             logger.exception(
@@ -272,8 +291,13 @@ class UserScheduleSweeper:
                 # into one attempt a minute forever. After the cap the window is
                 # left spent and the log says so once, loudly, rather than a
                 # thousand times quietly.
-                tries = self._failures.get(trigger_id, 0) + 1
-                self._failures[trigger_id] = tries
+                # Keyed by WINDOW, and the trigger's older windows are dropped
+                # so this cannot grow with time.
+                self._failures = {
+                    k: v for k, v in self._failures.items() if k[0] != trigger_id or k[1] == window
+                }
+                tries = self._failures.get((trigger_id, window), 0) + 1
+                self._failures[trigger_id, window] = tries
                 if tries < MAX_START_ATTEMPTS:
                     await asyncio.to_thread(self._store.release_claim, trigger_id, window, last)
                     logger.exception(
@@ -296,6 +320,6 @@ class UserScheduleSweeper:
                     )
                 continue
             # A run started, so whatever was wrong is over.
-            self._failures.pop(trigger_id, None)
+            self._failures.pop((trigger_id, window), None)
             fired += 1
         return fired

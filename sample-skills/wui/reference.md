@@ -169,10 +169,18 @@ await workspace.startRun("judge", { lot: "A1" }, function (event) {
 });
 ```
 
-The types you will actually see are `phase_entered`, `step_started`,
-`step_output`, `awaiting_human`, `message_delta`, `tool_start`, `tool_end`,
+The types you will actually see include `phase_entered`, `step_started`,
+`step_passed`, `step_failed`, `step_skipped`, `step_retrying`, `step_output`,
+`awaiting_human`, `message_delta`, `tool_start`, `tool_end`, `run_cancelled`,
 `error` and `done`. Copy names from that list rather than guessing: a handler
 keyed on a type nothing emits is dead code that looks like a feature.
+
+⚠️ **Handle the failures, not only the progress.** `step_failed` and
+`run_cancelled` are what a person needs to see, and a page that renders only
+`step_started` shows a run marching confidently through steps that did not
+work. The list is not closed — the platform grows types — which is why the
+reducer must ignore what it does not recognise rather than switch
+exhaustively.
 
 ⚠️ **`done` is per TURN, not per run.** A workflow with three agent steps emits
 it three times. The run is over when the stream ends — which is when the promise
@@ -240,10 +248,10 @@ await workspace.writeFile("schedules.json", JSON.stringify({
 | word | means |
 |---|---|
 | `every` | `minutes` · `hourly` · `daily` · `weekly` · `monthly` |
-| `n` | required by `every: "minutes"`; must divide 60 (1·2·3·4·5·6·10·12·15·20·30) |
+| `n` | required by `every: "minutes"`; must divide 60 (1·2·3·4·5·6·10·12·15·20·30·60) |
 | `at` | `"HH:MM"`, for daily/weekly/monthly |
 | `dow` | `mon`…`sun`, for weekly |
-| `dom` | 1–28, for monthly |
+| `dom` | 1–31, for monthly; a day past the month's end clamps to its last day |
 | `tz` | an IANA zone (`"Asia/Taipei"`); **defaults to UTC** |
 | `run` | a workflow id this app offers — the same ones `workflows:` may list. An id it does not offer is **skipped with a log line naming what is on offer**, and the other rows still run |
 | `with` | the payload, handed to the workflow exactly as `startRun` does |
@@ -263,8 +271,12 @@ What the platform guarantees, so you do not build it yourself:
   wakes.
 - **A missed window fires late** rather than being dropped — a machine that was
   down at 09:00 still sends the report at 10:30.
-- **Editing a row does not re-fire what already ran today**, because the
-  platform derives the identity from what you wrote.
+- **Re-saving an unchanged row does not re-fire it.** The identity is derived
+  from what the row SAYS, so saving five times is one schedule.
+  ⚠️ **Changing a row makes it a new schedule**, and the new one may fire again
+  in the same period — so edit a daily 09:00 row at 10:00 and it can run a
+  second time today. Change them when the period is not yet due if that
+  matters.
 
 ⚠️ **A bad row is skipped, not shouted about.** Get `every` or `n` wrong and that
 one row silently never fires while the others keep working. Show the file back to

@@ -87,7 +87,7 @@ uv run python -m workspace_app            # API + SPA 一起跑在 127.0.0.1:800
 | **不讓某一步永遠轉下去** | `server.workflow_step_timeout_sec`（預設 `600` = 10 分鐘）。工作流裡**單一 agent 步驟**的上限,超過就中止那一步,而且**錯誤訊息會寫出這個數字**——「永遠轉」是唯一連使用者都描述不出來的壞法(畫面沒有錯,只是還沒好),含糊的「太久」讓人以為是隨機,寫出數字才知道那是可以改的設定。設 `0` = 沒有上限（這也是這顆選項出現前每個部署的實際行為:機制早就在,但沒有人把值傳進去）|
 | **一個頁面最多能排幾件事** | `server.max_page_schedules`（預設 `1000`）。這是**失控護欄不是政策限制**:正常的頁面碰不到，碰到代表那個頁面有 bug。它擋的是耐久狀態——每個排程觸發過就在視窗帳本留一列。整個檔案超過就整份不跑，並在 log 寫出兩個數字 |
 | **把通知送出站（email / IM）** | `server.notification_channel: "你的套件.YourChannel"`——一份 `INotificationChannel`。平台**永遠**先寫站內信那一列，有指名通道才再交給它;**送信失敗不算排程失敗**（否則一次兩小時的郵件故障會變成全公司排程集體自我關閉）。平台不出貨實作:relay、寄件網域、合規都是你們的。沒設 = 行為跟今天完全一樣。見[擴充平台](extending-the-platform.md) |
-| **反向代理掛在子路徑下** | `server.root_path`（例如 `/workspace`）——FastAPI 的 `root_path`，讓 OpenAPI 與 SPA 的資源路徑帶上前綴 |
+| **反向代理掛在子路徑下** | `server.root_path`（例如 `/workspace`）——FastAPI 的 `root_path`，只影響**產生出來的 URL**(OpenAPI / docs)。**SPA 自己的 base path 不在這裡**,它是 build 期的 `VITE_BASE_PATH`;只設這一顆會得到一個資源全 404 的前端,而且沒有東西會提示你去找另一顆 |
 | **調 SSE 的重連緩衝與取消輪詢** | `server.turn_replay_buffer_events`（重連時最多補送幾個事件）/ `server.turn_cancel_poll_seconds`（跨 pod 取消的輪詢間隔）。兩顆都有堪用的預設，只有在觀察到「重連掉事件」或「按停止太慢」時才需要動 |
 | **限制上傳大小 / 每工作區配額** | `filestore.max_file_size` / `filestore.workspace_quota` |
 | **依 App 種類給不同的 cpu / 記憶體 / 硬碟** | App 自己宣告 `apps/<slug>/app.json` 的 `resources`；部署端用 `resources.per_app.default` 給預設、`resources.per_app.max` 設天花板（超過**開機失敗**）。見 §6.5 |

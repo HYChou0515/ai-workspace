@@ -31,7 +31,7 @@ from typing import Any, cast
 
 from msgspec import Struct
 
-from .triggers import Schedule
+from .triggers import Schedule, _valid_tz
 
 #: The periods a page may pick. `daily` / `weekly` / `monthly` are the words
 #: `triggers.json` already uses — reused rather than re-spelled, so one
@@ -156,11 +156,19 @@ def validate_user_schedules(raw: str) -> list[str]:
                 # a half. Silently, in every case: the only way to notice the
                 # cadence you did not ask for is to sit and watch a clock.
                 problems.append(
-                    f"{where}: `n` must divide 60 (1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30), "
+                    f"{where}: `n` must divide 60 (1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60), "
                     f"got {n}. For anything longer use `every: hourly` or `every: daily`."
                 )
         elif n:
             problems.append(f"{where}: `n` applies only to `every: minutes`.")
+        tz = row.get("tz", "")
+        if tz and not _valid_tz(str(tz)):
+            # Nothing checked this, so a typo travelled all the way to `ZoneInfo`
+            # — which raises `ValueError` for an absolute path or a traversal,
+            # not the `ZoneInfoNotFoundError` the sweep was catching. One bad
+            # zone took the WHOLE file down and the good rows in it stopped
+            # firing, which is the failure this per-row linting exists to stop.
+            problems.append(f"{where}: `tz` {tz!r} is not a known IANA time zone.")
         if every == "weekly" and row.get("dow") not in _DOW:
             problems.append(f"{where}: a weekly schedule needs `dow` ({', '.join(_DOW)}).")
         if every == "monthly":

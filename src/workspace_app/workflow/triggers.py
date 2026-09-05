@@ -356,7 +356,10 @@ def _valid_tz(tz: str) -> bool:
 
     try:
         ZoneInfo(tz)
-    except (ZoneInfoNotFoundError, ValueError):
+    except (ZoneInfoNotFoundError, ValueError, OSError):
+        # `OSError` too: an over-long key reaches the filesystem before the
+        # zone database refuses it. A validator that raises is a validator that
+        # takes down whatever asked it a question.
         return False
     return True
 

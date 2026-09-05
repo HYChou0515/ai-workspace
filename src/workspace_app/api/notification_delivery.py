@@ -155,7 +155,11 @@ async def deliver_pending(spec: SpecStar, channel: INotificationChannel | None) 
             # else's mail.
             logger.exception("notification %s could not be delivered", nid)
             tried = row.delivery_attempts + 1
-            rm.update(
+            # Offloaded like the read. One per row, up to BATCH per sweep, every
+            # 30s on every pod — moving only the query left the expensive half of
+            # this loop exactly where it was.
+            await asyncio.to_thread(
+                rm.update,
                 nid,
                 msgspec.structs.replace(
                     row,
@@ -168,7 +172,8 @@ async def deliver_pending(spec: SpecStar, channel: INotificationChannel | None) 
                 ),
             )
             continue
-        rm.update(
+        await asyncio.to_thread(
+            rm.update,
             nid,
             msgspec.structs.replace(
                 row,

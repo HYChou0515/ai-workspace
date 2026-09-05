@@ -1221,6 +1221,11 @@ class WorkspaceFiles:
             await self._ensure_headroom(workspace_id, path, len(updated), None)
             applied = await write_cas(workspace_id, path, updated, etag)
             if applied:
+                # Bytes landed, so whoever asked to be told is told — the same
+                # rule every other write path here keeps. This branch was the one
+                # `_landed` did NOT reach, which is the very shape it was
+                # extracted to close.
+                self._landed(workspace_id, path)
                 return None
             # A concurrent writer bumped the etag between our read and write —
             # loop to re-read and re-apply against the new content.

@@ -18,7 +18,7 @@ and it cost the feature entirely: the hook went into ``_write_unchecked``, which
 does not go through, so the one write this index exists to notice was the one it
 never saw. The facade now calls ``_landed`` from every path that lands bytes,
 and ``tests/api/test_schedule_index.py`` derives that set from the facade's own
-source so a sixth path cannot be added silently.
+source so a new one cannot be added silently.
 
 **Stale in one direction only.** The index may name a file that has since been
 deleted; it may never miss one that exists. So the sweep re-reads each path and
@@ -168,9 +168,11 @@ class ScheduleIndex:
         """Drop a path the sweep could not read. Quiet when the row is already
         gone: two pods may sweep the same item at once.
 
-        The row itself goes when its last path does — an item whose schedules
-        are deleted must stop being read, or the sweep pays for it on every pass
-        forever.
+        The row is EMPTIED, not deleted — `delete` takes no etag, so a delete
+        racing a `record` takes the peer's new path with it. An item with no
+        paths left is skipped by `items()`, so it stops being read either way,
+        which is the property that matters: otherwise the sweep pays for it on
+        every pass forever.
         """
         rm = self._spec.get_resource_manager(_ScheduleIndex)
         for _ in range(_MAX_CAS_RETRIES):

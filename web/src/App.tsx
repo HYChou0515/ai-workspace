@@ -28,8 +28,11 @@ import { ReleasesPage } from "./pages/ReleasesPage";
  *   /kb                        → Knowledge base
  * Unknown paths bounce back to the launcher.
  *
- * All routes nest under <GlobalLayout> (#158) so the global nav bar + breadcrumb
- * trail render above every page and pages can publish their own crumbs.
+ * Routes nest under <GlobalLayout> (#158) so the global nav bar + breadcrumb
+ * trail render above every page and pages can publish their own crumbs — with
+ * ONE exception, `/w/:slug/:itemId/*`, the deployed-page route, which is
+ * chrome-less by definition. That exception costs the layout's app-wide
+ * guarantees on that route; `GlobalLayout` says which and why it is safe today.
  */
 export function AppRoutes() {
   return (

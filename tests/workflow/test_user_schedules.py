@@ -116,6 +116,25 @@ def test_every_interval_that_divides_the_hour_is_accepted():
         )
 
 
+def test_a_zone_that_is_not_a_zone_is_refused():
+    """Nothing validated `tz` at all, so a typo reached `ZoneInfo` — which raises
+    `ValueError` for an absolute path or a traversal, not the
+    `ZoneInfoNotFoundError` the sweep catches. One bad zone took the WHOLE file
+    down and the valid rows in it never fired, which is the exact thing this
+    file's per-row linting exists to prevent."""
+    for bad in ("/absolute", "../x", "Not/A/Zone", "\x00"):
+        problems = validate_user_schedules(_file({**DAILY, "tz": bad}))
+        assert problems, f"tz={bad!r} was accepted"
+        assert "tz" in problems[0], f"tz={bad!r} was refused without naming the field"
+
+
+def test_a_real_zone_is_accepted():
+    """The control. Refusing every zone would pass the test above and break every
+    schedule that names one."""
+    for good in ("Asia/Taipei", "UTC", "Europe/Berlin", ""):
+        assert validate_user_schedules(_file({**DAILY, "tz": good})) == [], good
+
+
 def test_a_valid_file_has_nothing_to_say():
     assert validate_user_schedules(_file(DAILY, POLLER)) == []
 
