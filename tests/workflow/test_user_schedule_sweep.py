@@ -371,3 +371,61 @@ def test_nothing_indexed_reads_nothing():
     asyncio.run(_sweeper(spec, _Counting(), started, datetime(2026, 9, 5, 9, 30)).tick())
 
     assert read_calls == []
+
+
+# ── the runaway guard ────────────────────────────────────────────────────────
+
+
+def test_a_page_past_the_cap_fires_nothing_and_says_so(caplog):
+    """A guard against a page with a bug, not a policy limit on what people may
+    schedule. The number is deliberately far above any real use, so hitting it
+    means something is wrong — and the right answer to "something is wrong" is
+    to be loud, not to quietly do the first N.
+
+    Whole-file refusal on purpose here, unlike an invalid ROW: a file with a
+    thousand entries was not typed by a person, so there is no good half to
+    preserve, and half-processing would leave a ledger row for every one it got
+    through.
+    """
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    started = _Started()
+    many = _file(*[{**DAILY, "with": {"n": i}} for i in range(5)])
+    files = _Files(**{f"{ITEM}{PATH}": many})
+
+    sweeper = UserScheduleSweeper(
+        spec=spec,
+        index=ScheduleIndex(spec),
+        read=files.read,
+        start=started,
+        owner_of=lambda _i: "alice",
+        now=lambda: datetime(2026, 9, 5, 9, 30),
+        max_rows=3,
+    )
+    with caplog.at_level("ERROR"):
+        asyncio.run(sweeper.tick())
+
+    assert started.runs == []
+    assert "5" in caplog.text and "3" in caplog.text
+
+
+def test_a_page_at_the_cap_still_works():
+    """Off-by-one on a guard is how a legitimate page gets refused. The cap is
+    the most it may have, not the first number that is too many."""
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    started = _Started()
+    files = _Files(**{f"{ITEM}{PATH}": _file(*[{**DAILY, "with": {"n": i}} for i in range(3)])})
+
+    sweeper = UserScheduleSweeper(
+        spec=spec,
+        index=ScheduleIndex(spec),
+        read=files.read,
+        start=started,
+        owner_of=lambda _i: "alice",
+        now=lambda: datetime(2026, 9, 5, 9, 30),
+        max_rows=3,
+    )
+    asyncio.run(sweeper.tick())
+
+    assert len(started.runs) == 3

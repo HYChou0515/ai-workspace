@@ -35,6 +35,18 @@ from .user_schedules import trigger_id_for, usable_rows
 
 logger = logging.getLogger(__name__)
 
+#: Most schedules one page may declare — a RUNAWAY GUARD, not a policy limit.
+#:
+#: Deliberately far above any real use. A page's schedules are written by a
+#: person choosing when they want things; a thousand of them means the page has
+#: a bug, and the honest response to a bug is to be loud rather than to quietly
+#: do the first N. Overridable per deploy (`server.max_page_schedules`), because
+#: a number in the source is a number nobody can change when they need to.
+#:
+#: What it bounds is durable state: every schedule that fires leaves a row in the
+#: window ledger, and nothing else caps how many a page can create.
+DEFAULT_MAX_ROWS = 1000
+
 ReadFile = Callable[[str, str], Awaitable[bytes]]
 OwnerOf = Callable[[str], str]
 
@@ -60,12 +72,14 @@ class UserScheduleSweeper:
         start: StartRun,
         owner_of: OwnerOf,
         now: Callable[[], datetime] = datetime.now,
+        max_rows: int = DEFAULT_MAX_ROWS,
     ) -> None:
         self._index = index
         self._read = read
         self._start = start
         self._owner_of = owner_of
         self._now = now
+        self._max_rows = max_rows
         self._store = SpecstarTriggerStore(spec)
 
     async def tick(self) -> int:
@@ -95,6 +109,20 @@ class UserScheduleSweeper:
             return 0
 
         rows, problems = usable_rows(raw)
+        if len(rows) + len(problems) > self._max_rows:
+            # The WHOLE file, unlike a single invalid row. A file with a thousand
+            # entries was not typed by a person, so there is no good half worth
+            # preserving — and half-processing would leave a durable ledger row
+            # for every one it got through, which is the thing this bounds.
+            logger.error(
+                "user schedules: %s %s declares %d schedules, over the limit of %d — "
+                "none will run until it is reduced",
+                item_id,
+                path,
+                len(rows) + len(problems),
+                self._max_rows,
+            )
+            return 0
         if problems:
             # Named, not raised, and PER ROW: a typo in one schedule must not
             # stop the others in the same file. Whole-file rejection is how

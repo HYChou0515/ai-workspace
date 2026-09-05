@@ -237,6 +237,8 @@ def main() -> None:
             # The deploy's outbound channel for notifications. Empty ⇒ in-app
             # only, which is where they have always been.
             notification_channel=get_notification_channel(settings.server.notification_channel),
+            # A runaway guard on how many schedules one page may declare.
+            max_page_schedules=settings.server.max_page_schedules,
             # #750: the deploy's own credential->variable implementations.
             # Empty is the ordinary case — no buttons, and every variable
             # still typeable by hand.

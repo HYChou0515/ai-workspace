@@ -34,6 +34,7 @@ from ..filestore.blob_gc import register_gc_lease, run_blob_gc
 from ..health.service import HealthService
 from ..kernels import KernelService
 from ..observability.boot import boot_step
+from ..workflow.user_schedule_sweep import UserScheduleSweeper
 from . import perf_trace
 from .notification_delivery import INotificationChannel, deliver_pending
 from .registry import InvestigationRegistry
@@ -98,6 +99,7 @@ def build_lifespan(
     gc_t1: str,
     gc_t2: str,
     trigger_check_interval: timedelta | None = None,
+    user_schedule_sweeper: UserScheduleSweeper | None = None,
     notification_channel: INotificationChannel | None = None,
     notification_delivery_interval: timedelta = _NOTIFY_DELIVERY_INTERVAL,
     offhours: OffHoursSettings | None = None,
@@ -348,6 +350,22 @@ def build_lifespan(
         except asyncio.CancelledError:
             return
 
+    async def user_schedule_loop() -> None:
+        """Fire the schedules pages declared, on the trigger sweep's cadence."""
+        assert user_schedule_sweeper is not None and trigger_check_interval is not None
+        tick = user_schedule_sweeper.tick
+        try:
+            while True:
+                await asyncio.sleep(trigger_check_interval.total_seconds())
+                # One bad pass must not end the loop. The sweeper is already
+                # per-item resilient inside; this is the backstop for anything
+                # that escapes it, so a single malformed page cannot stop every
+                # schedule in the deployment.
+                with contextlib.suppress(Exception):
+                    await tick()
+        except asyncio.CancelledError:
+            return
+
     async def notification_delivery_sweeper() -> None:
         """Hand pending notifications to the deploy's outbound channel.
 
@@ -523,6 +541,14 @@ def build_lifespan(
             register_stretch_claims(spec)
             bg.append(asyncio.create_task(goal_offhours_sweeper(app)))
             logger.debug("lifespan: goal off-hours sweeper enabled")
+        if user_schedule_sweeper is not None and trigger_check_interval is not None:
+            # #WUI P15: page-declared schedules, on the SAME cadence as the
+            # engineer-authored triggers and behind the same switch. One knob for
+            # "does this deploy run scheduled work at all" rather than two that
+            # can disagree — and a deploy with triggers off gets no surprise
+            # background loop from a page.
+            bg.append(asyncio.create_task(user_schedule_loop()))
+
         if notification_channel is not None:
             # Only when a deploy named one. Without a channel there is nowhere to
             # deliver, and the loop would be a timer that wakes forever to do

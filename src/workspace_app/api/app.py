@@ -61,6 +61,7 @@ from ..workflow.discovery import load_run_callable
 from ..workflow.orchestrator import (
     WorkflowOrchestrator,
 )
+from ..workflow.user_schedule_sweep import DEFAULT_MAX_ROWS, UserScheduleSweeper
 from . import perf_trace
 from .activity import ActivityLog
 from .agent_progress import progress_line
@@ -283,6 +284,9 @@ def create_app(
     # A deploy's outbound notification channel (`server.notification_channel`).
     # None ⇒ notifications stay in-app, exactly as before this seam existed.
     notification_channel: INotificationChannel | None = None,
+    # Most schedules ONE PAGE may declare (`server.max_page_schedules`). A
+    # runaway guard, not a policy limit — see the sweeper's constant.
+    max_page_schedules: int = DEFAULT_MAX_ROWS,
     # #750: the deploy's credential->variable implementations. Empty is the
     # ordinary case — no buttons, and every variable still typeable by hand.
     # __main__ passes factories.get_env_providers(settings.server.env_providers).
@@ -1032,6 +1036,36 @@ def create_app(
             enforced=await sandbox.effective_limits(SandboxSpec()),
         )
 
+    def _owner_of_item(item_id: str) -> str:
+        """The identity a page's scheduled run acts as.
+
+        The item's OWNER, not whoever last edited the schedules file: a
+        scheduled run has no request, so there is no personal credential to
+        inherit, and the item is already the boundary its tools authenticate
+        with. Empty when the item has no owner on record — `orchestrator.start`
+        refuses that rather than falling back to a system identity, which is the
+        behaviour we want and not one to paper over here.
+        """
+        return _owner_of(item_id) or ""
+
+    async def _start_page_schedule(
+        *, item_id: str, workflow_id: str, acting_user: str, payload: dict[str, Any]
+    ) -> str | None:
+        """Launch one page-declared schedule.
+
+        Resolved at CALL time on purpose: the orchestrator is constructed later
+        than this, and a closure reading it when the sweep fires is the same
+        deferred wiring `entity_write_sink` uses.
+        """
+        return await workflow_orchestrator.start(
+            slug=locator.slug_of(item_id) or "",
+            item_id=item_id,
+            profile=locator.profile_of(item_id),
+            captured_user=acting_user,
+            workflow_id=workflow_id,
+            payload=payload,
+        )
+
     lifespan = build_lifespan(
         registry=registry,
         spec=spec,
@@ -1050,6 +1084,17 @@ def create_app(
         gc_t1=gc_t1,
         gc_t2=gc_t2,
         trigger_check_interval=trigger_check_interval,
+        # #WUI P15: fires the schedules pages declared. Built here so it shares
+        # the one `spec`, the one index and the item-owner lookup the rest of the
+        # app already resolved.
+        user_schedule_sweeper=UserScheduleSweeper(
+            spec=spec,
+            index=schedule_index,
+            read=files.read,
+            start=_start_page_schedule,
+            owner_of=_owner_of_item,
+            max_rows=max_page_schedules,
+        ),
         notification_channel=notification_channel,
         offhours=goal_offhours,  # #615: the after-hours goal sweeper
         cluster_sweep_seconds=kb_cluster_sweep_seconds,

@@ -93,6 +93,15 @@ class ServerSettings:
     # job that ends in a send would count the relay's failure as its own.
     notification_channel: str = ""
 
+    # Most schedules ONE PAGE may declare in its `schedules.json`. A runaway
+    # guard, not a policy limit: the default is far above any real use, so
+    # hitting it means the page has a bug.
+    #
+    # ⚠️ Not setting it changes nothing — 1000 is the default in code too. What
+    # it bounds is durable state: every schedule that fires leaves a row in the
+    # window ledger, and nothing else caps how many a page can create.
+    max_page_schedules: int = 1000
+
     # #750 — dotted paths to `IEnvProvider` implementations: the deploy's own
     # code for "log in, get the variables", so a person who knows their account
     # and password can fill a variable that is really a token.
