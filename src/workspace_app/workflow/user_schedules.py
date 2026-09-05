@@ -176,6 +176,37 @@ def _looks_like_time(at: object) -> bool:
     return 0 <= int(hh) <= 23 and 0 <= int(mm) <= 59
 
 
+def usable_rows(raw: str) -> tuple[list[UserSchedule], list[str]]:
+    """The rows that can be run, and what is wrong with the rest.
+
+    Per ROW, not per file. A file that will not parse at all yields nothing —
+    there is nothing to read. But once it parses, one mistyped row must cost
+    that row only: whole-file rejection means a person edits one schedule,
+    fat-fingers it, and the OTHER report they rely on stops arriving too, with
+    nothing anywhere saying why.
+    """
+    try:
+        doc = json.loads(raw)
+        rows = doc["schedules"] if isinstance(doc, dict) else None
+        if not isinstance(rows, list):
+            raise ValueError("no `schedules` list")
+    except Exception:
+        return [], validate_user_schedules(raw)
+
+    good: list[UserSchedule] = []
+    problems: list[str] = []
+    for i, row in enumerate(rows):
+        one = json.dumps({"schedules": [row]})
+        bad = validate_user_schedules(one)
+        if bad:
+            # Renumbered to this row's real position, so the message points at
+            # the line the author has to fix rather than always at zero.
+            problems.extend(p.replace("schedules[0]", f"schedules[{i}]") for p in bad)
+            continue
+        good.extend(parse_user_schedules(one))
+    return good, problems
+
+
 def trigger_id_for(item_id: str, folder: str, row: UserSchedule) -> str:
     """This row's lease key — derived from WHAT it runs, WITH what, and WHEN.
 
