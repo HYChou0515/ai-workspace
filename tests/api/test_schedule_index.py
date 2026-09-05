@@ -30,6 +30,8 @@ from workspace_app.api.schedule_index import (
 )
 from workspace_app.resources import make_spec
 
+from .conftest import Harness
+
 
 @pytest.fixture
 def index() -> ScheduleIndex:
@@ -179,3 +181,125 @@ def test_a_failing_hook_never_fails_the_write():
     asyncio.run(files.write("i1", "/scrap-review/schedules.json", b"{}"))  # must not raise
 
     assert asyncio.run(files.read("i1", "/scrap-review/schedules.json")) == b"{}"
+
+
+# ── every path that lands bytes, not just the one we happened to hook ────────
+
+
+def _methods_that_land_bytes() -> set[str]:
+    """Derived from the facade's source, never typed out here.
+
+    A hand-written list of write paths IS the bug this guards against. The hook
+    went into `_write_unchecked` in the belief that it was "the chokepoint every
+    write shares"; `write_from_path` — the streaming upload the file PUT route
+    uses, which is the path a WUI page's own `writeFile` takes — keeps its own
+    copy of that tail and never called it. So the index never saw the file, and
+    the schedules never fired, in silence.
+
+    A method lands bytes if it names a byte-writing primitive itself, or defers
+    to the one private tail that does. Add a sixth write path and this set grows
+    on its own, and the test below fails until that path is covered.
+    """
+    import ast
+    import inspect
+
+    from workspace_app.files import facade
+
+    tree = ast.parse(inspect.getsource(facade))
+    cls = next(
+        n for n in ast.walk(tree) if isinstance(n, ast.ClassDef) and n.name == "WorkspaceFiles"
+    )
+    primitives = {"upload", "upload_file", "write", "write_from_path", "_write_unchecked"}
+    out: set[str] = set()
+    for node in cls.body:
+        if not isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef):
+            continue
+        for sub in ast.walk(node):
+            if not isinstance(sub, ast.Call):
+                continue
+            fn = sub.func
+            if isinstance(fn, ast.Attribute) and fn.attr in primitives:
+                out.add(node.name)
+            # `native(...)` — the filestore's own create-exclusive, reached by
+            # `getattr`, so it is invisible as an attribute call.
+            if isinstance(fn, ast.Name) and fn.id == "native":
+                out.add(node.name)
+    return {n for n in out if not n.startswith("_")}
+
+
+def test_every_public_write_path_feeds_the_index() -> None:
+    """`schedule_index.py` states the invariant "it may never miss one that
+    exists". That is a claim about EVERY way bytes reach a path, and the facade
+    has several — a page's PUT, the agent's tool, a copy, a move, a record.
+
+    Each one is driven here rather than trusting a shared tail, because the tail
+    is precisely what was not shared.
+    """
+    import asyncio
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+
+    from workspace_app.files import WorkspaceFiles
+    from workspace_app.filestore.memory import MemoryFileStore
+
+    def _drive(name: str) -> list[str]:
+        seen: list[str] = []
+        files = WorkspaceFiles(MemoryFileStore(), on_write=lambda _w, p: seen.append(p))
+        target = f"/scrap-review/{SCHEDULES_FILE}"
+        if name == "write":
+            asyncio.run(files.write("i1", target, b"[]"))
+        elif name == "create_exclusive":
+            asyncio.run(files.create_exclusive("i1", target, b"[]"))
+        elif name == "write_record":
+            asyncio.run(files.write_record("i1", target, b"[]"))
+        elif name == "move":
+            asyncio.run(files.write("i1", "/scrap-review/draft.json", b"[]"))
+            seen.clear()
+            asyncio.run(files.move("i1", "/scrap-review/draft.json", target))
+        elif name == "write_from_path":
+            with TemporaryDirectory() as d:
+                src = Path(d) / "staged.json"
+                src.write_bytes(b"[]")
+                asyncio.run(files.write_from_path("i1", target, src))
+        elif name == "create":
+            asyncio.run(files.create("i1", target, b"[]"))
+        elif name == "edit":
+            # An edit REPLACES the declaration: "every weekday" becomes "every
+            # day" and the platform must re-read it. A page saving through the
+            # agent's edit tool is the same event as saving through PUT.
+            asyncio.run(files.write("i1", target, b'[{"every": "weekly"}]'))
+            seen.clear()
+            asyncio.run(files.edit("i1", target, "weekly", "daily"))
+        else:
+            return [f"UNCOVERED:{name}"]
+        return seen
+
+    landing = _methods_that_land_bytes()
+    assert landing, "the derivation found nothing — it is measuring nothing"
+
+    covered = {name: _drive(name) for name in sorted(landing)}
+    missed = [n for n, seen in covered.items() if SCHEDULES_FILE not in str(seen)]
+
+    assert not missed, f"these land bytes without telling the index: {missed}"
+
+
+def test_a_page_saving_its_schedules_through_the_file_route_is_indexed(
+    harness: Harness,
+) -> None:
+    """Through the entrance a PAGE actually uses, end to end.
+
+    The WUI bridge's `writeFile` is a PUT to the file route, which streams the
+    body to a staging file and calls `write_from_path`. This module's own
+    docstring named that route from the first commit — and every test in it went
+    through `files.write` instead, which is why the miss survived.
+    """
+    # Inside the lifespan: the index model is registered there (post-`spec.apply`,
+    # so specstar never emits bare CRUD routes for platform bookkeeping), and a
+    # client that never starts it would measure a world that does not ship.
+    with harness.client:
+        r = harness.client.put(
+            harness.wpath(f"/files/scrap-review/{SCHEDULES_FILE}"), content=b"[]"
+        )
+
+    assert r.status_code < 300, r.text
+    assert ScheduleIndex(harness.spec).items() == [harness.iid]
