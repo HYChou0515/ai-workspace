@@ -388,6 +388,53 @@ def test_a_blip_reading_the_file_is_not_a_deletion():
     assert index.items() == [ITEM], "a transient read error unregistered the schedule"
 
 
+def test_a_row_naming_a_workflow_this_app_does_not_offer_is_named_and_skipped():
+    """`run` has a ceiling — the workflows this app offers — and the interactive
+    entrance refuses an unknown one with a sentence saying which. The scheduled
+    entrance checked nothing, so a typo reached `orchestrator.start`, failed an
+    assertion deep inside, and arrived as a generic "could not start" in a log
+    the page's author never sees.
+
+    Per ROW, like every other lint here: one mistyped id must not stop the other
+    schedules in the same file.
+    """
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    started = _Started()
+    files = _Files(
+        **{f"{ITEM}{PATH}": _file({**DAILY, "run": "typo-report"}, {**NOON, "at": "09:00"})}
+    )
+    sweeper = UserScheduleSweeper(
+        spec=spec,
+        index=ScheduleIndex(spec),
+        read=files.read,
+        start=started,
+        owner_of=lambda _item: "alice",
+        now=lambda: datetime(2026, 9, 5, 9, 30),
+        workflows_for=lambda _item: ["build-report"],
+    )
+
+    asyncio.run(sweeper.tick())
+
+    assert [r[1] for r in started.runs] == ["build-report"], (
+        "the unknown workflow was started, or it took the good row down with it"
+    )
+
+
+def test_without_a_ceiling_every_row_still_runs():
+    """The control. A deploy that wires no resolver must behave as it does now,
+    not refuse everything — the same "unset means unrestricted" rule the tool
+    ceiling keeps."""
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    started = _Started()
+    files = _Files(**{f"{ITEM}{PATH}": _file(DAILY)})
+
+    asyncio.run(_sweeper(spec, files, started, datetime(2026, 9, 5, 9, 30)).tick())
+
+    assert [r[1] for r in started.runs] == ["build-report"]
+
+
 def test_a_window_whose_run_never_started_is_tried_again():
     """The claim is taken BEFORE the run is asked for, because that is what makes
     two pods produce one run. So when the start then fails, the window has been

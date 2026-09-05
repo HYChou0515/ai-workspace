@@ -1105,6 +1105,13 @@ def create_app(
             read=filestore.read,
             start=_start_page_schedule,
             owner_of=_owner_of_item,
+            # The SAME ceiling the page's own `startRun` is held to. Without it
+            # the two entrances disagreed about what a page may start, and the
+            # scheduled one said nothing at all when the answer was no.
+            # Through a lambda because the resolver is defined further down and
+            # this is built here — resolved when the sweep fires, the same
+            # deferred wiring `_start_page_schedule` explains above.
+            workflows_for=lambda item_id: _workflows_for_item(item_id),
             max_rows=max_page_schedules,
         ),
         notification_channel=notification_channel,

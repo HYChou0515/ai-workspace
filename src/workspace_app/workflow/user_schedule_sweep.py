@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -65,6 +65,10 @@ MAX_START_ATTEMPTS = 3
 
 ReadFile = Callable[[str, str], Awaitable[bytes]]
 OwnerOf = Callable[[str], str]
+#: Which workflows this app offers the given item, or None for "unrestricted".
+#: Unset means the deploy wired no resolver and behaves as it did before this
+#: existed — the same rule the tool ceiling keeps, never "refuse everything".
+WorkflowsFor = Callable[[str], Sequence[str] | None]
 
 
 def _utc_now() -> datetime:
@@ -116,6 +120,7 @@ class UserScheduleSweeper:
         read: ReadFile,
         start: StartRun,
         owner_of: OwnerOf,
+        workflows_for: WorkflowsFor | None = None,
         now: Callable[[], datetime] = _utc_now,
         max_rows: int = DEFAULT_MAX_ROWS,
     ) -> None:
@@ -123,6 +128,7 @@ class UserScheduleSweeper:
         self._read = read
         self._start = start
         self._owner_of = owner_of
+        self._workflows_for = workflows_for
         self._now = now
         self._max_rows = max_rows
         self._store = SpecstarTriggerStore(spec)
@@ -199,9 +205,31 @@ class UserScheduleSweeper:
 
         folder = path.rsplit("/", 1)[0]
         owner = await asyncio.to_thread(self._owner_of, item_id)
+        # The ceiling `run` has to stay inside. Checked HERE and per ROW, the
+        # same shape as every other lint in this file: the interactive entrance
+        # refuses an unknown workflow with a sentence naming it, and the
+        # scheduled one checked nothing — so a typo reached `orchestrator.start`,
+        # failed an assertion deep inside, and surfaced as a generic "could not
+        # start" in a log the page's author never reads. One mistyped id must
+        # not stop the other schedules in the same file.
+        offered = (
+            None
+            if self._workflows_for is None
+            else set(await asyncio.to_thread(self._workflows_for, item_id) or ())
+        )
         now_utc = self._now()
         fired = 0
         for row in rows:
+            if offered is not None and row.run not in offered:
+                logger.warning(
+                    "user schedules: %s %s wants %r, which this app does not offer "
+                    "(it offers %s) — that row will not run",
+                    item_id,
+                    path,
+                    row.run,
+                    ", ".join(sorted(offered)) or "nothing",
+                )
+                continue
             trigger_id = trigger_id_for(item_id, folder, row)
             schedule = row.as_schedule()
             # PER ROW, in the zone that row named. `tz` used to be accepted,

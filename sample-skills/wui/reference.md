@@ -245,7 +245,7 @@ await workspace.writeFile("schedules.json", JSON.stringify({
 | `dow` | `mon`…`sun`, for weekly |
 | `dom` | 1–28, for monthly |
 | `tz` | an IANA zone (`"Asia/Taipei"`); **defaults to UTC** |
-| `run` | a workflow id — the same ids `workflows:` lists |
+| `run` | a workflow id this app offers — the same ones `workflows:` may list. An id it does not offer is **skipped with a log line naming what is on offer**, and the other rows still run |
 | `with` | the payload, handed to the workflow exactly as `startRun` does |
 
 `tz` is optional and defaults to **UTC**, not to wherever the server happens to
