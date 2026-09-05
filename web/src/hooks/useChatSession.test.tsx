@@ -352,3 +352,62 @@ describe("the sender's own message", () => {
     expect(result.current.log.streaming).toBe(true);
   });
 });
+
+describe("stopping", () => {
+  // Stop used to flip `streaming` to false on the spot. That was a claim the
+  // backend had not made: teardown lags, and for as long as it did the composer
+  // said the turn had ended while it was still running — and, worse, unlocked
+  // itself, so the next message queued behind a turn nobody had actually
+  // stopped. `stopping` is the state that was missing: the request is out, the
+  // turn has not ended, and neither button should pretend otherwise.
+  it("stays streaming until the turn actually ends", async () => {
+    const t = fakeTransport();
+    const { result } = render(t);
+    await waitFor(() => expect(result.current.log.entries).toHaveLength(1));
+
+    act(() => {
+      void result.current.send("hello");
+    });
+    await waitFor(() => expect(result.current.log.streaming).toBe(true));
+
+    act(() => result.current.cancel());
+
+    expect(result.current.log.stopping).toBe(true);
+    // The turn has NOT ended — only the request to end it has been sent.
+    expect(result.current.log.streaming).toBe(true);
+  });
+
+  it("clears when the turn's terminal event arrives", async () => {
+    let push: ((ev: AgentEvent) => void) | null = null;
+    const t = fakeTransport({
+      subscribe: async function* () {
+        const queue: AgentEvent[] = [];
+        let wake: (() => void) | null = null;
+        push = (ev) => {
+          queue.push(ev);
+          wake?.();
+        };
+        while (true) {
+          if (queue.length) {
+            yield queue.shift() as AgentEvent;
+            continue;
+          }
+          await new Promise<void>((r) => (wake = r));
+        }
+      },
+    });
+    const { result } = render(t);
+    await waitFor(() => expect(push).not.toBeNull());
+
+    act(() => {
+      void result.current.send("hello");
+    });
+    act(() => result.current.cancel());
+    await waitFor(() => expect(result.current.log.stopping).toBe(true));
+
+    act(() => push?.({ type: "run_cancelled" } as AgentEvent));
+
+    await waitFor(() => expect(result.current.log.stopping).toBe(false));
+    expect(result.current.log.streaming).toBe(false);
+  });
+});

@@ -648,7 +648,12 @@ export function useChatSession(
         errorFromTurn: false,
       }));
     });
-    setLog((prev) => ({ ...prev, streaming: false }));
+    // NOT `streaming: false`. That was a claim the backend had not made —
+    // teardown lags — and for as long as it lagged the composer said the turn
+    // was over while it ran on, and unlocked itself, so the next message queued
+    // behind a turn nobody had actually stopped. `stopping` says the true thing
+    // (asked, not yet ended) and the terminal event is what ends it.
+    setLog((prev) => ({ ...prev, stopping: true }));
   }, [transport]);
 
   const undo = useCallback(

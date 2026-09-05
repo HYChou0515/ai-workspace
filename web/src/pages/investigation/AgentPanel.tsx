@@ -568,13 +568,17 @@ export function AgentPanel({
 
   const submit = () => {
     const text = draft.trim();
-    if (log.streaming && !othersTurn) {
-      // Pressing Enter mid-turn used to do NOTHING — the textarea stays enabled,
-      // so the user types a whole message, hits Enter, and gets no reaction at
-      // all. During any of the stuck states that is indistinguishable from the
-      // app being dead. Keep the draft (retyping it is the insult on top) and say
-      // why.
-      setComposerHint("回覆還在進行中。等它完成，或按 Stop 中止後再送出。");
+    if (log.stopping) {
+      // The only refusal left. Sending now would queue behind a turn nobody has
+      // actually stopped yet — the arrangement that had a message vanish into a
+      // queue while the previous answer kept streaming, which reads as the whole
+      // system being broken. Keep the draft: retyping it is the insult on top.
+      //
+      // Your own RUNNING turn is no longer refused. The backend serializes
+      // messages and does not cancel on them (#43), so the message just queues —
+      // and refusing your own turn while queueing behind everyone else's is what
+      // made Stop-then-send the only way through.
+      setComposerHint("正在停止這一輪…停下之後再送出。");
       return;
     }
     setComposerHint(null);
@@ -1292,51 +1296,83 @@ export function AgentPanel({
           >
             {modCombo("↵")}
           </span>
-          {log.streaming ? (
-            <button
-              type="button"
-              onClick={() => {
-                cancel();
-                // Stop's ENTIRE feedback used to be the spinner disappearing,
-                // which reads the same as the turn finishing on its own. So the
-                // click still says something — but about the CLICK, not the
-                // outcome: the transcript already gets a 「已取消。」 banner when
-                // the turn actually stops, and saying it here too is how one
-                // press of Stop came to print the same news twice.
-                setComposerHint("正在停止這一輪…");
-              }}
-              style={{
-                padding: "6px 14px",
-                borderRadius: "var(--radius-btn)",
-                border: "1px solid var(--err)",
-                color: "var(--err)",
-                fontSize: pxToRem(12),
-              }}
-            >
-              Stop
-            </button>
-          ) : (
-            (() => {
-              const summoning = mentions.length > 0;
-              const enabled = !readOnly && (summoning || draft.trim().length > 0);
-              return (
+          {(() => {
+            // TWO buttons, both always here. They used to share one slot, one
+            // size and one position, swapped on `streaming` — so the control
+            // changed meaning under the pointer: you aimed at Send, the turn was
+            // still running, and you stopped it; `cancel()` flipped `streaming`
+            // at once and put Send back under your finger for the second click.
+            // "It stopped the answer and then sent my message" is that, exactly.
+            //
+            // Each is disabled when it would not be honest, which is the other
+            // half: a disabled button says what will happen BEFORE the click,
+            // where the old refusal only said it after.
+            const summoning = mentions.length > 0;
+            // Nothing to stop with no turn running — and nothing left to stop
+            // once a Stop is already in flight.
+            const canStop = log.streaming && !log.stopping;
+            // Sending is fine DURING your own turn: the backend serializes
+            // messages, it does not cancel on them (#43), so the message simply
+            // queues. Refusing your own turn while queueing behind everyone
+            // else's is what made Stop-then-send the only way through. Not
+            // while stopping, though: that would queue behind a turn nobody has
+            // actually stopped yet.
+            const canSend =
+              !readOnly && !log.stopping && (summoning || draft.trim().length > 0);
+            const iconButton = {
+              width: 32,
+              height: 32,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              borderRadius: "var(--radius-btn)",
+            } as const;
+            return (
+              <>
                 <button
-                  type="submit"
-                  disabled={!enabled}
+                  type="button"
+                  // Icon-only, so the name has to come from here: without it the
+                  // button reads as "button" to a screen reader, and `title`
+                  // alone does not give it one.
+                  aria-label="Stop"
+                  title="Stop"
+                  disabled={!canStop}
+                  onClick={() => {
+                    cancel();
+                    // Stop's ENTIRE feedback used to be the spinner
+                    // disappearing, which reads the same as the turn finishing
+                    // on its own. So the click still says something — but about
+                    // the CLICK, not the outcome: the transcript already gets a
+                    // 「已取消。」 banner when the turn actually stops, and saying
+                    // it here too is how one press came to print the same news
+                    // twice.
+                    setComposerHint("正在停止這一輪…");
+                  }}
                   style={{
-                    padding: "6px 14px",
-                    borderRadius: "var(--radius-btn)",
-                    background: enabled ? "var(--accent)" : "var(--paper-3)",
-                    color: enabled ? "var(--white)" : "var(--text-paper-d)",
-                    fontSize: pxToRem(12),
-                    fontWeight: 500,
+                    ...iconButton,
+                    border: "1px solid var(--err)",
+                    color: canStop ? "var(--err)" : "var(--text-paper-d)",
+                    borderColor: canStop ? "var(--err)" : "var(--paper-3)",
                   }}
                 >
-                  {summoning ? "Notify" : "Send"}
+                  <Icon name="x" size={14} />
                 </button>
-              );
-            })()
-          )}
+                <button
+                  type="submit"
+                  aria-label={summoning ? "Notify" : "Send"}
+                  title={summoning ? "Notify" : "Send"}
+                  disabled={!canSend}
+                  style={{
+                    ...iconButton,
+                    background: canSend ? "var(--accent)" : "var(--paper-3)",
+                    color: canSend ? "var(--white)" : "var(--text-paper-d)",
+                  }}
+                >
+                  <Icon name={summoning ? "bell" : "arrow_r"} size={14} />
+                </button>
+              </>
+            );
+          })()}
         </div>
         </div>
       </form>

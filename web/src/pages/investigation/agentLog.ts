@@ -145,6 +145,15 @@ export type AgentLog = {
    * same endpoint. Ephemeral, like `restore` — it explains a silence, so it is
    * cleared the moment real output arrives. */
   rateLimited: { seconds: number } | null;
+  /** Stop has been asked for and the turn has not ended yet.
+   *
+   * Stop used to flip `streaming` straight to false, which was a claim the
+   * backend had not made: teardown lags, and for as long as it did the composer
+   * said the turn was over while it ran on — and unlocked itself, so the next
+   * message queued behind a turn nobody had actually stopped. The truthful
+   * state is neither "running" nor "idle", and this is it. Ephemeral like
+   * `restore` and `compacting`, and cleared by the same terminal events. */
+  stopping: boolean;
 };
 
 export const EMPTY_LOG: AgentLog = {
@@ -159,7 +168,29 @@ export const EMPTY_LOG: AgentLog = {
   restore: null,
   compacting: null,
   rateLimited: null,
+  stopping: false,
 };
+
+/** What every terminal event resets, in one place.
+ *
+ * An end is an end: no waiting state may outlive the turn that raised it. Each
+ * of these outranks something below it in `TurnStatus`, so a stale one does not
+ * merely linger, it SHADOWS — the rate-limit hold survived its own turn and,
+ * because compaction runs before the next one, told the user the system was
+ * waiting on a 429 while it was rewriting their thread.
+ *
+ * Shared rather than repeated, because it was repeated: three terminals carried
+ * the full list and `max_turns_exceeded` carried two of it, with nothing saying
+ * why. A rule written out four times is a rule that will hold in three. */
+const TURN_OVER = {
+  streaming: false,
+  streamingBy: null,
+  compacting: null,
+  rateLimited: null,
+  restore: null,
+  failover: null,
+  stopping: false,
+} as const;
 
 /** Put the sender's own words on screen the moment they send them, and lock the
  * composer, without waiting to hear back.
@@ -339,6 +370,9 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
     restore: null,
     compacting: null,
     rateLimited: null,
+    // A snapshot holds messages, not intentions: it cannot know a Stop was
+    // asked for. `reconcileSnapshot` carries the live one over the top.
+    stopping: false,
   };
 }
 
@@ -455,6 +489,12 @@ export function reconcileSnapshot(
     // …and with it, who owns it — or a re-hydrate would hand a send failure to
     // the turn, which then retracts it on its next token.
     errorFromTurn: prev.error !== null ? prev.errorFromTurn : snap.errorFromTurn,
+    // A re-hydrate must not quietly cancel a Stop that is still in flight — the
+    // store-poll runs every few seconds, so without this the buttons would
+    // unlock themselves halfway through stopping. Carried only while the
+    // snapshot still shows a turn running: once the reply has landed the Stop
+    // is over, whatever this viewer last believed.
+    stopping: snap.streaming && prev.stopping,
   };
 }
 
@@ -834,7 +874,12 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
     case "max_turns_exceeded": {
       const text = translate(initialLocale(), "banner.maxTurns", { turns: ev.turns });
       entries.push({ kind: "banner", at: now, text });
-      return { ...log, entries, streaming: false, streamingBy: null, error: text };
+      // Was the one terminal that cleared only `streaming`, with nothing saying
+      // why. Every waiting state it left standing outranks something in
+      // `TurnStatus`, so a turn that ran out of steps mid-compaction went on
+      // claiming to be summarising. Sharing the reset is what stops the next
+      // ephemeral state being remembered in three places and forgotten in one.
+      return { ...log, entries, ...TURN_OVER, error: text };
     }
 
     case "run_cancelled":
@@ -848,38 +893,23 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
       return {
         ...log,
         entries,
-        streaming: false,
-        streamingBy: null,
-        compacting: null,
-        rateLimited: null,
-        restore: null,
-        failover: null,
+        ...TURN_OVER,
       };
 
     case "error":
       return {
         ...log,
         entries,
-        streaming: false,
-        streamingBy: null,
+        ...TURN_OVER,
         error: ev.message,
         errorFromTurn: true,
-        compacting: null,
-        rateLimited: null,
-        restore: null,
-        failover: null,
       };
 
     case "done":
       return {
         ...log,
         entries,
-        streaming: false,
-        streamingBy: null,
-        compacting: null,
-        rateLimited: null,
-        restore: null,
-        failover: null,
+        ...TURN_OVER,
       };
 
     case "user_message": {

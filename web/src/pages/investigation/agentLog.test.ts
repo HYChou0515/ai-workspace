@@ -1361,3 +1361,23 @@ describe("the sender sees their own words at once", () => {
     expect(sent.streaming).toBe(true);
   });
 });
+
+describe("an end clears the stopping state", () => {
+  // Straight at the fold, on purpose. Through the hook a re-hydrate arrives on
+  // the heels of every terminal and clears `stopping` on its own, so a reducer
+  // that forgot to would still look right — and a viewer whose store-poll is
+  // quiet (the cross-pod case the poll exists for) would sit with both buttons
+  // disabled and no way back.
+  const stopping = { ...EMPTY_LOG, streaming: true, stopping: true };
+
+  it.each([
+    ["done", { type: "done" }],
+    ["error", { type: "error", message: "boom" }],
+    ["run_cancelled", { type: "run_cancelled" }],
+    ["max_turns_exceeded", { type: "max_turns_exceeded", turns: 5 }],
+  ])("%s ends it", (_name, ev) => {
+    const after = reduceAgent(stopping, ev as never);
+    expect(after.stopping).toBe(false);
+    expect(after.streaming).toBe(false);
+  });
+});

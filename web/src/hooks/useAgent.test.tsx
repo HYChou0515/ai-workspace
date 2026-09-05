@@ -19,7 +19,7 @@ const renderHook = <T,>(cb: () => T) => rtlRenderHook(cb, { wrapper: Wrap });
 describe("useAgent — stop / cancel (#49)", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it("Stop flips the button back immediately, even if the stream is slow to tear down", async () => {
+  it("Stop registers immediately, even if the stream is slow to tear down", async () => {
     vi.spyOn(api, "getCurrentUser").mockResolvedValue("tester");
     vi.spyOn(api, "getConversation").mockReturnValue(new Promise(() => {}));
     const cancelSpy = vi.spyOn(api, "cancelMessage").mockResolvedValue();
@@ -42,11 +42,17 @@ describe("useAgent — stop / cancel (#49)", () => {
     });
     await waitFor(() => expect(result.current.log.streaming).toBe(true));
 
-    // Hit Stop — the button must drop out of streaming synchronously, not
-    // wait for the (hung) stream to unwind.
+    // Hit Stop. The press must register synchronously rather than waiting for
+    // the (hung) stream to unwind — but as `stopping`, NOT by declaring the
+    // turn over. It used to flip `streaming` straight to false, which said
+    // something the backend had not: teardown lags, and the composer unlocked
+    // itself in the meantime, so the next message queued behind a turn nobody
+    // had actually stopped. The immediacy the #49 fix was about is kept; the
+    // claim it made is not.
     act(() => result.current.cancel());
 
-    expect(result.current.log.streaming).toBe(false);
+    expect(result.current.log.stopping).toBe(true);
+    expect(result.current.log.streaming).toBe(true);
     expect(cancelSpy).toHaveBeenCalledWith("rca", "inv-1");
   });
 
