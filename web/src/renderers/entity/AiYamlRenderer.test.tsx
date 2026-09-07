@@ -21,6 +21,7 @@ const mock = vi.hoisted(() => ({
 vi.mock("../../api/entities", () => ({ entitiesApi: mock }));
 
 import { AiYamlRenderer } from "./AiYamlRenderer";
+import { parseViewSpec } from "./shared";
 
 const ISSUE_TYPE = {
   name: "issue",
@@ -101,7 +102,7 @@ describe("AiYamlRenderer", () => {
       invalid: [],
     });
 
-    renderView("/views/workload.ai.yaml", GANTT);
+    renderView("/views/gantt.ai.yaml", GANTT);
 
     fireEvent.doubleClick(await screen.findByTestId("bar-4"));
 
@@ -180,6 +181,46 @@ describe("AiYamlRenderer", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save to view" }));
     await waitFor(() => expect(writeFile).toHaveBeenCalled());
     expect(writeFile.mock.calls[0]?.[1]).toMatch(/group_by:\s*status/);
+  });
+
+  it("writes the working day into the view file straight from the gear (#785)", async () => {
+    // A control that changes nothing on disk is the failure this guards. The
+    // gantt gear deliberately has no "Save to view" — it edits the text
+    // comment-safely and writes through at once — so the assertion is that the
+    // file it writes PARSES back to the window that was asked for, not merely
+    // that it contains the right characters.
+    mock.catalog.mockResolvedValue({ types: [ISSUE_TYPE], diagnostics: [] });
+    mock.list.mockResolvedValue({ entities: [], invalid: [] });
+    const path = "/views/gantt.ai.yaml";
+    const text = "view: gantt\nentity: issue\nspan: span\nlabel: title\nskip_weekends: true\n";
+    const store = new FileBufferStore({
+      readFile: vi.fn(async () => ({ kind: "text" as const, path, size: text.length, text, encoding: "utf-8" as const })),
+      writeFile: vi.fn(async () => {}),
+    });
+    store.ensureLoaded(path);
+    const writeFile = vi.fn(async (_path: string, _body: string | Blob | ArrayBuffer) => {});
+    const svc = { ...investigationFileService("pm", "item1"), writeFile };
+    render(
+      <QueryWrap>
+        <WorkspaceSlugProvider value="pm">
+          <FileServiceProvider value={svc}>
+            <EditModeProvider>
+              <FileBufferProvider store={store}>
+                <AiYamlRenderer path={path} />
+              </FileBufferProvider>
+            </EditModeProvider>
+          </FileServiceProvider>
+        </WorkspaceSlugProvider>
+      </QueryWrap>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "view settings" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Skip non-working hours" }));
+
+    await waitFor(() => expect(writeFile).toHaveBeenCalled());
+    const written = String(writeFile.mock.calls[0]?.[1]);
+    expect(parseViewSpec(written)?.work_hours).toEqual({ from: 7, to: 21 });
+    expect(parseViewSpec(written)?.skip_weekends).toBe(true); // the rest of the file survives
   });
 
   it("resets the group-by choice when the open file changes (no cross-file bleed, #1/#2)", async () => {

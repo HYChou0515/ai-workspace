@@ -38,6 +38,7 @@ class MockSandbox:
         self._memory_bytes = memory_bytes
         # One entry per `exec`, in call order — what the caller asked to add.
         self.exec_envs: list[dict[str, str]] = []
+        self.exec_timeouts: list[float | None] = []
         self._fs: dict[str, dict[str, bytes]] = {}
         # Directories, tracked explicitly rather than implied by the file paths:
         # an empty one implies nothing, and it is exactly the case that broke.
@@ -64,7 +65,7 @@ class MockSandbox:
             memory_bytes=self._memory_bytes if spec.memory_bytes is None else spec.memory_bytes,
         )
 
-    async def create(self, spec: SandboxSpec) -> SandboxHandle:
+    async def create(self, spec: SandboxSpec, item_id: str | None = None) -> SandboxHandle:
         handle = SandboxHandle(id=str(uuid.uuid4()))
         self._fs[handle.id] = {}
         return handle
@@ -101,11 +102,13 @@ class MockSandbox:
         cmd: list[str],
         on_output: OutputSink | None = None,
         env: Mapping[str, str] | None = None,
+        exec_timeout: float | None = None,
     ) -> ExecResult:
         fs = self._require(handle)
         # Recorded, not applied: there is no process here. Swallowing it would
         # let the wire test pass while the real hop dropped it.
         self.exec_envs.append(dict(env) if env else {})
+        self.exec_timeouts.append(exec_timeout)
         result = self._exec_result(fs, cmd)
         # Stream the (whole) stdout to the sink in one shot — enough for tests
         # that assert live output is forwarded.

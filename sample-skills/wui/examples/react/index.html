@@ -3,7 +3,7 @@
   `dist/index.html` with the bundle's real paths; that output is what the
   renderer runs (see `entry:` in page.ai.yaml).
 
-  This file's `/src/main.jsx` is a dev-server path and cannot be inlined — which
+  This file's `/src/main.tsx` is a dev-server path and cannot be inlined — which
   is exactly why `entry:` has to point at the build output. Leave this one alone.
 -->
 <!doctype html>
@@ -14,6 +14,6 @@
   </head>
   <body>
     <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

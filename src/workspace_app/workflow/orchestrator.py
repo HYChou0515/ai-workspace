@@ -105,6 +105,31 @@ def _default_upload_dir(_slug: str, _profile: str) -> str:
     return "uploads"
 
 
+def _with_trigger_payload(inputs: Any, payload: dict[str, Any]) -> Any:
+    """What this run was asked for, laid over the standing default.
+
+    A run's payload — `schedules.json`'s `with:`, `startRun`'s second argument —
+    is one of the four words the declaration is made of, and it was stored on the
+    run record and read by nothing. It arrives here as INPUT, the channel every
+    workflow already reads, rather than as a second one nobody would consult.
+
+    The payload WINS: `input.json` is the profile's standing default and the
+    payload is what this particular invocation asked for. An empty payload
+    changes nothing at all — `inputs` is returned unchanged, by identity — which
+    is what keeps every existing run byte-identical.
+
+    When `input.json` holds something OTHER than an object (a list, a number)
+    and a payload is present, the payload REPLACES it: there is no sensible
+    merge between the two, and this can only happen through the two new
+    entrances, which are the ones that sent a payload on purpose.
+    """
+    if not payload:
+        return inputs
+    if not isinstance(inputs, dict):
+        return payload
+    return {**inputs, **payload}
+
+
 @dataclass
 class WorkflowOrchestrator:
     spec: SpecStar
@@ -331,6 +356,7 @@ class WorkflowOrchestrator:
         chat_id: str = "",
         origin_trigger: str = "",
         trigger_depth: int = 0,
+        payload: dict[str, Any] | None = None,
     ) -> str:
         """Create a ``WorkflowRun`` (capturing the user, §15) and kick the run off as
         a background task. ``workflow_id`` selects which of the profile's workflows to
@@ -368,6 +394,10 @@ class WorkflowOrchestrator:
                     workflow_id=workflow_id,
                     origin_trigger=origin_trigger,
                     trigger_depth=trigger_depth,
+                    # Opaque, and stored rather than interpreted: what the
+                    # declaration asked for travels with the run so a resume
+                    # after a restart still knows it.
+                    trigger_payload=dict(payload or {}),
                 )
             )
             .resource_id
@@ -487,11 +517,16 @@ class WorkflowOrchestrator:
     ) -> None:
         key = chat_id or item_id
         upload_dir = self.load_upload_dir(slug, profile)
+        # (the payload is read back off the run record rather than threaded in as
+        # an argument, so a RESUME after a restart gets it too — which is what
+        # storing it on the record was for.)
         wf = self._build_handle(
             run_id, item_id, captured_user, manifest, key, workflow_id, upload_dir
         )
         profile_run = await self._resolve_run(slug, profile, workflow_id, item_id)
-        inputs = await resolve_inputs(wf, manifest)
+        inputs = _with_trigger_payload(
+            await resolve_inputs(wf, manifest), self._get(run_id).trigger_payload
+        )
         self._step_counts[run_id] = 0
         coro = run_workflow(
             self.spec,

@@ -31,6 +31,11 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
+          # Same version the sandbox-host image pins (#775). uv's version decides
+          # how a user's `uv.lock` is read, so a CI that floats stops testing what
+          # production runs — and the two silently diverged already: the image's
+          # base shipped 0.9.30 while this step installed 0.12.9.
+          version: "0.12.9"
           python-version: "3.12"
           enable-cache: true
 
@@ -133,6 +138,11 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
+          # Same version the sandbox-host image pins (#775). uv's version decides
+          # how a user's `uv.lock` is read, so a CI that floats stops testing what
+          # production runs — and the two silently diverged already: the image's
+          # base shipped 0.9.30 while this step installed 0.12.9.
+          version: "0.12.9"
           python-version: "3.12"
           enable-cache: true
 
@@ -221,6 +231,11 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
+          # Same version the sandbox-host image pins (#775). uv's version decides
+          # how a user's `uv.lock` is read, so a CI that floats stops testing what
+          # production runs — and the two silently diverged already: the image's
+          # base shipped 0.9.30 while this step installed 0.12.9.
+          version: "0.12.9"
           python-version: "3.12"
           enable-cache: true
 

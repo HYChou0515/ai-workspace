@@ -12,6 +12,7 @@ do we hand back the right concrete impl?
 from __future__ import annotations
 
 from dataclasses import replace
+from unittest.mock import patch
 
 import pytest
 
@@ -1034,3 +1035,168 @@ def test_http_sandbox_warns_that_exec_timeout_is_not_its_to_enforce(caplog):
     assert any("SANDBOX_HOST_EXEC_TIMEOUT" in r.message for r in caplog.records), [
         r.message for r in caplog.records
     ]
+
+
+def test_http_sandbox_warns_that_the_uv_cache_ceiling_is_not_its_to_apply(caplog):
+    """Same shape, same rule, one knob later. `sandbox.uv_cache_max_bytes` is
+    read by the APP-side sweeper; on `kind: http` the caches live in the
+    sandbox-host service, which sweeps its own with
+    `SANDBOX_HOST_UV_CACHE_MAX_BYTES`. So an operator who sets the app-side one
+    gets no eviction and no explanation — the exact case the test above already
+    settled the policy for.
+    """
+    import logging
+
+    from workspace_app.config.schema import HttpSandboxSettings, Settings
+
+    settings = Settings()
+    object.__setattr__(settings.sandbox, "kind", "http")
+    object.__setattr__(settings.sandbox, "uv_cache_max_bytes", 8_589_934_592)
+    object.__setattr__(
+        settings.sandbox, "http", HttpSandboxSettings(base_url="http://sandbox-host:8000")
+    )
+
+    with caplog.at_level(logging.WARNING):
+        get_sandbox(settings)
+
+    assert any("uv_cache_max_bytes" in r.message for r in caplog.records), [
+        r.message for r in caplog.records
+    ]
+
+
+def test_a_jailed_local_sandbox_also_says_the_uv_ceiling_is_dead(caplog):
+    """The rule was applied to one of three entry points.
+
+    On `kind: local` with the userns jail, `UV_CACHE_DIR` points INSIDE the
+    sandbox — there is no `{root}/.uv-cache` for a sweeper to walk, so
+    `sandbox.uv_cache_max_bytes` evicts nothing, exactly as on `kind: http`.
+    And `isolate` defaults to `null` = auto, so this is what a userns-capable
+    host WITHOUT CAP_SETUID gets by default, in silence.
+
+    The predicate is the backend's own — asking it beats re-deriving "is this
+    one jailed?" in a second place, which is how two rules end up disagreeing.
+    """
+    import logging
+
+    from workspace_app.config.schema import Settings
+
+    settings = Settings()
+    object.__setattr__(settings.sandbox, "kind", "local")
+    object.__setattr__(settings.sandbox, "isolate", True)  # the jail, explicitly
+    object.__setattr__(settings.sandbox.isolation, "enabled", False)
+    object.__setattr__(settings.sandbox, "uv_cache_max_bytes", 8_589_934_592)
+
+    with caplog.at_level(logging.WARNING):
+        get_sandbox(settings)
+
+    assert any("uv_cache_max_bytes" in r.message for r in caplog.records), [
+        r.message for r in caplog.records
+    ]
+
+
+def test_an_unjailed_local_sandbox_says_nothing_because_the_ceiling_works(caplog):
+    """The control. This is the backend the ceiling was BUILT for — warning
+    here would train an operator to ignore the message on the deployments where
+    it is true."""
+    import logging
+
+    from workspace_app.config.schema import Settings
+
+    settings = Settings()
+    object.__setattr__(settings.sandbox, "kind", "local")
+    object.__setattr__(settings.sandbox, "isolate", False)
+    object.__setattr__(settings.sandbox.isolation, "enabled", False)
+    object.__setattr__(settings.sandbox, "uv_cache_max_bytes", 8_589_934_592)
+
+    with caplog.at_level(logging.WARNING):
+        get_sandbox(settings)
+
+    assert not any("uv_cache_max_bytes" in r.message for r in caplog.records), [
+        r.message for r in caplog.records
+    ]
+
+
+def test_the_docker_sandbox_says_the_uv_ceiling_is_dead(caplog):
+    """Third entry point, same silence: `DockerSandbox` keeps no per-item uv
+    cache on this pod at all, so the number is read by nobody."""
+    import logging
+
+    from workspace_app.config.schema import Settings
+
+    settings = Settings()
+    object.__setattr__(settings.sandbox, "kind", "docker")
+    object.__setattr__(settings.sandbox, "uv_cache_max_bytes", 8_589_934_592)
+
+    with caplog.at_level(logging.WARNING):
+        get_sandbox(settings)
+
+    assert any("uv_cache_max_bytes" in r.message for r in caplog.records), [
+        r.message for r in caplog.records
+    ]
+
+
+def test_the_mock_sandbox_says_the_uv_ceiling_is_dead(caplog):
+    """The FOURTH entry point, missed by the fix for the other three.
+
+    `_warn_dead_uv_ceiling`'s own docstring counted mock among the backends
+    that cannot honour the number, and three documents then said every such
+    entry point warns — `factories.py` ("called from every entry point that
+    cannot honour the number"), `configs/config.example.yaml` ("logs a warning
+    at startup rather than pretending") and `docs/migrations.md` §5.5. `mock`
+    kept no cache and said nothing.
+
+    That is the same defect its own fix was for, one backend over — which is
+    why the call site is no longer a list to keep in step. See the test below.
+    """
+    import logging
+
+    from workspace_app.config.schema import Settings
+
+    settings = Settings()
+    object.__setattr__(settings.sandbox, "kind", "mock")
+    object.__setattr__(settings.sandbox, "uv_cache_max_bytes", 8_589_934_592)
+
+    with caplog.at_level(logging.WARNING):
+        get_sandbox(settings)
+
+    assert any("uv_cache_max_bytes" in r.message for r in caplog.records), [
+        r.message for r in caplog.records
+    ]
+
+
+def test_a_backend_that_cannot_bound_uv_caches_cannot_be_added_silently(caplog):
+    """The structural half: the answer comes from the BACKEND, once.
+
+    Hand-listing the entry points is what produced the bug above — three were
+    updated and the fourth was not, while the comment said all of them. So the
+    decision is made once, after the backend is built, by asking the object
+    whether it keeps per-item uv caches this process can sweep. A new backend
+    is therefore covered on the day it is added: it either answers yes and must
+    mean it, or the warning fires for it with no code written.
+
+    Driven through a `kind` nobody has taught the check about — the closest
+    thing to "a backend added next year" a test can hold.
+    """
+    import logging
+
+    from workspace_app import factories
+    from workspace_app.config.schema import Settings
+
+    class _FutureBackend:
+        """Keeps no per-item uv cache: no sweeper, no ceiling to apply."""
+
+    settings = Settings()
+    object.__setattr__(settings.sandbox, "kind", "mock")
+    object.__setattr__(settings.sandbox, "uv_cache_max_bytes", 8_589_934_592)
+
+    with (
+        caplog.at_level(logging.WARNING),
+        patch.object(factories, "_build_sandbox", lambda *a, **k: _FutureBackend()),
+    ):
+        built = get_sandbox(settings)
+
+    assert isinstance(built, _FutureBackend)
+    assert any("uv_cache_max_bytes" in r.message for r in caplog.records), (
+        "a backend nobody taught this about must still be caught: "
+        f"{[r.message for r in caplog.records]}"
+    )

@@ -146,6 +146,61 @@ async def test_inputs_and_handle_follow_the_profiles_upload_dir(spec_instance: S
     assert seen == {"upload_dir": "docs", "inputs": {"n": 7}}
 
 
+async def test_the_payload_the_caller_sent_reaches_the_workflow(spec_instance: SpecStar):
+    """`payload` is one of the four words the schedule vocabulary is made of —
+    *when*, *what*, *with what*, *as whom*. It was stored on the run record and
+    read by nothing, so `schedules.json`'s `with:` and `startRun`'s second
+    argument were both accepted and silently discarded: a page could ask for
+    "line 3" and get a workflow that had never heard of line 3.
+
+    It arrives as INPUT, the channel a workflow already reads, rather than as a
+    new one — and it wins over `input.json`, because the file is the standing
+    default and the payload is what this particular run was asked for.
+    """
+    seen: dict = {}
+
+    async def run(wf, inputs):
+        seen["inputs"] = inputs
+        return {"ok": True}
+
+    store = MemoryFileStore()
+    await store.write("rca/i1", "/uploads/input.json", b'{"n": 7, "line": "default"}')
+    orch, _fakes = _orch(spec_instance, run, store=store)
+
+    await orch.start(
+        slug="rca",
+        item_id="rca/i1",
+        profile="echo",
+        captured_user="alice",
+        payload={"line": "3"},
+    )
+    await asyncio.sleep(0)
+
+    assert seen["inputs"] == {"n": 7, "line": "3"}
+
+
+async def test_a_run_with_no_payload_reads_exactly_what_the_file_says(
+    spec_instance: SpecStar,
+):
+    """The positive control for the merge above. Without it, an implementation
+    that ignored `input.json` entirely and returned the payload would pass the
+    previous test, and every workflow that has ever read its input would break."""
+    seen: dict = {}
+
+    async def run(wf, inputs):
+        seen["inputs"] = inputs
+        return {"ok": True}
+
+    store = MemoryFileStore()
+    await store.write("rca/i1", "/uploads/input.json", b'{"n": 7}')
+    orch, _fakes = _orch(spec_instance, run, store=store)
+
+    await orch.start(slug="rca", item_id="rca/i1", profile="echo", captured_user="alice")
+    await asyncio.sleep(0)
+
+    assert seen["inputs"] == {"n": 7}
+
+
 async def test_run_handle_carries_the_per_invocation_identity(spec_instance: SpecStar):
     """#435 P7: the orchestrator exposes each run's per-invocation identity on the handle —
     ``run_id`` (create_new's fresh-per-invocation token, DISTINCT per start) and a resume-

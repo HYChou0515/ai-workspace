@@ -76,7 +76,7 @@ export function WorkflowDecisionCard({
         <span style={{ fontWeight: 600 }}>{decision.title || t("wf.decision.titleFallback")}</span>
       </header>
       {decision.summary && (
-        <pre
+        <pre className="scrollable"
           data-testid="wf-decision-summary"
           style={{
             margin: 0,

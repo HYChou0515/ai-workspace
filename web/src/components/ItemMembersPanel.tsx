@@ -82,7 +82,7 @@ export function ItemMembersPanel({
           the first line (both short), and the "Manage access…" button gets its own
           line — a button whose text can't shrink was what clipped a narrow sidebar
           (#6a). */}
-      <div style={{ display: "grid", gap: 8, minWidth: 0 }}>
+      <div data-testid="members-header" style={headerBlock}>
         <div style={titleRow}>
           <span data-testid="members-title" className="caps" style={ellipsis}>
             {label}
@@ -301,6 +301,29 @@ const unreadableBox: React.CSSProperties = {
 // frame and clip the roster's role labels (#6a).
 const sidebarBody: React.CSSProperties = { padding: 12, display: "grid", gap: 10, minWidth: 0 };
 const popoverBody: React.CSSProperties = { minWidth: 240, padding: "10px 12px", display: "grid", gap: 8 };
+/** The panel's own header, pinned when the panel is inside something that
+ *  scrolls. Every sibling rail tab (files / search / history / activity) keeps
+ *  its header OUT of the scrolling body; this panel owns its header, so it
+ *  keeps it in place itself instead — same result, and it holds for whichever
+ *  container renders the panel rather than only the one that remembered to.
+ *
+ *  The background is not decoration: without it the roster scrolls visibly
+ *  THROUGH the title. `top: 0` sticks it to the scrollport, so the wrapper's
+ *  own top padding scrolls away first and the header ends up flush.
+ *
+ *  Costs nothing when the panel is not inside a scroller — `sticky` with
+ *  nothing to stick to lays out exactly like `static`. */
+const headerBlock: React.CSSProperties = {
+  display: "grid",
+  gap: 8,
+  minWidth: 0,
+  position: "sticky",
+  top: 0,
+  zIndex: 1,
+  background: "var(--paper)",
+  paddingBottom: 6,
+};
+
 const titleRow: React.CSSProperties = {
   display: "flex",
   alignItems: "center",

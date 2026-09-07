@@ -89,7 +89,8 @@ Renderer 是全平台都有的——**手寫一份 `view: wui` 的 yaml 現在�
 銷售儀表板/
   page.ai.yaml         view: wui
   package.json         pnpm-lock.yaml
-  src/App.jsx          ← AI 改這裡
+  src/main.tsx         ← AI 改這裡(TypeScript)
+  src/wui.d.ts         ← workspace 橋接的型別,原樣照抄
   dist/index.html      ← build 產物，這才是頁面
   dist/assets/…js
 ```
@@ -207,11 +208,12 @@ AI。它讀的是 `wui` 這個 shared skill（`sample-skills/wui/`），裡面�
 
 | 範例 | 什麼時候抄 |
 |---|---|
+| `examples/complete/` | **先讀這一份**——一頁把整個介面用過一遍:讀、畫圖、存、呼叫 tool、開一個要跑幾分鐘的 run、以及每一種失敗都是一句話 |
 | `examples/dashboard/` | 資料已經在 item 裡，有人想換個方式**看** |
 | `examples/editor/` | 頁面就是資料被**輸入或修改**的地方 |
 | `examples/external/` | 答案在**另一個系統**裡——`callTool` |
 | `examples/chart/` | 有人想**看見數字的形狀**——真的圖表庫,build 負責把它抓進資料夾 |
-| `examples/react/` | 手寫 DOM 已經不划算——真的 build(`pnpm build` → `dist/`) |
+| `examples/react/` | **預設就用這份**——React + TypeScript,真的 build(`pnpm build` → `dist/`) |
 
 小模型照抄比照著規格生成可靠得多，所以範例是這個 skill 最重要的部分。
 

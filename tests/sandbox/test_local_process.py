@@ -141,6 +141,41 @@ async def test_upload_download_roundtrip(sandbox: LocalProcessSandbox):
     assert await sandbox.download(h, "/notes.txt") == b"payload"
 
 
+async def test_download_many_answers_in_order_with_none_for_what_is_absent(
+    sandbox: LocalProcessSandbox,
+):
+    """The facade's fast lane, on the local backend: many files in one hop off
+    the event loop, and `None` for a path that is not there — an answer about
+    that path, so one missing file cannot fail the batch."""
+    h = await sandbox.create(SandboxSpec())
+    await sandbox.upload(h, b"one", "/a.md")
+    await sandbox.upload(h, b"two", "/sub/b.md")
+
+    got = await sandbox.download_many(h, ["/a.md", "/nope.md", "/sub/b.md"])
+
+    assert got == [b"one", None, b"two"]
+
+
+async def test_download_many_stands_in_for_n_downloads_including_how_they_fail(
+    sandbox: LocalProcessSandbox,
+):
+    """A batch has to fail the way the single reads it replaces fail, or the
+    lane is observable from outside — and the tolerant listing read, which skips
+    a missing file, would silently drop a path that is really an error.
+
+    A directory is the case that separates them: `download` raises for it, so
+    `download_many` must too rather than calling it absent."""
+    import pytest
+
+    h = await sandbox.create(SandboxSpec())
+    await sandbox.upload(h, b"two", "/sub/b.md")
+
+    with pytest.raises(IsADirectoryError):
+        await sandbox.download(h, "/sub")
+    with pytest.raises(IsADirectoryError):
+        await sandbox.download_many(h, ["/sub"])
+
+
 async def test_upload_file_download_to_file_roundtrip(sandbox: LocalProcessSandbox, tmp_path):
     h = await sandbox.create(SandboxSpec())
     src = tmp_path / "src.bin"
@@ -944,3 +979,116 @@ async def test_a_bare_pip_install_is_importable_by_the_next_command(tmp_path, ca
     imported = await sb.exec(h, ["python", "-c", "import cowsay; print(cowsay.__name__)"])
     assert imported.exit_code == 0, imported.stderr.decode()
     assert imported.stdout.decode().strip() == "cowsay"
+
+
+@_needs_userns
+async def test_isolated_python_shim_prefers_the_workspaces_own_venv(tmp_path):
+    """The jail bootstrap is the THIRD place that decides what `python` means,
+    and it had two tiers while the other two had three: inside the jail, a
+    workspace that declared its dependencies still got the carrier.
+
+    The venv lives at the sandbox root, which IS the chroot root — so `/.venv`
+    in here and `<root>/.venv` out there are the same directory, and nothing
+    has to be bind-mounted for it to survive the exec.
+    """
+    tools = tmp_path / "prebuilt"
+    stack = tools / "python-stack"
+    stack.mkdir(parents=True)
+    (stack / "launch").write_text("#!/bin/sh\necho ROUTED-TO-PYTHON-STACK\n")
+    (stack / "launch").chmod(0o755)
+
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=True, tools_dir=tools)
+    h = await sb.create(SandboxSpec())
+    venv_bin = tmp_path / "sb" / h.id / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "python").write_text("#!/bin/sh\necho ROUTED-TO-PROJECT-VENV\n")
+    (venv_bin / "python").chmod(0o755)
+
+    r = await sb.exec(h, ["python", "-c", "ignored"])
+    assert r.exit_code == 0, r.stderr.decode()
+    assert "ROUTED-TO-PROJECT-VENV" in r.stdout.decode()
+
+    r3 = await sb.exec(h, ["python3", "-c", "ignored"])
+    assert "ROUTED-TO-PROJECT-VENV" in r3.stdout.decode(), "agents type `python3` too"
+
+
+@_needs_userns
+async def test_the_jails_venv_shim_is_a_wrapper_not_a_link(tmp_path):
+    """The shape matters and the routing test above cannot see it.
+
+    Its fake venv `python` is a shell script, so a SYMLINK would route there
+    just as well — and a symlink is precisely what breaks a real venv: CPython
+    resolves its own path to find `pyvenv.cfg` and a link from outside resolves
+    straight past it to the base interpreter. So ask the jail directly what
+    shape its shim has.
+    """
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=True)
+    h = await sb.create(SandboxSpec())
+    venv_bin = tmp_path / "sb" / h.id / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "python").write_text("#!/bin/sh\necho ok\n")
+    (venv_bin / "python").chmod(0o755)
+
+    r = await sb.exec(h, ["sh", "-c", "test -L /tmp/.jailbin/python && echo LINK || echo WRAPPER"])
+
+    assert r.stdout.decode().strip() == "WRAPPER", "a link would resolve past the venv"
+
+
+@_needs_userns
+async def test_the_jail_exports_virtual_env_for_the_project_venv(tmp_path):
+    """Same reason as unjailed: `uv pip install` reads VIRTUAL_ENV. The jail
+    bootstrap is what probes for the venv here, so it is what exports it."""
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=True)
+    h = await sb.create(SandboxSpec())
+    venv_bin = tmp_path / "sb" / h.id / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "python").write_text("#!/bin/sh\necho ok\n")
+    (venv_bin / "python").chmod(0o755)
+
+    r = await sb.exec(h, ["sh", "-c", "echo [$VIRTUAL_ENV]"])
+
+    assert r.stdout.decode().strip() == "[/.venv]"
+
+
+@_needs_userns
+async def test_the_jail_announces_no_virtual_env_when_there_is_none(tmp_path):
+    """And never the server's own, which the inherited environment carries
+    whenever the server was started under `uv run`."""
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=True)
+    h = await sb.create(SandboxSpec())
+
+    r = await sb.exec(h, ["sh", "-c", "echo [$VIRTUAL_ENV]"])
+
+    assert r.stdout.decode().strip() == "[]"
+
+
+@_needs_userns
+async def test_the_jail_refuses_a_venv_built_on_its_own_shim(tmp_path):
+    """Same cycle as unjailed, same route: this bootstrap puts /tmp/.jailbin
+    first on PATH, `uv sync` picks its base interpreter off PATH, and /tmp is a
+    fresh tmpfs each exec — so next time the shim is rebuilt as tier 1 pointing
+    into a venv that points back at it, and `python` execs itself forever.
+
+    Shell cannot walk the link chain hop by hop, so the guard reads the venv's
+    own record of what it was built on: `pyvenv.cfg`'s `home =`.
+    """
+    tools = tmp_path / "prebuilt"
+    stack = tools / "python-stack"
+    stack.mkdir(parents=True)
+    (stack / "launch").write_text("#!/bin/sh\necho ROUTED-TO-PYTHON-STACK\n")
+    (stack / "launch").chmod(0o755)
+
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=True, tools_dir=tools)
+    h = await sb.create(SandboxSpec())
+    venv = tmp_path / "sb" / h.id / ".venv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "python").write_text("#!/bin/sh\necho ROUTED-TO-PROJECT-VENV\n")
+    (venv / "bin" / "python").chmod(0o755)
+    (venv / "pyvenv.cfg").write_text("home = /tmp/.jailbin\nversion_info = 3.12.0\n")
+
+    r = await sb.exec(h, ["python", "-c", "ignored"])
+
+    assert r.exit_code == 0, r.stderr.decode()
+    assert "ROUTED-TO-PYTHON-STACK" in r.stdout.decode(), (
+        "a venv built on the shim must fall back, not loop"
+    )

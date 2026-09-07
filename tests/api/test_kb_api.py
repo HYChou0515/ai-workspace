@@ -1854,6 +1854,8 @@ def test_upload_of_new_content_still_enqueues_a_real_index():
 
 
 def test_reindex_document_invalidates_the_cache_then_repopulates():
+    import msgspec
+
     # #390: reindex is the "force recompute" path — it drops the cached result so
     # the rebuild misses, then the recompute repopulates it.
     from workspace_app.kb.index_cache import IndexCacheStore
@@ -1867,14 +1869,24 @@ def test_reindex_document_invalidates_the_cache_then_repopulates():
     ingestor = client.app.state.index_coordinator._ingestor  # noqa: SLF001  # ty: ignore[unresolved-attribute]
     key = ingestor.cache_key(doc_id)
     store = IndexCacheStore(spec)
-    assert store.get(key) is not None  # cached after the first index
+    cached = store.get(key)
+    assert cached is not None  # cached after the first index
+
+    # Poison the entry, then prove reindex did NOT serve it. Asserting
+    # `store.get(key) is None` right after the POST was a race with the
+    # background consumer (#82): the recompute is enqueued immediately, so the
+    # empty window closes on its own and the assertion caught whichever side of
+    # it the scheduler happened to be on. A sentinel needs no window — if the
+    # force path had reused the cache, it would still be here afterwards.
+    store.put(key, msgspec.structs.replace(cached, text="POISONED — reindex must not reuse this"))
 
     r = client.post(f"/kb/documents/reindex?id={doc_id}")
     assert r.status_code == 200
-    assert store.get(key) is None  # force path dropped the entry (recompute enqueued)
 
     _drain(client)
-    assert store.get(key) is not None  # recompute repopulated it
+    after = store.get(key)
+    assert after is not None  # recompute repopulated it
+    assert after.text != "POISONED — reindex must not reuse this"  # …by recomputing
 
 
 def test_reindex_collection_invalidates_the_cache():

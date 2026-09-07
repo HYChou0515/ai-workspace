@@ -27,7 +27,7 @@
  */
 
 import type { EntityInstance } from "../../api/entities";
-import { isWeekend, shiftDate, shiftWorkingDays, spanToDates, spanValue } from "./ganttScale";
+import { dayOf, isWeekend, shiftDate, shiftWorkingDays, spanToDates, spanValue } from "./ganttScale";
 import { fieldText } from "./shared";
 
 /** Days assumed for an issue nobody has estimated. It still goes on the chart —
@@ -93,6 +93,7 @@ export type ScheduleResult = {
 const isAuto = (e: EntityInstance, flag: string) => (fieldText(e.fields[flag]) || "auto") !== "manual";
 
 /** A busy stretch of one person's time: a manual issue nobody may move. */
+/** One person's immovable window, as whole DAYS — this scheduler's unit. */
 type Busy = { start: string; end: string };
 
 function anchorFor(
@@ -105,7 +106,11 @@ function anchorFor(
   const key = anchorField ? fieldText(issue.fields[anchorField]) : "";
   const owner = key ? milestones.get(key) : undefined;
   const span = owner ? spanToDates(owner.fields[spanField]) : null;
-  return span?.start ?? today;
+  // The DAY, never the edge as written. A milestone starting `09:30` would
+  // otherwise hand a clock to a scheduler that lays out whole days, and the
+  // issue would be written with a time nobody put on it — which then feeds
+  // every text comparison downstream a shape it cannot handle.
+  return span ? dayOf(span.start) : today;
 }
 
 /** The first day on or after `from` that this issue may occupy: not before its
@@ -139,7 +144,12 @@ export function scheduleRows({ issues, milestones, today, fields }: ScheduleInpu
     if (!span) continue;
     const owner = fields.assignee ? fieldText(e.fields[fields.assignee]) : "";
     const list = busyByOwner.get(owner) ?? [];
-    list.push({ start: span.start, end: span.end });
+    // Reduced to days HERE, where the busy window is made, rather than at each
+    // of the comparisons that read it. Those compare as text, and text order is
+    // only chronological between two edges of the same shape: `"2026-02-02" >=
+    // "2026-02-02T09:30"` is false, so a manual issue carrying a clock quietly
+    // stopped blocking and the scheduler double-booked over it.
+    list.push({ start: dayOf(span.start), end: dayOf(span.end) });
     busyByOwner.set(owner, list);
   }
 

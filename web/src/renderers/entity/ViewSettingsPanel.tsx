@@ -9,9 +9,24 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import { clockHours, clockText } from "./shared";
 import type { SortRule, ViewConfig } from "./types";
 
 const SORT_TIER_CAP = 3;
+
+/** What "skip non-working hours" means before anyone narrows it (#785). */
+const DEFAULT_WORK_HOURS = { from: 7, to: 21 };
+
+/** Move one end of the working day, or decline to. A window that closes before
+ * it opens is dropped by the parser anyway; refusing it at the control means
+ * the view file never holds one, so nobody has to find that out. */
+function setEnd(config: ViewConfig, end: "from" | "to", text: string) {
+  const hours = clockHours(text);
+  if (hours === undefined || !config.workHours) return;
+  const next = { ...config.workHours, [end]: hours };
+  if (next.from >= next.to) return;
+  config.onSetWorkHours?.(next);
+}
 
 export function ViewSettingsPanel({ config }: { config: ViewConfig }) {
   const [open, setOpen] = useState(false);
@@ -145,18 +160,58 @@ export function ViewSettingsPanel({ config }: { config: ViewConfig }) {
           </section>
           )}
 
-          {config.onToggleSkipWeekends && (
+          {(config.onToggleSkipWeekends || config.onSetWorkHours) && (
             <section className="ev-viewpanel__sec">
+              {/* Both controls say the same thing at two scales — which time the
+                  chart does not draw — so they share a section, and each is
+                  gated on its own callback rather than on the other's. */}
               <div className="ev-viewpanel__label">Working days</div>
-              <label className="ev-viewpanel__field">
-                <input
-                  type="checkbox"
-                  aria-label="Skip weekends"
-                  checked={config.skipWeekends ?? false}
-                  onChange={() => config.onToggleSkipWeekends?.(!config.skipWeekends)}
-                />
-                Skip weekends (Mon–Fri only)
-              </label>
+              {config.onToggleSkipWeekends && (
+                <label className="ev-viewpanel__field">
+                  <input
+                    type="checkbox"
+                    aria-label="Skip weekends"
+                    checked={config.skipWeekends ?? false}
+                    onChange={() => config.onToggleSkipWeekends?.(!config.skipWeekends)}
+                  />
+                  Skip weekends (Mon–Fri only)
+                </label>
+              )}
+              {config.onSetWorkHours && (
+                <>
+                  <label className="ev-viewpanel__field">
+                    <input
+                      type="checkbox"
+                      aria-label="Skip non-working hours"
+                      checked={Boolean(config.workHours)}
+                      // Switching ON means a working day, not an empty one: a
+                      // window with no hours in it folds the whole day away and
+                      // leaves the chart blank.
+                      onChange={() =>
+                        config.onSetWorkHours?.(config.workHours ? undefined : DEFAULT_WORK_HOURS)
+                      }
+                    />
+                    Skip non-working hours
+                  </label>
+                  {config.workHours && (
+                    <div className="ev-viewpanel__field">
+                      <input
+                        type="time"
+                        aria-label="day starts"
+                        value={clockText(config.workHours.from)}
+                        onChange={(e) => setEnd(config, "from", e.target.value)}
+                      />
+                      <span> to </span>
+                      <input
+                        type="time"
+                        aria-label="day ends"
+                        value={clockText(config.workHours.to)}
+                        onChange={(e) => setEnd(config, "to", e.target.value)}
+                      />
+                    </div>
+                  )}
+                </>
+              )}
             </section>
           )}
 

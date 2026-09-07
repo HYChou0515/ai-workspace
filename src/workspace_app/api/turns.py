@@ -895,15 +895,27 @@ class ChatTurnEngine:
         (and broadcast) and the (partial) result is always persisted."""
         reducer = _TurnReducer()
         try:
-            # Warm the sandbox as the turn begins (best-effort) so its cold-start
-            # overlaps the model's first response, instead of stalling when the
-            # agent first calls exec. Opening/viewing a chat never drives a turn,
-            # so a sandbox is only spun up once the user actually sends a message.
+            # Warm the sandbox as the turn begins (best-effort), so the cold
+            # start is already paid for by the time the agent calls exec.
+            #
+            # It does NOT overlap the model's first response — this is awaited
+            # before `_events` even builds the stream, so the wait is at the
+            # front of the turn either way. What it buys is that the wait
+            # happens once, here, instead of inside whichever tool call happens
+            # to be first. Opening/viewing a chat never drives a turn, so a
+            # sandbox is only spun up once the user actually sends a message.
             # A KB turn carries no sandbox (ensure_sandbox_via is None) → skipped;
             # a warm failure must never fail the turn (exec would still wake it).
             if ctx.ensure_sandbox_via is not None:
                 with contextlib.suppress(Exception):
-                    await ctx.ensure_sandbox()
+                    # `prepare_env=False`: the python env is NOT prepared here.
+                    # This runs before `_run_once` attaches `on_exec_output`, so
+                    # uv's progress would go to a sink that does not exist yet —
+                    # and a successful preparation is remembered, which also
+                    # silenced the stale-lock advisory for the whole turn. It
+                    # happens on the agent's first exec instead, where the tool
+                    # card can show it (#775).
+                    await ctx.ensure_sandbox(prepare_env=False)
             async for ev in self._events(content, ctx):
                 reducer.add(ev)
                 publish(ev)

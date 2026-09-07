@@ -2,13 +2,26 @@
  * What crosses the frame boundary.
  *
  * The iframe has a null origin, so `postMessage` is the ONLY channel between a
- * WUI and the platform — which makes this file the whole API surface. It is
- * deliberately small and deliberately CLOSED: every future capability arrives
- * as another `callTool` target, never as another verb, so the amount of code
- * that has to be trusted here stays the size it is today.
+ * WUI and the platform — which makes this file the whole API surface, and the
+ * reason it is kept small: every verb here is code that has to be trusted.
  *
  * Messages carry `proto` because a page shares its window with nothing else we
  * control: anything without the tag is somebody else's message and is ignored.
+ *
+ * **The verb set is closed to CAPABILITIES.** Anything that reaches an outside
+ * system arrives as another `callTool` target — never as another verb. What may
+ * still be added is a platform PRIMITIVE, something in the same class as reading
+ * a file, and only when it cannot be expressed as a tool call.
+ *
+ * (This replaces a flat "never another verb, ever". That rule was written before
+ * anything needed a primitive, and it was not the rule that was kept — so it is
+ * stated once, here, in the form it actually has. Two versions of a rule in one
+ * file means the reader gets whichever they stop at.)
+ *
+ * `startRun` (#WUI P18) is the one such addition so far, and the reason is
+ * mechanical rather than a matter of taste: `callTool` answers exactly once, and
+ * a run reports progress for minutes before it answers. Every future addition
+ * owes the same argument in writing, or this rule has quietly become nothing.
  */
 
 export const WUI_PROTOCOL = "wui/1";

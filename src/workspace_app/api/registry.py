@@ -20,6 +20,7 @@ from typing import Protocol
 
 from ..quota.limits import ResourceLimits
 from ..sandbox.protocol import (
+    OutputSink,
     Sandbox,
     SandboxBusy,
     SandboxHandle,
@@ -68,6 +69,13 @@ class InvestigationSession:
     # Serializes sandbox creation (ensure_handle) for this investigation. Turn
     # lifecycle (the in-flight agent turn) lives in ChatTurnEngine, not here.
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    # #775: serializes preparing the item's python environment, which is a
+    # DIFFERENT resource from the handle and so gets its own lock rather than
+    # borrowing the one above. `uv sync` has a 900 s budget, and `ensure_handle`
+    # is what the file routes and the WUI call to reach a sandbox at all —
+    # sharing one lock would stall browsing an item's files behind its cold
+    # start. Nothing takes both, so there is no ordering to get wrong.
+    env_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 async def _bare_spec(_item: str) -> SandboxSpec:
@@ -526,6 +534,44 @@ class InvestigationRegistry:
             return True
         return False
 
+    async def prepare_project_env(
+        self,
+        session: InvestigationSession,
+        handle: SandboxHandle,
+        *,
+        on_output: OutputSink | None = None,
+    ) -> None:
+        """#775: bring the item's declared python environment in line with its
+        lock — ONE preparation at a time per item.
+
+        The lock is the ITEM's, and it has to be, because the thing being
+        protected is one directory (`UV_PROJECT_ENVIRONMENT`) that several
+        unrelated callers write: an agent turn, a WUI tool call, and a
+        workflow's `run:` nodes, which `wf.map` fans out eight-way over ONE
+        item by default. `AgentToolContext._wake` guards a CONTEXT, and a
+        context is built per turn — so it could not see any of the others.
+
+        Overlap is not merely duplicated work. `ensure_project_env` removes the
+        environment before it raises (a half-built venv is what the `python`
+        shim would otherwise adopt), so one caller's transient failure deletes
+        the venv the others are filling or already running against — and they
+        then fall back to the carrier and report success, which is the
+        confident wrong answer this whole design refuses.
+
+        `handle` is passed in rather than acquired here, so this never has to
+        take `session.lock` as well — the two locks stay independent and there
+        is no order between them to get wrong.
+
+        ⚠️ Per item and PER POD. Two app pods can still prepare one item's
+        environment at once on a shared root; that is the same cross-pod class
+        as #345/#366 and is not closed here. What is closed is the in-process
+        fan-out, which is where the eight-way `wf.map` lives.
+        """
+        from ..agent.python_env import ensure_project_env
+
+        async with session.env_lock:
+            await ensure_project_env(self.sandbox, handle, on_output=on_output)
+
     async def flush(self, investigation_id: str) -> None:
         """Mirror this investigation's live sandbox to the snapshot right now
         (explicit refresh / turn-end). No-op when cold."""
@@ -562,6 +608,55 @@ class InvestigationRegistry:
         logger.debug("registry: mirror_warm swept, mirrored %d session(s)", len(mirrored))
         return mirrored
 
+    async def sweep_uv_cache(self, max_bytes: int | None, threshold: timedelta) -> list[str]:
+        """#775: bound the per-item uv download caches.
+
+        Rides the idle tick because that is when a cache stops being written to,
+        and delegates to the backend, which owns the directory.
+
+        ⚠️ The in-use set is NOT just this pod's. `cache_keys_in_use` reads the
+        backend's own `_dirs` — one process's view — while `{sandbox.root}` is a
+        ReadWriteMany volume every replica writes to (#345). A pod that never
+        created a sandbox for item X saw X as free and deleted the cache a sync
+        on ANOTHER pod was filling, which is precisely the mistake `kill_idle`
+        four lines below already guards against with the cross-pod heartbeat.
+        So every candidate that is not locally live is checked against it too.
+        With no heartbeat wired, this pod's view is the only view there is —
+        `create_app` always wires one, so that branch is what the tests that
+        construct a registry directly get, not a deployment mode.
+
+        Backends without a persistent cache (mock, docker, http — where the HOST
+        sweeps its own) have no method and this is a no-op."""
+        sweep = getattr(self.sandbox, "sweep_uv_cache", None)
+        local = getattr(self.sandbox, "cache_keys_in_use", None)
+        present = getattr(self.sandbox, "cache_keys_present", None)
+        if sweep is None or local is None or present is None:
+            return []
+        # No ceiling ⇒ nothing is ever evicted, so every question below is
+        # asked to decide something already decided. `max_bytes is None` is the
+        # DEFAULT, the cross-pod check is one specstar read per cached item on
+        # every tick, and with no ceiling the cache grows one directory per item
+        # forever — so the cost of asking grows without bound precisely where
+        # the answer cannot matter. The backend returns `[]` here too; this
+        # stops us paying to hear it.
+        if max_bytes is None:
+            return []
+        in_use = set(local())
+        if self.activity is not None:
+            cutoff_ms = int((datetime.now(UTC) - threshold).timestamp() * 1000)
+            for key in await asyncio.to_thread(present) - in_use:
+                if not await self._globally_idle(key, cutoff_ms):
+                    in_use.add(key)
+        # Re-read our OWN view last. Everything above is a sequential round
+        # trip, and the backend then walks the directory itself, so the first
+        # answer can be many hundreds of milliseconds old by the time anything
+        # is deleted. An item this pod woke inside that window was answered
+        # "idle" before it existed, and would be deleted mid-`uv sync` — the
+        # failure the cross-pod check exists to prevent, arriving through it.
+        # We cannot make the other pods' half fresh; this half is a dict lookup.
+        in_use |= set(local())
+        return await asyncio.to_thread(sweep, in_use=in_use, max_bytes=max_bytes)
+
     async def kill_idle(self, threshold: timedelta) -> list[str]:
         """Reap sandboxes idle past ``threshold``. #345: with a shared per-item
         dir, tearing it down (``rmtree`` via ``sandbox.kill``) on pod-local
@@ -576,6 +671,21 @@ class InvestigationRegistry:
         for inv_id in list(self._sessions):
             s = self._sessions[inv_id]
             if s.last_active >= cutoff:
+                continue
+            # A session someone is INSIDE right now is not idle, whatever its
+            # timestamp says. `ensure_handle` holds this lock for the whole
+            # acquire — create, restore, mark_ready — and assigns
+            # `session.handle` only when that returns, so a tick landing in
+            # that window saw a session with no handle, took the "nothing to
+            # kill" path below, and dropped it. The sandbox `_acquire` had
+            # already built was then orphaned: no session refers to it, so
+            # neither this loop nor `close_all` can ever reap it.
+            #
+            # Measured, not reasoned: with a 0.1 s threshold this reddens
+            # `test_idle_killer_reaps_session_past_threshold` in ~4% of runs,
+            # always as `kill_calls == 0`. Production's threshold is 8 h, so
+            # what it costs there is the orphan rather than the flake.
+            if s.lock.locked():
                 continue
             try:
                 if s.handle is not None and not await self._globally_idle(inv_id, cutoff_ms):
@@ -596,14 +706,33 @@ class InvestigationRegistry:
                     # SandboxNotFound — that IS the goal, so still drop the session.
                     with contextlib.suppress(SandboxNotFound):
                         await self.sandbox.kill(s.handle)
+                    # Dropped HERE, with no await between it and the kill.
+                    # Shutdown cancels this task and only then calls `close_all`,
+                    # so a tick parked at the `forget` below lost the removal —
+                    # `CancelledError` is not an `Exception` and the guard at the
+                    # bottom of this loop does not catch it — and `close_all`
+                    # then killed a sandbox that was already gone. Harmless (the
+                    # second kill is a suppressed `SandboxNotFound` on a dying
+                    # pod), but it made the idle-kill test a coin flip.
+                    del self._sessions[inv_id]
                     if self.activity is not None:
+                        # A heartbeat nothing gets to clear ages out on its own,
+                        # which is why this is the side of the line to be on.
                         await self.activity.forget(inv_id)
                     logger.info(
                         "registry: reaped idle sandbox %s for item %s (globally idle)",
                         s.handle.id,
                         inv_id,
                     )
-                del self._sessions[inv_id]
+                else:
+                    # The only exit from this loop that used to say nothing —
+                    # which is why the race above took an instrumented run to
+                    # find rather than a reading of the log.
+                    logger.info(
+                        "registry: dropped idle session for item %s (no sandbox to reap)",
+                        inv_id,
+                    )
+                    del self._sessions[inv_id]
                 killed.append(inv_id)
             except Exception:  # noqa: BLE001 — #366: one bad item must not abort the sweep
                 logger.warning(

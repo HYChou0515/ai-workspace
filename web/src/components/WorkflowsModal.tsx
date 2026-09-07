@@ -146,7 +146,7 @@ export function WorkflowsModal({
           {t("workflows.intro")}
         </p>
 
-        <div style={{ overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
+        <div className="scrollable" style={{ overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
           {list.length === 0 ? (
             <p
               data-testid="workflows-empty"

@@ -26,9 +26,11 @@ import msgspec
 from specstar import SpecStar
 from specstar.types import ResourceIDNotFoundError
 
+from ..agent.python_env import ProjectEnvError
 from ..resources import Conversation, Message
 from ..sandbox.protocol import OutputSink, Sandbox
 from ..workflow.capabilities import convert_upload, ingest_to_collection, upsert_context_card
+from ..workflow.engine import StepFailed
 from ..workflow.handle import WorkflowHandle
 from ..workflow.run import RunStatus, WorkflowRun
 from .notifications import notification_sent, notify
@@ -274,6 +276,58 @@ class WorkflowExecutor:
         (#178) so a long command shows movement instead of looking dead."""
         session = await self._registry.session(item_id)
         handle = await self._registry.ensure_handle(session)
+        # #775: `ensure_handle` wakes the sandbox and nothing more, so a node in
+        # a workspace that declares its own dependencies would run against an
+        # interpreter that has none of them — silently, because the `python`
+        # shim refuses the empty `.venv` and falls back to the carrier. That is
+        # the confident-wrong-answer this design refuses everywhere else.
+        #
+        # It used to be hidden: an agent turn's pre-warm prepared the item's
+        # environment whether or not that turn ran a command, so a `run:` node
+        # after any agent node inherited one. The pre-warm no longer prepares,
+        # which makes the hole visible and puts the case that never worked — a
+        # `run:` node with no agent node before it — in the same place.
+        #
+        # Every node, not once per run: this executor is app-scoped, and a
+        # remembered "prepared" would outlive the sandbox it was true of. The
+        # cost is one `exists` for the workspaces that declare nothing (all of
+        # the ones that predate this) and an audit of an already-built env for
+        # the ones that do. `on_output` is the node's live stream, so uv's
+        # progress and the staleness advisory land where someone is watching —
+        # and not in the node's captured stdout, which is the exec's alone.
+        # Through the REGISTRY, which holds the item's lock: `wf.map` runs this
+        # node over its elements eight-way by default (`_DEFAULT_MAP_CONCURRENCY`)
+        # on one item, i.e. one `UV_PROJECT_ENVIRONMENT`, and a preparation that
+        # fails deletes that directory before it raises. Unserialised, one
+        # element's transient failure takes its siblings' environment with it and
+        # they carry on against the carrier reporting success.
+        try:
+            await self._registry.prepare_project_env(session, handle, on_output=on_output)
+        except ProjectEnvError as exc:
+            # `StepFailed`, not an exit code and not the raw error.
+            #
+            # An exit code hands the decision to the node's GATE, and
+            # `sandbox_node` applies its safe `exit_zero()` default only when
+            # the author declared none: `produces:` passes if the glob matches
+            # anything (a previous run's files will do), and `check:`'s whole
+            # vocabulary — `file_nonempty` / `choice_in` / `collection_has` —
+            # cannot read an exit code at all. So "the environment could not be
+            # built" was reported as a run that finished, and journalled, which
+            # skips the node on every re-run.
+            #
+            # The raw `ProjectEnvError` was un-swallowable but escaped `execute`
+            # as a type the workflow does not know: `wf.map`'s gather has no
+            # `return_exceptions` and catches only `StepFailed`, so the sibling
+            # elements were left running detached.
+            #
+            # `StepFailed` is the engine's own word for "this step aborted". It
+            # never reaches the gate, `wf.map` collects it per element, and at
+            # top level it ends the run — carrying uv's words, which is all the
+            # operator has to act on.
+            logger.warning(
+                "workflow_exec: item %s could not prepare its python environment", item_id
+            )
+            raise StepFailed(str(exc)) from exc
         import shlex
 
         env = f"export WF_TOKEN={shlex.quote(credential)}; " if credential else ""

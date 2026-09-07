@@ -940,3 +940,166 @@ async def test_a_sandbox_from_before_the_upgrade_does_not_break_the_sweep(tmp_pa
     shutil.rmtree(sb._require(h) / ".tools-view")
 
     assert sb.tools_in_use() == set()
+
+
+@_needs_userns
+async def test_isolated_python_shim_prefers_the_workspaces_own_venv(tmp_path):
+    """The jail bootstrap is the THIRD place that decides what `python` means,
+    and it had two tiers while the other two had three: inside the jail, a
+    workspace that declared its dependencies still got the carrier.
+
+    The venv lives at the sandbox root, which IS the chroot root — so `/.venv`
+    in here and `<root>/.venv` out there are the same directory, and nothing
+    has to be bind-mounted for it to survive the exec.
+    """
+    tools = tmp_path / "prebuilt"
+    # `builtin/`: this backend reads its tools dir through that layer, so a
+    # carrier planted a level up is never found — and a test whose fallback
+    # target does not exist proves nothing about the fallback.
+    stack = tools / "builtin" / "python-stack"
+    stack.mkdir(parents=True)
+    (stack / "launch").write_text("#!/bin/sh\necho ROUTED-TO-PYTHON-STACK\n")
+    (stack / "launch").chmod(0o755)
+
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=True, tools_dir=tools)
+    h = await sb.create(SandboxSpec())
+    venv_bin = tmp_path / "sb" / h.id / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "python").write_text("#!/bin/sh\necho ROUTED-TO-PROJECT-VENV\n")
+    (venv_bin / "python").chmod(0o755)
+
+    r = await sb.exec(h, ["python", "-c", "ignored"])
+    assert r.exit_code == 0, r.stderr.decode()
+    assert "ROUTED-TO-PROJECT-VENV" in r.stdout.decode()
+
+    r3 = await sb.exec(h, ["python3", "-c", "ignored"])
+    assert "ROUTED-TO-PROJECT-VENV" in r3.stdout.decode(), "agents type `python3` too"
+
+
+@_needs_userns
+async def test_the_jails_venv_shim_is_a_wrapper_not_a_link(tmp_path):
+    """The shape matters and the routing test above cannot see it.
+
+    Its fake venv `python` is a shell script, so a SYMLINK would route there
+    just as well — and a symlink is precisely what breaks a real venv: CPython
+    resolves its own path to find `pyvenv.cfg` and a link from outside resolves
+    straight past it to the base interpreter. So ask the jail directly what
+    shape its shim has.
+    """
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=True)
+    h = await sb.create(SandboxSpec())
+    venv_bin = tmp_path / "sb" / h.id / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "python").write_text("#!/bin/sh\necho ok\n")
+    (venv_bin / "python").chmod(0o755)
+
+    r = await sb.exec(h, ["sh", "-c", "test -L /tmp/.jailbin/python && echo LINK || echo WRAPPER"])
+
+    assert r.stdout.decode().strip() == "WRAPPER", "a link would resolve past the venv"
+
+
+@_needs_userns
+async def test_the_jail_exports_virtual_env_for_the_project_venv(tmp_path):
+    """Same reason as unjailed: `uv pip install` reads VIRTUAL_ENV. The jail
+    bootstrap is what probes for the venv here, so it is what exports it."""
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=True)
+    h = await sb.create(SandboxSpec())
+    venv_bin = tmp_path / "sb" / h.id / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "python").write_text("#!/bin/sh\necho ok\n")
+    (venv_bin / "python").chmod(0o755)
+
+    r = await sb.exec(h, ["sh", "-c", "echo [$VIRTUAL_ENV]"])
+
+    assert r.stdout.decode().strip() == "[/.venv]"
+
+
+@_needs_userns
+async def test_the_jail_announces_no_virtual_env_when_there_is_none(tmp_path):
+    """And never the server's own, which the inherited environment carries
+    whenever the server was started under `uv run`."""
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=True)
+    h = await sb.create(SandboxSpec())
+
+    r = await sb.exec(h, ["sh", "-c", "echo [$VIRTUAL_ENV]"])
+
+    assert r.stdout.decode().strip() == "[]"
+
+
+@_needs_userns
+async def test_the_jail_refuses_a_venv_built_on_its_own_shim(tmp_path):
+    """Same cycle as unjailed, same route: this bootstrap puts /tmp/.jailbin
+    first on PATH, `uv sync` picks its base interpreter off PATH, and /tmp is a
+    fresh tmpfs each exec — so next time the shim is rebuilt as tier 1 pointing
+    into a venv that points back at it, and `python` execs itself forever.
+
+    Shell cannot walk the link chain hop by hop, so the guard reads the venv's
+    own record of what it was built on: `pyvenv.cfg`'s `home =`.
+    """
+    tools = tmp_path / "prebuilt"
+    # `builtin/`: this backend reads its tools dir through that layer, so a
+    # carrier planted a level up is never found — and a test whose fallback
+    # target does not exist proves nothing about the fallback.
+    stack = tools / "builtin" / "python-stack"
+    stack.mkdir(parents=True)
+    (stack / "launch").write_text("#!/bin/sh\necho ROUTED-TO-PYTHON-STACK\n")
+    (stack / "launch").chmod(0o755)
+
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=True, tools_dir=tools)
+    h = await sb.create(SandboxSpec())
+    venv = tmp_path / "sb" / h.id / ".venv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "python").write_text("#!/bin/sh\necho ROUTED-TO-PROJECT-VENV\n")
+    (venv / "bin" / "python").chmod(0o755)
+    (venv / "pyvenv.cfg").write_text("home = /tmp/.jailbin\nversion_info = 3.12.0\n")
+
+    r = await sb.exec(h, ["python", "-c", "ignored"])
+
+    assert r.exit_code == 0, r.stderr.decode()
+    assert "ROUTED-TO-PYTHON-STACK" in r.stdout.decode(), (
+        "a venv built on the shim must fall back, not loop"
+    )
+
+
+async def test_an_item_id_that_would_escape_the_cache_root_is_refused(tmp_path):
+    """`item_id` arrives as a raw string in the POST body and becomes a path
+    component. `mkdir(exist_ok=True)` accepts an EXISTING directory and
+    `_own_cache` then chowns it 0700 to the sandbox uid — so `..` would hand an
+    arbitrary directory on this host to one item's uid.
+
+    The app-side twin has always validated it. This side only did when an NFS
+    archive happened to be wired."""
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False)
+    h = await sb.create(SandboxSpec(), item_id="../../escaped")
+
+    _argv, _cwd, env = sb._exec_argv(h, ["true"])
+
+    cache = Path(env["UV_CACHE_DIR"]).resolve()
+    root = (tmp_path / "sb").resolve()
+    assert root in cache.parents, f"the cache escaped its root: {cache}"
+    assert cache.name == h.id, "and an unusable id falls back to the handle"
+
+
+def test_a_cache_that_cannot_shrink_says_so(tmp_path, caplog):
+    """The sweep's own docstring promises it: "If everything left is in use,
+    that is a host needing more disk, and it says so rather than breaking
+    something." On THIS side that sentence was false for a while — the module
+    had no logger at all, so the branch existed and printed nothing. And this is
+    the deployment where it matters: the caches sit on the pod's ephemeral disk,
+    which has no declared limit, so the kubelet evicts rather than the sweep
+    reclaiming.
+    """
+    import logging
+
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False)
+    cache = tmp_path / "sb" / ".uv-cache" / "busy"
+    cache.mkdir(parents=True)
+    (cache / "blob").write_bytes(b"x" * 8192)
+
+    with caplog.at_level(logging.WARNING):
+        removed = sb.sweep_uv_cache(in_use={"busy"}, max_bytes=1)
+
+    assert removed == [], "a live item's cache is never evicted, however full"
+    assert any("needs more disk" in r.message for r in caplog.records), [
+        r.message for r in caplog.records
+    ]

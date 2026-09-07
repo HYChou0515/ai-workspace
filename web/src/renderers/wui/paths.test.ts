@@ -1,12 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  resolveAssetPath,
-  resolveReadPath,
-  resolveInFolder,
-  resolveWritePath,
-  wuiFolder,
-} from "./paths";
+import { isOwnFile, resolveAssetPath, resolveInFolder, resolveReadPath, resolveWritePath, wuiFolder } from "./paths";
 
 describe("wuiFolder", () => {
   it("is the folder holding the view file", () => {
@@ -159,5 +153,54 @@ describe("resolveAssetPath", () => {
 
   it("refuses a sibling folder that merely shares the prefix", () => {
     expect(resolveAssetPath("/app", "/app/dist", "../../app2/x.js")).toBeNull();
+  });
+});
+
+describe("isOwnFile", () => {
+  // The rule moved here from `resolveWritePath` and its test did not come with
+  // it. Three mutations of this function passed the whole 196-test suite:
+  // dropping the trailing slash from the containment check, making a root page
+  // always "own", and skipping normalisation. A rule with no test is a comment.
+
+  it("is true for the page's own file, both spellings", () => {
+    expect(isOwnFile("/sales", "data.json")).toBe(true);
+    expect(isOwnFile("/sales", "/sales/data.json")).toBe(true);
+    expect(isOwnFile("/sales", "reports/q1.json")).toBe(true);
+  });
+
+  it("is false for anywhere else in the item", () => {
+    expect(isOwnFile("/sales", "/notes.md")).toBe(false);
+    expect(isOwnFile("/sales", "/tmp/out.json")).toBe(false);
+  });
+
+  it("compares SEGMENTS, so a sibling that shares a prefix is not inside", () => {
+    // `/sales2` and `/sales.bak` both pass a bare `startsWith("/sales")`. This
+    // is the property `resolveWritePath` was written around, and moving the
+    // rule to a new function is exactly when such a property goes missing.
+    expect(isOwnFile("/sales", "/sales2/x.json")).toBe(false);
+    expect(isOwnFile("/sales", "/sales.bak/x.json")).toBe(false);
+    expect(isOwnFile("/sales", "/salesx")).toBe(false);
+    expect(isOwnFile("/a/b", "/a/bb/x.json")).toBe(false);
+  });
+
+  it("normalises before it compares, so `..` cannot walk back in", () => {
+    // `/sales/../notes.md` IS `/notes.md`. Compared as a raw string it starts
+    // with `/sales/` and would be called the page's own.
+    expect(isOwnFile("/sales", "/sales/../notes.md")).toBe(false);
+    expect(isOwnFile("/sales", "/sales/./data.json")).toBe(true);
+  });
+
+  it("the folder itself is not a file in the folder", () => {
+    expect(isOwnFile("/sales", "/sales")).toBe(false);
+  });
+
+  it("a page at the workspace root owns every read", () => {
+    // It has no folder, so there is no boundary for a path to be outside of and
+    // nothing on which to call an absence a mistake. Answering
+    // `!raw.startsWith("/")` split one FILE in two: `data.json` quiet,
+    // `/data.json` loud, same file, same page.
+    expect(isOwnFile("", "data.json")).toBe(true);
+    expect(isOwnFile("", "/data.json")).toBe(true);
+    expect(isOwnFile("", "/anything/at/all.json")).toBe(true);
   });
 });

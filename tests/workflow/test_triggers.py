@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 from specstar import SpecStar
 
+from workspace_app.resources import make_spec
 from workspace_app.workflow.triggers import (
     ITriggerStore,
     Schedule,
@@ -46,6 +47,20 @@ class FakeStore(ITriggerStore):
         self._last[trigger_id] = fire_window
         self._run.pop(trigger_id, None)  # a fresh window resets the run slot
         return True
+
+    def release_claim(self, trigger_id: str, claimed: str, back_to: str) -> None:
+        # Only when the row still reads what we claimed — the same rule the real
+        # store keeps, so a fake cannot make a caller look correct that isn't.
+        if self._last.get(trigger_id) != claimed:
+            return
+        self._last[trigger_id] = back_to
+        self._run.pop(trigger_id, None)
+        # AND drop the claim itself. Without this the window can never be taken
+        # again through this fake, while the real store — which compares only
+        # `last_window` — allows it. That is the whole point of releasing: the
+        # next sweep gets to try. A fake that cannot express the retry would let
+        # a test call "released and then never retried" correct.
+        self._claimed.discard((trigger_id, claimed))
 
     def record_run(self, trigger_id: str, run_id: str) -> None:
         self._run[trigger_id] = (run_id, 1)
@@ -259,6 +274,7 @@ async def test_sweeper_keys_the_store_by_the_globally_qualified_trigger_id():
             claimed.append(trigger_id)
             return True
 
+        def release_claim(self, trigger_id: str, claimed: str, back_to: str) -> None: ...
         def record_run(self, trigger_id: str, run_id: str) -> None: ...
         def note_resume(self, trigger_id: str) -> None: ...
         def clear_run(self, trigger_id: str) -> None: ...
@@ -650,3 +666,42 @@ def test_monthly_dom_clamps_to_month_end():
     # Feb 2026 has 28 days → target is the 28th; on the 28th at/after 00:00 it is due
     assert is_due(s, datetime(2026, 2, 28, 0, 1), last_window="2026-01")
     assert not is_due(s, datetime(2026, 2, 27, 23, 0), last_window="2026-01")
+
+
+@pytest.mark.parametrize("kind", ["fake", "specstar"])
+def test_a_released_window_can_be_claimed_again(kind: str):
+    """Releasing hands the window BACK — the next sweep must be able to take it.
+
+    Asserted against both the fake and the real store with the same lines,
+    because the two had already drifted: the fake gated `try_claim` on a
+    permanent `_claimed` set that `release_claim` did not clear, so a released
+    window was un-reclaimable there and reclaimable in production. A double that
+    cannot express the behaviour under test makes the test agree with whatever
+    the code does.
+    """
+    if kind == "fake":
+        store: ITriggerStore = FakeStore()
+    else:
+        spec = make_spec(default_user="alice")
+        register_trigger_store(spec)
+        store = SpecstarTriggerStore(spec)
+
+    assert store.try_claim("t1", "2026-09-05") is True
+    assert store.try_claim("t1", "2026-09-05") is False  # already taken
+
+    store.release_claim("t1", "2026-09-05", "")
+
+    assert store.last_window("t1") == ""
+    assert store.try_claim("t1", "2026-09-05") is True, "a released window stayed spent"
+
+
+def test_releasing_a_window_somebody_else_moved_on_from_does_nothing():
+    """The condition is what keeps a release from re-firing a window that really
+    ran: only the caller whose claim is still the current one may hand it back."""
+    store = FakeStore()
+    store.try_claim("t1", "2026-09-05")
+    store.try_claim("t1", "2026-09-06")  # a peer advanced to the next window
+
+    store.release_claim("t1", "2026-09-05", "")
+
+    assert store.last_window("t1") == "2026-09-06"

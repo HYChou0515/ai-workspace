@@ -362,14 +362,17 @@ describe("a gantt bar coloured by ACTOR", () => {
 });
 
 /**
- * A provisional bar is the schedule's GUESS for work nobody has estimated. Its
- * rule makes it hollow and dashed so it is, in that rule's own words, "never
- * mistaken for the solid bars around it".
+ * A record with no estimate is PROVISIONAL — the schedule placed it rather than
+ * a person. That is not a rare state: `exp_days` is optional, the PM Timeline
+ * ships a `schedule:` block, and so an ordinary issue nobody has sized is
+ * provisional. It is the common case, not the exception.
  *
- * But that rule lives in the stylesheet and the colour is an inline style, and
- * inline wins — so on any `color_by` chart the guess paints as a solid, fully
- * planned bar. Pre-existing since #690 P2, and invisible until now because
- * every other guard renders bars that are not provisional.
+ * Which is why the colour has to survive it. Withholding the fill so the
+ * stylesheet's `background: transparent` could apply made every unsized issue
+ * on a `color_by` chart paint as an identical dashed blue outline — the
+ * assignee colouring, gone for most of a real project. The dashed edge is what
+ * says "provisional"; it says it perfectly well on a coloured bar, and it is
+ * the only thing that has to.
  */
 describe("a provisional bar on a coloured chart", () => {
   const withSchedule = (colorBy: string) => ({
@@ -381,23 +384,31 @@ describe("a provisional bar on a coloured chart", () => {
     ["urgency", "critical"],
     ["assignee", "alice"],
   ] as const) {
-    it(`keeps the guess hollow when the chart is coloured by ${field}`, () => {
+    it(`still wears its ${field} colour with no estimate set`, () => {
       const { bar } = renderBar({ [field]: value }, withSchedule(field));
 
       expect(bar.dataset.provisional, "the row is not provisional to begin with").toBe("true");
-      // All three inline paints have to stay off, or the stylesheet's hollow
-      // rule loses to them one by one: it sets a transparent fill, its own ink
-      // and a dashed edge, and an inline value beats each of those separately.
-      expect(bar.style.background, "a guess wearing a solid fill").toBe("");
-      expect(bar.style.color, "a guess wearing the fill's ink").toBe("");
-      expect(bar.style.borderColor, "a guess wearing a solid edge").toBe("");
+      expect(bar.style.background, "an unsized issue lost its colour").not.toBe("");
     });
   }
 
-  it("still colours the same record once it has an estimate", () => {
-    const { bar } = renderBar({ assignee: "alice", exp_days: 3 }, withSchedule("assignee"));
-    expect(bar.dataset.provisional).toBeUndefined();
-    expect(bar.style.background).not.toBe("");
+  it("is still told apart from a plan, by the dash the stylesheet gives it", () => {
+    // The two cues are meant to coexist: the fill says WHOSE, the dashed edge
+    // says NOT YET SIZED. Guarding only the fill would let a later change take
+    // the dash away and leave a guess indistinguishable from a commitment.
+    const rule = effective(ENTITY_VIEWS_CSS, ".ev-gantt__bar[data-provisional]", "border") ?? "";
+    expect(rule).toContain("dashed");
+  });
+
+  it("colours the same record the same way once it has an estimate", () => {
+    const guess = renderBar({ assignee: "alice" }, withSchedule("assignee"));
+    cleanup();
+    const sized = renderBar({ assignee: "alice", exp_days: 3 }, withSchedule("assignee"));
+
+    expect(guess.bar.dataset.provisional).toBe("true");
+    expect(sized.bar.dataset.provisional).toBeUndefined();
+    // Same person, same colour — sizing the work must not repaint it.
+    expect(guess.bar.style.background).toBe(sized.bar.style.background);
   });
 });
 

@@ -599,6 +599,12 @@ class TurnContextBuilder:
             ensure_sandbox_via=lambda on_progress, tools: self._registry.ensure_handle(
                 session, tools=tools, on_progress=on_progress
             ),
+            # #775: and the ITEM's preparation lock, so this turn cannot prepare
+            # the workspace's python environment while a workflow node, a WUI
+            # tool call or another chat on the same item is doing it.
+            prepare_env_via=lambda handle, on_output: self._registry.prepare_project_env(
+                session, handle, on_output=on_output
+            ),
             agent_config=agent_config,
             run_subagent=run_subagent,
             mention=self._agent_mention,

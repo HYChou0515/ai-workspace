@@ -1,3 +1,10 @@
+> ⚠️ **`chart.umd.js` is downloaded by the build. Never edit it** — the next
+> Rebuild overwrites it and your change vanishes silently. Change how you call
+> the library, or pin a different version in `package.json`'s build step.
+>
+> ⚠️ **`chart.js` is an example, not a limit.** `npm pack <any-package>@<ver>`
+> fetches anything on npm the same way.
+
 # The charting example
 
 **A WUI can use a real charting library. Do not hand-draw one.**

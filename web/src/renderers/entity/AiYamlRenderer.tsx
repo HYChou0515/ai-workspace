@@ -35,7 +35,7 @@ import { YamlTree } from "../YamlTree";
 import { EntityRecordModal } from "./EntityRecordModal";
 import { EntityViewBody, HealthView, parseViewSpec } from "./EntityViews";
 import { buildRefIndex, referencedTypes, refOptionsForField } from "./refTraversal";
-import { setViewScalar } from "./shared";
+import { clockText, setViewScalar } from "./shared";
 import { VIEW_KIND, type SortRule, type ViewConfig } from "./types";
 import { ViewErrorBoundary } from "./ViewErrorBoundary";
 
@@ -280,6 +280,19 @@ export function AiYamlRenderer({ path }: { path: string }) {
             onSetSort: (rules) => persistGantt(setViewScalar(entry.text, "sort", rules.length ? JSON.stringify(rules) : null)),
             skipWeekends: spec.skip_weekends ?? false,
             onToggleSkipWeekends: (next) => persistGantt(setViewScalar(entry.text, "skip_weekends", String(next))),
+            workHours: spec.work_hours,
+            // Written as a FLOW mapping so it stays one line, which is what
+            // `setViewScalar` edits — and formatted through `clockText`, the
+            // inverse of the parser's own reader, so the file can never hold a
+            // window the parser then drops.
+            onSetWorkHours: (next) =>
+              persistGantt(
+                setViewScalar(
+                  entry.text,
+                  "work_hours",
+                  next ? `{ from: "${clockText(next.from)}", to: "${clockText(next.to)}" }` : null,
+                ),
+              ),
             colorBy: spec.color_by ?? "",
             colorByOptions,
             onSetColorBy: (field) => persistGantt(setViewScalar(entry.text, "color_by", field || null)),

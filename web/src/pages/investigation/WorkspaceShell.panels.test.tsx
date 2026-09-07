@@ -61,10 +61,17 @@ const item = {
   permission: { visibility: "private" },
 } as unknown as AppItem;
 
-function openShell(files: { path: string; size: number }[] = []) {
+/** #785: PM opens its `layout.views` as the main stage instead of files. Same
+ * shell, different answer to "what did you come here to look at". */
+const viewsFirst = {
+  ...manifest,
+  layout: { ...manifest.layout, primary_surface: "views", views: ["/views/gantt.ai.yaml"] },
+} as unknown as AppManifest;
+
+function openShell(files: { path: string; size: number }[] = [], m: AppManifest = manifest) {
   return renderWithQuery(
     <MemoryRouter>
-      <WorkspaceShell manifest={manifest} item={item} files={files as never} />
+      <WorkspaceShell manifest={m} item={item} files={files as never} />
     </MemoryRouter>,
   );
 }
@@ -155,6 +162,15 @@ describe("the file sidebar answers to the activity rail", () => {
     openShell();
     await screen.findByTitle("Files");
     expect(pane()).toBeInTheDocument();
+  });
+
+  it("starts collapsed for a views-first App — the chart is the stage, not the tree (#785)", async () => {
+    // A views-first App is read from its charts; the file tree is a drawer you
+    // open when you want it, and 260px of it is 260px the gantt does not get.
+    // The rail stays, so this is a collapse, not a removal.
+    openShell([], viewsFirst);
+    await screen.findByTitle("Files");
+    expect(pane()).not.toBeInTheDocument();
   });
 
   it("collapses when the icon already on show is double-clicked, rail still there", async () => {
@@ -387,3 +403,77 @@ describe("the chevron stays a one-click toggle", () => {
     expect(screen.getByTestId("bottom-body")).toBeInTheDocument();
   });
 });
+
+
+describe("the Members rail — its roster has somewhere to scroll", () => {
+  // The reported bug, and it is worse than "no scrollbar": `MembersSidebar`
+  // opened its OWN <aside style={sidebarStyle}>, and `sidebarStyle` carries
+  // `overflow: hidden`. With no scrolling body inside it, a roster longer than
+  // the frame is CLIPPED — the names past the bottom are not merely
+  // unscrollable, they are unreachable.
+  //
+  // Four of the five rail tabs already got this right (evidence/search/history
+  // /activity); Members was the one that did not. Same rule, five carriers,
+  // one missing it.
+  //
+  // What this test can and cannot hold: happy-dom does no layout, so it cannot
+  // observe that content actually overflows or that a wheel event scrolls. It
+  // pins the STRUCTURE — a scrolling, focusable region wrapping the roster —
+  // which is exactly what was absent. "It really scrolls" is P4's job, in a
+  // real browser. Written down because a test that looks stronger than it is
+  // becomes the reason nobody checks.
+  it("wraps the roster in a scrollable region", async () => {
+    openShell();
+    fireEvent.click(screen.getByTitle("Members"));
+
+    const roster = await screen.findByTestId("members-title");
+    const region = roster.closest("[data-testid='members-scroll']");
+
+    expect(region).not.toBeNull();
+    expect(region).toHaveStyle({ overflowY: "auto" });
+  });
+
+  it("lets a keyboard user reach it", async () => {
+    // A roster of plain people has NO focusable element in it — `UserChip`
+    // renders a <span> — so without `tabindex` the region is unreachable by
+    // keyboard and cannot be scrolled without a mouse (axe
+    // `scrollable-region-focusable`, WCAG 2.1.1 A). A named region rather than
+    // a bare tab stop, so a screen-reader user is told what they landed on.
+    openShell();
+    fireEvent.click(screen.getByTitle("Members"));
+
+    const region = await screen.findByTestId("members-scroll");
+
+    expect(region).toHaveAttribute("tabindex", "0");
+    expect(region).toHaveAttribute("role", "region");
+    expect(region).toHaveAccessibleName();
+  });
+
+  it("keeps the title and Manage access pinned while the roster moves", () => {
+    // P1 wrapped the WHOLE panel — title, access chip, "Manage access…" and the
+    // roster — in one scrolling region, so scrolling took the header away with
+    // it. Its commit message said the fix copied `HistorySidebar`; it did not.
+    // HistorySidebar (and search, evidence, activity) all keep the header
+    // OUTSIDE the scrolling body. Four of five got it right and Members did
+    // not — the same asymmetry as the original bug, reproduced one level down
+    // by the fix for it.
+    //
+    // Structural again, and for the same reason: happy-dom does no layout, so
+    // "it actually stays put" is a real-browser question. What is asserted here
+    // is the declaration that makes it stay, and the background without which
+    // the rows would scroll visibly through it.
+    openShell();
+    fireEvent.click(screen.getByTitle("Members"));
+
+    const header = screen.getByTestId("members-header");
+
+    expect(header).toHaveStyle({ position: "sticky", top: "0px" });
+    // The inline declaration, not the computed value: happy-dom does not resolve
+    // the `background` shorthand, so asking the computed style would assert
+    // nothing while looking like it asserted something.
+    expect(header.style.background).not.toBe("");
+    // …and it is INSIDE the scroller, which is what makes sticky mean anything.
+    expect(header.closest("[data-testid='members-scroll']")).not.toBeNull();
+  });
+});
+

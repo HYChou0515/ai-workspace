@@ -123,6 +123,23 @@ def _fake_host(backend: MockSandbox, advertise_url: str) -> FastAPI:
         data = await backend.download(SandboxHandle(id=rid), path)
         return Response(content=data, media_type="application/octet-stream")
 
+    @app.post("/sandboxes/{rid}/files")
+    async def download_many(rid: str, body: dict) -> dict:
+        # Mirrors the real host (`sandbox_host/app.py`): base64 per file, and
+        # `None` for a path that is not there — a double that answered some
+        # other way would agree with a broken client.
+        import base64
+
+        out: list[str | None] = []
+        for path in body["paths"]:
+            try:
+                data = await backend.download(SandboxHandle(id=rid), path)
+            except FileNotFoundError:
+                out.append(None)
+            else:
+                out.append(base64.b64encode(data).decode())
+        return {"files": out}
+
     @app.get("/sandboxes/{rid}/exists")
     async def exists(rid: str, path: str) -> dict[str, bool]:
         return {"exists": await backend.exists(SandboxHandle(id=rid), path)}
@@ -173,6 +190,8 @@ def _fake_host(backend: MockSandbox, advertise_url: str) -> FastAPI:
                     # The real host reads this key too; a mirror that ignored it
                     # would let the client "send" an env nothing ever applied.
                     env=body.get("env"),
+                    # Same contract for the per-call wall-clock budget (#775).
+                    exec_timeout=body.get("exec_timeout"),
                 )
             except Exception as exc:  # noqa: BLE001 — relayed in-band as an error frame
                 yield (
@@ -317,6 +336,40 @@ async def test_upload_download_roundtrip(http_sandbox: HttpSandbox):
     h = await http_sandbox.create(SandboxSpec())
     await http_sandbox.upload(h, b"hello \x00 world", "/data/x.bin")
     assert await http_sandbox.download(h, "/data/x.bin") == b"hello \x00 world"
+
+
+async def test_an_endpoint_the_host_does_not_have_says_so(http_sandbox: HttpSandbox):
+    """A 404 from the host means one of two very different things, and they used
+    to arrive as the same sentence.
+
+    The host answers a real miss with its own `{"error": ...}`. A 404 WITHOUT
+    that key is the framework's route-not-found — an app pod ahead of a host pod
+    during a rollout. Nothing degrades (that is a deliberate decision: the host
+    ships on this pipeline), but an operator reading "sandbox not found" about a
+    sandbox that is plainly alive learns nothing at all."""
+    h = await http_sandbox.create(SandboxSpec())
+
+    with pytest.raises(SandboxNotFound) as caught:
+        await http_sandbox._io_request(h, "GET", "/no-such-endpoint")
+
+    said = str(caught.value)
+    assert "/no-such-endpoint" in said
+    assert "not implemented" in said and "older" in said
+
+
+async def test_download_many_returns_bytes_in_order_and_none_for_what_is_absent(
+    http_sandbox: HttpSandbox,
+):
+    """The production fast lane. Binary survives the base64 hop, order matches
+    what was asked, and a path the sandbox does not have comes back as `None` —
+    an answer about that path, so one missing file cannot fail the batch."""
+    h = await http_sandbox.create(SandboxSpec())
+    await http_sandbox.upload(h, b"one \x00", "/a.md")
+    await http_sandbox.upload(h, b"two", "/b.md")
+
+    got = await http_sandbox.download_many(h, ["/a.md", "/nope.md", "/b.md"])
+
+    assert got == [b"one \x00", None, b"two"]
 
 
 async def test_upload_file_download_to_file_roundtrip(http_sandbox: HttpSandbox, tmp_path):
@@ -994,3 +1047,38 @@ async def test_a_down_host_is_not_asked_for_its_listing_by_every_caller_in_turn(
         clock["t"] += 31.0  # the backoff expires: ask again rather than believe it forever
         assert await sandbox.running_sandboxes() is None
         assert asked == 2
+
+
+async def test_exec_carries_the_callers_wall_clock_budget_across_the_hop():
+    """`uv sync` names its own budget because the instance default (60s) kills a
+    cold start of a heavy profile instead of waiting for it. That budget is
+    useless unless it survives the hop — a hosted deployment is exactly where
+    the slow link lives."""
+    backend = MockSandbox()
+    app = _fake_host(backend, _ADVERTISE)
+    async with httpx.AsyncClient(transport=ASGITransport(app=app)) as client:
+        sb = HttpSandbox(base_url=_ADVERTISE, client=client)
+        h = await sb.create(SandboxSpec())
+        await sb.exec(h, ["true"], exec_timeout=900.0)
+    assert backend.exec_timeouts[-1] == 900.0
+
+
+async def test_no_budget_sends_the_same_request_it_always_did():
+    """An older host must keep working: omit the key rather than send a null it
+    would have to know to ignore. Same shape as the `env` pair above."""
+    seen: list[dict] = []
+    backend = MockSandbox()
+    app = _fake_host(backend, _ADVERTISE)
+
+    @app.middleware("http")
+    async def _capture(request, call_next):  # noqa: ANN001, ANN202
+        if request.url.path.endswith("/exec"):
+            seen.append(json.loads(await request.body()))
+        return await call_next(request)
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app)) as client:
+        sb = HttpSandbox(base_url=_ADVERTISE, client=client)
+        h = await sb.create(SandboxSpec())
+        await sb.exec(h, ["true"])
+    assert seen and "exec_timeout" not in seen[-1]
+    assert backend.exec_timeouts[-1] is None

@@ -26,7 +26,11 @@ const files = readdirSync(VIEWS_DIR).filter((f) => f.endsWith(".ai.yaml"));
 
 describe("every shipped PM view file survives the parser", () => {
   it("finds the shipped views (so this suite can't pass by scanning nothing)", () => {
-    expect(files.length).toBeGreaterThanOrEqual(6);
+    // Five since #785 retired `workload.ai.yaml` — it was `gantt.ai.yaml` with
+    // one key changed, and `group_by` is a setting the gear panel edits in
+    // place. A floor, not a count: a new view raises it, and only a scan that
+    // found nothing (the failure this guard exists for) drops below it.
+    expect(files.length).toBeGreaterThanOrEqual(5);
   });
 
   for (const file of files) {

@@ -86,15 +86,26 @@ async def workspace_workflow_metas(
     workspace's ``.workflows/`` dir, sorted by id, the filename winning as the id. A
     malformed one is skipped (not surfaced here — ``save_workflow`` is the loud guard),
     so one bad hand-edit can't break the whole list. Empty when there's none."""
+    from ..files.facade import read_all_existing
+
     prefix = f"/{WORKSPACE_WORKFLOW_DIR}/"
+    wanted = [
+        path
+        for path in sorted(await files.ls(workspace_id, prefix))
+        # only flat .workflows/<id>.json (no nested dirs)
+        if "/" not in path[len(prefix) :] and path.endswith(".json")
+    ]
+    # One operation, one resolution of where the workspace lives — reading them
+    # a call at a time put a second sandbox round trip in front of every file.
+    # `_existing` because a file deleted between the listing and the read is a
+    # race the panel survives, exactly as the per-file loop's `FileNotFound`
+    # guard used to.
+    blobs = await read_all_existing(files, workspace_id, wanted)
     out: list[WorkflowManifest] = []
-    for path in sorted(await files.ls(workspace_id, prefix)):
-        rel = path[len(prefix) :]
-        if "/" in rel or not rel.endswith(".json"):
-            continue  # only flat .workflows/<id>.json (no nested dirs)
+    for path, blob in blobs.items():
         try:
-            d = parse_def(await files.read(workspace_id, path))
+            d = parse_def(blob)
         except (DslError, FileNotFound):
             continue
-        out.append(msgspec.structs.replace(build_manifest(d), id=rel[: -len(".json")]))
+        out.append(msgspec.structs.replace(build_manifest(d), id=path[len(prefix) : -len(".json")]))
     return out

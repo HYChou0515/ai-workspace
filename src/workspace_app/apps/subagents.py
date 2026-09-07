@@ -149,14 +149,23 @@ async def workspace_subagent_defs(
     so the `tools:` it names is a REQUEST. Clamping here (rather than at the call
     site) is what keeps a hand-written file from granting itself `exec` on an App
     that has no sandbox."""
+    from ..files.facade import read_all
+
     prefix = f"/{WORKSPACE_AGENT_DIR}/"
+    wanted = [
+        path
+        for path in sorted(await files.ls(workspace_id, prefix))
+        if path[len(prefix) :].count("/") == 1 and path.endswith("/AGENT.md")
+    ]
+    # This index is rebuilt every turn, so reading each definition with its own
+    # call put a sandbox round trip per sub-agent in front of every message.
+    # STRICT, because the per-file loop this replaced was: it did a bare `read`,
+    # so a definition that vanished mid-listing raised out of here. Making the
+    # batch tolerant would have been a behaviour change nobody asked for, hidden
+    # inside a performance fix.
     out: list[SubagentDef] = []
-    for path in sorted(await files.ls(workspace_id, prefix)):
-        rel = path[len(prefix) :]
-        if rel.count("/") != 1 or not rel.endswith("/AGENT.md"):
-            continue
-        dir_name = rel[: -len("/AGENT.md")]
-        defn = _def_from(await files.read(workspace_id, path), dir_name)
+    for path, blob in zip(wanted, await read_all(files, workspace_id, wanted), strict=True):
+        defn = _def_from(blob, path[len(prefix) : -len("/AGENT.md")])
         if defn is not None:
             out.append(clamp_tools(defn, ceiling))
     return out

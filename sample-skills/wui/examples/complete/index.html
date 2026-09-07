@@ -1,0 +1,19 @@
+<!--
+  Vite's TEMPLATE, not the page. `vite build` reads this and writes
+  `dist/index.html` with the bundle's real paths; that output is what the
+  renderer runs (see `entry:` in page.ai.yaml).
+
+  This file's `/src/main.tsx` is a dev-server path and cannot be inlined — which
+  is exactly why `entry:` has to point at the build output. Leave this one alone.
+-->
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Scrap review</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
