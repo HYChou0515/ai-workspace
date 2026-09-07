@@ -494,11 +494,19 @@ class HttpSandbox:
                             stderr=base64.b64decode(frame["err"]),
                         )
         except httpx.TimeoutException as exc:  # subclass of TransportError — catch FIRST
-            # A read timeout means the command is still RUNNING on a busy host,
-            # not that the sandbox is gone. Mapping it to SandboxNotFound made
-            # `registry` rebuild the sandbox while the original command ran on to
-            # completion in the old one — the split-brain SandboxBusy exists to
-            # forbid. (`_request` has always had this ordering; exec did not.)
+            # A read timeout means the sandbox is BUSY, not gone. Mapping it to
+            # SandboxNotFound made `registry` rebuild the sandbox while the
+            # original command was still there — the split-brain SandboxBusy
+            # exists to forbid. (`_request` has always had this ordering; exec
+            # did not.)
+            #
+            # It no longer means the command RUNS ON, which this used to say: the
+            # host now cancels the exec when its stream closes, and a read
+            # timeout closes it. So a timed-out command is killed rather than
+            # abandoned. `read_timeout` defaults to 0 (no deadline), so only a
+            # deployment that sets one reaches this at all — but the reasoning
+            # above stands either way, and the sentence that no longer holds
+            # would have been the one a reader trusted.
             logger.warning("sandbox-http: exec sandbox %s timed out -> SandboxBusy", handle.id)
             raise SandboxBusy(handle.id) from exc
         except httpx.TransportError as exc:

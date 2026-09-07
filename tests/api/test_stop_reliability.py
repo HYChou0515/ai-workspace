@@ -17,7 +17,7 @@ from collections.abc import AsyncIterator
 from workspace_app.agent.context import AgentToolContext
 from workspace_app.api import MessageDelta, RunDone
 from workspace_app.api.events import AgentEvent
-from workspace_app.api.turns import ChatTurnEngine
+from workspace_app.api.turns import ChatTurnEngine, TurnMessage
 from workspace_app.turn_control import InMemoryTurnControl
 
 
@@ -119,27 +119,24 @@ async def test_a_stop_during_the_preamble_is_not_lost():
     exactly the window in which someone gives up and presses Stop.
 
     Nothing is queued yet, so there is no `current_turn` for the same-pod
-    fast-path to find, and the epoch bump is the ONLY record that the Stop
-    happened. Stamping the epoch when the turn is finally dequeued reads that
-    already-bumped value back, so `> my_epoch` never trips and the whole turn
-    then runs as though Stop had never been pressed. Stamping it when the
-    MESSAGE IS PERSISTED — before the preamble — is what makes the bump mean
-    something.
+    fast-path to find. The send registers itself as PREPARING before the
+    preamble and hands that token to `enqueue`; a Stop marks whatever is
+    preparing, and the worker declines to start it.
     """
     control = InMemoryTurnControl()
     runner = _HangingRunner()
     engine = ChatTurnEngine(runner, turn_control=control)
     key = "inv"
     try:
-        # The message is persisted; the caller stamps here, before the preamble.
-        stamped = await engine.cancel_epoch(key)
+        # The message is persisted; the send registers before the preamble.
+        pending = engine.preparing(key)
 
         # …the preamble runs, and the user hits Stop while it does.
         await engine.cancel_current(key)
 
         # …the preamble finishes and queues the turn it had been preparing.
         fut = engine.enqueue(
-            key, "go", AgentToolContext(), on_complete=lambda _: None, epoch=stamped
+            key, "go", AgentToolContext(), on_complete=lambda _: None, pending=pending
         )
 
         # Bounded: without the fix the turn runs and hangs for 30s, so a lost
@@ -151,12 +148,13 @@ async def test_a_stop_during_the_preamble_is_not_lost():
 
 
 async def test_a_turn_queued_after_the_stop_still_runs():
-    """The other half, and the reason this keys on the stamp rather than on "has
-    anyone ever pressed Stop": the NEXT message must not inherit the last Stop.
+    """The other half, and the reason this keys on a per-send token rather than
+    on "has anyone ever pressed Stop": the NEXT message must not inherit the
+    last Stop.
 
-    Its stamp is taken after the bump, so the same comparison that stands the
-    interrupted turn down lets this one through — which is what keeps Stop from
-    quietly becoming "this conversation is over".
+    Its token is registered after the bump and was never marked, so the same
+    check that declines the interrupted turn lets this one through — which is
+    what keeps Stop from quietly becoming "this conversation is over".
     """
     control = InMemoryTurnControl()
     runner = _QuickRunner()
@@ -164,10 +162,10 @@ async def test_a_turn_queued_after_the_stop_still_runs():
     key = "inv"
     try:
         await engine.cancel_current(key)  # an earlier Stop
-        stamped = await engine.cancel_epoch(key)  # a NEW message, stamped after it
+        pending = engine.preparing(key)  # a NEW message, registered after it
 
         fut = engine.enqueue(
-            key, "go", AgentToolContext(), on_complete=lambda _: None, epoch=stamped
+            key, "go", AgentToolContext(), on_complete=lambda _: None, pending=pending
         )
 
         await asyncio.wait_for(fut, 2)
@@ -359,3 +357,333 @@ async def test_a_stop_during_compaction_cancels_the_summariser():
     assert "summary" not in [m.role for m in after.messages], (
         "a cancelled summariser must leave the thread exactly as it found it"
     )
+
+
+class _HangsThenRuns:
+    """The first turn hangs — it is the one a Stop is aimed at. Later turns
+    finish, so a message queued behind it can be seen to run."""
+
+    def __init__(self) -> None:
+        self.seen: list[str] = []
+
+    async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+        self.seen.append(prompt)
+        if len(self.seen) == 1:
+            await asyncio.sleep(30)
+        yield RunDone()
+
+
+async def test_a_stop_does_not_discard_messages_already_queued_behind_it():
+    """Stop ends the RUNNING turn. It has never meant "and throw away what is
+    waiting" — `cancel_current`'s own docstring says queued messages are
+    untouched, and `chat_routes` promises the same to the person pressing it.
+
+    Keying on "was anything preparing when Stop landed" rather than on a shared
+    clock is what keeps that true: a message that reached the queue is no longer
+    preparing, so a later Stop cannot reach back and drop it. On a shared item
+    the alternative is one person's Stop silently discarding another's question;
+    on your own it is the follow-up you typed while the answer streamed.
+    """
+    runner = _HangsThenRuns()
+    engine = ChatTurnEngine(runner, turn_control=InMemoryTurnControl())
+    key = "inv"
+    try:
+        first = engine.preparing(key)
+        engine.enqueue(key, "M1", AgentToolContext(), on_complete=lambda _: None, pending=first)
+        while not runner.seen:  # M1 is running
+            await asyncio.sleep(0.01)
+
+        second = engine.preparing(key)
+        queued = engine.enqueue(
+            key, "M2", AgentToolContext(), on_complete=lambda _: None, pending=second
+        )
+
+        await engine.cancel_current(key)  # aimed at M1
+
+        # Bounded: a discarded M2 never resolves its future, so the regression
+        # is a timeout rather than a test that waits it out.
+        await asyncio.wait_for(queued, 3)
+        assert runner.seen == ["M1", "M2"]
+    finally:
+        await engine.forget(key)
+
+
+async def test_a_turn_declined_before_it_started_still_records_that_it_was_cancelled():
+    """A turn that never starts must still END — on the record, not only live.
+
+    `agentLog` derives "a reply is on its way" from the persisted thread, and
+    says why that is sound: a turn always ends in SOMETHING persisted, so the
+    waiting state cannot stick. Declining to start without writing anything
+    broke that: on reload — or for a viewer who never saw the live event — the
+    thread showed a question with no answer and no explanation, and the composer
+    waited half an hour for a reply nobody was going to send.
+    """
+    runner = _QuickRunner()
+    engine = ChatTurnEngine(runner, turn_control=InMemoryTurnControl())
+    key = "inv"
+    persisted: list[list[TurnMessage]] = []
+    try:
+        pending = engine.preparing(key)
+        await engine.cancel_current(key)
+        fut = engine.enqueue(
+            key, "go", AgentToolContext(), on_complete=persisted.append, pending=pending
+        )
+
+        await asyncio.wait_for(fut, 2)
+        assert not runner.started
+        assert [m.error_kind for batch in persisted for m in batch] == ["cancelled"]
+    finally:
+        await engine.forget(key)
+
+
+async def test_forget_also_cancels_work_that_was_still_preparing():
+    """Deleting a chat tears down its turn; the preparation behind it is part of
+    that. `forget` cancelled the worker and the in-flight turn but not the
+    `preparing` set, so a summariser kept running against a conversation the
+    route deletes on the very next line, and then wrote to it.
+    """
+    engine = ChatTurnEngine(_QuickRunner(), turn_control=InMemoryTurnControl())
+    key = "inv"
+    started = asyncio.Event()
+    outcome: list[str] = []
+
+    async def slow_preparation() -> None:
+        started.set()
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            outcome.append("cancelled")
+            raise
+        outcome.append("finished")  # pragma: no cover — only if forget misses it
+
+    running = asyncio.create_task(engine.run_interruptible(key, slow_preparation()))
+    await asyncio.wait_for(started.wait(), 2)
+
+    await engine.forget(key)
+
+    with contextlib.suppress(asyncio.CancelledError):
+        await asyncio.wait_for(running, 2)
+    assert outcome == ["cancelled"]
+
+
+async def test_a_stop_does_not_discard_a_queued_message_through_the_real_send_path():
+    """The same invariant through `POST /messages`, because that is the path that
+    had it wrong: the engine-level guard that was supposed to cover this
+    (`test_turn_queue`'s cancel test) calls `enqueue` WITHOUT a token — the
+    calling convention production no longer uses — so it went on passing while
+    the real path dropped messages.
+
+    Two sends, the first still running, then a Stop. The second must still be
+    answered: `cancel_current` promises exactly that, and on a shared item the
+    alternative is one person's Stop discarding another's question.
+    """
+    from httpx import ASGITransport
+
+    from workspace_app.api import create_app
+    from workspace_app.filestore.memory import MemoryFileStore
+    from workspace_app.resources import make_spec
+    from workspace_app.sandbox.mock import MockSandbox
+
+    from ._client import AsyncClient
+    from .conftest import register_rca_item
+
+    spec = make_spec(default_user="u")
+    iid = register_rca_item(spec)
+    runner = _HangsThenRuns()
+    app = create_app(spec=spec, sandbox=MockSandbox(), filestore=MemoryFileStore(), runner=runner)
+    url = f"/a/rca/items/{iid}/messages"
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+        first = asyncio.create_task(client.post(url, json={"content": "slow"}))
+        while not runner.seen:  # the first turn is running
+            await asyncio.sleep(0.01)
+        second = asyncio.create_task(client.post(url, json={"content": "fast"}))
+        # Let it get all the way into the queue before the Stop lands.
+        while len(app.state.turn_engine._ws_session(iid).queue._queue) == 0:  # noqa: SLF001
+            await asyncio.sleep(0.01)
+
+        await app.state.turn_engine.cancel_current(iid)
+
+        # Bounded: a discarded message never runs, so the regression is a
+        # timeout rather than a test that waits it out.
+        async def answered() -> None:
+            while "fast" not in runner.seen:
+                await asyncio.sleep(0.01)
+
+        await asyncio.wait_for(answered(), 5)
+
+        for task in (first, second):
+            task.cancel()
+            with contextlib.suppress(BaseException):
+                await task
+
+
+async def test_a_declined_turn_tells_the_live_stream_too():
+    """The marker on the record is for a viewer who reloads; this is for the one
+    watching right now.
+
+    `useChatSession` holds `stopping` until a TERMINAL event arrives. Without
+    this publish the composer would sit disabled until the store poll noticed —
+    seconds at best, and on a thread whose last message is the user's, the poll
+    reads "a reply is on its way" and waits half an hour.
+    """
+    engine = ChatTurnEngine(_QuickRunner(), turn_control=InMemoryTurnControl())
+    key = "inv"
+    seen: list[str] = []
+    sub = engine.subscribe(key)
+
+    async def collect() -> None:
+        async for ev in sub:
+            seen.append(type(ev).__name__)
+            if type(ev).__name__ == "RunCancelled":
+                return
+
+    collector = asyncio.create_task(collect())
+    try:
+        pending = engine.preparing(key)
+        await engine.cancel_current(key)
+        fut = engine.enqueue(
+            key, "go", AgentToolContext(), on_complete=lambda _: None, pending=pending
+        )
+        await asyncio.wait_for(fut, 2)
+
+        # Bounded: without the publish nothing ever arrives, so a missing
+        # terminal is a timeout rather than a test that waits it out.
+        await asyncio.wait_for(collector, 2)
+        assert "RunCancelled" in seen
+    finally:
+        collector.cancel()
+        with contextlib.suppress(BaseException):
+            await collector
+        await engine.forget(key)
+
+
+async def test_a_stop_during_compaction_leaves_the_rest_of_the_send_alone():
+    """Cancelling the summariser must not take the send down with it.
+
+    `run_interruptible` cancels a task it owns, so the `CancelledError` arrives
+    in `compact` as that task's RESULT — this coroutine was never cancelled and
+    must carry on. Letting it propagate would abort the preparation still to
+    come, and that preparation is the thing P1 established must be allowed to
+    finish: it is not atomic, and a cold sandbox restore abandoned halfway
+    leaves a sandbox nothing on the read path can tell is incomplete.
+
+    Observable end to end: the POST answers 202, and the turn that preparation
+    was building is DECLINED rather than never reaching the queue at all — which
+    is what leaves the marker behind.
+    """
+    from httpx import ASGITransport
+
+    from workspace_app.api import create_app
+    from workspace_app.filestore.memory import MemoryFileStore
+    from workspace_app.resources import Conversation, Message, make_spec
+    from workspace_app.sandbox.mock import MockSandbox
+
+    from ._client import AsyncClient
+    from .conftest import register_rca_item
+
+    class _HangingCompactor:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+
+        async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+            self.started.set()
+            await asyncio.sleep(30)
+            yield RunDone()  # pragma: no cover — only if the Stop is lost
+
+    spec = make_spec(default_user="u")
+    iid = register_rca_item(spec)
+    runner = _HangingCompactor()
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=runner,
+        get_user_id=lambda: "alice",
+        context_limit=6_000,
+    )
+    rm = spec.get_resource_manager(Conversation)
+    seeded = [Message(role="user", content=f"很久以前的第{i}個問題" * 40) for i in range(12)]
+    conv = rm.create(Conversation(item_id=iid, created_ms=1, messages=seeded))
+    key = app.state.chat_send._locator.engine_key(iid, conv.resource_id)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+        post = asyncio.create_task(
+            client.post(
+                f"/a/rca/items/{iid}/chats/{conv.resource_id}/messages",
+                json={"content": "接下來呢"},
+            )
+        )
+        await asyncio.wait_for(runner.started.wait(), 5)
+        await app.state.turn_engine.cancel_current(key)
+
+        # Bounded: if the cancellation escaped `compact`, the send dies and this
+        # never returns 202.
+        resp = await asyncio.wait_for(post, 10)
+
+    assert resp.status_code == 202
+    after = rm.get(conv.resource_id).data
+    assert isinstance(after, Conversation)
+    assert "summary" not in [m.role for m in after.messages], (
+        "a cancelled summariser must leave the thread exactly as it found it"
+    )
+    assert [m.error_kind for m in after.messages if m.role == "error"] == ["cancelled"], (
+        "the declined turn must still say, on the record, that it was stopped"
+    )
+
+
+async def test_a_stopped_manual_compaction_says_stopped_not_failed():
+    """The one place the outcome is visible to a person: `POST …/compact`.
+
+    Reporting a Stop as `failed` is what the wording exists to prevent — nothing
+    went wrong, they stopped it, and a control that calls your own press a
+    failure is one you stop trusting. Nothing held that: changing `stopped` back
+    to `failed` left every test green, and the composer then showed the fallback
+    「這段對話還沒有需要壓縮的內容」 — a stopped compaction reporting that there
+    was nothing to compact, over a thread full of history.
+    """
+    from httpx import ASGITransport
+
+    from workspace_app.api import create_app
+    from workspace_app.filestore.memory import MemoryFileStore
+    from workspace_app.resources import Conversation, Message, make_spec
+    from workspace_app.sandbox.mock import MockSandbox
+
+    from ._client import AsyncClient
+    from .conftest import register_rca_item
+
+    class _HangingCompactor:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+
+        async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+            self.started.set()
+            await asyncio.sleep(30)
+            yield RunDone()  # pragma: no cover — only if the Stop is lost
+
+    spec = make_spec(default_user="u")
+    iid = register_rca_item(spec)
+    runner = _HangingCompactor()
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=runner,
+        get_user_id=lambda: "alice",
+        context_limit=6_000,
+    )
+    rm = spec.get_resource_manager(Conversation)
+    seeded = [Message(role="user", content=f"很久以前的第{i}個問題" * 40) for i in range(12)]
+    conv = rm.create(Conversation(item_id=iid, created_ms=1, messages=seeded))
+    key = app.state.chat_send._locator.engine_key(iid, conv.resource_id)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+        asking = asyncio.create_task(
+            client.post(f"/a/rca/items/{iid}/chats/{conv.resource_id}/compact")
+        )
+        await asyncio.wait_for(runner.started.wait(), 5)
+        await app.state.turn_engine.cancel_current(key)
+        resp = await asyncio.wait_for(asking, 10)
+
+    assert resp.status_code == 200
+    assert resp.json() == {"compacted": False, "reason": "stopped"}

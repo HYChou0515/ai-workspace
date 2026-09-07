@@ -216,6 +216,12 @@ export function drawOwnAsk(log: AgentLog, ask: { author: string; content: string
   return {
     ...log,
     streaming: true,
+    // A new question supersedes a Stop that has not landed yet. `retryTurn` is
+    // literally `cancel()` then `send()`, and without this the retry inherits
+    // `stopping`: the turn it just started cannot be stopped and nothing can be
+    // sent, until a terminal event arrives for the turn being abandoned — which
+    // not arriving is the reason retry exists.
+    stopping: false,
     error: null,
     metrics: null,
     entries: [
@@ -227,6 +233,43 @@ export function drawOwnAsk(log: AgentLog, ask: { author: string; content: string
       },
     ],
   };
+}
+
+/** Take back a message drawn by {@link drawOwnAsk} whose send was refused.
+ *
+ * Drawing before the POST resolves is the whole point, so a refusal has to undo
+ * it: the message was never persisted, so no broadcast will ever adopt that
+ * entry, and the store poll cannot clear it either — `reconcileSnapshot` bails
+ * when the snapshot is SHORTER than the screen, which is exactly this case. It
+ * stayed, contradicted by the error beside it.
+ *
+ * And it was not merely cosmetic. An entry with no `at` is its own turn to
+ * `turnsFromEntry`, so "undo to here" asked the backend for one turn more than
+ * the person pointed at, and undo deletes irreversibly.
+ *
+ * Only PENDING entries, and only the last match: a message the backend already
+ * confirmed has been adopted and is no longer pending, so this cannot reach a
+ * message that really is in the thread. */
+export function retractOwnAsk(log: AgentLog, ask: { author: string; content: string }): AgentLog {
+  // Walked backwards by hand rather than with `findLastIndex`: this project's
+  // TS lib target predates it, and the suite passes either way — only the build
+  // says so.
+  let at = -1;
+  for (let i = log.entries.length - 1; i >= 0; i--) {
+    const e = log.entries[i];
+    if (
+      e.kind === "message" &&
+      e.pending &&
+      e.message.role === "user" &&
+      e.message.content === ask.content &&
+      e.message.author === ask.author
+    ) {
+      at = i;
+      break;
+    }
+  }
+  if (at < 0) return log;
+  return { ...log, entries: [...log.entries.slice(0, at), ...log.entries.slice(at + 1)] };
 }
 
 /** How long after asking we still believe a reply is on its way.

@@ -3,7 +3,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { AgentEvent } from "../events";
 import { eventId, eventSeq, isTerminal, isTurnProgress } from "../events";
-import { type AgentLog, drawOwnAsk, logFromMessages, reduceAgent } from "../pages/investigation/agentLog";
+import {
+  type AgentLog,
+  drawOwnAsk,
+  logFromMessages,
+  reduceAgent,
+  retractOwnAsk,
+} from "../pages/investigation/agentLog";
 import { publishFileChanged } from "../lib/fileChangedBus";
 import type { MsgKey } from "../lib/i18n";
 import { type QuotaDetail, type QuotaKind, quotaMessage } from "../lib/quotaFailure";
@@ -626,6 +632,15 @@ export function useChatSession(
           // The sentence above is lossy by design; the LIST survives beside it
           // so the refusal can offer to act rather than only to explain.
           holding: holdingFromSendError({ ...(err as object | null), status }),
+          // …and take the drawn message back. It was never persisted, so no
+          // broadcast will adopt it and the store poll cannot clear it — it
+          // would sit in the transcript with the error beside it saying it was
+          // not sent, and count as a turn to `turnsFromEntry`, which makes undo
+          // delete one turn more than the person pointed at. The gateway-cut
+          // branch above deliberately does NOT come here: there the request was
+          // cut but the turn may well be running, and hiding the message would
+          // be the worse lie.
+          entries: retractOwnAsk(prev, { author: currentUser, content: trimmed }).entries,
         }));
       }
     },

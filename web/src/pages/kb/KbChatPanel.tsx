@@ -411,8 +411,12 @@ export function KbChatPanel({
                 composer's (its `cancel` aborts the local stream outright, and a
                 send is refused while one is in flight rather than queued), but
                 the button that becomes a different button while you reach for it
-                is the same button. Icon-only, so each needs its own accessible
-                name — `title` alone does not give one. */}
+                is the same button. Icon-only, so each carries an explicit
+                `aria-label`: `title` would in fact supply an accessible name on
+                its own (measured — removing the label leaves the button findable
+                by name), but it is a fallback the spec applies only when nothing
+                better exists, and a label that says what the control IS should
+                not depend on that. */}
             <button
               type="button"
               className="kb-btn kb-btn--stop"

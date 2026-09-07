@@ -407,6 +407,19 @@ describe("KB chat — send and stop are two buttons", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: /Stop/ })).toBeEnabled());
     // Present, not vanished — a button that disappears takes its position with it.
     expect(screen.getByRole("button", { name: /Send/ })).toBeDisabled();
+
+    // …and disabled BECAUSE a turn is streaming, not because the composer went
+    // empty. `submit` clears the draft, so the assertion above passes with the
+    // `log.streaming` guard deleted — it was measuring `!draft.trim()`. Typing
+    // again separates the two: with a draft present, only the streaming turn can
+    // still be holding Send down. Deleting the guard makes THIS line fail, and
+    // a Send that is clickable mid-stream does nothing at all (`submit` returns
+    // early on `log.streaming`), which is the silent no-op the workspace
+    // composer spent a whole comment block eliminating.
+    fireEvent.change(screen.getByPlaceholderText("Ask the knowledge base…"), {
+      target: { value: "and another thing" },
+    });
+    expect(screen.getByRole("button", { name: /Send/ })).toBeDisabled();
   });
 
   it("has nothing to stop when nothing is streaming", () => {

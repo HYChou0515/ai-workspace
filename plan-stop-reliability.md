@@ -6,8 +6,8 @@
 2. **「訊息欄裡有東西時按 Stop，會把當前停下然後送出——但使用者只覺得東西不見了，AI 還在跑，像系統故障。」**
 
 第二件的一半（「東西不見了」）已經修掉：送出時本地就畫出自己的訊息，不再等後端廣播。
-見 commit `17e82862` + `67da5148`（真瀏覽器量測：注入 5 秒後端延遲下，泡泡從 2823ms → 34ms，
-且廣播到達後仍只有一顆）。本計畫處理其餘部分。
+見 `fix(chat): draw the sender's own message when they send it` 那一組 commit（真瀏覽器量測：
+注入 5 秒後端延遲下，泡泡從 2823ms → 34ms，且廣播到達後仍只有一顆）。本計畫處理其餘部分。
 
 ---
 
@@ -248,13 +248,16 @@ P1 (epoch 提前) → P2 (exec 真的被殺) → P3 (compaction 拆 task) → P4
 
 ## 執行結果（全部完成）
 
-| Phase | commit | 結果 |
+| Phase | commit 標題（用 `--grep` 找它） | 結果 |
 |---|---|---|
-| P1 | `e11c34f2` | epoch stamp 提前到訊息持久化；preamble 期間的 Stop 不再被靜默吃掉 |
-| P2 | `d95b811b` | **前提實測成立 → 走修法 A**（見下）；`finally` 改成 cancel |
-| P3 | `38543720` | `run_interruptible` + compaction 拆 task；新增 `stopped` outcome |
-| P4 | `b8f3f6e4` | Send/Stop 拆兩顆 icon 按鈕 + `stopping` 狀態；兩處都改 |
-| P5 | `cabfe5e8` | `on_chunk` 當取消點；洩漏從整個呼叫壓到一個 chunk |
+| P1 | `P1 a Stop pressed while the turn is still being prepared…` | Stop 在 preamble 期間不再被靜默吃掉。**機制在第一輪 review 後換過**，見下 |
+| P2 | `P2 Stop now actually kills the command running in the sandbox` | **前提實測成立 → 走修法 A**；`finally` 改成 cancel |
+| P3 | `P3 Stop reaches the summariser…` | `run_interruptible` + compaction 拆 task；新增 `stopped` outcome |
+| P4 | `P4 Send and Stop stop being the same button` | 拆兩顆 icon 按鈕 + `stopping` 狀態；兩處都改 |
+| P5 | `P5 a stopped deck turn lets go of the model call` | `on_chunk` 當取消點；洩漏從整個呼叫壓到一個 chunk |
+
+> **這張表不列 commit hash。** 它原本列了五個，而分支之後 rebase 到往前 93 個 commit 的
+> master，那五個全部變成任何分支都構不到的孤兒——**而表看起來完全正常**。標題找得到，hash 不會。
 
 ### P2 的前置實測 — 答案是「會」
 
@@ -299,3 +302,72 @@ P1 (epoch 提前) → P2 (exec 真的被殺) → P3 (compaction 拆 task) → P4
 - `uv run ty check` 有 1 個 diagnostic：`pandera.pandas` 解不到，是這棵 worktree 沒跑
   `uv sync --all-extras`（CLAUDE.md 有記），與本次改動無關；`tests/agent/` 有 5 條
   `test_infer_modules` 因同一原因紅。
+
+
+---
+
+## 第一輪對抗式 review 之後
+
+四個 lens（defect / conformance / veracity / regression）平行跑過，各自獨立。**一致性判定：
+五個 Phase 都做到計畫描述的事，鎖定決策沒有回退，「不在本計畫範圍」一項都沒被順手做掉，
+而計畫裡宣稱的每一個突變都被獨立重跑並復現**（連 P5 的「147 個 chunk」都分毫不差）。
+
+找到的是別的東西。
+
+### 換掉的機制：P1 的站下
+
+三個 lens 從三個方向指到同一行。原本的做法是「每則訊息在持久化時蓋 cancel epoch，出列時
+比對」，但 Stop 對一個 key 只 bump 一次 epoch，所以**所有在 Stop 之前蓋章的訊息**都會被站下
+——包含別人早就排進 FIFO 的。這牴觸 `cancel_current` 與 `chat_routes` 兩處寫死的契約，而且
+P4 開放「自己的 turn 進行中也能送」之後變得很好走。
+
+守衛之所以沒抓到：本來守這件事的 `test_cancel_current_stops_only_the_running_turn_then_next_runs`
+呼叫 `enqueue` **沒帶 epoch**——也就是生產環境已經不走的那條路。
+
+第二個錯：站下不呼叫 `on_complete`，什麼都不存，打破 `agentLog` 寫死的「turn 一定以某個
+持久化結果收場」，於是重整後畫面顯示「還在回覆」達 30 分鐘，在那狀態按 Stop 兩顆按鈕一起死。
+
+**改成 per-send 的 `PendingTurn` 憑證**：持久化前登記、`enqueue` 時註銷。Stop 只標記「還在
+準備中」的；已進佇列的碰不到。站下時走 `on_complete` 寫下和正常取消相同的 cancelled 標記，
+並發同一顆終止事件。
+
+代價要講明白：**跨 pod 的「preamble 期間 Stop」不再被涵蓋**（turn 開始後仍由 `_watch_epoch`
+中止，和 master 一樣）。原本的 epoch 版本涵蓋得到，換掉之後沒有——這是刻意的取捨，
+換來的是不會吃掉別人的訊息。
+
+### 其他修掉的
+
+- **送出被拒絕時，`drawOwnAsk` 畫的那則沒被收回**（`retractOwnAsk`）。它不只留在畫面上：
+  沒有 `at` 的 entry 被 `turnsFromEntry` 算成一個 turn，「undo 到這裡」因此多刪一個真 turn，
+  **不可逆**。gateway cut（502/504）刻意不收回——那裡訊息可能真的在跑。
+- **`stopping` 會卡死**：新的送出現在會清掉它（`retryTurn` 是 `cancel()` 接 `send()`）。
+- **`forget` 現在也收掉 `preparing` 與 `pending_turns`**：刪 chat 的下一行就 delete
+  conversation，summariser 原本會跑完再對已刪除的 conversation 寫入。
+- **送出的判準下沉成一個 `sendRefusal()`**：`submit` / `onChip` / `onAnswerQuestion` / chip
+  按鈕的 `disabled` 原本有**四份**拷貝，規則改了只有兩份跟上——正是計畫自己宣稱修掉的
+  「旁觀者被鎖住」。
+
+### 補上五條「刪掉一行、整套照樣綠」的守衛
+
+`reconcileSnapshot` 的 `stopping` 攜帶（兩個方向各一條）、`compact` 的 `except CancelledError`、
+`stopped` outcome 走 `POST …/compact` 端到端、站下的 live `RunCancelled`、KbChatPanel 的 Send
+守衛。**最後一條原本的測試是碰巧綠的**——`submit` 會 `setDraft("")`，所以它量到的是
+`!draft.trim()` 而不是 `log.streaming`。
+
+### 更正的不實宣稱
+
+- 「icon-only 按鈕沒有 `aria-label` 就沒有 accessible name，`title` 不算」——**實測是錯的**，
+  拿掉 `aria-label` 之後 `getByRole("button", { name })` 仍然找得到。註解已改成說明為什麼
+  仍然明寫 label，而不是宣稱一件假的事。
+- `HttpSandbox.exec` 的 `SandboxBusy` 註解說「the command is still RUNNING on a busy host」
+  ——P2 之後不再成立（read timeout 關掉串流現在會殺掉指令）。已更正。
+- P4 的 commit message 說 `max_turns_exceeded` 「listed two thirds of it」，實際是 6 個欄位
+  裡的 2 個，也就是三分之一；程式碼裡的註解是對的，commit message 不對。歷史不改寫，記在這裡。
+
+### 仍未做
+
+- **沒有 push、沒開 PR，所以 CI 從頭到尾沒跑過。**
+- **P4 的新按鈕仍然沒有人在真瀏覽器按過。**
+- P2 的驗收字面要求整合測試（「斷言行程真的不在了」），交付的是 mock 單元測試 +
+  既有的 `test_exec_kills_whole_process_group_on_cancel`（真的 spawn、驗孫行程死掉）。
+  兩半是靠推論接起來的，**沒有任何一條測試從「取消 turn」一路走到「行程不在了」**。

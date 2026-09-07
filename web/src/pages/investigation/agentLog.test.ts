@@ -1381,3 +1381,35 @@ describe("an end clears the stopping state", () => {
     expect(after.streaming).toBe(false);
   });
 });
+
+describe("a re-hydrate must not cancel a Stop that is still in flight", () => {
+  // This rule had none: deleting it, and inverting it, both left all 3670 tests
+  // green. The store poll runs every couple of seconds, so without it the
+  // buttons unlock themselves halfway through stopping — and with it held too
+  // long they never unlock at all. Both directions are pinned here.
+  const stopping = { ...EMPTY_LOG, streaming: true, stopping: true };
+
+  it("keeps stopping while the snapshot still shows a turn running", () => {
+    // Stamped NOW: `logFromMessages` only calls a trailing user message
+    // "awaiting a reply" for as long as one could still be coming, so an
+    // epoch-1 fixture would be reconciled as a finished thread and the rule
+    // under test would never be reached.
+    const asked = Date.now();
+    const after = reconcileSnapshot(stopping, {
+      messages: [{ role: "user", content: "q", created_at: asked, author: "u" }],
+    });
+    expect(after.streaming).toBe(true); // the thread still awaits a reply
+    expect(after.stopping).toBe(true);
+  });
+
+  it("clears stopping once the snapshot shows the turn ended", () => {
+    const after = reconcileSnapshot(stopping, {
+      messages: [
+        { role: "user", content: "q", created_at: Date.now(), author: "u" },
+        { role: "assistant", content: "a", created_at: Date.now(), author: "RCA Agent" },
+      ],
+    });
+    expect(after.streaming).toBe(false);
+    expect(after.stopping).toBe(false);
+  });
+});

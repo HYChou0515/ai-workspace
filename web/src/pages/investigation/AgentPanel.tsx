@@ -566,9 +566,20 @@ export function AgentPanel({
       return [];
     });
 
+  /** Why a send would be refused right now, or null.
+   *
+   * ONE place, because it used to be several: the composer, a suggestion chip
+   * and an `ask_user` answer each carried their own copy, the rule changed, and
+   * two of them were left behind still refusing during anyone's turn — the
+   * spectator lock-out the change existed to remove — while ignoring the one
+   * state where a send really is refused. */
+  const sendRefusal = (): string | null =>
+    log.stopping ? "正在停止這一輪…停下之後再送出。" : null;
+
   const submit = () => {
     const text = draft.trim();
-    if (log.stopping) {
+    const why = sendRefusal();
+    if (why) {
       // The only refusal left. Sending now would queue behind a turn nobody has
       // actually stopped yet — the arrangement that had a message vanish into a
       // queue while the previous answer kept streaming, which reads as the whole
@@ -578,7 +589,7 @@ export function AgentPanel({
       // messages and does not cancel on them (#43), so the message just queues —
       // and refusing your own turn while queueing behind everyone else's is what
       // made Stop-then-send the only way through.
-      setComposerHint("正在停止這一輪…停下之後再送出。");
+      setComposerHint(why);
       return;
     }
     setComposerHint(null);
@@ -637,7 +648,11 @@ export function AgentPanel({
   }, [log.entries]);
 
   const onChip = (label: string) => {
-    if (log.streaming) return;
+    const why = sendRefusal();
+    if (why) {
+      setComposerHint(why);
+      return;
+    }
     void send(label);
   };
 
@@ -724,7 +739,11 @@ export function AgentPanel({
             // grill-me: answering an `ask_user` question is an ordinary send
             // that records which question it answers.
             onAnswerQuestion={(a) => {
-              if (log.streaming) return;
+              const why = sendRefusal();
+              if (why) {
+                setComposerHint(why);
+                return;
+              }
               void send(a.content, { answers: a.answers });
             }}
             answeredQuestions={answeredQuestions}
@@ -833,7 +852,13 @@ export function AgentPanel({
             // A read-only viewer could still fire a chip, and got a raw
             // "send failed: 403" for it — the textarea beside it was already
             // disabled for exactly this reason.
-            disabled={log.streaming || readOnly}
+            //
+            // The send rule itself comes from `sendRefusal`, not a second copy
+            // of it: this button carried its own `log.streaming` and so stayed
+            // dead through anyone's turn long after the composer stopped
+            // refusing that — a disabled control saying something the composer
+            // beside it contradicts.
+            disabled={readOnly || sendRefusal() !== null}
             style={{
               display: "inline-flex",
               alignItems: "center",
@@ -1331,9 +1356,11 @@ export function AgentPanel({
               <>
                 <button
                   type="button"
-                  // Icon-only, so the name has to come from here: without it the
-                  // button reads as "button" to a screen reader, and `title`
-                  // alone does not give it one.
+                  // Icon-only, so it carries an explicit name. `title` would
+                  // in fact supply one on its own — measured: with the label
+                  // removed the button is still findable by name — but that is
+                  // a fallback the spec applies only when nothing better
+                  // exists, and what a control IS should not rest on it.
                   aria-label="Stop"
                   title="Stop"
                   disabled={!canStop}

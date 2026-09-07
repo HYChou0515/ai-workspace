@@ -567,6 +567,37 @@ describe("AgentPanel — the composer always answers back", () => {
     // record; this line only tells you your click landed.
     expect(await screen.findByTestId("composer-hint")).toHaveTextContent("正在停止");
   });
+
+
+  // The rule changed once and reached only two of its four callers. A suggestion
+  // chip and an `ask_user` answer are sends like any other, but they kept their
+  // own `if (log.streaming) return;` — so they stayed refused during ANYONE's
+  // turn, which is precisely the spectator lock-out the change claims to have
+  // removed, and they ignored `stopping`, so in the one state where a send IS
+  // refused they went through anyway. Two rules, drifting apart in silence.
+  const chipLog = (over: Partial<AgentLog>): AgentLog =>
+    ({ ...EMPTY_LOG, ...over }) as unknown as AgentState["log"];
+
+  it("a suggestion chip queues behind a running turn", async () => {
+    const { agent } = panelWith({ log: chipLog({ streaming: true }) });
+
+    fireEvent.click(screen.getByRole("button", { name: "chip" }));
+
+    await waitFor(() => expect(agent.send).toHaveBeenCalled());
+  });
+
+  it("a suggestion chip is disabled while a Stop is in flight", async () => {
+    // Disabled rather than refused-on-click: the same principle the two buttons
+    // follow — say what will happen BEFORE the press. What matters for the sweep
+    // is that the chip's own `disabled` now derives from `sendRefusal` too,
+    // instead of carrying a third copy of a rule that had already moved on.
+    const { agent } = panelWith({ log: chipLog({ streaming: true, stopping: true }) });
+
+    const chip = screen.getByRole("button", { name: "chip" });
+    expect(chip).toBeDisabled();
+    fireEvent.click(chip);
+    expect(agent.send).not.toHaveBeenCalled();
+  });
 });
 
 describe("AgentPanel — a shared item queues, so a spectator is not locked out", () => {

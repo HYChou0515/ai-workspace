@@ -411,3 +411,69 @@ describe("stopping", () => {
     expect(result.current.log.streaming).toBe(false);
   });
 });
+
+describe("a send that was refused leaves nothing behind", () => {
+  // `drawOwnAsk` puts the words on screen before the POST resolves, which is the
+  // point. When the POST then FAILS the message was never persisted, so no
+  // broadcast will ever adopt that entry and the store poll cannot remove it
+  // (`reconcileSnapshot` bails when the snapshot is shorter than the screen —
+  // exactly this case). It sat there, contradicted by the error beside it.
+  //
+  // Worse than cosmetic: an entry with no `at` counts as its own turn to
+  // `turnsFromEntry`, so "undo to here" asked the backend for one turn MORE than
+  // the user pointed at — and undo deletes irreversibly.
+  const refuse = (status: number) => {
+    const err = Object.assign(new Error("nope"), { status });
+    return vi.fn(() => Promise.reject(err));
+  };
+
+  it("takes the message back when the send is refused", async () => {
+    const t = fakeTransport({ post: refuse(507) });
+    const { result } = render(t);
+    await waitFor(() => expect(result.current.log.entries).toHaveLength(1));
+
+    await act(async () => {
+      await result.current.send("please do the thing");
+    });
+
+    expect(result.current.log.entries).toHaveLength(1);
+    expect(result.current.log.error).not.toBeNull();
+  });
+
+  it("keeps it on a gateway cut, which is not a refusal", async () => {
+    // 502/504 mean the request was cut, not that the turn failed — the message
+    // may well be running server-side. Taking it back there would hide a
+    // message that IS in the thread.
+    const t = fakeTransport({ post: refuse(504) });
+    const { result } = render(t);
+    await waitFor(() => expect(result.current.log.entries).toHaveLength(1));
+
+    await act(async () => {
+      await result.current.send("please do the thing");
+    });
+
+    expect(result.current.log.entries).toHaveLength(2);
+  });
+
+  it("a new send clears a Stop that is still pending", async () => {
+    // `retryTurn` is `cancel()` then `send()`. Without this the retry inherits
+    // `stopping`, so the turn it just started cannot be stopped and nothing can
+    // be sent — and the terminal event that would clear it belongs to the turn
+    // being abandoned, which is the reason retry exists.
+    const t = fakeTransport();
+    const { result } = render(t);
+    await waitFor(() => expect(result.current.log.entries).toHaveLength(1));
+
+    act(() => {
+      void result.current.send("first");
+    });
+    act(() => result.current.cancel());
+    expect(result.current.log.stopping).toBe(true);
+
+    act(() => {
+      void result.current.send("again");
+    });
+
+    expect(result.current.log.stopping).toBe(false);
+  });
+});
