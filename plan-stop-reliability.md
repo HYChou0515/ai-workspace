@@ -253,8 +253,13 @@ P1 (epoch 提前) → P2 (exec 真的被殺) → P3 (compaction 拆 task) → P4
 | P1 | `P1 a Stop pressed while the turn is still being prepared…` | Stop 在 preamble 期間不再被靜默吃掉。**機制在第一輪 review 後換過**，見下 |
 | P2 | `P2 Stop now actually kills the command running in the sandbox` | **前提實測成立 → 走修法 A**；`finally` 改成 cancel |
 | P3 | `P3 Stop reaches the summariser…` | `run_interruptible` + compaction 拆 task；新增 `stopped` outcome |
-| P4 | `P4 Send and Stop stop being the same button` | 拆兩顆 icon 按鈕 + `stopping` 狀態；兩處都改 |
+| P4 | `P4 Send and Stop stop being the same button` | 兩處都拆成兩顆 icon 按鈕；`stopping` **只有 app chat 有**（見下） |
 | P5 | `P5 a stopped deck turn lets go of the model call` | `on_chunk` 當取消點；洩漏從整個呼叫壓到一個 chunk |
+
+> **P4 的偏離，明講**：驗收寫「兩個面板各自要有」，實際上 `stopping` 只做在 `AgentPanel`。
+> `KbChatPanel` 刻意沒有：KB chat 的 `cancel` 直接中止本地串流，而且新的送出本來就會取消
+> 前一個 turn，所以那裡不存在「已經按了但還沒停」這個中間狀態，畫一個等於畫一個假的。
+> 決定寫在 `KbChatPanel.tsx` 裡；這裡補記，因為驗收字面說的是兩處。
 
 > **這張表不列 commit hash。** 它原本列了五個，而分支之後 rebase 到往前 93 個 commit 的
 > master，那五個全部變成任何分支都構不到的孤兒——**而表看起來完全正常**。標題找得到，hash 不會。
@@ -488,7 +493,7 @@ NameError**——#615 的下班窗從來沒有真的啟動過任何回合。更�
 | 使用者當初回報的症狀 | 這次量到的 |
 |---|---|
 | 送出後要等幾秒才看得到自己的訊息 | 自己的泡泡 **17ms** 出現 |
-| 按下 Stop 後要過好久才真的停下 | 點擊 11:09:09.452 → 假端點記錄 client 離開 11:09:09.42x，**約 30ms** |
+| 按下 Stop 後要過好久才真的停下 | 點擊與假端點記錄「client 離開」相差 **30 毫秒**（見下方註） |
 | 訊息欄有東西時按 Stop，字不見了 | 草稿在按下當下與 5 秒後**都還在**（逐字比對） |
 | AI 繼續跑、像故障 | thread 出現 `Cancelled.`，之後還能再送一次並正常回覆 |
 
@@ -497,6 +502,10 @@ NameError**——#615 的下班窗從來沒有真的啟動過任何回合。更�
 
 > 第一次量「靜止狀態」時我讀到 Stop 是可按的，那是量測污染——同一個 item 上還有前一次
 > 跑剩的 turn 在跑。換全新 item 重量才是上表的數字。
+>
+> Stop 那一列的 30 毫秒**只能讀成「兩個時間戳相差 30ms」**，不能讀成「點擊後經過 30ms」：
+> 假端點記的時間其實**早於**瀏覽器記的點擊時間 27ms，也就是兩邊的時鐘本來就沒有對齊到
+> 這個精度。它足以說明「連線是立刻被切的」，不足以當成一個延遲數字。
 
 **仍未在真瀏覽器驗過的**：P2 的「殺掉 sandbox 裡正在跑的指令」——假模型不會呼叫工具，
 所以那一半仍然只有單元測試 + 既有的 process-group 測試撐著。
@@ -530,8 +539,10 @@ NameError**——#615 的下班窗從來沒有真的啟動過任何回合。更�
 
 ### 代價（明講）
 
-一個 workspace 永遠是滿的 chat，**一週會拿到 7 則 marker + 7 個鈴**（通知沒有去重）。
-換來的是它不會被永久 park 掉。上一版是「講一次、然後永遠安靜，代價是目標死了」。
+一個 workspace 永遠是滿的 chat，每個 stretch 拿到一則 marker + 一個鈴，而通知**沒有去重**
+（`_ring_the_bell` 不傳 `dedup_key`）。以預設工作日（週一至週五）算，週末會併進週五那一段，
+所以一個日曆週是 **5 到 6 次**，不是七次。換來的是它不會被永久 park 掉——上一版是
+「講一次、然後永遠安靜，代價是目標死了」。
 
 ### 這一輪還欠的
 
