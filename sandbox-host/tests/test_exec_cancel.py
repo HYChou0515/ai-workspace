@@ -36,6 +36,11 @@ class _HangingSandbox(MockSandbox):
         cmd: list[str],
         on_output: OutputSink | None = None,
         env=None,  # noqa: ANN001 — mirrors the protocol's optional mapping
+        # Accepted and ignored, but it must be ACCEPTED: `_exec_ndjson` passes it
+        # (#775 P24), and a double that omits it fails with a `TypeError` the
+        # host reports as an in-band error frame — which looks like the exec
+        # itself going wrong, not like the double being out of date.
+        exec_timeout: float | None = None,
     ) -> ExecResult:
         if on_output is not None:
             on_output(b"working\n")
