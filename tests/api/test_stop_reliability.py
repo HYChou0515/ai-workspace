@@ -810,3 +810,118 @@ async def test_forget_declines_a_turn_that_was_still_being_prepared():
         await asyncio.wait_for(fut, 2)
     assert not runner.started
     await engine.forget(key)
+
+
+async def test_a_failed_preparation_tells_the_live_stream_too():
+    """Written on the record AND said out loud, like every other ending.
+
+    The declined-turn path has both halves and a test for each. This one had the
+    persisted row tested and the live event not — so it could be deleted with
+    every suite green, which is the third time in this branch that a rule was
+    claimed as checked-by-deletion without being checked.
+    """
+    from httpx import ASGITransport
+
+    from workspace_app.api import create_app
+    from workspace_app.filestore.memory import MemoryFileStore
+    from workspace_app.resources import make_spec
+    from workspace_app.sandbox.mock import MockSandbox
+
+    from ._client import AsyncClient
+    from .conftest import register_rca_item
+
+    spec = make_spec(default_user="u")
+    iid = register_rca_item(spec)
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=_QuickRunner(),
+        get_user_id=lambda: "alice",
+    )
+
+    async def explode(*a: object, **k: object) -> None:
+        raise RuntimeError("the sandbox would not wake")
+
+    app.state.chat_send._turn_ctx.build_chat_turn = explode
+    seen: list[str] = []
+    sub = app.state.turn_engine.subscribe(iid)
+
+    async def collect() -> None:
+        async for ev in sub:
+            seen.append(type(ev).__name__)
+            if type(ev).__name__ == "RunError":
+                return
+
+    collector = asyncio.create_task(collect())
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+            with contextlib.suppress(Exception):
+                await client.post(f"/a/rca/items/{iid}/messages", json={"content": "hi"})
+        await asyncio.wait_for(collector, 3)
+        assert "RunError" in seen
+    finally:
+        collector.cancel()
+        with contextlib.suppress(BaseException):
+            await collector
+
+
+async def test_a_declined_turn_that_cannot_be_recorded_says_so():
+    """The one ending that must never be silent is the one that failed to write.
+
+    If persisting the marker throws, the person is back in the state this whole
+    path exists to prevent — a question with no ending — so saying nothing is the
+    worst available option. `_run_turn` has said so in a comment for a long time;
+    the declined path swallowed it.
+    """
+    engine = ChatTurnEngine(_QuickRunner(), turn_control=InMemoryTurnControl())
+    key = "inv"
+    seen: list[str] = []
+    sub = engine.subscribe(key)
+
+    def refuse(_messages: list[TurnMessage]) -> None:
+        raise RuntimeError("the store said no")
+
+    async def collect() -> None:
+        async for ev in sub:
+            seen.append(type(ev).__name__)
+            if type(ev).__name__ == "RunCancelled":
+                return
+
+    collector = asyncio.create_task(collect())
+    try:
+        async with engine.preparing(key) as pending:
+            await engine.cancel_current(key)
+            fut = engine.enqueue(key, "go", AgentToolContext(), on_complete=refuse, pending=pending)
+        await asyncio.wait_for(fut, 2)
+        await asyncio.wait_for(collector, 2)
+        assert "RunError" in seen, "a marker that could not be written must still be announced"
+    finally:
+        collector.cancel()
+        with contextlib.suppress(BaseException):
+            await collector
+        await engine.forget(key)
+
+
+async def test_anyones_stop_reaches_a_round_the_system_is_driving():
+    """Scoping a Stop to its presser is right for a person's own question and
+    wrong for a round nobody asked for.
+
+    A goal follow-up and an off-hours round are stamped with whoever SET the
+    goal, so attributing them made a bystander's Stop miss an agent that is
+    running on a shared item — which #43 says anyone may stop. Driver rounds are
+    left unattributed, so they behave as they did before Stop learned who
+    pressed it.
+    """
+    engine = ChatTurnEngine(_QuickRunner(), turn_control=InMemoryTurnControl())
+    key = "inv"
+    try:
+        async with (
+            engine.preparing(key, author="") as driver_round,
+            engine.preparing(key, author="alice") as alices_own,
+        ):
+            await engine.cancel_current(key, by="bob")
+            assert driver_round.cancelled, "a bystander must be able to stop the agent"
+            assert not alices_own.cancelled, "…without stopping Alice's own question"
+    finally:
+        await engine.forget(key)

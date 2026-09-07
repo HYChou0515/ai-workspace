@@ -1139,7 +1139,11 @@ class ChatTurnEngine:
         # marking every one of them was the same collateral this mechanism
         # replaced, surviving in a smaller window.
         for waiting in session.pending_turns:
-            if not by or waiting.author == by:
+            # Marked when the Stop is unattributed (a caller that cannot say who),
+            # when the SEND is unattributed (a round the system is driving, which
+            # is nobody's question and anybody's to stop), or when they are the
+            # same person. Only "someone else's typed question" is spared.
+            if not by or not waiting.author or waiting.author == by:
                 waiting.cancelled = True
         turn = session.current_turn
         if turn is not None and not turn.done():

@@ -152,18 +152,30 @@ const SEEN_IDS_MAX = 2000;
 
 const GATEWAY_CUT = new Set([0, 502, 503, 504]);
 
-/** Refusals the backend raises BEFORE it writes the user's message.
+/** Did the backend refuse this send BEFORE it wrote the user's message?
  *
- * `chat_send` persists the message and only then prepares the turn, so this is
- * the whole of what can fail with nothing in the thread: the quota gate (507)
- * and the request-env resolution both run ahead of the write, and an
- * authorization refusal (403) never reaches `send` at all. Everything else —
- * 500 from a preparation that threw, an unknown status — may well have stored
- * it, and the message stays drawn. */
-const REFUSED_BEFORE_PERSIST = new Set([403, 507]);
-
+ * Derived from the route rather than listed. `send_message` runs
+ * `require_access` (403/404/410) and `conversation_for`; then `send` runs its
+ * quota gate (507) and its identity resolution (500 + `request_env_failed`) —
+ * and only THEN spawns the task whose first act is the persist. Every one of
+ * those is a refusal the backend CHOSE. After the persist there is no chosen
+ * refusal left: the preparation either succeeds or throws, and an unhandled
+ * throw is an uncoded 500.
+ *
+ * So the question is not which statuses refuse, it is which response can have
+ * come from AFTER the write — and that is exactly one: a 500 with no code.
+ * Everything else was refused before it.
+ *
+ * Two earlier versions of this got it wrong by listing instead of deriving:
+ * first `{403, 507}`, which left a viewer whose access was revoked (404) and one
+ * whose item had been deleted (410) drawing a message the backend never had;
+ * then "any 4xx", which forgot that the quota refusal is a 507. A list has to be
+ * kept up to date by whoever adds the next gate. This does not.
+ *
+ * The remaining case keeps the message, which is the safe direction: one shown
+ * that turns out not to exist is a smaller lie than one hidden that does. */
 const refusedBeforePersist = (status: number | undefined, code: string | undefined) =>
-  (status !== undefined && REFUSED_BEFORE_PERSIST.has(status)) || code === "request_env_failed";
+  !(status === 500 && code !== "request_env_failed");
 
 const isAbort = (err: unknown) => (err as { name?: string } | null)?.name === "AbortError";
 

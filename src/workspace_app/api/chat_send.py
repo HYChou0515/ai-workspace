@@ -42,7 +42,7 @@ from ..resources.conversation_goal import GOAL_DRIVER, read_goal, upsert_goal
 from ..sandbox.protocol import OutputSink
 from ..tokens import CallLane
 from ..workcalendar import OffHoursCalendar
-from .events import GoalUpdated, RunError, UserMessage
+from .events import GoalUpdated, UserMessage
 from .goal_offhours import build_offhours_calendar, owner_is_active, turn_signature
 from .goal_wrapup import headline, marker_text, night_transcript, write_summary
 from .kb_chat_routes import resolve_max_searches, to_caller_enhancements
@@ -50,7 +50,7 @@ from .notifications import notify
 from .rca_messages import bubble_kb_citations, to_rca_message
 from .timeutil import now_ms
 from .turn_gate import admit_turn
-from .turns import CONTEXT_NOTICE_ROLE, already_noticed
+from .turns import CONTEXT_NOTICE_ROLE, _terminal_error, already_noticed
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -741,7 +741,15 @@ class ChatSendService:
         # after it is what stops such a failure leaving a question nobody will
         # ever answer and nothing to say so.
         try:
-            async with self._turn_engine.preparing(engine_key, author=author) as pending:
+            async with self._turn_engine.preparing(
+                engine_key,
+                # A round the SYSTEM is driving (a goal follow-up, an off-hours
+                # round) is stamped with whoever set the goal, but it is not
+                # their question — on a shared item #43 says anyone may stop the
+                # agent. Left unattributed so anyone's Stop reaches it, which is
+                # what happened before Stop learned who pressed it.
+                author="" if driven_by else author,
+            ) as pending:
                 # #739: compact BEFORE the turn is built — the thread is final for this
                 # turn (the user's message is in) and the model has not been called yet.
                 #
@@ -1047,19 +1055,23 @@ class ChatSendService:
             # tell anyone watching. Then re-raise: the POST still fails, and it
             # should — this is a record of what happened, not a rescue.
             logger.exception("chat_send: preparation failed for item %s", investigation_id)
+            # Rendered ONCE, by the renderer the turn path already uses: two
+            # spellings of one failure is how the same event comes to read
+            # differently depending on where it was caught, and `str(exc)` alone
+            # drops the type — `str(KeyError("slug"))` reaches the thread as
+            # literally `'slug'`.
+            failure = _terminal_error(exc)
             with contextlib.suppress(Exception):
                 fresh = self._conv_rm.get(rid).data
                 if isinstance(fresh, Conversation):
                     fresh.messages.append(
                         Message(
                             role="error",
-                            content=str(exc) or "The turn could not be started.",
+                            content=failure.message,
                             error_kind="error",
                             created_at=now_ms(),
                         )
                     )
                     self._conv_rm.update(rid, fresh)
-            self._turn_engine.publish(
-                engine_key, RunError(message=str(exc) or "The turn could not be started.")
-            )
+            self._turn_engine.publish(engine_key, failure)
             raise

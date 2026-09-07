@@ -427,8 +427,21 @@ describe("a send that was refused leaves nothing behind", () => {
     return vi.fn(() => Promise.reject(err));
   };
 
-  it("takes the message back when the send is refused", async () => {
-    const t = fakeTransport({ post: refuse(507) });
+  it.each([
+    ["access revoked while the tab was open", 404],
+    ["the item was deleted", 410],
+    ["a limit refused it", 507],
+    ["no permission to send", 403],
+  ])("takes the message back when %s", async (_why, status) => {
+    // Derived from the route rather than enumerated, which is what the first
+    // version got wrong: `send_message` runs `require_access` (403/404/410) and
+    // `conversation_for`, then `send`'s quota gate (507) and identity resolution
+    // — and only THEN spawns the task that persists. So every 4xx this endpoint
+    // can answer happens before the write, and listing the two we happened to
+    // think of left a revoked viewer and a deleted item drawing a message the
+    // backend never stored.
+    const err = Object.assign(new Error("nope"), { status });
+    const t = fakeTransport({ post: vi.fn(() => Promise.reject(err)) });
     const { result } = render(t);
     await waitFor(() => expect(result.current.log.entries).toHaveLength(1));
 
@@ -437,7 +450,26 @@ describe("a send that was refused leaves nothing behind", () => {
     });
 
     expect(result.current.log.entries).toHaveLength(1);
-    expect(result.current.log.error).not.toBeNull();
+  });
+
+  it("takes it back for the one 500 that is refused before the write", async () => {
+    // 500 is the only ambiguous status: `request_env_failed` is raised before the
+    // persist and carries a code that says so, while a preparation that throws
+    // answers 500 with the message already stored. The code is what separates
+    // them; without it the safe reading of a 500 is "it may exist", so it stays.
+    const err = Object.assign(new Error("who are you"), {
+      status: 500,
+      code: "request_env_failed",
+    });
+    const t = fakeTransport({ post: vi.fn(() => Promise.reject(err)) });
+    const { result } = render(t);
+    await waitFor(() => expect(result.current.log.entries).toHaveLength(1));
+
+    await act(async () => {
+      await result.current.send("please do the thing");
+    });
+
+    expect(result.current.log.entries).toHaveLength(1);
   });
 
   it("keeps it on a gateway cut, which is not a refusal", async () => {

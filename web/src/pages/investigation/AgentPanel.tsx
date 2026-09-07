@@ -62,6 +62,12 @@ import { extractClipboardFiles, isImage, readTransferEntries } from "./transfer"
  * default 380px) the cap never engages, so that layout is untouched. Matches the
  * KB doc viewer's `.kb-docpage__body` cap for a consistent reading measure.
  */
+/** Said in two places — the composer's placeholder and the refusal every
+ * control gives — so it lives once. Two copies of one sentence diverge on the
+ * next edit, and a control that explains itself differently from the box beside
+ * it is the mismatch this file keeps having to fix. */
+const NO_PERMISSION_TO_SEND = "You don't have permission to send messages in this workspace.";
+
 export const CHAT_COLUMN_MAX_W = 860;
 
 /** Typing-area height bounds (px). The default is the old `rows={3}`; the floor
@@ -579,7 +585,7 @@ export function AgentPanel({
     // buttons, which is how a viewer without permission got a raw
     // `send failed: 403`, the very symptom the chip's own comment says its
     // guard exists to prevent.
-    if (readOnly) return "You don't have permission to send messages in this workspace.";
+    if (readOnly) return NO_PERMISSION_TO_SEND;
     if (log.stopping) return "正在停止這一輪…停下之後再送出。";
     return null;
   };
@@ -1206,7 +1212,7 @@ export function AgentPanel({
           }}
           placeholder={
             readOnly
-              ? "You don't have permission to send messages in this workspace."
+              ? NO_PERMISSION_TO_SEND
               : onSteer
                 ? "Tell the run what to change (e.g. use the X collection, redo from ingest)…"
                 : mentions.length > 0
