@@ -47,6 +47,7 @@ from ..config.schema import OffHoursSettings
 from ..resources.conversation import Conversation
 from ..resources.conversation_goal import ConversationGoal
 from ..workcalendar import OffHoursCalendar
+from .turns import _terminal_error
 
 logger = logging.getLogger(__name__)
 
@@ -146,9 +147,11 @@ class SpecstarStretchClaims:
             try:
                 res = rm.get(conversation_id)
             except (ResourceIDNotFoundError, ResourceIsDeletedError):  # pragma: no cover
-                # The row we just claimed is gone. Report the limit rather than
-                # 1: without a row there is nothing left to count with, and
-                # retrying blind is the failure this bound exists to prevent.
+                # The row we just claimed is gone. Report the limit so the caller
+                # does not write to a row that no longer exists — it does NOT
+                # stop tonight, because the next tick's `try_claim` re-creates
+                # the row and starts counting from one. Nothing here can bound a
+                # loop whose only counter keeps being deleted.
                 return _START_FAILURE_LIMIT
             data = res.data
             assert isinstance(data, _GoalStretch)
@@ -175,15 +178,33 @@ class SpecstarStretchClaims:
         the next evening, and the work they asked for overnight would simply not
         happen."""
         rm = self._spec.get_resource_manager(_GoalStretch)
-        with contextlib.suppress(ResourceIDNotFoundError, ResourceIsDeletedError):
-            res = rm.get(conversation_id)
+        for _ in range(_MAX_CAS_RETRIES):
+            try:
+                res = rm.get(conversation_id)
+            except (ResourceIDNotFoundError, ResourceIsDeletedError):
+                return  # nothing to give back
             data = res.data
             assert isinstance(data, _GoalStretch)
-            rm.modify(
-                conversation_id,
-                replace(data, stretch=""),  # the failure count outlives the release
-                status=RevisionStatus.draft,
-            )
+            try:
+                rm.modify(
+                    conversation_id,
+                    # The failure count outlives the release — which is exactly
+                    # why this needs the precondition it used to do without.
+                    # Blind-writing a CONSTANT row was harmless; blind-writing
+                    # one that carries a count means a pod standing down for a
+                    # person writes back the count it read before a peer's
+                    # failure landed, and a bound that keeps being rolled back is
+                    # not a bound. `release` runs on every pod, every tick.
+                    replace(data, stretch=""),
+                    status=RevisionStatus.draft,
+                    expected_etag=res.info.etag,  # ty: ignore[unknown-argument]
+                )
+                return
+            except PreconditionFailedError:  # pragma: no cover - cross-pod CAS race
+                continue  # a peer wrote between our read and write — re-read
+        raise RuntimeError(  # pragma: no cover - only under pathological churn
+            f"goal stretch release CAS exhausted retries for {conversation_id!r}"
+        )
 
 
 def build_offhours_calendar(spec: SpecStar, settings: OffHoursSettings) -> OffHoursCalendar:
@@ -257,6 +278,7 @@ class OffHoursGoalSweeper:
         settings: OffHoursSettings,
         claims: SpecstarStretchClaims,
         start_round: Callable[[str], Awaitable[None]],
+        night_abandoned: Callable[[str, str], Awaitable[None]],
     ) -> None:
         from ..resources.work_calendar import register_work_calendar
 
@@ -265,6 +287,7 @@ class OffHoursGoalSweeper:
         self._settings = settings
         self._claims = claims
         self._start_round = start_round
+        self._night_abandoned = night_abandoned
 
     async def tick(self, *, now: datetime | None = None) -> list[str]:
         """One sweep. Returns the conversation ids a round was started for."""
@@ -299,7 +322,7 @@ class OffHoursGoalSweeper:
             )
             try:
                 await self._start_round(cid)
-            except Exception:
+            except Exception as exc:
                 # One chat's failure must not end the sweep for the fleet, and
                 # must not cost that chat its night: give the claim back so a
                 # later tick retries instead of waiting until tomorrow evening.
@@ -310,9 +333,16 @@ class OffHoursGoalSweeper:
                 else:
                     # Tonight is over for this chat. Not for the goal: its state
                     # is untouched, so tomorrow's stretch tries again with no
-                    # human needed to un-park anything. Each attempt has already
-                    # persisted the driver's message and the real error into the
-                    # thread, so this is not silent either.
+                    # human needed to un-park anything.
+                    #
+                    # And say so. A failure raised INSIDE the send leaves the
+                    # driver's message and the error in the thread, but one
+                    # refused by the turn gate — a full workspace, a spent
+                    # sandbox quota — raises BEFORE anything is persisted and
+                    # leaves the thread untouched. Those are precisely the
+                    # conditions that fail every attempt, every night, so the
+                    # ending that most needs telling is the one the thread
+                    # cannot show.
                     logger.warning(
                         "goal offhours: %s failed to start %d times tonight — "
                         "leaving the rest of stretch %s alone",
@@ -320,6 +350,7 @@ class OffHoursGoalSweeper:
                         failures,
                         stretch,
                     )
+                    await self._night_abandoned(cid, _terminal_error(exc).message)
                 continue
             started.append(cid)
         return started

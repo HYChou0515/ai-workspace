@@ -677,6 +677,29 @@ class ChatSendService:
         upsert_goal(self._spec, fresh, user=fresh.set_by)
         return fresh
 
+    async def offhours_night_abandoned(self, conversation_id: str, reason: str) -> None:
+        """The sweeper gave up on tonight after too many failed starts. Say so.
+
+        Deliberately NOT `_hand_over`: that ending asks the cheap model to write
+        the body from `night_transcript`, which filters `role="error"` out — so
+        for a night in which nothing ran, the summariser was handed the driver's
+        own prompt and asked what happened, and answered. The one fact this
+        ending has is WHY it could not start, and that is what goes in.
+
+        The goal is left `active` on purpose. Infrastructure that was down at 3am
+        must not cost a goal its remaining nights, and tomorrow's stretch tries
+        again with nobody having to un-park anything."""
+        goal = read_goal(self._spec, conversation_id)
+        if goal is None or goal.state != "active" or not goal.offhours:
+            return  # cleared or finished between the failure and now
+        conv = self._conv_rm.get(conversation_id).data
+        assert isinstance(conv, Conversation)
+        self._append_goal_marker(
+            conversation_id, marker_text("unstartable", goal.condition, reason)
+        )
+        self._ring_the_bell(conversation_id, goal, "unstartable", reason)
+        self._publish_goal(self._locator.engine_key(conv.item_id, conversation_id), goal)
+
     async def _hand_over(self, rid: str, engine_key: str, goal, ending: str) -> None:  # noqa: ANN001
         """#615 P5: close a goal out — the thread's marker, the bell, the broadcast.
 

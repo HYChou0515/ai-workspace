@@ -52,17 +52,29 @@ def _spec_with_goal(
     return spec, "c1"
 
 
-def _sweeper(spec: SpecStar, started: list[str], *, settings=None, fail: bool = False):
+def _sweeper(
+    spec: SpecStar,
+    started: list[str],
+    *,
+    settings=None,
+    fail: bool = False,
+    abandoned: list[tuple[str, str]] | None = None,
+):
     async def start_round(conversation_id: str) -> None:
         started.append(conversation_id)
         if fail:
             raise RuntimeError("the sandbox would not wake")
+
+    async def night_abandoned(conversation_id: str, reason: str) -> None:
+        if abandoned is not None:
+            abandoned.append((conversation_id, reason))
 
     return OffHoursGoalSweeper(
         spec,
         settings=settings or OffHoursSettings(window="19:00-08:00", timezone=TAIPEI),
         claims=SpecstarStretchClaims(spec),
         start_round=start_round,
+        night_abandoned=night_abandoned,
     )
 
 
@@ -227,11 +239,15 @@ async def test_one_chat_failing_to_start_costs_it_a_tick_not_its_night():
         if len(calls) == 1:
             raise RuntimeError("sandbox is having a moment")
 
+    async def _never_called(conversation_id: str, reason: str) -> None:
+        raise AssertionError("one failure is not a night given up on")
+
     sweeper = OffHoursGoalSweeper(
         spec,
         settings=OffHoursSettings(window="19:00-08:00", timezone=TAIPEI),
         claims=SpecstarStretchClaims(spec),
         start_round=explode,
+        night_abandoned=_never_called,
     )
 
     assert await sweeper.tick(now=NIGHT) == []  # nothing started
@@ -321,7 +337,9 @@ async def test_a_night_that_will_not_start_stops_trying():
 
     for minute in range(30):
         assert await sweeper.tick(now=NIGHT.replace(minute=minute)) == []
-    assert len(attempts) < 10, f"the loop is unbounded: {len(attempts)} attempts in half an hour"
+    # The exact number, not a ceiling: a bound of three that quietly became nine
+    # would still be "less than ten", and this test is the only thing holding it.
+    assert len(attempts) == 3, f"expected three attempts, got {len(attempts)}"
 
 
 @pytest.mark.asyncio
@@ -344,3 +362,88 @@ async def test_tomorrow_night_starts_over():
     goal = read_goal(spec, cid)
     assert goal is not None
     assert goal.state == "active", "a night that could not start does not park the goal"
+
+
+@pytest.mark.asyncio
+async def test_a_night_that_is_given_up_on_says_so():
+    """Giving up quietly is the failure this whole bound was supposed to end.
+
+    A start refused by the turn gate (a full workspace, a spent sandbox quota)
+    raises BEFORE the driver's message is persisted, so a night lost that way
+    leaves NOTHING in the thread — no message, no error, nothing. Those are also
+    exactly the conditions that fail all three attempts, tonight and every
+    night, so "the thread already shows it" is not true where it matters most."""
+    spec, cid = _spec_with_goal()
+    attempts: list[str] = []
+    abandoned: list[tuple[str, str]] = []
+    sweeper = _sweeper(spec, attempts, fail=True, abandoned=abandoned)
+
+    for minute in range(30):
+        await sweeper.tick(now=NIGHT.replace(minute=minute))
+
+    assert len(abandoned) == 1, "told once, at the tick that gave up — not per attempt"
+    told_cid, reason = abandoned[0]
+    assert told_cid == cid
+    assert "the sandbox would not wake" in reason, "the person is told WHY, not just that"
+
+
+@pytest.mark.asyncio
+async def test_a_night_that_starts_fine_says_nothing():
+    spec, _cid = _spec_with_goal()
+    abandoned: list[tuple[str, str]] = []
+    await _sweeper(spec, [], abandoned=abandoned).tick(now=NIGHT)
+    assert abandoned == []
+
+
+@pytest.mark.asyncio
+async def test_a_release_that_races_a_failure_does_not_roll_it_back():
+    """`release` runs on EVERY pod on every tick — the owner-active path takes
+    it without ever holding the claim — and it now carries the failure count
+    through a read-modify-write. Without a precondition it writes back the count
+    it read before a peer's failure landed, and a bound that keeps being rolled
+    back is not a bound."""
+    from workspace_app.api.goal_offhours import _GoalStretch
+
+    spec, cid = _spec_with_goal()
+    pod_a = SpecstarStretchClaims(spec)
+    pod_b = SpecstarStretchClaims(spec)
+    assert pod_a.try_claim(cid, "tonight")
+
+    rm = spec.get_resource_manager(_GoalStretch)
+    real_get = rm.get
+    raced: list[int] = []
+
+    def get_then_race(resource_id: str):
+        res = real_get(resource_id)
+        if not raced:  # exactly once: pod A's failure lands mid-release
+            raced.append(1)
+            pod_a.note_failure(cid, "tonight")
+        return res
+
+    rm.get = get_then_race  # ty: ignore[invalid-assignment]
+    try:
+        pod_b.release(cid)
+    finally:
+        rm.get = real_get  # ty: ignore[invalid-assignment]
+
+    assert raced, "the interleaving under test never happened"
+    assert pod_a.note_failure(cid, "tonight") == 2, (
+        "pod B's release wrote back a count from before pod A's failure"
+    )
+
+
+@pytest.mark.asyncio
+async def test_standing_down_for_a_person_does_not_roll_back_the_failure_count():
+    """`release` carries the failure count through it, so it needs the same
+    precondition `note_failure` uses. Without one, a peer pod standing down for a
+    human writes back the count it read before ours landed — and a bound that
+    keeps being rolled back is not a bound."""
+    spec, cid = _spec_with_goal()
+    claims = SpecstarStretchClaims(spec)
+    assert claims.try_claim(cid, "tonight")
+    assert claims.note_failure(cid, "tonight") == 1
+    claims.release(cid)
+    assert claims.try_claim(cid, "tonight")
+    assert claims.note_failure(cid, "tonight") == 2, (
+        "the release must carry the count through, not reset it"
+    )

@@ -1203,3 +1203,58 @@ async def test_a_round_is_not_charged_for_anything_that_happens_before_the_send(
     assert after.rounds_used == before.rounds_used, (
         "the round was charged for a turn that never got as far as being built"
     )
+
+
+async def test_a_night_that_never_started_still_tells_its_owner():
+    """The thread cannot show what it was never given.
+
+    A start refused by the turn gate — a full workspace, a spent sandbox quota —
+    raises before the driver's message is persisted, so nothing lands in the
+    thread at all. Those are also the conditions that fail every attempt, every
+    night. So the sweeper says it out loud instead: the real error, not a model's
+    account of a transcript that never existed."""
+    from workspace_app.api import create_app
+    from workspace_app.filestore.memory import MemoryFileStore
+    from workspace_app.resources import Conversation, make_spec
+    from workspace_app.resources.conversation_goal import ConversationGoal, upsert_goal
+    from workspace_app.resources.notification import Notification
+    from workspace_app.sandbox.mock import MockSandbox
+
+    from .conftest import register_rca_item
+
+    spec = make_spec(default_user="u")
+    iid = register_rca_item(spec)
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=_QuickRunner(),
+        get_user_id=lambda: "alice",
+    )
+    service = app.state.chat_send
+    rid, _conv = service._locator.conversation_for(iid)
+    upsert_goal(
+        spec,
+        ConversationGoal(conversation_id=rid, condition="ship it", set_by="alice", offhours=True),
+        user="alice",
+    )
+
+    await service.offhours_night_abandoned(rid, "WorkspaceFull: 20.0 GB of 20.0 GB used")
+
+    conv = spec.get_resource_manager(Conversation).get(rid).data
+    assert isinstance(conv, Conversation)
+    markers = [m for m in conv.messages if m.role == "goal"]
+    assert len(markers) == 1, "one marker for the night, not one per attempt"
+    assert "ship it" in markers[0].content
+    assert "WorkspaceFull" in markers[0].content, (
+        "the reason is the only fact this ending has — a body without it is invention"
+    )
+
+    rm = spec.get_resource_manager(Notification)
+    bells = [
+        r.data
+        for r in rm.list_resources(QB.all())  # ty: ignore[invalid-argument-type]
+        if getattr(r.data, "kind", "") == "agent_done"
+    ]
+    assert len(bells) == 1
+    assert getattr(bells[0], "recipient", "") == "alice"
