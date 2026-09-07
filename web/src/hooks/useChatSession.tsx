@@ -605,7 +605,16 @@ export function useChatSession(
         // common form, and the enumerated list misses it: the `0` in
         // `GATEWAY_CUT` comes from an XHR upload path this send never takes.
         // Unanswered is the one case where nothing is known either way, so the
-        // message stays and the stream or the store poll settles it.
+        // message stays: hiding one that IS in the thread is the worse lie.
+        //
+        // What settles it afterwards is the STREAM, not the store poll —
+        // `reconcileSnapshot` bails when the snapshot is shorter than the
+        // screen, which is exactly this shape, so the poll cannot clear a
+        // message the backend never took. If nothing arrives, the drawn message
+        // stays until the thread is re-read. That is the honest cost of not
+        // knowing, and it is why a Stop that could not be SENT no longer leaves
+        // `stopping` set — that was the part that turned "unsettled" into
+        // "unusable".
         if (status === undefined || GATEWAY_CUT.has(status)) {
           lastEventAtRef.current = Date.now(); // give the poll a grace cycle
           return;
@@ -680,6 +689,12 @@ export function useChatSession(
         ...prev,
         error: `停止失敗,這一輪可能仍在進行:${why}`,
         errorFromTurn: false,
+        // …and stop claiming to be stopping. `stopping` means the backend has
+        // been TOLD; if telling it failed, it has not been, and the state only
+        // ends on a terminal event that is now never coming. Left set, it
+        // refuses every later send (`sendRefusal`) and disables both buttons
+        // until a reload — which is what an offline Stop did.
+        stopping: false,
       }));
     });
     // NOT `streaming: false`. That was a claim the backend had not made —

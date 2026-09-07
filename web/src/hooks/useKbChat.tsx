@@ -63,6 +63,22 @@ export function useKbChat({
     getThread: () => client.getChat(initialChatId as string),
   });
 
+  // Whether this hook is still mounted. Aborting the stream is not enough on its
+  // own: the `finally` below still runs, and it sets state — which in a torn-down
+  // test environment throws `ReferenceError: window is not defined` out of React
+  // and reddens whichever file happens to be running, intermittently and
+  // somewhere else entirely. In a real browser it is React's
+  // set-state-after-unmount, which is merely pointless. Both are the same
+  // mistake: finishing a stream nobody is watching by writing to a component
+  // that is gone.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
   // Abort the running stream when the mounted thread changes.
   useEffect(() => {
     setChatId(initialChatId);
@@ -129,7 +145,7 @@ export function useKbChat({
         setLog((prev) => ({ ...prev, streaming: false, error: msg }));
       } finally {
         if (abortRef.current === controller) abortRef.current = null;
-        setLog((prev) => ({ ...prev, streaming: false }));
+        if (mounted.current) setLog((prev) => ({ ...prev, streaming: false }));
       }
     },
     [chatId, collectionIds, excludedCollectionIds, client, log.streaming, onChatCreated, qc, setLog, reconcile],

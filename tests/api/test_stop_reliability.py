@@ -1038,3 +1038,60 @@ async def test_a_drivers_failed_round_still_raises_so_the_sweeper_can_retry():
             _MessageBody(content="the goal asks"),
             driven_by=GOAL_DRIVER,
         )
+
+
+async def test_an_offhours_round_that_never_started_is_not_charged_for():
+    """The budget is a promise about how much unattended work a goal may do. A
+    round that never reached the model did none of it.
+
+    The bump happens BEFORE the send on purpose — a crash must not forget a spent
+    round and let the budget restart every night — but a raise is not a crash: it
+    is the send saying, in as many words, that this round did not start. Without
+    giving it back, the sweeper's own retry becomes the meter: it releases the
+    claim and ticks again a minute later, so a sandbox that will not wake spends a
+    goal's WHOLE allowance in half an hour, runs nothing, leaves the goal `active`
+    so no hand-over, marker or bell ever fires, and drops it out of `_eligible`
+    for good.
+    """
+    from workspace_app.api import create_app
+    from workspace_app.filestore.memory import MemoryFileStore
+    from workspace_app.resources import Conversation, make_spec
+    from workspace_app.resources.conversation_goal import ConversationGoal, read_goal, upsert_goal
+    from workspace_app.sandbox.mock import MockSandbox
+
+    from .conftest import register_rca_item
+
+    spec = make_spec(default_user="u")
+    iid = register_rca_item(spec)
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=_QuickRunner(),
+        get_user_id=lambda: "alice",
+    )
+    service = app.state.chat_send
+    rid, _conv = service._locator.conversation_for(iid)
+    upsert_goal(
+        spec,
+        ConversationGoal(conversation_id=rid, condition="ship it", set_by="alice", offhours=True),
+        user="alice",
+    )
+
+    async def explode(*a: object, **k: object) -> None:
+        raise RuntimeError("the sandbox would not wake")
+
+    service._turn_ctx.build_chat_turn = explode
+
+    before = read_goal(spec, rid)
+    assert before is not None
+    with pytest.raises(RuntimeError):
+        await service.start_offhours_round(rid)
+
+    after = read_goal(spec, rid)
+    assert after is not None
+    assert after.offhours_rounds_used == before.offhours_rounds_used, (
+        "a round that never started must not be charged to the night's budget"
+    )
+    # …and the sweeper still learns it failed, so it can give the claim back.
+    assert isinstance(spec.get_resource_manager(Conversation).get(rid).data, Conversation)

@@ -377,6 +377,27 @@ describe("stopping", () => {
     expect(result.current.log.streaming).toBe(true);
   });
 
+  it("stops claiming to be stopping when the Stop itself could not be sent", async () => {
+    // `stopping` means the backend has been TOLD. If the request to tell it
+    // failed there is nothing stopping, and the state ends only on a terminal
+    // event that is now never coming — so it stuck, refusing every later send
+    // (`sendRefusal`) and disabling both buttons until a reload. Offline, that
+    // is one click away.
+    const t = fakeTransport({
+      requestCancel: vi.fn(() => Promise.reject(new TypeError("Failed to fetch"))),
+    });
+    const { result } = render(t);
+    await waitFor(() => expect(result.current.log.entries).toHaveLength(1));
+
+    act(() => {
+      void result.current.send("hello");
+    });
+    act(() => result.current.cancel());
+
+    await waitFor(() => expect(result.current.log.error).not.toBeNull());
+    expect(result.current.log.stopping).toBe(false);
+  });
+
   it("clears when the turn's terminal event arrives", async () => {
     let push: ((ev: AgentEvent) => void) | null = null;
     const t = fakeTransport({

@@ -86,13 +86,6 @@ from .events import Compacting
 # it, and it is now selected.
 from .schemas import _MessageBody
 
-# Runtime, not typing-only: two send paths CONSTRUCT one of these. It sat under
-# `TYPE_CHECKING` with a function-local import covering one caller and nothing
-# covering the other, so every off-hours round died on `NameError` before it sent
-# anything — while still spending a round from a budget that never resets. `ty`
-# and ruff's F821 both read the typing import as a binding; `TC004` is what sees
-# it, and it is now selected.
-
 logger = logging.getLogger(__name__)
 
 # #615: how many consecutive no-progress turns park an unattended goal. Two,
@@ -624,15 +617,35 @@ class ChatSendService:
                 f"{self._offhours_max_rounds} 輪):{goal.condition}"
             )
         )
-        await self.send(
-            conv.item_id,
-            conversation_id,
-            conv,
-            engine_key,
-            body,
-            author=goal.set_by,
-            driven_by=GOAL_DRIVER,
-        )
+        try:
+            await self.send(
+                conv.item_id,
+                conversation_id,
+                conv,
+                engine_key,
+                body,
+                author=goal.set_by,
+                driven_by=GOAL_DRIVER,
+            )
+        except Exception:
+            # Give the round back. The bump above is deliberate — a CRASH must
+            # not forget a spent round — but a raise is not a crash: it is the
+            # send telling us, in as many words, that this round did not start.
+            # The two are different evidence and only one of them is a reason to
+            # charge for it.
+            #
+            # Without this the sweeper's own retry becomes the meter: it releases
+            # the claim and ticks again a minute later, and a sandbox that will
+            # not wake spends a goal's WHOLE allowance in half an hour — a budget
+            # with no reset — running nothing, leaving the goal `active` so no
+            # hand-over, no marker and no bell ever fire, and filtering it out of
+            # `_eligible` for good. Measured at eight ticks against a real
+            # sweeper before this line existed.
+            fresh = read_goal(self._spec, conversation_id)
+            if fresh is not None and fresh.offhours_rounds_used > 0:
+                fresh.offhours_rounds_used -= 1
+                upsert_goal(self._spec, fresh, user=fresh.set_by)
+            raise
 
     async def _hand_over(self, rid: str, engine_key: str, goal, ending: str) -> None:  # noqa: ANN001
         """#615 P5: close a goal out — the thread's marker, the bell, the broadcast.
