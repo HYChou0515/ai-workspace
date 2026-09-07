@@ -108,7 +108,11 @@ target-version = "py312"
 extend-exclude = ["sample-tools", "sandbox-host", "tool-starter"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP", "SIM"]
+# TC004: an import parked under `TYPE_CHECKING` that is used at runtime. `ty`
+# and F821 both read it as a binding, so nothing else sees it — and one of
+# these made every off-hours round die on `NameError` before it sent anything.
+# Project-wide it flags exactly that one line, so it costs no noise.
+select = ["E", "F", "I", "B", "UP", "SIM", "TC004"]
 
 [tool.ty.src]
 exclude = [

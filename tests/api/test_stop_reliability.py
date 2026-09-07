@@ -21,6 +21,7 @@ import asyncio
 import contextlib
 from collections.abc import AsyncIterator
 
+import pytest
 from specstar import QB
 
 from workspace_app.agent.context import AgentToolContext
@@ -860,8 +861,11 @@ async def test_a_failed_preparation_tells_the_live_stream_too():
     collector = asyncio.create_task(collect())
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
-            with contextlib.suppress(Exception):
-                await client.post(f"/a/rca/items/{iid}/messages", json={"content": "hi"})
+            resp = await client.post(f"/a/rca/items/{iid}/messages", json={"content": "hi"})
+        # Asserted, not suppressed: the sibling case below was updated to check
+        # this and this one was not, so it could no longer tell a 202 from the
+        # 500 it used to get — the difference the whole change is about.
+        assert resp.status_code == 202
         await asyncio.wait_for(collector, 3)
         assert "RunError" in seen
     finally:
@@ -982,3 +986,55 @@ async def test_a_driver_round_is_registered_unattributed():
     )
 
     assert seen == ["alice", ""], "a driver's round belongs to nobody, a person's to them"
+
+
+async def test_a_drivers_failed_round_still_raises_so_the_sweeper_can_retry():
+    """Two callers, two things they can act on.
+
+    A person's send answers 202 once the message is written, and a failure after
+    that is reported on the thread and the stream. A DRIVER has no status to
+    read: `OffHoursGoalSweeper.tick` releases its per-stretch claim on this
+    exception so a later tick retries — "must not cost that chat its night" — and
+    a cold sandbox wake is exactly what fails at the top of a stretch, when the
+    item has been idle all evening. Swallowing it told the sweeper the round had
+    started, so the claim was held until morning with no turn ever run.
+    """
+    from workspace_app.api import create_app
+    from workspace_app.api.schemas import _MessageBody
+    from workspace_app.filestore.memory import MemoryFileStore
+    from workspace_app.resources import make_spec
+    from workspace_app.resources.conversation_goal import GOAL_DRIVER
+    from workspace_app.sandbox.mock import MockSandbox
+
+    from .conftest import register_rca_item
+
+    spec = make_spec(default_user="u")
+    iid = register_rca_item(spec)
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=_QuickRunner(),
+        get_user_id=lambda: "alice",
+    )
+    service = app.state.chat_send
+
+    async def explode(*a: object, **k: object) -> None:
+        raise RuntimeError("the sandbox would not wake")
+
+    service._turn_ctx.build_chat_turn = explode
+    rid, conv = service._locator.conversation_for(iid)
+
+    # A person's send is accepted — the message is in the thread either way.
+    await service.send(iid, rid, conv, iid, _MessageBody(content="a person asks"))
+
+    # The driver's is not: it has to know, or it cannot give the night back.
+    with pytest.raises(RuntimeError):
+        await service.send(
+            iid,
+            rid,
+            conv,
+            iid,
+            _MessageBody(content="the goal asks"),
+            driven_by=GOAL_DRIVER,
+        )

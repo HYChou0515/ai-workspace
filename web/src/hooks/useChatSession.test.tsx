@@ -433,13 +433,15 @@ describe("a send that was refused leaves nothing behind", () => {
     ["a limit refused it", 507],
     ["no permission to send", 403],
   ])("takes the message back when %s", async (_why, status) => {
-    // Derived from the route rather than enumerated, which is what the first
-    // version got wrong: `send_message` runs `require_access` (403/404/410) and
-    // `conversation_for`, then `send`'s quota gate (507) and identity resolution
-    // — and only THEN spawns the task that persists. So every 4xx this endpoint
-    // can answer happens before the write, and listing the two we happened to
-    // think of left a revoked viewer and a deleted item drawing a message the
-    // backend never stored.
+    // Every one of these is a refusal the backend answered with, and an answered
+    // refusal now means one thing: nothing was written. The endpoint carries
+    // that — a failure AFTER the write returns 202 and reports itself on the
+    // stream — so the client does not read the status at all.
+    //
+    // Two earlier versions did read it, first as a list and then as "any 4xx",
+    // and both were wrong for the same reason: the status is chosen by a
+    // type-keyed handler that cannot know where in the request the throw
+    // happened. These cases stay because they are the ones a person meets.
     const err = Object.assign(new Error("nope"), { status });
     const t = fakeTransport({ post: vi.fn(() => Promise.reject(err)) });
     const { result } = render(t);
@@ -495,6 +497,27 @@ describe("a send that was refused leaves nothing behind", () => {
     // settles it. This is the branch that returns before the retraction.
     const err = Object.assign(new Error("cut"), { status: 502 });
     const t = fakeTransport({ post: vi.fn(() => Promise.reject(err)) });
+    const { result } = render(t);
+    await waitFor(() => expect(result.current.log.entries).toHaveLength(1));
+
+    await act(async () => {
+      await result.current.send("please do the thing");
+    });
+
+    expect(result.current.log.entries).toHaveLength(2);
+  });
+
+  it("keeps it when the request was never answered at all", async () => {
+    // A connection reset arrives from `fetch` as a bare `TypeError` with no
+    // status — `apiFetch` does not wrap it — so the status-keyed cut list never
+    // saw it and the message was taken back although the backend may well have
+    // stored it and be answering. The `0` in that list comes from an XHR upload
+    // path this send never takes, so it was covering nothing here.
+    //
+    // Unanswered is precisely the case where nothing is known either way.
+    const t = fakeTransport({
+      post: vi.fn(() => Promise.reject(new TypeError("Failed to fetch"))),
+    });
     const { result } = render(t);
     await waitFor(() => expect(result.current.log.entries).toHaveLength(1));
 

@@ -599,7 +599,14 @@ export function useChatSession(
         // "streaming" so the stream / store-poll surfaces the result, instead of
         // flashing an error the user has to dismiss while the answer arrives.
         const status = (err as { status?: number } | null)?.status;
-        if (status !== undefined && GATEWAY_CUT.has(status)) {
+        // No status at all means the request was never ANSWERED — `apiFetch` does
+        // not wrap `fetch`'s own rejection, so a connection reset mid-flight
+        // arrives as a bare `TypeError`. That is the gateway cut in its most
+        // common form, and the enumerated list misses it: the `0` in
+        // `GATEWAY_CUT` comes from an XHR upload path this send never takes.
+        // Unanswered is the one case where nothing is known either way, so the
+        // message stays and the stream or the store poll settles it.
+        if (status === undefined || GATEWAY_CUT.has(status)) {
           lastEventAtRef.current = Date.now(); // give the poll a grace cycle
           return;
         }

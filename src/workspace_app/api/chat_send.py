@@ -69,7 +69,6 @@ if TYPE_CHECKING:
     from .compaction import IConversationCompactor
     from .locator import ItemLocator
     from .request_env import IRequestEnv
-    from .schemas import _MessageBody
     from .subagent_bridge import SubagentBridge
     from .turn_context import TurnContextBuilder
     from .turns import ChatTurnEngine, TurnMessage
@@ -78,6 +77,21 @@ from ..agent.context import AgentToolContext
 from ..context_budget import SUMMARY_ROLE
 from .compaction import CompactionOutcome
 from .events import Compacting
+
+# Runtime, not typing-only: two send paths CONSTRUCT one of these. It sat under
+# `TYPE_CHECKING` with a function-local import covering one caller and nothing
+# covering the other, so every off-hours round died on `NameError` before it sent
+# anything — while still spending a round from a budget that never resets. `ty`
+# and ruff's F821 both read the typing import as a binding; `TC004` is what sees
+# it, and it is now selected.
+from .schemas import _MessageBody
+
+# Runtime, not typing-only: two send paths CONSTRUCT one of these. It sat under
+# `TYPE_CHECKING` with a function-local import covering one caller and nothing
+# covering the other, so every off-hours round died on `NameError` before it sent
+# anything — while still spending a round from a budget that never resets. `ty`
+# and ruff's F821 both read the typing import as a binding; `TC004` is what sees
+# it, and it is now selected.
 
 logger = logging.getLogger(__name__)
 
@@ -427,7 +441,6 @@ class ChatSendService:
         from specstar.types import ResourceIDNotFoundError, ResourceIsDeletedError
 
         from .goal_checker import check_goal_met, transcript_tail
-        from .schemas import _MessageBody
 
         try:
             goal = read_goal(self._spec, rid)
@@ -1083,3 +1096,18 @@ class ChatSendService:
                     )
                     self._conv_rm.update(rid, fresh)
             self._turn_engine.publish(engine_key, failure)
+            if driven_by:
+                # …but a driver is not an HTTP caller and has no status to read.
+                # `OffHoursGoalSweeper.tick` releases its per-STRETCH claim on
+                # this exception so a later tick can retry — "must not cost that
+                # chat its night", in its own words — and a cold sandbox wake is
+                # exactly what fails at the top of an off-hours stretch, when the
+                # item has been idle all evening. Swallowing it told the sweeper
+                # the round had started: claim held until morning, no turn ever
+                # run, and nothing said.
+                #
+                # So each caller gets what it can act on. The request gets 202,
+                # because the message is in the thread and the failure is on the
+                # stream. The driver gets the throw, because a return value it
+                # cannot tell from success is no answer at all.
+                raise
