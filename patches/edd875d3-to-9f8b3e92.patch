@@ -1,0 +1,1539 @@
+diff --git a/web/src/lib/appColor.test.ts b/web/src/lib/appColor.test.ts
+new file mode 100644
+index 00000000..7e7db5e3
+--- /dev/null
++++ b/web/src/lib/appColor.test.ts
+@@ -0,0 +1,120 @@
++import { readFileSync, readdirSync } from "node:fs";
++import { dirname, join, resolve } from "node:path";
++import { fileURLToPath } from "node:url";
++
++import { describe, expect, it } from "vitest";
++
++import { DARK, LIGHT, TOKENS_CSS, contrast, over, parseFill, tokenIn } from "../test/contrast";
++import { appTagPalette } from "./appColor";
++import { parseHex, toOklch } from "./oklch";
++
++/**
++ * The App pill's ink must be legible on the App pill's fill — for EVERY App,
++ * in BOTH themes.
++ *
++ * Read off the shipped `app.json` files rather than a list written here. A
++ * hardcoded list guards the Apps that existed the day it was typed; the next App
++ * to declare a pale colour would ship a pill nobody can read, with a green suite.
++ * That is the whole failure mode this file exists for — the declared colours
++ * already span `#F0502E` and `#0EA5A4`, and raw teal ink on cream is ~2.8:1.
++ */
++const HERE = dirname(fileURLToPath(import.meta.url));
++const APPS = resolve(HERE, "../../../src/workspace_app/apps");
++
++function shippedAppColors(): { slug: string; color: string }[] {
++  return readdirSync(APPS, { withFileTypes: true })
++    .filter((d) => d.isDirectory())
++    .flatMap((d) => {
++      let raw: string;
++      try {
++        raw = readFileSync(join(APPS, d.name, "app.json"), "utf8");
++      } catch {
++        return []; // not an App directory (shared python modules live here too)
++      }
++      const m = JSON.parse(raw) as { slug?: string; color?: string };
++      return m.color ? [{ slug: m.slug ?? d.name, color: m.color }] : [];
++    });
++}
++
++describe("App pill palette", () => {
++  const apps = shippedAppColors();
++
++  it("finds the shipped Apps (a guard over an empty list proves nothing)", () => {
++    // The positive control. If the path above ever stops resolving, every
++    // `it.each` below silently becomes zero cases and the file goes green while
++    // guarding nothing at all.
++    expect(apps.length).toBeGreaterThanOrEqual(3);
++    expect(apps.map((a) => a.slug)).toContain("rca");
++  });
++
++  // WCAG 1.4.11's 3:1 floor for a UI component / large-ish label, held for the
++  // small bold text a pill carries. The fill is translucent, so what the ink
++  // actually sits on is the fill composited over the theme's paper.
++  const FLOOR = 3;
++
++  for (const { slug, color } of apps) {
++    it(`keeps ${slug} (${color}) legible in light mode`, () => {
++      const p = appTagPalette(color);
++      expect(p).not.toBeNull();
++      const paper = tokenIn(TOKENS_CSS, LIGHT, "--paper");
++      const surface = over(parseFill(p!.tint), paper);
++      expect(contrast(p!.inkLight, surface)).toBeGreaterThanOrEqual(FLOOR);
++    });
++
++    it(`keeps ${slug} (${color}) legible in dark mode`, () => {
++      const p = appTagPalette(color);
++      const paper = tokenIn(TOKENS_CSS, DARK, "--paper");
++      const surface = over(parseFill(p!.tint), paper);
++      expect(contrast(p!.inkDark, surface)).toBeGreaterThanOrEqual(FLOOR);
++    });
++
++    it(`keeps ${slug} recognisable as its own colour`, () => {
++      // Re-lighting must not become re-colouring: the ink has to stay the App's
++      // hue, or "the pill is the App's colour" is false and two Apps could even
++      // converge. 12° is well inside one colour name.
++      const p = appTagPalette(color)!;
++      const declared = toOklch(color).hue;
++      for (const ink of [p.inkLight, p.inkDark]) {
++        // Shortest distance around the hue circle. Two ways to get this wrong
++        // have already been written here: the first took the COMPLEMENT and
++        // reported every App as 180° off its own colour, and the second used
++        // `((raw + 180) % 360) - 180`, which is wrong whenever `raw < -180`
++        // because JS `%` keeps the DIVIDEND's sign — a true 10° delta across
++        // the 0°/360° wrap came back as 350. No shipped colour sits near the
++        // wrap today, so that one was green on correct output and would have
++        // failed the first App to declare a magenta. `+ 540` before the second
++        // modulo is what forces a non-negative dividend.
++        const raw = toOklch(ink).hue - declared;
++        const delta = Math.abs((((raw % 360) + 540) % 360) - 180);
++        expect(delta).toBeLessThanOrEqual(12);
++      }
++    });
++  }
++
++  it("keeps a hue that sits ON the 0°/360° wrap recognisable too", () => {
++    // The case no shipped App exercises, and the one the distance formula above
++    // used to get wrong. A pink near 0° re-lights to a hue on the other side of
++    // the wrap, which a naive modulo reports as ~350° of error.
++    const pink = "#FF0080";
++    const declared = toOklch(pink).hue;
++    const p = appTagPalette(pink)!;
++    for (const ink of [p.inkLight, p.inkDark]) {
++      const raw = toOklch(ink).hue - declared;
++      expect(Math.abs((((raw % 360) + 540) % 360) - 180)).toBeLessThanOrEqual(12);
++    }
++  });
++
++  it("carries the App's own colour into the fill", () => {
++    // The fill is the App's declared colour, not a re-lit one — it is what makes
++    // the pill read as that App at a glance.
++    const [r, g, b] = parseHex("#F0502E");
++    expect(appTagPalette("#F0502E")!.tint).toContain(`${r}, ${g}, ${b}`);
++  });
++
++  it("gives a neutral pill rather than throwing on a malformed colour", () => {
++    // A manifest typo should cost that row its colour, not take down the page.
++    expect(appTagPalette("not-a-colour")).toBeNull();
++    expect(appTagPalette(undefined)).toBeNull();
++    expect(appTagPalette("")).toBeNull();
++  });
++});
+diff --git a/web/src/lib/appColor.ts b/web/src/lib/appColor.ts
+new file mode 100644
+index 00000000..56bd11cb
+--- /dev/null
++++ b/web/src/lib/appColor.ts
+@@ -0,0 +1,65 @@
++/**
++ * The palette for an App's identity pill.
++ *
++ * An App declares ONE colour in its `app.json` (`"color": "#F0502E"`), chosen to
++ * look right as a 4px card accent on the launcher. Using that hex directly as
++ * INK is what a pill invites and must not do: the declared colours run from
++ * `#F0502E` to `#0EA5A4`, whose lightnesses differ by a factor a reader feels as
++ * "one of these labels is unreadable". Teal on cream is ~2.8:1 — under every
++ * floor — while the same teal on ink is fine, so the defect is invisible in
++ * whichever theme you happen to be looking at (#690's lesson, in reverse).
++ *
++ * So the HUE is the identity and the LIGHTNESS is ours: the ink keeps the App's
++ * hue and (gamut-permitting) its chroma, re-lit to a fixed lightness per theme.
++ * That makes contrast a property of this palette rather than of whichever colour
++ * an App happened to pick — the same trade `actorColor` makes for assignees.
++ *
++ * The fill stays translucent so ONE value serves both themes, the way the
++ * `--cat-N-bg` chip fills do; over cream it reads as a wash of the App's colour,
++ * over ink as a darker one.
++ *
++ * Everything is emitted as `rgba()` / hex, never `oklch()` — happy-dom drops an
++ * `oklch()` inline style outright, and a colour guard that reads an empty string
++ * passes on every element it can no longer measure.
++ */
++
++import { tintOf, toHex, toOklch } from "./oklch";
++
++/** How much of the App's colour the pill's fill carries. Low: the pill labels a
++ * row, it does not compete with the row's title. */
++const TINT_ALPHA = 0.16;
++
++/** Ink lightness per theme, verified against every shipped App colour in
++ * `appColor.test.ts`. Two values because one cannot work: an ink dark enough to
++ * read on cream is a hole on ink, and the tokens' own comment says the same of
++ * the categorical chips. */
++const INK_LIGHT = 0.46;
++const INK_DARK = 0.83;
++
++export type AppTagPalette = {
++  /** Translucent fill, valid over either theme's surface. */
++  tint: string;
++  /** Ink for the light theme. */
++  inkLight: string;
++  /** Ink for the dark theme. */
++  inkDark: string;
++};
++
++/**
++ * `hex` is the App's declared colour. A malformed or missing one falls back to
++ * a NEUTRAL pill rather than throwing: a manifest typo should cost the row its
++ * colour, not the whole resources page — and a grey pill still names its App.
++ */
++export function appTagPalette(hex: string | undefined): AppTagPalette | null {
++  if (!hex) return null;
++  try {
++    const { chroma, hue } = toOklch(hex);
++    return {
++      tint: tintOf(hex, TINT_ALPHA),
++      inkLight: toHex(INK_LIGHT, chroma, hue),
++      inkDark: toHex(INK_DARK, chroma, hue),
++    };
++  } catch {
++    return null;
++  }
++}
+diff --git a/web/src/lib/i18n.tsx b/web/src/lib/i18n.tsx
+index 572a0355..d3c47038 100644
+--- a/web/src/lib/i18n.tsx
++++ b/web/src/lib/i18n.tsx
+@@ -913,6 +913,25 @@ export const messages = {
+     en: "No such user, or you don't have permission.",
+   },
+   "resources.memory": { "zh-TW": "記憶體", en: "Memory" },
++  // Names the block of three totals, so it is announced as a block rather than
++  // read as the first three entries of the list of closable environments.
++  "resources.live.totals": { "zh-TW": "目前合計", en: "In use now" },
++  // Action and outcome, both halves. The second half is the one that was
++  // missing: closing refunds no storage, so somebody out of DISK space needs to
++  // be told to go to the list below instead of pressing Close and waiting.
++  //
++  // "the workspace reopens as you left it" stood here and was FALSE. The
++  // mirror's `DEFAULT_IGNORES` drops `node_modules/`, `.venv/`, `__pycache__/`
++  // and `.git/` — derived or huge, deliberately not persisted — so a recycled
++  // sandbox comes back with the source and the lockfile and no dependencies
++  // (`api/wui_routes.py` says exactly that, in those words). The person this
++  // sentence is written for is the one hesitating over Close having just run
++  // an install; telling them nothing is lost is the one thing it must not do.
++  "resources.live.lede": {
++    "zh-TW":
++      "這些環境正在佔用你的 CPU 與記憶體。關閉會立刻還回這兩項:你的檔案會保留,但裝好的套件與版本紀錄不會,下次開啟要重新準備。（儲存空間要靠下面那區清。）",
++    en: "These are holding your CPU and memory. Closing gives both back at once: your files are kept, but installed packages and version history are not — they have to be set up again when you reopen. (Storage is freed below, not here.)",
++  },
+   "resources.gauge.count": { "zh-TW": "環境數", en: "Environments" },
+   "resources.gauge.cpu": { "zh-TW": "CPU", en: "CPU" },
+   "resources.gauge.unlimited": { "zh-TW": "（無上限）", en: "(no limit)" },
+diff --git a/web/src/lib/oklch.ts b/web/src/lib/oklch.ts
+new file mode 100644
+index 00000000..7e6aaa99
+--- /dev/null
++++ b/web/src/lib/oklch.ts
+@@ -0,0 +1,103 @@
++/**
++ * sRGB ⇄ Oklch, and the one rule that makes a generated colour safe to put text
++ * on: hold the LIGHTNESS and give up chroma when the gamut demands it.
++ *
++ * Extracted from `renderers/entity/actorColor.ts`, which had these matrices
++ * privately and now imports them. A second copy is how the gantt's palette and
++ * a pill's palette would drift into disagreeing about what "the same colour"
++ * means, and the numbers are the kind nobody re-derives when they edit one side.
++ *
++ * Everything here resolves to a **hex or rgba string**, never an `oklch()`
++ * literal: `oklch()` in an inline style is dropped outright by happy-dom, which
++ * leaves a colour guard reading an empty string and passing on every element it
++ * can no longer measure (`reference_happydom_drops_oklch`).
++ */
++
++/** Oklab → linear sRGB (Björn Ottosson's matrices). Private: `toHex` is the
++ * only thing that should be reached for, and an exported helper with no caller
++ * is public surface nothing guards. */
++function linearRgb(lightness: number, a: number, b: number): [number, number, number] {
++  const l = (lightness + 0.3963377774 * a + 0.2158037573 * b) ** 3;
++  const m = (lightness - 0.1055613458 * a - 0.0638541728 * b) ** 3;
++  const s = (lightness - 0.0894841775 * a - 1.291485548 * b) ** 3;
++  return [
++    4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
++    -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
++    -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s,
++  ];
++}
++
++const inGamut = (rgb: readonly number[]): boolean =>
++  rgb.every((c) => c >= -1e-4 && c <= 1 + 1e-4);
++
++/** Linear-light channel → sRGB, clamped. */
++const gamma = (c: number): number => {
++  const v = Math.min(1, Math.max(0, c));
++  return v <= 0.0031308 ? 12.92 * v : 1.055 * v ** (1 / 2.4) - 0.055;
++};
++
++/** sRGB channel → linear-light. */
++const ungamma = (c: number): number =>
++  c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
++
++/** `#rgb` / `#rrggbb` → the three 0–255 channels. Throws on anything else, so a
++ * malformed manifest colour fails where it is introduced rather than painting
++ * an element black three surfaces away. */
++export function parseHex(hex: string): [number, number, number] {
++  const h = hex.trim().replace(/^#/, "");
++  const full = h.length === 3 ? [...h].map((c) => c + c).join("") : h;
++  if (!/^[0-9a-f]{6}$/i.test(full)) throw new Error(`not a hex colour: ${hex}`);
++  return [0, 2, 4].map((i) => parseInt(full.slice(i, i + 2), 16)) as [number, number, number];
++}
++
++/** The hue angle (degrees) and chroma of a colour, so a declared brand hex can
++ * be re-lit without losing which colour it IS. */
++export function toOklch(hex: string): { lightness: number; chroma: number; hue: number } {
++  const [r, g, b] = parseHex(hex).map((c) => ungamma(c / 255));
++  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
++  const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
++  const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
++  const lightness = 0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s;
++  const a = 1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s;
++  const bb = 0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s;
++  const hue = (Math.atan2(bb, a) * 180) / Math.PI;
++  return { lightness, chroma: Math.hypot(a, bb), hue: hue < 0 ? hue + 360 : hue };
++}
++
++/**
++ * The sRGB hex for one (lightness, chroma, hue), holding LIGHTNESS and giving up
++ * chroma if that is what it takes to land inside the gamut — never the other way
++ * round, because lightness is what the contrast floor rests on. Clipping the
++ * CHANNELS instead would drag neighbouring hues onto the gamut boundary and
++ * collapse them into each other.
++ */
++export function toHex(lightness: number, chroma: number, hue: number): string {
++  const rad = (hue * Math.PI) / 180;
++  const at = (c: number) => linearRgb(lightness, c * Math.cos(rad), c * Math.sin(rad));
++  let lo = 0;
++  let hi = chroma;
++  if (!inGamut(at(hi))) {
++    // 20 halvings resolve chroma far finer than 8-bit output can express.
++    for (let i = 0; i < 20; i++) {
++      const mid = (lo + hi) / 2;
++      if (inGamut(at(mid))) lo = mid;
++      else hi = mid;
++    }
++    hi = lo;
++  }
++  return `#${at(hi)
++    .map((c) =>
++      Math.round(gamma(c) * 255)
++        .toString(16)
++        .padStart(2, "0"),
++    )
++    .join("")}`;
++}
++
++/** A translucent fill of `hex`, as `rgba(...)`. Translucent rather than a
++ * pre-mixed hex so ONE value works on both themes' surfaces — the same shape
++ * the `--cat-N-bg` chip fills use. */
++export function tintOf(hex: string, alpha: number): string {
++  const [r, g, b] = parseHex(hex);
++  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
++}
+diff --git a/web/src/pages/MyResourcesPage.test.tsx b/web/src/pages/MyResourcesPage.test.tsx
+index f16841cc..e6484471 100644
+--- a/web/src/pages/MyResourcesPage.test.tsx
++++ b/web/src/pages/MyResourcesPage.test.tsx
+@@ -25,6 +25,18 @@ vi.mock("../api", () => ({
+       { id: "bob", name: "Bob Chen", section: "Reflow", email: "bob@example.com" },
+       { id: "carol", name: "Carol Wu", section: "Etch", email: "carol@example.com" },
+     ]),
++    // The App manifests the rows name themselves by. Two Apps, so a test can
++    // show a row picks ITS OWN App rather than whichever came back first.
++    //
++    // `color` is a raw hex and `icon` a named-icon key because that is what the
++    // shipped `app.json` files actually carry (`#F0502E` / `flame`). An earlier
++    // version of this double used `"cat-1"`, a chip-token name — a format the
++    // backend never sends, which would have let colour handling be written and
++    // tested against a shape that does not exist.
++    listApps: vi.fn(async () => [
++      { slug: "rca", title: "根因分析", description: "", icon: "flame", color: "#F0502E" },
++      { slug: "pm", title: "專案管理", description: "", icon: "kanban", color: "#3B82F6" },
++    ]),
+   },
+ }));
+ 
+@@ -172,6 +184,173 @@ describe("MyResourcesPage", () => {
+     expect(document.querySelectorAll(".meter")).toHaveLength(2);
+   });
+ 
++  it("says what closing actually gives back, and what it does not", async () => {
++    // Closing returns cpu and memory at once and returns NO bytes — the two
++    // halves of this page are refunded by different actions. The page never
++    // said so, so somebody at their STORAGE limit could press Close on every
++    // row, watch that gauge not move, and conclude the button was broken.
++    render(<MyResourcesPage client={client()} />, { wrapper: Wrap });
++    const live = await screen.findByRole("region", { name: "執行環境" });
++    expect(live).toHaveTextContent(/CPU 與記憶體/);
++    expect(live).toHaveTextContent(/檔案會保留/);
++    // …and what it does NOT keep. The first version of this sentence said the
++    // workspace "reopens as you left it", which is false: the mirror does not
++    // persist `node_modules/`, `.venv/` or `.git/`, so an install is gone after
++    // a recycle. The reader this line exists for is the one hesitating over
++    // Close having just run one, so the omission pointed the wrong way.
++    expect(live).toHaveTextContent(/套件與版本紀錄不會/);
++  });
++
++  it("names the App each environment belongs to, not its slug", async () => {
++    // Titles alone do not say what an environment IS. The payload has carried
++    // the slug all along (the row links with it) and the row spent it without
++    // showing it, so a list spanning three Apps looked like one flat list and
++    // the reader had to guess from the wording of a title.
++    //
++    // The App's own title, from its manifest — never a slug hardcoded in the
++    // FE, and never the slug shown raw when a real name is available.
++    const d = data({
++      live: [
++        { item_id: "i-1", slug: "rca", title: "Line 3 stoppage", cpu_cores: 1, memory_bytes: 800 },
++        { item_id: "i-2", slug: "pm", title: "Q4 roadmap", cpu_cores: 1, memory_bytes: 800 },
++      ],
++      workspaces: [],
++    });
++    render(<MyResourcesPage client={client({ get: vi.fn(async () => d) })} />, { wrapper: Wrap });
++
++    const live = await screen.findByRole("region", { name: "執行環境" });
++    const rowOf = (title: string) => within(live).getByText(title).closest("li")!;
++    await waitFor(() => expect(within(rowOf("Line 3 stoppage")).getByText("根因分析")).toBeTruthy());
++    expect(within(rowOf("Q4 roadmap")).getByText("專案管理")).toBeTruthy();
++  });
++
++  it("names the App on the STORAGE rows too, not just the live ones", async () => {
++    // The two lists answer the same question about the same items — which of my
++    // things is this? — so naming the App on one and not the other left the
++    // reader able to tell a pm workspace from an rca one while deciding what to
++    // close, and unable to while deciding what to DELETE, which is the
++    // irreversible half.
++    const d = data({
++      live: [],
++      workspaces: [
++        { item_id: "i-1", slug: "rca", title: "Line 3 stoppage", bytes_used: 900 },
++        { item_id: "i-2", slug: "pm", title: "Q4 roadmap", bytes_used: 100 },
++      ],
++    });
++    render(<MyResourcesPage client={client({ get: vi.fn(async () => d) })} />, { wrapper: Wrap });
++
++    const disk = await screen.findByRole("region", { name: "儲存空間" });
++    const rowOf = (title: string) => within(disk).getByText(title).closest("li")!;
++    await waitFor(() => expect(within(rowOf("Line 3 stoppage")).getByText("根因分析")).toBeTruthy());
++    expect(within(rowOf("Q4 roadmap")).getByText("專案管理")).toBeTruthy();
++  });
++
++  it("tints each pill with its OWN App's declared colour", async () => {
++    // "The pill's colour is the App's colour" — so it has to come from the
++    // manifest hex, per row, not from one shared accent. Asserted on both rows
++    // because a single-row test passes just as well when every pill is painted
++    // with whichever App happened to load first.
++    const d = data({
++      live: [
++        { item_id: "i-1", slug: "rca", title: "Line 3 stoppage", cpu_cores: 1, memory_bytes: 800 },
++        { item_id: "i-2", slug: "pm", title: "Q4 roadmap", cpu_cores: 1, memory_bytes: 800 },
++      ],
++      workspaces: [],
++    });
++    render(<MyResourcesPage client={client({ get: vi.fn(async () => d) })} />, { wrapper: Wrap });
++
++    const live = await screen.findByRole("region", { name: "執行環境" });
++    const tagIn = (title: string) =>
++      within(live).getByText(title).closest("li")!.querySelector(".app-tag") as HTMLElement;
++
++    await waitFor(() => expect(tagIn("Line 3 stoppage")).not.toBeNull());
++    // #F0502E and #3B82F6 — the two `app.json` colours the double declares.
++    expect(tagIn("Line 3 stoppage").style.getPropertyValue("--app-tint")).toMatch(/240,\s*80,\s*46/);
++    expect(tagIn("Q4 roadmap").style.getPropertyValue("--app-tint")).toMatch(/59,\s*130,\s*246/);
++  });
++
++  it("falls back to the slug for an App the manifest list does not name", async () => {
++    // `listApps` is a separate near-static query: it is EMPTY on first paint and
++    // stays empty if that request fails. Rendering nothing for the App would
++    // make the label flicker in and, on a failure, silently leave every row
++    // looking like it belongs to nothing at all.
++    vi.mocked(api.listApps).mockResolvedValueOnce([]);
++    const d = data({
++      live: [
++        { item_id: "i-1", slug: "rca", title: "Line 3 stoppage", cpu_cores: 1, memory_bytes: 800 },
++      ],
++      workspaces: [],
++    });
++    render(<MyResourcesPage client={client({ get: vi.fn(async () => d) })} />, { wrapper: Wrap });
++
++    const live = await screen.findByRole("region", { name: "執行環境" });
++    const row = within(live).getByText("Line 3 stoppage").closest("li")!;
++    expect(within(row).getByText("rca")).toBeTruthy();
++  });
++
++  it("shows no App tag at all for a row the backend could not name", async () => {
++    // `/me/resources` degrades a row it cannot resolve to empty strings rather
++    // than dropping it — the environment is running and being charged for, so
++    // it has to stay closable even when its item is gone or the reader may not
++    // see its title. An empty slug must therefore render NO tag: a chip has
++    // padding and a fill, so an empty one is a visible grey smudge in the
++    // column where every other row says something.
++    const d = data({
++      live: [{ item_id: "i-9", slug: "", title: "", cpu_cores: 1, memory_bytes: 800 }],
++      workspaces: [],
++    });
++    render(<MyResourcesPage client={client({ get: vi.fn(async () => d) })} />, { wrapper: Wrap });
++
++    const live = await screen.findByRole("region", { name: "執行環境" });
++    const row = within(live).getByText("i-9").closest("li")!;
++    expect(row.querySelector(".app-tag")).toBeNull();
++    // …and it is still closable, which is the whole reason the row is here.
++    expect(within(row).getByRole("button", { name: "關閉" })).toBeEnabled();
++    // The title must NOT be a link. With an empty slug it built `/a//i-9`,
++    // which matches no route, so the catch-all `*` navigates to `/` with
++    // `replace` — one click on the title ejects the reader from the page and
++    // Back does not bring them back. The row exists to be closed; its only
++    // other affordance must not throw the reader off the one page that offers
++    // the remedy.
++    expect(within(row).queryByRole("link")).toBeNull();
++  });
++
++  it("does not link a storage row the backend could not name either", async () => {
++    // The delete button is already gated on the slug ("a GHOST row has nothing
++    // this button could delete"), which left the ungated link as the row's ONLY
++    // clickable thing — and it navigates nowhere.
++    const d = data({
++      live: [],
++      workspaces: [{ item_id: "i-9", slug: "", title: "", bytes_used: 400 }],
++    });
++    render(<MyResourcesPage client={client({ get: vi.fn(async () => d) })} />, { wrapper: Wrap });
++
++    const disk = await screen.findByRole("region", { name: "儲存空間" });
++    const row = within(disk).getByText("i-9").closest("li")!;
++    expect(within(row).queryByRole("link")).toBeNull();
++    expect(within(row).queryByRole("button")).toBeNull();
++  });
++
++  it("keeps the three totals out of the list of things you can close", async () => {
++    // They are two different KINDS of line — "how full am I" and "here is one
++    // thing you could give back" — and they shipped as one undifferentiated
++    // column: same width, same type, one hairline between them, so the section
++    // read as seven rows of one list. Grouping the totals is what lets the
++    // stylesheet treat them as a block, and it is what a screen reader
++    // announces before the numbers instead of running them into the list.
++    const d = data({
++      limits: { count: 2, cpu: 4, memory_bytes: 2048, disk_bytes: 1024 },
++    });
++    render(<MyResourcesPage client={client({ get: vi.fn(async () => d) })} />, { wrapper: Wrap });
++
++    const live = await screen.findByRole("region", { name: "執行環境" });
++    const totals = within(live).getByRole("group", { name: "目前合計" });
++    expect(within(totals).getAllByRole("progressbar")).toHaveLength(3);
++    // …and none of them inside the list, where every entry must be a thing the
++    // Close button can act on.
++    expect(within(within(live).getByRole("list")).queryByRole("progressbar")).toBeNull();
++  });
++
+   it("says how to free disk, because deleting happens in the item", async () => {
+     render(<MyResourcesPage client={client()} />, { wrapper: Wrap });
+     expect(await screen.findByText(/刪除永遠不受額度限制/)).toBeTruthy();
+@@ -405,4 +584,42 @@ describe("a close that could not be done", () => {
+     expect(alerts).toHaveLength(1);
+     expect(within(alerts[0].closest("li")!).getByText("Line 9 stoppage")).toBeTruthy();
+   });
++
++  it("leaves the OTHER rows pressable while one close is in flight", async () => {
++    // The sibling of the assertion above, for the pending state rather than the
++    // failed one. One `useMutation` shared by every row made `isPending` a
++    // property of the PAGE: pressing Close on one row greyed out every other
++    // row's button until that request came back — on the page whose entire job
++    // is getting somebody back under their limit, and where a close that has to
++    // reach a busy host is exactly the slow case (503 + Retry-After).
++    let release: () => void = () => {};
++    const closeEnvironment = vi.fn(
++      () =>
++        new Promise<void>((resolve) => {
++          release = resolve;
++        }),
++    );
++    const two = data({
++      live: [
++        { item_id: "i-1", slug: "rca", title: "Line 3 stoppage", cpu_cores: 1, memory_bytes: 800 },
++        { item_id: "i-2", slug: "rca", title: "Line 9 stoppage", cpu_cores: 1, memory_bytes: 800 },
++      ],
++    });
++    render(
++      <MyResourcesPage client={client({ get: vi.fn(async () => two), closeEnvironment })} />,
++      { wrapper: Wrap },
++    );
++    // Scoped to the live region: the same item is listed again under Storage,
++    // so an unscoped lookup by title matches two rows in two different lists.
++    const live = () => screen.getByRole("region", { name: "執行環境" });
++    const closeIn = (title: string) =>
++      within(within(live()).getByText(title).closest("li")!).getByRole("button", { name: "關閉" });
++
++    await waitFor(() => expect(closeIn("Line 3 stoppage")).toBeTruthy());
++    await userEvent.click(closeIn("Line 3 stoppage"));
++
++    await waitFor(() => expect(closeIn("Line 3 stoppage")).toBeDisabled());
++    expect(closeIn("Line 9 stoppage")).toBeEnabled();
++    release();
++  });
+ });
+diff --git a/web/src/pages/MyResourcesPage.tsx b/web/src/pages/MyResourcesPage.tsx
+index 911e79bf..efb97b0a 100644
+--- a/web/src/pages/MyResourcesPage.tsx
++++ b/web/src/pages/MyResourcesPage.tsx
+@@ -18,9 +18,18 @@ import { Link } from "react-router-dom";
+ import { formatBytes } from "../lib/bytes";
+ import { useT } from "../lib/i18n";
+ 
+-import { type MyResources, type MyResourcesApi, type OverrideList as OverrideListDTO, myResourcesApi } from "../api/myResources";
++import {
++  type LiveEnvironment,
++  type MyResources,
++  type MyResourcesApi,
++  type OverrideList as OverrideListDTO,
++  myResourcesApi,
++} from "../api/myResources";
+ import { qk } from "../api/queryKeys";
+ import { useIsSuperuser } from "../hooks/useIsSuperuser";
++import { useApps } from "../hooks/useResources";
++import { appTagPalette } from "../lib/appColor";
++import { AppIcon } from "../components/AppIcon";
+ import { UserPicker } from "../components/UserPicker";
+ import { DeleteItemBody } from "../components/DeleteItemConfirm";
+ import { DialogProvider, useDialog } from "../components/Dialog";
+@@ -84,22 +93,11 @@ function Gauge({
+ 
+ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResourcesApi }) {
+   const t = useT();
+-  const qc = useQueryClient();
+   const { data, isLoading } = useQuery({
+     queryKey: qk.myResources,
+     queryFn: () => client.get(),
+   });
+ 
+-  const close = useMutation({
+-    mutationFn: (itemId: string) => client.closeEnvironment(itemId),
+-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.myResources }),
+-    // This failure is reported on the row it happened to, below. Without the
+-    // opt-out the query client ALSO routes it to the app-wide write-failure
+-    // toast, so one press raises two messages — and the page-level one names no
+-    // item, which is the thing the per-row alert exists to avoid.
+-    meta: { silentError: true },
+-  });
+-
+   if (isLoading || !data) return <p>{t("resources.loading")}</p>;
+ 
+   const { limits } = data;
+@@ -110,64 +108,50 @@ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResour
+ 
+       <section aria-labelledby="live-heading">
+         <h2 id="live-heading">{t("resources.live.heading")}</h2>
++        {/* What Close actually refunds. The two halves of this page are freed by
++            DIFFERENT actions — closing returns cpu and memory at once and
++            returns no bytes at all — and the page never said so, so a person at
++            their STORAGE limit could close every environment, watch that gauge
++            not move, and conclude the button was broken. Saying it also removes
++            the reason to hesitate over the one action here that is safe. */}
++        <p className="lede">{t("resources.live.lede")}</p>
+         {/* Three dimensions, three gauges. They used to share one line and ONE
+             bar — and that bar tracked only `count`, so at "1 / 2 · CPU 1 / 4" it
+             sat at 50% while cpu was at 25%: a reader takes the bar as "how full
+             am I" and it answered one dimension of three. Any of them can refuse
+-            a turn on its own, so each shows its own. */}
+-        <Gauge
+-          label={t("resources.gauge.count")}
+-          used={data.live.length}
+-          limit={limits.count}
+-          format={(n) => t("resources.live.count", { n })}
+-        />
+-        <Gauge
+-          label={t("resources.gauge.cpu")}
+-          used={data.cpu_in_use}
+-          limit={limits.cpu}
+-          format={(n) => `${n}`}
+-        />
+-        <Gauge
+-          label={t("resources.memory")}
+-          used={data.memory_in_use}
+-          limit={limits.memory_bytes}
+-          format={formatBytes}
+-        />
++            a turn on its own, so each shows its own.
++
++            Grouped, and named, because they are a different KIND of line from
++            the ones below: "how full am I" against "here is one thing you could
++            give back". Ungrouped they were seven rows of one column at one
++            width and one type size, and the section read as a single list whose
++            first three entries happened to have no button. */}
++        <div className="stat-row" role="group" aria-label={t("resources.live.totals")}>
++          <Gauge
++            label={t("resources.gauge.count")}
++            used={data.live.length}
++            limit={limits.count}
++            format={(n) => t("resources.live.count", { n })}
++          />
++          <Gauge
++            label={t("resources.gauge.cpu")}
++            used={data.cpu_in_use}
++            limit={limits.cpu}
++            format={(n) => `${n}`}
++          />
++          <Gauge
++            label={t("resources.memory")}
++            used={data.memory_in_use}
++            limit={limits.memory_bytes}
++            format={formatBytes}
++          />
++        </div>
+         {data.live.length === 0 ? (
+           <p className="empty">{t("resources.live.empty")}</p>
+         ) : (
+-          <ul>
++          <ul className="live-list">
+             {data.live.map((env) => (
+-              <li key={env.item_id}>
+-                <Link to={`/a/${env.slug}/${env.item_id}`}>{env.title || env.item_id}</Link>
+-                <span className="detail">
+-                  {env.cpu_cores
+-                    ? t(env.cpu_cores === 1 ? "resources.live.cores_one" : "resources.live.cores", {
+-                        n: env.cpu_cores,
+-                      })
+-                    : ""}
+-                  {env.memory_bytes ? ` · ${formatBytes(env.memory_bytes)}` : ""}
+-                </span>
+-                <button
+-                  type="button"
+-                  className="btn"
+-                  data-variant="secondary"
+-                  data-size="sm"
+-                  onClick={() => close.mutate(env.item_id)}
+-                  disabled={close.isPending}
+-                >
+-                  {t("resources.live.close")}
+-                </button>
+-                {/* On the row it is about, not above the list: a page-level
+-                    message names no item, and with more than one environment
+-                    the reader cannot tell which press failed. `variables` is
+-                    the item id the failed mutation was called with. */}
+-                {close.isError && close.variables === env.item_id ? (
+-                  <p className="error" role="alert">
+-                    {t("resources.live.close_failed")}
+-                  </p>
+-                ) : null}
+-              </li>
++              <LiveEnvironmentRow key={env.item_id} env={env} client={client} />
+             ))}
+           </ul>
+         )}
+@@ -180,19 +164,26 @@ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResour
+           // Reporting zero would state something false on a page anyone can open.
+           <p className="empty">{t("resources.disk.untracked")}</p>
+         ) : (
+-          <>
++          // The same panel the live totals sit in. Left bare, this gauge was
++          // full-width in the same column as the list below it, at the same
++          // type size, separated by the same hairline — which is precisely the
++          // "the totals are indistinguishable from the list" complaint the
++          // live section was rewritten to answer. Fixing one instance of that
++          // and leaving the other on the same page is worse than either.
++          // No `role="group"`: a group of one names nothing a heading does not.
++          <div className="stat-row">
+             <Gauge
+               label={t("resources.disk.heading")}
+               used={data.disk_in_use}
+               limit={limits.disk_bytes}
+               format={formatBytes}
+             />
+-          </>
++          </div>
+         )}
+         {!data.disk_tracked ? null : data.workspaces.length === 0 ? (
+           <p className="empty">{t("resources.disk.empty")}</p>
+         ) : (
+-          <ul>
++          <ul className="disk-list">
+             {data.workspaces.map((ws) => (
+               <li key={ws.item_id}>
+                 {/* This row can delete the WHOLE item (plan-delete-item-cascade):
+@@ -200,7 +191,15 @@ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResour
+                     refunds the quota, and this page is where the person at
+                     their limit sees which item is worth the trade. Per-file
+                     clean-up still lives in the item's own file view. */}
+-                <Link to={`/a/${ws.slug}/${ws.item_id}`}>{ws.title || ws.item_id}</Link>
++                {/* Same empty-slug case. The delete button below is already
++                    gated on the slug, which left this link as the ghost row's
++                    only clickable thing — and it navigates nowhere. */}
++                {ws.slug ? (
++                  <Link to={`/a/${ws.slug}/${ws.item_id}`}>{ws.title || ws.item_id}</Link>
++                ) : (
++                  <span className="row-title">{ws.title || ws.item_id}</span>
++                )}
++                <AppTag slug={ws.slug} />
+                 <span className="detail">{formatBytes(ws.bytes_used)}</span>
+                 {/* A GHOST row (its item already hard-deleted, slug unknown —
+                     the pre-cascade orphans #778 tracks) has nothing this
+@@ -225,6 +224,140 @@ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResour
+   );
+ }
+ 
++/** Which App a row belongs to, as a pill.
++ *
++ * ONE component for both lists. They answer the same question about the same
++ * items — which of my things is this? — and naming the App only on the live
++ * half left a reader able to tell a pm workspace from an rca one while deciding
++ * what to CLOSE and unable to while deciding what to DELETE, which is the
++ * irreversible half.
++ *
++ * The name falls back to the slug, and that is not cosmetic: `listApps` is a
++ * separate near-static query, so it is EMPTY on the first paint and STAYS empty
++ * if that request fails — rendering nothing would flicker on every load and, on
++ * a failure, leave every row looking like it belongs to no App at all. The slug
++ * is the honest answer in that window; it is what the row's link already uses.
++ * Never a slug→name table in the FE — the name is the manifest's to state.
++ *
++ * Nothing at all (an empty cell, so the rows below still line up) when the
++ * backend could not name the row: `/me/resources` degrades an item it cannot
++ * resolve to empty strings rather than dropping it (it is running and being
++ * charged for, so it must stay closable), and a pill is a fill plus padding —
++ * an empty one is a grey smudge in the column where every other row speaks. */
++function AppTag({ slug }: { slug: string }) {
++  const apps = useApps();
++  const app = apps.find((a) => a.slug === slug);
++  const name = app?.title || slug;
++  if (!name) return <span />;
++  // The App's own mark and its own colour. `AppIcon` because an App may ship a
++  // PNG, an emoji or a named icon and only it knows the difference — a pill that
++  // handled one of the three would look right on this deploy and blank on the
++  // next. Both are absent until `listApps` resolves, which is why the pill
++  // renders from `name` alone and dresses itself when the manifest arrives.
++  const palette = appTagPalette(app?.color);
++  return (
++    <span
++      className="app-tag"
++      // Published as custom properties rather than as `color`/`background`
++      // directly: the ink has to differ per theme, and only CSS knows which
++      // theme is on. Plain rgba/hex values, never `oklch()` — happy-dom drops
++      // that from an inline style, which would blind every colour guard.
++      style={
++        palette
++          ? ({
++              "--app-tint": palette.tint,
++              "--app-ink": palette.inkLight,
++              "--app-ink-dark": palette.inkDark,
++            } as React.CSSProperties)
++          : undefined
++      }
++    >
++      {app?.icon ? <AppIcon icon={app.icon} slug={app.slug} color="currentColor" size={13} /> : null}
++      {/* The label owns its own overflow. `text-overflow` applies to a block
++          container, and bare text inside the `inline-flex` pill becomes an
++          anonymous flex item that never inherits it — so a name too long for
++          the column was hard-clipped mid-word with no ellipsis at all. `title`
++          because an ellipsis says a name was cut and not what it was. */}
++      <span className="app-tag-label" title={name}>
++        {name}
++      </span>
++    </span>
++  );
++}
++
++/** One live environment: what it is, what it is holding, and the button that
++ * gives it back.
++ *
++ * Its own component so the close mutation is the ROW'S, the way
++ * `DeleteItemButton` below already owns its delete. Shared by the whole list,
++ * `isPending` was a property of the page — pressing Close on one row disabled
++ * every other row's button until that request came back, which on a busy host
++ * (503 + Retry-After) is the slow case, on the page whose only job is getting
++ * somebody back under their limit. Per-row state also removes the need to
++ * match `mutation.variables` against this row's id to tell whose failure a
++ * message belongs to: there is only one row's failure in here. */
++function LiveEnvironmentRow({ env, client }: { env: LiveEnvironment; client: MyResourcesApi }) {
++  const t = useT();
++  const qc = useQueryClient();
++  const close = useMutation({
++    mutationFn: () => client.closeEnvironment(env.item_id),
++    onSuccess: () => qc.invalidateQueries({ queryKey: qk.myResources }),
++    // This failure is reported on the row it happened to. Without the opt-out
++    // the query client ALSO routes it to the app-wide write-failure toast, so
++    // one press raises two messages — and the page-level one names no item,
++    // which is the thing the per-row alert exists to avoid.
++    meta: { silentError: true },
++  });
++  return (
++    <li>
++      {/* Decoration, and deliberately out of the a11y tree: the fact it states
++          — this one is running right now — is already carried by the section's
++          heading and lede. Its job is visual, and it is the thing that stops
++          this list reading as a second copy of the storage list below it. */}
++      <span className="live-dot" aria-hidden="true" />
++      {/* A row the backend could not name has an empty slug, and the link it
++          built (`/a//i-9`) matches no route — the catch-all navigates to `/`
++          with `replace`, so one click ejects the reader from the page and Back
++          does not bring them back. This row exists to be CLOSED; sending the
++          person away from the only page offering that remedy is the opposite.
++          The name still shows, so the row is still something rather than a
++          blank. */}
++      {env.slug ? (
++        <Link to={`/a/${env.slug}/${env.item_id}`}>{env.title || env.item_id}</Link>
++      ) : (
++        <span className="row-title">{env.title || env.item_id}</span>
++      )}
++      <AppTag slug={env.slug} />
++      <span className="detail">
++        {env.cpu_cores
++          ? t(env.cpu_cores === 1 ? "resources.live.cores_one" : "resources.live.cores", {
++              n: env.cpu_cores,
++            })
++          : ""}
++        {env.memory_bytes ? ` · ${formatBytes(env.memory_bytes)}` : ""}
++      </span>
++      <button
++        type="button"
++        className="btn"
++        data-variant="secondary"
++        data-size="sm"
++        onClick={() => close.mutate()}
++        disabled={close.isPending}
++      >
++        {t("resources.live.close")}
++      </button>
++      {/* On the row it is about, not above the list: a page-level message names
++          no item, and with more than one environment the reader cannot tell
++          which press failed. */}
++      {close.isError ? (
++        <p className="error" role="alert">
++          {t("resources.live.close_failed")}
++        </p>
++      ) : null}
++    </li>
++  );
++}
++
+ /** The per-row "delete this item and everything it owns" affordance
+  * (plan-delete-item-cascade). Its own component because `useDialog` must run
+  * UNDER the page's DialogProvider; the mutation invalidates `myResources`, so
+diff --git a/web/src/renderers/entity/actorColor.ts b/web/src/renderers/entity/actorColor.ts
+index 3388054b..37a5167c 100644
+--- a/web/src/renderers/entity/actorColor.ts
++++ b/web/src/renderers/entity/actorColor.ts
+@@ -26,6 +26,8 @@
+  * degrades gracelessly on the way there — but it is a limit, not infinity.
+  */
+ 
++import { toHex } from "../../lib/oklch";
++
+ import type { EntityFieldSpec } from "../../api/entities";
+ import type { ChipColor } from "./selectColor";
+ 
+@@ -74,52 +76,6 @@ export function hueFraction(k: number): number {
+   return (2 * (k - 2 ** (level - 1)) + 1) / 2 ** level;
+ }
+ 
+-/** Oklab → linear sRGB (Björn Ottosson's matrices). */
+-function linearRgb(lightness: number, a: number, b: number): [number, number, number] {
+-  const l = (lightness + 0.3963377774 * a + 0.2158037573 * b) ** 3;
+-  const m = (lightness - 0.1055613458 * a - 0.0638541728 * b) ** 3;
+-  const s = (lightness - 0.0894841775 * a - 1.291485548 * b) ** 3;
+-  return [
+-    4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+-    -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+-    -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s,
+-  ];
+-}
+-
+-const inGamut = (rgb: readonly number[]): boolean =>
+-  rgb.every((c) => c >= -1e-4 && c <= 1 + 1e-4);
+-
+-const gamma = (c: number): number => {
+-  const v = Math.min(1, Math.max(0, c));
+-  return v <= 0.0031308 ? 12.92 * v : 1.055 * v ** (1 / 2.4) - 0.055;
+-};
+-
+-/**
+- * The sRGB hex for one hue, holding LIGHTNESS and giving up chroma if that is
+- * what it takes to land inside the gamut — never the other way round, because
+- * lightness is what the contrast floor rests on.
+- */
+-function fill(chroma: number, hue: number): string {
+-  const rad = (hue * Math.PI) / 180;
+-  const at = (c: number) => linearRgb(LIGHTNESS, c * Math.cos(rad), c * Math.sin(rad));
+-  let lo = 0;
+-  let hi = chroma;
+-  if (!inGamut(at(hi))) {
+-    // 20 halvings resolve chroma far finer than 8-bit output can express.
+-    for (let i = 0; i < 20; i++) {
+-      const mid = (lo + hi) / 2;
+-      if (inGamut(at(mid))) lo = mid;
+-      else hi = mid;
+-    }
+-    hi = lo;
+-  }
+-  const hex = at(hi)
+-    .map((c) => Math.round(gamma(c) * 255).toString(16).padStart(2, "0"))
+-    .join("");
+-  return `#${hex}`;
+-}
+-
+-
+ /**
+  * Build the palette for one chart from its records' actor values, IN RECORD
+  * ORDER. Order matters and appearance order is the kind that churns least:
+@@ -163,11 +119,11 @@ export function actorPalette(
+     if (pinned !== undefined) {
+       // A pin naming no hue we know (or the neutral one) is achromatic, the same
+       // answer `selectColor` gives it.
+-      return { bg: pinned === null ? fill(0, 0) : fill(CHROMA, pinned), fg: INK };
++      return { bg: pinned === null ? toHex(LIGHTNESS, 0, 0) : toHex(LIGHTNESS, CHROMA, pinned), fg: INK };
+     }
+     const seat = value ? seats.get(value) : undefined;
+     return seat === undefined
+-      ? { bg: fill(0, 0), fg: INK }
+-      : { bg: fill(CHROMA, hueFraction(seat) * 360), fg: INK };
++      ? { bg: toHex(LIGHTNESS, 0, 0), fg: INK }
++      : { bg: toHex(LIGHTNESS, CHROMA, hueFraction(seat) * 360), fg: INK };
+   };
+ }
+diff --git a/web/src/styles/my-resources.css b/web/src/styles/my-resources.css
+index b87f8906..9cc54dd1 100644
+--- a/web/src/styles/my-resources.css
++++ b/web/src/styles/my-resources.css
+@@ -96,6 +96,260 @@
+   transition: width 0.2s;
+ }
+ 
++/* ── the live section ────────────────────────────────────────────────────
++   Everything below exists to answer one complaint: the section READ as a
++   single seven-row list whose first three rows happened to have no button.
++   The totals and the closable environments are different kinds of line, and
++   they had the same width, the same type size and the same hairline between
++   them, so nothing said which was which. */
++
++/* What Close gives back, in one sentence, before the numbers. Sits at body size
++   rather than the dimmer hint tier: it states the one fact that decides whether
++   pressing Close is worth it, so it is not an aside. */
++.page .lede {
++  margin: 0 0 var(--space-16);
++  max-width: 62ch;
++  font-size: var(--text-body);
++  color: var(--text-paper-d);
++}
++
++/* The three totals as ONE block, three columns — not three full-width bars
++   stacked in the same column as the rows beneath them. Three 712px accent bars
++   in a vertical run also read as three alarms; a third of the width each, in a
++   panel of their own, reads as a dashboard, which is what they are. */
++.page .stat-row {
++  display: grid;
++  /* `auto-fit` rather than `repeat(3, …)`: the storage section puts ONE gauge
++     in this same panel, and a fixed three-column grid would leave it sitting in
++     the left third with two empty columns beside it. Empty tracks collapse, so
++     three gauges still get three columns and one gets the full width. */
++  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
++  gap: var(--space-24);
++  margin-bottom: var(--space-24);
++  padding: var(--space-16);
++  border: 1px solid var(--paper-3);
++  border-radius: var(--radius-card);
++  background: var(--paper-2);
++}
++
++/* They are columns here, so the stacking margin that separates them elsewhere
++   would only push the second and third down out of line. */
++.page .stat-row .gauge + .gauge {
++  margin-top: 0;
++}
++
++/* Label above figure, not beside it: side by side in a third of the width, a
++   long label ("記憶體" plus "4.0 GB / 6.0 GB") had nowhere to go. */
++.page .stat-row .summary {
++  display: block;
++  margin: 0;
++}
++
++.page .stat-row .gauge-label {
++  display: block;
++  font-size: var(--text-small);
++  color: var(--text-paper-d);
++}
++
++.page .stat-row .gauge-value {
++  display: block;
++  margin-top: var(--space-4);
++  font-size: var(--text-body-lg);
++  line-height: var(--leading-body-lg);
++  color: var(--text-paper);
++}
++
++/* The bar belongs to the figure above it and to nothing else, so its trailing
++   margin — which exists to separate stacked gauges — is removed here. */
++.page .stat-row .meter {
++  margin: var(--space-8) 0 0;
++}
++
++/* One card per running environment, rather than rows separated by a hairline —
++ * the card is what makes this list look unlike the storage list below it, which
++ * was the actual complaint: two sections with different meanings and one
++ * appearance, distinguishable only by the word on their buttons.
++ *
++ * The COLUMNS belong to the list, not to each row.
++ *
++ * dot · title · App · spec · action. The title column is the only one that may
++ * shrink; `minmax(0, 1fr)` is what lets it ellipsis instead of pushing the spec
++ * and the button off the end. The App column is `fit-content(10rem)`: `auto`
++ * would let a long App name steal from the title without limit, and a hard
++ * `10rem` reserved 160px whether or not any name needed it — the shipped names
++ * render ~82px, and the 78px left over came straight out of the title (193px of
++ * it at a 641px viewport). The cap is the property; the slack goes back.
++ *
++ * The grid lives HERE and each row takes `subgrid`, because a grid declared on
++ * the row makes every row size its own tracks: the spec column is as wide as
++ * that row's text, so "0.5 核 · 1.0 GB" and "2 核 · 1.0 GB" produced different
++ * track widths and pushed the fixed App column to a different x on every row —
++ * tags that visibly failed to line up, in a column whose whole point is being
++ * scannable. Same width in every row is the property, so it has to be stated
++ * once for the list. */
++.page .live-list {
++  display: grid;
++  grid-template-columns: auto minmax(0, 1fr) fit-content(10rem) auto auto;
++  column-gap: var(--space-12);
++  row-gap: var(--space-8);
++}
++
++.page .live-list > li {
++  grid-column: 1 / -1;
++  display: grid;
++  grid-template-columns: subgrid;
++  align-items: center;
++  padding: var(--space-12) var(--space-16);
++  /* Two classes beat the one-class `.page ul > li` below on specificity, so the
++     shared row's hairline `border-top` and `display: flex` lose here whatever
++     the order in this file. */
++  border: 1px solid var(--paper-3);
++  border-radius: var(--radius-card);
++  background: var(--paper);
++}
++
++/* Marks the row under the pointer. NOT a claim that the card is clickable —
++   only the title and the button are, and the card carries no handler. Across a
++   five-column row it is easy to lose which line you are on between the name and
++   the button you are reaching for; this ties them together. */
++.page .live-list > li:hover {
++  border-color: var(--text-paper-d2);
++}
++
++/* The title is the row's subject. It keeps the shared rule's ellipsis (a grid
++   cell still needs `min-width: 0` to shrink, which that rule already sets); the
++   weight is what separates it from the App tag and the figures beside it. */
++.page .live-list > li > a {
++  font-weight: 500;
++}
++
++/* Running, right now. Solid rather than haloed so it needs no colour outside
++   the token set, and it breathes only where motion is welcome. */
++.page .live-dot {
++  width: 8px;
++  height: 8px;
++  border-radius: 50%;
++  background: var(--ok);
++}
++
++@media (prefers-reduced-motion: no-preference) {
++  .page .live-dot {
++    animation: live-pulse 2.4s ease-in-out infinite;
++  }
++}
++
++@keyframes live-pulse {
++  0%,
++  100% {
++    opacity: 1;
++  }
++  50% {
++    opacity: 0.35;
++  }
++}
++
++/* Which App a row belongs to, in that App's own colour, with that App's own
++   mark. The payload has always carried the slug — both lists link with it — and
++   never showed it, so a page spanning three Apps read as one flat list.
++ *
++ * `--app-tint` / `--app-ink` / `--app-ink-dark` are published per pill by
++ * `AppTag` from the manifest colour (see `lib/appColor.ts`); the fallbacks are
++ * what a pill wears when its App declares no colour, or declares a malformed
++ * one. The ink is re-lit to a fixed lightness per theme rather than used as
++ * declared — four of the five shipped App colours are under the contrast floor
++ * as raw ink on cream, and a fifth is under it on ink. */
++.page .app-tag {
++  /* Left edge of its own column, so the tags form a readable column instead of
++     drifting with the length of the title beside them. */
++  justify-self: start;
++  max-width: 100%;
++  display: inline-flex;
++  align-items: center;
++  gap: 5px;
++  padding: 2px var(--space-8);
++  border-radius: var(--radius-chip);
++  background: var(--app-tint, var(--paper-2));
++  font-size: var(--text-small);
++  color: var(--app-ink, var(--text-paper-d));
++  white-space: nowrap;
++  overflow: hidden;
++}
++
++/* The ellipsis lives on the LABEL, not on the pill. `text-overflow` applies to
++   a block container; bare text in the `inline-flex` pill is an anonymous flex
++   item that never inherits it, so a long App name was hard-clipped mid-word
++   with no "…" and nothing to recover it from. */
++.page .app-tag-label {
++  min-width: 0;
++  overflow: hidden;
++  text-overflow: ellipsis;
++}
++
++/* A mid-tone ink tuned for cream reads as a hole on ink — the same asymmetry
++   the categorical chip tokens carry, and the reason `--app-ink-dark` exists at
++   all rather than one value doing both. */
++[data-theme="dark"] .page .app-tag {
++  color: var(--app-ink-dark, var(--text-paper-d));
++}
++
++/* The App's mark takes the pill's ink (`color="currentColor"`), so it is re-lit
++   with the label instead of staying the raw declared hex beside a corrected
++   one. A file icon (a PNG an App ships) ignores that and keeps its own colours,
++   which is right — a logo is not a glyph. */
++.page .app-tag svg {
++  flex: none;
++}
++
++.page .app-tag img {
++  flex: none;
++  border-radius: 2px;
++}
++
++/* The specs are the reason to pick one row over another, so they get a column
++   of their own width and tabular figures: "0.5 核" under "2 核" only reads as
++   smaller if the digits line up. */
++.page .live-list .detail {
++  min-width: 9ch;
++  text-align: right;
++  font-variant-numeric: tabular-nums;
++}
++
++/* A failure belongs to the row, and a five-column grid would otherwise drop it
++   into the first cell of an implicit second row — under the dot, 8px wide. */
++.page .live-list .error {
++  grid-column: 1 / -1;
++}
++
++/* The storage list gets the same KIND of column grid as the live one — title,
++   App, figure, action — so its App tags form a scannable column of their own.
++ *
++ * They do NOT line up with the live list's, and an earlier version of this
++ * comment claimed they had to. Measured at the 760px page width the two columns
++ * sit 41px apart, because each list is its own grid whose content-sized figure
++ * and action tracks differ ("20.9 KB" against "2 核 · 1.0 GB") and the live rows
++ * carry 16px of card padding besides. Forcing them together would mean pinning
++ * the figure column to a fixed width in both, which clips the moment a number
++ * grows. The offset is the same thing the dot and the card are saying: these
++ * rows are running and those ones are not. */
++.page .disk-list {
++  display: grid;
++  grid-template-columns: minmax(0, 1fr) fit-content(10rem) auto auto;
++  column-gap: var(--space-12);
++}
++
++.page .disk-list > li {
++  grid-column: 1 / -1;
++  display: grid;
++  grid-template-columns: subgrid;
++  align-items: center;
++}
++
++.page .disk-list .detail {
++  min-width: 9ch;
++  text-align: right;
++  font-variant-numeric: tabular-nums;
++}
++
+ /* One row per environment / workspace: name grows, specs sit next to it, the
+    action is pushed to the end. The gap is what stopped "quota demo A" and
+    "1 core" reading as one word. */
+@@ -133,6 +387,99 @@
+   color: var(--text-paper-d);
+ }
+ 
++/* ── narrow viewports ────────────────────────────────────────────────────
++   The columns above reserve about 400px before the title gets any: 8px of dot,
++   four 12px gaps, a 10rem App track, the spec, the button and the card's own
++   32px of padding. The title is the ONLY shrinkable track, so it absorbs every
++   shortfall — measured at a 390px viewport it reached **width 0**, leaving rows
++   that cannot be identified and a Close button that still works on them. The
++   figures either side: 700px → 282px of title, 560px → 142px, 390px → 0.
++
++   So below the point where the one-line shape stops fitting, the row wraps
++   instead of squeezing: title and action stay on the first line (they are what
++   you read and what you press), the App tag and the spec drop to a second.
++   Nothing is hidden — a phone reader needs the App name as much as anyone. */
++@media (max-width: 640px) {
++  /* The list stops owning the tracks: with the rows reflowed there is no shared
++     column to align, and leaving `subgrid` in place would keep reserving the
++     five wide tracks that caused this. */
++  .page .live-list,
++  .page .disk-list {
++    display: flex;
++    flex-direction: column;
++  }
++
++  .page .live-list > li {
++    grid-template-columns: auto minmax(0, 1fr) auto;
++    row-gap: var(--space-4);
++  }
++
++  .page .live-list > li > a {
++    grid-column: 2;
++    grid-row: 1;
++  }
++
++  .page .live-list > li > button {
++    grid-column: 3;
++    grid-row: 1;
++    /* The rows are independent grids again here, so the action track is sized
++       by THAT row's spec text ("0.5 核 · 1.0 GB" against "2 核 · 1.0 GB") and a
++       stretched button came out 93px on one row and 81px on the next, with
++       ragged left edges. It is its natural width, pinned to the end. */
++    justify-self: end;
++  }
++
++  .page .live-list .app-tag {
++    grid-column: 2;
++    grid-row: 2;
++  }
++
++  .page .live-list .detail {
++    grid-column: 3;
++    grid-row: 2;
++    min-width: 0;
++  }
++
++  .page .disk-list > li {
++    grid-template-columns: minmax(0, 1fr) auto;
++    row-gap: var(--space-4);
++  }
++
++  .page .disk-list > li > a {
++    grid-column: 1;
++    grid-row: 1;
++  }
++
++  .page .disk-list > li > button {
++    grid-column: 2;
++    grid-row: 1;
++    /* Same reason as the live list, different figure: this list's action track
++       is sized by a byte count ("20.9 KB" against "1.4 GB") — measured 50px and
++       45px — so a stretched 刪除 button came out ragged here too. The live
++       list's cpu/memory spec column does not exist in this one. */
++    justify-self: end;
++  }
++
++  .page .disk-list .app-tag {
++    grid-column: 1;
++    grid-row: 2;
++  }
++
++  .page .disk-list .detail {
++    grid-column: 2;
++    grid-row: 2;
++    min-width: 0;
++  }
++
++  /* Three totals side by side in 342px is 114px each — narrower than
++     "4.0 GB / 6.0 GB" — so they stack rather than truncate the figures they
++     exist to show. */
++  .page .stat-row {
++    grid-template-columns: 1fr;
++    gap: var(--space-16);
++  }
++}
++
+ /* ── superuser: per-person overrides ─────────────────────────────────────
+    Only rendered for a superuser, so it is styled as a distinct block rather
+    than another list — the reader should be able to tell at a glance that this
+diff --git a/web/src/styles/my-resources.test.ts b/web/src/styles/my-resources.test.ts
+new file mode 100644
+index 00000000..bd77beb0
+--- /dev/null
++++ b/web/src/styles/my-resources.test.ts
+@@ -0,0 +1,155 @@
++import { readFileSync } from "node:fs";
++import { join } from "node:path";
++
++import { describe, expect, it } from "vitest";
++
++/**
++ * The live-environment panel's LAYOUT decisions, guarded here because no other
++ * test in this repo can see them.
++ *
++ * `MyResourcesPage.test.tsx` runs on happy-dom, which applies no stylesheet: it
++ * asserts that the three totals sit in a named group and that each row names its
++ * App, and every one of those assertions stays green with this file deleted —
++ * at which point the section is back to what it was, seven full-width rows in
++ * one column, the totals indistinguishable from the environments below them.
++ * That is not hypothetical here: this page shipped once with a complete
++ * vocabulary of semantic classes and NO stylesheet at all, and passed every
++ * "is it clickable" check while its meters were two zero-height divs.
++ *
++ * So these pin the three decisions whose loss is invisible to the DOM tests and
++ * visible to a reader. They assert the SHAPE of the decision, not exact pixel
++ * values — a re-tune should be free, a silent reversion should not.
++ */
++const here = new URL(".", import.meta.url).pathname;
++// Comments stripped FIRST. This sheet documents its reasoning heavily, so a
++// rule is usually preceded by a comment rather than by the previous rule's `}`
++// — and the anchor below needs one or the other. Leaving them in made this
++// helper report "no rule for .page .stat-row" about a rule that was right
++// there, which reads as the product being broken when it is the probe.
++const css = readFileSync(join(here, "my-resources.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
++
++/** The declaration block of the rule whose selector is exactly `selector`. */
++function rule(selector: string): string {
++  // Anchored on a preceding `}` or start-of-file so that asking for
++  // `.page .live-list > li` cannot match inside `.page .live-list > li:hover`
++  // or `... > li > a` — the near-miss that would make one of these guards read
++  // a neighbouring rule and pass on somebody else's declarations.
++  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
++  const m = css.match(new RegExp(`(?:^|})\\s*${escaped}\\s*{([^}]*)}`));
++  if (!m) throw new Error(`no rule for ${selector}`);
++  return m[1];
++}
++
++describe("my-resources: the live panel's layout", () => {
++  it("lays the three totals out as columns, not as a stack of full-width bars", () => {
++    // Three 712px accent bars stacked in the same column as the rows beneath
++    // them is what made the section read as one seven-row list. The group role
++    // the DOM test asserts survives this rule being deleted; the separation
++    // does not.
++    const block = rule(".page .stat-row");
++    expect(block).toMatch(/display:\s*grid/);
++    // A `repeat(...)`, not a pinned count: the storage section puts ONE gauge in
++    // this same panel, so `repeat(3, 1fr)` would leave it in the left third with
++    // two empty columns. What has to hold is that the totals get their own
++    // columns instead of stacking full-width in the list's column — which is
++    // the shape the whole section was rewritten to escape.
++    expect(block).toMatch(/grid-template-columns:\s*repeat\(/);
++  });
++
++  it("gives a live environment a different row shape from a stored one", () => {
++    // The complaint underneath all of this: two sections that mean different
++    // things looked identical, and the only thing separating them was the word
++    // on their buttons. The live rows are cards; the storage rows keep the
++    // shared hairline-separated row.
++    const live = rule(".page .live-list > li");
++    expect(live).toMatch(/display:\s*grid/);
++    expect(live).toMatch(/border-radius:/);
++    expect(rule(".page ul > li")).toMatch(/display:\s*flex/);
++  });
++
++  it.each([".page .live-list", ".page .disk-list"])(
++    "declares %s's columns ONCE for the whole list, so the rows line up",
++    (selector) => {
++      // Declared on the ROW instead, every row sizes its own tracks: the spec
++      // column is as wide as that row's own text, so "0.5 核 · 1.0 GB" and
++      // "2 核 · 1.0 GB" produced different widths and pushed the fixed App
++      // column to a different x on each row. The tags visibly failed to line
++      // up in a column whose whole point is being scannable — and every DOM
++      // test stayed green, because the tag renders either way.
++      const list = rule(selector);
++      expect(list).toMatch(/display:\s*grid/);
++      expect(list).toMatch(/grid-template-columns:/);
++      // …and the row defers to it rather than re-declaring its own.
++      expect(rule(`${selector} > li`)).toMatch(/grid-template-columns:\s*subgrid/);
++    },
++  );
++
++  it("BOUNDS the App column so a long name cannot eat the title", () => {
++    // `auto` would size the column to the longest App name in view, which is
++    // both variable and unbounded — the title is what must give way, and only
++    // because it can ellipsis. The property is the CEILING, not a fixed width:
++    // a hard `10rem` also reserved 78px that the shipped names never use, and
++    // `minmax(0, 1fr)` — the only shrinkable track — paid for it (193px of
++    // title at a 641px viewport). `fit-content(10rem)` keeps the cap and hands
++    // the slack back, and still gives every row one shared track.
++    const tracks = rule(".page .live-list").match(/grid-template-columns:([^;]*);/)?.[1];
++    expect(tracks).toBeTruthy();
++    // dot · title · App · spec · action.
++    const third = tracks!.trim().split(/\s+(?![^(]*\))/)[2];
++    const LENGTH = String.raw`\d+(\.\d+)?(rem|px|ch|em)`;
++    expect(third).toMatch(new RegExp(`^(${LENGTH}|fit-content\\(${LENGTH}\\))$`));
++  });
++
++  it("reflows the rows before the fixed columns eat the title", () => {
++    // The columns reserve ~400px before the title gets any, and the title is
++    // the only shrinkable track — measured in Chromium it reached width 0 at a
++    // 390px viewport, leaving rows nobody can identify and a Close button that
++    // still works on them. Nothing else here can see that: happy-dom lays
++    // nothing out, and the guards above read declarations, not geometry.
++    //
++    // So this pins the ESCAPE HATCH's existence. Whether it is wide enough is a
++    // measurement, and the measurement lives outside CI — but a media query
++    // deleted in a refactor is the failure this can actually catch.
++    const narrow = css.match(/@media \(max-width: \d+px\) \{([\s\S]*?)\n\}/);
++    expect(narrow).not.toBeNull();
++    const block = narrow![1];
++    // Both lists have to let go of the wide fixed tracks, or the reflow only
++    // fixes the half somebody happened to test.
++    expect(block).toMatch(/\.page \.live-list[^{}]*\{[^}]*display:\s*flex/);
++    // `[^}]*`, never `[\s\S]*`: the greedy form runs past this rule's closing
++    // brace and satisfies itself from a later rule in the same media block, so
++    // deleting the declaration it names changes nothing. Verified: with
++    // `[\s\S]*` the storage row lost its narrow tracks and rendered a 256px
++    // 刪除 button on the first line, with the suite green.
++    expect(block).toMatch(/\.page \.disk-list > li \{[^}]*grid-template-columns:/);
++    // …and the title must stop sharing a line with the App tag, which is what
++    // gives it the width back.
++    expect(block).toMatch(/\.page \.live-list \.app-tag \{[^}]*grid-row:\s*2/);
++  });
++
++  it("actually APPLIES the dark ink, not just computes one", () => {
++    // Found by mutation: deleting this rule left all the other guards green.
++    // `appColor.test.ts` proves both inks clear the contrast floor and says
++    // nothing about whether the stylesheet ever reaches for the dark one — and
++    // without it every pill wears the ink tuned for cream on an ink surface,
++    // which is the entire reason a second value exists. The defect is invisible
++    // in light mode, so it is also invisible to anyone not looking for it.
++    expect(rule('[data-theme="dark"] .page .app-tag')).toMatch(/color:\s*var\(--app-ink-dark/);
++    // …and the light rule reaches for the other one, so the two cannot collapse
++    // into a single value that is wrong in one theme.
++    // `[,)]` and NOT `\b`: a word boundary matches at the hyphen, so
++    // `var(--app-ink\b` is satisfied by `var(--app-ink-dark` — this guard
++    // accepted the very collapse it exists to forbid, and pointing BOTH rules
++    // at the dark ink left all 3547 tests green while every light-theme pill
++    // wore #ffb19f on cream (~1.5:1, unreadable).
++    expect(rule(".page .app-tag")).toMatch(/color:\s*var\(--app-ink[,)]/);
++  });
++
++  it("stops the row's failure message landing in the 8px dot column", () => {
++    // The alert is a fifth child of a five-column grid, so without an explicit
++    // span it drops into the first cell of an implicit second row — which is
++    // the dot's column, 8px wide. The DOM test that asserts the message appears
++    // on the right row passes either way.
++    expect(rule(".page .live-list .error")).toMatch(/grid-column:\s*1\s*\/\s*-1/);
++  });
++});
+diff --git a/web/src/styles/no-undefined-tokens.test.ts b/web/src/styles/no-undefined-tokens.test.ts
+index 18fb0359..8904aef0 100644
+--- a/web/src/styles/no-undefined-tokens.test.ts
++++ b/web/src/styles/no-undefined-tokens.test.ts
+@@ -20,6 +20,15 @@ const TOKENS_PATH = resolve(HERE, "tokens.css");
+ 
+ /** Custom properties that are NOT declared in tokens.css yet are legitimate. */
+ const RUNTIME_ASSIGNED = new Set([
++  // The colour an App declares in its own `app.json`, published inline per pill
++  // by `MyResourcesPage`'s `AppTag`. Not design tokens: an App's identity colour
++  // is the App's to state, and there are as many as there are Apps. Two inks
++  // because the ink has to be re-lit per theme and only CSS knows the theme —
++  // see `lib/appColor.ts`. Every reference gives a neutral token as its
++  // fallback, so a pill still paints when an App declares no colour.
++  "--app-tint",
++  "--app-ink",
++  "--app-ink-dark",
+   // set inline per-surface (see kb.css / FileTree) rather than in tokens.css
+   "--filetree-header-bg",
+   // fit-to-width scale for marp slides, set on the deck host from JS (MarpDeck)
