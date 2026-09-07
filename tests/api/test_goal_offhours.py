@@ -18,6 +18,7 @@ from workspace_app.config.schema import OffHoursSettings
 from workspace_app.resources.conversation import Conversation, Message
 from workspace_app.resources.conversation_goal import (
     ConversationGoal,
+    read_goal,
     register_conversation_goal,
     upsert_goal,
 )
@@ -51,9 +52,11 @@ def _spec_with_goal(
     return spec, "c1"
 
 
-def _sweeper(spec: SpecStar, started: list[str], *, settings=None):
+def _sweeper(spec: SpecStar, started: list[str], *, settings=None, fail: bool = False):
     async def start_round(conversation_id: str) -> None:
         started.append(conversation_id)
+        if fail:
+            raise RuntimeError("the sandbox would not wake")
 
     return OffHoursGoalSweeper(
         spec,
@@ -286,3 +289,58 @@ def test_a_thread_nobody_has_spoken_in_reads_as_quiet():
     from workspace_app.api.goal_offhours import last_human_message_ms
 
     assert last_human_message_ms(Conversation(item_id="i1")) is None
+
+
+# ── the retry that a start failure earns, and where it stops ────────────────
+
+
+@pytest.mark.asyncio
+async def test_a_start_that_fails_is_retried_within_the_night():
+    """A cold box on the first tick must not cost the whole night — that is what
+    giving the claim back is for."""
+    spec, cid = _spec_with_goal()
+    attempts: list[str] = []
+    sweeper = _sweeper(spec, attempts, fail=True)
+
+    assert await sweeper.tick(now=NIGHT) == []  # it raised, so nothing started
+    assert await sweeper.tick(now=NIGHT.replace(minute=1)) == []
+    assert len(attempts) == 2, "the claim went back, so a later tick tried again"
+
+
+@pytest.mark.asyncio
+async def test_a_night_that_will_not_start_stops_trying():
+    """Retrying is only right while the failure might be transient, and the
+    number of attempts is the only thing that tells the two apart.
+
+    Unbounded, a sandbox that will not wake turned into a minute-by-minute loop
+    all night — and each attempt persists the driver's message and an error into
+    its owner's thread before it fails, so the loop is not quiet."""
+    spec, cid = _spec_with_goal()
+    attempts: list[str] = []
+    sweeper = _sweeper(spec, attempts, fail=True)
+
+    for minute in range(30):
+        assert await sweeper.tick(now=NIGHT.replace(minute=minute)) == []
+    assert len(attempts) < 10, f"the loop is unbounded: {len(attempts)} attempts in half an hour"
+
+
+@pytest.mark.asyncio
+async def test_tomorrow_night_starts_over():
+    """The bound is on the NIGHT, not on the goal: infrastructure that was down
+    at 3am must not cost a goal its remaining nights. Its state is never
+    touched, so nothing has to be un-parked by hand."""
+    spec, cid = _spec_with_goal()
+    attempts: list[str] = []
+    sweeper = _sweeper(spec, attempts, fail=True)
+
+    for minute in range(30):
+        await sweeper.tick(now=NIGHT.replace(minute=minute))
+    spent_tonight = len(attempts)
+
+    tomorrow = NIGHT.replace(day=NIGHT.day + 1)
+    assert await sweeper.tick(now=tomorrow) == []
+    assert len(attempts) == spent_tonight + 1, "a new stretch tries again"
+
+    goal = read_goal(spec, cid)
+    assert goal is not None
+    assert goal.state == "active", "a night that could not start does not park the goal"

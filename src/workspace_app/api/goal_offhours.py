@@ -33,6 +33,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
 from msgspec import Struct
+from msgspec.structs import replace
 from specstar import QB, SpecStar
 from specstar.types import (
     DuplicateResourceError,
@@ -53,6 +54,13 @@ logger = logging.getLogger(__name__)
 # microseconds at the top of a stretch (mirrors the trigger-window CAS).
 _MAX_CAS_RETRIES = 100
 
+# How many starts may RAISE for one chat in one stretch before the night is
+# given up on. Three, because the first is a cold box, the second is the same
+# cold box a minute later, and by the third it is not waking tonight. Retrying
+# is only right while the failure might be transient, and the count of attempts
+# is the only thing that tells transient from permanent apart.
+_START_FAILURE_LIMIT = 3
+
 
 class _GoalStretch(Struct):
     """Which off-hours stretch a conversation's goal has already been started
@@ -60,6 +68,17 @@ class _GoalStretch(Struct):
 
     conversation_id: str
     stretch: str = ""
+    # How many starts have raised, and which stretch they belong to. They live
+    # BESIDE the claim because this is already the cluster's shared state for
+    # one night of one chat: a new night carries a different id, so the count
+    # resets by construction rather than by someone remembering to zero it —
+    # and nothing about the GOAL is touched, so infrastructure that was down at
+    # 3am cannot cost a goal its remaining nights.
+    #
+    # Kept separate from `stretch` because a release blanks that one, and the
+    # count has to survive the release it caused.
+    failed_stretch: str = ""
+    failures: int = 0
 
 
 def register_stretch_claims(spec: SpecStar) -> None:
@@ -78,9 +97,12 @@ class SpecstarStretchClaims:
     def try_claim(self, conversation_id: str, stretch: str) -> bool:
         """True for the single caller that claims ``stretch`` for this chat."""
         rm = self._spec.get_resource_manager(_GoalStretch)
-        row = _GoalStretch(conversation_id=conversation_id, stretch=stretch)
         try:
-            rm.create(row, resource_id=conversation_id, if_not_exists=True)  # ty: ignore[unknown-argument]
+            rm.create(
+                _GoalStretch(conversation_id=conversation_id, stretch=stretch),
+                resource_id=conversation_id,
+                if_not_exists=True,  # ty: ignore[unknown-argument]
+            )
             return True
         except DuplicateResourceError:
             pass  # a row exists — CAS-advance it below
@@ -96,7 +118,10 @@ class SpecstarStretchClaims:
             try:
                 rm.modify(
                     conversation_id,
-                    row,
+                    # `replace`, not a fresh row: this stretch's failure count
+                    # has to survive being re-claimed after the release it
+                    # caused, or the bound below can never be reached.
+                    replace(data, stretch=stretch),
                     status=RevisionStatus.draft,
                     expected_etag=res.info.etag,  # ty: ignore[unknown-argument]
                 )
@@ -105,6 +130,41 @@ class SpecstarStretchClaims:
                 continue  # a peer advanced between our read and write — re-read
         raise RuntimeError(  # pragma: no cover - only under pathological churn
             f"goal stretch claim CAS exhausted retries for {conversation_id!r}"
+        )
+
+    def note_failure(self, conversation_id: str, stretch: str) -> int:
+        """Record a start that raised, and answer how many have raised tonight.
+
+        The caller gives the claim back while that number is below
+        `_START_FAILURE_LIMIT` and KEEPS it at the limit. Keeping it ends the
+        stretch for every pod at once, because this row is the whole cluster's
+        answer to "who starts this goal tonight?" — one pod deciding the night
+        is over is therefore everyone's decision, with no second mechanism to
+        keep in step."""
+        rm = self._spec.get_resource_manager(_GoalStretch)
+        for _ in range(_MAX_CAS_RETRIES):
+            try:
+                res = rm.get(conversation_id)
+            except (ResourceIDNotFoundError, ResourceIsDeletedError):  # pragma: no cover
+                # The row we just claimed is gone. Report the limit rather than
+                # 1: without a row there is nothing left to count with, and
+                # retrying blind is the failure this bound exists to prevent.
+                return _START_FAILURE_LIMIT
+            data = res.data
+            assert isinstance(data, _GoalStretch)
+            count = data.failures + 1 if data.failed_stretch == stretch else 1
+            try:
+                rm.modify(
+                    conversation_id,
+                    replace(data, failed_stretch=stretch, failures=count),
+                    status=RevisionStatus.draft,
+                    expected_etag=res.info.etag,  # ty: ignore[unknown-argument]
+                )
+                return count
+            except PreconditionFailedError:  # pragma: no cover - cross-pod CAS race
+                continue  # a peer wrote between our read and write — re-read
+        raise RuntimeError(  # pragma: no cover - only under pathological churn
+            f"goal stretch failure count CAS exhausted retries for {conversation_id!r}"
         )
 
     def release(self, conversation_id: str) -> None:
@@ -116,9 +176,12 @@ class SpecstarStretchClaims:
         happen."""
         rm = self._spec.get_resource_manager(_GoalStretch)
         with contextlib.suppress(ResourceIDNotFoundError, ResourceIsDeletedError):
+            res = rm.get(conversation_id)
+            data = res.data
+            assert isinstance(data, _GoalStretch)
             rm.modify(
                 conversation_id,
-                _GoalStretch(conversation_id=conversation_id, stretch=""),
+                replace(data, stretch=""),  # the failure count outlives the release
                 status=RevisionStatus.draft,
             )
 
@@ -241,7 +304,22 @@ class OffHoursGoalSweeper:
                 # must not cost that chat its night: give the claim back so a
                 # later tick retries instead of waiting until tomorrow evening.
                 logger.exception("goal offhours: starting %s failed", cid)
-                self._claims.release(cid)
+                failures = self._claims.note_failure(cid, stretch)
+                if failures < _START_FAILURE_LIMIT:
+                    self._claims.release(cid)
+                else:
+                    # Tonight is over for this chat. Not for the goal: its state
+                    # is untouched, so tomorrow's stretch tries again with no
+                    # human needed to un-park anything. Each attempt has already
+                    # persisted the driver's message and the real error into the
+                    # thread, so this is not silent either.
+                    logger.warning(
+                        "goal offhours: %s failed to start %d times tonight — "
+                        "leaving the rest of stretch %s alone",
+                        cid,
+                        failures,
+                        stretch,
+                    )
                 continue
             started.append(cid)
         return started

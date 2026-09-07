@@ -52,8 +52,9 @@ export function useChatLog({
   // Every write to `log` is guarded HERE, where the state is made, rather than
   // at each caller. Both transports write it from async paths that can outlive
   // the view — a stream that ends, a snapshot that arrives — and a caller-side
-  // guard is one per exit: the KB chat had four such exits and a guard on the
-  // one that fires LAST, so it moved which line threw and removed nothing.
+  // guard is one per exit: `useKbChat.send` alone reaches six state writes after
+  // an await, five of them log writes, and the guard it had was on the one that
+  // fires LAST, so it moved which line threw and removed nothing.
   //
   // In a real browser a set-state-after-unmount is merely pointless. In a
   // torn-down test environment it throws `ReferenceError: window is not

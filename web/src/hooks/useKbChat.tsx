@@ -91,12 +91,20 @@ export function useKbChat({
       let id = chatId;
       if (id == null) {
         id = (await client.createChat("", collectionIds, excludedCollectionIds)).resource_id;
-        // Nobody to hand it to: the view left while the thread was being
-        // created. Aborting the stream cannot cover this — there is no stream
-        // yet.
-        if (!mounted.current) return;
-        setChatId(id);
-        onChatCreated?.(id);
+        // The view may have left while the thread was being created — the
+        // drawer closed, another thread clicked. Skip only what needs a live
+        // view: the state write (which throws out of React in a torn-down test
+        // environment) and the callback that NAVIGATES, which would yank
+        // whoever is reading back to a thread they just left.
+        //
+        // The question itself still goes. The thread exists on the server by
+        // now, so dropping it leaves an empty chat in the list and the thing
+        // the person typed nowhere at all — a worse outcome than answering
+        // into a view that stopped watching.
+        if (mounted.current) {
+          setChatId(id);
+          onChatCreated?.(id);
+        }
         void qc.invalidateQueries({ queryKey: qk.kb.chats });
       }
 

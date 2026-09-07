@@ -203,11 +203,15 @@ describe("useKbChat — send failure", () => {
   });
 
   // The same rule one await earlier: the thread is created, and by the time the
-  // id comes back there is nobody to hand it to.
-  it("writes nothing when the thread is created after unmount", async () => {
+  // id comes back there is nobody to hand it to. What must NOT happen is
+  // dropping the question — the thread already exists on the server, so a
+  // skipped send leaves an empty chat and the typed question nowhere.
+  it("writes nothing when the thread is created after unmount, but still asks", async () => {
     let release!: (v: { resource_id: string }) => void;
+    const streamMessage = vi.fn(mockKbApi.streamMessage.bind(mockKbApi));
     const client = {
       ...mockKbApi,
+      streamMessage,
       createChat: vi.fn(
         () => new Promise<{ resource_id: string }>((r) => (release = r)),
       ),
@@ -232,5 +236,8 @@ describe("useKbChat — send failure", () => {
     } finally {
       globalThis.window = realWindow;
     }
+    expect(streamMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ chatId: "kb-4", content: "q" }),
+    );
   });
 });

@@ -530,6 +530,10 @@ class ChatSendService:
                 upsert_goal(self._spec, current, user=current.set_by)
                 await self._hand_over(rid, engine_key, current, "exhausted")
                 return
+            # Ask BEFORE charging. A Stop that lands while we were judging ends
+            # the chain here, and a round that ends here reached no model.
+            if await self._turn_engine.cancel_epoch(engine_key) != baseline:
+                return  # the user hit Stop while we were judging — stand down
             if after_hours:
                 current.offhours_rounds_used += 1
                 spent = current.offhours_rounds_used
@@ -537,20 +541,17 @@ class ChatSendService:
                 current.rounds_used += 1
                 spent = current.rounds_used
             upsert_goal(self._spec, current, user=current.set_by)
-            self._publish_goal(engine_key, current)
-            if await self._turn_engine.cancel_epoch(engine_key) != baseline:
-                return  # the user hit Stop while we were judging — stand down
-            fresh = self._conv_rm.get(rid).data
-            assert isinstance(fresh, Conversation)
-            body = _MessageBody(
-                content=(
-                    f"[goal] 尚未達成,繼續朝目標推進(第 {spent}/{budget} 輪):{current.condition}"
-                )
-            )
-            # Through the full send path (quota gate, visible user message,
-            # broadcast) — as the goal's setter, since this task has no request
-            # context to resolve a user from.
             try:
+                self._publish_goal(engine_key, current)
+                fresh = self._conv_rm.get(rid).data
+                assert isinstance(fresh, Conversation)
+                progress = f"第 {spent}/{budget} 輪"
+                body = _MessageBody(
+                    content=f"[goal] 尚未達成,繼續朝目標推進({progress}):{current.condition}"
+                )
+                # Through the full send path (quota gate, visible user message,
+                # broadcast) — as the goal's setter, since this task has no
+                # request context to resolve a user from.
                 await self.send(
                     investigation_id,
                     rid,
@@ -561,14 +562,13 @@ class ChatSendService:
                     driven_by=GOAL_DRIVER,
                 )
             except Exception:
-                # The same bump-before-send, one round later. Only the SEND is
-                # wrapped: an exception earlier in this method belongs to a round
-                # this call never charged, and refunding that would take back one
-                # that really ran.
-                #
-                # No stall count here — this chain stops rather than retrying
-                # (the handler below logs and returns), so there is nothing to
-                # bound. It is the round that is wrong, not the ending.
+                # EVERY statement between the charge and the send is inside this,
+                # not just the send. The charge buys a turn that reaches the
+                # model, and none of these has yet — the broadcast, the thread
+                # re-read, the message it builds. Wrapping only the send left a
+                # five-statement window that charged for nothing, and the comment
+                # that justified the narrow wrap was simply wrong about where the
+                # charge happens.
                 self._refund_round(rid, after_hours=after_hours)
                 raise
         except (ResourceIDNotFoundError, ResourceIsDeletedError):
@@ -640,36 +640,20 @@ class ChatSendService:
                 driven_by=GOAL_DRIVER,
             )
         except Exception:
-            # Give the round back — and then END the night, because giving it
-            # back is what removes the only thing that used to stop this.
+            # Give the round back, and let the failure out: the sweeper counts
+            # it and decides whether tonight goes on (`_START_FAILURE_LIMIT`).
             #
-            # Charging for it stopped the retries by bankrupting the goal: a
-            # sandbox that would not wake spent a whole allowance in half an
-            # hour, ran nothing, and dropped out of `_eligible` for good — a
-            # bound, but one that also silently destroyed the budget of a goal
-            # whose only fault was a bad night. Refunding alone leaves the
-            # sweeper ticking a minute apart, forever, writing into its owner's
-            # thread every time. Neither is the bound anyone wants.
+            # The bound belongs there and not here. Tried here first, on
+            # `stall_count`, it read as "no progress" — which is true, but that
+            # counter is shared with the turn-end driver, whose reset sits below
+            # three early returns, one of them the `window` ending that closes
+            # EVERY unfinished night. So last night's count survived into
+            # tonight and a single cold sandbox parked a goal permanently, for a
+            # person to notice and retype. Measured.
             #
-            # `stall_count` is. A round that cannot start is no progress by any
-            # reading, and #615 already decided what to do about no progress:
-            # `_STALL_LIMIT` in a row parks the goal for a person. This is the
-            # same judgement, reached from the one failure that never produced a
-            # turn for the turn-end driver to judge.
-            fresh = self._refund_round(conversation_id, after_hours=True)
-            if fresh is not None:
-                fresh.stall_count += 1
-                if fresh.stall_count >= _STALL_LIMIT:
-                    fresh.state = "stalled"
-                upsert_goal(self._spec, fresh, user=fresh.set_by)
-                if fresh.state == "stalled":
-                    # `unattended=True` is not derivable here: the refund just
-                    # put the round counter back to where it says nobody ran
-                    # anything unattended. The sweeper only ever fires inside the
-                    # window, so it knows.
-                    await self._hand_over(
-                        conversation_id, engine_key, fresh, "stalled", unattended=True
-                    )
+            # A night is the right unit for this, and the claim row already IS
+            # the shared state of one night of one chat.
+            self._refund_round(conversation_id, after_hours=True)
             raise
 
     def _refund_round(self, rid: str, *, after_hours: bool):  # noqa: ANN201 — ConversationGoal
@@ -693,15 +677,7 @@ class ChatSendService:
         upsert_goal(self._spec, fresh, user=fresh.set_by)
         return fresh
 
-    async def _hand_over(
-        self,
-        rid: str,
-        engine_key: str,
-        goal,  # noqa: ANN001
-        ending: str,
-        *,
-        unattended: bool | None = None,
-    ) -> None:
+    async def _hand_over(self, rid: str, engine_key: str, goal, ending: str) -> None:  # noqa: ANN001
         """#615 P5: close a goal out — the thread's marker, the bell, the broadcast.
 
         A run that ended while nobody was watching gets a written hand-over and a
@@ -711,12 +687,7 @@ class ChatSendService:
         watched it happen, and a bell for it would be noise that teaches them to
         ignore the next one.
         """
-        # The round counter is a PROXY for "nobody was watching", and it is wrong
-        # for exactly one ending: a night that never managed to start a round has
-        # a counter of zero, so it would hand over in silence — at 3am, which is
-        # the only time this ending happens. A caller that KNOWS says so.
-        if unattended is None:
-            unattended = goal.offhours and goal.offhours_rounds_used > 0
+        unattended = goal.offhours and goal.offhours_rounds_used > 0
         summary = ""
         if unattended and self._goal_checker is not None:
             conv = self._conv_rm.get(rid).data
