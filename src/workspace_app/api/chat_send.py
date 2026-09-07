@@ -1043,17 +1043,26 @@ class ChatSendService:
                 # client follows the live SSE stream.
                 with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(asyncio.shield(fut), timeout=self._send_await_timeout)
-        except Exception as exc:  # noqa: BLE001 — recorded, then re-raised unchanged
+        except Exception as exc:  # noqa: BLE001 — reported on the thread, not to the caller
             # The message is already in the thread — it is persisted above, before
             # any of this — and no turn is going to answer it now. `agentLog`
             # reads "a reply is on its way" off exactly that shape and waits half
-            # an hour for one, which is the state the declined-turn path exists to
-            # prevent; it was alive on this path, where the preparation raises
-            # rather than being stopped.
+            # an hour for one, so the thread is given the ending a failed turn
+            # would have left, and anyone watching is told.
             #
-            # So give the thread the ending a failed turn would have left, and
-            # tell anyone watching. Then re-raise: the POST still fails, and it
-            # should — this is a record of what happened, not a rescue.
+            # NOT re-raised, deliberately, and this is what makes the POST's
+            # status mean something. It used to fail the request, and the client
+            # then had to work out from the status whether the message had been
+            # stored — which no status can answer, because they are assigned by a
+            # type-keyed handler in `create_app` that has no idea WHERE the throw
+            # happened. `FileNotFound` from a skill folder that vanished mid-read
+            # (deliberately strict, see `apps/skills.py`) answers 404 from inside
+            # this window exactly as a revoked viewer does from the route.
+            #
+            # So the write is the acceptance. Everything that fails after it is
+            # reported the way a turn's own failure already is — on the stream and
+            # in the thread — and a non-2xx from this endpoint now means one thing:
+            # nothing was written.
             logger.exception("chat_send: preparation failed for item %s", investigation_id)
             # Rendered ONCE, by the renderer the turn path already uses: two
             # spellings of one failure is how the same event comes to read
@@ -1074,4 +1083,3 @@ class ChatSendService:
                     )
                     self._conv_rm.update(rid, fresh)
             self._turn_engine.publish(engine_key, failure)
-            raise

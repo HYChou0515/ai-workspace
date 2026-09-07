@@ -735,9 +735,13 @@ async def test_preparation_that_fails_still_ends_the_thread():
     app.state.chat_send._turn_ctx.build_chat_turn = explode
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
-        with contextlib.suppress(Exception):
-            await client.post(f"/a/rca/items/{iid}/messages", json={"content": "hi"})
+        resp = await client.post(f"/a/rca/items/{iid}/messages", json={"content": "hi"})
 
+    # 202, because the message WAS accepted — it is in the thread. A preparation
+    # that fails afterwards is reported the way a turn's own failure is, on the
+    # stream and in the thread, and not by failing the request. That is what lets
+    # a non-2xx from this endpoint mean "nothing was written" and nothing else.
+    assert resp.status_code == 202
     rm = spec.get_resource_manager(Conversation)
     conv = next(
         r.data
@@ -925,3 +929,56 @@ async def test_anyones_stop_reaches_a_round_the_system_is_driving():
             assert not alices_own.cancelled, "…without stopping Alice's own question"
     finally:
         await engine.forget(key)
+
+
+async def test_a_driver_round_is_registered_unattributed():
+    """The `chat_send` half of the same rule, which had no test of its own.
+
+    The engine-level case pins what `cancel_current` does with an unattributed
+    token. This pins the thing that decides a round IS unattributed: a goal
+    follow-up and an off-hours round carry the goal-setter as their author, and
+    passing that through would put them behind that one person's Stop on an item
+    where #43 says anyone may stop the agent.
+    """
+    from workspace_app.api import create_app
+    from workspace_app.api.schemas import _MessageBody
+    from workspace_app.filestore.memory import MemoryFileStore
+    from workspace_app.resources import make_spec
+    from workspace_app.resources.conversation_goal import GOAL_DRIVER
+    from workspace_app.sandbox.mock import MockSandbox
+
+    from .conftest import register_rca_item
+
+    spec = make_spec(default_user="u")
+    iid = register_rca_item(spec)
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=_QuickRunner(),
+        get_user_id=lambda: "alice",
+    )
+    engine = app.state.turn_engine
+    service = app.state.chat_send
+    seen: list[str] = []
+    real = engine.preparing
+
+    def spy(key: str, author: str = ""):  # noqa: ANN202 — passthrough
+        seen.append(author)
+        return real(key, author=author)
+
+    engine.preparing = spy
+    rid, conv = service._locator.conversation_for(iid)
+
+    await service.send(iid, rid, conv, iid, _MessageBody(content="a person asks"), author="alice")
+    await service.send(
+        iid,
+        rid,
+        conv,
+        iid,
+        _MessageBody(content="the goal asks"),
+        author="alice",
+        driven_by=GOAL_DRIVER,
+    )
+
+    assert seen == ["alice", ""], "a driver's round belongs to nobody, a person's to them"

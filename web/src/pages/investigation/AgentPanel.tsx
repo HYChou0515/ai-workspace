@@ -54,6 +54,12 @@ import { useT } from "../../lib/i18n";
 import { type AttachProgress, attachPrompt, runAttach, uploadPathFor } from "./attach";
 import { extractClipboardFiles, isImage, readTransferEntries } from "./transfer";
 
+/** Said in two places — the composer's placeholder and the refusal every
+ * control gives — so it lives once. Two copies of one sentence diverge on the
+ * next edit, and a control that explains itself differently from the box beside
+ * it is the mismatch this file keeps having to fix. */
+const NO_PERMISSION_TO_SEND = "You don't have permission to send messages in this workspace.";
+
 /**
  * Max width of the conversation reading column. When the chat pane is wider than
  * this (a workspace=false App filling the row, the IDE collapsed, or the RCA side
@@ -62,12 +68,6 @@ import { extractClipboardFiles, isImage, readTransferEntries } from "./transfer"
  * default 380px) the cap never engages, so that layout is untouched. Matches the
  * KB doc viewer's `.kb-docpage__body` cap for a consistent reading measure.
  */
-/** Said in two places — the composer's placeholder and the refusal every
- * control gives — so it lives once. Two copies of one sentence diverge on the
- * next edit, and a control that explains itself differently from the box beside
- * it is the mismatch this file keeps having to fix. */
-const NO_PERMISSION_TO_SEND = "You don't have permission to send messages in this workspace.";
-
 export const CHAT_COLUMN_MAX_W = 860;
 
 /** Typing-area height bounds (px). The default is the old `rows={3}`; the floor

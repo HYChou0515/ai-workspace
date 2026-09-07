@@ -452,11 +452,12 @@ describe("a send that was refused leaves nothing behind", () => {
     expect(result.current.log.entries).toHaveLength(1);
   });
 
-  it("takes it back for the one 500 that is refused before the write", async () => {
-    // 500 is the only ambiguous status: `request_env_failed` is raised before the
-    // persist and carries a code that says so, while a preparation that throws
-    // answers 500 with the message already stored. The code is what separates
-    // them; without it the safe reading of a 500 is "it may exist", so it stays.
+  it("takes it back for a 500 too, because a 500 now means it was never written", async () => {
+    // There is no ambiguous status left. A failure after the write answers 202
+    // and reports itself on the stream, so reaching this branch at all means
+    // nothing was stored — whatever number came back. The status used to be
+    // asked, and it could not answer: it is chosen by a type-keyed handler that
+    // does not know where in the request the throw happened.
     const err = Object.assign(new Error("who are you"), {
       status: 500,
       code: "request_env_failed",
@@ -487,14 +488,12 @@ describe("a send that was refused leaves nothing behind", () => {
     expect(result.current.log.entries).toHaveLength(2);
   });
 
-  it("keeps the message when the failure came AFTER the backend stored it", async () => {
-    // The criterion is "did the backend persist it", not "was it a gateway cut".
-    // `chat_send` writes the user's message and only THEN prepares the turn, so
-    // anything that fails in the preparation — a sandbox that will not wake, a
-    // context build that throws — answers 500 with the message already in the
-    // thread. Retracting there takes it off the sender's screen while the agent
-    // still reads it next turn, so they retype it and the thread has two.
-    const err = Object.assign(new Error("boom"), { status: 500 });
+  it("keeps it when the request was cut without an answer", async () => {
+    // The one case where nothing is known either way. A gateway cut says the
+    // request did not complete, not that the turn failed — the message may be in
+    // the thread and running — so it stays, and the stream or the store poll
+    // settles it. This is the branch that returns before the retraction.
+    const err = Object.assign(new Error("cut"), { status: 502 });
     const t = fakeTransport({ post: vi.fn(() => Promise.reject(err)) });
     const { result } = render(t);
     await waitFor(() => expect(result.current.log.entries).toHaveLength(1));
@@ -504,7 +503,6 @@ describe("a send that was refused leaves nothing behind", () => {
     });
 
     expect(result.current.log.entries).toHaveLength(2);
-    expect(result.current.log.error).not.toBeNull();
   });
 
   it("a new send clears a Stop that is still pending", async () => {

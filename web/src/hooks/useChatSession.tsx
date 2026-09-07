@@ -152,31 +152,6 @@ const SEEN_IDS_MAX = 2000;
 
 const GATEWAY_CUT = new Set([0, 502, 503, 504]);
 
-/** Did the backend refuse this send BEFORE it wrote the user's message?
- *
- * Derived from the route rather than listed. `send_message` runs
- * `require_access` (403/404/410) and `conversation_for`; then `send` runs its
- * quota gate (507) and its identity resolution (500 + `request_env_failed`) —
- * and only THEN spawns the task whose first act is the persist. Every one of
- * those is a refusal the backend CHOSE. After the persist there is no chosen
- * refusal left: the preparation either succeeds or throws, and an unhandled
- * throw is an uncoded 500.
- *
- * So the question is not which statuses refuse, it is which response can have
- * come from AFTER the write — and that is exactly one: a 500 with no code.
- * Everything else was refused before it.
- *
- * Two earlier versions of this got it wrong by listing instead of deriving:
- * first `{403, 507}`, which left a viewer whose access was revoked (404) and one
- * whose item had been deleted (410) drawing a message the backend never had;
- * then "any 4xx", which forgot that the quota refusal is a 507. A list has to be
- * kept up to date by whoever adds the next gate. This does not.
- *
- * The remaining case keeps the message, which is the safe direction: one shown
- * that turns out not to exist is a smaller lie than one hidden that does. */
-const refusedBeforePersist = (status: number | undefined, code: string | undefined) =>
-  !(status === 500 && code !== "request_env_failed");
-
 const isAbort = (err: unknown) => (err as { name?: string } | null)?.name === "AbortError";
 
 /** The transient "you may have missed a piece" notice, shown while a dropped
@@ -657,26 +632,27 @@ export function useChatSession(
           // The sentence above is lossy by design; the LIST survives beside it
           // so the refusal can offer to act rather than only to explain.
           holding: holdingFromSendError({ ...(err as object | null), status }),
-          // …and take the drawn message back, but ONLY when the backend cannot
-          // have stored it. Left drawn after a refusal it would sit there with
-          // the error beside it saying it was not sent, and count as a turn to
-          // `turnsFromEntry`, which makes undo delete one turn more than the
-          // person pointed at.
+          // …and take the drawn message back. Left drawn after a refusal it
+          // would sit there with the error beside it saying it was not sent, and
+          // count as a turn to `turnsFromEntry`, which makes undo delete one turn
+          // more than the person pointed at.
           //
-          // The question is whether it was PERSISTED, not whether the request
-          // survived. `chat_send` writes the user's message and only then
-          // prepares the turn, so a preparation that throws answers 500 with the
-          // message already in the thread: retracting there takes it off the
-          // sender's screen while the agent still reads it next turn, and they
-          // retype it. `REFUSED_BEFORE_PERSIST` is the set that cannot have got
-          // that far — the quota gate and the identity resolution both run ahead
-          // of the write, and an authorization refusal never reaches it. Anything
-          // else keeps the message, which is the safe direction: a message shown
-          // that turns out not to exist is a smaller lie than one hidden that
-          // does.
-          entries: refusedBeforePersist(status, (err as { code?: string } | null)?.code)
-            ? retractOwnAsk(prev, { author: currentUser, content: trimmed }).entries
-            : prev.entries,
+          // Unconditional, and that is a property of the endpoint rather than an
+          // assumption about it: the write is the acceptance, so anything that
+          // fails after it answers 202 and reports itself on the stream. Getting
+          // here at all therefore means nothing was stored.
+          //
+          // Two earlier versions tried to infer that from the status — first a
+          // list of refusals, then "any 4xx" — and both were wrong, because the
+          // status is chosen by a type-keyed handler in `create_app` that cannot
+          // know where in the request the throw happened. The same 404 answers a
+          // revoked viewer and a skill folder that vanished mid-preparation. No
+          // status could have carried this; the endpoint had to.
+          //
+          // The gateway-cut branch above still returns early: there the request
+          // was cut without an answer, so nothing is known either way, and
+          // hiding a message that may be running is the worse lie.
+          entries: retractOwnAsk(prev, { author: currentUser, content: trimmed }).entries,
         }));
       }
     },
