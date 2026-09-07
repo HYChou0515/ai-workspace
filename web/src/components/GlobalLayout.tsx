@@ -37,8 +37,12 @@ function GlobalLayoutInner() {
       <div className="scrollable" style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
         <Outlet />
       </div>
-      {/* Every route nests here, which is the only reason "a failed write is
-          never silent" can be true app-wide instead of page by page. Outside the
+      {/* Every route nests here EXCEPT the deployed-page one (`/w/:slug/:itemId/*`,
+          which is chrome-less by definition), which is why "a failed write is
+          never silent" is true app-wide rather than page by page. A WUI does not
+          use the mutation cache this reads — its refusals reach the page through
+          the bridge's own `refuse()` — so nothing is dropped today; the day a
+          mutation is added under `/w/`, it needs its own notice. Outside the
           `hidden` guard on purpose: a chat-first surface drops the nav bar as
           chrome, and this is not chrome. */}
       <WriteFailureNotice />

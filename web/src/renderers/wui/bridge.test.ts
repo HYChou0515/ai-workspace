@@ -37,6 +37,9 @@ function ctx(over: Partial<BridgeContext> = {}, files: Record<string, string> = 
     me: "alice",
     declaredTools: [],
     callTool: null,
+    declaredWorkflows: ["judge"],
+    startRun: null,
+    onRunEvent: () => {},
     ...over,
   };
 }
@@ -219,6 +222,205 @@ describe("dispatchWuiRequest", () => {
 
     expect(res).toMatchObject({ ok: false });
     expect(res.ok === false && res.error).toContain("/gone.md");
+  });
+
+  it("keeps a missing file in the page's OWN folder quiet — that is a first run", async () => {
+    // The documented way to start empty, and the examples all catch it. Reported,
+    // it would put a red refusal in front of every user opening every new WUI.
+    const res = await dispatchWuiRequest(req("readFile", { path: "data.json" }), ctx());
+
+    expect(res).toMatchObject({ ok: false, expected: true });
+  });
+
+  it("does NOT keep a missing file elsewhere in the item quiet", async () => {
+    // A tool that returns a PATH rather than its payload — the way a tool with a
+    // large result is supposed to answer — hands the page a string it did not
+    // choose. If that path is wrong (a sandbox `/tmp/out.json`, say, which the
+    // bridge resolves against the ITEM's root, where nothing exists), the page
+    // gets the same "not there" a first run gets. Every example catches that and
+    // renders its empty state, so the page says "nothing found", forever, and
+    // the pane says nothing at all.
+    //
+    // The page's own folder is where absence is ordinary. Everywhere else it is
+    // a mistake somebody has to be able to see.
+    const res = await dispatchWuiRequest(req("readFile", { path: "/tmp/out.json" }), ctx());
+
+    expect(res).toMatchObject({ ok: false });
+    expect(res.ok === false && res.expected).toBeUndefined();
+  });
+
+  it("hints at the root spelling without claiming to know the cause", async () => {
+    // The reader cannot open a console, so the sentence has to name what is
+    // actually surprising: a leading `/` means the ITEM's root, not a disk.
+    //
+    // But it must not ASSERT absence. `readAsset` files any error it cannot
+    // classify as `missing` — `kbFileService` throws a plain Error for every
+    // non-ok status, so a 403 lands here too — and this is the one sentence the
+    // reader forwards to the agent. "Nothing could be read" is true either way;
+    // "there is no file" would be a confident wrong diagnosis.
+    const res = await dispatchWuiRequest(req("readFile", { path: "/tmp/out.json" }), ctx());
+    const why = res.ok === false ? res.error : "";
+
+    expect(why).toContain("/tmp/out.json");
+    expect(why).toContain("this item's root");
+    expect(why).not.toContain("There is no file");
+  });
+
+  it("refuses a bare path that starts with the page's own folder name", async () => {
+    // The reported symptom, exactly: "/sales/sales/foo.json 無此檔案".
+    //
+    // A tool that writes into the page's folder names the file the way the
+    // WORKSPACE names it — `sales/foo.json`, no leading slash, because that is
+    // what a workspace path looks like everywhere else. A bare path here means
+    // "next to the page", so the folder goes on twice.
+    const res = await dispatchWuiRequest(req("readFile", { path: "sales/foo.json" }), ctx());
+
+    expect(res).toMatchObject({ ok: false });
+    expect(res.ok === false && res.expected).toBeUndefined();
+    const why = res.ok === false ? res.error : "";
+    // Both spellings, because only the author knows which they meant.
+    expect(why).toContain("/sales/sales/foo.json");
+    expect(why).toContain("/sales/foo.json");
+  });
+
+  it("refuses the same spelling on the verbs that would SUCCEED", async () => {
+    // The read is the least harmful member of the family and the only one that
+    // was reported. `writeFile` succeeds, puts the file where nothing will look
+    // for it, and returns ok — the save button works and the data is gone.
+    // `listFiles` answers `[]`, which is a legitimate answer and therefore
+    // indistinguishable from the truth. Hence ONE rule, before any verb runs.
+    const c = ctx();
+    for (const [verb, args] of [
+      ["writeFile", { path: "sales/out.json", text: "[]" }],
+      ["deleteFile", { path: "sales/out.json" }],
+      ["openFile", { path: "sales/out.json" }],
+      ["listFiles", { prefix: "sales/reports" }],
+    ] as const) {
+      const res = await dispatchWuiRequest(req(verb, args), c);
+      expect(res, verb).toMatchObject({ ok: false });
+      expect(res.ok === false && res.error, verb).toContain("in it twice");
+    }
+    // And nothing reached the workspace.
+    expect(c.fs.writeFile).not.toHaveBeenCalled();
+    expect(c.fs.deleteFile).not.toHaveBeenCalled();
+    expect(c.fs.listFiles).not.toHaveBeenCalled();
+  });
+
+  it("lets the absolute spelling through, so nothing becomes impossible", async () => {
+    // A page that really does keep files in `/sales/sales/` says so out loud.
+    const c = ctx({}, { "/sales/sales/foo.json": "[1]" });
+    const res = await dispatchWuiRequest(req("readFile", { path: "/sales/sales/foo.json" }), c);
+
+    expect(res).toMatchObject({ ok: true });
+  });
+
+  it("starts a ROOT page quietly too, and does not lecture it about a slash", async () => {
+    // A view file at the workspace root is a documented shape: it can read,
+    // and every write is refused. Answering "is absence ordinary here?" with
+    // `resolveWritePath` imported that write rule wholesale — it returns null
+    // unconditionally for a root page — so EVERY missing read went loud,
+    // including the bare read of its own data file on its very first open, with
+    // a sentence about a leading "/" the caller never wrote.
+    const res = await dispatchWuiRequest(req("readFile", { path: "data.json" }), ctx({ folder: "" }));
+
+    expect(res).toMatchObject({ ok: false, expected: true });
+    expect(res.ok === false && res.error).not.toContain("starting with");
+  });
+
+  it("still starts a page quietly when its own data file is simply not there", async () => {
+    // The doubling rule must not swallow the ordinary first run — that is the
+    // case `refuseExpected` exists for, and an alarm that fires on every new
+    // page is one nobody reads.
+    const res = await dispatchWuiRequest(req("readFile", { path: "data.json" }), ctx());
+
+    expect(res).toMatchObject({ ok: false, expected: true });
+  });
+
+  it("does not cry doubling when the folder name legitimately repeats deeper", async () => {
+    // `/sales/reports/sales/q1.json` really exists here, so nothing is wrong and
+    // a successful read must not be second-guessed.
+    const c = ctx({}, { "/sales/reports/sales/q1.json": "[1]" });
+    const res = await dispatchWuiRequest(req("readFile", { path: "reports/sales/q1.json" }), c);
+
+    expect(res).toMatchObject({ ok: true });
+  });
+
+  it("does not cry doubling for a deeper repeat that is merely absent", async () => {
+    // The test above cannot pin this: it SUCCEEDS, so it never reaches the
+    // missing branch at all, and a rule that matched any segment rather than the
+    // first passed it untouched. Only an absent one exercises the decision.
+    //
+    // `/sales/reports/sales/q1.json` is an ordinary path inside the page's own
+    // folder. Absent, it is an ordinary first run — quiet, and with no advice to
+    // give, because there is no second spelling that would have worked.
+    const res = await dispatchWuiRequest(req("readFile", { path: "reports/sales/q1.json" }), ctx());
+
+    expect(res).toMatchObject({ ok: false, expected: true });
+  });
+
+  it("says nothing clever about a file named after its own folder", async () => {
+    // `readFile("sales")` in `/sales` names `/sales/sales` — odd, legal, and with
+    // no alternative spelling to offer. Without the guard the message suggests
+    // "/sales/" and a second path built by slicing off a "/" that is not there.
+    const res = await dispatchWuiRequest(req("readFile", { path: "sales" }), ctx());
+
+    expect(res).toMatchObject({ ok: false, expected: true });
+  });
+
+  it("starts a run and reports every event back under the call's id", async () => {
+    /**
+     * The page gets the platform's events VERBATIM and decides what to draw.
+     * The pane's chrome does not know which row somebody clicked, and the whole
+     * premise of a WUI is that its author owns the experience.
+     *
+     * Each event carries the CALL's id, because a page may have two judgements
+     * in flight and has no other way to tell whose progress it is looking at.
+     */
+    const events: unknown[] = [];
+    const res = await dispatchWuiRequest(
+      req("startRun", { workflow: "judge", with: { lot: "A1" } }),
+      ctx({
+        startRun: async (_workflow, _payload, onEvent) => {
+          // Real event shapes. A double emitting types nothing sends is how the
+          // shipped example came to switch on `type: "step"`, which no part of
+          // the platform emits, and read `exit_code` off an event that has no
+          // such field — both green here for as long as the double agreed.
+          onEvent({ type: "step_started", phase: "read", name: "reading 12 files" });
+          onEvent({ type: "done" });
+        },
+        onRunEvent: (id, event) => events.push([id, event]),
+      }),
+    );
+
+    expect(res).toMatchObject({ ok: true });
+    expect(events).toEqual([
+      ["1", { type: "step_started", phase: "read", name: "reading 12 files" }],
+      ["1", { type: "done" }],
+    ]);
+  });
+
+  it("refuses a workflow the page did not declare", async () => {
+    /**
+     * Disclosure, exactly as with `tools:`. The app's list is the real gate on
+     * the server; this stops a page QUIETLY using something it never announced,
+     * which is what makes reading the declaration worth anything.
+     */
+    const res = await dispatchWuiRequest(
+      req("startRun", { workflow: "undeclared" }),
+      ctx({ declaredWorkflows: ["judge"], startRun: async () => {} }),
+    );
+
+    expect(res).toMatchObject({ ok: false });
+    expect(res.ok === false && res.error).toContain("undeclared");
+  });
+
+  it("says so when this page is shown somewhere runs cannot start", async () => {
+    const res = await dispatchWuiRequest(
+      req("startRun", { workflow: "judge" }),
+      ctx({ startRun: null }),
+    );
+
+    expect(res).toMatchObject({ ok: false });
   });
 
   it("answers on the id it was asked with, so replies cannot be crossed", async () => {

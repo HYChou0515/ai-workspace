@@ -93,7 +93,17 @@ function draw(rows) {
   }
 
   var data = byCause(rows);
-  if (!data.length) { $("empty").hidden = false; return; }
+  if (!data.length) {
+    // DESTROY FIRST, then return. Returning early with a live chart leaves
+    // Chart.js watching the canvas's parent for resizes; the next time the
+    // layout moves it reads that node's `parentNode` and finds nothing, and
+    // the page starts throwing about a node nobody can see. Every early exit
+    // from a draw has to tear the old chart down — that is the whole reason
+    // this looks like a library bug when it is not.
+    if (chart) { chart.destroy(); chart = null; }
+    $("empty").hidden = false;
+    return;
+  }
   $("empty").hidden = true;
 
   var total = data.reduce(function (n, d) { return n + d.wafers; }, 0) || 1;

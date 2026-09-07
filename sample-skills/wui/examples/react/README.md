@@ -1,13 +1,37 @@
-# The built example
+# The built example — React + TypeScript
 
-Copy this folder when hand-written DOM stops paying. Then, in the sandbox:
+**Copy this folder by default.** Anything past one screen of static markup wants
+it. Then, in the sandbox:
 
 ```sh
 pnpm install --frozen-lockfile   # or `pnpm install` the first time, to write the lock
-pnpm build                       # → dist/
+pnpm build                       # → tsc --noEmit && vite build → dist/
 ```
 
 `dist/` is the page. `src/` is what you edit. Both live in the workspace.
+
+## Why TypeScript here in particular
+
+A WUI reports the bugs that throw — the pane shows the error, with a **Tell the
+agent** button. What it cannot show is a page that renders and is quietly wrong,
+and its reader does not open a console, so all they can say is "it's broken".
+The compiler is what stands between that and the person who asked for the page.
+
+`src/wui.d.ts` types the whole `workspace` bridge — copy it unchanged, it
+describes the platform rather than your page — and `tsc --noEmit` runs BEFORE
+Vite, because Vite strips types without checking them and would happily build
+code the compiler rejects. Two shapes are worth the whole exercise on their own:
+
+- `readFile` returns a **union**, so `JSON.parse(file.text)` against a binary
+  file is a compile error. Untyped it throws at runtime, the `.catch` every
+  example teaches absorbs the throw, and the page renders its empty state —
+  "Nothing yet." over real data, which nobody can see is wrong.
+- `callTool` returns `{ output: string, exit_code: number }` — a **string**,
+  with no promise it is JSON. The type says so; run the tool and look before you
+  parse it (SKILL.md, "Run the tool before you parse it").
+
+A type error fails the build, which means `dist/` stays as it was and the build
+log on screen says why. The page does not silently become wrong.
 
 ## Who rebuilds, and when
 
@@ -29,17 +53,17 @@ lock is what makes that reproducible, which is why `--frozen-lockfile` is the
 command to use: without it two installs from one lock can resolve differently,
 and then the lock was pointless.
 
-## Why not just write DOM
+## When plain files are still right
 
-Because at some size you stop being able to. Use whichever you would reach for
-outside this platform:
-
-| | no build | built |
+| | no build | built (this folder) |
 |---|---|---|
 | edit → see it | change a file, press Refresh | change a file, **rebuild** (or reopen the page), press Refresh |
 | what ships | the files you wrote | `dist/`, derived |
 | libraries | a UMD file in the folder | `package.json` |
-| good for | a form, a table, a dashboard | real state, routing, a component library |
+| checking | none | `tsc --noEmit` before every build |
+| good for | one screen, no state worth naming | everything else |
 
-Neither is the recommended one. The build step buys expressiveness and costs a
-step that can be forgotten.
+The build costs a step that can be forgotten — which is what Auto-rebuild is
+for, so it is no longer the reason it once was to avoid one. What it buys is a
+compiler, and on a page nobody can debug from the outside that is the trade
+worth making.

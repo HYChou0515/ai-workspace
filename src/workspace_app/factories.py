@@ -31,6 +31,7 @@ from workspace_app.resources import make_spec
 from .agent.config_catalog import AgentConfigCatalog
 from .api.env_provider import IEnvProvider
 from .api.litellm_runner import LitellmAgentRunner
+from .api.notification_delivery import INotificationChannel
 from .api.request_env import IRequestEnv
 from .api.runner import AgentRunner
 from .apps.catalog import AppCatalog, validate_all_apps
@@ -1290,6 +1291,19 @@ def get_check_registry(settings: Settings):  # -> health.CheckRegistry
     for dotted in settings.health.checks:
         registry.register(_construct_dotted(dotted, ISanityCheck, config_key="health.checks"))
     return registry
+
+
+def get_notification_channel(dotted: str) -> INotificationChannel | None:
+    """The deploy's outbound notification channel, or None when it named one.
+
+    None is the absence of the feature, not a degraded mode: notifications stay
+    in-app, which is where they have always been and where they remain the
+    record of truth. There is no bundled default because the platform cannot
+    guess a relay, a from-address, or a compliance regime.
+    """
+    if not dotted:
+        return None
+    return _construct_dotted(dotted, INotificationChannel, config_key="server.notification_channel")
 
 
 def get_request_env(dotted: str) -> IRequestEnv | None:

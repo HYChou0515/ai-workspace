@@ -80,10 +80,40 @@
 #                              # (a reconnect degrades to store re-hydrate).
 #                              # ~200KB/session, only while a session is live.
 #   trigger_check_interval_sec: 0  # #429 P7: how often the sweeper polls each
-#                              # profile's `triggers.json` for due headless runs.
-#                              # 0 (default) = OFF; time-triggered workflows are
-#                              # opt-in per deploy. A CAS lease per (trigger,
-#                              # window) means only one pod fires each window.
+#                              # profile's `triggers.json` for due headless runs
+#                              # AND each page's own `schedules.json` (#WUI P15).
+#                              # 0 (default) = OFF, and OFF IS SILENT: a page can
+#                              # declare schedules, see its file, and nothing will
+#                              # ever run them. One knob for both on purpose — two
+#                              # governing the same thing eventually disagree.
+#                              # The number is "how late a run may be", so 60 is a
+#                              # sane start. A CAS lease per (trigger, window)
+#                              # means only one pod fires each window.
+#   workflow_step_timeout_sec: 600 # #WUI P15: hard cap on ONE agent step inside
+#                              # a workflow run. A step that never returns is the
+#                              # only failure a person cannot describe — nothing
+#                              # looks wrong, it is simply still going — and the
+#                              # refusal names this number so a reader learns it
+#                              # is a setting rather than randomness. 0 = no cap,
+#                              # which is what every deploy actually ran before
+#                              # this line existed: the mechanism was there and
+#                              # nothing ever passed it a value.
+#   max_page_schedules: 1000   # #WUI P15: most schedules ONE page may declare.
+#                              # A runaway guard, not a policy limit: a real page
+#                              # never approaches it, and a file over the limit
+#                              # runs NOTHING (with both numbers in the log)
+#                              # rather than half of it — every schedule that
+#                              # fires leaves a durable row in the window ledger.
+#   notification_channel: ""   # #WUI P12: dotted path to an INotificationChannel
+#                              # — "and also send it somewhere" (email, IM). The
+#                              # in-app row is always written first and is the
+#                              # record of truth; the channel is a best-effort
+#                              # copy, and a delivery failure fails NOTHING else
+#                              # (a two-hour mail outage must not turn into "every
+#                              # scheduled job stopped itself"). The platform
+#                              # ships no implementation: the relay, the sending
+#                              # domain and the compliance rules are yours. Empty
+#                              # (default) = exactly today's behaviour, no timer.
 #   cors_allowed_origins: []   # #700: browser origins allowed to call this API
 #                              # cross-site — needed when an outside system hands
 #                              # work over FROM ITS OWN PAGE (e.g. a legacy

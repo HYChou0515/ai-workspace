@@ -104,6 +104,34 @@ export function resolveReadPath(folder: string, path: string): string | null {
 }
 
 /**
+ * Is this read asking for the page's OWN file — the one place absence is
+ * ordinary rather than a mistake?
+ *
+ * Deliberately NOT `resolveWritePath(...) !== null`. That function answers a
+ * WRITE question and opens with `if (folder === "") return null` — a security
+ * decision about a root-level page, which may not write anywhere. Borrowing it
+ * to answer a READ question imported that decision wholesale: a root page,
+ * which the reference documents as able to read, had EVERY missing read
+ * reported, including the bare read of its own data file on its very first
+ * open. An alarm that always fires is the failure this whole distinction exists
+ * to prevent.
+ *
+ * A ROOT page is quiet for every read, and that is not a shortcut. Its folder
+ * IS the item, so there is no boundary for a path to be outside of and no basis
+ * for calling any absence a mistake: `/data.json` and `/tmp/out.json` are the
+ * same kind of thing to it. Answering `!raw.startsWith("/")` instead looked
+ * careful and split one FILE in two — `readFile("data.json")` quiet,
+ * `readFile("/data.json")` loud, same file, same page — so an author who
+ * spelled it out got lectured about a slash they had used correctly. Quiet
+ * everywhere is also exactly what a root page did before any of this.
+ */
+export function isOwnFile(folder: string, raw: string): boolean {
+  if (folder === "") return true;
+  const abs = raw.startsWith("/") ? normalizeAbsolute(raw) : resolveInFolder(folder, raw);
+  return abs !== null && abs.startsWith(`${folder}/`);
+}
+
+/**
  * A path the page may WRITE or DELETE: only inside its own folder.
  *
  * Both spellings are normalised FIRST and the containment is then checked on

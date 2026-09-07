@@ -126,6 +126,7 @@ REINDEX TABLE CONCURRENTLY cluster_member_meta;
 | `graph-entity` | v1 | `e21369fb`（2026-08-03） | 走訪要逐列解 blob，慢 | §9 |
 | `graph-entity-link` | v1 | `e21369fb`（2026-08-03） | 走訪要逐列解 blob，慢 | §9 |
 | `graph-relationship` | v1 | `e21369fb`（2026-08-03） | 走訪要逐列解 blob，慢 | §9 |
+| `notification` | — | 待填（WUI 第三輪） | **想要的行為,不用回填**：舊通知不帶 `outbound` 索引值,所以外送掃描永遠看不到它們——第一次接上寄信通道時,不會把平台歷史上所有通知都寄出去一遍 | §5.6 |
 
 一次盤點全部（**dry-run 不寫回，安全**，§3）：
 
@@ -156,7 +157,28 @@ uv run python scripts/run_migrate.py --dry-run \
 | --- | --- | --- | --- |
 | `failover.rate_limit_budget_s` | #759（2026-09-03） | ⚠️ **行為有變**：agent 鏈碰到 429 從「快速燒完重試然後 giving up」變成「在原端點等它聲明的窗口」，等待秒數每次 agent run 共用一池，預設上限 2 小時；畫面會出現「請求過於頻繁，N 秒後自動重試」。設 `0` 回到一律切換的舊行為 | configuration.md §11 |
 | `agents.subagent_models` | #770（2026-09-03） | **完全不變**：`run_agent` 不長 `model` 參數，sub-agent 照舊跟 parent turn 同一顆模型（review 以逐位元比對驗證） | configuration.md §7 |
+| `server.max_page_schedules` | #788（2026-09-05） | **完全不變**：預設 1000,程式碼裡的預設值一樣。這是**失控護欄不是政策限制**——正常的頁面碰不到,碰到代表那個頁面有 bug。它擋的是耐久狀態:每個排程觸發過就在視窗帳本留一列,而沒有別的東西限制頁面能建幾個 | configuration.md |
+| `server.notification_channel` | #788（2026-09-05） | **完全不變**：通知只寫站內信,跟這個接縫出現之前一模一樣。沒有背景外送迴圈會被啟動(空值連 timer 都不建),也沒有任何查詢會多跑 | configuration.md |
+| `server.workflow_step_timeout_sec` | #788（2026-09-05） | ⚠️ **行為有變**:工作流裡單一 agent 步驟從「沒有上限」變成 **10 分鐘就中止那一步**,訊息裡會寫出那個秒數。機制本來就在(`steps.py` 的 `asyncio.wait_for`),但**沒有任何地方把值傳進 `create_app`**,所以每個部署實際上都跑在無上限那條分支——這次補的是接線。有合法長於十分鐘的 agent 步驟的部署要調大,或設 `0` 回到舊行為 | configuration.md |
+| `server.trigger_check_interval_sec` | #788（2026-09-05,既有選項,語意擴大） | ⚠️ **不設就完全沒有排程**,而且沒有錯誤訊息。這一顆本來只管工程師寫的 `triggers.json`,現在同時決定頁面自己寫的 `schedules.json` 會不會被掃到——預設仍是 `0`(不掃),所以「頁面排程」這個功能在沒有開這顆的部署上**存在但永遠不動**。刻意共用一顆而不是新增第二顆:兩顆管同一件事保證有一天會不一致。要用就設個秒數(60 是合理起點),那個數字就是「最晚會遲到多久」 | configuration.md |
 | `sandbox.uv_cache_max_bytes` / `SANDBOX_HOST_UV_CACHE_MAX_BYTES` | #775（2026-09-04） | ⚠️ **行為有變,但方向是省事的**:profile 帶 `pyproject.toml` 時,uv 的下載快取現在**活得比 sandbox 久**(每個 item 一份,放在 sandbox 目錄旁邊),所以同一個 item 的下一次冷啟動不必重抓。**不設就沒有上限、不會淘汰**——和這裡每個其他限制的「unset = 無限」一致。因此不設的風險是**磁碟只增不減**:host 那份在 pod 的 ephemeral 磁碟(沒有宣告 ephemeral-storage 上限,塞爆會被 kubelet 驅逐),app 那份在共用 scratch 磁碟區(連 rollout 都不會清)。設一個數字,idle tick 就會依「最近最少使用」淘汰,而**活著的 sandbox 正在用的那份永遠不動** | `configs/config.example.yaml`(`sandbox.uv_cache_max_bytes`)與 `deploy/sandbox-host.example.yaml`(`SANDBOX_HOST_UV_CACHE_MAX_BYTES`);⚠️ app 端那個只在 **`kind: local` 且沒套 userns jail** 時有作用(`isolate: false`,或 `isolation.enabled: true`);`kind: http`(快取在 host 上)、`kind: docker`、`kind: mock`、以及**套了 jail 的 `kind: local`**(在支援 userns 但沒有 CAP_SETUID 的機器上就是 `isolate: null` 的 auto 預設)都沒有作用,四種都會在啟動時 warn —— 而且那個判斷是**建完之後問 backend 一次**,不是列舉入口點,所以之後新增的 backend 不會再漏掉 |
+
+---
+
+## 5.6 案例：`notification.outbound`——**故意不回填**
+
+WUI 第三輪替 `Notification` 加了 `outbound`(`""` 待送 / `sent` / `無法送達`)並把它加進
+`indexed_fields`,外送掃描就是查 `outbound == ""`。
+
+specstar 不會自動回填,所以**這個欄位出現之前寫下的每一列都對不上任何值**,掃描永遠看不到
+它們。
+
+**這正是要的行為,不要去回填它。** 一個部署第一次接上 email 通道的那一刻,如果舊資料也被
+掃到,平台歷史上每一則通知都會在那一分鐘內被寄出去一次。
+
+⚠️ 所以這一列存在的目的跟其他列相反:**它是提醒你「不要跑」**,而不是提醒你「記得跑」。
+如果哪天真的需要補送某一段期間的通知,那要是一次有明確時間範圍的一次性動作,不是
+`migrate/execute`。
 
 ---
 
