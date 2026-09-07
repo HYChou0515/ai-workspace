@@ -70,6 +70,16 @@ DEFAULT_MAX_ROWS = 1000
 #: restart, and needs no durable row of its own.
 MAX_START_ATTEMPTS = 3
 
+#: "I could not get an answer", as distinct from "it is not there".
+#:
+#: Collapsing those two is how a read failure became a deletion: the snapshot
+#: says missing (ordinary, while the mirror catches up), the live read then
+#: raises `SandboxBusy` or times out, and a two-valued answer files that as
+#: gone — permanently, since only a WRITE of `schedules.json` re-creates the
+#: row. The sweep already refuses to make that inference on its FIRST read; this
+#: is what lets the confirming read refuse it too.
+UNKNOWN = object()
+
 ReadFile = Callable[[str, str], Awaitable[bytes]]
 OwnerOf = Callable[[str], str]
 #: Which workflows this app offers the given item, or None for "unrestricted".
@@ -120,7 +130,18 @@ def _in_zone(now_utc: datetime, tz: str) -> datetime:
 
 class StartRun(Protocol):
     """Launch one run. Kept narrow on purpose: the sweep decides WHEN, and
-    nothing about how a workflow runs."""
+    nothing about how a workflow runs.
+
+    **Raising means NOTHING STARTED.** The sweep claims the window before asking,
+    so a raise is its signal to hand that window back and try again — which it
+    cannot distinguish from "the run began and the bookkeeping after it failed".
+    An implementation that raises AFTER its side effect has happened therefore
+    causes the same window to fire again, with no shared chat id to collide on,
+    and the person gets two of whatever this sends.
+
+    So: once the run exists, swallow and log. Anything else is a promise this
+    caller cannot keep.
+    """
 
     async def __call__(
         self, *, item_id: str, workflow_id: str, acting_user: str, payload: dict[str, Any]
@@ -182,24 +203,39 @@ class UserScheduleSweeper:
                     logger.exception("user schedules: item %s path %s failed", item_id, path)
         return fired
 
-    async def _still_there(self, item_id: str, path: str) -> bytes | None:
-        """The file's bytes from the LIVE workspace, or None when it is really gone.
+    async def _still_there(self, item_id: str, path: str) -> bytes | None | object:
+        """Three answers, not two: the bytes, `None` for confirmed gone, or
+        :data:`UNKNOWN` when the question could not be answered.
 
-        A read error that is not "missing" answers None too — logged, and the
-        caller was already about to drop this path, so the worst case is one lost
-        schedule rather than a sweep that stops.
+        The distinction is the whole point. A read that FAILS is not evidence of
+        absence — `files.read` raises `SandboxBusy` (which the facade propagates
+        deliberately), 502s from the sandbox host, and everything a half-restored
+        workspace throws. Answering `None` to those made the caller unregister a
+        schedule that exists, which is the failure this confirmation was added to
+        prevent, arriving through the confirmation itself.
+
+        The reasoning that produced the bug is worth keeping visible: "the caller
+        was already about to drop this path, so the worst case is one lost
+        schedule". It is wrong because the caller was about to drop it ONLY on the
+        snapshot's word — and doubting exactly that word is why this function
+        exists.
         """
         if self._read_live is None:
-            return None  # no live reader wired: the snapshot is all there is
+            # No live reader wired. The snapshot is all there is, so its answer
+            # stands: this is a deploy that opted out of confirming, not one that
+            # tried and failed.
+            return None
         try:
             return await self._read_live(item_id, path)
         except (FileNotFound, FileNotFoundError):
             return None
         except Exception:
             logger.exception(
-                "user schedules: could not confirm whether %s %s still exists", item_id, path
+                "user schedules: could not confirm whether %s %s still exists — leaving it indexed",
+                item_id,
+                path,
             )
-            return None
+            return UNKNOWN
 
     async def _one_file(self, item_id: str, path: str) -> int:
         try:
@@ -220,12 +256,18 @@ class UserScheduleSweeper:
             # So ask the LIVE workspace before believing it — only here, so the
             # ordinary tick still reads the snapshot and wakes nothing.
             found = await self._still_there(item_id, path)
+            if found is UNKNOWN:
+                # Nobody could say. Leave it indexed and try again next tick —
+                # the same answer the first read's own failure branch gives, for
+                # the same reason: unregistering is not undoable.
+                return 0
             if found is None:
                 logger.info(
                     "user schedules: %s %s is gone — dropping from the index", item_id, path
                 )
                 await asyncio.to_thread(self._index.forget, item_id, path)
                 return 0
+            assert isinstance(found, bytes)
             raw = found.decode("utf-8", "replace")
         except Exception:
             # "Could not read it just now" is a DIFFERENT answer, and it must not

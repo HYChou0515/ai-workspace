@@ -75,3 +75,36 @@ def test_a_scheduled_run_gets_its_own_conversation() -> None:
     assert "open_run_chat" in body, "a scheduled run does not open its own conversation"
     assert "chat_id=chat_id" in body, "it opens one and then does not use it"
     assert "settle_run_chat" in body, "the chat is never linked to its run, or cleaned up"
+
+
+def test_a_started_run_is_never_reported_as_not_started() -> None:
+    """Once `orchestrator.start` returns, the run EXISTS. Anything that fails
+    after that is bookkeeping, and it must not reach the sweep as an exception.
+
+    The sweep claims a window before asking for the run, so a raise is its
+    signal to hand that window back and fire again — and it cannot tell "nothing
+    started" from "it started and the chat link failed". The second fire opens a
+    fresh chat id, so `active_run_for_chat` collides with nothing and the person
+    gets two of whatever the workflow sends. Probed at three runs for one daily
+    window before this guard existed.
+
+    A source check on CONTROL FLOW, which is the thing at stake: the linking call
+    has to sit under a `try` whose handler swallows.
+    """
+    source = _APP.read_text(encoding="utf-8")
+    body = source.split("async def _start_page_schedule", 1)[-1].split("\n    lifespan", 1)[0]
+
+    marker = "locator.settle_run_chat(chat_id, run_id)"
+    assert marker in body, "the run's chat is never linked"
+
+    before = body.split(marker, 1)[0]
+    guard = [ln.strip() for ln in before.splitlines() if ln.strip()][-1]
+    assert guard == "try:", (
+        "the post-start link is unguarded — a failure there tells the sweep the "
+        f"run never started, and it fires the window again (last line was {guard!r})"
+    )
+
+    after = body.split(marker, 1)[1]
+    assert "except Exception:" in after.split("return run_id", 1)[0], (
+        "nothing catches a failure after the run exists"
+    )

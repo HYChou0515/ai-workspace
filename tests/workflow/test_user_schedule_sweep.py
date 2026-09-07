@@ -87,6 +87,11 @@ def _sweeper(spec: SpecStar, files: _Files, started: _Started, now: datetime):
         spec=spec,
         index=ScheduleIndex(spec),
         read=files.read,
+        # WIRED, like production. Leaving it out meant nearly every test in this
+        # file exercised a sweeper shaped differently from the one that ships —
+        # and the confirmation path, where the interesting failures live, was
+        # reached by exactly one test.
+        read_live=files.read,
         start=started,
         owner_of=lambda _item: "alice",
         now=lambda: now,
@@ -445,6 +450,44 @@ def test_a_file_the_snapshot_has_not_caught_up_with_is_not_gone():
 
     assert index.items() == [ITEM], "a schedule was unregistered for lagging the mirror"
     assert [r[1] for r in started.runs] == ["build-report"], "and it did not fire either"
+
+
+def test_a_confirmation_that_could_not_be_made_is_not_a_deletion():
+    """ "I could not ask" is a third answer, and it must not be filed as "gone".
+
+    The snapshot says missing (mirror lag — the state this confirmation exists
+    for) and the LIVE read then fails for a reason that is not absence:
+    `SandboxBusy`, which the facade propagates on purpose, or a 502 from the
+    sandbox host. Collapsing that onto "gone" unregisters the schedule
+    permanently, and only a WRITE of `schedules.json` puts it back.
+
+    That is the same failure the sibling branch below already refuses to make —
+    reintroduced through the confirmation path added to prevent it. The
+    justification given at the time ("the caller was already about to drop this
+    path") is the trap: the caller was about to drop it ONLY because the
+    snapshot said missing, which is exactly the claim being checked.
+    """
+
+    class _Busy(_Files):
+        async def read(self, item_id: str, path: str) -> bytes:
+            raise RuntimeError("sandbox busy")
+
+    spec = _spec()
+    index = ScheduleIndex(spec)
+    index.record(ITEM, PATH)
+
+    sweeper = UserScheduleSweeper(
+        spec=spec,
+        index=index,
+        read=_Files().read,  # snapshot: not there yet
+        read_live=_Busy().read,  # live: cannot answer
+        start=_Started(),
+        owner_of=lambda _item: "alice",
+        now=lambda: datetime(2026, 9, 5, 9, 30),
+    )
+    asyncio.run(sweeper.tick())
+
+    assert index.items() == [ITEM], "a schedule was unregistered because a read failed"
 
 
 def test_a_file_gone_from_both_is_really_gone():

@@ -314,6 +314,46 @@ def test_a_soft_deleted_row_comes_back_rather_than_stalling(index: ScheduleIndex
     assert index.items() == ["i1"]
 
 
+def test_the_absent_branch_never_overwrites_a_row_that_is_there(index: ScheduleIndex) -> None:
+    """`create` without `if_not_exists` does not refuse a taken id — specstar
+    only performs that check when the flag is set. It writes a new revision, so
+    a row holding two paths becomes a row holding one.
+
+    Reachable whenever the read says "absent" and the row is not: a retry
+    iteration after a CAS conflict, or a peer's create landing between our read
+    and ours. The read is what is unreliable here, so the WRITE has to carry the
+    condition — asking again cannot make an unreliable answer reliable.
+
+    This is the same `['/a','/b'] → ['/b']` shape the previous fix in this file
+    was written to close, surviving in the branch that fix added.
+    """
+    index.record("i1", "/a/schedules.json")
+    index.record("i1", "/b/schedules.json")
+
+    # The read says absent while the row is right there — one iteration only, so
+    # the loop must recover rather than depend on never being lied to.
+    real_res = index._res
+    lied = []
+
+    def _lies_once(item_id: str):
+        if not lied:
+            lied.append(1)
+            return None
+        return real_res(item_id)
+
+    index._res = _lies_once  # ty: ignore[invalid-assignment]
+    try:
+        index.record("i1", "/c/schedules.json")
+    finally:
+        index._res = real_res  # ty: ignore[invalid-assignment]
+
+    assert index.paths("i1") == [
+        "/a/schedules.json",
+        "/b/schedules.json",
+        "/c/schedules.json",
+    ]
+
+
 def test_a_page_in_a_nested_folder_counts_too() -> None:
     """A page is a folder, and nothing says that folder must sit at the top.
     `wuiFolder` accepts any depth and `writeFile`'s boundary is the page's OWN

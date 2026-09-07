@@ -176,11 +176,25 @@ class ScheduleIndex:
         for _ in range(_MAX_CAS_RETRIES):
             res = self._res(item_id)
             if res is None:
-                # Genuinely absent between the create and the read — somebody
-                # hard-removed it. Re-create rather than loop: the read has
-                # already answered, and asking again cannot change it.
-                rm.create(_ScheduleIndex(paths=[path]), resource_id=item_id)
-                return True
+                # The READ said absent. That is the unreliable half — a retry
+                # after a CAS conflict, or a peer's create landing between our
+                # read and our write, both produce it while the row is right
+                # there — so the WRITE carries the condition rather than trusting
+                # the answer. Without `if_not_exists` specstar does no existence
+                # check at all: it writes a new revision, and a row holding two
+                # paths becomes a row holding one.
+                try:
+                    rm.create(
+                        _ScheduleIndex(paths=[path]),
+                        resource_id=item_id,
+                        if_not_exists=True,  # ty: ignore[unknown-argument]
+                    )
+                    return True
+                except DuplicateResourceError:
+                    # It was there after all. Go round: the next read sees it and
+                    # merges instead of replacing.
+                    self._restore_if_deleted(item_id)
+                    continue
             row, etag = res
             if path in row.paths:
                 return False

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -1083,9 +1084,28 @@ def create_app(
             # `run_id` is a FREE chat, and the earliest free chat is what the item
             # opens as its default. A schedule that fails nightly would otherwise
             # install a new default conversation every night.
-            locator.settle_run_chat(chat_id, None)
+            #
+            # Suppressed so the cleanup cannot REPLACE the failure it is cleaning
+            # up after: the caller needs the original reason, and a second error
+            # from the tidy-up buries it.
+            with contextlib.suppress(Exception):
+                locator.settle_run_chat(chat_id, None)
             raise
-        locator.settle_run_chat(chat_id, run_id)
+        # PAST THE POINT OF NO RETURN. The run exists and is already writing to
+        # this conversation; linking it is bookkeeping. Raising here would tell
+        # the sweep "nothing started" — and the sweep's answer to that is to hand
+        # the window back and fire again, with a fresh chat id that collides with
+        # nothing. One bad `update` would become two reports, two emails, twice.
+        try:
+            locator.settle_run_chat(chat_id, run_id)
+        except Exception:
+            logger.exception(
+                "page schedule: run %s started for item %s but its chat %s could not be "
+                "linked — the run is fine; the chat may show as free",
+                run_id,
+                item_id,
+                chat_id,
+            )
         return run_id
 
     lifespan = build_lifespan(
