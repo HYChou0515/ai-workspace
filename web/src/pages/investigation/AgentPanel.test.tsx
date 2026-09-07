@@ -492,7 +492,7 @@ describe("AgentPanel — permission-disclosure readOnly composer", () => {
  * places it used to happen in silence.
  */
 describe("AgentPanel — the composer always answers back", () => {
-  function panelWith(over: Partial<AgentState>) {
+  function panelWith(over: Partial<AgentState>, readOnly = false) {
     const agent = { ...stubAgent(), ...over } as AgentState;
     return {
       agent,
@@ -507,6 +507,7 @@ describe("AgentPanel — the composer always answers back", () => {
             attachedPreset=""
             onAttachPreset={() => {}}
             uploadDir="uploads"
+            readOnly={readOnly}
           />
         </DialogProvider>,
       ),
@@ -584,6 +585,34 @@ describe("AgentPanel — the composer always answers back", () => {
     fireEvent.click(screen.getByRole("button", { name: "chip" }));
 
     await waitFor(() => expect(agent.send).toHaveBeenCalled());
+  });
+
+  it("a chip that works looks like it works", async () => {
+    // The sweep moved `disabled` to the shared rule and left `cursor` and
+    // `opacity` on `log.streaming` two lines below. For a whole turn the chip
+    // was drawn as unclickable and clicked fine — the same "a control says what
+    // the composer beside it denies" the sweep existed to end, inverted.
+    //
+    // This is also the case that pins the rule with a REACHABLE state: under the
+    // old rule the chip is disabled here, under the new one it is not.
+    const { agent } = panelWith({ log: chipLog({ streaming: true }) });
+
+    const chip = screen.getByRole("button", { name: "chip" });
+    expect(chip).toBeEnabled();
+    expect(chip).toHaveStyle({ cursor: "pointer", opacity: "1" });
+
+    fireEvent.click(chip);
+    await waitFor(() => expect(agent.send).toHaveBeenCalled());
+  });
+
+  it("a read-only viewer is refused everywhere, not just at the composer", async () => {
+    // `readOnly` was enforced on the composer, Send and the chip separately and
+    // NOT on the `ask_user` answers, so a viewer without permission got a raw
+    // `send failed: 403` from the one control nobody had guarded.
+    const { agent } = panelWith({ log: chipLog({}) }, true);
+
+    expect(screen.getByRole("button", { name: "chip" })).toBeDisabled();
+    expect(agent.send).not.toHaveBeenCalled();
   });
 
   it("a suggestion chip is disabled while a Stop is in flight", async () => {

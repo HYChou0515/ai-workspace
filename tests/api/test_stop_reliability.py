@@ -1,4 +1,11 @@
-"""Stop must reliably reach the running turn — the #349 epoch stamp had a race.
+"""Stop must reach the turn it is aimed at — and nothing else.
+
+Three separate ways it did not, kept together because each was found by the one
+before it failing to hold: the #349 epoch stamp had a race (below); stamping an
+epoch per message let a Stop stand down every message stamped before it,
+including ones already queued; and a send that never reached the queue at all —
+stopped, or simply failing mid-preparation — left the thread with a question and
+no ending.
 
 The workspace worker stamped ``my_epoch = await current(key)`` and only set
 ``session.current_turn`` AFTER that await. A Stop landing inside the read window
@@ -13,6 +20,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import AsyncIterator
+
+from specstar import QB
 
 from workspace_app.agent.context import AgentToolContext
 from workspace_app.api import MessageDelta, RunDone
@@ -128,16 +137,15 @@ async def test_a_stop_during_the_preamble_is_not_lost():
     engine = ChatTurnEngine(runner, turn_control=control)
     key = "inv"
     try:
-        # The message is persisted; the send registers before the preamble.
-        pending = engine.preparing(key)
+        # The message is persisted; the send owns the window from here.
+        async with engine.preparing(key) as pending:
+            # …the preamble runs, and the user hits Stop while it does.
+            await engine.cancel_current(key)
 
-        # …the preamble runs, and the user hits Stop while it does.
-        await engine.cancel_current(key)
-
-        # …the preamble finishes and queues the turn it had been preparing.
-        fut = engine.enqueue(
-            key, "go", AgentToolContext(), on_complete=lambda _: None, pending=pending
-        )
+            # …the preamble finishes and queues the turn it had been preparing.
+            fut = engine.enqueue(
+                key, "go", AgentToolContext(), on_complete=lambda _: None, pending=pending
+            )
 
         # Bounded: without the fix the turn runs and hangs for 30s, so a lost
         # Stop is a timeout (a failure) rather than a test that waits it out.
@@ -162,11 +170,10 @@ async def test_a_turn_queued_after_the_stop_still_runs():
     key = "inv"
     try:
         await engine.cancel_current(key)  # an earlier Stop
-        pending = engine.preparing(key)  # a NEW message, registered after it
-
-        fut = engine.enqueue(
-            key, "go", AgentToolContext(), on_complete=lambda _: None, pending=pending
-        )
+        async with engine.preparing(key) as pending:  # a NEW message, after it
+            fut = engine.enqueue(
+                key, "go", AgentToolContext(), on_complete=lambda _: None, pending=pending
+            )
 
         await asyncio.wait_for(fut, 2)
         assert runner.started
@@ -345,7 +352,7 @@ async def test_a_stop_during_compaction_cancels_the_summariser():
         await asyncio.wait_for(let_go(), 5)
 
         # What the POST does AFTERWARDS is P1's subject, not this one's: the send
-        # runs on to the end and the epoch stamp stands the turn down. Asserting
+        # runs on to the end and the pending token stands the turn down. Asserting
         # both here would make one failure look like the other.
         post.cancel()
         with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -388,15 +395,15 @@ async def test_a_stop_does_not_discard_messages_already_queued_behind_it():
     engine = ChatTurnEngine(runner, turn_control=InMemoryTurnControl())
     key = "inv"
     try:
-        first = engine.preparing(key)
-        engine.enqueue(key, "M1", AgentToolContext(), on_complete=lambda _: None, pending=first)
+        async with engine.preparing(key) as first:
+            engine.enqueue(key, "M1", AgentToolContext(), on_complete=lambda _: None, pending=first)
         while not runner.seen:  # M1 is running
             await asyncio.sleep(0.01)
 
-        second = engine.preparing(key)
-        queued = engine.enqueue(
-            key, "M2", AgentToolContext(), on_complete=lambda _: None, pending=second
-        )
+        async with engine.preparing(key) as second:
+            queued = engine.enqueue(
+                key, "M2", AgentToolContext(), on_complete=lambda _: None, pending=second
+            )
 
         await engine.cancel_current(key)  # aimed at M1
 
@@ -423,11 +430,11 @@ async def test_a_turn_declined_before_it_started_still_records_that_it_was_cance
     key = "inv"
     persisted: list[list[TurnMessage]] = []
     try:
-        pending = engine.preparing(key)
-        await engine.cancel_current(key)
-        fut = engine.enqueue(
-            key, "go", AgentToolContext(), on_complete=persisted.append, pending=pending
-        )
+        async with engine.preparing(key) as pending:
+            await engine.cancel_current(key)
+            fut = engine.enqueue(
+                key, "go", AgentToolContext(), on_complete=persisted.append, pending=pending
+            )
 
         await asyncio.wait_for(fut, 2)
         assert not runner.started
@@ -540,11 +547,11 @@ async def test_a_declined_turn_tells_the_live_stream_too():
 
     collector = asyncio.create_task(collect())
     try:
-        pending = engine.preparing(key)
-        await engine.cancel_current(key)
-        fut = engine.enqueue(
-            key, "go", AgentToolContext(), on_complete=lambda _: None, pending=pending
-        )
+        async with engine.preparing(key) as pending:
+            await engine.cancel_current(key)
+            fut = engine.enqueue(
+                key, "go", AgentToolContext(), on_complete=lambda _: None, pending=pending
+            )
         await asyncio.wait_for(fut, 2)
 
         # Bounded: without the publish nothing ever arrives, so a missing
@@ -687,3 +694,119 @@ async def test_a_stopped_manual_compaction_says_stopped_not_failed():
 
     assert resp.status_code == 200
     assert resp.json() == {"compacted": False, "reason": "stopped"}
+
+
+async def test_preparation_that_fails_still_ends_the_thread():
+    """The window between persisting the message and queueing the turn has to
+    have an owner, and the failure path is where it shows.
+
+    `_send` persists the user's message and then does two hundred lines of I/O
+    to build a turn — the sandbox acquire, tool discovery, skills, the context
+    block. Any of it can raise. When it did, the message was in the thread and
+    nothing else was: no turn, no marker, nothing to end it. `agentLog` reads "a
+    reply is on its way" off exactly that shape and waits half an hour.
+
+    Which is the defect the declined-turn path was written to remove, alive on
+    the sibling path — the half nobody had looked at.
+    """
+    from httpx import ASGITransport
+
+    from workspace_app.api import create_app
+    from workspace_app.filestore.memory import MemoryFileStore
+    from workspace_app.resources import Conversation, make_spec
+    from workspace_app.sandbox.mock import MockSandbox
+
+    from ._client import AsyncClient
+    from .conftest import register_rca_item
+
+    spec = make_spec(default_user="u")
+    iid = register_rca_item(spec)
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=_QuickRunner(),
+        get_user_id=lambda: "alice",
+    )
+
+    async def explode(*a: object, **k: object) -> None:
+        raise RuntimeError("the sandbox would not wake")
+
+    app.state.chat_send._turn_ctx.build_chat_turn = explode
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+        with contextlib.suppress(Exception):
+            await client.post(f"/a/rca/items/{iid}/messages", json={"content": "hi"})
+
+    rm = spec.get_resource_manager(Conversation)
+    conv = next(
+        r.data
+        for r in rm.list_resources(QB.all())  # ty: ignore[invalid-argument-type]
+        if isinstance(r.data, Conversation) and r.data.item_id == iid
+    )
+    kinds = [m.error_kind for m in conv.messages if m.role == "error"]
+    assert kinds, "a send that died mid-preparation left the thread with no ending"
+
+
+async def test_a_preparation_that_fails_does_not_leak_its_token():
+    """`preparing` is paired with a release, so a send that never reaches
+    `enqueue` does not leave its token behind.
+
+    The set is keyed to the engine key, and a default chat's key is the item id —
+    it lives as long as the item does. `run_interruptible` right above already
+    had the `finally`; the asymmetry was the tell.
+    """
+    engine = ChatTurnEngine(_QuickRunner(), turn_control=InMemoryTurnControl())
+    key = "inv"
+    try:
+        for _ in range(5):
+            with contextlib.suppress(RuntimeError):
+                async with engine.preparing(key):
+                    raise RuntimeError("preparation failed")
+        assert engine._ws_session(key).pending_turns == set()
+    finally:
+        await engine.forget(key)
+
+
+async def test_one_persons_stop_does_not_decline_another_persons_preparation():
+    """The collateral this whole mechanism exists to stop, in the one window it
+    survived in.
+
+    Stop reaches what is preparing — but a Stop is pressed BY somebody, and it
+    means "not the thing I asked for". Marking every send in preparation put
+    Alice's Stop back on Bob's question: narrower than before (seconds, not the
+    whole queue) but the same wrong. An unattributed Stop still marks
+    everything, which is the old behaviour for callers that cannot say who.
+    """
+    engine = ChatTurnEngine(_QuickRunner(), turn_control=InMemoryTurnControl())
+    key = "inv"
+    try:
+        async with (
+            engine.preparing(key, author="alice") as mine,
+            engine.preparing(key, author="bob") as theirs,
+        ):
+            await engine.cancel_current(key, by="alice")
+            assert mine.cancelled
+            assert not theirs.cancelled, "Bob's question was not Alice's to stop"
+    finally:
+        await engine.forget(key)
+
+
+async def test_forget_declines_a_turn_that_was_still_being_prepared():
+    """Deleting a chat must not leave a send about to start a turn for it.
+
+    `forget` cancelled the preparing TASKS and, separately, had to mark the
+    pending sends — a rule that could be deleted with every test still green
+    until this one. The route deletes the conversation on the next line.
+    """
+    runner = _QuickRunner()
+    engine = ChatTurnEngine(runner, turn_control=InMemoryTurnControl())
+    key = "inv"
+    async with engine.preparing(key) as pending:
+        await engine.forget(key)
+        fut = engine.enqueue(
+            key, "go", AgentToolContext(), on_complete=lambda _: None, pending=pending
+        )
+        await asyncio.wait_for(fut, 2)
+    assert not runner.started
+    await engine.forget(key)

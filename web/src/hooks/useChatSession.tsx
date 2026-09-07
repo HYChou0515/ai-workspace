@@ -152,6 +152,19 @@ const SEEN_IDS_MAX = 2000;
 
 const GATEWAY_CUT = new Set([0, 502, 503, 504]);
 
+/** Refusals the backend raises BEFORE it writes the user's message.
+ *
+ * `chat_send` persists the message and only then prepares the turn, so this is
+ * the whole of what can fail with nothing in the thread: the quota gate (507)
+ * and the request-env resolution both run ahead of the write, and an
+ * authorization refusal (403) never reaches `send` at all. Everything else —
+ * 500 from a preparation that threw, an unknown status — may well have stored
+ * it, and the message stays drawn. */
+const REFUSED_BEFORE_PERSIST = new Set([403, 507]);
+
+const refusedBeforePersist = (status: number | undefined, code: string | undefined) =>
+  (status !== undefined && REFUSED_BEFORE_PERSIST.has(status)) || code === "request_env_failed";
+
 const isAbort = (err: unknown) => (err as { name?: string } | null)?.name === "AbortError";
 
 /** The transient "you may have missed a piece" notice, shown while a dropped
@@ -632,15 +645,26 @@ export function useChatSession(
           // The sentence above is lossy by design; the LIST survives beside it
           // so the refusal can offer to act rather than only to explain.
           holding: holdingFromSendError({ ...(err as object | null), status }),
-          // …and take the drawn message back. It was never persisted, so no
-          // broadcast will adopt it and the store poll cannot clear it — it
-          // would sit in the transcript with the error beside it saying it was
-          // not sent, and count as a turn to `turnsFromEntry`, which makes undo
-          // delete one turn more than the person pointed at. The gateway-cut
-          // branch above deliberately does NOT come here: there the request was
-          // cut but the turn may well be running, and hiding the message would
-          // be the worse lie.
-          entries: retractOwnAsk(prev, { author: currentUser, content: trimmed }).entries,
+          // …and take the drawn message back, but ONLY when the backend cannot
+          // have stored it. Left drawn after a refusal it would sit there with
+          // the error beside it saying it was not sent, and count as a turn to
+          // `turnsFromEntry`, which makes undo delete one turn more than the
+          // person pointed at.
+          //
+          // The question is whether it was PERSISTED, not whether the request
+          // survived. `chat_send` writes the user's message and only then
+          // prepares the turn, so a preparation that throws answers 500 with the
+          // message already in the thread: retracting there takes it off the
+          // sender's screen while the agent still reads it next turn, and they
+          // retype it. `REFUSED_BEFORE_PERSIST` is the set that cannot have got
+          // that far — the quota gate and the identity resolution both run ahead
+          // of the write, and an authorization refusal never reaches it. Anything
+          // else keeps the message, which is the safe direction: a message shown
+          // that turns out not to exist is a smaller lie than one hidden that
+          // does.
+          entries: refusedBeforePersist(status, (err as { code?: string } | null)?.code)
+            ? retractOwnAsk(prev, { author: currentUser, content: trimmed }).entries
+            : prev.entries,
         }));
       }
     },

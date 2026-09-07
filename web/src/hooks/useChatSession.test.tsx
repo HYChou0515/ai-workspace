@@ -455,6 +455,26 @@ describe("a send that was refused leaves nothing behind", () => {
     expect(result.current.log.entries).toHaveLength(2);
   });
 
+  it("keeps the message when the failure came AFTER the backend stored it", async () => {
+    // The criterion is "did the backend persist it", not "was it a gateway cut".
+    // `chat_send` writes the user's message and only THEN prepares the turn, so
+    // anything that fails in the preparation — a sandbox that will not wake, a
+    // context build that throws — answers 500 with the message already in the
+    // thread. Retracting there takes it off the sender's screen while the agent
+    // still reads it next turn, so they retype it and the thread has two.
+    const err = Object.assign(new Error("boom"), { status: 500 });
+    const t = fakeTransport({ post: vi.fn(() => Promise.reject(err)) });
+    const { result } = render(t);
+    await waitFor(() => expect(result.current.log.entries).toHaveLength(1));
+
+    await act(async () => {
+      await result.current.send("please do the thing");
+    });
+
+    expect(result.current.log.entries).toHaveLength(2);
+    expect(result.current.log.error).not.toBeNull();
+  });
+
   it("a new send clears a Stop that is still pending", async () => {
     // `retryTurn` is `cancel()` then `send()`. Without this the retry inherits
     // `stopping`, so the turn it just started cannot be stopped and nothing can

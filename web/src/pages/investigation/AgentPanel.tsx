@@ -573,8 +573,16 @@ export function AgentPanel({
    * two of them were left behind still refusing during anyone's turn — the
    * spectator lock-out the change existed to remove — while ignoring the one
    * state where a send really is refused. */
-  const sendRefusal = (): string | null =>
-    log.stopping ? "正在停止這一輪…停下之後再送出。" : null;
+  const sendRefusal = (): string | null => {
+    // `readOnly` belongs here too. It was enforced on the composer, the Send
+    // button and the chip, each separately — and NOT on the `ask_user` answer
+    // buttons, which is how a viewer without permission got a raw
+    // `send failed: 403`, the very symptom the chip's own comment says its
+    // guard exists to prevent.
+    if (readOnly) return "You don't have permission to send messages in this workspace.";
+    if (log.stopping) return "正在停止這一輪…停下之後再送出。";
+    return null;
+  };
 
   const submit = () => {
     const text = draft.trim();
@@ -858,7 +866,7 @@ export function AgentPanel({
             // dead through anyone's turn long after the composer stopped
             // refusing that — a disabled control saying something the composer
             // beside it contradicts.
-            disabled={readOnly || sendRefusal() !== null}
+            disabled={sendRefusal() !== null}
             style={{
               display: "inline-flex",
               alignItems: "center",
@@ -869,8 +877,12 @@ export function AgentPanel({
               background: "var(--white)",
               fontSize: pxToRem(12),
               color: "var(--text-paper)",
-              cursor: log.streaming ? "not-allowed" : "pointer",
-              opacity: log.streaming ? 0.5 : 1,
+              // Same rule as `disabled` above, deliberately not a second copy of
+              // it: these two kept `log.streaming` when the guard moved, so for
+              // a whole turn the chip was drawn as unclickable while clicking it
+              // worked — the inverse of the mismatch the sweep set out to end.
+              cursor: sendRefusal() !== null ? "not-allowed" : "pointer",
+              opacity: sendRefusal() !== null ? 0.5 : 1,
             }}
           >
             <Icon name="sparkle" size={12} color="var(--accent)" />
@@ -1343,7 +1355,7 @@ export function AgentPanel({
             // while stopping, though: that would queue behind a turn nobody has
             // actually stopped yet.
             const canSend =
-              !readOnly && !log.stopping && (summoning || draft.trim().length > 0);
+              sendRefusal() === null && (summoning || draft.trim().length > 0);
             const iconButton = {
               width: 32,
               height: 32,
