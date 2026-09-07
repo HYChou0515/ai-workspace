@@ -63,14 +63,10 @@ export function useKbChat({
     getThread: () => client.getChat(initialChatId as string),
   });
 
-  // Whether this hook is still mounted. Aborting the stream is not enough on its
-  // own: the `finally` below still runs, and it sets state — which in a torn-down
-  // test environment throws `ReferenceError: window is not defined` out of React
-  // and reddens whichever file happens to be running, intermittently and
-  // somewhere else entirely. In a real browser it is React's
-  // set-state-after-unmount, which is merely pointless. Both are the same
-  // mistake: finishing a stream nobody is watching by writing to a component
-  // that is gone.
+  // Whether this hook is still mounted. The LOG's writes are guarded by
+  // `useChatLog`, where that state is made; this ref covers the one piece of
+  // state this hook owns itself — `chatId`, written after an await, when a
+  // thread finishes being created for a view that has already gone.
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -95,6 +91,10 @@ export function useKbChat({
       let id = chatId;
       if (id == null) {
         id = (await client.createChat("", collectionIds, excludedCollectionIds)).resource_id;
+        // Nobody to hand it to: the view left while the thread was being
+        // created. Aborting the stream cannot cover this — there is no stream
+        // yet.
+        if (!mounted.current) return;
         setChatId(id);
         onChatCreated?.(id);
         void qc.invalidateQueries({ queryKey: qk.kb.chats });
@@ -145,7 +145,7 @@ export function useKbChat({
         setLog((prev) => ({ ...prev, streaming: false, error: msg }));
       } finally {
         if (abortRef.current === controller) abortRef.current = null;
-        if (mounted.current) setLog((prev) => ({ ...prev, streaming: false }));
+        setLog((prev) => ({ ...prev, streaming: false }));
       }
     },
     [chatId, collectionIds, excludedCollectionIds, client, log.streaming, onChatCreated, qc, setLog, reconcile],

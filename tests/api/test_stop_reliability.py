@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 
 import pytest
 from specstar import QB
@@ -28,6 +28,7 @@ from workspace_app.agent.context import AgentToolContext
 from workspace_app.api import MessageDelta, RunDone
 from workspace_app.api.events import AgentEvent
 from workspace_app.api.turns import ChatTurnEngine, TurnMessage
+from workspace_app.kb.llm import ILlm
 from workspace_app.turn_control import InMemoryTurnControl
 
 
@@ -1095,3 +1096,127 @@ async def test_an_offhours_round_that_never_started_is_not_charged_for():
     )
     # …and the sweeper still learns it failed, so it can give the claim back.
     assert isinstance(spec.get_resource_manager(Conversation).get(rid).data, Conversation)
+
+
+async def test_a_night_that_never_starts_parks_the_goal_instead_of_retrying_forever():
+    """Giving a failed round back removed the only thing that ever ended such a
+    night, so the round has to be given back AND counted as no progress.
+
+    Before this, a goal whose sandbox would not wake spent its whole allowance in
+    half an hour and then stopped for good; after the refund alone it stopped
+    spending anything, which meant the sweeper retried it every minute, forever,
+    writing two messages into its owner's thread each time. The budget was never
+    the bound anyone wanted — `stall_count` is, and it is the same judgement
+    (`_STALL_LIMIT` consecutive no-progress rounds park the goal for a person)
+    that a night which runs but gets nowhere already goes through.
+    """
+    from workspace_app.api import create_app
+    from workspace_app.filestore.memory import MemoryFileStore
+    from workspace_app.resources import make_spec
+    from workspace_app.resources.conversation_goal import ConversationGoal, read_goal, upsert_goal
+    from workspace_app.sandbox.mock import MockSandbox
+
+    from .conftest import register_rca_item
+
+    spec = make_spec(default_user="u")
+    iid = register_rca_item(spec)
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=_QuickRunner(),
+        get_user_id=lambda: "alice",
+    )
+    service = app.state.chat_send
+    rid, _conv = service._locator.conversation_for(iid)
+    upsert_goal(
+        spec,
+        ConversationGoal(conversation_id=rid, condition="ship it", set_by="alice", offhours=True),
+        user="alice",
+    )
+
+    async def explode(*a: object, **k: object) -> None:
+        raise RuntimeError("the sandbox would not wake")
+
+    service._turn_ctx.build_chat_turn = explode
+
+    for _ in range(2):
+        with pytest.raises(RuntimeError):
+            await service.start_offhours_round(rid)
+
+    parked = read_goal(spec, rid)
+    assert parked is not None
+    assert parked.offhours_rounds_used == 0, "still not charged for rounds that never ran"
+    assert parked.state == "stalled", (
+        "a night that cannot start has to end for a person, not tick forever"
+    )
+    # And the person hears about it — the sweeper runs when nobody is watching,
+    # so a marker nobody is there to read is not a hand-over.
+    assert _bells(spec), "the goal's owner is told their overnight run stopped"
+
+
+def _bells(spec) -> list:  # noqa: ANN001
+    from specstar import QB
+
+    from workspace_app.resources.notification import Notification
+
+    rm = spec.get_resource_manager(Notification)
+    return [
+        r.data for r in rm.list_resources(QB.all()) if getattr(r.data, "kind", "") == "agent_done"
+    ]
+
+
+async def test_a_continuation_that_never_started_is_not_charged_either():
+    """The same bump-before-send lives in `_goal_followup`, one round later.
+
+    It is the smaller half — the chain stops rather than looping, because that
+    exception is swallowed — but the round is still charged for work that never
+    reached the model, and a budget only means anything if it counts turns that
+    happened."""
+    from workspace_app.api import create_app
+    from workspace_app.filestore.memory import MemoryFileStore
+    from workspace_app.resources import make_spec
+    from workspace_app.resources.conversation_goal import ConversationGoal, read_goal, upsert_goal
+    from workspace_app.sandbox.mock import MockSandbox
+
+    from .conftest import register_rca_item
+
+    class _NeverMet(ILlm):
+        """Says the goal is unmet, so the chain reaches the continuation send."""
+
+        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+            yield ("NOT_MET", False)
+
+    spec = make_spec(default_user="u")
+    iid = register_rca_item(spec)
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=_QuickRunner(),
+        get_user_id=lambda: "alice",
+        goal_checker_llm=_NeverMet(),
+    )
+    service = app.state.chat_send
+    rid, _conv = service._locator.conversation_for(iid)
+    upsert_goal(
+        spec,
+        ConversationGoal(conversation_id=rid, condition="ship it", set_by="alice"),
+        user="alice",
+    )
+    engine_key = service._locator.engine_key(iid, rid)
+
+    async def explode(*a: object, **k: object) -> None:
+        raise RuntimeError("the sandbox would not wake")
+
+    service._turn_ctx.build_chat_turn = explode
+
+    before = read_goal(spec, rid)
+    assert before is not None
+    await service._goal_followup(iid, rid, engine_key, "alice", "ok")
+
+    after = read_goal(spec, rid)
+    assert after is not None
+    assert after.rounds_used == before.rounds_used, (
+        "a continuation that never reached the model is not a round of work"
+    )
