@@ -20,6 +20,15 @@ const TOKENS_PATH = resolve(HERE, "tokens.css");
 
 /** Custom properties that are NOT declared in tokens.css yet are legitimate. */
 const RUNTIME_ASSIGNED = new Set([
+  // The colour an App declares in its own `app.json`, published inline per pill
+  // by `MyResourcesPage`'s `AppTag`. Not design tokens: an App's identity colour
+  // is the App's to state, and there are as many as there are Apps. Two inks
+  // because the ink has to be re-lit per theme and only CSS knows the theme —
+  // see `lib/appColor.ts`. Every reference gives a neutral token as its
+  // fallback, so a pill still paints when an App declares no colour.
+  "--app-tint",
+  "--app-ink",
+  "--app-ink-dark",
   // set inline per-surface (see kb.css / FileTree) rather than in tokens.css
   "--filetree-header-bg",
   // fit-to-width scale for marp slides, set on the deck host from JS (MarpDeck)
