@@ -116,6 +116,19 @@ class SpecstarStretchClaims:
             assert isinstance(data, _GoalStretch)
             if data.stretch == stretch:
                 return False  # a peer (or an earlier tick tonight) already has it
+            if data.failed_stretch == stretch and data.failures >= _START_FAILURE_LIMIT:
+                # Tonight was given up on. Holding the claim is what expresses
+                # that, and `release` blanks the claim for a person — so without
+                # this, standing down for someone HANDS THE NIGHT BACK and the
+                # whole thing starts over, telling them again each time. Which
+                # they then answer, which stands us down again: measured at six
+                # tellings and eight attempts for one night of glancing at the
+                # screen, against a bound of three.
+                #
+                # The guard belongs here rather than in `release`, because this
+                # is where "may this chat be started tonight?" is answered, and
+                # every future caller of `release` gets it for free.
+                return False
             try:
                 rm.modify(
                     conversation_id,
@@ -350,7 +363,18 @@ class OffHoursGoalSweeper:
                         failures,
                         stretch,
                     )
-                    await self._night_abandoned(cid, _terminal_error(exc).message)
+                    try:
+                        await self._night_abandoned(cid, _terminal_error(exc).message)
+                    except Exception:  # noqa: BLE001 — the rule of this handler
+                        # Telling is done INSIDE the handler whose whole purpose
+                        # is that one chat's failure must not end the pass for
+                        # the fleet, so it takes the same treatment as the rest
+                        # of it. An orphaned goal — an active off-hours goal
+                        # whose chat is gone — raises on the read, and that is a
+                        # real state, not a hypothetical.
+                        logger.exception(
+                            "goal offhours: could not tell %s its night was given up on", cid
+                        )
                 continue
             started.append(cid)
         return started

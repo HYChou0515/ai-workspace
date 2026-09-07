@@ -447,3 +447,73 @@ async def test_standing_down_for_a_person_does_not_roll_back_the_failure_count()
     assert claims.note_failure(cid, "tonight") == 2, (
         "the release must carry the count through, not reset it"
     )
+
+
+@pytest.mark.asyncio
+async def test_a_person_speaking_does_not_undo_a_night_already_given_up_on():
+    """Standing down for a person gives the claim back — and the claim is the
+    only thing holding the give-up, so the night restarted itself.
+
+    The loop closes on itself, which is what makes it bad: the bell this ending
+    rings says 今晚沒能開始, and a person who answers it in the chat is exactly
+    the message that stands the sweeper down and hands the night back. Measured
+    at six tellings and eight attempts for one night of glancing at the screen."""
+    spec, cid = _spec_with_goal()
+    attempts: list[str] = []
+    abandoned: list[tuple[str, str]] = []
+    sweeper = _sweeper(spec, attempts, fail=True, abandoned=abandoned)
+
+    for minute in range(5):
+        await sweeper.tick(now=NIGHT.replace(minute=minute))
+    assert len(abandoned) == 1 and len(attempts) == 3
+
+    # Someone reads the bell and replies. The sweeper stands down for them…
+    _say(spec, cid, at=NIGHT.replace(minute=6))
+    for minute in range(6, 40):
+        await sweeper.tick(now=NIGHT.replace(minute=minute))
+
+    # …and, once they are quiet again, must NOT pick tonight back up.
+    assert len(attempts) == 3, f"the night restarted itself: {len(attempts)} attempts"
+    assert len(abandoned) == 1, f"told {len(abandoned)} times for one night"
+
+
+@pytest.mark.asyncio
+async def test_a_failure_to_TELL_one_chat_does_not_end_the_sweep_either():
+    """The handler this runs in exists so one chat's failure cannot end the pass
+    for the fleet. Telling is done inside it, so it needs the same treatment as
+    everything else there — an orphaned goal whose chat is gone raises on the
+    read, and that is a real state (`item_routes` names it)."""
+    spec, first = _spec_with_goal()
+    rm = spec.get_resource_manager(Conversation)
+    rm.create(Conversation(item_id="i2"), resource_id="c2")
+    upsert_goal(
+        spec,
+        ConversationGoal(
+            conversation_id="c2", condition="ship it too", set_by="bob", offhours=True
+        ),
+        user="bob",
+    )
+
+    attempts: list[str] = []
+
+    async def start_round(conversation_id: str) -> None:
+        attempts.append(conversation_id)
+        raise RuntimeError("the sandbox would not wake")
+
+    async def telling_explodes(conversation_id: str, reason: str) -> None:
+        raise RuntimeError("that chat was deleted while we were failing")
+
+    sweeper = OffHoursGoalSweeper(
+        spec,
+        settings=OffHoursSettings(window="19:00-08:00", timezone=TAIPEI),
+        claims=SpecstarStretchClaims(spec),
+        start_round=start_round,
+        night_abandoned=telling_explodes,
+    )
+
+    for minute in range(5):
+        await sweeper.tick(now=NIGHT.replace(minute=minute))
+
+    assert first in attempts and "c2" in attempts, (
+        "the chat whose telling blew up took the whole sweep down with it"
+    )
