@@ -44,10 +44,6 @@ export type ItemEnvironmentPanelProps = {
    *  caller turns into "keep what is stored" — the distinction that stops a cpu
    *  edit from clearing memory. */
   onSave?: (edit: { cpuCores?: number | null; memory?: string | null }) => void;
-  /** Whether the last save was REFUSED. Leaving the panel commits what is in
-   *  the fields, so a refusal has to be on screen or the number is gone and
-   *  nobody said so. */
-  saveFailed?: boolean;
 };
 
 function Meter({ used, limit }: { used: number; limit: number }) {
@@ -72,7 +68,6 @@ export function ItemEnvironmentPanel({
   canEdit,
   onClose,
   onSave,
-  saveFailed,
 }: ItemEnvironmentPanelProps) {
   const t = useT();
   const [draft, setDraft] = useState<string>(
@@ -83,19 +78,10 @@ export function ItemEnvironmentPanel({
   );
 
   /**
-   * This panel APPLIES AS YOU GO: each field commits on blur and there is no
-   * Save button, which makes it the "live-applying" case the modal rules name
-   * as having nothing to lose. It was briefly treated as a form instead —
-   * `useDirtyClose` plus a record of what had been sent — and that could not be
-   * made to work, for a reason worth keeping: the confirm dialog TAKES FOCUS in
-   * order to be answered, which blurs the field, which saves. The question
-   * "discard this?" committed the thing it was asking about. So the exits
-   * commit instead, and `ItemEnvironmentModal` blurs before it closes so that
-   * Escape and the ✕ send the same thing in every browser.
-   *
-   * What that costs is that a REFUSED save must be visible — hence `saveFailed`
-   * below — because there is no longer a prompt standing between the person and
-   * the door.
+   * Each field commits when it loses focus, and there is no Save button. The
+   * modal around this deliberately does NOT extend that to its own exits —
+   * closing neither saves nor asks. See the comment there for why both of those
+   * were tried and withdrawn.
    */
   const dispatch = (edit: SizeEdit) => onSave?.(edit);
 
@@ -200,11 +186,6 @@ export function ItemEnvironmentPanel({
           />
           )}
           {canEdit ? null : <p className="detail">{t("itemenv.readonly")}</p>}
-          {saveFailed ? (
-            <p data-testid="save-failed" className="detail" role="alert">
-              {t("itemenv.saveFailed")}
-            </p>
-          ) : null}
 
           {/* Memory had no control at all — the field existed on the item, the
               route accepted it, and nothing could set it. P9's SIGKILL note

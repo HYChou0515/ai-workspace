@@ -995,14 +995,6 @@ export const messages = {
     en: "You set {stated}; {effective} is in effect (held down by this App's ceiling)",
   },
   "itemenv.usage.total": { "zh-TW": "你的總用量", en: "Your total" },
-  // Leaving the panel COMMITS what is in the fields, so a refusal has to be
-  // visible: otherwise someone walks away certain they set a number that was
-  // never stored. 507 is a normal answer here — the size spends the OWNER's
-  // quota, not the editor's.
-  "itemenv.saveFailed": {
-    "zh-TW": "沒有存起來:這個大小沒有套用,再試一次。",
-    en: "Not saved — that size wasn't applied. Try again.",
-  },
   // Says CANNOT CONFIRM, not "not enforced": the backend reports an unreachable
   // host identically to one that caps nothing, so claiming to know which would
   // be inventing a distinction it cannot make.

@@ -36,15 +36,6 @@ const ENVIRONMENT = {
   memory_bound_by: null,
 };
 
-/** Memory ENFORCED, and already set — the only shape in which the memory field
- *  is drawn at all, which is why nothing caught the format mismatch below. */
-const WITH_MEMORY = {
-  ...ENVIRONMENT,
-  stated_memory_bytes: 536870912,
-  effective_memory_bytes: 536870912,
-  enforced_memory_bytes: 536870912,
-};
-
 const CAPPED = {
   limits: { count: 0, cpu: 4, memory_bytes: 0, disk_bytes: 0 },
   cpu_in_use: 2,
@@ -58,18 +49,10 @@ const CAPPED = {
 
 const UNCAPPED = { ...CAPPED, limits: { count: 0, cpu: 0, memory_bytes: 0, disk_bytes: 0 } };
 
-function route(
-  resources: unknown,
-  environment: unknown = ENVIRONMENT,
-  { refuseSave = false } = {},
-) {
+function route(resources: unknown, environment: unknown = ENVIRONMENT) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
-    if (init?.method === "PUT") {
-      return refuseSave
-        ? new Response(JSON.stringify({ detail: "sandbox_quota_exceeded" }), { status: 507 })
-        : json({});
-    }
+    if (init?.method === "PUT") return json({});
     if (url.includes("/environment")) return json(environment);
     if (url.includes("/me/resources")) return json(resources);
     return json({});
@@ -134,20 +117,25 @@ describe("ItemEnvironmentModal", () => {
   });
 
   /**
-   * This panel APPLIES AS YOU GO — the fields commit on blur and there is no
-   * Save button to press, which is the "live-applying picker" the modal rules
-   * name as having nothing to lose. Two review rounds went into trying to make
-   * it behave like a form instead, and each fix uncovered another exit where
-   * the prompt asked about a value it had already saved: the ✕ blurs on its way
-   * out, and so does the confirm dialog itself, because it takes focus in order
-   * to be answered. You cannot ask "discard this?" with a question whose asking
-   * commits it.
+   * Closing does not WRITE. That is the whole of what this modal decides about
+   * saving, and it is deliberately the smaller claim.
    *
-   * So leaving COMMITS, on every exit, and nothing is asked. These tests count
-   * what reached the server, because a prompt that did not appear is equally
-   * consistent with a number that was saved and one that was thrown away.
+   * The fields commit on blur and there is no Save button, so "what does
+   * leaving mean" has no answer this component can derive. Two attempts were
+   * made and both were worse than the question. A `useDirtyClose` prompt could
+   * not work at all: the confirm dialog takes focus in order to be answerable,
+   * taking focus blurs the field, and blurring is what saves — the question
+   * committed the thing it was asking about. Committing on the way out instead
+   * made Escape the only keystroke in the app that writes, spending the ITEM
+   * OWNER's quota, and the refusal could not even be shown because the panel is
+   * gone by the time the server answers.
+   *
+   * So Escape does what Escape does everywhere else here: it closes. A number
+   * typed and never blurred is not sent — the same thing that happens today if
+   * you type one and navigate away, and the safe direction: dropping a
+   * keystroke rather than writing one nobody confirmed.
    */
-  it("sends a size that was typed but never blurred, when Escape closes it", async () => {
+  it("writes nothing when it is closed, even mid-edit", async () => {
     const fetcher = route(CAPPED);
     vi.stubGlobal("fetch", fetcher);
     const onClose = vi.fn();
@@ -157,77 +145,21 @@ describe("ItemEnvironmentModal", () => {
 
     await waitFor(() => expect(screen.getByTestId("cpu-input")).toBeTruthy());
     await userEvent.type(screen.getByTestId("cpu-input"), "3");
-    await userEvent.keyboard("{Escape}");
-
-    await waitFor(() => expect(onClose).toHaveBeenCalled());
-    expect(puts(fetcher)).toEqual([JSON.stringify({ cpu_cores: 3, memory: null })]);
-    expect(screen.queryByText("放棄未儲存的變更？")).toBeNull();
-  });
-
-  it("sends it exactly once when the ✕ is the way out", async () => {
-    // What this pins is EXACTLY ONCE. happy-dom blurs on click the way Chrome
-    // does, so it would stay green with the explicit blur removed — the test
-    // that pins that is the Escape one above, which is red without it. The
-    // cross-browser half (Firefox and Safari do not blur on mousedown, so the
-    // ✕ alone would lose the number there) is not reachable from this runner
-    // and is why the blur is explicit rather than left to the click.
-    const fetcher = route(CAPPED);
-    vi.stubGlobal("fetch", fetcher);
-    const onClose = vi.fn();
-    renderWithQuery(
-      <ItemEnvironmentModal slug="rca" itemId="i-1" canEdit onClose={onClose} />,
-    );
-
-    await waitFor(() => expect(screen.getByTestId("cpu-input")).toBeTruthy());
-    await userEvent.type(screen.getByTestId("cpu-input"), "3");
-    await userEvent.click(screen.getByTestId("dismiss-item-environment"));
-
-    await waitFor(() => expect(onClose).toHaveBeenCalled());
-    expect(puts(fetcher)).toEqual([JSON.stringify({ cpu_cores: 3, memory: null })]);
-  });
-
-  it("sends nothing at all when the person typed nothing", async () => {
-    // The other side of it. A panel that PUTs on every close would spend a
-    // request — and a quota check — on someone who only came to look.
-    const fetcher = route(CAPPED);
-    vi.stubGlobal("fetch", fetcher);
-    const onClose = vi.fn();
-    renderWithQuery(
-      <ItemEnvironmentModal slug="rca" itemId="i-1" canEdit onClose={onClose} />,
-    );
-
-    await waitFor(() => expect(screen.getByTestId("cpu-input")).toBeTruthy());
     await userEvent.keyboard("{Escape}");
 
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     expect(puts(fetcher)).toEqual([]);
-  });
-
-  it("sends a memory size in the spelling the field asks for", async () => {
-    const fetcher = route(CAPPED, WITH_MEMORY);
-    vi.stubGlobal("fetch", fetcher);
-    renderWithQuery(
-      <ItemEnvironmentModal slug="rca" itemId="i-1" canEdit onClose={() => {}} />,
-    );
-
-    const mem = await screen.findByTestId("memory-input");
-    await userEvent.clear(mem);
-    await userEvent.type(mem, "1G");
-    await userEvent.keyboard("{Escape}");
-
-    await waitFor(() => expect(puts(fetcher).length).toBe(1));
-    expect(JSON.parse(puts(fetcher)[0]).memory).toBe("1G");
-    // Without this the test also passes the OLD way: the confirm dialog took
-    // focus, which blurred the field, which saved. Same PUT, opposite meaning.
+    // Nor is anything asked: there is no prompt this panel could raise that
+    // would not first commit the value it is asking about.
     expect(screen.queryByText("放棄未儲存的變更？")).toBeNull();
   });
 
-  it("says so when the server refused the size, rather than dropping it in silence", async () => {
-    // Committing on the way out is only safe if a refusal is visible. The quota
-    // this spends belongs to the item's OWNER, so 507 is a normal answer here,
-    // and a panel that swallowed it would leave someone certain they had set a
-    // number that was never stored.
-    vi.stubGlobal("fetch", route(CAPPED, ENVIRONMENT, { refuseSave: true }));
+  it("still commits a field that is blurred inside the panel", async () => {
+    // The panel's own save model, unchanged by any of this: the value goes out
+    // when the field loses focus to something else IN the panel. Closing is not
+    // that, which is the distinction the test above pins.
+    const fetcher = route(CAPPED);
+    vi.stubGlobal("fetch", fetcher);
     renderWithQuery(
       <ItemEnvironmentModal slug="rca" itemId="i-1" canEdit onClose={() => {}} />,
     );
@@ -236,7 +168,21 @@ describe("ItemEnvironmentModal", () => {
     await userEvent.type(screen.getByTestId("cpu-input"), "3");
     await userEvent.tab();
 
-    expect(await screen.findByTestId("save-failed")).toBeTruthy();
+    await waitFor(() =>
+      expect(puts(fetcher)).toEqual([JSON.stringify({ cpu_cores: 3, memory: null })]),
+    );
+  });
+
+  it("closes from its own ✕", async () => {
+    const onClose = vi.fn();
+    renderWithQuery(
+      <ItemEnvironmentModal slug="rca" itemId="i-1" canEdit onClose={onClose} />,
+    );
+
+    await waitFor(() => expect(screen.getByTestId("environment-status")).toBeTruthy());
+    await userEvent.click(screen.getByTestId("dismiss-item-environment"));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 
   it("asks the item's route for the item, and the person's for the total", async () => {

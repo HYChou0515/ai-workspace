@@ -19,22 +19,25 @@
  * below the panel. `ModalShell` owns all of that (#445/#779), so this asks for
  * it rather than re-deriving it.
  *
- * Making it a real modal added Escape, and the size fields commit on BLUR — so
- * a number typed and not blurred had a new way to vanish. The first answer was
- * `useDirtyClose`, and it could not be made to work: the confirm dialog takes
- * focus in order to be answered, which blurs the field, which saves. The
- * question "discard this?" committed the thing it asked about, in the one
- * browser-independent way there is.
+ * Closing is only closing. The fields commit on BLUR and there is no Save
+ * button, so what "leaving" ought to mean is a question about the panel's save
+ * model rather than about this modal, and two attempts to answer it here were
+ * both worse than leaving it alone.
  *
- * So leaving COMMITS. `commitAndClose` blurs whatever is focused before it
- * closes, which sends the pending edit down the same path a click on another
- * field takes — Escape and the ✕ then behave identically, and identically
- * across browsers (Chrome moves focus on mousedown, Firefox and Safari do not,
- * so relying on the ✕'s own blur saved in one and lost the number in another).
+ * A `useDirtyClose` prompt cannot work at all: `DialogProvider` focuses the
+ * confirm in order for it to be answerable, taking focus blurs the field, and
+ * blurring is what saves — so the question "discard this?" committed the value
+ * it was asking about, by design and in every browser. Committing on the way
+ * out instead made Escape the only keystroke in the app that WRITES, spending
+ * the item OWNER's quota, and the 507 that answers it could not be shown
+ * because this component is unmounted by then.
  *
- * `closeOnBackdrop` stays OFF, and now for a sharper reason than the default:
- * if exits commit, a stray click beside the panel would commit a half-typed
- * number — and this one spends the ITEM OWNER's quota.
+ * So Escape closes, as it does in every other modal here, and a number typed
+ * but never blurred is not sent. That is the same outcome as typing one and
+ * navigating away today, and it errs in the safe direction: a dropped keystroke
+ * rather than a write nobody confirmed. Making that number reachable — a Save
+ * button, or a visible refusal that outlives the panel — is a change to the
+ * save model, not to the frame around it.
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -100,21 +103,11 @@ export function ItemEnvironmentModal({
     onSuccess: refresh,
   });
 
-  // Every deliberate exit — Escape, and the ✕ this component draws itself —
-  // goes through this one handler, so a field that is mid-edit is committed
-  // exactly once and by one path. A ✕ wired straight to `onClose` would drop
-  // the number wherever the browser does not blur on mousedown.
-  const commitAndClose = () => {
-    const focused = document.activeElement;
-    if (focused instanceof HTMLElement) focused.blur();
-    onClose();
-  };
-
   if (!env.data) return null;
 
   return (
     <ModalShell
-      onClose={commitAndClose}
+      onClose={onClose}
       labelledBy={titleId}
       data-testid="item-environment-modal"
       width={420}
@@ -143,7 +136,7 @@ export function ItemEnvironmentModal({
           // NOT `itemenv.close` — that button ends what is running. This one
           // only puts the panel away.
           aria-label={t("itemenv.dismiss")}
-          onClick={commitAndClose}
+          onClick={onClose}
           style={{ border: "none", background: "transparent", cursor: "pointer" }}
         >
           <Icon name="x" size={14} />
@@ -156,7 +149,6 @@ export function ItemEnvironmentModal({
         canEdit={canEdit}
         onClose={() => close.mutate()}
         onSave={(edit) => save.mutate(edit)}
-        saveFailed={save.isError}
       />
     </ModalShell>
   );
