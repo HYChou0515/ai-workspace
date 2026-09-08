@@ -308,7 +308,7 @@ export function AgentPanel({
           "no-room":
               "目前的提示詞本身已經佔滿模型的可讀範圍,整理對話幫不上忙 —— 需要調大模型視窗或縮短提示詞。",
           failed: "整理沒有成功,對話沒有更動。可以再試一次。",
-          unavailable: "目前沒有開啟整理功能。",
+          unavailable: "這個站台沒有開啟整理功能。",
         };
         setComposerHint(said[r.reason] ?? "這段對話還沒有需要壓縮的內容。");
         return;
