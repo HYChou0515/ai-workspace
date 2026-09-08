@@ -591,3 +591,49 @@ def test_a_page_saving_its_schedules_through_the_file_route_is_indexed(
 
     assert r.status_code < 300, r.text
     assert ScheduleIndex(harness.spec).items() == [harness.iid]
+
+
+def test_adding_an_ignore_pattern_cannot_silently_switch_schedules_off() -> None:
+    """`DEFAULT_IGNORES` is the mirror's list, and it now gates schedules too.
+
+    Two consumers, one list. `is_schedule_file` reuses it on purpose — a file
+    the platform declines to back up is not one it should take instructions
+    from. `SandboxSync.mirror` skips ignored paths before it reports a write, so
+    a pattern added there ALSO stops the index ever hearing about the file.
+
+    That makes an edit to a backup-noise list a change to which pages have
+    working schedules, with no error anywhere: the page saves, shows its file,
+    and nothing runs. This pins the ordinary shapes, so adding a pattern that
+    swallows one fails HERE rather than in somebody's missing report.
+    """
+    for page in (
+        "reports/schedules.json",
+        "reports/scrap/schedules.json",
+        "my page/schedules.json",
+        "data/schedules.json",
+        "build/schedules.json",
+        "dist/schedules.json",
+        "tmp/schedules.json",
+        "out/schedules.json",
+    ):
+        assert is_schedule_file(page), (
+            f"{page!r} is no longer a schedule declaration — an ignore pattern now "
+            "covers it, so pages under that folder lose their schedules in silence"
+        )
+
+
+def test_the_derivative_folders_are_still_not_pages() -> None:
+    """The control. The coupling has to keep the exclusion it was added for.
+
+    A vendored or unpacked `schedules.json` under `node_modules/` is not a
+    declaration anybody made — firing work out of a folder the user has never
+    opened is the failure this shares the list to prevent. A guard that only
+    said "everything is a schedule" would satisfy the test above completely.
+    """
+    for noise in (
+        "node_modules/pkg/schedules.json",
+        "app/.venv/lib/schedules.json",
+        "x/__pycache__/schedules.json",
+        ".git/schedules.json",
+    ):
+        assert not is_schedule_file(noise), f"{noise!r} would fire work nobody asked for"

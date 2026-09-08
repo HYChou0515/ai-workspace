@@ -2,7 +2,7 @@
 
 The profile's `triggers.json` is authored once by whoever builds the app. This
 is the other half: a file a WUI writes into its own folder, so a domain expert
-can say "every weekday at 09:00, build my report" without anyone editing the
+can say "every Monday at 09:00, build my report" without anyone editing the
 repo.
 
 Two properties carry the whole design:
@@ -18,11 +18,13 @@ Two properties carry the whole design:
 
 from __future__ import annotations
 
+import pathlib
+import re
 from datetime import datetime
 
 import pytest
 
-from workspace_app.workflow.triggers import fire_window, is_due, period_target
+from workspace_app.workflow.triggers import _DOW, fire_window, is_due, period_target
 from workspace_app.workflow.user_schedules import (
     UserSchedule,
     declared_count,
@@ -334,3 +336,63 @@ def test_a_file_that_is_not_a_schedules_file_declares_nothing_countable():
     assert declared_count("not json at all") is None
     assert declared_count('{"schedules": "nope"}') is None
     assert declared_count("[]") is None
+
+
+# --- what the shipped docs promise, the DSL must accept -----------------------
+
+
+def _fenced_schedule_examples(text: str) -> list[str]:
+    """Every ``{ "schedules": [...] }`` literal in a doc's fenced code blocks.
+
+    Pulled out of the prose rather than duplicated into the test, so the thing
+    asserted IS the thing shipped. A copy would pass forever while the doc drifted.
+    """
+    out: list[str] = []
+    for block in re.findall(r"```[a-z]*\n(.*?)```", text, re.DOTALL):
+        m = re.search(r"\{\s*\n?\s*schedules:\s*\[.*?\n\s*\]\s*\n?\s*\}", block, re.DOTALL)
+        if m is None:
+            continue
+        # The docs show it as a JS object literal — bare keys, so quote them.
+        js = m.group(0)
+        js = re.sub(r"([{,]\s*)([A-Za-z_][A-Za-z0-9_]*)(\s*:)", r'\1"\2"\3', js)
+        js = re.sub(r",(\s*[}\]])", r"\1", js)  # no trailing commas
+        out.append(js)
+    return out
+
+
+def test_the_docs_only_promise_schedules_the_dsl_can_express() -> None:
+    """A doc example that does not validate is a defect in the product.
+
+    The product here IS the documentation: a page author never reads this
+    repo, and an LLM writing their page reads the skill. So an example the
+    engine would refuse is not a typo — it is a feature the reader is told
+    exists, writes down, and then does not get. And the refusal lands in a
+    SERVER log, which is the one place the author cannot see.
+
+    Asserted against the shipped file, so prose and engine cannot drift.
+    """
+    ref = pathlib.Path("sample-skills/wui/reference.md").read_text(encoding="utf-8")
+    examples = _fenced_schedule_examples(ref)
+    assert examples, "no schedules example found — the extractor stopped matching the doc"
+
+    for js in examples:
+        problems = validate_user_schedules(js)
+        assert not problems, f"reference.md shows a schedule the engine refuses: {problems}"
+
+
+def test_no_shipped_doc_offers_a_dow_the_engine_does_not_know() -> None:
+    """`dow` takes ONE day. "weekdays" is not one of them.
+
+    The tempting sentence is "weekdays at nine", because that is how people say
+    it — and the DSL cannot express it in a row. An LLM handed that sentence
+    writes `dow: "weekdays"`, the row is dropped, and the page's author sees a
+    schedule that simply never runs. Five rows is the answer, and the docs have
+    to say so rather than implying one will do.
+    """
+    for name in ("SKILL.md", "reference.md"):
+        text = pathlib.Path("sample-skills/wui", name).read_text(encoding="utf-8")
+        for word in re.findall(r'dow"?\s*:\s*"([a-z]+)"', text):
+            assert word in _DOW, f"{name} offers dow={word!r}, which the engine refuses"
+        assert "weekdays at" not in text, (
+            f"{name} offers 'weekdays at ...', which `every: weekly` cannot express in one row"
+        )

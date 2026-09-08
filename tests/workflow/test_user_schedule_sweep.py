@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 from specstar import SpecStar
@@ -27,10 +27,11 @@ from workspace_app.api.schedule_index import (
     register_schedule_index,
 )
 from workspace_app.resources import make_spec
-from workspace_app.workflow.triggers import register_trigger_store
+from workspace_app.workflow.triggers import register_trigger_store, window_key
 from workspace_app.workflow.user_schedule_sweep import (
     MAX_START_ATTEMPTS,
     UserScheduleSweeper,
+    _in_zone,
 )
 
 ITEM = "i1"
@@ -1162,3 +1163,46 @@ def test_a_page_at_the_cap_still_works():
     asyncio.run(sweeper.tick())
 
     assert len(started.runs) == 3
+
+
+# --- the DST limitation, recorded so it cannot be discovered by accident ------
+
+
+@pytest.mark.parametrize(
+    ("every", "per_hour"),
+    [("hourly", 1), ("minutes:30", 2), ("minutes:15", 4), ("minutes:5", 12)],
+)
+def test_a_sub_daily_schedule_loses_one_hour_of_runs_at_the_autumn_switch(
+    every: str, per_hour: int
+) -> None:
+    """KNOWN LIMITATION, measured — not a bug report, a recorded shape.
+
+    Windows are keyed on the LOCAL wall clock, and at a fall-back the local
+    clock repeats an hour. `Europe/Berlin` 2025-10-26 is local 02:00 twice, so
+    the two real hours from UTC 00:00 to 01:59 produce ONE bucket. A sub-daily
+    schedule therefore fires half as often across that stretch — exactly one
+    hour of runs, once a year, in a DST-observing zone.
+
+    Not fixed, deliberately. Distinguishing the two 02:00s needs the offset in
+    the key, which needs `_in_zone` to hand back an AWARE datetime, which
+    `period_target` then cannot compare against the naive ones it builds — a
+    change to the window mechanism shared with the engineer-authored triggers
+    and #435's notification fingerprint, to buy back one run a year. The zone
+    that avoids it costs nothing: UTC, which is the default.
+
+    Spring forward needs no note: local 02:00 simply never happens, so nothing
+    is skipped that the local clock ever showed. The asymmetry is the point —
+    only the repeat collapses.
+    """
+    base = datetime(2025, 10, 26, 0, 0)  # UTC, the two hours local 02 covers
+    keys = {
+        window_key(every, _in_zone(base + timedelta(minutes=m), "Europe/Berlin"))
+        for m in range(120)
+    }
+    assert len(keys) == per_hour, f"{every} produced {len(keys)} buckets over two real hours"
+
+    # The control: in a zone that does not switch, the same stretch buckets fully.
+    steady = {
+        window_key(every, _in_zone(base + timedelta(minutes=m), "Asia/Taipei")) for m in range(120)
+    }
+    assert len(steady) == per_hour * 2, "the loss must be the SWITCH, not the arithmetic"
