@@ -56,7 +56,7 @@ describe("my-resources: the live panel's layout", () => {
     expect(block).toMatch(/grid-template-columns:\s*repeat\(/);
   });
 
-  it("gives a live environment a different row shape from a stored one", () => {
+  it("gives a live sandbox a different row shape from a stored one", () => {
     // The complaint underneath all of this: two sections that mean different
     // things looked identical, and the only thing separating them was the word
     // on their buttons. The live rows are cards; the storage rows keep the

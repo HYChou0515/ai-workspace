@@ -962,7 +962,26 @@ export const messages = {
   // Dismisses the PANEL. Deliberately not `itemenv.close`, which shuts the
   // sandbox down — one ✕ meaning "put this away" and one button meaning
   // "end what is running" must never share a string.
-  "itemenv.dismiss": { "zh-TW": "關閉", en: "Close" },
+  // 「關閉面板」, not 「關閉」: `resources.live.close` on /my-resources is also
+  // 「關閉」 and it ENDS the sandbox. A zh reader who has been there has learnt
+  // 關閉 = shut it down, so the bare word on a ✕ is the same collision this
+  // pair was separated to avoid — one surface over.
+  "itemenv.dismiss": { "zh-TW": "關閉面板", en: "Close panel" },
+  // The frame is drawn before the answer arrives, so these are what it holds.
+  // Returning null instead meant clicking 沙盒 did nothing visible — and since
+  // the parent already believed it was open, a second click did nothing either.
+  "itemenv.loading": { "zh-TW": "讀取中…", en: "Loading…" },
+  "itemenv.loadFailed": {
+    "zh-TW": "讀不到這個沙盒的狀態。關掉再開一次。",
+    en: "Couldn't read this sandbox's status. Close it and open it again.",
+  },
+  // Every save happens while this panel is on screen — the exits deliberately
+  // do not commit — so a refusal has somewhere to appear. 507 is a normal
+  // answer here: the size spends the ITEM OWNER's quota, not the editor's.
+  "itemenv.saveFailed": {
+    "zh-TW": "沒有存起來:這個大小沒有套用,再試一次。",
+    en: "Not saved — that size wasn't applied. Try again.",
+  },
   "itemenv.status.running": { "zh-TW": "執行中", en: "Running" },
   "itemenv.status.idle": { "zh-TW": "未啟動", en: "Not running" },
   "itemenv.close": { "zh-TW": "關閉沙盒", en: "Close sandbox" },

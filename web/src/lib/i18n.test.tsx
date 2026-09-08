@@ -46,11 +46,33 @@ const NOT_THE_SANDBOX = new Set([
 // Vitest's cwd is `web/`.
 const SRC = join(process.cwd(), "src");
 
-/** Assembled rather than written out, so the one line that has to NAME the
- *  banned term — the line doing the banning — is not itself an offence. The
- *  alternative, exempting this file, would leave the guard unable to see the
- *  place most likely to grow a stale copy of the word. */
-const OLD_TERM = ["\u57f7\u884c", "\u74b0\u5883"].join("");
+/**
+ * What a hardcoded string may not say. Assembled from escapes rather than
+ * written out, so the lines doing the banning are not themselves offences —
+ * exempting this whole file instead would blind the guard to the place most
+ * likely to grow a stale copy.
+ *
+ * The zh needle is 環境 alone, NOT 執行環境. The first version banned the
+ * four-character form and would therefore have caught nothing: both strings
+ * this rename actually had to hand-fix (`AgentPanel`'s compaction hints) said
+ * 「這個環境…」. A guard aimed past its own stated reason for existing is worse
+ * than none, because it reports success.
+ *
+ * 環境變數 — environment VARIABLES — is a different noun and is removed before
+ * the check rather than allow-listed by key, because in source there is no key
+ * to list.
+ *
+ * English cannot ban the bare word: `itemEnvironmentApi`, the `/environment`
+ * route and this component's own name are all legitimate. It bans the PROSE the
+ * rename removed.
+ */
+const ZH_TERM = "\u74b0\u5883";
+const ZH_ALLOWED = "\u74b0\u5883\u8b8a\u6578";
+// Split so this line is not itself an offence, same reason as the zh needles.
+const EN_TERMS = [
+  new RegExp("execution " + "environment", "i"),
+  new RegExp("live " + "environments?", "i"),
+];
 
 function sourceFiles(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
@@ -112,7 +134,7 @@ describe("i18n #171 term sweep", () => {
       if (NOT_THE_SANDBOX.has(key)) continue;
       const zh = (entry as Record<string, string>)["zh-TW"];
       const en = (entry as Record<string, string>).en;
-      expect(`${key} → ${zh}`).not.toMatch(/環境/);
+      expect(`${key} → ${zh}`).not.toMatch(new RegExp(ZH_TERM));
       expect(`${key} → ${en}`).not.toMatch(/environments?\b/i);
     }
   });
@@ -121,8 +143,8 @@ describe("i18n #171 term sweep", () => {
    * `messages` is not the only place a user-visible string lives, and the two
    * this rename actually had to hand-fix were not in it: `AgentPanel` writes
    * some of its own copy as JSX literals. A guard over the table alone would
-   * have let 執行環境 back in through them — while `contribution.md` cites this
-   * file as the thing that stops exactly that.
+   * have let the old word back in through them — while `contribution.md` cites
+   * this file as the thing that stops exactly that.
    *
    * It reads LINES and skips comment ones, rather than trying to match quoted
    * literals. The obvious `/(["\'`])(...)\1/` spelling is worse than useless
@@ -143,7 +165,10 @@ describe("i18n #171 term sweep", () => {
         .forEach((line, i) => {
           const code = line.trim();
           if (code.startsWith("//") || code.startsWith("*") || code.startsWith("/*")) return;
-          if (code.includes(OLD_TERM)) offenders.push(`${relative(SRC, file)}:${i + 1}`);
+          const zh = code.split(ZH_ALLOWED).join("");
+          if (zh.includes(ZH_TERM) || EN_TERMS.some((re) => re.test(code))) {
+            offenders.push(`${relative(SRC, file)}:${i + 1}`);
+          }
         });
     }
     expect(offenders).toEqual([]);

@@ -49,11 +49,22 @@ const CAPPED = {
 
 const UNCAPPED = { ...CAPPED, limits: { count: 0, cpu: 0, memory_bytes: 0, disk_bytes: 0 } };
 
-function route(resources: unknown, environment: unknown = ENVIRONMENT) {
+function route(
+  resources: unknown,
+  environment: unknown = ENVIRONMENT,
+  { refuseSave = false, hangLoad = false } = {},
+) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
-    if (init?.method === "PUT") return json({});
-    if (url.includes("/environment")) return json(environment);
+    if (init?.method === "PUT") {
+      return refuseSave
+        ? new Response(JSON.stringify({ detail: "sandbox_quota_exceeded" }), { status: 507 })
+        : json({});
+    }
+    if (url.includes("/environment")) {
+      if (hangLoad) return new Promise<Response>(() => {});
+      return json(environment);
+    }
     if (url.includes("/me/resources")) return json(resources);
     return json({});
   });
@@ -192,6 +203,59 @@ describe("ItemEnvironmentModal", () => {
 
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     expect(puts(fetcher)).toEqual([]);
+  });
+
+  it("commits when the person TABS off the field, ✕ included", async () => {
+    // The rule is "you moved focus off the field", not "you closed". Tabbing to
+    // the ✕ is a focus move the PERSON made, so the value goes out — and then
+    // Enter closes without adding anything. This pins behaviour that already
+    // held; it exists because the comment above it once claimed the opposite,
+    // and a sentence is not a guard.
+    const fetcher = route(CAPPED);
+    vi.stubGlobal("fetch", fetcher);
+    const onClose = vi.fn();
+    renderWithQuery(
+      <ItemEnvironmentModal slug="rca" itemId="i-1" canEdit onClose={onClose} />,
+    );
+
+    await waitFor(() => expect(screen.getByTestId("cpu-input")).toBeTruthy());
+    await userEvent.type(screen.getByTestId("cpu-input"), "3");
+    await userEvent.tab({ shift: true });
+
+    expect(document.activeElement).toBe(screen.getByTestId("dismiss-item-environment"));
+    expect(puts(fetcher)).toEqual([JSON.stringify({ cpu_cores: 3, memory: null })]);
+
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(puts(fetcher).length).toBe(1);
+  });
+
+  it("is a modal from the moment it opens, not once the fetch lands", async () => {
+    // It used to `return null` until `/environment` answered. Clicking 沙盒 then
+    // did nothing visible — and because the parent already believed it was
+    // open, a second click did nothing either.
+    vi.stubGlobal("fetch", route(CAPPED, ENVIRONMENT, { hangLoad: true }));
+    renderWithQuery(
+      <ItemEnvironmentModal slug="rca" itemId="i-1" canEdit onClose={() => {}} />,
+    );
+
+    expect(await screen.findByTestId("item-environment-modal")).toBeTruthy();
+    expect(screen.getByTestId("item-environment-pending")).toBeTruthy();
+  });
+
+  it("says so when the server refuses the size", async () => {
+    // Reachable precisely because no exit commits: the save is dispatched while
+    // this is still on screen, so there is somewhere for the 507 to be read.
+    vi.stubGlobal("fetch", route(CAPPED, ENVIRONMENT, { refuseSave: true }));
+    renderWithQuery(
+      <ItemEnvironmentModal slug="rca" itemId="i-1" canEdit onClose={() => {}} />,
+    );
+
+    await waitFor(() => expect(screen.getByTestId("cpu-input")).toBeTruthy());
+    await userEvent.type(screen.getByTestId("cpu-input"), "3");
+    await userEvent.tab({ shift: true });
+
+    expect(await screen.findByTestId("save-failed")).toBeTruthy();
   });
 
   it("asks the item's route for the item, and the person's for the total", async () => {

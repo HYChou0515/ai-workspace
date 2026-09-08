@@ -47,6 +47,10 @@ export type ItemEnvironmentPanelProps = {
    *  modal is deliberately not that: its exits neither save nor ask, and the
    *  comment in `ItemEnvironmentModal` says why both were tried and withdrawn. */
   onSave?: (edit: { cpuCores?: number | null; memory?: string | null }) => void;
+  /** Whether the last save was REFUSED. Every save is dispatched while this
+   *  panel is on screen — the modal's exits do not commit — so a refusal has
+   *  somewhere to be read, which is what makes fire-and-forget saving honest. */
+  saveFailed?: boolean;
 };
 
 function Meter({ used, limit }: { used: number; limit: number }) {
@@ -71,6 +75,7 @@ export function ItemEnvironmentPanel({
   canEdit,
   onClose,
   onSave,
+  saveFailed,
 }: ItemEnvironmentPanelProps) {
   const t = useT();
   const [draft, setDraft] = useState<string>(
@@ -181,6 +186,11 @@ export function ItemEnvironmentPanel({
           />
           )}
           {canEdit ? null : <p className="detail">{t("itemenv.readonly")}</p>}
+          {saveFailed ? (
+            <p data-testid="save-failed" className="detail" role="alert">
+              {t("itemenv.saveFailed")}
+            </p>
+          ) : null}
 
           {/* Memory had no control at all — the field existed on the item, the
               route accepted it, and nothing could set it. P9's SIGKILL note

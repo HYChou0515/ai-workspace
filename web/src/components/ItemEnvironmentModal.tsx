@@ -32,23 +32,28 @@
  * the item OWNER's quota, and the 507 that answers it could not be shown
  * because this component is unmounted by then.
  *
- * So the exits close, and nothing else. A number typed but never blurred is not
- * sent — the same outcome as typing one and navigating away today, and the safe
- * direction: a dropped keystroke rather than a write nobody confirmed.
+ * The rule that does hold, and it is about FOCUS rather than about closing:
+ * moving focus off a field commits it, and the exits do not move focus. Tab to
+ * the ✕ and the field you left is saved — you moved the focus, and that is this
+ * panel's save gesture. Click the ✕ or press Escape and nothing is sent: Escape
+ * never moved focus, and `preventDefault` on the ✕'s mousedown withdraws the
+ * move a click would otherwise make.
  *
- * That has to be arranged for the ✕, which otherwise disagrees with Escape: a
- * click moves focus, the field saves on blur, and so the SAME click saved in
- * Chrome and dropped the number in Firefox and Safari. `preventDefault` on its
- * mousedown withdraws the focus move, leaving the click itself untouched — one
- * meaning for both exits, in every browser. It does change what the ✕ used to
- * do in Chrome, deliberately: the old behaviour was an artefact of focus
- * mechanics rather than a decision, and it was never the behaviour anywhere
- * else in this app.
+ * An earlier version of this comment claimed "closing is only closing", which
+ * is false the moment anyone reaches the ✕ by keyboard. The behaviour was
+ * right; the sentence was not.
  *
- * Committing stays where it always was — blurring a field INSIDE the panel, by
- * tabbing or clicking another one. Making a typed-and-unblurred number
- * reachable (a Save button) or a refused save visible (a failure surface that
- * outlives the panel) are changes to the save model, not to the frame.
+ * The `preventDefault` does change what a ✕ CLICK used to do in Chrome, on
+ * purpose. The old behaviour was an artefact of which browsers focus a button
+ * on mousedown — the same click saved in Chrome and dropped the number in
+ * Firefox and Safari — rather than anything anyone decided.
+ *
+ * Because no exit commits, every save is dispatched while this is on screen,
+ * which is what lets a refusal be shown at all (`saveFailed`). What is still
+ * missing, and is a save-model decision rather than a frame one: a number typed
+ * and never blurred is discarded with nothing said, and a save refused after a
+ * tab-to-✕-then-Enter lands with nobody left to read it. Both want a Save
+ * button rather than more focus bookkeeping.
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -114,8 +119,6 @@ export function ItemEnvironmentModal({
     onSuccess: refresh,
   });
 
-  if (!env.data) return null;
-
   return (
     <ModalShell
       onClose={onClose}
@@ -138,9 +141,21 @@ export function ItemEnvironmentModal({
         }}
       >
         <Icon name="settings" size={15} />
-        <strong id={titleId} style={{ flex: 1, minWidth: 0 }}>
+        {/* A heading ELEMENT: `labelledBy` names the dialog either way, but a
+            <strong> leaves the dialog with nothing for heading navigation to
+            land on. */}
+        <h2
+          id={titleId}
+          style={{
+            flex: 1,
+            minWidth: 0,
+            margin: 0,
+            fontSize: "var(--text-body)",
+            fontWeight: 600,
+          }}
+        >
           {t("itemenv.heading")}
-        </strong>
+        </h2>
         <button
           type="button"
           data-testid="dismiss-item-environment"
@@ -157,13 +172,24 @@ export function ItemEnvironmentModal({
         </button>
       </div>
 
-      <ItemEnvironmentPanel
-        env={env.data}
-        budget={budgetFrom(resources.data)}
-        canEdit={canEdit}
-        onClose={() => close.mutate()}
-        onSave={(edit) => save.mutate(edit)}
-      />
+      {env.data ? (
+        <ItemEnvironmentPanel
+          env={env.data}
+          budget={budgetFrom(resources.data)}
+          canEdit={canEdit}
+          onClose={() => close.mutate()}
+          onSave={(edit) => save.mutate(edit)}
+          saveFailed={save.isError}
+        />
+      ) : (
+        <p
+          data-testid="item-environment-pending"
+          className="detail"
+          style={{ margin: 0, padding: "var(--space-12)", color: "var(--text-paper-d)" }}
+        >
+          {t(env.isError ? "itemenv.loadFailed" : "itemenv.loading")}
+        </p>
+      )}
     </ModalShell>
   );
 }
