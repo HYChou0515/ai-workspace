@@ -160,7 +160,7 @@ workspace 檔案視圖。
 ## 11. 常見問題
 
 - **agent 寫了檔卻沒看到？** 回合結束會自動重整；若仍沒有，手動在檔案樹做一次操作或重整。
-- **agent 用 `python /script.py` 找不到檔？** 需要執行環境支援 user namespace 隔離
+- **agent 用 `python /script.py` 找不到檔？** 需要部署環境支援 user namespace 隔離
   （見 [deployment.md](deployment.md) §4）；否則絕對路徑會打到 host 的根目錄。
 - **聊天紀錄不見了？** 若後端用記憶體儲存（預設），重啟後端會清空；要保留請改用持久化
   儲存（見 [deployment.md](deployment.md) §5）。
