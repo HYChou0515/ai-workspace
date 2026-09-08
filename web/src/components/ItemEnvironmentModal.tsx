@@ -19,24 +19,29 @@
  * below the panel. `ModalShell` owns all of that (#445/#779), so this asks for
  * it rather than re-deriving it.
  *
- * The dirty guard is not optional decoration. The size fields commit on BLUR,
- * and the old `×` happened to save on the way out because clicking it moved
- * focus. Escape does not, so the very act of making this a real modal is what
- * introduces a way to lose a typed number — `useDirtyClose` goes in with it.
+ * Making it a real modal added Escape, and the size fields commit on BLUR — so
+ * a number typed and not blurred had a new way to vanish. The first answer was
+ * `useDirtyClose`, and it could not be made to work: the confirm dialog takes
+ * focus in order to be answered, which blurs the field, which saves. The
+ * question "discard this?" committed the thing it asked about, in the one
+ * browser-independent way there is.
  *
- * WHAT counts as dirty is decided in `ItemEnvironmentPanel`, beside the drafts,
- * and the rule is "typed and not yet sent" rather than "differs from what the
- * server stores". The comment there says why; the short version is that the
- * field and the record spell a memory size differently, and that the ✕ blurs on
- * its way out and so saves BEFORE this handler runs.
+ * So leaving COMMITS. `commitAndClose` blurs whatever is focused before it
+ * closes, which sends the pending edit down the same path a click on another
+ * field takes — Escape and the ✕ then behave identically, and identically
+ * across browsers (Chrome moves focus on mousedown, Firefox and Safari do not,
+ * so relying on the ✕'s own blur saved in one and lost the number in another).
+ *
+ * `closeOnBackdrop` stays OFF, and now for a sharper reason than the default:
+ * if exits commit, a stray click beside the panel would commit a half-typed
+ * number — and this one spends the ITEM OWNER's quota.
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useId, useState } from "react";
+import { useId } from "react";
 
 import { itemEnvironmentApi } from "../api/itemEnvironment";
 import { myResourcesApi } from "../api/myResources";
-import { useDirtyClose } from "../hooks/useDirtyClose";
 import { useT } from "../lib/i18n";
 import { Icon } from "./Icon";
 import { ItemEnvironmentPanel } from "./ItemEnvironmentPanel";
@@ -62,8 +67,6 @@ export function ItemEnvironmentModal({
   const t = useT();
   const qc = useQueryClient();
   const titleId = useId();
-  // Reported UP by the panel, because that is where the drafts are made.
-  const [dirty, setDirty] = useState(false);
 
   const env = useQuery({
     queryKey: ["item-environment", slug, itemId],
@@ -98,15 +101,20 @@ export function ItemEnvironmentModal({
   });
 
   // Every deliberate exit — Escape, and the ✕ this component draws itself —
-  // goes through this one handler. A ✕ still wired to the bare `onClose` would
-  // throw the work away in silence while Escape politely asked.
-  const attemptClose = useDirtyClose(dirty, onClose);
+  // goes through this one handler, so a field that is mid-edit is committed
+  // exactly once and by one path. A ✕ wired straight to `onClose` would drop
+  // the number wherever the browser does not blur on mousedown.
+  const commitAndClose = () => {
+    const focused = document.activeElement;
+    if (focused instanceof HTMLElement) focused.blur();
+    onClose();
+  };
 
   if (!env.data) return null;
 
   return (
     <ModalShell
-      onClose={attemptClose}
+      onClose={commitAndClose}
       labelledBy={titleId}
       data-testid="item-environment-modal"
       width={420}
@@ -135,7 +143,7 @@ export function ItemEnvironmentModal({
           // NOT `itemenv.close` — that button ends what is running. This one
           // only puts the panel away.
           aria-label={t("itemenv.dismiss")}
-          onClick={attemptClose}
+          onClick={commitAndClose}
           style={{ border: "none", background: "transparent", cursor: "pointer" }}
         >
           <Icon name="x" size={14} />
@@ -148,7 +156,7 @@ export function ItemEnvironmentModal({
         canEdit={canEdit}
         onClose={() => close.mutate()}
         onSave={(edit) => save.mutate(edit)}
-        onDirtyChange={setDirty}
+        saveFailed={save.isError}
       />
     </ModalShell>
   );

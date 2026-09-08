@@ -16,7 +16,7 @@
  * explicable.
  */
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import type { ItemEnvironment } from "../api/itemEnvironment";
 import type { SizeEdit } from "./ItemEnvironmentSize";
@@ -44,11 +44,10 @@ export type ItemEnvironmentPanelProps = {
    *  caller turns into "keep what is stored" — the distinction that stops a cpu
    *  edit from clearing memory. */
   onSave?: (edit: { cpuCores?: number | null; memory?: string | null }) => void;
-  /** Reports whether a field holds something that has been TYPED AND NOT SENT,
-   *  so the modal around it can guard its exits (#779). Measured here because
-   *  this is where the drafts are made — see the rule beside `dirty` for why it
-   *  is not "differs from what the server stores". */
-  onDirtyChange?: (dirty: boolean) => void;
+  /** Whether the last save was REFUSED. Leaving the panel commits what is in
+   *  the fields, so a refusal has to be on screen or the number is gone and
+   *  nobody said so. */
+  saveFailed?: boolean;
 };
 
 function Meter({ used, limit }: { used: number; limit: number }) {
@@ -73,45 +72,32 @@ export function ItemEnvironmentPanel({
   canEdit,
   onClose,
   onSave,
-  onDirtyChange,
+  saveFailed,
 }: ItemEnvironmentPanelProps) {
   const t = useT();
-  const loadedCpu = env.statedCpuCores === null ? "" : String(env.statedCpuCores);
-  const loadedMemory = env.statedMemoryBytes === null ? "" : String(env.statedMemoryBytes);
-  const [draft, setDraft] = useState<string>(loadedCpu);
-  const [memoryDraft, setMemoryDraft] = useState<string>(loadedMemory);
-  // What each field has already been SENT as — seeded with what it loaded.
-  const [sent, setSent] = useState({ cpu: loadedCpu, memory: loadedMemory });
+  const [draft, setDraft] = useState<string>(
+    env.statedCpuCores === null ? "" : String(env.statedCpuCores),
+  );
+  const [memoryDraft, setMemoryDraft] = useState<string>(
+    env.statedMemoryBytes === null ? "" : String(env.statedMemoryBytes),
+  );
 
   /**
-   * Dirty means TYPED AND NOT YET SENT — the only state in which leaving costs
-   * the person anything. It is deliberately not "the field differs from what
-   * the server stores", which was the first rule here and was wrong twice over.
+   * This panel APPLIES AS YOU GO: each field commits on blur and there is no
+   * Save button, which makes it the "live-applying" case the modal rules name
+   * as having nothing to lose. It was briefly treated as a form instead —
+   * `useDirtyClose` plus a record of what had been sent — and that could not be
+   * made to work, for a reason worth keeping: the confirm dialog TAKES FOCUS in
+   * order to be answered, which blurs the field, which saves. The question
+   * "discard this?" committed the thing it was asking about. So the exits
+   * commit instead, and `ItemEnvironmentModal` blurs before it closes so that
+   * Escape and the ✕ send the same thing in every browser.
    *
-   * The field holds the spelling the placeholder asks for (`1G`) and the record
-   * holds a byte count (`1073741824`), so a saved memory size compared unequal
-   * forever and every exit afterwards asked about work already on disk. CPU had
-   * the same shape wherever the person's spelling was not the server's — `2.50`
-   * and `2.5` are one number and two strings.
-   *
-   * And the fields commit on BLUR, which the ✕ triggers on its way out: the
-   * save was already in flight while the prompt asked whether to discard it,
-   * and answering "discard" discarded nothing. Recording what was sent, at the
-   * moment it is sent, answers the question the prompt is actually asking.
+   * What that costs is that a REFUSED save must be visible — hence `saveFailed`
+   * below — because there is no longer a prompt standing between the person and
+   * the door.
    */
-  const dispatch = (next: Partial<{ cpu: string; memory: string }>, edit: SizeEdit) => {
-    // Nothing is recorded as sent when there is nobody to send it — otherwise a
-    // panel with no save handler would report itself clean and let the exit
-    // drop the value in silence, which is the failure this whole rule exists
-    // to prevent, wearing the opposite sign.
-    if (!onSave) return;
-    setSent((s) => ({ ...s, ...next }));
-    onSave(edit);
-  };
-  const dirty = draft !== sent.cpu || memoryDraft !== sent.memory;
-  useEffect(() => {
-    onDirtyChange?.(dirty);
-  }, [dirty, onDirtyChange]);
+  const dispatch = (edit: SizeEdit) => onSave?.(edit);
 
   const stated = env.statedCpuCores;
   const effective = env.effectiveCpuCores;
@@ -176,7 +162,7 @@ export function ItemEnvironmentPanel({
                 disabled={!canEdit || env.running}
                 onClick={() => {
                   setDraft("");
-                  dispatch({ cpu: "" }, { cpuCores: null });
+                  dispatch({ cpuCores: null });
                 }}
               >
                 {t("itemenv.size.reset")}
@@ -210,10 +196,15 @@ export function ItemEnvironmentPanel({
             // change now would be promising something the protocol cannot do.
             disabled={!canEdit || env.running}
             onChange={(e) => setDraft(e.target.value)}
-            onBlur={() => dispatch({ cpu: draft }, { cpuCores: draft === "" ? null : Number(draft) })}
+            onBlur={() => dispatch({ cpuCores: draft === "" ? null : Number(draft) })}
           />
           )}
           {canEdit ? null : <p className="detail">{t("itemenv.readonly")}</p>}
+          {saveFailed ? (
+            <p data-testid="save-failed" className="detail" role="alert">
+              {t("itemenv.saveFailed")}
+            </p>
+          ) : null}
 
           {/* Memory had no control at all — the field existed on the item, the
               route accepted it, and nothing could set it. P9's SIGKILL note
@@ -250,7 +241,7 @@ export function ItemEnvironmentPanel({
               disabled={!canEdit || env.running}
               onChange={(e) => setMemoryDraft(e.target.value)}
               onBlur={() =>
-                dispatch({ memory: memoryDraft }, { memory: memoryDraft === "" ? null : memoryDraft })
+                dispatch({ memory: memoryDraft === "" ? null : memoryDraft })
               }
             />
           )}

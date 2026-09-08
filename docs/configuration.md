@@ -347,7 +347,7 @@ DELETE /admin/user-resources/{user_id}   # 清掉覆寫,回全站預設
 被擋的人自己解決的地方是 **`/my-resources`**:列出活著的沙盒(附**關閉**鈕)與各 item 的
 儲存用量,兩者都配一條用量對上限的量表。實測一輪:`per_user.count: 1` 時第二個 item 的 exec 回
 `507 {"error":"sandbox_quota_exceeded","dimension":"sandboxes","used":2,"limit":1.0}` → 進畫面顯示
-`Live environments 1 / 1` → 按 Close → `0 / 1 · No live environments` → 同一個 exec 回 200。
+`Live sandboxes 1 / 1` → 按 Close → `0 / 1 · No live sandboxes.` → 同一個 exec 回 200。
 
 superuser 在同一頁的最下方多一個**個人額度**區塊,可以直接把某個人調高(見上一節)。
 
