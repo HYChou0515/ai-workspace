@@ -972,17 +972,29 @@ def create_app(
     schedule_index = ScheduleIndex(spec)
 
     def _note_schedule_file(item_id: str, path: str) -> None:
-        """Record that this item now has schedules. Runs on EVERY write in the
-        platform, so the test is exact and cheap and the work only happens for
+        """Record that this item now has schedules.
+
+        Wired to BOTH ways bytes reach the durable store: the facade's write
+        tail, and `SandboxSync.mirror` for files written inside the sandbox.
+        One callback for the two, so they cannot disagree about what counts.
+        Either way the test is exact and cheap and the work only happens for
         the one filename that means anything here.
 
-        ⚠️ `record` is blocking specstar I/O and this runs on the event loop —
-        `_landed` is synchronous by design, because it sits in the write tail
-        that every path shares, so offloading here would mean making that whole
-        chain async. NOT done: the cost is paid only by an actual write of
-        `schedules.json`, which is a person saving a page, not a hot path. If
-        that ever stops being true the answer is an async hook, not a
-        fire-and-forget task whose failures nobody sees.
+        ⚠️ `record` is blocking specstar I/O and both callers are on the event
+        loop — `_landed` is synchronous by design, because it sits in the write
+        tail that every path shares, so offloading there would mean making that
+        whole chain async. NOT done, and the reason has to cover both callers:
+        the cost is paid only by an actual CHANGE to a `schedules.json` — a
+        person saving a page through the facade, or an agent's `exec` writing
+        one, which the mirror uploads once because an unchanged file never
+        reaches here. Neither is a hot path. If that stops being true the answer
+        is an async hook, not a fire-and-forget task whose failures nobody sees.
+
+        There is no matching unregister on either door, deliberately. A path
+        leaves the index one way only: the sweep reads it, gets `FileNotFound`,
+        CONFIRMS that against the live store, and forgets it then. A hook here
+        cannot tell "deleted" from "the mirror declined to persist it this
+        pass", and guessing wrong is what silently stops a daily report.
         """
         if is_schedule_file(path):
             schedule_index.record(item_id, path)
