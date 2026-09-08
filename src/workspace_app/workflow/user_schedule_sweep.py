@@ -34,7 +34,7 @@ from specstar import SpecStar
 from ..api.schedule_index import ScheduleIndex
 from ..filestore.protocol import FileNotFound
 from .triggers import SpecstarTriggerStore, fire_window, is_due
-from .user_schedules import trigger_id_for, usable_rows
+from .user_schedules import declared_count, trigger_id_for, usable_rows
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +79,18 @@ MAX_START_ATTEMPTS = 3
 #: row. The sweep already refuses to make that inference on its FIRST read; this
 #: is what lets the confirming read refuse it too.
 UNKNOWN = object()
+
+#: How long the confirming read may take before it counts as "could not say".
+#:
+#: That read reaches the LIVE workspace, and on the hosted backend a cold one is
+#: a full restore. `tick` is sequential over items, so an unbounded wait behind
+#: ONE deleted schedule delays every other item's schedules on that pod — against
+#: a sweeper whose whole promise is that the interval is the latest a run will be.
+#:
+#: Timing out is not evidence of absence. It is :data:`UNKNOWN`: the path stays
+#: indexed and the next tick asks again, which costs one tick rather than the
+#: schedule.
+DEFAULT_CONFIRM_TIMEOUT_S = 10.0
 
 ReadFile = Callable[[str, str], Awaitable[bytes]]
 OwnerOf = Callable[[str], str]
@@ -169,6 +181,7 @@ class UserScheduleSweeper:
         workflows_for: WorkflowsFor | None = None,
         now: Callable[[], datetime] = _utc_now,
         max_rows: int = DEFAULT_MAX_ROWS,
+        confirm_timeout_s: float = DEFAULT_CONFIRM_TIMEOUT_S,
     ) -> None:
         self._index = index
         self._read = read
@@ -184,6 +197,7 @@ class UserScheduleSweeper:
         self._workflows_for = workflows_for
         self._now = now
         self._max_rows = max_rows
+        self._confirm_timeout_s = confirm_timeout_s
         self._store = SpecstarTriggerStore(spec)
         self._failures: dict[tuple[str, str], int] = {}
 
@@ -232,9 +246,21 @@ class UserScheduleSweeper:
             # tried and failed.
             return None
         try:
-            return await self._read_live(item_id, path)
+            return await asyncio.wait_for(self._read_live(item_id, path), self._confirm_timeout_s)
         except (FileNotFound, FileNotFoundError):
             return None
+        except TimeoutError:
+            # Bounded, because this read can be a whole sandbox restore and the
+            # tick is sequential: one slow answer would delay every other item's
+            # schedules on this pod. A timeout says nothing about whether the
+            # file is there, so it is UNKNOWN and the path stays indexed.
+            logger.warning(
+                "user schedules: confirming %s %s took longer than %.0fs — leaving it indexed",
+                item_id,
+                path,
+                self._confirm_timeout_s,
+            )
+            return UNKNOWN
         except Exception:
             logger.exception(
                 "user schedules: could not confirm whether %s %s still exists — leaving it indexed",
@@ -291,8 +317,11 @@ class UserScheduleSweeper:
             )
             return 0
 
-        rows, problems = usable_rows(raw)
-        if len(rows) + len(problems) > self._max_rows:
+        # BEFORE the parse, because the cap exists to bound exactly that work.
+        # Counting after it meant a runaway file paid its full parse and was then
+        # refused — every tick, on every pod, for as long as it stayed indexed.
+        declared = declared_count(raw)
+        if declared is not None and declared > self._max_rows:
             # The WHOLE file, unlike a single invalid row. A file with a thousand
             # entries was not typed by a person, so there is no good half worth
             # preserving — and half-processing would leave a durable ledger row
@@ -302,10 +331,12 @@ class UserScheduleSweeper:
                 "none will run until it is reduced",
                 item_id,
                 path,
-                len(rows) + len(problems),
+                declared,
                 self._max_rows,
             )
             return 0
+
+        rows, problems = usable_rows(raw)
         if problems:
             # Named, not raised, and PER ROW: a typo in one schedule must not
             # stop the others in the same file. Whole-file rejection is how
@@ -322,11 +353,15 @@ class UserScheduleSweeper:
         # failed an assertion deep inside, and surfaced as a generic "could not
         # start" in a log the page's author never reads. One mistyped id must
         # not stop the other schedules in the same file.
-        offered = (
-            None
-            if self._workflows_for is None
-            else set(await asyncio.to_thread(self._workflows_for, item_id) or ())
-        )
+        offered: set[str] | None = None
+        if self._workflows_for is not None:
+            answer = await asyncio.to_thread(self._workflows_for, item_id)
+            # `None` from the RESOLVER means unrestricted, exactly as an unwired
+            # resolver does — `set(... or ())` collapsed it to the empty set,
+            # which refuses every row. The outer check only ever covered "no
+            # resolver"; a resolver that answers None is the documented value and
+            # it did the opposite, silently, once per row per tick.
+            offered = None if answer is None else set(answer)
         now_utc = self._now()
         fired = 0
         for row in rows:

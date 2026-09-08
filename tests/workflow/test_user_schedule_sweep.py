@@ -390,6 +390,173 @@ def test_a_schedule_in_a_zone_does_not_fire_before_its_moment_there():
     assert started.runs == []
 
 
+def test_a_slow_confirmation_does_not_hold_up_every_other_item():
+    """The confirming read reaches the LIVE workspace, and on the hosted backend
+    that can mean a full sandbox restore. `tick` is sequential over items, so one
+    deleted schedule behind a cold workspace delays every other item's schedules
+    on that pod — against a sweeper whose whole promise is "the interval is the
+    latest a run will be".
+
+    Bounded, so a slow answer costs one tick's worth of one path rather than the
+    sweep. Timing out is not "confirmed gone": it is the third answer, and the
+    path stays indexed.
+    """
+
+    async def _never_answers(item_id: str, path: str) -> bytes:
+        await asyncio.sleep(30)
+        raise AssertionError("should have been cut off long before this")
+
+    spec = _spec()
+    index = ScheduleIndex(spec)
+    index.record(ITEM, PATH)
+
+    sweeper = UserScheduleSweeper(
+        spec=spec,
+        index=index,
+        read=_Files().read,
+        read_live=_never_answers,
+        start=_Started(),
+        owner_of=lambda _item: "alice",
+        now=lambda: datetime(2026, 9, 5, 9, 30),
+        confirm_timeout_s=0.05,
+    )
+
+    started_at = time.monotonic()
+    asyncio.run(sweeper.tick())
+    took = time.monotonic() - started_at
+
+    assert took < 5, f"the tick waited {took:.1f}s on one confirmation"
+    assert index.items() == [ITEM], "a timeout was read as a deletion"
+
+
+def test_the_cap_counts_schedules_not_complaints():
+    """A file of 400 bad rows declares 400 schedules, not 1200.
+
+    `validate_user_schedules` emits several strings per bad row, so counting
+    rows-plus-problems made the cap fire on files that never reached it — and the
+    operator-facing message named the inflated number, so the one place they
+    could check the claim disagreed with the file in front of them.
+    """
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    started = _Started()
+    # Three problems each, well under a cap of 100 by any honest count.
+    bad = {"every": "monthly", "dom": 99, "at": "9am", "run": "x"}
+    rows = [DAILY, *[bad] * 40]
+    files = _Files(**{f"{ITEM}{PATH}": _file(*rows)})
+
+    sweeper = UserScheduleSweeper(
+        spec=spec,
+        index=ScheduleIndex(spec),
+        read=files.read,
+        read_live=files.read,
+        start=started,
+        owner_of=lambda _item: "alice",
+        now=lambda: datetime(2026, 9, 5, 9, 30),
+        max_rows=100,
+    )
+    asyncio.run(sweeper.tick())
+
+    assert [r[1] for r in started.runs] == ["build-report"], (
+        "the whole file was refused against a cap it never reached"
+    )
+
+
+def test_a_file_over_the_cap_is_refused_before_it_is_parsed():
+    """The guard bounds the work, so it has to come first.
+
+    Parsing every row and THEN refusing means a runaway file costs its full
+    parse — one `json.dumps` plus one `json.loads` plus validation per row —
+    every tick, on every pod, for as long as it stays indexed. Measured at 327ms
+    of event-loop time for 20 000 rows, firing nothing.
+    """
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    started = _Started()
+    files = _Files(**{f"{ITEM}{PATH}": _file(*[DAILY] * 50)})
+
+    parsed: list[int] = []
+    import workspace_app.workflow.user_schedule_sweep as mod
+
+    real = mod.usable_rows
+
+    def _counting(raw: str):
+        parsed.append(1)
+        return real(raw)
+
+    mod.usable_rows = _counting  # ty: ignore[invalid-assignment]
+    try:
+        sweeper = UserScheduleSweeper(
+            spec=spec,
+            index=ScheduleIndex(spec),
+            read=files.read,
+            read_live=files.read,
+            start=started,
+            owner_of=lambda _item: "alice",
+            now=lambda: datetime(2026, 9, 5, 9, 30),
+            max_rows=10,
+        )
+        asyncio.run(sweeper.tick())
+    finally:
+        mod.usable_rows = real
+
+    assert started.runs == []
+    assert parsed == [], "the file was fully parsed before the cap refused it"
+
+
+def test_an_unset_workflow_ceiling_means_unrestricted():
+    """`WorkflowsFor` documents "or None for 'unrestricted' … never 'refuse
+    everything'". A resolver that ANSWERS `None` was being mapped to the empty
+    set, which rejects every row — the opposite, silently, one warning per row
+    per tick.
+
+    The outer "is the resolver wired" check only covered an unwired resolver,
+    not a wired one that answers None.
+    """
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    started = _Started()
+    files = _Files(**{f"{ITEM}{PATH}": _file(DAILY)})
+
+    sweeper = UserScheduleSweeper(
+        spec=spec,
+        index=ScheduleIndex(spec),
+        read=files.read,
+        read_live=files.read,
+        start=started,
+        owner_of=lambda _item: "alice",
+        workflows_for=lambda _item: None,
+        now=lambda: datetime(2026, 9, 5, 9, 30),
+    )
+    asyncio.run(sweeper.tick())
+
+    assert [r[1] for r in started.runs] == ["build-report"]
+
+
+def test_an_empty_workflow_ceiling_still_refuses_everything():
+    """The control. `None` and `[]` are different answers: "this deploy does not
+    restrict" and "this app offers nothing". Collapsing them either way loses a
+    real distinction."""
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    started = _Started()
+    files = _Files(**{f"{ITEM}{PATH}": _file(DAILY)})
+
+    sweeper = UserScheduleSweeper(
+        spec=spec,
+        index=ScheduleIndex(spec),
+        read=files.read,
+        read_live=files.read,
+        start=started,
+        owner_of=lambda _item: "alice",
+        workflows_for=lambda _item: [],
+        now=lambda: datetime(2026, 9, 5, 9, 30),
+    )
+    asyncio.run(sweeper.tick())
+
+    assert started.runs == []
+
+
 def test_the_sweep_never_holds_the_event_loop():
     """Every blocking call the sweep MAKES ITSELF must be off the loop — all of
     them, not most of them.
@@ -424,7 +591,13 @@ def test_the_sweep_never_holds_the_event_loop():
     started = _Started()
     sweeper = _sweeper(spec, files, started, datetime(2026, 9, 5, 9, 30))
 
-    BLOCK = 0.05  # a round trip, as it is on a real backend
+    # 200ms, not 50. The measurement floor is scheduler jitter, and under the
+    # oversubscription CI actually runs at (`-n auto` on a busy runner) that
+    # jitter reaches ~26ms — which cleared a 25ms threshold and made this test
+    # flake, exactly as a load measurement predicted before it did. Widening the
+    # block widens the signal, not the tolerance: a held loop still shows as a
+    # gap of a full block, and the threshold stays half of it.
+    BLOCK = 0.2  # a round trip, as it is on a real backend
 
     def _slow(fn):
         def go(*a, **kw):

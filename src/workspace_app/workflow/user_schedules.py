@@ -25,9 +25,11 @@ lint. Reading files, sweeping and firing land with the sweep.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 from typing import Any, cast
+from zoneinfo import available_timezones
 
 from msgspec import Struct
 
@@ -46,6 +48,35 @@ from .triggers import Schedule, _valid_tz
 EVERY = ("minutes", "hourly", "daily", "weekly", "monthly")
 
 _DOW = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
+@functools.cache
+def _zones_by_lowercase() -> dict[str, str]:
+    """Every IANA zone this machine knows, keyed by its lowercase spelling.
+
+    Built once. `available_timezones()` walks the tzdata tree, which is far too
+    much to do per row of every page's file on every tick.
+    """
+    return {name.lower(): name for name in available_timezones()}
+
+
+def normalise_tz(tz: str) -> str:
+    """The zone as `ZoneInfo` spells it, or the input unchanged when it is not a
+    zone at all.
+
+    IANA names are case-sensitive by convention only, and `utc` / `asia/taipei`
+    is how people type them. Refusing those turned "the report arrives an hour
+    out" into "the report stops" — the worse of the two, because a wrong time is
+    noticed and an absent report is noticed weeks later. This module's own design
+    note says exactly that about silent stops.
+
+    Deliberately NOT clever beyond case. `UTC+8` and `GMT+8` are not IANA names,
+    and POSIX reads their sign as the opposite of what nearly everyone means, so
+    guessing would be worse than refusing.
+    """
+    if not tz:
+        return tz
+    return _zones_by_lowercase().get(tz.lower(), tz)
 
 
 class UserSchedule(Struct):
@@ -98,7 +129,11 @@ def parse_user_schedules(raw: str) -> list[UserSchedule]:
                 at=str(row.get("at") or "00:00"),
                 dow=str(row.get("dow") or ""),
                 dom=int(row.get("dom") or 0),
-                tz=str(row.get("tz") or ""),
+                # Normalised HERE so the row carries what `ZoneInfo` takes.
+                # Accepting a spelling in the lint and then handing the sweep
+                # something it cannot resolve would make the acceptance a lie:
+                # it would fall back to UTC and fire at the wrong hour.
+                tz=normalise_tz(str(row.get("tz") or "")),
                 # "with" in the file because that is how it reads to an author;
                 # `payload` in code because `with` is a keyword.
                 payload=dict(row.get("with") or {}),
@@ -161,8 +196,8 @@ def validate_user_schedules(raw: str) -> list[str]:
                 )
         elif n:
             problems.append(f"{where}: `n` applies only to `every: minutes`.")
-        tz = row.get("tz", "")
-        if tz and not _valid_tz(str(tz)):
+        tz = normalise_tz(str(row.get("tz", "")))
+        if tz and not _valid_tz(tz):
             # Nothing checked this, so a typo travelled all the way to `ZoneInfo`
             # — which raises `ValueError` for an absolute path or a traversal,
             # not the `ZoneInfoNotFoundError` the sweep was catching. One bad
@@ -194,6 +229,34 @@ def _looks_like_time(at: object) -> bool:
     if not (hh.isdigit() and mm.isdigit()):
         return False
     return 0 <= int(hh) <= 23 and 0 <= int(mm) <= 59
+
+
+def declared_count(raw: str) -> int | None:
+    """How many schedules this file DECLARES, or None when it is not that shape.
+
+    Cheap by construction — the length of a list, not its contents — so a cap can
+    be applied BEFORE the per-row parsing it exists to bound. `usable_rows` costs
+    one `json.dumps` plus one `json.loads` plus a full validation per row, and a
+    runaway file paid all of it and was then refused, every tick, on every pod,
+    for as long as it stayed indexed.
+
+    It also counts the right thing. `validate_user_schedules` emits SEVERAL
+    strings for one bad row, so counting rows-plus-problems reported a file of
+    400 as 1200 — refusing it against a cap it never reached, and telling the
+    operator a number they could not reconcile with the file in front of them.
+
+    `None` rather than 0 for an unreadable file: "I cannot count this" and "it
+    declares nothing" are different answers, and only one of them means the cap
+    is satisfied.
+    """
+    try:
+        doc = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(doc, dict):
+        return None
+    rows = doc.get("schedules")
+    return len(rows) if isinstance(rows, list) else None
 
 
 def usable_rows(raw: str) -> tuple[list[UserSchedule], list[str]]:

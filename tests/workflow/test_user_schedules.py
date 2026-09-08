@@ -25,6 +25,7 @@ import pytest
 from workspace_app.workflow.triggers import fire_window, is_due, period_target
 from workspace_app.workflow.user_schedules import (
     UserSchedule,
+    declared_count,
     parse_user_schedules,
     trigger_id_for,
     validate_user_schedules,
@@ -126,6 +127,35 @@ def test_a_zone_that_is_not_a_zone_is_refused():
         problems = validate_user_schedules(_file({**DAILY, "tz": bad}))
         assert problems, f"tz={bad!r} was accepted"
         assert "tz" in problems[0], f"tz={bad!r} was refused without naming the field"
+
+
+def test_a_zone_written_in_the_wrong_case_still_works():
+    """`utc` and `asia/taipei` are how people type these, and IANA names are
+    case-sensitive only by convention. Refusing them turns "the report arrives an
+    hour out" into "the report stops", which is the worse of the two failures —
+    a wrong time gets noticed, an absent report gets noticed weeks later, and
+    this file's own design note says so.
+
+    `UTC+8` and `GMT+8` are NOT normalised: they are not IANA names at all, and
+    in POSIX the sign means the opposite of what almost everyone intends. Guessing
+    there would be worse than refusing.
+    """
+    for spelled in ("utc", "asia/taipei", "ASIA/TAIPEI", "Europe/berlin"):
+        assert validate_user_schedules(_file({**DAILY, "tz": spelled})) == [], spelled
+
+    for nonsense in ("UTC+8", "GMT+8", "local"):
+        assert validate_user_schedules(_file({**DAILY, "tz": nonsense})), nonsense
+
+
+def test_a_normalised_zone_is_the_one_the_schedule_runs_in():
+    """Accepting the spelling is only half of it — the parsed row has to carry a
+    zone `ZoneInfo` will take, or the sweep falls back to UTC and the acceptance
+    was a lie."""
+    from zoneinfo import ZoneInfo
+
+    row = parse_user_schedules(_file({**DAILY, "tz": "asia/taipei"}))[0]
+
+    assert ZoneInfo(row.tz)
 
 
 def test_a_real_zone_is_accepted():
@@ -278,3 +308,29 @@ def test_a_poller_is_due_again_in_the_next_bucket_but_not_the_same_one():
     assert is_due(row, now, last_window="") is True
     assert is_due(row, now, last_window=window) is False
     assert is_due(row, datetime(2026, 9, 5, 9, 7), last_window=window) is True
+
+
+def test_the_declared_count_is_how_many_schedules_there_are():
+    """The cap has to count SCHEDULES. `validate_user_schedules` emits several
+    strings for one bad row — a single `{"every":"monthly","dom":99,"at":"9am"}`
+    yields three — so counting rows-plus-problems reports a file of 400 as 1200,
+    refuses it against a cap of 1000 that it never reached, and tells the
+    operator it "declares 1200 schedules".
+
+    Cheap on purpose: it reads the list's length, not its contents, so the cap
+    can be applied BEFORE the per-row parsing it exists to bound.
+    """
+    bad = {"every": "monthly", "dom": 99, "at": "9am"}
+    assert len(validate_user_schedules(_file(bad))) > 1, "this row must yield several problems"
+
+    assert declared_count(_file(DAILY, POLLER)) == 2
+    assert declared_count(_file(bad, bad, bad)) == 3
+    assert declared_count(_file()) == 0
+
+
+def test_a_file_that_is_not_a_schedules_file_declares_nothing_countable():
+    """`None`, not 0 — "unreadable" and "an empty list" are different answers,
+    and only one of them means the cap has been satisfied."""
+    assert declared_count("not json at all") is None
+    assert declared_count('{"schedules": "nope"}') is None
+    assert declared_count("[]") is None
