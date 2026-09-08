@@ -23,7 +23,7 @@ import json
 import logging
 import os
 import time
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncGenerator, Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -204,7 +204,7 @@ async def _exec_ndjson(
     cmd: list[str],
     env: Mapping[str, str] | None = None,
     exec_timeout: float | None = None,
-) -> AsyncIterator[bytes]:
+) -> AsyncGenerator[bytes, None]:
     """Run `exec` and yield NDJSON frames as output arrives.
 
     `{"o": b64}` per live chunk (forwarded to the caller's `on_output`; stdout
