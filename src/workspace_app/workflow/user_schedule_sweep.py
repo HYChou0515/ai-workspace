@@ -144,7 +144,13 @@ class StartRun(Protocol):
     """
 
     async def __call__(
-        self, *, item_id: str, workflow_id: str, acting_user: str, payload: dict[str, Any]
+        self,
+        *,
+        item_id: str,
+        workflow_id: str,
+        acting_user: str,
+        payload: dict[str, Any],
+        key: str,
     ) -> str | None: ...
 
 
@@ -361,6 +367,10 @@ class UserScheduleSweeper:
                     # boundary everything else here is scoped to.
                     acting_user=owner,
                     payload=row.payload,
+                    # The SAME id the window ledger claims on, so the chat this
+                    # run drives and the lock that stops it running twice agree
+                    # about what "this schedule" means.
+                    key=trigger_id,
                 )
             except Exception:
                 # Hand the window BACK, up to a point. The claim is taken before

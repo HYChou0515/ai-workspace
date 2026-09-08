@@ -88,3 +88,55 @@ def test_dropping_a_chat_twice_is_not_an_error() -> None:
     locator.settle_run_chat(chat_id, None)
 
     locator.settle_run_chat(chat_id, None)  # must not raise
+
+
+def test_a_schedule_keeps_one_conversation_across_its_fires() -> None:
+    """A schedule's chat belongs to the SCHEDULE, not to one firing of it.
+
+    Opening a fresh one per fire cost two things at once. `active_run_for_chat`
+    keys on the chat, so a brand-new id every time meant a schedule could never
+    collide with its own still-running previous fire — the one-run rule stopped
+    applying to exactly the entrance that repeats. And the conversations
+    accumulate: `every: minutes, n: 1` is 1440 permanent chats a day on one item,
+    each loaded by every item-level chat operation.
+
+    Reusing it is also what the thing IS: a recurring report is one thread, the
+    way a recurring meeting is.
+    """
+    spec, locator, item_id = _locator_and_item()
+
+    first, created_first = locator.chat_for_schedule(item_id, "build-report", "wui:i1:abc")
+    second, created_second = locator.chat_for_schedule(item_id, "build-report", "wui:i1:abc")
+
+    assert first == second
+    assert created_first is True
+    assert created_second is False
+    assert len(list_item_conversations(spec.get_resource_manager(Conversation), item_id)) == 1
+
+
+def test_two_schedules_on_one_item_do_not_share_a_conversation() -> None:
+    """The control. Keying on the item instead of the schedule would pass the
+    test above and merge two unrelated reports into one thread."""
+    spec, locator, item_id = _locator_and_item()
+
+    a, _ = locator.chat_for_schedule(item_id, "build-report", "wui:i1:aaa")
+    b, _ = locator.chat_for_schedule(item_id, "close-month", "wui:i1:bbb")
+
+    assert a != b
+    assert len(list_item_conversations(spec.get_resource_manager(Conversation), item_id)) == 2
+
+
+def test_a_reused_schedule_chat_survives_a_failed_run() -> None:
+    """`settle_run_chat(chat, None)` deletes, which is right for a chat opened
+    for THIS run and wrong for one the schedule has been using — deleting it
+    would take the schedule's whole history with it because one night's start
+    failed."""
+    spec, locator, item_id = _locator_and_item()
+    chat_id, created = locator.chat_for_schedule(item_id, "build-report", "wui:i1:abc")
+    locator.settle_run_chat(chat_id, "run-1")
+
+    again, created_again = locator.chat_for_schedule(item_id, "build-report", "wui:i1:abc")
+
+    assert again == chat_id
+    assert created_again is False, "a caller told it created this would then delete it on failure"
+    assert list_item_conversations(spec.get_resource_manager(Conversation), item_id)

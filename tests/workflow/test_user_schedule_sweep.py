@@ -61,9 +61,16 @@ class _Started:
 
     def __init__(self) -> None:
         self.runs: list[tuple[str, str, str, dict]] = []
+        #: The stable per-schedule key each fire was given. Recorded because the
+        #: chat it selects is what `active_run_for_chat` collides on — a key that
+        #: changes per fire silently switches the one-run rule off.
+        self.keys: list[str] = []
 
-    async def __call__(self, *, item_id: str, workflow_id: str, acting_user: str, payload: dict):
+    async def __call__(
+        self, *, item_id: str, workflow_id: str, acting_user: str, payload: dict, key: str
+    ):
         self.runs.append((item_id, workflow_id, acting_user, payload))
+        self.keys.append(key)
         return "run-1"
 
 
@@ -117,6 +124,44 @@ def test_a_due_schedule_starts_its_workflow_with_its_payload():
     )
 
     assert started.runs == [(ITEM, "build-report", "alice", {"line": "A"})]
+
+
+def test_every_fire_of_one_schedule_carries_the_same_key():
+    """The key picks the conversation the run drives, and that conversation is
+    what `active_run_for_chat` collides on. A key that changes per fire means a
+    schedule can never collide with its own still-running previous fire, so
+    `every: minutes` against a slow workflow piles runs up on one item with
+    nothing to stop it — and leaves a permanent chat behind for each.
+
+    It is the same key the window ledger uses, so "the same schedule" means the
+    same thing to both.
+    """
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    started = _Started()
+    files = _Files(**{f"{ITEM}{PATH}": _file(DAILY)})
+
+    asyncio.run(_sweeper(spec, files, started, datetime(2026, 9, 5, 9, 30)).tick())
+    asyncio.run(_sweeper(spec, files, started, datetime(2026, 9, 6, 9, 30)).tick())
+
+    assert len(started.keys) == 2
+    assert started.keys[0] == started.keys[1]
+    assert started.keys[0].startswith("wui:")
+
+
+def test_two_schedules_in_one_file_get_different_keys():
+    """The control. One key per ITEM would pass the test above and make two
+    unrelated reports share a thread — and collide with each other."""
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    started = _Started()
+    rows = _file(DAILY, {"every": "daily", "at": "09:00", "run": "close-month"})
+    files = _Files(**{f"{ITEM}{PATH}": rows})
+
+    asyncio.run(_sweeper(spec, files, started, datetime(2026, 9, 5, 9, 30)).tick())
+
+    assert len(started.keys) == 2
+    assert started.keys[0] != started.keys[1]
 
 
 def test_a_schedule_whose_moment_has_not_come_does_not_fire():
@@ -346,8 +391,16 @@ def test_a_schedule_in_a_zone_does_not_fire_before_its_moment_there():
 
 
 def test_the_sweep_never_holds_the_event_loop():
-    """Every blocking call the sweep makes must be off the loop — all of them,
-    not most of them.
+    """Every blocking call the sweep MAKES ITSELF must be off the loop — all of
+    them, not most of them.
+
+    Scope, stated because the first version of this docstring overstated it: the
+    `start` callback is somebody else's code, injected here as an in-memory
+    double, so this measures the sweep and not the fire path. What the fire path
+    does with the loop is pinned separately, by
+    `test_the_fire_path_does_not_hold_the_event_loop` — and it needed pinning:
+    `_start_page_schedule` was making ten blocking specstar calls while this test
+    read green and claimed "all of them".
 
     Not a style point. This runs on every API pod, un-gated by `run_consumers`,
     at O(items × paths × rows) per tick, so a loop it holds is holding every

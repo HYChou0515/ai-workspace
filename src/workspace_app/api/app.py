@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 import time
@@ -1052,7 +1053,7 @@ def create_app(
         return _owner_of(item_id) or ""
 
     async def _start_page_schedule(
-        *, item_id: str, workflow_id: str, acting_user: str, payload: dict[str, Any]
+        *, item_id: str, workflow_id: str, acting_user: str, payload: dict[str, Any], key: str
     ) -> str | None:
         """Launch one page-declared schedule.
 
@@ -1067,13 +1068,23 @@ def create_app(
         its context and append its turns there, every night, on the entrance
         nobody is watching. Fixing the interactive half and not this one left the
         same defect where it is hardest to notice.
+
+        Every locator call here is OFFLOADED, because every one is blocking
+        specstar I/O and this runs inside the sweep's tick. `chat_for_schedule`
+        alone is seven round trips — `item_conversation_mirror` asks each
+        registered app model for its meta — and the sweep carefully offloads all
+        of its own store calls only to hand the loop to this one. On Postgres
+        that is ten network round trips per fire, on every pod, holding every
+        request that pod is serving.
         """
-        chat_id = locator.open_run_chat(item_id, workflow_id)
+        chat_id, ours = await asyncio.to_thread(
+            locator.chat_for_schedule, item_id, workflow_id, key
+        )
         try:
             run_id = await workflow_orchestrator.start(
-                slug=locator.slug_of(item_id) or "",
+                slug=await asyncio.to_thread(locator.slug_of, item_id) or "",
                 item_id=item_id,
-                profile=locator.profile_of(item_id),
+                profile=await asyncio.to_thread(locator.profile_of, item_id),
                 captured_user=acting_user,
                 workflow_id=workflow_id,
                 chat_id=chat_id,
@@ -1088,8 +1099,12 @@ def create_app(
             # Suppressed so the cleanup cannot REPLACE the failure it is cleaning
             # up after: the caller needs the original reason, and a second error
             # from the tidy-up buries it.
-            with contextlib.suppress(Exception):
-                locator.settle_run_chat(chat_id, None)
+            # Only a chat THIS call created. One the schedule has been using
+            # holds its history, and deleting that because one night's start
+            # failed would lose every previous run's thread.
+            if ours:
+                with contextlib.suppress(Exception):
+                    await asyncio.to_thread(locator.settle_run_chat, chat_id, None)
             raise
         # PAST THE POINT OF NO RETURN. The run exists and is already writing to
         # this conversation; linking it is bookkeeping. Raising here would tell
@@ -1097,7 +1112,7 @@ def create_app(
         # the window back and fire again, with a fresh chat id that collides with
         # nothing. One bad `update` would become two reports, two emails, twice.
         try:
-            locator.settle_run_chat(chat_id, run_id)
+            await asyncio.to_thread(locator.settle_run_chat, chat_id, run_id)
         except Exception:
             logger.exception(
                 "page schedule: run %s started for item %s but its chat %s could not be "

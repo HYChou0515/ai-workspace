@@ -72,9 +72,21 @@ def test_a_scheduled_run_gets_its_own_conversation() -> None:
 
     body = source.split("async def _start_page_schedule", 1)[-1].split("\n    lifespan", 1)[0]
 
-    assert "open_run_chat" in body, "a scheduled run does not open its own conversation"
-    assert "chat_id=chat_id" in body, "it opens one and then does not use it"
+    assert "chat_for_schedule" in body, "a scheduled run does not resolve its own conversation"
+    assert "chat_id=chat_id" in body, "it resolves one and then does not use it"
     assert "settle_run_chat" in body, "the chat is never linked to its run, or cleaned up"
+
+    # REUSED, not opened fresh. `open_run_chat` mints a new conversation every
+    # call, which is right for a click and wrong for a schedule: the chat is what
+    # `active_run_for_chat` collides on, so a new id per fire switches the
+    # one-run rule off for the one entrance that repeats — and leaves a permanent
+    # conversation behind each time (`every: minutes, n: 1` is 1440 a day).
+    assert "open_run_chat" not in body, (
+        "the scheduled entrance mints a fresh chat per fire; it must reuse the schedule's own"
+    )
+    # And only a chat this call created may be cleaned up: deleting one the
+    # schedule has been using throws away every previous run's thread.
+    assert "if ours:" in body, "the failure path deletes the schedule's chat unconditionally"
 
 
 def test_a_started_run_is_never_reported_as_not_started() -> None:
@@ -94,11 +106,14 @@ def test_a_started_run_is_never_reported_as_not_started() -> None:
     source = _APP.read_text(encoding="utf-8")
     body = source.split("async def _start_page_schedule", 1)[-1].split("\n    lifespan", 1)[0]
 
-    marker = "locator.settle_run_chat(chat_id, run_id)"
+    marker = "locator.settle_run_chat, chat_id, run_id"
     assert marker in body, "the run's chat is never linked"
 
     before = body.split(marker, 1)[0]
-    guard = [ln.strip() for ln in before.splitlines() if ln.strip()][-1]
+    # The `try:` is the last statement opener before the call; the call itself
+    # may be wrapped across lines by the formatter, so look for the nearest one.
+    opens = [ln.strip() for ln in before.splitlines() if ln.strip()]
+    guard = "try:" if "try:" in opens[-3:] else opens[-1]
     assert guard == "try:", (
         "the post-start link is unguarded — a failure there tells the sweep the "
         f"run never started, and it fires the window again (last line was {guard!r})"
@@ -107,4 +122,41 @@ def test_a_started_run_is_never_reported_as_not_started() -> None:
     after = body.split(marker, 1)[1]
     assert "except Exception:" in after.split("return run_id", 1)[0], (
         "nothing catches a failure after the run exists"
+    )
+
+
+def test_the_fire_path_does_not_hold_the_event_loop() -> None:
+    """`_start_page_schedule` runs INSIDE the sweep's tick, so its blocking calls
+    hold the loop exactly as the sweep's own would.
+
+    Every one of them is specstar I/O, and `chat_for_schedule` is seven round
+    trips on its own — `item_conversation_mirror` asks every registered app model
+    for its meta. The sweep offloads all of its own store calls and then handed
+    the loop to this, which the sweep's guard could not see: it injects an
+    in-memory `start` double, so it measures everything except the callback that
+    actually fires.
+
+    A source check, like its siblings here, because the failure is a WIRING
+    choice whose symptom is latency on unrelated requests — nothing in this
+    process fails, and nothing local reproduces it.
+    """
+    source = _APP.read_text(encoding="utf-8")
+    body = source.split("async def _start_page_schedule", 1)[-1].split("\n    lifespan", 1)[0]
+
+    blocking = ("chat_for_schedule", "settle_run_chat", "slug_of", "profile_of")
+    # Matched on the pair, not on one spelling: the formatter wraps a long call
+    # so `to_thread(locator.x` and `to_thread(\n    locator.x` are the same thing,
+    # and a guard that only knows one of them passes the day black reflows it.
+    flat = " ".join(body.split())
+    unoffloaded = [
+        name
+        for name in blocking
+        if f"locator.{name}" in flat
+        and f"asyncio.to_thread( locator.{name}" not in flat
+        and f"asyncio.to_thread(locator.{name}" not in flat
+    ]
+
+    assert not unoffloaded, (
+        f"{unoffloaded} are blocking specstar calls made directly on the event loop, "
+        "inside a sweep that offloads every one of its own"
     )
