@@ -154,7 +154,7 @@ describe("MyResourcesPage", () => {
 
     expect(closeEnvironment).toHaveBeenCalledWith("i-1");
     // the panel re-reads, so the person can see the slot came back
-    await waitFor(() => expect(screen.getByText(/目前沒有執行中的環境/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/目前沒有執行中的沙盒/)).toBeTruthy());
   });
 
   // Any of the three can refuse a turn on its own, so each needs its own
@@ -190,7 +190,7 @@ describe("MyResourcesPage", () => {
     // said so, so somebody at their STORAGE limit could press Close on every
     // row, watch that gauge not move, and conclude the button was broken.
     render(<MyResourcesPage client={client()} />, { wrapper: Wrap });
-    const live = await screen.findByRole("region", { name: "執行環境" });
+    const live = await screen.findByRole("region", { name: "沙盒" });
     expect(live).toHaveTextContent(/CPU 與記憶體/);
     expect(live).toHaveTextContent(/檔案會保留/);
     // …and what it does NOT keep. The first version of this sentence said the
@@ -218,7 +218,7 @@ describe("MyResourcesPage", () => {
     });
     render(<MyResourcesPage client={client({ get: vi.fn(async () => d) })} />, { wrapper: Wrap });
 
-    const live = await screen.findByRole("region", { name: "執行環境" });
+    const live = await screen.findByRole("region", { name: "沙盒" });
     const rowOf = (title: string) => within(live).getByText(title).closest("li")!;
     await waitFor(() => expect(within(rowOf("Line 3 stoppage")).getByText("根因分析")).toBeTruthy());
     expect(within(rowOf("Q4 roadmap")).getByText("專案管理")).toBeTruthy();
@@ -259,7 +259,7 @@ describe("MyResourcesPage", () => {
     });
     render(<MyResourcesPage client={client({ get: vi.fn(async () => d) })} />, { wrapper: Wrap });
 
-    const live = await screen.findByRole("region", { name: "執行環境" });
+    const live = await screen.findByRole("region", { name: "沙盒" });
     const tagIn = (title: string) =>
       within(live).getByText(title).closest("li")!.querySelector(".app-tag") as HTMLElement;
 
@@ -283,7 +283,7 @@ describe("MyResourcesPage", () => {
     });
     render(<MyResourcesPage client={client({ get: vi.fn(async () => d) })} />, { wrapper: Wrap });
 
-    const live = await screen.findByRole("region", { name: "執行環境" });
+    const live = await screen.findByRole("region", { name: "沙盒" });
     const row = within(live).getByText("Line 3 stoppage").closest("li")!;
     expect(within(row).getByText("rca")).toBeTruthy();
   });
@@ -301,7 +301,7 @@ describe("MyResourcesPage", () => {
     });
     render(<MyResourcesPage client={client({ get: vi.fn(async () => d) })} />, { wrapper: Wrap });
 
-    const live = await screen.findByRole("region", { name: "執行環境" });
+    const live = await screen.findByRole("region", { name: "沙盒" });
     const row = within(live).getByText("i-9").closest("li")!;
     expect(row.querySelector(".app-tag")).toBeNull();
     // …and it is still closable, which is the whole reason the row is here.
@@ -343,7 +343,7 @@ describe("MyResourcesPage", () => {
     });
     render(<MyResourcesPage client={client({ get: vi.fn(async () => d) })} />, { wrapper: Wrap });
 
-    const live = await screen.findByRole("region", { name: "執行環境" });
+    const live = await screen.findByRole("region", { name: "沙盒" });
     const totals = within(live).getByRole("group", { name: "目前合計" });
     expect(within(totals).getAllByRole("progressbar")).toHaveLength(3);
     // …and none of them inside the list, where every entry must be a thing the
@@ -386,7 +386,7 @@ describe("MyResourcesPage", () => {
     render(<MyResourcesPage client={client({ get: vi.fn(async () => empty) })} />, {
       wrapper: Wrap,
     });
-    expect(await screen.findByText(/目前沒有執行中的環境/)).toBeTruthy();
+    expect(await screen.findByText(/目前沒有執行中的沙盒/)).toBeTruthy();
     expect(screen.getByText(/還沒有任何項目佔用空間/)).toBeTruthy();
   });
 });
@@ -423,7 +423,7 @@ describe("per-person overrides (superuser)", () => {
     render(<MyResourcesPage client={c} />, { wrapper: Wrap });
 
     await userEvent.click(await screen.findByRole("button", { name: /Bob Chen/ }));
-    await userEvent.type(screen.getByLabelText("同時執行環境上限"), "5");
+    await userEvent.type(screen.getByLabelText("同時開啟沙盒上限"), "5");
     await userEvent.click(screen.getByRole("button", { name: "儲存" }));
 
     expect(c.adminSet).toHaveBeenCalledWith("bob", { count: 5, cpu: 0, memory: "", disk: "" });
@@ -435,7 +435,7 @@ describe("per-person overrides (superuser)", () => {
     render(<MyResourcesPage client={c} />, { wrapper: Wrap });
 
     await userEvent.click(await screen.findByRole("button", { name: /Bob Chen/ }));
-    await userEvent.type(screen.getByLabelText("同時執行環境上限"), "5");
+    await userEvent.type(screen.getByLabelText("同時開啟沙盒上限"), "5");
     await userEvent.click(screen.getByRole("button", { name: "儲存" }));
 
     expect(c.adminSet).toHaveBeenCalledWith("bob", { count: 5, cpu: 0, memory: "", disk: "" });
@@ -459,7 +459,7 @@ describe("per-person overrides (superuser)", () => {
     // the deploy default rather than freezing it at 1024.
     expect(screen.getByLabelText("儲存空間上限")).toHaveValue("");
 
-    await userEvent.type(screen.getByLabelText("同時執行環境上限"), "9");
+    await userEvent.type(screen.getByLabelText("同時開啟沙盒上限"), "9");
     await userEvent.click(screen.getByRole("button", { name: "儲存" }));
     expect(c.adminSet).toHaveBeenCalledWith("bob", { count: 9, cpu: 0, memory: "", disk: "" });
   });
@@ -472,11 +472,11 @@ describe("per-person overrides (superuser)", () => {
     await c.adminSet("bob", { count: 9, cpu: 0, memory: "", disk: "" });
     render(<MyResourcesPage client={c} />, { wrapper: Wrap });
 
-    expect(await screen.findByText(/^站台預設:/)).toHaveTextContent("同時執行環境上限 2");
+    expect(await screen.findByText(/^站台預設:/)).toHaveTextContent("同時開啟沙盒上限 2");
     expect(screen.getByText("bob")).toBeInTheDocument();
     // only the dimension actually granted — not every dimension merged against
     // the default, which would make everyone look overridden everywhere
-    expect(screen.getByText(/同時執行環境上限 9$/)).toBeInTheDocument();
+    expect(screen.getByText(/同時開啟沙盒上限 9$/)).toBeInTheDocument();
   });
 
   it("says plainly when nobody has an exception", async () => {
@@ -611,7 +611,7 @@ describe("a close that could not be done", () => {
     );
     // Scoped to the live region: the same item is listed again under Storage,
     // so an unscoped lookup by title matches two rows in two different lists.
-    const live = () => screen.getByRole("region", { name: "執行環境" });
+    const live = () => screen.getByRole("region", { name: "沙盒" });
     const closeIn = (title: string) =>
       within(within(live()).getByText(title).closest("li")!).getByRole("button", { name: "關閉" });
 

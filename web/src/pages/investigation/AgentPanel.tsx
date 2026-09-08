@@ -306,9 +306,9 @@ export function AgentPanel({
         // of history, that this whole mechanism was built to stop telling.
         const said: Partial<Record<CompactionReason, string>> = {
           "no-room":
-              "這個環境的提示詞本身已經佔滿模型的可讀範圍,整理對話幫不上忙 —— 需要調大模型視窗或縮短提示詞。",
+              "目前的提示詞本身已經佔滿模型的可讀範圍,整理對話幫不上忙 —— 需要調大模型視窗或縮短提示詞。",
           failed: "整理沒有成功,對話沒有更動。可以再試一次。",
-          unavailable: "這個環境沒有開啟整理功能。",
+          unavailable: "目前沒有開啟整理功能。",
         };
         setComposerHint(said[r.reason] ?? "這段對話還沒有需要壓縮的內容。");
         return;
@@ -1546,7 +1546,7 @@ export function AgentHeader({
       {environment && (
         <button
           type="button"
-          // The item's execution environment: is it running, what is it costing,
+          // The item's sandbox: is it running, what is it costing,
           // how big may it be. Beside the variables button because both are
           // per-item configuration of the same sandbox — but gated on the App
           // HAVING one, not on who may edit the item.

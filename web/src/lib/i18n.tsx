@@ -521,8 +521,8 @@ export const messages = {
 
   // Agent run banners (agentLog reducer) — de-jargoned behavior descriptions
   "banner.sandboxIdle": {
-    "zh-TW": "閒置太久，下次操作會重新啟動執行環境。",
-    en: "Idle too long — the execution environment will restart on your next action.",
+    "zh-TW": "閒置太久，下次操作會重新啟動沙盒。",
+    en: "Idle too long — the sandbox will restart on your next action.",
   },
   "banner.maxTurns": {
     "zh-TW": "已達回合上限（{turns}），對話已停止。",
@@ -688,17 +688,19 @@ export const messages = {
   "kb.dropToUpload": { "zh-TW": "放開以上傳", en: "Drop to upload" },
   "kb.dropHint": { "zh-TW": "把檔案拖到這裡開始", en: "Drag files here to start" },
 
-  // Investigation terminal (TerminalPane) — sandbox → 執行環境 (#171).
+  // Investigation terminal (TerminalPane). #171 renamed sandbox → 執行環境 to
+  // de-jargon it; that is reversed — the product calls this one thing 沙盒 /
+  // sandbox everywhere, and `i18n.test.tsx` sweeps for the old word.
   "terminal.help.lead": {
-    "zh-TW": "在執行環境裡執行指令，試試",
-    en: "Run shell commands in the execution environment. Try",
+    "zh-TW": "在沙盒裡執行指令，試試",
+    en: "Run shell commands in the sandbox. Try",
   },
   "terminal.help.clears": { "zh-TW": "可清除畫面。", en: "clears." },
   "replay.showThinking": { "zh-TW": "顯示思考", en: "Show thinking" },
   "replay.hideThinking": { "zh-TW": "隱藏思考", en: "Hide thinking" },
   "terminal.aborted": {
-    "zh-TW": "^C 已中斷（指令仍在執行環境裡跑到結束）",
-    en: "^C  interrupted (still running in the execution environment until it exits)",
+    "zh-TW": "^C 已中斷（指令仍在沙盒裡跑到結束）",
+    en: "^C  interrupted (still running in the sandbox until it exits)",
   },
 
   // KB collection landing + in-place concept help (#173)
@@ -803,12 +805,12 @@ export const messages = {
   // card proposal + clarification question the user may see, across collections.
   "review.title": { "zh-TW": "審核", en: "Review" },
   // The terminal's own wording for the three limits. It wakes a sandbox, so it
-  // is one of only two surfaces where the live-environment limit can appear.
+  // is one of only two surfaces where the live-sandbox limit can appear.
   // Sending a message is the primary interface and the other place the
-  // live-environment limit appears, so it gets its own wording too.
+  // live-sandbox limit appears, so it gets its own wording too.
   "chat.send.envFull": {
-    "zh-TW": "沒有送出:你同時開啟的執行環境已達上限。到「我的資源」關掉不用的環境再送一次。",
-    en: "Not sent — you're at your limit for live environments. Close one in My resources, then send again.",
+    "zh-TW": "沒有送出:你同時開啟的沙盒已達上限。到「我的資源」關掉不用的沙盒再送一次。",
+    en: "Not sent — you're at your limit for live sandboxes. Close one in My resources, then send again.",
   },
   "chat.send.userFull": {
     "zh-TW": "沒有送出:你所有項目的空間總量已滿。到「我的資源」看是哪些項目佔用,刪掉不需要的再送一次。",
@@ -818,9 +820,9 @@ export const messages = {
   // checked by the person reading it — "your workspace is full" reads the same
   // whether it is true or whether the wrong rule answered, which is how a wrong
   // one survived long enough to be reported as a bug.
-  // The environment limit covers three different things, so its numbers say
+  // The sandbox limit covers three different things, so its numbers say
   // which one they are. Without that, "已用 4,上限 2" under a sentence about
-  // live environments reads as "I have four environments open" when it means
+  // live sandboxes reads as "I have four sandboxes open" when it means
   // four cores.
   "resources.usedOfLimitNamed": {
     "zh-TW": "({what} 已用 {used},上限 {limit})",
@@ -854,8 +856,8 @@ export const messages = {
     en: "Not sent — we couldn't confirm your sign-in for this request. Refresh the page or sign in again, then send it once more.",
   },
   "terminal.envFull": {
-    "zh-TW": "沒有執行:你同時開啟的執行環境已達上限。到「我的資源」關掉不用的環境再試一次。",
-    en: "Not run — you're at your limit for live environments. Close one in My resources, then try again.",
+    "zh-TW": "沒有執行:你同時開啟的沙盒已達上限。到「我的資源」關掉不用的沙盒再試一次。",
+    en: "Not run — you're at your limit for live sandboxes. Close one in My resources, then try again.",
   },
   "terminal.userFull": {
     "zh-TW": "沒有執行:你所有項目的空間總量已滿。到「我的資源」看是哪些項目佔用,刪掉不需要的再試一次。",
@@ -868,14 +870,14 @@ export const messages = {
   "resources.title": { "zh-TW": "我的資源", en: "My resources" },
   "resources.heading": { "zh-TW": "我的資源使用", en: "My resource usage" },
   "resources.loading": { "zh-TW": "載入中…", en: "Loading…" },
-  "resources.live.heading": { "zh-TW": "執行環境", en: "Live environments" },
-  "resources.live.empty": { "zh-TW": "目前沒有執行中的環境。", en: "No live environments." },
+  "resources.live.heading": { "zh-TW": "沙盒", en: "Live sandboxes" },
+  "resources.live.empty": { "zh-TW": "目前沒有執行中的沙盒。", en: "No live sandboxes." },
   "resources.live.close": { "zh-TW": "關閉", en: "Close" },
   // Says what happened and what to do, not which call returned what. The row
   // stays put deliberately, so "再試一次" points at something that is still there.
   "resources.live.close_failed": {
-    "zh-TW": "目前關不掉這個環境，請稍後再試一次。",
-    en: "Could not shut this environment down just now. Try again shortly.",
+    "zh-TW": "目前關不掉這個沙盒，請稍後再試一次。",
+    en: "Could not shut this sandbox down just now. Try again shortly.",
   },
   "resources.live.count": { "zh-TW": "{n} 個", en: "{n}" },
   "resources.live.cores": { "zh-TW": "{n} 核", en: "{n} cores" },
@@ -895,7 +897,7 @@ export const messages = {
   "resources.admin.lookup": { "zh-TW": "查詢", en: "Look up" },
   "resources.admin.save": { "zh-TW": "儲存", en: "Save" },
   "resources.admin.clear": { "zh-TW": "清除覆寫", en: "Clear override" },
-  "resources.admin.count": { "zh-TW": "同時執行環境上限", en: "Live environment limit" },
+  "resources.admin.count": { "zh-TW": "同時開啟沙盒上限", en: "Live sandbox limit" },
   "resources.admin.cpu": { "zh-TW": "CPU 核心上限", en: "CPU core limit" },
   "resources.admin.memory": { "zh-TW": "記憶體上限", en: "Memory limit" },
   "resources.admin.disk": { "zh-TW": "儲存空間上限", en: "Storage limit" },
@@ -929,10 +931,10 @@ export const messages = {
   // an install; telling them nothing is lost is the one thing it must not do.
   "resources.live.lede": {
     "zh-TW":
-      "這些環境正在佔用你的 CPU 與記憶體。關閉會立刻還回這兩項:你的檔案會保留,但裝好的套件與版本紀錄不會,下次開啟要重新準備。（儲存空間要靠下面那區清。）",
+      "這些沙盒正在佔用你的 CPU 與記憶體。關閉會立刻還回這兩項:你的檔案會保留,但裝好的套件與版本紀錄不會,下次開啟要重新準備。（儲存空間要靠下面那區清。）",
     en: "These are holding your CPU and memory. Closing gives both back at once: your files are kept, but installed packages and version history are not — they have to be set up again when you reopen. (Storage is freed below, not here.)",
   },
-  "resources.gauge.count": { "zh-TW": "環境數", en: "Environments" },
+  "resources.gauge.count": { "zh-TW": "沙盒數", en: "Sandboxes" },
   "resources.gauge.cpu": { "zh-TW": "CPU", en: "CPU" },
   "resources.gauge.unlimited": { "zh-TW": "（無上限）", en: "(no limit)" },
   // ── who may MANAGE an item (change_permission), shown apart from roles ──
@@ -941,27 +943,31 @@ export const messages = {
   // second is the easy one to miss: this grant now decides who may spend the
   // owner's quota, not merely who may see the item.
   "itemshare.managers.consequence": {
-    "zh-TW": "他們可以把這個項目的存取權再授權給任何人，也可以調整執行環境大小 —— 那花的是擁有者的額度。",
-    en: "They can re-share this item with anyone, and can resize its environment — which spends the owner's quota.",
+    "zh-TW": "他們可以把這個項目的存取權再授權給任何人，也可以調整沙盒大小 —— 那花的是擁有者的額度。",
+    en: "They can re-share this item with anyone, and can resize its sandbox — which spends the owner's quota.",
   },
   "itemshare.managers.add": { "zh-TW": "加入使用者 ID", en: "Add a user id" },
   "itemshare.managers.remove": { "zh-TW": "移除", en: "Remove" },
-  // ── the item page's own environment panel ────────────────────────────
-  "itemenv.button": { "zh-TW": "環境", en: "Environment" },
+  // ── the item page's own sandbox panel ─────────────────────────────────
+  "itemenv.button": { "zh-TW": "沙盒", en: "Sandbox" },
   "itemenv.tip": {
-    "zh-TW": "這個項目的執行環境：狀態、用量、大小。",
-    en: "This item's environment — status, usage, size.",
+    "zh-TW": "這個項目的沙盒：狀態、用量、大小。",
+    en: "This item's sandbox — status, usage, size.",
   },
-  "itemenv.heading": { "zh-TW": "執行環境", en: "Environment" },
+  "itemenv.heading": { "zh-TW": "沙盒", en: "Sandbox" },
+  // Dismisses the PANEL. Deliberately not `itemenv.close`, which shuts the
+  // sandbox down — one ✕ meaning "put this away" and one button meaning
+  // "end what is running" must never share a string.
+  "itemenv.dismiss": { "zh-TW": "關閉", en: "Close" },
   "itemenv.status.running": { "zh-TW": "執行中", en: "Running" },
   "itemenv.status.idle": { "zh-TW": "未啟動", en: "Not running" },
-  "itemenv.close": { "zh-TW": "關閉環境", en: "Close environment" },
+  "itemenv.close": { "zh-TW": "關閉沙盒", en: "Close sandbox" },
   // Says WHY the size is locked, so the disabled field is not read as broken.
   "itemenv.close.hint": {
     "zh-TW": "關閉後即可調整大小。關閉會結束正在執行的程序，檔案不受影響。",
     en: "Close it to change the size. Running processes end; your files are untouched.",
   },
-  "itemenv.size.heading": { "zh-TW": "這個項目的環境大小", en: "This item's environment size" },
+  "itemenv.size.heading": { "zh-TW": "這個項目的沙盒大小", en: "This item's sandbox size" },
   // The label an UNSET value carries. Without it an empty field renders as a
   // number with no provenance, and the person cannot tell what they chose from
   // what was chosen for them.
@@ -1175,8 +1181,8 @@ export const messages = {
     en: "{names} wasn't attached — you're out of space across all your items. Open My resources to see where it went, then try again.",
   },
   "workspace.overQuota.env": {
-    "zh-TW": "{names} 沒有附上:你同時開啟的執行環境已達上限。到「我的資源」關掉不用的環境再試一次。",
-    en: "{names} wasn't attached — you're at your limit for live environments. Close one in My resources, then try again.",
+    "zh-TW": "{names} 沒有附上:你同時開啟的沙盒已達上限。到「我的資源」關掉不用的沙盒再試一次。",
+    en: "{names} wasn't attached — you're at your limit for live sandboxes. Close one in My resources, then try again.",
   },
   "workspace.overQuota": {
     "zh-TW": "空間不足，未能上傳:{names}",
@@ -1191,11 +1197,11 @@ export const messages = {
     "zh-TW": "「{name}」沒有上傳:你所有項目的空間總量已滿。到「我的資源」看是哪些項目佔用,刪掉不需要的再重試。",
     en: "{name} wasn't uploaded — you're out of space across all your items. Open My resources to see where it went, delete what you don't need, then try again.",
   },
-  // Nothing to do with files at all: they are holding as many live environments
+  // Nothing to do with files at all: they are holding as many live sandboxes
   // as they may. Saying "the workspace is full" here would be simply untrue.
   "workspace.upload.envFull": {
-    "zh-TW": "「{name}」沒有上傳:你同時開啟的執行環境已達上限。到「我的資源」關掉不用的環境再重試。",
-    en: "{name} wasn't uploaded — you're at your limit for live environments. Close one in My resources, then try again.",
+    "zh-TW": "「{name}」沒有上傳:你同時開啟的沙盒已達上限。到「我的資源」關掉不用的沙盒再重試。",
+    en: "{name} wasn't uploaded — you're at your limit for live sandboxes. Close one in My resources, then try again.",
   },
   "workspace.upload.full": {
     "zh-TW": "「{name}」沒有上傳:工作區空間已滿。請先刪除不需要的檔案，再重新上傳。",

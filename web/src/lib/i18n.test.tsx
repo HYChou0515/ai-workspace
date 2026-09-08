@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   detectLocale,
+  messages,
   getStoredLocale,
   initialLocale,
   LocaleProvider,
@@ -52,10 +53,32 @@ describe("i18n #171 term sweep", () => {
     expect(translate("zh-TW", "picker.depth")).toBe("搜尋範圍");
   });
 
-  it("de-jargons the sandbox idle banner to 'execution environment' / 執行環境", () => {
-    expect(translate("en", "banner.sandboxIdle")).toContain("execution environment");
+  it("calls the thing a sandbox — 沙盒 / Sandbox", () => {
+    expect(translate("en", "itemenv.button")).toBe("Sandbox");
+    expect(translate("zh-TW", "itemenv.button")).toBe("沙盒");
+    expect(translate("en", "banner.sandboxIdle")).toContain("sandbox");
     expect(translate("en", "banner.sandboxIdle")).not.toContain("workspace");
-    expect(translate("zh-TW", "banner.sandboxIdle")).toContain("執行環境");
+    expect(translate("zh-TW", "banner.sandboxIdle")).toContain("沙盒");
+  });
+
+  /**
+   * #171 went the other way — sandbox → 執行環境 / execution environment — to
+   * de-jargon the word. This reverses that decision, and the reason this guard
+   * is a sweep rather than one assertion is that the HALF-done rename is worse
+   * than either name: the button would read 沙盒 and the panel it opens 執行環境,
+   * and nobody could tell whether those were one thing or two.
+   *
+   * Environment VARIABLES are a different noun and keep theirs — they are the
+   * variables handed to tools, and "沙盒變數" would name nothing anyone types.
+   */
+  it("leaves no string still calling the sandbox an environment", () => {
+    for (const [key, entry] of Object.entries(messages)) {
+      if (key.startsWith("env.")) continue;
+      const zh = (entry as Record<string, string>)["zh-TW"];
+      const en = (entry as Record<string, string>).en;
+      expect(`${key} → ${zh}`).not.toMatch(/環境/);
+      expect(`${key} → ${en}`).not.toMatch(/environments?\b/i);
+    }
   });
 
   it("reframes the advanced-retrieval tooltips as outcomes, not mechanisms", () => {

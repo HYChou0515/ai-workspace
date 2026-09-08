@@ -358,13 +358,16 @@ describe("reduceAgent", () => {
     expect(log.entries.some((e) => e.kind === "banner" && /回合上限（12）/.test(e.text))).toBe(true);
   });
 
-  it("#160: the idle-restart banner describes behavior, not sandbox/exec internals", () => {
+  it("#160: the idle-restart banner describes behavior, not exec internals", () => {
     const log = fold([{ type: "sandbox_killed_idle" }]);
     const b = log.entries.find((e) => e.kind === "banner");
     if (b?.kind !== "banner") throw new Error("expected a banner entry");
-    expect(b.text).not.toMatch(/sandbox/i);
-    // #171: sandbox → 執行環境 / execution environment (was 工作環境 / workspace).
-    expect(b.text).toMatch(/執行環境|execution environment/);
+    // #160 banned the word because it was EXEC jargon leaking into a banner
+    // ('the sandbox was killed'). What it must not do is describe the
+    // machinery; naming the thing is fine, and 沙盒 / sandbox is now the one
+    // name the product uses for it (`i18n.test.tsx` sweeps for the old one).
+    expect(b.text).not.toMatch(/kill|exec|container/i);
+    expect(b.text).toMatch(/沙盒|sandbox/i);
   });
 
   it("starts a new assistant message after a tool call returns", () => {
