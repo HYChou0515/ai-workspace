@@ -164,23 +164,24 @@ class ScheduleIndex:
             rm.create(_ScheduleIndex(paths=[path]), resource_id=item_id, if_not_exists=True)  # ty: ignore[unknown-argument]
             return True
         except DuplicateResourceError:
-            # A row exists — possibly SOFT-DELETED, which `create(if_not_exists=True)`
-            # reports as a duplicate just the same (existence is deletion-blind by
-            # contract). Restore it HERE, where that state is still visible: `_res`
-            # answers `None` for a deleted row, so the loop below cannot tell it
-            # apart from "absent" and would keep asking a question already answered.
-            # `SpecstarTriggerStore.try_claim`, the pattern this copies, has the
-            # same branch for the same reason.
-            self._restore_if_deleted(item_id)
+            pass  # a row exists — merge into it below
 
         for _ in range(_MAX_CAS_RETRIES):
             res = self._res(item_id)
             if res is None:
-                # The READ said absent. That is the unreliable half — a retry
-                # after a CAS conflict, or a peer's create landing between our
-                # read and our write, both produce it while the row is right
-                # there — so the WRITE carries the condition rather than trusting
-                # the answer. Without `if_not_exists` specstar does no existence
+                # The read said absent, and it cannot say WHY: `_res` answers
+                # `None` for a hard-gone row and for a soft-deleted one alike,
+                # while `create(if_not_exists=True)` calls the second a duplicate.
+                # Nothing that fails to resolve that disagreement can make
+                # progress. Done HERE rather than on every `DuplicateResourceError`
+                # because this is the rare branch — doing it eagerly cost a second
+                # read on every save after the first, against this function's own
+                # rule that "already known" costs one.
+                self._restore_if_deleted(item_id)
+                # The READ is the unreliable half — a retry after a CAS conflict,
+                # or a peer's create landing between our read and our write, both
+                # produce it while the row is right there — so the WRITE carries
+                # the condition. Without `if_not_exists` specstar does no existence
                 # check at all: it writes a new revision, and a row holding two
                 # paths becomes a row holding one.
                 try:
@@ -193,7 +194,6 @@ class ScheduleIndex:
                 except DuplicateResourceError:
                     # It was there after all. Go round: the next read sees it and
                     # merges instead of replacing.
-                    self._restore_if_deleted(item_id)
                     continue
             row, etag = res
             if path in row.paths:
@@ -252,16 +252,25 @@ class ScheduleIndex:
                 return
             except PreconditionFailedError:
                 continue  # a peer changed the row — re-read and decide again
+        raise RuntimeError(  # pragma: no cover - only under pathological churn
+            f"schedule index CAS exhausted retries forgetting {path!r} of {item_id!r}"
+        )
 
-    def items(self) -> list[str]:
-        """Every item with at least one schedule file. The sweep's whole input."""
+    def items_with_paths(self) -> list[tuple[str, list[str]]]:
+        """Every item with at least one schedule file, AND its paths.
+
+        One listing, not a listing plus a point read per item. The listing
+        already fetches `data` to tell an emptied row from a live one, so asking
+        each item for its paths afterwards re-reads what is in hand — a round
+        trip per item, per tick, per pod, for a number that only grows.
+        """
         rm = self._spec.get_resource_manager(_ScheduleIndex)
         # `is_deleted() == False` because `list_resources` happily returns
         # soft-deleted rows. Without it an item whose last schedule was removed
         # keeps being read on every sweep, forever — which is the one cost this
         # index exists to avoid.
         query = (QB.is_deleted() == False).build()  # noqa: E712
-        out: list[str] = []
+        out: list[tuple[str, list[str]]] = []
         for res in rm.list_resources(query, returns=["data", "info"]):
             data = res.data
             # An EMPTIED row is not an item to sweep. `forget` empties rather
@@ -277,8 +286,20 @@ class ScheduleIndex:
             # hold — but nothing reclaims it, and if it ever stops being small
             # the answer is an indexed flag to filter on, not a racy delete.
             if isinstance(data, _ScheduleIndex) and data.paths:
-                out.append(res.info.resource_id)  # ty: ignore[unresolved-attribute]
+                out.append(
+                    (res.info.resource_id, list(data.paths))  # ty: ignore[unresolved-attribute]
+                )
         return sorted(out)
+
+    def items(self) -> list[str]:
+        """Every item with at least one schedule file. The sweep's whole input."""
+        rm = self._spec.get_resource_manager(_ScheduleIndex)
+        # `is_deleted() == False` because `list_resources` happily returns
+        # soft-deleted rows. Without it an item whose last schedule was removed
+        # keeps being read on every sweep, forever — which is the one cost this
+        # index exists to avoid.
+        del rm  # the listing lives in `items_with_paths`; this is its id half
+        return [item_id for item_id, _paths in self.items_with_paths()]
 
     def paths(self, item_id: str) -> list[str]:
         row = self._row(item_id)

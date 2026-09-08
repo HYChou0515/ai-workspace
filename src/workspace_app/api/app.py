@@ -966,7 +966,16 @@ def create_app(
     def _note_schedule_file(item_id: str, path: str) -> None:
         """Record that this item now has schedules. Runs on EVERY write in the
         platform, so the test is exact and cheap and the work only happens for
-        the one filename that means anything here."""
+        the one filename that means anything here.
+
+        ⚠️ `record` is blocking specstar I/O and this runs on the event loop —
+        `_landed` is synchronous by design, because it sits in the write tail
+        that every path shares, so offloading here would mean making that whole
+        chain async. NOT done: the cost is paid only by an actual write of
+        `schedules.json`, which is a person saving a page, not a hot path. If
+        that ever stops being true the answer is an async hook, not a
+        fire-and-forget task whose failures nobody sees.
+        """
         if is_schedule_file(path):
             schedule_index.record(item_id, path)
 

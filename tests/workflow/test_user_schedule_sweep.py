@@ -678,6 +678,68 @@ def test_a_file_the_snapshot_has_not_caught_up_with_is_not_gone():
     assert [r[1] for r in started.runs] == ["build-report"], "and it did not fire either"
 
 
+def test_the_same_complaint_is_not_repeated_every_tick(caplog):
+    """A file with a typo is read every tick, so a complaint logged per tick is
+    the same three lines a minute, for ever, per pod.
+
+    This module already argues the point about its own retry cap — "the log says
+    so once instead of a thousand times" — because a channel trained to be noise
+    is one where the line that mattered is not read either. The same reasoning
+    applies to the thing being complained about.
+
+    It repeats when the complaint CHANGES, because that is new information.
+    """
+    import logging
+
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    started = _Started()
+    bad = {"every": "fortnightly", "run": "x"}
+    files = _Files(**{f"{ITEM}{PATH}": _file(bad, DAILY)})
+    sweeper = _sweeper(spec, files, started, datetime(2026, 9, 5, 9, 30))
+
+    with caplog.at_level(logging.WARNING, logger="workspace_app.workflow.user_schedule_sweep"):
+        for _ in range(4):
+            asyncio.run(sweeper.tick())
+        first = [r for r in caplog.records if "fortnightly" in r.getMessage()]
+
+        # The file is edited and is still wrong in a NEW way.
+        files.files[f"{ITEM}{PATH}"] = _file({"every": "minutes", "n": 7, "run": "x"}, DAILY)
+        asyncio.run(sweeper.tick())
+        second = [r for r in caplog.records if "divide 60" in r.getMessage()]
+
+    assert len(first) == 1, f"the same complaint was logged {len(first)} times"
+    assert len(second) == 1, "a NEW complaint was suppressed along with the old one"
+
+
+def test_a_tick_reads_the_index_once_not_once_per_item():
+    """The listing already fetches each row's data — it has to, to tell an
+    emptied row from a live one — so asking each item for its paths afterwards
+    re-reads what is in hand. One round trip per item, per tick, per pod, for a
+    number that only grows.
+
+    It also removed a failure mode rather than guarding it: reading paths per
+    item happened OUTSIDE the per-item try, so one specstar error skipped every
+    item after it in the same tick, alphabetically, with the lifespan loop
+    swallowing the error so nothing looked wrong.
+    """
+    spec = _spec()
+    index = ScheduleIndex(spec)
+    for n in range(5):
+        index.record(f"item-{n}", PATH)
+    started = _Started()
+    files = _Files(**{f"item-{n}{PATH}": _file(DAILY) for n in range(5)})
+
+    sweeper = _sweeper(spec, files, started, datetime(2026, 9, 5, 9, 30))
+    per_item: list[str] = []
+    sweeper._index.paths = lambda item_id: per_item.append(item_id) or []
+
+    asyncio.run(sweeper.tick())
+
+    assert len(started.runs) == 5, "the sweep did not do its work — this measures nothing"
+    assert per_item == [], f"the index was read again per item: {per_item}"
+
+
 def test_a_confirmation_that_could_not_be_made_is_not_a_deletion():
     """ "I could not ask" is a third answer, and it must not be filed as "gone".
 

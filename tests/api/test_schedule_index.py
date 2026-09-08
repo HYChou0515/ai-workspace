@@ -292,6 +292,36 @@ def test_a_backend_that_is_down_is_not_mistaken_for_a_lost_race(index: ScheduleI
         rm.create = real_create  # ty: ignore[invalid-assignment]
 
 
+def test_a_known_path_still_costs_one_read(index: ScheduleIndex) -> None:
+    """`record` runs on the write path and a page saves on every edit, so its own
+    docstring sets the bar: "already known" costs a point read and NOT a
+    round-trip.
+
+    Resolving the soft-deleted case eagerly on every duplicate added a second
+    `get` to every save after the first — to detect a state nothing produces
+    today. The check belongs on the branch that needs it: the one where the read
+    said absent.
+    """
+    index.record("i1", "/a/schedules.json")
+
+    rm = index._spec.get_resource_manager(_ScheduleIndex)
+    real_get = rm.get
+    gets: list[str] = []
+
+    def _counting(resource_id: str, *a, **kw):
+        gets.append(resource_id)
+        return real_get(resource_id, *a, **kw)
+
+    rm.get = _counting  # ty: ignore[invalid-assignment]
+    try:
+        wrote = index.record("i1", "/a/schedules.json")
+    finally:
+        rm.get = real_get  # ty: ignore[invalid-assignment]
+
+    assert wrote is False
+    assert len(gets) == 1, f"a known path cost {len(gets)} reads, not one"
+
+
 def test_a_soft_deleted_row_comes_back_rather_than_stalling(index: ScheduleIndex) -> None:
     """specstar deletes SOFTLY, and `exists` is deletion-blind — so a deleted row
     answers "duplicate" to a create and "absent" to a read. Anything that does

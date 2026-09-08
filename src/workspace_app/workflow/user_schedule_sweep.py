@@ -200,6 +200,13 @@ class UserScheduleSweeper:
         self._confirm_timeout_s = confirm_timeout_s
         self._store = SpecstarTriggerStore(spec)
         self._failures: dict[tuple[str, str], int] = {}
+        #: The last complaint said about each file, so an unchanged one is not
+        #: repeated. A file with a typo is re-read every tick, and this module
+        #: already argues the point about its own retry cap: "the log says so
+        #: once instead of a thousand times", because a channel trained to be
+        #: noise is one where the line that mattered is not read either.
+        #: In memory, per pod — it is a property of this run of the sweep.
+        self._said: dict[tuple[str, str], str] = {}
 
     async def tick(self) -> int:
         """Fire everything due. Returns how many runs were launched."""
@@ -211,17 +218,34 @@ class UserScheduleSweeper:
         # sync, the sweeper is what puts it on a thread. This loop runs on every
         # API pod, un-gated by `run_consumers`, at O(items × paths × rows) per
         # tick, so a loop it holds is holding every request that pod is serving.
-        for item_id in await asyncio.to_thread(self._index.items):
-            for path in await asyncio.to_thread(self._index.paths, item_id):
-                try:
+        for item_id, paths in await asyncio.to_thread(self._index.items_with_paths):
+            # The try covers the WHOLE item, reading its paths included. Reading
+            # them outside it meant one specstar error skipped every item after
+            # this one in the same tick — alphabetically, so the same items lose
+            # every time, and the lifespan loop swallows it so nothing crashes:
+            # some schedules are just late, sometimes. That is the opposite of
+            # the per-item resilience this module's header promises.
+            try:
+                for path in paths:
                     fired += await self._one_file(item_id, path)
-                except Exception:
-                    # Per-item resilience, the rule every sweep here keeps: one
-                    # item's problem must not cost the rest their schedules. The
-                    # failure that would otherwise be found weeks later, by
-                    # somebody asking why their report stopped.
-                    logger.exception("user schedules: item %s path %s failed", item_id, path)
+            except Exception:
+                # One item's problem must not cost the rest their schedules — the
+                # failure that would otherwise be found weeks later, by somebody
+                # asking why their report stopped.
+                logger.exception("user schedules: item %s failed", item_id)
         return fired
+
+    def _say_once(self, item_id: str, path: str, level: int, message: str, *args: object) -> None:
+        """Log this file's complaint, unless it is the one already said about it.
+
+        Repeats when the complaint CHANGES, because that is new information —
+        the author edited the file and it is wrong in a different way.
+        """
+        rendered = message % args if args else message
+        if self._said.get((item_id, path)) == rendered:
+            return
+        self._said[item_id, path] = rendered
+        logger.log(level, "%s", rendered)
 
     async def _still_there(self, item_id: str, path: str) -> bytes | None | object:
         """Three answers, not two: the bytes, `None` for confirmed gone, or
@@ -326,7 +350,10 @@ class UserScheduleSweeper:
             # entries was not typed by a person, so there is no good half worth
             # preserving — and half-processing would leave a durable ledger row
             # for every one it got through, which is the thing this bounds.
-            logger.error(
+            self._say_once(
+                item_id,
+                path,
+                logging.ERROR,
                 "user schedules: %s %s declares %d schedules, over the limit of %d — "
                 "none will run until it is reduced",
                 item_id,
@@ -342,7 +369,21 @@ class UserScheduleSweeper:
             # stop the others in the same file. Whole-file rejection is how
             # somebody's working report stops arriving because a colleague
             # mistyped a different one.
-            logger.warning("user schedules: %s %s: %s", item_id, path, "; ".join(problems[:3]))
+            self._say_once(
+                item_id,
+                path,
+                logging.WARNING,
+                "user schedules: %s %s: %s",
+                item_id,
+                path,
+                "; ".join(problems[:3]),
+            )
+
+        else:
+            # Clean now — forget what was said, so a future problem is reported
+            # rather than suppressed by a memo of a complaint that no longer
+            # applies.
+            self._said.pop((item_id, path), None)
 
         folder = path.rsplit("/", 1)[0]
         owner = await asyncio.to_thread(self._owner_of, item_id)
