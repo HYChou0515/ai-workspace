@@ -32,28 +32,28 @@
  * the item OWNER's quota, and the 507 that answers it could not be shown
  * because this component is unmounted by then.
  *
- * The rule that does hold, and it is about FOCUS rather than about closing:
- * moving focus off a field commits it, and the exits do not move focus. Tab to
- * the ✕ and the field you left is saved — you moved the focus, and that is this
- * panel's save gesture. Click the ✕ or press Escape and nothing is sent: Escape
- * never moved focus, and `preventDefault` on the ✕'s mousedown withdraws the
- * move a click would otherwise make.
+ * The rule is about FOCUS, not about closing: moving focus off a field commits
+ * it. Tab to the ✕, or click it in a browser that focuses buttons on mousedown,
+ * and the field you left is saved — you moved the focus, and that is this
+ * panel's only save gesture. Escape moves no focus and so sends nothing.
  *
- * An earlier version of this comment claimed "closing is only closing", which
- * is false the moment anyone reaches the ✕ by keyboard. The behaviour was
- * right; the sentence was not.
+ * That is inherited, and it is uneven: whether a ✕ CLICK saves depends on the
+ * browser (Chrome focuses on mousedown, Firefox and Safari do not). Both were
+ * tried here and both were worse than saying so. A `useDirtyClose` prompt
+ * cannot work at all — `DialogProvider` focuses the confirm so it can be
+ * answered, focus leaving the field blurs it, and blurring is what saves, so
+ * the question commits the value it asks about. Committing on the way out made
+ * Escape the only keystroke in the app that WRITES, spending the item owner's
+ * quota. And withdrawing the ✕'s focus move with `preventDefault` — the third
+ * attempt — evened the exits out by turning the commonest one into silent data
+ * loss, which is a regression against what the ✕ does today.
  *
- * The `preventDefault` does change what a ✕ CLICK used to do in Chrome, on
- * purpose. The old behaviour was an artefact of which browsers focus a button
- * on mousedown — the same click saved in Chrome and dropped the number in
- * Firefox and Safari — rather than anything anyone decided.
+ * So the frame leaves the save model alone and this comment states it rather
+ * than claiming it away. What would actually fix it is a Save button, which is
+ * a decision about the panel, not about the modal around it.
  *
- * Because no exit commits, every save is dispatched while this is on screen,
- * which is what lets a refusal be shown at all (`saveFailed`). What is still
- * missing, and is a save-model decision rather than a frame one: a number typed
- * and never blurred is discarded with nothing said, and a save refused after a
- * tab-to-✕-then-Enter lands with nobody left to read it. Both want a Save
- * button rather than more focus bookkeeping.
+ * Because saves are dispatched while this is on screen, a refusal has somewhere
+ * to be read (`saveFailed`) — the one part of that gap this frame can close.
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -162,9 +162,6 @@ export function ItemEnvironmentModal({
           // NOT `itemenv.close` — that button ends what is running. This one
           // only puts the panel away.
           aria-label={t("itemenv.dismiss")}
-          // Keeps focus where it is, so closing does not blur — and therefore
-          // does not save — the field the person was in. See the note above.
-          onMouseDown={(e) => e.preventDefault()}
           onClick={onClose}
           style={{ border: "none", background: "transparent", cursor: "pointer" }}
         >
@@ -177,7 +174,13 @@ export function ItemEnvironmentModal({
           env={env.data}
           budget={budgetFrom(resources.data)}
           canEdit={canEdit}
-          onClose={() => close.mutate()}
+          onClose={() => {
+            // Otherwise the "not saved" line from an earlier refusal is still
+            // sitting there after the sandbox has been shut down and the panel
+            // has re-rendered around it, describing a request nobody can see.
+            save.reset();
+            close.mutate();
+          }}
           onSave={(edit) => save.mutate(edit)}
           saveFailed={save.isError}
         />

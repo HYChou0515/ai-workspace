@@ -186,11 +186,6 @@ export function ItemEnvironmentPanel({
           />
           )}
           {canEdit ? null : <p className="detail">{t("itemenv.readonly")}</p>}
-          {saveFailed ? (
-            <p data-testid="save-failed" className="detail" role="alert">
-              {t("itemenv.saveFailed")}
-            </p>
-          ) : null}
 
           {/* Memory had no control at all — the field existed on the item, the
               route accepted it, and nothing could set it. P9's SIGKILL note
@@ -231,6 +226,15 @@ export function ItemEnvironmentPanel({
               }
             />
           )}
+
+          {/* After BOTH inputs, not between them: one `save` mutation serves cpu,
+              memory and reset alike, so an alert sitting under the cpu field
+              points a refused MEMORY save at the wrong control. */}
+          {saveFailed ? (
+            <p data-testid="save-failed" className="detail" role="alert">
+              {t("itemenv.saveFailed")}
+            </p>
+          ) : null}
 
           <div data-testid="budget-gauge" className="gauge">
             <p className="summary">

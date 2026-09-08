@@ -67,7 +67,22 @@ const SRC = join(process.cwd(), "src");
  * rename removed.
  */
 const ZH_TERM = "\u74b0\u5883";
-const ZH_ALLOWED = "\u74b0\u5883\u8b8a\u6578";
+
+/**
+ * Compounds that are a different noun, removed from a line before it is judged.
+ * In source there is no key to allow-list against, so the door has to be the
+ * words themselves — and it has to exist: this branch put 部署環境 into the docs
+ * for a sentence that really is about the host, and 開發環境 / 正式環境 are the
+ * same kind of word. Without them the guard would forbid writing about a
+ * deployment at all, under a failure message about mis-naming the sandbox.
+ */
+const ZH_ALLOWED = [
+  "\u74b0\u5883\u8b8a\u6578", // 環境變數 — environment variables
+  "\u90e8\u7f72\u74b0\u5883", // 部署環境 — the deployment
+  "\u958b\u767c\u74b0\u5883", // 開發環境
+  "\u6b63\u5f0f\u74b0\u5883", // 正式環境
+  "\u6e2c\u8a66\u74b0\u5883", // 測試環境
+];
 // Split so this line is not itself an offence, same reason as the zh needles.
 const EN_TERMS = [
   new RegExp("execution " + "environment", "i"),
@@ -134,8 +149,11 @@ describe("i18n #171 term sweep", () => {
       if (NOT_THE_SANDBOX.has(key)) continue;
       const zh = (entry as Record<string, string>)["zh-TW"];
       const en = (entry as Record<string, string>).en;
-      expect(`${key} → ${zh}`).not.toMatch(new RegExp(ZH_TERM));
-      expect(`${key} → ${en}`).not.toMatch(/environments?\b/i);
+      // The key is the MESSAGE, not part of the subject: folding it in meant a
+      // future `env.environmentName` failed a guard about what users read, over
+      // a word no user reads.
+      expect(zh, key).not.toMatch(new RegExp(ZH_TERM));
+      expect(en, key).not.toMatch(/environments?\b/i);
     }
   });
 
@@ -165,7 +183,7 @@ describe("i18n #171 term sweep", () => {
         .forEach((line, i) => {
           const code = line.trim();
           if (code.startsWith("//") || code.startsWith("*") || code.startsWith("/*")) return;
-          const zh = code.split(ZH_ALLOWED).join("");
+          const zh = ZH_ALLOWED.reduce((line, ok) => line.split(ok).join(""), code);
           if (zh.includes(ZH_TERM) || EN_TERMS.some((re) => re.test(code))) {
             offenders.push(`${relative(SRC, file)}:${i + 1}`);
           }

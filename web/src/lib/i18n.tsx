@@ -978,9 +978,14 @@ export const messages = {
   // Every save happens while this panel is on screen — the exits deliberately
   // do not commit — so a refusal has somewhere to appear. 507 is a normal
   // answer here: the size spends the ITEM OWNER's quota, not the editor's.
+  // No "try again": the expected cause is a quota refusal against the OWNER's
+  // limit, which is deterministic — a retry loops. Naming the dimension and the
+  // numbers is what `lib/quotaFailure.ts` exists for and would be the better
+  // message; wiring it here is a bigger change than this frame, so this says
+  // only what it knows rather than inventing a remedy.
   "itemenv.saveFailed": {
-    "zh-TW": "沒有存起來:這個大小沒有套用,再試一次。",
-    en: "Not saved — that size wasn't applied. Try again.",
+    "zh-TW": "沒有存起來:這個大小沒有套用。",
+    en: "Not saved — that size wasn't applied.",
   },
   "itemenv.status.running": { "zh-TW": "執行中", en: "Running" },
   "itemenv.status.idle": { "zh-TW": "未啟動", en: "Not running" },
