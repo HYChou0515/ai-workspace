@@ -112,8 +112,10 @@ export function ItemEnvironmentModal({
           display: "flex",
           alignItems: "center",
           gap: "var(--space-8)",
-          // Lines up with `.item-environment`'s own padding below it, so the
-          // title and the first reading share a left edge.
+          // Same padding as `.item-environment` below it, so the header BOX
+          // shares the panel's margins. The title text itself sits one icon
+          // further in, exactly as it does in every other modal's header —
+          // measured at 1280: title 466px, first reading 443px.
           padding: "var(--space-12) var(--space-12) 0",
         }}
       >
