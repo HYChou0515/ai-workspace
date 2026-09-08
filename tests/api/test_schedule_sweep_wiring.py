@@ -160,3 +160,28 @@ def test_the_fire_path_does_not_hold_the_event_loop() -> None:
         f"{unoffloaded} are blocking specstar calls made directly on the event loop, "
         "inside a sweep that offloads every one of its own"
     )
+
+
+def test_both_write_boundaries_feed_the_index() -> None:
+    """The facade is one of TWO ways bytes reach the durable store.
+
+    A file written inside the sandbox — an agent's `exec`, a workflow's shell
+    step — arrives through the mirror, which writes to the FileStore directly and
+    never touches `WorkspaceFiles`. So a `schedules.json` produced that way was
+    never indexed: the schedules never ran, and nothing said why. That is the
+    same silent failure the index exists to prevent, entering through the door
+    the facade fix did not cover.
+
+    One callback wired to both, so they cannot disagree about what counts.
+    """
+    source = _APP.read_text(encoding="utf-8")
+
+    facade = re.search(r"WorkspaceFiles\((.*?)\n    \)", source, re.DOTALL)
+    mirror = re.search(r"SandboxSync\((.*?)\n    \)", source, re.DOTALL)
+    assert facade is not None and mirror is not None, "one of the two is no longer built here"
+
+    for name, call in (("facade", facade.group(1)), ("mirror", mirror.group(1))):
+        assert "_note_schedule_file" in call, (
+            f"the {name} write path does not tell the schedule index, so a file "
+            "that arrives that way is never swept"
+        )

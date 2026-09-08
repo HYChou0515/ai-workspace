@@ -57,10 +57,22 @@ class SandboxSync:
         ignores: list[str] | None = None,
         monitor: IMonitor | None = None,
         on_measured: Callable[[str, int], None] | None = None,
+        on_write: Callable[[str, str], None] | None = None,
     ) -> None:
         self._fs = filestore
         self._sb = sandbox
         self._ignores = list(ignores) if ignores is not None else list(DEFAULT_IGNORES)
+        #: Told about each path this mirror PERSISTED, with the same signature as
+        #: `WorkspaceFiles`' hook of the same name — so one callback can serve
+        #: both boundaries and they cannot disagree about what counts.
+        #:
+        #: The facade is not the only way bytes reach the durable store. A file
+        #: written INSIDE the sandbox — an agent's `exec`, a workflow's shell
+        #: step — never touches the facade, so anything keyed on "this file now
+        #: exists" is only right about the half it watched. The concrete miss was
+        #: a `schedules.json` produced by a shell step: never indexed, so its
+        #: schedules never ran and nothing said why.
+        self._on_write = on_write
         # Per-workspace {path: version} last mirrored to the snapshot — the diff
         # state so `mirror` only re-copies changed files and can spot deletions.
         self._versions: dict[str, dict[str, str]] = {}
@@ -197,6 +209,21 @@ class SandboxSync:
                 await self._fs.write_from_path(workspace_id, entry.path, tmp, None)
                 n_bytes += tmp.stat().st_size
             n_uploaded += 1
+            if self._on_write is not None:
+                # After the bytes land, and only for paths this pass actually
+                # persisted — an unchanged file `continue`s above, so a hook
+                # meaning "this changed" is not fired for files that did not.
+                # A failing hook must never fail the mirror: the bytes are
+                # committed, and raising here would abandon the rest of the
+                # workspace over a bookkeeping error.
+                try:
+                    self._on_write(workspace_id, entry.path)
+                except Exception:
+                    logger.exception(
+                        "sandbox-sync: on_write hook failed for %s %s",
+                        workspace_id,
+                        entry.path,
+                    )
         # Directories, same shape as the files above: creating is always safe, so
         # it runs unconditionally; removing needs the #366 readiness sandwich.
         live_dirs = {d for d in walked.dirs if not should_ignore(d, self._ignores)}

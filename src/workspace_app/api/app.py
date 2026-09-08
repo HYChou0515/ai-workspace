@@ -556,6 +556,14 @@ def create_app(
         sandbox=sandbox,
         monitor=monitor,
         on_measured=lambda ws, total: files.record_measurement(ws, total),
+        # THE SAME hook the facade gets, on the other boundary. Bytes written
+        # inside the sandbox — an agent's `exec`, a workflow's shell step — never
+        # touch the facade, so a `schedules.json` produced that way was never
+        # indexed and its schedules never ran, silently. One callback for both,
+        # so the two cannot disagree about what counts. Through a lambda because
+        # the resolver is defined further down, the same deferred wiring
+        # `_start_page_schedule` explains.
+        on_write=lambda ws, path: _note_schedule_file(ws, path),
     )
     # #345 wired this for the local process sandbox only: it is the one backend
     # that keeps an item's working dir on a shared volume, so it is the one whose

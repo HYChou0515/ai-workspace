@@ -493,3 +493,54 @@ async def test_mirror_does_not_persist_an_ignored_folder(
     await sync.mirror("ws", h)
 
     assert await fs.listdir("ws") == ["/src"]
+
+
+async def test_the_mirror_reports_what_it_persisted(fs: SpecstarFileStore, sandbox: MockSandbox):
+    """The facade is not the only way bytes reach the durable store.
+
+    A file written INSIDE the sandbox — an agent's `exec` doing `echo > x`, a
+    workflow's shell step — never touches `WorkspaceFiles`, so the facade's
+    `on_write` hook cannot see it. It arrives here instead, and anything keyed on
+    "this file now exists" has to hear about it from BOTH boundaries or it is
+    only right about the half it watched.
+
+    The concrete miss: a `schedules.json` produced by a shell step is never
+    indexed, so its schedules never run and nothing says why — the same silent
+    failure the index was built to prevent, entering through the door the fix
+    did not cover.
+
+    Same signature as the facade's hook, so one callback serves both and the two
+    cannot disagree about what counts.
+    """
+    seen: list[tuple[str, str]] = []
+    h = await sandbox.create(SandboxSpec())
+    await sandbox.upload(h, b"[]", "/page/schedules.json")
+    await sandbox.upload(h, b"hi", "/notes.txt")
+
+    sync = SandboxSync(filestore=fs, sandbox=sandbox, on_write=lambda w, p: seen.append((w, p)))
+    await sync.mirror("ws", h)
+
+    assert ("ws", "/page/schedules.json") in seen
+    assert ("ws", "/notes.txt") in seen
+
+
+async def test_the_mirror_says_nothing_about_files_it_did_not_write(
+    fs: SpecstarFileStore, sandbox: MockSandbox
+):
+    """The control. Reporting every path it WALKED rather than every path it
+    PERSISTED would fire on unchanged files every mirror — a hook that means
+    "this changed" firing constantly is a hook nobody can act on."""
+    seen: list[tuple[str, str]] = []
+    h = await sandbox.create(SandboxSpec())
+    await sandbox.upload(h, b"[]", "/page/schedules.json")
+
+    sync = SandboxSync(filestore=fs, sandbox=sandbox, on_write=lambda w, p: seen.append((w, p)))
+    await sync.mirror("ws", h)
+    first = list(seen)
+    await sync.mirror("ws", h)  # nothing changed
+
+    # NOT `first == 1`. That would be the sibling test's assertion smuggled in
+    # here, and it makes this one fail when the hook never fires at all — a
+    # control that is red for the same reason as the test it controls tells the
+    # two apart from nothing. This one asks only: did the second pass add?
+    assert seen == first, "an unchanged file was reported as written again"
