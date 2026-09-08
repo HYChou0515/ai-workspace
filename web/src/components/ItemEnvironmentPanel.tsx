@@ -16,7 +16,7 @@
  * explicable.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { ItemEnvironment } from "../api/itemEnvironment";
 import { formatBytes } from "../lib/bytes";
@@ -43,6 +43,13 @@ export type ItemEnvironmentPanelProps = {
    *  caller turns into "keep what is stored" — the distinction that stops a cpu
    *  edit from clearing memory. */
   onSave?: (edit: { cpuCores?: number | null; memory?: string | null }) => void;
+  /** Reports whether a field is showing something other than what is STORED, so
+   *  the modal around it can guard its exits (#779). It is measured here
+   *  because this is where the drafts are made, and against the stored value
+   *  rather than "has anything been typed": a successful save clears it by
+   *  itself, and a guard that fires over a number nobody changed is the one
+   *  that teaches people to click straight through it. */
+  onDirtyChange?: (dirty: boolean) => void;
 };
 
 function Meter({ used, limit }: { used: number; limit: number }) {
@@ -67,6 +74,7 @@ export function ItemEnvironmentPanel({
   canEdit,
   onClose,
   onSave,
+  onDirtyChange,
 }: ItemEnvironmentPanelProps) {
   const t = useT();
   const [draft, setDraft] = useState<string>(
@@ -75,6 +83,15 @@ export function ItemEnvironmentPanel({
   const [memoryDraft, setMemoryDraft] = useState<string>(
     env.statedMemoryBytes === null ? "" : String(env.statedMemoryBytes),
   );
+
+  // The two fields commit on blur, so between a keystroke and a blur the panel
+  // is holding something the person would lose on the way out.
+  const storedCpu = env.statedCpuCores === null ? "" : String(env.statedCpuCores);
+  const storedMemory = env.statedMemoryBytes === null ? "" : String(env.statedMemoryBytes);
+  const dirty = draft !== storedCpu || memoryDraft !== storedMemory;
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
 
   const stated = env.statedCpuCores;
   const effective = env.effectiveCpuCores;
@@ -95,9 +112,9 @@ export function ItemEnvironmentPanel({
   const boundByQuota = env.cpuBoundBy === "quota";
 
   return (
-    <section className="item-environment" aria-label={t("itemenv.heading")}>
-      <h3>{t("itemenv.heading")}</h3>
-
+    // The title lives on the modal's own header row — drawing it again here
+    // gave the panel two of them, one of which no `labelledBy` pointed at.
+    <section className="item-environment">
       {/* ── the machine half: always drawn ── */}
       <p data-testid="environment-status" className="summary">
         <span className="gauge-label">

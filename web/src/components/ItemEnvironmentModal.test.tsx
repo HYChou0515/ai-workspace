@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ItemEnvironmentModal } from "./ItemEnvironmentModal";
@@ -88,6 +89,55 @@ describe("ItemEnvironmentModal", () => {
     await waitFor(() => expect(screen.getByTestId("environment-status")).toBeTruthy());
     expect(screen.queryByTestId("budget-gauge")).toBeNull();
     expect(screen.queryByTestId("cpu-input")).toBeNull();
+  });
+
+  it("is a real modal — it dims what is behind it and answers Escape", async () => {
+    // It used to be a bare `<div className="modal">`: nothing dimmed behind it,
+    // focus stayed on the page underneath, and the only way out was one
+    // unlabelled `×` below the panel.
+    const onClose = vi.fn();
+    renderWithQuery(
+      <ItemEnvironmentModal slug="rca" itemId="i-1" canEdit onClose={onClose} />,
+    );
+
+    await waitFor(() => expect(screen.getByTestId("environment-status")).toBeTruthy());
+    expect(screen.getByTestId("item-environment-modal-backdrop")).toBeTruthy();
+
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
+  it("keeps a size that was typed but not yet blurred", async () => {
+    // Escape is NEW here, and the field commits on BLUR. The old `×` happened
+    // to save on the way out — clicking it moved focus, which fired the blur —
+    // so making this a proper modal is precisely what introduces a way to lose
+    // a typed number. The guard goes in with the exit that needs it.
+    const onClose = vi.fn();
+    renderWithQuery(
+      <ItemEnvironmentModal slug="rca" itemId="i-1" canEdit onClose={onClose} />,
+    );
+
+    await waitFor(() => expect(screen.getByTestId("cpu-input")).toBeTruthy());
+    await userEvent.type(screen.getByTestId("cpu-input"), "3");
+    await userEvent.keyboard("{Escape}");
+
+    expect(await screen.findByText("放棄未儲存的變更？")).toBeTruthy();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("closes without asking when the person changed nothing", async () => {
+    // The other half of the guard. A prompt that fires when nothing was edited
+    // is the one that teaches people to click through it.
+    const onClose = vi.fn();
+    renderWithQuery(
+      <ItemEnvironmentModal slug="rca" itemId="i-1" canEdit onClose={onClose} />,
+    );
+
+    await waitFor(() => expect(screen.getByTestId("cpu-input")).toBeTruthy());
+    await userEvent.keyboard("{Escape}");
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(screen.queryByText("放棄未儲存的變更？")).toBeNull();
   });
 
   it("asks the item's route for the item, and the person's for the total", async () => {
