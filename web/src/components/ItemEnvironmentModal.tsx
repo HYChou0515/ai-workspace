@@ -32,12 +32,23 @@
  * the item OWNER's quota, and the 507 that answers it could not be shown
  * because this component is unmounted by then.
  *
- * So Escape closes, as it does in every other modal here, and a number typed
- * but never blurred is not sent. That is the same outcome as typing one and
- * navigating away today, and it errs in the safe direction: a dropped keystroke
- * rather than a write nobody confirmed. Making that number reachable — a Save
- * button, or a visible refusal that outlives the panel — is a change to the
- * save model, not to the frame around it.
+ * So the exits close, and nothing else. A number typed but never blurred is not
+ * sent — the same outcome as typing one and navigating away today, and the safe
+ * direction: a dropped keystroke rather than a write nobody confirmed.
+ *
+ * That has to be arranged for the ✕, which otherwise disagrees with Escape: a
+ * click moves focus, the field saves on blur, and so the SAME click saved in
+ * Chrome and dropped the number in Firefox and Safari. `preventDefault` on its
+ * mousedown withdraws the focus move, leaving the click itself untouched — one
+ * meaning for both exits, in every browser. It does change what the ✕ used to
+ * do in Chrome, deliberately: the old behaviour was an artefact of focus
+ * mechanics rather than a decision, and it was never the behaviour anywhere
+ * else in this app.
+ *
+ * Committing stays where it always was — blurring a field INSIDE the panel, by
+ * tabbing or clicking another one. Making a typed-and-unblurred number
+ * reachable (a Save button) or a refused save visible (a failure surface that
+ * outlives the panel) are changes to the save model, not to the frame.
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -136,6 +147,9 @@ export function ItemEnvironmentModal({
           // NOT `itemenv.close` — that button ends what is running. This one
           // only puts the panel away.
           aria-label={t("itemenv.dismiss")}
+          // Keeps focus where it is, so closing does not blur — and therefore
+          // does not save — the field the person was in. See the note above.
+          onMouseDown={(e) => e.preventDefault()}
           onClick={onClose}
           style={{ border: "none", background: "transparent", cursor: "pointer" }}
         >

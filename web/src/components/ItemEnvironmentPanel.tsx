@@ -19,7 +19,6 @@
 import { useState } from "react";
 
 import type { ItemEnvironment } from "../api/itemEnvironment";
-import type { SizeEdit } from "./ItemEnvironmentSize";
 import { formatBytes } from "../lib/bytes";
 import { useT } from "../lib/i18n";
 
@@ -42,7 +41,11 @@ export type ItemEnvironmentPanelProps = {
   onClose?: () => void;
   /** One dimension at a time. An absent key means "not touched", which the
    *  caller turns into "keep what is stored" — the distinction that stops a cpu
-   *  edit from clearing memory. */
+   *  edit from clearing memory.
+   *
+   *  Called when a field LOSES FOCUS to something else in the panel. Closing the
+   *  modal is deliberately not that: its exits neither save nor ask, and the
+   *  comment in `ItemEnvironmentModal` says why both were tried and withdrawn. */
   onSave?: (edit: { cpuCores?: number | null; memory?: string | null }) => void;
 };
 
@@ -76,14 +79,6 @@ export function ItemEnvironmentPanel({
   const [memoryDraft, setMemoryDraft] = useState<string>(
     env.statedMemoryBytes === null ? "" : String(env.statedMemoryBytes),
   );
-
-  /**
-   * Each field commits when it loses focus, and there is no Save button. The
-   * modal around this deliberately does NOT extend that to its own exits —
-   * closing neither saves nor asks. See the comment there for why both of those
-   * were tried and withdrawn.
-   */
-  const dispatch = (edit: SizeEdit) => onSave?.(edit);
 
   const stated = env.statedCpuCores;
   const effective = env.effectiveCpuCores;
@@ -148,7 +143,7 @@ export function ItemEnvironmentPanel({
                 disabled={!canEdit || env.running}
                 onClick={() => {
                   setDraft("");
-                  dispatch({ cpuCores: null });
+                  onSave?.({ cpuCores: null });
                 }}
               >
                 {t("itemenv.size.reset")}
@@ -182,7 +177,7 @@ export function ItemEnvironmentPanel({
             // change now would be promising something the protocol cannot do.
             disabled={!canEdit || env.running}
             onChange={(e) => setDraft(e.target.value)}
-            onBlur={() => dispatch({ cpuCores: draft === "" ? null : Number(draft) })}
+            onBlur={() => onSave?.({ cpuCores: draft === "" ? null : Number(draft) })}
           />
           )}
           {canEdit ? null : <p className="detail">{t("itemenv.readonly")}</p>}
@@ -222,7 +217,7 @@ export function ItemEnvironmentPanel({
               disabled={!canEdit || env.running}
               onChange={(e) => setMemoryDraft(e.target.value)}
               onBlur={() =>
-                dispatch({ memory: memoryDraft === "" ? null : memoryDraft })
+                onSave?.({ memory: memoryDraft === "" ? null : memoryDraft })
               }
             />
           )}

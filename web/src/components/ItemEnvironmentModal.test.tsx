@@ -173,16 +173,25 @@ describe("ItemEnvironmentModal", () => {
     );
   });
 
-  it("closes from its own ✕", async () => {
+  it("closes from its own ✕, and writes nothing on the way out either", async () => {
+    // The ✕ is the exit that USED to write, and only in some browsers: clicking
+    // a button moves focus in Chrome, the field saves on blur, and so the same
+    // click saved in Chrome and dropped the number in Firefox and Safari. Both
+    // exits now mean the same thing, everywhere — which is what a modal's exits
+    // mean in the rest of this app.
+    const fetcher = route(CAPPED);
+    vi.stubGlobal("fetch", fetcher);
     const onClose = vi.fn();
     renderWithQuery(
       <ItemEnvironmentModal slug="rca" itemId="i-1" canEdit onClose={onClose} />,
     );
 
-    await waitFor(() => expect(screen.getByTestId("environment-status")).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId("cpu-input")).toBeTruthy());
+    await userEvent.type(screen.getByTestId("cpu-input"), "3");
     await userEvent.click(screen.getByTestId("dismiss-item-environment"));
 
     await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(puts(fetcher)).toEqual([]);
   });
 
   it("asks the item's route for the item, and the person's for the total", async () => {

@@ -870,7 +870,11 @@ export const messages = {
   "resources.title": { "zh-TW": "我的資源", en: "My resources" },
   "resources.heading": { "zh-TW": "我的資源使用", en: "My resource usage" },
   "resources.loading": { "zh-TW": "載入中…", en: "Loading…" },
-  "resources.live.heading": { "zh-TW": "沙盒", en: "Live sandboxes" },
+  // 「執行中的」 is not decoration: the storage list further down the same page
+  // holds the SAME items, and running-ness is the only thing separating the two
+  // sections. A bare 「沙盒」 also collided with `itemenv.heading`, which names
+  // one item's panel — two regions, one accessible name, different pages.
+  "resources.live.heading": { "zh-TW": "執行中的沙盒", en: "Live sandboxes" },
   "resources.live.empty": { "zh-TW": "目前沒有執行中的沙盒。", en: "No live sandboxes." },
   "resources.live.close": { "zh-TW": "關閉", en: "Close" },
   // Says what happened and what to do, not which call returned what. The row

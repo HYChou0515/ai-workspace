@@ -1,4 +1,7 @@
 // @vitest-environment happy-dom
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
+
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -24,6 +27,39 @@ function Probe() {
       <button onClick={() => setLocale("en")}>to-en</button>
     </div>
   );
+}
+
+/**
+ * Keys whose "environment" is NOT the sandbox. A named list rather than a `env.`
+ * prefix skip, for two reasons: a future `env.sandboxStatus` would have been
+ * silently exempt from both halves of the sweep, and a genuine
+ * deployment-environment string should have to be entered here deliberately
+ * rather than acquire an exemption by being named a certain way.
+ */
+const NOT_THE_SANDBOX = new Set([
+  "env.button", // 環境變數 / Env — the variables handed to tools
+  "env.title",
+]);
+
+// NOT `import.meta.url`: this file runs under happy-dom, where that is a
+// browser-style URL and its pathname is `/src/lib/` rather than a real path.
+// Vitest's cwd is `web/`.
+const SRC = join(process.cwd(), "src");
+
+/** Assembled rather than written out, so the one line that has to NAME the
+ *  banned term — the line doing the banning — is not itself an offence. The
+ *  alternative, exempting this file, would leave the guard unable to see the
+ *  place most likely to grow a stale copy of the word. */
+const OLD_TERM = ["\u57f7\u884c", "\u74b0\u5883"].join("");
+
+function sourceFiles(dir: string, out: string[] = []): string[] {
+  for (const name of readdirSync(dir)) {
+    if (name === "node_modules") continue;
+    const full = join(dir, name);
+    if (statSync(full).isDirectory()) sourceFiles(full, out);
+    else if (/\.tsx?$/.test(name)) out.push(full);
+  }
+  return out;
 }
 
 describe("i18n translate", () => {
@@ -73,12 +109,44 @@ describe("i18n #171 term sweep", () => {
    */
   it("leaves no string still calling the sandbox an environment", () => {
     for (const [key, entry] of Object.entries(messages)) {
-      if (key.startsWith("env.")) continue;
+      if (NOT_THE_SANDBOX.has(key)) continue;
       const zh = (entry as Record<string, string>)["zh-TW"];
       const en = (entry as Record<string, string>).en;
       expect(`${key} → ${zh}`).not.toMatch(/環境/);
       expect(`${key} → ${en}`).not.toMatch(/environments?\b/i);
     }
+  });
+
+  /**
+   * `messages` is not the only place a user-visible string lives, and the two
+   * this rename actually had to hand-fix were not in it: `AgentPanel` writes
+   * some of its own copy as JSX literals. A guard over the table alone would
+   * have let 執行環境 back in through them — while `contribution.md` cites this
+   * file as the thing that stops exactly that.
+   *
+   * It reads LINES and skips comment ones, rather than trying to match quoted
+   * literals. The obvious `/(["\'`])(...)\1/` spelling is worse than useless
+   * here: an apostrophe in English prose opens a "string" that runs to the next
+   * quote several lines away, swallowing the comments this rule deliberately
+   * spares — it reported three offences on a clean tree, none of them real.
+   *
+   * The word stays in COMMENTS on purpose: that is where the decision this
+   * reverses is recorded, and erasing it leaves the next person re-deciding it
+   * from nothing. A trailing comment on a line of code would be a false
+   * positive, which is the safe direction for a ban.
+   */
+  it("leaves no hardcoded literal calling it one either", () => {
+    const offenders: string[] = [];
+    for (const file of sourceFiles(SRC)) {
+      readFileSync(file, "utf8")
+        .split("\n")
+        .forEach((line, i) => {
+          const code = line.trim();
+          if (code.startsWith("//") || code.startsWith("*") || code.startsWith("/*")) return;
+          if (code.includes(OLD_TERM)) offenders.push(`${relative(SRC, file)}:${i + 1}`);
+        });
+    }
+    expect(offenders).toEqual([]);
   });
 
   it("reframes the advanced-retrieval tooltips as outcomes, not mechanisms", () => {
