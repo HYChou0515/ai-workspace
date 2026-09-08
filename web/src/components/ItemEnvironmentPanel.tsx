@@ -19,6 +19,7 @@
 import { useEffect, useState } from "react";
 
 import type { ItemEnvironment } from "../api/itemEnvironment";
+import type { SizeEdit } from "./ItemEnvironmentSize";
 import { formatBytes } from "../lib/bytes";
 import { useT } from "../lib/i18n";
 
@@ -43,12 +44,10 @@ export type ItemEnvironmentPanelProps = {
    *  caller turns into "keep what is stored" — the distinction that stops a cpu
    *  edit from clearing memory. */
   onSave?: (edit: { cpuCores?: number | null; memory?: string | null }) => void;
-  /** Reports whether a field is showing something other than what is STORED, so
-   *  the modal around it can guard its exits (#779). It is measured here
-   *  because this is where the drafts are made, and against the stored value
-   *  rather than "has anything been typed": a successful save clears it by
-   *  itself, and a guard that fires over a number nobody changed is the one
-   *  that teaches people to click straight through it. */
+  /** Reports whether a field holds something that has been TYPED AND NOT SENT,
+   *  so the modal around it can guard its exits (#779). Measured here because
+   *  this is where the drafts are made — see the rule beside `dirty` for why it
+   *  is not "differs from what the server stores". */
   onDirtyChange?: (dirty: boolean) => void;
 };
 
@@ -77,18 +76,39 @@ export function ItemEnvironmentPanel({
   onDirtyChange,
 }: ItemEnvironmentPanelProps) {
   const t = useT();
-  const [draft, setDraft] = useState<string>(
-    env.statedCpuCores === null ? "" : String(env.statedCpuCores),
-  );
-  const [memoryDraft, setMemoryDraft] = useState<string>(
-    env.statedMemoryBytes === null ? "" : String(env.statedMemoryBytes),
-  );
+  const loadedCpu = env.statedCpuCores === null ? "" : String(env.statedCpuCores);
+  const loadedMemory = env.statedMemoryBytes === null ? "" : String(env.statedMemoryBytes);
+  const [draft, setDraft] = useState<string>(loadedCpu);
+  const [memoryDraft, setMemoryDraft] = useState<string>(loadedMemory);
+  // What each field has already been SENT as — seeded with what it loaded.
+  const [sent, setSent] = useState({ cpu: loadedCpu, memory: loadedMemory });
 
-  // The two fields commit on blur, so between a keystroke and a blur the panel
-  // is holding something the person would lose on the way out.
-  const storedCpu = env.statedCpuCores === null ? "" : String(env.statedCpuCores);
-  const storedMemory = env.statedMemoryBytes === null ? "" : String(env.statedMemoryBytes);
-  const dirty = draft !== storedCpu || memoryDraft !== storedMemory;
+  /**
+   * Dirty means TYPED AND NOT YET SENT — the only state in which leaving costs
+   * the person anything. It is deliberately not "the field differs from what
+   * the server stores", which was the first rule here and was wrong twice over.
+   *
+   * The field holds the spelling the placeholder asks for (`1G`) and the record
+   * holds a byte count (`1073741824`), so a saved memory size compared unequal
+   * forever and every exit afterwards asked about work already on disk. CPU had
+   * the same shape wherever the person's spelling was not the server's — `2.50`
+   * and `2.5` are one number and two strings.
+   *
+   * And the fields commit on BLUR, which the ✕ triggers on its way out: the
+   * save was already in flight while the prompt asked whether to discard it,
+   * and answering "discard" discarded nothing. Recording what was sent, at the
+   * moment it is sent, answers the question the prompt is actually asking.
+   */
+  const dispatch = (next: Partial<{ cpu: string; memory: string }>, edit: SizeEdit) => {
+    // Nothing is recorded as sent when there is nobody to send it — otherwise a
+    // panel with no save handler would report itself clean and let the exit
+    // drop the value in silence, which is the failure this whole rule exists
+    // to prevent, wearing the opposite sign.
+    if (!onSave) return;
+    setSent((s) => ({ ...s, ...next }));
+    onSave(edit);
+  };
+  const dirty = draft !== sent.cpu || memoryDraft !== sent.memory;
   useEffect(() => {
     onDirtyChange?.(dirty);
   }, [dirty, onDirtyChange]);
@@ -156,7 +176,7 @@ export function ItemEnvironmentPanel({
                 disabled={!canEdit || env.running}
                 onClick={() => {
                   setDraft("");
-                  onSave?.({ cpuCores: null });
+                  dispatch({ cpu: "" }, { cpuCores: null });
                 }}
               >
                 {t("itemenv.size.reset")}
@@ -190,7 +210,7 @@ export function ItemEnvironmentPanel({
             // change now would be promising something the protocol cannot do.
             disabled={!canEdit || env.running}
             onChange={(e) => setDraft(e.target.value)}
-            onBlur={() => onSave?.({ cpuCores: draft === "" ? null : Number(draft) })}
+            onBlur={() => dispatch({ cpu: draft }, { cpuCores: draft === "" ? null : Number(draft) })}
           />
           )}
           {canEdit ? null : <p className="detail">{t("itemenv.readonly")}</p>}
@@ -229,7 +249,9 @@ export function ItemEnvironmentPanel({
               aria-label={t("resources.memory")}
               disabled={!canEdit || env.running}
               onChange={(e) => setMemoryDraft(e.target.value)}
-              onBlur={() => onSave?.({ memory: memoryDraft === "" ? null : memoryDraft })}
+              onBlur={() =>
+                dispatch({ memory: memoryDraft }, { memory: memoryDraft === "" ? null : memoryDraft })
+              }
             />
           )}
 

@@ -36,6 +36,15 @@ const ENVIRONMENT = {
   memory_bound_by: null,
 };
 
+/** Memory ENFORCED, and already set — the only shape in which the memory field
+ *  is drawn at all, which is why nothing caught the format mismatch below. */
+const WITH_MEMORY = {
+  ...ENVIRONMENT,
+  stated_memory_bytes: 536870912,
+  effective_memory_bytes: 536870912,
+  enforced_memory_bytes: 536870912,
+};
+
 const CAPPED = {
   limits: { count: 0, cpu: 4, memory_bytes: 0, disk_bytes: 0 },
   cpu_in_use: 2,
@@ -49,10 +58,10 @@ const CAPPED = {
 
 const UNCAPPED = { ...CAPPED, limits: { count: 0, cpu: 0, memory_bytes: 0, disk_bytes: 0 } };
 
-function route(resources: unknown) {
+function route(resources: unknown, environment: unknown = ENVIRONMENT) {
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
-    if (url.includes("/environment")) return json(ENVIRONMENT);
+    if (url.includes("/environment")) return json(environment);
     if (url.includes("/me/resources")) return json(resources);
     return json({});
   });
@@ -134,6 +143,46 @@ describe("ItemEnvironmentModal", () => {
     );
 
     await waitFor(() => expect(screen.getByTestId("cpu-input")).toBeTruthy());
+    await userEvent.keyboard("{Escape}");
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(screen.queryByText("放棄未儲存的變更？")).toBeNull();
+  });
+
+  it("does not ask about a value the ✕ just saved on its way out", async () => {
+    // The fields commit on BLUR, and clicking the ✕ blurs. So the save goes out
+    // first and the question comes second: the person is told their change is
+    // unsaved, answers "discard", and it is persisted anyway. A guard that
+    // fires over work that is already on its way to the server is the one that
+    // teaches people to click straight through it.
+    const onClose = vi.fn();
+    renderWithQuery(
+      <ItemEnvironmentModal slug="rca" itemId="i-1" canEdit onClose={onClose} />,
+    );
+
+    await waitFor(() => expect(screen.getByTestId("cpu-input")).toBeTruthy());
+    await userEvent.type(screen.getByTestId("cpu-input"), "3");
+    await userEvent.click(screen.getByTestId("dismiss-item-environment"));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(screen.queryByText("放棄未儲存的變更？")).toBeNull();
+  });
+
+  it("counts a memory size as saved, though the field and the record spell it differently", async () => {
+    // The field holds what the placeholder asks for — `1G`. The record holds
+    // 1073741824. Measuring dirtiness by comparing those two STRINGS makes
+    // every memory edit permanently unsaved, so from the first one onwards
+    // every exit raises a prompt about work that is already stored.
+    vi.stubGlobal("fetch", route(CAPPED, WITH_MEMORY));
+    const onClose = vi.fn();
+    renderWithQuery(
+      <ItemEnvironmentModal slug="rca" itemId="i-1" canEdit onClose={onClose} />,
+    );
+
+    const mem = await screen.findByTestId("memory-input");
+    await userEvent.clear(mem);
+    await userEvent.type(mem, "1G");
+    await userEvent.tab();
     await userEvent.keyboard("{Escape}");
 
     await waitFor(() => expect(onClose).toHaveBeenCalled());

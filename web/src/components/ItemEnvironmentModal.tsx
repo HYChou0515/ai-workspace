@@ -23,6 +23,12 @@
  * and the old `×` happened to save on the way out because clicking it moved
  * focus. Escape does not, so the very act of making this a real modal is what
  * introduces a way to lose a typed number — `useDirtyClose` goes in with it.
+ *
+ * WHAT counts as dirty is decided in `ItemEnvironmentPanel`, beside the drafts,
+ * and the rule is "typed and not yet sent" rather than "differs from what the
+ * server stores". The comment there says why; the short version is that the
+ * field and the record spell a memory size differently, and that the ✕ blurs on
+ * its way out and so saves BEFORE this handler runs.
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
