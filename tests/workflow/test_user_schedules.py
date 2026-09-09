@@ -396,3 +396,57 @@ def test_no_shipped_doc_offers_a_dow_the_engine_does_not_know() -> None:
         assert "weekdays at" not in text, (
             f"{name} offers 'weekdays at ...', which `every: weekly` cannot express in one row"
         )
+
+
+def test_a_null_tz_means_the_default_not_a_rejected_row() -> None:
+    """`"tz": null` is what a generated page writes for "I did not choose one".
+
+    reference.md tells the author `tz` is optional and defaults to UTC, and an
+    LLM writing the page emits nulls for the fields it left out. The validator
+    read it through `str(...)`, which turns `None` into the STRING `"None"` —
+    truthy, and not a zone — so the row was refused and the message named a
+    value the author never typed.
+
+    `parse_user_schedules` was always null-tolerant (`row.get("tz") or ""`), so
+    the two halves of this module disagreed about the same file: one would run
+    the row, the other refused it. Refusing is the worse half — it turns "the
+    report arrives an hour out" into "the report stops", which is the trade
+    `normalise_tz`'s own docstring says it exists to avoid.
+    """
+    for absent in (None, 0, False):
+        raw = _file({"every": "daily", "at": "09:00", "run": "r", "tz": absent})
+        assert validate_user_schedules(raw) == [], f"tz={absent!r} was refused"
+        assert parse_user_schedules(raw)[0].tz == "", f"tz={absent!r} did not default to UTC"
+
+    # The control: a zone that is genuinely wrong is still refused, and the
+    # message names what the author actually wrote.
+    bad = _file({"every": "daily", "at": "09:00", "run": "r", "tz": "Asia/Taipeii"})
+    problems = validate_user_schedules(bad)
+    assert problems and "Asia/Taipeii" in problems[0]
+
+
+@pytest.mark.parametrize("field", ["every", "at", "run", "dow", "dom", "tz", "n", "with"])
+def test_writing_null_for_a_field_means_the_same_as_leaving_it_out(field: str) -> None:
+    """The CLASS, not the one field that was reported.
+
+    `.get(key, default)` fires only when the key is ABSENT, so every field read
+    that way answered `None` for an explicit `null` and something else for an
+    omitted key — two spellings of "I did not set this" that the validator
+    graded differently. A page generator writes nulls for what it left unset,
+    so the shape a real author produces is the one that was refused.
+
+    Asserted over every field rather than the one that was found: `tz` was
+    reported, and `every` and `at` had the same defect for the same reason.
+    Fixing the instance and leaving the class is how this comes back.
+
+    `run` is expected to be refused BOTH ways — it has no default, and a
+    schedule with no workflow to start is genuinely unusable. That is the
+    control: the property is "the two agree", not "everything is accepted".
+    """
+    base = {"every": "daily", "at": "09:00", "run": "r"}
+    omitted = {k: v for k, v in base.items() if k != field}
+    nulled = {**base, field: None}
+
+    assert validate_user_schedules(_file(omitted)) == validate_user_schedules(_file(nulled)), (
+        f"`{field}: null` is graded differently from omitting `{field}`"
+    )

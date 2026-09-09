@@ -174,7 +174,14 @@ def validate_user_schedules(raw: str) -> list[str]:
         row = cast("dict[str, Any]", raw_row)
         if not row.get("run"):
             problems.append(f"{where}: needs `run` — the workflow to start.")
-        every = row.get("every", "daily")
+        # `or`, not a `.get` default: a JSON `null` has to mean what an omitted
+        # key means. A page generator writes nulls for the fields it left
+        # unset, and `.get(k, default)` only fires when the key is ABSENT — so
+        # `"every": null` reached the check as `None`, was refused, and the row
+        # was dropped, while omitting the same key was accepted. The parser
+        # already spelled every one of these `or`; the validator did not, so the
+        # two halves disagreed about the same file.
+        every = row.get("every") or "daily"
         if every not in EVERY:
             problems.append(f"{where}: `every` is {every!r}; it must be one of {', '.join(EVERY)}.")
             continue
@@ -196,7 +203,14 @@ def validate_user_schedules(raw: str) -> list[str]:
                 )
         elif n:
             problems.append(f"{where}: `n` applies only to `every: minutes`.")
-        tz = normalise_tz(str(row.get("tz", "")))
+        # `or ""`, the SAME spelling `parse_user_schedules` uses, because the two
+        # halves have to agree about one file. `str(row.get("tz", ""))` turns a
+        # JSON `null` into the string "None" — truthy, not a zone — so a page
+        # that wrote `"tz": null` for "I did not pick one" had its row refused
+        # and was told about a value nobody typed, while the parser next door
+        # ran the same row happily. reference.md tells authors tz is optional,
+        # and a generated page emits nulls for what it left out.
+        tz = normalise_tz(str(row.get("tz") or ""))
         if tz and not _valid_tz(tz):
             # Nothing checked this, so a typo travelled all the way to `ZoneInfo`
             # — which raises `ValueError` for an absolute path or a traversal,
@@ -211,7 +225,7 @@ def validate_user_schedules(raw: str) -> list[str]:
             if dom and not (isinstance(dom, int) and 1 <= dom <= 31):
                 problems.append(f"{where}: `dom` must be 1..31, got {dom!r}.")
         if every in ("daily", "weekly", "monthly"):
-            at = row.get("at", "00:00")
+            at = row.get("at") or "00:00"  # `null` means the same as omitted
             if not _looks_like_time(at):
                 problems.append(f"{where}: `at` must look like HH:MM, got {at!r}.")
         elif row.get("at"):
