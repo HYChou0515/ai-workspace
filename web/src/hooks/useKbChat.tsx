@@ -88,6 +88,15 @@ export function useKbChat({
     mounted.current = true;
     return () => {
       mounted.current = false;
+      // Abort here too, not only in the `[chatId, attach]` effect. `send`
+      // attaches a subscription for a chat it has just CREATED, before that
+      // effect has committed for the new id — the committed one ran with
+      // `chatId == null` and returned without registering a cleanup. Unmounting
+      // in that window used to leak a dead generator; it would now leak an
+      // endless reconnect loop hitting the stream every 15s for the life of the
+      // page.
+      subRef.current?.controller.abort();
+      subRef.current = null;
     };
   }, []);
 
@@ -127,7 +136,6 @@ export function useKbChat({
           firstConnect = false;
           try {
             for await (const ev of client.subscribeChat(id, controller.signal, since)) {
-              backoff = 1000; // a healthy stream resets it
               const seq = eventSeq(ev);
               if (seq !== undefined && (maxSeq === undefined || seq > maxSeq)) maxSeq = seq;
               // A replay re-delivers what this viewer already folded. An event
@@ -145,6 +153,17 @@ export function useKbChat({
                   }
                 }
               }
+              // Only a NEW event counts as health. Resetting on a re-delivered
+              // replay lets a pod that dies right after serving one reconnect
+              // every second forever — the backoff never engages in the single
+              // scenario it exists for.
+              backoff = 1000;
+              // …and this stream is working, so a message saying it dropped is
+              // no longer true. `message_delta` only clears an error it raised
+              // itself (`errorFromTurn`), and `reconcileSnapshot` carries one
+              // across, so that notice would otherwise stay pinned above the
+              // whole answer streaming in below it.
+              setLog((prev) => (prev.error === null ? prev : { ...prev, error: null }));
               setLog((prev) => reduceAgent(prev, ev));
               if (isTerminal(ev)) {
                 // The persisted thread is what carries the resolved [n]
@@ -166,6 +185,30 @@ export function useKbChat({
           }
           if (controller.signal.aborted) return;
           await new Promise<void>((resolve) => setTimeout(resolve, backoff));
+          if (controller.signal.aborted) return;
+          // RE-HYDRATE before resuming, exactly as `useChatSession` does after
+          // its own backoff — and for the reason its comment gives: the replay
+          // ring lives on the pod's session, so a reconnect that lands on a
+          // DIFFERENT pod (the rollover this loop exists for) resumes into an
+          // empty ring. The terminal event is then gone for good, and without
+          // this read `streaming` would stay true forever with the finished
+          // answer sitting unread in the store — the same symptom as never
+          // reconnecting at all, moved one step later.
+          const fresh = await client.getChat(id).catch(() => null);
+          if (fresh && !controller.signal.aborted) {
+            qc.setQueryData(qk.kb.chat(id), fresh);
+            // Reconcile, not replace: a drop MID-turn re-hydrates a thread that
+            // does not yet contain what is on screen.
+            reconcile(fresh);
+            // The evidence that the turn ended has to be an ANSWER THAT
+            // ARRIVED. "Not a user message" is not the same thing — a `notice`
+            // (#624) is persisted before the model is even called and stands
+            // through the whole time-to-first-token window.
+            const last = fresh.messages[fresh.messages.length - 1];
+            if (last !== undefined && last.role === "assistant") {
+              setLog((prev) => ({ ...prev, streaming: false }));
+            }
+          }
           backoff = Math.min(backoff * 2, 15000);
         }
       })();
@@ -223,7 +266,14 @@ export function useKbChat({
       // `user_message` broadcast adopts this entry when it lands, so it stays
       // one bubble — keyed on author, which is why this must be the id the
       // backend will stamp and not a display name like "You".
-      setLog((prev) => drawOwnAsk(prev, { author: currentUser, content: trimmed }));
+      // Read the CURRENT value while drawing, so a failure below can put it back.
+      // `drawOwnAsk` sets `streaming`, so after this the log can no longer say
+      // whether a turn was already running when this send started.
+      let wasStreaming = false;
+      setLog((prev) => {
+        wasStreaming = prev.streaming;
+        return drawOwnAsk(prev, { author: currentUser, content: trimmed });
+      });
       try {
         await client.sendMessage({
           chatId: id,
@@ -254,7 +304,14 @@ export function useKbChat({
         try {
           const fresh = await client.getChat(id);
           qc.setQueryData(qk.kb.chat(id), fresh);
-          reconcile(fresh);
+          // Only when the turn actually ENDED. The route awaits its own turn
+          // just to `send_await_timeout` and then DETACHES it, so at 25s into a
+          // slow turn this read lands mid-flight — and a snapshot that ties on
+          // length wins `reconcileSnapshot` and nulls the ephemerals with it:
+          // 「請求過於頻繁,N 秒後自動重試」,「整理較早的對話」,「還原工作區 n/m」.
+          // Those notices exist to explain exactly the silence being had.
+          const last = fresh.messages[fresh.messages.length - 1];
+          if (last !== undefined && last.role === "assistant") reconcile(fresh);
         } catch {
           // Best effort. The subscription's terminal reconcile is the other
           // route to the same snapshot, so this is not the last chance.
@@ -269,8 +326,13 @@ export function useKbChat({
           // …but do NOT claim the turn ended. This send may have been queued
           // behind one that is still writing, and saying "not streaming" there
           // hides a running turn — the spinner and Stop vanish while the answer
-          // is still arriving. An answer still flagged live is that turn.
-          streaming: prev.entries.some((e) => e.kind === "message" && e.live),
+          // is still arriving.
+          //
+          // What it was BEFORE this send, not "has an answer started": the gap
+          // between a turn being accepted and its first token is seconds on a
+          // local model, and a failure inside that window would read as nothing
+          // running at all.
+          streaming: wasStreaming,
           error: msg,
           entries: retractOwnAsk(prev, { author: currentUser, content: trimmed }).entries,
         }));

@@ -650,9 +650,17 @@ export function turnLooksSilent(log: AgentLog): boolean {
 export function turnPhase(log: AgentLog): TurnPhase {
   if (!log.streaming) return "idle";
   if (!log.metrics) return "prep";
-  // The trailing assistant message is this turn's live output (a user prompt or
-  // tool call ends the run, so a fresh turn has none yet — see lastAssistantIdx).
-  const idx = lastAssistantIdx(log.entries);
+  // This turn's live output — by its flag first, because a question QUEUED
+  // behind it sits after it and the positional read then finds a user message
+  // and gives up. That reported "waiting" over an answer visibly streaming, and
+  // `TurnStatus` escalates from there to offering a retry that would abandon a
+  // turn doing fine.
+  //
+  // The positional scan is the fallback it was documented as: a re-hydrate
+  // rebuilds entries from the stored thread with no flag on them, and there the
+  // trailing assistant message IS the turn's output so far.
+  const live = liveAnswerIdx(log.entries);
+  const idx = live >= 0 ? live : lastAssistantIdx(log.entries);
   const entry = idx >= 0 ? log.entries[idx] : undefined;
   const msg = entry && entry.kind === "message" ? entry.message : undefined;
   if (msg && msg.content.trim().length > 0) return "answering";

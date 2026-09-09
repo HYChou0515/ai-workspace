@@ -178,6 +178,68 @@ describe("useKbChat — the subscription outlives a dropped connection", () => {
   });
 });
 
+describe("useKbChat — a turn that ended while we were away", () => {
+  beforeEach(() => _resetKbMock());
+
+  // Reconnecting is not enough. The replay ring lives on the POD's session, so
+  // a reconnect that lands elsewhere — the rollover this loop exists for —
+  // resumes into an empty ring and the terminal event is gone for good. Without
+  // a re-hydrate, `streaming` stays true forever with the finished answer
+  // sitting unread in the store: the same symptom as never reconnecting, moved
+  // one step later. There is no store-poll on this surface to catch it.
+  it("re-reads the thread after a drop and stops claiming to be streaming", async () => {
+    const ended = {
+      resource_id: "kb-gone",
+      title: "",
+      collection_ids: [],
+      owner: "default-user",
+      shared_with: [],
+      messages: [
+        { role: "user", content: "問題", reasoning: null, tool_name: null, tool_args: null, tool_call_id: null, created_at: 1, citations: [] },
+        { role: "assistant", content: "答完了", reasoning: null, tool_name: null, tool_args: null, tool_call_id: null, created_at: 2, citations: [] },
+      ],
+    };
+    let connects = 0;
+    // The thread is EMPTY when the view first hydrates and carries the finished
+    // answer only afterwards — which is the real sequence, and the only one in
+    // which "streaming stopped" says anything: seeded with the ended thread from
+    // the start, mount alone would satisfy the assertion.
+    const empty = { ...ended, messages: [] };
+    let reads = 0;
+    const client = {
+      ...mockKbApi,
+      getChat: vi.fn(async () => (reads++ === 0 ? empty : ended)),
+      subscribeChat: async function* () {
+        if (connects++ === 0) {
+          // A turn IS in flight when the connection dies — that is what makes
+          // the assertion below mean anything. Asserting "not streaming" on a
+          // log that was never streaming is true before the hook does a thing.
+          yield { type: "user_message", author: "default-user", content: "問題", created_at: 1 } as never;
+          // Held open a moment so "a turn is in flight" is observable before the
+          // drop — otherwise this test races its own premise.
+          await new Promise<void>((r) => setTimeout(r, 300));
+          return; // …and then the stream is simply gone
+        }
+        // The pod it reconnects to knows nothing about the turn that finished:
+        // an empty replay ring, and no terminal event is ever coming.
+        await new Promise<void>(() => {});
+      },
+    } as unknown as typeof mockKbApi;
+
+    const { result } = renderHook(() =>
+      useKbChat({ collectionIds: ["c1"], chatId: "kb-gone", client }),
+    );
+
+    await waitFor(() => expect(result.current.log.streaming).toBe(true));
+    await waitFor(() => expect(result.current.log.streaming).toBe(false), { timeout: 5000 });
+    expect(
+      result.current.log.entries.some(
+        (e) => e.kind === "message" && e.message.content.includes("答完了"),
+      ),
+    ).toBe(true);
+  });
+});
+
 describe("useKbChat — send failure", () => {
   beforeEach(() => _resetKbMock());
 

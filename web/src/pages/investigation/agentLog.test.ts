@@ -108,8 +108,27 @@ describe("turnPhase (wait-state selector)", () => {
     expect(turnPhase({ ...base, streaming: true, metrics: downMetrics })).toBe("answering");
   });
 
+  // The case this whole branch exists for, and the one the status line lost:
+  // a question queued behind an answer that is still streaming. Read off
+  // POSITION the trailing entry is that question, so the phase fell back to
+  // "waiting" — and `TurnStatus` then walks 等候模型回應 → 模型忙碌中 → 這次比較久,
+  // and past 60s offers 重新問一次, whose first act is to abandon a turn that is
+  // working perfectly.
+  it("is 'answering' while a queued question sits below the streaming answer", () => {
+    const streamingLog = reduceAgent(EMPTY_LOG, {
+      type: "message_delta",
+      text: "回答中",
+    } as never);
+    const queued = drawOwnAsk(streamingLog, { author: "alice", content: "再問一個" });
+    expect(turnPhase({ ...queued, streaming: true, metrics: downMetrics })).toBe("answering");
+  });
+
   it("stays 'waiting' on a fresh turn even if a previous answer is in the log", () => {
-    const base = fold([{ type: "message_delta", text: "old answer" }]);
+    // The `done` is not decoration: it is what ENDS the previous answer, and a
+    // fixture without it describes a state the reducer cannot produce — an
+    // answer still flagged as being written while the next turn starts. The
+    // assertion is untouched; only the sequence is now one that can happen.
+    const base = fold([{ type: "message_delta", text: "old answer" }, { type: "done" }]);
     const fresh: AgentLog = {
       ...base,
       streaming: true,
