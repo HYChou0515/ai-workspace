@@ -19,7 +19,7 @@ describe("widgetForRole (the single role→widget table)", () => {
     expect(widgetForRole("status")).toBe("select");
     expect(widgetForRole("actor")).toBe("actor");
     expect(widgetForRole("date")).toBe("date");
-    expect(widgetForRole("daterange")).toBe("daterange");
+    expect(widgetForRole("datetimerange")).toBe("datetimerange");
     expect(widgetForRole("progress")).toBe("progress");
     expect(widgetForRole("rank")).toBe("rank");
     expect(widgetForRole("ref")).toBe("ref");
@@ -41,16 +41,16 @@ describe("RoleField", () => {
     expect(screen.getByLabelText("assignee")).toHaveValue("ghost");
   });
 
-  it("edits a daterange as start + end date inputs and commits start/end", () => {
+  it("edits a datetimerange as start + end date inputs and commits start/end", () => {
     const onCommit = vi.fn();
-    render(<RoleField widget="daterange" name="span" value="" onCommit={onCommit} />);
+    render(<RoleField widget="datetimerange" name="span" value="" onCommit={onCommit} />);
     fireEvent.change(screen.getByLabelText("span start"), { target: { value: "2026-01-01" } });
     fireEvent.change(screen.getByLabelText("span end"), { target: { value: "2026-02-01" } });
     expect(onCommit).toHaveBeenLastCalledWith("2026-01-01/2026-02-01");
   });
 
-  it("seeds the daterange inputs from an existing start/end value", () => {
-    render(<RoleField widget="daterange" name="span" value="2026-03-01/2026-04-01" onCommit={vi.fn()} />);
+  it("seeds the datetimerange inputs from an existing start/end value", () => {
+    render(<RoleField widget="datetimerange" name="span" value="2026-03-01/2026-04-01" onCommit={vi.fn()} />);
     expect(screen.getByLabelText("span start")).toHaveValue("2026-03-01");
     expect(screen.getByLabelText("span end")).toHaveValue("2026-04-01");
   });
@@ -117,21 +117,21 @@ describe("half-filled date range (#PM issue-12)", () => {
     // the box showed it, and nothing was ever sent — the value was gone on the
     // next load, with no error to explain it.
     const onCommit = vi.fn();
-    render(<RoleField widget="daterange" name="span" value={null} onCommit={onCommit} />);
+    render(<RoleField widget="datetimerange" name="span" value={null} onCommit={onCommit} />);
     fireEvent.change(screen.getByLabelText("span start"), { target: { value: "2026-07-13" } });
     expect(onCommit).toHaveBeenCalledWith("2026-07-13/");
   });
 
   it("saves an end with no start too", () => {
     const onCommit = vi.fn();
-    render(<RoleField widget="daterange" name="span" value={null} onCommit={onCommit} />);
+    render(<RoleField widget="datetimerange" name="span" value={null} onCommit={onCommit} />);
     fireEvent.change(screen.getByLabelText("span end"), { target: { value: "2026-07-15" } });
     expect(onCommit).toHaveBeenCalledWith("/2026-07-15");
   });
 
   it("clearing both ends still clears the field", () => {
     const onCommit = vi.fn();
-    render(<RoleField widget="daterange" name="span" value="2026-07-13/2026-07-15" onCommit={onCommit} />);
+    render(<RoleField widget="datetimerange" name="span" value="2026-07-13/2026-07-15" onCommit={onCommit} />);
     fireEvent.change(screen.getByLabelText("span start"), { target: { value: "" } });
     fireEvent.change(screen.getByLabelText("span end"), { target: { value: "" } });
     expect(onCommit).toHaveBeenLastCalledWith(null);

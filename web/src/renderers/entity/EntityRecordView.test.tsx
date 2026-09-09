@@ -16,7 +16,7 @@ const type: EntityType = {
     { name: "title", role: "text", required: true },
     { name: "status", role: "status", values: ["open", "done"] },
     { name: "assignee", role: "actor" },
-    { name: "span", role: "daterange" },
+    { name: "span", role: "datetimerange" },
     { name: "progress", role: "progress" },
     { name: "milestone", role: "ref", to: "milestone" },
     { name: "rank", role: "rank" },

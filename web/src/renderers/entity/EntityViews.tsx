@@ -52,7 +52,7 @@ export function QuickCreate({
 }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<Record<string, string>>({});
-  // The seeded draft the form opened with (see the daterange default below).
+  // The seeded draft the form opened with (see the datetimerange default below).
   // Dirtiness is measured against THAT, not against "is the draft non-empty" —
   // otherwise every form with a date field would claim unsaved work the instant
   // it opened, and the prompt would become something people click through.
@@ -83,7 +83,7 @@ export function QuickCreate({
           // your back.
           const today = new Date().toISOString().slice(0, 10);
           const seeded: Record<string, string> = {};
-          for (const f of form) if (f.widget === "daterange") seeded[f.name] = `${today}/`;
+          for (const f of form) if (f.widget === "datetimerange") seeded[f.name] = `${today}/`;
           setDraft(seeded);
           setSeed(seeded);
           setOpen(true);

@@ -28,7 +28,7 @@ def _issue() -> EntityType:
                 ),
                 FieldSpec(name="assignee", role=Role.ACTOR),
                 FieldSpec(name="due", role=Role.DATE),
-                FieldSpec(name="span", role=Role.DATERANGE),
+                FieldSpec(name="span", role=Role.DATETIMERANGE),
                 FieldSpec(name="progress", role=Role.PROGRESS),
                 FieldSpec(name="milestone", role=Role.REF, to="milestone"),
                 # manual board/table order — infra, auto-assigned / drag-set
@@ -47,7 +47,7 @@ def _milestone() -> EntityType:
             fields=[
                 FieldSpec(name="title", role=Role.TEXT, required=True),
                 FieldSpec(name="status", role=Role.STATUS, values=["planned", "active", "done"]),
-                FieldSpec(name="span", role=Role.DATERANGE),
+                FieldSpec(name="span", role=Role.DATETIMERANGE),
                 # derived — must be omitted from create guidance
                 FieldSpec(name="issues", role=Role.BACKREF, from_="issue.milestone"),
                 FieldSpec(
@@ -70,12 +70,25 @@ def test_enumerates_the_closed_status_vocabulary() -> None:
     assert "status (one of: open, in_progress, blocked, done)" in brief
 
 
-def test_spells_out_the_timeline_date_range_field() -> None:
+def test_spells_out_the_timeline_range_field_including_its_times() -> None:
     # the #4 gap: an issue with no span never appears on the gantt
     brief = entity_schema_brief(_catalog(_issue()))
     assert "span" in brief
     assert "timeline / gantt" in brief
-    assert "YYYY-MM-DD/YYYY-MM-DD" in brief
+    # The agent never sees the role NAME (`_field_hint` prints only the
+    # description), so this sentence is its whole source of truth about the
+    # field's shape. It said "a date range YYYY-MM-DD/YYYY-MM-DD" long after
+    # #785/#789 made times valid — so an agent asked for a 09:30–12:00 review
+    # wrote a whole-day span, correctly, from a hint that was wrong.
+    assert "YYYY-MM-DD" in brief
+    assert "YYYY-MM-DDTHH:MM" in brief
+    # The two edges are NOT symmetric (`ganttScale.instantOf`): a plain date as
+    # the START is that day's midnight, but as the END it runs to the NEXT
+    # midnight so the day is included. The first version of this hint said a
+    # plain date "runs to the end of that day" for either edge — true of an end,
+    # wrong of a start, and the agent has nothing else to read.
+    assert "START begins that day" in brief
+    assert "three days" in brief
 
 
 def test_marks_required_and_names_actor_and_ref_conventions() -> None:

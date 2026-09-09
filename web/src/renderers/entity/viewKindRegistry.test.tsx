@@ -15,7 +15,7 @@ const issueType: EntityType = {
   fields: [
     { name: "title", role: "text", required: true },
     { name: "status", role: "status", values: ["open", "done"] },
-    { name: "span", role: "daterange" },
+    { name: "span", role: "datetimerange" },
   ],
   form: [{ name: "title", widget: "text", required: true }],
 };

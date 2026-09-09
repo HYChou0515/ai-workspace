@@ -38,7 +38,7 @@
 | # | 主題 | 定案 |
 |---|------|------|
 | A1 | schema 載體 | **宣告式檔(非 Python model)**。`role` 是封閉詞彙,一個 role **同時決定四件事**:frontmatter parse/驗證、quick-create widget、自動生成工具的參數型別、view 能綁哪個視覺鍵。 |
-| A2 | role 詞彙 | text / status / actor / date / daterange / progress / ref / rank / backref / rollup。**表達力上限 = role 詞彙上限**(不給運算式、多步 join、OR/巢狀)。 |
+| A2 | role 詞彙 | text / status / actor / date / datetimerange / progress / ref / rank / backref / rollup。**表達力上限 = role 詞彙上限**(不給運算式、多步 join、OR/巢狀)。 |
 | A3 | forward `ref` traversal | **多跳,但只准穿 to-one `ref`**(永不穿 backref、唯讀、結尾必須純量)。允許 `issue→milestone→epic.title`;仍不是查詢語言(無 filter / fan-out / 中途聚合)。 |
 | A4 | backref / rollup | **compute-on-read**:掃引用方檔案當場算,不存、不落地。因 view render 本來就要掃該 type 全部檔,backref/rollup 是**同一趟順手算**,與「不建索引」天生共存。 |
 | A5 | rollup 表達力 | `agg` 限封閉集 `{count, sum, avg, min, max}`;`over` 只能是**一個** backref;`where` 只允許**單一欄位 == 值**(不給 AND/OR、巢狀、比較運算子)。 |

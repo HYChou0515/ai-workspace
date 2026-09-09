@@ -315,7 +315,7 @@ export function fieldText(value: unknown): string {
   return String(value);
 }
 
-/** Parse a `daterange` value (`"start/end"` string, `[start, end]`, or
+/** Parse a `datetimerange` value (`"start/end"` string, `[start, end]`, or
  * `{start,end}` / `{from,to}`) into two epoch millis, or `null`. */
 export function parseSpan(value: unknown): { start: number; end: number } | null {
   let a: unknown;

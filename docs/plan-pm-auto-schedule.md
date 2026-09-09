@@ -62,7 +62,7 @@ coherent:
 Verified against the code, not assumed:
 
 - **No numeric role.** The role vocabulary (`entity/schema.py`) is closed —
-  `text status actor date daterange progress rank ref backref rollup` — and a
+  `text status actor date datetimerange progress rank ref backref rollup` — and a
   duration is a number. This is a generic gap, not a PM one.
 - **`rollup` only aggregates numbers** (`projection.py::_rollup` coerces through
   `_as_number`) and only a whole scalar field, so "earliest start of my issues"

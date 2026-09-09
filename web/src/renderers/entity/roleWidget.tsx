@@ -4,7 +4,7 @@
  * editor) resolves its control here, so a role always looks + behaves the same:
  *
  *   text → text · status → dropdown (closed `values`) · actor → directory select
- *   date → date · daterange → start/end · number/progress/rank → number · ref → number
+ *   date → date · datetimerange → start/end · number/progress/rank → number · ref → number
  *   (a proper #N-picker lands in P4) · backref/rollup → read-only (compute-on-read)
  *
  * `RoleField` is the inline editor (uncontrolled scalars commit on blur; discrete
@@ -25,7 +25,7 @@ export type WidgetKind =
   | "select"
   | "actor"
   | "date"
-  | "daterange"
+  | "datetimerange"
   | "number"
   | "progress"
   | "rank"
@@ -37,7 +37,7 @@ const ROLE_WIDGET: Record<EntityRole, WidgetKind> = {
   status: "select",
   actor: "actor",
   date: "date",
-  daterange: "daterange",
+  datetimerange: "datetimerange",
   number: "number",
   progress: "progress",
   rank: "rank",
@@ -137,7 +137,7 @@ function ActorSelect({
   );
 }
 
-/** Split a `daterange` value into its raw start/end date strings (no epoch
+/** Split a `datetimerange` value into its raw start/end date strings (no epoch
  * coercion — the `<input type=date>` wants `YYYY-MM-DD`). */
 function splitRange(value: unknown): { start: string; end: string } {
   if (typeof value === "string" && value.includes("/")) {
@@ -271,7 +271,7 @@ export function RoleField({ widget, name, value, values, users, refOptions, disa
     );
   if (widget === "actor")
     return <ActorSelect name={name} value={value} users={users} disabled={disabled} required={required} className="ev-field" onCommit={onCommit} />;
-  if (widget === "daterange")
+  if (widget === "datetimerange")
     return <DateRangeInput name={name} value={value} disabled={disabled} className="ev-field" onCommit={onCommit} />;
   // A ref is a pointer to another collection's record, so it edits as a #N-title
   // picker whenever the caller wired options — even an EMPTY list (no targets yet)
@@ -336,7 +336,7 @@ export function RoleCreateInput({ widget, name, value, values, users, refOptions
     );
   if (widget === "actor")
     return <ActorSelect name={name} value={value} users={users} required={required} className="ev-field" onCommit={onChange} />;
-  if (widget === "daterange")
+  if (widget === "datetimerange")
     return <DateRangeInput name={name} value={value} className="ev-field" onCommit={(next) => onChange(next == null ? "" : String(next))} />;
   if (widget === "ref" && refOptions)
     return (

@@ -7,6 +7,11 @@
 
 ## 1. 現狀(已查證)
 
+> **這一節記的是 #785 執行「之前」的狀態,不是今天的現況。** 本計畫本身推翻了其中好幾條
+> (值不再只是 `YYYY-MM-DD`),而 `daterange` 這個 role 名稱後來也改成 `datetimerange`
+> —— 見 [`plan-datetimerange-role.md`](plan-datetimerange-role.md) 與本文件 §5 的補記。
+> 底下的表格保留原樣,因為它是當時的查證紀錄;改寫它會讓這份紀錄不再可信。
+
 ### 1.1 gantt 的時間模型比想像中乾淨
 
 整張圖 —— 軸、bar、拖曳、today 線 —— 都只透過三個函式看時間:
@@ -177,6 +182,11 @@ export function barColumns(span: Span, skip: boolean): number {
 
 - **`schedule` 自動排程維持「天」粒度**(`exp_days` 仍是天)。它算出來的 span 是整天,使用者再手動細調。把排程一起改成小時會讓這包變成兩包,而且排程的正確性有自己的一組測試要重寫。
 - **不新增 `datetime` role**。`daterange` 的值升級成可帶時間,role 名稱不變 —— 多一個 role 就多一個要在每個 widget、每個 view kind、每個 editor 裡處理的分支,而 `daterange` 只有 PM 在用。
+  > **後續補記(見 [`plan-datetimerange-role.md`](plan-datetimerange-role.md)):** 這條的**前半仍然成立**,後半被取代了。
+  > 不新增第二個 role 是對的 —— 粒度是**每個邊各自**的性質,`7/13–7/15` 和 `7/13T09:30–7/13T12:00`
+  > 是同一個 role 的兩個合法值,沒有「純日期的 range」可以分出去。但「名稱不變」的代價後來由使用者付了:
+  > 他在自己的 `schema.yaml` 裡讀到一個說謊的名字。改名叫 `datetimerange`(舊拼法永久 alias)**不增加任何分支**,
+  > 所以這條當初拒絕的成本並不適用於改名。
 - **不做「每人不同工時」**。工時視窗是 view 層的一份設定,不是 per-assignee 的日曆。
 - **不碰 `due`(`role: date`)**。它是單一時點,跟這包的區間問題無關。
 

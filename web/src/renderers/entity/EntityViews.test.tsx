@@ -29,7 +29,7 @@ const issueType: EntityType = {
     { name: "title", role: "text", required: true },
     { name: "status", role: "status", values: ["open", "in_progress", "done"] },
     { name: "progress", role: "progress" },
-    { name: "span", role: "daterange" },
+    { name: "span", role: "datetimerange" },
   ],
   form: [
     { name: "title", widget: "text", required: true },
@@ -473,7 +473,7 @@ describe("role widgets in the table (§B3)", () => {
     expect(onPatch).toHaveBeenCalledWith(1, { assignee: "bob" });
   });
 
-  it("edits a daterange column as start + end date inputs", () => {
+  it("edits a datetimerange column as start + end date inputs", () => {
     const onPatch = vi.fn();
     const spec: ViewSpec = { view: "table", entity: "issue", columns: ["span"] };
     render(<EntityViewBody spec={spec} type={issueType} entities={[issue(1, { span: "" })]} onCreate={vi.fn()} onPatch={onPatch} />);
@@ -879,7 +879,7 @@ describe("QuickCreate defaults (#PM auto-schedule P9)", () => {
       <QuickCreate
         form={[
           { name: "title", widget: "text", required: true },
-          { name: "span", widget: "daterange", required: false },
+          { name: "span", widget: "datetimerange", required: false },
         ]}
         onCreate={vi.fn()}
       />,

@@ -279,3 +279,28 @@ def test_grouping_by_assignee_is_a_setting_not_a_second_tab():
 
     m = load_app_manifest("pm")
     assert not any("workload" in v for v in m.layout.views)
+
+
+def test_the_shipped_seed_schemas_use_roles_the_platform_knows():
+    """The other half of the compatibility story, and the half nobody had.
+
+    `Role._missing_` protects the schemas ALREADY on disk. Nothing protected the
+    ones we WRITE. A typo in a seeded `schema.yaml` — `datetimerangee` — leaves
+    every NEW project's `span` degraded to `text` with only a warning: the gantt
+    bar simply stops being drawn and the table becomes a free-text box, while
+    the whole suite stays green. Measured before this test existed: 355 passed
+    with that typo in place.
+
+    Asserted as "no diagnostics at all" rather than as "span's role is
+    datetimerange", because the defect is a property of what we ship, not of one
+    field — a guard naming `span` is one somebody adds a second field beside.
+    Read back through the real path (create an item, ask the API) so it sees
+    what a user's project actually gets, not what the package happens to hold.
+    """
+    c = _client()
+    iid = c.post("/a/pm/items", json={"title": "Launch"}).json()["resource_id"]
+
+    catalog = c.get(f"/a/pm/items/{iid}/entities").json()
+
+    assert catalog["types"], "the PM profile seeds entity types; an empty list is itself the bug"
+    assert catalog["diagnostics"] == []

@@ -33,10 +33,13 @@ def _role_detail(f: FieldSpec) -> str:
         return "a person — pass a user id from lookup_user"
     if f.role is Role.DATE:
         return "a date, YYYY-MM-DD"
-    if f.role is Role.DATERANGE:
+    if f.role is Role.DATETIMERANGE:
         return (
-            'a date range "YYYY-MM-DD/YYYY-MM-DD" — set this so the record '
-            "shows on the timeline / gantt"
+            'a range, "start/end". Either edge may be a date '
+            '("YYYY-MM-DD") or a time ("YYYY-MM-DDTHH:MM"), and they may be '
+            "mixed. A plain date as the START begins that day; as the END it "
+            "includes all of it, so 07-13/07-15 is three days — set this so "
+            "the record shows on the timeline / gantt"
         )
     if f.role is Role.NUMBER:
         return "a number"

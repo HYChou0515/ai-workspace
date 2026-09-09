@@ -9,7 +9,7 @@
 
 **後端已定、前端必須對齊的事實**(不可自立一套):
 
-- **role 封閉詞彙**:`text / status / actor / date / daterange / progress / rank / ref / backref / rollup`;rollup 聚合 `count/sum/avg/min/max`。role 決定 widget、view 綁定鍵、寫入 arg 型別。
+- **role 封閉詞彙**:`text / status / actor / date / datetimerange / progress / rank / ref / backref / rollup`;rollup 聚合 `count/sum/avg/min/max`。role 決定 widget、view 綁定鍵、寫入 arg 型別。
 - **ref 路徑 traversal 是 renderer 職責**(`projection.py` 明載:`milestone.title` 由前端在 render 時跟 ref number 解析,後端不做、不建索引)。
 - **backref / rollup 是 compute-on-read**:前端拿到算好的值,唯讀。
 - **寫入只有一條路** `update_X`(含 UI 編輯);entity **number 是永久 id、ref 指 number 不指路徑**。

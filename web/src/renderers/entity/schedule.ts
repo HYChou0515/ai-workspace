@@ -60,7 +60,7 @@ export type ScheduleReport = {
  * same way the week rule is: this renderer serves every app's entity types, and
  * "exp_days" is a name one schema happens to use, not a fact about timelines. */
 export type ScheduleFields = {
-  /** The `daterange` field being scheduled, on BOTH the record and its anchor. */
+  /** The `datetimerange` field being scheduled, on BOTH the record and its anchor. */
   span: string;
   /** number role — how long the work takes. */
   duration: string;
