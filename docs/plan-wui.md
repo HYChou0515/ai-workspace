@@ -829,6 +829,47 @@ FREE chat」——`""` 就是空的,它成立的真正理由是 `find_default_co
 - **第三個寫入者**(`seed_item`、`/collections.json` 直接寫 raw filestore)沒有 hook。
   turn 邊界的對帳現在會蓋到它們,所以不再是洞,但那兩條路本身仍然繞過 façade 和 mirror。
 
+### 第五輪 review(2026-09-09,三個 lens,P53–P54)
+
+Conformance 這輪沒跑:上一輪已完整對過計劃,而 P44–P52 全是對已命名發現的修正、沒有新增
+範圍。為了湊四個 lens 而跑,就是慣例說的「製造一輪」。
+
+**判準:這一輪 15 條發現裡,8 條是上一輪修法造成的。** 沒有收斂。
+
+| 找到什麼 | 誰造成的 |
+|---|---|
+| 對帳把阻塞 `record` 放回 event loop,每個 turn 都跑(實測握住 402ms),推翻我自己五個 commit 前寫的理由 | P48 |
+| 成功投遞把 `delivery_attempts` 多算一次(第一次就成功記成 2) | P49 |
+| overrun memo 用 window 當 key → 既無上界也不去重(40 個視窗說 40 次) | P51 |
+| P46 加的 per-row memo 沒有被遺忘規則帶到 → 修好又壞掉不會再報 | P46/P47 |
+| P52 的 reducer 守衛只驗 token:分支留著、body 換成 `return prev`,43 條全綠 | P52 |
+| offload 守衛被一行別名(`_loc = locator`)打穿,兩邊計數同時歸零 | P45 |
+| mirror→index 接線守衛只驗 token | P40/P48 |
+| cascade 新步驟雙重 suppress、完全靜默 | P51 |
+| **validator 說乾淨、`usable_rows` 卻 raise**,整份檔案的好列一起陪葬 | 既有 |
+| `_in_zone` 的加寬 except 是死碼(lint 先擋掉了),而且會擋 100% coverage gate | 既有(P38 兩半) |
+| 「七次 round trip」「327ms」「FREE chat」的假話還印在出貨的 docstring 裡 | P52 只改了計劃書 |
+| `docs/wui.md` 的「八個動詞」是手寫數字,改成十七也全綠 | P48 |
+
+**這一輪的形狀:規則寫對了,卻沒有套到眼前那個成品上。** 8 條裡有 6 條是這個形狀——
+「memo 一定要能被忘記」新加的 memo 沒忘記;「手寫數字會過期」同一段散文留下新的手寫數字;
+「守衛要驅動不要讀 token」新加的兩個守衛都是讀 token;「導出式守衛不能從被守的東西導出」
+同一個 docstring 還在描述被否決的做法。
+
+修法一律是**把它變成測得到的**:範例的 reducer 現在由 vitest 真的驅動(跨目錄 import 出貨檔),
+火線的 offload 改成量心跳間隔,`_in_zone` 的 fallback 直接單元測試三種例外家族。
+
+### 訂正(第五輪)
+
+- 「`chat_for_schedule` 是七次 round trip,因為 `item_conversation_mirror` 問每個 app model」
+  ——實測建立 6 次、重用 2 次,而且 `find_work_item` 是用 id 前綴單次 `get`。P52 只改了計劃書,
+  這一輪把 `app.py` 和守衛 docstring 裡的那兩句也改了。
+- 「327ms / 20 000 rows」→ 跨機器 150–330ms,附上導出的指令。單次抽樣寫成常數是這本帳一直在抓的。
+- 「沒有 `run_id` 的對話是 FREE chat」——對互動入口成立、對排程入口不成立(`""` 不是 `None`),
+  而它同時印在 `locator.py` 和一個測試 docstring 裡。
+- 「數字不再是手寫的」——**表格**是導出的,**數字**不是。所以數字拿掉了。
+- P52 訂正 #4 少算:`orchestrator.start` 同步跑的還有 `_prune_runs` 和 `_chat_referenced_runs`。
+
 ## 知情不做
 
 - **每個 owner 的 LLM 額度帳本** — LiteLLM 是計量器、429 是訊號,平台已有處理(#759)。自己再蓋
