@@ -237,7 +237,15 @@ def validate_user_schedules(raw: str) -> list[str]:
             problems.append(f"{where}: a weekly schedule needs `dow` ({', '.join(_DOW)}).")
         if every == "monthly":
             dom = row.get("dom", 0)
-            if dom and not (isinstance(dom, int) and 1 <= dom <= 31):
+            # RANGE only. The type is graded once, above, on every row —
+            # because the parser decodes `dom` on every row. Testing
+            # `isinstance` here as well meant one mistake produced two
+            # complaints: "must be a number" and "must be 1..31", about the same
+            # `dom: "x"`. The cap counts what this returns, which is the defect
+            # P38 fixed, and an author reading two messages looks for two
+            # problems. A rule that sinks below an older one takes its job with
+            # it rather than sitting beside it.
+            if isinstance(dom, int) and not (1 <= dom <= 31):
                 problems.append(f"{where}: `dom` must be 1..31, got {dom!r}.")
         if every in ("daily", "weekly", "monthly"):
             at = row.get("at") or "00:00"  # `null` means the same as omitted

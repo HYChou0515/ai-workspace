@@ -549,6 +549,14 @@ class UserScheduleSweeper:
                 continue
             # A run started, so whatever was wrong is over.
             self._failures.pop((trigger_id, window), None)
+            # Including an overrun. The `#busy` memo said its line once, which is
+            # right for one slow run — but nothing cleared it, so the NEXT time
+            # this schedule overran, weeks later, the sweep stayed silent. Its
+            # own comment claimed it "clears itself when the run finishes"; it
+            # did not, and that is the same "a memo outlives the problem" defect
+            # this module fixed for the per-row complaint, written into the fix
+            # for it. Here is where the overrun demonstrably ended.
+            self._said.pop((item_id, f"{path}#busy"), None)
             fired += 1
 
         # AFTER the loop, when every row has been graded: forget the per-row

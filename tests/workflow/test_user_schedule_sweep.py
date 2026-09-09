@@ -1735,3 +1735,64 @@ def test_a_sweep_with_no_live_reader_trusts_the_snapshot():
         "with no live reader the snapshot's answer stands, so a gone file must be "
         "unregistered — otherwise the index only ever grows"
     )
+
+
+def test_a_schedule_that_overruns_again_later_says_so_again(caplog):
+    """The overrun memo has to be forgotten when the overrun ends.
+
+    It is keyed on the schedule, so one slow run narrates itself once — which is
+    the point. But nothing cleared it, while its own comment claimed the memo
+    "clears itself when the run finishes". It does not: the entry survives, so
+    the NEXT time that schedule overruns, weeks later, the sweep says nothing.
+
+    That is the same "a memo outlives the problem it was about" defect this
+    round fixed for the per-row complaint, written into the fix for it. A run
+    starting is when the overrun is over, and it is where `_failures` is already
+    cleared.
+
+    ONE sweeper across all three ticks, with only the clock moving. Building a
+    fresh one per tick — which the sibling overrun test does — gives every tick
+    an empty `_said`, so the memo can be neither observed nor found wanting.
+    """
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    files = _Files(**{f"{ITEM}{PATH}": _file(DAILY)})
+    busy = {"on": True}
+    day = {"n": 5}
+
+    async def _sometimes_busy(**kw):
+        if busy["on"]:
+            raise ActiveRunExists(ITEM, "still-going")
+        return "run-1"
+
+    sweeper = UserScheduleSweeper(
+        spec=spec,
+        index=ScheduleIndex(spec),
+        read=files.read,
+        read_live=files.read,
+        start=_sometimes_busy,
+        owner_of=lambda _item: "alice",
+        now=lambda: datetime(2026, 9, day["n"], 9, 30),
+    )
+
+    def _lines() -> int:
+        return len(
+            [r for r in caplog.records if "still running its previous fire" in r.getMessage()]
+        )
+
+    with caplog.at_level(logging.INFO):
+        asyncio.run(sweeper.tick())  # overruns
+        assert _lines() == 1, "the first overrun was not reported"
+
+        busy["on"] = False
+        day["n"] = 6
+        asyncio.run(sweeper.tick())  # the run finally starts
+
+        busy["on"] = True
+        day["n"] = 7
+        asyncio.run(sweeper.tick())  # and it overruns again, later
+
+    assert _lines() == 2, (
+        "the schedule overran again after recovering and the sweep stayed silent "
+        "— the memo outlived the overrun it was about"
+    )

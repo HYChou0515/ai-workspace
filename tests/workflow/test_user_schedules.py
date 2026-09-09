@@ -537,3 +537,29 @@ def test_a_complaint_names_the_row_the_author_has_to_fix() -> None:
     assert any("schedules[2]" in p for p in problems), (
         f"the complaint points at the wrong row: {problems}"
     )
+
+
+def test_one_mistake_is_one_complaint() -> None:
+    """Two rules about the same field say the same thing twice.
+
+    P53 added a type check for `dom` on every row, because the parser decodes it
+    on every row. The range check twenty lines below still tested
+    `isinstance(dom, int)` as well — so a monthly row with `dom: "x"` came back
+    with BOTH "must be a number" and "must be 1..31", about one mistake.
+
+    That matters beyond tidiness: the cap counts what this returns, which is the
+    defect P38 fixed, and an author reading two messages looks for two problems.
+    A new rule sinking below an old one has to take the old one's job with it.
+    """
+    monthly_bad_type = validate_user_schedules(
+        _file({"every": "monthly", "dom": "x", "at": "09:00", "run": "r"})
+    )
+    assert len(monthly_bad_type) == 1, f"one mistake produced {monthly_bad_type}"
+
+    # The controls: each rule still catches what only it can.
+    assert validate_user_schedules(
+        _file({"every": "monthly", "dom": 99, "at": "09:00", "run": "r"})
+    ), "a dom out of range is no longer caught"
+    assert validate_user_schedules(
+        _file({"every": "daily", "dom": "x", "at": "09:00", "run": "r"})
+    ), "a dom the parser cannot decode is no longer caught on a non-monthly row"
