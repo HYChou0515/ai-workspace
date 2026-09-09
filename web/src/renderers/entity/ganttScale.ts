@@ -29,11 +29,27 @@ export type Span = { start: string; end: string };
 
 const DAY_MS = 86_400_000;
 
-/** The three named zoom stops, in px-per-day — labelled anchor points the slider
- * snaps to. They are NOT the ends of the track: it travels past `day` (zoom in
- * further, days grow wider) and past `month` (zoom out further, months compress).
- * So the anchors sit INSIDE [PPD_MIN, PPD_MAX]. */
-export const PPD_ANCHORS: Record<Zoom, number> = { day: 28, week: 10, month: 3 };
+/** Horizontal room (px) reserved per fine-tier label. A fine step is only
+ * chosen if `stepDays * ppd` clears this, so labels never touch. Declared here
+ * because the `hour` stop below is derived from it. */
+export const AXIS_MIN_LABEL_PX = 36;
+
+/** The named zoom stops, in px-per-day — labelled anchor points the slider snaps
+ * to. They are NOT the ends of the track: it travels past `hour` (zoom in
+ * further) and past `month` (zoom out further), so the anchors sit INSIDE
+ * [PPD_MIN, PPD_MAX].
+ *
+ * `hour` is DERIVED, not chosen: the fine row only takes a one-hour step once a
+ * column clears the label reservation, so anything less would be a stop that
+ * says "hour" and leaves you on a 2-hour axis — the defect wearing a label.
+ * Without this stop the hour zone was unlabelled rail: reachable by dragging
+ * past the last name on the track, and findable only by accident. */
+export const PPD_ANCHORS: Record<AxisUnit, number> = {
+  month: 3,
+  week: 10,
+  day: 28,
+  hour: AXIS_MIN_LABEL_PX * 24,
+};
 export const PPD_MIN = 1; // most zoomed-out (further out than the `month` anchor)
 
 /** How much room an hour column needs before hours are worth drawing at all.
@@ -380,9 +396,6 @@ export type CoarseBand = { day: number; days: number; label: string };
 export type AxisUnit = Zoom | "hour";
 export type Axis = { unit: AxisUnit; fine: FineTick[]; coarse: CoarseBand[] };
 
-/** Horizontal room (px) reserved per fine-tier label. A fine step is only
- * chosen if `stepDays * ppd` clears this, so labels never touch. */
-export const AXIS_MIN_LABEL_PX = 36;
 
 /* An hour label needs no reservation of its own. `09:00` measures 36.7px in the
  * tick's own mono face — the same as the day row's `Mon 5` — so both rows are
@@ -539,10 +552,10 @@ function hourTicks(minDate: string, visibleColumns: number, ppd: number, scale: 
   const ticks: FineTick[] = [];
   for (let col = Math.ceil(clock0) - clock0; col < visibleColumns; col += step) {
     const at = dateAtColumn(minDate, col, scale);
-    // `HH:MM`, not a bare `HH`. The day row draws the day of the MONTH in this
-    // same position, so "09 10 11" under "Mon 2 Mar" reads as three DATES —
-    // the axis has to state its unit, and the clock is how a time says it.
-    ticks.push({ day: col, label: at.slice(11, 16), title: `${dayOf(at)} ${at.slice(11, 16)}` });
+    // A bare `HH`. Spelling ":00" on every one of 24 ticks is the same word
+    // repeated across the axis; the UNIT is said once, by the slider's `hour`
+    // stop, which is what makes the bare number unambiguous.
+    ticks.push({ day: col, label: at.slice(11, 13), title: `${dayOf(at)} ${at.slice(11, 16)}` });
   }
   return ticks;
 }

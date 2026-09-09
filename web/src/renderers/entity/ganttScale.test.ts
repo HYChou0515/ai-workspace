@@ -307,21 +307,32 @@ describe("the slider reaches hours (#785)", () => {
     expect(sliderToPpd(1)).toBeGreaterThan(PPD_ANCHORS.day);
   });
 
-  it("writes an hour tick as a TIME, so it cannot be read as a day number", () => {
-    // "Timeline label沒有小時". The fine row drew a bare `HH` — and at day grain
-    // that same row draws the day of the MONTH. So "09 10 11 12" under a band
-    // reading "Mon 2 Mar" is indistinguishable from Mar 9th, 10th, 11th; the
-    // one thing the axis had to say (which unit am I in) was the one thing it
-    // did not. Measured in a real browser: `09:00` is 36.7px in the tick's own
-    // mono face — the same width as the day row's `Mon 5`, which is what
-    // AXIS_MIN_LABEL_PX was sized for. So the clock costs no new constant.
-    const axis = axisFor("2026-01-05", 48, sliderToPpd(1));
-    expect(axis.unit).toBe("hour");
-    for (const t of axis.fine) expect(t.label).toMatch(/^\d\d:\d\d$/);
-    // Still a real clock reading, not "09:00" pasted onto every column.
-    expect(axis.fine.map((t) => t.label).slice(0, 3)).toEqual(["00:00", "01:00", "02:00"]);
+  it("names an HOUR stop, and puts it where the axis is actually hourly", () => {
+    // "還是沒有小時的label 我只看到month week day". The track reached hours from
+    // #785 onward, but the only NAMED stops were month / week / day, so the
+    // hour zone was a stretch of blank rail past the last label: nothing said
+    // it was there and nothing could jump to it.
+    //
+    // The stop has to LAND on an hourly axis, not merely inside hour grain —
+    // an "hour" button that leaves the fine row on a 2-hour step is the same
+    // defect wearing a label.
+    expect(PPD_ANCHORS.hour).toBeGreaterThanOrEqual(AXIS_MIN_LABEL_PX * 24);
+    expect(grainFor(PPD_ANCHORS.hour)).toBe("hour");
+
+    const axis = axisFor("2026-01-05", 48, PPD_ANCHORS.hour);
+    expect(axis.fine[1].day - axis.fine[0].day).toBe(1);
+    expect(axis.fine[0].label).toMatch(/^\d\d$/);
+
+    // ...and it stays a reachable position on the track, not the very end.
+    expect(ppdToSlider(PPD_ANCHORS.hour)).toBeLessThan(1);
+    expect(ppdToSlider(PPD_ANCHORS.hour)).toBeGreaterThan(ppdToSlider(PPD_ANCHORS.day));
   });
 
+  // REMOVED: "writes an hour tick as a TIME". It required `HH:MM` on every
+  // tick, which spells ":00" twenty-four times across the axis for one piece
+  // of information. The ambiguity it was fixing (a bare "09 10 11" reading as
+  // dates) is answered by the named `hour` stop on the slider — the unit is
+  // said once, by the control that sets it. The test above holds that stop.
   it("reaches a ONE-hour tick, not merely hour grain", () => {
     // "拉霸應該要能拉到小時 現在拉到最右邊有時也是 by 2hr". Reaching hour
     // GRAIN is not the same as reaching an hourly AXIS: the fine row picks the
@@ -511,8 +522,8 @@ describe("the axis at hour grain (#785)", () => {
     const labels = axis.fine.map((t) => t.label);
     expect(labels.length).toBeGreaterThan(0);
     for (const l of labels) {
-      expect(l).toMatch(/^\d\d:\d\d$/);
-      expect(Number(l.slice(0, 2))).toBeLessThan(24);
+      expect(l).toMatch(/^\d\d$/);
+      expect(Number(l)).toBeLessThan(24);
     }
     expect(axis.coarse.map((b) => b.label)).toContain("Mon 5 Jan");
   });
@@ -540,9 +551,7 @@ describe("the axis at hour grain (#785)", () => {
     // The chart's left edge is a record's start, which is as likely to be 09:30
     // as midnight. Labels running :30 past every hour would read as broken.
     const axis = axisFor("2026-01-05T09:30", 24, PPD);
-    // Now stated exactly: "on the hour" IS ":00", which the bare HH could only
-    // imply.
-    for (const t of axis.fine) expect(t.label).toMatch(/^\d\d:00$/);
+    for (const t of axis.fine) expect(t.label).toMatch(/^\d\d$/);
     expect(axis.fine[0].day).toBeCloseTo(0.5);
   });
 

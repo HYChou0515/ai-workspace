@@ -52,7 +52,7 @@ import {
   unionSpan,
   spanValue,
   visibleDaysFor,
-  type Zoom,
+  type AxisUnit,
 } from "./ganttScale";
 import { backrefBuckets, type RefIndex } from "./refTraversal";
 import { fieldText, roleOf } from "./shared";
@@ -84,7 +84,13 @@ const FINE_H = 20; // fine tick row (weekdays / week codes / months)
 const SUB_H = 11;
 const LANE_H = 24;
 const ROW_H = 26;
-const ZOOMS: Zoom[] = ["day", "week", "month"];
+/** The slider's named stops, densest first. `hour` is here because the track has
+ * run into hour grain since #785 while the last NAME on it stayed `day` — so the
+ * hourly zone was blank rail, reachable only by dragging past the end of the
+ * labels and findable only by accident. Naming the stop is also what lets the
+ * fine row stay a bare `09`: the unit is stated once, here, instead of being
+ * spelled ":00" on all twenty-four ticks. */
+const ZOOMS: AxisUnit[] = ["hour", "day", "week", "month"];
 
 type Row = { e: EntityInstance; span: Span; source: SpanSource; reach: Span };
 

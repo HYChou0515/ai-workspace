@@ -454,6 +454,27 @@ describe("GanttView", () => {
     expect(screen.getByTestId("bar-1").style.width).not.toBe(weekWidth);
   });
 
+  it("names an hour stop on the slider, and clicking it lands on an hourly axis", () => {
+    // "還是沒有小時的label 我只看到month week day". Reaching hours by dragging
+    // past the last NAME on the track is not the same as being able to ask for
+    // them. Driven through the button a person actually presses: a stop that
+    // exists but leaves the fine row on a 2-hour step would pass any assertion
+    // about the anchor alone.
+    render(
+      <GanttView
+        {...props({ entities: [rec(1, { title: "A", span: "2026-01-05T09:00/2026-01-07T17:00" })] })} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "zoom hour" }));
+
+    const labels = Array.from(document.querySelectorAll(".ev-gantt__tick")).map((n) => n.textContent?.trim() ?? "");
+    expect(labels.length).toBeGreaterThan(2);
+    for (const l of labels) expect(l).toMatch(/^\d\d$/);
+    // Consecutive HOURS, so the axis is hourly and not merely in hour grain.
+    const hours = labels.slice(0, 3).map(Number);
+    expect((hours[1] - hours[0] + 24) % 24).toBe(1);
+    expect((hours[2] - hours[1] + 24) % 24).toBe(1);
+  });
+
   it("zooms continuously by dragging the density slider", () => {
     render(<GanttView {...props({ entities: [rec(1, { title: "A", span: "2026-01-01/2026-01-31" })] })} />);
     const slider = screen.getByRole("slider", { name: /zoom/i });
