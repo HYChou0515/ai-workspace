@@ -129,6 +129,55 @@ describe("useKbChat", () => {
   });
 });
 
+describe("useKbChat — the subscription outlives a dropped connection", () => {
+  beforeEach(() => _resetKbMock());
+
+  // A stream that ENDS is not a stream that is finished. An idle proxy cutting
+  // the connection, a pod rollover and `close_streams` all end the generator
+  // without throwing, so a loop that only caught errors stopped for good — and
+  // because the ref still held the chat id, nothing re-attached. The chat went
+  // permanently deaf: sends returned 202, `streaming` stayed true, and no answer
+  // ever rendered again until the component remounted.
+  it("re-attaches after the stream ends cleanly, and folds what arrives next", async () => {
+    let connects = 0;
+    const client = {
+      ...mockKbApi,
+      getChat: vi.fn().mockResolvedValue({
+        resource_id: "kb-live",
+        title: "",
+        collection_ids: [],
+        owner: "default-user",
+        shared_with: [],
+        messages: [],
+      }),
+      subscribeChat: async function* () {
+        connects += 1;
+        if (connects === 1) return; // a clean EOF: no error, just gone
+        yield { type: "message_delta", text: "回來了" } as never;
+        await new Promise<void>(() => {}); // then stay open
+      },
+    } as unknown as typeof mockKbApi;
+
+    const { result } = renderHook(() =>
+      useKbChat({ collectionIds: ["c1"], chatId: "kb-live", client }),
+    );
+
+    // The first backoff is 1s, so give it room — and assert on the CONTENT, not
+    // on the connect count: reconnecting and then dropping what arrives would
+    // satisfy a counter and still leave the chat blank.
+    await waitFor(
+      () =>
+        expect(
+          result.current.log.entries.some(
+            (e) => e.kind === "message" && e.message.content.includes("回來了"),
+          ),
+        ).toBe(true),
+      { timeout: 4000 },
+    );
+    expect(connects).toBeGreaterThan(1);
+  });
+});
+
 describe("useKbChat — send failure", () => {
   beforeEach(() => _resetKbMock());
 

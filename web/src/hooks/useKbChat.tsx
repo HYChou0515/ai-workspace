@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { kbApi, type KbApi, type KbImageInput } from "../api/kb";
 import { qk } from "../api/queryKeys";
-import { isTerminal } from "../events";
+import { eventId, eventSeq, isTerminal } from "../events";
 import { getKbAgentName } from "../lib/kbAgent";
 import {
   getStored as getKbEnhancementSelection,
@@ -22,6 +22,11 @@ import {
 } from "../pages/investigation/agentLog";
 import { useChatLog } from "./useChatLog";
 import { useCurrentUser } from "./useCurrentUser";
+
+/** How many delivered event ids a viewer remembers, for the replay de-dupe —
+ * matched to the server's replay ring, since what this guards against is a
+ * re-delivery of something the server still holds. */
+const SEEN_IDS_MAX = 2000;
 
 /**
  * Drives one KB chat thread, reusing the RCA agent-log machinery so the KB chat
@@ -104,26 +109,64 @@ export function useKbChat({
       const controller = new AbortController();
       subRef.current = { id, controller };
       void (async () => {
-        try {
-          for await (const ev of client.subscribeChat(id, controller.signal)) {
-            setLog((prev) => reduceAgent(prev, ev));
-            if (isTerminal(ev)) {
-              // The persisted thread is what carries the resolved [n]
-              // citations; the stream never has them. Reconcile, never
-              // replace — it must not cost the user the answer they just
-              // watched arrive.
-              const fresh = await client.getChat(id);
-              qc.setQueryData(qk.kb.chat(id), fresh);
-              reconcile(fresh);
+        let backoff = 1000;
+        // A subscription that ENDS is not a subscription that is finished. A
+        // clean EOF throws nothing — an idle proxy cutting the connection, a pod
+        // rollover, `close_streams` — so a loop that only caught errors left the
+        // chat permanently deaf: the next send returned 202, `streaming` stayed
+        // true, and no answer ever rendered again until the component remounted.
+        // Only an abort (unmount / thread switch) stops this.
+        let firstConnect = true;
+        let maxSeq: number | undefined;
+        const seen = new Set<string>();
+        while (!controller.signal.aborted) {
+          // The first connect of this subscription replays nothing; every later
+          // one RESUMES from the last seq seen, so the events emitted during the
+          // gap come back rather than being lost.
+          const since = firstConnect ? undefined : maxSeq;
+          firstConnect = false;
+          try {
+            for await (const ev of client.subscribeChat(id, controller.signal, since)) {
+              backoff = 1000; // a healthy stream resets it
+              const seq = eventSeq(ev);
+              if (seq !== undefined && (maxSeq === undefined || seq > maxSeq)) maxSeq = seq;
+              // A replay re-delivers what this viewer already folded. An event
+              // with no id is always folded — dropping those would blank the
+              // stream against a backend that predates them.
+              const evId = eventId(ev);
+              if (evId !== undefined) {
+                if (seen.has(evId)) continue;
+                seen.add(evId);
+                if (seen.size > SEEN_IDS_MAX) {
+                  let drop = seen.size - SEEN_IDS_MAX;
+                  for (const old of seen) {
+                    if (drop-- <= 0) break;
+                    seen.delete(old); // a Set iterates oldest-first
+                  }
+                }
+              }
+              setLog((prev) => reduceAgent(prev, ev));
+              if (isTerminal(ev)) {
+                // The persisted thread is what carries the resolved [n]
+                // citations; the stream never has them. Reconcile, never
+                // replace — it must not cost the user the answer they just
+                // watched arrive.
+                const fresh = await client.getChat(id);
+                qc.setQueryData(qk.kb.chat(id), fresh);
+                reconcile(fresh);
+              }
             }
+          } catch (err: unknown) {
+            if (controller.signal.aborted) return;
+            const msg = err instanceof Error ? err.message : String(err);
+            // Say so rather than going quiet: a stream that dropped looks
+            // exactly like a chat where nothing is happening, and the answer
+            // simply stops growing.
+            setLog((prev) => ({ ...prev, error: msg }));
           }
-        } catch (err: unknown) {
           if (controller.signal.aborted) return;
-          const msg = err instanceof Error ? err.message : String(err);
-          // Say so rather than going quiet: a stream that dropped looks exactly
-          // like a chat where nothing is happening, and the answer simply stops
-          // growing.
-          setLog((prev) => ({ ...prev, error: msg }));
+          await new Promise<void>((resolve) => setTimeout(resolve, backoff));
+          backoff = Math.min(backoff * 2, 15000);
         }
       })();
     },
@@ -171,8 +214,10 @@ export function useKbChat({
       }
       // Attach BEFORE sending, and directly rather than via the effect above:
       // the effect runs a render later, and the events this send is about to
-      // provoke do not wait for React.
-      attach(id);
+      // provoke do not wait for React. Skipped when the view has already gone —
+      // nothing would abort that subscription, since the effect never registered
+      // a cleanup for a controller it did not create.
+      if (mounted.current) attach(id);
 
       // Draw the question and lock in "a turn is in flight" at once. The
       // `user_message` broadcast adopts this entry when it lands, so it stays
@@ -194,6 +239,26 @@ export function useKbChat({
           // #506: per-message cap on this reply's wiki greps (replaces the toggle).
           maxWikiSearches: getKbWikiMax(),
         });
+        // The send awaits ITS OWN turn, so by the time it resolves that turn has
+        // ended (or been detached at the deadline). Re-reading here is the safety
+        // net for everything the subscription could have missed — most of all the
+        // window on a brand-new chat, where the stream is attached microseconds
+        // before the first broadcast and a miss would leave `streaming` true with
+        // nothing ever to clear it. Reconcile keeps whatever the screen has that
+        // the snapshot does not.
+        //
+        // Its OWN try, because the send it follows already SUCCEEDED. Letting a
+        // failed re-read fall into the catch below would report a turn failure
+        // that did not happen — and retract a question the backend has accepted
+        // and is going to answer.
+        try {
+          const fresh = await client.getChat(id);
+          qc.setQueryData(qk.kb.chat(id), fresh);
+          reconcile(fresh);
+        } catch {
+          // Best effort. The subscription's terminal reconcile is the other
+          // route to the same snapshot, so this is not the last chance.
+        }
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         // Take the drawn question back: the send was refused, so no broadcast
@@ -201,7 +266,11 @@ export function useKbChat({
         // would sit there with the error beside it saying it was never sent.
         setLog((prev) => ({
           ...prev,
-          streaming: false,
+          // …but do NOT claim the turn ended. This send may have been queued
+          // behind one that is still writing, and saying "not streaming" there
+          // hides a running turn — the spinner and Stop vanish while the answer
+          // is still arriving. An answer still flagged live is that turn.
+          streaming: prev.entries.some((e) => e.kind === "message" && e.live),
           error: msg,
           entries: retractOwnAsk(prev, { author: currentUser, content: trimmed }).entries,
         }));
@@ -216,6 +285,7 @@ export function useKbChat({
       onChatCreated,
       qc,
       setLog,
+      reconcile,
       attach,
     ],
   );
