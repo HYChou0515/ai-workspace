@@ -157,6 +157,7 @@ uv run python scripts/run_migrate.py --dry-run \
 | --- | --- | --- | --- |
 | `failover.rate_limit_budget_s` | #759（2026-09-03） | ⚠️ **行為有變**：agent 鏈碰到 429 從「快速燒完重試然後 giving up」變成「在原端點等它聲明的窗口」，等待秒數每次 agent run 共用一池，預設上限 2 小時；畫面會出現「請求過於頻繁，N 秒後自動重試」。設 `0` 回到一律切換的舊行為 | configuration.md §11 |
 | `agents.subagent_models` | #770（2026-09-03） | **完全不變**：`run_agent` 不長 `model` 參數，sub-agent 照舊跟 parent turn 同一顆模型（review 以逐位元比對驗證） | configuration.md §7 |
+| `history.max_tokens_window_ratio` | #767（2026-09-04） | ⚠️ **行為有變**：窗口解析多了一段「問 proxy 自己的 `/model/info`」。原本前四段全滅、上限只能是 `unknown` 的部署（自架模型掛在 litellm proxy 後面、用任意別名，最典型），`unknown` 的意思是**歷史從不裁切、自動壓縮從不執行**；現在若 proxy 只答得出 `max_tokens`，會用它 ×0.8 推出一個**標記為估計**的上限，於是裁切與壓縮開始運作。推導值裝不下已知開銷時一律拒收、退回 `unknown`（也就是舊行為）。⚠️ 這一格**沒有「設 0 回到舊行為」**——載入時要求 `0 < ratio <= 1`，`0` 會被擋下；要完全不走推導，就明確設 `history.context_limit`，讓第一段直接答得出來 | `configs/config.example.yaml` 的 `history:` 區塊 |
 | `server.max_page_schedules` | #788（2026-09-05） | **完全不變**：預設 1000,程式碼裡的預設值一樣。這是**失控護欄不是政策限制**——正常的頁面碰不到,碰到代表那個頁面有 bug。它擋的是耐久狀態:每個排程觸發過就在視窗帳本留一列,而沒有別的東西限制頁面能建幾個 | configuration.md |
 | `server.notification_channel` | #788（2026-09-05） | **完全不變**：通知只寫站內信,跟這個接縫出現之前一模一樣。沒有背景外送迴圈會被啟動(空值連 timer 都不建),也沒有任何查詢會多跑 | configuration.md |
 | `server.workflow_step_timeout_sec` | #788（2026-09-05） | ⚠️ **行為有變**:工作流裡單一 agent 步驟從「沒有上限」變成 **10 分鐘就中止那一步**,訊息裡會寫出那個秒數。機制本來就在(`steps.py` 的 `asyncio.wait_for`),但**沒有任何地方把值傳進 `create_app`**,所以每個部署實際上都跑在無上限那條分支——這次補的是接線。有合法長於十分鐘的 agent 步驟的部署要調大,或設 `0` 回到舊行為 | configuration.md |

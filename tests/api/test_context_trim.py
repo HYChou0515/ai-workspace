@@ -9,6 +9,8 @@ landing neither — an accurate estimator against a fabricated 24,000 cap trims
 
 from __future__ import annotations
 
+import pytest
+
 from workspace_app.api.turns import history_items
 from workspace_app.resources import Message
 
@@ -203,6 +205,8 @@ def _bare_builder():
     builder.learned_limit_fn = None
     builder._catalog_cache = {}
     builder._catalog_fn = lambda model: None  # the registry knows nothing by default
+    builder.endpoint_limits_fn = None  # nothing wired ⇒ the rung is skipped
+    builder._max_tokens_window_ratio = 0.8
     return builder
 
 
@@ -423,11 +427,15 @@ async def test_the_catalog_rung_does_not_block_the_event_loop():
     """
     import time
 
+    from workspace_app.context_probe import EndpointLimits
     from workspace_app.resources import AgentConfig
 
     cfg = AgentConfig(name="t", model="ollama/qwen3:14b", system_prompt="s")
     builder = _bare_builder()
-    builder._catalog_fn = lambda model: (time.sleep(0.5), 40_960)[1]  # a hanging daemon
+    builder._catalog_fn = lambda model: (  # a hanging daemon
+        time.sleep(0.5),
+        EndpointLimits(max_input_tokens=40_960, max_tokens=None),
+    )[1]
 
     started = time.perf_counter()
     got = builder._budget_for(cfg)
@@ -482,10 +490,345 @@ def test_kb_history_budget_does_not_call_the_catalog_every_turn(monkeypatch):
 
     kb_chat_routes._KB_CATALOG_CACHE.clear()
     calls: list[str] = []
-    monkeypatch.setattr(context_budget, "catalog_limit", lambda m: calls.append(m) or None)
+    monkeypatch.setattr(context_budget, "catalog_limits", lambda m: calls.append(m) or None)
 
     cfg = AgentConfig(name="t", model="openai/self-hosted", system_prompt="s")
     kb_chat_routes._kb_history_budget(cfg, None)
     kb_chat_routes._kb_history_budget(cfg, None)
 
     assert len(calls) == 1, "the catalog lookup must be cached, not repeated each turn"
+
+
+# ── the rung for a self-hosted model behind a proxy ──────────────────────
+
+
+def _cfg(model: str = "our-alias", base_url: str = "http://proxy/v1"):
+    from workspace_app.resources import AgentConfig
+
+    return AgentConfig(name="t", model=model, system_prompt="", llm_base_url=base_url)
+
+
+def test_a_window_the_proxy_states_is_used_and_named_as_a_declaration():
+    """The topology this whole rung exists for: the registry does not know the
+    alias, `/tokenize` never survives the proxy, and nothing has been learned —
+    but the proxy itself was told what the window is."""
+    from workspace_app.context_probe import EndpointLimits
+
+    builder = _bare_builder()
+    builder.endpoint_limits_fn = lambda model, base_url: EndpointLimits(
+        max_input_tokens=131072, max_tokens=8192
+    )
+
+    got = builder._context_window(_cfg())
+    assert got.tokens == 131072
+    assert got.source == "declared"
+
+
+def test_only_max_tokens_is_derived_and_says_it_was():
+    """The real deployment's shape: `max_input_tokens` is null and `max_tokens`
+    carries a large number. Using it is a judgement call, so the answer has to
+    admit which kind of number it is."""
+    from workspace_app.context_probe import EndpointLimits
+
+    builder = _bare_builder()
+    builder.endpoint_limits_fn = lambda model, base_url: EndpointLimits(
+        max_input_tokens=None, max_tokens=131072
+    )
+
+    got = builder._context_window(_cfg())
+    assert got.tokens == 104857  # 131072 * 0.8
+    assert got.source == "estimated"
+
+
+def test_the_operators_ratio_is_the_one_applied():
+    """Not a constant in the code — see `history.max_tokens_window_ratio`."""
+    from workspace_app.context_probe import EndpointLimits
+
+    builder = _bare_builder()
+    builder._max_tokens_window_ratio = 0.5
+    builder.endpoint_limits_fn = lambda model, base_url: EndpointLimits(
+        max_input_tokens=None, max_tokens=100_000
+    )
+
+    assert builder._context_window(_cfg()).tokens == 50_000
+
+
+def test_a_stated_window_is_never_scaled_by_the_ratio():
+    """`max_input_tokens` already IS the input window. Scaling it would discount
+    twice, on top of the prompt, tool schemas, reply reserve and margin the
+    budget subtracts later."""
+    from workspace_app.context_probe import EndpointLimits
+
+    builder = _bare_builder()
+    builder._max_tokens_window_ratio = 0.5
+    builder.endpoint_limits_fn = lambda model, base_url: EndpointLimits(
+        max_input_tokens=131072, max_tokens=131072
+    )
+
+    assert builder._context_window(_cfg()).tokens == 131072
+
+
+def test_the_registry_still_outranks_a_derived_number():
+    """An estimate may never displace a figure someone stated — the catalog is
+    at least exact about the model it names."""
+    from workspace_app.context_probe import EndpointLimits
+
+    builder = _bare_builder()
+    builder._catalog_fn = lambda model: EndpointLimits(max_input_tokens=40_960, max_tokens=None)
+    builder.endpoint_limits_fn = lambda model, base_url: EndpointLimits(
+        max_input_tokens=None, max_tokens=131072
+    )
+
+    got = builder._context_window(_cfg())
+    assert got.tokens == 40_960
+    assert got.source == "catalog"
+
+
+def test_a_silent_proxy_leaves_the_ceiling_unknown():
+    """Most endpoints are not a litellm proxy. This rung must add nothing when
+    it learns nothing — `unknown` still means send it all."""
+    builder = _bare_builder()
+
+    got = builder._context_window(_cfg())
+    assert got.tokens is None
+    assert got.source == "unknown"
+
+
+def test_an_empty_base_url_reaches_the_runner_unchanged():
+    """`llm_base_url == ""` MEANS "the deploy's endpoint" — only the runner
+    knows which that is. Resolving it to `None` here is what made this rung
+    silent on a single-endpoint deployment, which is the only shape it was
+    written for: every other consumer of this field does the same fallback, and
+    this one skipped it."""
+    from workspace_app.context_probe import EndpointLimits
+    from workspace_app.resources import AgentConfig
+
+    seen: list[tuple[str, str | None]] = []
+
+    def _record(model: str, base_url: str | None) -> EndpointLimits:
+        seen.append((model, base_url))
+        return EndpointLimits(max_input_tokens=131072, max_tokens=None)
+
+    builder = _bare_builder()
+    builder.endpoint_limits_fn = _record
+
+    got = builder._context_window(AgentConfig(name="t", model="our-alias", system_prompt=""))
+    assert seen == [("our-alias", None)], "the config's own url is passed through untouched"
+    assert got.tokens == 131072
+
+
+def test_nothing_wired_skips_the_rung_rather_than_failing():
+    """Replay and tests run without a runner. The ladder simply has one fewer
+    rung there — never an exception on a turn."""
+    builder = _bare_builder()
+    assert builder._context_window(_cfg()).source == "unknown"
+
+
+# ── which rung answered has to be visible OUTSIDE the type system ────────
+
+
+@pytest.fixture(autouse=True)
+def _fresh_announcements():
+    """The dedupe set is process state, so a test that does not clear it passes
+    or fails depending on what ran before it — and would pass for the wrong
+    reason once some earlier test happened to announce the same outcome."""
+    from workspace_app.api.turn_context import _CEILING_SAID
+
+    _CEILING_SAID.clear()
+    yield
+    _CEILING_SAID.clear()
+
+
+def test_the_resolved_ceiling_is_logged_with_its_source(caplog):
+    """The plan's own rule — "a number nobody stated must never read like a
+    measurement" — held only in the type system. `ContextLimit.source` had no
+    production reader at all, so in operation an estimate and a measurement were
+    the same number with no way to tell them apart. A deployment whose ceiling
+    is a guess derived from an output cap looked exactly like one whose endpoint
+    stated its window.
+
+    It matters most where it is least visible: production is reachable only
+    through the log aggregator, so this line IS the check that the ladder is
+    working, and it names the model so two presets can be told apart."""
+    import logging
+
+    from workspace_app.context_probe import EndpointLimits
+
+    builder = _bare_builder()
+    builder.endpoint_limits_fn = lambda model, base_url: EndpointLimits(
+        max_input_tokens=None, max_tokens=131072
+    )
+
+    with caplog.at_level(logging.INFO):
+        got = builder._context_window(_cfg())
+
+    assert got.source == "estimated"
+    line = "\n".join(r.getMessage() for r in caplog.records)
+    assert "estimated" in line, line
+    assert "104857" in line, line
+    assert _cfg().model in line, line
+
+
+def test_the_same_answer_is_not_logged_every_turn(caplog):
+    """One line per distinct outcome per pod. A per-turn line would bury the
+    thing it exists to make findable."""
+    import logging
+
+    from workspace_app.context_probe import EndpointLimits
+
+    builder = _bare_builder()
+    builder.endpoint_limits_fn = lambda model, base_url: EndpointLimits(
+        max_input_tokens=131072, max_tokens=None
+    )
+
+    with caplog.at_level(logging.INFO):
+        for _ in range(5):
+            builder._context_window(_cfg())
+
+    said = [r for r in caplog.records if "context ceiling" in r.getMessage()]
+    assert len(said) == 1, said
+
+
+def test_unknown_says_so_too(caplog):
+    """The state this whole feature exists to leave. An operator reading the log
+    has to be able to see that NOTHING answered — that is the diagnosis, and it
+    is invisible if only successes are logged."""
+    import logging
+
+    builder = _bare_builder()
+
+    with caplog.at_level(logging.INFO):
+        builder._context_window(_cfg())
+
+    assert "unknown" in "\n".join(r.getMessage() for r in caplog.records)
+
+
+def test_a_derived_ceiling_too_small_to_be_a_window_does_not_drive_compaction():
+    """The half of the sanity floor that lived in only one consumer.
+
+    `history_budget` refuses a derived ceiling that cannot hold the fixed
+    overhead — but the COMPACTION trigger computes its own budget straight off
+    `window.tokens`, and so was untouched by that refusal. With a proxy
+    reporting a well-behaved `max_tokens: 4096`, the derived 3,276-token
+    "window" leaves a compaction budget of 948, and every thread above a
+    paragraph gets compacted on every turn.
+
+    That is strictly worse than the symptom the floor was written for.
+    Replaying one message is recoverable; compaction is lossy and irreversible,
+    and here it would be driven by a size measured against a ceiling nobody
+    stated. The rule has to live where the ceiling is resolved, not in whichever
+    consumer happened to be reviewed."""
+    from workspace_app.context_probe import EndpointLimits
+    from workspace_app.resources import Message
+
+    builder = _bare_builder()
+    builder._max_tokens_window_ratio = 0.8
+    builder.endpoint_limits_fn = lambda model, base_url: EndpointLimits(
+        max_input_tokens=None,
+        max_tokens=4_096,  # an OUTPUT cap, reported correctly
+    )
+    cfg = _cfg()
+    cfg.system_prompt = "x" * 44_000  # ~11k tokens, the measured low end
+    builder._locator = _LocatorFor(cfg)
+
+    messages = [
+        Message(role="user" if i % 2 == 0 else "assistant", content="x" * 400) for i in range(20)
+    ]
+    plan = builder.compaction_plan_for("item", messages)
+
+    assert plan.span == [], "compaction must not be driven by a ceiling nobody stated"
+
+
+class _LocatorFor:
+    def __init__(self, cfg):
+        self._cfg = cfg
+
+    def resolve_agent_config(self, item_id):
+        return self._cfg
+
+
+def test_a_stated_ceiling_that_small_still_drives_compaction():
+    """The control. When the ceiling was STATED, a thread that overflows it
+    genuinely needs compacting, and refusing to would leave the user with a
+    conversation that cannot be sent at all."""
+    from workspace_app.resources import Message
+
+    builder = _bare_builder()
+    builder._context_limit = 4_096  # the operator said so
+    cfg = _cfg()
+    cfg.system_prompt = "s"
+    builder._locator = _LocatorFor(cfg)
+
+    messages = [
+        Message(role="user" if i % 2 == 0 else "assistant", content="x" * 4_000) for i in range(20)
+    ]
+    plan = builder.compaction_plan_for("item", messages)
+
+    assert plan.span, "a stated ceiling is not second-guessed"
+
+
+def test_the_gauge_shows_no_ceiling_when_nothing_credible_answered():
+    """The third consumer of the same number, and the one the user looks at.
+
+    `usage_of` drew its denominator straight off the resolved ceiling, so a
+    derived 3,276 that neither the budget nor the compaction trigger is willing
+    to act on would still be rendered as the bar's limit — a gauge reading past
+    100% beside a chat that never compacts, which is a worse answer than an
+    honest "no denominator". The FE is already built for `limit: null`: it shows
+    the usage with no bar rather than inventing one."""
+    from workspace_app.context_probe import EndpointLimits
+
+    builder = _bare_builder()
+    builder._max_tokens_window_ratio = 0.8
+    builder.endpoint_limits_fn = lambda model, base_url: EndpointLimits(
+        max_input_tokens=None, max_tokens=4_096
+    )
+    cfg = _cfg()
+    cfg.system_prompt = "x" * 44_000
+    builder._locator = _LocatorFor(cfg)
+
+    usage = builder.usage_of("item", _msgs(4))
+
+    assert usage.limit is None, "an incredible ceiling must not be drawn as one"
+    assert usage.limit_source == "unknown"
+
+
+def test_the_gauge_still_shows_a_ceiling_anyone_actually_stated():
+    """The control — this must not turn the gauge off for everyone."""
+    builder = _bare_builder()
+    builder._context_limit = 40_960
+    cfg = _cfg()
+    cfg.system_prompt = "s"
+    builder._locator = _LocatorFor(cfg)
+
+    usage = builder.usage_of("item", _msgs(4))
+
+    assert usage.limit == 40_960
+    assert usage.limit_source == "config"
+
+
+def test_a_person_can_still_compact_when_no_ceiling_is_credible():
+    """The reassuring half of refusing an incredible ceiling.
+
+    Declining to act on a derived number silences the AUTOMATIC path — that is
+    the point. It must not take away the button: someone pressing compact has a
+    reason we do not (the last hour of debugging is finished and they want the
+    window back before the next question), and on the deployment this rung
+    exists for they may have no other way to get it.
+
+    Nothing covered `force=True` together with `budget=None` through this
+    method, which is exactly the combination the credibility test creates."""
+    from workspace_app.context_probe import EndpointLimits
+
+    builder = _bare_builder()
+    builder._max_tokens_window_ratio = 0.8
+    builder.endpoint_limits_fn = lambda model, base_url: EndpointLimits(
+        max_input_tokens=None, max_tokens=4_096
+    )
+    cfg = _cfg()
+    cfg.system_prompt = "x" * 44_000
+    builder._locator = _LocatorFor(cfg)
+
+    messages = _msgs(20)
+    assert builder.compaction_plan_for("item", messages).span == [], "not automatically"
+    assert builder.compaction_plan_for("item", messages, force=True).span, "but on request, yes"

@@ -1229,6 +1229,16 @@ def test_host_managed_durable_check_survives_an_empty_sandbox_block(tmp_path: Pa
     assert s.sandbox.kind == "http"
 
 
+def test_max_tokens_window_ratio_is_actually_read_from_the_config(tmp_path: Path):
+    """A knob that is documented but never read is worse than no knob: the
+    operator changes it, nothing happens, and nothing says so. This is the whole
+    of the wiring — the loader builds `HistorySettings` generically, so the only
+    thing that can break is the field name."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("history:\n  max_tokens_window_ratio: 0.5\n", encoding="utf-8")
+    assert load(config_path=cfg, env={}).history.max_tokens_window_ratio == 0.5
+
+
 def test_subagent_models_loads_as_an_ordered_preset_name_list(tmp_path: Path):
     """`agents.subagent_models` is the operator's curated list of presets the
     `run_agent` caller may pick (plan-subagent-model-choice). It must survive

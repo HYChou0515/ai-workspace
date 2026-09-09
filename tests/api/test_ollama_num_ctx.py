@@ -68,12 +68,17 @@ def _builder(*, configured=None, learned=None, catalog=None):
     """A TurnContextBuilder with only the ceiling knobs — `_context_window`
     needs no service bundle."""
     from workspace_app.api.turn_context import TurnContextBuilder
+    from workspace_app.context_probe import EndpointLimits
 
     b = TurnContextBuilder.__new__(TurnContextBuilder)
     b._context_limit = configured
     b.learned_limit_fn = (lambda model, base_url: learned) if learned else None
     b._catalog_cache = {}
-    b._catalog_fn = lambda model: catalog
+    # The registry's EXACT figure. Its `max_tokens` is a separate, ambiguous
+    # number and no longer answers this rung — see `catalog_limits`.
+    b._catalog_fn = lambda model: EndpointLimits(max_input_tokens=catalog, max_tokens=None)
+    b.endpoint_limits_fn = None
+    b._max_tokens_window_ratio = 0.8
     return b
 
 
