@@ -556,7 +556,14 @@ export function GanttView({
 
           {/* right timeline: gridlines + axis ticks + today line + bars */}
           <div className="ev-gantt__canvas" style={{ width: canvasWidth }}>
-            {axis.fine.map((t) => (
+            {/* One rule per DAY at hour grain, per fine tick otherwise. A line
+                every hour is noise at 48px apart, and `axis.fine` is rendered
+                twice (here and as ticks below) — so on a long project the
+                one-hour step P3 unlocked would double the node count exactly
+                where the chart is densest (~13k -> ~25.5k on a two-year
+                weekday project). The day boundary is what a gridline means at
+                this grain anyway; it lines up with the band that names it. */}
+            {(axis.unit === "hour" ? axis.coarse : axis.fine).map((t) => (
               <div key={`grid-${t.day}`} className="ev-gantt__gridline" style={{ left: t.day * cpx }} />
             ))}
             <div className="ev-gantt__axis" style={{ height: axisH }}>

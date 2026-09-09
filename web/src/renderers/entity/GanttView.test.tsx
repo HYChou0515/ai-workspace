@@ -522,6 +522,33 @@ describe("GanttView", () => {
     expect(overnight).toBeCloseTo(allDay / 7);
   });
 
+  it("rules one gridline per DAY at hour grain, not one per hour", () => {
+    // Every fine tick used to get a full-height gridline. That was fine while
+    // the finest step was days (or 2 hours). Now that the track reaches a
+    // one-hour step (P3), the same code rules a line every hour — visual noise
+    // at 48px apart, and `axis.fine` is rendered TWICE (gridline + tick), so a
+    // long project doubles its node count exactly where the chart is densest.
+    // Measured: a two-year weekday project goes from ~13,000 nodes to ~25,500.
+    //
+    // The day boundary is what a gridline is FOR at this grain — the band
+    // above already names the day, and this lines up with it.
+    render(
+      <GanttView
+        {...props({
+          entities: [rec(1, { title: "A", span: "2026-01-05T09:00/2026-01-08T17:00" })],
+        })}
+      />,
+    );
+    fireEvent.change(screen.getByRole("slider", { name: /zoom/i }), { target: { value: "1" } });
+
+    const gridlines = document.querySelectorAll(".ev-gantt__gridline").length;
+    const bands = document.querySelectorAll(".ev-gantt__coarse-band").length;
+    const ticks = document.querySelectorAll(".ev-gantt__tick").length;
+
+    expect(ticks, "hour ticks are still one per hour").toBeGreaterThan(bands);
+    expect(gridlines, "a gridline per hour is noise, and doubles the DOM").toBe(bands);
+  });
+
   it("renders a month context band above the fine ticks (two-tier axis)", () => {
     render(<GanttView {...props({ entities: [rec(1, { title: "A", span: "2026-01-05/2026-01-20" })] })} />);
     expect(screen.getByText("Jan 2026")).toBeInTheDocument();

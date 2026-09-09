@@ -81,6 +81,10 @@ describe("entity-views.css", () => {
     // border.
     for (const sel of ["\\.ev-viewpanel__field", "\\.ev-viewpanel__range"]) {
       const rule = CSS.match(new RegExp(sel + "\\s*\\{[^}]*\\}"))?.[0] ?? "";
+      // A `not.toMatch` against "" passes having checked nothing, so renaming
+      // or deleting the rule would retire this guard in silence. Prove the
+      // rule was found BEFORE asserting what it does not contain.
+      expect(rule, `${sel} has no rule to check`).not.toBe("");
       expect(rule, `${sel} must not wrap`).not.toMatch(/flex-wrap/);
     }
 

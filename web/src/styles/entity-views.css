@@ -1200,10 +1200,13 @@ button.ev-card__status:focus-visible {
   color: var(--text-dark);
   /* Reserved whether or not it is drawn, so a coloured bar and an uncoloured
    * one occupy the same box — box-sizing is border-box, so this costs no
-   * width. A `color_by` bar paints it in its own ink (GanttView barColor): the
-   * chip fill is translucent, and on a grouped chart the neutral slot IS the
-   * lane-band colour, so without an edge the bar's start and end — the data —
-   * have nothing to read against. The solid fill used to do this job. */
+   * width. A `color_by` bar paints it in `--text-paper`, NOT in its own ink:
+   * the edge has to be legible against the LANE BAND behind the bar, and the
+   * ink is chosen to be legible on the FILL. `--ink` is one value in both
+   * themes, which made the dark-mode edge 1.09:1 on the band — no edge at all,
+   * and in a gantt the bar's start and end are the data. The fill cannot carry
+   * the boundary alone either: solid as it is, it measures 2.40:1 against the
+   * light band. Both numbers come from ganttBarContrast.test.ts. */
   border: 1px solid transparent;
   border-radius: var(--radius-chip);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.14);
