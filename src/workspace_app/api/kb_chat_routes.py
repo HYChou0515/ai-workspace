@@ -2,9 +2,13 @@
 
 Each thread is a KbChat (specstar resource). A message turn drives the KB agent
 through the shared AgentRunner with a KB-flavoured context (retriever +
-collection_ids, no sandbox), streams the agent's events over SSE, and persists
-the assistant answer with its [n] citations resolved against the passages the
-turn's kb_search calls accumulated.
+collection_ids, no sandbox) and persists the assistant answer with its [n]
+citations resolved against the passages the turn's kb_search calls accumulated.
+
+Sending QUEUES (202) and the live events arrive on the chat's own SSE stream —
+they are not the POST's body. The POST used to be the stream, which forced the
+engine to CANCEL a running turn whenever a follow-up was asked; a body held open
+until the answer finished cannot also let the next message queue behind it.
 
 User, assistant (with [n] citations), and tool-call messages all persist, so
 reopening a thread shows the answer, its sources, and what the agent searched.
