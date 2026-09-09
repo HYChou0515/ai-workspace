@@ -1424,6 +1424,38 @@ describe("a queued question must not split the answer that is still streaming", 
     expect(answers(after)[1].message.content).toBe("第二個答案");
   });
 
+  // Both questions sent BEFORE the first token — seconds of window on a local
+  // model, and the case `queued` could not see, because it asked "is an answer
+  // already on screen" when the question is "is a turn already running".
+  it("keeps two answers apart when both questions were asked before either began", () => {
+    const askedTwice = reduceAgent(
+      drawOwnAsk(drawOwnAsk(EMPTY_LOG, { author: "alice", content: "A" }), {
+        author: "alice",
+        content: "B",
+      }),
+      { type: "message_delta", text: "答案A" } as never,
+    );
+    const firstDone = reduceAgent(askedTwice, { type: "done" } as never);
+    const after = reduceAgent(firstDone, { type: "message_delta", text: "答案B" } as never);
+
+    expect(answers(after).map((e) => e.message.content)).toEqual(["答案A", "答案B"]);
+  });
+
+  // Two questions waiting behind ONE answer. Releasing every queued entry at the
+  // terminal let the second turn's deltas treat the third question as a
+  // boundary, so the third answer appended to the second's block.
+  it("keeps the answers apart when two questions are queued behind one", () => {
+    let log = reduceAgent(EMPTY_LOG, { type: "message_delta", text: "答案A" } as never);
+    log = drawOwnAsk(log, { author: "alice", content: "B" });
+    log = drawOwnAsk(log, { author: "alice", content: "C" });
+    log = reduceAgent(log, { type: "done" } as never);
+    log = reduceAgent(log, { type: "message_delta", text: "答案B" } as never);
+    log = reduceAgent(log, { type: "done" } as never);
+    log = reduceAgent(log, { type: "message_delta", text: "答案C" } as never);
+
+    expect(answers(log).map((e) => e.message.content)).toEqual(["答案A", "答案B", "答案C"]);
+  });
+
   // The other control: an ordinary first question opens an answer of its own.
   // A rule that marked every user message as "queued" would break this.
   it("still opens a fresh answer for a question asked with nothing running", () => {

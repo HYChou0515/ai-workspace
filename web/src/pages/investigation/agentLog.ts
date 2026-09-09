@@ -85,20 +85,25 @@ export type AgentEntry =
        * on. The `user_message` broadcast ADOPTS it, which retires the flag and
        * puts the entry back under the shared key. */
       pending?: boolean;
-      /** Sent while an answer was already streaming, so it is waiting its turn
-       * rather than starting one.
+      /** THIS is the answer the running turn is writing.
        *
-       * The backend serializes messages and does not cancel on them (#43), and
-       * `chat_send` broadcasts a message BEFORE it enqueues the turn — so a
-       * queued question lands on screen, and stops being `pending`, in the
-       * middle of an answer that has minutes left to run. Without this flag it
-       * looked exactly like the next turn's prompt, so the rest of THAT answer
-       * opened a second agent block below it and read as the reply to a
-       * question nobody had answered yet.
+       * Which assistant entry a delta belongs to used to be inferred from
+       * POSITION — the last one, stopping at a tool call or any user message.
+       * That held only while a user's bubble could not appear in the middle of
+       * a turn. It can now: the backend serializes messages and broadcasts each
+       * one when it is ACCEPTED, not when its turn starts (#43), so questions
+       * pile up between an answer and its own later tokens.
        *
-       * Cleared when the turn it queued behind ends: from that moment it is an
-       * ordinary question again, and the answer that follows really is its own. */
-      queued?: boolean;
+       * Position then gets it wrong in both directions, and both were measured:
+       * the rest of an answer opened a SECOND block below the new question and
+       * read as the reply to it; and two questions asked before the first token
+       * put both answers in ONE block, because the second turn's first delta
+       * found the first turn's answer sitting at the end.
+       *
+       * A flag on the answer itself cannot be confused by anything drawn around
+       * it. Set when the turn opens its answer, cleared by a tool call (which
+       * ends the run, as before) and by the turn's terminal event. */
+      live?: boolean;
     }
   | { kind: "tool_call"; call: ToolCallView }
   | { kind: "mention"; by: string; users: string[]; note: string; at?: number }
@@ -244,9 +249,6 @@ export function drawOwnAsk(log: AgentLog, ask: { author: string; content: string
       {
         kind: "message",
         pending: true,
-        // An answer is already open ⇒ this one is waiting behind it, not
-        // starting a turn of its own. See `queued` on AgentEntry.
-        ...(lastAssistantIdx(log.entries) >= 0 ? { queued: true } : {}),
         message: { role: "user", author: ask.author, content: ask.content },
       },
     ],
@@ -736,6 +738,34 @@ function findStep(entries: AgentEntry[], phase: string, name: string, key?: stri
   return -1;
 }
 
+/** The answer the RUNNING turn is writing, found by its own flag rather than by
+ * where it sits. See `live` on AgentEntry for the two ways position got this
+ * wrong once questions could be drawn in the middle of a turn. */
+function liveAnswerIdx(entries: AgentEntry[]): number {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const e = entries[i];
+    if (e && e.kind === "message" && e.live && e.message.role === "assistant") return i;
+  }
+  return -1;
+}
+
+/** End the run in place: a tool call and a terminal event both close the answer
+ * that was being written, so the next delta opens a new one. */
+function endLiveAnswer(entries: AgentEntry[]): void {
+  const idx = liveAnswerIdx(entries);
+  const e = idx >= 0 ? entries[idx] : undefined;
+  if (e && e.kind === "message") {
+    const { live, ...ended } = e;
+    entries[idx] = ended;
+  }
+}
+
+/** Positional fallback — `turnPhase` only, and only when nothing is flagged.
+ *
+ * A re-hydrate rebuilds entries from the stored thread, which carries no flag,
+ * and asking "is there visible output yet" off position is right there: the
+ * snapshot IS the turn's output so far. Appending must never fall back here,
+ * which is the whole of `live`. */
 function lastAssistantIdx(entries: AgentEntry[]): number {
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i];
@@ -744,10 +774,6 @@ function lastAssistantIdx(entries: AgentEntry[]): number {
     // ends the current assistant run — so a new turn starts fresh instead
     // of appending to the previous turn's answer.
     if (e.kind === "tool_call") return -1;
-    // A message QUEUED behind this answer is not the next prompt — it has not
-    // started a turn and will not until this one ends, so it is not a boundary.
-    // See `queued` on AgentEntry for what treating it as one cost.
-    if (e.kind === "message" && e.queued && e.message.role === "user") continue;
     if (e.kind === "message") return e.message.role === "assistant" ? i : -1;
   }
   return -1;
@@ -758,22 +784,14 @@ function lastAssistantIdx(entries: AgentEntry[]): number {
 export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.now()): AgentLog {
   const entries = [...log.entries];
 
-  // The turn those messages were queued behind has ended, so they are ordinary
-  // questions again and the next answer belongs to the first of them.
+  // This turn is over, so its answer stops being the one deltas belong to and
+  // the next turn opens its own — whatever has been drawn in between.
   //
   // Once, here, rather than inside each terminal case: `done`, `error`,
-  // `run_cancelled` and `max_turns_exceeded` are four exits, and a release that
-  // covers three of them leaves the fourth appending a whole new turn's answer
-  // onto the previous one — the same defect, mirrored.
-  if (isTerminal(ev)) {
-    for (let i = 0; i < entries.length; i++) {
-      const e = entries[i];
-      if (e && e.kind === "message" && e.queued) {
-        const { queued, ...released } = e;
-        entries[i] = released;
-      }
-    }
-  }
+  // `run_cancelled` and `max_turns_exceeded` are four exits, and closing three
+  // of them leaves the fourth appending a whole turn's answer onto the previous
+  // one.
+  if (isTerminal(ev)) endLiveAnswer(entries);
 
   switch (ev.type) {
     case "agent_metrics":
@@ -825,7 +843,7 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
       return { ...log, restore: { done: ev.done, total: ev.total } };
 
     case "message_delta": {
-      const idx = lastAssistantIdx(entries);
+      const idx = liveAnswerIdx(entries);
       const last = idx >= 0 ? entries[idx] : undefined;
       if (last && last.kind === "message" && last.message.role === "assistant") {
         const m = last.message;
@@ -833,12 +851,15 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
           ? { ...m, reasoning: (m.reasoning ?? "") + ev.text }
           : { ...m, content: m.content + ev.text };
         // Preserve the entry's original timestamp — don't drop `at` on append,
-        // or the live time vanishes after the first delta.
-        entries[idx] = { kind: "message", at: last.at ?? now, message: updated };
+        // or the live time vanishes after the first delta. And keep `live`: it
+        // is what makes the NEXT delta land here too.
+        entries[idx] = { kind: "message", at: last.at ?? now, live: true, message: updated };
       } else {
         entries.push({
           kind: "message",
           at: now,
+          // This turn's answer, from here until a tool call or its terminal.
+          live: true,
           message: ev.reasoning
             ? { role: "assistant", content: "", reasoning: ev.text, author: "RCA Agent" }
             : { role: "assistant", content: ev.text, author: "RCA Agent" },
@@ -864,6 +885,10 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
     }
 
     case "tool_start":
+      // A tool call ends the assistant run — the same rule the positional scan
+      // had, kept explicit: whatever the model says after the tool is a new
+      // block, not a continuation of what it was saying before it.
+      endLiveAnswer(entries);
       entries.push({
         kind: "tool_call",
         call: {
@@ -942,7 +967,7 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
       // already streamed and stay visible; we only flag the current assistant
       // message so the view shows a notice (live and, via the persisted flag,
       // on reload). A `done` follows to close the stream.
-      const idx = lastAssistantIdx(entries);
+      const idx = liveAnswerIdx(entries);
       const last = idx >= 0 ? entries[idx] : undefined;
       if (last && last.kind === "message" && last.message.role === "assistant") {
         entries[idx] = {
@@ -1049,18 +1074,7 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
       );
       const own = mine >= 0 ? entries[mine] : undefined;
       if (own !== undefined && own.kind === "message") {
-        // Adoption retires `pending` — the backend has confirmed it — but NOT
-        // `queued`: whether this message is waiting behind an answer is about
-        // the turn it landed in, and the broadcast is what lands it there. This
-        // is the ordering that matters: `chat_send` broadcasts before it
-        // enqueues, so dropping the flag here put it back exactly one event
-        // before the deltas that needed it.
-        entries[mine] = {
-          kind: "message",
-          at: askedAt,
-          ...(own.queued ? { queued: true } : {}),
-          message: own.message,
-        };
+        entries[mine] = { kind: "message", at: askedAt, message: own.message };
       } else {
         const alreadyDrawn = entries.some(
           (e) =>
@@ -1075,9 +1089,6 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
           entries.push({
             kind: "message",
             at: askedAt,
-            // Someone else's question can queue behind this answer too, and it
-            // chopped the answer in half the same way.
-            ...(lastAssistantIdx(entries) >= 0 ? { queued: true } : {}),
             message: { role: "user", author: ev.author, content: ev.content },
           });
         }
