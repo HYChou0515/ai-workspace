@@ -9,6 +9,7 @@
  */
 
 import type { QuotaHolder } from "../../lib/quotaHolding";
+import { isTerminal } from "../../events";
 import type { AgentEvent } from "../../events";
 import type { Message, MessageCitation } from "../../api/types";
 import { initialLocale, translate } from "../../lib/i18n";
@@ -84,6 +85,20 @@ export type AgentEntry =
        * on. The `user_message` broadcast ADOPTS it, which retires the flag and
        * puts the entry back under the shared key. */
       pending?: boolean;
+      /** Sent while an answer was already streaming, so it is waiting its turn
+       * rather than starting one.
+       *
+       * The backend serializes messages and does not cancel on them (#43), and
+       * `chat_send` broadcasts a message BEFORE it enqueues the turn — so a
+       * queued question lands on screen, and stops being `pending`, in the
+       * middle of an answer that has minutes left to run. Without this flag it
+       * looked exactly like the next turn's prompt, so the rest of THAT answer
+       * opened a second agent block below it and read as the reply to a
+       * question nobody had answered yet.
+       *
+       * Cleared when the turn it queued behind ends: from that moment it is an
+       * ordinary question again, and the answer that follows really is its own. */
+      queued?: boolean;
     }
   | { kind: "tool_call"; call: ToolCallView }
   | { kind: "mention"; by: string; users: string[]; note: string; at?: number }
@@ -229,6 +244,9 @@ export function drawOwnAsk(log: AgentLog, ask: { author: string; content: string
       {
         kind: "message",
         pending: true,
+        // An answer is already open ⇒ this one is waiting behind it, not
+        // starting a turn of its own. See `queued` on AgentEntry.
+        ...(lastAssistantIdx(log.entries) >= 0 ? { queued: true } : {}),
         message: { role: "user", author: ask.author, content: ask.content },
       },
     ],
@@ -726,6 +744,10 @@ function lastAssistantIdx(entries: AgentEntry[]): number {
     // ends the current assistant run — so a new turn starts fresh instead
     // of appending to the previous turn's answer.
     if (e.kind === "tool_call") return -1;
+    // A message QUEUED behind this answer is not the next prompt — it has not
+    // started a turn and will not until this one ends, so it is not a boundary.
+    // See `queued` on AgentEntry for what treating it as one cost.
+    if (e.kind === "message" && e.queued && e.message.role === "user") continue;
     if (e.kind === "message") return e.message.role === "assistant" ? i : -1;
   }
   return -1;
@@ -735,6 +757,23 @@ function lastAssistantIdx(entries: AgentEntry[]): number {
 
 export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.now()): AgentLog {
   const entries = [...log.entries];
+
+  // The turn those messages were queued behind has ended, so they are ordinary
+  // questions again and the next answer belongs to the first of them.
+  //
+  // Once, here, rather than inside each terminal case: `done`, `error`,
+  // `run_cancelled` and `max_turns_exceeded` are four exits, and a release that
+  // covers three of them leaves the fourth appending a whole new turn's answer
+  // onto the previous one — the same defect, mirrored.
+  if (isTerminal(ev)) {
+    for (let i = 0; i < entries.length; i++) {
+      const e = entries[i];
+      if (e && e.kind === "message" && e.queued) {
+        const { queued, ...released } = e;
+        entries[i] = released;
+      }
+    }
+  }
 
   switch (ev.type) {
     case "agent_metrics":
@@ -1010,7 +1049,18 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
       );
       const own = mine >= 0 ? entries[mine] : undefined;
       if (own !== undefined && own.kind === "message") {
-        entries[mine] = { kind: "message", at: askedAt, message: own.message };
+        // Adoption retires `pending` — the backend has confirmed it — but NOT
+        // `queued`: whether this message is waiting behind an answer is about
+        // the turn it landed in, and the broadcast is what lands it there. This
+        // is the ordering that matters: `chat_send` broadcasts before it
+        // enqueues, so dropping the flag here put it back exactly one event
+        // before the deltas that needed it.
+        entries[mine] = {
+          kind: "message",
+          at: askedAt,
+          ...(own.queued ? { queued: true } : {}),
+          message: own.message,
+        };
       } else {
         const alreadyDrawn = entries.some(
           (e) =>
@@ -1025,6 +1075,9 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
           entries.push({
             kind: "message",
             at: askedAt,
+            // Someone else's question can queue behind this answer too, and it
+            // chopped the answer in half the same way.
+            ...(lastAssistantIdx(entries) >= 0 ? { queued: true } : {}),
             message: { role: "user", author: ev.author, content: ev.content },
           });
         }

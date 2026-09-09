@@ -1362,6 +1362,84 @@ describe("the sender sees their own words at once", () => {
   });
 });
 
+describe("a queued question must not split the answer that is still streaming", () => {
+  const answers = (log: AgentLog) =>
+    log.entries.filter(
+      (e): e is Extract<AgentEntry, { kind: "message" }> =>
+        e.kind === "message" && e.message.role === "assistant",
+    );
+
+  // The broadcast is part of the sequence ON PURPOSE. `chat_send` publishes
+  // `user_message` BEFORE it enqueues the turn, so a queued message is adopted
+  // (and stops being `pending`) within milliseconds — long before the turn it
+  // queued behind has finished. A test that stops at `drawOwnAsk` passes while
+  // the browser still splits the answer; that is exactly the false green this
+  // block exists to prevent.
+  const queueBehindAnswer = () => {
+    const streaming = reduceAgent(EMPTY_LOG, { type: "message_delta", text: "前半段" } as never);
+    const drawn = drawOwnAsk(streaming, { author: "alice", content: "第二個問題" });
+    return reduceAgent(drawn, {
+      type: "user_message",
+      author: "alice",
+      content: "第二個問題",
+      created_at: 100,
+    } as never);
+  };
+
+  it("keeps the answer in one block when a message is queued behind it", () => {
+    const after = reduceAgent(queueBehindAnswer(), {
+      type: "message_delta",
+      text: "後半段",
+    } as never);
+
+    expect(answers(after)).toHaveLength(1);
+    expect(answers(after)[0].message.content).toBe("前半段後半段");
+  });
+
+  // Same hazard, spectator side: somebody else's question queues behind MY
+  // turn's answer, and it must not chop that answer in half either.
+  it("does the same for a queued message drawn by someone else", () => {
+    const streaming = reduceAgent(EMPTY_LOG, { type: "message_delta", text: "前半段" } as never);
+    const queued = reduceAgent(streaming, {
+      type: "user_message",
+      author: "bob",
+      content: "我也問一個",
+      created_at: 100,
+    } as never);
+    const after = reduceAgent(queued, { type: "message_delta", text: "後半段" } as never);
+
+    expect(answers(after)).toHaveLength(1);
+    expect(answers(after)[0].message.content).toBe("前半段後半段");
+  });
+
+  // The control. It must redden on a DIFFERENT mutation than the two above:
+  // skipping every user message would pass them and break this one. Once the
+  // turn has ended, the queued question is a question again — the answer that
+  // follows it is its own.
+  it("starts a new answer once the turn the message queued behind has ended", () => {
+    const ended = reduceAgent(queueBehindAnswer(), { type: "done" } as never);
+    const after = reduceAgent(ended, { type: "message_delta", text: "第二個答案" } as never);
+
+    expect(answers(after)).toHaveLength(2);
+    expect(answers(after)[1].message.content).toBe("第二個答案");
+  });
+
+  // The other control: an ordinary first question opens an answer of its own.
+  // A rule that marked every user message as "queued" would break this.
+  it("still opens a fresh answer for a question asked with nothing running", () => {
+    const asked = reduceAgent(EMPTY_LOG, {
+      type: "user_message",
+      author: "alice",
+      content: "第一個問題",
+      created_at: 100,
+    } as never);
+    const after = reduceAgent(asked, { type: "message_delta", text: "第一個答案" } as never);
+
+    expect(answers(after)).toHaveLength(1);
+    expect(answers(after)[0].message.content).toBe("第一個答案");
+  });
+});
+
 describe("an end clears the stopping state", () => {
   // Straight at the fold, on purpose. Through the hook a re-hydrate arrives on
   // the heels of every terminal and clears `stopping` on its own, so a reducer
