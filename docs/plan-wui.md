@@ -771,6 +771,64 @@ sweep 眼裡那個 item 從來沒進過索引。現在兩邊接同一個 callbac
 - **「自動跑的走背景 lane」仍然沒做**(見上面憑證那一節已劃掉的段落)。
 - **Q5「全 item 看得到所有排程」仍然沒有介面**,理由同第二輪。
 
+### 第四輪 review(2026-09-09,四個 lens,P44–P52)
+
+**這一輪換了結果的形狀。** 前三輪最嚴重的那條都是「程式錯了」——引擎從沒跑過、掉資料、
+重複執行。這一輪 defect lens 跑 25 個突變、21 個變紅:**機制本身撐住了**。四個 lens 各自
+獨立地寫下同一句描述:真正的缺陷幾乎全部是**「守衛接受了它自己命名的那個回歸」**。
+
+四個 lens 都找到同一條的那個:`chat_for_schedule` 的 `run_id=""`,註解說它「非空所以不會是
+FREE chat」——`""` 就是空的,它成立的真正理由是 `find_default_conversation` 測 `is None`。
+把它改成 `None`,191 條聊天測試全綠,而後果是排程的凌晨三點對話變成 item 的預設對話。
+
+| 找到什麼 | 性質 |
+|---|---|
+| `"tz": null` 讓整列被拒(`str(None)` 是 `"None"`);`every`/`at` 同病 | 上一輪的修法 |
+| 雙重執行守衛只檢查 `try:`/`except` 兩個 token,加一行 `raise` 讓 200 條全綠 | 守衛不守 |
+| offload 守衛看「有沒有出現」,而 `settle_run_chat` 有兩個呼叫點 | 守衛不守 |
+| event loop 守衛還在拖慢 P39 已經不呼叫的函式,對新的那個全盲 | 規則搬家沒帶測試 |
+| `run_id=""`、`_said.pop`、`max_page_schedules` 第二跳,零守衛 | 守衛不存在 |
+| cap 測試的 fixture 構不到它命名的回歸(81 < 100),註解的「三個 problem」實測是 2 | 守衛不守 |
+| **P40 在 host-managed 部署上完全沒生效**(`_writeback` 走 `persist` 就 return) | 上一輪的修法 |
+| 一封通知每個 pod 各寄一次(送完才標記,沒有 CAS) | 第一輪就有 |
+| 三條重複 log 只修兩條,漏掉唯一會乘以列數的那條 | 上一輪的修法 |
+| tick 的 try 從 per-path 放寬成 per-item | 上一輪的修法 |
+| 重用聊天室讓「上一輪還在跑」變成每天約 4300 行 ERROR 並燒掉視窗 | 上一輪的修法 |
+| `docs/wui.md` 寫「七個動詞而且封閉」,而 bridge 有八個 | 寄給維護者的假話 |
+| 範例把失敗/取消的 run 畫成「Finished.」 | 寄給頁面作者的假話 |
+| 刪除 item 沒帶走排程索引列 | 新列沒進既有 cascade |
+
+**修法的形狀也變了。** 三次把守衛從「讀原始碼」換成「真的驅動它」:`_start_page_schedule`
+和 `_reconcile_after_turn` 都搬到模組層才測得到;P40 的第三個 hook 換成 **turn 邊界對帳**,
+因為「一扇門一個 hook」就是一張門的清單,而這個功能每一張手寫清單都靜默過期過。
+
+### 訂正:第四輪抓到我自己寫錯的宣稱
+
+- **P39 的 commit 訊息說「刪掉了一個測試」——那個測試從來不存在。** git 全歷史查無
+  `does not end the tick`,而那一版 tests 的 numstat 是 `30 0` / `62 0`,零刪除。壓縮之後憑
+  印象寫進 commit 的虛構,正是 P42 那本帳要防的同一類。
+- **「`chat_for_schedule` 是七次 round trip,因為 `item_conversation_mirror` 會問每個註冊的
+  app model」——數字和機制都錯。** 實測建立時 6 次、重用時 2 次,而重用才是排程每次觸發
+  做的事;`find_work_item` 是用 id 前綴路由的單次 `get`,只有前綴對不上才掃。這句話同時在
+  P37 的 commit 訊息、`start_page_schedule` 的 docstring 和 event loop 守衛的 docstring 裡。
+- **P37 的「120 tests across the five touched files」不可重跑。** P37 動了六個檔案,那三個
+  測試檔在當時是 43 條。和 P42 已更正的「547」「363」同一類,而且就在那本帳宣稱涵蓋的範圍內。
+- **「火線整條壓在 event loop 上 → 已修」講太滿。** offload 的是 locator 那四個呼叫;
+  `orchestrator.start` 自己的 `active_run_for_chat`(掃該 item 每一筆 WorkflowRun)和 `create`
+  仍然同步跑在 loop 上。那是互動入口共用的既有行為,要改是另一件事,不是這一輪的一行。
+- **「327ms / 20 000 rows」不可重跑**(reviewer 在自己機器上量到 161ms)。同量級、機器相關,
+  但它出現在測試 docstring 裡而沒有附上量它的指令。
+
+### 第四輪知情未做
+
+- **刪掉排程的對話不會停掉排程**——`restore` 是承重的(否則排程對著 soft-deleted 對話寫,
+  而 `drive_turn` 只接 `ResourceIDNotFoundError`)。已釘住並在 reference.md 告訴作者:
+  要停就移掉那一列。
+- **`_note_schedule_file` 的 `record` 仍然是壓在 event loop 上的阻塞 specstar I/O。**
+  P39 就寫在程式碼裡,但沒進這份清單。代價只由真正寫 `schedules.json` 的那一次付。
+- **第三個寫入者**(`seed_item`、`/collections.json` 直接寫 raw filestore)沒有 hook。
+  turn 邊界的對帳現在會蓋到它們,所以不再是洞,但那兩條路本身仍然繞過 façade 和 mirror。
+
 ## 知情不做
 
 - **每個 owner 的 LLM 額度帳本** — LiteLLM 是計量器、429 是訊號,平台已有處理(#759)。自己再蓋

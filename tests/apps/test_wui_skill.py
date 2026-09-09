@@ -667,3 +667,37 @@ def test_the_maintainer_page_names_every_verb_the_bridge_has() -> None:
     assert "不會再多一個動詞" not in page, (
         "the page claims the verb set is closed; it was reopened by `startRun`"
     )
+
+
+def test_the_worked_reducer_shows_a_failed_step_as_failed(payload: dict[str, bytes]):
+    """A run whose step failed must not render as "Finished."
+
+    `StepFailed` carries `phase`, `name`, `reason`, `key` — no `text`, no
+    `message` — so it fell past every branch and returned `prev`. `RunCancelled`
+    carries only `type` and did the same. When the stream then ended, `main.tsx`
+    wrote "Finished." over both.
+
+    That matters more here than anywhere: the orchestrator does not publish a
+    `RunError` onto this stream, so `step_failed` IS the signal for a workflow
+    whose gate failed after its retries. And this file's own reference tells the
+    author, in a ⚠️ added the round before, that "a page that renders only
+    `step_started` shows a run marching confidently through steps that did not
+    work" — while the example the skill calls the one to read first did exactly
+    that.
+
+    The sibling guard catches a branch reading a field no event carries. It
+    cannot see a branch that is missing, which is why this one asks for the
+    types by name.
+    """
+    source = payload["examples/complete/src/workspace.ts"].decode()
+    body = source.split("export function reduceRunEvent", 1)[-1].split("\nexport ", 1)[0]
+
+    for kind in ("step_failed", "run_cancelled"):
+        assert f'"{kind}"' in body, (
+            f"the worked reducer ignores `{kind}`, so a run that ended that way "
+            'renders as "Finished." — the failure the reference warns about'
+        )
+    assert "e.reason" in body, (
+        "`step_failed` carries `reason`, the one sentence saying which gate gave "
+        "up; a page that drops it can only say something went wrong"
+    )
