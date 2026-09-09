@@ -356,18 +356,6 @@
   font-size: var(--text-body-sm);
   cursor: pointer;
 }
-/* Only the TIME RANGE wraps. The popover is `width: 260px; max-width: 80vw`, so
- * on a narrow viewport it is narrower than the two boxes plus "to", and the row
- * used to overflow the panel (73px at a 220px viewport, measured). Wrapping
- * keeps both boxes whole on two lines — shrinking them instead clips the value
- * to "09:00 A", which is worse than the overflow.
- *
- * NOT on `.ev-viewpanel__field` itself: a checkbox row that wraps drops its
- * LABEL below the box, which is the ragged look this is meant to remove. A
- * label that is too long should wrap inside its own text, aligned under itself. */
-.ev-viewpanel__range {
-  flex-wrap: wrap;
-}
 .ev-viewpanel__foot {
   display: flex;
   gap: var(--space-8);
@@ -643,11 +631,11 @@
   background: var(--paper-2);
 }
 /* native selects in the filter row / batch bar wear the field chrome. */
-/* The panel's time inputs share this rule rather than carrying a copy: they are
- * meant to read as the same control as the select sitting under them, and two
- * rules that have to agree are two rules that will drift. */
+/* The time range shares the select's chrome rather than carrying a copy: they
+ * are meant to read as the same control, and two rules that have to agree are
+ * two rules that will drift. */
 .ev-select,
-.ev-viewpanel__field input[type="time"] {
+.ev-viewpanel__range {
   height: 28px;
   padding: 0 var(--space-8);
   border: 1px solid var(--paper-3);
@@ -656,14 +644,45 @@
   color: var(--text-paper);
   font-size: var(--text-body-sm);
 }
-.ev-viewpanel__field input[type="time"] {
-  /* Chrome's native picker is wider than its content and pushed "to" and the
-   * second box out of the popover once `max-width: 80vw` started biting.
-   * Letting the row WRAP is the fix; letting the boxes SHRINK is not — a
-   * squeezed time input clips its own value to "09:00 A", which is worse than
-   * the overflow it replaced. Seen in a real browser at 320px. */
+/* ONE field, not three. Two bordered inputs with "to" between them are three
+ * controls for one value, and at the panel's narrow end (224px) they did not
+ * fit at any font size. Wrapping them was worse — a control that reflows as
+ * you resize reads as broken. The border lives on the GROUP; the inputs inside
+ * are bare, which is the shape every date-range control uses. */
+.ev-viewpanel__range {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  width: fit-content;
+  max-width: 100%;
+}
+.ev-viewpanel__range input[type="time"] {
+  flex: 0 1 auto;
   min-width: 0;
+  height: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
   font-family: var(--font-mono);
+  font-size: inherit;
+}
+.ev-viewpanel__range input[type="time"]:focus-visible {
+  outline: none;
+}
+/* The group takes the focus ring, so tabbing still shows where you are even
+ * though the inputs themselves are chromeless. */
+.ev-viewpanel__range:focus-within {
+  border-color: var(--accent);
+}
+.ev-viewpanel__range input[type="time"]::-webkit-calendar-picker-indicator {
+  /* Two clock glyphs cost ~32px in a 224px panel and say nothing the field
+   * does not: the value is typed or arrow-keyed, and 24-hour text is
+   * unambiguous without them. */
+  display: none;
+}
+.ev-viewpanel__range-sep {
+  color: var(--text-paper-d);
 }
 .ev-viewpanel__field input[type="checkbox"] {
   accent-color: var(--accent);
@@ -1026,6 +1045,10 @@ button.ev-card__status:focus-visible {
    * name has nowhere to put its second line and lands on the row below. */
   white-space: nowrap;
   overflow: hidden;
+  /* The caret's own `width: 1em` used to be the gap, which only read as one
+   * while the name was wrapping onto its own line underneath. On one line the
+   * glyph fills that em and the two run together ("▾PHOTORESIST"). */
+  gap: var(--space-4);
 }
 /* The ellipsis for BOTH gutter labels. It cannot live on the labels
  * themselves: they are flex containers (a caret beside a name / a drag row),

@@ -92,20 +92,24 @@ describe("ViewSettingsPanel", () => {
       expect(onSetWorkHours).toHaveBeenCalledWith({ from: 7, to: 21 });
     });
 
-    it("marks the time range as the row that may wrap, and only that row", () => {
-      // The popover is `width: 260px; max-width: 80vw`, so on a narrow viewport
-      // it is narrower than two native time inputs plus "to" — measured in a
-      // real browser, the row overflowed the panel by 73px at 220px wide.
-      // Wrapping fixes it, but the class carrying `flex-wrap` must be the
-      // range's own: on the shared field class a CHECKBOX row wraps too, and
-      // its label drops below the box, which looks exactly like the defect.
+    it("puts both ends in ONE field, and says what the field is for", () => {
+      // Two separately-bordered time boxes with "to" between them are three
+      // controls for one value; measured in a real browser they overflowed the
+      // panel by 73px at a 220px viewport. They share one bordered group now.
+      //
+      // And the range is labelled: "沒人看懂時間是要選什麼東西" — two time
+      // boxes under a checkbox never said WHICH hours they were. The hint
+      // carries that rather than a lead-in inside the row, because a label
+      // competing for width is what makes this panel wrap.
       render(<ViewSettingsPanel config={config({ workHours: { from: 7, to: 21 }, onSetWorkHours: vi.fn() })} />);
       open();
 
       const range = screen.getByLabelText("day starts").closest("div");
       expect(range).toHaveClass("ev-viewpanel__range");
-      const checkboxRow = screen.getByRole("checkbox", { name: "Skip non-working hours" }).closest("label");
-      expect(checkboxRow).not.toHaveClass("ev-viewpanel__range");
+      // Both ends live in that same group — that is what "one field" means.
+      expect(range).toContainElement(screen.getByLabelText("day ends"));
+      expect(screen.getByText(/hours the chart draws/i)).toBeInTheDocument();
+
     });
 
     it("shows the window it is set to, and edits either end", () => {

@@ -60,19 +60,29 @@ describe("entity-views.css", () => {
     // hours" and its time range sat in the middle of a designed popover
     // wearing whatever the OS paints — "幾乎沒有 css 樣式看起來很隨便".
 
-    // The time inputs SHARE the select's rule rather than getting a second
-    // copy of it: the whole point is that they look like the same control, and
-    // two rules that must agree are two rules that will not.
-    expect(CSS).toMatch(/\.ev-select[^{]*input\[type="time"\][^{]*\{/);
+    // The time range SHARES the select's rule rather than getting a second
+    // copy: they are meant to look like the same control, and two rules that
+    // must agree are two rules that will not.
+    expect(CSS).toMatch(/\.ev-select[^{]*\.ev-viewpanel__range[^{]*\{/);
 
-    // Only the time RANGE wraps. Putting `flex-wrap` on the shared field class
-    // drops a checkbox's label onto its own line below the box — measured at a
-    // 280px viewport while fixing the overflow, and it is precisely the ragged
-    // look being removed. The narrower rule is the fix; this pins both halves.
-    const range = CSS.match(/\.ev-viewpanel__range\s*\{[^}]*\}/)?.[0] ?? "";
-    expect(range).toMatch(/flex-wrap:\s*wrap/);
-    const field = CSS.match(/\.ev-viewpanel__field\s*\{[^}]*\}/)?.[0] ?? "";
-    expect(field, "a wrapping checkbox row splits box from label").not.toMatch(/flex-wrap/);
+    // One field, not three: the border is on the GROUP and the inputs inside
+    // are bare. Two separately-bordered boxes with "to" between them are three
+    // controls for one value and did not fit the panel's narrow end.
+    const rangeInput = CSS.match(/\.ev-viewpanel__range input\[type="time"\]\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(rangeInput).toMatch(/border:\s*0/);
+    expect(rangeInput).toMatch(/background:\s*none/);
+    // The picker glyphs cost ~32px of a 224px panel and duplicate the value.
+    expect(CSS).toMatch(/::-webkit-calendar-picker-indicator\s*\{[^}]*display:\s*none/);
+
+    // NOTHING in the panel wraps. Wrapping was tried and is worse: on the
+    // shared field class it drops a checkbox's label below its box, and on the
+    // range it makes the control reflow as the panel resizes. Anything too
+    // wide is made to fit instead — shorter copy, or a field that shares one
+    // border.
+    for (const sel of ["\\.ev-viewpanel__field", "\\.ev-viewpanel__range"]) {
+      const rule = CSS.match(new RegExp(sel + "\\s*\\{[^}]*\\}"))?.[0] ?? "";
+      expect(rule, `${sel} must not wrap`).not.toMatch(/flex-wrap/);
+    }
 
     const check = CSS.match(/\.ev-viewpanel__field input\[type="checkbox"\]\s*\{[^}]*\}/)?.[0] ?? "";
     expect(check).toMatch(/accent-color:\s*var\(--accent\)/);
