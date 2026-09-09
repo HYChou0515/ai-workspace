@@ -1,0 +1,2829 @@
+diff --git a/configs/config.example.yaml b/configs/config.example.yaml
+index 3b7933ae..649963cf 100644
+--- a/configs/config.example.yaml
++++ b/configs/config.example.yaml
+@@ -619,6 +619,33 @@
+ #   context_limit: 32768                  # ← the ceiling, if you know it
+ #   max_messages: 0                       # ← optional hard cap (0 = off)
+ #   max_context_tokens: 0                 # ← optional hard cap (0 = off)
++#   max_tokens_window_ratio: 0.8          # ← see below; only used as a last resort
++#
++# `max_tokens_window_ratio` — the LAST rung, and the only one whose number
++# nobody stated. Reached when the operator config, what the traffic taught us,
++# the endpoint's own `/tokenize`, its proxy's `max_input_tokens` AND the model
++# registry are all silent, which is the normal state for a self-hosted model
++# behind a litellm proxy under a local alias: `/tokenize` is a vLLM extension
++# that the proxy does not route, and no registry knows the alias. There the
++# alternative is not a better number — it is `unknown`, which means the history
++# is never trimmed and compaction never runs, so a conversation grows until the
++# endpoint refuses it.
++#
++# In that case we ask the proxy's own `GET /model/info`. If it states
++# `max_input_tokens`, that IS the input window and is used as-is. If it states
++# only `max_tokens`, that figure is multiplied by this ratio.
++#
++# ⚠️ It is a ratio and not a reading because `max_tokens` is not one thing.
++# Measured against litellm's own registry: `gpt-4o` reports `max_tokens` 16,384
++# beside a 128,000 window (an OUTPUT cap), while `ollama_chat/qwen3:14b` reports
++# 40,960 for both (the window). Inside a proxy's own config it is whatever the
++# operator put there. So the fraction is yours to set, the result never
++# outranks a figure anyone stated, and it is reported with its own source so
++# nothing downstream mistakes it for a measurement.
++#
++# Never applied to a stated `max_input_tokens` — that already is the input
++# window, and scaling it would discount twice on top of the prompt, the tool
++# schemas, the reply reserve and the margin the budget already subtracts.
+ #
+ # ── Serving-layer note: the window is NOT the model's capability ──
+ #
+diff --git a/docs/migrations.md b/docs/migrations.md
+index ef41da03..35618f66 100644
+--- a/docs/migrations.md
++++ b/docs/migrations.md
+@@ -157,6 +157,7 @@ uv run python scripts/run_migrate.py --dry-run \
+ | --- | --- | --- | --- |
+ | `failover.rate_limit_budget_s` | #759（2026-09-03） | ⚠️ **行為有變**：agent 鏈碰到 429 從「快速燒完重試然後 giving up」變成「在原端點等它聲明的窗口」，等待秒數每次 agent run 共用一池，預設上限 2 小時；畫面會出現「請求過於頻繁，N 秒後自動重試」。設 `0` 回到一律切換的舊行為 | configuration.md §11 |
+ | `agents.subagent_models` | #770（2026-09-03） | **完全不變**：`run_agent` 不長 `model` 參數，sub-agent 照舊跟 parent turn 同一顆模型（review 以逐位元比對驗證） | configuration.md §7 |
++| `history.max_tokens_window_ratio` | #767（2026-09-04） | ⚠️ **行為有變**：窗口解析多了一段「問 proxy 自己的 `/model/info`」。原本前四段全滅、上限只能是 `unknown` 的部署（自架模型掛在 litellm proxy 後面、用任意別名，最典型），`unknown` 的意思是**歷史從不裁切、自動壓縮從不執行**；現在若 proxy 只答得出 `max_tokens`，會用它 ×0.8 推出一個**標記為估計**的上限，於是裁切與壓縮開始運作。推導值裝不下已知開銷時一律拒收、退回 `unknown`（也就是舊行為）。⚠️ 這一格**沒有「設 0 回到舊行為」**——載入時要求 `0 < ratio <= 1`，`0` 會被擋下；要完全不走推導，就明確設 `history.context_limit`，讓第一段直接答得出來 | `configs/config.example.yaml` 的 `history:` 區塊 |
+ | `server.max_page_schedules` | #788（2026-09-05） | **完全不變**：預設 1000,程式碼裡的預設值一樣。這是**失控護欄不是政策限制**——正常的頁面碰不到,碰到代表那個頁面有 bug。它擋的是耐久狀態:每個排程觸發過就在視窗帳本留一列,而沒有別的東西限制頁面能建幾個 | configuration.md |
+ | `server.notification_channel` | #788（2026-09-05） | **完全不變**：通知只寫站內信,跟這個接縫出現之前一模一樣。沒有背景外送迴圈會被啟動(空值連 timer 都不建),也沒有任何查詢會多跑 | configuration.md |
+ | `server.workflow_step_timeout_sec` | #788（2026-09-05） | ⚠️ **行為有變**:工作流裡單一 agent 步驟從「沒有上限」變成 **10 分鐘就中止那一步**,訊息裡會寫出那個秒數。機制本來就在(`steps.py` 的 `asyncio.wait_for`),但**沒有任何地方把值傳進 `create_app`**,所以每個部署實際上都跑在無上限那條分支——這次補的是接線。有合法長於十分鐘的 agent 步驟的部署要調大,或設 `0` 回到舊行為 | configuration.md |
+diff --git a/docs/plan-context-limit-behind-proxy.md b/docs/plan-context-limit-behind-proxy.md
+new file mode 100644
+index 00000000..4327140b
+--- /dev/null
++++ b/docs/plan-context-limit-behind-proxy.md
+@@ -0,0 +1,238 @@
++# 自架模型在 proxy 後面時,窗口上限解不出來
++
++> 這份計畫處理的是 #624 那套「上下文窗口解析階梯」在**一個真實拓撲下四段全滅**的問題。
++> 每一段為什麼答不出來,都在使用者的正式環境上量過,不是推論。
++
++---
++
++## 1. 症狀
++
++使用者回報「自動 compact 好像有問題」。查下來**自動壓縮沒有缺陷** —— 它從來沒有執行過。
++
++`plan_for_budget` 的第一行:
++
++```python
++if not force and (budget is None or used <= budget):
++    return CompactionPlan(0, [], refusal="fits")
++```
++
++**沒有已知上限 ⇒ 直接回 `fits` ⇒ 自動壓縮不執行。** 歷史也不裁切(#624 的規則:寧可全送,
++也不照猜的數字截肢)。這是刻意的設計,但從外面看跟「壓縮壞了」一模一樣,而且**沒有任何地方
++告訴操作員自己處在哪一種狀態**。
++
++### 迴圈是怎麼閉合的
++
++```
++上限 unknown
++   ↓
++自動壓縮不執行、歷史不裁切 → 每輪送出整串對話
++   ↓
++prompt 越來越大 → prefill 超過 TTFT 門檻(預設 8 秒)
++   ↓
++被判成「這個模型忙」→ provider 罰站 30 秒 → failover
++   ↓
++因為是 timeout 不是 400,撞牆學習永遠不被觸發 → 上限永遠 unknown
++```
++
++手動按壓縮之所以有效:prompt 變小,prefill 回到門檻內。使用者的原話是
++「送會出事,但是先 compact 再送就好了」—— 那正是這個迴圈的外顯。
++
++---
++
++## 2. 為什麼四段階梯全滅
++
++拓撲是 **app → litellm proxy → 自架 vLLM**,而且**模型名字是任意別名**。
++
++| 階梯 | 結果 | 依據 |
++|---|---|---|
++| 1. `history.context_limit` | 沒設 | 使用者以 SSOT 為由否決(見 §3.1) |
++| 2. 從流量學到的 | 空 | log 無 `truncated silently`;`/context` 回的 `limit` 是 `null` |
++| 3. `/tokenize` 探測 | 沒答案 | log 無 `context probe`。`/tokenize` 是 vLLM 的擴充,**proxy 沒有這條路由** |
++| 4. 模型登錄表 | `None` | 名字是任意別名。對照組正常:`gpt-4o-mini` → 128000、`ollama_chat/qwen3:14b` → 40960 |
++
++⇒ `unknown`。
++
++### ⚠️ 新這一段**還沒有**真實部署的量測
++
++上面那張表的每一列都有依據,**新加的第 5 段沒有**。這裡誠實寫下來,因為這份文件
++前面才剛因為同一件事付過代價(見下)。
++
++已經量到的只有:litellm **登錄表**裡 3,518 筆有 2,888 筆同時帶兩個數字,只有 6 筆
++單獨帶 `max_tokens`;以及 litellm 自己對這個欄位的定義原文是
++*"LEGACY parameter. set to max_output_tokens if provider specifies it. IF not set to
++max_input_tokens"*。**那是登錄表,不是你們的 proxy。**
++
++還沒有答案的是這個:**app 用的那把 key 打得到 proxy 的管理路由嗎?** litellm 的
++`/model/info` 常常只開給 master key。打不到的話,這一段跟前四段一樣安靜,而且
++「沒權限」和「這裡根本不是 litellm proxy」**在舊的 log 裡長得一模一樣**。
++
++所以這個 PR 讓它自己講(不必再寫腳本、不必貼設定):
++
++| 想知道的事 | 部署後在 log 找 | 看到什麼就代表 |
++|---|---|---|
++| 階梯到底走到哪一段 | `context ceiling` | `source=declared` 成功;`source=estimated` 是我們推導的;`source=unknown` 全滅 |
++| key 有沒有權限 | `context probe` + `401`/`403` | 有這行 = 路由在、但我們讀不到 → 要開權限 |
++| 是不是根本沒有這條路由 | 上面兩行都沒有,且 ceiling 是 `unknown` | 這個端點前面沒有 litellm proxy |
++
++`/context` 這個 route 也多回一個 `limit_source` 欄位,所以同樣的答案可以直接 curl 到。
++
++### 一個代價高的錯誤,記在這裡
++
++第 2 段曾經被量成「拒絕但不講數字」,據此寫進文件說「這個部署學不到上限」。**那次量測是在
++模型停機期間跑的** —— 一個停機中的端點回的錯誤裡當然沒有上限,長得跟「拒絕但不講」一模一樣。
++重跑之後:**拒絕訊息確實帶著數字,解析得出來。**
++
++> **停機中的服務會給你一個看起來完全合法的否定答案。** 任何探測在下否定結論之前,
++> 要先確認對面是活的。
++
++---
++
++## 3. 被否決的做法
++
++### 3.1 在 aiw 設 `history.context_limit`
++
++**否決理由(使用者):違反 SSOT。** 正確 —— 那是一份 `--max-model-len` 的副本,改了本體而
++忘了改副本就靜默漂移。
++
++⚠️ 順帶推翻了一個中途的建議:「請同事在 proxy 補 `model_info.max_input_tokens`」也是副本,
++只是離本體近一點。SSOT 管的不是「誰寫的」,是**有沒有第二份會跟著漂移的東西**:
++
++| 來源 | 是副本嗎 | 改了 `--max-model-len` 之後 |
++|---|---|---|
++| `--max-model-len` | 不是,vLLM 拿它執行 | — |
++| 拒絕訊息裡的數字 | 不是,讀自執行方、當下產生 | 自動跟上 |
++| proxy 的 `model_info` | **是**,手維護 | 靜默漂移 |
++| aiw 的 `context_limit` | **是** | 靜默漂移 |
++
++### 3.2 自己帶一份模型目錄(OpenCode 走這條)
++
++**否決理由:名字是任意別名,任何目錄都對不上。**
++
++順帶查證了一件反直覺的事:**OpenCode 的規則跟本專案一模一樣。** 它的判斷是
++
++```js
++if (H.model.limit.context === 0) return false;   // 沒有窗口就不壓縮
++```
++
++保留額度也是同一個形狀(`min(20000, maxOutputTokens)`),沒有窗口時連百分比都不顯示。
++使用者後來確認**他們的 OpenCode 也沒有在自動壓縮** —— 同一個根因。
++
++所以「別人有解我們沒解」不成立,差別只在**目錄厚度**(models.dev 收了 GLM,litellm 的沒有),
++而任意別名讓兩者都失效。
++
++### 3.3 主動撞牆(送一個過長的請求,從拒絕訊息讀出上限)
++
++技術上可行(§2 已證實拒絕訊息帶著數字),而且**沒有任何副本** —— 數字讀自執行方。
++
++**否決理由(使用者):「不要為了繞過一個缺失的設定值而一直往 app 加機制」。** 這是產品判斷,
++不是技術判斷,記錄下來以免日後有人重新提案時以為沒討論過。
++
++### 3.4 拿 `max_tokens` 當**主要**來源
++
++`max_tokens` 不是窗口。對照 litellm 自己的登錄表實測:
++
++| | `max_tokens` | 真實窗口 | 比值 |
++|---|---|---|---|
++| gpt-4o | 16,384 | 128,000 | **7.8×** |
++| gpt-4o-mini | 16,384 | 128,000 | 7.8× |
++| ollama_chat/qwen3:14b | 40,960 | 40,960 | **1.0×** |
++
++任何固定係數在另一個模型上就錯 8 倍。所以它**不能**當主要來源。
++
++---
++
++## 4. 定案:補第五段,而且只當 fallback
++
++使用者的框架是**「補上 fallback」**,而這改變了計算:這一段只在其餘全部沉默時生效,
++而那個狀態不是中立的 —— 是「完全不壓縮 → 送不出去」。所以比較對象不是
++「正確的數字 vs 錯的數字」,是**「什麼都不做 vs 一個近似的天花板」**。
++
++### 4.1 問 proxy 自己的 `GET /model/info`
++
++litellm 的管理路由,回它**被設定成什麼**。兩件事要分開:
++
++- **`max_input_tokens`** —— 就是輸入窗口,**直接採用,不乘任何係數**
++- **`max_tokens`** —— 只有它有值時才乘係數當**估計**
++
++⚠️ 探測**原樣回傳兩個數字**,不在探測裡解釋 `max_tokens`。在那裡乘係數等於
++**把一個猜測藏進一個看起來像量測的東西裡**。要不要用、怎麼用,是階梯的決定。
++
++⚠️ **兩種 url 拼法都要問**:`base_url` 是操作員寫的,聊天路由在 `/v1` 底下所以通常帶著,
++但 litellm 把管理路由掛在 `/model/info` **和** `/v1/model/info`。只問一種,這一段就會
++因為一個沒人在意的路徑尾巴而時靈時不靈。
++
++### 4.2 排序與來源標記
++
++```
++你設的 → 從流量學到的(含 /tokenize) → proxy 宣告的 → 模型登錄表 → 估計 → unknown
++  config        learned                    declared        catalog     estimated
++```
++
++- **`declared` 在 `catalog` 之上**:它是關於**這個端點**的陳述,而登錄表是按模型名字查的,
++  那個名字端點自己未必認。
++- **`estimated` 在所有明確數字之下**,包含 `catalog` —— 登錄表至少對它所指名的模型是精確的。
++- **來源必須可分辨。** 一個沒人講過的數字絕不能讀起來像量測 ——`learned` 帶著
++  「端點真的這樣做了」的權威,估計一點都沒有。
++
++### 4.3 ⚠️ 估計絕不能進 `LimitLearner`
++
++`/tokenize` 的探測結果目前是灌進 `LimitLearner.learn_exact` 的,而那個 store 的契約寫著:
++
++> `learn_exact` —— a rejection stated the limit. **That is a fact; take it.**
++
++把估計放進去,下游就再也分不出事實與估計,而 `ContextLimit.source` 會回報 `learned`。
++所以估計必須是獨立的一段、獨立的來源名稱。
++
++### 4.4 係數
++
++`history.max_tokens_window_ratio`,**預設 0.8**,從 config 讀而不是寫死。
++
++⚠️ 只作用在 `max_tokens` 那條路。`max_input_tokens` 已經是輸入窗口,再乘就是**扣兩次**
++—— app 本來就會自己扣掉系統提示、tool schema、回覆保留額度和邊界。
++
++---
++
++## 5. 這個 PR 不做的事
++
++- **TTFT 誤判**(§1 迴圈的第三格):固定 8 秒的門檻把「prompt 長」誤讀成「模型忙」,
++  罰站一個健康的端點,而且什麼都學不到。**修法不能是「timeout 觸發壓縮」** —— timeout
++  天生分不出「長」「忙」「暫時不可用」,而壓縮是有損且不可逆的。
++  > **壓縮只能由「大小」觸發,永遠不能由「失敗」觸發。**
++  > 大小在送出前就知道且確定;失敗在送出後才知道且分不出原因。
++  這條原則值得寫進程式碼,但屬於另一個 PR。
++- **OpenCode 那邊**:它不讀 `/model/info`(binary 裡沒有這個字串),所以要在它自己的設定裡
++  各自宣告一次。不是這個 repo 的範圍。
++- **文件 PR #758** 已經在描述今天的階梯;本 PR 落地後要更新那張表。
++
++---
++
++## 6. Phases
++
++| | 內容 |
++|---|---|
++| **P1** | `probe_endpoint_limits`:問 `/model/info`,兩種拼法,原樣回傳兩個數字 |
++| **P2** | 階梯新增 `declared` / `estimated` 兩段與來源標記 |
++| **P3** | `history.max_tokens_window_ratio`(預設 0.8) |
++| **P4** | 接進 `turn_context`(照 `catalog` 的 `deferred_lookup` 樣式,不動 runner) |
++| **P5** | 文件 |
++
++對抗式 review 之後(9 項發現,全部修掉):
++
++| | 內容 |
++|---|---|
++| **P6** | 空字串的 `llm_base_url` **是**「用這個部署的端點」——這一段本來對它唯一存在目的的那種部署完全沒作用 |
++| **P7** | 兩種拼法變成問同一個位址兩次;`_as_count` 讓 `0.5` 變成 `0`、讓 `inf` 逸出 |
++| **P8** | 每次 probe 洩漏連線池;proxy 的否定答案被永久記住(對面是**別人服務上的設定檔**) |
++| **P9** | 推導出來的天花板若裝不下固定開銷就拒收(否則每回合只剩一則訊息);比率在載入時做範圍檢查 |
++| **P10** | 把「哪一段答的」講出來——log 一行 + `/context` 的 `limit_source` |
++| **P11** | 登錄表裡同一個曖昧欄位本來也被當精確值讀 |
++| **P12** | 端到端測接縫(用突變驗證會紅);死旋鈕檢查延伸到第二跳 |
++
++階梯現在是六段:
++
++```
++config → learned → declared → catalog → estimated → unknown
++```
++
++其中 `declared` / `estimated` 都來自 `GET /model/info`,而且**只有 `estimated` 是導出的**
++—— 來源名稱刻意分開,因為一個沒人講過的數字絕不能讀起來像量測。
+diff --git a/src/workspace_app/__main__.py b/src/workspace_app/__main__.py
+index d72e6581..86123f28 100644
+--- a/src/workspace_app/__main__.py
++++ b/src/workspace_app/__main__.py
+@@ -367,6 +367,7 @@ def main() -> None:
+             history_max_context_tokens=settings.history.max_context_tokens,
+             # #624: the operator's declared endpoint ceiling (None ⇒ resolve per turn).
+             context_limit=settings.history.context_limit,
++            max_tokens_window_ratio=settings.history.max_tokens_window_ratio,
+             packages=packages,
+             # `prebuilt_dir=None` even with packages: the sandbox's `tools_dir`
+             # above already bind-mounts PREBUILT_DIR read-only at /.tools/ inside
+diff --git a/src/workspace_app/api/app.py b/src/workspace_app/api/app.py
+index 1b290eb2..291b5c55 100644
+--- a/src/workspace_app/api/app.py
++++ b/src/workspace_app/api/app.py
+@@ -20,6 +20,7 @@ from ..agent.config_catalog import AgentConfigCatalog
+ from ..agent.context import AgentToolContext
+ from ..apps.subagents import SubagentDef
+ from ..config.schema import EnhancementSettings, OffHoursSettings, PerUserResources
++from ..context_budget import DEFAULT_MAX_TOKENS_WINDOW_RATIO
+ 
+ if TYPE_CHECKING:
+     # Annotation-only: `factories` composes THIS module, so a runtime import
+@@ -411,6 +412,7 @@ def create_app(
+     # #624: the operator's declared context ceiling for this deploy's endpoint.
+     # None ⇒ resolve per turn from the model registry; unknown ⇒ do not trim.
+     context_limit: int | None = None,
++    max_tokens_window_ratio: float = DEFAULT_MAX_TOKENS_WINDOW_RATIO,
+     # Operator-level KB retrieval enhancement defaults + LLM ceilings.
+     # `None` ⇒ bundled `EnhancementSettings()` (light: expand=1, hyde=0,
+     # rerank=on). __main__ threads `settings.kb.retrieval.enhancements`.
+@@ -1810,6 +1812,10 @@ def create_app(
+         # #624: the operator's declared ceiling for this endpoint (the escape
+         # hatch); unset ⇒ resolved per turn, and unknown ⇒ no trimming.
+         context_limit=context_limit,
++        # The last rung's fraction. Only reached when every stated source is
++        # silent, which is the normal state for a self-hosted model behind a
++        # proxy under a local alias.
++        max_tokens_window_ratio=max_tokens_window_ratio,
+         # #397: lets the request_wiki_update tool submit a user's wiki correction.
+         wiki_coordinator=wiki_coordinator,
+         run_agent=_delegate,
+@@ -1824,6 +1830,7 @@ def create_app(
+     # after construction because the runner is injected, and duck-typed because
+     # ScriptedAgentRunner (tests, replay) has nothing to learn from.
+     turn_ctx.learned_limit_fn = getattr(runner, "learned_limit", None)
++    turn_ctx.endpoint_limits_fn = getattr(runner, "endpoint_limits", None)
+ 
+     # ── replay diagnostics (#51 P4) ──────────────────────────────────
+     # Read-only loaders: replay must never create/mutate anything, so
+diff --git a/src/workspace_app/api/chat_routes.py b/src/workspace_app/api/chat_routes.py
+index 68105b0a..49b37508 100644
+--- a/src/workspace_app/api/chat_routes.py
++++ b/src/workspace_app/api/chat_routes.py
+@@ -407,7 +407,12 @@ def register_chat_routes(
+         investigation_id = locator.require_access(slug, item_id, "read_chat")
+         _rid, conv = locator.require_chat(slug, item_id, chat_id)
+         usage = context_usage_for(investigation_id, conv.messages)
+-        return _ContextOut(used=usage.used, limit=usage.limit, measured=usage.measured)
++        return _ContextOut(
++            used=usage.used,
++            limit=usage.limit,
++            measured=usage.measured,
++            limit_source=usage.limit_source,
++        )
+ 
+     @app.get("/a/{slug}/items/{item_id}/chats/{chat_id}/todos")
+     async def get_chat_todos(slug: str, item_id: str, chat_id: str) -> _TodosOut:
+diff --git a/src/workspace_app/api/kb_chat_routes.py b/src/workspace_app/api/kb_chat_routes.py
+index 357f362d..b2187ed3 100644
+--- a/src/workspace_app/api/kb_chat_routes.py
++++ b/src/workspace_app/api/kb_chat_routes.py
+@@ -429,7 +429,7 @@ def _graph_block_for(spec: SpecStar, text: str, as_user: str) -> str:
+ #: Per-process cache for the KB-chat catalog rung, keyed by model — the litellm
+ #: registry value never changes within a run, and `deferred_lookup` fills it off
+ #: the event loop. Module-level (not per-request) so it survives across turns.
+-_KB_CATALOG_CACHE: dict[str, int | None] = {}
++_KB_CATALOG_CACHE: dict[str, Any] = {}
+ 
+ 
+ def _kb_history_budget(cfg: AgentConfig | None, context_limit: int | None) -> int:
+@@ -440,7 +440,7 @@ def _kb_history_budget(cfg: AgentConfig | None, context_limit: int | None) -> in
+     tiny), so the overhead is the system prompt. Same ladder as the app chat:
+     operator config, then the model registry, then unknown."""
+     from ..context_budget import (
+-        catalog_limit,
++        catalog_limits,
+         deferred_lookup,
+         estimate_tokens,
+         history_budget,
+@@ -453,8 +453,16 @@ def _kb_history_budget(cfg: AgentConfig | None, context_limit: int | None) -> in
+     # name via the daemon, untimed), and this runs on the `send_message` request
+     # path — so it goes through deferred_lookup exactly like the app-chat path
+     # (cached per model, filled off the event loop), never a raw per-turn call.
+-    catalog = deferred_lookup(_KB_CATALOG_CACHE, cfg.model, lambda: catalog_limit(cfg.model))
+-    limit = resolve_context_limit(configured=context_limit, catalog=catalog)
++    # Only the EXACT figure. The registry's `max_tokens` is documented upstream
++    # as ambiguous between the input and output caps, so reading it as a window
++    # is a guess — and this path has no operator-set ratio to make that guess
++    # with. Reaching for the module default instead would be a knob the operator
++    # set and this path silently ignored, so the honest answer here is `unknown`,
++    # which means "send it all" and lets a rejection teach us the real number.
++    catalog = deferred_lookup(_KB_CATALOG_CACHE, cfg.model, lambda: catalog_limits(cfg.model))
++    limit = resolve_context_limit(
++        configured=context_limit, catalog=getattr(catalog, "max_input_tokens", None)
++    )
+     budget = history_budget(limit, overhead_tokens=estimate_tokens(cfg.system_prompt or ""))
+     return 0 if budget is None else max(1, budget)
+ 
+diff --git a/src/workspace_app/api/litellm_runner.py b/src/workspace_app/api/litellm_runner.py
+index cc0a4825..436f8fe6 100644
+--- a/src/workspace_app/api/litellm_runner.py
++++ b/src/workspace_app/api/litellm_runner.py
+@@ -57,7 +57,7 @@ from ..context_budget import (
+     is_context_overflow,
+     parse_limit_from_error,
+ )
+-from ..context_probe import probe_context_limit
++from ..context_probe import probe_context_limit, probe_endpoint_limits
+ from ..failover.rate_limit import is_rate_limited, rate_limit_wait_s
+ from ..resources import AgentConfig
+ from ..tokens import ITokenService, LlmCredential
+@@ -100,6 +100,25 @@ _LOGGER = logging.getLogger(__name__)
+ #: turn's line.
+ _NUM_CTX_SEEN: set[tuple[str, int | None]] = set()
+ 
++#: How long "the proxy did not say" is believed before asking again.
++#:
++#: Every other cached lookup in this file caches a fact about software we ship.
++#: This one caches a fact about a config file on ANOTHER service — and the
++#: documented remedy for a deployment stuck on an `unknown` ceiling is that
++#: somebody adds `max_input_tokens` to exactly that file. Remembering the
++#: negative for the life of the pod would make their fix take effect only when
++#: WE are next redeployed: a dependency between two services that neither of
++#: them is told about, presenting as "I added it and nothing happened".
++#:
++#: It also bounds the other way a negative gets recorded: a probe that lands
++#: while the proxy is restarting gets a legitimate-looking "no", and nothing
++#: about that answer says it was taken from a dead endpoint.
++#:
++#: Ten minutes because the cost is one GET per (model, endpoint) per pod per
++#: window — nothing — while the thing it buys is that a correct proxy config
++#: starts working on its own. An ANSWER never expires; only silence does.
++DECLARED_RETRY_S = 600.0
++
+ # Drop params a model doesn't support (e.g. reasoning_effort on a non-reasoning
+ # model) instead of erroring — the per-message reasoning-effort selector sends
+ # it to every model, and LiteLLM's support varies by provider.
+@@ -1171,6 +1190,18 @@ class LitellmAgentRunner:
+         self._limits = LimitLearner()
+         # Endpoints already asked (value or None), so a silent one is asked once.
+         self._probed: dict[tuple[str, str], int | None] = {}
++        # The same, for what a PROXY in front of the model says it was
++        # configured with. Separate cache because it is a different question
++        # with a different answer shape, and separate from the learner because
++        # what a proxy relays is a claim, not something the endpoint did.
++        self._endpoint_declared: dict[tuple[str, str], Any] = {}
++        # When each of those keys was last asked, so a NEGATIVE can expire. See
++        # `DECLARED_RETRY_S`.
++        self._declared_at: dict[tuple[str, str], float] = {}
++        self._clock: Callable[[], float] = time.monotonic
++        self._declared_probe: Callable[[str | None, str], Any] = lambda base_url, model: (
++            probe_endpoint_limits(base_url=base_url, model=model)
++        )
+         # The endpoint-asking seam. A plain attribute (not a method) so it is an
+         # injectable dependency like the other sinks here — every failure inside
+         # `probe_context_limit` already degrades to None.
+@@ -1505,6 +1536,49 @@ class LitellmAgentRunner:
+             self._limits.learn_exact(model, base_url, limit=probed)
+         return self._limits.get(model, base_url)
+ 
++    def endpoint_limits(self, model: str, base_url: str | None) -> Any:
++        """What a proxy in front of `model` says it was configured with (#624
++        follow-up), or None.
++
++        Lives here rather than in the turn-context builder for one reason, and
++        it is the reason the first version of this did nothing at all: an
++        `AgentConfig` carries `llm_base_url == ""` whenever the preset does not
++        override it, and that empty string MEANS "use the deploy's endpoint" —
++        which only the runner knows. A caller that reads the config's field
++        alone sees no endpoint on exactly the deployment this rung exists for:
++        one endpoint configured globally, presets naming only a model.
++
++        Asked once per (model, endpoint) and cached — most endpoints are not a
++        litellm proxy, and re-asking would put an HTTP round trip in front of
++        every message for a value that does not change. Filled off the loop by
++        `deferred_lookup`, like the `/tokenize` probe: an endpoint that hangs
++        must not stall the pod.
++
++        Silence expires, though — see `DECLARED_RETRY_S`."""
++        key = (model or "", base_url or "")
++        self._expire_declared(key)
++        return deferred_lookup(
++            self._endpoint_declared,
++            key,
++            lambda: self._declared_probe(base_url or self._base_url, model),
++        )
++
++    def _expire_declared(self, key: tuple[str, str]) -> None:
++        """Forget a cached silence once it is old enough to re-ask.
++
++        Only silence: an answer is kept for the life of the pod. And the stamp
++        is taken at the moment the question is ASKED, not answered, so a lookup
++        still in flight (which reads as `None` until the thread lands) cannot be
++        re-asked out from under itself."""
++        now = self._clock()
++        asked_at = self._declared_at.get(key)
++        if asked_at is None:
++            self._declared_at[key] = now
++            return
++        if self._endpoint_declared.get(key) is None and now - asked_at >= DECLARED_RETRY_S:
++            self._endpoint_declared.pop(key, None)
++            self._declared_at[key] = now
++
+     def _agent_kwargs(
+         self,
+         ctx: AgentToolContext,
+diff --git a/src/workspace_app/api/schemas.py b/src/workspace_app/api/schemas.py
+index e37bd4a8..98bf7fb5 100644
+--- a/src/workspace_app/api/schemas.py
++++ b/src/workspace_app/api/schemas.py
+@@ -178,11 +178,20 @@ class _ContextOut(BaseModel):
+     `limit` is None when no ceiling could be resolved — the FE must then show the
+     usage with NO denominator rather than draw a bar against an invented one.
+     `measured` says whether a provider's own count anchored the figure or the
+-    whole thing is an estimate, so the UI never presents a guess as a fact."""
++    whole thing is an estimate, so the UI never presents a guess as a fact.
++
++    `limit_source` is the same honesty for the DENOMINATOR: which rung of the
++    resolution ladder produced `limit` (#624). `measured` and it are independent
++    — the numerator can be a provider's exact count while the denominator is a
++    figure we derived from the endpoint's output cap. Without it an operator
++    checking whether the ladder works reads `limit: 104857` and cannot tell a
++    stated window from a guess, which is the single distinction the ladder
++    exists to preserve."""
+ 
+     used: int
+     limit: int | None
+     measured: bool
++    limit_source: str = "unknown"
+ 
+ 
+ class _CompactOut(BaseModel):
+diff --git a/src/workspace_app/api/turn_context.py b/src/workspace_app/api/turn_context.py
+index d762a372..48af8071 100644
+--- a/src/workspace_app/api/turn_context.py
++++ b/src/workspace_app/api/turn_context.py
+@@ -33,7 +33,13 @@ from ..agent.context import AgentToolContext
+ from ..apps.manifest import load_app_manifest
+ from ..apps.skills import advertised_workspace_skills, effective_item_skills
+ from ..apps.subagents import SubagentDef, load_subagents
+-from ..context_budget import ContextLimit, ContextUsage, catalog_limit, estimate_tokens
++from ..context_budget import (
++    DEFAULT_MAX_TOKENS_WINDOW_RATIO,
++    ContextLimit,
++    ContextUsage,
++    catalog_limits,
++    estimate_tokens,
++)
+ from ..entity.brief import entity_schema_brief
+ from ..entity.catalog import discover_catalog
+ from ..sandbox.protocol import Sandbox, SandboxSpec
+@@ -70,6 +76,12 @@ RunAgent = Callable[..., Awaitable[str]]
+ 
+ logger = logging.getLogger(__name__)
+ 
++#: Ceilings already announced, as (model, source, tokens) — so the line that
++#: says which rung answered is written once per distinct outcome per pod rather
++#: than once per turn. Module-level, like `_NUM_CTX_SEEN` beside it: the fact
++#: belongs to the process, and two builders in one pod should not each repeat it.
++_CEILING_SAID: set[tuple[str, str, int | None]] = set()
++
+ 
+ async def resolve_item_tools(sandbox: Sandbox, locator: ItemLocator, item_id: str) -> ExternalTools:
+     """#674: what this item's App declares as third-party tools, resolved.
+@@ -145,6 +157,7 @@ class TurnContextBuilder:
+         history_max_messages: int,
+         history_max_context_tokens: int,
+         context_limit: int | None = None,
++        max_tokens_window_ratio: float = DEFAULT_MAX_TOKENS_WINDOW_RATIO,
+         wiki_coordinator: WikiMaintenanceCoordinator | None = None,
+         run_agent: RunAgent | None = None,
+         subagent_models: tuple[SubagentModel, ...] = (),
+@@ -193,12 +206,26 @@ class TurnContextBuilder:
+         # (tests, replay) has nothing to learn from. None ⇒ the ladder simply
+         # skips that rung.
+         self.learned_limit_fn: Callable[[str, str | None], int | None] | None = None
++        # The proxy rung, wired to the runner for the same reason as the one
++        # above: only the runner knows the deploy's endpoint, and an
++        # `AgentConfig` whose `llm_base_url` is "" is SAYING "use that one".
++        # Reading the config's field here instead is how the first version of
++        # this rung came to do nothing on the very deployment it was for.
++        # None ⇒ the ladder simply skips it (tests, replay).
++        self.endpoint_limits_fn: Callable[[str, str | None], Any] | None = None
+         # #624 §9.12: the catalog rung, memoised per model and filled OFF the
+         # event loop (see `deferred_lookup`). `_catalog_fn` is a plain attribute
+         # rather than a direct call so a test can stand in for the slow, untimed
+         # registry lookup — the hazard itself is what needs driving.
+         self._catalog_cache: dict[str, int | None] = {}
+-        self._catalog_fn: Callable[[str], int | None] = catalog_limit
++        # Returns BOTH registry figures, because they answer different rungs:
++        # `max_input_tokens` is exact, while `max_tokens` is documented upstream
++        # as meaning one of two things — so it is derived and labelled, exactly
++        # like a proxy's.
++        self._catalog_fn: Callable[[str], Any] = catalog_limits
++        # What fraction of a stated `max_tokens` to treat as the window, when
++        # that is the only figure the proxy gave us. See `history` settings.
++        self._max_tokens_window_ratio = max_tokens_window_ratio
+ 
+     def _overhead_for(
+         self,
+@@ -229,28 +256,101 @@ class TurnContextBuilder:
+         we budget against one window and are served another, which is exactly the
+         shape of the silent truncation this resolves against.
+         """
+-        from ..context_budget import deferred_lookup, resolve_context_limit
++        from ..context_budget import (
++            deferred_lookup,
++            resolve_context_limit,
++            window_from_max_tokens,
++        )
+ 
+         if agent_config is None:
+             return ContextLimit(tokens=None, source="unknown")
+-        return resolve_context_limit(
+-            configured=self._context_limit,
+-            # #624: what the endpoint told us in a past rejection. Wired to the
+-            # runner's learner — the adversarial review caught this as a dangling
+-            # `learned=None  # P3 feeds this` comment that nothing ever fed.
+-            learned=self._learned_limit(agent_config),
+-            # #624 §9.12: NOT a table lookup, whatever its name says — litellm
+-            # resolves an `ollama/*` name by asking the daemon, untimed (measured
+-            # 129,781 ms against an address that does not answer). This runs on
+-            # every turn, inside `async def build_chat_turn`, so it is deferred
+-            # off the loop like the probe.
+-            catalog=deferred_lookup(
+-                self._catalog_cache,
+-                agent_config.model,
+-                lambda: self._catalog_fn(agent_config.model),
++        endpoint = self._endpoint_limits(agent_config)
++        # #624 §9.12: NOT a table lookup, whatever its name says — litellm
++        # resolves an `ollama/*` name by asking the daemon, untimed (measured
++        # 129,781 ms against an address that does not answer). This runs on every
++        # turn, inside `async def build_chat_turn`, so it is deferred off the
++        # loop like the probe.
++        catalog = deferred_lookup(
++            self._catalog_cache,
++            agent_config.model,
++            lambda: self._catalog_fn(agent_config.model),
++        )
++        # A stated `max_tokens` is the same ambiguous figure whichever source
++        # holds it — litellm's registry documents its own as "LEGACY parameter.
++        # set to max_output_tokens if provider specifies it. IF not set to
++        # max_input_tokens" — so both feed the one DERIVED rung rather than one
++        # of them being read as exact. The endpoint's own wins: it describes this
++        # deployment, while the registry describes a model name.
++        ambiguous = getattr(endpoint, "max_tokens", None) or getattr(catalog, "max_tokens", None)
++        return self._announce(
++            agent_config.model,
++            resolve_context_limit(
++                configured=self._context_limit,
++                # #624: what the endpoint told us in a past rejection. Wired to the
++                # runner's learner — the adversarial review caught this as a dangling
++                # `learned=None  # P3 feeds this` comment that nothing ever fed.
++                learned=self._learned_limit(agent_config),
++                # What a proxy in front of the model says it was configured with.
++                # A relayed claim rather than the enforcer speaking, so it sits below
++                # `learned` — but above the registry, which is keyed on a model name
++                # this endpoint may not even use.
++                declared=getattr(endpoint, "max_input_tokens", None),
++                catalog=getattr(catalog, "max_input_tokens", None),
++                # Last, and derived rather than stated — see `window_from_max_tokens`
++                # for why the ratio cannot be a constant.
++                estimated=window_from_max_tokens(
++                    ambiguous,
++                    ratio=self._max_tokens_window_ratio,
++                ),
+             ),
+         )
+ 
++    def _announce(self, model: str, limit: ContextLimit) -> ContextLimit:
++        """Say once, per distinct outcome, which rung answered.
++
++        The rule this serves is the ladder's own: a number nobody stated must
++        never read like a measurement. Until this line, that held in the type
++        system and nowhere else — `ContextLimit.source` had no production reader,
++        so an estimate derived from an output cap and a window the endpoint
++        stated were the same integer with nothing to tell them apart.
++
++        It matters most where it is least visible. Production is reachable only
++        through the log aggregator, so this line IS how an operator checks
++        whether the ladder is working, and `unknown` is logged as loudly as the
++        rest: "nothing answered" is the diagnosis this whole feature exists for,
++        and it would be invisible if only the successes spoke.
++
++        Deduped per (model, source, tokens): one line per outcome per pod, not
++        one per turn. A per-turn line would bury the thing it exists to surface.
++        """
++        seen = (model, limit.source, limit.tokens)
++        if seen not in _CEILING_SAID:
++            _CEILING_SAID.add(seen)
++            logger.info(
++                "context ceiling for %s: %s (source=%s)",
++                model,
++                "unknown — history is not trimmed" if limit.tokens is None else limit.tokens,
++                limit.source,
++            )
++        return limit
++
++    def _endpoint_limits(self, agent_config: AgentConfig) -> Any:
++        """What a proxy in front of this model says it was configured with, or
++        None when nothing is wired or nothing answered.
++
++        The empty-string base_url is passed through UNTOUCHED: it means "the
++        deploy's endpoint", and resolving it is the runner's job. Turning it
++        into `None` here is what made this rung silent on a single-endpoint
++        deployment — the only shape it was written for."""
++        fn = self.endpoint_limits_fn
++        if fn is None:
++            return None
++        try:
++            return fn(agent_config.model, agent_config.llm_base_url or None)
++        except Exception:  # noqa: BLE001 — a probe must never break a turn
++            logger.debug("endpoint limits lookup failed", exc_info=True)
++            return None
++
+     def _learned_limit(self, agent_config: AgentConfig) -> int | None:
+         """What the endpoint stated in a past rejection, via the runner's
+         learner. None when nothing has been learned (or no runner is wired —
+@@ -273,7 +373,30 @@ class TurnContextBuilder:
+         from ..context_budget import context_usage
+ 
+         return context_usage(
+-            messages, limit=self._context_window(self._locator.resolve_agent_config(item_id))
++            messages, limit=self._credible_window(self._locator.resolve_agent_config(item_id))
++        )
++
++    def _credible_window(self, agent_config: AgentConfig | None) -> ContextLimit:
++        """The resolved ceiling, minus one that cannot be a window.
++
++        Three things read the ceiling — the history budget, the compaction
++        trigger, and the usage gauge — and every one of them does something
++        wrong with a derived number too small to hold the prompt: replay one
++        message, summarise the thread on every turn, or draw a bar past 100%
++        beside a chat that never compacts. The rule was written into the first
++        of those and immediately missed the other two, so it lives here, once,
++        and the three ask rather than each deciding.
++
++        `_budget_for` has its own call because it already holds the EXACT
++        overhead — prompt plus tool schemas — and should not re-estimate a
++        figure it measured. The other two size the system prompt only: cheap (no
++        schemas built, which is the 28 ms part) and the dominant term anyway.
++        """
++        from ..context_budget import estimate_tokens, usable_window
++
++        return usable_window(
++            self._context_window(agent_config),
++            overhead_tokens=estimate_tokens(getattr(agent_config, "system_prompt", "") or ""),
+         )
+ 
+     def compaction_plan_for(
+@@ -293,7 +416,11 @@ class TurnContextBuilder:
+         from .compaction import plan_for_budget
+ 
+         cfg = self._locator.resolve_agent_config(item_id)
+-        window = self._context_window(cfg)
++        # The same credibility test every other reader of the ceiling applies —
++        # and with the most at stake here, because a derived ceiling too small to
++        # hold the prompt would summarise the thread on EVERY turn, lossily and
++        # irreversibly, driven by a size measured against a number nobody stated.
++        window = self._credible_window(cfg)
+         usage = self.usage_of(item_id, messages)
+         # Deliberately NOT `_budget_for`. That budget is for HISTORY alone, so it
+         # subtracts the system prompt and the tool schemas — and measuring those
+diff --git a/src/workspace_app/config/loader.py b/src/workspace_app/config/loader.py
+index f0c47d96..de56e87d 100644
+--- a/src/workspace_app/config/loader.py
++++ b/src/workspace_app/config/loader.py
+@@ -322,6 +322,50 @@ def _validate(merged: dict[str, Any], *, source: str) -> None:
+     _check_retrieval_llm_reference(merged, source=source)
+     _check_max_searches(merged, source=source)
+     _check_host_managed_durable(merged, source=source)
++    _check_window_ratio(merged, source=source)
++
++
++def _check_window_ratio(merged: dict[str, Any], *, source: str) -> None:
++    """`history.max_tokens_window_ratio` is the only MULTIPLIER in this config.
++
++    Every other number nearby is a token count, where a typo is visibly too big
++    or too small. Here the typo that matters is a missing decimal point, and `8`
++    looks entirely reasonable in a field that takes numbers — it just claims the
++    input window is eight times what the endpoint stated, which surfaces as a
++    rejected request on every turn, on exactly the deployment that set this key
++    because compaction was not working.
++
++    `0` and negatives are the other end: they derive no window at all, which
++    reads downstream as "no ceiling known" and switches off the fallback the
++    operator was in the middle of configuring.
++
++    So the range is stated once, at load, while they are still looking at the
++    file they just edited.
++    """
++    history = merged.get("history")
++    if not isinstance(history, dict) or "max_tokens_window_ratio" not in history:
++        return
++    ratio = history["max_tokens_window_ratio"]
++    path = "history.max_tokens_window_ratio"
++    if isinstance(ratio, bool) or not isinstance(ratio, (int, float)):
++        raise ValueError(
++            f"config {source}: {path}={ratio!r} is not a number. It is the fraction of an "
++            f"endpoint's stated max_tokens to treat as its input window (0 < ratio <= 1, "
++            f"default 0.8)."
++        )
++    if 0 < ratio <= 1:
++        return
++    hint = (
++        f" Did you mean {ratio / 10:g}?"
++        if ratio > 1
++        else " A value of 0 or less derives no window at all, which silently disables the "
++        "fallback this key configures."
++    )
++    raise ValueError(
++        f"config {source}: {path}={ratio!r} is out of range. It is the FRACTION of an "
++        f"endpoint's stated max_tokens to treat as its input window, so 0 < ratio <= 1 "
++        f"(default 0.8).{hint}"
++    )
+ 
+ 
+ def _check_host_managed_durable(merged: dict[str, Any], *, source: str) -> None:
+diff --git a/src/workspace_app/config/schema.py b/src/workspace_app/config/schema.py
+index c25e28f1..f4ccfb06 100644
+--- a/src/workspace_app/config/schema.py
++++ b/src/workspace_app/config/schema.py
+@@ -416,6 +416,29 @@ class HistorySettings:
+     `chars // 4` estimator that undercounts Traditional Chinese 3.6x. Left here
+     as an override for deploys that want a hard ceiling of their own."""
+ 
++    max_tokens_window_ratio: float = 0.8
++    """What fraction of an endpoint's stated `max_tokens` to treat as its input
++    window, when that is the ONLY figure it gave us.
++
++    Last resort, and only reached when the operator config, what the traffic
++    taught us, the endpoint's own `/tokenize`, its proxy's `max_input_tokens`
++    and the model registry are all silent — which is the normal state for a
++    self-hosted model behind a litellm proxy under a local alias. There the
++    alternative is not a better number, it is `unknown`: the history is never
++    trimmed and compaction never runs, so a conversation grows until the
++    endpoint refuses it.
++
++    Configurable because `max_tokens` means different things in different
++    deployments — it is the OUTPUT cap for most registry entries (gpt-4o: 16,384
++    beside a 128,000 window) but equals the window for others (qwen3:14b: 40,960
++    for both), and in a proxy's own config it is whatever the operator put
++    there. A number derived from it is therefore never trusted over one somebody
++    stated, and it is reported with a distinguishable source so nothing
++    downstream can mistake it for a measurement.
++
++    NOT applied to a stated `max_input_tokens` — that already is the input
++    window, and scaling it would discount twice."""
++
+     context_limit: int | None = None
+     """The endpoint's context window in tokens, when the operator knows it.
+ 
+diff --git a/src/workspace_app/context_budget.py b/src/workspace_app/context_budget.py
+index 0cb39f25..1579ab95 100644
+--- a/src/workspace_app/context_budget.py
++++ b/src/workspace_app/context_budget.py
+@@ -32,11 +32,12 @@ from collections.abc import Callable
+ from dataclasses import dataclass
+ from typing import Any, Literal
+ 
++from .context_probe import EndpointLimits
+ from .kb.tokens import count_tokens
+ 
+ logger = logging.getLogger(__name__)
+ 
+-LimitSource = Literal["config", "learned", "catalog", "unknown"]
++LimitSource = Literal["config", "learned", "declared", "catalog", "estimated", "unknown"]
+ 
+ #: Strong refs to in-flight deferred lookups — asyncio keeps only a weak one, so
+ #: an unreferenced task can be collected mid-flight.
+@@ -110,17 +111,61 @@ class ContextLimit:
+     def known(self) -> bool:
+         return self.tokens is not None
+ 
++    @property
++    def derived(self) -> bool:
++        """True when nobody stated this number — we computed it from one that
++        means something else. Everything else on the ladder was said out loud by
++        an operator, the endpoint, or a registry; this one is our own arithmetic
++        and is the only rung allowed to be overruled by its own implausibility.
++        """
++        return self.source == "estimated"
++
+ 
+ def _positive(value: int | None) -> int | None:
+     """A limit must be a positive count; 0 / negative / None all mean absent."""
+     return value if value is not None and value > 0 else None
+ 
+ 
++#: What fraction of a stated `max_tokens` to treat as the input window when it
++#: is the only figure an endpoint gave us. Configurable because the right
++#: fraction depends on what the operator put in that field, which only they
++#: know — see `window_from_max_tokens`.
++DEFAULT_MAX_TOKENS_WINDOW_RATIO = 0.8
++
++
++def window_from_max_tokens(max_tokens: int | None, *, ratio: float) -> int | None:
++    """An input window derived from a stated `max_tokens`, or ``None``.
++
++    A DERIVATION, not a reading. `max_tokens` is the OUTPUT cap for most
++    entries — measured against litellm's own registry, gpt-4o reports 16,384
++    beside a 128,000 window, while `ollama_chat/qwen3:14b` reports 40,960 for
++    both — so the ratio between them is not a constant and cannot be one. That
++    is exactly why the fraction is the operator's to set and why the result
++    ranks below every figure someone actually stated.
++
++    It earns its place only where every other rung is silent: a self-hosted
++    model behind a proxy, under a local alias no registry knows. There the
++    alternative is not a better number, it is `unknown` — which means the
++    history is never trimmed and compaction never runs, so a conversation grows
++    until the endpoint refuses it.
++
++    Never applied to `max_input_tokens`: that one already IS the input window,
++    and scaling it would discount twice, on top of the prompt, the tool schemas,
++    the reply reserve and the margin the budget already subtracts.
++
++    Absent or non-positive in, ``None`` out — never a floor and never a default.
++    A window of 0 is not "unlimited" and not "unknown"; it is a number that
++    would cut every conversation down to its last message."""
++    return _positive(int((max_tokens or 0) * max(0.0, ratio)))
++
++
+ def resolve_context_limit(
+     *,
+     configured: int | None = None,
+     learned: int | None = None,
++    declared: int | None = None,
+     catalog: int | None = None,
++    estimated: int | None = None,
+ ) -> ContextLimit:
+     """The ceiling for this endpoint, by descending authority.
+ 
+@@ -131,14 +176,30 @@ def resolve_context_limit(
+        by evidence is a trap.)
+     2. ``learned`` — what the endpoint actually accepted or reported. Beats a
+        table, because it is an observation rather than a claim.
+-    3. ``catalog`` — a registry lookup (litellm). Right for hosted models and
++    3. ``declared`` — what a proxy in front of the model says it was configured
++       with (`model_info.max_input_tokens`). A claim rather than an observation,
++       so it ranks below ``learned`` — but it is a claim about THIS endpoint,
++       which beats a table keyed on a model name the endpoint may not even use.
++    4. ``catalog`` — a registry lookup (litellm). Right for hosted models and
+        ``ollama/*``; blank for a self-hosted model served under a custom name.
+-    4. otherwise ``unknown`` — stated, never faked.
++    5. ``estimated`` — derived rather than stated (see `window_from_max_tokens`).
++       Last, below every figure anyone actually gave us, because it is the only
++       rung whose number nobody vouched for. It exists for the topology where
++       all four above are silent — self-hosted behind a proxy, under a local
++       alias — and there the alternative is not a better number, it is `unknown`,
++       which means the history is never trimmed and compaction never runs.
++    6. otherwise ``unknown`` — stated, never faked.
++
++    The SOURCE travels with the number for exactly this reason: a caller that
++    cannot tell an estimate from a measurement will eventually present one as
++    the other.
+     """
+     for value, source in (
+         (configured, "config"),
+         (learned, "learned"),
++        (declared, "declared"),
+         (catalog, "catalog"),
++        (estimated, "estimated"),
+     ):
+         got = _positive(value)
+         if got is not None:
+@@ -146,8 +207,8 @@ def resolve_context_limit(
+     return ContextLimit(tokens=None, source="unknown")
+ 
+ 
+-def catalog_limit(model: str) -> int | None:
+-    """The registry's input-token ceiling for ``model``, or None when unknown.
++def catalog_limits(model: str) -> EndpointLimits | None:
++    """Both figures the registry holds for ``model``, kept apart — or None.
+ 
+     **This does network I/O.** It reads like a table lookup and mostly is one —
+     hosted models really are in litellm's bundled map — but an ``ollama/*`` name
+@@ -156,24 +217,58 @@ def catalog_limit(model: str) -> int | None:
+     every caller on a request path must reach it through ``deferred_lookup``,
+     never directly.
+ 
++    The two numbers are returned separately, and that is the whole point. This
++    used to answer with ``max_input_tokens`` **or**, failing that,
++    ``max_tokens`` — unscaled, and the ladder then labelled the result
++    ``catalog``, which reads as "a registry stated this". But litellm's own
++    registry documents that field as, verbatim:
++
++        LEGACY parameter. set to max_output_tokens if provider specifies it.
++        IF not set to max_input_tokens, if provider specifies it.
++
++    The upstream source is saying the field means one of two different things
++    and does not say which. Reading it as an input window is therefore a guess,
++    exactly like reading a proxy's `max_tokens` is a guess — so it goes to the
++    same rung, under the same ratio, with the same `estimated` label. One rule,
++    because two rules for one number is a rule that holds in one place only.
++
++    Measured against the bundled registry: 2,888 of 3,518 entries carry both
++    figures and only six carry `max_tokens` alone, so this narrows what the
++    ladder may CLAIM far more than what it can answer.
++
+     A self-hosted model behind an OpenAI-compatible endpoint (the production
+     shape) is in no registry, so None is the honest and expected answer there —
+     never a fallback number. Import is local and every failure degrades to None:
+-    a registry lookup must not be able to break a turn."""
++    a registry lookup must not be able to break a turn. That promise now covers
++    the numbers too — litellm ships an entry whose limits are prose describing
++    the field (`sample_spec`), and comparing one of those against zero raised
++    `TypeError` straight through a guard that only wrapped the lookup."""
+     if not model:
+         return None
+     try:
+         import litellm
+ 
+         info = litellm.get_model_info(model)
++        if not isinstance(info, dict):
++            return None
++        window = _positive_count(info.get("max_input_tokens"))
++        output = _positive_count(info.get("max_tokens"))
++        # Neither figure usable is the same answer as "not in the registry" for
++        # every caller here, and saying it one way keeps them from having to
++        # check both. It is also what the entry whose limits are prose returns.
++        if window is None and output is None:
++            return None
++        return EndpointLimits(max_input_tokens=window, max_tokens=output)
+     except Exception:  # noqa: BLE001 — unknown model / registry shape drift
+         return None
+-    if not isinstance(info, dict):
++
++
++def _positive_count(value: Any) -> int | None:  # noqa: ANN401 — registry data, any shape
++    """A positive whole number out of whatever the registry holds, or None."""
++    if isinstance(value, bool) or not isinstance(value, (int, float)):
+         return None
+-    for key in ("max_input_tokens", "max_tokens"):
+-        got = _positive(info.get(key))
+-        if got is not None:
+-            return got
++    count = int(value)
++    return count if count > 0 else None
+     return None
+ 
+ 
+@@ -206,6 +301,47 @@ def estimate_messages(messages: Any) -> int:
+     return total
+ 
+ 
++def usable_window(
++    limit: ContextLimit,
++    *,
++    overhead_tokens: int,
++    reply_reserve: int = DEFAULT_REPLY_RESERVE,
++    margin_ratio: float = DEFAULT_MARGIN_RATIO,
++) -> ContextLimit:
++    """The ceiling, or ``unknown`` when a DERIVED one cannot be a window.
++
++    Most proxies report `max_tokens` as what it usually means: the output cap.
++    A well-behaved `max_tokens: 4096` derives a 3,276-token "window" — smaller
++    than the system prompt this deployment demonstrably sends in every request
++    and gets answers to. A number that cannot contain what the endpoint is
++    already accepting is not that endpoint's input window, and every consumer
++    that believes it does something destructive with it: the history budget
++    replays one message per turn, and the compaction trigger summarises the
++    thread on every turn, lossily and irreversibly.
++
++    So the test lives HERE, beside the ladder, rather than inside whichever
++    consumer was looked at — that is exactly how the first version of it came to
++    protect the budget and leave compaction firing on a fabricated ceiling.
++
++    A STATED ceiling is never second-guessed. `config`, `learned`, `declared`
++    and `catalog` were said out loud by an operator, the endpoint or a registry;
++    if one of those is genuinely too small for the prompt, that is the truth and
++    the caller needs to act on it."""
++    if limit.tokens is None or not limit.derived:
++        return limit
++    usable = int(limit.tokens * (1.0 - margin_ratio))
++    if usable - max(0, overhead_tokens) - max(0, reply_reserve) > 0:
++        return limit
++    logger.warning(
++        "context: a derived ceiling of %d leaves no room beside %d tokens of prompt and tools, "
++        "so it is not the input window — falling back to no ceiling. Set "
++        "model_info.max_input_tokens on the endpoint to fix this properly.",
++        limit.tokens,
++        overhead_tokens,
++    )
++    return ContextLimit(tokens=None, source="unknown")
++
++
+ def history_budget(
+     limit: ContextLimit,
+     *,
+@@ -220,7 +356,22 @@ def history_budget(
+     prompt and the tool schemas. Both were entirely absent from the old
+     arithmetic, which is why a deploy could aim 18.5k + 24k at a 40,960 model
+     and only find out via silent truncation.
++
++    A DERIVED ceiling is first put through ``usable_window``, which refuses one
++    too small to be a window at all — so ``None`` here means either "no ceiling
++    known" or "the only candidate was not credible", and both mean the same
++    thing to the caller: do not trim.
++
++    A STATED ceiling that small is not second-guessed: 0 is then the truth
++    ("we know the ceiling and the prompt alone fills it"), and the caller
++    depends on being able to tell that from "we do not know".
+     """
++    limit = usable_window(
++        limit,
++        overhead_tokens=overhead_tokens,
++        reply_reserve=reply_reserve,
++        margin_ratio=margin_ratio,
++    )
+     if limit.tokens is None:
+         return None
+     usable = int(limit.tokens * (1.0 - margin_ratio))
+@@ -245,6 +396,12 @@ class ContextUsage:
+     used: int
+     limit: int | None
+     measured: bool
++    #: Which rung of the ladder produced `limit`. `measured` describes the
++    #: NUMERATOR — did a provider count the prompt, or did we estimate it — and
++    #: this one describes the DENOMINATOR. They are independently trustworthy,
++    #: and collapsing them would hide the difference the ladder is built around:
++    #: a window the endpoint stated versus one we derived from its output cap.
++    limit_source: LimitSource = "unknown"
+ 
+     @property
+     def ratio(self) -> float | None:
+@@ -346,8 +503,14 @@ def context_usage(messages: Any, *, limit: ContextLimit) -> ContextUsage:
+                 used=used,
+                 limit=limit.tokens,
+                 measured=bool(getattr(metrics, "exact", False)),
++                limit_source=limit.source,
+             )
+-    return ContextUsage(used=estimate_messages(_replayed(msgs)), limit=limit.tokens, measured=False)
++    return ContextUsage(
++        used=estimate_messages(_replayed(msgs)),
++        limit=limit.tokens,
++        measured=False,
++        limit_source=limit.source,
++    )
+ 
+ 
+ # ── learning the ceiling from the traffic (#624 P3) ──────────────────
+diff --git a/src/workspace_app/context_probe.py b/src/workspace_app/context_probe.py
+index 065f07c1..879678f6 100644
+--- a/src/workspace_app/context_probe.py
++++ b/src/workspace_app/context_probe.py
+@@ -18,6 +18,9 @@ which never depended on an answer.
+ from __future__ import annotations
+ 
+ import logging
++from collections.abc import Iterator
++from contextlib import contextmanager
++from dataclasses import dataclass
+ from typing import Any
+ 
+ logger = logging.getLogger(__name__)
+@@ -26,6 +29,177 @@ logger = logging.getLogger(__name__)
+ #: wrong endpoint must cost a moment, not a boot.
+ PROBE_TIMEOUT_S = 3.0
+ 
++#: Refusals already reported, as (url, status) — see `_report`.
++_REFUSALS_SAID: set[tuple[str, Any]] = set()
++
++
++@dataclass(frozen=True)
++class EndpointLimits:
++    """What a litellm proxy says it was configured with for one model.
++
++    Two numbers, kept apart because they mean different things and only one of
++    them is an answer to our question. `max_input_tokens` IS the input window.
++    `max_tokens` is the OUTPUT cap for most entries — measured against litellm's
++    own registry, gpt-4o reports 16,384 beside a 128,000 window — so it is
++    returned raw and left to the caller to decide what, if anything, to make of
++    it. Interpreting it here would bury a guess inside something that reads like
++    a measurement.
++    """
++
++    max_input_tokens: int | None
++    max_tokens: int | None
++
++
++def probe_endpoint_limits(
++    *,
++    base_url: str | None,
++    model: str,
++    client: Any = None,
++    timeout: float = PROBE_TIMEOUT_S,
++) -> EndpointLimits | None:
++    """What the endpoint's own model list says about `model`, or `None`.
++
++    `/tokenize` asks the thing that ENFORCES the window, which is the best
++    source there is — and it is a vLLM extension, so it does not survive a
++    proxy. A deployment running self-hosted vLLM behind a litellm proxy
++    therefore has no rung at all: the request reaches the proxy, which has no
++    such route, and the model's name is a local alias no registry knows.
++
++    litellm's management route answers from the model list it was configured
++    with. That is a relayed declaration rather than the enforcer speaking, so it
++    is ranked below `/tokenize` and below what the traffic taught us — but it is
++    the only thing that answers at all in that topology.
++
++    Silent on every failure, like the probe beside it: most endpoints are not a
++    litellm proxy, and a 404 here is the ordinary case rather than a fault."""
++    if not base_url:
++        return None
++    root = base_url.rstrip("/")
++    # Both spellings, DEDUPED: `base_url` usually ends in `/v1` (the chat route
++    # lives there) but need not, and litellm mounts the management route at both
++    # `/model/info` and `/v1/model/info`. Deriving one variant by stripping and
++    # the other by appending covers either way the operator wrote it — while
++    # only stripping meant a url that did NOT end in `/v1` produced the same
++    # address twice, so the most common path (not a litellm proxy at all) paid
++    # two round trips and two timeouts to learn the same nothing, and the
++    # `/v1/model/info` spelling was never reached.
++    stripped = root.removesuffix("/v1")
++    urls = _unique(f"{root}/model/info", f"{stripped}/model/info", f"{stripped}/v1/model/info")
++    with _http(client, timeout) as http:
++        for url in urls:
++            found = _read_model_info(url, model=model, client=http)
++            if found is not None:
++                return found
++    return None
++
++
++def _unique(*urls: str) -> list[str]:
++    """Order-preserving dedupe — the variants collapse to one or two depending
++    on how the url was written, and asking the same address twice is waste
++    charged to the path that learns nothing."""
++    return list(dict.fromkeys(urls))
++
++
++@contextmanager
++def _http(client: Any, timeout: float) -> Iterator[Any]:
++    """Close what we opened; never close what we were handed.
++
++    A probe that opens a connection pool per request and drops it leaks the
++    socket until the GC happens to run — and this one runs per (model, endpoint)
++    on every pod, most often down the path that learns nothing at all. A caller
++    that lends us a client keeps ownership of it."""
++    if client is not None:
++        yield client
++        return
++    http = _default_client(timeout)
++    try:
++        yield http
++    finally:
++        closer = getattr(http, "close", None)
++        if callable(closer):
++            closer()
++
++
++def _read_model_info(url: str, *, model: str, client: Any) -> EndpointLimits | None:
++    """One address, asked with a client somebody else owns. No `timeout` here:
++    it belongs to the client now that one covers the whole probe, and a second
++    copy of it would be a number that looks like it does something."""
++    try:
++        resp = client.get(url)
++        status = getattr(resp, "status_code", 0)
++        if status != 200:
++            _report(url, status)
++            return None
++        body = resp.json()
++    except Exception as exc:  # noqa: BLE001 — a probe must never break anything
++        logger.debug("context probe: %s unavailable (%s)", url, type(exc).__name__)
++        return None
++    if not isinstance(body, dict):
++        return None
++    rows = body.get("data")
++    if not isinstance(rows, list):
++        return None
++    for row in rows:
++        if not isinstance(row, dict) or row.get("model_name") != model:
++            continue
++        info = row.get("model_info")
++        if not isinstance(info, dict):
++            return None
++        try:
++            return EndpointLimits(
++                max_input_tokens=_as_count(info.get("max_input_tokens")),
++                max_tokens=_as_count(info.get("max_tokens")),
++            )
++        except (OverflowError, ValueError):  # a body carrying Infinity / NaN
++            logger.debug("context probe: %s reported an unusable count", url)
++            return None
++    return None
++
++
++def _report(url: str, status: Any) -> None:
++    """A missing route and a refused one are opposite diagnoses.
++
++    404 is the ordinary answer — this endpoint is not a litellm proxy, nothing
++    is wrong, and a line per endpoint would be noise drowning the signal. But
++    401/403 says the route EXISTS and turned us away, which on litellm means the
++    key this app authenticates with does not reach the management routes. That
++    is a fixable misconfiguration, and logging it the same way as a 404 left it
++    indistinguishable from "no proxy here": both end as a silent `unknown`
++    ceiling and no compaction, on a deployment whose operator has already done
++    their half of the work and is waiting to see it take effect."""
++    if status in (401, 403):
++        # Once per address+status per process. The negative this produces now
++        # expires and is re-asked every ten minutes, so an unfixed permission
++        # would otherwise repeat this line forever — and a notice that fires
++        # every round becomes wallpaper. Only the LOGGING is deduped; the
++        # re-asking is what makes the operator's fix take effect on its own.
++        if (url, status) in _REFUSALS_SAID:
++            return
++        _REFUSALS_SAID.add((url, status))
++        logger.info(
++            "context probe: %s answered %s — the route exists but this key cannot read it, "
++            "so the endpoint's declared max_input_tokens cannot be used. Grant the app's key "
++            "access to the proxy's model-info route, or set history.context_limit.",
++            url,
++            status,
++        )
++        return
++    logger.debug("context probe: %s answered %s", url, status)
++
++
++def _as_count(value: Any) -> int | None:
++    """A positive whole number, or None.
++
++    Floats are accepted because litellm's own documented example reports
++    `16385.0`, and rejecting that on a technicality would drop a real answer.
++    The positivity check is applied AFTER truncation, or a fractional value
++    below one (`0.5`) survives as `0` — a number that is neither a count nor
++    absent, and which the field would then carry as if it were an answer."""
++    if isinstance(value, bool) or not isinstance(value, (int, float)):
++        return None
++    count = int(value)  # may raise on inf/nan; the caller treats that as silence
++    return count if count > 0 else None
++
+ 
+ def probe_context_limit(
+     *,
+@@ -46,12 +220,14 @@ def probe_context_limit(
+         return None
+     url = f"{base_url.rstrip('/')}/tokenize"
+     try:
+-        http = client if client is not None else _default_client(timeout)
+-        resp = http.post(url, json={"model": model, "prompt": "ping"})
+-        if getattr(resp, "status_code", 0) != 200:
+-            logger.debug("context probe: %s answered %s", url, getattr(resp, "status_code", "?"))
+-            return None
+-        body = resp.json()
++        with _http(client, timeout) as http:
++            resp = http.post(url, json={"model": model, "prompt": "ping"})
++            if getattr(resp, "status_code", 0) != 200:
++                logger.debug(
++                    "context probe: %s answered %s", url, getattr(resp, "status_code", "?")
++                )
++                return None
++            body = resp.json()
+     except Exception as exc:  # noqa: BLE001 — a probe must never break anything
+         logger.debug("context probe: %s unavailable (%s)", url, type(exc).__name__)
+         return None
+diff --git a/tests/api/test_chat_routes.py b/tests/api/test_chat_routes.py
+index f50c0703..1dafeb99 100644
+--- a/tests/api/test_chat_routes.py
++++ b/tests/api/test_chat_routes.py
+@@ -497,3 +497,14 @@ def test_the_chat_reports_what_it_is_costing_before_any_turn_runs():
+     got = r.json()
+     assert got["used"] == 9_400
+     assert got["measured"] is True
++    # The DENOMINATOR's provenance travels beside the numerator's: `measured`
++    # says whether a provider counted the prompt, `limit_source` says which rung
++    # of the ceiling ladder produced `limit`. Only the field's presence is
++    # asserted here — WHICH rung answers depends on the machine, because this
++    # app's bundled preset is an `ollama_chat/*` name and litellm resolves those
++    # by asking the daemon. Asserting `catalog` here passed on a laptop with
++    # Ollama installed and failed on CI, which is a test describing its
++    # environment rather than the product. The ladder's own behaviour is pinned
++    # in `test_context_ladder_end_to_end.py`, over a model the registry knows
++    # without a daemon.
++    assert "limit_source" in got, got
+diff --git a/tests/api/test_context_ladder_end_to_end.py b/tests/api/test_context_ladder_end_to_end.py
+new file mode 100644
+index 00000000..2fc0b81b
+--- /dev/null
++++ b/tests/api/test_context_ladder_end_to_end.py
+@@ -0,0 +1,182 @@
++"""The whole rung, from a running app to the number a chat reports.
++
++Every other test on this feature holds one piece still and drives another. That
++left the JOINS untested, and the joins are where this rung already failed once:
++the first version resolved an unset per-preset endpoint to `None`, so it asked
++nothing at all — on precisely the single-endpoint deployment it was written for
++— while every unit test stayed green, because they all passed an explicit
++base_url.
++
++This holds nothing still except the network. It builds the app the way the
++composition root does, with a real `LitellmAgentRunner` and the real probe, over
++the bundled preset (`ollama_chat/qwen3:14b`, whose `llm_base_url` is `""` — the
++exact shape that broke), and reads the answer off the same HTTP route an
++operator would curl.
++
++The catalog rung has to be a REAL value for these to mean anything — the
++proxy's answer must BEAT one, not fill a hole — but it also has to be the same
++value on every machine. The bundled preset names `ollama_chat/qwen3:14b`, and
++litellm resolves an `ollama_chat/*` name by ASKING THE DAEMON: 40,960 on a
++laptop with Ollama installed, nothing on CI. So the preset's model is overridden
++to one litellm answers for out of its bundled map, with no network at all.
++"""
++
++from __future__ import annotations
++
++import json
++
++import pytest
++
++from workspace_app.api import create_app
++from workspace_app.api.litellm_runner import LitellmAgentRunner
++from workspace_app.filestore.memory import MemoryFileStore
++from workspace_app.resources import make_spec
++from workspace_app.sandbox.mock import MockSandbox
++
++from ._client import TestClient
++from .conftest import register_rca_item
++
++#: A model litellm answers for from its BUNDLED map — no daemon, no network, the
++#: same number everywhere. (`ollama_chat/*` names are resolved by asking the
++#: Ollama daemon, which is why the app's own default cannot be used here.)
++TEST_MODEL = "gpt-4o"
++REGISTRY_SAYS = 128_000
++
++
++class _Resp:
++    def __init__(self, body: object) -> None:
++        self.status_code = 200
++        self._body = body
++
++    def json(self) -> object:
++        return self._body
++
++    @property
++    def text(self) -> str:
++        return json.dumps(self._body)
++
++
++class _Proxy:
++    """A litellm proxy answering `/model/info` for one model."""
++
++    def __init__(self, **model_info: object) -> None:
++        self.asked: list[str] = []
++        self.closed = False
++        self._body = {"data": [{"model_name": TEST_MODEL, "model_info": model_info}]}
++
++    def get(self, url: str, **kw: object) -> _Resp:
++        self.asked.append(url)
++        return _Resp(self._body)
++
++    def close(self) -> None:
++        self.closed = True
++
++
++class _Nothing(_Proxy):
++    """Not a litellm proxy — the ordinary case, and the one that must stay cheap
++    and harmless."""
++
++    def get(self, url: str, **kw: object) -> _Resp:
++        self.asked.append(url)
++        raise ConnectionError("no such route")
++
++
++def _catalog_naming(model: str):
++    """The bundled catalog with the RCA preset pointed at `model`.
++
++    Everything else stays bundled — the preset's `llm.base_url` is still `""`,
++    which is the shape this whole rung exists for and the one the first version
++    got wrong."""
++    import dataclasses
++
++    from workspace_app.agent.config_catalog import AgentConfigCatalog
++    from workspace_app.config.catalog_build import build_catalog
++    from workspace_app.config.schema import Settings
++
++    bundled = build_catalog(Settings(), config_dir=None)
++    presets = dict(bundled.presets())
++    presets["qwen3-local"] = dataclasses.replace(presets["qwen3-local"], model=model)
++    return AgentConfigCatalog(presets=presets, kb_chats=bundled.kb_chats())
++
++
++@pytest.fixture(autouse=True)
++def _fresh_announcements():
++    from workspace_app.api.turn_context import _CEILING_SAID
++
++    _CEILING_SAID.clear()
++    yield
++    _CEILING_SAID.clear()
++
++
++def _app_with(proxy, monkeypatch):
++    from workspace_app import context_probe
++
++    monkeypatch.setattr(context_probe, "_default_client", lambda timeout: proxy)
++    spec = make_spec(default_user="u")
++    iid = register_rca_item(spec)
++    app = create_app(
++        spec=spec,
++        sandbox=MockSandbox(),
++        filestore=MemoryFileStore(),
++        runner=LitellmAgentRunner(base_url="http://the-deploys-proxy/v1"),
++        get_user_id=lambda: "alice",
++        agent_config_catalog=_catalog_naming(TEST_MODEL),
++    )
++    client = TestClient(app)
++    chat = client.post(f"/a/rca/items/{iid}/chats", json={"title": "t"}).json()["chat_id"]
++    return client, f"/a/rca/items/{iid}/chats/{chat}/context"
++
++
++def test_what_the_proxy_declares_reaches_a_real_chat(monkeypatch):
++    """The join, end to end. Every one of these makes it red:
++
++    - `turn_ctx.endpoint_limits_fn = ...` missing from `create_app`
++    - `base_url or self._base_url` missing from the runner (the F1 bug)
++    - either `/model/info` spelling dropped
++    - `declared` ranked below `catalog`
++    """
++    proxy = _Proxy(max_input_tokens=131_072, max_tokens=8_192)
++    client, url = _app_with(proxy, monkeypatch)
++
++    got = client.get(url).json()
++
++    assert proxy.asked, "the proxy was never asked — the rung is silent again"
++    assert proxy.asked[0].startswith("http://the-deploys-proxy"), proxy.asked
++    assert got["limit"] == 131_072, got
++    assert got["limit"] != REGISTRY_SAYS, "it has to BEAT the registry, not fall back to it"
++    assert got["limit_source"] == "declared", got
++
++
++def test_the_output_cap_is_never_mistaken_for_the_window(monkeypatch):
++    """The proxy states BOTH. `max_tokens` there is 8,192 — an output cap — and
++    it must not be read as, scaled into, or blended with the window."""
++    proxy = _Proxy(max_input_tokens=131_072, max_tokens=8_192)
++    client, url = _app_with(proxy, monkeypatch)
++
++    assert client.get(url).json()["limit"] == 131_072
++
++
++def test_a_silent_endpoint_leaves_the_ladder_where_it_was(monkeypatch):
++    """Most endpoints are not a litellm proxy. That path must cost a moment and
++    change nothing — here, the registry still answers."""
++    proxy = _Nothing()
++    client, url = _app_with(proxy, monkeypatch)
++
++    got = client.get(url).json()
++
++    assert proxy.asked, "it should still have tried"
++    assert got["limit"] == REGISTRY_SAYS, got
++    assert got["limit_source"] == "catalog", got
++
++
++def test_the_proxy_is_asked_once_not_once_per_read(monkeypatch):
++    """An HTTP round trip reached from a request path — every read of the usage
++    gauge must not become one."""
++    proxy = _Proxy(max_input_tokens=131_072)
++    client, url = _app_with(proxy, monkeypatch)
++
++    for _ in range(4):
++        client.get(url)
++
++    assert len(proxy.asked) == 1, proxy.asked
++    assert proxy.closed, "and the client it opened is closed"
+diff --git a/tests/api/test_context_trim.py b/tests/api/test_context_trim.py
+index 449682f0..7d3857c1 100644
+--- a/tests/api/test_context_trim.py
++++ b/tests/api/test_context_trim.py
+@@ -9,6 +9,8 @@ landing neither — an accurate estimator against a fabricated 24,000 cap trims
+ 
+ from __future__ import annotations
+ 
++import pytest
++
+ from workspace_app.api.turns import history_items
+ from workspace_app.resources import Message
+ 
+@@ -203,6 +205,8 @@ def _bare_builder():
+     builder.learned_limit_fn = None
+     builder._catalog_cache = {}
+     builder._catalog_fn = lambda model: None  # the registry knows nothing by default
++    builder.endpoint_limits_fn = None  # nothing wired ⇒ the rung is skipped
++    builder._max_tokens_window_ratio = 0.8
+     return builder
+ 
+ 
+@@ -423,11 +427,15 @@ async def test_the_catalog_rung_does_not_block_the_event_loop():
+     """
+     import time
+ 
++    from workspace_app.context_probe import EndpointLimits
+     from workspace_app.resources import AgentConfig
+ 
+     cfg = AgentConfig(name="t", model="ollama/qwen3:14b", system_prompt="s")
+     builder = _bare_builder()
+-    builder._catalog_fn = lambda model: (time.sleep(0.5), 40_960)[1]  # a hanging daemon
++    builder._catalog_fn = lambda model: (  # a hanging daemon
++        time.sleep(0.5),
++        EndpointLimits(max_input_tokens=40_960, max_tokens=None),
++    )[1]
+ 
+     started = time.perf_counter()
+     got = builder._budget_for(cfg)
+@@ -482,10 +490,345 @@ def test_kb_history_budget_does_not_call_the_catalog_every_turn(monkeypatch):
+ 
+     kb_chat_routes._KB_CATALOG_CACHE.clear()
+     calls: list[str] = []
+-    monkeypatch.setattr(context_budget, "catalog_limit", lambda m: calls.append(m) or None)
++    monkeypatch.setattr(context_budget, "catalog_limits", lambda m: calls.append(m) or None)
+ 
+     cfg = AgentConfig(name="t", model="openai/self-hosted", system_prompt="s")
+     kb_chat_routes._kb_history_budget(cfg, None)
+     kb_chat_routes._kb_history_budget(cfg, None)
+ 
+     assert len(calls) == 1, "the catalog lookup must be cached, not repeated each turn"
++
++
++# ── the rung for a self-hosted model behind a proxy ──────────────────────
++
++
++def _cfg(model: str = "our-alias", base_url: str = "http://proxy/v1"):
++    from workspace_app.resources import AgentConfig
++
++    return AgentConfig(name="t", model=model, system_prompt="", llm_base_url=base_url)
++
++
++def test_a_window_the_proxy_states_is_used_and_named_as_a_declaration():
++    """The topology this whole rung exists for: the registry does not know the
++    alias, `/tokenize` never survives the proxy, and nothing has been learned —
++    but the proxy itself was told what the window is."""
++    from workspace_app.context_probe import EndpointLimits
++
++    builder = _bare_builder()
++    builder.endpoint_limits_fn = lambda model, base_url: EndpointLimits(
++        max_input_tokens=131072, max_tokens=8192
++    )
++
++    got = builder._context_window(_cfg())
++    assert got.tokens == 131072
++    assert got.source == "declared"
++
++
++def test_only_max_tokens_is_derived_and_says_it_was():
++    """The real deployment's shape: `max_input_tokens` is null and `max_tokens`
++    carries a large number. Using it is a judgement call, so the answer has to
++    admit which kind of number it is."""
++    from workspace_app.context_probe import EndpointLimits
++
++    builder = _bare_builder()
++    builder.endpoint_limits_fn = lambda model, base_url: EndpointLimits(
++        max_input_tokens=None, max_tokens=131072
++    )
++
++    got = builder._context_window(_cfg())
++    assert got.tokens == 104857  # 131072 * 0.8
++    assert got.source == "estimated"
++
++
++def test_the_operators_ratio_is_the_one_applied():
++    """Not a constant in the code — see `history.max_tokens_window_ratio`."""
++    from workspace_app.context_probe import EndpointLimits
++
++    builder = _bare_builder()
++    builder._max_tokens_window_ratio = 0.5
++    builder.endpoint_limits_fn = lambda model, base_url: EndpointLimits(
++        max_input_tokens=None, max_tokens=100_000
++    )
++
++    assert builder._context_window(_cfg()).tokens == 50_000
++
++
++def test_a_stated_window_is_never_scaled_by_the_ratio():
++    """`max_input_tokens` already IS the input window. Scaling it would discount
++    twice, on top of the prompt, tool schemas, reply reserve and margin the
++    budget subtracts later."""
++    from workspace_app.context_probe import EndpointLimits
++
++    builder = _bare_builder()
++    builder._max_tokens_window_ratio = 0.5
++    builder.endpoint_limits_fn = lambda model, base_url: EndpointLimits(
++        max_input_tokens=131072, max_tokens=131072
++    )
++
++    assert builder._context_window(_cfg()).tokens == 131072
++
++
++def test_the_registry_still_outranks_a_derived_number():
++    """An estimate may never displace a figure someone stated — the catalog is
++    at least exact about the model it names."""
++    from workspace_app.context_probe import EndpointLimits
++
++    builder = _bare_builder()
++    builder._catalog_fn = lambda model: EndpointLimits(max_input_tokens=40_960, max_tokens=None)
++    builder.endpoint_limits_fn = lambda model, base_url: EndpointLimits(
++        max_input_tokens=None, max_tokens=131072
++    )
++
++    got = builder._context_window(_cfg())
++    assert got.tokens == 40_960
++    assert got.source == "catalog"
++
++
++def test_a_silent_proxy_leaves_the_ceiling_unknown():
++    """Most endpoints are not a litellm proxy. This rung must add nothing when
++    it learns nothing — `unknown` still means send it all."""
++    builder = _bare_builder()
++
++    got = builder._context_window(_cfg())
++    assert got.tokens is None
++    assert got.source == "unknown"
++
++
++def test_an_empty_base_url_reaches_the_runner_unchanged():
++    """`llm_base_url == ""` MEANS "the deploy's endpoint" — only the runner
++    knows which that is. Resolving it to `None` here is what made this rung
++    silent on a single-endpoint deployment, which is the only shape it was
++    written for: every other consumer of this field does the same fallback, and
++    this one skipped it."""
++    from workspace_app.context_probe import EndpointLimits
++    from workspace_app.resources import AgentConfig
++
++    seen: list[tuple[str, str | None]] = []
++
++    def _record(model: str, base_url: str | None) -> EndpointLimits:
++        seen.append((model, base_url))
++        return EndpointLimits(max_input_tokens=131072, max_tokens=None)
++
++    builder = _bare_builder()
++    builder.endpoint_limits_fn = _record
++
++    got = builder._context_window(AgentConfig(name="t", model="our-alias", system_prompt=""))
++    assert seen == [("our-alias", None)], "the config's own url is passed through untouched"
++    assert got.tokens == 131072
++
++
++def test_nothing_wired_skips_the_rung_rather_than_failing():
++    """Replay and tests run without a runner. The ladder simply has one fewer
++    rung there — never an exception on a turn."""
++    builder = _bare_builder()
++    assert builder._context_window(_cfg()).source == "unknown"
++
++
++# ── which rung answered has to be visible OUTSIDE the type system ────────
++
++
++@pytest.fixture(autouse=True)
++def _fresh_announcements():
++    """The dedupe set is process state, so a test that does not clear it passes
++    or fails depending on what ran before it — and would pass for the wrong
++    reason once some earlier test happened to announce the same outcome."""
++    from workspace_app.api.turn_context import _CEILING_SAID
++
++    _CEILING_SAID.clear()
++    yield
++    _CEILING_SAID.clear()
++
++
++def test_the_resolved_ceiling_is_logged_with_its_source(caplog):
++    """The plan's own rule — "a number nobody stated must never read like a
++    measurement" — held only in the type system. `ContextLimit.source` had no
++    production reader at all, so in operation an estimate and a measurement were
++    the same number with no way to tell them apart. A deployment whose ceiling
++    is a guess derived from an output cap looked exactly like one whose endpoint
++    stated its window.
++
++    It matters most where it is least visible: production is reachable only
++    through the log aggregator, so this line IS the check that the ladder is
++    working, and it names the model so two presets can be told apart."""
++    import logging
++
++    from workspace_app.context_probe import EndpointLimits
++
++    builder = _bare_builder()
++    builder.endpoint_limits_fn = lambda model, base_url: EndpointLimits(
++        max_input_tokens=None, max_tokens=131072
++    )
++
++    with caplog.at_level(logging.INFO):
++        got = builder._context_window(_cfg())
++
++    assert got.source == "estimated"
++    line = "\n".join(r.getMessage() for r in caplog.records)
++    assert "estimated" in line, line
++    assert "104857" in line, line
++    assert _cfg().model in line, line
++
++
++def test_the_same_answer_is_not_logged_every_turn(caplog):
++    """One line per distinct outcome per pod. A per-turn line would bury the
++    thing it exists to make findable."""
++    import logging
++
++    from workspace_app.context_probe import EndpointLimits
++
++    builder = _bare_builder()
++    builder.endpoint_limits_fn = lambda model, base_url: EndpointLimits(
++        max_input_tokens=131072, max_tokens=None
++    )
++
++    with caplog.at_level(logging.INFO):
++        for _ in range(5):
++            builder._context_window(_cfg())
++
++    said = [r for r in caplog.records if "context ceiling" in r.getMessage()]
++    assert len(said) == 1, said
++
++
++def test_unknown_says_so_too(caplog):
++    """The state this whole feature exists to leave. An operator reading the log
++    has to be able to see that NOTHING answered — that is the diagnosis, and it
++    is invisible if only successes are logged."""
++    import logging
++
++    builder = _bare_builder()
++
++    with caplog.at_level(logging.INFO):
++        builder._context_window(_cfg())
++
++    assert "unknown" in "\n".join(r.getMessage() for r in caplog.records)
++
++
++def test_a_derived_ceiling_too_small_to_be_a_window_does_not_drive_compaction():
++    """The half of the sanity floor that lived in only one consumer.
++
++    `history_budget` refuses a derived ceiling that cannot hold the fixed
++    overhead — but the COMPACTION trigger computes its own budget straight off
++    `window.tokens`, and so was untouched by that refusal. With a proxy
++    reporting a well-behaved `max_tokens: 4096`, the derived 3,276-token
++    "window" leaves a compaction budget of 948, and every thread above a
++    paragraph gets compacted on every turn.
++
++    That is strictly worse than the symptom the floor was written for.
++    Replaying one message is recoverable; compaction is lossy and irreversible,
++    and here it would be driven by a size measured against a ceiling nobody
++    stated. The rule has to live where the ceiling is resolved, not in whichever
++    consumer happened to be reviewed."""
++    from workspace_app.context_probe import EndpointLimits
++    from workspace_app.resources import Message
++
++    builder = _bare_builder()
++    builder._max_tokens_window_ratio = 0.8
++    builder.endpoint_limits_fn = lambda model, base_url: EndpointLimits(
++        max_input_tokens=None,
++        max_tokens=4_096,  # an OUTPUT cap, reported correctly
++    )
++    cfg = _cfg()
++    cfg.system_prompt = "x" * 44_000  # ~11k tokens, the measured low end
++    builder._locator = _LocatorFor(cfg)
++
++    messages = [
++        Message(role="user" if i % 2 == 0 else "assistant", content="x" * 400) for i in range(20)
++    ]
++    plan = builder.compaction_plan_for("item", messages)
++
++    assert plan.span == [], "compaction must not be driven by a ceiling nobody stated"
++
++
++class _LocatorFor:
++    def __init__(self, cfg):
++        self._cfg = cfg
++
++    def resolve_agent_config(self, item_id):
++        return self._cfg
++
++
++def test_a_stated_ceiling_that_small_still_drives_compaction():
++    """The control. When the ceiling was STATED, a thread that overflows it
++    genuinely needs compacting, and refusing to would leave the user with a
++    conversation that cannot be sent at all."""
++    from workspace_app.resources import Message
++
++    builder = _bare_builder()
++    builder._context_limit = 4_096  # the operator said so
++    cfg = _cfg()
++    cfg.system_prompt = "s"
++    builder._locator = _LocatorFor(cfg)
++
++    messages = [
++        Message(role="user" if i % 2 == 0 else "assistant", content="x" * 4_000) for i in range(20)
++    ]
++    plan = builder.compaction_plan_for("item", messages)
++
++    assert plan.span, "a stated ceiling is not second-guessed"
++
++
++def test_the_gauge_shows_no_ceiling_when_nothing_credible_answered():
++    """The third consumer of the same number, and the one the user looks at.
++
++    `usage_of` drew its denominator straight off the resolved ceiling, so a
++    derived 3,276 that neither the budget nor the compaction trigger is willing
++    to act on would still be rendered as the bar's limit — a gauge reading past
++    100% beside a chat that never compacts, which is a worse answer than an
++    honest "no denominator". The FE is already built for `limit: null`: it shows
++    the usage with no bar rather than inventing one."""
++    from workspace_app.context_probe import EndpointLimits
++
++    builder = _bare_builder()
++    builder._max_tokens_window_ratio = 0.8
++    builder.endpoint_limits_fn = lambda model, base_url: EndpointLimits(
++        max_input_tokens=None, max_tokens=4_096
++    )
++    cfg = _cfg()
++    cfg.system_prompt = "x" * 44_000
++    builder._locator = _LocatorFor(cfg)
++
++    usage = builder.usage_of("item", _msgs(4))
++
++    assert usage.limit is None, "an incredible ceiling must not be drawn as one"
++    assert usage.limit_source == "unknown"
++
++
++def test_the_gauge_still_shows_a_ceiling_anyone_actually_stated():
++    """The control — this must not turn the gauge off for everyone."""
++    builder = _bare_builder()
++    builder._context_limit = 40_960
++    cfg = _cfg()
++    cfg.system_prompt = "s"
++    builder._locator = _LocatorFor(cfg)
++
++    usage = builder.usage_of("item", _msgs(4))
++
++    assert usage.limit == 40_960
++    assert usage.limit_source == "config"
++
++
++def test_a_person_can_still_compact_when_no_ceiling_is_credible():
++    """The reassuring half of refusing an incredible ceiling.
++
++    Declining to act on a derived number silences the AUTOMATIC path — that is
++    the point. It must not take away the button: someone pressing compact has a
++    reason we do not (the last hour of debugging is finished and they want the
++    window back before the next question), and on the deployment this rung
++    exists for they may have no other way to get it.
++
++    Nothing covered `force=True` together with `budget=None` through this
++    method, which is exactly the combination the credibility test creates."""
++    from workspace_app.context_probe import EndpointLimits
++
++    builder = _bare_builder()
++    builder._max_tokens_window_ratio = 0.8
++    builder.endpoint_limits_fn = lambda model, base_url: EndpointLimits(
++        max_input_tokens=None, max_tokens=4_096
++    )
++    cfg = _cfg()
++    cfg.system_prompt = "x" * 44_000
++    builder._locator = _LocatorFor(cfg)
++
++    messages = _msgs(20)
++    assert builder.compaction_plan_for("item", messages).span == [], "not automatically"
++    assert builder.compaction_plan_for("item", messages, force=True).span, "but on request, yes"
+diff --git a/tests/api/test_ollama_num_ctx.py b/tests/api/test_ollama_num_ctx.py
+index 26e69a74..c1bdaa75 100644
+--- a/tests/api/test_ollama_num_ctx.py
++++ b/tests/api/test_ollama_num_ctx.py
+@@ -68,12 +68,17 @@ def _builder(*, configured=None, learned=None, catalog=None):
+     """A TurnContextBuilder with only the ceiling knobs — `_context_window`
+     needs no service bundle."""
+     from workspace_app.api.turn_context import TurnContextBuilder
++    from workspace_app.context_probe import EndpointLimits
+ 
+     b = TurnContextBuilder.__new__(TurnContextBuilder)
+     b._context_limit = configured
+     b.learned_limit_fn = (lambda model, base_url: learned) if learned else None
+     b._catalog_cache = {}
+-    b._catalog_fn = lambda model: catalog
++    # The registry's EXACT figure. Its `max_tokens` is a separate, ambiguous
++    # number and no longer answers this rung — see `catalog_limits`.
++    b._catalog_fn = lambda model: EndpointLimits(max_input_tokens=catalog, max_tokens=None)
++    b.endpoint_limits_fn = None
++    b._max_tokens_window_ratio = 0.8
+     return b
+ 
+ 
+diff --git a/tests/config/test_history_settings.py b/tests/config/test_history_settings.py
+new file mode 100644
+index 00000000..88ae9348
+--- /dev/null
++++ b/tests/config/test_history_settings.py
+@@ -0,0 +1,48 @@
++"""#624 follow-up: the one setting on this ladder that is a MULTIPLIER.
++
++Every other number in `history` is a token count, where a typo is a number
++visibly too big or too small. This one is a fraction, and the typo that matters
++is a missing decimal point — `8` looks entirely reasonable in a field that takes
++numbers. It just claims the input window is eight times what the endpoint said,
++which surfaces as a rejected request on every turn, on exactly the deployment
++that set the key because compaction was not working.
++"""
++
++from __future__ import annotations
++
++from pathlib import Path
++
++import pytest
++
++from workspace_app.config.loader import load
++
++
++def _cfg(tmp_path: Path, ratio: object) -> Path:
++    path = tmp_path / "config.yaml"
++    path.write_text(f"history:\n  max_tokens_window_ratio: {ratio}\n")
++    return path
++
++
++@pytest.mark.parametrize("ratio", [0.5, 0.8, 1.0, 0.2])
++def test_a_fraction_is_accepted(tmp_path: Path, ratio: float):
++    """The documented range, both ends included: 1.0 says "take max_tokens at
++    face value", which is right for an endpoint whose two figures are equal
++    (measured: `ollama_chat/qwen3:14b` reports 40,960 for both)."""
++    settings = load(config_path=_cfg(tmp_path, ratio), env={})
++    assert settings.history.max_tokens_window_ratio == ratio
++
++
++@pytest.mark.parametrize("ratio", [8, 1.5, -0.5, 0])
++def test_a_value_outside_the_range_is_refused_at_load(tmp_path: Path, ratio: object):
++    """`8` is the missing decimal point. `1.5` claims a window larger than the
++    endpoint's own figure. `0` and negatives derive no window at all, which
++    reads downstream as "no ceiling known" and turns off the very fallback the
++    operator was configuring — the dead-knob failure, self-inflicted."""
++    with pytest.raises(ValueError, match="max_tokens_window_ratio"):
++        load(config_path=_cfg(tmp_path, ratio), env={})
++
++
++def test_the_message_names_the_likely_typo(tmp_path: Path):
++    """An operator who wrote `8` needs to be told `0.8`, not just "invalid"."""
++    with pytest.raises(ValueError, match="0.8"):
++        load(config_path=_cfg(tmp_path, 8), env={})
+diff --git a/tests/config/test_loader.py b/tests/config/test_loader.py
+index 7d2edaf6..5f917af3 100644
+--- a/tests/config/test_loader.py
++++ b/tests/config/test_loader.py
+@@ -1229,6 +1229,16 @@ def test_host_managed_durable_check_survives_an_empty_sandbox_block(tmp_path: Pa
+     assert s.sandbox.kind == "http"
+ 
+ 
++def test_max_tokens_window_ratio_is_actually_read_from_the_config(tmp_path: Path):
++    """A knob that is documented but never read is worse than no knob: the
++    operator changes it, nothing happens, and nothing says so. This is the whole
++    of the wiring — the loader builds `HistorySettings` generically, so the only
++    thing that can break is the field name."""
++    cfg = tmp_path / "config.yaml"
++    cfg.write_text("history:\n  max_tokens_window_ratio: 0.5\n", encoding="utf-8")
++    assert load(config_path=cfg, env={}).history.max_tokens_window_ratio == 0.5
++
++
+ def test_subagent_models_loads_as_an_ordered_preset_name_list(tmp_path: Path):
+     """`agents.subagent_models` is the operator's curated list of presets the
+     `run_agent` caller may pick (plan-subagent-model-choice). It must survive
+diff --git a/tests/config/test_schema.py b/tests/config/test_schema.py
+index 097fdd05..30005481 100644
+--- a/tests/config/test_schema.py
++++ b/tests/config/test_schema.py
+@@ -104,6 +104,10 @@ def test_history_section_defaults():
+     assert s.max_messages == 0
+     assert s.max_context_tokens == 0
+     assert s.context_limit is None
++    # The derived-window fraction has a default because its rung only fires
++    # where every stated source is silent — leaving it unset there would mean
++    # "no compaction at all", which is the state this rung exists to end.
++    assert s.max_tokens_window_ratio == 0.8
+ 
+ 
+ def test_kb_section_is_nested_dataclasses():
+diff --git a/tests/config/test_server_settings_are_wired.py b/tests/config/test_server_settings_are_wired.py
+index c78977cb..3e3d48b4 100644
+--- a/tests/config/test_server_settings_are_wired.py
++++ b/tests/config/test_server_settings_are_wired.py
+@@ -16,9 +16,11 @@ from __future__ import annotations
+ import dataclasses
+ from pathlib import Path
+ 
+-from workspace_app.config.schema import ServerSettings
++from workspace_app.config.schema import HistorySettings, ServerSettings
+ 
+-_COMPOSITION_ROOT = Path(__file__).resolve().parents[2] / "src" / "workspace_app" / "__main__.py"
++_SRC = Path(__file__).resolve().parents[2] / "src" / "workspace_app"
++_COMPOSITION_ROOT = _SRC / "__main__.py"
++_CREATE_APP = _SRC / "api" / "app.py"
+ 
+ 
+ def test_every_server_setting_is_read_by_the_composition_root():
+@@ -34,3 +36,61 @@ def test_every_server_setting_is_read_by_the_composition_root():
+         f"{unread} exist in ServerSettings but nothing in __main__.py reads them — "
+         "an operator can set them and nothing will happen"
+     )
++
++
++def test_every_history_setting_is_read_by_the_composition_root():
++    """Same rule, same reason — and this section is where it bites hardest.
++
++    Every knob here governs how much of a conversation survives, and getting
++    none of it is silent by design: an unresolved ceiling means "send it all",
++    which looks exactly like a working deploy right up until a thread grows too
++    large. So a `history` field nothing reads does not fail, it just quietly
++    never applies."""
++    source = _COMPOSITION_ROOT.read_text(encoding="utf-8")
++
++    unread = [
++        f.name
++        for f in dataclasses.fields(HistorySettings)
++        if f"settings.history.{f.name}" not in source
++    ]
++
++    assert not unread, (
++        f"{unread} exist in HistorySettings but nothing in __main__.py reads them — "
++        "an operator can set them and nothing will happen"
++    )
++
++
++def test_every_history_setting_survives_the_SECOND_hop_as_well():
++    """`__main__` reading a knob is only half the chain.
++
++    It forwards each one to `create_app`, which forwards it again to the
++    builder that actually applies it. The check above cannot see that second
++    hop, so deleting the kwarg inside `create_app` leaves an operator's setting
++    read, passed, and then dropped — with every test green, including the one
++    written to catch exactly this. That is not hypothetical: it is what the
++    adversarial review found for `max_tokens_window_ratio`.
++
++    A source-text check for the same reason as its neighbour: it has to cover
++    the field nobody has added yet, so a future knob is caught the day it is
++    written rather than the day someone notices it does nothing.
++    """
++    import re
++
++    main = _COMPOSITION_ROOT.read_text(encoding="utf-8")
++    app = _CREATE_APP.read_text(encoding="utf-8")
++
++    dropped = []
++    for f in dataclasses.fields(HistorySettings):
++        m = re.search(rf"(\w+)=settings\.history\.{re.escape(f.name)}\b", main)
++        if m is None:
++            continue  # the first test already names an unread field
++        kwarg = m.group(1)
++        # It has to arrive AND leave: `create_app` must accept the parameter and
++        # pass it on, not merely have a name that looks like it.
++        if f"{kwarg}=" not in app or app.count(f"{kwarg}") < 2:
++            dropped.append(kwarg)
++
++    assert not dropped, (
++        f"{dropped} reach create_app from __main__.py but are not forwarded on inside it — "
++        "the operator sets them, they travel one hop, and nothing applies them"
++    )
+diff --git a/tests/test_context_budget.py b/tests/test_context_budget.py
+index be072d42..37bc78a1 100644
+--- a/tests/test_context_budget.py
++++ b/tests/test_context_budget.py
+@@ -11,7 +11,7 @@ from __future__ import annotations
+ 
+ from workspace_app.context_budget import (
+     ContextLimit,
+-    catalog_limit,
++    catalog_limits,
+     context_usage,
+     estimate_messages,
+     estimate_tokens,
+@@ -98,18 +98,20 @@ def test_catalog_knows_a_hosted_model():
+     which is a different claim from the one this test was making, and not one a
+     unit test can hold. `learned` and `probe` are the rungs that cover it.
+     """
+-    assert catalog_limit("gpt-4o") == 128_000
++    known = catalog_limits("gpt-4o")
++    assert known is not None
++    assert known.max_input_tokens == 128_000
+ 
+ 
+ def test_catalog_returns_none_for_a_self_hosted_name():
+     """The production shape: OpenAI provider + custom endpoint + a model name
+     no registry has ever heard of. Must answer "I don't know", not a default."""
+-    assert catalog_limit("openai/some-self-hosted-qwen") is None
++    assert catalog_limits("openai/some-self-hosted-qwen") is None
+ 
+ 
+ def test_catalog_never_raises_on_a_junk_name():
+-    assert catalog_limit("") is None
+-    assert catalog_limit("!!! not a model !!!") is None
++    assert catalog_limits("") is None
++    assert catalog_limits("!!! not a model !!!") is None
+ 
+ 
+ # ── counting ────────────────────────────────────────────────────────
+@@ -372,3 +374,184 @@ def test_a_message_written_before_exactness_was_recorded_is_not_trusted():
+     got = context_usage([_Old()], limit=ContextLimit(tokens=40_960, source="catalog"))
+     assert got.measured is False
+     assert got.used == 9_400, "the stored figure is still the best one available"
++
++
++# ── what a proxy relays, and what we derive from it ──────────────────────
++
++
++def test_a_declared_window_beats_the_catalog_but_not_what_we_learned():
++    """`declared` is the proxy relaying what an operator configured. That is a
++    real statement about THIS endpoint, so it outranks a registry keyed on a
++    model name the endpoint may not even use — but it is still a claim, and
++    what the traffic actually did outranks any claim."""
++    assert resolve_context_limit(learned=4096, declared=131072, catalog=40960) == ContextLimit(
++        tokens=4096, source="learned"
++    )
++    assert resolve_context_limit(learned=None, declared=131072, catalog=40960) == ContextLimit(
++        tokens=131072, source="declared"
++    )
++
++
++def test_an_estimate_ranks_below_every_stated_number():
++    """The estimate is derived from a figure that does not mean what we want it
++    to mean, so it may never displace something that was actually stated —
++    including a catalog entry, which is at least exact about the model it
++    names."""
++    assert resolve_context_limit(catalog=40960, estimated=104857) == ContextLimit(
++        tokens=40960, source="catalog"
++    )
++
++
++def test_an_estimate_is_used_when_nothing_else_answers_and_says_it_is_one():
++    """The rung that exists for the topology where every other one is silent.
++    Its source is distinguishable, because a number nobody stated must never
++    read like a measurement — `learned` carries the authority of "the endpoint
++    actually did this", and an estimate carries none of it."""
++    got = resolve_context_limit(estimated=104857)
++    assert got == ContextLimit(tokens=104857, source="estimated")
++    assert got.known is True
++
++
++def test_no_estimate_still_means_unknown():
++    """A silent proxy leaves the ladder exactly where it was: `unknown` — send
++    it all rather than trim on a guess."""
++    assert resolve_context_limit() == ContextLimit(tokens=None, source="unknown")
++
++
++# ── deriving a window from the one figure a proxy did state ──────────────
++
++
++def test_a_stated_output_cap_becomes_a_conservative_window_estimate():
++    """`max_tokens` is the OUTPUT cap for most entries, so this is a derivation
++    and not a reading. It is here because on a proxy that states nothing else it
++    is the only figure in the room, and the alternative is `unknown` — no
++    trimming and no compaction at all."""
++    from workspace_app.context_budget import window_from_max_tokens
++
++    assert window_from_max_tokens(131072, ratio=0.8) == 104857
++
++
++def test_the_ratio_is_the_operators_and_is_not_applied_to_a_stated_window():
++    """The knob exists because the right fraction depends on what the operator
++    put in that field, which only they know. And it is deliberately only ever
++    applied HERE: `max_input_tokens` is already the input window, so scaling
++    that one would discount twice — the budget already subtracts the prompt,
++    the tool schemas, a reply reserve and a margin."""
++    from workspace_app.context_budget import window_from_max_tokens
++
++    assert window_from_max_tokens(100_000, ratio=0.5) == 50_000
++    assert window_from_max_tokens(100_000, ratio=1.0) == 100_000
++
++
++def test_nothing_stated_derives_nothing():
++    """No figure, no estimate — never a floor, never a default. An invented
++    number here would govern every later turn on this endpoint."""
++    from workspace_app.context_budget import window_from_max_tokens
++
++    assert window_from_max_tokens(None, ratio=0.8) is None
++    assert window_from_max_tokens(0, ratio=0.8) is None
++
++
++def test_a_ratio_that_would_round_to_nothing_yields_nothing():
++    """A window of 0 is not "unlimited" and not "unknown" — it is a number that
++    would trim every conversation to its last message. Refuse to produce one."""
++    from workspace_app.context_budget import window_from_max_tokens
++
++    assert window_from_max_tokens(3, ratio=0.1) is None
++    assert window_from_max_tokens(100_000, ratio=0.0) is None
++
++
++# ── a derived ceiling that cannot hold a conversation is not a ceiling ────
++
++
++def test_a_derived_ceiling_too_small_to_hold_history_is_refused():
++    """The way this feature could make a deployment WORSE than before it.
++
++    Most proxies report `max_tokens` as what it usually means: the OUTPUT cap.
++    A well-behaved `max_tokens: 4096` derives a 3,276-token "window" — smaller
++    than the system prompt alone (11k-18.5k, measured) — and the arithmetic then
++    says history gets 0 tokens, which the caller floors at 1: every turn replays
++    exactly one message and the assistant appears to have lost its memory. That
++    is worse than the `unknown` it replaced, and silent.
++
++    The refusal is evidence-based rather than a magic threshold: the deployment
++    is up and answering with that overhead in every request, so a number too
++    small to contain the overhead is demonstrably not the input window. Falling
++    back to `unknown` restores exactly the behaviour that was working."""
++    from workspace_app.context_budget import ContextLimit, history_budget
++
++    derived = ContextLimit(tokens=3276, source="estimated")
++    assert history_budget(derived, overhead_tokens=11_000) is None
++
++
++def test_a_stated_ceiling_that_small_still_answers_zero():
++    """`0` and `None` are different answers and must stay different. When the
++    ceiling was STATED — an operator's config, the endpoint's own report — "the
++    prompt already fills it" is the truth, and the caller needs to hear it
++    rather than be told the ceiling is unknown."""
++    from workspace_app.context_budget import ContextLimit, history_budget
++
++    for source in ("config", "learned", "declared", "catalog"):
++        stated = ContextLimit(tokens=3276, source=source)
++        assert history_budget(stated, overhead_tokens=11_000) == 0, source
++
++
++def test_a_derived_ceiling_with_room_to_spare_is_used():
++    """The case this rung exists for: a proxy whose `max_tokens` really is the
++    window. It must not be refused along with the small ones."""
++    from workspace_app.context_budget import ContextLimit, history_budget
++
++    derived = ContextLimit(tokens=104857, source="estimated")  # 131072 * 0.8
++    assert history_budget(derived, overhead_tokens=18_500) == 73_871
++
++
++# ── the registry has the SAME ambiguous field, and was reading it raw ─────
++
++
++def test_the_registry_never_answers_the_exact_rung_with_max_tokens():
++    """The rule this PR exists for, applied to the rung next door.
++
++    litellm's own registry documents `max_tokens` as, verbatim: "LEGACY
++    parameter. set to max_output_tokens if provider specifies it. IF not set to
++    max_input_tokens" — the upstream source says the field means one of two
++    different things and does not say which. `catalog_limit` read it as an exact
++    input window anyway, unscaled, and `resolve_context_limit` then labelled the
++    result `catalog`, which reads as "a registry stated this".
++
++    So the same figure had two contradictory treatments in one ladder: derived
++    and labelled `estimated` when a proxy relayed it, exact and labelled
++    `catalog` when the registry held it. Two rules for one number is a rule that
++    will hold in one place only.
++
++    Measured against the bundled registry: 2,888 of 3,518 entries carry both
++    figures, and only SIX carry `max_tokens` alone — so this changes almost
++    nothing except what the ladder is allowed to claim."""
++    from workspace_app.context_budget import catalog_limits
++
++    got = catalog_limits("gemini/gemini-gemma-2-27b-it")  # one of those six
++    assert got is not None
++    assert got.max_input_tokens is None, "the registry did not state an input window"
++    assert got.max_tokens == 8192, "and the ambiguous figure is returned as itself"
++
++
++def test_the_registry_still_answers_exactly_when_it_actually_knows():
++    """The 2,888 entries that do state an input window are untouched — this is
++    about what we may claim, not about giving up a real answer."""
++    from workspace_app.context_budget import catalog_limits
++
++    got = catalog_limits("gpt-4o")
++    assert got is not None
++    assert got.max_input_tokens == 128_000
++    assert got.max_tokens == 16_384, "the output cap, kept apart from the window"
++
++
++def test_a_registry_entry_that_is_not_a_number_cannot_break_a_turn():
++    """`catalog_limit` promises in its own docstring that "every failure degrades
++    to None: a registry lookup must not be able to break a turn" — and then put
++    the numeric comparison OUTSIDE the guard. litellm ships an entry whose
++    limits are prose (`sample_spec`, whose value literally describes the field),
++    so the promise was already false against the bundled data, not against some
++    hypothetical drift. Same shape as the `inf` escape in the endpoint probe."""
++    from workspace_app.context_budget import catalog_limits
++
++    assert catalog_limits("sample_spec") is None
+diff --git a/tests/test_context_learn.py b/tests/test_context_learn.py
+index 5da7bbfa..a5605a75 100644
+--- a/tests/test_context_learn.py
++++ b/tests/test_context_learn.py
+@@ -142,3 +142,128 @@ async def test_a_healthy_turn_teaches_nothing():
+     for _ in range(3):
+         await _drain(runner, _ctx())
+     assert runner.learned_limit("m", None) is None
++
++
++# ── what a proxy in front of the model was told ──────────────────────────
++
++
++def test_an_unset_per_config_endpoint_falls_back_to_the_deploys_own():
++    """The bug this rung was shipped with, pinned.
++
++    `AgentConfig.llm_base_url == ""` MEANS "use the deploy's endpoint" — that is
++    the documented contract, and it is the normal shape for a deployment with
++    one endpoint whose presets name only a model. Every other consumer of that
++    field does this fallback. The first version of this rung did not, so it saw
++    no endpoint, asked nothing, and silently changed nothing on precisely the
++    deployment it was written for."""
++    from workspace_app.api.litellm_runner import LitellmAgentRunner
++
++    seen: list[str | None] = []
++    runner = LitellmAgentRunner(base_url="http://the-deploys-proxy/v1")
++    runner._declared_probe = lambda base_url, model: seen.append(base_url)
++
++    runner.endpoint_limits("our-alias", None)
++    assert seen == ["http://the-deploys-proxy/v1"]
++
++
++def test_a_per_config_endpoint_still_wins():
++    """A preset that names its own endpoint is asked about THAT one — the
++    fallback is for the empty case, not a override."""
++    from workspace_app.api.litellm_runner import LitellmAgentRunner
++
++    seen: list[str | None] = []
++    runner = LitellmAgentRunner(base_url="http://the-deploys-proxy/v1")
++    runner._declared_probe = lambda base_url, model: seen.append(base_url)
++
++    runner.endpoint_limits("our-alias", "http://a-different-one/v1")
++    assert seen == ["http://a-different-one/v1"]
++
++
++def test_the_proxy_is_asked_once_per_endpoint_not_once_per_turn():
++    """An HTTP round trip reached from inside a turn. Asking per turn would put
++    one in front of every message for a value that does not change — and the
++    silence has to be cached too, because most endpoints are not a litellm proxy
++    and would otherwise be re-asked forever."""
++    from workspace_app.api.litellm_runner import LitellmAgentRunner
++
++    calls: list[tuple[str | None, str]] = []
++
++    def _once(base_url: str | None, model: str) -> None:
++        calls.append((base_url, model))
++        return None  # the ordinary answer: not a litellm proxy
++
++    runner = LitellmAgentRunner(base_url="http://proxy/v1")
++    runner._declared_probe = _once
++
++    for _ in range(3):
++        runner.endpoint_limits("our-alias", None)
++    assert len(calls) == 1
++
++
++def test_two_endpoints_under_one_model_name_are_asked_separately():
++    """The answer belongs to the endpoint, not to the model name — two presets
++    can carry the same name across different proxies."""
++    from workspace_app.api.litellm_runner import LitellmAgentRunner
++
++    calls: list[str | None] = []
++    runner = LitellmAgentRunner(base_url="http://a/v1")
++    runner._declared_probe = lambda base_url, model: calls.append(base_url)
++
++    runner.endpoint_limits("same-name", "http://a/v1")
++    runner.endpoint_limits("same-name", "http://b/v1")
++    assert calls == ["http://a/v1", "http://b/v1"]
++
++
++def test_a_negative_from_the_proxy_is_asked_again_later():
++    """The one cached value here that a HUMAN is expected to change.
++
++    The proxy's model list is a config file on ANOTHER service, and the
++    documented next step for a deployment sitting on `unknown` is that somebody
++    adds `max_input_tokens` to it. Remembering "it did not say" for the life of
++    the pod means their edit does nothing until WE are redeployed — a silent
++    dependency between two services that nothing would have told either of them
++    about. It is also what a probe that landed during a proxy restart leaves
++    behind: a legitimate-looking negative, permanently."""
++    from workspace_app.api.litellm_runner import (
++        DECLARED_RETRY_S,
++        LitellmAgentRunner,
++    )
++
++    now = [0.0]
++    calls: list[str | None] = []
++    runner = LitellmAgentRunner(base_url="http://proxy/v1")
++    runner._clock = lambda: now[0]
++    runner._declared_probe = lambda base_url, model: calls.append(base_url)
++
++    runner.endpoint_limits("our-alias", None)
++    now[0] = DECLARED_RETRY_S - 1
++    runner.endpoint_limits("our-alias", None)
++    assert len(calls) == 1, "not once per turn — that is a round trip per message"
++
++    now[0] = DECLARED_RETRY_S + 1
++    runner.endpoint_limits("our-alias", None)
++    assert len(calls) == 2, "but eventually, or the operator's fix needs a redeploy of us"
++
++
++def test_an_answer_is_kept_for_the_life_of_the_pod():
++    """Only the SILENCE expires. A number that was stated changes when the proxy
++    is reconfigured, and re-asking for it would spend a round trip to relearn
++    what we already know."""
++    from workspace_app.api.litellm_runner import DECLARED_RETRY_S, LitellmAgentRunner
++    from workspace_app.context_probe import EndpointLimits
++
++    now = [0.0]
++    calls: list[str | None] = []
++
++    def _answers(base_url: str | None, model: str) -> EndpointLimits:
++        calls.append(base_url)
++        return EndpointLimits(max_input_tokens=131072, max_tokens=8192)
++
++    runner = LitellmAgentRunner(base_url="http://proxy/v1")
++    runner._clock = lambda: now[0]
++    runner._declared_probe = _answers
++
++    assert runner.endpoint_limits("our-alias", None).max_input_tokens == 131072
++    now[0] = DECLARED_RETRY_S * 10
++    assert runner.endpoint_limits("our-alias", None).max_input_tokens == 131072
++    assert len(calls) == 1
+diff --git a/tests/test_context_probe.py b/tests/test_context_probe.py
+index 19ed7336..48def58f 100644
+--- a/tests/test_context_probe.py
++++ b/tests/test_context_probe.py
+@@ -179,3 +179,322 @@ async def test_a_backgrounded_probe_still_teaches_the_next_turn():
+             break
+ 
+     assert runner.learned_limit("m", "http://vllm") == 32_768
++
++
++# ── asking the PROXY what it was told ────────────────────────────────────
++#
++# `/tokenize` is a vLLM extension, so it never survives a proxy: the request
++# goes to the proxy, which has no such route. That is the shape a real
++# deployment has — self-hosted vLLM behind a litellm proxy — and it is exactly
++# the shape the ladder had no rung for.
++#
++# litellm's own management route DOES answer, from the model list it was
++# configured with. It is a different kind of source from `/tokenize`: not the
++# enforcer speaking, but the operator's declaration relayed. So it is asked
++# separately and ranked separately.
++
++
++def _get_client(resp: object, *, seen: list[str] | None = None):
++    """A stand-in whose GET returns `resp` (or raises it), recording the urls."""
++
++    def get(url: str, **kw: object) -> _Resp:
++        if seen is not None:
++            seen.append(url)
++        if isinstance(resp, Exception):
++            raise resp
++        assert isinstance(resp, _Resp)
++        return resp
++
++    return type("C", (), {"get": staticmethod(get)})()
++
++
++def _model_info(**info: object) -> _Resp:
++    """The shape litellm's `/model/info` answers with."""
++    return _Resp(200, {"data": [{"model_name": "our-alias", "model_info": info}]})
++
++
++def test_the_proxy_can_state_the_input_window():
++    """`max_input_tokens` IS the input window — it needs no interpretation, and
++    it outranks anything derived."""
++    from workspace_app.context_probe import probe_endpoint_limits
++
++    got = probe_endpoint_limits(
++        base_url="http://proxy/v1",
++        model="our-alias",
++        client=_get_client(_model_info(max_input_tokens=131072, max_tokens=8192)),
++    )
++    assert got is not None
++    assert got.max_input_tokens == 131072
++    assert got.max_tokens == 8192
++
++
++def test_it_asks_both_spellings_because_base_url_may_or_may_not_end_in_v1():
++    """`base_url` is whatever the operator wrote — the chat route lives under
++    `/v1`, so it usually ends there, but not always. litellm mounts the
++    management route at BOTH spellings, and asking only one makes this rung work
++    or not depending on a trailing path nobody thinks about."""
++    from workspace_app.context_probe import probe_endpoint_limits
++
++    seen: list[str] = []
++    probe_endpoint_limits(
++        base_url="http://proxy/v1",
++        model="nobody",  # never matches, so every spelling gets asked
++        client=_get_client(_Resp(404, {"detail": "Not Found"}), seen=seen),
++    )
++    assert seen == ["http://proxy/v1/model/info", "http://proxy/model/info"]
++
++
++def test_a_base_url_without_v1_reaches_both_spellings_and_neither_twice():
++    """The half the first version got wrong. Deriving the second spelling by
++    STRIPPING `/v1` is a no-op on a url that does not have it, so the same
++    address was asked twice — the most common path (not a litellm proxy) paid
++    two round trips and two timeouts to learn the same nothing, and
++    `/v1/model/info` was never reached at all."""
++    from workspace_app.context_probe import probe_endpoint_limits
++
++    seen: list[str] = []
++    probe_endpoint_limits(
++        base_url="http://proxy",
++        model="nobody",
++        client=_get_client(_Resp(404, {"detail": "Not Found"}), seen=seen),
++    )
++    assert seen == ["http://proxy/model/info", "http://proxy/v1/model/info"]
++    assert len(seen) == len(set(seen)), "the same address must never be asked twice"
++
++
++@pytest.mark.parametrize(
++    "resp",
++    [
++        _Resp(404, {"detail": "Not Found"}),  # not a litellm proxy at all
++        _Resp(401, {"detail": "no key"}),  # a key without management rights
++        _Resp(200, {"data": []}),  # answered, knows no models
++        _Resp(200, {"data": [{"model_name": "someone-else"}]}),  # not our model
++        _Resp(200, {"data": "not a list"}),  # unexpected shape
++        _Resp(200, ["not", "a", "dict"]),
++        _Resp(200, ValueError("not json")),  # unparseable
++        _Resp(500, {"detail": "boom"}),
++        ConnectionError("refused"),  # nothing listening
++    ],
++)
++def test_every_way_of_not_answering_is_silent(resp: object):
++    """This rung's most-exercised path is the one where it learns nothing —
++    most endpoints are not a litellm proxy. Silence has to be free and
++    non-fatal, or a rung that exists for ONE topology breaks every other one."""
++    from workspace_app.context_probe import probe_endpoint_limits
++
++    assert (
++        probe_endpoint_limits(base_url="http://x", model="our-alias", client=_get_client(resp))
++        is None
++    )
++
++
++def test_a_row_that_states_nothing_useful_yields_no_numbers():
++    """Found the model, and it carries neither figure. That is an answer — the
++    proxy was never told — not a reason to keep looking or to invent one."""
++    from workspace_app.context_probe import probe_endpoint_limits
++
++    got = probe_endpoint_limits(
++        base_url="http://proxy",
++        model="our-alias",
++        client=_get_client(_model_info(max_input_tokens=None, max_tokens=0)),
++    )
++    assert got is not None
++    assert got.max_input_tokens is None
++    assert got.max_tokens is None
++
++
++def test_a_float_count_is_read_as_a_count():
++    """litellm's own documented example reports `16385.0`. Rejecting a float
++    here would drop a real answer on a technicality."""
++    from workspace_app.context_probe import probe_endpoint_limits
++
++    got = probe_endpoint_limits(
++        base_url="http://proxy",
++        model="our-alias",
++        client=_get_client(_model_info(max_tokens=16385.0)),
++    )
++    assert got is not None
++    assert got.max_tokens == 16385
++
++
++def test_no_base_url_asks_nothing():
++    """Nothing to ask, and no exception either — the ladder simply moves on."""
++    from workspace_app.context_probe import probe_endpoint_limits
++
++    seen: list[str] = []
++    assert (
++        probe_endpoint_limits(
++            base_url=None, model="m", client=_get_client(_Resp(200, {}), seen=seen)
++        )
++        is None
++    )
++    assert seen == []
++
++
++def test_a_fraction_below_one_is_absent_not_zero():
++    """`0` is neither a count nor absent, and the field would carry it as if it
++    were an answer."""
++    from workspace_app.context_probe import probe_endpoint_limits
++
++    got = probe_endpoint_limits(
++        base_url="http://proxy",
++        model="our-alias",
++        client=_get_client(_model_info(max_tokens=0.5)),
++    )
++    assert got is not None
++    assert got.max_tokens is None
++
++
++def test_a_body_carrying_infinity_is_silence_not_an_exception():
++    """`json.loads` accepts a bare `Infinity`, and a non-strict proxy can emit
++    one. Converting it raises — outside the guard, that escaped a function whose
++    whole contract is that it answers `None` instead of failing."""
++    from workspace_app.context_probe import probe_endpoint_limits
++
++    assert (
++        probe_endpoint_limits(
++            base_url="http://proxy",
++            model="our-alias",
++            client=_get_client(_model_info(max_input_tokens=float("inf"))),
++        )
++        is None
++    )
++
++
++class _CountingClient:
++    """Records that it was closed — the thing an `httpx.Client` needs and the
++    thing nothing was doing."""
++
++    def __init__(self, resp: _Resp) -> None:
++        self._resp = resp
++        self.closed = False
++        self.gets = 0
++
++    def get(self, url: str, **kw: object) -> _Resp:
++        self.gets += 1
++        return self._resp
++
++    def close(self) -> None:
++        self.closed = True
++
++
++def test_one_client_per_probe_and_it_is_closed(monkeypatch):
++    """A client was opened per URL VARIANT and never closed — up to three leaked
++    connection pools per probe, on every pod, for the path that most often
++    learns nothing. `httpx` warns about exactly this and then holds the socket
++    until the GC happens to run."""
++    from workspace_app import context_probe
++
++    made: list[_CountingClient] = []
++
++    def _fake(timeout: float) -> _CountingClient:
++        client = _CountingClient(_Resp(404, {"detail": "Not Found"}))
++        made.append(client)
++        return client
++
++    monkeypatch.setattr(context_probe, "_default_client", _fake)
++    context_probe.probe_endpoint_limits(base_url="http://proxy/v1", model="nobody")
++
++    assert len(made) == 1, "one client for the whole probe, not one per url variant"
++    assert made[0].gets == 2, "and it is the one that asks each variant"
++    assert made[0].closed, "an opened connection pool must be closed"
++
++
++def test_a_client_we_were_handed_is_never_closed(monkeypatch):
++    """Closing a borrowed client would break the caller that lent it — the
++    runner could reasonably pass a long-lived one."""
++    from workspace_app import context_probe
++
++    borrowed = _CountingClient(_Resp(404, {}))
++    monkeypatch.setattr(
++        context_probe, "_default_client", lambda timeout: pytest.fail("must not open its own")
++    )
++    context_probe.probe_endpoint_limits(base_url="http://proxy/v1", model="nobody", client=borrowed)
++
++    assert not borrowed.closed
++
++
++def test_the_tokenize_probe_also_closes_what_it_opened(monkeypatch):
++    """The same defect, in the same module, in older code — the probe beside it
++    leaked one client per call too. Left unfixed it would have been the
++    surviving half of a bug this PR only half repaired."""
++    from workspace_app import context_probe
++
++    made: list[_Post] = []
++
++    class _Post(_CountingClient):
++        def post(self, url: str, **kw: object) -> _Resp:
++            return self._resp
++
++    def _fake(timeout: float) -> _Post:
++        client = _Post(_Resp(404, {"detail": "Not Found"}))
++        made.append(client)
++        return client
++
++    monkeypatch.setattr(context_probe, "_default_client", _fake)
++    context_probe.probe_context_limit(base_url="http://vllm", model="m")
++
++    assert len(made) == 1
++    assert made[0].closed
++
++
++def test_a_refusal_is_reported_but_a_missing_route_is_not(caplog):
++    """404 and 403 are opposite diagnoses and were logged identically.
++
++    A 404 is the ordinary answer: this endpoint is not a litellm proxy, nothing
++    is wrong, and saying so per endpoint would be noise. A 401/403 is the
++    opposite — the route EXISTS and refused us, which on litellm means the key
++    the app authenticates with does not reach the management routes. That is a
++    fixable misconfiguration, and it is otherwise indistinguishable from "no
++    proxy here": both end as a silent `unknown` ceiling with no compaction, on a
++    deployment where the operator has already done their half of the work.
++    """
++    import logging
++
++    from workspace_app.context_probe import probe_endpoint_limits
++
++    with caplog.at_level(logging.INFO):
++        probe_endpoint_limits(
++            base_url="http://proxy/v1", model="m", client=_get_client(_Resp(404, {}))
++        )
++    assert not [r for r in caplog.records if r.levelno >= logging.INFO]
++
++    caplog.clear()
++    with caplog.at_level(logging.INFO):
++        probe_endpoint_limits(
++            base_url="http://proxy/v1", model="m", client=_get_client(_Resp(403, {}))
++        )
++    said = "\n".join(r.getMessage() for r in caplog.records if r.levelno >= logging.INFO)
++    assert "403" in said, said
++    assert "max_input_tokens" in said, "and it says what to do about it"
++
++
++def test_the_refusal_is_said_once_not_on_every_retry(caplog):
++    """A negative from the proxy now expires and is re-asked every ten minutes,
++    so a permanently-refused route would repeat this line forever — two or three
++    times per window, per pod. This codebase already has the rule for that: a
++    notice that fires every round becomes wallpaper and stops being read. Said
++    once per address and status per process; the RE-ASKING is unaffected."""
++    import logging
++
++    from workspace_app import context_probe
++
++    context_probe._REFUSALS_SAID.clear()
++
++    def _probe_once():
++        context_probe.probe_endpoint_limits(
++            base_url="http://proxy/v1", model="m", client=_get_client(_Resp(403, {}))
++        )
++
++    with caplog.at_level(logging.INFO):
++        _probe_once()
++    first = [r.getMessage() for r in caplog.records if r.levelno >= logging.INFO]
++    # Once per ADDRESS: both spellings were refused and the operator wants to
++    # know which, so two lines here is the signal, not the noise.
++    assert len(first) == len(set(first)) == 2, first
++
++    caplog.clear()
++    with caplog.at_level(logging.INFO):
++        for _ in range(4):
++            _probe_once()
++    assert not [r for r in caplog.records if r.levelno >= logging.INFO], "and never again"
