@@ -1645,6 +1645,9 @@ def create_app(
         get_user_id,
         users,
         kb_agent_configs=kb_agent_configs,
+        # The same deadline the workspace send waits on — one knob, so "as long
+        # as the other chat waits" stays true instead of drifting into two.
+        send_await_timeout=send_await_timeout,
         history_max_messages=history_max_messages,
         history_max_context_tokens=history_max_context_tokens,
         context_limit=context_limit,

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -67,7 +68,7 @@ from ..resources.kb import Citation, KbChat, KbMessage
 from ..tokens import CallLane
 from ..users.protocol import UserDirectory
 from .chat_naming import first_user_snippet
-from .events import AgentEvent, MessageDelta, RunError, ToolEnd, ToolStart
+from .events import AgentEvent, MessageDelta, RunError, ToolEnd, ToolStart, UserMessage
 from .notifications import notify
 from .permission_body import PermissionBody, PermissionOut, build_permission, granted_user_ids
 from .runner import AgentRunner
@@ -468,6 +469,11 @@ def register_kb_chat_routes(
     users: UserDirectory,
     *,
     kb_agent_configs: list[AgentConfig],
+    # #493: how long a send waits for ITS OWN turn before detaching it and
+    # answering anyway — the same knob the workspace chat uses, threaded from
+    # `create_app`, because "as long as the RCA send waits" has to be one number
+    # and not two that drift.
+    send_await_timeout: float = 25.0,
     history_max_messages: int = 0,
     history_max_context_tokens: int = 0,
     # #624: the endpoint's context ceiling. KB chat replays retrieved passages
@@ -770,13 +776,18 @@ def register_kb_chat_routes(
         return PermissionOut(resource_id=chat_id, visibility=new_perm.visibility, notified=notified)
 
     @app.post("/kb/chats/{chat_id}/messages")
-    async def send_message(chat_id: str, body: _MsgBody) -> StreamingResponse:
+    async def send_message(chat_id: str, body: _MsgBody) -> Response:
         # #304: sending a message needs `converse` — 404 if you can't see the chat,
         # 403 if you can see/read it but aren't allowed to drive it (a read-only
         # share). The owner always holds converse; a collaborator needs the grant.
         chat, owner = _authorize_chat(chat_id, "converse")
+        # Stamped ONCE and handed to both copies of this message — the stored one
+        # and the broadcast below. The FE keys its de-duplication on
+        # author + content + timestamp, so two stamps would draw two bubbles.
+        asked_at = _now_ms()
+        asked_by = get_user_id()
         chat.messages.append(
-            KbMessage(role="user", content=body.content, author=get_user_id(), created_at=_now_ms())
+            KbMessage(role="user", content=body.content, author=asked_by, created_at=asked_at)
         )
         # Persist AS THE OWNER: the write mechanically an `update`, so the auto-CRUD
         # write handler re-checks write_meta — which a converse-only collaborator
@@ -1029,7 +1040,48 @@ def register_kb_chat_routes(
                 agent_content, body.image, vlm_describer
             )
 
-        return await engine.stream(chat_id, agent_content, ctx, on_complete=persist)
+        # QUEUE this turn; do not cancel whatever is running.
+        #
+        # `stream()` begins with `_cancel_prior_turn`, so a follow-up asked while
+        # an answer was streaming threw that answer away. The composer covered it
+        # by refusing to send at all — no bubble, no cleared box, no reason given
+        # — which reads as the whole app being dead. The workspace chat settled
+        # this in #43: messages serialize, and only Stop cancels. This is that,
+        # for the KB chat.
+        #
+        # The broadcast goes out FIRST and on the chat's own stream, so every
+        # viewer (and the sender, whose optimistic bubble adopts it) sees the
+        # question the moment it is accepted rather than whenever its turn
+        # eventually starts.
+        engine.publish(
+            chat_id, UserMessage(author=asked_by, content=body.content, created_at=asked_at)
+        )
+        fut = engine.enqueue(chat_id, agent_content, ctx, on_complete=persist)
+        # #493: await THIS turn, but only to a deadline, then DETACH it — `shield`
+        # keeps the worker's future alive, so detaching is not cancelling. A fast
+        # turn still returns after its reply is persisted (which is what the
+        # route tests read); a slow one runs on and reports itself on the stream.
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(asyncio.shield(fut), timeout=send_await_timeout)
+        return Response(status_code=202)
+
+    @app.get("/kb/chats/{chat_id}/stream")
+    async def stream_chat(chat_id: str, since: int | None = None) -> StreamingResponse:
+        """The chat's live event stream, subscribed independently of any send.
+
+        Separating the stream from the POST is what lets a message queue: the
+        POST can return while an earlier turn is still writing, and this stays
+        open across both. `?since=<seq>` replays what a reconnect missed on this
+        pod, exactly as the workspace stream does.
+
+        `converse` is not required — watching is not driving — but `read_chat`
+        is: the stream carries the same content the thread does, so it is gated
+        exactly as reading the thread is."""
+        _authorize_chat(chat_id, "read_chat")
+        return StreamingResponse(
+            engine.subscribe_sse(chat_id, since=since),
+            media_type="text/event-stream",
+        )
 
     @app.delete("/kb/chats/{chat_id}/messages/current", status_code=204)
     async def cancel_message(chat_id: str) -> Response:
