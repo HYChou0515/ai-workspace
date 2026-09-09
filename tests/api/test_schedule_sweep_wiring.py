@@ -146,3 +146,29 @@ def test_both_write_boundaries_feed_the_index() -> None:
             f"the {name} write path does not tell the schedule index, so a file "
             "that arrives that way is never swept"
         )
+
+
+def test_the_row_cap_knob_reaches_the_sweeper() -> None:
+    """`server.max_page_schedules` has to arrive where it is enforced.
+
+    The config ledger proves the setting is READ in `__main__`. Nothing proved
+    the second hop: replacing `max_rows=...max_page_schedules` with the module
+    default left 235 tests green, and `grep -rn max_page_schedules tests/` found
+    nothing. A knob that is read and then dropped is worse than an absent one —
+    an operator lowers it after an incident, watches the deploy go out, and the
+    cap they set never applies.
+
+    A source check because the failure is a WIRING choice: the sweeper is built
+    once in a composition root, and both values are plausible integers, so
+    nothing downstream can tell which one it got.
+    """
+    source = _APP.read_text(encoding="utf-8")
+
+    call = source.split("UserScheduleSweeper(", 1)[-1].split("\n    )", 1)[0]
+    flat = " ".join(call.split())
+
+    assert "max_rows=" in flat, "the sweeper is built without a row cap at all"
+    assert "max_page_schedules" in flat, (
+        "the sweeper's row cap does not come from `server.max_page_schedules`, so "
+        "the knob an operator sets is read and then dropped"
+    )

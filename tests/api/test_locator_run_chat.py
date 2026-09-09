@@ -140,3 +140,40 @@ def test_a_reused_schedule_chat_survives_a_failed_run() -> None:
     assert again == chat_id
     assert created_again is False, "a caller told it created this would then delete it on failure"
     assert list_item_conversations(spec.get_resource_manager(Conversation), item_id)
+
+
+def test_a_schedules_thread_never_becomes_the_items_default_conversation() -> None:
+    """The invariant `chat_for_schedule` states, asserted at last.
+
+    `find_default_conversation` picks the earliest FREE chat — free meaning
+    `run_id is None` — and that is what the item opens for a person who just
+    clicks in. A schedule's 03:00 thread becoming that means someone opens their
+    item and lands in a machine's log, with their own conversation somewhere
+    below it. It is P22's headline failure returning through the scheduled door.
+
+    Nothing held this. Changing the created `run_id` from `""` to `None` — which
+    is exactly that failure — left 191 chat-and-conversation tests green.
+
+    Asserted through `find_default_conversation` itself rather than by reading
+    the field, because the field is not the rule: the comment beside it said
+    "non-empty from the start", and `""` is empty. What makes it work is that
+    the rule tests `is None`, and only a test that asks the rule can tell the
+    difference between a property and a sentence about one.
+    """
+    spec, locator, item_id = _locator_and_item()
+    conv_rm = spec.get_resource_manager(Conversation)
+
+    assert find_default_conversation(conv_rm, item_id) is None, "the item starts with none"
+
+    locator.chat_for_schedule(item_id, "build-report", "wui:i1:abc")
+
+    assert find_default_conversation(conv_rm, item_id) is None, (
+        "a schedule's thread became the item's default conversation — a person "
+        "opening this item now lands in a machine's log"
+    )
+
+    # The control: a chat a PERSON opens is free, and does become the default.
+    # Without this the assertion above is satisfied by nothing ever being default.
+    human = conv_rm.create(Conversation(item_id=item_id, title="mine", created_ms=1)).resource_id
+    found = find_default_conversation(conv_rm, item_id)
+    assert found is not None and found[0] == human, "a person's own chat is the default"

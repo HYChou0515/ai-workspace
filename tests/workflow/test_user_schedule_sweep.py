@@ -14,6 +14,7 @@ is to be boring:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import time
@@ -583,8 +584,14 @@ def test_the_sweep_never_holds_the_event_loop():
     nothing else runs for as long as that call takes, and that shows up here
     whichever call it is.
 
-    Every store call is slowed, so the test does not depend on knowing which one
-    somebody forgets next.
+    The slowed set is DERIVED from the module's own `asyncio.to_thread` call
+    sites, not hand-written. It used to be a list naming `_index.items` and
+    `_index.paths` — and when P39 replaced those with `items_with_paths`, the
+    list kept slowing two functions the tick no longer calls. Un-offloading the
+    new one left this test green: the guard was measuring a code path that no
+    longer existed, while claiming "every store call is slowed". A list written
+    against something defined in another file goes stale silently, and the only
+    fix that stays fixed is to stop writing the list.
     """
     spec = _spec()
     index = ScheduleIndex(spec)
@@ -608,11 +615,45 @@ def test_the_sweep_never_holds_the_event_loop():
 
         return go
 
-    sweeper._store.last_window = _slow(sweeper._store.last_window)  # type: ignore[method-assign]
-    sweeper._store.try_claim = _slow(sweeper._store.try_claim)  # type: ignore[method-assign]
-    sweeper._index.items = _slow(sweeper._index.items)  # type: ignore[method-assign]
-    sweeper._index.paths = _slow(sweeper._index.paths)  # type: ignore[method-assign]
-    sweeper._owner_of = _slow(sweeper._owner_of)
+    # DERIVED FROM THE COLLABORATORS, not from the sweep's call sites.
+    #
+    # The list used to be hand-written — `_index.items`, `_index.paths`,
+    # `_store.last_window`, `_store.try_claim`, `_owner_of` — and when P39
+    # replaced the first two with `items_with_paths`, the guard went on slowing
+    # two functions the tick no longer calls. Un-offloading the new one left it
+    # green: a list written against something defined in another file goes stale
+    # in silence, which is this file's recurring failure.
+    #
+    # Deriving it from the sweep's own `asyncio.to_thread(...)` call sites is
+    # WORSE, not better, and it took a probe to see why: removing an offload
+    # removes the call site, so the derivation stops slowing exactly the call the
+    # mutation just broke, and the guard adapts to the regression instead of
+    # catching it. A derived guard must not derive from the thing it guards
+    # against.
+    #
+    # So: slow every public method of every store-like collaborator the sweeper
+    # holds. That surface is decided by the collaborator, not by this sweep, so
+    # neither renaming a call here nor deleting an offload can shrink it.
+    slowed: list[str] = []
+    for holder in (sweeper._store, sweeper._index):
+        for attr in dir(holder):
+            if attr.startswith("_"):
+                continue
+            current = getattr(holder, attr)
+            if not callable(current) or inspect.iscoroutinefunction(current):
+                continue
+            setattr(holder, attr, _slow(current))
+            slowed.append(f"{type(holder).__name__}.{attr}")
+    for attr in ("_owner_of", "_workflows_for"):
+        current = getattr(sweeper, attr, None)
+        # `workflows_for` is optional and this fixture leaves it unwired; wrapping
+        # `None` would turn "not configured" into "configured", which is a
+        # different behaviour from the one under test.
+        if callable(current):
+            setattr(sweeper, attr, _slow(current))
+            slowed.append(attr)
+
+    assert len(slowed) >= 5, f"only {slowed} were slowed — the derivation stopped finding them"
 
     async def _race() -> float:
         beats: list[float] = [time.monotonic()]
@@ -1307,4 +1348,45 @@ def test_one_page_of_an_item_failing_does_not_cost_the_other_pages(caplog):
     assert fired == 1, (
         f"{fired} schedules fired — page /b was skipped because page /a failed, so "
         "the alphabetically-first page costs every page after it, every tick"
+    )
+
+
+def test_a_page_fixed_and_broken_again_is_reported_again(caplog):
+    """The memo has to be FORGOTTEN when the file becomes clean.
+
+    Otherwise "we already said that" outlives the thing it was said about: the
+    author fixes the page, breaks it again a week later in the same way, and the
+    sweep stays silent because a dict in a pod's memory still holds the sentence
+    from last week. That is worse than never having de-noised, because the log
+    now looks healthy.
+
+    Nothing held this: deleting the `pop` left 43 tests green. Its two siblings —
+    always-log, and remembering the key instead of the text — each bite alone;
+    this is the half that decides whether a problem RECURRING is ever reported.
+    """
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    files = _Files(**{f"{ITEM}{PATH}": _file({"every": "daily", "at": "9am", "run": "r"})})
+    sweeper = _sweeper(spec, files, _Started(), datetime(2026, 9, 5, 11, 0))
+
+    def _lines() -> int:
+        return len([r for r in caplog.records if "must look like HH:MM" in r.getMessage()])
+
+    with caplog.at_level(logging.WARNING):
+        asyncio.run(sweeper.tick())
+        asyncio.run(sweeper.tick())
+        said_once = _lines()
+
+        # fixed
+        files.files[f"{ITEM}{PATH}"] = _file(DAILY)
+        asyncio.run(sweeper.tick())
+
+        # and broken again, the same way
+        files.files[f"{ITEM}{PATH}"] = _file({"every": "daily", "at": "9am", "run": "r"})
+        asyncio.run(sweeper.tick())
+
+    assert said_once == 1, f"the first complaint was logged {said_once} times"
+    assert _lines() == 2, (
+        "the page broke again and the sweep stayed silent — the memo outlived the "
+        "problem it was about"
     )

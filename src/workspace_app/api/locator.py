@@ -393,9 +393,17 @@ class ItemLocator:
                     item_id=item_id,
                     title=title,
                     created_ms=now_ms(),
-                    # Non-empty from the start, so it is never a FREE chat: the
-                    # earliest free chat is what the item opens as its default,
-                    # and a schedule's thread must never become that.
+                    # NOT None, which is what makes a chat FREE — the earliest
+                    # free chat is what the item opens as its default, and a
+                    # schedule's 03:00 thread must never become that.
+                    #
+                    # The rule is `find_default_conversation`'s `run_id is None`,
+                    # so `""` satisfies it. This used to say "non-empty from the
+                    # start", which is a sentence about a property nobody tests:
+                    # `""` IS empty, and changing this to `None` — the actual
+                    # failure — left 191 chat tests green. Pinned now, through
+                    # `find_default_conversation` rather than through the field,
+                    # in `test_a_schedules_thread_never_becomes_the_items_default_conversation`.
                     run_id="",
                     **item_conversation_mirror(self._spec, item_id),
                 ),
