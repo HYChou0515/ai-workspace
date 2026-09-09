@@ -29,6 +29,7 @@ from workspace_app.api.schedule_index import (
     register_schedule_index,
 )
 from workspace_app.resources import make_spec
+from workspace_app.workflow.orchestrator import ActiveRunExists
 from workspace_app.workflow.triggers import register_trigger_store, window_key
 from workspace_app.workflow.user_schedule_sweep import (
     MAX_START_ATTEMPTS,
@@ -1401,3 +1402,53 @@ def test_a_page_fixed_and_broken_again_is_reported_again(caplog):
         "the page broke again and the sweep stayed silent — the memo outlived the "
         "problem it was about"
     )
+
+
+def test_a_schedule_whose_previous_run_is_still_going_skips_the_window_quietly(caplog):
+    """An overrun is NORMAL, not a failure.
+
+    Since a schedule's chat became stable, `active_run_for_chat` collides with
+    the schedule's own still-running previous fire — which is the point: the
+    one-run rule finally applies to the entrance that repeats. But the sweep
+    treated the collision as a failed start: `logger.exception` with a
+    traceback, the window handed back, and after three tries the window burned
+    with "Nothing will run for it."
+
+    `every: minutes, n: 1` against a two-minute workflow makes that a normal
+    Tuesday — thousands of ERROR lines a day for a condition the design intends,
+    in a module that spent this round arguing that a log trained to be noise is
+    one where the line that mattered is not read either. Burning the window is
+    wrong twice over: nothing failed, and the next window is the right place to
+    try again.
+    """
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    files = _Files(**{f"{ITEM}{PATH}": _file(DAILY)})
+
+    async def _busy(**kw):
+        raise ActiveRunExists(ITEM, "run-still-going")
+
+    def _tick(day: int) -> None:
+        asyncio.run(
+            UserScheduleSweeper(
+                spec=spec,
+                index=ScheduleIndex(spec),
+                read=files.read,
+                read_live=files.read,
+                start=_busy,
+                owner_of=lambda _item: "alice",
+                now=lambda: datetime(2026, 9, day, 9, 30),
+            ).tick()
+        )
+
+    with caplog.at_level(logging.INFO):
+        for day in range(5, 10):
+            _tick(day)
+
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert not errors, (
+        f"{len(errors)} ERROR lines for a schedule whose previous run is still "
+        "going — a condition the design intends"
+    )
+    burned = [r for r in caplog.records if "Nothing will run for it" in r.getMessage()]
+    assert not burned, "the window was burned because the last run had not finished"

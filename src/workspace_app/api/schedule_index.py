@@ -292,13 +292,13 @@ class ScheduleIndex:
         return sorted(out)
 
     def items(self) -> list[str]:
-        """Every item with at least one schedule file. The sweep's whole input."""
-        rm = self._spec.get_resource_manager(_ScheduleIndex)
-        # `is_deleted() == False` because `list_resources` happily returns
-        # soft-deleted rows. Without it an item whose last schedule was removed
-        # keeps being read on every sweep, forever — which is the one cost this
-        # index exists to avoid.
-        del rm  # the listing lives in `items_with_paths`; this is its id half
+        """Every item with at least one schedule file.
+
+        The id half of :meth:`items_with_paths`, which holds the listing and the
+        reasoning. No production caller — `tick` takes the paths with the ids in
+        one read — so this is for tests and for anyone asking the index what it
+        covers.
+        """
         return [item_id for item_id, _paths in self.items_with_paths()]
 
     def paths(self, item_id: str) -> list[str]:

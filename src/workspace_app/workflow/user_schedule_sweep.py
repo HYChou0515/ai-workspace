@@ -33,6 +33,7 @@ from specstar import SpecStar
 
 from ..api.schedule_index import ScheduleIndex
 from ..filestore.protocol import FileNotFound
+from .orchestrator import ActiveRunExists
 from .triggers import SpecstarTriggerStore, fire_window, is_due
 from .user_schedules import declared_count, trigger_id_for, usable_rows
 
@@ -461,6 +462,30 @@ class UserScheduleSweeper:
                     # about what "this schedule" means.
                     key=trigger_id,
                 )
+            except ActiveRunExists:
+                # NOT a failure. The schedule's previous fire is still running,
+                # and colliding with it is what the stable per-schedule chat was
+                # FOR — the one-run rule finally applies to the entrance that
+                # repeats. Treating it as a failed start meant a traceback per
+                # tick and, after three, the window burned with "Nothing will
+                # run for it": `every: minutes, n: 1` against a two-minute
+                # workflow is thousands of ERROR lines a day for a condition the
+                # design intends.
+                #
+                # The window stays CLAIMED, deliberately. Handing it back would
+                # only make the next tick collide again; skipping it is what an
+                # overrun means, and the next window is the right place to try.
+                # Said once per (schedule, window) so a slow run does not narrate
+                # itself, and at INFO because nothing is wrong.
+                self._say_once(
+                    item_id,
+                    f"{path}#busy#{window}",
+                    logging.INFO,
+                    "user schedules: %s is still running its previous fire — skipping window %s",
+                    trigger_id,
+                    window,
+                )
+                continue
             except Exception:
                 # Hand the window BACK, up to a point. The claim is taken before
                 # the run is asked for — that ordering is what makes two pods
