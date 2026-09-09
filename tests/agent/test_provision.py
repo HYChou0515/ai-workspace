@@ -63,6 +63,12 @@ class _Recording:
     ) -> SandboxHandle:  # pragma: no cover
         return SandboxHandle(id="s1")
 
+    async def exists(self, handle, path: str) -> bool:
+        # Part of the Sandbox protocol, so the stand-in answers it. These
+        # tests are about provisioning; no workspace here declares python
+        # dependencies, so the #775 sync never fires.
+        return False
+
     async def exec(self, handle, cmd, on_output=None, env=None) -> ExecResult:
         self.calls.append(cmd)
         # Recorded so a caller cannot pass an env this stand-in silently drops.

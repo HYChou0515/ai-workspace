@@ -26,8 +26,8 @@ describe("<ResourceLinkText /> (#692)", () => {
     expect(link).toHaveAttribute("href", "/my-resources");
     // The remedy still reads as one sentence — the link replaced the phrase,
     // it was not appended as a stray "click here".
-    expect(screen.getByText(/執行環境已達上限/)).toBeInTheDocument();
-    expect(screen.getByText(/關掉不用的環境再試一次/)).toBeInTheDocument();
+    expect(screen.getByText(/沙盒已達上限/)).toBeInTheDocument();
+    expect(screen.getByText(/關掉不用的沙盒再試一次/)).toBeInTheDocument();
   });
 
   it("links the English wording too, so the phrase is not hardcoded", () => {

@@ -3,7 +3,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { AgentEvent } from "../events";
 import { eventId, eventSeq, isTerminal, isTurnProgress } from "../events";
-import { type AgentLog, logFromMessages, reduceAgent } from "../pages/investigation/agentLog";
+import {
+  type AgentLog,
+  drawOwnAsk,
+  logFromMessages,
+  reduceAgent,
+  retractOwnAsk,
+} from "../pages/investigation/agentLog";
 import { publishFileChanged } from "../lib/fileChangedBus";
 import type { MsgKey } from "../lib/i18n";
 import { type QuotaDetail, type QuotaKind, quotaMessage } from "../lib/quotaFailure";
@@ -37,8 +43,14 @@ export type { ChatThread };
  *
  * Broadcast semantics (#43): the POST only ENQUEUES the turn — the user's own
  * message and every turn event come back over the shared subscription, so all
- * viewers see the turn, and nothing is pushed optimistically here (that would
- * double it).
+ * viewers see the turn.
+ *
+ * The sender's own message is the one exception, and it is drawn locally the
+ * moment they send it (`drawOwnAsk`). Everything else waits for the broadcast
+ * because the broadcast is what tells a viewer it happened; the sender already
+ * knows, and they are the only one who can measure how long the answer took to
+ * come back. That local copy is `pending` until the broadcast adopts it, so it
+ * stays one bubble rather than becoming two.
  */
 
 export type ChatSendOpts = {
@@ -560,11 +572,24 @@ export function useChatSession(
     async (content: string, opts?: ChatSendOpts) => {
       const trimmed = content.trim();
       if (!trimmed) return;
-      // Flip into "streaming" eagerly so the composer locks, but DON'T push the
-      // user message — it arrives via the `user_message` broadcast (#43). Stamp
-      // activity so the #202 poll gives the live stream one cycle to start.
+      // Lock the composer AND draw the words at once. The `user_message`
+      // broadcast (#43) still carries this message to every viewer, but the
+      // backend publishes it only after the whole turn preamble, so waiting for
+      // it left the SENDER — the only person who knows when they pressed send —
+      // staring at a composer that had swallowed what they typed. `drawOwnAsk`
+      // explains why this is local rather than an earlier publish; the fold
+      // adopts this entry when the broadcast arrives, so it stays one bubble.
+      //
+      // `currentUser` is the placeholder until its query settles, and an author
+      // that disagrees with the one the backend stamps means the broadcast
+      // finds nothing to adopt and draws its own. That is the direction this
+      // fold already fails in everywhere else — a duplicate, never a message
+      // that never appears — and the window is one query on mount against a
+      // person who has yet to finish typing.
+      //
+      // Stamp activity so the #202 poll gives the live stream one cycle to start.
       lastEventAtRef.current = Date.now();
-      setLog((prev) => ({ ...prev, streaming: true, error: null, metrics: null }));
+      setLog((prev) => drawOwnAsk(prev, { author: currentUser, content: trimmed }));
       try {
         await transport.post(trimmed, opts);
       } catch (err: unknown) {
@@ -574,7 +599,23 @@ export function useChatSession(
         // "streaming" so the stream / store-poll surfaces the result, instead of
         // flashing an error the user has to dismiss while the answer arrives.
         const status = (err as { status?: number } | null)?.status;
-        if (status !== undefined && GATEWAY_CUT.has(status)) {
+        // No status at all means the request was never ANSWERED — `apiFetch` does
+        // not wrap `fetch`'s own rejection, so a connection reset mid-flight
+        // arrives as a bare `TypeError`. That is the gateway cut in its most
+        // common form, and the enumerated list misses it: the `0` in
+        // `GATEWAY_CUT` comes from an XHR upload path this send never takes.
+        // Unanswered is the one case where nothing is known either way, so the
+        // message stays: hiding one that IS in the thread is the worse lie.
+        //
+        // What settles it afterwards is the STREAM, not the store poll —
+        // `reconcileSnapshot` bails when the snapshot is shorter than the
+        // screen, which is exactly this shape, so the poll cannot clear a
+        // message the backend never took. If nothing arrives, the drawn message
+        // stays until the thread is re-read. That is the honest cost of not
+        // knowing, and it is why a Stop that could not be SENT no longer leaves
+        // `stopping` set — that was the part that turned "unsettled" into
+        // "unusable".
+        if (status === undefined || GATEWAY_CUT.has(status)) {
           lastEventAtRef.current = Date.now(); // give the poll a grace cycle
           return;
         }
@@ -607,10 +648,31 @@ export function useChatSession(
           // The sentence above is lossy by design; the LIST survives beside it
           // so the refusal can offer to act rather than only to explain.
           holding: holdingFromSendError({ ...(err as object | null), status }),
+          // …and take the drawn message back. Left drawn after a refusal it
+          // would sit there with the error beside it saying it was not sent, and
+          // count as a turn to `turnsFromEntry`, which makes undo delete one turn
+          // more than the person pointed at.
+          //
+          // Unconditional, and that is a property of the endpoint rather than an
+          // assumption about it: the write is the acceptance, so anything that
+          // fails after it answers 202 and reports itself on the stream. Getting
+          // here at all therefore means nothing was stored.
+          //
+          // Two earlier versions tried to infer that from the status — first a
+          // list of refusals, then "any 4xx" — and both were wrong, because the
+          // status is chosen by a type-keyed handler in `create_app` that cannot
+          // know where in the request the throw happened. The same 404 answers a
+          // revoked viewer and a skill folder that vanished mid-preparation. No
+          // status could have carried this; the endpoint had to.
+          //
+          // The gateway-cut branch above still returns early: there the request
+          // was cut without an answer, so nothing is known either way, and
+          // hiding a message that may be running is the worse lie.
+          entries: retractOwnAsk(prev, { author: currentUser, content: trimmed }).entries,
         }));
       }
     },
-    [transport, t],
+    [transport, t, currentUser],
   );
 
   const cancel = useCallback(() => {
@@ -627,9 +689,20 @@ export function useChatSession(
         ...prev,
         error: `停止失敗,這一輪可能仍在進行:${why}`,
         errorFromTurn: false,
+        // …and stop claiming to be stopping. `stopping` means the backend has
+        // been TOLD; if telling it failed, it has not been, and the state only
+        // ends on a terminal event that is now never coming. Left set, it
+        // refuses every later send (`sendRefusal`) and disables both buttons
+        // until a reload — which is what an offline Stop did.
+        stopping: false,
       }));
     });
-    setLog((prev) => ({ ...prev, streaming: false }));
+    // NOT `streaming: false`. That was a claim the backend had not made —
+    // teardown lags — and for as long as it lagged the composer said the turn
+    // was over while it ran on, and unlocked itself, so the next message queued
+    // behind a turn nobody had actually stopped. `stopping` says the true thing
+    // (asked, not yet ended) and the terminal event is what ends it.
+    setLog((prev) => ({ ...prev, stopping: true }));
   }, [transport]);
 
   const undo = useCallback(

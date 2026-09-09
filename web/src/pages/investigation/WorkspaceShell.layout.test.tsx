@@ -5,7 +5,13 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AppItem, AppManifest } from "../../api/types";
-import { TopBar, initialIdeCollapsed, mainSurfaceTabs, showAgentPanel } from "./WorkspaceShell";
+import {
+  TopBar,
+  initialIdeCollapsed,
+  initialSidebarState,
+  mainSurfaceTabs,
+  showAgentPanel,
+} from "./WorkspaceShell";
 
 // The TopBar hosts the live PresenceBar (#455), which opens an SSE subscription +
 // reads the current user through TanStack Query. These layout tests render TopBar
@@ -63,6 +69,23 @@ describe("initialIdeCollapsed (#159)", () => {
 
   it("opens the workspace up front for a views-first App (#419 §B5)", () => {
     expect(initialIdeCollapsed(manifest({ primary_surface: "views", views: ["/views/board.ai.yaml"] }))).toBe(false);
+  });
+});
+
+describe("initialSidebarState (#785)", () => {
+  it("docks the tree for an ide-first App — its files ARE the main stage", () => {
+    expect(initialSidebarState("ide", false)).toBe("pinned");
+  });
+
+  it("collapses the tree for a views-first App so the chart gets the width", () => {
+    expect(initialSidebarState("views", false)).toBe("closed");
+  });
+
+  it("collapses on narrow whatever the App is — the tree is a tap-to-open overlay there (#464)", () => {
+    // The narrow rule predates this and still wins: four columns do not fit
+    // below 768px, so the width question is settled before the App is asked.
+    expect(initialSidebarState("ide", true)).toBe("closed");
+    expect(initialSidebarState("views", true)).toBe("closed");
   });
 });
 

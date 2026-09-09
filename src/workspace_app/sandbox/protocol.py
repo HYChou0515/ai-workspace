@@ -291,6 +291,7 @@ class Sandbox(Protocol):
         cmd: list[str],
         on_output: OutputSink | None = None,
         env: Mapping[str, str] | None = None,
+        exec_timeout: float | None = None,
     ) -> ExecResult:
         """Run `cmd` (an argv list — NOT a shell string; use
         `["sh", "-c", "..."]` if you need shell features) with the workspace
@@ -322,6 +323,18 @@ class Sandbox(Protocol):
         Raises `FileNotFoundError` if it doesn't exist. Used by SandboxSync to
         pull sandbox changes back into the FileStore."""
         ...
+
+    # `download_many(handle, paths) -> list[bytes | None]` is NOT on this core
+    # Protocol — it is an optional capability the WorkspaceFiles facade
+    # duck-types (#781), the same way FileStore's `stat_all` / CAS pair work. A
+    # backend that has it answers a whole chunk in one round trip; one that does
+    # not is read a file at a time, and no caller can tell which happened.
+    #
+    # Its contract is "N calls to `download`, in one hop": ONLY a missing file
+    # becomes `None` (an answer about that path, so the facade can raise for a
+    # caller that demanded it and skip it for a listing that merely named it).
+    # Every other error propagates — a directory is not a missing file. Answers
+    # are in the order asked. The facade bounds the size of the ask.
 
     async def upload_file(self, handle: SandboxHandle, local_path: Path, remote_path: str) -> None:
         """Like `upload`, but copy the content from the on-disk `local_path`

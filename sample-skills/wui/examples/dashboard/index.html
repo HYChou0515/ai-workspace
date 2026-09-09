@@ -1,0 +1,41 @@
+<!--
+  A WUI that READS. The other half of what these pages are for: the item already
+  holds the data, and somebody wants it laid out their way.
+
+  It writes nothing, so none of the editor's hazards apply. The ones that do:
+  reading many files without stalling, presenting what a file does not say, and
+  handing the user back to the real file when they want the detail.
+-->
+<html>
+  <head>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Issue board</h1>
+      <span id="status" class="status">Reading…</span>
+    </header>
+
+    <section data-wui="filters">
+      <label>Show <select id="status-filter"></select></label>
+      <button id="reload">Reload</button>
+    </section>
+
+    <section data-wui="totals">
+      <!-- Filled from the files; there is no "totals" file to read. -->
+      <div id="totals" class="totals"></div>
+    </section>
+
+    <section data-wui="issues">
+      <table>
+        <thead>
+          <tr><th>#</th><th>Title</th><th>Status</th><th>Owner</th><th></th></tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <p id="empty" class="empty" hidden>Nothing to show.</p>
+    </section>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

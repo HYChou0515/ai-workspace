@@ -161,4 +161,83 @@ describe("useKbChat — send failure", () => {
 
     expect(result.current.log.error).toBeNull();
   });
+
+  // A stream that ends after the view is gone must write nothing. In a real
+  // browser a set-state-after-unmount is merely pointless; in a torn-down test
+  // environment it throws `ReferenceError: window is not defined` out of React
+  // and reddens whichever FILE happened to be running, somewhere else entirely.
+  // Deleting `globalThis.window` is that environment, reproduced on purpose.
+  it("writes nothing when the stream ends after unmount", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const client = {
+      ...mockKbApi,
+      createChat: vi.fn().mockResolvedValue({ resource_id: "kb-3" }),
+      streamMessage: async function* () {
+        await gate;
+        // The shape that actually happens: the socket dies as the view goes.
+        throw new Error("stream died after the view was gone");
+      },
+    } as unknown as typeof mockKbApi;
+
+    const { result, unmount } = renderHook(() =>
+      useKbChat({ collectionIds: ["c1"], client }),
+    );
+    let sent!: Promise<void>;
+    await act(async () => {
+      sent = result.current.send("q");
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(result.current.log.streaming).toBe(true));
+
+    unmount();
+    const realWindow = globalThis.window;
+    // @ts-expect-error — reproducing the torn-down environment
+    delete globalThis.window;
+    try {
+      release();
+      await expect(sent).resolves.toBeUndefined();
+    } finally {
+      globalThis.window = realWindow;
+    }
+  });
+
+  // The same rule one await earlier: the thread is created, and by the time the
+  // id comes back there is nobody to hand it to. What must NOT happen is
+  // dropping the question — the thread already exists on the server, so a
+  // skipped send leaves an empty chat and the typed question nowhere.
+  it("writes nothing when the thread is created after unmount, but still asks", async () => {
+    let release!: (v: { resource_id: string }) => void;
+    const streamMessage = vi.fn(mockKbApi.streamMessage.bind(mockKbApi));
+    const client = {
+      ...mockKbApi,
+      streamMessage,
+      createChat: vi.fn(
+        () => new Promise<{ resource_id: string }>((r) => (release = r)),
+      ),
+    } as unknown as typeof mockKbApi;
+
+    const { result, unmount } = renderHook(() =>
+      useKbChat({ collectionIds: ["c1"], client }),
+    );
+    let sent!: Promise<void>;
+    await act(async () => {
+      sent = result.current.send("q");
+      await Promise.resolve();
+    });
+
+    unmount();
+    const realWindow = globalThis.window;
+    // @ts-expect-error — reproducing the torn-down environment
+    delete globalThis.window;
+    try {
+      release({ resource_id: "kb-4" });
+      await expect(sent).resolves.toBeUndefined();
+    } finally {
+      globalThis.window = realWindow;
+    }
+    expect(streamMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ chatId: "kb-4", content: "q" }),
+    );
+  });
 });

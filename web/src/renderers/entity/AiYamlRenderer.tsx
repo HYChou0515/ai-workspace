@@ -35,7 +35,7 @@ import { YamlTree } from "../YamlTree";
 import { EntityRecordModal } from "./EntityRecordModal";
 import { EntityViewBody, HealthView, parseViewSpec } from "./EntityViews";
 import { buildRefIndex, referencedTypes, refOptionsForField } from "./refTraversal";
-import { setViewScalar } from "./shared";
+import { clockText, setViewScalar } from "./shared";
 import { VIEW_KIND, type SortRule, type ViewConfig } from "./types";
 import { ViewErrorBoundary } from "./ViewErrorBoundary";
 
@@ -199,9 +199,12 @@ export function AiYamlRenderer({ path }: { path: string }) {
   const groupOptions = fields
     .filter((f) => f.role === "status" || f.role === "actor" || f.role === "ref")
     .map((f) => ({ name: f.name, label: f.name }));
-  // #690 P3 — what a bar's colour may mean. Select-ish fields and people:
-  // both give `selectColor` a stable string to work from. `ref` is left out
-  // until it can resolve its display value (plan §7 R3).
+  // #690 P3 — what a bar's colour may mean. Select-ish fields and people: both
+  // give the chart a stable string to colour from, though not the same palette
+  // — a `status` takes the chip slots so it matches its chip in the table, and
+  // an `actor` takes a generated hue per person, since six slots cannot hold a
+  // directory (actorColor.ts). `ref` is left out until it can resolve its
+  // display value (plan §7 R3).
   const colorByOptions = fields
     .filter((f) => f.role === "status" || f.role === "actor")
     .map((f) => ({ name: f.name, label: f.name }));
@@ -277,6 +280,19 @@ export function AiYamlRenderer({ path }: { path: string }) {
             onSetSort: (rules) => persistGantt(setViewScalar(entry.text, "sort", rules.length ? JSON.stringify(rules) : null)),
             skipWeekends: spec.skip_weekends ?? false,
             onToggleSkipWeekends: (next) => persistGantt(setViewScalar(entry.text, "skip_weekends", String(next))),
+            workHours: spec.work_hours,
+            // Written as a FLOW mapping so it stays one line, which is what
+            // `setViewScalar` edits — and formatted through `clockText`, the
+            // inverse of the parser's own reader, so the file can never hold a
+            // window the parser then drops.
+            onSetWorkHours: (next) =>
+              persistGantt(
+                setViewScalar(
+                  entry.text,
+                  "work_hours",
+                  next ? `{ from: "${clockText(next.from)}", to: "${clockText(next.to)}" }` : null,
+                ),
+              ),
             colorBy: spec.color_by ?? "",
             colorByOptions,
             onSetColorBy: (field) => persistGantt(setViewScalar(entry.text, "color_by", field || null)),

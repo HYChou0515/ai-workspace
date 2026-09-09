@@ -51,3 +51,46 @@ async def test_seed_smt_profile_seeds_notebooks_and_omits_canvas_and_5why():
     assert any(w.endswith("/pareto.ipynb") for w in written)
     assert any("/data/" in w for w in written)
     assert not any("canvas" in w.lower() or "5-why" in w.lower() for w in written)
+
+
+async def test_a_declaring_profile_seeds_the_files_the_sync_reads():
+    """#775 — the declaration only works if it reaches the WORKSPACE.
+
+    `ensure_project_env` looks for `pyproject.toml` in the sandbox, which is
+    restored from what seeding wrote. A profile whose declaration stayed in the
+    package would sync nothing and report nothing: the feature would be off,
+    and off in the way that leaves no trace.
+
+    The lock ships too. `uv sync --frozen` has nothing to install from without
+    it, so a pyproject on its own is a failed cold start rather than a
+    half-configured one.
+    """
+    fs = MemoryFileStore()
+
+    written = await seed_item(fs, "playground/x", "playground", "pydeps", {})
+
+    assert "/pyproject.toml" in written
+    assert "/uv.lock" in written
+    assert "/_prompt.md" not in written, "the prompt is read from the package, never copied"
+
+    declared = (await fs.read("playground/x", "/pyproject.toml")).decode()
+    # The carrier is REPLACED, not layered under, so a profile that declares
+    # anything must carry the stack the carrier would have given it — or an
+    # author adding one package silently loses pandas.
+    # The reference set is `sample-tools/python-stack/pyproject.toml` — the
+    # CARRIER. The first version of this list was taken from
+    # `docker/Dockerfile.workspace` instead, an image nothing starts, so the
+    # office half was missing from both the example and this assertion and
+    # `import openpyxl` broke in the one profile shipped to demonstrate that it
+    # would not.
+    for pkg in (
+        "ipykernel",
+        "numpy",
+        "pandas",
+        "matplotlib",
+        "scipy",
+        "openpyxl",
+        "XlsxWriter",
+        "python-pptx",
+    ):
+        assert pkg in declared, f"{pkg} must survive the carrier being replaced"

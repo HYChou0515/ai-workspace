@@ -30,10 +30,11 @@ const render = (ui: Parameters<typeof rtlRender>[0]) => rtlRender(ui, { wrapper:
 describe("TerminalPane empty-state help (#171)", () => {
   afterEach(cleanup);
 
-  it("describes the execution environment, not a 'sandbox'", () => {
+  it("says which thing it runs commands in, by the name the rest of the product uses", () => {
     render(<TerminalPane investigationId="item:1" />);
-    // zh-TW default (no LocaleProvider): de-jargoned to 執行環境.
-    expect(screen.getByText(/執行環境/)).toBeInTheDocument();
+    // zh-TW default (no LocaleProvider). #171 called this 執行環境; the product
+    // now calls the one thing 沙盒 everywhere, guarded in `i18n.test.tsx`.
+    expect(screen.getByText(/沙盒/)).toBeInTheDocument();
     expect(screen.queryByText(/sandbox/i)).not.toBeInTheDocument();
   });
 });
@@ -46,7 +47,7 @@ describe("TerminalPane quota refusals", () => {
   // live-environment limit can appear at all. Before this, all three quotas
   // rendered as the raw "exec failed: 507" — a status with no remedy attached.
   it.each([
-    ["sandbox_quota_exceeded", /執行環境已達上限/],
+    ["sandbox_quota_exceeded", /沙盒已達上限/],
     ["user_quota_exceeded", /空間總量已滿/],
     ["workspace_quota_exceeded", /工作區空間已滿/],
   ])("names the limit for %s", async (code, expected) => {

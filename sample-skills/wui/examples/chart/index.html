@@ -1,0 +1,49 @@
+<!--
+  A page with a real chart, drawn by a real charting library.
+
+  "No network" is about RUNTIME. A script pulled from a CDN never arrives — but
+  `chart.umd.js` is a FILE IN THIS FOLDER, and a folder-relative reference is
+  inlined like `app.js` and `style.css` are. Getting the file here is what
+  `package.json`'s build step does; see README.md.
+
+  Do not hand-draw. Axes that agree with their own scale, hit-testing, tooltips
+  and legible tick spacing are a lot of code to get right, and a library that is
+  already in the folder costs nothing at runtime.
+-->
+<html lang="en">
+  <head>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header>
+      <div>
+        <h1>Scrap board</h1>
+        <p id="range" class="sub">Reading…</p>
+      </div>
+      <span id="status" class="status"></span>
+    </header>
+
+    <section class="card">
+      <h2>Where the wafers go</h2>
+      <p class="sub">Wafers scrapped by cause, worst first. The line is the running share.</p>
+      <div class="plot"><canvas id="pareto"></canvas></div>
+      <p id="empty" class="empty" hidden>Nothing to plot yet.</p>
+    </section>
+
+    <section class="card">
+      <h2 id="rows-title">The records behind it</h2>
+      <div class="scroller">
+        <table>
+          <thead>
+            <tr><th>#</th><th>Title</th><th>Cause</th><th class="num">Wafers</th><th></th></tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- The library, then the page. Both folder-relative, both inlined. -->
+    <script src="./chart.umd.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>

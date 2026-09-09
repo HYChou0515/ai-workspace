@@ -140,7 +140,7 @@ class _RenderSandbox(MockSandbox):
     """node → ok; the render step drops a slide image so the loop's read/list
     seams run; everything else falls back to MockSandbox."""
 
-    async def exec(self, handle, cmd, on_output=None, env=None):  # type: ignore[override]
+    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None):  # type: ignore[override]
         if cmd and cmd[0] == "sh":  # preflight: toolchain present
             return ExecResult(exit_code=0, stdout=b"")
         if cmd and cmd[0] == "node":

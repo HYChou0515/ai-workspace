@@ -12,10 +12,13 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
+from sandbox_host.app import _HostController
 from sandbox_host.isolated_process import (
     IsolatedProcessSandbox,
     _acl_argv,
@@ -27,7 +30,7 @@ from sandbox_host.isolated_process import (
     _setpriv_cgroup_argv,
     _UidPool,
 )
-from sandbox_host.protocol import SandboxSpec
+from sandbox_host.protocol import SandboxHandle, SandboxSpec
 
 
 @pytest.fixture
@@ -364,3 +367,293 @@ async def test_the_tool_view_is_never_handed_to_the_sandboxs_own_uid(tmp_path):
     chowned = {p for p, _uid in chowns}
     assert chowned, "the workspace itself is still chowned"
     assert not any(str(view) in str(p) for p in chowned)
+
+
+async def test_the_download_cache_is_owned_by_whoever_has_to_fill_it(isolated):
+    """Named for EVERY exec, not just the sync: a user's own `uv add` has to
+    land in the same place or the second copy is pure waste.
+
+    And OWNED for every exec, which is the part this backend adds. The cache
+    belongs to the item, so it outlives any one sandbox — but the uid that has
+    to fill it is allocated per sandbox and freed on kill, so ownership has to
+    be re-established rather than assumed. Exactly the shape `.home` already
+    has, for exactly the same reason.
+    """
+    h = await isolated.create(SandboxSpec())
+
+    _argv, _cwd, env = isolated._exec_argv(h, ["true"])
+
+    cache = Path(env["UV_CACHE_DIR"])
+    root = Path(isolated._require(h))
+    assert root not in cache.parents, "it has to outlive the sandbox to be worth anything"
+    assert cache.stat().st_uid == isolated._identities[h.id].uid, "and the filler must own it"
+    assert cache.stat().st_mode & 0o777 == 0o700, "and no other item may read it"
+
+
+async def test_the_project_venv_is_a_dir_the_dropped_uid_can_actually_fill(isolated) -> None:
+    """`uv sync` runs as the item uid, under `setpriv`. `<root>/.venv`'s parent
+    is the sandbox root, which this service created and still owns — so uv
+    cannot create the directory at all:
+
+        error: failed to create directory `…/.venv`: Permission denied (os error 13)
+
+    That is every declared profile failing to start, in production only, which
+    is why nothing here saw it: the unjailed dev path drops no uid and creates
+    it happily. It is the same failure `.home` had (#393) from the same side,
+    so it gets the same answer — made where it is USED, and owned.
+
+    Empty, and only when absent: uv accepts an existing EMPTY directory as the
+    target (measured) but refuses one holding anything else — "cannot be used
+    because it is not a valid Python environment" — so a real venv from an
+    earlier turn must survive untouched.
+    """
+    h = await isolated.create(SandboxSpec())
+
+    _argv, _cwd, env = isolated._exec_argv(h, ["true"])
+
+    venv = Path(env["UV_PROJECT_ENVIRONMENT"])
+    assert venv.is_dir(), "uv cannot make this itself: it does not own the parent"
+    assert venv.stat().st_uid == isolated._identities[h.id].uid, (
+        "and cannot fill one it does not own"
+    )
+    # The mode is what gives this test teeth. The fixture pins the sandbox uid
+    # to the caller's own, so `st_uid` is satisfied by the directory's natural
+    # owner whether or not the chown ever happened -- deleting the whole of
+    # `_own_privately` left this file green. 0700 is the observable half, and
+    # it is also the point: nobody else may read it.
+    assert venv.stat().st_mode & 0o777 == 0o700, "and no other item may read it"
+    assert not any(venv.iterdir()), "uv refuses a target dir holding anything else"
+
+
+async def test_uvs_download_cache_is_named_for_every_exec(isolated) -> None:
+    """Named for EVERY exec, not just the sync: a user's own `uv add` has to
+    land in the same place or the second copy is pure waste.
+
+    Where it is named has moved twice on this branch, so what this pins is the
+    PROPERTY, not the path: it must outlive the sandbox (or a cold start
+    re-fetches the whole stack every time) while being reachable only by the
+    tenant that filled it (or a recycled key hands one item another's
+    downloads). Beside the sandboxes, keyed by the item, is what satisfies both.
+    """
+    h = await isolated.create(SandboxSpec())
+
+    _argv, _cwd, env = isolated._exec_argv(h, ["true"])
+
+    cache = Path(env["UV_CACHE_DIR"])
+    root = Path(isolated._require(h))
+    assert root not in cache.parents, "it has to outlive the sandbox to be worth anything"
+    assert cache.stat().st_mode & 0o777 == 0o700, "and no other item may read it"
+
+
+async def test_the_controller_can_create_against_the_REAL_backend(tmp_path):
+    """The gate that was missing, and its absence shipped a `TypeError` into
+    production.
+
+    P25 gave `_HostController.create` an `item_id` to hand down, and every test
+    that exercised it used `MockSandbox` — which had been updated. The backend
+    this service actually builds (`service.build_sandbox` -> the isolated one)
+    kept the old two-argument `create`, so `POST /sandboxes` raised and a hosted
+    deployment could not open a single sandbox. Three gates missed it: the wire
+    tests use the double, the isolated tests call `create(spec)` directly and
+    never go through the controller, and this package's `ty` was excluded by the
+    parent config and checking nothing at all.
+
+    So this one wires the REAL class to the REAL controller. It is not about
+    `item_id`; it is about the seam between them being exercised by something
+    that cannot be updated into agreement.
+    """
+    sandbox = IsolatedProcessSandbox(
+        root_dir=tmp_path / "sb",
+        cgroup_root=tmp_path / "cg",
+        uid_min=os.getuid(),
+        uid_max=os.getuid(),
+        acl_runner=lambda argv: None,
+        chown_runner=lambda p, u: None,
+    )
+    controller = _HostController(sandbox, idle_ttl=0.0, clock=time.monotonic)
+
+    handle = await controller.create(SandboxSpec(), "item-a")
+
+    assert handle.id
+    assert sandbox._item_of.get(handle.id) == "item-a", (
+        "and the item id has to REACH the backend, or the cache falls back to a "
+        "per-sandbox uuid — the very thing keying by item was for"
+    )
+
+
+def _cache_sandbox(tmp_path):
+    """A sandbox with room in the pool for TWO live uids, recording every
+    ownership handover through the seam rather than through `st_uid`.
+
+    The shared `isolated` fixture pins the pool to a single uid (the caller's),
+    which cannot express the case below at all — and would also make an
+    `st_uid == getuid()` assertion true before anything ran, the way an app-side
+    test in this family was vacuous a round ago."""
+    sandbox = IsolatedProcessSandbox(
+        root_dir=tmp_path / "sb",
+        cgroup_root=tmp_path / "cg",
+        uid_min=os.getuid(),
+        uid_max=os.getuid() + 4,
+        acl_runner=lambda argv: None,
+        chown_runner=lambda p, u: None,
+    )
+    released: list[tuple[Path, int]] = []
+    sandbox._own_privately = lambda path, uid: released.append((path, uid))  # ty: ignore[invalid-assignment]
+    # `_provision` is the one privileged step with no runner seam — a raw
+    # `os.chown`, which only works non-root when the uid IS the caller's, which
+    # is why the shared fixture can only ever hold one sandbox. Nothing below
+    # asks anything of it, so it is stubbed rather than worked around; `create`,
+    # `_exec_argv`, `_cache_key`, `kill` and `_release_cache` all stay real.
+    sandbox._provision = lambda workspace, uid: None  # ty: ignore[invalid-assignment]
+    return sandbox, released
+
+
+async def test_the_items_last_sandbox_hands_its_cache_back_to_the_service(tmp_path) -> None:
+    """The cache outlives the sandbox on purpose — but `_own_cache` leaves it
+    owned by that sandbox's uid, and THIS host hands uids straight back to a
+    pool on kill (`_UidPool.free`, "Freed ids are reused").
+
+    Without the release, the next tenant of that uid reads and rewrites the
+    previous item's cache: the inheritance keying by ITEM was chosen to prevent,
+    arriving one step later.
+
+    The fix for it shipped with no test on this side at all — the app-side twin
+    had one, and this is the copy production runs. A `coverage report` over the
+    whole host suite named the two lines as never executed, and the host CI step
+    has no `--fail-under`, so nothing was ever going to say so.
+    """
+    sandbox, released = _cache_sandbox(tmp_path)
+    handle = await sandbox.create(SandboxSpec(), item_id="item-a")
+    _argv, _cwd, env = sandbox._exec_argv(handle, ["true"])
+    cache = Path(env["UV_CACHE_DIR"])
+    assert cache.is_dir()
+    released.clear()  # the exec's own `_own_cache` is not what is under test
+
+    await sandbox.kill(handle)
+
+    assert cache.is_dir(), "the cache outlives the sandbox — that is the whole point"
+    assert (cache, os.getuid()) in released, (
+        "and it must go back to the SERVICE, not stay owned by a uid this host "
+        f"has just returned to the pool: {released}"
+    )
+
+
+async def test_a_second_live_sandbox_for_one_item_keeps_its_cache(tmp_path) -> None:
+    """`kill` is per-HANDLE; the cache is per-ITEM. This host mints a fresh uuid
+    per create, so one item can have two live sandboxes here.
+
+    That is not exotic — it is what the #366 rebuild race produces every time
+    two app pods wake one cold item: the loser kills its orphan (`registry`:
+    "lost the race — drop our orphan") while the winner is running. Releasing on
+    that kill revoked the WINNER's access to the cache its `uv sync` was
+    filling: EACCES, `ProjectEnvError`, and a turn dead over a download cache.
+    The orphan has usually never exec'd, so it took no ownership to hand back
+    and the release was pure damage.
+    """
+    sandbox, released = _cache_sandbox(tmp_path)
+    winner = await sandbox.create(SandboxSpec(), item_id="item-a")
+    orphan = await sandbox.create(SandboxSpec(), item_id="item-a")
+    assert winner.id != orphan.id, "two handles, one item — that is the whole case"
+    _argv, _cwd, env = sandbox._exec_argv(winner, ["true"])
+    cache = Path(env["UV_CACHE_DIR"])
+    released.clear()
+
+    await sandbox.kill(orphan)
+
+    assert released == [], (
+        f"the winner is still filling {cache.name}; its access must survive: {released}"
+    )
+
+    # And the release is deferred, not dropped: the last one out still does it.
+    await sandbox.kill(winner)
+    assert (cache, os.getuid()) in released, (
+        f"deferring it must not turn into never doing it: {released}"
+    )
+
+
+async def test_a_uid_is_not_reusable_before_its_cache_has_been_dealt_with(tmp_path) -> None:
+    """The order matters, and the last-live guard is what made it matter.
+
+    `kill` freed the uid to the pool BEFORE `super().kill()` reached
+    `_release_cache`. That was harmless while the release was unconditional —
+    the cache went back to the service on the same tick. Now it can be
+    DEFERRED (another sandbox for the item is still live), and a deferred
+    release leaves the cache owned, 0700, by a uid that is already back in the
+    pool: whoever takes that uid next can read the surviving item's downloads
+    until its own next exec re-chowns them. That is precisely the inheritance
+    keying by ITEM was chosen to prevent.
+
+    So the uid goes back only after the cache decision has been made.
+    """
+    sandbox, released = _cache_sandbox(tmp_path)
+    winner = await sandbox.create(SandboxSpec(), item_id="item-a")
+    orphan = await sandbox.create(SandboxSpec(), item_id="item-a")
+    dying_uid = sandbox._identities[orphan.id].uid
+    order: list[str] = []
+    freed: list[int] = []
+    real_free, real_release = sandbox._pool.free, sandbox._release_cache
+
+    def _free(uid: int, gid: int) -> None:
+        order.append("free")
+        freed.append(uid)
+        real_free(uid, gid)
+
+    def _release(handle: SandboxHandle) -> None:
+        order.append("release")
+        real_release(handle)
+
+    sandbox._pool.free = _free
+    sandbox._release_cache = _release
+
+    await sandbox.kill(orphan)
+
+    assert freed == [dying_uid], f"the uid must still come back to the pool: {freed}"
+    assert order == ["release", "free"], (
+        f"but only after the cache it owns has been dealt with: {order}"
+    )
+    assert released == [], "and here the release is deferred — a sibling is still live"
+    assert winner.id in sandbox._dirs
+
+
+async def test_a_kill_that_fails_still_returns_the_uid_to_the_pool(tmp_path) -> None:
+    """Moving `free` after `super().kill()` bought the cache ordering; without a
+    `finally` it would have cost this.
+
+    `_identities.pop` happens first, so once `super().kill()` raises there is
+    nothing left that could ever free the uid — it stays allocated forever, and
+    invisibly, because a leaked uid is simply never handed out again. The
+    realistic trigger is a `CancelledError` during the `rmtree` (a client
+    disconnect, a SIGTERM), not a bug in the teardown.
+
+    Before the reorder the uid was freed first and this could not happen. The
+    reorder must not trade one narrow hole for another.
+    """
+    sandbox, released = _cache_sandbox(tmp_path)
+    handle = await sandbox.create(SandboxSpec(), item_id="item-a")
+    sandbox._exec_argv(handle, ["true"])  # so the cache exists to be released
+    uid = sandbox._identities[handle.id].uid
+    free_before = len(sandbox._pool._free)
+    released.clear()
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("device or resource busy")
+
+    # `rmtree`, not the whole of `kill`: patching the base method out entirely
+    # would skip `_release_cache` too, and then this test could say nothing
+    # about the ORDER the `finally` exists to preserve — only that a raise
+    # still frees. Raising here leaves the real teardown intact up to the point
+    # the cache has already been handed back.
+    with (
+        mock.patch("sandbox_host.local_process.shutil.rmtree", _boom),
+        pytest.raises(RuntimeError, match="device or resource busy"),
+    ):
+        await sandbox.kill(handle)
+
+    assert len(sandbox._pool._free) == free_before + 1, (
+        "a teardown that failed must still hand the uid back"
+    )
+    assert uid in sandbox._pool._free
+    assert released, (
+        "and it must not have been freed BEFORE the cache was released — the "
+        "whole reason P34 moved this call after `super().kill()`"
+    )

@@ -115,7 +115,7 @@ class Sandbox(Protocol):
     proxies. Implemented by `IsolatedProcessSandbox` (production) and
     `MockSandbox` (tests)."""
 
-    async def create(self, spec: SandboxSpec) -> SandboxHandle: ...
+    async def create(self, spec: SandboxSpec, item_id: str | None = None) -> SandboxHandle: ...
     async def kill(self, handle: SandboxHandle) -> None: ...
     # #492: the sandbox's LOCAL working dir on this pod's disk — the source/target
     # of the host's rsync to/from the durable NFS archive. Raises SandboxNotFound
@@ -127,10 +127,19 @@ class Sandbox(Protocol):
         cmd: list[str],
         on_output: OutputSink | None = None,
         env: Mapping[str, str] | None = None,
+        exec_timeout: float | None = None,
     ) -> ExecResult:
         """`env` is added to the command's environment and WINS over anything
         the backend sets itself — the app names the item's user-set variables
         per call, and this hop is what actually hands them to the process."""
+        ...
+
+    async def effective_limits(self, spec: SandboxSpec) -> EnforcedLimits:
+        # What this backend will REALLY cap a sandbox at, so the number the
+        # capabilities route publishes is the number the cgroup gets. It was
+        # missing from this protocol while `app.py` called it through exactly
+        # this type — and the checker that would have said so was excluded by
+        # the repo-root config and checking zero files.
         ...
 
     async def upload(self, handle: SandboxHandle, data: bytes, remote_path: str) -> None: ...

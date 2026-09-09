@@ -1,0 +1,7 @@
+{
+  "name": "scrap-board",
+  "private": true,
+  "scripts": {
+    "build": "npm pack chart.js@4 --silent && tar xzf chart.js-*.tgz && cp package/dist/chart.umd.js . && rm -rf package chart.js-*.tgz && ls -l chart.umd.js"
+  }
+}

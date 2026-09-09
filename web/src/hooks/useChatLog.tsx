@@ -47,7 +47,28 @@ export function useChatLog({
   queryKey: QueryKey;
   getThread: () => Promise<ChatThread | null>;
 }): ChatLogState {
-  const [log, setLog] = useState<AgentLog>(EMPTY_LOG);
+  const [log, setLogState] = useState<AgentLog>(EMPTY_LOG);
+
+  // Every write to `log` is guarded HERE, where the state is made, rather than
+  // at each caller. Both transports write it from async paths that can outlive
+  // the view — a stream that ends, a snapshot that arrives — and a caller-side
+  // guard is one per exit: `useKbChat.send` alone reaches six state writes after
+  // an await, five of them log writes, and the guard it had was on the one that
+  // fires LAST, so it moved which line threw and removed nothing.
+  //
+  // In a real browser a set-state-after-unmount is merely pointless. In a
+  // torn-down test environment it throws `ReferenceError: window is not
+  // defined` out of React and reddens whichever FILE happened to be running.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const setLog = useCallback<React.Dispatch<React.SetStateAction<AgentLog>>>((update) => {
+    if (mounted.current) setLogState(update);
+  }, []);
 
   // staleTime 0 so each mount sees the turns the backend persisted after the
   // last stream.
@@ -74,7 +95,7 @@ export function useChatLog({
   useEffect(() => {
     hydratedFor.current = null;
     setLog(EMPTY_LOG);
-  }, [threadKey]);
+  }, [threadKey, setLog]);
 
   // Seed from the persisted thread, once per thread.
   //
@@ -93,7 +114,7 @@ export function useChatLog({
           : EMPTY_LOG
         : reconcileSnapshot(prev, hydrated ?? { messages: [] }),
     );
-  }, [hydrated, threadKey]);
+  }, [hydrated, threadKey, setLog]);
 
   return { log, setLog, snapshot, reconcile };
 }

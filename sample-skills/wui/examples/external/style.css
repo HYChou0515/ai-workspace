@@ -1,0 +1,83 @@
+/* Plain CSS in the folder. No web fonts and no CDN — the page has no network,
+   so a stylesheet that reaches out simply does not arrive. */
+
+body {
+  font-family: system-ui, sans-serif;
+  font-size: 14px;
+  margin: 0;
+  padding: 16px;
+  color: #1a1a1a;
+  background: #fff;
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+h1 {
+  font-size: 18px;
+  margin: 0;
+}
+
+.status {
+  color: #666;
+}
+
+section {
+  margin-bottom: 16px;
+}
+
+input {
+  padding: 6px 8px;
+  margin-right: 6px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+
+button {
+  padding: 6px 10px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: #f6f6f6;
+  cursor: pointer;
+}
+
+button:disabled {
+  color: #999;
+  cursor: default;
+}
+
+/* The refusal has to be readable, not decorative: it names the one thing the
+   reader can change. */
+.problem {
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border-left: 3px solid #c22;
+  background: #fdf3f3;
+  color: #7a1c1c;
+}
+
+.fields {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 16px;
+  margin: 0;
+}
+
+.fields dt {
+  color: #666;
+}
+
+.fields dd {
+  margin: 0;
+}
+
+pre {
+  overflow-x: auto;
+  padding: 8px;
+  background: #f6f6f6;
+  border-radius: 4px;
+}

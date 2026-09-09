@@ -418,3 +418,100 @@ async def test_it_reports_the_ceiling_it_really_applies_when_the_spec_states_not
     assert await isolated.effective_limits(SandboxSpec()) == EnforcedLimits(
         cpu_cores=0.5, memory_bytes=64 * 1024**2
     )
+
+
+async def test_the_project_venv_is_a_dir_the_dropped_uid_can_actually_fill(isolated) -> None:
+    """`uv sync` runs as the item uid, under `setpriv`. `<root>/.venv`'s parent
+    is the sandbox root, which this service created and still owns — so uv
+    cannot create the directory at all:
+
+        error: failed to create directory `…/.venv`: Permission denied (os error 13)
+
+    That is every declared profile failing to start, in production only, which
+    is why nothing here saw it: the unjailed dev path drops no uid and creates
+    it happily. It is the same failure `.home` had (#393) from the same side,
+    so it gets the same answer — made where it is USED, and owned.
+
+    Empty, and only when absent: uv accepts an existing EMPTY directory as the
+    target (measured) but refuses one holding anything else — "cannot be used
+    because it is not a valid Python environment" — so a real venv from an
+    earlier turn must survive untouched.
+    """
+    h = await isolated.create(SandboxSpec())
+
+    _argv, _cwd, env = isolated._exec_argv(h, ["true"])
+
+    venv = Path(env["UV_PROJECT_ENVIRONMENT"])
+    assert venv.is_dir(), "uv cannot make this itself: it does not own the parent"
+    assert venv.stat().st_uid == isolated._uid_for(h.id), "and cannot fill one it does not own"
+    # The mode is what gives this test teeth. The fixture pins the derived uid
+    # to the caller's own (uid_range=1), so `st_uid` is satisfied by the
+    # directory's natural owner whether or not the chown ever happened —
+    # deleting the whole of `_own_privately` left this file green. 0700 is the
+    # observable half, and it is also the point: nobody else may read it.
+    assert venv.stat().st_mode & 0o777 == 0o700, "and no other item may read it"
+    assert not any(venv.iterdir()), "uv refuses a target dir holding anything else"
+
+
+async def test_uvs_download_cache_is_named_for_every_exec(isolated) -> None:
+    """Named for EVERY exec, not just the sync: a user's own `uv add` has to
+    land in the same place or the second copy is pure waste.
+
+    And OWNED for every exec, which is the part this backend adds. The cache
+    belongs to the item, so it outlives any one sandbox — but the uid that has
+    to fill it is allocated per sandbox and freed on kill, so ownership has to
+    be re-established rather than assumed. Exactly the shape `.home` already
+    has, for exactly the same reason.
+    """
+    h = await isolated.create(SandboxSpec())
+
+    _argv, _cwd, env = isolated._exec_argv(h, ["true"])
+
+    cache = Path(env["UV_CACHE_DIR"])
+    root = Path(isolated._require(h))
+    assert root not in cache.parents, "it has to outlive the sandbox to be worth anything"
+    assert cache.stat().st_uid == isolated._uid_for(h.id), "and the filler must own it"
+    assert cache.stat().st_mode & 0o777 == 0o700, "and no other item may read it"
+
+
+async def test_a_dead_sandbox_does_not_de_own_this_backends_cache(isolated) -> None:
+    """This backend has no next tenant to protect the cache from.
+
+    The host's `IsolatedProcessSandbox` allocates uids from a pool and frees
+    them on kill, so a cache left owned by a dead sandbox's uid is a cache the
+    NEXT holder of that uid can read — and it hands ownership back for exactly
+    that reason. THIS one derives the uid as `uid_base + xxhash(item_id) %
+    uid_range`: a pure function of the item, the same on every pod, never freed.
+
+    So handing it back here would buy nothing, and it is not free. On a #345
+    shared root the item's dirs are siblings every replica writes to, and
+    de-owning a cache another live sandbox for the same item is filling breaks
+    its `uv sync` with EACCES. An override shipped here anyway, its docstring
+    asserting that this backend pools uids — the opposite of what the class
+    docstring says twelve methods above it.
+    """
+    h = await isolated.create(SandboxSpec())
+    _argv, _cwd, env = isolated._exec_argv(h, ["true"])
+    cache = Path(env["UV_CACHE_DIR"])
+    assert cache.is_dir()
+
+    # Through the OWNERSHIP SEAM, never `st_uid`: the fixture pins the derived
+    # uid to the caller's own (uid_range=1 ⇒ hash%1==0), so the directory
+    # already has that owner and `st_uid == getuid()` holds whether or not
+    # anything happened. That is how the venv-ownership test in this same file
+    # was vacuous one round ago.
+    released: list[tuple[Path, int]] = []
+    isolated._own_privately = lambda path, uid: released.append((path, uid))
+    # The positive control, first: the seam IS the one a release would go
+    # through, and this recorder does capture it. Without this the assertion
+    # below passes just as happily against a misspelt attribute name.
+    isolated._own_cache(h, cache)
+    assert released == [(cache, isolated._uid_for(h.id))], released
+    released.clear()
+
+    await isolated.kill(h)
+
+    assert cache.is_dir(), "the cache outlives the sandbox — that is the whole point"
+    assert released == [], (
+        f"nothing to hand back to: this backend's uid is a pure function of the item: {released}"
+    )

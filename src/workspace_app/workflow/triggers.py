@@ -292,6 +292,20 @@ def window_key(every: str, now: datetime) -> str:
         return f"{iso.year}-W{iso.week:02d}"
     if every == "monthly":
         return f"{now.year:04d}-{now.month:02d}"
+    if every == "hourly":
+        return now.strftime("%Y-%m-%dT%H")
+    # `minutes:N` — a page's poller (`workflow.user_schedules`), the one thing
+    # that legitimately runs often. Bucketed to N so every tick inside the same
+    # N-minute window claims the same lease and fires once.
+    #
+    # The DEFAULT is unchanged on purpose: anything unrecognised still buckets by
+    # day. This function is shared with #435's `send_notification` per-window
+    # fingerprint, so a "daily" schedule and a "daily" notify must keep bucketing
+    # identically — a new period here must add a case, never move the fallback.
+    if every.startswith("minutes:"):
+        _, _, width = every.partition(":")
+        n = int(width) if width.isdigit() and int(width) > 0 else 1
+        return f"{now.strftime('%Y-%m-%dT%H:')}{(now.minute // n) * n:02d}"
     return now.strftime("%Y-%m-%d")
 
 
@@ -313,7 +327,22 @@ def period_target(s: Schedule, now: datetime) -> datetime:
         last = calendar.monthrange(now.year, now.month)[1]
         dom = min(s.dom or 1, last)  # clamp to month-end
         return datetime(now.year, now.month, dom, hh, mm)
+    if s.every == "hourly" or s.every.startswith("minutes:"):
+        # A sub-daily period targets the START of its own bucket, not a wall
+        # time. Falling through to "today at `at`" would make a poller
+        # not-yet-due until 00:00 had passed, i.e. due once and then never
+        # again within the day.
+        return _bucket_start(s.every, now)
     return datetime(now.year, now.month, now.day, hh, mm)
+
+
+def _bucket_start(every: str, now: datetime) -> datetime:
+    """The first instant of the sub-daily period containing ``now``."""
+    if every == "hourly":
+        return now.replace(minute=0, second=0, microsecond=0)
+    _, _, width = every.partition(":")
+    n = int(width) if width.isdigit() and int(width) > 0 else 1
+    return now.replace(minute=(now.minute // n) * n, second=0, microsecond=0)
 
 
 def is_due(s: Schedule, now: datetime, last_window: str) -> bool:
@@ -327,7 +356,10 @@ def _valid_tz(tz: str) -> bool:
 
     try:
         ZoneInfo(tz)
-    except (ZoneInfoNotFoundError, ValueError):
+    except (ZoneInfoNotFoundError, ValueError, OSError):
+        # `OSError` too: an over-long key reaches the filesystem before the
+        # zone database refuses it. A validator that raises is a validator that
+        # takes down whatever asked it a question.
         return False
     return True
 
@@ -351,6 +383,21 @@ class ITriggerStore(abc.ABC):
         caller that wins the race (which then starts the run), False for everyone else —
         so a window fires exactly once across all pods. Winning a NEW window also resets the
         run slot (``run_id``/``attempts``) — a fresh window is a fresh run."""
+
+    @abc.abstractmethod
+    def release_claim(self, trigger_id: str, claimed: str, back_to: str) -> None:
+        """Give back a claim whose run never started, so the window can be tried again.
+
+        The claim is taken BEFORE the run is asked for — that ordering is what makes two
+        pods produce one run — so a start that then fails leaves the ledger saying a window
+        fired for a run that does not exist. Nothing else recovers it: catch-up covers a
+        sweeper that was DOWN at the moment, not a window that was claimed and dropped, so
+        the report silently misses that day.
+
+        ``claimed`` is the window that was just taken and ``back_to`` is what the row held
+        before, and the write happens ONLY if the row still reads ``claimed`` — otherwise
+        another pod has moved on and giving it back would re-fire a window that really did
+        run."""
 
     @abc.abstractmethod
     def record_run(self, trigger_id: str, run_id: str) -> None:
@@ -429,6 +476,15 @@ class SpecstarTriggerStore(ITriggerStore):
     def last_window(self, trigger_id: str) -> str:
         row = self._row(trigger_id)
         return row.last_window if row is not None else ""
+
+    def release_claim(self, trigger_id: str, claimed: str, back_to: str) -> None:
+        row = self._row(trigger_id)
+        if row is None or row.last_window != claimed:
+            # Somebody else has already moved this trigger on. Handing the window
+            # back now would re-fire one that really did run.
+            return
+        _log.info("trigger %s: releasing window %s — its run never started", trigger_id, claimed)
+        self._write_fields(trigger_id, last_window=back_to, run_id="", attempts=0)
 
     def record_run(self, trigger_id: str, run_id: str) -> None:
         self._write_fields(trigger_id, run_id=run_id, attempts=1)

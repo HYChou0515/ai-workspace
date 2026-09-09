@@ -12,6 +12,8 @@ import type { AgentEvent } from "../../events";
 import type { Message } from "../../api/types";
 import {
   EMPTY_LOG,
+  drawOwnAsk,
+  type AgentEntry,
   type AgentLog,
   type AgentMetricsState,
   formatMetrics,
@@ -358,13 +360,16 @@ describe("reduceAgent", () => {
     expect(log.entries.some((e) => e.kind === "banner" && /回合上限（12）/.test(e.text))).toBe(true);
   });
 
-  it("#160: the idle-restart banner describes behavior, not sandbox/exec internals", () => {
+  it("#160: the idle-restart banner describes behavior, not exec internals", () => {
     const log = fold([{ type: "sandbox_killed_idle" }]);
     const b = log.entries.find((e) => e.kind === "banner");
     if (b?.kind !== "banner") throw new Error("expected a banner entry");
-    expect(b.text).not.toMatch(/sandbox/i);
-    // #171: sandbox → 執行環境 / execution environment (was 工作環境 / workspace).
-    expect(b.text).toMatch(/執行環境|execution environment/);
+    // #160 banned the word because it was EXEC jargon leaking into a banner
+    // ('the sandbox was killed'). What it must not do is describe the
+    // machinery; naming the thing is fine, and 沙盒 / sandbox is now the one
+    // name the product uses for it (`i18n.test.tsx` sweeps for the old one).
+    expect(b.text).not.toMatch(/kill|exec|container/i);
+    expect(b.text).toMatch(/沙盒|sandbox/i);
   });
 
   it("starts a new assistant message after a tool call returns", () => {
@@ -1272,5 +1277,142 @@ describe("a question already on screen from the store is not drawn again", () =>
       (e) => e.kind === "message" && e.message.role === "user",
     );
     expect(asked).toHaveLength(2);
+  });
+});
+
+describe("the sender sees their own words at once", () => {
+  // The sender is the only viewer with a reference point: they know when they
+  // pressed send, so the wait until the broadcast returns reads as a composer
+  // that ate their message. Everyone else is receiving a message a moment later
+  // with nothing to measure it against. That asymmetry is why this is drawn
+  // locally rather than by publishing the broadcast earlier server-side.
+  //
+  // The local copy is PENDING: it holds the sender's own words but not the
+  // identity the backend gives them. `created_at` is stamped once, server-side,
+  // and every de-dupe rule above keys on it — so the local copy cannot carry it
+  // and cannot be matched by it. This matches on what a sender does know (their
+  // own words, under their own name) and then ADOPTS the server's stamp when
+  // the broadcast lands, which puts the entry back under the same key the rest
+  // of this fold already uses.
+
+  const asked = (log: AgentLog) =>
+    log.entries.filter(
+      (e): e is Extract<AgentEntry, { kind: "message" }> =>
+        e.kind === "message" && e.message.role === "user",
+    );
+
+  it("draws the message the moment it is sent", () => {
+    const sent = drawOwnAsk(EMPTY_LOG, { author: "alice", content: "yo" });
+    expect(asked(sent)).toHaveLength(1);
+  });
+
+  it("adopts the broadcast rather than drawing a second bubble", () => {
+    const sent = drawOwnAsk(EMPTY_LOG, { author: "alice", content: "yo" });
+    const after = reduceAgent(sent, {
+      type: "user_message",
+      author: "alice",
+      content: "yo",
+      created_at: 100,
+    } as never);
+
+    expect(asked(after)).toHaveLength(1);
+    // Adopted, not merely kept: the entry now carries the server's stamp, so
+    // the rules that key on it (the store de-dupe, banner staleness) see the
+    // same message the backend does rather than a browser clock.
+    expect(asked(after)[0].at).toBe(100);
+  });
+
+  it("does not let my pending message swallow someone else's identical one", () => {
+    // The hazard the author key exists for, from the local side: my own "ok"
+    // must not absorb the broadcast of somebody else's "ok".
+    const mine = drawOwnAsk(EMPTY_LOG, { author: "alice", content: "ok" });
+    const after = reduceAgent(mine, {
+      type: "user_message",
+      author: "bob",
+      content: "ok",
+      created_at: 100,
+    } as never);
+
+    expect(asked(after)).toHaveLength(2);
+  });
+
+  it("adopts once, so saying the same thing twice still shows twice", () => {
+    // One pending entry cannot answer for two broadcasts. The second finds
+    // nothing left to adopt and draws — the safe direction: this fold would
+    // rather show a duplicate than lose a message.
+    const mine = drawOwnAsk(EMPTY_LOG, { author: "alice", content: "again" });
+    const once = reduceAgent(mine, {
+      type: "user_message",
+      author: "alice",
+      content: "again",
+      created_at: 100,
+    } as never);
+    const twice = reduceAgent(once, {
+      type: "user_message",
+      author: "alice",
+      content: "again",
+      created_at: 900,
+    } as never);
+
+    expect(asked(twice)).toHaveLength(2);
+  });
+
+  it("still locks the composer, exactly as the broadcast did", () => {
+    // Drawing locally must not cost the state the event carries: a turn is in
+    // flight from the moment the message is sent.
+    const sent = drawOwnAsk(EMPTY_LOG, { author: "alice", content: "yo" });
+    expect(sent.streaming).toBe(true);
+  });
+});
+
+describe("an end clears the stopping state", () => {
+  // Straight at the fold, on purpose. Through the hook a re-hydrate arrives on
+  // the heels of every terminal and clears `stopping` on its own, so a reducer
+  // that forgot to would still look right — and a viewer whose store-poll is
+  // quiet (the cross-pod case the poll exists for) would sit with both buttons
+  // disabled and no way back.
+  const stopping = { ...EMPTY_LOG, streaming: true, stopping: true };
+
+  it.each([
+    ["done", { type: "done" }],
+    ["error", { type: "error", message: "boom" }],
+    ["run_cancelled", { type: "run_cancelled" }],
+    ["max_turns_exceeded", { type: "max_turns_exceeded", turns: 5 }],
+  ])("%s ends it", (_name, ev) => {
+    const after = reduceAgent(stopping, ev as never);
+    expect(after.stopping).toBe(false);
+    expect(after.streaming).toBe(false);
+  });
+});
+
+describe("a re-hydrate must not cancel a Stop that is still in flight", () => {
+  // This rule had none: deleting it, and inverting it, both left all 3670 tests
+  // green. The store poll runs every couple of seconds, so without it the
+  // buttons unlock themselves halfway through stopping — and with it held too
+  // long they never unlock at all. Both directions are pinned here.
+  const stopping = { ...EMPTY_LOG, streaming: true, stopping: true };
+
+  it("keeps stopping while the snapshot still shows a turn running", () => {
+    // Stamped NOW: `logFromMessages` only calls a trailing user message
+    // "awaiting a reply" for as long as one could still be coming, so an
+    // epoch-1 fixture would be reconciled as a finished thread and the rule
+    // under test would never be reached.
+    const asked = Date.now();
+    const after = reconcileSnapshot(stopping, {
+      messages: [{ role: "user", content: "q", created_at: asked, author: "u" }],
+    });
+    expect(after.streaming).toBe(true); // the thread still awaits a reply
+    expect(after.stopping).toBe(true);
+  });
+
+  it("clears stopping once the snapshot shows the turn ended", () => {
+    const after = reconcileSnapshot(stopping, {
+      messages: [
+        { role: "user", content: "q", created_at: Date.now(), author: "u" },
+        { role: "assistant", content: "a", created_at: Date.now(), author: "RCA Agent" },
+      ],
+    });
+    expect(after.streaming).toBe(false);
+    expect(after.stopping).toBe(false);
   });
 });

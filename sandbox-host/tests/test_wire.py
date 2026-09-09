@@ -58,6 +58,25 @@ async def test_upload_download_roundtrip_raw_bytes(client):
     assert r.content == payload
 
 
+async def test_reading_many_paths_answers_in_order_and_nulls_what_is_absent(client):
+    """The batch read the app uses to list a whole record type in one round trip.
+
+    Binary survives the base64 hop, the answers line up with what was asked, and
+    a path that is not there is `null` — an answer about THAT path. A 404 for
+    the whole batch instead would mean one deleted file turns a listing into an
+    error page, which is the opposite of what reading them one at a time did."""
+    rid = await _create(client)
+    for path, body in (("/a.bin", b"one \x00"), ("/b.bin", b"two")):
+        await client.put(f"/sandboxes/{rid}/file", params={"path": path}, content=body)
+
+    r = await client.post(
+        f"/sandboxes/{rid}/files", json={"paths": ["/a.bin", "/nope.bin", "/b.bin"]}
+    )
+
+    assert r.status_code == 200
+    assert r.json() == {"files": ["b25lIAA=", None, "dHdv"]}
+
+
 async def test_download_missing_maps_to_file_not_found(client):
     rid = await _create(client)
     r = await client.get(f"/sandboxes/{rid}/file", params={"path": "/nope.txt"})
@@ -187,3 +206,40 @@ async def test_exec_applies_the_env_the_body_carries():
             async for _ in resp.aiter_lines():
                 pass
     assert backend.exec_envs[-1] == {"API_KEY": "sk-1"}
+
+
+async def test_exec_applies_the_wall_clock_budget_the_body_carries():
+    """The app's half is `tests/sandbox/test_http.py`; this is the host's.
+
+    `uv sync` names its own budget because the instance default (60s) KILLS a
+    cold start of a heavy profile instead of waiting for it. A host that read
+    the key and dropped it would leave every hosted deployment with the fix
+    silently off — the same shape as the env failure above, and the reason both
+    halves are asserted rather than one."""
+    backend = MockSandbox()
+    app = make_host_app(backend, advertise_url=_ADVERTISE)
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://h") as client:
+        rid = await _create(client)
+        async with client.stream(
+            "POST",
+            f"/sandboxes/{rid}/exec",
+            json={"cmd": ["true"], "exec_timeout": 900.0},
+        ) as resp:
+            assert resp.status_code == 200
+            async for _ in resp.aiter_lines():
+                pass
+    assert backend.exec_timeouts[-1] == 900.0
+
+
+async def test_exec_without_a_budget_still_works_for_an_older_client():
+    """The key is absent on an older client, and absent must mean "instance
+    default", not an error and not a null the backend has to special-case."""
+    backend = MockSandbox()
+    app = make_host_app(backend, advertise_url=_ADVERTISE)
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://h") as client:
+        rid = await _create(client)
+        async with client.stream("POST", f"/sandboxes/{rid}/exec", json={"cmd": ["true"]}) as resp:
+            assert resp.status_code == 200
+            async for _ in resp.aiter_lines():
+                pass
+    assert backend.exec_timeouts[-1] is None

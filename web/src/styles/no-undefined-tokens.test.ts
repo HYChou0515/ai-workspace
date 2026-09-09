@@ -20,6 +20,15 @@ const TOKENS_PATH = resolve(HERE, "tokens.css");
 
 /** Custom properties that are NOT declared in tokens.css yet are legitimate. */
 const RUNTIME_ASSIGNED = new Set([
+  // The colour an App declares in its own `app.json`, published inline per pill
+  // by `MyResourcesPage`'s `AppTag`. Not design tokens: an App's identity colour
+  // is the App's to state, and there are as many as there are Apps. Two inks
+  // because the ink has to be re-lit per theme and only CSS knows the theme —
+  // see `lib/appColor.ts`. Every reference gives a neutral token as its
+  // fallback, so a pill still paints when an App declares no colour.
+  "--app-tint",
+  "--app-ink",
+  "--app-ink-dark",
   // set inline per-surface (see kb.css / FileTree) rather than in tokens.css
   "--filetree-header-bg",
   // fit-to-width scale for marp slides, set on the deck host from JS (MarpDeck)
@@ -29,6 +38,12 @@ const RUNTIME_ASSIGNED = new Set([
   // #730: attachment tile size, set inline from the card's zoom slider so the
   // grid can be resized live. Not a design token — it is one reader's choice.
   "--kb-tile",
+  // The ink a gantt bar carries, published inline per bar by GanttView. Not a
+  // design token: a `color_by` bar's ink comes from its own palette entry, and
+  // which ink is right depends on that bar's fill, not on the theme. Every
+  // reference gives `--text-dark` (the default slab's ink) as its fallback, so
+  // an uncoloured bar still paints.
+  "--bar-ink",
 ]);
 
 /** Third-party custom-property namespaces we don't own (Mantine admin UI). */

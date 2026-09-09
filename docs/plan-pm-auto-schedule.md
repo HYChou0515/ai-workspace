@@ -1,5 +1,22 @@
 # PM — automatic scheduling on the Timeline
 
+> **Withdrawn from the PM app, 2026-09-04.** The requirement behind decision #1
+> below — "dates are computed, not typed" — no longer holds: the Timeline is
+> used with `span` set by hand, and re-arranging it is something the agent does
+> with `query_entity` + `update_entity`, which needs no schema of its own. So
+> the PM profile no longer declares `exp_days` / `exp_days_unit` / `schedule`
+> or a `schedule:` block, and Recalculate does not appear.
+>
+> **The capability is still in the platform** (`schedule.ts`, `ScheduleFields`,
+> the Recalculate control, the provisional bar) and is inert without a
+> `schedule:` block, so any app or profile can turn it back on by naming those
+> fields. Everything below stands as the record of what was decided and why —
+> read it as history, not as a description of what PM ships.
+>
+> One property the agent does NOT give back, worth stating because this plan
+> made a point of it: **recalculation is no longer reproducible.** Same data,
+> different run, possibly different dates.
+
 The Timeline is a drawing of dates somebody typed. This turns it into a
 schedule: you say how long a piece of work takes and who does it, press
 **Recalculate**, and the chart lays the work out.

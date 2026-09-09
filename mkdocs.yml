@@ -118,6 +118,7 @@ nav:
       - Workflows 規格: workflows.md
       - Workflow 視覺手冊（全語法 + 動畫）: workflows-syntax.html
       - Workflow 參考模型（#428 釘死決策）: workflow-reference-model.md
+      - WUI（使用者和 AI 自己做的頁面）: wui.md
       - Topic Hub: topic-hub.md
       - Hosted Sandbox 執行時架構: hosted-sandbox.md
       - Sandbox Host: sandbox-host.md

@@ -46,6 +46,10 @@ export const qk = {
   // which is what makes Refresh mean "start over" rather than "re-render".
   wuiDoc: (id: string, path: string, generation: number) =>
     ["wuiDoc", id, path, generation] as const,
+  // Whether a WUI's folder declares a build. Its own key rather than `file`:
+  // that one holds a `FileContent`, and two shapes under one key is a cache
+  // that hands a consumer the other one's answer.
+  wuiBuildable: (id: string, folder: string) => ["wuiBuildable", id, folder] as const,
   activity: ["activity"] as const,
   conversation: (id: string) => ["conversation", id] as const,
 

@@ -195,7 +195,7 @@ app.json `resources` ◇ resources.per_app.default ◇ sandbox.isolation.* / fil
 
 ### P8 — 「我的資源使用」畫面 ✅ 已完成
 
-**交付** 用量 / 上限;cpu/mem 半列出活著的執行環境 + **關閉**鈕;disk 半列出 item 用量 + **刪除**鈕。
+**交付** 用量 / 上限;cpu/mem 半列出活著的沙盒 + **關閉**鈕;disk 半列出 item 用量 + **刪除**鈕。
 
 **驗收**
 
@@ -205,7 +205,7 @@ app.json `resources` ◇ resources.per_app.default ◇ sandbox.isolation.* / fil
 
 > ⚠️ 第 2、3 條是事後補的。原本只有第 1 條,而一個**零 CSS**、量表是兩個零高度 div、整列擠成一串字的頁面**完全可以通過「按過一輪」**;維運的兩個問題則從頭到尾不在計劃裡。見 §3.3。
 
-**實測結果**(在真的跑起來的服務 + 真 Chromium 上,不是替身):`per_user.count: 1` → 開第二個 item 的 terminal 回 `507 {"error":"sandbox_quota_exceeded","dimension":"sandboxes"}` → `/my-resources` 顯示「執行環境 1 個 / 1 個 · 第二個 · 1 核 · 512 MB」與「儲存空間 2.9 MB / 80 MB」→ 在瀏覽器點「關閉」→ 變成「0 個 / 1 個 · 目前沒有執行中的環境」→ 同一個 exec 回 200。
+**實測結果**(在真的跑起來的服務 + 真 Chromium 上,不是替身;下面引的畫面字串是當時的,「執行環境」後來改回「沙盒」,見 `contribution.md` 的 #171 那列):`per_user.count: 1` → 開第二個 item 的 terminal 回 `507 {"error":"sandbox_quota_exceeded","dimension":"sandboxes"}` → `/my-resources` 顯示「執行環境 1 個 / 1 個 · 第二個 · 1 核 · 512 MB」與「儲存空間 2.9 MB / 80 MB」→ 在瀏覽器點「關閉」→ 變成「0 個 / 1 個 · 目前沒有執行中的環境」→ 同一個 exec 回 200。
 
 **一個刻意的取捨**:disk 那半**不在這裡刪檔**,只列出用量並連到該項目。刪除要在項目自己的檔案清單做,因為那是唯一看得到「正在刪什麼」的地方,而在這裡誤刪是不可回復的。畫面上明講了這件事,也明講「刪除永遠不受額度限制」。
 

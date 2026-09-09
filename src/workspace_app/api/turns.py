@@ -497,12 +497,42 @@ class _TurnSession:
 # guarantee (2)'s Y=1 turn). Best-effort: a flush failure never fails the turn.
 OnTurnEnd = Callable[[], Awaitable[None]]
 
+
+# `eq=False` so these hash by IDENTITY: two sends preparing the same message are
+# two different pending turns, and a value-equal token would let one retire the
+# other out of the set.
+@dataclass(eq=False)
+class PendingTurn:
+    """A turn a caller is still PREPARING — persisted, not yet queued.
+
+    Stop has always meant "end the turn that is running", and `cancel_current`
+    still promises that queued messages are untouched. But a send spends real
+    time before its turn exists at all — compaction, a cold sandbox wake, the
+    context build — and a Stop pressed in THAT window had nothing to reach: no
+    `current_turn`, and the message not yet in the queue.
+
+    So a send registers one of these before it starts preparing and hands it to
+    `enqueue`, which retires it. A Stop marks whatever is still preparing — and
+    only that. A message that reached the queue is no longer preparing, so a
+    later Stop cannot reach back and drop it, which is the whole difference
+    between "stop this answer" and "throw away what everyone is waiting for"."""
+
+    cancelled: bool = False
+    # Who is preparing this send. A Stop is pressed BY somebody and means "not
+    # the thing I asked for": marking every send in preparation put one person's
+    # Stop back on another's question — narrower than dropping the queue, the
+    # same wrong. Empty means unattributed, and an unattributed Stop still marks
+    # everything, which is what a caller that cannot say who always got.
+    author: str = ""
+
+
 _QueueItem = tuple[
     str,
     AgentToolContext,
     Callable[[list[TurnMessage]], None],
     "OnTurnEnd | None",
     "asyncio.Future[None]",
+    "PendingTurn | None",  # the caller's preparation token; see `enqueue`
 ]
 
 
@@ -523,6 +553,16 @@ class _WorkspaceSession:
     queue: asyncio.Queue[_QueueItem] = field(default_factory=asyncio.Queue)
     worker: asyncio.Task | None = None
     current_turn: asyncio.Task | None = None
+    # Work a caller runs BEFORE the turn and has asked Stop to be able to reach —
+    # compaction, which calls an LLM (see `run_interruptible`). A set, because a
+    # shared item's collaborators each prepare their own message, and Stop means
+    # all of it. Entries remove themselves when they end, so this holds only what
+    # is actually in flight.
+    preparing: set[asyncio.Task] = field(default_factory=set)
+    # Sends whose turn does not exist yet (see `PendingTurn`). Retired by
+    # `enqueue`, so this holds only the ones a Stop should still be able to
+    # reach — never a message already waiting its turn in the queue.
+    pending_turns: set[PendingTurn] = field(default_factory=set)
     # queue → the subscriber's user id ("" for an anonymous stream, e.g. per-chat /
     # workflow streams that don't participate in presence). #455 tracks it here so
     # a join/leave can broadcast the roster. Each queue element is a `(seq, event)`
@@ -746,6 +786,16 @@ class ChatTurnEngine:
         # publishes into THIS (now unreachable) session object, so anything it
         # emits from here on can never be seen anyway.
         ws.close_subscribers()
+        # Preparation is part of the turn being torn down. `chat_routes` deletes
+        # the conversation on the line after this one, so a summariser left
+        # running would finish against a thread that no longer exists and then
+        # write to it. Marked as well as cancelled: a send between `preparing`
+        # and `enqueue` must not start a turn for a conversation being deleted.
+        for prep in list(ws.preparing):
+            prep.cancel()
+        # Every pending send, whoever asked: the conversation itself is going.
+        for waiting in ws.pending_turns:
+            waiting.cancelled = True
         # Cancel the in-flight turn (if any) + the parked worker. `cancel()` on an
         # already-finished task is a harmless no-op, so no done-guard is needed.
         for task in (ws.current_turn, ws.worker):
@@ -760,6 +810,7 @@ class ChatTurnEngine:
         *,
         on_complete: Callable[[list[TurnMessage]], None],
         on_turn_end: OnTurnEnd | None = None,
+        pending: PendingTurn | None = None,
     ) -> asyncio.Future[None]:
         """#43: append a message to the investigation's FIFO turn queue and
         ensure its worker is running. Unlike `stream()`, a new message does NOT
@@ -767,6 +818,32 @@ class ChatTurnEngine:
         each other's work (Stop is the explicit `cancel_current`). Returns a
         future that resolves when THIS message's turn ends, so the caller can
         await its own turn while later messages queue behind it.
+
+        `pending` is the token this send registered with `preparing` before it
+        began preparing (compaction, a cold sandbox wake, the context build). A
+        Stop pressed during that window has nothing else to reach — the turn does
+        not exist yet — so it marks the token, and the worker declines to start.
+        Passing it here RETIRES it: from now on this message is queued like any
+        other, and a later Stop must not reach back and discard it.
+
+        Omit it and the send is simply not interruptible before it runs, which is
+        right for a caller with no preparation to speak of.
+
+        Scope, stated because it is easy to assume otherwise: this reaches a Stop
+        that lands on THIS pod. A Stop that lands elsewhere during preparation is
+        LOST — the turn runs to completion.
+
+        An earlier version of this sentence said `_watch_epoch` picks it up once
+        the turn starts. It does not, and measuring is what showed it: the worker
+        reads `my_epoch` at dequeue, by which time the peer's `advance()` is
+        already in that reading, so `> my_epoch` can never trip. The comfort was
+        the invention, not the gap.
+
+        Not repaired here, deliberately. Stamping at `preparing` and comparing at
+        the watcher would abort a message already queued behind a running turn
+        the moment that turn is stopped — the collateral this whole mechanism
+        exists to remove, moved one layer down. Cross-pod cancel is #349's
+        problem and wants #349's answer.
 
         #492: `on_turn_end` (optional) runs once after the turn's messages are
         persisted — the surface flushes the item's live sandbox to durable
@@ -776,7 +853,8 @@ class ChatTurnEngine:
         if session.worker is None or session.worker.done():
             session.worker = asyncio.create_task(self._worker(session, key))
         fut: asyncio.Future[None] = asyncio.get_running_loop().create_future()
-        session.queue.put_nowait((content, ctx, on_complete, on_turn_end, fut))
+        session.pending_turns.discard(pending) if pending is not None else None
+        session.queue.put_nowait((content, ctx, on_complete, on_turn_end, fut, pending))
         logger.info("turns: enqueued turn for %s", key)
         return fut
 
@@ -786,7 +864,36 @@ class ChatTurnEngine:
         cancellable task so `cancel_current` stops only the running turn and the
         worker proceeds to the next; its completion future is then resolved."""
         while True:
-            content, ctx, on_complete, on_turn_end, fut = await session.queue.get()
+            content, ctx, on_complete, on_turn_end, fut, pending = await session.queue.get()
+            # A Stop that landed while the caller was still PREPARING this turn
+            # (see `PendingTurn`): there was nothing to cancel then, so honouring
+            # it is entirely a matter of not starting now. Checked before the turn
+            # task exists, so the runner is never reached at all.
+            #
+            # It still ENDS, on the record and not merely live. `agentLog` reads
+            # "a reply is on its way" off the persisted thread, and that is only
+            # sound because a turn always ends in something persisted; a turn
+            # that declined to start and wrote nothing left the thread showing a
+            # question with no answer and no explanation, and the composer
+            # waiting half an hour for a reply nobody was going to send. So this
+            # writes the same marker the ordinary cancel path writes, and
+            # publishes the same terminal event live.
+            if pending is not None and pending.cancelled:
+                logger.info("turns: worker %s declined a turn stopped during prep", key)
+                try:
+                    on_complete([_error_message(RunCancelled())])
+                except Exception as exc:  # noqa: BLE001 — reported, never raised at the worker
+                    # Loud, like `_run_turn`'s own persist failure. Swallowed, a
+                    # failed write here lands the person back in the state this
+                    # path exists to prevent — a question with no ending — and
+                    # says nothing about why.
+                    logger.exception("turns: worker %s could not record a declined turn", key)
+                    session.publish(_terminal_error(exc))
+                session.publish(RunCancelled())
+                if not fut.done():
+                    fut.set_result(None)
+                session.queue.task_done()
+                continue
             # Make the turn cancellable BEFORE reading the epoch. `current()` awaits
             # (a specstar round-trip); a Stop landing in that window must find the
             # turn via the same-pod fast-path (`cancel_current` reads `current_turn`)
@@ -895,15 +1002,27 @@ class ChatTurnEngine:
         (and broadcast) and the (partial) result is always persisted."""
         reducer = _TurnReducer()
         try:
-            # Warm the sandbox as the turn begins (best-effort) so its cold-start
-            # overlaps the model's first response, instead of stalling when the
-            # agent first calls exec. Opening/viewing a chat never drives a turn,
-            # so a sandbox is only spun up once the user actually sends a message.
+            # Warm the sandbox as the turn begins (best-effort), so the cold
+            # start is already paid for by the time the agent calls exec.
+            #
+            # It does NOT overlap the model's first response — this is awaited
+            # before `_events` even builds the stream, so the wait is at the
+            # front of the turn either way. What it buys is that the wait
+            # happens once, here, instead of inside whichever tool call happens
+            # to be first. Opening/viewing a chat never drives a turn, so a
+            # sandbox is only spun up once the user actually sends a message.
             # A KB turn carries no sandbox (ensure_sandbox_via is None) → skipped;
             # a warm failure must never fail the turn (exec would still wake it).
             if ctx.ensure_sandbox_via is not None:
                 with contextlib.suppress(Exception):
-                    await ctx.ensure_sandbox()
+                    # `prepare_env=False`: the python env is NOT prepared here.
+                    # This runs before `_run_once` attaches `on_exec_output`, so
+                    # uv's progress would go to a sink that does not exist yet —
+                    # and a successful preparation is remembered, which also
+                    # silenced the stale-lock advisory for the whole turn. It
+                    # happens on the agent's first exec instead, where the tool
+                    # card can show it (#775).
+                    await ctx.ensure_sandbox(prepare_env=False)
             async for ev in self._events(content, ctx):
                 reducer.add(ev)
                 publish(ev)
@@ -944,7 +1063,51 @@ class ChatTurnEngine:
                 with contextlib.suppress(Exception):
                     await on_turn_end()
 
-    async def cancel_current(self, key: str) -> None:
+    @contextlib.asynccontextmanager
+    async def preparing(self, key: str, author: str = "") -> AsyncIterator[PendingTurn]:
+        """Own the window in which a send is preparing a turn, and yield its token.
+
+        Hand the token to `enqueue`, which retires it at the right moment: from
+        then on the message is queued and a Stop must not reach back and drop it.
+        This context is what guarantees the token goes ANYWAY — a send raises
+        between here and `enqueue` more often than it looks (the sandbox acquire,
+        tool discovery, skills, the context block are all in that stretch), and a
+        registration with no release grew the set for the life of the item.
+
+        `author` scopes what a Stop by a named person may decline; see
+        `PendingTurn`."""
+        pending = PendingTurn(author=author)
+        session = self._ws_session(key)
+        session.pending_turns.add(pending)
+        try:
+            yield pending
+        finally:
+            session.pending_turns.discard(pending)
+
+    async def run_interruptible[T](self, key: str, coro: Coroutine[Any, Any, T]) -> T:
+        """Run `coro` as work a Stop on `key` can cancel, and return its result.
+
+        For the work a caller does BEFORE the turn exists. `cancel_current` only
+        ever knew about `current_turn`, so anything upstream of the queue was
+        beyond Stop's reach however long it took — compaction most of all, which
+        calls an LLM and can hold a send for many seconds.
+
+        Its OWN task, deliberately, rather than registering the caller's: the
+        rest of a send's preparation must survive a Stop, because it is not
+        atomic (a cold sandbox restore cancelled halfway leaves a sandbox that is
+        alive but only partly restored, and nothing on the read path notices).
+        Cancelling the caller's task would take that down with it. So the caller
+        wraps only the part that is safe to lose, and the send's `PendingTurn`
+        token is what stops the turn the rest of it was preparing."""
+        task = asyncio.create_task(coro)
+        session = self._ws_session(key)
+        session.preparing.add(task)
+        try:
+            return await task
+        finally:
+            session.preparing.discard(task)
+
+    async def cancel_current(self, key: str, by: str = "") -> None:
         """#43 Stop: interrupt the investigation's in-flight turn (anyone may do
         this). Queued messages are untouched — the worker runs the next one. A
         no-op when nothing is running.
@@ -957,6 +1120,31 @@ class ChatTurnEngine:
         session = self._ws_sessions.get(key)
         if session is None:
             return
+        # Pre-turn work that asked to be reachable (`run_interruptible`) — the
+        # LLM call inside compaction, above all. Cancelled first: it stands
+        # BETWEEN the person and their answer, so leaving it running would let a
+        # stopped send carry on paying for a summary nobody is waiting for.
+        # Iterated over a copy — each task's own cleanup discards it from the set.
+        for prep in list(session.preparing):
+            prep.cancel()
+        # …and the sends whose turn does not exist yet. Marking rather than
+        # cancelling, because the preparation itself must FINISH: it is not
+        # atomic, and a cold sandbox restore abandoned halfway leaves a sandbox
+        # that is alive but only partly restored, which nothing on the read path
+        # notices. The turn it was preparing is what does not run.
+        #
+        # Only the presser's own, when the caller says who. Stop on a shared item
+        # is anyone's to press against the RUNNING turn — that is #43 — but a
+        # send still being prepared is not yet anyone else's business, and
+        # marking every one of them was the same collateral this mechanism
+        # replaced, surviving in a smaller window.
+        for waiting in session.pending_turns:
+            # Marked when the Stop is unattributed (a caller that cannot say who),
+            # when the SEND is unattributed (a round the system is driving, which
+            # is nobody's question and anybody's to stop), or when they are the
+            # same person. Only "someone else's typed question" is spared.
+            if not by or not waiting.author or waiting.author == by:
+                waiting.cancelled = True
         turn = session.current_turn
         if turn is not None and not turn.done():
             turn.cancel()

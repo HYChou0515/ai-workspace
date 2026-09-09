@@ -43,6 +43,38 @@ export function resolveInFolder(folder: string, ref: string): string | null {
   return `${folder}/${out.join("/")}`;
 }
 
+/**
+ * A file an assembled page references, resolved against the ENTRY's directory
+ * and bounded by the WUI's folder.
+ *
+ * Those are two different things as soon as a page is BUILT: `dist/index.html`
+ * saying `./assets/x.js` means the file next to itself. Resolving from the WUI
+ * folder instead put every reference one directory too high and nothing was
+ * inlined — the page rendered blank, which is the same lost-origin mistake that
+ * broke markdown images (#717).
+ *
+ * The boundary stays the folder, not the entry's directory, so a built page can
+ * still reach a sibling of its view file (`../logo.png`) without being able to
+ * reach the item.
+ */
+export function resolveAssetPath(folder: string, entryDir: string, ref: string): string | null {
+  if (!ref || ref.startsWith("/")) return null;
+  const out = entryDir.split("/").filter(Boolean);
+  const floor = folder.split("/").filter(Boolean).length;
+  for (const seg of ref.split("/")) {
+    if (seg === "" || seg === ".") continue;
+    if (seg !== "..") {
+      out.push(seg);
+      continue;
+    }
+    // Counted against the FOLDER's depth, not the entry's: climbing back to the
+    // view file is ordinary; climbing past it is the escape this refuses.
+    if (out.length <= floor) return null;
+    out.pop();
+  }
+  return out.length > floor ? `/${out.join("/")}` : null;
+}
+
 /** Normalise a workspace-absolute path, or `null` if it climbs past the root or
  * names the root itself. Same segment walk as above, so `/sales/../notes.md`
  * cannot arrive somewhere a string comparison would later mistake for inside. */
@@ -69,6 +101,34 @@ function normalizeAbsolute(path: string): string | null {
  */
 export function resolveReadPath(folder: string, path: string): string | null {
   return path.startsWith("/") ? normalizeAbsolute(path) : resolveInFolder(folder, path);
+}
+
+/**
+ * Is this read asking for the page's OWN file — the one place absence is
+ * ordinary rather than a mistake?
+ *
+ * Deliberately NOT `resolveWritePath(...) !== null`. That function answers a
+ * WRITE question and opens with `if (folder === "") return null` — a security
+ * decision about a root-level page, which may not write anywhere. Borrowing it
+ * to answer a READ question imported that decision wholesale: a root page,
+ * which the reference documents as able to read, had EVERY missing read
+ * reported, including the bare read of its own data file on its very first
+ * open. An alarm that always fires is the failure this whole distinction exists
+ * to prevent.
+ *
+ * A ROOT page is quiet for every read, and that is not a shortcut. Its folder
+ * IS the item, so there is no boundary for a path to be outside of and no basis
+ * for calling any absence a mistake: `/data.json` and `/tmp/out.json` are the
+ * same kind of thing to it. Answering `!raw.startsWith("/")` instead looked
+ * careful and split one FILE in two — `readFile("data.json")` quiet,
+ * `readFile("/data.json")` loud, same file, same page — so an author who
+ * spelled it out got lectured about a slash they had used correctly. Quiet
+ * everywhere is also exactly what a root page did before any of this.
+ */
+export function isOwnFile(folder: string, raw: string): boolean {
+  if (folder === "") return true;
+  const abs = raw.startsWith("/") ? normalizeAbsolute(raw) : resolveInFolder(folder, raw);
+  return abs !== null && abs.startsWith(`${folder}/`);
 }
 
 /**

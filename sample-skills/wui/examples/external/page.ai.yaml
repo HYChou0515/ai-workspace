@@ -1,0 +1,7 @@
+view: wui
+title: Lot lookup
+
+# EVERY tool this page calls has to be named here, or the call is refused before
+# it leaves the browser. Replace `lot-status` with a tool THIS app grants — the
+# skill's "Tools this app offers its WUIs" section lists them by name.
+tools: [lot-status]

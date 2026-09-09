@@ -16,6 +16,7 @@ import { EntryView } from "../../components/AgentEntryView";
 import { HealthDot } from "../../components/HealthDot";
 import { Icon } from "../../components/Icon";
 import { ModelEffortPicker } from "../../components/ModelEffortPicker";
+import { ResizeDivider } from "../../components/ResizeDivider";
 import { SkillsModal } from "../../components/SkillsModal";
 import { WorkflowsModal } from "../../components/WorkflowsModal";
 import { EnvVarsModal } from "../../components/EnvVarsModal";
@@ -47,10 +48,17 @@ import { TurnStatus } from "../../components/TurnStatus";
 import { turnLooksSilent, turnsFromEntry } from "./agentLog";
 import type { CompactionReason } from "../../api/types";
 import type { QuotaKind } from "../../lib/quotaFailure";
+import { usePersistentNumber } from "../../hooks/usePersistentNumber";
 import { pxToRem } from "../../lib/pxToRem";
 import { useT } from "../../lib/i18n";
 import { type AttachProgress, attachPrompt, runAttach, uploadPathFor } from "./attach";
 import { extractClipboardFiles, isImage, readTransferEntries } from "./transfer";
+
+/** Said in two places — the composer's placeholder and the refusal every
+ * control gives — so it lives once. Two copies of one sentence diverge on the
+ * next edit, and a control that explains itself differently from the box beside
+ * it is the mismatch this file keeps having to fix. */
+const NO_PERMISSION_TO_SEND = "You don't have permission to send messages in this workspace.";
 
 /**
  * Max width of the conversation reading column. When the chat pane is wider than
@@ -61,6 +69,13 @@ import { extractClipboardFiles, isImage, readTransferEntries } from "./transfer"
  * KB doc viewer's `.kb-docpage__body` cap for a consistent reading measure.
  */
 export const CHAT_COLUMN_MAX_W = 860;
+
+/** Typing-area height bounds (px). The default is the old `rows={3}`; the floor
+ * keeps a line and a half visible; the ceiling stops a drag from swallowing the
+ * feed on a short window. */
+const COMPOSER_H_DEFAULT = 64;
+const COMPOSER_H_MIN = 40;
+const COMPOSER_H_MAX = 420;
 
 /** The centred, capped reading column shared by the feed, chips row and composer. */
 const chatColumn: React.CSSProperties = {
@@ -297,9 +312,13 @@ export function AgentPanel({
         // of history, that this whole mechanism was built to stop telling.
         const said: Partial<Record<CompactionReason, string>> = {
           "no-room":
-              "這個環境的提示詞本身已經佔滿模型的可讀範圍,整理對話幫不上忙 —— 需要調大模型視窗或縮短提示詞。",
+              "目前的提示詞本身已經佔滿模型的可讀範圍,整理對話幫不上忙 —— 需要調大模型視窗或縮短提示詞。",
           failed: "整理沒有成功,對話沒有更動。可以再試一次。",
-          unavailable: "這個環境沒有開啟整理功能。",
+          unavailable: "這個站台沒有開啟整理功能。",
+          // Its own wording rather than `failed`: nothing went wrong, the person
+          // stopped it — and being told their own Stop was a failure is how a
+          // control stops being trusted.
+          stopped: "整理已中止,對話沒有更動。",
         };
         setComposerHint(said[r.reason] ?? "這段對話還沒有需要壓縮的內容。");
         return;
@@ -390,6 +409,20 @@ export function AgentPanel({
   // aggregate byte/file progress driving the bar. `dragging` flags the drop overlay.
   const [progress, setProgress] = useState<AttachProgress | null>(null);
   const [dragging, setDragging] = useState(false);
+  // How tall the composer stands. Persisted + clamped like every other panel
+  // size in this app (`rca:layout:*`), so a stored bad value cannot wedge the
+  // layout and the choice survives a reload. The feed is `flex: 1`, so every
+  // pixel the composer takes comes out of the message list — which is what a
+  // person dragging this seam is choosing between.
+  const [composerH, setComposerH] = usePersistentNumber(
+    "chat:composerHeight",
+    COMPOSER_H_DEFAULT,
+    COMPOSER_H_MIN,
+    COMPOSER_H_MAX,
+  );
+  // Anchored drag: ResizeDivider reports the delta from the START of the drag,
+  // so the parent snapshots the value it anchors to (see its docstring).
+  const composerStart = useRef(composerH);
   // #364: attached images show as removable preview chips instead of a raw path in
   // the box; each holds the uploaded workspace `path` (appended to the message on send
   // so the agent can read_image it) + an object-URL `url` for the thumbnail.
@@ -539,15 +572,38 @@ export function AgentPanel({
       return [];
     });
 
+  /** Why a send would be refused right now, or null.
+   *
+   * ONE place, because it used to be several: the composer, a suggestion chip
+   * and an `ask_user` answer each carried their own copy, the rule changed, and
+   * two of them were left behind still refusing during anyone's turn — the
+   * spectator lock-out the change existed to remove — while ignoring the one
+   * state where a send really is refused. */
+  const sendRefusal = (): string | null => {
+    // `readOnly` belongs here too. It was enforced on the composer, the Send
+    // button and the chip, each separately — and NOT on the `ask_user` answer
+    // buttons, which is how a viewer without permission got a raw
+    // `send failed: 403`, the very symptom the chip's own comment says its
+    // guard exists to prevent.
+    if (readOnly) return NO_PERMISSION_TO_SEND;
+    if (log.stopping) return "正在停止這一輪…停下之後再送出。";
+    return null;
+  };
+
   const submit = () => {
     const text = draft.trim();
-    if (log.streaming && !othersTurn) {
-      // Pressing Enter mid-turn used to do NOTHING — the textarea stays enabled,
-      // so the user types a whole message, hits Enter, and gets no reaction at
-      // all. During any of the stuck states that is indistinguishable from the
-      // app being dead. Keep the draft (retyping it is the insult on top) and say
-      // why.
-      setComposerHint("回覆還在進行中。等它完成，或按 Stop 中止後再送出。");
+    const why = sendRefusal();
+    if (why) {
+      // The only refusal left. Sending now would queue behind a turn nobody has
+      // actually stopped yet — the arrangement that had a message vanish into a
+      // queue while the previous answer kept streaming, which reads as the whole
+      // system being broken. Keep the draft: retyping it is the insult on top.
+      //
+      // Your own RUNNING turn is no longer refused. The backend serializes
+      // messages and does not cancel on them (#43), so the message just queues —
+      // and refusing your own turn while queueing behind everyone else's is what
+      // made Stop-then-send the only way through.
+      setComposerHint(why);
       return;
     }
     setComposerHint(null);
@@ -606,7 +662,11 @@ export function AgentPanel({
   }, [log.entries]);
 
   const onChip = (label: string) => {
-    if (log.streaming) return;
+    const why = sendRefusal();
+    if (why) {
+      setComposerHint(why);
+      return;
+    }
     void send(label);
   };
 
@@ -693,7 +753,11 @@ export function AgentPanel({
             // grill-me: answering an `ask_user` question is an ordinary send
             // that records which question it answers.
             onAnswerQuestion={(a) => {
-              if (log.streaming) return;
+              const why = sendRefusal();
+              if (why) {
+                setComposerHint(why);
+                return;
+              }
               void send(a.content, { answers: a.answers });
             }}
             answeredQuestions={answeredQuestions}
@@ -802,7 +866,13 @@ export function AgentPanel({
             // A read-only viewer could still fire a chip, and got a raw
             // "send failed: 403" for it — the textarea beside it was already
             // disabled for exactly this reason.
-            disabled={log.streaming || readOnly}
+            //
+            // The send rule itself comes from `sendRefusal`, not a second copy
+            // of it: this button carried its own `log.streaming` and so stayed
+            // dead through anyone's turn long after the composer stopped
+            // refusing that — a disabled control saying something the composer
+            // beside it contradicts.
+            disabled={sendRefusal() !== null}
             style={{
               display: "inline-flex",
               alignItems: "center",
@@ -813,8 +883,12 @@ export function AgentPanel({
               background: "var(--white)",
               fontSize: pxToRem(12),
               color: "var(--text-paper)",
-              cursor: log.streaming ? "not-allowed" : "pointer",
-              opacity: log.streaming ? 0.5 : 1,
+              // Same rule as `disabled` above, deliberately not a second copy of
+              // it: these two kept `log.streaming` when the guard moved, so for
+              // a whole turn the chip was drawn as unclickable while clicking it
+              // worked — the inverse of the mismatch the sweep set out to end.
+              cursor: sendRefusal() !== null ? "not-allowed" : "pointer",
+              opacity: sendRefusal() !== null ? 0.5 : 1,
             }}
           >
             <Icon name="sparkle" size={12} color="var(--accent)" />
@@ -825,7 +899,29 @@ export function AgentPanel({
         </div>
       )}
 
+      {/* The handle floats on the seam via negative margins, and the form below
+          is `position: relative` (its drop overlay needs that) — a positioned
+          later sibling paints OVER it, which left only the top ~6px of the
+          handle hittable and its centre dead. This wrapper lifts the whole hit
+          area above the form. Found by hit-testing the real page: every unit
+          test passed because they dispatch events straight at the element. */}
+      <div style={{ position: "relative", zIndex: 1 }}>
+        <ResizeDivider
+          orientation="horizontal"
+          ariaLabel="resize composer"
+          // Published for assistive tech (window splitter pattern) — and it is
+          // what makes the arrow keys mean something to a screen reader.
+          position={{ value: composerH, min: COMPOSER_H_MIN, max: COMPOSER_H_MAX }}
+          onResizeStart={() => {
+            composerStart.current = composerH;
+          }}
+          // Dragging UP is a negative delta and must GROW the composer, so the
+          // delta is subtracted — the same anchoring the shell's bottom panel uses.
+          onResize={(d) => setComposerH(composerStart.current - d)}
+        />
+      </div>
       <form
+        data-testid="agent-composer"
         onSubmit={(e) => {
           e.preventDefault();
           submit();
@@ -847,11 +943,16 @@ export function AgentPanel({
         }}
         style={{
           padding: 12,
-          borderTop: "1px solid var(--paper-3)",
+          // The divider above draws the seam now, so the form's own top border
+          // would double it.
           background: "var(--white)",
           display: "flex",
           flexDirection: "column",
           position: "relative",
+          // NO fixed height here: the form also carries the chips row, the
+          // usage/token lines and the button row. Pinning it squeezed all of
+          // that until it spilled past the panel's bottom edge and the send row
+          // left the screen — visible only in a real browser.
         }}
       >
         {dragging && (
@@ -954,7 +1055,7 @@ export function AgentPanel({
           </div>
         )}
         {imageChips.length > 0 && (
-          <div
+          <div className="scrollable"
             data-testid="image-chips"
             style={{
               display: "flex",
@@ -1111,20 +1212,25 @@ export function AgentPanel({
           }}
           placeholder={
             readOnly
-              ? "You don't have permission to send messages in this workspace."
+              ? NO_PERMISSION_TO_SEND
               : onSteer
                 ? "Tell the run what to change (e.g. use the X collection, redo from ingest)…"
                 : mentions.length > 0
                   ? "Add a note (optional)…"
                   : "Ask the agent…"
           }
-          rows={3}
           style={{
             border: "1px solid var(--paper-3)",
             borderRadius: "var(--radius-btn)",
             padding: 8,
             fontSize: pxToRem(13),
-            resize: "vertical",
+            // The seam handle owns this height — and only this box grows, so
+            // the rows around it keep their natural size instead of being
+            // squeezed off screen.
+            height: composerH,
+            // The corner grip is gone: a 15px target in a corner, and it moved
+            // only this box while the seam handle moves the composer as a whole.
+            resize: "none",
             outline: "none",
             fontFamily: "var(--font-body)",
           }}
@@ -1233,51 +1339,85 @@ export function AgentPanel({
           >
             {modCombo("↵")}
           </span>
-          {log.streaming ? (
-            <button
-              type="button"
-              onClick={() => {
-                cancel();
-                // Stop's ENTIRE feedback used to be the spinner disappearing,
-                // which reads the same as the turn finishing on its own. So the
-                // click still says something — but about the CLICK, not the
-                // outcome: the transcript already gets a 「已取消。」 banner when
-                // the turn actually stops, and saying it here too is how one
-                // press of Stop came to print the same news twice.
-                setComposerHint("正在停止這一輪…");
-              }}
-              style={{
-                padding: "6px 14px",
-                borderRadius: "var(--radius-btn)",
-                border: "1px solid var(--err)",
-                color: "var(--err)",
-                fontSize: pxToRem(12),
-              }}
-            >
-              Stop
-            </button>
-          ) : (
-            (() => {
-              const summoning = mentions.length > 0;
-              const enabled = !readOnly && (summoning || draft.trim().length > 0);
-              return (
+          {(() => {
+            // TWO buttons, both always here. They used to share one slot, one
+            // size and one position, swapped on `streaming` — so the control
+            // changed meaning under the pointer: you aimed at Send, the turn was
+            // still running, and you stopped it; `cancel()` flipped `streaming`
+            // at once and put Send back under your finger for the second click.
+            // "It stopped the answer and then sent my message" is that, exactly.
+            //
+            // Each is disabled when it would not be honest, which is the other
+            // half: a disabled button says what will happen BEFORE the click,
+            // where the old refusal only said it after.
+            const summoning = mentions.length > 0;
+            // Nothing to stop with no turn running — and nothing left to stop
+            // once a Stop is already in flight.
+            const canStop = log.streaming && !log.stopping;
+            // Sending is fine DURING your own turn: the backend serializes
+            // messages, it does not cancel on them (#43), so the message simply
+            // queues. Refusing your own turn while queueing behind everyone
+            // else's is what made Stop-then-send the only way through. Not
+            // while stopping, though: that would queue behind a turn nobody has
+            // actually stopped yet.
+            const canSend =
+              sendRefusal() === null && (summoning || draft.trim().length > 0);
+            const iconButton = {
+              width: 32,
+              height: 32,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              borderRadius: "var(--radius-btn)",
+            } as const;
+            return (
+              <>
                 <button
-                  type="submit"
-                  disabled={!enabled}
+                  type="button"
+                  // Icon-only, so it carries an explicit name. `title` would
+                  // in fact supply one on its own — measured: with the label
+                  // removed the button is still findable by name — but that is
+                  // a fallback the spec applies only when nothing better
+                  // exists, and what a control IS should not rest on it.
+                  aria-label="Stop"
+                  title="Stop"
+                  disabled={!canStop}
+                  onClick={() => {
+                    cancel();
+                    // Stop's ENTIRE feedback used to be the spinner
+                    // disappearing, which reads the same as the turn finishing
+                    // on its own. So the click still says something — but about
+                    // the CLICK, not the outcome: the transcript already gets a
+                    // 「已取消。」 banner when the turn actually stops, and saying
+                    // it here too is how one press came to print the same news
+                    // twice.
+                    setComposerHint("正在停止這一輪…");
+                  }}
                   style={{
-                    padding: "6px 14px",
-                    borderRadius: "var(--radius-btn)",
-                    background: enabled ? "var(--accent)" : "var(--paper-3)",
-                    color: enabled ? "var(--white)" : "var(--text-paper-d)",
-                    fontSize: pxToRem(12),
-                    fontWeight: 500,
+                    ...iconButton,
+                    border: "1px solid var(--err)",
+                    color: canStop ? "var(--err)" : "var(--text-paper-d)",
+                    borderColor: canStop ? "var(--err)" : "var(--paper-3)",
                   }}
                 >
-                  {summoning ? "Notify" : "Send"}
+                  <Icon name="x" size={14} />
                 </button>
-              );
-            })()
-          )}
+                <button
+                  type="submit"
+                  aria-label={summoning ? "Notify" : "Send"}
+                  title={summoning ? "Notify" : "Send"}
+                  disabled={!canSend}
+                  style={{
+                    ...iconButton,
+                    background: canSend ? "var(--accent)" : "var(--paper-3)",
+                    color: canSend ? "var(--white)" : "var(--text-paper-d)",
+                  }}
+                >
+                  <Icon name={summoning ? "bell" : "arrow_r"} size={14} />
+                </button>
+              </>
+            );
+          })()}
         </div>
         </div>
       </form>
@@ -1491,7 +1631,7 @@ export function AgentHeader({
       {environment && (
         <button
           type="button"
-          // The item's execution environment: is it running, what is it costing,
+          // The item's sandbox: is it running, what is it costing,
           // how big may it be. Beside the variables button because both are
           // per-item configuration of the same sandbox — but gated on the App
           // HAVING one, not on who may edit the item.

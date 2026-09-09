@@ -35,6 +35,48 @@ const run = (issues: EntityInstance[], milestones: EntityInstance[] = [], today 
 const spanOf = (out: ReturnType<typeof run>, number: number) =>
   out.issues.find((p) => p.number === number)?.span;
 
+describe("a span that names a clock is still a DAY to the scheduler (#785)", () => {
+  // `spanToDates` can return `YYYY-MM-DDTHH:mm` since #785, and every
+  // comparison in this module is text over bare dates. `"2026-02-02" >=
+  // "2026-02-02T09:30"` is false — the shorter string sorts first — so a manual
+  // issue that happens to carry a clock stops blocking, and the scheduler
+  // books somebody onto work they are already doing.
+  it("routes automatic work around a manual span that carries a clock", () => {
+    const plain = run(
+      [
+        issue(1, { assignee: "alice", schedule: "manual", span: "2026-07-02/2026-07-03" }),
+        issue(2, { assignee: "alice", exp_days: 1 }),
+      ],
+      [],
+      "2026-07-02",
+    );
+    const timed = run(
+      [
+        issue(1, {
+          assignee: "alice",
+          schedule: "manual",
+          span: "2026-07-02T09:30/2026-07-03T17:00",
+        }),
+        issue(2, { assignee: "alice", exp_days: 1 }),
+      ],
+      [],
+      "2026-07-02",
+    );
+    // Same two days blocked, so the same answer — the clock says WHEN in the
+    // day, and this scheduler lays out whole days.
+    expect(spanOf(timed, 2)).toBe(spanOf(plain, 2));
+    expect(spanOf(timed, 2)).toBe("2026-07-06/2026-07-06");
+  });
+
+  it("anchors to the milestone's DAY, never writing a clock the issue never had", () => {
+    const out = run(
+      [issue(1, { assignee: "alice", exp_days: 1, milestone: 1 })],
+      [milestone(1, { span: "2026-07-09T09:30/" })],
+    );
+    expect(spanOf(out, 1)).toBe("2026-07-09/2026-07-09");
+  });
+});
+
 describe("scheduleRows — one queue per assignee", () => {
   it("chains a person's work: the next task starts after the last one ends", () => {
     const out = run(

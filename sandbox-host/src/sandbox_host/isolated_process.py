@@ -26,11 +26,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from .local_process import _HOME, LocalProcessSandbox
+from .local_process import _HOME, _UV_CACHE, LocalProcessSandbox
 from .protocol import EnforcedLimits, SandboxHandle, SandboxSpec
 
 # cgroup v2 cpu.max uses a fixed 100ms accounting period.
 _CPU_PERIOD = 100_000
+# #775: uv's cache root, a sibling of the sandbox dirs on the same scratch
+# volume — same filesystem as the venvs, which is what lets uv hardlink into
+# them instead of copying.
 _SIZE_UNITS = {"K": 1024, "M": 1024**2, "G": 1024**3}
 
 
@@ -248,9 +251,15 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         answer, so the number published is the number written to `cpu.max`."""
         return self._cgroups.effective(spec.cpu_cores, spec.memory_bytes)
 
-    async def create(self, spec: SandboxSpec) -> SandboxHandle:
+    async def create(self, spec: SandboxSpec, item_id: str | None = None) -> SandboxHandle:
+        # `item_id` is forwarded, not ignored: the base keys this sandbox's uv
+        # cache by it (#775), and a uid cannot stand in — this class POOLS uids
+        # and frees them on kill, so a uid-keyed cache would be handed to the
+        # next tenant. Dropping the argument here left `_item_of` empty and the
+        # cache back on a per-sandbox uuid; keeping the old SIGNATURE broke
+        # `POST /sandboxes` outright, because the controller passes it.
         async with self._alloc_lock:  # serialize uid allocation across handles
-            handle = await super().create(spec)
+            handle = await super().create(spec, item_id)
             uid, gid = self._pool.alloc()
             ws = self._workspace(handle)
             cgroup = await asyncio.to_thread(
@@ -309,13 +318,69 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         # #393: the per-sandbox HOME (a workspace sibling) must be writable by
         # the dropped uid so the carrier launcher's HOME/caches + a user's `pip
         # --user` install land there. No default ACL — only the uid writes here.
-        self._own_home(workspace.parent / _HOME, uid)
+        self._own_privately(workspace.parent / _HOME, uid)
 
-    def _own_home(self, home: Path, uid: int) -> None:
-        """Hand `.home` to the sandbox uid, 0700. Idempotent — chowning to the
-        same uid is a no-op, which is what lets the exec path redo it."""
-        os.chown(home, uid, -1)
-        os.chmod(home, 0o700)
+    def _own_privately(self, path: Path, uid: int) -> None:
+        """Hand one infra-area dir to the sandbox uid, 0700 — `.home` (#393) and
+        the project venv (#775), both of which the dropped uid has to write and
+        neither of which anyone else may read. Idempotent: chowning to the same
+        uid is a no-op, which is what lets the exec path redo it."""
+        os.chown(path, uid, -1)
+        os.chmod(path, 0o700)
+
+    def _ensure_venv(self, handle: SandboxHandle, root: Path) -> Path:
+        """The base makes the dir; here it also has to be OWNED correctly.
+
+        `uv sync` is the thing that fills it, and it runs as the sandbox uid via
+        `setpriv` — so a directory this pod owns is one uv cannot write, and the
+        profile's whole environment fails to build. Idempotent, like `.home`:
+        chowning to the same derived uid is a no-op, which is what lets the exec
+        path redo it every time."""
+        venv = super()._ensure_venv(handle, root)
+        self._own_privately(venv, self._identities[handle.id].uid)
+        return venv
+
+    def _own_cache(self, handle: SandboxHandle, cache: Path) -> None:
+        """The cache belongs to the ITEM, so it outlives any one sandbox — but
+        the uid that must fill it is per sandbox (derived here, POOLED on the
+        host) and cannot be assumed. Re-established every exec, the same shape
+        `.home` has, for the same reason.
+
+        0700 is what makes the key's guarantee real: a cache only the tenant
+        that filled it can read is the entire argument for keeping one."""
+        self._own_privately(cache, self._identities[handle.id].uid)
+
+    def _release_cache(self, handle: SandboxHandle) -> None:
+        """Hand the item's cache back to THIS SERVICE when its LAST sandbox ends.
+
+        The cache outlives the sandbox deliberately, but `_own_cache` left it
+        owned by that sandbox's uid — and this backend hands uids back to a pool
+        on kill. Without this, the next tenant of that uid reads and writes the
+        previous item's cache: exactly the inheritance keying by item was chosen
+        to prevent, one step later. Owned by the service between sandboxes, and
+        re-chowned to the new uid the next time the item runs.
+
+        The last, because `kill` is per-HANDLE and the cache is per-ITEM. This
+        host mints a fresh uuid handle per create, so one item can have two live
+        sandboxes here — which is not exotic, it is what the #366 rebuild race
+        produces every time two app pods wake one cold item: the loser kills its
+        orphan while the winner is running. Releasing on that kill revoked the
+        WINNER's access to a cache its `uv sync` was filling, so the sync died
+        of EACCES and took the turn with it. The orphan usually never exec'd, so
+        it had taken no ownership to hand back and the release was pure damage.
+        """
+        key = self._cache_key(handle)
+        still_live = any(
+            self._cache_key(SandboxHandle(id=other)) == key
+            for other in self._dirs
+            if other != handle.id
+        )
+        if still_live:
+            return
+        cache = self._root / _UV_CACHE / key
+        if cache.is_dir():
+            with contextlib.suppress(OSError):
+                self._own_privately(cache, os.getuid())
 
     def _ensure_home(self, handle: SandboxHandle, root: Path) -> Path:
         """The base makes the dir; here it also has to be OWNED correctly.
@@ -325,15 +390,32 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         a plain `mkdir` would hand it a HOME it cannot write, which is the same
         failure from the permission side."""
         home = super()._ensure_home(handle, root)
-        self._own_home(home, self._identities[handle.id].uid)
+        self._own_privately(home, self._identities[handle.id].uid)
         return home
 
     async def kill(self, handle: SandboxHandle) -> None:
         ident = self._identities.pop(handle.id, None)
         if ident is not None:
             await asyncio.to_thread(self._cgroups.remove, ident.cgroup)
-            self._pool.free(ident.uid, ident.gid)
-        await super().kill(handle)
+        # The uid goes back to the pool only AFTER `super().kill()` has run
+        # `_release_cache`. While that release was unconditional the order did
+        # not matter — the cache returned to the service on the same tick — but
+        # it can now be DEFERRED (another sandbox for this item is still live),
+        # and a deferred release leaves the cache owned 0700 by a uid already
+        # back in the pool. Whoever takes that uid next could read the surviving
+        # item's downloads until its own next exec re-chowns them: the
+        # inheritance keying by ITEM was chosen to prevent, through the guard
+        # that was added to protect the same cache.
+        try:
+            await super().kill(handle)
+        finally:
+            # In a `finally` because `_identities.pop` above already happened:
+            # once the teardown raises — a `CancelledError` during the rmtree
+            # is the realistic one, from a client disconnect or SIGTERM —
+            # nothing else could ever free this uid, and a leaked uid is
+            # invisible because it is simply never handed out again.
+            if ident is not None:
+                self._pool.free(ident.uid, ident.gid)
 
     def _exec_argv(
         self, handle: SandboxHandle, cmd: list[str]

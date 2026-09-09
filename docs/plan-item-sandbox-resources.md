@@ -137,7 +137,7 @@ export type ItemVerb = "read_meta" | "read_chat" | "read_content"
 
 §1.3 之後撞牆從例外變成常態，所以這一刻的體驗**就是這個功能的體驗**，不是錯誤處理的邊角。
 
-今天使用者看到：`cpu 4 of 4 already in use by live environments`。他知道滿了，但不知道
+今天使用者看到：`cpu 4 of 4 already in use by live sandboxes`。他知道滿了，但不知道
 **是誰佔著**，也不知道**關掉哪一個夠**——得自己想到有 `/my-resources` 這頁、切過去、
 看清單、關掉、切回來、重打一次訊息。
 

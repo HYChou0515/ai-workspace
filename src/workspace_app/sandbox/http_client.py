@@ -278,7 +278,7 @@ class HttpSandbox:
             )
             raise SandboxNotFound(handle.id) from exc
         if resp.status_code == 404:
-            self._raise_mapped(resp, handle)
+            self._raise_mapped(resp, handle, method, suffix)
         resp.raise_for_status()
         logger.debug("sandbox-http: %s %s -> %d", method, suffix, resp.status_code)
         return resp
@@ -316,10 +316,26 @@ class HttpSandbox:
         raise AssertionError("unreachable")  # pragma: no cover — AsyncRetrying returns or raises
 
     @staticmethod
-    def _raise_mapped(resp: httpx.Response, handle: SandboxHandle) -> None:
+    def _raise_mapped(
+        resp: httpx.Response, handle: SandboxHandle, method: str, suffix: str
+    ) -> None:
         body = resp.json()
         exc_type = _ERRORS.get(body.get("error", ""), SandboxNotFound)
         message = body.get("detail") or handle.id
+        if "error" not in body:
+            # The host answers a real miss with its own `{"error": ...}`. A 404
+            # WITHOUT that key is the framework's route-not-found, i.e. this host
+            # does not implement this endpoint — an app pod ahead of a host pod
+            # during a rollout. Same exception (nothing degrades, by decision:
+            # `sandbox-host` ships on this pipeline), but the message has to say
+            # which it was: an operator reading "sandbox not found" about a
+            # sandbox that is plainly alive learns nothing.
+            message = (
+                f"{method} {suffix} is not implemented by this sandbox-host "
+                f"(404 with no error body) — the host is likely older than this app"
+            )
+            logger.warning("sandbox-http: %s", message)
+            raise exc_type(message)
         logger.warning(
             "sandbox-http: 404 for sandbox %s -> %s (rebuild)", handle.id, exc_type.__name__
         )
@@ -437,11 +453,16 @@ class HttpSandbox:
         cmd: list[str],
         on_output: OutputSink | None = None,
         env: Mapping[str, str] | None = None,
+        exec_timeout: float | None = None,
     ) -> ExecResult:
         pod_url, remote_id = _decode_handle(handle)
         url = f"{pod_url}/sandboxes/{remote_id}/exec"
         logger.debug("sandbox-http: exec sandbox %s cmd=%s", handle.id, cmd)
         body: dict[str, object] = {"cmd": cmd}
+        if exec_timeout is not None:
+            # Omitted when unset so an older host sees the request it always
+            # got — same shape as `env` above.
+            body["exec_timeout"] = exec_timeout
         if env:
             # Omitted when empty so the host sees the same request it always
             # has — an older host ignores the key, a newer one applies it.
@@ -473,11 +494,19 @@ class HttpSandbox:
                             stderr=base64.b64decode(frame["err"]),
                         )
         except httpx.TimeoutException as exc:  # subclass of TransportError — catch FIRST
-            # A read timeout means the command is still RUNNING on a busy host,
-            # not that the sandbox is gone. Mapping it to SandboxNotFound made
-            # `registry` rebuild the sandbox while the original command ran on to
-            # completion in the old one — the split-brain SandboxBusy exists to
-            # forbid. (`_request` has always had this ordering; exec did not.)
+            # A read timeout means the sandbox is BUSY, not gone. Mapping it to
+            # SandboxNotFound made `registry` rebuild the sandbox while the
+            # original command was still there — the split-brain SandboxBusy
+            # exists to forbid. (`_request` has always had this ordering; exec
+            # did not.)
+            #
+            # It no longer means the command RUNS ON, which this used to say: the
+            # host now cancels the exec when its stream closes, and a read
+            # timeout closes it. So a timed-out command is killed rather than
+            # abandoned. `read_timeout` defaults to 0 (no deadline), so only a
+            # deployment that sets one reaches this at all — but the reasoning
+            # above stands either way, and the sentence that no longer holds
+            # would have been the one a reader trusted.
             logger.warning("sandbox-http: exec sandbox %s timed out -> SandboxBusy", handle.id)
             raise SandboxBusy(handle.id) from exc
         except httpx.TransportError as exc:
@@ -495,6 +524,25 @@ class HttpSandbox:
     async def download(self, handle: SandboxHandle, remote_path: str) -> bytes:
         resp = await self._io_request(handle, "GET", "/file", params={"path": remote_path})
         return resp.content
+
+    async def download_many(
+        self, handle: SandboxHandle, remote_paths: list[str]
+    ) -> list[bytes | None]:
+        """A batch of paths in ONE round trip — the facade's fast lane, and the
+        only backend where it changes anything that matters.
+
+        `None` for a path the sandbox does not have: absent is an answer about
+        that path, so the facade raises for a caller that demanded it and skips
+        it for a listing that merely named it. POST because the path list is a
+        body — a query string of 200 paths is what a proxy truncates.
+
+        There is no old-host fallback here on purpose: `sandbox-host` ships on
+        the same pipeline as this app, so designing for version skew would be
+        designing for a state the deploy does not produce."""
+        import base64
+
+        resp = await self._io_request(handle, "POST", "/files", json={"paths": list(remote_paths)})
+        return [None if b is None else base64.b64decode(b) for b in resp.json()["files"]]
 
     async def upload_file(self, handle: SandboxHandle, local_path: Path, remote_path: str) -> None:
         # The host's /file endpoint takes a whole body; HttpSandbox doesn't yet

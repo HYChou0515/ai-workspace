@@ -339,3 +339,61 @@ select {
 @media (prefers-reduced-motion: reduce) {
   .skeleton { animation: none; opacity: 0.65; }
 }
+
+/* Switch — a setting that takes effect when you flip it (components/Switch.tsx).
+   The native input stays in the DOM (label click, Space, tab order, screen
+   readers) and is drawn off-screen; the track and thumb are what you see. */
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: var(--text-small);
+  color: var(--text-paper-d);
+  user-select: none;
+}
+.switch[data-disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.switch input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+.switch-track {
+  position: relative;
+  flex: 0 0 auto;
+  width: 26px;
+  height: 15px;
+  border-radius: 999px;
+  background: var(--paper-3);
+  transition: background 0.15s;
+}
+.switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--white);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
+  transition: transform 0.15s;
+}
+.switch input:checked + .switch-track {
+  background: var(--accent);
+}
+.switch input:checked + .switch-track .switch-thumb {
+  transform: translateX(11px);
+}
+.switch input:focus-visible + .switch-track {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

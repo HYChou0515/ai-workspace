@@ -3,9 +3,24 @@
  * `GanttView` component stays a thin pointer-event shell. The timeline is a
  * fixed px-per-day scale (zoom picks the density); a pixel drag converts to a
  * whole number of days, and a bar drag rewrites the record's `daterange` value.
- * Dates are day-resolution `YYYY-MM-DD` strings compared lexicographically
- * (== chronologically, since they're zero-padded) and shifted in UTC to dodge
- * timezone drift.
+ * A span edge is one of two shapes, both UTC, both fixed-width in their date
+ * part so a same-shape comparison is still chronological: `YYYY-MM-DD`, which
+ * names a WHOLE day, and `YYYY-MM-DDTHH:mm`, which names one minute of one
+ * (#785). The distinction is the point — a plain date has always been read
+ * inclusively (7/13–7/15 is three days), and that reading is only expressible
+ * if the value can still say "a day" rather than collapsing to midnight. Ask
+ * {@link instantOf} what an edge MEANS at a given end; ask {@link dayOf} which
+ * day it falls on. Comparing the two shapes as text does not work and is the
+ * one thing to avoid here.
+ *
+ * Every position is a COLUMN offset, and a {@link Scale} says what a column is
+ * worth: a day, or — once the slider is dense enough — an hour. The same Scale
+ * carries the folding rule, and there is only one of those. A weekend and a
+ * night are the same statement at two scales ("the chart does not draw this
+ * time"), so they go through the same code: folded time costs no columns, and
+ * whatever is left is what the chart is made of. Hour counts are built ON the
+ * day count, which is what keeps the two grains agreeing and the switch between
+ * them invisible.
  */
 
 export type Zoom = "day" | "week" | "month";
@@ -20,7 +35,27 @@ const DAY_MS = 86_400_000;
  * So the anchors sit INSIDE [PPD_MIN, PPD_MAX]. */
 export const PPD_ANCHORS: Record<Zoom, number> = { day: 28, week: 10, month: 3 };
 export const PPD_MIN = 1; // most zoomed-out (further out than the `month` anchor)
-export const PPD_MAX = 56; // most zoomed-in (further in than the `day` anchor)
+
+/** How much room an hour column needs before hours are worth drawing at all.
+ * Below this they are illegible and the chart is only a wider day view. */
+const MIN_HOUR_COLUMN_PX = 6;
+
+/** The density at which a column stops being a day and becomes an hour. Stated
+ * in px-per-DAY like everything else on this scale, so it is directly
+ * comparable with the anchors: 144 is a bit over five times the `day` anchor. */
+export const PPD_HOUR_GRAIN = MIN_HOUR_COLUMN_PX * 24;
+
+/** The densest the slider goes — 24px per hour column, which is roughly what
+ * the `day` anchor gives a day. Raised from 56 (the old end of the track, which
+ * is now {@link PPD_MAX_FIT}) so the track can reach hours at all (#785). */
+export const PPD_MAX = 24 * 24;
+
+/** The densest FIT-TO-PANE goes. Fitting a two-day project into a wide pane
+ * lands at 450 px/day, well past {@link PPD_HOUR_GRAIN} — so without this the
+ * chart would open in hours for no better reason than the project being short.
+ * Going finer than days is a deliberate drag. This is the old `PPD_MAX`, so
+ * fit-to-pane behaves exactly as it did before the track was extended. */
+export const PPD_MAX_FIT = 56;
 
 export function pxPerDay(zoom: Zoom): number {
   return PPD_ANCHORS[zoom];
@@ -47,6 +82,28 @@ export function ppdToSlider(ppd: number): number {
   return Math.log(clampPpd(ppd) / PPD_MIN) / Math.log(PPD_MAX / PPD_MIN);
 }
 
+/** Which grain the columns are at this density. The slider is the only thing
+ * that decides it — there is no separate hour/day switch to get out of step
+ * with the zoom, which is what "the granularity follows the slider" means. */
+export function grainFor(ppd: number): Grain {
+  return ppd >= PPD_HOUR_GRAIN ? "hour" : "day";
+}
+
+/** The width of ONE column at this density. A day column is the density
+ * itself; an hour column is a twenty-fourth of it. That is what makes crossing
+ * {@link PPD_HOUR_GRAIN} continuous — a day is 1 column of width `ppd` on one
+ * side and 24 columns of width `ppd/24` on the other, so nothing on screen
+ * moves when the grain changes under it. */
+export function columnPx(ppd: number, grain: Grain): number {
+  return grain === "hour" ? ppd / 24 : ppd;
+}
+
+/** The density that fits `columns` columns into the pane — never denser than
+ * {@link PPD_MAX_FIT}, so opening a project can't land it in hours. */
+export function fitPpd(paneAvail: number, columns: number): number {
+  return Math.min(PPD_MAX_FIT, clampPpd(paneAvail / columns));
+}
+
 /** The chart canvas width: at least the pane it sits in (so a short project
  * fills the width instead of leaving a half-empty card), at least the content
  * it needs (so a long project scrolls). `max(pane, content)`. A `paneAvail` of
@@ -67,14 +124,21 @@ function toISODate(ms: number): string {
   return new Date(ms).toISOString().slice(0, 10);
 }
 
-/** Add (or subtract) whole days to a `YYYY-MM-DD` date, in UTC. */
+/** Add (or subtract) whole days to a date, in UTC. Takes the day out of an edge
+ * that also names a clock, and always returns a bare `YYYY-MM-DD`. */
 export function shiftDate(date: string, days: number): string {
-  return toISODate(Date.parse(date) + days * DAY_MS);
+  return toISODate(Date.parse(`${dayOf(date)}T00:00:00Z`) + days * DAY_MS);
 }
 
-/** Whole UTC days from `a` to `b` (negative if `b` precedes `a`). */
+/** Whole UTC days from `a` to `b` (negative if `b` precedes `a`).
+ *
+ * Counted between the two DAYS, not by dividing elapsed time: 01:00 to 23:00
+ * the next day is one day apart, though only 46 hours passed, and 09:00 to
+ * 20:00 the same day is zero though eleven hours did. Rounding the quotient
+ * got both wrong the moment spans could carry a clock. */
 export function daysBetween(a: string, b: string): number {
-  return Math.round((Date.parse(b) - Date.parse(a)) / DAY_MS);
+  const ms = Date.parse(`${dayOf(b)}T00:00:00Z`) - Date.parse(`${dayOf(a)}T00:00:00Z`);
+  return Math.round(ms / DAY_MS);
 }
 
 /** A horizontal pixel delta → the nearest whole number of days at this
@@ -94,6 +158,23 @@ export function deltaDays(dx: number, ppd: number): number {
  * it does know; what fills the other end is a scheduling decision, not a
  * parsing one. */
 export function spanToDates(value: unknown): Span | null {
+  const { start, end } = edgesOf(value);
+  if (start === null && end === null) return null;
+  const sa = start ?? (end as string);
+  const sb = end ?? sa;
+  // Compared as the instants they DENOTE, not as bytes: a plain end date runs
+  // to the next midnight, so `09:30/the same date` is a morning's work, not a
+  // reversed range. String order would have called it reversed and dropped it.
+  if (instantOf(sb, "end") < instantOf(sa, "start")) return null;
+  return { start: sa, end: sb };
+}
+
+/** The two canonical edges a `daterange` value carries, each `null` when it is
+ * absent or unreadable. The ONE place the accepted shapes (`"a/b"`, `[a, b]`,
+ * `{start,end}`, `{from,to}`) are taken apart — {@link spanToDates} folds a
+ * missing edge onto the other one, {@link resolveSpan} computes a week from it,
+ * and neither can disagree with the other about what was actually written. */
+function edgesOf(value: unknown): { start: string | null; end: string | null } {
   let a: unknown;
   let b: unknown;
   if (typeof value === "string" && value.includes("/")) {
@@ -105,31 +186,165 @@ export function spanToDates(value: unknown): Span | null {
     a = o.start ?? o.from;
     b = o.end ?? o.to;
   } else {
-    return null;
+    return { start: null, end: null };
   }
-  let sa = Date.parse(String(a));
-  let sb = Date.parse(String(b));
-  if (Number.isNaN(sa) && Number.isNaN(sb)) return null;
-  if (Number.isNaN(sa)) sa = sb;
-  if (Number.isNaN(sb)) sb = sa;
-  if (sb < sa) return null;
-  return { start: toISODate(sa), end: toISODate(sb) };
+  return { start: canonicalEdge(a), end: canonicalEdge(b) };
+}
+
+/** The span that contains all of them, or `null` over nothing.
+ *
+ * Edges are compared by what they DENOTE and returned exactly as they were
+ * written — the union is a DRAWING, and nothing about it should come back out
+ * looking like a decision somebody made about a record's dates. */
+export function unionSpan(spans: Span[]): Span | null {
+  if (spans.length === 0) return null;
+  let start = spans[0].start;
+  let end = spans[0].end;
+  for (const s of spans.slice(1)) {
+    if (instantOf(s.start, "start") < instantOf(start, "start")) start = s.start;
+    if (instantOf(s.end, "end") > instantOf(end, "end")) end = s.end;
+  }
+  return { start, end };
+}
+
+/** Whether a bar's dates are the record's own or the chart's suggestion. */
+export type SpanSource = "given" | "derived";
+export type ResolvedSpan = { span: Span; source: SpanSource };
+
+/** How long the chart proposes a piece of work is, when nobody has said. Six,
+ * because a plain end date is inclusive of its own day: start + 6 is a week. */
+const PROPOSED_DAYS = 6;
+
+/** The span to DRAW for a record, and whether the record actually said it.
+ *
+ * Every record gets a bar. Dropping the ones with no dates does not say "this
+ * has no dates yet" — it says nothing at all, and an absent row reads as no
+ * such work, which is how an unscheduled issue quietly stops existing. A
+ * proposal can be seen, argued with, and dragged into place; `source` is what
+ * lets the chart draw it as a proposal rather than pass it off as a decision.
+ *
+ * One stated end anchors the proposal (a week out from a start, a week back
+ * from an end); with neither, the week starts today. A range that is back to
+ * front is the same silence as no range at all — it cannot be drawn as written
+ * — so it gets the same answer rather than vanishing, which is what it used
+ * to do. */
+export function resolveSpan(value: unknown, today: string): ResolvedSpan {
+  const { start, end } = edgesOf(value);
+  if (start !== null && end !== null) {
+    const span = spanToDates(value);
+    if (span) return { span, source: "given" };
+  } else if (start !== null) {
+    return { span: { start, end: withClockOf(start, PROPOSED_DAYS) }, source: "derived" };
+  } else if (end !== null) {
+    return { span: { start: withClockOf(end, -PROPOSED_DAYS), end }, source: "derived" };
+  }
+  return { span: { start: today, end: shiftDate(today, PROPOSED_DAYS) }, source: "derived" };
+}
+
+/** Shift an edge by whole days and put its clock back on — a proposal derived
+ * from "starts 09:30 on the 1st" ends at 09:30, not at midnight. */
+function withClockOf(edge: string, days: number): string {
+  return shiftDate(edge, days) + edge.slice(10);
+}
+
+/** A span edge that names only a day — the form every span had before #785, and
+ * still the form the chart writes back on a drag. */
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Whether a value already carries a UTC offset (`Z` or `±HH:MM`). */
+const ZONED = /(?:Z|[+-]\d{2}:?\d{2})$/;
+
+/** One span edge → its canonical text, or `null` if it is not a time at all.
+ *
+ * Canonical means: a day stays a bare `YYYY-MM-DD`, and a clock becomes
+ * `YYYY-MM-DDTHH:mm` — minutes, which is the precision a span is specified to.
+ * Keeping the two forms distinct is what lets a plain date go on meaning a
+ * WHOLE day (see {@link instantOf}) instead of silently becoming midnight. */
+function canonicalEdge(value: unknown): string | null {
+  const raw = String(value).trim().replace(" ", "T");
+  if (!raw) return null;
+  const ms = parseUtc(raw);
+  if (Number.isNaN(ms)) return null;
+  return DATE_ONLY.test(raw)
+    ? new Date(ms).toISOString().slice(0, 10)
+    : new Date(ms).toISOString().slice(0, 16);
+}
+
+/** Parse a span edge as UTC. ES reads a zone-less DATE as UTC but a zone-less
+ * DATE-TIME as LOCAL, which would put the two halves of one span in two
+ * different calendars and make a late-evening bar jump a day for anyone east
+ * of London. Every other date in this module is UTC; so is this. */
+function parseUtc(raw: string): number {
+  if (DATE_ONLY.test(raw)) return Date.parse(`${raw}T00:00:00Z`);
+  return Date.parse(ZONED.test(raw) ? raw : `${raw}Z`);
+}
+
+/** The instant a span edge DENOTES, in epoch ms.
+ *
+ * A plain `YYYY-MM-DD` names a whole DAY, so it means different things at the
+ * two ends — as a start, that day's first minute; as an end, the midnight that
+ * closes it. That is the same inclusive reading the chart has always drawn
+ * (7/13–7/15 is three days, not two), said in the value instead of patched on
+ * afterwards with a `+1`. An edge that names a clock means exactly that minute
+ * at either end: "09:30–17:00" is seven and a half hours to everyone who
+ * writes it, so a timed end is where work stops, not the last minute of it.
+ *
+ * The end is therefore an EXCLUSIVE bound, which is what makes every width in
+ * the chart a plain `end - start`. The last minute you can be inside a plain
+ * date is still 23:59; that is the same statement, from the other side. */
+export function instantOf(value: string, edge: "start" | "end"): number {
+  const ms = parseUtc(value);
+  if (edge === "start" || !DATE_ONLY.test(value)) return ms;
+  return ms + DAY_MS; // up to, not through, the next midnight
+}
+
+/** An interval's exclusive upper bound written back as an edge string, so it
+ * can go through the column machinery (which speaks edges, and which knows how
+ * to walk a weekend) instead of being converted to milliseconds and back. */
+function boundEdge(value: string): string {
+  return DATE_ONLY.test(value) ? `${shiftDate(value, 1)}T00:00` : value;
+}
+
+/** The UTC calendar day an edge falls on. Every function that asks a question
+ * about a DAY (which column, which weekday, which week) reads this first, so a
+ * value carrying a clock lands on the day that clock is in rather than parsing
+ * as garbage. */
+export function dayOf(value: string): string {
+  return value.slice(0, 10);
 }
 
 /** Apply a drag of `days` to a span: `move` shifts both ends (keeps duration);
  * `start` / `end` resize one edge, clamped so the range never inverts. With
  * `skip`, `days` is a count of WORKING days so the drag hops over weekends. */
-export function applyDrag(span: Span, mode: DragMode, days: number, skip = false): Span {
-  const shift = (d: string) => shiftWorkingDays(d, days, skip);
+export function applyDrag(span: Span, mode: DragMode, cols: number, scale: ScaleArg = false): Span {
+  const s = toScale(scale);
+  const hour = s.grain === "hour";
+  // A drag moves the bar by whole COLUMNS — days at day grain, hours at hour
+  // grain. At day grain the time of day rides along: every shift helper answers
+  // in bare dates, so without re-attaching the clock one drag would flatten a
+  // 09:30–17:00 bar into two whole days.
+  const shiftStart = (d: string) =>
+    hour ? dateAtColumn(d, cols, s) : shiftWorkingDays(d, cols, s) + d.slice(10);
+  // The END edge is the one that catches people out. A start edge denotes
+  // itself, but a plain end date denotes the midnight it runs UP TO — so it is
+  // that bound which has to move. Shifting "2026-01-07" as though it were Jan 7
+  // 00:00 lands on Jan 8 00:00, which is the instant it already denoted: the
+  // bar would silently lose a day on every drag.
+  const shiftEnd = (d: string) =>
+    hour ? dateAtColumn(boundEdge(d), cols, s) : shiftWorkingDays(d, cols, s) + d.slice(10);
+  // Ordering compares the edges AS WRITTEN (both as starts), which is what the
+  // string comparison this replaces did — and unlike it, works between two
+  // edges of different shapes.
+  const before = (x: string, y: string) => instantOf(x, "start") < instantOf(y, "start");
   if (mode === "move") {
-    return { start: shift(span.start), end: shift(span.end) };
+    return { start: shiftStart(span.start), end: shiftEnd(span.end) };
   }
   if (mode === "start") {
-    const start = shift(span.start);
-    return { start: start > span.end ? span.end : start, end: span.end };
+    const start = shiftStart(span.start);
+    return { start: before(span.end, start) ? span.end : start, end: span.end };
   }
-  const end = shift(span.end);
-  return { start: span.start, end: end < span.start ? span.start : end };
+  const end = shiftEnd(span.end);
+  return { start: span.start, end: before(end, span.start) ? span.start : end };
 }
 
 /** The canonical stored form of a span (matches the table daterange picker). */
@@ -150,7 +365,11 @@ export function spanValue(span: Span): string {
  * permanently, and the sticky header already spends some. */
 export type FineTick = { day: number; label: string; sub?: string; title?: string };
 export type CoarseBand = { day: number; days: number; label: string };
-export type Axis = { unit: Zoom; fine: FineTick[]; coarse: CoarseBand[] };
+/** What the fine row is counting. A superset of {@link Zoom}: the slider's
+ * labelled stops are still day / week / month, but the track now runs on past
+ * the last of them into hours (#785), and the axis has to be able to say so. */
+export type AxisUnit = Zoom | "hour";
+export type Axis = { unit: AxisUnit; fine: FineTick[]; coarse: CoarseBand[] };
 
 /** Horizontal room (px) reserved per fine-tier label. A fine step is only
  * chosen if `stepDays * ppd` clears this, so labels never touch. */
@@ -194,7 +413,12 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 const DETAIL_PPD = 5;
 
 function ymd(date: string): { y: number; m: number; d: number } {
-  const t = new Date(`${date}T00:00:00Z`);
+  // Through `dayOf`, like every other reader of a raw edge. Without it an edge
+  // that already carries a `T` builds `2026-01-05T09:30T00:00:00Z`, which is an
+  // Invalid Date, and the NaN that comes out of it is not a wrong label — it is
+  // a hung tab, because the month walk's exit is a comparison and every
+  // comparison against NaN is false.
+  const t = new Date(`${dayOf(date)}T00:00:00Z`);
   return { y: t.getUTCFullYear(), m: t.getUTCMonth(), d: t.getUTCDate() };
 }
 
@@ -257,7 +481,13 @@ function monthTicks(minDate: string, visibleDays: number, ppd: number, skip: boo
       m += 1;
     }
   }
-  for (let count = 0; ; count += 1) {
+  // Bounded by construction. A month is never narrower than one column, so
+  // `visibleDays` months cannot fit in `visibleDays` columns and this ceiling
+  // is unreachable in normal use — it exists so that a bad number can only ever
+  // produce a wrong axis, which a test can see, instead of a frozen tab, which
+  // no test can survive long enough to report. `advance()` gives the other
+  // walks the same property; this loop predates it and never got it.
+  for (let count = 0; count <= visibleDays; count += 1) {
     const day = columnOf(minDate, firstOfMonth(y, m), skip);
     if (day >= visibleDays) break;
     if (day >= 0 && count % step === 0) ticks.push({ day, label: MONTHS[m] });
@@ -279,6 +509,53 @@ function monthTicks(minDate: string, visibleDays: number, ppd: number, skip: boo
  * CODES at week starts (e.g. `W627`) instead of day numbers — `today` feeds the
  * `by_today` cross-year boundary. Zoomed all the way out (month zone) still
  * shows months, since a week code per column would be far too dense there. */
+/** The fine row at hour grain: `HH`, thinned to a step that keeps two labels
+ * from touching — the same rule the day row has had since #448.
+ *
+ * Snapped to the whole hour. The chart's left edge is a record's START, which
+ * is as likely to be 09:30 as midnight, and an hour axis labelled at :30 past
+ * every hour reads as broken rather than as precise. */
+function hourTicks(minDate: string, visibleColumns: number, ppd: number, scale: Scale): FineTick[] {
+  const px = columnPx(ppd, "hour");
+  const step = [1, 2, 3, 6, 12, 24].find((s) => s * px >= AXIS_MIN_LABEL_PX) ?? 24;
+  // Snapped from the CLOCK at column zero rather than from the column offset,
+  // so it lands on a whole hour whatever the working window starts at.
+  const clock0 = clockOf(dateAtColumn(minDate, 0, scale));
+  const ticks: FineTick[] = [];
+  for (let col = Math.ceil(clock0) - clock0; col < visibleColumns; col += step) {
+    const at = dateAtColumn(minDate, col, scale);
+    ticks.push({ day: col, label: at.slice(11, 13), title: `${dayOf(at)} ${at.slice(11, 16)}` });
+  }
+  return ticks;
+}
+
+/** The context band at hour grain: one per DAY, 24 columns wide, except a first
+ * band the chart starts partway into.
+ *
+ * Advances by the width it just emitted rather than by a fixed day, so a
+ * weekend the columns skip is skipped here too — and it stops on a band that
+ * would be zero wide. `monthBands` once looped forever on exactly that (#690,
+ * a weekend origin), and this walks the same kind of ground. */
+function dayBands(minDate: string, visibleColumns: number, scale: Scale): CoarseBand[] {
+  const bands: CoarseBand[] = [];
+  let col = 0;
+  while (col < visibleColumns) {
+    const at = dateAtColumn(minDate, col, scale);
+    const width = Math.min(hoursPerDay(scale.work) - hoursIntoDay(at, scale.work), visibleColumns - col);
+    if (width <= 0) break;
+    bands.push({ day: col, days: width, label: dayBandLabel(dayOf(at)) });
+    col += width;
+  }
+  return bands;
+}
+
+/** `Mon 5 Jan` — the weekday because an hour axis is read for planning a day's
+ * work, the date because two Mondays look alike. */
+function dayBandLabel(day: string): string {
+  const { m, d } = ymd(day);
+  return `${SHORT_DAYS[weekdayOf(day)]} ${d} ${MONTHS[m]}`;
+}
+
 export function axisFor(
   minDate: string,
   visibleDays: number,
@@ -287,7 +564,20 @@ export function axisFor(
   today = "",
   skip = false,
   opts: AxisOptions = {},
+  work?: WorkHours,
 ): Axis {
+  // Densest of all (#785): the columns are hours, so the fine row says WHICH
+  // hour and the band above names the day. Decided from `ppd` alone rather than
+  // from a parameter — the grain follows the slider, and a second way to ask
+  // for hours is a second thing to fall out of step with the zoom.
+  if (grainFor(ppd) === "hour") {
+    const scale: Scale = { grain: "hour", skipWeekends: skip, work };
+    return {
+      unit: "hour",
+      fine: hourTicks(minDate, visibleDays, ppd, scale),
+      coarse: dayBands(minDate, visibleDays, scale),
+    };
+  }
   // Densest: every column is one day, so the fine row can say WHICH day of the
   // week it is and the band above it can name the week. Needs a week rule —
   // without one there is no code to head the band with, and the axis stays the
@@ -352,7 +642,7 @@ const WEEKDAY_INDEX: Record<Weekday, number> = {
 
 /** The UTC day-of-week of a `YYYY-MM-DD` date, 0 = Sunday … 6 = Saturday. */
 function weekdayOf(date: string): number {
-  return new Date(`${date}T00:00:00Z`).getUTCDay();
+  return new Date(`${dayOf(date)}T00:00:00Z`).getUTCDay();
 }
 
 /** The first day of the week `date` falls in, for a week that begins on `start`
@@ -367,6 +657,94 @@ export function weekStart(date: string, start: Weekday = "monday"): string {
 // column = one WORKING day (Mon–Fri) and weekends collapse to zero width; off,
 // one column = one calendar day (so every fn below is a no-op passthrough then).
 
+/** What one gantt column is worth. `day` is what the chart has always drawn;
+ * `hour` is the same timeline read closer, and the slider picks between them
+ * (see {@link grainFor}). */
+export type Grain = "day" | "hour";
+
+/** The column rule: how wide a column is, and which time gets none.
+ *
+ * These two settings are one mechanism at two scales — a skipped weekend and a
+ * skipped night are both "time the chart does not draw" — so they are decided
+ * together, here, rather than by each caller. */
+export type Scale = { grain: Grain; skipWeekends: boolean; work?: WorkHours };
+
+/** The part of a day the chart draws, in hours past midnight — `{from: 7, to:
+ * 21}` is a 07:00–21:00 working day. Absent means all twenty-four.
+ *
+ * This is the weekend rule at a finer scale and it goes through the same code:
+ * folded time takes no width, so an overnight gap is as wide as a weekend is,
+ * which is not at all. At day grain it changes nothing, because a day is one
+ * column however many of its hours are worked. */
+export type WorkHours = { from: number; to: number };
+
+/** How many columns a whole day is worth at hour grain. */
+function hoursPerDay(work?: WorkHours): number {
+  return work ? work.to - work.from : HOURS_PER_DAY;
+}
+
+/** A {@link Scale}, or the bare `skip` boolean that meant "day columns, with or
+ * without weekends" before columns could be finer. Shorthand for the same one
+ * rule, normalised at the door by {@link toScale} — not a second rule. */
+export type ScaleArg = boolean | Scale;
+
+export function toScale(scale: ScaleArg): Scale {
+  return typeof scale === "boolean" ? { grain: "day", skipWeekends: scale } : scale;
+}
+
+const HOURS_PER_DAY = 24;
+const HOUR_MS = 3_600_000;
+
+/** How far into its day an edge sits, in hours — `0` for a bare date, `9.5` for
+ * `T09:30`. Fractional on purpose: spans are specified to the minute and the
+ * CHART to the hour, so a half hour is half a column, not a rounding error. */
+function clockOf(edge: string): number {
+  if (edge.length <= 10) return 0;
+  return Number(edge.slice(11, 13)) + Number(edge.slice(14, 16)) / 60;
+}
+
+/** How many COLUMNS into its day an edge sits — the clock, less any part of it
+ * the working window folds away. Before the window opens that is zero; after it
+ * closes it is the whole day's worth, so an evening and the following small
+ * hours sit on the same column and the night between two working days costs
+ * nothing. */
+function hoursIntoDay(edge: string, work?: WorkHours): number {
+  const clock = clockOf(edge);
+  if (!work) return clock;
+  return Math.min(Math.max(clock, work.from), work.to) - work.from;
+}
+
+/** An edge reduced to the day that holds its column, plus how far into that day
+ * it sits. A weekend edge has no column of its own, so it reports the first
+ * hour of the next working day — the same collapse the day grain performs, and
+ * the reason the two grains agree instead of drifting a column apart (the
+ * disagreement that froze a tab in #690). */
+function workingOrigin(edge: string, s: Scale): { day: string; hours: number } {
+  let day = dayOf(edge);
+  if (s.skipWeekends && isWeekend(day)) {
+    while (isWeekend(day)) day = shiftDate(day, 1);
+    return { day, hours: 0 };
+  }
+  return { day, hours: hoursIntoDay(edge, s.work) };
+}
+
+/** {@link columnOf} at hour grain: whole days still cost what they cost at day
+ * grain (so a day is exactly 24 columns and a skipped weekend still nothing),
+ * and the clocks at either end add the part-days. Keeping it built ON the day
+ * count is what makes crossing the grain threshold continuous — the same date
+ * sits at the same place before and after. */
+function hourColumns(from: string, date: string, s: Scale): number {
+  const a = workingOrigin(from, s);
+  const b = workingOrigin(date, s);
+  const key = (o: { day: string; hours: number }) =>
+    Date.parse(`${o.day}T00:00:00Z`) + o.hours * HOUR_MS;
+  const sign = key(b) >= key(a) ? 1 : -1;
+  const lo = sign > 0 ? a : b;
+  const hi = sign > 0 ? b : a;
+  const days = columnOf(lo.day, hi.day, { grain: "day", skipWeekends: s.skipWeekends });
+  return sign * (days * hoursPerDay(s.work) + hi.hours - lo.hours);
+}
+
 /** Whether `date` is a Saturday or Sunday. */
 export function isWeekend(date: string): boolean {
   const d = weekdayOf(date);
@@ -376,12 +754,21 @@ export function isWeekend(date: string): boolean {
 /** The column index of `date` relative to `from`: working days when `skip`, else
  * calendar days. Signed; a weekend date collapses onto the following working
  * column (so Fri, Sat, Sun, next-Mon are cols n, n+1, n+1, n+1). */
-export function columnOf(from: string, date: string, skip: boolean): number {
-  if (!skip) return daysBetween(from, date);
-  if (date === from) return 0;
-  const sign = date > from ? 1 : -1;
-  const lo = sign > 0 ? from : date;
-  const total = daysBetween(lo, sign > 0 ? date : from); // ≥ 0
+export function columnOf(from: string, date: string, scale: ScaleArg): number {
+  const s = toScale(scale);
+  if (s.grain === "hour") return hourColumns(from, date, s);
+  // Reduced to bare days FIRST. Both the ordering below and the week walk are
+  // string comparisons, and those are only sound between two edges of the same
+  // shape — `"2026-01-05"` sorts before `"2026-01-05T00:00"` though they name
+  // the same moment.
+  const skip = s.skipWeekends;
+  const a = dayOf(from);
+  const b = dayOf(date);
+  if (!skip) return daysBetween(a, b);
+  if (b === a) return 0;
+  const sign = b > a ? 1 : -1;
+  const lo = sign > 0 ? a : b;
+  const total = daysBetween(lo, sign > 0 ? b : a); // ≥ 0
   const fullWeeks = Math.floor(total / 7);
   let wd = fullWeeks * 5;
   const dow = weekdayOf(lo);
@@ -392,19 +779,33 @@ export function columnOf(from: string, date: string, skip: boolean): number {
   return sign * wd;
 }
 
-/** How many columns a span COVERS — both ends included, because a `daterange`
- * is inclusive: 7/13–7/15 is a three-day task, not a two-day one. This is the
- * same counting the chart's own width uses (`columnOf(min, max) + 1`); a bar
- * measured with the bare `columnOf` stopped at the START of its end date, so
- * that day never got coloured and the range read a day short. Never below 1 —
- * `spanToDates` rejects a reversed range, so start ≤ end always. */
-export function barColumns(span: Span, skip: boolean): number {
-  return columnOf(span.start, span.end, skip) + 1;
+/** How many columns a span COVERS: the distance from where it starts to where
+ * it ends, counted in columns the chart actually draws.
+ *
+ * The inclusive reading survives without a `+1` — a plain end date runs to the
+ * next midnight, so 7/13–7/15 measures three days on its own. Removing that
+ * `+1` also removes what it was hiding. It carried a "never below 1" floor, and
+ * a task lying entirely in folded time — a Saturday-to-Sunday issue on a
+ * working-day chart, a job booked at 22:00 on a 07:00–21:00 one — measures
+ * ZERO columns. The floor stretched it to exactly the width of a full working
+ * day, so the chart said a weekend task takes as long as a Monday one. It
+ * doesn't; it now measures nothing, and the view draws that nothing as a line
+ * so the record is still visibly there (#785 §1.3). */
+export function barColumns(span: Span, scale: ScaleArg): number {
+  const s = toScale(scale);
+  // At day grain a span occupies a whole day column even when it only uses part
+  // of one — the column IS the unit there, and an eight-hour task still happens
+  // on that day. Only the finer grain can say how much of it.
+  const end = s.grain === "hour" ? span.end : dayOf(span.end);
+  return columnOf(span.start, boundEdge(end), s);
 }
 
 /** The calendar date at working-day column `col` from `minDate` (inverse of
  * {@link columnOf}); plain `shiftDate` when not skipping. */
-export function dateAtColumn(minDate: string, col: number, skip: boolean): string {
+export function dateAtColumn(minDate: string, col: number, scale: ScaleArg): string {
+  const s = toScale(scale);
+  if (s.grain === "hour") return instantAtHourColumn(minDate, col, s);
+  const skip = s.skipWeekends;
   if (!skip) return shiftDate(minDate, col);
   const dir = col >= 0 ? 1 : -1;
   let remaining = Math.abs(col);
@@ -417,8 +818,20 @@ export function dateAtColumn(minDate: string, col: number, skip: boolean): strin
   // `columnOf` reports (weekend days contribute no working days, so measuring
   // from the Saturday or from the Monday gives the same answer for every date
   // at or after it) — it only makes this function its true inverse.
-  let d = minDate;
+  let d = dayOf(minDate);
   while (isWeekend(d)) d = shiftDate(d, 1);
+  // Whole weeks are arithmetic, not a walk: from a working day, seven calendar
+  // days is the same weekday and exactly five working days, in either
+  // direction. Only the remainder is walked, so this is at most nine
+  // iterations instead of one per column. The hour axis asks for one of these
+  // per tick with a column that grows linearly, which made the axis quadratic
+  // in the project's length — 1.6s for two years — precisely when
+  // `skip_weekends` is on, which is what the shipped Timeline ships.
+  const weeks = Math.floor(remaining / 5);
+  if (weeks > 0) {
+    d = shiftDate(d, dir * weeks * 7);
+    remaining -= weeks * 5;
+  }
   while (remaining > 0) {
     d = shiftDate(d, dir);
     if (!isWeekend(d)) remaining--;
@@ -426,11 +839,29 @@ export function dateAtColumn(minDate: string, col: number, skip: boolean): strin
   return d;
 }
 
+/** {@link dateAtColumn} at hour grain — the inverse of {@link hourColumns}, and
+ * built the same way round: reduce to whole days at the DAY grain (so the
+ * weekend walk is the one that already works) and put the leftover hours back
+ * on. Counted in whole minutes rather than fractional hours so an origin at
+ * `T09:20` cannot accumulate a float error into a 19-minute answer. */
+function instantAtHourColumn(minDate: string, col: number, s: Scale): string {
+  const o = workingOrigin(minDate, s);
+  const perDay = hoursPerDay(s.work) * 60;
+  const total = Math.round((o.hours + col) * 60);
+  const dayDelta = Math.floor(total / perDay);
+  const inDay = total - dayDelta * perDay + (s.work?.from ?? 0) * 60;
+  const day = dateAtColumn(o.day, dayDelta, { grain: "day", skipWeekends: s.skipWeekends });
+  const hh = String(Math.floor(inDay / 60)).padStart(2, "0");
+  const mm = String(Math.round(inDay % 60)).padStart(2, "0");
+  return `${day}T${hh}:${mm}`;
+}
+
 /** Add (or subtract) `n` WORKING days to a date, hopping over weekends; plain
  * `shiftDate` when not skipping. */
-export function shiftWorkingDays(date: string, n: number, skip: boolean): string {
-  if (!skip) return shiftDate(date, n);
-  return dateAtColumn(date, n, true);
+export function shiftWorkingDays(date: string, n: number, scale: ScaleArg): string {
+  const s = toScale(scale);
+  if (s.grain === "day" && !s.skipWeekends) return shiftDate(date, n);
+  return dateAtColumn(date, n, s);
 }
 
 /** How a year's first week is anchored. `jan1` = the week containing Jan 1;

@@ -1,0 +1,70 @@
+/* Plain CSS in the folder. No web fonts and no CDN — the page has no network
+   once it is running, so a stylesheet that reaches out simply does not arrive.
+   `system-ui` is the good typeface that is always already there. */
+
+body {
+  font-family: system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  margin: 0;
+  padding: 16px;
+  color: #1a1a1a;
+  background: #fff;
+}
+
+header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+h1 { font-size: 19px; margin: 0; }
+h2 { font-size: 14px; margin: 0 0 2px; }
+
+.sub { margin: 2px 0 0; color: #6b7280; font-size: 12px; }
+.status { color: #6b7280; font-size: 12px; }
+.status--bad { color: #b23c17; }
+
+.card {
+  border: 1px solid #e6e6e6;
+  border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 12px;
+  min-width: 0;
+}
+
+/* A canvas has no intrinsic size, so the box gives it one and Chart.js fills
+   it. Without a height here the chart collapses to nothing — and nothing about
+   that failure says so. */
+.plot {
+  position: relative;
+  height: 220px;
+  margin-top: 8px;
+}
+.plot canvas { display: block; }
+
+.scroller { overflow-x: auto; }
+
+table { border-collapse: collapse; width: 100%; margin-top: 8px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #f0f0f0; white-space: nowrap; }
+th { color: #6b7280; font-weight: 600; font-size: 12px; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+td:nth-child(2) { white-space: normal; min-width: 220px; }
+tbody tr:hover { background: #f7f7f8; }
+
+button {
+  padding: 4px 9px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: #f6f6f6;
+  font: inherit;
+  cursor: pointer;
+}
+button:hover { background: #eee; }
+
+/* Not an error: the ordinary state before the library is fetched, or before
+   anybody has filed a record. */
+.empty { color: #6b7280; margin: 10px 0 0; }

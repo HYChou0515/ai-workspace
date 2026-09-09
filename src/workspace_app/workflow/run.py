@@ -139,6 +139,18 @@ class WorkflowRun(Struct):
     every phase/step transition (`_apply_progress`), so a run left RUNNING by a dead pod goes
     stale while a live one stays fresh; the orphan sweeper flags `now - progress_at > grace`.
     Additive (None on runs written before #429), so no migration is needed."""
+    trigger_payload: dict[str, Any] = field(default_factory=dict)
+    """What the declaration that started this run asked for (#WUI P15).
+
+    Opaque to the platform: a page's `schedules.json` row carries a `with`
+    object, and it arrives here untouched. Everything domain-shaped — which
+    line, which recipients, which report — lives in here, which is what keeps
+    the platform from ever learning what a report is.
+
+    Empty for a human launch and for an engineer-authored trigger. Additive, so
+    runs written before this just have `{}` and no migration is needed.
+    """
+
     origin_trigger: str = ""
     """The event trigger that spawned this run (#429 P9), or "" for a human / schedule launch.
     A run's entity writes carry this so the dispatcher never re-fires the run's OWN trigger

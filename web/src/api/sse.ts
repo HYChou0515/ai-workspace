@@ -26,6 +26,20 @@ async function* _parseSseStreamInner<T>(
   body: ReadableStream<Uint8Array>,
 ): AsyncGenerator<T> {
   const reader = body.getReader();
+  try {
+    yield* _read<T>(reader);
+  } finally {
+    // The consumer abandoned the generator (a component unmounted, a `for await`
+    // returned early). Without this the reader stays locked and the body open,
+    // so the SERVER sees a client that went quiet rather than one that left —
+    // and keeps doing whatever it was doing for it.
+    await reader.cancel().catch(() => {});
+  }
+}
+
+async function* _read<T>(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): AsyncGenerator<T> {
   const decoder = new TextDecoder();
   let buffer = "";
   while (true) {

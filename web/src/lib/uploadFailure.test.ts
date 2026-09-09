@@ -89,7 +89,7 @@ describe("quotaAmounts — the numbers behind the refusal", () => {
   // rendering cores as "1 B" would be worse than showing nothing.
   // The environment limit is three limits behind one sentence, so its numbers
   // have to say which one they are: "2 of 1" under "you are at your limit for
-  // live environments" reads as environments even when it means cores.
+  // live sandboxes" reads as sandboxes even when it means cores.
   it("reads each environment dimension in its own unit, and names it", () => {
     expect(
       quotaAmounts({ error: "sandbox_quota_exceeded", dimension: "sandboxes", used: 2, limit: 1 }),

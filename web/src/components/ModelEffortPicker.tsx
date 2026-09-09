@@ -374,7 +374,7 @@ export function ModelEffortPicker({
             <div style={{ padding: "10px 12px 4px" }}>
               <SectionLabel>{t("picker.model")}</SectionLabel>
             </div>
-            <div
+            <div className="scrollable"
               style={{
                 padding: "0 8px 8px",
                 display: "flex",

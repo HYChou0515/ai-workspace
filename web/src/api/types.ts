@@ -154,7 +154,8 @@ export type CompactionReason =
   | "empty"
   | "no-room"
   | "failed"
-  | "unavailable";
+  | "unavailable"
+  | "stopped";
 
 /** An agent profile the picker offers — model + prompt live BE-side; the
  * FE only needs enough to label the radio and PATCH the attachment.

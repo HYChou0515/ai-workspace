@@ -1,0 +1,82 @@
+/* Plain CSS in the folder. No web fonts and no CDN — the page has no network,
+   so a stylesheet that reaches out simply does not arrive. */
+
+body {
+  font-family: system-ui, sans-serif;
+  font-size: 14px;
+  margin: 0;
+  padding: 16px;
+  color: #1a1a1a;
+  background: #fff;
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+h1 {
+  font-size: 18px;
+  margin: 0;
+}
+
+.status {
+  color: #666;
+}
+
+.status--bad {
+  color: #c22;
+}
+
+section {
+  margin-bottom: 16px;
+}
+
+label {
+  margin-right: 8px;
+}
+
+select,
+button {
+  padding: 5px 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: #f6f6f6;
+  cursor: pointer;
+}
+
+.totals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #eef2f7;
+  color: #33506e;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid #eee;
+}
+
+th {
+  color: #666;
+  font-weight: 600;
+}
+
+.empty {
+  color: #888;
+}
