@@ -78,12 +78,22 @@ describe("KB api (mock client)", () => {
     const c = await kb.createCollection("kb");
     const chat = await kb.createChat("t", [c.resource_id]);
 
-    const events = [];
-    for await (const ev of kb.streamMessage({ chatId: chat.resource_id, content: "why voids?" })) {
-      events.push(ev);
-    }
+    // The events arrive on the SUBSCRIPTION now, not in the send's response —
+    // so this listens first, then asks, the same order the UI uses.
+    const events: { type: string }[] = [];
+    const seen = (async () => {
+      for await (const ev of kb.subscribeChat(chat.resource_id)) {
+        events.push(ev);
+        if (ev.type === "done") return;
+      }
+    })();
+    await kb.sendMessage({ chatId: chat.resource_id, content: "why voids?" });
+    await seen;
     expect(events.at(-1)).toEqual({ type: "done" });
     expect(events.some((e) => e.type === "message_delta")).toBe(true);
+    // The question is broadcast before the turn runs — that ordering is what
+    // lets the sender's own bubble be adopted rather than drawn twice.
+    expect(events[0]).toMatchObject({ type: "user_message", content: "why voids?" });
 
     const detail = await kb.getChat(chat.resource_id);
     expect(detail.messages.map((m) => m.role)).toEqual(["user", "tool", "assistant"]);

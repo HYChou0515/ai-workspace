@@ -33,19 +33,28 @@ describe("useKbChat", () => {
 
     expect(result.current.chatId).not.toBeNull();
     expect(onChatCreated).toHaveBeenCalledWith(result.current.chatId);
-    expect(result.current.log.streaming).toBe(false);
+
+    // Waited for, not asserted straight after the send: the turn ends on the
+    // SUBSCRIPTION now, and the citation-carrying snapshot is fetched by that
+    // terminal event rather than by the send returning. The send resolving no
+    // longer means the answer is in — that is the whole point of it being able
+    // to queue.
+    await waitFor(() => expect(result.current.log.streaming).toBe(false));
+    await waitFor(() => {
+      const answer = result.current.log.entries.find(
+        (e) => e.kind === "message" && e.message.role === "assistant",
+      );
+      expect(answer?.kind === "message" && answer.message.citations?.[0]?.filename).toBe(
+        "reflow.md",
+      );
+    });
     // the snapshot has a user message, a kb_search tool call, and the answer
-    const kinds = result.current.log.entries.map((e) => e.kind);
-    expect(kinds).toContain("tool_call");
+    expect(result.current.log.entries.map((e) => e.kind)).toContain("tool_call");
     expect(assistantText(result.current.log.entries)).toContain("[1]");
-    const answer = result.current.log.entries.find(
-      (e) => e.kind === "message" && e.message.role === "assistant",
-    );
-    expect(answer?.kind === "message" && answer.message.citations?.[0]?.filename).toBe("reflow.md");
   });
 
-  it("forwards an attached image to streamMessage (#513 P10)", async () => {
-    const spy = vi.spyOn(mockKbApi, "streamMessage");
+  it("forwards an attached image to sendMessage (#513 P10)", async () => {
+    const spy = vi.spyOn(mockKbApi, "sendMessage");
     const { result } = renderHook(() => useKbChat({ collectionIds: ["col-1"], client: mockKbApi }));
     const image = { data: "AQID", mime: "image/png" };
 
@@ -58,7 +67,7 @@ describe("useKbChat", () => {
   });
 
   it("sends an image-only message (no text) (#513 P10)", async () => {
-    const spy = vi.spyOn(mockKbApi, "streamMessage");
+    const spy = vi.spyOn(mockKbApi, "sendMessage");
     const { result } = renderHook(() => useKbChat({ collectionIds: ["col-1"], client: mockKbApi }));
     const image = { data: "AQID", mime: "image/png" };
 
@@ -81,7 +90,7 @@ describe("useKbChat", () => {
 
   it("hydrates an existing thread's history", async () => {
     const chat = await mockKbApi.createChat("t", ["col-1"]);
-    for await (const _ of mockKbApi.streamMessage({ chatId: chat.resource_id, content: "q" }));
+    await mockKbApi.sendMessage({ chatId: chat.resource_id, content: "q" });
 
     const { result } = renderHook(() =>
       useKbChat({ collectionIds: ["col-1"], chatId: chat.resource_id, client: mockKbApi }),
@@ -126,13 +135,12 @@ describe("useKbChat — send failure", () => {
   // A failing stream must land in the log as a turn error. Swallowing it leaves
   // the composer unlocked with no explanation, which is indistinguishable from
   // "the model had nothing to say".
-  it("surfaces a stream failure as a turn error and unlocks the composer", async () => {
+  it("surfaces a refused send as a turn error and unlocks the composer", async () => {
     const client = {
       ...mockKbApi,
       createChat: vi.fn().mockResolvedValue({ resource_id: "kb-1" }),
-      streamMessage: async function* () {
-        throw new Error("stream failed: 503");
-      },
+      sendMessage: vi.fn().mockRejectedValue(new Error("kb message failed: 503")),
+      subscribeChat: async function* () {},
     } as unknown as typeof mockKbApi;
 
     const { result } = renderHook(() => useKbChat({ collectionIds: ["c1"], client }));
@@ -142,23 +150,43 @@ describe("useKbChat — send failure", () => {
 
     expect(result.current.log.error).toContain("503");
     expect(result.current.log.streaming).toBe(false);
+    // …and the question is taken back off the screen. Nothing was stored, so no
+    // broadcast will ever adopt it — left drawn it would sit there with the
+    // error beside it saying it was never sent.
+    expect(
+      result.current.log.entries.filter((e) => e.kind === "message" && e.message.role === "user"),
+    ).toEqual([]);
   });
 
-  // An abort is the user pressing Stop or navigating away — not a failure.
-  it("treats an abort as a cancellation, not an error", async () => {
+  // Navigating away aborts the subscription. That is not a failure, and saying
+  // it was would put an error on a chat the reader has already left — which
+  // they then find waiting for them when they come back.
+  it("treats an aborted subscription as a departure, not an error", async () => {
+    let signalled: AbortSignal | undefined;
     const client = {
       ...mockKbApi,
       createChat: vi.fn().mockResolvedValue({ resource_id: "kb-2" }),
-      streamMessage: async function* () {
+      sendMessage: vi.fn().mockResolvedValue(undefined),
+      subscribeChat: async function* (_id: string, signal?: AbortSignal) {
+        signalled = signal;
+        // Hangs until aborted, exactly as a live stream does.
+        await new Promise<void>((resolve) =>
+          signal?.addEventListener("abort", () => resolve(), { once: true }),
+        );
         throw Object.assign(new Error("aborted"), { name: "AbortError" });
       },
     } as unknown as typeof mockKbApi;
 
-    const { result } = renderHook(() => useKbChat({ collectionIds: ["c1"], client }));
+    const { result, unmount } = renderHook(() => useKbChat({ collectionIds: ["c1"], client }));
     await act(async () => {
       await result.current.send("q");
     });
+    unmount();
+    await act(async () => {
+      await Promise.resolve();
+    });
 
+    expect(signalled?.aborted).toBe(true);
     expect(result.current.log.error).toBeNull();
   });
 
@@ -167,17 +195,18 @@ describe("useKbChat — send failure", () => {
   // environment it throws `ReferenceError: window is not defined` out of React
   // and reddens whichever FILE happened to be running, somewhere else entirely.
   // Deleting `globalThis.window` is that environment, reproduced on purpose.
-  it("writes nothing when the stream ends after unmount", async () => {
+  it("writes nothing when the send settles after unmount", async () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     const client = {
       ...mockKbApi,
       createChat: vi.fn().mockResolvedValue({ resource_id: "kb-3" }),
-      streamMessage: async function* () {
+      subscribeChat: async function* () {},
+      sendMessage: vi.fn(async () => {
         await gate;
-        // The shape that actually happens: the socket dies as the view goes.
-        throw new Error("stream died after the view was gone");
-      },
+        // The shape that actually happens: the request dies as the view goes.
+        throw new Error("the send died after the view was gone");
+      }),
     } as unknown as typeof mockKbApi;
 
     const { result, unmount } = renderHook(() =>
@@ -208,10 +237,10 @@ describe("useKbChat — send failure", () => {
   // skipped send leaves an empty chat and the typed question nowhere.
   it("writes nothing when the thread is created after unmount, but still asks", async () => {
     let release!: (v: { resource_id: string }) => void;
-    const streamMessage = vi.fn(mockKbApi.streamMessage.bind(mockKbApi));
+    const sendMessage = vi.fn(mockKbApi.sendMessage.bind(mockKbApi));
     const client = {
       ...mockKbApi,
-      streamMessage,
+      sendMessage,
       createChat: vi.fn(
         () => new Promise<{ resource_id: string }>((r) => (release = r)),
       ),
@@ -236,7 +265,7 @@ describe("useKbChat — send failure", () => {
     } finally {
       globalThis.window = realWindow;
     }
-    expect(streamMessage).toHaveBeenCalledWith(
+    expect(sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({ chatId: "kb-4", content: "q" }),
     );
   });

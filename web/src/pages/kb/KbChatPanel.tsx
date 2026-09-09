@@ -199,7 +199,13 @@ export function KbChatPanel({
   const submit = (text: string) => {
     const t = text.trim();
     // #513 P10: an image with no text is a valid turn (its VLM description is the query).
-    if ((!t && !image) || log.streaming) return;
+    //
+    // `log.streaming` is NOT a reason to refuse. KB turns serialize server-side
+    // now, so a question asked while an answer is still arriving queues behind
+    // it. Refusing here did the one thing a composer must never do: nothing at
+    // all — no bubble, no cleared box, no reason — which is indistinguishable
+    // from the app being broken.
+    if (!t && !image) return;
     setDraft("");
     const img = image;
     setImage(null);
@@ -432,7 +438,12 @@ export function KbChatPanel({
               className="kb-btn kb-btn--primary"
               aria-label="Send"
               title="Send"
-              disabled={log.streaming || (!draft.trim() && !image)}
+              // Only "there is nothing to send" disables this. A running turn
+              // does not: the message queues behind it. A disabled button says
+              // what will happen BEFORE the click, so leaving it grey while the
+              // composer beside it accepted the text was the two of them
+              // contradicting each other.
+              disabled={!draft.trim() && !image}
               onClick={() => submit(draft)}
             >
               <Icon name="arrow_r" size={13} />

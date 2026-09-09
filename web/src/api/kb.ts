@@ -967,9 +967,15 @@ export interface KbApi {
   /** Owner-only: share a thread read-only with users (they get a notification). */
   shareChat(chatId: string, userIds: string[]): Promise<void>;
   unshareChat(chatId: string, userId: string): Promise<void>;
-  /** Stream one chat turn. Citations are not in the stream — refetch the chat
-   * on done to get the persisted assistant message with its [n] resolved. */
-  streamMessage(args: SendKbMessageArgs): AsyncGenerator<AgentEvent>;
+  /** Queue one chat turn (202). The events arrive on `subscribeChat`, NOT here:
+   * a POST that stayed open until the answer finished could not also let the
+   * next message queue behind it, which is why it stopped being the stream.
+   * Citations are not in the stream either — refetch the chat on done to get the
+   * persisted assistant message with its [n] resolved. */
+  sendMessage(args: SendKbMessageArgs): Promise<void>;
+  /** The chat's long-lived event subscription. `since` (a RECONNECT only) asks
+   * the server to replay what this viewer missed after that broadcast seq. */
+  subscribeChat(chatId: string, signal?: AbortSignal, since?: number): AsyncGenerator<AgentEvent>;
   /** Interrupt the chat's in-flight turn server-side (the stream gets a
    * run_cancelled event, then closes). Mirrors the RCA workspace cancel. */
   cancelMessage(chatId: string): Promise<void>;
@@ -1609,7 +1615,7 @@ export const realKbApi: KbApi = {
       "unshare chat",
     );
   },
-  async *streamMessage(args) {
+  async sendMessage(args) {
     const resp = await apiFetch(`/kb/chats/${encodeURIComponent(args.chatId)}/messages`, {
       method: "POST",
       headers: jsonHeaders,
@@ -1625,7 +1631,14 @@ export const realKbApi: KbApi = {
       }),
       signal: args.signal,
     });
-    if (!resp.ok || !resp.body) throw new Error(`kb message failed: ${resp.status}`);
+    // 202 = queued. The reply arrives on the subscription, whenever this turn's
+    // place in the queue comes up.
+    if (!resp.ok) throw new Error(`kb message failed: ${resp.status}`);
+  },
+  async *subscribeChat(chatId, signal, since) {
+    const q = since !== undefined ? `?since=${since}` : "";
+    const resp = await apiFetch(`/kb/chats/${encodeURIComponent(chatId)}/stream${q}`, { signal });
+    if (!resp.ok || !resp.body) throw new Error(`kb stream failed: ${resp.status}`);
     yield* parseSseStream(resp.body);
   },
   async cancelMessage(chatId) {
