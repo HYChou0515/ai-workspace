@@ -819,9 +819,13 @@ def register_item_routes(
             """
             from .schedule_index import _ScheduleIndex
 
-            rm_ = spec_.get_resource_manager(_ScheduleIndex)
-            with contextlib.suppress(Exception):
-                rm_.permanently_delete(item_id_)
+            # Only "this deploy never registered the model" is tolerable, the
+            # same line the satellite purge draws sixty lines above: a failure
+            # from inside the delete is a real one and has to surface. It was
+            # `suppress(Exception)` at both levels — the one step in this
+            # cascade that could fail completely silently.
+            with contextlib.suppress(KeyError):
+                spec_.get_resource_manager(_ScheduleIndex).permanently_delete(item_id_)
 
         def _sweep_rows(conv_ids: list[str], run_ids: list[str]) -> None:
             """Conversations (soft-deleted ones included — the cascade must not
@@ -893,8 +897,7 @@ def register_item_routes(
             # removed outright is instead kept forever. Exactly the orphan class
             # the cascade exists for, and the docstring's "everything it owns"
             # has to be true of a row added after the cascade was written.
-            with contextlib.suppress(Exception):
-                await asyncio.to_thread(_purge_schedule_index, spec, item_id)
+            await asyncio.to_thread(_purge_schedule_index, spec, item_id)
             # Off the event loop: pg round-trips per row would otherwise
             # serialise the whole pod (the #657 class).
             await asyncio.to_thread(_sweep_rows, conv_ids, run_ids)

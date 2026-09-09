@@ -31,6 +31,7 @@ being told.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 
@@ -55,11 +56,37 @@ async def reconcile_item_schedules(item_id: str, *, ls: ListFiles, index: Schedu
         logger.exception("schedule reconcile: could not list %s", item_id)
         return
 
-    for path in paths:
-        if not is_schedule_file(path):
+    declared = [p for p in paths if is_schedule_file(p)]
+    if not declared:
+        # Nothing to reconcile, and the overwhelmingly common case. Not even a
+        # read: a workspace with no page must not pay for this at all.
+        return
+
+    # ASK ONCE what is already known, then write only what is new.
+    #
+    # Steady state is a turn end that finds exactly what the hooks already
+    # recorded, and `record` costs TWO round trips for a path it already holds
+    # (`create(if_not_exists=True)` refuses, then a read). Recording each path
+    # unconditionally therefore made a workspace with three pages pay six
+    # round trips per turn to learn nothing.
+    try:
+        known = set(await asyncio.to_thread(index.paths, item_id))
+    except Exception:
+        logger.exception("schedule reconcile: could not read the index for %s", item_id)
+        return
+
+    for path in declared:
+        if path in known:
             continue
         try:
-            index.record(item_id, path)
+            # OFFLOADED. `record` is blocking specstar I/O and this runs at every
+            # turn end, on the API's event loop. `_note_schedule_file` keeps the
+            # synchronous call and argues for it — "the cost is paid only by an
+            # actual CHANGE to a `schedules.json` ... If that stops being true
+            # the answer is an async hook" — and this reconciler is what made it
+            # stop being true. So this is that async hook; the facade's own
+            # write tail stays synchronous because it really is per-change.
+            await asyncio.to_thread(index.record, item_id, path)
         except Exception:
             # Per PATH, so one bad row does not cost the others theirs — the same
             # rule the sweep itself keeps.

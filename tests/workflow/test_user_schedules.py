@@ -30,6 +30,7 @@ from workspace_app.workflow.user_schedules import (
     declared_count,
     parse_user_schedules,
     trigger_id_for,
+    usable_rows,
     validate_user_schedules,
 )
 
@@ -449,4 +450,74 @@ def test_writing_null_for_a_field_means_the_same_as_leaving_it_out(field: str) -
 
     assert validate_user_schedules(_file(omitted)) == validate_user_schedules(_file(nulled)), (
         f"`{field}: null` is graded differently from omitting `{field}`"
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("dom", "x"), ("dom", "3"), ("with", ["a", "b"]), ("with", "not a dict")],
+)
+def test_a_row_the_validator_calls_clean_can_never_make_the_parser_raise(
+    field: str, value: object
+) -> None:
+    """The half of "the two must agree about one file" that RAISES.
+
+    `validate_user_schedules` only looks at `dom` when `every == "monthly"`, and
+    never looks at `with` at all — but `parse_user_schedules` decodes both on
+    every row (`int(row.get("dom") or 0)`, `dict(row.get("with") or {})`). So a
+    file the linter calls clean makes `usable_rows` raise `ValueError`.
+
+    The raise escapes before `return good, problems`, so it costs the file's
+    GOOD rows too — the exact thing `usable_rows`' own docstring promises
+    against: "one mistyped row must cost that row only". And the author is told
+    nothing, because the linter is the only thing that reaches them and it is
+    empty.
+
+    `"with": ["a", "b"]` is a shape an LLM page generator plausibly emits.
+    """
+    raw = _file({"every": "daily", "at": "09:00", "run": "r", field: value}, DAILY)
+
+    problems = validate_user_schedules(raw)
+    rows, from_usable = usable_rows(raw)  # must not raise
+
+    assert problems, f"`{field}: {value!r}` is refused by the parser and linted by nothing"
+    assert [r.run for r in rows] == ["build-report"], (
+        "the good row beside it was lost — one row's mistake cost the whole file"
+    )
+    assert from_usable, "the row was dropped with nothing said about it"
+
+
+def test_a_row_the_parser_cannot_read_costs_only_its_own_row(monkeypatch) -> None:
+    """The belt, pinned independently of which shapes currently reach it.
+
+    The linter now grades every field the parser decodes, so no input I can
+    construct still makes `parse_user_schedules` raise — removing the guard in
+    `usable_rows` leaves the shape-based tests green. That is exactly the
+    argument for pinning the PROPERTY rather than a shape: the guard exists for
+    the parser change nobody has made yet, and a test that depends on today's
+    broken input stops holding the day that input is linted.
+
+    The property: a row the parser cannot read is dropped WITH a complaint, and
+    the good rows beside it still run. Before, the raise escaped before
+    `return good, problems` and took the whole file — the opposite of this
+    function's own promise.
+    """
+    import workspace_app.workflow.user_schedules as mod
+
+    real = mod.parse_user_schedules
+    calls: list[int] = []
+
+    def _raises_on_the_first_row(raw):
+        calls.append(1)
+        if len(calls) == 1:
+            raise ValueError("a decode nobody linted for")
+        return real(raw)
+
+    monkeypatch.setattr(mod, "parse_user_schedules", _raises_on_the_first_row)
+
+    rows, problems = usable_rows(_file(DAILY, POLLER))
+
+    assert [r.run for r in rows] == [POLLER["run"]], "the unreadable row took the good row with it"
+    assert any("could not be read" in p for p in problems), (
+        "the row vanished with nothing said about it"
     )

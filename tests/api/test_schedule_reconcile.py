@@ -15,6 +15,9 @@ door added tomorrow is covered without anybody remembering this file.
 
 from __future__ import annotations
 
+import asyncio
+import time
+
 import pytest
 from specstar import SpecStar
 
@@ -170,3 +173,87 @@ async def test_a_failed_flush_still_drops_the_size_it_knows_is_wrong() -> None:
         "a failed flush must still drop the cached size, and must NOT go on to "
         "list a workspace whose bytes never settled"
     )
+
+
+# --- what it costs, since it runs on every turn end -------------------------
+
+
+async def test_the_reconcile_does_not_hold_the_event_loop(spec: SpecStar) -> None:
+    """`index.record` is blocking specstar I/O and this runs at EVERY turn end.
+
+    `_note_schedule_file` argues the sync `record` is acceptable because "the
+    cost is paid only by an actual CHANGE to a `schedules.json` ... If that
+    stops being true the answer is an async hook". Five commits later this
+    reconciler made it stop being true — every turn end, changed or not — and
+    reused the same synchronous call, leaving that paragraph standing.
+
+    Measured as the longest GAP between heartbeats, the same instrument the
+    sweep's own guard uses, because a count of beats passes while one call is
+    still blocking.
+    """
+    index = ScheduleIndex(spec)
+    BLOCK = 0.2
+
+    real = index.record
+
+    def _slow(item_id: str, path: str) -> None:
+        time.sleep(BLOCK)
+        real(item_id, path)
+
+    index.record = _slow  # ty: ignore[invalid-assignment]
+
+    async def _ls(item_id: str) -> list[str]:
+        return [f"/a/{SCHEDULES_FILE}", f"/b/{SCHEDULES_FILE}"]
+
+    beats: list[float] = [time.monotonic()]
+    running = True
+
+    async def _heartbeat() -> None:
+        while running:
+            await asyncio.sleep(0.001)
+            beats.append(time.monotonic())
+
+    pulse = asyncio.create_task(_heartbeat())
+    await reconcile_item_schedules(ITEM, ls=_ls, index=index)
+    running = False
+    pulse.cancel()
+    beats.append(time.monotonic())
+
+    worst = max(b - a for a, b in zip(beats, beats[1:], strict=False))
+    assert worst < BLOCK / 2, (
+        f"the loop was held for {worst * 1000:.0f}ms at once, and one store call "
+        f"takes {BLOCK * 1000:.0f}ms — the reconcile is running it on the loop, "
+        "at every turn end, on every pod"
+    )
+
+
+async def test_a_path_already_indexed_is_not_written_again(spec: SpecStar) -> None:
+    """Steady state has to be READS, not writes.
+
+    Every turn end reconciles, and almost every turn end finds exactly what the
+    hooks already recorded. `record` costs two round trips for a path it already
+    holds (`create(if_not_exists=True)` refuses, then a read), so a workspace
+    with three pages paid six writes-worth of specstar per turn to learn
+    nothing. Ask once what is already known, and write only what is new.
+    """
+    index = ScheduleIndex(spec)
+    index.record(ITEM, f"/a/{SCHEDULES_FILE}")
+
+    calls: list[str] = []
+    real = index.record
+
+    def _counting(item_id: str, path: str) -> None:
+        calls.append(path)
+        real(item_id, path)
+
+    index.record = _counting  # ty: ignore[invalid-assignment]
+
+    async def _ls(item_id: str) -> list[str]:
+        return [f"/a/{SCHEDULES_FILE}", f"/b/{SCHEDULES_FILE}"]
+
+    await reconcile_item_schedules(ITEM, ls=_ls, index=index)
+    assert calls == [f"/b/{SCHEDULES_FILE}"], f"wrote {calls}; /a was already indexed"
+
+    calls.clear()
+    await reconcile_item_schedules(ITEM, ls=_ls, index=index)
+    assert calls == [], "a reconcile that changes nothing still wrote"

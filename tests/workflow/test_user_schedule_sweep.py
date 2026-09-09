@@ -1452,3 +1452,51 @@ def test_a_schedule_whose_previous_run_is_still_going_skips_the_window_quietly(c
     )
     burned = [r for r in caplog.records if "Nothing will run for it" in r.getMessage()]
     assert not burned, "the window was burned because the last run had not finished"
+
+
+def test_an_overrunning_schedule_says_it_once_and_remembers_boundedly(caplog):
+    """ "Said once per (schedule, window)" bounds nothing and de-noises nothing.
+
+    A minutely schedule whose run is slow produces a NEW window every minute, so
+    keying the memo on the window means one line per window — 1440 a day, which
+    is the flood the memo was added to stop — and one dict entry per window,
+    never popped, for the life of the process.
+
+    `_failures`, ten lines below, prunes the trigger's older windows with the
+    comment "so this cannot grow with time". The window-keyed memo added beside
+    it got no such treatment.
+
+    The right key is the SCHEDULE: a run that spans forty windows is one fact,
+    said once, and said again only when it changes.
+    """
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    files = _Files(**{f"{ITEM}{PATH}": _file(DAILY)})
+
+    async def _busy(**kw):
+        raise ActiveRunExists(ITEM, "run-still-going")
+
+    sweeper = UserScheduleSweeper(
+        spec=spec,
+        index=ScheduleIndex(spec),
+        read=files.read,
+        read_live=files.read,
+        start=_busy,
+        owner_of=lambda _item: "alice",
+        now=lambda: datetime(2026, 9, 5, 9, 30),
+    )
+
+    with caplog.at_level(logging.INFO):
+        for day in range(5, 45):
+            sweeper._now = lambda d=day: datetime(2026, 9, d, 9, 30)
+            asyncio.run(sweeper.tick())
+
+    said = [r for r in caplog.records if "still running its previous fire" in r.getMessage()]
+    assert len(said) == 1, (
+        f"forty windows of one slow run narrated themselves {len(said)} times — "
+        "the memo is keyed on the window, so it never suppresses anything"
+    )
+    assert len(sweeper._said) <= 2, (
+        f"the memo holds {len(sweeper._said)} entries after forty windows and "
+        "nothing ever pops them"
+    )

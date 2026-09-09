@@ -205,7 +205,11 @@ async def deliver_pending(spec: SpecStar, channel: INotificationChannel | None) 
                 row,
                 outbound="sent",
                 delivered_at=_now_ms(),
-                delivery_attempts=row.delivery_attempts + 1,
+                # NOT `+ 1`. `row` is the CLAIMED struct, whose count already
+                # includes this attempt — the claim is what counts it, before the
+                # channel is asked. Adding one here counted every success twice,
+                # so the number an operator reads to judge a flaky relay was
+                # inflated by exactly the deliveries that worked.
             ),
         )
         sent += 1

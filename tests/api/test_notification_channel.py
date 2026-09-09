@@ -268,3 +268,39 @@ def test_a_claim_that_was_not_delivered_is_tried_again(spec: SpecStar):
     working = _Channel()
     asyncio.run(deliver_pending(spec, working))
     assert len(working.sent) == 1, "the row was never retried after a transient failure"
+
+
+def test_a_notification_delivered_first_time_records_one_attempt(spec: SpecStar):
+    """`delivery_attempts` is documented as "how many times a channel was
+    offered this row". One offer is one.
+
+    The CAS claim already counts the attempt before the channel is asked, so the
+    success mark must not count it again. It did: `row` was rebound to the
+    claimed struct and then `+ 1` was applied to a number that already included
+    this attempt. A row delivered first time read as two offers, and a row that
+    failed once and then went read as three — so the number an operator uses to
+    judge a flaky relay was inflated by exactly the successes.
+
+    Nothing held it in either direction: no test asserted the count on a sent
+    row at all.
+    """
+    nid = _one(spec)
+    asyncio.run(deliver_pending(spec, _Channel()))
+
+    row = _row(spec, nid)
+    assert row.outbound == "sent"
+    assert row.delivery_attempts == 1, f"one offer was recorded as {row.delivery_attempts} attempts"
+
+
+def test_a_notification_that_failed_once_records_two_attempts(spec: SpecStar):
+    """The control: the count must still RISE with real offers, or the
+    assertion above is satisfied by never counting anything."""
+    nid = _one(spec)
+    asyncio.run(deliver_pending(spec, _Channel(fail=True)))
+    asyncio.run(deliver_pending(spec, _Channel()))
+
+    row = _row(spec, nid)
+    assert row.outbound == "sent"
+    assert row.delivery_attempts == 2, (
+        f"a failure then a success is two offers, recorded as {row.delivery_attempts}"
+    )

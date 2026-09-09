@@ -477,13 +477,22 @@ class UserScheduleSweeper:
                 # overrun means, and the next window is the right place to try.
                 # Said once per (schedule, window) so a slow run does not narrate
                 # itself, and at INFO because nothing is wrong.
+                # Keyed on the SCHEDULE, not the window. A slow run produces a
+                # new window every period, so a window-keyed memo says the line
+                # once per window — 1440 a day for a minutely schedule, which is
+                # the flood it was added to stop — and keeps one dict entry per
+                # window for the life of the process. `_failures` below prunes
+                # exactly this way and says so; the memo beside it did not.
+                #
+                # A run spanning forty windows is ONE fact, so the message names
+                # the schedule rather than whichever window we noticed in.
                 self._say_once(
                     item_id,
-                    f"{path}#busy#{window}",
+                    f"{path}#busy",
                     logging.INFO,
-                    "user schedules: %s is still running its previous fire — skipping window %s",
+                    "user schedules: %s is still running its previous fire — "
+                    "skipping windows until it finishes",
                     trigger_id,
-                    window,
                 )
                 continue
             except Exception:

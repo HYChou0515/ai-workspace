@@ -174,6 +174,21 @@ def validate_user_schedules(raw: str) -> list[str]:
         row = cast("dict[str, Any]", raw_row)
         if not row.get("run"):
             problems.append(f"{where}: needs `run` — the workflow to start.")
+        # CHECKED ON EVERY ROW, not only where the field means something.
+        # `parse_user_schedules` decodes `dom` and `with` unconditionally
+        # (`int(...)`, `dict(...)`), so a value it cannot decode raises — and the
+        # validator, which only looked at `dom` for a monthly row and never
+        # looked at `with` at all, called the file clean. A linter that grades a
+        # narrower set than the parser reads is a linter that promises the parser
+        # will succeed and does not check.
+        dom_raw = row.get("dom")
+        if dom_raw is not None and not isinstance(dom_raw, int):
+            problems.append(f"{where}: `dom` must be a number, got {dom_raw!r}.")
+        with_raw = row.get("with")
+        if with_raw is not None and not isinstance(with_raw, dict):
+            problems.append(
+                f"{where}: `with` must be an object of values for the workflow, got {with_raw!r}."
+            )
         # `or`, not a `.get` default: a JSON `null` has to mean what an omitted
         # key means. A page generator writes nulls for the fields it left
         # unset, and `.get(k, default)` only fires when the key is ABSENT — so
@@ -300,7 +315,16 @@ def usable_rows(raw: str) -> tuple[list[UserSchedule], list[str]]:
             # the line the author has to fix rather than always at zero.
             problems.extend(p.replace("schedules[0]", f"schedules[{i}]") for p in bad)
             continue
-        good.extend(parse_user_schedules(one))
+        try:
+            good.extend(parse_user_schedules(one))
+        except Exception as exc:
+            # BELT AND BRACES, and the belt is the linter above. A decode that
+            # raises here escaped before `return good, problems` and took the
+            # file's GOOD rows with it — the opposite of this function's whole
+            # promise — and the author saw nothing, because the linter is the
+            # only thing that reaches them. Every known case is linted now; this
+            # keeps the next unknown one costing its own row only.
+            problems.append(f"schedules[{i}]: could not be read ({exc}).")
     return good, problems
 
 
