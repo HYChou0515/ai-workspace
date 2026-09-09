@@ -21,7 +21,7 @@
 | 決策 | 理由 | 否決的替代方案 | 出處 |
 |---|---|---|---|
 | `AgentRunner` Protocol 是 scripted ↔ 真 LLM 的抽換點 | 測試（`ScriptedAgentRunner`）不依賴 LLM；SSE plumbing 可獨立開發；正式用 `LitellmAgentRunner` | 測試直接打真模型（慢、不確定、要外部依賴） | [architecture.md](architecture.md) §9, [subsystems/agent-runtime.md](subsystems/agent-runtime.md) |
-| RCA workspace 與 KB chat 回合共用同一個 `ChatTurnEngine`（`api/turns.py`）| turn/cancel/SSE/序列化邏輯只一份；每個 conversation 一把 lock、一個可取消的 in-flight turn（新訊息取消前一個）；兩邊只注入各自的 `AgentToolContext` + `on_complete` | 每個 surface 各刻一套 turn/cancel/SSE | `CLAUDE.md`；[architecture.md](architecture.md) §3, [subsystems/api-and-turns.md](subsystems/api-and-turns.md) |
+| RCA workspace 與 KB chat 回合共用同一個 `ChatTurnEngine`（`api/turns.py`）| turn/cancel/SSE/序列化邏輯只一份；每個 conversation 一把 lock、一個 in-flight turn；**兩邊都排隊**（新訊息不取消,只有 Stop 打斷）；兩邊只注入各自的 `AgentToolContext` + `on_complete` | 每個 surface 各刻一套 turn/cancel/SSE | `CLAUDE.md`；[architecture.md](architecture.md) §3, [subsystems/api-and-turns.md](subsystems/api-and-turns.md) |
 | `InvestigationRegistry` 只管 sandbox 生命週期（RCA 專屬），不管 turn | turn 已抽進共用引擎；registry 只剩它無可取代的職責 | registry 同時管 turn + sandbox（職責混雜） | [architecture.md](architecture.md) §3, [subsystems/api-and-turns.md](subsystems/api-and-turns.md) |
 | SSE event schema 在 BE/FE 鏡像（`api/events.py` ↔ `web/src/events.ts`）| 同一份事件契約兩端共用；新增事件型別必須兩邊同步，否則 FE 渲染漏接 | 各自定義、靠文件對齊（易 drift） | [architecture.md](architecture.md) §4/§6, [subsystems/frontend.md](subsystems/frontend.md) |
 | `_run_once` 把 producer（SDK 事件）與 `on_exec_output`（exec stdout）fan-in 進一個 queue | Agents SDK 工具是 request→response，執行期間無回報 stdout 的管道；fan-in 才能讓長指令輸出邊跑邊變成 `ToolLog` | 等工具整段跑完才顯示輸出（長指令像卡死）| [architecture.md](architecture.md) §3, [subsystems/agent-runtime.md](subsystems/agent-runtime.md) |

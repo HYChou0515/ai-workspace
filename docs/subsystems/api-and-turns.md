@@ -11,7 +11,7 @@ HTTP / SSE 邊界：對外暴露 FastAPI 的 REST 表面（Apps/items、KB colle
 - **REST 表面**：App items 的訊息端點、KB collections/documents 的 CRUD 與上傳、KB chat 的多執行緒對話。
 - **回合生命週期**：每個對話一次一場可取消的 in-flight turn；把 runner 吐出的 `AgentEvent` 串流成 SSE，並把同一串事件 reduce 成可持久化的 `TurnMessage`。
 - **LiteLLM / Ollama 的眉角集中地**：delta channel 分流、`<think>` 切分、token 用量補值、小模型工具呼叫的重試與診斷，全都收斂在 `LitellmAgentRunner` 一處。
-- **兩種廣播模型**：KB chat 的 per-requester `stream()`（新訊息取消前一場），RCA 的 #43 broadcast `enqueue()`（新訊息不取消，序列化於共用 sandbox/檔案）。
+- **一種廣播模型**：兩邊都是 #43 broadcast `enqueue()`——新訊息不取消,序列化排隊,只有 Stop 打斷。KB chat 曾經走 per-requester `stream()`(新訊息取消前一場),那正是「問一個追問就把答案丟掉」的來源。
 
 **不負責**：
 
@@ -24,7 +24,7 @@ HTTP / SSE 邊界：對外暴露 FastAPI 的 REST 表面（Apps/items、KB colle
 
 | 路徑 | 角色 |
 | --- | --- |
-| `src/workspace_app/api/turns.py` | `ChatTurnEngine`：per-requester `stream()`（KB）+ #43 `enqueue`/`_worker`/`_run_turn`/`subscribe_sse`/`publish`/`cancel_current`（RCA broadcast）。`_TurnReducer` 把 `AgentEvent` 折成 `TurnMessage`；`history_items` 由持久訊息重建 SDK input items（#199 折疊、#45 token 預算）。 |
+| `src/workspace_app/api/turns.py` | `ChatTurnEngine`：#43 `enqueue`/`_worker`/`_run_turn`/`subscribe_sse`/`publish`/`cancel_current`(RCA 與 KB 共用);`stream()` 只剩沒有自己佇列語意的呼叫者在用。`_TurnReducer` 把 `AgentEvent` 折成 `TurnMessage`；`history_items` 由持久訊息重建 SDK input items（#199 折疊、#45 token 預算）。 |
 | `src/workspace_app/api/runner.py` | `AgentRunner` Protocol（swap 接縫）+ `ScriptedAgentRunner`（測試用）。 |
 | `src/workspace_app/api/litellm_runner.py` | `LitellmAgentRunner`：`run()` 重試迴圈（`diagnose_error`/`classify_retry_event`，#26 progress-gated）、`_run_once` fan-in queue（producer 正規化 SDK 事件 + `ctx.on_exec_output` stdout）、`_delta_channel`、`ThinkSplitter`、`_final_tokens`、`_agent_for`。 |
 | `src/workspace_app/api/events.py` | `AgentEvent` dataclass union + `to_sse()`；在 `web/src/events.ts` 鏡像。 |
@@ -85,11 +85,13 @@ flowchart TD
   REG["InvestigationRegistry (sandbox only)"] -. peek_handle .-> RUN
 ```
 
-### KB chat（per-requester `stream()`）
+### KB chat（broadcast `enqueue()`，與 RCA 同一套）
 
-`POST /kb/chats/{id}/messages` →（在 `send_message`）先把使用者的 `KbMessage` append 進 `KbChat` → 解析 picker（`agent_name`，未知名稱回 422 不靜默 fallback）→ 建 KB `AgentToolContext`（retriever + `collection_ids` + `history_items(...)` + #106 context-card pre-scan，只增 agent 看到的內容、持久訊息保持乾淨）→ `engine.stream(chat_id, content, ctx, on_complete=persist)`。
+`POST /kb/chats/{id}/messages` →（在 `send_message`）先把使用者的 `KbMessage` append 進 `KbChat`（`created_at`/`author` **只蓋一次**，同時給持久化與廣播——蓋兩次前端會畫出兩顆泡泡）→ 解析 picker（`agent_name`，未知名稱回 422 不靜默 fallback）→ 建 KB `AgentToolContext`（retriever + `collection_ids` + `history_items(...)` + #106 context-card pre-scan，只增 agent 看到的內容、持久訊息保持乾淨）→ `engine.publish(chat_id, UserMessage(...))` → `engine.enqueue(chat_id, content, ctx, on_complete=persist)` → 等自己那一輪（`shield` + `send_await_timeout`，逾時只是 detach 不是取消）→ 回 **202**。
 
-`stream()` 拿 `session.lock`，先 `_cancel_prior_turn`（新訊息取消前一場），再 spawn `_drive`。`_drive` 把 `_events(...)`（即 `guard_repetition(runner.run(...))`，#113 重複偵測包在這一處）泵進 per-turn queue：`CancelledError` → 推 `RunCancelled`、其他 `Exception` → 推 `RunError`、最後推 `None` sentinel。回傳 `StreamingResponse(gen())`。`gen()` 把每個事件同時 `reducer.add()`（建可持久化形狀）並 `to_sse()` yield 給這個 requester；收到 sentinel 時呼叫 `on_complete(reducer.produced)`——`persist` 重抓 chat、把每個 `TurnMessage` 轉成 `KbMessage`，assistant 訊息以 `parse_citations(content, ctx.kb_passages)` 解析 `[n]` 並 `record_citations`。
+**新訊息不取消**進行中的 turn，和 RCA 一樣：turn 序列化排隊，只有 `cancel_current`（Stop）能打斷。先前用的是 `stream()`（開頭 `_cancel_prior_turn`），問一個追問就會把正在寫的答案丟掉；而 POST 本身就是那條串流的話，body 要一直開到答案寫完，後面那則根本沒有排隊的餘地。
+
+事件改走 `GET /kb/chats/{id}/stream` → `subscribe_sse(chat_id, since=…)`，一條訂閱跨越多個 turn。`persist` 重抓 chat、把每個 `TurnMessage` 轉成 `KbMessage`，assistant 訊息以 `parse_citations(content, ctx.kb_passages)` 解析 `[n]` 並 `record_citations`。
 
 ### RCA（#43 broadcast `enqueue()`）
 
@@ -117,7 +119,7 @@ agent 回合不是這層唯一的串流。`POST /a/{slug}/items/{item_id}/notebo
     工具輸出的 `raw_item` 在 LiteLLM 路徑上是 `FunctionCallOutput` TypedDict（dict），其餘情況才是物件。純 `getattr` 會默默丟失 `call_id`，FE 的工具卡就會永遠卡在「running」。
 
 !!! note "兩種廣播模型的取消語意不同"
-    `stream()`（KB，per-requester）：新訊息**取消**前一場（由 `session.lock` 序列化）。`enqueue()`（RCA #43，broadcast）：新訊息**不取消**——協作者共用 sandbox/檔案，turn 序列化排隊，只有 `cancel_current`（Stop）打斷。`ChatTurnEngine` 擁有 **turn** 生命週期；`InvestigationRegistry` 擁有 **sandbox** 生命週期。不要在每個表面各自重做 turn/cancel/SSE。
+    `enqueue()`（#43 broadcast，RCA 與 KB 共用）：新訊息**不取消**——turn 序列化排隊，只有 `cancel_current`（Stop）打斷,而且 Stop 只動進行中的那一場、不碰佇列。`stream()`（per-requester，開頭 `_cancel_prior_turn`）仍在,但聊天表面都不再用它。`ChatTurnEngine` 擁有 **turn** 生命週期；`InvestigationRegistry` 擁有 **sandbox** 生命週期。不要在每個表面各自重做 turn/cancel/SSE。
 
 !!! warning "history 不可在對話中段含 system item"
     `_build_input` 會 `assert` 沒有 `role == "system"` 的項目（SDK 自己 prepend system prompt，中段再插一個會被 provider 以「system message must be at the beginning」拒絕）。使用者取消是以 `_INTERRUPTED_MARKER` **折疊進前一個 assistant turn** 重播（#199），絕不發成獨立 system 訊息。`history_items` 也把 `role == "error"` 的 marker（除 `cancelled` 外）排除在模型 context 之外（#37）。
@@ -158,7 +160,7 @@ agent 回合不是這層唯一的串流。`POST /a/{slug}/items/{item_id}/notebo
 
 接手者建議照這個順序讀：
 
-- `src/workspace_app/api/turns.py` — `ChatTurnEngine.stream` / `_drive`（KB per-requester）、`enqueue` / `_worker` / `_run_turn` / `cancel_current` / `subscribe_sse`（RCA #43 broadcast）、`_TurnReducer`、`history_items`。
+- `src/workspace_app/api/turns.py` — `enqueue` / `_worker` / `_run_turn` / `cancel_current` / `subscribe_sse`（#43 broadcast，兩個聊天表面共用）、`stream` / `_drive`（per-requester，cancel-prior）、`_TurnReducer`、`history_items`。
 - `src/workspace_app/api/runner.py` — `AgentRunner` Protocol 的 swap 契約 + `ScriptedAgentRunner`。
 - `src/workspace_app/api/litellm_runner.py` — `LitellmAgentRunner.run`（重試迴圈）/ `_run_once`（fan-in queue）/ `_delta_channel` / `ThinkSplitter` / `_final_tokens` / `diagnose_error` / `_map_event` / `_agent_for`。
 - `src/workspace_app/api/events.py` — `AgentEvent` union + `to_sse`（與 `web/src/events.ts` 對照）。

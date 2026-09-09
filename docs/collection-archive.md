@@ -183,13 +183,16 @@ exact key 比對,毫秒級,不呼叫 LLM。卡片**不進語意索引**,匯入�
 CHAT=$(curl -s -X POST "$BASE/kb/chats" -H 'content-type: application/json' \
        -d '{"title":"分類","collection_ids":["'$CID'"]}' | jq -r .resource_id)
 
-curl -N -X POST "$BASE/kb/chats/$CHAT/messages" \
+curl -X POST "$BASE/kb/chats/$CHAT/messages" \
      -H 'content-type: application/json' \
      -d '{"content":"這張是哪一種?",
           "image":{"data":"'"$(base64 -w0 shot.png)"'","mime":"image/png"}}'
+
+# 202 之後,答案在 thread 裡(這個 POST 會等自己那一輪跑完才回)
+curl -s "$BASE/kb/chats/$CHAT" | jq -r '.messages[-1].content'
 ```
 
-回傳是 SSE 串流(`-N` 不能省)。這張圖**不會被存成文件** —— 平台用 VLM 描述它、拿那段描述去搜、然後丟掉。
+回傳是 **202**、空 body —— turn 排進佇列,事件走 `GET /kb/chats/{id}/stream`。這張圖**不會被存成文件** —— 平台用 VLM 描述它、拿那段描述去搜、然後丟掉。
 
 搜到的文件會**把連著它的代號卡一起帶出來**,所以答案講得出「這叫什麼」,而不只是描述它看到什麼。這一點對圖片文件特別關鍵:圖片文件的內文是視覺模型寫的描述,**不可能出現人類指定的代號**,單靠文字比對永遠搆不到那張卡。
 

@@ -361,8 +361,10 @@ def _error_message(item: RunError | RunCancelled | MaxTurnsExceeded) -> TurnMess
 @dataclass
 class _TurnReducer:
     """Reduces a turn's `AgentEvent`s into persistable `TurnMessage`s. Shared by
-    the per-requester `stream()` (KB chat) and the collaborative broadcast
-    worker (#43) so both produce the SAME persisted shape from the same events."""
+    the per-requester `stream()` and the collaborative broadcast worker (#43) so
+    both produce the SAME persisted shape from the same events. Both chat
+    surfaces now take the second path — a message queues rather than cancelling
+    the answer it arrived during."""
 
     produced: list[TurnMessage] = field(default_factory=list)
     _pending_tools: dict[str, ToolStart] = field(default_factory=dict)

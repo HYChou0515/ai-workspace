@@ -117,7 +117,7 @@
 
 ## 其他橫切
 
-- **ChatTurnEngine** — RCA workspace ＋ KB chat 共用的單一回合引擎（`api/turns.py`）：per-conversation lock、單一可取消 in-flight turn（新訊息取消前一個）、`_drive` pump、SSE `gen()` 把事件 reduce 成中性 `TurnMessage`、`cancel()`/`forget()`。別逐 surface 重刻 turn／cancel／SSE。歸 [API 與回合引擎](subsystems/api-and-turns.md)。
+- **ChatTurnEngine** — RCA workspace ＋ KB chat 共用的單一回合引擎（`api/turns.py`）：per-conversation lock、單一 in-flight turn（新訊息**排隊**,只有 Stop 打斷）、`_drive` pump、SSE `gen()` 把事件 reduce 成中性 `TurnMessage`、`cancel_current()`/`forget()`。別逐 surface 重刻 turn／cancel／SSE。歸 [API 與回合引擎](subsystems/api-and-turns.md)。
 - **TurnMessage** — `ChatTurnEngine` 產出的中性訊息；每個 surface 用 `on_complete` 把它對映到自家 model（`Message`／`KbMessage`）。歸 [API 與回合引擎](subsystems/api-and-turns.md)。
 - **SSE event schema** — `api/events.py` 定義、`web/src/events.ts` 鏡射；新增事件型別要兩邊同步。KB chat 串同一套事件。歸 [API 與回合引擎](subsystems/api-and-turns.md)。
 - **JobType** — 背景工作型別（index／wiki／card-gen／sanity）；一個 worker pod 阻塞消費**一個** JobType（`consume_until_stopped`），各自在自己的 k8s HPA 下擴展。歸 [背景工作與擴展](subsystems/jobs-and-scaling.md)。
