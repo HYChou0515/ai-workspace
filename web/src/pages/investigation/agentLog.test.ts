@@ -1475,6 +1475,26 @@ describe("a queued question must not split the answer that is still streaming", 
     expect(answers(log).map((e) => e.message.content)).toEqual(["答案A", "答案B", "答案C"]);
   });
 
+  // `live` is cleared by a tool call or a terminal, so a turn whose terminal
+  // never arrives — the stream dropped mid-answer — leaves it set, and the next
+  // turn's first `metrics` event would then read "answering" off the PREVIOUS
+  // turn's output. What bounds that is the re-hydrate: a snapshot rebuilt from
+  // the store carries no flag, so reconnecting ends the stale answer. Without
+  // this the window would be silent as well as open.
+  it("a re-hydrate ends an answer whose terminal never arrived", () => {
+    const dropped = reduceAgent(EMPTY_LOG, { type: "message_delta", text: "半句" } as never);
+    expect(dropped.entries.some((e) => e.kind === "message" && e.live)).toBe(true);
+
+    const rehydrated = reconcileSnapshot(dropped, {
+      messages: [
+        { role: "user", content: "問題" },
+        { role: "assistant", content: "半句" },
+        { role: "assistant", content: "整句" },
+      ] as never,
+    });
+    expect(rehydrated.entries.some((e) => e.kind === "message" && e.live)).toBe(false);
+  });
+
   // The other control: an ordinary first question opens an answer of its own.
   // A rule that marked every user message as "queued" would break this.
   it("still opens a fresh answer for a question asked with nothing running", () => {

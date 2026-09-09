@@ -240,6 +240,74 @@ describe("useKbChat — a turn that ended while we were away", () => {
   });
 });
 
+describe("useKbChat — a turn that FAILS still says why", () => {
+  beforeEach(() => _resetKbMock());
+
+  const failedThread = {
+    resource_id: "kb-boom",
+    title: "",
+    collection_ids: [],
+    owner: "default-user",
+    shared_with: [],
+    messages: [
+      { role: "user", content: "問題", reasoning: null, tool_name: null, tool_args: null, tool_call_id: null, created_at: 1, citations: [] },
+      { role: "error", content: "model exploded", reasoning: null, tool_name: null, tool_args: null, tool_call_id: null, created_at: 2, citations: [] },
+    ],
+  };
+
+  // The runner gives up by yielding RunError and then RunDone — always both,
+  // always in that order. So anything that clears `error` on each event wipes
+  // the failure one event after it arrives, and the chat just stops with no
+  // explanation. `agentLog`'s `message_delta` comment says this exact defect
+  // must not come back; it came back through the reconnect loop instead.
+  it("keeps the turn's error when `done` follows it", async () => {
+    const client = {
+      ...mockKbApi,
+      getChat: vi.fn().mockResolvedValue(failedThread),
+      subscribeChat: async function* () {
+        yield { type: "error", message: "model exploded" } as never;
+        yield { type: "done" } as never;
+        await new Promise<void>(() => {});
+      },
+    } as unknown as typeof mockKbApi;
+
+    const { result } = renderHook(() =>
+      useKbChat({ collectionIds: ["c1"], chatId: "kb-boom", client }),
+    );
+
+    await waitFor(() => expect(result.current.log.error).toContain("model exploded"));
+    // …and it is still there once everything has settled, not just in the frame
+    // between the two events.
+    await act(async () => {
+      await new Promise<void>((r) => setTimeout(r, 50));
+    });
+    expect(result.current.log.error).toContain("model exploded");
+  });
+
+  // The post-send safety net gates on "the turn ended". A failed, cancelled or
+  // step-limited turn persists `role="error"` (`turns._error_message`), so a gate
+  // reading `role === "assistant"` skipped exactly the turns most likely to have
+  // lost their broadcast — leaving the composer locked and the spinner spinning.
+  it("unsticks a new chat whose first turn ended in an error", async () => {
+    const client = {
+      ...mockKbApi,
+      createChat: vi.fn().mockResolvedValue({ resource_id: "kb-boom" }),
+      getChat: vi.fn().mockResolvedValue(failedThread),
+      sendMessage: vi.fn().mockResolvedValue(undefined),
+      subscribeChat: async function* () {
+        await new Promise<void>(() => {}); // the broadcast is missed entirely
+      },
+    } as unknown as typeof mockKbApi;
+
+    const { result } = renderHook(() => useKbChat({ collectionIds: ["c1"], client }));
+    await act(async () => {
+      await result.current.send("問題");
+    });
+
+    await waitFor(() => expect(result.current.log.streaming).toBe(false));
+  });
+});
+
 describe("useKbChat — send failure", () => {
   beforeEach(() => _resetKbMock());
 

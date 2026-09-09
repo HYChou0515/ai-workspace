@@ -111,6 +111,12 @@ export function useKbChat({
   // thread it has only just created, without waiting a render for this effect.
   const subRef = useRef<{ id: string; controller: AbortController } | null>(null);
 
+  // `log.streaming` as of the last render, so `send` can put it back if the send
+  // fails. `drawOwnAsk` sets `streaming`, so once it has run the log can no
+  // longer say whether a turn was already running when this send started.
+  const streamingRef = useRef(false);
+  streamingRef.current = log.streaming;
+
   const attach = useCallback(
     (id: string) => {
       if (subRef.current?.id === id) return;
@@ -126,6 +132,9 @@ export function useKbChat({
         // true, and no answer ever rendered again until the component remounted.
         // Only an abort (unmount / thread switch) stops this.
         let firstConnect = true;
+        // The last "the stream dropped" message this loop put on screen, so a
+        // successful reconnect can retract exactly it and nothing else.
+        let dropNotice: string | null = null;
         let maxSeq: number | undefined;
         const seen = new Set<string>();
         while (!controller.signal.aborted) {
@@ -158,12 +167,21 @@ export function useKbChat({
               // every second forever — the backoff never engages in the single
               // scenario it exists for.
               backoff = 1000;
-              // …and this stream is working, so a message saying it dropped is
-              // no longer true. `message_delta` only clears an error it raised
-              // itself (`errorFromTurn`), and `reconcileSnapshot` carries one
-              // across, so that notice would otherwise stay pinned above the
-              // whole answer streaming in below it.
-              setLog((prev) => (prev.error === null ? prev : { ...prev, error: null }));
+              // …and the "this stream dropped" notice is no longer true, so
+              // clear THAT ONE — matched by the exact text this loop wrote.
+              //
+              // Not every error. `litellm_runner` gives up by yielding RunError
+              // and then RunDone, so a blanket clear on each event wiped a
+              // turn's own failure one event after it arrived and left the chat
+              // simply stopping with no explanation — the defect `agentLog`'s
+              // `message_delta` comment says must not come back. It also wiped
+              // send failures (`errorFromTurn: false`), which are deliberately
+              // the ones nothing else retracts.
+              if (dropNotice !== null) {
+                const stale = dropNotice;
+                dropNotice = null;
+                setLog((prev) => (prev.error === stale ? { ...prev, error: null } : prev));
+              }
               setLog((prev) => reduceAgent(prev, ev));
               if (isTerminal(ev)) {
                 // The persisted thread is what carries the resolved [n]
@@ -181,6 +199,7 @@ export function useKbChat({
             // Say so rather than going quiet: a stream that dropped looks
             // exactly like a chat where nothing is happening, and the answer
             // simply stops growing.
+            dropNotice = msg;
             setLog((prev) => ({ ...prev, error: msg }));
           }
           if (controller.signal.aborted) return;
@@ -197,17 +216,15 @@ export function useKbChat({
           const fresh = await client.getChat(id).catch(() => null);
           if (fresh && !controller.signal.aborted) {
             qc.setQueryData(qk.kb.chat(id), fresh);
-            // Reconcile, not replace: a drop MID-turn re-hydrates a thread that
-            // does not yet contain what is on screen.
+            // Reconcile, and nothing else. It already derives `streaming` from
+            // the snapshot, so the forced `streaming: false` that used to sit
+            // here could only take effect in the one case `reconcileSnapshot`
+            // deliberately BAILS — the screen ahead of the store, which is
+            // exactly "a send is in flight". It unlocked the composer and took
+            // Stop away while the turn the user had just sent was being
+            // accepted, and it discarded the recency bound `logFromMessages`
+            // applies. Less code, and right in both directions.
             reconcile(fresh);
-            // The evidence that the turn ended has to be an ANSWER THAT
-            // ARRIVED. "Not a user message" is not the same thing — a `notice`
-            // (#624) is persisted before the model is even called and stands
-            // through the whole time-to-first-token window.
-            const last = fresh.messages[fresh.messages.length - 1];
-            if (last !== undefined && last.role === "assistant") {
-              setLog((prev) => ({ ...prev, streaming: false }));
-            }
           }
           backoff = Math.min(backoff * 2, 15000);
         }
@@ -266,14 +283,14 @@ export function useKbChat({
       // `user_message` broadcast adopts this entry when it lands, so it stays
       // one bubble — keyed on author, which is why this must be the id the
       // backend will stamp and not a display name like "You".
-      // Read the CURRENT value while drawing, so a failure below can put it back.
-      // `drawOwnAsk` sets `streaming`, so after this the log can no longer say
-      // whether a turn was already running when this send started.
-      let wasStreaming = false;
-      setLog((prev) => {
-        wasStreaming = prev.streaming;
-        return drawOwnAsk(prev, { author: currentUser, content: trimmed });
-      });
+      // Read it from the REF, not from inside the updater below. React only
+      // evaluates an updater eagerly when the fiber has no pending lanes, and on
+      // a brand-new chat `setChatId` has just marked it — so a `sendMessage`
+      // that rejects in a microtask reaches the catch before the updater has
+      // run, reads `false`, and hides a turn that is still writing. Which is
+      // the exact failure this is here to prevent.
+      const wasStreaming = streamingRef.current;
+      setLog((prev) => drawOwnAsk(prev, { author: currentUser, content: trimmed }));
       try {
         await client.sendMessage({
           chatId: id,
@@ -310,8 +327,16 @@ export function useKbChat({
           // length wins `reconcileSnapshot` and nulls the ephemerals with it:
           // 「請求過於頻繁,N 秒後自動重試」,「整理較早的對話」,「還原工作區 n/m」.
           // Those notices exist to explain exactly the silence being had.
+          //
+          // "Ended" is NOT "ends on an assistant message": a failed, cancelled
+          // or step-limited turn persists `role="error"` (`turns._error_message`),
+          // and skipping the reconcile for those left the very case this net
+          // exists for — a first message on a new chat whose broadcast was
+          // missed — spinning forever with the composer locked. KB threads have
+          // no `notice` role, so the tail is a user message only while the turn
+          // is still to produce anything.
           const last = fresh.messages[fresh.messages.length - 1];
-          if (last !== undefined && last.role === "assistant") reconcile(fresh);
+          if (last !== undefined && last.role !== "user") reconcile(fresh);
         } catch {
           // Best effort. The subscription's terminal reconcile is the other
           // route to the same snapshot, so this is not the last chance.
