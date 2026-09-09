@@ -343,10 +343,21 @@ describe("a gantt bar coloured by ACTOR", () => {
     });
   }
 
-  it("carries the extent by the EDGE in light mode and by the FILL in dark", () => {
-    // Named rather than implied: this is the pairing that makes the guard above
-    // pass, and if it ever inverts, the boundary has moved to a mechanism
-    // nobody checked.
+  it("carries the extent by the EDGE, because the FILL cannot do it alone", () => {
+    // Named rather than implied: if the boundary ever moves to a mechanism
+    // nobody checked, this is where it shows.
+    //
+    // This used to assert the pairing "edge in light, FILL in dark" — with
+    // `edgeOf(DARK) < 3` written as a requirement. That was the defect stated
+    // as the spec: `--ink` is one value in both themes, so the dark edge was
+    // 1.09:1 on the band, and the guard demanded it stay that way. A bar whose
+    // boundary exists in only one theme is a bar whose start and end — the
+    // data — are guessable in the other.
+    //
+    // The edge is a theme-inverting token now, so it holds in both. What is
+    // still worth pinning is WHY it cannot be dropped: the fill alone is under
+    // 3:1 on the light band, so "the fill is solid, the border is decoration"
+    // is false however solid the fill looks.
     const bars = renderTeam({ group_by: "assignee" });
     const surface = (block: RegExp) => tokenIn(TOKENS_CSS, block, "--white");
     const fillOf = (bar: HTMLElement, block: RegExp) =>
@@ -354,10 +365,13 @@ describe("a gantt bar coloured by ACTOR", () => {
     const edgeOf = (bar: HTMLElement, block: RegExp) =>
       contrast(inkHex(bar.style.borderColor, block), laneBand(block));
 
-    expect(edgeOf(bars[0], LIGHT)).toBeGreaterThanOrEqual(3);
+    for (const [themeName, block] of THEMES) {
+      const edge = edgeOf(bars[0], block);
+      expect(edge, `${themeName}: edge on the band is ${edge.toFixed(2)}:1`).toBeGreaterThanOrEqual(3);
+    }
+    // The reason the edge is load-bearing rather than decorative.
     expect(fillOf(bars[0], LIGHT)).toBeLessThan(3);
     expect(fillOf(bars[0], DARK)).toBeGreaterThanOrEqual(3);
-    expect(edgeOf(bars[0], DARK)).toBeLessThan(3);
   });
 });
 
@@ -418,10 +432,20 @@ describe("a coloured gantt bar's extent", () => {
   // then has no readable edge, and in a gantt the bar's start and end ARE the
   // data. The solid fill used to do this job; since #690 it cannot, so the
   // bar states its own boundary in the ink it already carries.
-  for (const urgency of ["critical", "low"]) {
+  // BOTH colour sources, or the guard only ever walks the default bar. The
+  // person case was missing, and it is the one that was failing: an actor bar
+  // has always worn `--ink` on its edge, which is 1.09:1 on the dark lane band.
+  // Nothing caught it because every case here was a `urgency` bar, whose edge
+  // used to be the chip's own `fg`. Two sources, two exits — walk both.
+  const EDGES = [
+    ["critical", { urgency: "critical" }, { color_by: "urgency", group_by: "urgency" }],
+    ["low", { urgency: "low" }, { color_by: "urgency", group_by: "urgency" }],
+    ["person", { assignee: "alice" }, { color_by: "assignee", group_by: "assignee" }],
+  ] as const;
+  for (const [caseName, fields, colourSpec] of EDGES) {
     for (const [themeName, block] of THEMES) {
-      it(`gives the ${urgency} bar an edge against a lane band in ${themeName} mode`, () => {
-        const { bar } = renderBar({ urgency }, { color_by: "urgency", group_by: "urgency" });
+      it(`gives the ${caseName} bar an edge against a lane band in ${themeName} mode`, () => {
+        const { bar } = renderBar(fields, colourSpec);
 
         const edge = bar.style.borderColor || effective(ENTITY_VIEWS_CSS, ".ev-gantt__bar", "border");
         expect(edge, "the bar draws no boundary of its own").toBeTruthy();
@@ -430,7 +454,7 @@ describe("a coloured gantt bar's extent", () => {
         const ratio = contrast(inkHex(edge as string, block), laneBand(block));
         expect(
           ratio,
-          `${urgency} bar edge in ${themeName}: ${edge} on ${laneBand(block)} = ${ratio.toFixed(2)}:1`,
+          `${caseName} bar edge in ${themeName}: ${edge} on ${laneBand(block)} = ${ratio.toFixed(2)}:1`,
         ).toBeGreaterThanOrEqual(3);
       });
     }

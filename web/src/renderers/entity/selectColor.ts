@@ -34,10 +34,20 @@ function slotOf(name: string): number {
   return n >= 1 && n <= SLOTS ? n : SLOTS;
 }
 
-export function selectColor(value: string, fieldSpec?: EntityFieldSpec): ChipColor {
-  if (!value) return pair(SLOTS);
+/**
+ * Which palette slot a value lands in. Exported because the gantt paints the
+ * same value as a SOLID bar rather than a chip (see `solidForSlot`): the fill
+ * differs, the slot must not, or one `status` would wear two hues in two
+ * places on the same screen. One decision, two renderings.
+ */
+export function slotFor(value: string, fieldSpec?: EntityFieldSpec): number {
+  if (!value) return SLOTS;
   const override = fieldSpec?.colors?.[value];
-  return pair(override ? slotOf(override) : hashSlot(value));
+  return override ? slotOf(override) : hashSlot(value);
+}
+
+export function selectColor(value: string, fieldSpec?: EntityFieldSpec): ChipColor {
+  return pair(slotFor(value, fieldSpec));
 }
 
 // Literal token strings (one per slot) so the no-undefined-tokens guard sees each

@@ -5,8 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { EntityInstance, EntityType } from "../../api/entities";
 import { GanttView } from "./GanttView";
-import { actorPalette } from "./actorColor";
-import { selectColor } from "./selectColor";
+import { actorPalette, solidForSlot } from "./actorColor";
+import { selectColor, slotFor } from "./selectColor";
 import { pxPerDay } from "./ganttScale";
 import { buildRefIndex } from "./refTraversal";
 import type { EntityViewProps } from "./types";
@@ -799,9 +799,66 @@ describe("GanttView colour source", () => {
       />,
     );
 
-    // The same palette the chips use — a second one would put `critical` on
-    // two different colours in two places on the same screen.
-    expect(screen.getByTestId("bar-1").style.background).toBe(selectColor("critical", urgencySpec).bg);
+    // The same SLOT the chips use — a second one would put `critical` on two
+    // different hues in two places on the same screen. The fill differs from
+    // the chip's on purpose (a slab is not a pill; see solidForSlot), which is
+    // why this reads the slot rather than `selectColor` directly.
+    expect(screen.getByTestId("bar-1").style.background).toBe(
+      solidForSlot(slotFor("critical", urgencySpec)).bg,
+    );
+  });
+
+  it("fills a select bar out of the same system as a person bar (#690)", () => {
+    // The two colour sources were two visual SYSTEMS: an actor got a generated
+    // solid fill under `--ink`, a select got the chip pair whose `bg` is a
+    // 16%-alpha wash (--cat-N-bg). Side by side on one chart they did not read
+    // as the same control — "色卡樣式差太多".
+    //
+    // They share the fill now. What stays separate is only how the HUE is
+    // picked: a directory GENERATES one per person (it has no fixed value
+    // list), a vocabulary keeps its chip slot (so `critical` is still the same
+    // hue as the `critical` chip in the table beside the chart). Pinning both
+    // to the same named colour is what makes that observable — if the two
+    // systems had drifted apart, these two bars would differ.
+    const pinned: EntityType = {
+      ...type,
+      fields: type.fields.map((f) => (f.name === "assignee" ? { ...f, colors: { alice: "red" } } : f)),
+    };
+    const spec = { view: "gantt", entity: "issue", span: "span", label: "title" } as const;
+
+    const bySelect = render(
+      <GanttView
+        {...props({
+          type: pinned,
+          spec: { ...spec, color_by: "urgency" },
+          entities: [rec(1, { title: "A", span, urgency: "critical" })],
+        })}
+      />,
+    );
+    const selectBar = bySelect.container.querySelector<HTMLElement>('[data-testid="bar-1"]');
+    const selectFill = selectBar?.style.background;
+    const selectInk = selectBar?.style.color;
+    cleanup();
+
+    const byPerson = render(
+      <GanttView
+        {...props({
+          type: pinned,
+          spec: { ...spec, color_by: "assignee" },
+          entities: [rec(1, { title: "A", span, assignee: "alice" })],
+          users,
+        })}
+      />,
+    );
+    const personBar = byPerson.container.querySelector<HTMLElement>('[data-testid="bar-1"]');
+
+    // `critical` is pinned red and so is alice: one system ⇒ one colour.
+    expect(selectFill).toBe(personBar?.style.background);
+    expect(selectInk).toBe(personBar?.style.color);
+    // ...and specifically the SOLID system, not the wash. Stated against the
+    // old value rather than as "is a hex", so it fails if the select side
+    // silently goes back to the chip pair.
+    expect(selectFill).not.toBe(selectColor("critical", urgencySpec).bg);
   });
 
   it("gives a record with nothing set the neutral slot rather than a hashed colour", () => {
@@ -814,7 +871,14 @@ describe("GanttView colour source", () => {
       />,
     );
 
-    expect(screen.getByTestId("bar-1").style.background).toBe(selectColor("", urgencySpec).bg);
+    const fill = screen.getByTestId("bar-1").style.background;
+    expect(fill).toBe(solidForSlot(slotFor("", urgencySpec)).bg);
+    // The neutral slot is the one with no hue, so "nothing set" has to read as
+    // ACHROMATIC rather than as one more colour someone has to decode. Stated
+    // on the channels because that is the property, not on the string.
+    const [, r, g, b] = /^#(\w\w)(\w\w)(\w\w)$/.exec(fill) ?? [];
+    expect(r, `neutral fill ${fill} is not grey`).toBe(g);
+    expect(g).toBe(b);
   });
 
   it("can colour by who is doing the work, not only by a select", () => {

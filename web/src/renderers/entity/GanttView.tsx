@@ -57,8 +57,8 @@ import {
 import { backrefBuckets, type RefIndex } from "./refTraversal";
 import { fieldText, roleOf } from "./shared";
 import { usePersistentSet } from "../../hooks/usePersistentSet";
-import { actorPalette } from "./actorColor";
-import { type ChipColor, selectColor } from "./selectColor";
+import { actorPalette, solidForSlot } from "./actorColor";
+import { type ChipColor, slotFor } from "./selectColor";
 import { sortRows } from "./sortRows";
 import type { EntityViewProps } from "./types";
 
@@ -188,10 +188,13 @@ export function GanttView({
   const barColor = (e: EntityInstance): ChipColor | undefined => {
     if (!colorField) return undefined;
     const value = fieldText(e.fields[colorField]) ?? "";
-    // Anything else is a closed vocabulary — keep the palette the chips already
-    // use. A second one would put one `status` value on two different colours in
-    // two places on the same screen.
-    return actorHues ? actorHues(value) : selectColor(value, colorSpec);
+    // Anything else is a closed vocabulary — keep the SLOT the chips already
+    // use (a second one would put a `status` value on two different colours in
+    // two places on the same screen), but paint it with the same solid fill a
+    // person gets. The chip's own `bg` is a 16%-alpha wash meant for a pill;
+    // on a slab beside a person's solid fill it read as a different control
+    // altogether (#690).
+    return actorHues ? actorHues(value) : solidForSlot(slotFor(value, colorSpec));
   };
   // null ⇒ auto-fit the whole project to the measured pane (fills the width on
   // open); a number ⇒ the user has taken over the zoom via the slider / anchors.
@@ -666,7 +669,18 @@ export function GanttView({
                             width,
                             background: c?.bg,
                             color: c?.fg,
-                            borderColor: c?.fg,
+                            // The edge answers a DIFFERENT question from the
+                            // ink and so cannot share its value. The ink has to
+                            // be readable on the FILL; the edge has to be
+                            // visible on the LANE BAND behind the bar, and in a
+                            // gantt the bar's start and end are the data. `fg`
+                            // is `--ink`, which is one value in both themes by
+                            // construction — 14.78:1 on the light band but
+                            // 1.09:1 on the dark one, i.e. no edge at all in
+                            // dark mode. `--text-paper` inverts with the theme,
+                            // which is exactly the property the band-facing
+                            // side needs: 14.32:1 light, 13.54:1 dark.
+                            borderColor: c ? "var(--text-paper)" : undefined,
                             "--bar-ink": c?.fg,
                           } as React.CSSProperties
                         }
