@@ -187,6 +187,87 @@ def _reconcile_after_turn(
     return _hook
 
 
+async def start_page_schedule(
+    *,
+    locator: Any,
+    orchestrator: Any,
+    item_id: str,
+    workflow_id: str,
+    acting_user: str,
+    payload: dict[str, Any],
+    key: str,
+) -> str | None:
+    """Launch one page-declared schedule.
+
+    Module level, and taking its two collaborators as arguments, so a test can
+    DRIVE it. The guards this replaced were source-text checks on this file:
+    they asserted that the tokens `try:` and `except Exception:` appear around
+    the post-start call. Adding `raise` to that handler — the exact regression
+    the guard was named after — left 200 tests green, because nothing ever
+    called the function. `create_app` still resolves the orchestrator at CALL
+    time through a thin closure, which is where that deferral belongs.
+
+    It opens its OWN conversation, exactly as the interactive entrance does.
+    Without a `chat_id` the run keys on the item, `workflow_exec.drive_turn`
+    looks that up, finds no conversation and falls back to the item's DEFAULT
+    chat — so a scheduled page run would read the user's own chat history as
+    its context and append its turns there, every night, on the entrance
+    nobody is watching. Fixing the interactive half and not this one left the
+    same defect where it is hardest to notice.
+
+    Every locator call here is OFFLOADED, because every one is blocking
+    specstar I/O and this runs inside the sweep's tick. `chat_for_schedule`
+    alone is seven round trips — `item_conversation_mirror` asks each
+    registered app model for its meta — and the sweep carefully offloads all
+    of its own store calls only to hand the loop to this one. On Postgres
+    that is ten network round trips per fire, on every pod, holding every
+    request that pod is serving.
+    """
+    chat_id, ours = await asyncio.to_thread(locator.chat_for_schedule, item_id, workflow_id, key)
+    try:
+        run_id = await orchestrator.start(
+            slug=await asyncio.to_thread(locator.slug_of, item_id) or "",
+            item_id=item_id,
+            profile=await asyncio.to_thread(locator.profile_of, item_id),
+            captured_user=acting_user,
+            workflow_id=workflow_id,
+            chat_id=chat_id,
+            payload=payload,
+        )
+    except Exception:
+        # Take the chat down with the run that never started: a chat with no
+        # `run_id` is a FREE chat, and the earliest free chat is what the item
+        # opens as its default. A schedule that fails nightly would otherwise
+        # install a new default conversation every night.
+        #
+        # Suppressed so the cleanup cannot REPLACE the failure it is cleaning
+        # up after: the caller needs the original reason, and a second error
+        # from the tidy-up buries it.
+        # Only a chat THIS call created. One the schedule has been using
+        # holds its history, and deleting that because one night's start
+        # failed would lose every previous run's thread.
+        if ours:
+            with contextlib.suppress(Exception):
+                await asyncio.to_thread(locator.settle_run_chat, chat_id, None)
+        raise
+    # PAST THE POINT OF NO RETURN. The run exists and is already writing to
+    # this conversation; linking it is bookkeeping. Raising here would tell
+    # the sweep "nothing started" — and the sweep's answer to that is to hand
+    # the window back and fire again, with a fresh chat id that collides with
+    # nothing. One bad `update` would become two reports, two emails, twice.
+    try:
+        await asyncio.to_thread(locator.settle_run_chat, chat_id, run_id)
+    except Exception:
+        logger.exception(
+            "page schedule: run %s started for item %s but its chat %s could not be "
+            "linked — the run is fine; the chat may show as free",
+            run_id,
+            item_id,
+            chat_id,
+        )
+    return run_id
+
+
 def _ensure_insights_collection(spec: SpecStar, name: str) -> str:
     """Idempotently ensure the chat-insights collection exists, returning its
     id. Used by the chat→knowledge promote path (P2) — every server boot
@@ -1086,71 +1167,21 @@ def create_app(
     ) -> str | None:
         """Launch one page-declared schedule.
 
-        Resolved at CALL time on purpose: the orchestrator is constructed later
-        than this, and a closure reading it when the sweep fires is the same
-        deferred wiring `entity_write_sink` uses.
-
-        It opens its OWN conversation, exactly as the interactive entrance does.
-        Without a `chat_id` the run keys on the item, `workflow_exec.drive_turn`
-        looks that up, finds no conversation and falls back to the item's DEFAULT
-        chat — so a scheduled page run would read the user's own chat history as
-        its context and append its turns there, every night, on the entrance
-        nobody is watching. Fixing the interactive half and not this one left the
-        same defect where it is hardest to notice.
-
-        Every locator call here is OFFLOADED, because every one is blocking
-        specstar I/O and this runs inside the sweep's tick. `chat_for_schedule`
-        alone is seven round trips — `item_conversation_mirror` asks each
-        registered app model for its meta — and the sweep carefully offloads all
-        of its own store calls only to hand the loop to this one. On Postgres
-        that is ten network round trips per fire, on every pod, holding every
-        request that pod is serving.
+        A thin adapter over :func:`start_page_schedule`, which holds the whole
+        body. The orchestrator is read HERE, at call time, because it is
+        constructed later than this line — the same deferred wiring
+        `entity_write_sink` uses. The body lives at module level so a test can
+        drive it; see `tests/api/test_page_schedule_start.py`.
         """
-        chat_id, ours = await asyncio.to_thread(
-            locator.chat_for_schedule, item_id, workflow_id, key
+        return await start_page_schedule(
+            locator=locator,
+            orchestrator=workflow_orchestrator,
+            item_id=item_id,
+            workflow_id=workflow_id,
+            acting_user=acting_user,
+            payload=payload,
+            key=key,
         )
-        try:
-            run_id = await workflow_orchestrator.start(
-                slug=await asyncio.to_thread(locator.slug_of, item_id) or "",
-                item_id=item_id,
-                profile=await asyncio.to_thread(locator.profile_of, item_id),
-                captured_user=acting_user,
-                workflow_id=workflow_id,
-                chat_id=chat_id,
-                payload=payload,
-            )
-        except Exception:
-            # Take the chat down with the run that never started: a chat with no
-            # `run_id` is a FREE chat, and the earliest free chat is what the item
-            # opens as its default. A schedule that fails nightly would otherwise
-            # install a new default conversation every night.
-            #
-            # Suppressed so the cleanup cannot REPLACE the failure it is cleaning
-            # up after: the caller needs the original reason, and a second error
-            # from the tidy-up buries it.
-            # Only a chat THIS call created. One the schedule has been using
-            # holds its history, and deleting that because one night's start
-            # failed would lose every previous run's thread.
-            if ours:
-                with contextlib.suppress(Exception):
-                    await asyncio.to_thread(locator.settle_run_chat, chat_id, None)
-            raise
-        # PAST THE POINT OF NO RETURN. The run exists and is already writing to
-        # this conversation; linking it is bookkeeping. Raising here would tell
-        # the sweep "nothing started" — and the sweep's answer to that is to hand
-        # the window back and fire again, with a fresh chat id that collides with
-        # nothing. One bad `update` would become two reports, two emails, twice.
-        try:
-            await asyncio.to_thread(locator.settle_run_chat, chat_id, run_id)
-        except Exception:
-            logger.exception(
-                "page schedule: run %s started for item %s but its chat %s could not be "
-                "linked — the run is fine; the chat may show as free",
-                run_id,
-                item_id,
-                chat_id,
-            )
-        return run_id
 
     lifespan = build_lifespan(
         registry=registry,

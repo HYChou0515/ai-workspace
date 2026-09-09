@@ -55,74 +55,28 @@ def test_the_sweep_does_not_read_through_the_live_sandbox() -> None:
     )
 
 
-def test_a_scheduled_run_gets_its_own_conversation() -> None:
-    """`_start_page_schedule` must open a chat, like the interactive entrance.
+def test_the_app_wires_both_collaborators_into_the_starter() -> None:
+    """The body lives in `start_page_schedule`, so this pins that `create_app`
+    actually reaches it — with BOTH things it needs.
 
-    Without a `chat_id` the run keys on the item id; `workflow_exec.drive_turn`
-    looks that up, finds no conversation, and falls back to the item's DEFAULT
-    chat — so the run reads the user's own history as context and appends its
-    turns there. That was P22's headline finding, fixed on the entrance somebody
-    is watching and left standing on the one that fires at 3am.
+    What the body does is driven in `tests/api/test_page_schedule_start.py`;
+    what a test cannot drive is whether the composition root still points at it.
+    An extraction that nothing calls is the same as no extraction, and the
+    symptom would be a scheduled run reading the user's own chat history.
 
-    A source check for the same reason as the reads above: what it pins is a
-    WIRING choice whose failure is invisible until somebody opens their chat and
-    finds a conversation they did not have.
+    The orchestrator is read inside the closure on purpose — it is constructed
+    later than this line — so passing it is a call-time act, not a captured one.
     """
     source = _APP.read_text(encoding="utf-8")
 
-    body = source.split("async def _start_page_schedule", 1)[-1].split("\n    lifespan", 1)[0]
+    closure = source.split("async def _start_page_schedule", 1)[-1].split("\n    lifespan", 1)[0]
 
-    assert "chat_for_schedule" in body, "a scheduled run does not resolve its own conversation"
-    assert "chat_id=chat_id" in body, "it resolves one and then does not use it"
-    assert "settle_run_chat" in body, "the chat is never linked to its run, or cleaned up"
-
-    # REUSED, not opened fresh. `open_run_chat` mints a new conversation every
-    # call, which is right for a click and wrong for a schedule: the chat is what
-    # `active_run_for_chat` collides on, so a new id per fire switches the
-    # one-run rule off for the one entrance that repeats — and leaves a permanent
-    # conversation behind each time (`every: minutes, n: 1` is 1440 a day).
-    assert "open_run_chat" not in body, (
-        "the scheduled entrance mints a fresh chat per fire; it must reuse the schedule's own"
+    assert "start_page_schedule(" in closure, (
+        "create_app no longer delegates to the extracted starter, so nothing "
+        "that is driven by a test is what actually fires"
     )
-    # And only a chat this call created may be cleaned up: deleting one the
-    # schedule has been using throws away every previous run's thread.
-    assert "if ours:" in body, "the failure path deletes the schedule's chat unconditionally"
-
-
-def test_a_started_run_is_never_reported_as_not_started() -> None:
-    """Once `orchestrator.start` returns, the run EXISTS. Anything that fails
-    after that is bookkeeping, and it must not reach the sweep as an exception.
-
-    The sweep claims a window before asking for the run, so a raise is its
-    signal to hand that window back and fire again — and it cannot tell "nothing
-    started" from "it started and the chat link failed". The second fire opens a
-    fresh chat id, so `active_run_for_chat` collides with nothing and the person
-    gets two of whatever the workflow sends. Probed at three runs for one daily
-    window before this guard existed.
-
-    A source check on CONTROL FLOW, which is the thing at stake: the linking call
-    has to sit under a `try` whose handler swallows.
-    """
-    source = _APP.read_text(encoding="utf-8")
-    body = source.split("async def _start_page_schedule", 1)[-1].split("\n    lifespan", 1)[0]
-
-    marker = "locator.settle_run_chat, chat_id, run_id"
-    assert marker in body, "the run's chat is never linked"
-
-    before = body.split(marker, 1)[0]
-    # The `try:` is the last statement opener before the call; the call itself
-    # may be wrapped across lines by the formatter, so look for the nearest one.
-    opens = [ln.strip() for ln in before.splitlines() if ln.strip()]
-    guard = "try:" if "try:" in opens[-3:] else opens[-1]
-    assert guard == "try:", (
-        "the post-start link is unguarded — a failure there tells the sweep the "
-        f"run never started, and it fires the window again (last line was {guard!r})"
-    )
-
-    after = body.split(marker, 1)[1]
-    assert "except Exception:" in after.split("return run_id", 1)[0], (
-        "nothing catches a failure after the run exists"
-    )
+    for arg in ("locator=locator", "orchestrator=workflow_orchestrator"):
+        assert arg in closure, f"the starter is called without {arg}"
 
 
 def test_the_fire_path_does_not_hold_the_event_loop() -> None:
@@ -141,23 +95,30 @@ def test_the_fire_path_does_not_hold_the_event_loop() -> None:
     process fails, and nothing local reproduces it.
     """
     source = _APP.read_text(encoding="utf-8")
-    body = source.split("async def _start_page_schedule", 1)[-1].split("\n    lifespan", 1)[0]
+    body = source.split("async def start_page_schedule", 1)[-1].split("\ndef ", 1)[0]
 
     blocking = ("chat_for_schedule", "settle_run_chat", "slug_of", "profile_of")
     # Matched on the pair, not on one spelling: the formatter wraps a long call
     # so `to_thread(locator.x` and `to_thread(\n    locator.x` are the same thing,
     # and a guard that only knows one of them passes the day black reflows it.
     flat = " ".join(body.split())
-    unoffloaded = [
-        name
-        for name in blocking
-        if f"locator.{name}" in flat
-        and f"asyncio.to_thread( locator.{name}" not in flat
-        and f"asyncio.to_thread(locator.{name}" not in flat
-    ]
+
+    # COUNTED, not merely present. `settle_run_chat` has TWO call sites — the
+    # post-start link and the failure cleanup — and an `in` check is satisfied by
+    # either one. Reverting just the cleanup to a direct call left every test
+    # green, which is the whole failure mode this file keeps producing: a guard
+    # that passes because SOMETHING matched, not because the property holds.
+    unoffloaded = []
+    for name in blocking:
+        calls = flat.count(f"locator.{name}")
+        offloaded = flat.count(f"asyncio.to_thread(locator.{name}") + flat.count(
+            f"asyncio.to_thread( locator.{name}"
+        )
+        if calls != offloaded:
+            unoffloaded.append(f"{name} ({offloaded} of {calls} offloaded)")
 
     assert not unoffloaded, (
-        f"{unoffloaded} are blocking specstar calls made directly on the event loop, "
+        f"{unoffloaded} — blocking specstar calls made directly on the event loop, "
         "inside a sweep that offloads every one of its own"
     )
 
