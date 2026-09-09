@@ -257,3 +257,30 @@ async def test_a_path_already_indexed_is_not_written_again(spec: SpecStar) -> No
     calls.clear()
     await reconcile_item_schedules(ITEM, ls=_ls, index=index)
     assert calls == [], "a reconcile that changes nothing still wrote"
+
+
+async def test_one_unrecordable_path_does_not_cost_the_others(spec: SpecStar) -> None:
+    """ "Per PATH, so one bad row does not cost the others theirs."
+
+    The same rule the sweep keeps. Without it a single `record` failure — the
+    CAS running out of retries under churn — silently drops every page after it
+    in the listing, and the listing is sorted, so the same pages lose every time.
+    """
+    index = ScheduleIndex(spec)
+    real = index.record
+
+    def _breaks_on_a(item_id: str, path: str) -> None:
+        if "/a/" in path:
+            raise RuntimeError("the CAS gave up")
+        real(item_id, path)
+
+    index.record = _breaks_on_a  # ty: ignore[invalid-assignment]
+
+    async def _ls(item_id: str) -> list[str]:
+        return [f"/a/{SCHEDULES_FILE}", f"/b/{SCHEDULES_FILE}"]
+
+    await reconcile_item_schedules(ITEM, ls=_ls, index=index)
+
+    assert index.paths(ITEM) == [f"/b/{SCHEDULES_FILE}"], (
+        "one page that could not be recorded took the pages after it with it"
+    )

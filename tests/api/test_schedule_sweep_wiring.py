@@ -147,7 +147,23 @@ def test_both_write_boundaries_feed_the_index() -> None:
     mirror = re.search(r"SandboxSync\((.*?)\n    \)", source, re.DOTALL)
     assert facade is not None and mirror is not None, "one of the two is no longer built here"
 
+    # EXACT, not "the name appears somewhere in the call". A no-op wrapper that
+    # mentions it — `on_write=lambda ws, path: None if True else
+    # _note_schedule_file(ws, path)` — satisfied a containment check and left 73
+    # tests green, which is the same token-not-behaviour hole this file keeps
+    # producing. The mirror is the door P40 and P48 each spent a phase on, and
+    # nothing else covers it at the composition root.
     for name, call in (("facade", facade.group(1)), ("mirror", mirror.group(1))):
+        flat = " ".join(call.split())
+        wired = (
+            "on_write=_note_schedule_file" in flat
+            or "on_write=lambda ws, path: _note_schedule_file(ws, path)" in flat
+        )
+        assert wired, (
+            f"the {name} write path does not hand the resolver straight to "
+            "`on_write` — anything between them is a place the call can stop "
+            f"happening while this guard still sees the name. Found: {flat[:200]}"
+        )
         assert "_note_schedule_file" in call, (
             f"the {name} write path does not tell the schedule index, so a file "
             "that arrives that way is never swept"

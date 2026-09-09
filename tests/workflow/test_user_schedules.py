@@ -521,3 +521,19 @@ def test_a_row_the_parser_cannot_read_costs_only_its_own_row(monkeypatch) -> Non
     assert any("could not be read" in p for p in problems), (
         "the row vanished with nothing said about it"
     )
+
+
+def test_a_complaint_names_the_row_the_author_has_to_fix() -> None:
+    """ "Renumbered to this row's real position."
+
+    `usable_rows` validates one row at a time, so every message comes back
+    saying `schedules[0]`. Handing those through unchanged points every
+    complaint at the first row — an author with forty schedules is told to look
+    at the wrong one, forty times.
+    """
+    problems = usable_rows(_file(DAILY, DAILY, {"every": "daily", "at": "9am", "run": "r"}))[1]
+
+    assert problems, "the bad third row was not complained about at all"
+    assert any("schedules[2]" in p for p in problems), (
+        f"the complaint points at the wrong row: {problems}"
+    )

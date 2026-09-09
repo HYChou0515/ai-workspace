@@ -36,6 +36,7 @@ from workspace_app.workflow.user_schedule_sweep import (
     UserScheduleSweeper,
     _in_zone,
 )
+from workspace_app.workflow.user_schedules import trigger_id_for, usable_rows
 
 ITEM = "i1"
 PAGE = "/scrap-review"
@@ -1593,4 +1594,144 @@ def test_a_row_fixed_and_broken_again_complains_again(caplog):
     assert _lines() == 2, (
         "the row broke again the same way and the sweep stayed silent — the memo "
         "outlived the problem it was about"
+    )
+
+
+# --- properties this module states that nothing was holding -----------------
+
+
+def test_an_overrun_does_not_hand_its_window_back(caplog):
+    """ "The window stays CLAIMED, deliberately."
+
+    Releasing it would only make the next tick collide with the same still-
+    running run — and each release is a write, so a slow run would churn the
+    ledger once per period for as long as it takes. Skipping IS what an overrun
+    means; the next window is where to try again.
+    """
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    files = _Files(**{f"{ITEM}{PATH}": _file(DAILY)})
+
+    async def _busy(**kw):
+        raise ActiveRunExists(ITEM, "still-going")
+
+    sweeper = UserScheduleSweeper(
+        spec=spec,
+        index=ScheduleIndex(spec),
+        read=files.read,
+        read_live=files.read,
+        start=_busy,
+        owner_of=lambda _item: "alice",
+        now=lambda: datetime(2026, 9, 5, 9, 30),
+    )
+    asyncio.run(sweeper.tick())
+
+    trigger = next(iter(sweeper._failures), None)
+    del trigger
+    # The ledger must still say this window is taken.
+    store = sweeper._store
+    claimed = [
+        t
+        for t in [trigger_id_for(ITEM, PAGE, r) for r in usable_rows(_file(DAILY))[0]]
+        if store.last_window(t)
+    ]
+    assert claimed, "the window was handed back, so the next tick collides all over again"
+
+
+def test_a_file_over_the_cap_says_so_once(caplog):
+    """The over-cap refusal is memoised like the other complaints about a file.
+
+    It is the loudest of them — ERROR, naming a number an operator will act on —
+    and a runaway file stays over the cap until somebody edits it, so an
+    un-memoised line is the flood at its worst.
+    """
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    files = _Files(**{f"{ITEM}{PATH}": _file(*([DAILY] * 5))})
+    sweeper = UserScheduleSweeper(
+        spec=spec,
+        index=ScheduleIndex(spec),
+        read=files.read,
+        read_live=files.read,
+        start=_Started(),
+        owner_of=lambda _item: "alice",
+        now=lambda: datetime(2026, 9, 5, 9, 30),
+        max_rows=2,
+    )
+
+    with caplog.at_level(logging.ERROR):
+        for _ in range(4):
+            asyncio.run(sweeper.tick())
+
+    said = [r for r in caplog.records if "over the limit" in r.getMessage()]
+    assert len(said) == 1, f"four ticks over the cap produced {len(said)} lines"
+
+
+def test_a_started_run_clears_what_the_failures_remembered(caplog):
+    """ "A run started, so whatever was wrong is over."
+
+    Without the pop, a schedule that stumbled twice in one window carries those
+    two into the NEXT window's budget, so it is abandoned on its first stumble
+    there — the blip absorption the cap exists for, gone for good on exactly the
+    schedules that have already had trouble. That was P30's finding at the
+    trigger level; the same shape lives here per window.
+    """
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    files = _Files(**{f"{ITEM}{PATH}": _file(DAILY)})
+    fail = {"n": 0}
+
+    async def _flaky(**kw):
+        fail["n"] += 1
+        if fail["n"] == 1:
+            raise RuntimeError("a blip")
+        return "run-1"
+
+    sweeper = UserScheduleSweeper(
+        spec=spec,
+        index=ScheduleIndex(spec),
+        read=files.read,
+        read_live=files.read,
+        start=_flaky,
+        owner_of=lambda _item: "alice",
+        now=lambda: datetime(2026, 9, 5, 9, 30),
+    )
+
+    with caplog.at_level(logging.ERROR):
+        asyncio.run(sweeper.tick())  # fails, window released
+        asyncio.run(sweeper.tick())  # succeeds
+
+    assert sweeper._failures == {}, (
+        f"the run started and {sweeper._failures} is still remembered — the next "
+        "window inherits a budget already spent"
+    )
+
+
+def test_a_sweep_with_no_live_reader_trusts_the_snapshot():
+    """ "No live reader wired ... its answer stands."
+
+    A deploy that opted out of confirming must still unregister a file the
+    snapshot says is gone, or the index only ever grows. The branch exists so
+    that "we could not confirm" and "we were not asked to confirm" are different
+    answers — and the second one is not a reason to keep the path forever.
+    """
+    spec = _spec()
+    index = ScheduleIndex(spec)
+    index.record(ITEM, PATH)
+    files = _Files()  # the file is gone from the snapshot
+
+    sweeper = UserScheduleSweeper(
+        spec=spec,
+        index=ScheduleIndex(spec),
+        read=files.read,
+        read_live=None,  # opted out
+        start=_Started(),
+        owner_of=lambda _item: "alice",
+        now=lambda: datetime(2026, 9, 5, 9, 30),
+    )
+    asyncio.run(sweeper.tick())
+
+    assert index.paths(ITEM) == [], (
+        "with no live reader the snapshot's answer stands, so a gone file must be "
+        "unregistered — otherwise the index only ever grows"
     )

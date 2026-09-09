@@ -544,3 +544,61 @@ async def test_the_mirror_says_nothing_about_files_it_did_not_write(
     # control that is red for the same reason as the test it controls tells the
     # two apart from nothing. This one asks only: did the second pass add?
     assert seen == first, "an unchanged file was reported as written again"
+
+
+async def test_a_failing_write_hook_does_not_fail_the_mirror(
+    fs: SpecstarFileStore, sandbox: MockSandbox
+):
+    """ "A failing hook must never fail the mirror."
+
+    The bytes are already committed by the time the hook runs, and its consumer
+    is an index that self-heals. Letting it propagate would abandon the rest of
+    the workspace over a bookkeeping error — and it CAN raise:
+    `ScheduleIndex.record` raises `RuntimeError` when its CAS runs out of
+    retries, which that module says happens under pathological churn.
+    """
+    h = await sandbox.create(SandboxSpec())
+    await sandbox.upload(h, b"[]", "/page/schedules.json")
+    await sandbox.upload(h, b"hi", "/notes.txt")
+
+    def _boom(ws: str, path: str) -> None:
+        raise RuntimeError("the index said no")
+
+    sync = SandboxSync(filestore=fs, sandbox=sandbox, on_write=_boom)
+    await sync.mirror("ws", h)  # must not raise
+
+    assert sorted(await fs.ls("ws")) == ["/notes.txt", "/page/schedules.json"], (
+        "a hook failure cost the workspace the rest of its mirror"
+    )
+
+
+async def test_the_hook_is_told_only_after_the_bytes_are_persisted(
+    fs: SpecstarFileStore, sandbox: MockSandbox
+):
+    """ "After the bytes land."
+
+    The hook's consumer reads the durable store. Told BEFORE the write, it looks
+    for a file that is not there yet — and if the write then fails, it has
+    recorded a path whose bytes never landed. Order is the property, so the
+    order is what is asserted.
+    """
+    h = await sandbox.create(SandboxSpec())
+    await sandbox.upload(h, b"[]", "/page/schedules.json")
+
+    order: list[str] = []
+    real = fs.write_from_path
+
+    async def _watched(ws, path, src, *a, **kw):
+        order.append(f"write:{path}")
+        return await real(ws, path, src, *a, **kw)
+
+    fs.write_from_path = _watched  # ty: ignore[invalid-assignment]
+
+    sync = SandboxSync(
+        filestore=fs, sandbox=sandbox, on_write=lambda ws, p: order.append(f"hook:{p}")
+    )
+    await sync.mirror("ws", h)
+
+    assert order == ["write:/page/schedules.json", "hook:/page/schedules.json"], (
+        f"the hook ran in the order {order}; it must come after the write"
+    )

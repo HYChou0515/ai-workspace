@@ -637,3 +637,89 @@ def test_the_derivative_folders_are_still_not_pages() -> None:
         ".git/schedules.json",
     ):
         assert not is_schedule_file(noise), f"{noise!r} would fire work nobody asked for"
+
+
+# ── properties this module states that nothing was holding ───────────────────
+
+
+def test_forgetting_a_path_is_a_compare_and_swap(index: ScheduleIndex) -> None:
+    """`forget` writes with `expected_etag`, like every other write here.
+
+    A peer adding a path between this read and this write must LOSE the race,
+    not have its path erased. Without the precondition the emptied row wins and
+    the page the peer just registered is never swept — the same silent loss
+    `record`'s CAS exists to prevent, on the other side of the row.
+    """
+    index.record("i1", f"/a/{SCHEDULES_FILE}")
+
+    rm = index._spec.get_resource_manager(_ScheduleIndex)
+    real = rm.modify
+    # The in-memory backend's etag is not atomic, so it accepts a stale one.
+    # Enforce it in the double — the same move the notification claim's test
+    # makes, and the reason a hand-rolled CAS cannot be unit-tested without one.
+    moved_on = {"i1": "a-peer-was-here"}
+
+    def _cas(rid, *a, expected_etag=None, **kw):
+        # `forget` writes through `modify`, not `update` — wrapping the wrong
+        # method is a double that never reaches the path under test, and it
+        # looks exactly like a passing probe.
+        if expected_etag is not None and moved_on.get(rid, expected_etag) != expected_etag:
+            raise PreconditionFailedError(rid, expected_etag, moved_on[rid])
+        return real(rid, *a, **kw)
+
+    rm.modify = _cas  # ty: ignore[invalid-assignment]
+
+    with pytest.raises(RuntimeError):
+        index.forget("i1", f"/a/{SCHEDULES_FILE}")
+
+    assert index.paths("i1") == [f"/a/{SCHEDULES_FILE}"], (
+        "the emptied row was written over a peer's, so its page is never swept"
+    )
+
+
+def test_forgetting_a_path_that_is_already_gone_is_quiet(index: ScheduleIndex) -> None:
+    """The control, and why the CAS above is not simply "raise on anything".
+
+    `forget` is called from a sweep that has just decided a file is gone, and
+    two pods reach that decision in the same second. The second finds nothing to
+    do, which is not an error — raising would turn a normal race into a
+    per-item traceback, on every pod, every tick.
+    """
+    index.forget("never-had-one", f"/a/{SCHEDULES_FILE}")  # must not raise
+    index.record("i1", f"/a/{SCHEDULES_FILE}")
+    index.forget("i1", f"/a/{SCHEDULES_FILE}")
+    index.forget("i1", f"/a/{SCHEDULES_FILE}")  # again — still quiet
+
+    assert index.paths("i1") == []
+
+
+def test_a_soft_deleted_row_is_not_swept(index: ScheduleIndex) -> None:
+    """`items_with_paths` filters `is_deleted`, and the delete cascade is what
+    creates rows to filter.
+
+    `list_resources` returns soft-deleted rows happily, so without the filter an
+    item whose row was deleted keeps being read on every sweep, on every pod,
+    forever — the one cost this index exists to avoid.
+
+    The two mechanisms cover for each other: the cascade's hard delete is
+    invisible while the filter holds, and the filter is invisible while nothing
+    soft-deletes. Break both and a deleted item is swept for the life of the
+    deployment, so each needs its own test.
+    """
+    index.record("i1", f"/a/{SCHEDULES_FILE}")
+    assert index.items() == ["i1"]
+
+    index._spec.get_resource_manager(_ScheduleIndex).delete("i1")
+
+    assert index.items() == [], "a soft-deleted row is still handed to the sweep"
+
+
+def test_registering_the_index_twice_is_not_an_error(index: ScheduleIndex) -> None:
+    """ "Idempotently."
+
+    Both `create_app` and a test harness may register it, and a second
+    registration must not take the app down at import time — a failure nobody
+    sees until a deploy that happens to build the spec twice.
+    """
+    register_schedule_index(index._spec)
+    register_schedule_index(index._spec)  # must not raise
