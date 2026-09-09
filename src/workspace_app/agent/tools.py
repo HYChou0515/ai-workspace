@@ -18,7 +18,7 @@ from agents import FunctionTool, RunContextWrapper, ToolOutputImage, function_to
 
 from ..files import WorkspaceFiles, WorkspaceFull, rel_path
 from ..filestore.protocol import FileNotFound
-from ..sandbox.protocol import ExecResult
+from ..sandbox.protocol import ExecResult, OutputSink, SandboxNotFound
 from .context import AgentToolContext
 from .exit_codes import explain
 from .output_cap import cap_tool_outputs, truncate_middle
@@ -96,6 +96,54 @@ def _workspace(ctx: RunContextWrapper[AgentToolContext]) -> tuple[WorkspaceFiles
     return files, inv
 
 
+async def _exec_surviving_a_reap(
+    ctx: AgentToolContext, cmd: list[str], *, on_output: OutputSink | None
+) -> ExecResult:
+    """Run ``cmd`` in this context's sandbox, surviving the sandbox being taken
+    away underneath it.
+
+    The host reaps on its own 30-minute idle TTL — whose docstring says it is
+    for sandboxes "orphaned by an app-pod crash", but which cannot tell an
+    orphan from a person who stopped typing — and a `rollout restart` kills
+    every sandbox on every pod at once. Either way a turn that cached its handle
+    on an earlier call is now holding a dead one.
+
+    The FILE tools have recovered from this since #492: `_warm` probes on every
+    op and rebuilds, and its own comment calls that probe "the RECOVERY
+    trigger". `exec` had nothing — the exception went to the SDK, which showed
+    the model `Error: <opaque base64 handle>` and told it to try again, which it
+    did, against the same dead handle.
+
+    ONE retry, and only for ``SandboxNotFound``:
+
+    * **gone** — the sandbox does not exist, so the command did not run in it,
+      and whatever it might have written there is gone with it. Clearing the
+      cached handle sends `ensure_sandbox` back through the wake hook, which
+      converges on another pod's live sandbox or rebuilds from the durable
+      archive. Re-running is then the same command against the same restored
+      state.
+    * **busy** — deliberately NOT retried. The sandbox is ALIVE (`registry._alive`
+      reads busy as alive on purpose) and a timed-out stream says nothing about
+      what the far end did: the command may be running, or finished. Re-sending
+      `rm -rf`, a `git push` or a POST would make this recovery the cause of the
+      damage it exists to prevent. It propagates.
+    """
+    assert ctx.sandbox is not None
+    handle = await ctx.ensure_sandbox()
+    try:
+        return await ctx.sandbox.exec(handle, cmd, on_output=on_output)
+    except SandboxNotFound:
+        _LOGGER.warning(
+            "tools: sandbox for item %s was gone at exec — rebuilding and re-running once",
+            ctx.investigation_id,
+        )
+        # Drop the dead handle so `ensure_sandbox` actually re-acquires: it
+        # returns early while one is cached, so clearing it IS the retry.
+        ctx.handle = None
+        fresh = await ctx.ensure_sandbox()
+        return await ctx.sandbox.exec(fresh, cmd, on_output=on_output)
+
+
 async def exec_impl(ctx: RunContextWrapper[AgentToolContext], cmd: list[str]) -> str:
     """Run a shell command inside the workspace sandbox.
 
@@ -117,10 +165,10 @@ async def exec_impl(ctx: RunContextWrapper[AgentToolContext], cmd: list[str]) ->
     if (denied := authorize_tool(ctx.context, "execute")) is not None:
         return denied
     assert ctx.context.sandbox is not None
-    handle = await ctx.context.ensure_sandbox()
-    # Stream stdout live (when the runner wired a sink) so a long-running
-    # command's output shows up in run history as it happens.
-    result = await ctx.context.sandbox.exec(handle, cmd, on_output=ctx.context.on_exec_output)
+    # Streams stdout live (when the runner wired a sink) so a long-running
+    # command's output shows up in run history as it happens, and survives the
+    # sandbox being reaped mid-turn — see `_exec_surviving_a_reap`.
+    result = await _exec_surviving_a_reap(ctx.context, cmd, on_output=ctx.context.on_exec_output)
     return _exec_result_text(ctx.context, "exec", result)
 
 
@@ -312,9 +360,9 @@ async def make_deck_impl(
         return await fs.ls(inv, prefix)
 
     async def exec_run(cmd: list[str]) -> tuple[int, str]:
-        handle = await ctx.context.ensure_sandbox()
-        assert ctx.context.sandbox is not None
-        result = await ctx.context.sandbox.exec(handle, cmd, on_output=sink)
+        # Same recovery as the exec tool: a deck build is long enough to outlive
+        # the sandbox it started in.
+        result = await _exec_surviving_a_reap(ctx.context, cmd, on_output=sink)
         return result.exit_code, (result.stdout + result.stderr).decode("utf-8", errors="replace")
 
     progress = (lambda text: sink(text.encode("utf-8"))) if sink is not None else None

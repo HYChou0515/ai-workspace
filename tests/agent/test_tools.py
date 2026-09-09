@@ -14,6 +14,16 @@ from workspace_app.agent import (
 )
 from workspace_app.files import WorkspaceFiles
 from workspace_app.filestore.memory import MemoryFileStore
+from workspace_app.filestore.specstar_impl import SpecstarFileStore
+from workspace_app.resources import make_spec
+from workspace_app.sandbox.mock import MockSandbox
+from workspace_app.sandbox.protocol import (
+    SandboxBusy,
+    SandboxHandle,
+    SandboxNotFound,
+    SandboxSpec,
+)
+from workspace_app.sync import SandboxSync
 
 
 async def test_read_file_caps_lines_with_a_notice_and_supports_offset_limit():
@@ -131,6 +141,99 @@ async def test_a_file_tool_without_a_facade_fails_instead_of_bypassing_the_quota
     ctx = RunContextWrapper(AgentToolContext(investigation_id="inv-1", filestore=MemoryFileStore()))
     with pytest.raises(AssertionError):
         await write_file_impl(ctx, "/a.txt", "hi")
+
+
+class _ReapableSandbox(MockSandbox):
+    """A sandbox whose handles can be taken away mid-turn, the way the host's
+    idle reaper and a `rollout restart` both do."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.dead: set[str] = set()
+        self.busy = False
+        self.exec_handles: list[str] = []
+
+    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None):
+        self.exec_handles.append(handle.id)
+        if self.busy:
+            raise SandboxBusy(handle.id)
+        if handle.id in self.dead:
+            raise SandboxNotFound(handle.id)
+        return await super().exec(
+            handle, cmd, on_output=on_output, env=env, exec_timeout=exec_timeout
+        )
+
+
+def _reapable_ctx(sandbox: _ReapableSandbox) -> RunContextWrapper[AgentToolContext]:
+    """Wired like `ctx`, but every wake mints a FRESH handle — which is what a
+    rebuild does, and what makes "did it recover?" observable."""
+    spec = make_spec(default_user="test-user")
+    filestore = SpecstarFileStore(spec)
+    sync = SandboxSync(filestore=filestore, sandbox=sandbox)
+    holder: dict[str, SandboxHandle] = {}
+
+    async def _resolve(ws: str) -> SandboxHandle | None:
+        return holder.get(ws)
+
+    async def wake(on_progress=None, tools=None) -> SandboxHandle:
+        h = await sandbox.create(SandboxSpec(tools=tools))
+        await sync.restore("ws-test", h, on_progress=on_progress)
+        holder["ws-test"] = h
+        return h
+
+    return RunContextWrapper(
+        AgentToolContext(
+            investigation_id="ws-test",
+            sandbox=sandbox,
+            filestore=filestore,
+            files=WorkspaceFiles(filestore, sandbox, _resolve),
+            sync=sync,
+            ensure_sandbox_via=wake,
+        )
+    )
+
+
+async def test_exec_rebuilds_and_reruns_when_the_sandbox_was_reaped():
+    """The host takes the sandbox away mid-turn — its 30-minute idle TTL, or a
+    `rollout restart` killing every pod at once — while this turn still holds
+    the handle it cached on its first exec.
+
+    The FILE tools have recovered from exactly this since #492: `_warm` probes
+    on every op and rebuilds, and its comment calls that probe "the RECOVERY
+    trigger". `exec` had no such path — the exception went straight to the SDK,
+    which showed the model `Error: <opaque base64 handle>` and told it to try
+    again, which it did, against the same dead handle, forever."""
+    sandbox = _ReapableSandbox()
+    ctx = _reapable_ctx(sandbox)
+
+    assert "hi" in await exec_impl(ctx, ["echo", "hi"])
+    first = ctx.context.handle
+    assert first is not None
+
+    sandbox.dead.add(first.id)  # the host reaps it out from under the turn
+
+    assert "back" in await exec_impl(ctx, ["echo", "back"])
+    assert ctx.context.handle is not None
+    assert ctx.context.handle.id != first.id, "should be running in a REBUILT sandbox"
+    # Attempted on the dead handle, then once on the fresh one — one retry, not a loop.
+    assert sandbox.exec_handles == [first.id, first.id, ctx.context.handle.id]
+
+
+async def test_exec_does_not_rerun_a_command_a_busy_sandbox_may_have_already_run():
+    """`SandboxBusy` is NOT the same permission to retry. The sandbox is ALIVE
+    (`registry._alive` reads busy as alive on purpose, #492) and the command may
+    already be running or done — a timeout on a stream says nothing about what
+    the far end did. Re-sending `rm -rf`, `git push` or a POST would be this
+    fix causing the damage it exists to prevent, so busy propagates and the
+    command is sent exactly once."""
+    sandbox = _ReapableSandbox()
+    ctx = _reapable_ctx(sandbox)
+    sandbox.busy = True
+
+    with pytest.raises(SandboxBusy):
+        await exec_impl(ctx, ["rm", "-rf", "/data"])
+
+    assert len(sandbox.exec_handles) == 1, "a busy sandbox must not be re-sent the command"
 
 
 async def test_exec_lazy_creates_sandbox_on_first_call(
