@@ -631,7 +631,11 @@
   background: var(--paper-2);
 }
 /* native selects in the filter row / batch bar wear the field chrome. */
-.ev-select {
+/* The panel's time inputs share this rule rather than carrying a copy: they are
+ * meant to read as the same control as the select sitting under them, and two
+ * rules that have to agree are two rules that will drift. */
+.ev-select,
+.ev-viewpanel__field input[type="time"] {
   height: 28px;
   padding: 0 var(--space-8);
   border: 1px solid var(--paper-3);
@@ -639,6 +643,20 @@
   background: var(--white);
   color: var(--text-paper);
   font-size: var(--text-body-sm);
+}
+.ev-viewpanel__field input[type="time"] {
+  /* Chrome's native picker is wider than its content and pushes "to" and the
+   * second box out of a 260px popover. */
+  min-width: 0;
+  flex: 1 1 auto;
+  font-family: var(--font-mono);
+}
+.ev-viewpanel__field input[type="checkbox"] {
+  accent-color: var(--accent);
+  /* The one fixed-size thing in the row — a flex item shrinks by default, and
+   * a squashed checkbox beside a long label reads as an oval. */
+  flex: 0 0 auto;
+  margin: 0;
 }
 
 /* ── board / kanban (§A3) ────────────────────────────────────────────────── */

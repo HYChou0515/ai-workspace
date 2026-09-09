@@ -54,6 +54,24 @@ describe("entity-views.css", () => {
     expect(bar).not.toMatch(/--accent\b/); // bars must not reuse it, or they blend in
   });
 
+  it("skins every control in the view panel, not just the select", () => {
+    // The panel styled its <select> and left the checkbox and the two
+    // <input type="time"> boxes at browser defaults, so "Skip non-working
+    // hours" and its time range sat in the middle of a designed popover
+    // wearing whatever the OS paints — "幾乎沒有 css 樣式看起來很隨便".
+
+    // The time inputs SHARE the select's rule rather than getting a second
+    // copy of it: the whole point is that they look like the same control, and
+    // two rules that must agree are two rules that will not.
+    expect(CSS).toMatch(/\.ev-select[^{]*input\[type="time"\][^{]*\{/);
+
+    const check = CSS.match(/\.ev-viewpanel__field input\[type="checkbox"\]\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(check).toMatch(/accent-color:\s*var\(--accent\)/);
+    // A flex item's default is to shrink; the box then goes oval next to a
+    // long label. It is the one thing in the row with a fixed size.
+    expect(check).toMatch(/flex:\s*0 0 auto|flex-shrink:\s*0/);
+  });
+
   it("truncates the first column instead of wrapping it", () => {
     // The gutter is a FIXED 150px beside rows of a FIXED height (GUTTER /
     // ROW_H / LANE_H), so a label that wraps has nowhere to put the second
