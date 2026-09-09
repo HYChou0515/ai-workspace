@@ -151,12 +151,21 @@ class FallbackModel(Model):
             if self._on_switch is not None:
                 self._on_switch(endpoint.model, exc)
             return False
+        # The CAUSE, not just the count and the seconds. This is the common
+        # branch — it runs on every wait, dozens of times across a budget that
+        # reaches two hours by default — and without the reason an operator can
+        # see that we are waiting and for how long, but not whether it is a
+        # spend limit, a request-rate limit or too much concurrency. Those are
+        # three different remedies behind one line, and the reason is in hand
+        # right here: it is the exception being held for. (`park_for`'s sibling
+        # log has always carried its cause; this one did not.)
         logger.warning(
             "failover-model: endpoint %s rate-limited (hold %d) — waiting %.1fs before "
-            "retrying the same endpoint",
+            "retrying the same endpoint (%r)",
             endpoint.model,
             held,
             wait,
+            exc,
         )
         if self._on_hold is not None:
             self._on_hold(endpoint.model, wait)
@@ -201,9 +210,14 @@ class FallbackModel(Model):
                             self._degrade(endpoint, exc)
                             break
                         # else: a quick same-endpoint retry
+        # `rate_limited or last`, the same preference the `raise` below already
+        # applies and for the same reason its comment gives: `last` "is often
+        # the least informative one — a dead spare, not the throttle". The line
+        # an operator greps was naming that dead spare while the throttle that
+        # actually bound the chain went unmentioned.
         logger.warning(
-            "failover-model: all endpoints failed or cooling (get_response) — last %r",
-            last,
+            "failover-model: all endpoints failed or cooling (get_response) — cause %r",
+            rate_limited or last,
         )
         # Chain from the 429 when one was seen: the turn loop upstream tells
         # "rate limited" (wait, own budget, own message) from "broken" (retry
@@ -273,9 +287,10 @@ class FallbackModel(Model):
                             except StopAsyncIteration:
                                 return
                             yield event  # mid-stream errors / idle stalls propagate (terminal)
+        # Same preference as `get_response` — see the note there.
         logger.warning(
-            "failover-model: all endpoints failed or cooling (stream_response) — last %r",
-            last,
+            "failover-model: all endpoints failed or cooling (stream_response) — cause %r",
+            rate_limited or last,
         )
         # Same cause preference as get_response: surface the 429 when one was
         # seen, so the turn loop can wait it out instead of "giving up".
