@@ -4,6 +4,18 @@ The defaults cover the standard noise (build/cache directories, compiled
 artifacts) — regenerable derivatives, never the agent's own data. Per-workspace
 customization can override DEFAULT_IGNORES when constructing SandboxSync.
 
+⚠️ THIS LIST HAS A SECOND CONSUMER, and it decides behaviour, not just backups.
+`api.schedule_index.is_schedule_file` reuses `DEFAULT_IGNORES` so that a file
+the platform declines to back up is not one it takes instructions from, and the
+mirror skips ignored paths before reporting a write — so BOTH doors into the
+schedule index are closed by a pattern added here. Adding one that covers a
+folder users keep pages in therefore switches those pages' schedules off, with
+no error anywhere: the page saves, shows its file, and nothing ever runs.
+
+Adding a pattern is a product decision about scheduling, not only about disk.
+`tests/api/test_schedule_index.py` pins the ordinary page shapes, so a pattern
+that swallows one fails there rather than in somebody's missing report.
+
 There is deliberately NO per-file size cap: the mirror is a COMPLETE backup, so
 a big agent-produced file (a model dump, a generated dataset) is persisted like
 any other — else it would silently vanish on sandbox reap and under-count in the

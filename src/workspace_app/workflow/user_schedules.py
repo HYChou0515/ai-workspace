@@ -25,9 +25,11 @@ lint. Reading files, sweeping and firing land with the sweep.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 from typing import Any, cast
+from zoneinfo import available_timezones
 
 from msgspec import Struct
 
@@ -46,6 +48,35 @@ from .triggers import Schedule, _valid_tz
 EVERY = ("minutes", "hourly", "daily", "weekly", "monthly")
 
 _DOW = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
+@functools.cache
+def _zones_by_lowercase() -> dict[str, str]:
+    """Every IANA zone this machine knows, keyed by its lowercase spelling.
+
+    Built once. `available_timezones()` walks the tzdata tree, which is far too
+    much to do per row of every page's file on every tick.
+    """
+    return {name.lower(): name for name in available_timezones()}
+
+
+def normalise_tz(tz: str) -> str:
+    """The zone as `ZoneInfo` spells it, or the input unchanged when it is not a
+    zone at all.
+
+    IANA names are case-sensitive by convention only, and `utc` / `asia/taipei`
+    is how people type them. Refusing those turned "the report arrives an hour
+    out" into "the report stops" — the worse of the two, because a wrong time is
+    noticed and an absent report is noticed weeks later. This module's own design
+    note says exactly that about silent stops.
+
+    Deliberately NOT clever beyond case. `UTC+8` and `GMT+8` are not IANA names,
+    and POSIX reads their sign as the opposite of what nearly everyone means, so
+    guessing would be worse than refusing.
+    """
+    if not tz:
+        return tz
+    return _zones_by_lowercase().get(tz.lower(), tz)
 
 
 class UserSchedule(Struct):
@@ -98,7 +129,11 @@ def parse_user_schedules(raw: str) -> list[UserSchedule]:
                 at=str(row.get("at") or "00:00"),
                 dow=str(row.get("dow") or ""),
                 dom=int(row.get("dom") or 0),
-                tz=str(row.get("tz") or ""),
+                # Normalised HERE so the row carries what `ZoneInfo` takes.
+                # Accepting a spelling in the lint and then handing the sweep
+                # something it cannot resolve would make the acceptance a lie:
+                # it would fall back to UTC and fire at the wrong hour.
+                tz=normalise_tz(str(row.get("tz") or "")),
                 # "with" in the file because that is how it reads to an author;
                 # `payload` in code because `with` is a keyword.
                 payload=dict(row.get("with") or {}),
@@ -139,7 +174,29 @@ def validate_user_schedules(raw: str) -> list[str]:
         row = cast("dict[str, Any]", raw_row)
         if not row.get("run"):
             problems.append(f"{where}: needs `run` — the workflow to start.")
-        every = row.get("every", "daily")
+        # CHECKED ON EVERY ROW, not only where the field means something.
+        # `parse_user_schedules` decodes `dom` and `with` unconditionally
+        # (`int(...)`, `dict(...)`), so a value it cannot decode raises — and the
+        # validator, which only looked at `dom` for a monthly row and never
+        # looked at `with` at all, called the file clean. A linter that grades a
+        # narrower set than the parser reads is a linter that promises the parser
+        # will succeed and does not check.
+        dom_raw = row.get("dom")
+        if dom_raw is not None and not isinstance(dom_raw, int):
+            problems.append(f"{where}: `dom` must be a number, got {dom_raw!r}.")
+        with_raw = row.get("with")
+        if with_raw is not None and not isinstance(with_raw, dict):
+            problems.append(
+                f"{where}: `with` must be an object of values for the workflow, got {with_raw!r}."
+            )
+        # `or`, not a `.get` default: a JSON `null` has to mean what an omitted
+        # key means. A page generator writes nulls for the fields it left
+        # unset, and `.get(k, default)` only fires when the key is ABSENT — so
+        # `"every": null` reached the check as `None`, was refused, and the row
+        # was dropped, while omitting the same key was accepted. The parser
+        # already spelled every one of these `or`; the validator did not, so the
+        # two halves disagreed about the same file.
+        every = row.get("every") or "daily"
         if every not in EVERY:
             problems.append(f"{where}: `every` is {every!r}; it must be one of {', '.join(EVERY)}.")
             continue
@@ -161,8 +218,15 @@ def validate_user_schedules(raw: str) -> list[str]:
                 )
         elif n:
             problems.append(f"{where}: `n` applies only to `every: minutes`.")
-        tz = row.get("tz", "")
-        if tz and not _valid_tz(str(tz)):
+        # `or ""`, the SAME spelling `parse_user_schedules` uses, because the two
+        # halves have to agree about one file. `str(row.get("tz", ""))` turns a
+        # JSON `null` into the string "None" — truthy, not a zone — so a page
+        # that wrote `"tz": null` for "I did not pick one" had its row refused
+        # and was told about a value nobody typed, while the parser next door
+        # ran the same row happily. reference.md tells authors tz is optional,
+        # and a generated page emits nulls for what it left out.
+        tz = normalise_tz(str(row.get("tz") or ""))
+        if tz and not _valid_tz(tz):
             # Nothing checked this, so a typo travelled all the way to `ZoneInfo`
             # — which raises `ValueError` for an absolute path or a traversal,
             # not the `ZoneInfoNotFoundError` the sweep was catching. One bad
@@ -173,10 +237,18 @@ def validate_user_schedules(raw: str) -> list[str]:
             problems.append(f"{where}: a weekly schedule needs `dow` ({', '.join(_DOW)}).")
         if every == "monthly":
             dom = row.get("dom", 0)
-            if dom and not (isinstance(dom, int) and 1 <= dom <= 31):
+            # RANGE only. The type is graded once, above, on every row —
+            # because the parser decodes `dom` on every row. Testing
+            # `isinstance` here as well meant one mistake produced two
+            # complaints: "must be a number" and "must be 1..31", about the same
+            # `dom: "x"`. The cap counts what this returns, which is the defect
+            # P38 fixed, and an author reading two messages looks for two
+            # problems. A rule that sinks below an older one takes its job with
+            # it rather than sitting beside it.
+            if isinstance(dom, int) and not (1 <= dom <= 31):
                 problems.append(f"{where}: `dom` must be 1..31, got {dom!r}.")
         if every in ("daily", "weekly", "monthly"):
-            at = row.get("at", "00:00")
+            at = row.get("at") or "00:00"  # `null` means the same as omitted
             if not _looks_like_time(at):
                 problems.append(f"{where}: `at` must look like HH:MM, got {at!r}.")
         elif row.get("at"):
@@ -194,6 +266,34 @@ def _looks_like_time(at: object) -> bool:
     if not (hh.isdigit() and mm.isdigit()):
         return False
     return 0 <= int(hh) <= 23 and 0 <= int(mm) <= 59
+
+
+def declared_count(raw: str) -> int | None:
+    """How many schedules this file DECLARES, or None when it is not that shape.
+
+    Cheap by construction — the length of a list, not its contents — so a cap can
+    be applied BEFORE the per-row parsing it exists to bound. `usable_rows` costs
+    one `json.dumps` plus one `json.loads` plus a full validation per row, and a
+    runaway file paid all of it and was then refused, every tick, on every pod,
+    for as long as it stayed indexed.
+
+    It also counts the right thing. `validate_user_schedules` emits SEVERAL
+    strings for one bad row, so counting rows-plus-problems reported a file of
+    400 as 1200 — refusing it against a cap it never reached, and telling the
+    operator a number they could not reconcile with the file in front of them.
+
+    `None` rather than 0 for an unreadable file: "I cannot count this" and "it
+    declares nothing" are different answers, and only one of them means the cap
+    is satisfied.
+    """
+    try:
+        doc = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(doc, dict):
+        return None
+    rows = doc.get("schedules")
+    return len(rows) if isinstance(rows, list) else None
 
 
 def usable_rows(raw: str) -> tuple[list[UserSchedule], list[str]]:
@@ -223,7 +323,16 @@ def usable_rows(raw: str) -> tuple[list[UserSchedule], list[str]]:
             # the line the author has to fix rather than always at zero.
             problems.extend(p.replace("schedules[0]", f"schedules[{i}]") for p in bad)
             continue
-        good.extend(parse_user_schedules(one))
+        try:
+            good.extend(parse_user_schedules(one))
+        except Exception as exc:
+            # BELT AND BRACES, and the belt is the linter above. A decode that
+            # raises here escaped before `return good, problems` and took the
+            # file's GOOD rows with it — the opposite of this function's whole
+            # promise — and the author saw nothing, because the linter is the
+            # only thing that reaches them. Every known case is linted now; this
+            # keeps the next unknown one costing its own row only.
+            problems.append(f"schedules[{i}]: could not be read ({exc}).")
     return good, problems
 
 

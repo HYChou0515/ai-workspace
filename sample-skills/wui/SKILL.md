@@ -222,8 +222,8 @@ title: Lot tracker
 Two capabilities, one engine. `workspace.startRun("judge", {...}, onEvent)`
 starts a workflow now and streams its progress back. Writing a
 **`schedules.json`** in the page's own folder makes the platform start the same
-workflow on a clock — every 15 minutes, weekdays at nine, the first of the
-month. Both are how "email me when the shipment lands" and "build this report
+workflow on a clock — every 15 minutes, every Monday at nine, the first of
+the month. Both are how "email me when the shipment lands" and "build this report
 every Monday" get built without anyone touching the repo.
 
 The declaration is an ordinary file the page writes with `writeFile`, so the

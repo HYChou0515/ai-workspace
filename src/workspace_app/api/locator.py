@@ -22,7 +22,11 @@ from typing import NamedTuple
 
 from fastapi import HTTPException
 from specstar import SpecStar
-from specstar.types import ResourceIDNotFoundError, ResourceIsDeletedError
+from specstar.types import (
+    DuplicateResourceError,
+    ResourceIDNotFoundError,
+    ResourceIsDeletedError,
+)
 
 from ..apps.catalog import AppCatalog
 from ..apps.manifest import load_app_manifest
@@ -355,15 +359,81 @@ class ItemLocator:
             )
         ).resource_id
 
+    def chat_for_schedule(self, item_id: str, title: str, key: str) -> tuple[str, bool]:
+        """The conversation a repeating schedule drives, and whether this call
+        made it. Get-or-create, keyed on the schedule.
+
+        A chat per FIRING costs two things at once. `active_run_for_chat` keys on
+        the chat, so a fresh id every time means a schedule can never collide
+        with its own still-running previous fire — the one-run rule silently
+        stops applying to the one entrance that repeats, and `every: minutes`
+        against a slow workflow piles runs onto a single item's shared
+        workspace. And the chats accumulate: one a minute is 1440 permanent
+        conversations a day, every one of them loaded by every item-level chat
+        operation.
+
+        Reuse is also what the thing IS — a recurring report is one thread, the
+        way a recurring meeting is.
+
+        ``key`` is the schedule's window-ledger id, so "the same schedule" means
+        the same thing to the chat and to the claim. The boolean matters at the
+        call site: a chat this call CREATED may be cleaned up when the run fails,
+        and one it merely found may not — deleting that would throw away the
+        schedule's whole history because one night's start went wrong.
+        """
+        try:
+            found = self._conv_rm.get(key).data
+            if isinstance(found, Conversation) and found.item_id == item_id:
+                return key, False
+        except (ResourceIDNotFoundError, ResourceIsDeletedError):
+            pass
+        try:
+            self._conv_rm.create(
+                Conversation(
+                    item_id=item_id,
+                    title=title,
+                    created_ms=now_ms(),
+                    # NOT None, which is what makes a chat FREE — the earliest
+                    # free chat is what the item opens as its default, and a
+                    # schedule's 03:00 thread must never become that.
+                    #
+                    # The rule is `find_default_conversation`'s `run_id is None`,
+                    # so `""` satisfies it. This used to say "non-empty from the
+                    # start", which is a sentence about a property nobody tests:
+                    # `""` IS empty, and changing this to `None` — the actual
+                    # failure — left 191 chat tests green. Pinned now, through
+                    # `find_default_conversation` rather than through the field,
+                    # in `test_a_schedules_thread_never_becomes_the_items_default_conversation`.
+                    run_id="",
+                    **item_conversation_mirror(self._spec, item_id),
+                ),
+                resource_id=key,
+                if_not_exists=True,  # ty: ignore[unknown-argument]
+            )
+            return key, True
+        except DuplicateResourceError:
+            # A peer created it between our read and our write, or it is
+            # soft-deleted. Either way it is not ours to clean up.
+            with contextlib.suppress(ResourceIDNotFoundError, ResourceIsDeletedError):
+                self._conv_rm.restore(key)
+            return key, False
+
     def settle_run_chat(self, chat_id: str, run_id: str | None) -> None:
         """Link the chat to the run it was opened for — or, when the run never
         started, remove it.
 
-        A conversation with no ``run_id`` is a FREE chat, and the earliest free
-        chat is what the item opens as its default (`find_default_conversation`).
-        So a chat left behind by a refused run does not merely litter: it can
-        become the default conversation for everyone on the item, and each retry
-        leaves another.
+        A conversation with ``run_id is None`` is a FREE chat, and the earliest
+        free chat is what the item opens as its default
+        (`find_default_conversation`). So a chat left behind by a refused run
+        does not merely litter: it can become the default conversation for
+        everyone on the item, and each retry leaves another.
+
+        ⚠️ That is the INTERACTIVE entrance's reason. `open_run_chat` creates
+        with the default ``run_id``, which is ``None``, so its abandoned chats
+        really are free. `chat_for_schedule` creates with ``""`` — not free —
+        so a scheduled chat could never become the default, and the cleanup
+        there buys only tidiness. Stating one entrance's true sentence about the
+        other is how the same claim was wrong in three places.
         """
         if run_id is None:
             # Both errors, because specstar deletes SOFTLY: a second cleanup of

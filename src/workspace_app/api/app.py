@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -109,6 +111,7 @@ from .schedule_index import (
     ScheduleIndex,
     is_schedule_file,
 )
+from .schedule_reconcile import reconcile_item_schedules
 from .spa import SpaStaticFiles
 from .subagent_bridge import SubagentBridge
 from .subagent_run import run_agent_task
@@ -162,6 +165,7 @@ def resolve_durable_backfill(
 def _reconcile_after_turn(
     flush: Callable[[str], Awaitable[None]],
     forget_usage: Callable[[str], None],
+    reconcile_schedules: Callable[[str], Awaitable[None]] | None = None,
 ) -> Callable[[str], Awaitable[None]]:
     """The turn-end hook: settle the item's bytes, then stop trusting the size
     we had for it.
@@ -173,17 +177,130 @@ def _reconcile_after_turn(
     measurement is published by `SandboxSync.mirror`, which `registry._writeback`
     returns before ever reaching on that branch.
 
+    The SAME branch closes the schedule index's second door. `SandboxSync`'s
+    `on_write` hook is unreachable on a host-managed deployment for exactly the
+    reason above, so a `schedules.json` an agent's `exec` wrote is never
+    indexed there and its schedules never run. Reconciling from a listing here
+    is right on both deployments and covers the writers that reach the raw
+    filestore past the facade and the mirror both (`apps.seeding.seed_item`,
+    the `/collections.json` route) — a backstop rather than a third hook,
+    because a hook per door is a list of doors and this feature's hand-written
+    lists have all gone stale in silence.
+
     Ordered flush-then-forget so the next read measures a settled workspace,
     and the forget runs in `finally` so a failed flush cannot leave a number we
-    already know is wrong."""
+    already know is wrong. The reconcile comes AFTER the flush, so it lists a
+    workspace whose bytes have landed, and it never raises."""
 
     async def _hook(item_id: str) -> None:
         try:
             await flush(item_id)
         finally:
             forget_usage(item_id)
+        if reconcile_schedules is not None:
+            await reconcile_schedules(item_id)
 
     return _hook
+
+
+async def start_page_schedule(
+    *,
+    locator: Any,
+    orchestrator: Any,
+    item_id: str,
+    workflow_id: str,
+    acting_user: str,
+    payload: dict[str, Any],
+    key: str,
+) -> str | None:
+    """Launch one page-declared schedule.
+
+    Module level, and taking its two collaborators as arguments, so a test can
+    DRIVE it. The guards this replaced were source-text checks on this file:
+    they asserted that the tokens `try:` and `except Exception:` appear around
+    the post-start call. Adding `raise` to that handler — the exact regression
+    the guard was named after — left 200 tests green, because nothing ever
+    called the function. `create_app` still resolves the orchestrator at CALL
+    time through a thin closure, which is where that deferral belongs.
+
+    It opens its OWN conversation, exactly as the interactive entrance does.
+    Without a `chat_id` the run keys on the item, `workflow_exec.drive_turn`
+    looks that up, finds no conversation and falls back to the item's DEFAULT
+    chat — so a scheduled page run would read the user's own chat history as
+    its context and append its turns there, every night, on the entrance
+    nobody is watching. Fixing the interactive half and not this one left the
+    same defect where it is hardest to notice.
+
+    Every locator call here is OFFLOADED, because every one is blocking
+    specstar I/O and this runs inside the sweep's tick. `chat_for_schedule`
+    alone is SIX round trips when it mints the conversation and two when it
+    reuses one — and reuse is what a repeating schedule does on every fire after
+    the first. The sweep carefully offloads all of its own store calls, so
+    handing the loop to this one would undo that, on every pod, holding every
+    request that pod is serving.
+
+    ⚠️ This used to say "seven round trips, because `item_conversation_mirror`
+    asks each registered app model for its meta". Both halves were wrong —
+    measured 6 and 2, and `find_work_item` routes by the id's prefix in a single
+    `get`, scanning only when no prefix matches. The figure is not load-bearing;
+    it is corrected because a number nobody can re-derive is how each of the
+    last four rounds found a false claim.
+
+    NOT the whole fire path: `orchestrator.start` still runs
+    `active_run_for_chat` — a synchronous scan of the item's WorkflowRuns — plus
+    a synchronous `create` and `_prune_runs`. That is behaviour the interactive
+    entrance shares, so it is its own change, not a line here.
+    """
+    chat_id, ours = await asyncio.to_thread(locator.chat_for_schedule, item_id, workflow_id, key)
+    try:
+        run_id = await orchestrator.start(
+            slug=await asyncio.to_thread(locator.slug_of, item_id) or "",
+            item_id=item_id,
+            profile=await asyncio.to_thread(locator.profile_of, item_id),
+            captured_user=acting_user,
+            workflow_id=workflow_id,
+            chat_id=chat_id,
+            payload=payload,
+        )
+    except Exception:
+        # Take the chat down with the run that never started, so a schedule
+        # whose FIRST fire failed does not leave an empty thread named after a
+        # workflow that never ran.
+        #
+        # ⚠️ This used to say "a chat with no `run_id` is a FREE chat, and a
+        # schedule that fails nightly would install a new default conversation
+        # every night". That is the reason for the INTERACTIVE entrance, whose
+        # `open_run_chat` really does create with `run_id=None`. It is not the
+        # reason here: `chat_for_schedule` creates with `""`, which is not free,
+        # so this chat could never have become the item's default. Copying the
+        # true sentence from one entrance to the other made it false.
+        #
+        # Suppressed so the cleanup cannot REPLACE the failure it is cleaning
+        # up after: the caller needs the original reason, and a second error
+        # from the tidy-up buries it.
+        # Only a chat THIS call created. One the schedule has been using
+        # holds its history, and deleting that because one night's start
+        # failed would lose every previous run's thread.
+        if ours:
+            with contextlib.suppress(Exception):
+                await asyncio.to_thread(locator.settle_run_chat, chat_id, None)
+        raise
+    # PAST THE POINT OF NO RETURN. The run exists and is already writing to
+    # this conversation; linking it is bookkeeping. Raising here would tell
+    # the sweep "nothing started" — and the sweep's answer to that is to hand
+    # the window back and fire again, with a fresh chat id that collides with
+    # nothing. One bad `update` would become two reports, two emails, twice.
+    try:
+        await asyncio.to_thread(locator.settle_run_chat, chat_id, run_id)
+    except Exception:
+        logger.exception(
+            "page schedule: run %s started for item %s but its chat %s could not be "
+            "linked — the run is fine; the chat may show as free",
+            run_id,
+            item_id,
+            chat_id,
+        )
+    return run_id
 
 
 def _ensure_insights_collection(spec: SpecStar, name: str) -> str:
@@ -556,6 +673,14 @@ def create_app(
         sandbox=sandbox,
         monitor=monitor,
         on_measured=lambda ws, total: files.record_measurement(ws, total),
+        # THE SAME hook the facade gets, on the other boundary. Bytes written
+        # inside the sandbox — an agent's `exec`, a workflow's shell step — never
+        # touch the facade, so a `schedules.json` produced that way was never
+        # indexed and its schedules never ran, silently. One callback for both,
+        # so the two cannot disagree about what counts. Through a lambda because
+        # the resolver is defined further down, the same deferred wiring
+        # `_start_page_schedule` explains.
+        on_write=lambda ws, path: _note_schedule_file(ws, path),
     )
     # #345 wired this for the local process sandbox only: it is the one backend
     # that keeps an item's working dir on a shared volume, so it is the one whose
@@ -964,9 +1089,30 @@ def create_app(
     schedule_index = ScheduleIndex(spec)
 
     def _note_schedule_file(item_id: str, path: str) -> None:
-        """Record that this item now has schedules. Runs on EVERY write in the
-        platform, so the test is exact and cheap and the work only happens for
-        the one filename that means anything here."""
+        """Record that this item now has schedules.
+
+        Wired to BOTH ways bytes reach the durable store: the facade's write
+        tail, and `SandboxSync.mirror` for files written inside the sandbox.
+        One callback for the two, so they cannot disagree about what counts.
+        Either way the test is exact and cheap and the work only happens for
+        the one filename that means anything here.
+
+        ⚠️ `record` is blocking specstar I/O and both callers are on the event
+        loop — `_landed` is synchronous by design, because it sits in the write
+        tail that every path shares, so offloading there would mean making that
+        whole chain async. NOT done, and the reason has to cover both callers:
+        the cost is paid only by an actual CHANGE to a `schedules.json` — a
+        person saving a page through the facade, or an agent's `exec` writing
+        one, which the mirror uploads once because an unchanged file never
+        reaches here. Neither is a hot path. If that stops being true the answer
+        is an async hook, not a fire-and-forget task whose failures nobody sees.
+
+        There is no matching unregister on either door, deliberately. A path
+        leaves the index one way only: the sweep reads it, gets `FileNotFound`,
+        CONFIRMS that against the live store, and forgets it then. A hook here
+        cannot tell "deleted" from "the mirror declined to persist it this
+        pass", and guessing wrong is what silently stops a daily report.
+        """
         if is_schedule_file(path):
             schedule_index.record(item_id, path)
 
@@ -1053,42 +1199,25 @@ def create_app(
         return _owner_of(item_id) or ""
 
     async def _start_page_schedule(
-        *, item_id: str, workflow_id: str, acting_user: str, payload: dict[str, Any]
+        *, item_id: str, workflow_id: str, acting_user: str, payload: dict[str, Any], key: str
     ) -> str | None:
         """Launch one page-declared schedule.
 
-        Resolved at CALL time on purpose: the orchestrator is constructed later
-        than this, and a closure reading it when the sweep fires is the same
-        deferred wiring `entity_write_sink` uses.
-
-        It opens its OWN conversation, exactly as the interactive entrance does.
-        Without a `chat_id` the run keys on the item, `workflow_exec.drive_turn`
-        looks that up, finds no conversation and falls back to the item's DEFAULT
-        chat — so a scheduled page run would read the user's own chat history as
-        its context and append its turns there, every night, on the entrance
-        nobody is watching. Fixing the interactive half and not this one left the
-        same defect where it is hardest to notice.
+        A thin adapter over :func:`start_page_schedule`, which holds the whole
+        body. The orchestrator is read HERE, at call time, because it is
+        constructed later than this line — the same deferred wiring
+        `entity_write_sink` uses. The body lives at module level so a test can
+        drive it; see `tests/api/test_page_schedule_start.py`.
         """
-        chat_id = locator.open_run_chat(item_id, workflow_id)
-        try:
-            run_id = await workflow_orchestrator.start(
-                slug=locator.slug_of(item_id) or "",
-                item_id=item_id,
-                profile=locator.profile_of(item_id),
-                captured_user=acting_user,
-                workflow_id=workflow_id,
-                chat_id=chat_id,
-                payload=payload,
-            )
-        except Exception:
-            # Take the chat down with the run that never started: a chat with no
-            # `run_id` is a FREE chat, and the earliest free chat is what the item
-            # opens as its default. A schedule that fails nightly would otherwise
-            # install a new default conversation every night.
-            locator.settle_run_chat(chat_id, None)
-            raise
-        locator.settle_run_chat(chat_id, run_id)
-        return run_id
+        return await start_page_schedule(
+            locator=locator,
+            orchestrator=workflow_orchestrator,
+            item_id=item_id,
+            workflow_id=workflow_id,
+            acting_user=acting_user,
+            payload=payload,
+            key=key,
+        )
 
     lifespan = build_lifespan(
         registry=registry,
@@ -2001,7 +2130,11 @@ def create_app(
         goal_checker_llm=goal_checker_llm,
         goal_max_rounds=goal_max_rounds,
         # #492: flush the item's live sandbox to durable at turn-end (guarantee 2).
-        flush_item=_reconcile_after_turn(registry.flush, files.forget_measurement),
+        flush_item=_reconcile_after_turn(
+            registry.flush,
+            files.forget_measurement,
+            lambda item_id: reconcile_item_schedules(item_id, ls=files.ls, index=schedule_index),
+        ),
         # #493 symptom 1 (504): detach a long turn from its POST past this deadline.
         send_await_timeout=send_await_timeout,
         # #714: the deploy's request→env impl. None (the default) ⇒ no seam, and

@@ -250,7 +250,7 @@ await workspace.writeFile("schedules.json", JSON.stringify({
 | `every` | `minutes` · `hourly` · `daily` · `weekly` · `monthly` |
 | `n` | required by `every: "minutes"`; must divide 60 (1·2·3·4·5·6·10·12·15·20·30·60) |
 | `at` | `"HH:MM"`, for daily/weekly/monthly |
-| `dow` | `mon`…`sun`, for weekly |
+| `dow` | ONE of `mon`…`sun`, for weekly. Not a list and not `weekdays` — "every weekday at nine" is **five rows**, one per day |
 | `dom` | 1–31, for monthly; a day past the month's end clamps to its last day |
 | `tz` | an IANA zone (`"Asia/Taipei"`); **defaults to UTC** |
 | `run` | a workflow id this app offers — the same ones `workflows:` may list. An id it does not offer is **skipped with a log line naming what is on offer**, and the other rows still run |
@@ -261,9 +261,21 @@ be. Name the zone whenever the time is one a person chose — `"Asia/Taipei"`,
 `"Europe/Berlin"` — or "09:00" will mean something different to the reader than
 it does to the platform.
 
+⚠️ **A zone that observes daylight saving loses one hour of sub-daily runs a
+year.** On the autumn switch the local clock repeats an hour, and `hourly` /
+`minutes` bucket on that clock — so `hourly` fires once across those two hours
+instead of twice, and `minutes: 15` fires 4 times instead of 8. Daily, weekly
+and monthly are unaffected, and so is spring forward. If an `hourly` poller must
+never skip, leave `tz` off: UTC does not switch.
+
 Read it back with `readFile` and render it: the file IS the state, so a page that
 shows what it wrote is showing the truth. Cancelling a schedule is removing its
 row and writing the file again.
+
+⚠️ **Deleting the schedule's chat thread does not cancel it.** Each schedule
+drives one conversation, reused every fire, and the platform brings it back if
+it is missing — otherwise a stray delete would stop a nightly report with
+nothing anywhere saying why. Remove the row.
 
 What the platform guarantees, so you do not build it yourself:
 

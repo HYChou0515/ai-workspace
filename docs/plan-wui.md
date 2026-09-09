@@ -493,10 +493,16 @@ cronjob。
 ⚠️ **要寫進 skill:AI 不能假設個人 token 一定在。** 排程跑的時候它就是不在,而一個寫成「一定用
 個人 token」的頁面,互動時好好的、排到半夜就掛——「測的時候都對、上線才錯」的典型。
 
-⚠️ **自動跑的走背景 lane,遇到 429 不等、直接失敗。** `failover/model.py` 的等待上限是時間不是
-次數(操作者連無限等待都能接受),因為那條路上**有人在等**。排程沒有人在等,而且**有下一個
-視窗**;它卡著等的時候佔的是那個 item 的沙盒容量,**擠掉的正是唯一真的有人在等的那條路**。
-`ITokenService` 的 `lane` 參數文件明寫「說的是有沒有人在等這個答案」——概念已經在,不用發明。
+⚠️ ~~**自動跑的走背景 lane,遇到 429 不等、直接失敗。**~~ **這條沒有做,而且這一段一直讀起來
+像做了。** `failover/model.py` 的等待判斷只比 `_held_s` 和 `rate_limit_budget_s`,**完全不看
+lane**——`failover/` 底下沒有任何地方引用 `CallLane`。所以排程跑的 turn 碰到 429 一樣會等,
+預設上限兩小時,佔著那個 item 的沙盒容量。理由與規模寫在下面「第二輪知情未做」,這裡先劃掉,
+因為讀到這裡的人不會先讀到那裡——一句只在文末更正的假話,對先讀到它的人來說仍然是假話。
+
+原本的論證留著,因為它仍然成立、只是還沒被實作:等待上限是時間不是次數(操作者連無限等待
+都能接受),因為那條路上**有人在等**。排程沒有人在等,而且**有下一個視窗**;它卡著等的時候
+擠掉的正是唯一真的有人在等的那條路。`ITokenService` 的 `lane` 參數文件明寫「說的是有沒有人
+在等這個答案」——概念已經在,不用發明。
 
 ## 通知:接縫,不是平台自己長 email
 
@@ -685,9 +691,184 @@ cover it」的那個 commit 裡)、`startRun` 的 `run_id` 永遠是空字串、
   幽靈排程」仍然要先知道是哪個資料夾。這是一個**新功能**不是缺陷修復,規模是一個 FE 視圖 +
   一條列舉路由,留給下一輪拍板。
 - **sweep 讀檔會喚醒被回收的 sandbox** 的根因在 `kill_idle` 不清位址列(既有行為,非本輪程式碼)。
-  本輪的修法是讓 sweep 改讀持久快照,所以**這條路徑**不再喚醒;位址列本身仍未清。
+  週期性的那個讀改成讀持久快照,所以**每一輪都喚醒**不會再發生;位址列本身仍未清。
+  ⚠️ **訂正(第三輪 veracity 抓到):原本這裡寫「這條路徑不再喚醒」,講太滿。** P31 之後
+  sweep 還有第二個讀:快照說檔案不見了時的**確認讀**走 `read_live=files.read`,那條是活的,
+  `_still_there` 自己的 docstring 就寫著「這個讀可能是一整個 sandbox restore」。差別在頻率
+  ——只在快照說「沒了」時發生,而且有 10 秒上限——不是在有沒有。
 - **`build_trigger_start` 對 `ActiveRunExists` 刻意燒掉視窗**(註解明說),那是既有決定,沒有動。
   頁面排程走的是另一條,已改成有上限地歸還。
+
+### 第三輪 review(2026-09-05 → 09-08,P30–P41)
+
+第二輪修完之後再跑一輪,四個 lens 平行、彼此不知道對方在看什麼。**這一輪最嚴重的一條仍然是
+上一輪的修法**——連續第三輪如此,所以判準已經固定成「幾條源自上輪修法」而不是「找到幾條」。
+
+會掉資料或重複執行的(P36–P37,五條):
+
+| 找到什麼 | 誰造成的 |
+|---|---|
+| 確認式讀取把「讀不到」當成「不存在」→ 一次 `SandboxBusy` 就把排程永久註銷 | 上一輪的修法 |
+| 啟動後才失敗會歸還視窗 → 同一個視窗跑三次(`StartRun` 的契約沒說「raise 代表什麼都沒開始」) | 上一輪的修法 |
+| `record` 的 absent 分支覆蓋整列 → 同 item 的其他頁面排程被一次寫掉 | 上一輪的修法 |
+| 火線(開聊天室 + 查 slug/profile)整條壓在 event loop 上 | 上一輪的修法 |
+| 每次觸發開一個新聊天室 → 一個每 15 分鐘的排程一天長出 96 間 | 第一輪就有 |
+
+其餘十條(P38–P41),依性質:
+
+| 找到什麼 | 性質 |
+|---|---|
+| 上限數的是**抱怨數**不是排程數(一列壞的產生三個字串),400 列被說成 1200;而且**做完工作才數** | 判準裝錯地方 |
+| `tz` 大小寫寫錯就靜默不跑(`Asia/taipei`) | 缺陷 |
+| `workflows_for` 回 `None`(拿不到清單)被當成「一個都不准」→ 全部拒絕 | 三種答案壓成兩種 |
+| 一個 tick 對每個 item 多讀一次 index(listing 已經把 paths 拿在手上了) | 效能 |
+| 同一句抱怨每輪重印一次 → 把 log 訓練成雜訊 | 可用性 |
+| `forget` 的 CAS 用完重試就靜默放棄,而呼叫端已經記了「已刪除」 | 大聲失敗沒人接 |
+| **在 sandbox 裡寫出來的 `schedules.json` 從來沒有被索引過**(P40) | 三輪都漏掉的洞 |
+| SKILL.md 寫「weekdays at nine」,而 `every: weekly` 一列只吃一個 `dow`(P41) | 寄給頁面作者的假話 |
+| 加一條 ignore pattern 會靜默關掉排程,而 `ignore.py` 完全沒提到這件事(P41) | 隱性耦合沒釘住 |
+| DST 回撥那一小時,sub-daily 排程少跑一小時份(P41) | 已知限制沒寫下來 |
+
+**P40 那條值得單獨講。** 索引是靠 `WorkspaceFiles.on_write` 餵的,但那只是**兩扇門的其中一扇**。
+在 sandbox 裡寫出來的檔案——agent 的 `exec`、workflow 的 shell step——走 `SandboxSync.mirror`
+直接進 FileStore,從來不碰 façade。也就是說:**agent 實際上產生 `schedules.json` 的那條路,
+正好是唯一不會註冊它的路**。檔案在、資料夾畫得出來、排程就是不跑,而且沒有任何 log,因為在
+sweep 眼裡那個 item 從來沒進過索引。現在兩邊接同一個 callback,它們無法對「什麼算數」有不同意見。
+
+### 訂正:我自己寫錯的宣稱(這一輪 veracity lens 的收穫)
+
+推出去的 commit 訊息不能改寫(不 force-push),所以更正記在這裡。**每一條都回去查證過,不是憑
+印象**:
+
+- **P32:「舊測試對那個還原是靜默接受的」——假的。** 把 `_is_built` 還原成看 `package.json` 裡
+  「build」這個字的判準,**舊測試也會紅**:`chart/` 沒有 `src/`,而舊測試斷言每個被歸類為 built
+  的範例都有 `src/`。新測試真正買到的不是「抓到這個還原」,而是**抓到另一類**:哪天有人為了別的
+  理由給 `chart/` 加一個 `src/`,舊測試會綠(它有 src)、新測試會紅(它沒有 bundler)。
+- **P35:「commit 訊息說 RESTORE, never recurse」——那是程式碼註解,不是 commit 訊息。** 那句話
+  是 P31 加在 `schedule_index.py` 裡的註解;P31 的 commit 訊息裡沒有這句。
+- **P35 描述的落點已經被 P36 換掉。** P35 把 restore 放進 `DuplicateResourceError` 分支;P36 量到
+  那樣**每次存檔都多一次讀**(而這個函式自己的規則是「已知的只花一次」),移到 `res is None` 分支。
+  兩種都修得掉那個資料遺失,現在的落點是後者。
+- **P30:「事件型別清單漏掉每一種失敗」——講太滿。** 舊清單裡有 `error`(run 層級的失敗)。漏的是
+  **每一步**的失敗:`step_failed` 和 `run_cancelled`。差別是實質的:照舊清單寫的頁面看得到「整個
+  run 失敗了」,只是看不到「哪一步失敗」。
+- **P23:「`deliver_pending` 有多達 400 次 update 壓在 loop 上」——是 200。** `BATCH = 200`,而迴圈
+  每一列**只走一條分支**(成功或失敗,中間 `continue`),所以上限是每輪 200 次,不是 400。
+- **P33:「條件式釋放也釘住了」——當時只釘在 fake 上。** 而 P33 的整個發現就是 fake 會和真的漂移,
+  所以只釘 fake 正好是那個發現在講的漏洞。**已修**:兩個 store 都跑,並驗過拿掉真 store 的條件時
+  `[specstar]` 紅、`[fake]` 綠——正是這個參數化存在的理由。
+- **「547 個 backend 測試」「363 個 backend 測試」是讀者無法重跑的數字。** 「across every touched
+  file」不是一個指令,而數字取決於當時碰了哪些檔;後一次比前一次少,看起來像退步,其實是碰的檔案
+  不同。判準跟上一輪同一條:**能被導出的數字就不要出現在散文裡**——要嘛附上能重跑的指令,要嘛不寫。
+
+### 第三輪知情未做
+
+- **DST 回撥每年少跑一小時份的 sub-daily 排程**(`hourly` 少 1 次、`minutes:N` 少 60/N 次)。
+  已量測、已寫成測試、已寫進 `window_key` 的 docstring 和頁面作者讀的 reference.md。**不修**:
+  要分辨重複的那兩個 02:00 就得把偏移量放進 key,那需要 `_in_zone` 回傳 aware 時間,而
+  `period_target` 沒辦法拿它跟自己造的 naive 時間比較——為了一年一次的一小時,去動兩個引擎
+  (加上 #435 的通知指紋)共用的機制。而且不用 DST 的時區成本是零:UTC,也就是預設值。
+- **「自動跑的走背景 lane」仍然沒做**(見上面憑證那一節已劃掉的段落)。
+- **Q5「全 item 看得到所有排程」仍然沒有介面**,理由同第二輪。
+
+### 第四輪 review(2026-09-09,四個 lens,P44–P52)
+
+**這一輪換了結果的形狀。** 前三輪最嚴重的那條都是「程式錯了」——引擎從沒跑過、掉資料、
+重複執行。這一輪 defect lens 跑 25 個突變、21 個變紅:**機制本身撐住了**。四個 lens 各自
+獨立地寫下同一句描述:真正的缺陷幾乎全部是**「守衛接受了它自己命名的那個回歸」**。
+
+四個 lens 都找到同一條的那個:`chat_for_schedule` 的 `run_id=""`,註解說它「非空所以不會是
+FREE chat」——`""` 就是空的,它成立的真正理由是 `find_default_conversation` 測 `is None`。
+把它改成 `None`,191 條聊天測試全綠,而後果是排程的凌晨三點對話變成 item 的預設對話。
+
+| 找到什麼 | 性質 |
+|---|---|
+| `"tz": null` 讓整列被拒(`str(None)` 是 `"None"`);`every`/`at` 同病 | 上一輪的修法 |
+| 雙重執行守衛只檢查 `try:`/`except` 兩個 token,加一行 `raise` 讓 200 條全綠 | 守衛不守 |
+| offload 守衛看「有沒有出現」,而 `settle_run_chat` 有兩個呼叫點 | 守衛不守 |
+| event loop 守衛還在拖慢 P39 已經不呼叫的函式,對新的那個全盲 | 規則搬家沒帶測試 |
+| `run_id=""`、`_said.pop`、`max_page_schedules` 第二跳,零守衛 | 守衛不存在 |
+| cap 測試的 fixture 構不到它命名的回歸(81 < 100),註解的「三個 problem」實測是 2 | 守衛不守 |
+| **P40 在 host-managed 部署上完全沒生效**(`_writeback` 走 `persist` 就 return) | 上一輪的修法 |
+| 一封通知每個 pod 各寄一次(送完才標記,沒有 CAS) | 第一輪就有 |
+| 三條重複 log 只修兩條,漏掉唯一會乘以列數的那條 | 上一輪的修法 |
+| tick 的 try 從 per-path 放寬成 per-item | 上一輪的修法 |
+| 重用聊天室讓「上一輪還在跑」變成每天約 4300 行 ERROR 並燒掉視窗 | 上一輪的修法 |
+| `docs/wui.md` 寫「七個動詞而且封閉」,而 bridge 有八個 | 寄給維護者的假話 |
+| 範例把失敗/取消的 run 畫成「Finished.」 | 寄給頁面作者的假話 |
+| 刪除 item 沒帶走排程索引列 | 新列沒進既有 cascade |
+
+**修法的形狀也變了。** 三次把守衛從「讀原始碼」換成「真的驅動它」:`_start_page_schedule`
+和 `_reconcile_after_turn` 都搬到模組層才測得到;P40 的第三個 hook 換成 **turn 邊界對帳**,
+因為「一扇門一個 hook」就是一張門的清單,而這個功能每一張手寫清單都靜默過期過。
+
+### 訂正:第四輪抓到我自己寫錯的宣稱
+
+- **P39 的 commit 訊息說「刪掉了一個測試」——那個測試從來不存在。** git 全歷史查無
+  `does not end the tick`,而那一版 tests 的 numstat 是 `30 0` / `62 0`,零刪除。壓縮之後憑
+  印象寫進 commit 的虛構,正是 P42 那本帳要防的同一類。
+- **「`chat_for_schedule` 是七次 round trip,因為 `item_conversation_mirror` 會問每個註冊的
+  app model」——數字和機制都錯。** 實測建立時 6 次、重用時 2 次,而重用才是排程每次觸發
+  做的事;`find_work_item` 是用 id 前綴路由的單次 `get`,只有前綴對不上才掃。這句話同時在
+  P37 的 commit 訊息、`start_page_schedule` 的 docstring 和 event loop 守衛的 docstring 裡。
+- **P37 的「120 tests across the five touched files」不可重跑。** P37 動了六個檔案,那三個
+  測試檔在當時是 43 條。和 P42 已更正的「547」「363」同一類,而且就在那本帳宣稱涵蓋的範圍內。
+- **「火線整條壓在 event loop 上 → 已修」講太滿。** offload 的是 locator 那四個呼叫;
+  `orchestrator.start` 自己的 `active_run_for_chat`(掃該 item 每一筆 WorkflowRun)和 `create`
+  仍然同步跑在 loop 上。那是互動入口共用的既有行為,要改是另一件事,不是這一輪的一行。
+- **「327ms / 20 000 rows」不可重跑**(reviewer 在自己機器上量到 161ms)。同量級、機器相關,
+  但它出現在測試 docstring 裡而沒有附上量它的指令。
+
+### 第四輪知情未做
+
+- **刪掉排程的對話不會停掉排程**——`restore` 是承重的(否則排程對著 soft-deleted 對話寫,
+  而 `drive_turn` 只接 `ResourceIDNotFoundError`)。已釘住並在 reference.md 告訴作者:
+  要停就移掉那一列。
+- **`_note_schedule_file` 的 `record` 仍然是壓在 event loop 上的阻塞 specstar I/O。**
+  P39 就寫在程式碼裡,但沒進這份清單。代價只由真正寫 `schedules.json` 的那一次付。
+- **第三個寫入者**(`seed_item`、`/collections.json` 直接寫 raw filestore)沒有 hook。
+  turn 邊界的對帳現在會蓋到它們,所以不再是洞,但那兩條路本身仍然繞過 façade 和 mirror。
+
+### 第五輪 review(2026-09-09,三個 lens,P53–P54)
+
+Conformance 這輪沒跑:上一輪已完整對過計劃,而 P44–P52 全是對已命名發現的修正、沒有新增
+範圍。為了湊四個 lens 而跑,就是慣例說的「製造一輪」。
+
+**判準:這一輪 15 條發現裡,8 條是上一輪修法造成的。** 沒有收斂。
+
+| 找到什麼 | 誰造成的 |
+|---|---|
+| 對帳把阻塞 `record` 放回 event loop,每個 turn 都跑(實測握住 402ms),推翻我自己五個 commit 前寫的理由 | P48 |
+| 成功投遞把 `delivery_attempts` 多算一次(第一次就成功記成 2) | P49 |
+| overrun memo 用 window 當 key → 既無上界也不去重(40 個視窗說 40 次) | P51 |
+| P46 加的 per-row memo 沒有被遺忘規則帶到 → 修好又壞掉不會再報 | P46/P47 |
+| P52 的 reducer 守衛只驗 token:分支留著、body 換成 `return prev`,43 條全綠 | P52 |
+| offload 守衛被一行別名(`_loc = locator`)打穿,兩邊計數同時歸零 | P45 |
+| mirror→index 接線守衛只驗 token | P40/P48 |
+| cascade 新步驟雙重 suppress、完全靜默 | P51 |
+| **validator 說乾淨、`usable_rows` 卻 raise**,整份檔案的好列一起陪葬 | 既有 |
+| `_in_zone` 的加寬 except 是死碼(lint 先擋掉了),而且會擋 100% coverage gate | 既有(P38 兩半) |
+| 「七次 round trip」「327ms」「FREE chat」的假話還印在出貨的 docstring 裡 | P52 只改了計劃書 |
+| `docs/wui.md` 的「八個動詞」是手寫數字,改成十七也全綠 | P48 |
+
+**這一輪的形狀:規則寫對了,卻沒有套到眼前那個成品上。** 8 條裡有 6 條是這個形狀——
+「memo 一定要能被忘記」新加的 memo 沒忘記;「手寫數字會過期」同一段散文留下新的手寫數字;
+「守衛要驅動不要讀 token」新加的兩個守衛都是讀 token;「導出式守衛不能從被守的東西導出」
+同一個 docstring 還在描述被否決的做法。
+
+修法一律是**把它變成測得到的**:範例的 reducer 現在由 vitest 真的驅動(跨目錄 import 出貨檔),
+火線的 offload 改成量心跳間隔,`_in_zone` 的 fallback 直接單元測試三種例外家族。
+
+### 訂正(第五輪)
+
+- 「`chat_for_schedule` 是七次 round trip,因為 `item_conversation_mirror` 問每個 app model」
+  ——實測建立 6 次、重用 2 次,而且 `find_work_item` 是用 id 前綴單次 `get`。P52 只改了計劃書,
+  這一輪把 `app.py` 和守衛 docstring 裡的那兩句也改了。
+- 「327ms / 20 000 rows」→ 跨機器 150–330ms,附上導出的指令。單次抽樣寫成常數是這本帳一直在抓的。
+- 「沒有 `run_id` 的對話是 FREE chat」——對互動入口成立、對排程入口不成立(`""` 不是 `None`),
+  而它同時印在 `locator.py` 和一個測試 docstring 裡。
+- 「數字不再是手寫的」——**表格**是導出的,**數字**不是。所以數字拿掉了。
+- P52 訂正 #4 少算:`orchestrator.start` 同步跑的還有 `_prune_runs` 和 `_chat_referenced_runs`。
 
 ## 知情不做
 

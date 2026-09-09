@@ -695,10 +695,24 @@ def test_a_released_window_can_be_claimed_again(kind: str):
     assert store.try_claim("t1", "2026-09-05") is True, "a released window stayed spent"
 
 
-def test_releasing_a_window_somebody_else_moved_on_from_does_nothing():
+@pytest.mark.parametrize("kind", ["fake", "specstar"])
+def test_releasing_a_window_somebody_else_moved_on_from_does_nothing(kind: str):
     """The condition is what keeps a release from re-firing a window that really
-    ran: only the caller whose claim is still the current one may hand it back."""
-    store = FakeStore()
+    ran: only the caller whose claim is still the current one may hand it back.
+
+    Against BOTH stores, for the reason the sibling test exists: this file's
+    finding was that the fake had drifted from the real one, and pinning the
+    conditional half on the fake alone would have left exactly the gap that
+    finding was about — the half that matters most, since getting it wrong
+    re-fires a window that really ran.
+    """
+    if kind == "fake":
+        store: ITriggerStore = FakeStore()
+    else:
+        spec = make_spec(default_user="alice")
+        register_trigger_store(spec)
+        store = SpecstarTriggerStore(spec)
+
     store.try_claim("t1", "2026-09-05")
     store.try_claim("t1", "2026-09-06")  # a peer advanced to the next window
 

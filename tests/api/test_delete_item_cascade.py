@@ -570,3 +570,37 @@ async def test_a_turn_that_re_warms_mid_cascade_does_not_survive_the_delete(monk
 
     # Nothing may outlive the delete: no environment listed, none running.
     assert client.get("/me/resources").json()["live"] == []
+
+
+async def test_deleting_an_item_takes_its_schedule_index_row():
+    """ "Everything it owns" has to keep being true of rows added later.
+
+    The schedule index arrived after this cascade was written and was not added
+    to it. It self-heals — the sweep reads a path, confirms it is gone, forgets
+    it — but only after firing at a deleted item first, and `forget` EMPTIES
+    rather than deletes, so a row this cascade could have removed outright is
+    instead listed on every sweep forever. That is the orphan class the cascade
+    exists for.
+    """
+    from workspace_app.api.schedule_index import (
+        SCHEDULES_FILE,
+        ScheduleIndex,
+        register_schedule_index,
+    )
+
+    app, spec, filestore = _build()
+    register_schedule_index(spec)
+    client = TestClient(app)
+    item_id = _create_item(client)
+
+    index = ScheduleIndex(spec)
+    index.record(item_id, f"/report/{SCHEDULES_FILE}")
+    assert item_id in index.items()
+
+    resp = client.delete(f"/a/rca/items/{item_id}")
+
+    assert resp.status_code == 204, resp.text
+    assert item_id not in index.items(), (
+        "the deleted item is still listed by the schedule index, so every sweep "
+        "on every pod keeps reading a row for an item that no longer exists"
+    )
