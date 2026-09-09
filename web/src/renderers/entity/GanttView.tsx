@@ -534,7 +534,7 @@ export function GanttView({
                     <span aria-hidden="true" className="ev-gantt__lane-caret">
                       {collapsed.has(lane.key) ? "\u25b8" : "\u25be"}
                     </span>
-                    <span>{lane.label}</span>
+                    <span className="ev-gantt__trunc">{lane.label}</span>
                   </button>
                 )}
                 {(collapsed.has(lane.key) ? [] : lane.rows).map((row) => (
@@ -723,7 +723,9 @@ function GutterRow({
 }: {
   number: number;
   enabled: boolean;
-  /** The whole label. The column ellipsises, and without this the only way to
+  /** The whole label. The column ellipsises (see `.ev-gantt__trunc` — the
+   * ellipsis is on the inner span, because this row is a flex container and
+   * `text-overflow` does nothing on one), and without this the only way to
    * read a cut-off title was to open the record. */
   title?: string;
   children: React.ReactNode;
@@ -744,7 +746,7 @@ function GutterRow({
       {...(enabled ? attributes : {})}
       {...(enabled ? listeners : {})}
     >
-      {children}
+      <span className="ev-gantt__trunc">{children}</span>
     </div>
   );
 }

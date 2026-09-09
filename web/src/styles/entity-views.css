@@ -990,13 +990,25 @@ button.ev-card__status:focus-visible {
   color: var(--text-paper-d);
   padding: 0 var(--space-8);
   background: var(--paper-2);
+  /* The lane sits in a fixed-width gutter at a fixed LANE_H — a wrapped group
+   * name has nowhere to put its second line and lands on the row below. */
+  white-space: nowrap;
+  overflow: hidden;
+}
+/* The ellipsis for BOTH gutter labels. It cannot live on the labels
+ * themselves: they are flex containers (a caret beside a name / a drag row),
+ * and `text-overflow` is ignored on a flex container and does not inherit into
+ * the anonymous flex item holding the text. So the text gets its own box. */
+.ev-gantt__trunc {
+  min-width: 0; /* or the flex item refuses to shrink below its content */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .ev-gantt__row-label {
   display: flex;
   align-items: center;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   padding: 0 var(--space-8);
   /* hairline per row, aligned with the canvas rows for a continuous grid */
   border-bottom: 1px solid color-mix(in srgb, var(--paper-3) 55%, transparent);

@@ -937,6 +937,33 @@ describe("long labels (#690 P6)", () => {
     expect(screen.getByTestId("bar-1")).toHaveAttribute("title", "2026-01-10/2026-01-20");
   });
 
+  it("puts the truncating element AROUND the label text, not on the flex row", () => {
+    // The `title` above is the fallback for text that got cut off — it says
+    // nothing about whether anything cuts it off. Both labels are flex
+    // containers, and `text-overflow` on a flex container does nothing (it is
+    // not inherited into the anonymous flex item that holds the text), so the
+    // ellipsis only exists if the TEXT sits in its own element carrying it.
+    // Asserted on the DOM rather than the stylesheet because the defect is
+    // structural: the CSS was already correct-looking on the wrong box.
+    const { container } = render(
+      <GanttView
+        {...props({
+          spec: { view: "gantt", entity: "issue", span: "span", label: "title", group_by: "assignee" },
+          entities: [rec(1, { title: long, span, assignee: "alice" })],
+        })}
+      />,
+    );
+
+    const row = container.querySelector(".ev-gantt__row-label");
+    expect(row?.querySelector(".ev-gantt__trunc")).toHaveTextContent(long);
+
+    // The lane label wraps a caret AND the name; only the name may truncate,
+    // or the arrow is the thing that gets ellipsised away.
+    const lane = container.querySelector(".ev-gantt__lane-label");
+    expect(lane?.querySelector(".ev-gantt__trunc")).toHaveTextContent("alice");
+    expect(lane?.querySelector(".ev-gantt__lane-caret")).not.toHaveClass("ev-gantt__trunc");
+  });
+
   it("carries the whole group name too", () => {
     // Lane labels truncate in the same column, for the same reason.
     render(

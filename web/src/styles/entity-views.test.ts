@@ -54,6 +54,31 @@ describe("entity-views.css", () => {
     expect(bar).not.toMatch(/--accent\b/); // bars must not reuse it, or they blend in
   });
 
+  it("truncates the first column instead of wrapping it", () => {
+    // The gutter is a FIXED 150px beside rows of a FIXED height (GUTTER /
+    // ROW_H / LANE_H), so a label that wraps has nowhere to put the second
+    // line — it overlaps its neighbours. Three places already CLAIMED this
+    // column truncates (the GutterRow comment, and two test names) while the
+    // lane label had neither `nowrap` nor `overflow`, so a long group name
+    // wrapped and the rows collided.
+    const lane = CSS.match(/\.ev-gantt__lane-label\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(lane).toMatch(/white-space:\s*nowrap/);
+    expect(lane).toMatch(/overflow:\s*hidden/);
+
+    // `text-overflow` needs a BLOCK container: on a flex container it is
+    // ignored, and it does not inherit into the anonymous flex item holding
+    // the text. Both labels are flex (for the caret / vertical centring), so
+    // the ellipsis has to live on an inner element — which is what this class
+    // is for. Without it the text is chopped mid-glyph with no "…".
+    const trunc = CSS.match(/\.ev-gantt__trunc\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(trunc).toMatch(/text-overflow:\s*ellipsis/);
+    expect(trunc).toMatch(/overflow:\s*hidden/);
+    expect(trunc).toMatch(/white-space:\s*nowrap/);
+    // A flex item's automatic minimum is its CONTENT width, so without this it
+    // refuses to shrink and overflows the gutter rather than ellipsising.
+    expect(trunc).toMatch(/min-width:\s*0/);
+  });
+
   it("only references declared design tokens (no hardcoded brand colors)", () => {
     // Guard against a stray hex on a fill — everything routes through tokens.
     // Box-shadows are the one sanctioned rgba() exception (no shadow token).
