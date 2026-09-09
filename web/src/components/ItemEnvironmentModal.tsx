@@ -19,18 +19,9 @@
  * below the panel. `ModalShell` owns all of that (#445/#779), so this asks for
  * it rather than re-deriving it.
  *
- * Closing is only closing. The fields commit on BLUR and there is no Save
- * button, so what "leaving" ought to mean is a question about the panel's save
- * model rather than about this modal, and two attempts to answer it here were
- * both worse than leaving it alone.
- *
- * A `useDirtyClose` prompt cannot work at all: `DialogProvider` focuses the
- * confirm in order for it to be answerable, taking focus blurs the field, and
- * blurring is what saves — so the question "discard this?" committed the value
- * it was asking about, by design and in every browser. Committing on the way
- * out instead made Escape the only keystroke in the app that WRITES, spending
- * the item OWNER's quota, and the 507 that answers it could not be shown
- * because this component is unmounted by then.
+ * The fields commit on BLUR and there is no Save button, so what "leaving"
+ * ought to mean is a question about the panel's save model rather than about
+ * this modal.
  *
  * The rule is about FOCUS, not about closing: moving focus off a field commits
  * it. Tab to the ✕, or click it in a browser that focuses buttons on mousedown,
