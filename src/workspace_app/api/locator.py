@@ -422,11 +422,18 @@ class ItemLocator:
         """Link the chat to the run it was opened for — or, when the run never
         started, remove it.
 
-        A conversation with no ``run_id`` is a FREE chat, and the earliest free
-        chat is what the item opens as its default (`find_default_conversation`).
-        So a chat left behind by a refused run does not merely litter: it can
-        become the default conversation for everyone on the item, and each retry
-        leaves another.
+        A conversation with ``run_id is None`` is a FREE chat, and the earliest
+        free chat is what the item opens as its default
+        (`find_default_conversation`). So a chat left behind by a refused run
+        does not merely litter: it can become the default conversation for
+        everyone on the item, and each retry leaves another.
+
+        ⚠️ That is the INTERACTIVE entrance's reason. `open_run_chat` creates
+        with the default ``run_id``, which is ``None``, so its abandoned chats
+        really are free. `chat_for_schedule` creates with ``""`` — not free —
+        so a scheduled chat could never become the default, and the cleanup
+        there buys only tidiness. Stating one entrance's true sentence about the
+        other is how the same claim was wrong in three places.
         """
         if run_id is None:
             # Both errors, because specstar deletes SOFTLY: a second cleanup of

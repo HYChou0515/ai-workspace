@@ -165,8 +165,8 @@ Refresh **不會** build，它只是重讀資料夾。所以 AI 改完 `src/` �
 頁面跑在一個 **null origin** 的 iframe 裡（`sandbox="allow-scripts"`，**沒有**
 `allow-same-origin`），所以它拿不到 cookie、碰不到外層 DOM、也呼叫不了 API。
 唯一的出口是 `postMessage`，而外層是關卡。平台注入的 runtime 給它 `window.workspace`，
-**八個**動詞，而這個集合只在一種情況下會變：新增一個要先寫下它為什麼不能從
-`callTool` 進來的論證。
+動詞的完整清單如下，而這個集合只在一種情況下會變：新增一個要先寫下它為什麼不能從
+`callTool` 進來的論證。（刻意不寫數字——上一版寫「七個」而 bridge 有八個，而一個手寫的數字沒有任何守衛看得到它過期。）
 
 | 動詞 | 範圍 |
 |---|---|

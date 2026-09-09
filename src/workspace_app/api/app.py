@@ -232,11 +232,23 @@ async def start_page_schedule(
 
     Every locator call here is OFFLOADED, because every one is blocking
     specstar I/O and this runs inside the sweep's tick. `chat_for_schedule`
-    alone is seven round trips — `item_conversation_mirror` asks each
-    registered app model for its meta — and the sweep carefully offloads all
-    of its own store calls only to hand the loop to this one. On Postgres
-    that is ten network round trips per fire, on every pod, holding every
+    alone is SIX round trips when it mints the conversation and two when it
+    reuses one — and reuse is what a repeating schedule does on every fire after
+    the first. The sweep carefully offloads all of its own store calls, so
+    handing the loop to this one would undo that, on every pod, holding every
     request that pod is serving.
+
+    ⚠️ This used to say "seven round trips, because `item_conversation_mirror`
+    asks each registered app model for its meta". Both halves were wrong —
+    measured 6 and 2, and `find_work_item` routes by the id's prefix in a single
+    `get`, scanning only when no prefix matches. The figure is not load-bearing;
+    it is corrected because a number nobody can re-derive is how each of the
+    last four rounds found a false claim.
+
+    NOT the whole fire path: `orchestrator.start` still runs
+    `active_run_for_chat` — a synchronous scan of the item's WorkflowRuns — plus
+    a synchronous `create` and `_prune_runs`. That is behaviour the interactive
+    entrance shares, so it is its own change, not a line here.
     """
     chat_id, ours = await asyncio.to_thread(locator.chat_for_schedule, item_id, workflow_id, key)
     try:

@@ -407,6 +407,15 @@ class UserScheduleSweeper:
             # resolver"; a resolver that answers None is the documented value and
             # it did the opposite, silently, once per row per tick.
             offered = None if answer is None else set(answer)
+        # Every `run` this file still complains about. Cleared below for the
+        # ones it no longer does — the per-row memo's subject is a ROW, so "the
+        # file has no lint problems" is the wrong moment to forget it: a row
+        # naming a workflow the app does not offer is not a lint problem, so
+        # that branch fired on every tick and cleared the memo it had just
+        # written. The failure the memo exists to prevent — an author fixing a
+        # bad `run:` and breaking it the same way next week to silence — needs
+        # forgetting to happen when the ROW changes, not when the file parses.
+        still_bad: set[str] = set()
         now_utc = self._now()
         fired = 0
         for row in rows:
@@ -429,6 +438,7 @@ class UserScheduleSweeper:
                     row.run,
                     ", ".join(sorted(offered)) or "nothing",
                 )
+                still_bad.add(row.run)
                 continue
             trigger_id = trigger_id_for(item_id, folder, row)
             schedule = row.as_schedule()
@@ -540,4 +550,24 @@ class UserScheduleSweeper:
             # A run started, so whatever was wrong is over.
             self._failures.pop((trigger_id, window), None)
             fired += 1
+
+        # AFTER the loop, when every row has been graded: forget the per-row
+        # complaints this file no longer makes. The per-row memo's subject is a
+        # ROW, so "the file has no lint problems" is the wrong moment to clear it
+        # — a row naming a workflow the app does not offer is not a lint
+        # problem, so that branch runs on every tick and would erase the memo it
+        # had just written, restoring the flood. And never clearing it at all is
+        # the failure the memo exists to prevent: fix a bad `run:`, break it the
+        # same way next week, and the sweep stays silent while the log looks
+        # healthy. `#busy` is excluded — an overrun is not a complaint about the
+        # file, and it clears itself when the run finishes.
+        for key in [
+            k
+            for k in self._said
+            if k[0] == item_id
+            and k[1].startswith(f"{path}#")
+            and not k[1].endswith("#busy")
+            and k[1].rsplit("#", 1)[1] not in still_bad
+        ]:
+            del self._said[key]
         return fired

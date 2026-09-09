@@ -482,8 +482,12 @@ def test_a_file_over_the_cap_is_refused_before_it_is_parsed():
 
     Parsing every row and THEN refusing means a runaway file costs its full
     parse — one `json.dumps` plus one `json.loads` plus validation per row —
-    every tick, on every pod, for as long as it stays indexed. Measured at 327ms
-    of event-loop time for 20 000 rows, firing nothing.
+    every tick, on every pod, for as long as it stays indexed. Measured in the
+    hundreds of milliseconds of event-loop time for 20 000 rows, firing nothing
+    — 150ms to 330ms across the machines this has been run on, with
+    `uv run python -c` over `usable_rows` on a file of that size. The figure
+    moves with the machine; the shape does not, and a single draw quoted as a
+    constant is what the claim ledger keeps catching.
     """
     spec = _spec()
     ScheduleIndex(spec).record(ITEM, PATH)
@@ -1499,4 +1503,94 @@ def test_an_overrunning_schedule_says_it_once_and_remembers_boundedly(caplog):
     assert len(sweeper._said) <= 2, (
         f"the memo holds {len(sweeper._said)} entries after forty windows and "
         "nothing ever pops them"
+    )
+
+
+@pytest.mark.parametrize(
+    ("zone", "raises"),
+    [
+        ("Nowhere/Atlantis", "ZoneInfoNotFoundError"),
+        ("/absolute", "ValueError"),
+        ("../traversal", "ValueError"),
+        ("x" * 5000, "OSError"),
+    ],
+)
+def test_an_unusable_zone_falls_back_to_utc_instead_of_raising(zone: str, raises: str, caplog):
+    """The FALLBACK, reached directly, because nothing reaches it through `tick`.
+
+    This module says of the pair: "Both, deliberately: the lint is what TELLS
+    the author, and this is what keeps a miss from being fatal. Neither alone is
+    enough." Only the lint was held. `validate_user_schedules` now rejects a bad
+    zone with the same `_valid_tz` predicate, so `usable_rows` drops the row
+    before `_in_zone` can see it — which means the test named after this catch
+    was exercising the LINT, and removing the widened `except` left 125 tests
+    green while the branch also stopped being covered at all.
+
+    THE FULL SET, not just "not found": `ZoneInfo` raises `ValueError` for an
+    absolute path or a traversal and `OSError` for a key long enough to reach
+    the filesystem. Catching only `ZoneInfoNotFoundError` is what made one bad
+    row take a whole file down.
+
+    An hour out is the intended trade against a page stopping, so the fallback
+    returns UTC and says so once.
+    """
+    del raises  # named in the ids, so a failure says which family broke
+    now = datetime(2026, 9, 5, 9, 30)
+
+    with caplog.at_level(logging.WARNING):
+        assert _in_zone(now, zone) == now, "the fallback did not return the UTC clock"
+
+    assert any("unusable time zone" in r.getMessage() for r in caplog.records), (
+        "the zone was silently ignored — the operator has nothing to look at"
+    )
+
+
+def test_a_row_fixed_and_broken_again_complains_again(caplog):
+    """The forget rule has to cover EVERY memo about the file, not just the one
+    it was written for.
+
+    P47 pinned "a page fixed and broken again is reported again", and the pop it
+    added clears only the bare `(item_id, path)` key. P46 had added a second
+    memo about the same file, keyed `(item_id, f"{path}#{row.run}")`, and
+    nothing pops that one — so an author who fixes a bad `run:` and breaks it
+    the same way a week later gets silence, from a dict in a pod's memory, while
+    the log looks healthy.
+
+    That is exactly the failure P47's own docstring describes, sitting in a memo
+    the same round added. A rule applied to one key and not the others is the
+    shape this branch keeps producing.
+    """
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    files = _Files(**{f"{ITEM}{PATH}": _file({"every": "daily", "at": "09:00", "run": "nope"})})
+    sweeper = UserScheduleSweeper(
+        spec=spec,
+        index=ScheduleIndex(spec),
+        read=files.read,
+        read_live=files.read,
+        start=_Started(),
+        owner_of=lambda _item: "alice",
+        now=lambda: datetime(2026, 9, 5, 11, 0),
+        workflows_for=lambda _item: ("build-report",),
+    )
+
+    def _lines() -> int:
+        return len([r for r in caplog.records if "does not offer" in r.getMessage()])
+
+    with caplog.at_level(logging.WARNING):
+        asyncio.run(sweeper.tick())
+        first = _lines()
+
+        files.files[f"{ITEM}{PATH}"] = _file(DAILY)  # fixed
+        asyncio.run(sweeper.tick())
+
+        files.files[f"{ITEM}{PATH}"] = _file(  # broken again, the same way
+            {"every": "daily", "at": "09:00", "run": "nope"}
+        )
+        asyncio.run(sweeper.tick())
+
+    assert first == 1, f"the first complaint was logged {first} times"
+    assert _lines() == 2, (
+        "the row broke again the same way and the sweep stayed silent — the memo "
+        "outlived the problem it was about"
     )

@@ -83,12 +83,18 @@ def test_the_fire_path_does_not_hold_the_event_loop() -> None:
     """`_start_page_schedule` runs INSIDE the sweep's tick, so its blocking calls
     hold the loop exactly as the sweep's own would.
 
-    Every one of them is specstar I/O, and `chat_for_schedule` is seven round
-    trips on its own — `item_conversation_mirror` asks every registered app model
-    for its meta. The sweep offloads all of its own store calls and then handed
-    the loop to this, which the sweep's guard could not see: it injects an
-    in-memory `start` double, so it measures everything except the callback that
-    actually fires.
+    Every one of them is specstar I/O, and `chat_for_schedule` is six round
+    trips when it mints a conversation and two when it reuses one — reuse being
+    what a repeating schedule does after its first fire. The sweep offloads all
+    of its own store calls and then handed the loop to this, which the sweep's
+    guard could not see: it injects an in-memory `start` double, so it measures
+    everything except the callback that actually fires.
+
+    ⚠️ This is a source check and it can be defeated by an ALIAS: `_loc =
+    locator` takes both counts to zero and nothing fires. The property itself is
+    driven in `tests/api/test_page_schedule_start.py`, which measures the loop
+    gap and reddens under exactly that mutation. This one stays because it names
+    the offending call, which a timing test cannot.
 
     A source check, like its siblings here, because the failure is a WIRING
     choice whose symptom is latency on unrelated requests — nothing in this

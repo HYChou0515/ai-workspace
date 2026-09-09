@@ -13,6 +13,8 @@ it, so the extraction cannot be silently bypassed.
 
 from __future__ import annotations
 
+import asyncio
+import time
 from typing import Any
 
 import pytest
@@ -110,9 +112,13 @@ async def test_a_failed_start_takes_down_only_the_chat_this_call_made() -> None:
     """A chat the schedule has been using holds its history.
 
     Deleting it because one night's start failed loses every previous run's
-    thread. But a chat THIS call minted and never linked is a free chat, and the
-    earliest free chat is what the item opens as its default — so a schedule
-    failing nightly would install a new default conversation every night.
+    thread. A chat THIS call minted and never linked is worth removing so a
+    schedule whose first fire failed does not leave an empty thread named after
+    a workflow that never ran.
+
+    NOT because it would become the item's default: `chat_for_schedule` creates
+    with ``run_id=""``, and free means ``None``. That reason is true of the
+    interactive entrance and was copied here, where it is false.
     """
     ours = _Locator(ours=True)
     with pytest.raises(RuntimeError):
@@ -133,3 +139,58 @@ async def test_a_failing_cleanup_does_not_replace_the_failure_it_cleans_up_after
 
     with pytest.raises(RuntimeError, match="no capacity"):
         await _fire(loc, _Orchestrator(boom=RuntimeError("no capacity")))
+
+
+async def test_the_fire_path_does_not_hold_the_event_loop() -> None:
+    """DRIVEN, because the source guard beside it can be defeated by an alias.
+
+    `test_the_fire_path_does_not_hold_the_event_loop` in the wiring file counts
+    `locator.<name>` against `asyncio.to_thread(locator.<name>`. One line —
+    `_loc = locator` — takes both counts to zero and the guard never fires,
+    which is a plausible refactor rather than a contrived one.
+
+    So this measures the property itself: the longest GAP between heartbeats
+    while the fire path runs against a locator whose every call blocks. A count
+    of beats would pass with one call still on the loop; the gap is what a held
+    loop actually is.
+    """
+    BLOCK = 0.2
+
+    class _Blocking(_Locator):
+        def chat_for_schedule(self, item_id: str, title: str, key: str) -> tuple[str, bool]:
+            time.sleep(BLOCK)
+            return super().chat_for_schedule(item_id, title, key)
+
+        def slug_of(self, item_id: str) -> str | None:
+            time.sleep(BLOCK)
+            return super().slug_of(item_id)
+
+        def profile_of(self, item_id: str) -> str:
+            time.sleep(BLOCK)
+            return super().profile_of(item_id)
+
+        def settle_run_chat(self, chat_id: str, run_id: str | None) -> None:
+            time.sleep(BLOCK)
+            super().settle_run_chat(chat_id, run_id)
+
+    beats: list[float] = [time.monotonic()]
+    running = True
+
+    async def _heartbeat() -> None:
+        while running:
+            await asyncio.sleep(0.001)
+            beats.append(time.monotonic())
+
+    pulse = asyncio.create_task(_heartbeat())
+    run_id = await _fire(_Blocking(), _Orchestrator())
+    running = False
+    pulse.cancel()
+    beats.append(time.monotonic())
+
+    assert run_id == "run-1", "the fire path did not complete — this measures nothing"
+    worst = max(b - a for a, b in zip(beats, beats[1:], strict=False))
+    assert worst < BLOCK / 2, (
+        f"the loop was held for {worst * 1000:.0f}ms at once, and one locator call "
+        f"takes {BLOCK * 1000:.0f}ms — so at least one is still running on it, "
+        "inside the sweep's tick, on every pod"
+    )
