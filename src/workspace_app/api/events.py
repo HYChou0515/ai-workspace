@@ -69,6 +69,14 @@ class RunDone:
 class RunError:
     message: str
     type: Literal["error"] = "error"
+    #: WHICH terminal failure this is, when we can tell — `rate_limited`,
+    #: `all_busy`, or None for anything else. The message alone could not carry
+    #: it: one English sentence was doing duty for two different failures with
+    #: two different remedies, in a product that speaks zh-TW. Stamped onto the
+    #: persisted message as `error_kind`, which the FE already words from
+    #: (`agentLog.persistedErrorText`), falling back to this message when it has
+    #: no wording for a kind.
+    kind: str | None = None
 
 
 @dataclass(frozen=True)

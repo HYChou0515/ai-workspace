@@ -40,7 +40,10 @@ export type ToolLog = { type: "tool_log"; call_id: string; text: string };
 
 export type RunDone = { type: "done" };
 
-export type RunError = { type: "error"; message: string };
+/** `kind` names WHICH terminal failure this is when the backend could tell
+ *  (`rate_limited` / `all_busy`); absent otherwise. `message` stays the
+ *  fallback for kinds the FE has no wording for. */
+export type RunError = { type: "error"; message: string; kind?: string | null };
 
 export type RunCancelled = { type: "run_cancelled" };
 

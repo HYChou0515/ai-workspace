@@ -11,7 +11,7 @@
 import type { QuotaHolder } from "../../lib/quotaHolding";
 import type { AgentEvent } from "../../events";
 import type { Message, MessageCitation } from "../../api/types";
-import { initialLocale, translate } from "../../lib/i18n";
+import { type MsgKey, initialLocale, translate } from "../../lib/i18n";
 
 export type ToolCallView = {
   call_id: string;
@@ -294,8 +294,19 @@ const AWAITING_REPLY_MAX_MS = 30 * 60_000;
  * const it froze the language at import, so switching language mid-session left
  * the stored copy in the old one — different text, de-dupe blind again, and the
  * doubled banner back in two languages at once. */
-const persistedErrorText = (kind: string | null | undefined): string | undefined =>
-  kind === "cancelled" ? translate(initialLocale(), "banner.cancelled") : undefined;
+const PERSISTED_ERROR_KEYS: Record<string, MsgKey> = {
+  cancelled: "banner.cancelled",
+  // #797: the backend can now say WHICH terminal failure this was, so the two
+  // readings of an exhausted failover chain get the reader's own language
+  // instead of one English sentence standing in for both.
+  all_busy: "turn.allBusy",
+  rate_limited: "turn.rateLimited",
+};
+
+const persistedErrorText = (kind: string | null | undefined): string | undefined => {
+  const key = kind == null ? undefined : PERSISTED_ERROR_KEYS[kind];
+  return key === undefined ? undefined : translate(initialLocale(), key);
+};
 
 const isRecent = (at: number | null | undefined): boolean =>
   at != null && Date.now() - at < AWAITING_REPLY_MAX_MS;

@@ -1649,6 +1649,18 @@ export const messages = {
   // Leaving a modal that holds something unsaved (#779). ONE set of words for
   // every modal — the tool picker and the collections picker each used to carry
   // their own, which is how the same question ended up phrased three ways.
+  // A turn that died with the failover chain exhausted. TWO kinds, because they
+  // need different things from the reader: a rate limit clears on its own
+  // schedule or somebody raises it; genuinely busy models are a capacity
+  // question. The backend used to send one English sentence for both.
+  "turn.allBusy": {
+    "zh-TW": "目前每個可用的模型都在忙,這次回答沒有完成。請稍後再試一次。",
+    en: "All available models are busy right now, so this response wasn't completed. Please try again in a moment.",
+  },
+  "turn.rateLimited": {
+    "zh-TW": "模型服務正在限制我們的請求頻率,這次回答沒有完成。這不是模型忙 —— 要等限制解除,或把額度調高。",
+    en: "The model endpoint is rate-limiting us, so this response wasn't completed. This is not a busy model: the limit has to clear, or be raised.",
+  },
   "dirtyClose.prompt": { "zh-TW": "放棄未儲存的變更？", en: "Discard unsaved changes?" },
   "dirtyClose.keep": { "zh-TW": "繼續編輯", en: "Keep editing" },
   "dirtyClose.discard": { "zh-TW": "放棄變更", en: "Discard changes" },
