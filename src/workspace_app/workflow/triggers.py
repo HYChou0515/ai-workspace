@@ -286,7 +286,17 @@ def window_key(every: str, now: datetime) -> str:
     (weekly), or ``YYYY-MM`` (monthly); any other ``every`` buckets by day. Shared by the
     schedule trigger's fire dedup (``fire_window``) and #435's ``send_notification``
     per-window fingerprint — one truncation rule, so a "daily" notify and a "daily" schedule
-    bucket identically."""
+    bucket identically.
+
+    ``now`` is the LOCAL wall clock and carries no offset, so a DST fall-back — where
+    the local clock repeats an hour — collapses that hour's SUB-DAILY buckets into one:
+    ``hourly`` loses 1 run and ``minutes:N`` loses ``60/N``, once a year, in a zone that
+    switches. Spring forward loses nothing (the skipped local hour never shows). This is
+    the sub-daily half of the KNOWN LIMITATION ``_valid_tz`` states for ``at`` times, and
+    it is measured in ``test_a_sub_daily_schedule_loses_one_hour_of_runs_at_the_autumn_switch``.
+    Not fixed: the offset in the key needs an aware ``now``, which ``period_target`` cannot
+    compare against the naive datetimes it builds — a change to a mechanism two engines
+    share, for one run a year. UTC, the default, does not switch."""
     if every == "weekly":
         iso = now.isocalendar()
         return f"{iso.year}-W{iso.week:02d}"

@@ -809,6 +809,24 @@ def register_item_routes(
                 out.append(rid)
             return out
 
+        def _purge_schedule_index(spec_, item_id_: str) -> None:
+            """Drop the item's schedule-index row outright.
+
+            `ScheduleIndex.forget` empties rather than deletes, because a delete
+            cannot be made conditional and would race a concurrent `record`.
+            Nothing is racing here — the item is going — so this is the one
+            place the row can actually leave the listing.
+            """
+            from .schedule_index import _ScheduleIndex
+
+            # Only "this deploy never registered the model" is tolerable, the
+            # same line the satellite purge draws sixty lines above: a failure
+            # from inside the delete is a real one and has to surface. It was
+            # `suppress(Exception)` at both levels — the one step in this
+            # cascade that could fail completely silently.
+            with contextlib.suppress(KeyError):
+                spec_.get_resource_manager(_ScheduleIndex).permanently_delete(item_id_)
+
         def _sweep_rows(conv_ids: list[str], run_ids: list[str]) -> None:
             """Conversations (soft-deleted ones included — the cascade must not
             leave what a soft delete already hid), each conversation's SATELLITE
@@ -872,6 +890,14 @@ def register_item_routes(
             # Every file and directory record, permanently — what makes the
             # blobs collectable by the existing GC.
             await filestore.purge(item_id)
+            # The schedule index row. It self-heals — the sweep reads a path,
+            # confirms it is gone and forgets it — but only after firing at it,
+            # and only if a sweeper ever gets that far; and `forget` EMPTIES
+            # rather than deletes, so a listing that this cascade could have
+            # removed outright is instead kept forever. Exactly the orphan class
+            # the cascade exists for, and the docstring's "everything it owns"
+            # has to be true of a row added after the cascade was written.
+            await asyncio.to_thread(_purge_schedule_index, spec, item_id)
             # Off the event loop: pg round-trips per row would otherwise
             # serialise the whole pod (the #657 class).
             await asyncio.to_thread(_sweep_rows, conv_ids, run_ids)

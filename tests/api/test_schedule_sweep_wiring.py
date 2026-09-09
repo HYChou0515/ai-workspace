@@ -55,23 +55,168 @@ def test_the_sweep_does_not_read_through_the_live_sandbox() -> None:
     )
 
 
-def test_a_scheduled_run_gets_its_own_conversation() -> None:
-    """`_start_page_schedule` must open a chat, like the interactive entrance.
+def test_the_app_wires_both_collaborators_into_the_starter() -> None:
+    """The body lives in `start_page_schedule`, so this pins that `create_app`
+    actually reaches it — with BOTH things it needs.
 
-    Without a `chat_id` the run keys on the item id; `workflow_exec.drive_turn`
-    looks that up, finds no conversation, and falls back to the item's DEFAULT
-    chat — so the run reads the user's own history as context and appends its
-    turns there. That was P22's headline finding, fixed on the entrance somebody
-    is watching and left standing on the one that fires at 3am.
+    What the body does is driven in `tests/api/test_page_schedule_start.py`;
+    what a test cannot drive is whether the composition root still points at it.
+    An extraction that nothing calls is the same as no extraction, and the
+    symptom would be a scheduled run reading the user's own chat history.
 
-    A source check for the same reason as the reads above: what it pins is a
-    WIRING choice whose failure is invisible until somebody opens their chat and
-    finds a conversation they did not have.
+    The orchestrator is read inside the closure on purpose — it is constructed
+    later than this line — so passing it is a call-time act, not a captured one.
     """
     source = _APP.read_text(encoding="utf-8")
 
-    body = source.split("async def _start_page_schedule", 1)[-1].split("\n    lifespan", 1)[0]
+    closure = source.split("async def _start_page_schedule", 1)[-1].split("\n    lifespan", 1)[0]
 
-    assert "open_run_chat" in body, "a scheduled run does not open its own conversation"
-    assert "chat_id=chat_id" in body, "it opens one and then does not use it"
-    assert "settle_run_chat" in body, "the chat is never linked to its run, or cleaned up"
+    assert "start_page_schedule(" in closure, (
+        "create_app no longer delegates to the extracted starter, so nothing "
+        "that is driven by a test is what actually fires"
+    )
+    for arg in ("locator=locator", "orchestrator=workflow_orchestrator"):
+        assert arg in closure, f"the starter is called without {arg}"
+
+
+def test_the_fire_path_does_not_hold_the_event_loop() -> None:
+    """`_start_page_schedule` runs INSIDE the sweep's tick, so its blocking calls
+    hold the loop exactly as the sweep's own would.
+
+    Every one of them is specstar I/O, and `chat_for_schedule` is six round
+    trips when it mints a conversation and two when it reuses one — reuse being
+    what a repeating schedule does after its first fire. The sweep offloads all
+    of its own store calls and then handed the loop to this, which the sweep's
+    guard could not see: it injects an in-memory `start` double, so it measures
+    everything except the callback that actually fires.
+
+    ⚠️ This is a source check and it can be defeated by an ALIAS: `_loc =
+    locator` takes both counts to zero and nothing fires. The property itself is
+    driven in `tests/api/test_page_schedule_start.py`, which measures the loop
+    gap and reddens under exactly that mutation. This one stays because it names
+    the offending call, which a timing test cannot.
+
+    A source check, like its siblings here, because the failure is a WIRING
+    choice whose symptom is latency on unrelated requests — nothing in this
+    process fails, and nothing local reproduces it.
+    """
+    source = _APP.read_text(encoding="utf-8")
+    body = source.split("async def start_page_schedule", 1)[-1].split("\ndef ", 1)[0]
+
+    blocking = ("chat_for_schedule", "settle_run_chat", "slug_of", "profile_of")
+    # Matched on the pair, not on one spelling: the formatter wraps a long call
+    # so `to_thread(locator.x` and `to_thread(\n    locator.x` are the same thing,
+    # and a guard that only knows one of them passes the day black reflows it.
+    flat = " ".join(body.split())
+
+    # COUNTED, not merely present. `settle_run_chat` has TWO call sites — the
+    # post-start link and the failure cleanup — and an `in` check is satisfied by
+    # either one. Reverting just the cleanup to a direct call left every test
+    # green, which is the whole failure mode this file keeps producing: a guard
+    # that passes because SOMETHING matched, not because the property holds.
+    unoffloaded = []
+    for name in blocking:
+        calls = flat.count(f"locator.{name}")
+        offloaded = flat.count(f"asyncio.to_thread(locator.{name}") + flat.count(
+            f"asyncio.to_thread( locator.{name}"
+        )
+        if calls != offloaded:
+            unoffloaded.append(f"{name} ({offloaded} of {calls} offloaded)")
+
+    assert not unoffloaded, (
+        f"{unoffloaded} — blocking specstar calls made directly on the event loop, "
+        "inside a sweep that offloads every one of its own"
+    )
+
+
+def test_both_write_boundaries_feed_the_index() -> None:
+    """The facade is one of TWO ways bytes reach the durable store.
+
+    A file written inside the sandbox — an agent's `exec`, a workflow's shell
+    step — arrives through the mirror, which writes to the FileStore directly and
+    never touches `WorkspaceFiles`. So a `schedules.json` produced that way was
+    never indexed: the schedules never ran, and nothing said why. That is the
+    same silent failure the index exists to prevent, entering through the door
+    the facade fix did not cover.
+
+    One callback wired to both, so they cannot disagree about what counts.
+    """
+    source = _APP.read_text(encoding="utf-8")
+
+    facade = re.search(r"WorkspaceFiles\((.*?)\n    \)", source, re.DOTALL)
+    mirror = re.search(r"SandboxSync\((.*?)\n    \)", source, re.DOTALL)
+    assert facade is not None and mirror is not None, "one of the two is no longer built here"
+
+    # EXACT, not "the name appears somewhere in the call". A no-op wrapper that
+    # mentions it — `on_write=lambda ws, path: None if True else
+    # _note_schedule_file(ws, path)` — satisfied a containment check and left 73
+    # tests green, which is the same token-not-behaviour hole this file keeps
+    # producing. The mirror is the door P40 and P48 each spent a phase on, and
+    # nothing else covers it at the composition root.
+    for name, call in (("facade", facade.group(1)), ("mirror", mirror.group(1))):
+        flat = " ".join(call.split())
+        wired = (
+            "on_write=_note_schedule_file" in flat
+            or "on_write=lambda ws, path: _note_schedule_file(ws, path)" in flat
+        )
+        assert wired, (
+            f"the {name} write path does not hand the resolver straight to "
+            "`on_write` — anything between them is a place the call can stop "
+            f"happening while this guard still sees the name. Found: {flat[:200]}"
+        )
+        assert "_note_schedule_file" in call, (
+            f"the {name} write path does not tell the schedule index, so a file "
+            "that arrives that way is never swept"
+        )
+
+
+def test_the_row_cap_knob_reaches_the_sweeper() -> None:
+    """`server.max_page_schedules` has to arrive where it is enforced.
+
+    The config ledger proves the setting is READ in `__main__`. Nothing proved
+    the second hop: replacing `max_rows=...max_page_schedules` with the module
+    default left 235 tests green, and `grep -rn max_page_schedules tests/` found
+    nothing. A knob that is read and then dropped is worse than an absent one —
+    an operator lowers it after an incident, watches the deploy go out, and the
+    cap they set never applies.
+
+    A source check because the failure is a WIRING choice: the sweeper is built
+    once in a composition root, and both values are plausible integers, so
+    nothing downstream can tell which one it got.
+    """
+    source = _APP.read_text(encoding="utf-8")
+
+    call = source.split("UserScheduleSweeper(", 1)[-1].split("\n    )", 1)[0]
+    flat = " ".join(call.split())
+
+    assert "max_rows=" in flat, "the sweeper is built without a row cap at all"
+    assert "max_page_schedules" in flat, (
+        "the sweeper's row cap does not come from `server.max_page_schedules`, so "
+        "the knob an operator sets is read and then dropped"
+    )
+
+
+def test_the_turn_boundary_reconciles_the_schedule_index() -> None:
+    """The backstop has to be WIRED, or it is a module nothing calls.
+
+    Both write hooks are unreachable on a host-managed durable deployment —
+    `registry._writeback` returns before `sync.mirror` — so on that branch the
+    reconcile is the ONLY thing that puts an agent-written `schedules.json` into
+    the index. A test of the reconciler alone would pass forever while the
+    schedules never ran.
+
+    Same shape, and the same reason, as the sibling on this hook:
+    `forget_measurement` is there because `on_measured` cannot fire on that
+    branch either.
+    """
+    source = _APP.read_text(encoding="utf-8")
+
+    call = source.split("flush_item=_reconcile_after_turn(", 1)[-1].split("\n        ),", 1)[0]
+    flat = " ".join(call.split())
+
+    assert "reconcile_item_schedules" in flat, (
+        "the turn boundary no longer reconciles the schedule index, so on a "
+        "host-managed deployment nothing does"
+    )
+    assert "index=schedule_index" in flat, "it is called without the index to write to"
+    assert "ls=files.ls" in flat, "it is called without a way to list the item"

@@ -2,7 +2,7 @@
 
 The profile's `triggers.json` is authored once by whoever builds the app. This
 is the other half: a file a WUI writes into its own folder, so a domain expert
-can say "every weekday at 09:00, build my report" without anyone editing the
+can say "every Monday at 09:00, build my report" without anyone editing the
 repo.
 
 Two properties carry the whole design:
@@ -18,15 +18,19 @@ Two properties carry the whole design:
 
 from __future__ import annotations
 
+import pathlib
+import re
 from datetime import datetime
 
 import pytest
 
-from workspace_app.workflow.triggers import fire_window, is_due, period_target
+from workspace_app.workflow.triggers import _DOW, fire_window, is_due, period_target
 from workspace_app.workflow.user_schedules import (
     UserSchedule,
+    declared_count,
     parse_user_schedules,
     trigger_id_for,
+    usable_rows,
     validate_user_schedules,
 )
 
@@ -126,6 +130,35 @@ def test_a_zone_that_is_not_a_zone_is_refused():
         problems = validate_user_schedules(_file({**DAILY, "tz": bad}))
         assert problems, f"tz={bad!r} was accepted"
         assert "tz" in problems[0], f"tz={bad!r} was refused without naming the field"
+
+
+def test_a_zone_written_in_the_wrong_case_still_works():
+    """`utc` and `asia/taipei` are how people type these, and IANA names are
+    case-sensitive only by convention. Refusing them turns "the report arrives an
+    hour out" into "the report stops", which is the worse of the two failures —
+    a wrong time gets noticed, an absent report gets noticed weeks later, and
+    this file's own design note says so.
+
+    `UTC+8` and `GMT+8` are NOT normalised: they are not IANA names at all, and
+    in POSIX the sign means the opposite of what almost everyone intends. Guessing
+    there would be worse than refusing.
+    """
+    for spelled in ("utc", "asia/taipei", "ASIA/TAIPEI", "Europe/berlin"):
+        assert validate_user_schedules(_file({**DAILY, "tz": spelled})) == [], spelled
+
+    for nonsense in ("UTC+8", "GMT+8", "local"):
+        assert validate_user_schedules(_file({**DAILY, "tz": nonsense})), nonsense
+
+
+def test_a_normalised_zone_is_the_one_the_schedule_runs_in():
+    """Accepting the spelling is only half of it — the parsed row has to carry a
+    zone `ZoneInfo` will take, or the sweep falls back to UTC and the acceptance
+    was a lie."""
+    from zoneinfo import ZoneInfo
+
+    row = parse_user_schedules(_file({**DAILY, "tz": "asia/taipei"}))[0]
+
+    assert ZoneInfo(row.tz)
 
 
 def test_a_real_zone_is_accepted():
@@ -278,3 +311,255 @@ def test_a_poller_is_due_again_in_the_next_bucket_but_not_the_same_one():
     assert is_due(row, now, last_window="") is True
     assert is_due(row, now, last_window=window) is False
     assert is_due(row, datetime(2026, 9, 5, 9, 7), last_window=window) is True
+
+
+def test_the_declared_count_is_how_many_schedules_there_are():
+    """The cap has to count SCHEDULES. `validate_user_schedules` emits several
+    strings for one bad row — a single `{"every":"monthly","dom":99,"at":"9am"}`
+    yields three — so counting rows-plus-problems reports a file of 400 as 1200,
+    refuses it against a cap of 1000 that it never reached, and tells the
+    operator it "declares 1200 schedules".
+
+    Cheap on purpose: it reads the list's length, not its contents, so the cap
+    can be applied BEFORE the per-row parsing it exists to bound.
+    """
+    bad = {"every": "monthly", "dom": 99, "at": "9am"}
+    assert len(validate_user_schedules(_file(bad))) > 1, "this row must yield several problems"
+
+    assert declared_count(_file(DAILY, POLLER)) == 2
+    assert declared_count(_file(bad, bad, bad)) == 3
+    assert declared_count(_file()) == 0
+
+
+def test_a_file_that_is_not_a_schedules_file_declares_nothing_countable():
+    """`None`, not 0 — "unreadable" and "an empty list" are different answers,
+    and only one of them means the cap has been satisfied."""
+    assert declared_count("not json at all") is None
+    assert declared_count('{"schedules": "nope"}') is None
+    assert declared_count("[]") is None
+
+
+# --- what the shipped docs promise, the DSL must accept -----------------------
+
+
+def _fenced_schedule_examples(text: str) -> list[str]:
+    """Every ``{ "schedules": [...] }`` literal in a doc's fenced code blocks.
+
+    Pulled out of the prose rather than duplicated into the test, so the thing
+    asserted IS the thing shipped. A copy would pass forever while the doc drifted.
+    """
+    out: list[str] = []
+    for block in re.findall(r"```[a-z]*\n(.*?)```", text, re.DOTALL):
+        m = re.search(r"\{\s*\n?\s*schedules:\s*\[.*?\n\s*\]\s*\n?\s*\}", block, re.DOTALL)
+        if m is None:
+            continue
+        # The docs show it as a JS object literal — bare keys, so quote them.
+        js = m.group(0)
+        js = re.sub(r"([{,]\s*)([A-Za-z_][A-Za-z0-9_]*)(\s*:)", r'\1"\2"\3', js)
+        js = re.sub(r",(\s*[}\]])", r"\1", js)  # no trailing commas
+        out.append(js)
+    return out
+
+
+def test_the_docs_only_promise_schedules_the_dsl_can_express() -> None:
+    """A doc example that does not validate is a defect in the product.
+
+    The product here IS the documentation: a page author never reads this
+    repo, and an LLM writing their page reads the skill. So an example the
+    engine would refuse is not a typo — it is a feature the reader is told
+    exists, writes down, and then does not get. And the refusal lands in a
+    SERVER log, which is the one place the author cannot see.
+
+    Asserted against the shipped file, so prose and engine cannot drift.
+    """
+    ref = pathlib.Path("sample-skills/wui/reference.md").read_text(encoding="utf-8")
+    examples = _fenced_schedule_examples(ref)
+    assert examples, "no schedules example found — the extractor stopped matching the doc"
+
+    for js in examples:
+        problems = validate_user_schedules(js)
+        assert not problems, f"reference.md shows a schedule the engine refuses: {problems}"
+
+
+def test_no_shipped_doc_offers_a_dow_the_engine_does_not_know() -> None:
+    """`dow` takes ONE day. "weekdays" is not one of them.
+
+    The tempting sentence is "weekdays at nine", because that is how people say
+    it — and the DSL cannot express it in a row. An LLM handed that sentence
+    writes `dow: "weekdays"`, the row is dropped, and the page's author sees a
+    schedule that simply never runs. Five rows is the answer, and the docs have
+    to say so rather than implying one will do.
+    """
+    for name in ("SKILL.md", "reference.md"):
+        text = pathlib.Path("sample-skills/wui", name).read_text(encoding="utf-8")
+        for word in re.findall(r'dow"?\s*:\s*"([a-z]+)"', text):
+            assert word in _DOW, f"{name} offers dow={word!r}, which the engine refuses"
+        assert "weekdays at" not in text, (
+            f"{name} offers 'weekdays at ...', which `every: weekly` cannot express in one row"
+        )
+
+
+def test_a_null_tz_means_the_default_not_a_rejected_row() -> None:
+    """`"tz": null` is what a generated page writes for "I did not choose one".
+
+    reference.md tells the author `tz` is optional and defaults to UTC, and an
+    LLM writing the page emits nulls for the fields it left out. The validator
+    read it through `str(...)`, which turns `None` into the STRING `"None"` —
+    truthy, and not a zone — so the row was refused and the message named a
+    value the author never typed.
+
+    `parse_user_schedules` was always null-tolerant (`row.get("tz") or ""`), so
+    the two halves of this module disagreed about the same file: one would run
+    the row, the other refused it. Refusing is the worse half — it turns "the
+    report arrives an hour out" into "the report stops", which is the trade
+    `normalise_tz`'s own docstring says it exists to avoid.
+    """
+    for absent in (None, 0, False):
+        raw = _file({"every": "daily", "at": "09:00", "run": "r", "tz": absent})
+        assert validate_user_schedules(raw) == [], f"tz={absent!r} was refused"
+        assert parse_user_schedules(raw)[0].tz == "", f"tz={absent!r} did not default to UTC"
+
+    # The control: a zone that is genuinely wrong is still refused, and the
+    # message names what the author actually wrote.
+    bad = _file({"every": "daily", "at": "09:00", "run": "r", "tz": "Asia/Taipeii"})
+    problems = validate_user_schedules(bad)
+    assert problems and "Asia/Taipeii" in problems[0]
+
+
+@pytest.mark.parametrize("field", ["every", "at", "run", "dow", "dom", "tz", "n", "with"])
+def test_writing_null_for_a_field_means_the_same_as_leaving_it_out(field: str) -> None:
+    """The CLASS, not the one field that was reported.
+
+    `.get(key, default)` fires only when the key is ABSENT, so every field read
+    that way answered `None` for an explicit `null` and something else for an
+    omitted key — two spellings of "I did not set this" that the validator
+    graded differently. A page generator writes nulls for what it left unset,
+    so the shape a real author produces is the one that was refused.
+
+    Asserted over every field rather than the one that was found: `tz` was
+    reported, and `every` and `at` had the same defect for the same reason.
+    Fixing the instance and leaving the class is how this comes back.
+
+    `run` is expected to be refused BOTH ways — it has no default, and a
+    schedule with no workflow to start is genuinely unusable. That is the
+    control: the property is "the two agree", not "everything is accepted".
+    """
+    base = {"every": "daily", "at": "09:00", "run": "r"}
+    omitted = {k: v for k, v in base.items() if k != field}
+    nulled = {**base, field: None}
+
+    assert validate_user_schedules(_file(omitted)) == validate_user_schedules(_file(nulled)), (
+        f"`{field}: null` is graded differently from omitting `{field}`"
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("dom", "x"), ("dom", "3"), ("with", ["a", "b"]), ("with", "not a dict")],
+)
+def test_a_row_the_validator_calls_clean_can_never_make_the_parser_raise(
+    field: str, value: object
+) -> None:
+    """The half of "the two must agree about one file" that RAISES.
+
+    `validate_user_schedules` only looks at `dom` when `every == "monthly"`, and
+    never looks at `with` at all — but `parse_user_schedules` decodes both on
+    every row (`int(row.get("dom") or 0)`, `dict(row.get("with") or {})`). So a
+    file the linter calls clean makes `usable_rows` raise `ValueError`.
+
+    The raise escapes before `return good, problems`, so it costs the file's
+    GOOD rows too — the exact thing `usable_rows`' own docstring promises
+    against: "one mistyped row must cost that row only". And the author is told
+    nothing, because the linter is the only thing that reaches them and it is
+    empty.
+
+    `"with": ["a", "b"]` is a shape an LLM page generator plausibly emits.
+    """
+    raw = _file({"every": "daily", "at": "09:00", "run": "r", field: value}, DAILY)
+
+    problems = validate_user_schedules(raw)
+    rows, from_usable = usable_rows(raw)  # must not raise
+
+    assert problems, f"`{field}: {value!r}` is refused by the parser and linted by nothing"
+    assert [r.run for r in rows] == ["build-report"], (
+        "the good row beside it was lost — one row's mistake cost the whole file"
+    )
+    assert from_usable, "the row was dropped with nothing said about it"
+
+
+def test_a_row_the_parser_cannot_read_costs_only_its_own_row(monkeypatch) -> None:
+    """The belt, pinned independently of which shapes currently reach it.
+
+    The linter now grades every field the parser decodes, so no input I can
+    construct still makes `parse_user_schedules` raise — removing the guard in
+    `usable_rows` leaves the shape-based tests green. That is exactly the
+    argument for pinning the PROPERTY rather than a shape: the guard exists for
+    the parser change nobody has made yet, and a test that depends on today's
+    broken input stops holding the day that input is linted.
+
+    The property: a row the parser cannot read is dropped WITH a complaint, and
+    the good rows beside it still run. Before, the raise escaped before
+    `return good, problems` and took the whole file — the opposite of this
+    function's own promise.
+    """
+    import workspace_app.workflow.user_schedules as mod
+
+    real = mod.parse_user_schedules
+    calls: list[int] = []
+
+    def _raises_on_the_first_row(raw):
+        calls.append(1)
+        if len(calls) == 1:
+            raise ValueError("a decode nobody linted for")
+        return real(raw)
+
+    monkeypatch.setattr(mod, "parse_user_schedules", _raises_on_the_first_row)
+
+    rows, problems = usable_rows(_file(DAILY, POLLER))
+
+    assert [r.run for r in rows] == [POLLER["run"]], "the unreadable row took the good row with it"
+    assert any("could not be read" in p for p in problems), (
+        "the row vanished with nothing said about it"
+    )
+
+
+def test_a_complaint_names_the_row_the_author_has_to_fix() -> None:
+    """ "Renumbered to this row's real position."
+
+    `usable_rows` validates one row at a time, so every message comes back
+    saying `schedules[0]`. Handing those through unchanged points every
+    complaint at the first row — an author with forty schedules is told to look
+    at the wrong one, forty times.
+    """
+    problems = usable_rows(_file(DAILY, DAILY, {"every": "daily", "at": "9am", "run": "r"}))[1]
+
+    assert problems, "the bad third row was not complained about at all"
+    assert any("schedules[2]" in p for p in problems), (
+        f"the complaint points at the wrong row: {problems}"
+    )
+
+
+def test_one_mistake_is_one_complaint() -> None:
+    """Two rules about the same field say the same thing twice.
+
+    P53 added a type check for `dom` on every row, because the parser decodes it
+    on every row. The range check twenty lines below still tested
+    `isinstance(dom, int)` as well — so a monthly row with `dom: "x"` came back
+    with BOTH "must be a number" and "must be 1..31", about one mistake.
+
+    That matters beyond tidiness: the cap counts what this returns, which is the
+    defect P38 fixed, and an author reading two messages looks for two problems.
+    A new rule sinking below an old one has to take the old one's job with it.
+    """
+    monthly_bad_type = validate_user_schedules(
+        _file({"every": "monthly", "dom": "x", "at": "09:00", "run": "r"})
+    )
+    assert len(monthly_bad_type) == 1, f"one mistake produced {monthly_bad_type}"
+
+    # The controls: each rule still catches what only it can.
+    assert validate_user_schedules(
+        _file({"every": "monthly", "dom": 99, "at": "09:00", "run": "r"})
+    ), "a dom out of range is no longer caught"
+    assert validate_user_schedules(
+        _file({"every": "daily", "dom": "x", "at": "09:00", "run": "r"})
+    ), "a dom the parser cannot decode is no longer caught on a non-monthly row"

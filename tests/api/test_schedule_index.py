@@ -292,6 +292,36 @@ def test_a_backend_that_is_down_is_not_mistaken_for_a_lost_race(index: ScheduleI
         rm.create = real_create  # ty: ignore[invalid-assignment]
 
 
+def test_a_known_path_still_costs_one_read(index: ScheduleIndex) -> None:
+    """`record` runs on the write path and a page saves on every edit, so its own
+    docstring sets the bar: "already known" costs a point read and NOT a
+    round-trip.
+
+    Resolving the soft-deleted case eagerly on every duplicate added a second
+    `get` to every save after the first — to detect a state nothing produces
+    today. The check belongs on the branch that needs it: the one where the read
+    said absent.
+    """
+    index.record("i1", "/a/schedules.json")
+
+    rm = index._spec.get_resource_manager(_ScheduleIndex)
+    real_get = rm.get
+    gets: list[str] = []
+
+    def _counting(resource_id: str, *a, **kw):
+        gets.append(resource_id)
+        return real_get(resource_id, *a, **kw)
+
+    rm.get = _counting  # ty: ignore[invalid-assignment]
+    try:
+        wrote = index.record("i1", "/a/schedules.json")
+    finally:
+        rm.get = real_get  # ty: ignore[invalid-assignment]
+
+    assert wrote is False
+    assert len(gets) == 1, f"a known path cost {len(gets)} reads, not one"
+
+
 def test_a_soft_deleted_row_comes_back_rather_than_stalling(index: ScheduleIndex) -> None:
     """specstar deletes SOFTLY, and `exists` is deletion-blind — so a deleted row
     answers "duplicate" to a create and "absent" to a read. Anything that does
@@ -312,6 +342,46 @@ def test_a_soft_deleted_row_comes_back_rather_than_stalling(index: ScheduleIndex
     assert wrote is True
     assert index.paths("i1") == ["/a/schedules.json", "/b/schedules.json"]
     assert index.items() == ["i1"]
+
+
+def test_the_absent_branch_never_overwrites_a_row_that_is_there(index: ScheduleIndex) -> None:
+    """`create` without `if_not_exists` does not refuse a taken id — specstar
+    only performs that check when the flag is set. It writes a new revision, so
+    a row holding two paths becomes a row holding one.
+
+    Reachable whenever the read says "absent" and the row is not: a retry
+    iteration after a CAS conflict, or a peer's create landing between our read
+    and ours. The read is what is unreliable here, so the WRITE has to carry the
+    condition — asking again cannot make an unreliable answer reliable.
+
+    This is the same `['/a','/b'] → ['/b']` shape the previous fix in this file
+    was written to close, surviving in the branch that fix added.
+    """
+    index.record("i1", "/a/schedules.json")
+    index.record("i1", "/b/schedules.json")
+
+    # The read says absent while the row is right there — one iteration only, so
+    # the loop must recover rather than depend on never being lied to.
+    real_res = index._res
+    lied = []
+
+    def _lies_once(item_id: str):
+        if not lied:
+            lied.append(1)
+            return None
+        return real_res(item_id)
+
+    index._res = _lies_once  # ty: ignore[invalid-assignment]
+    try:
+        index.record("i1", "/c/schedules.json")
+    finally:
+        index._res = real_res  # ty: ignore[invalid-assignment]
+
+    assert index.paths("i1") == [
+        "/a/schedules.json",
+        "/b/schedules.json",
+        "/c/schedules.json",
+    ]
 
 
 def test_a_page_in_a_nested_folder_counts_too() -> None:
@@ -521,3 +591,135 @@ def test_a_page_saving_its_schedules_through_the_file_route_is_indexed(
 
     assert r.status_code < 300, r.text
     assert ScheduleIndex(harness.spec).items() == [harness.iid]
+
+
+def test_adding_an_ignore_pattern_cannot_silently_switch_schedules_off() -> None:
+    """`DEFAULT_IGNORES` is the mirror's list, and it now gates schedules too.
+
+    Two consumers, one list. `is_schedule_file` reuses it on purpose — a file
+    the platform declines to back up is not one it should take instructions
+    from. `SandboxSync.mirror` skips ignored paths before it reports a write, so
+    a pattern added there ALSO stops the index ever hearing about the file.
+
+    That makes an edit to a backup-noise list a change to which pages have
+    working schedules, with no error anywhere: the page saves, shows its file,
+    and nothing runs. This pins the ordinary shapes, so adding a pattern that
+    swallows one fails HERE rather than in somebody's missing report.
+    """
+    for page in (
+        "reports/schedules.json",
+        "reports/scrap/schedules.json",
+        "my page/schedules.json",
+        "data/schedules.json",
+        "build/schedules.json",
+        "dist/schedules.json",
+        "tmp/schedules.json",
+        "out/schedules.json",
+    ):
+        assert is_schedule_file(page), (
+            f"{page!r} is no longer a schedule declaration — an ignore pattern now "
+            "covers it, so pages under that folder lose their schedules in silence"
+        )
+
+
+def test_the_derivative_folders_are_still_not_pages() -> None:
+    """The control. The coupling has to keep the exclusion it was added for.
+
+    A vendored or unpacked `schedules.json` under `node_modules/` is not a
+    declaration anybody made — firing work out of a folder the user has never
+    opened is the failure this shares the list to prevent. A guard that only
+    said "everything is a schedule" would satisfy the test above completely.
+    """
+    for noise in (
+        "node_modules/pkg/schedules.json",
+        "app/.venv/lib/schedules.json",
+        "x/__pycache__/schedules.json",
+        ".git/schedules.json",
+    ):
+        assert not is_schedule_file(noise), f"{noise!r} would fire work nobody asked for"
+
+
+# ── properties this module states that nothing was holding ───────────────────
+
+
+def test_forgetting_a_path_is_a_compare_and_swap(index: ScheduleIndex) -> None:
+    """`forget` writes with `expected_etag`, like every other write here.
+
+    A peer adding a path between this read and this write must LOSE the race,
+    not have its path erased. Without the precondition the emptied row wins and
+    the page the peer just registered is never swept — the same silent loss
+    `record`'s CAS exists to prevent, on the other side of the row.
+    """
+    index.record("i1", f"/a/{SCHEDULES_FILE}")
+
+    rm = index._spec.get_resource_manager(_ScheduleIndex)
+    real = rm.modify
+    # The in-memory backend's etag is not atomic, so it accepts a stale one.
+    # Enforce it in the double — the same move the notification claim's test
+    # makes, and the reason a hand-rolled CAS cannot be unit-tested without one.
+    moved_on = {"i1": "a-peer-was-here"}
+
+    def _cas(rid, *a, expected_etag=None, **kw):
+        # `forget` writes through `modify`, not `update` — wrapping the wrong
+        # method is a double that never reaches the path under test, and it
+        # looks exactly like a passing probe.
+        if expected_etag is not None and moved_on.get(rid, expected_etag) != expected_etag:
+            raise PreconditionFailedError(rid, expected_etag, moved_on[rid])
+        return real(rid, *a, **kw)
+
+    rm.modify = _cas  # ty: ignore[invalid-assignment]
+
+    with pytest.raises(RuntimeError):
+        index.forget("i1", f"/a/{SCHEDULES_FILE}")
+
+    assert index.paths("i1") == [f"/a/{SCHEDULES_FILE}"], (
+        "the emptied row was written over a peer's, so its page is never swept"
+    )
+
+
+def test_forgetting_a_path_that_is_already_gone_is_quiet(index: ScheduleIndex) -> None:
+    """The control, and why the CAS above is not simply "raise on anything".
+
+    `forget` is called from a sweep that has just decided a file is gone, and
+    two pods reach that decision in the same second. The second finds nothing to
+    do, which is not an error — raising would turn a normal race into a
+    per-item traceback, on every pod, every tick.
+    """
+    index.forget("never-had-one", f"/a/{SCHEDULES_FILE}")  # must not raise
+    index.record("i1", f"/a/{SCHEDULES_FILE}")
+    index.forget("i1", f"/a/{SCHEDULES_FILE}")
+    index.forget("i1", f"/a/{SCHEDULES_FILE}")  # again — still quiet
+
+    assert index.paths("i1") == []
+
+
+def test_a_soft_deleted_row_is_not_swept(index: ScheduleIndex) -> None:
+    """`items_with_paths` filters `is_deleted`, and the delete cascade is what
+    creates rows to filter.
+
+    `list_resources` returns soft-deleted rows happily, so without the filter an
+    item whose row was deleted keeps being read on every sweep, on every pod,
+    forever — the one cost this index exists to avoid.
+
+    The two mechanisms cover for each other: the cascade's hard delete is
+    invisible while the filter holds, and the filter is invisible while nothing
+    soft-deletes. Break both and a deleted item is swept for the life of the
+    deployment, so each needs its own test.
+    """
+    index.record("i1", f"/a/{SCHEDULES_FILE}")
+    assert index.items() == ["i1"]
+
+    index._spec.get_resource_manager(_ScheduleIndex).delete("i1")
+
+    assert index.items() == [], "a soft-deleted row is still handed to the sweep"
+
+
+def test_registering_the_index_twice_is_not_an_error(index: ScheduleIndex) -> None:
+    """ "Idempotently."
+
+    Both `create_app` and a test harness may register it, and a second
+    registration must not take the app down at import time — a failure nobody
+    sees until a deploy that happens to build the spec twice.
+    """
+    register_schedule_index(index._spec)
+    register_schedule_index(index._spec)  # must not raise

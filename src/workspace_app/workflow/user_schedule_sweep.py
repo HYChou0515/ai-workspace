@@ -33,8 +33,9 @@ from specstar import SpecStar
 
 from ..api.schedule_index import ScheduleIndex
 from ..filestore.protocol import FileNotFound
+from .orchestrator import ActiveRunExists
 from .triggers import SpecstarTriggerStore, fire_window, is_due
-from .user_schedules import trigger_id_for, usable_rows
+from .user_schedules import declared_count, trigger_id_for, usable_rows
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +70,28 @@ DEFAULT_MAX_ROWS = 1000
 #: In memory, per pod. It is a property of "this run of the sweep", resets on
 #: restart, and needs no durable row of its own.
 MAX_START_ATTEMPTS = 3
+
+#: "I could not get an answer", as distinct from "it is not there".
+#:
+#: Collapsing those two is how a read failure became a deletion: the snapshot
+#: says missing (ordinary, while the mirror catches up), the live read then
+#: raises `SandboxBusy` or times out, and a two-valued answer files that as
+#: gone — permanently, since only a WRITE of `schedules.json` re-creates the
+#: row. The sweep already refuses to make that inference on its FIRST read; this
+#: is what lets the confirming read refuse it too.
+UNKNOWN = object()
+
+#: How long the confirming read may take before it counts as "could not say".
+#:
+#: That read reaches the LIVE workspace, and on the hosted backend a cold one is
+#: a full restore. `tick` is sequential over items, so an unbounded wait behind
+#: ONE deleted schedule delays every other item's schedules on that pod — against
+#: a sweeper whose whole promise is that the interval is the latest a run will be.
+#:
+#: Timing out is not evidence of absence. It is :data:`UNKNOWN`: the path stays
+#: indexed and the next tick asks again, which costs one tick rather than the
+#: schedule.
+DEFAULT_CONFIRM_TIMEOUT_S = 10.0
 
 ReadFile = Callable[[str, str], Awaitable[bytes]]
 OwnerOf = Callable[[str], str]
@@ -120,10 +143,27 @@ def _in_zone(now_utc: datetime, tz: str) -> datetime:
 
 class StartRun(Protocol):
     """Launch one run. Kept narrow on purpose: the sweep decides WHEN, and
-    nothing about how a workflow runs."""
+    nothing about how a workflow runs.
+
+    **Raising means NOTHING STARTED.** The sweep claims the window before asking,
+    so a raise is its signal to hand that window back and try again — which it
+    cannot distinguish from "the run began and the bookkeeping after it failed".
+    An implementation that raises AFTER its side effect has happened therefore
+    causes the same window to fire again, with no shared chat id to collide on,
+    and the person gets two of whatever this sends.
+
+    So: once the run exists, swallow and log. Anything else is a promise this
+    caller cannot keep.
+    """
 
     async def __call__(
-        self, *, item_id: str, workflow_id: str, acting_user: str, payload: dict[str, Any]
+        self,
+        *,
+        item_id: str,
+        workflow_id: str,
+        acting_user: str,
+        payload: dict[str, Any],
+        key: str,
     ) -> str | None: ...
 
 
@@ -142,6 +182,7 @@ class UserScheduleSweeper:
         workflows_for: WorkflowsFor | None = None,
         now: Callable[[], datetime] = _utc_now,
         max_rows: int = DEFAULT_MAX_ROWS,
+        confirm_timeout_s: float = DEFAULT_CONFIRM_TIMEOUT_S,
     ) -> None:
         self._index = index
         self._read = read
@@ -157,8 +198,16 @@ class UserScheduleSweeper:
         self._workflows_for = workflows_for
         self._now = now
         self._max_rows = max_rows
+        self._confirm_timeout_s = confirm_timeout_s
         self._store = SpecstarTriggerStore(spec)
         self._failures: dict[tuple[str, str], int] = {}
+        #: The last complaint said about each file, so an unchanged one is not
+        #: repeated. A file with a typo is re-read every tick, and this module
+        #: already argues the point about its own retry cap: "the log says so
+        #: once instead of a thousand times", because a channel trained to be
+        #: noise is one where the line that mattered is not read either.
+        #: In memory, per pod — it is a property of this run of the sweep.
+        self._said: dict[tuple[str, str], str] = {}
 
     async def tick(self) -> int:
         """Fire everything due. Returns how many runs were launched."""
@@ -170,36 +219,83 @@ class UserScheduleSweeper:
         # sync, the sweeper is what puts it on a thread. This loop runs on every
         # API pod, un-gated by `run_consumers`, at O(items × paths × rows) per
         # tick, so a loop it holds is holding every request that pod is serving.
-        for item_id in await asyncio.to_thread(self._index.items):
-            for path in await asyncio.to_thread(self._index.paths, item_id):
+        for item_id, paths in await asyncio.to_thread(self._index.items_with_paths):
+            # PER PATH, because a page is a folder and the promise in this
+            # module's header is "one page's mistake costs that page only".
+            #
+            # This handler has now been wrong in both directions. It started
+            # outside the paths READ, so one specstar error skipped every item
+            # after this one; moving it in fixed that and widened it to the whole
+            # item at the same time, which made the alphabetically-first page
+            # cost every page after it — the same argument, one level down.
+            # `paths` arrives with the listing now, so nothing has to be read
+            # here and the handler can sit where the blast radius belongs.
+            for path in paths:
                 try:
                     fired += await self._one_file(item_id, path)
                 except Exception:
-                    # Per-item resilience, the rule every sweep here keeps: one
-                    # item's problem must not cost the rest their schedules. The
-                    # failure that would otherwise be found weeks later, by
+                    # The failure that would otherwise be found weeks later, by
                     # somebody asking why their report stopped.
                     logger.exception("user schedules: item %s path %s failed", item_id, path)
         return fired
 
-    async def _still_there(self, item_id: str, path: str) -> bytes | None:
-        """The file's bytes from the LIVE workspace, or None when it is really gone.
+    def _say_once(self, item_id: str, path: str, level: int, message: str, *args: object) -> None:
+        """Log this file's complaint, unless it is the one already said about it.
 
-        A read error that is not "missing" answers None too — logged, and the
-        caller was already about to drop this path, so the worst case is one lost
-        schedule rather than a sweep that stops.
+        Repeats when the complaint CHANGES, because that is new information —
+        the author edited the file and it is wrong in a different way.
+        """
+        rendered = message % args if args else message
+        if self._said.get((item_id, path)) == rendered:
+            return
+        self._said[item_id, path] = rendered
+        logger.log(level, "%s", rendered)
+
+    async def _still_there(self, item_id: str, path: str) -> bytes | None | object:
+        """Three answers, not two: the bytes, `None` for confirmed gone, or
+        :data:`UNKNOWN` when the question could not be answered.
+
+        The distinction is the whole point. A read that FAILS is not evidence of
+        absence — `files.read` raises `SandboxBusy` (which the facade propagates
+        deliberately), 502s from the sandbox host, and everything a half-restored
+        workspace throws. Answering `None` to those made the caller unregister a
+        schedule that exists, which is the failure this confirmation was added to
+        prevent, arriving through the confirmation itself.
+
+        The reasoning that produced the bug is worth keeping visible: "the caller
+        was already about to drop this path, so the worst case is one lost
+        schedule". It is wrong because the caller was about to drop it ONLY on the
+        snapshot's word — and doubting exactly that word is why this function
+        exists.
         """
         if self._read_live is None:
-            return None  # no live reader wired: the snapshot is all there is
+            # No live reader wired. The snapshot is all there is, so its answer
+            # stands: this is a deploy that opted out of confirming, not one that
+            # tried and failed.
+            return None
         try:
-            return await self._read_live(item_id, path)
+            return await asyncio.wait_for(self._read_live(item_id, path), self._confirm_timeout_s)
         except (FileNotFound, FileNotFoundError):
             return None
+        except TimeoutError:
+            # Bounded, because this read can be a whole sandbox restore and the
+            # tick is sequential: one slow answer would delay every other item's
+            # schedules on this pod. A timeout says nothing about whether the
+            # file is there, so it is UNKNOWN and the path stays indexed.
+            logger.warning(
+                "user schedules: confirming %s %s took longer than %.0fs — leaving it indexed",
+                item_id,
+                path,
+                self._confirm_timeout_s,
+            )
+            return UNKNOWN
         except Exception:
             logger.exception(
-                "user schedules: could not confirm whether %s %s still exists", item_id, path
+                "user schedules: could not confirm whether %s %s still exists — leaving it indexed",
+                item_id,
+                path,
             )
-            return None
+            return UNKNOWN
 
     async def _one_file(self, item_id: str, path: str) -> int:
         try:
@@ -220,12 +316,18 @@ class UserScheduleSweeper:
             # So ask the LIVE workspace before believing it — only here, so the
             # ordinary tick still reads the snapshot and wakes nothing.
             found = await self._still_there(item_id, path)
+            if found is UNKNOWN:
+                # Nobody could say. Leave it indexed and try again next tick —
+                # the same answer the first read's own failure branch gives, for
+                # the same reason: unregistering is not undoable.
+                return 0
             if found is None:
                 logger.info(
                     "user schedules: %s %s is gone — dropping from the index", item_id, path
                 )
                 await asyncio.to_thread(self._index.forget, item_id, path)
                 return 0
+            assert isinstance(found, bytes)
             raw = found.decode("utf-8", "replace")
         except Exception:
             # "Could not read it just now" is a DIFFERENT answer, and it must not
@@ -243,27 +345,49 @@ class UserScheduleSweeper:
             )
             return 0
 
-        rows, problems = usable_rows(raw)
-        if len(rows) + len(problems) > self._max_rows:
+        # BEFORE the parse, because the cap exists to bound exactly that work.
+        # Counting after it meant a runaway file paid its full parse and was then
+        # refused — every tick, on every pod, for as long as it stayed indexed.
+        declared = declared_count(raw)
+        if declared is not None and declared > self._max_rows:
             # The WHOLE file, unlike a single invalid row. A file with a thousand
             # entries was not typed by a person, so there is no good half worth
             # preserving — and half-processing would leave a durable ledger row
             # for every one it got through, which is the thing this bounds.
-            logger.error(
+            self._say_once(
+                item_id,
+                path,
+                logging.ERROR,
                 "user schedules: %s %s declares %d schedules, over the limit of %d — "
                 "none will run until it is reduced",
                 item_id,
                 path,
-                len(rows) + len(problems),
+                declared,
                 self._max_rows,
             )
             return 0
+
+        rows, problems = usable_rows(raw)
         if problems:
             # Named, not raised, and PER ROW: a typo in one schedule must not
             # stop the others in the same file. Whole-file rejection is how
             # somebody's working report stops arriving because a colleague
             # mistyped a different one.
-            logger.warning("user schedules: %s %s: %s", item_id, path, "; ".join(problems[:3]))
+            self._say_once(
+                item_id,
+                path,
+                logging.WARNING,
+                "user schedules: %s %s: %s",
+                item_id,
+                path,
+                "; ".join(problems[:3]),
+            )
+
+        else:
+            # Clean now — forget what was said, so a future problem is reported
+            # rather than suppressed by a memo of a complaint that no longer
+            # applies.
+            self._said.pop((item_id, path), None)
 
         folder = path.rsplit("/", 1)[0]
         owner = await asyncio.to_thread(self._owner_of, item_id)
@@ -274,16 +398,39 @@ class UserScheduleSweeper:
         # failed an assertion deep inside, and surfaced as a generic "could not
         # start" in a log the page's author never reads. One mistyped id must
         # not stop the other schedules in the same file.
-        offered = (
-            None
-            if self._workflows_for is None
-            else set(await asyncio.to_thread(self._workflows_for, item_id) or ())
-        )
+        offered: set[str] | None = None
+        if self._workflows_for is not None:
+            answer = await asyncio.to_thread(self._workflows_for, item_id)
+            # `None` from the RESOLVER means unrestricted, exactly as an unwired
+            # resolver does — `set(... or ())` collapsed it to the empty set,
+            # which refuses every row. The outer check only ever covered "no
+            # resolver"; a resolver that answers None is the documented value and
+            # it did the opposite, silently, once per row per tick.
+            offered = None if answer is None else set(answer)
+        # Every `run` this file still complains about. Cleared below for the
+        # ones it no longer does — the per-row memo's subject is a ROW, so "the
+        # file has no lint problems" is the wrong moment to forget it: a row
+        # naming a workflow the app does not offer is not a lint problem, so
+        # that branch fired on every tick and cleared the memo it had just
+        # written. The failure the memo exists to prevent — an author fixing a
+        # bad `run:` and breaking it the same way next week to silence — needs
+        # forgetting to happen when the ROW changes, not when the file parses.
+        still_bad: set[str] = set()
         now_utc = self._now()
         fired = 0
         for row in rows:
             if offered is not None and row.run not in offered:
-                logger.warning(
+                # Memoised like the other two complaints about this file, and
+                # keyed on the ROW as well as the path: this is the only one of
+                # the three that multiplies by rows, so leaving it bare was a
+                # line per bad row per tick, on every pod, until somebody edits a
+                # page nothing has told them is broken. A lesson applied to two
+                # of three places is worse than one not applied at all — the memo
+                # makes the log look tamed while the line that floods it fires on.
+                self._say_once(
+                    item_id,
+                    f"{path}#{row.run}",
+                    logging.WARNING,
                     "user schedules: %s %s wants %r, which this app does not offer "
                     "(it offers %s) — that row will not run",
                     item_id,
@@ -291,6 +438,7 @@ class UserScheduleSweeper:
                     row.run,
                     ", ".join(sorted(offered)) or "nothing",
                 )
+                still_bad.add(row.run)
                 continue
             trigger_id = trigger_id_for(item_id, folder, row)
             schedule = row.as_schedule()
@@ -319,7 +467,44 @@ class UserScheduleSweeper:
                     # boundary everything else here is scoped to.
                     acting_user=owner,
                     payload=row.payload,
+                    # The SAME id the window ledger claims on, so the chat this
+                    # run drives and the lock that stops it running twice agree
+                    # about what "this schedule" means.
+                    key=trigger_id,
                 )
+            except ActiveRunExists:
+                # NOT a failure. The schedule's previous fire is still running,
+                # and colliding with it is what the stable per-schedule chat was
+                # FOR — the one-run rule finally applies to the entrance that
+                # repeats. Treating it as a failed start meant a traceback per
+                # tick and, after three, the window burned with "Nothing will
+                # run for it": `every: minutes, n: 1` against a two-minute
+                # workflow is thousands of ERROR lines a day for a condition the
+                # design intends.
+                #
+                # The window stays CLAIMED, deliberately. Handing it back would
+                # only make the next tick collide again; skipping it is what an
+                # overrun means, and the next window is the right place to try.
+                # Said once per (schedule, window) so a slow run does not narrate
+                # itself, and at INFO because nothing is wrong.
+                # Keyed on the SCHEDULE, not the window. A slow run produces a
+                # new window every period, so a window-keyed memo says the line
+                # once per window — 1440 a day for a minutely schedule, which is
+                # the flood it was added to stop — and keeps one dict entry per
+                # window for the life of the process. `_failures` below prunes
+                # exactly this way and says so; the memo beside it did not.
+                #
+                # A run spanning forty windows is ONE fact, so the message names
+                # the schedule rather than whichever window we noticed in.
+                self._say_once(
+                    item_id,
+                    f"{path}#busy",
+                    logging.INFO,
+                    "user schedules: %s is still running its previous fire — "
+                    "skipping windows until it finishes",
+                    trigger_id,
+                )
+                continue
             except Exception:
                 # Hand the window BACK, up to a point. The claim is taken before
                 # the run is asked for — that ordering is what makes two pods
@@ -364,5 +549,33 @@ class UserScheduleSweeper:
                 continue
             # A run started, so whatever was wrong is over.
             self._failures.pop((trigger_id, window), None)
+            # Including an overrun. The `#busy` memo said its line once, which is
+            # right for one slow run — but nothing cleared it, so the NEXT time
+            # this schedule overran, weeks later, the sweep stayed silent. Its
+            # own comment claimed it "clears itself when the run finishes"; it
+            # did not, and that is the same "a memo outlives the problem" defect
+            # this module fixed for the per-row complaint, written into the fix
+            # for it. Here is where the overrun demonstrably ended.
+            self._said.pop((item_id, f"{path}#busy"), None)
             fired += 1
+
+        # AFTER the loop, when every row has been graded: forget the per-row
+        # complaints this file no longer makes. The per-row memo's subject is a
+        # ROW, so "the file has no lint problems" is the wrong moment to clear it
+        # — a row naming a workflow the app does not offer is not a lint
+        # problem, so that branch runs on every tick and would erase the memo it
+        # had just written, restoring the flood. And never clearing it at all is
+        # the failure the memo exists to prevent: fix a bad `run:`, break it the
+        # same way next week, and the sweep stays silent while the log looks
+        # healthy. `#busy` is excluded — an overrun is not a complaint about the
+        # file, and it clears itself when the run finishes.
+        for key in [
+            k
+            for k in self._said
+            if k[0] == item_id
+            and k[1].startswith(f"{path}#")
+            and not k[1].endswith("#busy")
+            and k[1].rsplit("#", 1)[1] not in still_bad
+        ]:
+            del self._said[key]
         return fired

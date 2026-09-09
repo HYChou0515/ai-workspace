@@ -195,7 +195,29 @@ export type RunProgress = { note: string; done: boolean; failed: boolean };
  */
 export function reduceRunEvent(prev: RunProgress, event: unknown): RunProgress {
   if (!event || typeof event !== "object") return prev;
-  const e = event as { type?: unknown; text?: unknown; message?: unknown; name?: unknown };
+  const e = event as {
+    type?: unknown;
+    text?: unknown;
+    message?: unknown;
+    name?: unknown;
+    reason?: unknown;
+  };
+  if (e.type === "step_failed") {
+    // A step gave up after its retries. This is THE failure signal for a
+    // workflow — the platform does not put a `RunError` on this stream — and it
+    // carries `reason`, not `text` or `message`, so a reducer that only looks
+    // for those falls straight through and the run ends up rendered as
+    // "Finished." A page that shows a failed run as a finished one is the exact
+    // thing reference.md warns about.
+    const why = typeof e.reason === "string" && e.reason.trim() ? e.reason.trim() : "";
+    const step = typeof e.name === "string" ? e.name : "A step";
+    return { note: why ? `${step}: ${why}` : `${step} failed.`, done: true, failed: true };
+  }
+  if (e.type === "run_cancelled") {
+    // Carries nothing but its type. Terminal all the same, and a person who
+    // pressed Stop should see that they did, not "Finished."
+    return { note: "Cancelled.", done: true, failed: true };
+  }
   if (e.type === "error") {
     // `message`, which is the field `RunError` carries. Reading `text` here
     // always missed and fell through to our own wording — throwing away the one
