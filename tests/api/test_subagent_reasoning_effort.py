@@ -7,7 +7,9 @@ composer's effort pick was silently dropped.
 
 from __future__ import annotations
 
-import pytest
+import time
+
+from specstar import QB
 
 from workspace_app.api import ScriptedAgentRunner, create_app  # noqa: F401 — re-export sanity
 from workspace_app.api.events import MessageDelta, RunDone
@@ -117,9 +119,17 @@ def test_infer_modules_scopes_kb_search_to_the_configured_collection():
     assert seen.get("colls") == [wanted]
 
 
-def test_infer_modules_misconfigured_collection_raises_loudly():
+def test_infer_modules_misconfigured_collection_is_still_loud():
     """#66: a configured collection NAME that matches nothing is a loud
-    misconfig (a typo would otherwise silently disable KB for every step)."""
+    misconfig (a typo would otherwise silently disable KB for every step).
+
+    It used to be loud by escaping the request. It cannot be any more: the check
+    runs AFTER the user's message is persisted, and this endpoint now answers 202
+    the moment the write lands — a 500 there would tell the client the message
+    did not happen when it did. So the loudness moved rather than went away, and
+    this test moved with it: the misconfig is written into the thread as an error
+    the person can see, and `logger.exception` puts the traceback in front of
+    whoever configured it."""
     spec = make_spec(default_user="u")
     iid = register_rca_item(spec)  # no collections created
     app = create_app(
@@ -129,6 +139,28 @@ def test_infer_modules_misconfigured_collection_raises_loudly():
         runner=ScriptedAgentRunner([MessageDelta(text="hi"), RunDone()]),
         infer_modules_collection="ghost-collection",
     )
-    client = TestClient(app)
-    with pytest.raises(ValueError, match="ghost-collection"):
-        client.post(f"/a/rca/items/{iid}/messages", json={"content": "q"})
+    with TestClient(app) as client:
+        r = client.post(f"/a/rca/items/{iid}/messages", json={"content": "q"})
+        assert r.status_code == 202, "the message was written, so it was accepted"
+
+        errors: list[str] = []
+        for _ in range(100):
+            conv = _thread(spec, iid)
+            errors = [m.content for m in conv.messages if m.role == "error"]
+            if errors:
+                break
+            time.sleep(0.05)
+
+    assert errors, "the misconfig left nothing behind for anyone to see"
+    assert any("ghost-collection" in e for e in errors), errors
+
+
+def _thread(spec, iid: str):  # noqa: ANN001, ANN202
+    from workspace_app.resources import Conversation
+
+    rm = spec.get_resource_manager(Conversation)
+    for r in rm.list_resources(QB.all()):
+        data = r.data
+        if isinstance(data, Conversation) and data.item_id == iid:
+            return data
+    raise AssertionError(f"no conversation for {iid}")

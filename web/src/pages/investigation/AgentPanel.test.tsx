@@ -492,7 +492,7 @@ describe("AgentPanel — permission-disclosure readOnly composer", () => {
  * places it used to happen in silence.
  */
 describe("AgentPanel — the composer always answers back", () => {
-  function panelWith(over: Partial<AgentState>) {
+  function panelWith(over: Partial<AgentState>, readOnly = false) {
     const agent = { ...stubAgent(), ...over } as AgentState;
     return {
       agent,
@@ -507,13 +507,43 @@ describe("AgentPanel — the composer always answers back", () => {
             attachedPreset=""
             onAttachPreset={() => {}}
             uploadDir="uploads"
+            readOnly={readOnly}
           />
         </DialogProvider>,
       ),
     };
   }
 
-  it("explains why Enter did nothing while a turn is running", async () => {
+  it("explains why Enter did nothing while a Stop is in flight", async () => {
+    // This used to be about your own RUNNING turn, which the composer refused
+    // while queueing behind everyone else's — the asymmetry that made
+    // Stop-then-send the only way through, and so produced the two-click "it
+    // stopped the answer and sent my message". A running turn now simply
+    // queues.
+    //
+    // The protection the old test gave has not been dropped, it has moved to
+    // the one case that still refuses: Enter must never be silently inert, so
+    // wherever a send is refused it says so and keeps the draft.
+    const stopping = {
+      entries: [],
+      streaming: true,
+      stopping: true,
+    } as unknown as AgentState["log"];
+    const { agent } = panelWith({ log: stopping });
+
+    const box = screen.getByRole("textbox");
+    fireEvent.change(box, { target: { value: "my next question" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+
+    expect(await screen.findByTestId("composer-hint")).toHaveTextContent("正在停止這一輪");
+    // The draft is KEPT — retyping it would be the insult on top of the injury.
+    expect(box).toHaveValue("my next question");
+    expect(agent.send).not.toHaveBeenCalled();
+  });
+
+  it("sends into your own running turn rather than refusing it", async () => {
+    // The other half of the same change, kept as its own case so deleting the
+    // refusal cannot quietly delete the behaviour that replaced it.
     const streaming = { entries: [], streaming: true } as unknown as AgentState["log"];
     const { agent } = panelWith({ log: streaming });
 
@@ -521,10 +551,7 @@ describe("AgentPanel — the composer always answers back", () => {
     fireEvent.change(box, { target: { value: "my next question" } });
     fireEvent.keyDown(box, { key: "Enter" });
 
-    expect(await screen.findByTestId("composer-hint")).toHaveTextContent("回覆還在進行中");
-    // The draft is KEPT — retyping it would be the insult on top of the injury.
-    expect(box).toHaveValue("my next question");
-    expect(agent.send).not.toHaveBeenCalled();
+    await waitFor(() => expect(agent.send).toHaveBeenCalled());
   });
 
   it("confirms a Stop instead of just making the spinner vanish", async () => {
@@ -540,6 +567,65 @@ describe("AgentPanel — the composer always answers back", () => {
     // news three times (verified in the running app). The transcript owns the
     // record; this line only tells you your click landed.
     expect(await screen.findByTestId("composer-hint")).toHaveTextContent("正在停止");
+  });
+
+
+  // The rule changed once and reached only two of its four callers. A suggestion
+  // chip and an `ask_user` answer are sends like any other, but they kept their
+  // own `if (log.streaming) return;` — so they stayed refused during ANYONE's
+  // turn, which is precisely the spectator lock-out the change claims to have
+  // removed, and they ignored `stopping`, so in the one state where a send IS
+  // refused they went through anyway. Two rules, drifting apart in silence.
+  const chipLog = (over: Partial<AgentLog>): AgentLog =>
+    ({ ...EMPTY_LOG, ...over }) as unknown as AgentState["log"];
+
+  it("a suggestion chip queues behind a running turn", async () => {
+    const { agent } = panelWith({ log: chipLog({ streaming: true }) });
+
+    fireEvent.click(screen.getByRole("button", { name: "chip" }));
+
+    await waitFor(() => expect(agent.send).toHaveBeenCalled());
+  });
+
+  it("a chip that works looks like it works", async () => {
+    // The sweep moved `disabled` to the shared rule and left `cursor` and
+    // `opacity` on `log.streaming` two lines below. For a whole turn the chip
+    // was drawn as unclickable and clicked fine — the same "a control says what
+    // the composer beside it denies" the sweep existed to end, inverted.
+    //
+    // This is also the case that pins the rule with a REACHABLE state: under the
+    // old rule the chip is disabled here, under the new one it is not.
+    const { agent } = panelWith({ log: chipLog({ streaming: true }) });
+
+    const chip = screen.getByRole("button", { name: "chip" });
+    expect(chip).toBeEnabled();
+    expect(chip).toHaveStyle({ cursor: "pointer", opacity: "1" });
+
+    fireEvent.click(chip);
+    await waitFor(() => expect(agent.send).toHaveBeenCalled());
+  });
+
+  it("a read-only viewer is refused everywhere, not just at the composer", async () => {
+    // `readOnly` was enforced on the composer, Send and the chip separately and
+    // NOT on the `ask_user` answers, so a viewer without permission got a raw
+    // `send failed: 403` from the one control nobody had guarded.
+    const { agent } = panelWith({ log: chipLog({}) }, true);
+
+    expect(screen.getByRole("button", { name: "chip" })).toBeDisabled();
+    expect(agent.send).not.toHaveBeenCalled();
+  });
+
+  it("a suggestion chip is disabled while a Stop is in flight", async () => {
+    // Disabled rather than refused-on-click: the same principle the two buttons
+    // follow — say what will happen BEFORE the press. What matters for the sweep
+    // is that the chip's own `disabled` now derives from `sendRefusal` too,
+    // instead of carrying a third copy of a rule that had already moved on.
+    const { agent } = panelWith({ log: chipLog({ streaming: true, stopping: true }) });
+
+    const chip = screen.getByRole("button", { name: "chip" });
+    expect(chip).toBeDisabled();
+    fireEvent.click(chip);
+    expect(agent.send).not.toHaveBeenCalled();
   });
 });
 
@@ -587,16 +673,18 @@ describe("AgentPanel — a shared item queues, so a spectator is not locked out"
     expect(await screen.findByTestId("composer-hint")).toHaveTextContent("排在");
   });
 
-  // Your OWN in-flight turn still blocks: Stop is the affordance there, and
-  // queueing a second message behind your own is rarely what you meant.
-  it("still blocks a second send during your own turn", async () => {
+  // …and so does your OWN turn now. It used to be the one refused, which read as
+  // arbitrary from the composer — the backend queues either way — and left Stop
+  // as the only way through, which is how "Stop then send" became a two-click
+  // habit and then a bug report: the answer kept streaming while the message
+  // disappeared into a queue behind a turn that had not actually stopped.
+  it("queues behind your own turn as readily as behind anyone else's", async () => {
     const { agent } = render({ streaming: true, streamingBy: "alice" });
     const box = await screen.findByRole("textbox");
     fireEvent.change(box, { target: { value: "again" } });
     fireEvent.keyDown(box, { key: "Enter" });
 
-    await waitFor(() => expect(screen.getByTestId("composer-hint")).toHaveTextContent("回覆還在進行中"));
-    expect(agent.send).not.toHaveBeenCalled();
+    await waitFor(() => expect(agent.send).toHaveBeenCalledWith("again", expect.anything()));
   });
 });
 
@@ -1040,5 +1128,52 @@ describe("AgentPanel — asking whether the turn is alive", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("send and stop are two buttons", () => {
+  // They used to share one slot, one size and one position, swapped on
+  // `streaming`. So the control changed meaning under the pointer: you aimed at
+  // Send, the turn was still running, you stopped it — and `cancel()` flipped
+  // `streaming` at once, putting Send back under your finger for the second
+  // click. "It stopped the answer and sent my message" is that, exactly.
+  const logWith = (over: Partial<AgentLog>): AgentLog => ({ ...EMPTY_LOG, ...over });
+  const composer = () => screen.getByPlaceholderText(/Ask the agent/i);
+
+  it("shows both at once, so neither replaces the other", () => {
+    renderPanel("uploads", { ...stubAgent(), log: logWith({ streaming: true }) });
+    expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
+  });
+
+  it("disables both while a Stop is in flight", () => {
+    // Neither is honest here: the turn has not ended, so there is nothing left
+    // to stop; and sending would queue behind a turn nobody has yet stopped —
+    // which is what made the answer appear to keep running after Stop.
+    renderPanel("uploads", {
+      ...stubAgent(),
+      log: logWith({ streaming: true, stopping: true }),
+    });
+    fireEvent.change(composer(), { target: { value: "next" } });
+    expect(screen.getByRole("button", { name: "Stop" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+  });
+
+  it("has nothing to stop when nothing is running", () => {
+    renderPanel("uploads", { ...stubAgent(), log: logWith({}) });
+    expect(screen.getByRole("button", { name: "Stop" })).toBeDisabled();
+  });
+
+  it("lets a message queue behind your own running turn", async () => {
+    // The backend serializes messages; it does not cancel on them (#43). The
+    // composer refused your OWN turn while happily queueing behind everyone
+    // else's, which is what made Stop-then-send the only way through — the
+    // two-step dance the report describes.
+    const agent = { ...stubAgent(), log: logWith({ streaming: true }) };
+    renderPanel("uploads", agent);
+    fireEvent.change(composer(), { target: { value: "next" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(agent.send).toHaveBeenCalled());
+    expect((agent.send as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe("next");
   });
 });

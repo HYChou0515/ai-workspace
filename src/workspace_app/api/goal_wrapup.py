@@ -38,6 +38,7 @@ _HEADLINE = {
     "stalled": "卡住了,需要你看一下",
     "exhausted": "額度用盡,還沒完成",
     "window": "上班時間到了,先停在這裡",
+    "unstartable": "今晚沒能開始",
 }
 
 _NEXT_STEP = {
@@ -45,6 +46,9 @@ _NEXT_STEP = {
     "stalled": "它連續幾輪沒有進展,已經停下來等你。",
     "exhausted": "自動續跑的額度用完了,要不要繼續由你決定。",
     "window": "還沒做完,今天晚上會自己接著做。",
+    # No LLM summary for this one: nothing ran, so there is nothing to summarise
+    # — the caller passes the real error instead, which is the only fact there is.
+    "unstartable": "連續幾次都起不來,今晚先跳過了。明天晚上會自己再試一次。",
 }
 
 _PROMPT = """\

@@ -77,6 +77,13 @@ export type AgentEntry =
        * the same thing in the same millisecond, and both must show — but "did
        * this already arrive by the other route". */
       fromStore?: boolean;
+      /** Drawn from the sender's own composer, before the backend has confirmed
+       * it — see `drawOwnAsk`. It carries the sender's words but not the
+       * identity the backend gives them (`created_at` is stamped once,
+       * server-side), so it is the one user entry the rules above cannot key
+       * on. The `user_message` broadcast ADOPTS it, which retires the flag and
+       * puts the entry back under the shared key. */
+      pending?: boolean;
     }
   | { kind: "tool_call"; call: ToolCallView }
   | { kind: "mention"; by: string; users: string[]; note: string; at?: number }
@@ -138,6 +145,15 @@ export type AgentLog = {
    * same endpoint. Ephemeral, like `restore` — it explains a silence, so it is
    * cleared the moment real output arrives. */
   rateLimited: { seconds: number } | null;
+  /** Stop has been asked for and the turn has not ended yet.
+   *
+   * Stop used to flip `streaming` straight to false, which was a claim the
+   * backend had not made: teardown lags, and for as long as it did the composer
+   * said the turn was over while it ran on — and unlocked itself, so the next
+   * message queued behind a turn nobody had actually stopped. The truthful
+   * state is neither "running" nor "idle", and this is it. Ephemeral like
+   * `restore` and `compacting`, and cleared by the same terminal events. */
+  stopping: boolean;
 };
 
 export const EMPTY_LOG: AgentLog = {
@@ -152,7 +168,109 @@ export const EMPTY_LOG: AgentLog = {
   restore: null,
   compacting: null,
   rateLimited: null,
+  stopping: false,
 };
+
+/** What every terminal event resets, in one place.
+ *
+ * An end is an end: no waiting state may outlive the turn that raised it. Each
+ * of these outranks something below it in `TurnStatus`, so a stale one does not
+ * merely linger, it SHADOWS — the rate-limit hold survived its own turn and,
+ * because compaction runs before the next one, told the user the system was
+ * waiting on a 429 while it was rewriting their thread.
+ *
+ * Shared rather than repeated, because it was repeated: three terminals carried
+ * the full list and `max_turns_exceeded` carried two of it, with nothing saying
+ * why. A rule written out four times is a rule that will hold in three. */
+const TURN_OVER = {
+  streaming: false,
+  streamingBy: null,
+  compacting: null,
+  rateLimited: null,
+  restore: null,
+  failover: null,
+  stopping: false,
+} as const;
+
+/** Put the sender's own words on screen the moment they send them, and lock the
+ * composer, without waiting to hear back.
+ *
+ * The message reaches the screen by a broadcast the backend publishes only after
+ * the turn preamble — persisting, compaction (which may call an LLM), then
+ * building the turn context (a cold sandbox wake, context and skill file reads,
+ * a `/tokenize` probe). Seconds, on a bad day, and all of it in front of the
+ * sender seeing what they just typed.
+ *
+ * Only the sender is hurt by that. They know when they pressed send, so the gap
+ * is a gap; every other viewer is receiving a message slightly later with
+ * nothing to measure it against. So this is drawn locally rather than by
+ * publishing the broadcast earlier, which would have moved everyone's copy and
+ * still left the sender waiting on a round-trip.
+ *
+ * The entry is `pending`: the sender's words, without the `created_at` the
+ * backend stamps. `reduceAgent`'s `user_message` case adopts it when the
+ * broadcast lands. If that broadcast never comes the entry simply stays, and
+ * the next `reconcileSnapshot` replaces it with the stored copy — the message
+ * was persisted before it was ever broadcast, so the store is where it heals. */
+export function drawOwnAsk(log: AgentLog, ask: { author: string; content: string }): AgentLog {
+  return {
+    ...log,
+    streaming: true,
+    // A new question supersedes a Stop that has not landed yet. `retryTurn` is
+    // literally `cancel()` then `send()`, and without this the retry inherits
+    // `stopping`: the turn it just started cannot be stopped and nothing can be
+    // sent, until a terminal event arrives for the turn being abandoned — which
+    // not arriving is the reason retry exists.
+    stopping: false,
+    error: null,
+    metrics: null,
+    entries: [
+      ...log.entries,
+      {
+        kind: "message",
+        pending: true,
+        message: { role: "user", author: ask.author, content: ask.content },
+      },
+    ],
+  };
+}
+
+/** Take back a message drawn by {@link drawOwnAsk} whose send was refused.
+ *
+ * Drawing before the POST resolves is the whole point, so a refusal has to undo
+ * it: the message was never persisted, so no broadcast will ever adopt that
+ * entry, and the store poll cannot clear it either — `reconcileSnapshot` bails
+ * when the snapshot is SHORTER than the screen, which is exactly this case. It
+ * stayed, contradicted by the error beside it.
+ *
+ * And it was not merely cosmetic. An entry with no `at` is its own turn to
+ * `turnsFromEntry`, so "undo to here" asked the backend for one turn more than
+ * the person pointed at, and undo deletes irreversibly.
+ *
+ * Only PENDING entries, and only the last match: a message the backend already
+ * confirmed has been adopted and is no longer pending, so this cannot reach a
+ * message that really is in the thread. */
+export function retractOwnAsk(log: AgentLog, ask: { author: string; content: string }): AgentLog {
+  // Walked backwards by hand rather than with `findLastIndex`: this project's
+  // TS lib target predates it, and the suite passes either way — only the build
+  // says so.
+  let at = -1;
+  for (let i = log.entries.length - 1; i >= 0; i--) {
+    const e = log.entries[i];
+    if (
+      e.kind === "message" &&
+      e.pending &&
+      e.message.role === "user" &&
+      e.message.content === ask.content &&
+      e.message.author === ask.author
+    ) {
+      at = i;
+      break;
+    }
+  }
+  if (at < 0) return log;
+  return { ...log, entries: [...log.entries.slice(0, at), ...log.entries.slice(at + 1)] };
+}
 
 /** How long after asking we still believe a reply is on its way.
  *
@@ -295,6 +413,9 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
     restore: null,
     compacting: null,
     rateLimited: null,
+    // A snapshot holds messages, not intentions: it cannot know a Stop was
+    // asked for. `reconcileSnapshot` carries the live one over the top.
+    stopping: false,
   };
 }
 
@@ -411,6 +532,12 @@ export function reconcileSnapshot(
     // …and with it, who owns it — or a re-hydrate would hand a send failure to
     // the turn, which then retracts it on its next token.
     errorFromTurn: prev.error !== null ? prev.errorFromTurn : snap.errorFromTurn,
+    // A re-hydrate must not quietly cancel a Stop that is still in flight — the
+    // store-poll runs every few seconds, so without this the buttons would
+    // unlock themselves halfway through stopping. Carried only while the
+    // snapshot still shows a turn running: once the reply has landed the Stop
+    // is over, whatever this viewer last believed.
+    stopping: snap.streaming && prev.stopping,
   };
 }
 
@@ -790,7 +917,12 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
     case "max_turns_exceeded": {
       const text = translate(initialLocale(), "banner.maxTurns", { turns: ev.turns });
       entries.push({ kind: "banner", at: now, text });
-      return { ...log, entries, streaming: false, streamingBy: null, error: text };
+      // Was the one terminal that cleared only `streaming`, with nothing saying
+      // why. Every waiting state it left standing outranks something in
+      // `TurnStatus`, so a turn that ran out of steps mid-compaction went on
+      // claiming to be summarising. Sharing the reset is what stops the next
+      // ephemeral state being remembered in three places and forgotten in one.
+      return { ...log, entries, ...TURN_OVER, error: text };
     }
 
     case "run_cancelled":
@@ -804,38 +936,23 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
       return {
         ...log,
         entries,
-        streaming: false,
-        streamingBy: null,
-        compacting: null,
-        rateLimited: null,
-        restore: null,
-        failover: null,
+        ...TURN_OVER,
       };
 
     case "error":
       return {
         ...log,
         entries,
-        streaming: false,
-        streamingBy: null,
+        ...TURN_OVER,
         error: ev.message,
         errorFromTurn: true,
-        compacting: null,
-        rateLimited: null,
-        restore: null,
-        failover: null,
       };
 
     case "done":
       return {
         ...log,
         entries,
-        streaming: false,
-        streamingBy: null,
-        compacting: null,
-        rateLimited: null,
-        restore: null,
-        failover: null,
+        ...TURN_OVER,
       };
 
     case "user_message": {
@@ -870,21 +987,47 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
       // both broadcasts, because this is a scan and not a match-and-consume. It
       // heals itself on the next reconcile, once the snapshot carries both.
       const askedAt = ev.created_at || now;
-      const alreadyDrawn = entries.some(
+      // The sender drew this themselves the instant they sent it (`drawOwnAsk`),
+      // because they are the only viewer who knows when that was: to them the
+      // wait for this broadcast reads as a composer that ate their words, while
+      // to everyone else it is just a message arriving. That local copy is the
+      // same message, so ADOPT it rather than drawing a second one — it takes
+      // the server's stamp here and stops being pending, which is what puts it
+      // under the same key as every other rule in this fold.
+      //
+      // Keyed on author + content and NOT on the timestamp, which is the one
+      // thing a browser cannot know (stamped once, server-side — that is why
+      // the store rule below can use it and this one cannot). Adoption is
+      // by INDEX and consumes exactly one entry, so a second identical send
+      // finds nothing left and draws: the same safe direction as below.
+      const mine = entries.findIndex(
         (e) =>
           e.kind === "message" &&
-          e.fromStore &&
+          e.pending &&
           e.message.role === "user" &&
           e.message.content === ev.content &&
-          e.message.author === ev.author &&
-          e.at === askedAt,
+          e.message.author === ev.author,
       );
-      if (!alreadyDrawn) {
-        entries.push({
-          kind: "message",
-          at: askedAt,
-          message: { role: "user", author: ev.author, content: ev.content },
-        });
+      const own = mine >= 0 ? entries[mine] : undefined;
+      if (own !== undefined && own.kind === "message") {
+        entries[mine] = { kind: "message", at: askedAt, message: own.message };
+      } else {
+        const alreadyDrawn = entries.some(
+          (e) =>
+            e.kind === "message" &&
+            e.fromStore &&
+            e.message.role === "user" &&
+            e.message.content === ev.content &&
+            e.message.author === ev.author &&
+            e.at === askedAt,
+        );
+        if (!alreadyDrawn) {
+          entries.push({
+            kind: "message",
+            at: askedAt,
+            message: { role: "user", author: ev.author, content: ev.content },
+          });
+        }
       }
       // #721: and the previous turn's error stops describing anything. `error`
       // is sticky by design — nothing else clears it and `reconcileSnapshot`

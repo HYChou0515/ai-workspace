@@ -63,6 +63,18 @@ export function useKbChat({
     getThread: () => client.getChat(initialChatId as string),
   });
 
+  // Whether this hook is still mounted. The LOG's writes are guarded by
+  // `useChatLog`, where that state is made; this ref covers the one piece of
+  // state this hook owns itself — `chatId`, written after an await, when a
+  // thread finishes being created for a view that has already gone.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
   // Abort the running stream when the mounted thread changes.
   useEffect(() => {
     setChatId(initialChatId);
@@ -79,8 +91,20 @@ export function useKbChat({
       let id = chatId;
       if (id == null) {
         id = (await client.createChat("", collectionIds, excludedCollectionIds)).resource_id;
-        setChatId(id);
-        onChatCreated?.(id);
+        // The view may have left while the thread was being created — the
+        // drawer closed, another thread clicked. Skip only what needs a live
+        // view: the state write (which throws out of React in a torn-down test
+        // environment) and the callback that NAVIGATES, which would yank
+        // whoever is reading back to a thread they just left.
+        //
+        // The question itself still goes. The thread exists on the server by
+        // now, so dropping it leaves an empty chat in the list and the thing
+        // the person typed nowhere at all — a worse outcome than answering
+        // into a view that stopped watching.
+        if (mounted.current) {
+          setChatId(id);
+          onChatCreated?.(id);
+        }
         void qc.invalidateQueries({ queryKey: qk.kb.chats });
       }
 

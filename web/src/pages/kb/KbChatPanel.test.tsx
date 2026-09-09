@@ -371,3 +371,61 @@ describe("KbChatPanel image attach (#513 P10)", () => {
     expect(screen.queryByText("d.png")).not.toBeInTheDocument();
   });
 });
+
+describe("KB chat — send and stop are two buttons", () => {
+  // The same defect as the workspace composer: one slot, swapped on
+  // `streaming`, so the control changed meaning under the pointer. KB chat's
+  // rules differ — its `cancel` aborts the local stream outright, and a send is
+  // refused while one is in flight rather than queued — but the button that
+  // becomes a different button while you reach for it is the same button.
+  it("shows both while a turn streams, with send disabled rather than absent", async () => {
+    const client = panelClient(EIGHT, [], {
+      streamMessage: vi.fn(() =>
+        (async function* () {
+          yield { type: "message_delta", text: "thinking" } as never;
+          await new Promise<void>(() => {}); // hangs: the turn is streaming
+        })(),
+      ),
+      getChat: async () => ({
+        resource_id: "c-1",
+        title: "",
+        collection_ids: [],
+        owner: "default-user",
+        shared_with: [],
+        messages: [],
+      }),
+    });
+    render(
+      <KbChatPanel chatId="c-1" collectionIds={["help-1"]} hideCollectionPicker client={client} />,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("Ask the knowledge base…"), {
+      target: { value: "hello" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Send/ }));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: /Stop/ })).toBeEnabled());
+    // Present, not vanished — a button that disappears takes its position with it.
+    expect(screen.getByRole("button", { name: /Send/ })).toBeDisabled();
+
+    // …and disabled BECAUSE a turn is streaming, not because the composer went
+    // empty. `submit` clears the draft, so the assertion above passes with the
+    // `log.streaming` guard deleted — it was measuring `!draft.trim()`. Typing
+    // again separates the two: with a draft present, only the streaming turn can
+    // still be holding Send down. Deleting the guard makes THIS line fail, and
+    // a Send that is clickable mid-stream does nothing at all (`submit` returns
+    // early on `log.streaming`), which is the silent no-op the workspace
+    // composer spent a whole comment block eliminating.
+    fireEvent.change(screen.getByPlaceholderText("Ask the knowledge base…"), {
+      target: { value: "and another thing" },
+    });
+    expect(screen.getByRole("button", { name: /Send/ })).toBeDisabled();
+  });
+
+  it("has nothing to stop when nothing is streaming", () => {
+    render(
+      <KbChatPanel chatId="c-1" collectionIds={["help-1"]} hideCollectionPicker client={panelClient(EIGHT, [], { streamMessage: async function* () {} })} />,
+    );
+    expect(screen.getByRole("button", { name: /Stop/ })).toBeDisabled();
+  });
+});

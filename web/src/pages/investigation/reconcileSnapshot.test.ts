@@ -10,19 +10,10 @@ import {
   reduceAgent,
 } from "./agentLog";
 
-const live = (over: Partial<AgentLog> = {}): AgentLog => ({
-  entries: [],
-  streaming: false,
-  streamingBy: null,
-  error: null,
-  errorFromTurn: false,
-  metrics: null,
-  failover: null,
-  restore: null,
-  compacting: null,
-  rateLimited: null,
-  ...over,
-});
+// Built FROM `EMPTY_LOG` rather than re-listing its fields: a second copy of the
+// shape is a second thing to keep in step, and it broke on the first field added
+// after it was written.
+const live = (over: Partial<AgentLog> = {}): AgentLog => ({ ...EMPTY_LOG, ...over });
 
 const msg = (role: "user" | "assistant", content: string) =>
   ({ kind: "message", message: { role, content } }) as AgentLog["entries"][number];

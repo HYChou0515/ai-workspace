@@ -50,7 +50,7 @@ from .notifications import notify
 from .rca_messages import bubble_kb_citations, to_rca_message
 from .timeutil import now_ms
 from .turn_gate import admit_turn
-from .turns import CONTEXT_NOTICE_ROLE, already_noticed
+from .turns import CONTEXT_NOTICE_ROLE, _terminal_error, already_noticed
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -69,7 +69,6 @@ if TYPE_CHECKING:
     from .compaction import IConversationCompactor
     from .locator import ItemLocator
     from .request_env import IRequestEnv
-    from .schemas import _MessageBody
     from .subagent_bridge import SubagentBridge
     from .turn_context import TurnContextBuilder
     from .turns import ChatTurnEngine, TurnMessage
@@ -78,6 +77,14 @@ from ..agent.context import AgentToolContext
 from ..context_budget import SUMMARY_ROLE
 from .compaction import CompactionOutcome
 from .events import Compacting
+
+# Runtime, not typing-only: two send paths CONSTRUCT one of these. It sat under
+# `TYPE_CHECKING` with a function-local import covering one caller and nothing
+# covering the other, so every off-hours round died on `NameError` before it sent
+# anything — while still spending a round from a budget that never resets. `ty`
+# and ruff's F821 both read the typing import as a binding; `TC004` is what sees
+# it, and it is now selected.
+from .schemas import _MessageBody
 
 logger = logging.getLogger(__name__)
 
@@ -315,7 +322,27 @@ class ChatSendService:
                 agent_config=self._locator.resolve_agent_config(item_id),
             )
             try:
-                text = await self._compactor.summarise(span, ctx=ctx)
+                # Run where a Stop can reach it. This is an LLM call standing
+                # between a person and their answer, and it happens before any
+                # turn exists — so `cancel_current`, which only ever knew about
+                # `current_turn`, could not touch it however long it took.
+                text = await self._turn_engine.run_interruptible(
+                    engine_key, self._compactor.summarise(span, ctx=ctx)
+                )
+            except asyncio.CancelledError:
+                # Ours to catch: `run_interruptible` cancels the task it made,
+                # so this arrives as that task's result — THIS coroutine has not
+                # been cancelled and must carry on. The send continues to the
+                # end; the send's `PendingTurn` token is what stands the turn
+                # down. Cancelling
+                # the rest of the preparation is the thing P1 established must
+                # not happen.
+                #
+                # Nothing to undo: the insert below is the only write and it is
+                # all at once, so a cancelled summariser leaves the thread
+                # exactly as it found it.
+                logger.info("chat_send: compaction stopped for item %s", item_id)
+                return "stopped"
             except Exception:  # noqa: BLE001 — a failed summary must not fail the turn
                 logger.warning("chat_send: compaction failed for item %s", item_id, exc_info=True)
                 return "failed"
@@ -407,7 +434,6 @@ class ChatSendService:
         from specstar.types import ResourceIDNotFoundError, ResourceIsDeletedError
 
         from .goal_checker import check_goal_met, transcript_tail
-        from .schemas import _MessageBody
 
         try:
             goal = read_goal(self._spec, rid)
@@ -504,6 +530,10 @@ class ChatSendService:
                 upsert_goal(self._spec, current, user=current.set_by)
                 await self._hand_over(rid, engine_key, current, "exhausted")
                 return
+            # Ask BEFORE charging. A Stop that lands while we were judging ends
+            # the chain here, and a round that ends here reached no model.
+            if await self._turn_engine.cancel_epoch(engine_key) != baseline:
+                return  # the user hit Stop while we were judging — stand down
             if after_hours:
                 current.offhours_rounds_used += 1
                 spent = current.offhours_rounds_used
@@ -511,28 +541,36 @@ class ChatSendService:
                 current.rounds_used += 1
                 spent = current.rounds_used
             upsert_goal(self._spec, current, user=current.set_by)
-            self._publish_goal(engine_key, current)
-            if await self._turn_engine.cancel_epoch(engine_key) != baseline:
-                return  # the user hit Stop while we were judging — stand down
-            fresh = self._conv_rm.get(rid).data
-            assert isinstance(fresh, Conversation)
-            body = _MessageBody(
-                content=(
-                    f"[goal] 尚未達成,繼續朝目標推進(第 {spent}/{budget} 輪):{current.condition}"
+            try:
+                self._publish_goal(engine_key, current)
+                fresh = self._conv_rm.get(rid).data
+                assert isinstance(fresh, Conversation)
+                progress = f"第 {spent}/{budget} 輪"
+                body = _MessageBody(
+                    content=f"[goal] 尚未達成,繼續朝目標推進({progress}):{current.condition}"
                 )
-            )
-            # Through the full send path (quota gate, visible user message,
-            # broadcast) — as the goal's setter, since this task has no request
-            # context to resolve a user from.
-            await self.send(
-                investigation_id,
-                rid,
-                fresh,
-                engine_key,
-                body,
-                author=current.set_by or author,
-                driven_by=GOAL_DRIVER,
-            )
+                # Through the full send path (quota gate, visible user message,
+                # broadcast) — as the goal's setter, since this task has no
+                # request context to resolve a user from.
+                await self.send(
+                    investigation_id,
+                    rid,
+                    fresh,
+                    engine_key,
+                    body,
+                    author=current.set_by or author,
+                    driven_by=GOAL_DRIVER,
+                )
+            except Exception:
+                # EVERY statement between the charge and the send is inside this,
+                # not just the send. The charge buys a turn that reaches the
+                # model, and none of these has yet — the broadcast, the thread
+                # re-read, the message it builds. Wrapping only the send left a
+                # five-statement window that charged for nothing, and the comment
+                # that justified the narrow wrap was simply wrong about where the
+                # charge happens.
+                self._refund_round(rid, after_hours=after_hours)
+                raise
         except (ResourceIDNotFoundError, ResourceIsDeletedError):
             return  # the chat was deleted mid-flight
         except Exception:
@@ -591,15 +629,76 @@ class ChatSendService:
                 f"{self._offhours_max_rounds} 輪):{goal.condition}"
             )
         )
-        await self.send(
-            conv.item_id,
-            conversation_id,
-            conv,
-            engine_key,
-            body,
-            author=goal.set_by,
-            driven_by=GOAL_DRIVER,
+        try:
+            await self.send(
+                conv.item_id,
+                conversation_id,
+                conv,
+                engine_key,
+                body,
+                author=goal.set_by,
+                driven_by=GOAL_DRIVER,
+            )
+        except Exception:
+            # Give the round back, and let the failure out: the sweeper counts
+            # it and decides whether tonight goes on (`_START_FAILURE_LIMIT`).
+            #
+            # The bound belongs there and not here. Tried here first, on
+            # `stall_count`, it read as "no progress" — which is true, but that
+            # counter is shared with the turn-end driver, whose reset sits below
+            # three early returns, one of them the `window` ending that closes
+            # EVERY unfinished night. So last night's count survived into
+            # tonight and a single cold sandbox parked a goal permanently, for a
+            # person to notice and retype. Measured.
+            #
+            # A night is the right unit for this, and the claim row already IS
+            # the shared state of one night of one chat.
+            self._refund_round(conversation_id, after_hours=True)
+            raise
+
+    def _refund_round(self, rid: str, *, after_hours: bool):  # noqa: ANN201 — ConversationGoal
+        """Give back a round that demonstrably never reached the model.
+
+        The bump is before the send on purpose — a CRASH must not forget a spent
+        round and let the budget restart every night — but a raise is not a
+        crash. It is the send saying, in as many words, that this round did not
+        start, and the two are different evidence.
+
+        Re-read rather than decrementing the copy in hand: the turn we tried to
+        start may have been running for a while, and this goal is written by the
+        turn-end driver too."""
+        fresh = read_goal(self._spec, rid)
+        if fresh is None:
+            return None
+        if after_hours:
+            fresh.offhours_rounds_used = max(0, fresh.offhours_rounds_used - 1)
+        else:
+            fresh.rounds_used = max(0, fresh.rounds_used - 1)
+        upsert_goal(self._spec, fresh, user=fresh.set_by)
+        return fresh
+
+    async def offhours_night_abandoned(self, conversation_id: str, reason: str) -> None:
+        """The sweeper gave up on tonight after too many failed starts. Say so.
+
+        Deliberately NOT `_hand_over`: that ending asks the cheap model to write
+        the body from `night_transcript`, which filters `role="error"` out — so
+        for a night in which nothing ran, the summariser was handed the driver's
+        own prompt and asked what happened, and answered. The one fact this
+        ending has is WHY it could not start, and that is what goes in.
+
+        The goal is left `active` on purpose. Infrastructure that was down at 3am
+        must not cost a goal its remaining nights, and tomorrow's stretch tries
+        again with nobody having to un-park anything."""
+        goal = read_goal(self._spec, conversation_id)
+        if goal is None or goal.state != "active" or not goal.offhours:
+            return  # cleared or finished between the failure and now
+        conv = self._conv_rm.get(conversation_id).data
+        assert isinstance(conv, Conversation)
+        self._append_goal_marker(
+            conversation_id, marker_text("unstartable", goal.condition, reason)
         )
+        self._ring_the_bell(conversation_id, goal, "unstartable", reason)
+        self._publish_goal(self._locator.engine_key(conv.item_id, conversation_id), goal)
 
     async def _hand_over(self, rid: str, engine_key: str, goal, ending: str) -> None:  # noqa: ANN001
         """#615 P5: close a goal out — the thread's marker, the bell, the broadcast.
@@ -706,291 +805,375 @@ class ChatSendService:
             )
         )
         self._conv_rm.update(rid, conv)
-        # #739: compact BEFORE the turn is built — the thread is final for this
-        # turn (the user's message is in) and the model has not been called yet.
+        # Own the preparation window from here — before any of it runs.
         #
-        # This DOES lengthen the POST. `send` awaits `asyncio.shield(task)`, and
-        # shield stops a client disconnect from CANCELLING the work; it does not
-        # stop the caller waiting for it. Measured: a summariser that takes 1s
-        # adds 1s to `POST /messages`. An earlier version of this comment claimed
-        # the opposite, which was simply wrong.
+        # Everything from this point to `enqueue` takes real time: compaction
+        # (which may call an LLM), a cold sandbox wake, context and skill file
+        # reads, the `/tokenize` probe. It is exactly the window in which someone
+        # gives up and presses Stop — and in that window there is no turn to
+        # cancel, so the same-pod fast-path finds nothing. The token is what a
+        # Stop marks; `enqueue` retires it, so from the moment this message is
+        # queued a later Stop can no longer reach it. See `PendingTurn`.
         #
-        # It stays here anyway: the alternative is compacting inside the turn,
-        # after the model has already been handed a thread that does not fit.
-        # The cost is disclosed instead — `Compacting` streams while it runs, so
-        # the wait is explained rather than silent.
-        await self.compact(investigation_id, rid, conv, engine_key)
-        logger.info(
-            "chat_send: user %s sent message to item %s (chat %s)",
-            author,
-            investigation_id,
-            rid,
-        )
-
-        # Topic Hub §5/§7 + #280: the item's collection set (collections.json),
-        # read ONCE — the flat union scopes the turn's deterministic glossary /
-        # resolve_collection; the rank-ordered tiers drive ask_knowledge_base's
-        # priority fallback. Both empty for Apps without the file.
-        hub_data = await read_hub_collections(self._filestore, investigation_id)
-        hub_collection_ids = collection_ids_from_json(hub_data)
-        hub_collection_tiers = collection_tiers_from_json(hub_data)
-        # Global-collection concept: globals the item's collections.json flagged
-        # `exclude: true` — removed from the (tier ∪ global) baseline (grill D2 mode 3).
-        hub_excluded = excluded_ids_from_json(hub_data)
-        # Composer knowledge-search depth: applies to this turn's KB
-        # lookups. The bridge wrapper forwards it to the kb_chat
-        # sub-agent only — infer_modules' focused classification probe
-        # keeps the operator defaults.
-        caller_enh = to_caller_enhancements(body.enhancements)
-        # #66: resolve infer_modules' configured collection NAME → ids ONCE for
-        # this whole turn (not per step). "" ⇒ None ⇒ the bridge searches all
-        # collections (backward-compatible). A configured-but-missing name → []
-        # ⇒ kb_search finds nothing and the classifier falls back to taxonomy.
-        infer_coll_ids = resolve_named_collection_ids(self._spec, self._infer_modules_collection)
-        # #334 Q6: ONE kb_search budget for the WHOLE turn, shared by every
-        # ask_knowledge_base call below — the composer's per-message pick (clamped
-        # to [0, ceiling]) or, absent one, the operator default. infer_modules is
-        # NOT scoped by it (it keeps the operator default, a focused classifier).
-        kb_budget = KbSearchBudget(
-            max_calls=resolve_max_searches(
-                body.max_kb_searches,
-                default=self._kb_max_searches_per_turn,
-                ceiling=self._kb_max_searches_ceiling,
-            )
-        )
-        # #537 follow-up: the wiki twin — one turn-wide allowance shared the same
-        # way. Always passed, so the sub-agent's wiki cap is the user's pick (or
-        # the operator default) instead of the old unstated-→-unlimited.
-        wiki_budget = WikiSearchBudget(
-            max_calls=resolve_max_searches(
-                body.max_wiki_searches,
-                default=self._kb_max_searches_per_turn,
-                ceiling=self._kb_max_searches_ceiling,
-            )
-        )
-
-        async def _run_subagent_with_depth(
-            purpose: str,
-            payload: str,
-            emit: OutputSink | None = None,
-            origin_id: str | None = None,
-            collection_ids: list[str] | None = None,
-            withheld_sink: list[str] | None = None,
-        ) -> tuple[str, list[Citation]]:
-            # kb_chat uses the COMPOSER's live depth + effort (#65); infer_modules
-            # uses its OWN configured depth + effort + a single configured
-            # collection (#66, a focused classifier).
-            #
-            # #280: for kb_chat, the caller (ask_knowledge_base, after resolving
-            # its `rank` → a priority tier) passes the tier's `collection_ids`;
-            # `None` ⇒ no tier scoping ⇒ search the whole KB (today's behaviour).
-            # #334 Q6: only kb_chat (ask_knowledge_base) draws from the turn's
-            # shared budget; infer_modules keeps the operator default (bud=None ⇒
-            # the bridge seeds a fresh budget from its own max_searches).
-            if purpose == "kb_chat":
-                enh = caller_enh
-                reff = body.reasoning_effort
-                colls = collection_ids
-                bud = kb_budget
-                wiki_bud = wiki_budget
-            elif purpose == "infer_modules":
-                enh, reff = (
-                    self._infer_modules_enhancements,
-                    self._infer_modules_reasoning_effort,
+        # The context is what guarantees the token is released even when the
+        # preparation raises, which it can at every step below — and the handler
+        # after it is what stops such a failure leaving a question nobody will
+        # ever answer and nothing to say so.
+        try:
+            async with self._turn_engine.preparing(
+                engine_key,
+                # A round the SYSTEM is driving (a goal follow-up, an off-hours
+                # round) is stamped with whoever set the goal, but it is not
+                # their question — on a shared item #43 says anyone may stop the
+                # agent. Left unattributed so anyone's Stop reaches it, which is
+                # what happened before Stop learned who pressed it.
+                author="" if driven_by else author,
+            ) as pending:
+                # #739: compact BEFORE the turn is built — the thread is final for this
+                # turn (the user's message is in) and the model has not been called yet.
+                #
+                # This DOES lengthen the POST. `send` awaits `asyncio.shield(task)`, and
+                # shield stops a client disconnect from CANCELLING the work; it does not
+                # stop the caller waiting for it. Measured: a summariser that takes 1s
+                # adds 1s to `POST /messages`. An earlier version of this comment claimed
+                # the opposite, which was simply wrong.
+                #
+                # It stays here anyway: the alternative is compacting inside the turn,
+                # after the model has already been handed a thread that does not fit.
+                # The cost is disclosed instead — `Compacting` streams while it runs, so
+                # the wait is explained rather than silent.
+                await self.compact(investigation_id, rid, conv, engine_key)
+                logger.info(
+                    "chat_send: user %s sent message to item %s (chat %s)",
+                    author,
+                    investigation_id,
+                    rid,
                 )
-                colls = infer_coll_ids
-                bud = None
-                wiki_bud = None
-            else:  # pragma: no cover
-                enh, reff, colls, bud, wiki_bud = None, None, None, None, None
-            return await self._subagent_bridge.run(
-                purpose,
-                payload,
-                emit,
-                origin_id,
-                enhancements=enh,
-                reasoning_effort=reff,
-                collection_ids=colls,
-                budget=bud,
-                wiki_budget=wiki_bud,
-                # Permission-disclosure: forward the parent turn's withheld
-                # accumulator so the KB sub-agent's disclosed sources bubble up.
-                withheld_sink=withheld_sink,
-                # Global-collection concept: the item's collections.json excludes
-                # apply to the KB-answer scope (bridge resolves (tier ∪ global) \
-                # excluded). infer_modules keeps its focused single collection.
-                excluded_collection_ids=hub_excluded if purpose == "kb_chat" else None,
-                # #605: the composer's per-chat disclosure toggle rides the body.
-                disclosure=body.disclosure if purpose == "kb_chat" else None,
-                # The sub-agent runs on the lane of the turn that spawned it.
-                lane=lane,
-            )
 
-        # ONE bridge for every sub-agent the RCA tools may invoke
-        # (ask_knowledge_base, infer_modules, future ones) drives the turn with the
-        # investigation's attached agent + the composer's per-turn depth/effort/scope.
-        agent_config = self._locator.resolve_agent_config(investigation_id)
-        ctx = await self._turn_ctx.build_chat_turn(
-            investigation_id,
-            agent_config=agent_config,
-            run_subagent=_run_subagent_with_depth,
-            # Cross-turn memory: prior dialogue (excludes the user msg just added).
-            history_messages=conv.messages[:-1],
-            reasoning_effort=body.reasoning_effort,
-            kb_enhancements=caller_enh,
-            collection_ids=hub_collection_ids,
-            collection_tiers=hub_collection_tiers,
-            acting_user=author,
-            speaker=self._users.get(author),
-            # Interactive only when the caller says a person is waiting — the goal
-            # driver re-enters this same path with nobody watching.
-            call_lane=lane,
-            # #380: skills applied THIS turn — so read_skill exempts them from the
-            # disable gate (their bodies are already preloaded into the prompt).
-            apply_skills=body.apply_skills or [],
-            # #714: what the POST's own cookies/headers contributed, resolved
-            # back when the request was still open. The item's env_vars are
-            # merged on top of these.
-            request_env=request_env,
-            # #613: this thread's Conversation id — the update_todos tool's row key.
-            conversation_id=rid,
-        )
+                # Topic Hub §5/§7 + #280: the item's collection set (collections.json),
+                # read ONCE — the flat union scopes the turn's deterministic glossary /
+                # resolve_collection; the rank-ordered tiers drive ask_knowledge_base's
+                # priority fallback. Both empty for Apps without the file.
+                hub_data = await read_hub_collections(self._filestore, investigation_id)
+                hub_collection_ids = collection_ids_from_json(hub_data)
+                hub_collection_tiers = collection_tiers_from_json(hub_data)
+                # Global-collection concept: globals the item's collections.json flagged
+                # `exclude: true` — removed from the (tier ∪ global) baseline (grill D2 mode 3).
+                hub_excluded = excluded_ids_from_json(hub_data)
+                # Composer knowledge-search depth: applies to this turn's KB
+                # lookups. The bridge wrapper forwards it to the kb_chat
+                # sub-agent only — infer_modules' focused classification probe
+                # keeps the operator defaults.
+                caller_enh = to_caller_enhancements(body.enhancements)
+                # #66: resolve infer_modules' configured collection NAME → ids ONCE for
+                # this whole turn (not per step). "" ⇒ None ⇒ the bridge searches all
+                # collections (backward-compatible). A configured-but-missing name → []
+                # ⇒ kb_search finds nothing and the classifier falls back to taxonomy.
+                infer_coll_ids = resolve_named_collection_ids(
+                    self._spec, self._infer_modules_collection
+                )
+                # #334 Q6: ONE kb_search budget for the WHOLE turn, shared by every
+                # ask_knowledge_base call below — the composer's per-message pick (clamped
+                # to [0, ceiling]) or, absent one, the operator default. infer_modules is
+                # NOT scoped by it (it keeps the operator default, a focused classifier).
+                kb_budget = KbSearchBudget(
+                    max_calls=resolve_max_searches(
+                        body.max_kb_searches,
+                        default=self._kb_max_searches_per_turn,
+                        ceiling=self._kb_max_searches_ceiling,
+                    )
+                )
+                # #537 follow-up: the wiki twin — one turn-wide allowance shared the same
+                # way. Always passed, so the sub-agent's wiki cap is the user's pick (or
+                # the operator default) instead of the old unstated-→-unlimited.
+                wiki_budget = WikiSearchBudget(
+                    max_calls=resolve_max_searches(
+                        body.max_wiki_searches,
+                        default=self._kb_max_searches_per_turn,
+                        ceiling=self._kb_max_searches_ceiling,
+                    )
+                )
 
-        # #624: the turn had to leave part of the thread out. Say so — once, at
-        # the transition. A silent cut is indistinguishable from the model being
-        # forgetful, which is how this stayed invisible for so long; a notice on
-        # EVERY subsequent turn would become wallpaper just as fast.
-        if ctx.history_reduced_note:
-            self._notice_history_reduced(rid, ctx.history_reduced_note)
+                async def _run_subagent_with_depth(
+                    purpose: str,
+                    payload: str,
+                    emit: OutputSink | None = None,
+                    origin_id: str | None = None,
+                    collection_ids: list[str] | None = None,
+                    withheld_sink: list[str] | None = None,
+                ) -> tuple[str, list[Citation]]:
+                    # kb_chat uses the COMPOSER's live depth + effort (#65); infer_modules
+                    # uses its OWN configured depth + effort + a single configured
+                    # collection (#66, a focused classifier).
+                    #
+                    # #280: for kb_chat, the caller (ask_knowledge_base, after resolving
+                    # its `rank` → a priority tier) passes the tier's `collection_ids`;
+                    # `None` ⇒ no tier scoping ⇒ search the whole KB (today's behaviour).
+                    # #334 Q6: only kb_chat (ask_knowledge_base) draws from the turn's
+                    # shared budget; infer_modules keeps the operator default (bud=None ⇒
+                    # the bridge seeds a fresh budget from its own max_searches).
+                    if purpose == "kb_chat":
+                        enh = caller_enh
+                        reff = body.reasoning_effort
+                        colls = collection_ids
+                        bud = kb_budget
+                        wiki_bud = wiki_budget
+                    elif purpose == "infer_modules":
+                        enh, reff = (
+                            self._infer_modules_enhancements,
+                            self._infer_modules_reasoning_effort,
+                        )
+                        colls = infer_coll_ids
+                        bud = None
+                        wiki_bud = None
+                    else:  # pragma: no cover
+                        enh, reff, colls, bud, wiki_bud = None, None, None, None, None
+                    return await self._subagent_bridge.run(
+                        purpose,
+                        payload,
+                        emit,
+                        origin_id,
+                        enhancements=enh,
+                        reasoning_effort=reff,
+                        collection_ids=colls,
+                        budget=bud,
+                        wiki_budget=wiki_bud,
+                        # Permission-disclosure: forward the parent turn's withheld
+                        # accumulator so the KB sub-agent's disclosed sources bubble up.
+                        withheld_sink=withheld_sink,
+                        # Global-collection concept: the item's collections.json excludes
+                        # apply to the KB-answer scope (bridge resolves (tier ∪ global) \
+                        # excluded). infer_modules keeps its focused single collection.
+                        excluded_collection_ids=hub_excluded if purpose == "kb_chat" else None,
+                        # #605: the composer's per-chat disclosure toggle rides the body.
+                        disclosure=body.disclosure if purpose == "kb_chat" else None,
+                        # The sub-agent runs on the lane of the turn that spawned it.
+                        lane=lane,
+                    )
 
-        # Source A (#…): a vision-capable main model reads attached images
-        # directly — inline them into this turn's user message so the model sees
-        # the pixels with no `read_image` round-trip through the separate VLM.
-        # Text-only models leave this empty and use `read_image` as before; the
-        # image also persists as a workspace file, so `read_image` still works.
-        if agent_config is not None and agent_config.vision and body.image_paths:
-            ctx.turn_image_urls = await _load_inline_image_urls(
-                self._files, investigation_id, body.image_paths
-            )
+                # ONE bridge for every sub-agent the RCA tools may invoke
+                # (ask_knowledge_base, infer_modules, future ones) drives the turn with the
+                # investigation's attached agent + the composer's per-turn depth/effort/scope.
+                agent_config = self._locator.resolve_agent_config(investigation_id)
+                ctx = await self._turn_ctx.build_chat_turn(
+                    investigation_id,
+                    agent_config=agent_config,
+                    run_subagent=_run_subagent_with_depth,
+                    # Cross-turn memory: prior dialogue (excludes the user msg just added).
+                    history_messages=conv.messages[:-1],
+                    reasoning_effort=body.reasoning_effort,
+                    kb_enhancements=caller_enh,
+                    collection_ids=hub_collection_ids,
+                    collection_tiers=hub_collection_tiers,
+                    acting_user=author,
+                    speaker=self._users.get(author),
+                    # Interactive only when the caller says a person is waiting — the goal
+                    # driver re-enters this same path with nobody watching.
+                    call_lane=lane,
+                    # #380: skills applied THIS turn — so read_skill exempts them from the
+                    # disable gate (their bodies are already preloaded into the prompt).
+                    apply_skills=body.apply_skills or [],
+                    # #714: what the POST's own cookies/headers contributed, resolved
+                    # back when the request was still open. The item's env_vars are
+                    # merged on top of these.
+                    request_env=request_env,
+                    # #613: this thread's Conversation id — the update_todos tool's row key.
+                    conversation_id=rid,
+                )
 
-        def persist(produced: list[TurnMessage]) -> None:
-            # Persist the agent's reply + tool outputs so re-entering the
-            # workspace shows them, not just the user's own messages.
-            if produced:
-                conv2 = self._conv_rm.get(rid).data  # re-fetch THIS chat (not the default)
-                assert isinstance(conv2, Conversation)
-                # Citations live on `ctx.subagent_citations` — a dict
-                # keyed by TOOL NAME (the surface that produced them).
-                # Per name, lists are in CALL ORDER, so we keep one
-                # cursor per name and pair the Nth bucket entry with
-                # the Nth tool message bearing that name. Assistant
-                # messages that quote `[N]` bubble against the shared
-                # seen-so-far pool (most-recent call wins for marker
-                # collisions), so a `[3]` after both an ask_kb call AND
-                # an infer_modules call resolves to whichever of them
-                # surfaced marker 3 most recently. Tool messages without
-                # any stashed citations keep `citations=[]`.
-                tool_idx: dict[str, int] = {}
-                seen_subagent: list[list[Citation]] = []
-                for tm in produced:
-                    msg = to_rca_message(tm)
-                    name = tm.tool_name
-                    pool = ctx.subagent_citations.get(name) if name is not None else None
-                    if pool is not None and name is not None:
-                        idx = tool_idx.get(name, 0)
-                        if idx < len(pool):
-                            msg.citations = list(pool[idx])
-                            seen_subagent.append(pool[idx])
-                        tool_idx[name] = idx + 1
-                    elif tm.role == "assistant" and seen_subagent:
-                        msg.citations = bubble_kb_citations(tm.content, seen_subagent)
-                    # Permission-disclosure: the turn's ask_knowledge_base sub-agents
-                    # bubbled read_meta-only sources into ctx.withheld_collection_ids;
-                    # chip them on the assistant answer (resolved to id+name+owner).
-                    if tm.role == "assistant" and ctx.withheld_collection_ids:
-                        msg.withheld = resolve_withheld(self._spec, ctx.withheld_collection_ids)
-                    conv2.messages.append(msg)
-                self._conv_rm.update(rid, conv2)
-            self._activity.record(
-                "agent_turn_complete",
-                "Agent finished a turn",
-                {"investigation_id": investigation_id},
-            )
-            logger.info("chat_send: turn completed for item %s", investigation_id)
-            # #613 P3: the turn is persisted — maybe the chat's goal wants another
-            # round. Spawned DETACHED: persist runs inside the turn task (the
-            # worker is awaiting it), so awaiting a follow-up turn here would
-            # deadlock — the queue only advances once this task ends.
-            self._maybe_continue_goal(produced, investigation_id, rid, engine_key, author)
+                # #624: the turn had to leave part of the thread out. Say so — once, at
+                # the transition. A silent cut is indistinguishable from the model being
+                # forgetful, which is how this stayed invisible for so long; a notice on
+                # EVERY subsequent turn would become wallpaper just as fast.
+                if ctx.history_reduced_note:
+                    self._notice_history_reduced(rid, ctx.history_reduced_note)
 
-        # Topic Hub §6: prepend the App's context_files (e.g. MEMORY.md +
-        # collections.json) as a labelled, authoritative block — re-derived fresh from
-        # the live FileStore each turn and handed ONLY to the agent. The persisted user
-        # message + the broadcast UserMessage stay clean (block never enters history),
-        # so it is idempotent + replay-safe. "" for Apps that declare no context_files.
-        from ..apps.context_files import build_context_block
-        from ..apps.skills import build_applied_skills_block, build_workspace_skills_block
+                # Source A (#…): a vision-capable main model reads attached images
+                # directly — inline them into this turn's user message so the model sees
+                # the pixels with no `read_image` round-trip through the separate VLM.
+                # Text-only models leave this empty and use `read_image` as before; the
+                # image also persists as a workspace file, so `read_image` still works.
+                if agent_config is not None and agent_config.vision and body.image_paths:
+                    ctx.turn_image_urls = await _load_inline_image_urls(
+                        self._files, investigation_id, body.image_paths
+                    )
 
-        block = await build_context_block(
-            self._filestore, investigation_id, self._locator.context_files(investigation_id)
-        )
-        # #298: advertise the skills the user co-created in THIS workspace, read
-        # live each turn (through the same file facade the agent writes with, so a
-        # skill saved last turn shows up now). Injected like context_files —
-        # never persisted into history.
-        skills_block = await build_workspace_skills_block(
-            self._files, investigation_id, self._locator.skill_prefs_of(investigation_id)
-        )
-        # #380: skills the user picked to APPLY this turn — hard-preload each body
-        # so the model applies it without a read_skill round-trip. One-shot: built
-        # from the per-message `apply_skills`, injected like the blocks above, never
-        # persisted. Overrides a disabled toggle (resolve_skill_body ignores prefs).
-        applied_block = (
-            await build_applied_skills_block(
-                self._files,
-                investigation_id,
-                self._locator.slug_of(investigation_id),
-                self._locator.profile_of(investigation_id),
-                body.apply_skills,
-            )
-            if body.apply_skills
-            else ""
-        )
-        prefix = "\n\n".join(p for p in (block, skills_block, applied_block) if p)
-        turn_content = f"{prefix}\n\n{body.content}" if prefix else body.content
+                def persist(produced: list[TurnMessage]) -> None:
+                    # Persist the agent's reply + tool outputs so re-entering the
+                    # workspace shows them, not just the user's own messages.
+                    if produced:
+                        conv2 = self._conv_rm.get(rid).data  # re-fetch THIS chat (not the default)
+                        assert isinstance(conv2, Conversation)
+                        # Citations live on `ctx.subagent_citations` — a dict
+                        # keyed by TOOL NAME (the surface that produced them).
+                        # Per name, lists are in CALL ORDER, so we keep one
+                        # cursor per name and pair the Nth bucket entry with
+                        # the Nth tool message bearing that name. Assistant
+                        # messages that quote `[N]` bubble against the shared
+                        # seen-so-far pool (most-recent call wins for marker
+                        # collisions), so a `[3]` after both an ask_kb call AND
+                        # an infer_modules call resolves to whichever of them
+                        # surfaced marker 3 most recently. Tool messages without
+                        # any stashed citations keep `citations=[]`.
+                        tool_idx: dict[str, int] = {}
+                        seen_subagent: list[list[Citation]] = []
+                        for tm in produced:
+                            msg = to_rca_message(tm)
+                            name = tm.tool_name
+                            pool = ctx.subagent_citations.get(name) if name is not None else None
+                            if pool is not None and name is not None:
+                                idx = tool_idx.get(name, 0)
+                                if idx < len(pool):
+                                    msg.citations = list(pool[idx])
+                                    seen_subagent.append(pool[idx])
+                                tool_idx[name] = idx + 1
+                            elif tm.role == "assistant" and seen_subagent:
+                                msg.citations = bubble_kb_citations(tm.content, seen_subagent)
+                            # Permission-disclosure: the turn's ask_knowledge_base sub-agents
+                            # bubbled read_meta-only sources into ctx.withheld_collection_ids;
+                            # chip them on the assistant answer (resolved to id+name+owner).
+                            if tm.role == "assistant" and ctx.withheld_collection_ids:
+                                msg.withheld = resolve_withheld(
+                                    self._spec, ctx.withheld_collection_ids
+                                )
+                            conv2.messages.append(msg)
+                        self._conv_rm.update(rid, conv2)
+                    self._activity.record(
+                        "agent_turn_complete",
+                        "Agent finished a turn",
+                        {"investigation_id": investigation_id},
+                    )
+                    logger.info("chat_send: turn completed for item %s", investigation_id)
+                    # #613 P3: the turn is persisted — maybe the chat's goal wants another
+                    # round. Spawned DETACHED: persist runs inside the turn task (the
+                    # worker is awaiting it), so awaiting a follow-up turn here would
+                    # deadlock — the queue only advances once this task ends.
+                    self._maybe_continue_goal(produced, investigation_id, rid, engine_key, author)
 
-        # #43: broadcast the human's message to every live viewer, then queue the
-        # turn and await ITS completion. The queue serializes concurrent users on
-        # the shared sandbox/files (a new message no longer cancels a running
-        # turn — Stop does). Live turn events reach all viewers via GET .../stream
-        # (item-level / default chat) or the chat-scoped stream (other chats).
-        self._turn_engine.publish(
-            engine_key,
-            UserMessage(author=author, content=body.content, created_at=created),
-        )
-        # #492: flush the item's live sandbox to durable when THIS turn ends, so
-        # durable lags by at most one turn (guarantee (2)). Runs on the engine's
-        # worker, off this POST's back; a flush failure never fails the turn.
-        logger.debug(
-            "chat_send: enqueue turn for item %s on engine %s (await<=%.0fs)",
-            investigation_id,
-            engine_key,
-            self._send_await_timeout,
-        )
-        fut = self._turn_engine.enqueue(
-            engine_key,
-            turn_content,
-            ctx,
-            on_complete=persist,
-            on_turn_end=lambda: self._flush_item(investigation_id),
-        )
-        # #493 symptom 1 (504): await THIS turn's completion, but only up to a
-        # deadline — then DETACH it so a long turn can't hang the POST until the
-        # ingress `proxy-read-timeout` fires a 504. `shield` keeps the turn's
-        # completion future alive across our timeout (the worker still resolves it
-        # via `fut.set_result`), so a detach is not a cancel. Fast turns resolve
-        # `fut` well within the deadline → the POST returns after the reply is
-        # persisted, exactly as before; slow turns run on in the background and the
-        # client follows the live SSE stream.
-        with contextlib.suppress(TimeoutError):
-            await asyncio.wait_for(asyncio.shield(fut), timeout=self._send_await_timeout)
+                # Topic Hub §6: prepend the App's context_files (e.g. MEMORY.md +
+                # collections.json) as a labelled, authoritative block — re-derived fresh from
+                # the live FileStore each turn and handed ONLY to the agent. The persisted user
+                # message + the broadcast UserMessage stay clean (block never enters history),
+                # so it is idempotent + replay-safe. "" for Apps that declare no context_files.
+                from ..apps.context_files import build_context_block
+                from ..apps.skills import build_applied_skills_block, build_workspace_skills_block
+
+                block = await build_context_block(
+                    self._filestore, investigation_id, self._locator.context_files(investigation_id)
+                )
+                # #298: advertise the skills the user co-created in THIS workspace, read
+                # live each turn (through the same file facade the agent writes with, so a
+                # skill saved last turn shows up now). Injected like context_files —
+                # never persisted into history.
+                skills_block = await build_workspace_skills_block(
+                    self._files, investigation_id, self._locator.skill_prefs_of(investigation_id)
+                )
+                # #380: skills the user picked to APPLY this turn — hard-preload each body
+                # so the model applies it without a read_skill round-trip. One-shot: built
+                # from the per-message `apply_skills`, injected like the blocks above, never
+                # persisted. Overrides a disabled toggle (resolve_skill_body ignores prefs).
+                applied_block = (
+                    await build_applied_skills_block(
+                        self._files,
+                        investigation_id,
+                        self._locator.slug_of(investigation_id),
+                        self._locator.profile_of(investigation_id),
+                        body.apply_skills,
+                    )
+                    if body.apply_skills
+                    else ""
+                )
+                prefix = "\n\n".join(p for p in (block, skills_block, applied_block) if p)
+                turn_content = f"{prefix}\n\n{body.content}" if prefix else body.content
+
+                # #43: broadcast the human's message to every live viewer, then queue the
+                # turn and await ITS completion. The queue serializes concurrent users on
+                # the shared sandbox/files (a new message no longer cancels a running
+                # turn — Stop does). Live turn events reach all viewers via GET .../stream
+                # (item-level / default chat) or the chat-scoped stream (other chats).
+                self._turn_engine.publish(
+                    engine_key,
+                    UserMessage(author=author, content=body.content, created_at=created),
+                )
+                # #492: flush the item's live sandbox to durable when THIS turn ends, so
+                # durable lags by at most one turn (guarantee (2)). Runs on the engine's
+                # worker, off this POST's back; a flush failure never fails the turn.
+                logger.debug(
+                    "chat_send: enqueue turn for item %s on engine %s (await<=%.0fs)",
+                    investigation_id,
+                    engine_key,
+                    self._send_await_timeout,
+                )
+                fut = self._turn_engine.enqueue(
+                    engine_key,
+                    turn_content,
+                    ctx,
+                    on_complete=persist,
+                    on_turn_end=lambda: self._flush_item(investigation_id),
+                    pending=pending,
+                )
+                # #493 symptom 1 (504): await THIS turn's completion, but only up to a
+                # deadline — then DETACH it so a long turn can't hang the POST until the
+                # ingress `proxy-read-timeout` fires a 504. `shield` keeps the turn's
+                # completion future alive across our timeout (the worker still resolves it
+                # via `fut.set_result`), so a detach is not a cancel. Fast turns resolve
+                # `fut` well within the deadline → the POST returns after the reply is
+                # persisted, exactly as before; slow turns run on in the background and the
+                # client follows the live SSE stream.
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(asyncio.shield(fut), timeout=self._send_await_timeout)
+        except Exception as exc:  # noqa: BLE001 — reported on the thread, not to the caller
+            # The message is already in the thread — it is persisted above, before
+            # any of this — and no turn is going to answer it now. `agentLog`
+            # reads "a reply is on its way" off exactly that shape and waits half
+            # an hour for one, so the thread is given the ending a failed turn
+            # would have left, and anyone watching is told.
+            #
+            # NOT re-raised, deliberately, and this is what makes the POST's
+            # status mean something. It used to fail the request, and the client
+            # then had to work out from the status whether the message had been
+            # stored — which no status can answer, because they are assigned by a
+            # type-keyed handler in `create_app` that has no idea WHERE the throw
+            # happened. `FileNotFound` from a skill folder that vanished mid-read
+            # (deliberately strict, see `apps/skills.py`) answers 404 from inside
+            # this window exactly as a revoked viewer does from the route.
+            #
+            # So the write is the acceptance. Everything that fails after it is
+            # reported the way a turn's own failure already is — on the stream and
+            # in the thread — and a non-2xx from this endpoint now means one thing:
+            # nothing was written.
+            logger.exception("chat_send: preparation failed for item %s", investigation_id)
+            # Rendered ONCE, by the renderer the turn path already uses: two
+            # spellings of one failure is how the same event comes to read
+            # differently depending on where it was caught, and `str(exc)` alone
+            # drops the type — `str(KeyError("slug"))` reaches the thread as
+            # literally `'slug'`.
+            failure = _terminal_error(exc)
+            with contextlib.suppress(Exception):
+                fresh = self._conv_rm.get(rid).data
+                if isinstance(fresh, Conversation):
+                    fresh.messages.append(
+                        Message(
+                            role="error",
+                            content=failure.message,
+                            error_kind="error",
+                            created_at=now_ms(),
+                        )
+                    )
+                    self._conv_rm.update(rid, fresh)
+            self._turn_engine.publish(engine_key, failure)
+            if driven_by:
+                # …but a driver is not an HTTP caller and has no status to read.
+                # `OffHoursGoalSweeper.tick` releases its per-STRETCH claim on
+                # this exception so a later tick can retry — "must not cost that
+                # chat its night", in its own words — and a cold sandbox wake is
+                # exactly what fails at the top of an off-hours stretch, when the
+                # item has been idle all evening. Swallowing it told the sweeper
+                # the round had started: claim held until morning, no turn ever
+                # run, and nothing said.
+                #
+                # So each caller gets what it can act on. The request gets 202,
+                # because the message is in the thread and the failure is on the
+                # stream. The driver gets the throw, because a return value it
+                # cannot tell from success is no answer at all.
+                raise

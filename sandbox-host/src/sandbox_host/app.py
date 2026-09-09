@@ -18,11 +18,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import logging
 import os
 import time
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncGenerator, Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -203,7 +204,7 @@ async def _exec_ndjson(
     cmd: list[str],
     env: Mapping[str, str] | None = None,
     exec_timeout: float | None = None,
-) -> AsyncIterator[bytes]:
+) -> AsyncGenerator[bytes, None]:
     """Run `exec` and yield NDJSON frames as output arrives.
 
     `{"o": b64}` per live chunk (forwarded to the caller's `on_output`; stdout
@@ -250,7 +251,27 @@ async def _exec_ndjson(
                 yield _frame({"error": type(payload).__name__, "detail": str(payload)})
                 return
     finally:
-        await task
+        # Take the command down with the stream.
+        #
+        # Both exits land here. On the ordinary one the task is already done and
+        # `cancel()` is a no-op, so the result frame above is untouched. The one
+        # that matters is the other: the app pod cancelled a turn, closed its
+        # `client.stream(...)`, and Starlette closed this generator — measured,
+        # and promptly, whether the command was still writing or had gone quiet.
+        #
+        # `await task` alone therefore waited out a command nobody was listening
+        # to any more: it ran to its own end (or to `exec_timeout`, a minute
+        # later) with the agent's files still changing under someone who had
+        # pressed Stop. Cancelling is what reaches `LocalProcessSandbox.exec`'s
+        # `CancelledError` handler, which SIGKILLs the whole process group —
+        # machinery that was already there, and had nothing to pull it.
+        #
+        # Still awaited afterwards: the kill is what that handler does while
+        # unwinding, so returning before it finishes would leave the reap racing
+        # a sandbox that may be torn down next.
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
 
 
 def _error(exc: Exception) -> JSONResponse:

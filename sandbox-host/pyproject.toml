@@ -59,7 +59,9 @@ line-length = 100
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP", "SIM"]
+# TC004 matches the root config: a typing-only import used at runtime is a
+# `NameError` waiting for the first caller, and neither `ty` nor F821 sees it.
+select = ["E", "F", "I", "B", "UP", "SIM", "TC004"]
 
 # ⚠️ This package is EXCLUDED by the repo-root config, and with no `[tool.ty*]`
 # table of its OWN, `ty` walked up to that one and checked NOTHING — "WARN No
