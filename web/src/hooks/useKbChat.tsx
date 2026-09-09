@@ -28,6 +28,26 @@ import { useCurrentUser } from "./useCurrentUser";
  * re-delivery of something the server still holds. */
 const SEEN_IDS_MAX = 2000;
 
+/** Roles a thread ends on when its turn is OVER.
+ *
+ * A POSITIVE list, and that is the point. Two rounds of review killed the two
+ * negative spellings: `=== "assistant"` skipped every turn that ended badly
+ * (`turns._error_message` persists `role="error"`), and `!== "user"` swept in
+ * the #624 `notice`, which `_note_kb_reduction` appends BEFORE the turn is
+ * enqueued — so it is the tail for the whole time-to-first-token window, and
+ * treating it as "ended" reconciles mid-flight, unlocks the composer and (since
+ * `notice` counts as content) lets the snapshot beat the screen and delete the
+ * answer already streamed into it.
+ *
+ * Naming the shapes that mean "over" fails SAFE: an unlisted role declines to
+ * act, where a negative list acts wrongly. */
+const TURN_ENDED_ROLES = new Set(["assistant", "error"]);
+
+const turnEnded = (messages: readonly { role: string }[]): boolean => {
+  const last = messages[messages.length - 1];
+  return last !== undefined && TURN_ENDED_ROLES.has(last.role);
+};
+
 /**
  * Drives one KB chat thread, reusing the RCA agent-log machinery so the KB chat
  * renders identically (foldable reasoning, tool-call cards, live token metrics).
@@ -111,11 +131,17 @@ export function useKbChat({
   // thread it has only just created, without waiting a render for this effect.
   const subRef = useRef<{ id: string; controller: AbortController } | null>(null);
 
-  // `log.streaming` as of the last render, so `send` can put it back if the send
-  // fails. `drawOwnAsk` sets `streaming`, so once it has run the log can no
-  // longer say whether a turn was already running when this send started.
+  // `log.streaming`, so `send` can put it back if the send fails. `drawOwnAsk`
+  // sets `streaming`, so once it has run the log can no longer say whether a
+  // turn was already running when this send started.
+  //
+  // Committed in an effect rather than written during render: a render that
+  // React discards would otherwise leave its value behind, and a write during
+  // render is a side effect in a function that is supposed to have none.
   const streamingRef = useRef(false);
-  streamingRef.current = log.streaming;
+  useEffect(() => {
+    streamingRef.current = log.streaming;
+  }, [log.streaming]);
 
   const attach = useCallback(
     (id: string) => {
@@ -216,15 +242,19 @@ export function useKbChat({
           const fresh = await client.getChat(id).catch(() => null);
           if (fresh && !controller.signal.aborted) {
             qc.setQueryData(qk.kb.chat(id), fresh);
-            // Reconcile, and nothing else. It already derives `streaming` from
-            // the snapshot, so the forced `streaming: false` that used to sit
-            // here could only take effect in the one case `reconcileSnapshot`
-            // deliberately BAILS — the screen ahead of the store, which is
-            // exactly "a send is in flight". It unlocked the composer and took
-            // Stop away while the turn the user had just sent was being
-            // accepted, and it discarded the recency bound `logFromMessages`
-            // applies. Less code, and right in both directions.
             reconcile(fresh);
+            // …and say the turn is over when the STORE says so. `reconcile`
+            // derives `streaming` itself, but only when it does not bail — and
+            // it bails whenever the screen holds content the store will never
+            // get, such as a running tool card orphaned by an interrupted turn
+            // (a `tool` message is persisted on ToolEnd, never before). From
+            // then on nothing would ever clear `streaming` again on a thread
+            // whose terminal event was lost, which is the case this loop is for.
+            //
+            // Gated on `turnEnded`, not unconditional: while a send is in
+            // flight the tail is the question itself, and resetting there took
+            // Stop away from a turn that was just being accepted.
+            if (turnEnded(fresh.messages)) setLog((prev) => ({ ...prev, streaming: false }));
           }
           backoff = Math.min(backoff * 2, 15000);
         }
@@ -328,15 +358,7 @@ export function useKbChat({
           // 「請求過於頻繁,N 秒後自動重試」,「整理較早的對話」,「還原工作區 n/m」.
           // Those notices exist to explain exactly the silence being had.
           //
-          // "Ended" is NOT "ends on an assistant message": a failed, cancelled
-          // or step-limited turn persists `role="error"` (`turns._error_message`),
-          // and skipping the reconcile for those left the very case this net
-          // exists for — a first message on a new chat whose broadcast was
-          // missed — spinning forever with the composer locked. KB threads have
-          // no `notice` role, so the tail is a user message only while the turn
-          // is still to produce anything.
-          const last = fresh.messages[fresh.messages.length - 1];
-          if (last !== undefined && last.role !== "user") reconcile(fresh);
+          if (turnEnded(fresh.messages)) reconcile(fresh);
         } catch {
           // Best effort. The subscription's terminal reconcile is the other
           // route to the same snapshot, so this is not the last chance.

@@ -308,6 +308,57 @@ describe("useKbChat — a turn that FAILS still says why", () => {
   });
 });
 
+describe("useKbChat — a thread whose tail is a #624 notice is still MID-turn", () => {
+  beforeEach(() => _resetKbMock());
+
+  // `_note_kb_reduction` appends `role="notice"` BEFORE the turn is enqueued, so
+  // it is the thread's tail for the whole time-to-first-token window. Treating
+  // "not a user message" as "the turn ended" therefore reconciled mid-flight on
+  // every long thread that had just crossed the context horizon — and because a
+  // notice counts as content, the snapshot beat the screen and deleted the
+  // answer that had already streamed into it.
+  it("does not reconcile a mid-turn thread away when the send detaches", async () => {
+    const midTurn = {
+      resource_id: "kb-notice",
+      title: "",
+      collection_ids: [],
+      owner: "default-user",
+      shared_with: [],
+      messages: [
+        { role: "user", content: "問題", reasoning: null, tool_name: null, tool_args: null, tool_call_id: null, created_at: 1, citations: [] },
+        { role: "notice", content: "較早的對話已不在模型視窗內", reasoning: null, tool_name: null, tool_args: null, tool_call_id: null, created_at: 2, citations: [] },
+      ],
+    };
+    const client = {
+      ...mockKbApi,
+      createChat: vi.fn().mockResolvedValue({ resource_id: "kb-notice" }),
+      getChat: vi.fn().mockResolvedValue(midTurn),
+      sendMessage: vi.fn().mockResolvedValue(undefined),
+      subscribeChat: async function* () {
+        // The answer is already arriving when the send's 25s deadline detaches.
+        yield { type: "message_delta", text: "已經開始回答了" } as never;
+        await new Promise<void>(() => {});
+      },
+    } as unknown as typeof mockKbApi;
+
+    const { result } = renderHook(() => useKbChat({ collectionIds: ["c1"], client }));
+    await act(async () => {
+      await result.current.send("問題");
+    });
+    await act(async () => {
+      await new Promise<void>((r) => setTimeout(r, 60));
+    });
+
+    // The answer on screen survives, and the turn is still running.
+    expect(
+      result.current.log.entries.some(
+        (e) => e.kind === "message" && e.message.content.includes("已經開始回答了"),
+      ),
+    ).toBe(true);
+    expect(result.current.log.streaming).toBe(true);
+  });
+});
+
 describe("useKbChat — send failure", () => {
   beforeEach(() => _resetKbMock());
 
