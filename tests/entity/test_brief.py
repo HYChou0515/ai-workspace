@@ -82,6 +82,13 @@ def test_spells_out_the_timeline_range_field_including_its_times() -> None:
     # wrote a whole-day span, correctly, from a hint that was wrong.
     assert "YYYY-MM-DD" in brief
     assert "YYYY-MM-DDTHH:MM" in brief
+    # The two edges are NOT symmetric (`ganttScale.instantOf`): a plain date as
+    # the START is that day's midnight, but as the END it runs to the NEXT
+    # midnight so the day is included. The first version of this hint said a
+    # plain date "runs to the end of that day" for either edge — true of an end,
+    # wrong of a start, and the agent has nothing else to read.
+    assert "START begins that day" in brief
+    assert "three days" in brief
 
 
 def test_marks_required_and_names_actor_and_ref_conventions() -> None:

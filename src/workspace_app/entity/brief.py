@@ -36,9 +36,10 @@ def _role_detail(f: FieldSpec) -> str:
     if f.role is Role.DATETIMERANGE:
         return (
             'a range, "start/end". Either edge may be a date '
-            '("YYYY-MM-DD", which runs to the end of that day) or a time '
-            '("YYYY-MM-DDTHH:MM"), and they may be mixed — set this so the '
-            "record shows on the timeline / gantt"
+            '("YYYY-MM-DD") or a time ("YYYY-MM-DDTHH:MM"), and they may be '
+            "mixed. A plain date as the START begins that day; as the END it "
+            "includes all of it, so 07-13/07-15 is three days — set this so "
+            "the record shows on the timeline / gantt"
         )
     if f.role is Role.NUMBER:
         return "a number"
