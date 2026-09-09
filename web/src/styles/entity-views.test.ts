@@ -65,6 +65,15 @@ describe("entity-views.css", () => {
     // two rules that must agree are two rules that will not.
     expect(CSS).toMatch(/\.ev-select[^{]*input\[type="time"\][^{]*\{/);
 
+    // Only the time RANGE wraps. Putting `flex-wrap` on the shared field class
+    // drops a checkbox's label onto its own line below the box — measured at a
+    // 280px viewport while fixing the overflow, and it is precisely the ragged
+    // look being removed. The narrower rule is the fix; this pins both halves.
+    const range = CSS.match(/\.ev-viewpanel__range\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(range).toMatch(/flex-wrap:\s*wrap/);
+    const field = CSS.match(/\.ev-viewpanel__field\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(field, "a wrapping checkbox row splits box from label").not.toMatch(/flex-wrap/);
+
     const check = CSS.match(/\.ev-viewpanel__field input\[type="checkbox"\]\s*\{[^}]*\}/)?.[0] ?? "";
     expect(check).toMatch(/accent-color:\s*var\(--accent\)/);
     // A flex item's default is to shrink; the box then goes oval next to a

@@ -194,7 +194,7 @@ export function ViewSettingsPanel({ config }: { config: ViewConfig }) {
                     Skip non-working hours
                   </label>
                   {config.workHours && (
-                    <div className="ev-viewpanel__field">
+                    <div className="ev-viewpanel__field ev-viewpanel__range">
                       <input
                         type="time"
                         aria-label="day starts"

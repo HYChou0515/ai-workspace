@@ -92,6 +92,22 @@ describe("ViewSettingsPanel", () => {
       expect(onSetWorkHours).toHaveBeenCalledWith({ from: 7, to: 21 });
     });
 
+    it("marks the time range as the row that may wrap, and only that row", () => {
+      // The popover is `width: 260px; max-width: 80vw`, so on a narrow viewport
+      // it is narrower than two native time inputs plus "to" — measured in a
+      // real browser, the row overflowed the panel by 73px at 220px wide.
+      // Wrapping fixes it, but the class carrying `flex-wrap` must be the
+      // range's own: on the shared field class a CHECKBOX row wraps too, and
+      // its label drops below the box, which looks exactly like the defect.
+      render(<ViewSettingsPanel config={config({ workHours: { from: 7, to: 21 }, onSetWorkHours: vi.fn() })} />);
+      open();
+
+      const range = screen.getByLabelText("day starts").closest("div");
+      expect(range).toHaveClass("ev-viewpanel__range");
+      const checkboxRow = screen.getByRole("checkbox", { name: "Skip non-working hours" }).closest("label");
+      expect(checkboxRow).not.toHaveClass("ev-viewpanel__range");
+    });
+
     it("shows the window it is set to, and edits either end", () => {
       const onSetWorkHours = vi.fn();
       render(<ViewSettingsPanel config={config({ workHours: { from: 7, to: 21 }, onSetWorkHours })} />);

@@ -356,6 +356,18 @@
   font-size: var(--text-body-sm);
   cursor: pointer;
 }
+/* Only the TIME RANGE wraps. The popover is `width: 260px; max-width: 80vw`, so
+ * on a narrow viewport it is narrower than the two boxes plus "to", and the row
+ * used to overflow the panel (73px at a 220px viewport, measured). Wrapping
+ * keeps both boxes whole on two lines — shrinking them instead clips the value
+ * to "09:00 A", which is worse than the overflow.
+ *
+ * NOT on `.ev-viewpanel__field` itself: a checkbox row that wraps drops its
+ * LABEL below the box, which is the ragged look this is meant to remove. A
+ * label that is too long should wrap inside its own text, aligned under itself. */
+.ev-viewpanel__range {
+  flex-wrap: wrap;
+}
 .ev-viewpanel__foot {
   display: flex;
   gap: var(--space-8);
@@ -645,10 +657,12 @@
   font-size: var(--text-body-sm);
 }
 .ev-viewpanel__field input[type="time"] {
-  /* Chrome's native picker is wider than its content and pushes "to" and the
-   * second box out of a 260px popover. */
+  /* Chrome's native picker is wider than its content and pushed "to" and the
+   * second box out of the popover once `max-width: 80vw` started biting.
+   * Letting the row WRAP is the fix; letting the boxes SHRINK is not — a
+   * squeezed time input clips its own value to "09:00 A", which is worse than
+   * the overflow it replaced. Seen in a real browser at 320px. */
   min-width: 0;
-  flex: 1 1 auto;
   font-family: var(--font-mono);
 }
 .ev-viewpanel__field input[type="checkbox"] {
