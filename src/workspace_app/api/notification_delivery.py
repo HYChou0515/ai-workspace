@@ -36,6 +36,7 @@ from datetime import UTC, datetime
 
 import msgspec
 from specstar import QB, SpecStar
+from specstar.types import PreconditionFailedError
 
 from ..resources import Notification
 
@@ -139,6 +140,36 @@ async def deliver_pending(spec: SpecStar, channel: INotificationChannel | None) 
         if not isinstance(row, Notification):  # pragma: no cover — defensive
             continue
         nid: str = res.info.resource_id  # ty: ignore[unresolved-attribute]
+
+        # CLAIM IT FIRST, and claim it with a CAS.
+        #
+        # This sweep is not gated by `run_consumers`, so every API pod runs it.
+        # Listing pending rows, mailing each, and marking it afterwards meant two
+        # overlapping pods both saw the same row as pending and both sent it: the
+        # recipient gets one copy per pod. The rest of this feature took a lease
+        # before firing so two pods produce one run, and left unclaimed the one
+        # path that actually leaves the building.
+        #
+        # The claim IS the attempt counter, deliberately, rather than a new
+        # "sending" state. A state would need a lease to go with it — a pod that
+        # dies mid-send would leave the row claimed forever and nothing would
+        # ever retry it. The counter is already bounded by `MAX_ATTEMPTS`, so a
+        # crash after the claim costs one retry out of that budget, which is what
+        # a crash mid-send should cost.
+        tried = row.delivery_attempts + 1
+        claimed = msgspec.structs.replace(row, delivery_attempts=tried)
+        try:
+            await asyncio.to_thread(
+                rm.update,
+                nid,
+                claimed,
+                expected_etag=res.info.etag,  # ty: ignore[unknown-argument,unresolved-attribute]
+            )
+        except PreconditionFailedError:
+            # A peer took this row between our listing and now. Theirs to send.
+            continue
+        row = claimed
+
         try:
             await channel.deliver(
                 OutboundNotification(
@@ -154,23 +185,18 @@ async def deliver_pending(spec: SpecStar, channel: INotificationChannel | None) 
             # follow: one recipient's broken address must not hold up everyone
             # else's mail.
             logger.exception("notification %s could not be delivered", nid)
-            tried = row.delivery_attempts + 1
+            if tried < MAX_ATTEMPTS:
+                # The attempt is already recorded by the claim, and the row is
+                # still pending, so the next sweep picks it up. Nothing to write.
+                continue
+            # Out of the pending set once it is hopeless. Not every failure is
+            # transient — a malformed address never succeeds — and the in-app
+            # row, the one that could not be lost, is already there.
+            #
             # Offloaded like the read. One per row, up to BATCH per sweep, every
             # 30s on every pod — moving only the query left the expensive half of
             # this loop exactly where it was.
-            await asyncio.to_thread(
-                rm.update,
-                nid,
-                msgspec.structs.replace(
-                    row,
-                    delivery_attempts=tried,
-                    # Out of the pending set once it is hopeless. Not every
-                    # failure is transient — a malformed address never succeeds
-                    # — and the in-app row, the one that could not be lost, is
-                    # already there.
-                    outbound="failed" if tried >= MAX_ATTEMPTS else row.outbound,
-                ),
-            )
+            await asyncio.to_thread(rm.update, nid, msgspec.structs.replace(row, outbound="failed"))
             continue
         await asyncio.to_thread(
             rm.update,

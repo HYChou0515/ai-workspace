@@ -23,6 +23,7 @@ import asyncio
 
 import pytest
 from specstar import SpecStar
+from specstar.types import PreconditionFailedError
 
 from workspace_app.api.notification_delivery import (
     INotificationChannel,
@@ -203,3 +204,67 @@ def test_nothing_is_swept_when_the_deploy_named_no_channel(spec: SpecStar):
 
     assert _row(spec, nid).delivered_at == 0
     assert _row(spec, nid).delivery_attempts == 0
+
+
+def test_two_pods_sweeping_at_once_send_one_notification_once(spec: SpecStar):
+    """The sweep is not gated by `run_consumers`, so EVERY API pod runs it.
+
+    `deliver_pending` listed the pending rows, handed each to the channel, and
+    only then marked it sent. Two pods overlapping therefore both saw the same
+    row as pending and both mailed it: the person gets two of everything, and
+    the more pods you run the more copies they get.
+
+    This round put a CAS lease on firing a schedule so two pods produce one run,
+    and left the one path that actually leaves the building unclaimed.
+
+    Driven concurrently, not reasoned about: both sweeps run against one row.
+    """
+    _one(spec)
+    a, b = _Channel(), _Channel()
+
+    # The in-memory backend's etag is NOT atomic, so it accepts a stale
+    # `expected_etag` and a hand-rolled CAS looks broken here whether or not it
+    # is. Enforce the precondition in the double instead — the same move P30
+    # made for the schedule index's CAS, and for the same reason: a store that
+    # merely RECORDS the etag cannot tell a working claim from an absent one.
+    rm = spec.get_resource_manager(Notification)
+    real_update = rm.update
+    seen: dict[str, str] = {}
+
+    def _cas_update(nid, data, *, expected_etag=None, **kw):
+        if expected_etag is not None:
+            if seen.get(nid, expected_etag) != expected_etag:
+                raise PreconditionFailedError(nid, expected_etag, seen[nid])
+            seen[nid] = f"{expected_etag}+1"
+        return real_update(nid, data, **kw)
+
+    rm.update = _cas_update  # ty: ignore[invalid-assignment]
+
+    async def _both() -> None:
+        await asyncio.gather(deliver_pending(spec, a), deliver_pending(spec, b))
+
+    asyncio.run(_both())
+
+    assert len(a.sent) + len(b.sent) == 1, (
+        f"the row was mailed {len(a.sent) + len(b.sent)} times — two pods each "
+        "took it, so the recipient gets one copy per pod"
+    )
+
+
+def test_a_claim_that_was_not_delivered_is_tried_again(spec: SpecStar):
+    """The control. Claiming must not become losing.
+
+    A claim that marks a row done BEFORE the channel takes it would satisfy the
+    test above perfectly and silently drop mail whenever a relay was briefly
+    down. The claim has to be the thing that is already bounded — the attempt
+    counter — so a crash mid-send costs a retry, not the message.
+    """
+    nid = _one(spec)
+    failing = _Channel(fail=True)
+
+    asyncio.run(deliver_pending(spec, failing))
+    assert _row(spec, nid).outbound == "", "a failed send left the row out of the pending set"
+
+    working = _Channel()
+    asyncio.run(deliver_pending(spec, working))
+    assert len(working.sent) == 1, "the row was never retried after a transient failure"
