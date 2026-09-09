@@ -27,6 +27,11 @@ from workspace_app.apps.skill_payload import skill_payload
 #: parameterised over a tuple nobody remembered to extend.
 _EXAMPLE_DIR = SHARED_SKILLS["wui"] / "examples"
 
+#: The repo root, for the maintainer-facing docs and the FE source the shipped
+#: claims are checked against.
+_ROOT = pathlib.Path(__file__).resolve().parents[2]
+_WEB = _ROOT / "web"
+
 
 def _example_names() -> tuple[str, ...]:
     return tuple(sorted(p.name for p in _EXAMPLE_DIR.iterdir() if p.is_dir()))
@@ -634,4 +639,31 @@ def test_the_user_facing_page_names_every_example_too(payload: dict[str, bytes])
     assert shipped <= listed, f"docs/wui.md never mentions {sorted(shipped - listed)}"
     assert listed <= shipped, (
         f"docs/wui.md points at folders nothing ships: {sorted(listed - shipped)}"
+    )
+
+
+def test_the_maintainer_page_names_every_verb_the_bridge_has() -> None:
+    """`docs/wui.md`'s verb table, derived from `bridge.ts` rather than counted.
+
+    It said "seven verbs, and this set is CLOSED" while the bridge had eight —
+    and the commit that added the eighth edited this very file, fixing the
+    hand-copied verb set in a test and leaving the sentence twenty lines above it
+    denying that verb can exist. A number written by hand against a list defined
+    in another file goes stale the day somebody changes the list.
+
+    So the assertion reads the list. A verb added tomorrow fails here until the
+    page names it.
+    """
+    bridge = (_WEB / "src" / "renderers" / "wui" / "bridge.ts").read_text(encoding="utf-8")
+    page = (_ROOT / "docs" / "wui.md").read_text(encoding="utf-8")
+
+    verbs = set(re.findall(r'^\s*case "(\w+)":', bridge, re.M))
+    assert len(verbs) >= 8, f"only found {verbs} in bridge.ts — the extractor stopped matching"
+
+    table = page.split("| 動詞 | 範圍 |", 1)[-1].split("\n\n", 1)[0]
+    missing = sorted(v for v in verbs if f"`{v}`" not in table)
+    assert not missing, f"docs/wui.md's verb table does not name {missing}"
+
+    assert "不會再多一個動詞" not in page, (
+        "the page claims the verb set is closed; it was reopened by `startRun`"
     )

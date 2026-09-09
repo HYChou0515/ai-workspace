@@ -172,3 +172,29 @@ def test_the_row_cap_knob_reaches_the_sweeper() -> None:
         "the sweeper's row cap does not come from `server.max_page_schedules`, so "
         "the knob an operator sets is read and then dropped"
     )
+
+
+def test_the_turn_boundary_reconciles_the_schedule_index() -> None:
+    """The backstop has to be WIRED, or it is a module nothing calls.
+
+    Both write hooks are unreachable on a host-managed durable deployment —
+    `registry._writeback` returns before `sync.mirror` — so on that branch the
+    reconcile is the ONLY thing that puts an agent-written `schedules.json` into
+    the index. A test of the reconciler alone would pass forever while the
+    schedules never ran.
+
+    Same shape, and the same reason, as the sibling on this hook:
+    `forget_measurement` is there because `on_measured` cannot fire on that
+    branch either.
+    """
+    source = _APP.read_text(encoding="utf-8")
+
+    call = source.split("flush_item=_reconcile_after_turn(", 1)[-1].split("\n        ),", 1)[0]
+    flat = " ".join(call.split())
+
+    assert "reconcile_item_schedules" in flat, (
+        "the turn boundary no longer reconciles the schedule index, so on a "
+        "host-managed deployment nothing does"
+    )
+    assert "index=schedule_index" in flat, "it is called without the index to write to"
+    assert "ls=files.ls" in flat, "it is called without a way to list the item"

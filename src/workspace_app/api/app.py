@@ -110,6 +110,7 @@ from .schedule_index import (
     ScheduleIndex,
     is_schedule_file,
 )
+from .schedule_reconcile import reconcile_item_schedules
 from .spa import SpaStaticFiles
 from .subagent_bridge import SubagentBridge
 from .subagent_run import run_agent_task
@@ -163,6 +164,7 @@ def resolve_durable_backfill(
 def _reconcile_after_turn(
     flush: Callable[[str], Awaitable[None]],
     forget_usage: Callable[[str], None],
+    reconcile_schedules: Callable[[str], Awaitable[None]] | None = None,
 ) -> Callable[[str], Awaitable[None]]:
     """The turn-end hook: settle the item's bytes, then stop trusting the size
     we had for it.
@@ -174,15 +176,28 @@ def _reconcile_after_turn(
     measurement is published by `SandboxSync.mirror`, which `registry._writeback`
     returns before ever reaching on that branch.
 
+    The SAME branch closes the schedule index's second door. `SandboxSync`'s
+    `on_write` hook is unreachable on a host-managed deployment for exactly the
+    reason above, so a `schedules.json` an agent's `exec` wrote is never
+    indexed there and its schedules never run. Reconciling from a listing here
+    is right on both deployments and covers the writers that reach the raw
+    filestore past the facade and the mirror both (`apps.seeding.seed_item`,
+    the `/collections.json` route) — a backstop rather than a third hook,
+    because a hook per door is a list of doors and this feature's hand-written
+    lists have all gone stale in silence.
+
     Ordered flush-then-forget so the next read measures a settled workspace,
     and the forget runs in `finally` so a failed flush cannot leave a number we
-    already know is wrong."""
+    already know is wrong. The reconcile comes AFTER the flush, so it lists a
+    workspace whose bytes have landed, and it never raises."""
 
     async def _hook(item_id: str) -> None:
         try:
             await flush(item_id)
         finally:
             forget_usage(item_id)
+        if reconcile_schedules is not None:
+            await reconcile_schedules(item_id)
 
     return _hook
 
@@ -2089,7 +2104,11 @@ def create_app(
         goal_checker_llm=goal_checker_llm,
         goal_max_rounds=goal_max_rounds,
         # #492: flush the item's live sandbox to durable at turn-end (guarantee 2).
-        flush_item=_reconcile_after_turn(registry.flush, files.forget_measurement),
+        flush_item=_reconcile_after_turn(
+            registry.flush,
+            files.forget_measurement,
+            lambda item_id: reconcile_item_schedules(item_id, ls=files.ls, index=schedule_index),
+        ),
         # #493 symptom 1 (504): detach a long turn from its POST past this deadline.
         send_await_timeout=send_await_timeout,
         # #714: the deploy's request→env impl. None (the default) ⇒ no seam, and
