@@ -165,21 +165,40 @@ class _ReapableSandbox(MockSandbox):
 
 
 def _reapable_ctx(sandbox: _ReapableSandbox) -> RunContextWrapper[AgentToolContext]:
-    """Wired like `ctx`, but every wake mints a FRESH handle — which is what a
-    rebuild does, and what makes "did it recover?" observable."""
+    """Wired like `ctx`, and — the part that matters — like the REGISTRY.
+
+    The first version of this double minted a fresh handle on every wake, which
+    made the recovery look like it worked and hid the defect review found: on
+    the `kind: local` backend `InvestigationRegistry.ensure_handle` re-acquires
+    only when the SESSION has no handle (its liveness probe is http-only), so
+    clearing the context's copy changed nothing and the retry got the same dead
+    handle back. A double that always says yes cannot fail the way the real
+    thing does.
+
+    So `wake` holds a session handle and reuses it, exactly as the registry
+    does, and only `rebuild` — the `force=True` path — clears it."""
     spec = make_spec(default_user="test-user")
     filestore = SpecstarFileStore(spec)
     sync = SandboxSync(filestore=filestore, sandbox=sandbox)
     holder: dict[str, SandboxHandle] = {}
+    session: dict[str, SandboxHandle | None] = {"handle": None}
 
     async def _resolve(ws: str) -> SandboxHandle | None:
         return holder.get(ws)
 
     async def wake(on_progress=None, tools=None) -> SandboxHandle:
-        h = await sandbox.create(SandboxSpec(tools=tools))
-        await sync.restore("ws-test", h, on_progress=on_progress)
-        holder["ws-test"] = h
-        return h
+        if session["handle"] is None:
+            h = await sandbox.create(SandboxSpec(tools=tools))
+            await sync.restore("ws-test", h, on_progress=on_progress)
+            holder["ws-test"] = h
+            session["handle"] = h
+        current = session["handle"]
+        assert current is not None
+        return current
+
+    async def rebuild(tools=None) -> SandboxHandle:
+        session["handle"] = None  # what `force=True` does to the session
+        return await wake(None, tools)
 
     return RunContextWrapper(
         AgentToolContext(
@@ -189,6 +208,7 @@ def _reapable_ctx(sandbox: _ReapableSandbox) -> RunContextWrapper[AgentToolConte
             files=WorkspaceFiles(filestore, sandbox, _resolve),
             sync=sync,
             ensure_sandbox_via=wake,
+            rebuild_sandbox_via=rebuild,
         )
     )
 
@@ -217,6 +237,33 @@ async def test_exec_rebuilds_and_reruns_when_the_sandbox_was_reaped():
     assert ctx.context.handle.id != first.id, "should be running in a REBUILT sandbox"
     # Attempted on the dead handle, then once on the fresh one — one retry, not a loop.
     assert sandbox.exec_handles == [first.id, first.id, ctx.context.handle.id]
+
+
+async def test_a_rebuilt_sandbox_prepares_its_python_environment_again():
+    """`.venv/` is in `sync/ignore.py`'s ignores, so a rebuild brings the
+    workspace back WITHOUT it. The context remembers that the environment is
+    ready in `_project_env_ready`, and that belief outlived the sandbox it was
+    about: the re-run — and every later exec in the turn — would have executed
+    against a venv that no longer existed, silently, on the carrier python."""
+    sandbox = _ReapableSandbox()
+    ctx = _reapable_ctx(sandbox)
+    prepared: list[str] = []
+    ctx.context.prepare_env_via = lambda handle, on_output: _record(prepared, handle)
+
+    await exec_impl(ctx, ["echo", "hi"])
+    assert len(prepared) == 1
+    first = ctx.context.handle
+    assert first is not None
+
+    sandbox.dead.add(first.id)
+    await exec_impl(ctx, ["echo", "back"])
+
+    assert len(prepared) == 2, "the rebuilt sandbox never had its environment prepared"
+    assert prepared[1] != prepared[0], "it must be prepared for the NEW sandbox"
+
+
+async def _record(sink: list[str], handle) -> None:
+    sink.append(handle.id)
 
 
 async def test_exec_does_not_rerun_a_command_a_busy_sandbox_may_have_already_run():

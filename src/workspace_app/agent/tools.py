@@ -146,10 +146,21 @@ async def _exec_surviving_a_reap(
             "tools: sandbox for item %s was gone at exec — rebuilding and re-running once",
             ctx.investigation_id,
         )
-        # Drop the dead handle so `ensure_sandbox` actually re-acquires: it
-        # returns early while one is cached, so clearing it IS the retry.
-        ctx.handle = None
-        fresh = await ctx.ensure_sandbox()
+        # `rebuild=True` rather than clearing the handle here: the context does
+        # it inside its own wake lock, drops the "environment is prepared"
+        # belief with it (the archive carries no `.venv/`), and reaches the hook
+        # that makes the REGISTRY re-acquire — without which the local backend
+        # hands back the same dead handle and this retry fails identically.
+        fresh = await ctx.ensure_sandbox(rebuild=True)
+        # Say so IN the stream before the re-run writes into it. On the
+        # `stream closed mid-exec` path the sink has already received part of a
+        # first run, and the retry streams a whole second one into the same
+        # place — without this line the tool card shows a truncated output
+        # welded to a complete one, with nothing marking where the first ended.
+        # Cheap, and the alternative (a second sink, or buffering the retry) buys
+        # a boundary the reader can already see once it is named.
+        if on_output is not None:
+            on_output(b"\n[sandbox was rebuilt; re-running the command]\n")
         return await ctx.sandbox.exec(fresh, cmd, on_output=on_output)
 
 

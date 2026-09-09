@@ -726,6 +726,12 @@ class TurnContextBuilder:
             ensure_sandbox_via=lambda on_progress, tools: self._registry.ensure_handle(
                 session, tools=tools, on_progress=on_progress
             ),
+            # #797: and the way BACK from a sandbox that was reaped mid-turn.
+            # `force` because `ensure_handle`'s own probe is http-only, and the
+            # caller here already knows: it caught `SandboxNotFound`.
+            rebuild_sandbox_via=lambda tools: self._registry.ensure_handle(
+                session, tools=tools, force=True
+            ),
             # #775: and the ITEM's preparation lock, so this turn cannot prepare
             # the workspace's python environment while a workflow node, a WUI
             # tool call or another chat on the same item is doing it.

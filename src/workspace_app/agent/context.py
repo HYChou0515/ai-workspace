@@ -151,6 +151,19 @@ class AgentToolContext:
         ]
         | None
     ) = None
+    #: Get a sandbox for this item KNOWING the one we held is gone (#797).
+    #:
+    #: Separate from `ensure_sandbox_via` because they ask different questions,
+    #: and on the default `kind: local` backend the difference is the whole fix:
+    #: `InvestigationRegistry.ensure_handle` re-acquires only when the SESSION
+    #: has no handle, or (http only) when a probe says the published one is
+    #: dead. Clearing this context's copy therefore did nothing — the wake
+    #: handed back the same dead handle and the retry failed identically.
+    #:
+    #: None ⇒ not wired (tests, any context with no registry): the fallback is
+    #: to clear the local handle and wake normally, which is right for a backend
+    #: whose handles are minted per create.
+    rebuild_sandbox_via: Callable[[dict[str, str] | None], Awaitable[SandboxHandle]] | None = None
     # The investigation's attached AgentConfig (model + prompt) for this
     # turn; when set, LitellmAgentRunner uses it instead of its default.
     agent_config: AgentConfig | None = None
@@ -568,7 +581,9 @@ class AgentToolContext:
     #: ITEM instead, through `prepare_env_via`; see it above.
     _wake: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False, compare=False)
 
-    async def ensure_sandbox(self, *, prepare_env: bool = True) -> SandboxHandle:
+    async def ensure_sandbox(
+        self, *, prepare_env: bool = True, rebuild: bool = False
+    ) -> SandboxHandle:
         """Wake this context's sandbox, and by default bring its declared python
         environment in line with the workspace's lock.
 
@@ -586,8 +601,25 @@ class AgentToolContext:
         is on screen and a failure lands on the call whose error the user sees."""
         assert self.sandbox is not None  # file/exec tools imply an RCA context
         async with self._wake:
+            if rebuild:
+                # `rebuild=True` says the sandbox we were using is GONE, so both
+                # beliefs this context holds about it have to go — inside the
+                # lock, because that lock exists precisely so two tool calls in
+                # one assistant message cannot wake concurrently, and a retry
+                # clearing the handle outside it could pull a freshly built
+                # sandbox out from under the call that built it.
+                #
+                # `_project_env_ready` matters as much as the handle: `.venv/` is
+                # in `sync/ignore.py`'s ignores, so a rebuild restores the
+                # workspace WITHOUT it. Left set, the re-run would execute
+                # against an environment that no longer exists — silently, on the
+                # carrier python, for the rest of the turn.
+                self.handle = None
+                self._project_env_ready = False
             if self.handle is None:
-                if self.ensure_sandbox_via is not None:
+                if rebuild and self.rebuild_sandbox_via is not None:
+                    self.handle = await self.rebuild_sandbox_via(self.sandbox_spec.tools)
+                elif self.ensure_sandbox_via is not None:
                     # #492 P11: hand the wake hook the restore-progress sink so a slow
                     # cold-wake restore streams "還原中 N/M" to the turn.
                     # #674: and this turn's bundles — the same ones whose schemas the

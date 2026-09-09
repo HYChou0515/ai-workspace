@@ -406,7 +406,16 @@ class HttpSandbox:
     ) -> None:
         body = resp.json()
         exc_type = _ERRORS.get(body.get("error", ""), SandboxNotFound)
-        message = _with_host_detail(_gone_msg(handle), body.get("detail"))
+        # Only a missing SANDBOX gets the missing-sandbox sentence. This branch
+        # also carries `FileNotFoundError` — a path the agent asked for that is
+        # not there — and telling someone their sandbox was reaped, on a sandbox
+        # that is plainly alive, sends them to rebuild instead of to the typo.
+        # The detail (which for that case IS the path) stays either way.
+        message = (
+            _with_host_detail(_gone_msg(handle), body.get("detail"))
+            if exc_type is SandboxNotFound
+            else str(body.get("detail") or _sandbox_ref(handle))
+        )
         if "error" not in body:
             # The host answers a real miss with its own `{"error": ...}`. A 404
             # WITHOUT that key is the framework's route-not-found, i.e. this host

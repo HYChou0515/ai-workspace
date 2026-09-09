@@ -296,11 +296,28 @@ const AWAITING_REPLY_MAX_MS = 30 * 60_000;
  * doubled banner back in two languages at once. */
 const PERSISTED_ERROR_KEYS: Record<string, MsgKey> = {
   cancelled: "banner.cancelled",
-  // #797: the backend can now say WHICH terminal failure this was, so the two
-  // readings of an exhausted failover chain get the reader's own language
-  // instead of one English sentence standing in for both.
+  // #797: the backend now says WHICH terminal failure this was, so the two
+  // readings of an exhausted failover chain reach the reader in their own
+  // language instead of one English sentence standing in for both.
+  //
+  // These obey the precondition above rather than breaking it: `errorTextFor`
+  // words the LIVE event from the same keys, so the box a running turn shows
+  // and the message the store hands back afterwards are the same sentence. Word
+  // only one of them and one failure appears twice, in two languages — the
+  // English live box plus a zh-TW stored copy.
   all_busy: "turn.allBusy",
   rate_limited: "turn.rateLimited",
+};
+
+/** A terminal error's text, worded from its kind where we have wording.
+ *
+ * The live event and the persisted message go through the SAME table, which is
+ * what keeps them one event rather than two. `message` remains the fallback: a
+ * client that meets a kind it has no words for still shows what the backend
+ * said, which is better than showing nothing. */
+const errorTextFor = (ev: { message: string; kind?: string | null }): string => {
+  const key = ev.kind == null ? undefined : PERSISTED_ERROR_KEYS[ev.kind];
+  return key === undefined ? ev.message : translate(initialLocale(), key);
 };
 
 const persistedErrorText = (kind: string | null | undefined): string | undefined => {
@@ -955,7 +972,7 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
         ...log,
         entries,
         ...TURN_OVER,
-        error: ev.message,
+        error: errorTextFor(ev),
         errorFromTurn: true,
       };
 
