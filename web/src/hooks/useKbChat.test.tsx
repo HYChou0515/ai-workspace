@@ -359,6 +359,160 @@ describe("useKbChat — a thread whose tail is a #624 notice is still MID-turn",
   });
 });
 
+describe("useKbChat — reconnecting must not eat what is on screen", () => {
+  beforeEach(() => _resetKbMock());
+
+  const thread = (messages: unknown[]) => ({
+    resource_id: "kb-r",
+    title: "",
+    collection_ids: [],
+    owner: "default-user",
+    shared_with: [],
+    messages,
+  });
+  const msg = (role: string, content: string, created_at: number) => ({
+    role, content, reasoning: null, tool_name: null, tool_args: null,
+    tool_call_id: null, created_at, citations: [],
+  });
+
+  // The gate went onto the SEND path's re-hydrate and not the reconnect's, so a
+  // mid-turn thread — tail `notice`, the #624 marker written before the turn is
+  // even enqueued — was re-hydrated by the loop anyway.
+  //
+  // What that costs was MEASURED rather than reasoned about, and it is not what
+  // the reasoning said: `reconcileSnapshot` merges rather than replaces, so the
+  // streamed answer survives. The snapshot's copy of the question arrives beside
+  // the broadcast's instead — `["user:問題", "notice", "user:問題", "assistant:…"]`
+  // — which is the duplicate bubble the whole adoption machinery exists to stop.
+  // Asserting the property that was actually observed, not the mechanism that
+  // was assumed.
+  it("does not redraw the question when a mid-turn thread is re-read (a notice tail)", async () => {
+    // The thread is EMPTY when the view hydrates, so the two content entries the
+    // stream then puts on screen TIE with the snapshot's two. That tie is the
+    // whole scenario: `reconcileSnapshot` bails only when the screen is strictly
+    // ahead, so on a tie the snapshot wins and takes the answer with it. Seeded
+    // the other way the screen is ahead, the bail protects it anyway, and the
+    // test proves nothing — which is how the first version of this passed with
+    // both gates removed.
+    // Keyed on the SCENARIO, not on a call count: hydration may read more than
+    // once, and a fixture that switches on "the second read" then feeds the
+    // mid-turn thread to hydration instead of to the reconnect — a different
+    // test wearing this one's name, which is how the first version of this
+    // failed against its own fix.
+    let dropped = false;
+    let connects = 0;
+    const client = {
+      ...mockKbApi,
+      getChat: vi.fn(async () =>
+        dropped
+          ? thread([msg("user", "問題", 1), msg("notice", "較早的對話已不在視窗內", 2)])
+          : thread([]),
+      ),
+      subscribeChat: async function* () {
+        // The RECONNECT yields nothing — that is the case this whole loop is
+        // for: a pod whose replay ring knows nothing about the turn. A double
+        // that re-sent its events on every connect duplicated the question by
+        // itself (these carry no event id, so the de-dupe cannot see them), and
+        // the test then measured the double instead of the hook.
+        if (connects++ > 0) {
+          await new Promise<void>(() => {});
+          return;
+        }
+        // After the initial hydration, which would otherwise replace the log
+        // (and the delta with it) a beat later.
+        await new Promise<void>((r) => setTimeout(r, 60));
+        // The question's broadcast comes first, as the backend sends it — and it
+        // is what puts the log into "a turn is in flight". Without it nothing in
+        // this scenario ever sets `streaming`, and the assertion below would be
+        // measuring the fixture rather than the code.
+        yield {
+          type: "user_message", author: "default-user", content: "問題", created_at: 1,
+        } as never;
+        yield { type: "message_delta", text: "答案開頭" } as never;
+        dropped = true;
+        throw new Error("kb stream failed: 502"); // …and the connection dies
+      },
+    } as unknown as typeof mockKbApi;
+
+    const { result } = renderHook(() =>
+      useKbChat({ collectionIds: ["c1"], chatId: "kb-r", client }),
+    );
+    await waitFor(() =>
+      expect(
+        result.current.log.entries.some(
+          (e) => e.kind === "message" && e.message.content.includes("答案開頭"),
+        ),
+      ).toBe(true),
+    );
+    // Past the 1s backoff, where the re-hydrate lands.
+    await act(async () => {
+      await new Promise<void>((r) => setTimeout(r, 1400));
+    });
+
+    expect(
+      result.current.log.entries.filter(
+        (e) => e.kind === "message" && e.message.content === "問題",
+      ),
+    ).toHaveLength(1);
+    // …and the answer is still there, which is the other half of "nothing was
+    // disturbed".
+    expect(
+      result.current.log.entries.some(
+        (e) => e.kind === "message" && e.message.content.includes("答案開頭"),
+      ),
+    ).toBe(true);
+    expect(result.current.log.streaming).toBe(true);
+  });
+
+  // "Is the screen ahead of the store" is not answerable from the store. While a
+  // send is out its tail is still the PREVIOUS turn's answer, which reads as
+  // finished — so re-hydrating there erased the question the user had just typed
+  // and took Stop away from a turn being accepted.
+  it("leaves a just-sent question alone when the drop happens during the send", async () => {
+    let releaseSend!: () => void;
+    const client = {
+      ...mockKbApi,
+      getChat: vi.fn().mockResolvedValue(
+        thread([msg("user", "舊問題", 1), msg("assistant", "舊答案", 2)]),
+      ),
+      sendMessage: vi.fn(() => new Promise<void>((r) => (releaseSend = r))),
+      subscribeChat: async function* () {
+        throw new Error("kb stream failed: 502"); // drops at once, retries at 1s
+      },
+    } as unknown as typeof mockKbApi;
+
+    const { result } = renderHook(() =>
+      useKbChat({ collectionIds: ["c1"], chatId: "kb-r", client }),
+    );
+    // Let the initial hydration land first; otherwise it replaces the log after
+    // the question is drawn and this measures the wrong thing.
+    await act(async () => {
+      await new Promise<void>((r) => setTimeout(r, 80));
+    });
+    let sending!: Promise<void>;
+    await act(async () => {
+      sending = result.current.send("新問題");
+      await Promise.resolve();
+    });
+    // The reconnect's re-hydrate would land here, while the POST is still out.
+    await act(async () => {
+      await new Promise<void>((r) => setTimeout(r, 1400));
+    });
+
+    expect(
+      result.current.log.entries.some(
+        (e) => e.kind === "message" && e.message.content === "新問題",
+      ),
+    ).toBe(true);
+    expect(result.current.log.streaming).toBe(true);
+
+    releaseSend();
+    await act(async () => {
+      await sending;
+    });
+  });
+});
+
 describe("useKbChat — send failure", () => {
   beforeEach(() => _resetKbMock());
 

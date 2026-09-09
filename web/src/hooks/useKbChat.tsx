@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { kbApi, type KbApi, type KbImageInput } from "../api/kb";
 import { qk } from "../api/queryKeys";
@@ -138,8 +138,13 @@ export function useKbChat({
   // Committed in an effect rather than written during render: a render that
   // React discards would otherwise leave its value behind, and a write during
   // render is a side effect in a function that is supposed to have none.
+  // How many sends are out right now. The reconnect re-hydrate must not run
+  // while one is, because the screen legitimately holds a question the store has
+  // not got yet — and no reading of the STORE can tell that.
+  const sendsInFlight = useRef(0);
+
   const streamingRef = useRef(false);
-  useEffect(() => {
+  useLayoutEffect(() => {
     streamingRef.current = log.streaming;
   }, [log.streaming]);
 
@@ -239,22 +244,35 @@ export function useKbChat({
           // this read `streaming` would stay true forever with the finished
           // answer sitting unread in the store — the same symptom as never
           // reconnecting at all, moved one step later.
-          const fresh = await client.getChat(id).catch(() => null);
-          if (fresh && !controller.signal.aborted) {
+          //
+          // TWO conditions, and they answer different questions:
+          //
+          // `sendsInFlight` is the CLIENT's own fact. "Is the screen ahead of
+          // the store" cannot be read off the store's tail — between
+          // `drawOwnAsk` and the POST persisting the question, that tail is the
+          // PREVIOUS turn's answer, which looks finished. Re-hydrating there
+          // erases the question the user just typed and takes Stop away from a
+          // turn being accepted. The client knows exactly when a send is out;
+          // it does not have to infer it.
+          //
+          // `turnEnded` is the STORE's fact, and it gates the whole read rather
+          // than just the `streaming` reset: a thread whose tail is the #624
+          // `notice` is MID-turn, and `notice` counts as content, so a snapshot
+          // taken then ties on `contentCount`, wins `reconcileSnapshot` and
+          // deletes the answer already on screen. If the turn has not ended
+          // there is nothing here to catch — the resumed stream will deliver it.
+          const fresh =
+            sendsInFlight.current === 0 ? await client.getChat(id).catch(() => null) : null;
+          if (fresh && !controller.signal.aborted && turnEnded(fresh.messages)) {
             qc.setQueryData(qk.kb.chat(id), fresh);
             reconcile(fresh);
-            // …and say the turn is over when the STORE says so. `reconcile`
-            // derives `streaming` itself, but only when it does not bail — and
-            // it bails whenever the screen holds content the store will never
-            // get, such as a running tool card orphaned by an interrupted turn
-            // (a `tool` message is persisted on ToolEnd, never before). From
-            // then on nothing would ever clear `streaming` again on a thread
-            // whose terminal event was lost, which is the case this loop is for.
-            //
-            // Gated on `turnEnded`, not unconditional: while a send is in
-            // flight the tail is the question itself, and resetting there took
-            // Stop away from a turn that was just being accepted.
-            if (turnEnded(fresh.messages)) setLog((prev) => ({ ...prev, streaming: false }));
+            // `reconcile` derives `streaming` itself, but only when it does not
+            // bail — and it bails whenever the screen holds content the store
+            // will never get, such as a running tool card orphaned by an
+            // interrupted turn (a `tool` message is persisted on ToolEnd, never
+            // before). Without this, a thread in that state would never clear
+            // `streaming` again once a terminal event was lost.
+            setLog((prev) => ({ ...prev, streaming: false }));
           }
           backoff = Math.min(backoff * 2, 15000);
         }
@@ -321,6 +339,7 @@ export function useKbChat({
       // the exact failure this is here to prevent.
       const wasStreaming = streamingRef.current;
       setLog((prev) => drawOwnAsk(prev, { author: currentUser, content: trimmed }));
+      sendsInFlight.current += 1;
       try {
         await client.sendMessage({
           chatId: id,
@@ -383,6 +402,10 @@ export function useKbChat({
           error: msg,
           entries: retractOwnAsk(prev, { author: currentUser, content: trimmed }).entries,
         }));
+      } finally {
+        // In a `finally`, so a throw cannot leave the reconnect re-hydrate
+        // switched off for the life of the view.
+        sendsInFlight.current -= 1;
       }
     },
     [
