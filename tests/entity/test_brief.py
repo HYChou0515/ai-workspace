@@ -28,7 +28,7 @@ def _issue() -> EntityType:
                 ),
                 FieldSpec(name="assignee", role=Role.ACTOR),
                 FieldSpec(name="due", role=Role.DATE),
-                FieldSpec(name="span", role=Role.DATERANGE),
+                FieldSpec(name="span", role=Role.DATETIMERANGE),
                 FieldSpec(name="progress", role=Role.PROGRESS),
                 FieldSpec(name="milestone", role=Role.REF, to="milestone"),
                 # manual board/table order — infra, auto-assigned / drag-set
@@ -47,7 +47,7 @@ def _milestone() -> EntityType:
             fields=[
                 FieldSpec(name="title", role=Role.TEXT, required=True),
                 FieldSpec(name="status", role=Role.STATUS, values=["planned", "active", "done"]),
-                FieldSpec(name="span", role=Role.DATERANGE),
+                FieldSpec(name="span", role=Role.DATETIMERANGE),
                 # derived — must be omitted from create guidance
                 FieldSpec(name="issues", role=Role.BACKREF, from_="issue.milestone"),
                 FieldSpec(

@@ -33,7 +33,7 @@ def _role_detail(f: FieldSpec) -> str:
         return "a person — pass a user id from lookup_user"
     if f.role is Role.DATE:
         return "a date, YYYY-MM-DD"
-    if f.role is Role.DATERANGE:
+    if f.role is Role.DATETIMERANGE:
         return (
             'a date range "YYYY-MM-DD/YYYY-MM-DD" — set this so the record '
             "shows on the timeline / gantt"

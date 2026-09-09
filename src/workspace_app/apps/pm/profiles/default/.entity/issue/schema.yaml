@@ -19,7 +19,7 @@ fields:
     values: [critical, high, medium, low]
     colors: { critical: red, high: amber, medium: blue, low: slate }
   due: { role: date }
-  span: { role: daterange }
+  span: { role: datetimerange }
   progress: { role: progress }
   milestone: { role: ref, to: milestone }
   # Manual board/table order (#GH-projects) — a fractional position the user sets

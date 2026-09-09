@@ -5,6 +5,7 @@ dir → empty catalog → the item behaves exactly as before."""
 from __future__ import annotations
 
 from workspace_app.entity.catalog import discover_catalog
+from workspace_app.entity.schema import Role
 from workspace_app.filestore.memory import MemoryFileStore
 
 _SCHEMA = b"""\
@@ -122,7 +123,10 @@ async def test_loads_relational_role_config() -> None:
 
     schema = catalog.get("milestone").schema
     span = schema.field("span")
-    assert span is not None and span.role.value == "daterange"
+    # Written as `daterange` above and read back under the new name: this one
+    # kept the OLD spelling in its fixture on purpose, so it witnesses the
+    # alias a second time from a schema it did not set out to test.
+    assert span is not None and span.role.value == "datetimerange"
     epic = schema.field("epic")
     assert epic is not None and epic.to == "epic"
     issues = schema.field("issues")
@@ -222,3 +226,56 @@ async def test_a_type_that_vanishes_after_the_listing_does_not_empty_the_catalog
     catalog, _diags = await discover_catalog(files, "ws1")
 
     assert catalog.names() == ["issue"]
+
+
+async def test_the_old_daterange_spelling_still_names_the_same_role() -> None:
+    """`daterange` was renamed to `datetimerange` (its values carry times, and
+    have since #785/#789 — the old name lied about the granularity).
+
+    The spelling is not ours to retire: `.entity/<type>/schema.yaml` is seeded
+    into the item's workspace ONCE, at creation, and is then the user's file —
+    `seed_item` has a single caller and no re-seed path, and the user may have
+    edited it. So every schema already written says `daterange`, forever.
+
+    This runs the REAL path (schema bytes → `discover_catalog` → `FieldSpec`)
+    rather than asserting `Role("daterange")` on its own, because that call sits
+    inside a `try/except ValueError` in `catalog.py`: an alias that raises, or
+    that returns `None`, is swallowed there and the field silently degrades to
+    `text`. The pure-function assertion would pass over that.
+    """
+    fs = MemoryFileStore()
+    await fs.write(
+        "ws1",
+        "/.entity/issue/schema.yaml",
+        b"path: issues\nfields:\n  span: { role: daterange }\n",
+    )
+
+    catalog, diagnostics = await discover_catalog(fs, "ws1")
+
+    span = catalog.get("issue").schema.field("span")
+    assert span is not None
+    assert span.role is Role.DATETIMERANGE
+    # …and it goes out under ONE name, so nothing downstream can branch on the
+    # spelling that came in.
+    assert span.role.value == "datetimerange"
+    # Not a warning either: the old spelling is accepted, not tolerated. A
+    # warning here would train people to ignore the ones that matter.
+    assert [d for d in diagnostics if "span" in d.message] == []
+
+
+async def test_a_role_that_is_merely_wrong_still_degrades_with_a_warning() -> None:
+    """The alias forgives ONE spelling, not every string. A typo has to keep
+    failing the way it always did, or the compatibility hatch has quietly turned
+    the closed vocabulary into an open one."""
+    fs = MemoryFileStore()
+    await fs.write(
+        "ws1",
+        "/.entity/issue/schema.yaml",
+        b"path: issues\nfields:\n  span: { role: bogus }\n",
+    )
+
+    catalog, diagnostics = await discover_catalog(fs, "ws1")
+
+    span = catalog.get("issue").schema.field("span")
+    assert span is not None and span.role is Role.TEXT
+    assert any(d.level == "warning" and "unknown role" in d.message for d in diagnostics)

@@ -24,7 +24,7 @@ class Role(StrEnum):
     STATUS = "status"
     ACTOR = "actor"
     DATE = "date"
-    DATERANGE = "daterange"
+    DATETIMERANGE = "datetimerange"
     NUMBER = "number"
     PROGRESS = "progress"
     RANK = "rank"
@@ -32,6 +32,31 @@ class Role(StrEnum):
     REF = "ref"
     BACKREF = "backref"
     ROLLUP = "rollup"
+
+    @classmethod
+    def _missing_(cls, value: object) -> Role | None:
+        """Accept `daterange`, the name `datetimerange` used to have.
+
+        Not a transition window — a permanent spelling. `.entity/<type>/
+        schema.yaml` is seeded into the item's workspace ONCE, at creation
+        (`apps.seeding.seed_item` has a single caller and no re-seed path), and
+        is the user's file from then on. Every schema written before the rename
+        says `daterange` and always will, and so will anything a user or an
+        agent copies from one.
+
+        Refusing it would not raise: `catalog._entity_type` catches the
+        `ValueError` and degrades the field to `text` with a warning, so the
+        symptom is a gantt bar that silently stops being drawn while the value
+        sits intact in the file. Guarded in `tests/entity/test_catalog.py`
+        through the real path, because asserting `Role("daterange")` alone
+        cannot see that `except`.
+
+        This is the ONLY place the old spelling exists. `.value` is the new
+        name, so the widget table, the brief, the API payload and every view
+        kind see one name and cannot branch on which was written."""
+        if value == "daterange":
+            return cls.DATETIMERANGE
+        return None
 
 
 ROLLUP_AGGS = ("count", "sum", "avg", "min", "max")

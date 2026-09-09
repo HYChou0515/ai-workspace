@@ -31,14 +31,14 @@ def test_form_spec_derives_only_arg_fields_with_role_widgets() -> None:
     assert body.required is False  # `{{arg.body?}}` is optional
 
 
-def test_ref_and_daterange_args_get_their_own_widgets() -> None:
+def test_ref_and_datetimerange_args_get_their_own_widgets() -> None:
     """A `ref` field is settable at create time (you pick the target record), so
-    it enters the form with a `ref` widget; a `daterange` gets a `daterange`
+    it enters the form with a `ref` widget; a `datetimerange` gets a `datetimerange`
     widget — both distinct from a plain text box."""
     schema = EntitySchema(
         fields=[
             FieldSpec(name="milestone", role=Role.REF, to="milestone"),
-            FieldSpec(name="span", role=Role.DATERANGE),
+            FieldSpec(name="span", role=Role.DATETIMERANGE),
         ]
     )
     entity_type = EntityType(
@@ -48,7 +48,7 @@ def test_ref_and_daterange_args_get_their_own_widgets() -> None:
         records_path="issues",
     )
     widgets = {f.name: f.widget for f in form_spec(entity_type)}
-    assert widgets == {"milestone": "ref", "span": "daterange"}
+    assert widgets == {"milestone": "ref", "span": "datetimerange"}
 
 
 def test_compute_on_read_arg_degrades_to_text_instead_of_crashing() -> None:
