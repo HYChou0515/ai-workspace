@@ -162,11 +162,14 @@ export function GanttView({
   const collapsed = usePersistentSet(`gantt-collapsed:${viewKey ?? spec.entity}`);
   const colorField = spec.color_by;
   const colorSpec = colorField ? roleOf(type, colorField) : undefined;
-  // Both halves of the palette entry or neither: `bg` is a translucent CHIP
-  // fill, legible only under its paired `fg`. Handing the bar the fill alone
-  // left it wearing the ink of the solid blue slab it used to be — cream on a
-  // 93%-white fill, 1.07:1, invisible in light mode (#690). The pair travels
-  // together now, guarded by ganttBarContrast.test.ts.
+  // Both halves of the palette entry or neither, guarded by
+  // ganttBarContrast.test.ts. The rule was written when the fill was the chip's
+  // translucent `bg` and handing the bar that alone left it wearing the ink of
+  // the solid blue slab it used to be (cream on a 93%-white fill, 1.07:1,
+  // invisible in light mode — #690). The bar no longer takes a chip fill at
+  // all: both branches below return an OPAQUE hex under `--ink`. The pairing
+  // rule outlives the wash that prompted it, because a fill chosen without its
+  // ink is how that defect happened, whatever the fill is made of.
   // An ACTOR field is a directory, not a vocabulary: it has no fixed value list
   // to pin colours to and no ceiling on how many values it holds, so it gets a
   // GENERATED hue per person (`actorPalette`) instead of the six chip slots,

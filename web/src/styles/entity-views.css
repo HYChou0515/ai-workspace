@@ -667,11 +667,17 @@
   font-family: var(--font-mono);
   font-size: inherit;
 }
+/* The group says the FIELD has focus; the ring says WHICH END. The group alone
+ * cannot: it holds two inputs, so tabbing from "day starts" to "day ends" left
+ * the border already accent-coloured and the move was invisible. Dropping the
+ * outline without replacing it is what base.css means by "never to none" — so
+ * this takes the inset-ring form sheet.css already uses for a control whose
+ * outline would break its shape. */
 .ev-viewpanel__range input[type="time"]:focus-visible {
   outline: none;
+  box-shadow: inset 0 0 0 1px var(--accent);
+  border-radius: 3px;
 }
-/* The group takes the focus ring, so tabbing still shows where you are even
- * though the inputs themselves are chromeless. */
 .ev-viewpanel__range:focus-within {
   border-color: var(--accent);
 }

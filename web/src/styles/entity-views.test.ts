@@ -74,6 +74,16 @@ describe("entity-views.css", () => {
     // The picker glyphs cost ~32px of a 224px panel and duplicate the value.
     expect(CSS).toMatch(/::-webkit-calendar-picker-indicator\s*\{[^}]*display:\s*none/);
 
+    // Killing the outline is allowed (it would cut through the shared border);
+    // killing it without a replacement is not — base.css says "never to none".
+    // The group's own :focus-within cannot stand in for this: it holds TWO
+    // inputs, so tabbing between the ends would not change anything on screen.
+    const ring = CSS.match(/\.ev-viewpanel__range input\[type="time"\]:focus-visible\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(ring, "the focused END has no rule of its own").not.toBe("");
+    if (/outline:\s*none/.test(ring)) {
+      expect(ring, "outline removed with nothing put back").toMatch(/box-shadow:[^;]*var\(--accent/);
+    }
+
     // NOTHING in the panel wraps. Wrapping was tried and is worse: on the
     // shared field class it drops a checkbox's label below its box, and on the
     // range it makes the control reflow as the panel resizes. Anything too
