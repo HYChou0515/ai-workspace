@@ -4,7 +4,6 @@ import {
   applyDrag,
   AXIS_DAY_OF_MONTH_PX,
   AXIS_MIN_LABEL_PX,
-  AXIS_MIN_HOUR_LABEL_PX,
   AXIS_WEEKDAY_PX,
   axisFor,
   canvasWidthFor,
@@ -308,6 +307,21 @@ describe("the slider reaches hours (#785)", () => {
     expect(sliderToPpd(1)).toBeGreaterThan(PPD_ANCHORS.day);
   });
 
+  it("writes an hour tick as a TIME, so it cannot be read as a day number", () => {
+    // "Timeline label沒有小時". The fine row drew a bare `HH` — and at day grain
+    // that same row draws the day of the MONTH. So "09 10 11 12" under a band
+    // reading "Mon 2 Mar" is indistinguishable from Mar 9th, 10th, 11th; the
+    // one thing the axis had to say (which unit am I in) was the one thing it
+    // did not. Measured in a real browser: `09:00` is 36.7px in the tick's own
+    // mono face — the same width as the day row's `Mon 5`, which is what
+    // AXIS_MIN_LABEL_PX was sized for. So the clock costs no new constant.
+    const axis = axisFor("2026-01-05", 48, sliderToPpd(1));
+    expect(axis.unit).toBe("hour");
+    for (const t of axis.fine) expect(t.label).toMatch(/^\d\d:\d\d$/);
+    // Still a real clock reading, not "09:00" pasted onto every column.
+    expect(axis.fine.map((t) => t.label).slice(0, 3)).toEqual(["00:00", "01:00", "02:00"]);
+  });
+
   it("reaches a ONE-hour tick, not merely hour grain", () => {
     // "拉霸應該要能拉到小時 現在拉到最右邊有時也是 by 2hr". Reaching hour
     // GRAIN is not the same as reaching an hourly AXIS: the fine row picks the
@@ -326,7 +340,7 @@ describe("the slider reaches hours (#785)", () => {
 
     // ...and the labels still must not touch, or "1 hour" is only readable in
     // the sense that the ticks exist.
-    expect(columnPx(ppd, "hour")).toBeGreaterThanOrEqual(AXIS_MIN_HOUR_LABEL_PX);
+    expect(columnPx(ppd, "hour")).toBeGreaterThanOrEqual(AXIS_MIN_LABEL_PX);
   });
 
   it("leaves the one-hour step room on the track rather than only at its very end", () => {
@@ -334,7 +348,7 @@ describe("the slider reaches hours (#785)", () => {
     // cannot hold: a pixel of travel back and the axis doubles. So the densest
     // column has to clear the hour reservation by a margin, not exactly meet
     // it. Stated as a fraction of the track so it survives a retuned PPD_MAX.
-    const onlyAtTheEnd = ppdToSlider(AXIS_MIN_HOUR_LABEL_PX * 24);
+    const onlyAtTheEnd = ppdToSlider(AXIS_MIN_LABEL_PX * 24);
     expect(onlyAtTheEnd).toBeLessThan(0.95);
   });
 
@@ -497,8 +511,8 @@ describe("the axis at hour grain (#785)", () => {
     const labels = axis.fine.map((t) => t.label);
     expect(labels.length).toBeGreaterThan(0);
     for (const l of labels) {
-      expect(l).toMatch(/^\d\d$/);
-      expect(Number(l)).toBeLessThan(24);
+      expect(l).toMatch(/^\d\d:\d\d$/);
+      expect(Number(l.slice(0, 2))).toBeLessThan(24);
     }
     expect(axis.coarse.map((b) => b.label)).toContain("Mon 5 Jan");
   });
@@ -526,7 +540,9 @@ describe("the axis at hour grain (#785)", () => {
     // The chart's left edge is a record's start, which is as likely to be 09:30
     // as midnight. Labels running :30 past every hour would read as broken.
     const axis = axisFor("2026-01-05T09:30", 24, PPD);
-    for (const t of axis.fine) expect(t.label).toMatch(/^\d\d$/);
+    // Now stated exactly: "on the hour" IS ":00", which the bare HH could only
+    // imply.
+    for (const t of axis.fine) expect(t.label).toMatch(/^\d\d:00$/);
     expect(axis.fine[0].day).toBeCloseTo(0.5);
   });
 

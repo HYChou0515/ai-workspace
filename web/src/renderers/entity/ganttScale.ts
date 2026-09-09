@@ -45,16 +45,19 @@ const MIN_HOUR_COLUMN_PX = 6;
  * comparable with the anchors: 144 is a bit over five times the `day` anchor. */
 export const PPD_HOUR_GRAIN = MIN_HOUR_COLUMN_PX * 24;
 
-/** The densest the slider goes — 48px per hour column.
+/** The densest the slider goes — 80px per hour column.
  *
  * Raised from 56 (the old end of the track, now {@link PPD_MAX_FIT}) so the
- * track could reach hours at all (#785), and again from `24 * 24` so it can
- * reach an HOURLY one. At 24px per hour column the densest possible step was
- * two hours, and a ceiling that exactly meets {@link AXIS_MIN_HOUR_LABEL_PX}
- * would put the one-hour axis at slider position 1.0 alone — a setting the
- * user cannot hold, since a pixel of travel back doubles it. Twice the
- * reservation leaves the last ~10% of the track hourly. */
-export const PPD_MAX = 48 * 24;
+ * track could reach hours at all (#785), and then twice more so it can reach an
+ * HOURLY one: the fine row only takes a step of 1 once a column clears
+ * {@link AXIS_MIN_LABEL_PX}, i.e. at 864 px/day. A ceiling that merely MEETS
+ * that would put the hourly axis at slider position 1.0 and nowhere else — a
+ * setting the user cannot hold, since a pixel of travel back doubles the step.
+ * At 80px per hour column the last ~10% of the track is hourly.
+ *
+ * This costs canvas WIDTH, not nodes: the tick count is the column count, which
+ * is set by the project's length, and the gridlines follow the day bands. */
+export const PPD_MAX = 80 * 24;
 
 /** The densest FIT-TO-PANE goes. Fitting a two-day project into a wide pane
  * lands at 450 px/day, well past {@link PPD_HOUR_GRAIN} — so without this the
@@ -381,13 +384,11 @@ export type Axis = { unit: AxisUnit; fine: FineTick[]; coarse: CoarseBand[] };
  * chosen if `stepDays * ppd` clears this, so labels never touch. */
 export const AXIS_MIN_LABEL_PX = 36;
 
-/** The same reservation for an HOUR label, which is a different size of thing:
- * `HH` is two mono digits at `--text-xs` behind the tick's `--space-4` padding,
- * where a day label is `Mon 5` / `W627`. Holding hours to the day figure made
- * the one-hour step unreachable at EVERY density the track can reach — the
- * fine row fell straight to 2 — so the chart could enter hour grain and still
- * never draw an hour. Two label shapes, two reservations. */
-export const AXIS_MIN_HOUR_LABEL_PX = 24;
+/* An hour label needs no reservation of its own. `09:00` measures 36.7px in the
+ * tick's own mono face — the same as the day row's `Mon 5` — so both rows are
+ * held to the figure above. An earlier pass gave hours a narrower one on the
+ * grounds that `HH` is only two digits; writing the clock is what removed that
+ * saving, and the saving was never the point. */
 
 /** How the days of the week are written. Digits are the default because that is
  * how the user's shop floor writes them; the names are there for everyone else. */
@@ -531,14 +532,17 @@ function monthTicks(minDate: string, visibleDays: number, ppd: number, skip: boo
  * every hour reads as broken rather than as precise. */
 function hourTicks(minDate: string, visibleColumns: number, ppd: number, scale: Scale): FineTick[] {
   const px = columnPx(ppd, "hour");
-  const step = [1, 2, 3, 6, 12, 24].find((s) => s * px >= AXIS_MIN_HOUR_LABEL_PX) ?? 24;
+  const step = [1, 2, 3, 6, 12, 24].find((s) => s * px >= AXIS_MIN_LABEL_PX) ?? 24;
   // Snapped from the CLOCK at column zero rather than from the column offset,
   // so it lands on a whole hour whatever the working window starts at.
   const clock0 = clockOf(dateAtColumn(minDate, 0, scale));
   const ticks: FineTick[] = [];
   for (let col = Math.ceil(clock0) - clock0; col < visibleColumns; col += step) {
     const at = dateAtColumn(minDate, col, scale);
-    ticks.push({ day: col, label: at.slice(11, 13), title: `${dayOf(at)} ${at.slice(11, 16)}` });
+    // `HH:MM`, not a bare `HH`. The day row draws the day of the MONTH in this
+    // same position, so "09 10 11" under "Mon 2 Mar" reads as three DATES —
+    // the axis has to state its unit, and the clock is how a time says it.
+    ticks.push({ day: col, label: at.slice(11, 16), title: `${dayOf(at)} ${at.slice(11, 16)}` });
   }
   return ticks;
 }
