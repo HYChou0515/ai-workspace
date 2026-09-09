@@ -162,8 +162,12 @@ regardless` —— 作者本意是挑一個**不指涉原因**的填充詞。但
 
 - `SandboxNotFound` → 走既有的重建路徑取得新 handle → **重跑一次**;
   第二次仍失敗就回一句人看得懂的話。
-- `SandboxBusy` → **不重建**,退避重試。#492 已定調「rebuilding a merely-busy sandbox」
-  是錯的,`registry._alive`(`:360-375`)也刻意把 busy 讀成「活著」。
+- `SandboxBusy` → **不重建,也不重試。** ⚠️ 這一條在實作時**改掉了計畫原本寫的「退避重試」**:
+  busy 代表沙盒**活著**,而串流逾時對「對面做了什麼」一無所知 —— 指令可能正在跑或已經跑完。
+  重送 `rm -rf` / `git push` / POST 會讓這個修復本身造成它要防止的傷害。
+- ⚠️ 實作時發現 `stream closed before the final frame ⇒ the pod died mid-exec` 也會拋
+  `SandboxNotFound`,所以「指令沒跑過」這句話太滿:它**跑到一半**,只是沙盒內的效果隨沙盒消失。
+  外部效果(push / POST)可能重複一次。註解已照實寫,不粉飾。
 - 涵蓋 `agent/tools.py` 裡**每一個** `sandbox.exec` 呼叫點(`:123`、`:317`),
   不是只修使用者貼的那一個。
 - ⚠️ `agent/python_env.py` 的三個 exec(`:145` `:159` `:177`)**不在這個 phase**:
@@ -177,7 +181,10 @@ regardless` —— 作者本意是挑一個**不指涉原因**的填充詞。但
 
 ### P3 — 三處停止宣稱「模型忙」
 
-- `TurnStatus`:只知道秒數就說秒數,不說原因。
+- `TurnStatus`:只知道秒數就說秒數,不說原因。⚠️ 實作時發現**第二個缺陷**(使用者指出的):
+  那個碼錶錨在「turn 開始串流」、只在 turn 結束才歸零,所以第二次等待開始時它已經是幾分鐘,
+  15 秒與 40 秒的升級**一進入 phase 就觸發、而且永遠回不去**。改成 phase 錨定,
+  照抄同檔案 compaction 時鐘已經寫下的理由。turn 的時鐘保留給 `· Ns`、放棄偵測與重試按鈕。
 - `turns.py` 的 `_BUSY_MESSAGE`:cause chain 上有 429 就說限流
   (`failover/model.py:210` 是**刻意** `raise ... from (rate_limited or last)`,
   註解自己說上游要靠走這條 chain 分辨),並且**搬進 i18n** ——
@@ -191,6 +198,28 @@ regardless` —— 作者本意是挑一個**不指涉原因**的填充詞。但
   (`model.py:154` 只印 model/hold/wait);chain 用完印的是 `last`(`:204` `:276`),
   **而同段註解自己說 `last` 常是最沒資訊的那個**。
 - **不動換模型的策略。** 要不要改成不換,得先有這裡的資料讓操作員看到真實比例。
+
+---
+
+## 5.1 完成後補記
+
+**五個 phase 全部完成**(P0 `9e7af199` / P1 `02c5de4b` / P2 `3be677e1` /
+P3 `306eb81b`+`344d7fac` / P4 `c535fba2`),PR #797。
+
+兩件實作時才學到、值得留下的事:
+
+1. **突變探針抓到我自己的測試漏洞。** P3 後端把 `kind` 傳到 `error_kind` 的那一行被拿掉時,
+   **沒有任何測試變紅** —— 我測了 `_terminal_error`,沒測它的**出口**。而前端只讀
+   `error_kind`,所以那條線斷掉的話整個分辨是白做的。補了
+   `test_the_kind_reaches_the_persisted_message_the_fe_words_from` 之後同一個突變會紅。
+   ([[feedback_guard_must_cover_every_exit]] 的又一個實例。)
+2. **每個 phase 的兩個突變都刻意打紅不同的測試。** 一起紅就代表它們是同一條斷言的兩種寫法,
+   證明不了各自被守著。
+
+**使用者在過程中回報、已確認但不在這份計畫範圍內的:** turn 的總計時鐘(`· Ns`)在
+**終結事件遺失**時不會歸零 —— `streaming` 只由 `agentLog.TURN_OVER` 關掉,而那要靠終結事件。
+SSE 斷線 / turn 在別的 pod 結束 / pod 被 rollout 換掉時,它會一路爬。這與
+「連線中斷,這裡可能少了一段」是**同一個根因**,同屬下面 §6 那條刻意不修的跨 pod 收尾。
 
 ---
 
