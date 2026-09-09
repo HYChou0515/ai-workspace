@@ -541,6 +541,53 @@ async def test_exec_unknown_handle_raises_via_error_frame(http_sandbox: HttpSand
         await http_sandbox.exec(h, ["echo", "hi"])
 
 
+async def test_a_gone_sandbox_says_so_rather_than_handing_back_its_handle(
+    http_sandbox: HttpSandbox,
+):
+    """The message a sandbox failure carries is read by two audiences that were
+    both being failed.
+
+    It reaches the MODEL: the agents SDK wraps a tool exception as "An error
+    occurred while running the tool. Please try again. Error: <str(exc)>", and
+    every raise site passed `handle.id` — a base64 blob. The model was handed
+    something it cannot act on and told to try again, which it did, against the
+    same dead sandbox.
+
+    And `handle.id` decodes to `{"u": <pod url>, "r": <remote id>}`, so the
+    cluster's internal address was going into the agent's context and the saved
+    transcript. The operator's need for the full handle is met by the log, which
+    is not the model's input."""
+    h = await http_sandbox.create(SandboxSpec())
+    await http_sandbox.kill(h)
+
+    with pytest.raises(SandboxNotFound) as caught:
+        await http_sandbox.exec(h, ["echo", "hi"])
+
+    message = str(caught.value)
+    assert h.id not in message, "the opaque handle must not BE the message"
+    assert _ADVERTISE not in message, "the pod url must not reach the model"
+    assert "sandbox" in message.lower(), "it must say what kind of thing is gone"
+
+
+async def test_a_busy_sandbox_says_so_rather_than_handing_back_its_handle():
+    """The same rule on the timeout path, which is a different raise site — a
+    fix that reaches only the one the user reported is half a fix."""
+
+    def _too_slow(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("no answer", request=request)
+
+    handle = SandboxHandle(id=_encode_handle(_ADVERTISE, "r-1"))
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_too_slow)) as client:
+        sb = HttpSandbox(base_url=_ADVERTISE, client=client)
+        with pytest.raises(SandboxBusy) as caught:
+            await sb.exec(handle, ["echo", "hi"])
+
+    message = str(caught.value)
+    assert handle.id not in message
+    assert _ADVERTISE not in message
+    assert "sandbox" in message.lower()
+
+
 async def test_exec_output_without_sink_is_dropped(http_sandbox: HttpSandbox):
     # An `o` frame arrives but no on_output is given ⇒ chunk is simply not
     # forwarded; the final ExecResult still carries the full stdout.

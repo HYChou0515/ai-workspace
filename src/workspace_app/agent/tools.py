@@ -116,12 +116,21 @@ async def _exec_surviving_a_reap(
 
     ONE retry, and only for ``SandboxNotFound``:
 
-    * **gone** — the sandbox does not exist, so the command did not run in it,
-      and whatever it might have written there is gone with it. Clearing the
-      cached handle sends `ensure_sandbox` back through the wake hook, which
-      converges on another pod's live sandbox or rebuilds from the durable
-      archive. Re-running is then the same command against the same restored
-      state.
+    * **gone** — the sandbox does not exist any more, so whatever the command
+      might have written INSIDE it is gone with it and a re-run starts from the
+      same restored state. Clearing the cached handle is what makes the retry
+      real: `ensure_sandbox` returns early while one is cached, so dropping it
+      is what sends the wake hook back to converge on another pod's live sandbox
+      or rebuild from the durable archive.
+
+      Not free of doubt, and better said than glossed: one path that raises this
+      is `stream closed before the final frame ⇒ the pod died mid-exec`, where
+      the command HAD started. Its in-sandbox effects died with the sandbox, but
+      one it had already pushed OUTSIDE — a git push, a POST — would happen
+      twice. The alternative is what shipped before: the SDK telling the model to
+      try again against a dead handle, which it does, repeatedly and with no
+      rebuild in between. One controlled retry is the smaller exposure, not a
+      zero one.
     * **busy** — deliberately NOT retried. The sandbox is ALIVE (`registry._alive`
       reads busy as alive on purpose) and a timed-out stream says nothing about
       what the far end did: the command may be running, or finished. Re-sending
