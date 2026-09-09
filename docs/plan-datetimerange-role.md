@@ -137,6 +137,11 @@ schema 位元組,不會用到既有 item 的檔案。**沒有任何測試持有�
 - **不新增第二個 role。** 見 §1.1:只有一種 range。
 - **不改寫既有 item 的檔案。** 見 §3。
 - **不改任何行為。** 值格式、解析、繪製、拖曳吸附、非工時摺疊全部不動。
+- **不修排序把時刻截掉這件事。** `sortRows.ts` 的 `String(raw).slice(0, 10)` 只取到日期,所以
+  同一天 09:00 與 15:00 的兩筆排序鍵相同、順序退回文件順序 —— 使用者看到「排了但沒排」。
+  這是**既有行為**,而且這一行正好被本 PR 的改名掃到,所以 review 指到它。仍然不修:
+  「零行為改變」是本計畫鎖定的決策,而在一包改名裡順手改掉排序語意,正是讓改名變得難以
+  判斷的做法。**記在這裡當 follow-up**,不要讓它因為沒人寫下來而消失。
 
 ---
 
@@ -155,8 +160,22 @@ Phase 1 第二條測試就是為這個而寫。
 `ValueError` 而被 `catalog.py:67` 接住 —— 症狀跟完全沒做一模一樣。這條要有測試釘住,**而且要對
 沒改的版本驗紅**。
 
-### 6.3 msgspec 反序列化不一定走 `_missing_`
+### 6.3 滾動更新期間,舊 pod 讀新檔案
 
-`FieldSpec` 是 msgspec struct,但 `catalog.py:66` 是**手動**呼叫 `Role(...)` 之後才組
-`FieldSpec`,所以走的是 Python enum 的路徑。若之後有人改成讓 msgspec 直接解 `Role`,alias 會
-靜默失效。→ Phase 1 的 catalog 測試同時是這件事的守衛。
+相容性是**單向**的:新 pod 讀舊檔案有 alias,舊 pod 讀**新 seed 出來的** `datetimerange`
+則不認得 —— 欄位降級成 `text`,症狀跟 §1.3 一模一樣。影響範圍只有「新版建立的 item 被尚未
+更新的 pod 讀到」這個窗口,窗口過了自己就好(值沒有被改壞,只是當下沒被畫出來)。
+不值得為它設計降級路徑,但**要知道它存在**,否則滾動更新中看到那個症狀會被當成本包的缺陷。
+
+### 6.4 msgspec 反序列化 —— **實測會走 `_missing_`,此風險不成立**
+
+原本擔心 `FieldSpec` 是 msgspec struct,若哪天改成讓 msgspec 直接解 `Role`,alias 會靜默失效。
+實測推翻了它:
+
+```
+msgspec.json.decode(b'{"name":"span","role":"daterange"}', type=FieldSpec).role
+→ Role.DATETIMERANGE
+```
+
+msgspec 走的是 Python enum 的查表,所以 `_missing_` 一樣生效。**保留這一段而不是刪掉**:
+下一個人會有同樣的疑慮,把「查過了、答案是會」寫下來比讓他重查一次便宜。

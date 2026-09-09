@@ -44,7 +44,7 @@ class Role(StrEnum):
         says `daterange` and always will, and so will anything a user or an
         agent copies from one.
 
-        Refusing it would not raise: `catalog._entity_type` catches the
+        Refusing it would not raise: `catalog._load_type` catches the
         `ValueError` and degrades the field to `text` with a warning, so the
         symptom is a gantt bar that silently stops being drawn while the value
         sits intact in the file. Guarded in `tests/entity/test_catalog.py`

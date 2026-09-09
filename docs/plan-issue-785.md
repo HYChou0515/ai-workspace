@@ -7,6 +7,11 @@
 
 ## 1. 現狀(已查證)
 
+> **這一節記的是 #785 執行「之前」的狀態,不是今天的現況。** 本計畫本身推翻了其中好幾條
+> (值不再只是 `YYYY-MM-DD`),而 `daterange` 這個 role 名稱後來也改成 `datetimerange`
+> —— 見 [`plan-datetimerange-role.md`](plan-datetimerange-role.md) 與本文件 §5 的補記。
+> 底下的表格保留原樣,因為它是當時的查證紀錄;改寫它會讓這份紀錄不再可信。
+
 ### 1.1 gantt 的時間模型比想像中乾淨
 
 整張圖 —— 軸、bar、拖曳、today 線 —— 都只透過三個函式看時間:

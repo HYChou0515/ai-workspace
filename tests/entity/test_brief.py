@@ -70,12 +70,18 @@ def test_enumerates_the_closed_status_vocabulary() -> None:
     assert "status (one of: open, in_progress, blocked, done)" in brief
 
 
-def test_spells_out_the_timeline_date_range_field() -> None:
+def test_spells_out_the_timeline_range_field_including_its_times() -> None:
     # the #4 gap: an issue with no span never appears on the gantt
     brief = entity_schema_brief(_catalog(_issue()))
     assert "span" in brief
     assert "timeline / gantt" in brief
-    assert "YYYY-MM-DD/YYYY-MM-DD" in brief
+    # The agent never sees the role NAME (`_field_hint` prints only the
+    # description), so this sentence is its whole source of truth about the
+    # field's shape. It said "a date range YYYY-MM-DD/YYYY-MM-DD" long after
+    # #785/#789 made times valid — so an agent asked for a 09:30–12:00 review
+    # wrote a whole-day span, correctly, from a hint that was wrong.
+    assert "YYYY-MM-DD" in brief
+    assert "YYYY-MM-DDTHH:MM" in brief
 
 
 def test_marks_required_and_names_actor_and_ref_conventions() -> None:
