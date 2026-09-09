@@ -54,6 +54,12 @@ import { useT } from "../../lib/i18n";
 import { type AttachProgress, attachPrompt, runAttach, uploadPathFor } from "./attach";
 import { extractClipboardFiles, isImage, readTransferEntries } from "./transfer";
 
+/** Said in two places — the composer's placeholder and the refusal every
+ * control gives — so it lives once. Two copies of one sentence diverge on the
+ * next edit, and a control that explains itself differently from the box beside
+ * it is the mismatch this file keeps having to fix. */
+const NO_PERMISSION_TO_SEND = "You don't have permission to send messages in this workspace.";
+
 /**
  * Max width of the conversation reading column. When the chat pane is wider than
  * this (a workspace=false App filling the row, the IDE collapsed, or the RCA side
@@ -309,6 +315,10 @@ export function AgentPanel({
               "目前的提示詞本身已經佔滿模型的可讀範圍,整理對話幫不上忙 —— 需要調大模型視窗或縮短提示詞。",
           failed: "整理沒有成功,對話沒有更動。可以再試一次。",
           unavailable: "這個站台沒有開啟整理功能。",
+          // Its own wording rather than `failed`: nothing went wrong, the person
+          // stopped it — and being told their own Stop was a failure is how a
+          // control stops being trusted.
+          stopped: "整理已中止,對話沒有更動。",
         };
         setComposerHint(said[r.reason] ?? "這段對話還沒有需要壓縮的內容。");
         return;
@@ -562,15 +572,38 @@ export function AgentPanel({
       return [];
     });
 
+  /** Why a send would be refused right now, or null.
+   *
+   * ONE place, because it used to be several: the composer, a suggestion chip
+   * and an `ask_user` answer each carried their own copy, the rule changed, and
+   * two of them were left behind still refusing during anyone's turn — the
+   * spectator lock-out the change existed to remove — while ignoring the one
+   * state where a send really is refused. */
+  const sendRefusal = (): string | null => {
+    // `readOnly` belongs here too. It was enforced on the composer, the Send
+    // button and the chip, each separately — and NOT on the `ask_user` answer
+    // buttons, which is how a viewer without permission got a raw
+    // `send failed: 403`, the very symptom the chip's own comment says its
+    // guard exists to prevent.
+    if (readOnly) return NO_PERMISSION_TO_SEND;
+    if (log.stopping) return "正在停止這一輪…停下之後再送出。";
+    return null;
+  };
+
   const submit = () => {
     const text = draft.trim();
-    if (log.streaming && !othersTurn) {
-      // Pressing Enter mid-turn used to do NOTHING — the textarea stays enabled,
-      // so the user types a whole message, hits Enter, and gets no reaction at
-      // all. During any of the stuck states that is indistinguishable from the
-      // app being dead. Keep the draft (retyping it is the insult on top) and say
-      // why.
-      setComposerHint("回覆還在進行中。等它完成，或按 Stop 中止後再送出。");
+    const why = sendRefusal();
+    if (why) {
+      // The only refusal left. Sending now would queue behind a turn nobody has
+      // actually stopped yet — the arrangement that had a message vanish into a
+      // queue while the previous answer kept streaming, which reads as the whole
+      // system being broken. Keep the draft: retyping it is the insult on top.
+      //
+      // Your own RUNNING turn is no longer refused. The backend serializes
+      // messages and does not cancel on them (#43), so the message just queues —
+      // and refusing your own turn while queueing behind everyone else's is what
+      // made Stop-then-send the only way through.
+      setComposerHint(why);
       return;
     }
     setComposerHint(null);
@@ -629,7 +662,11 @@ export function AgentPanel({
   }, [log.entries]);
 
   const onChip = (label: string) => {
-    if (log.streaming) return;
+    const why = sendRefusal();
+    if (why) {
+      setComposerHint(why);
+      return;
+    }
     void send(label);
   };
 
@@ -716,7 +753,11 @@ export function AgentPanel({
             // grill-me: answering an `ask_user` question is an ordinary send
             // that records which question it answers.
             onAnswerQuestion={(a) => {
-              if (log.streaming) return;
+              const why = sendRefusal();
+              if (why) {
+                setComposerHint(why);
+                return;
+              }
               void send(a.content, { answers: a.answers });
             }}
             answeredQuestions={answeredQuestions}
@@ -825,7 +866,13 @@ export function AgentPanel({
             // A read-only viewer could still fire a chip, and got a raw
             // "send failed: 403" for it — the textarea beside it was already
             // disabled for exactly this reason.
-            disabled={log.streaming || readOnly}
+            //
+            // The send rule itself comes from `sendRefusal`, not a second copy
+            // of it: this button carried its own `log.streaming` and so stayed
+            // dead through anyone's turn long after the composer stopped
+            // refusing that — a disabled control saying something the composer
+            // beside it contradicts.
+            disabled={sendRefusal() !== null}
             style={{
               display: "inline-flex",
               alignItems: "center",
@@ -836,8 +883,12 @@ export function AgentPanel({
               background: "var(--white)",
               fontSize: pxToRem(12),
               color: "var(--text-paper)",
-              cursor: log.streaming ? "not-allowed" : "pointer",
-              opacity: log.streaming ? 0.5 : 1,
+              // Same rule as `disabled` above, deliberately not a second copy of
+              // it: these two kept `log.streaming` when the guard moved, so for
+              // a whole turn the chip was drawn as unclickable while clicking it
+              // worked — the inverse of the mismatch the sweep set out to end.
+              cursor: sendRefusal() !== null ? "not-allowed" : "pointer",
+              opacity: sendRefusal() !== null ? 0.5 : 1,
             }}
           >
             <Icon name="sparkle" size={12} color="var(--accent)" />
@@ -1161,7 +1212,7 @@ export function AgentPanel({
           }}
           placeholder={
             readOnly
-              ? "You don't have permission to send messages in this workspace."
+              ? NO_PERMISSION_TO_SEND
               : onSteer
                 ? "Tell the run what to change (e.g. use the X collection, redo from ingest)…"
                 : mentions.length > 0
@@ -1288,51 +1339,85 @@ export function AgentPanel({
           >
             {modCombo("↵")}
           </span>
-          {log.streaming ? (
-            <button
-              type="button"
-              onClick={() => {
-                cancel();
-                // Stop's ENTIRE feedback used to be the spinner disappearing,
-                // which reads the same as the turn finishing on its own. So the
-                // click still says something — but about the CLICK, not the
-                // outcome: the transcript already gets a 「已取消。」 banner when
-                // the turn actually stops, and saying it here too is how one
-                // press of Stop came to print the same news twice.
-                setComposerHint("正在停止這一輪…");
-              }}
-              style={{
-                padding: "6px 14px",
-                borderRadius: "var(--radius-btn)",
-                border: "1px solid var(--err)",
-                color: "var(--err)",
-                fontSize: pxToRem(12),
-              }}
-            >
-              Stop
-            </button>
-          ) : (
-            (() => {
-              const summoning = mentions.length > 0;
-              const enabled = !readOnly && (summoning || draft.trim().length > 0);
-              return (
+          {(() => {
+            // TWO buttons, both always here. They used to share one slot, one
+            // size and one position, swapped on `streaming` — so the control
+            // changed meaning under the pointer: you aimed at Send, the turn was
+            // still running, and you stopped it; `cancel()` flipped `streaming`
+            // at once and put Send back under your finger for the second click.
+            // "It stopped the answer and then sent my message" is that, exactly.
+            //
+            // Each is disabled when it would not be honest, which is the other
+            // half: a disabled button says what will happen BEFORE the click,
+            // where the old refusal only said it after.
+            const summoning = mentions.length > 0;
+            // Nothing to stop with no turn running — and nothing left to stop
+            // once a Stop is already in flight.
+            const canStop = log.streaming && !log.stopping;
+            // Sending is fine DURING your own turn: the backend serializes
+            // messages, it does not cancel on them (#43), so the message simply
+            // queues. Refusing your own turn while queueing behind everyone
+            // else's is what made Stop-then-send the only way through. Not
+            // while stopping, though: that would queue behind a turn nobody has
+            // actually stopped yet.
+            const canSend =
+              sendRefusal() === null && (summoning || draft.trim().length > 0);
+            const iconButton = {
+              width: 32,
+              height: 32,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              borderRadius: "var(--radius-btn)",
+            } as const;
+            return (
+              <>
                 <button
-                  type="submit"
-                  disabled={!enabled}
+                  type="button"
+                  // Icon-only, so it carries an explicit name. `title` would
+                  // in fact supply one on its own — measured: with the label
+                  // removed the button is still findable by name — but that is
+                  // a fallback the spec applies only when nothing better
+                  // exists, and what a control IS should not rest on it.
+                  aria-label="Stop"
+                  title="Stop"
+                  disabled={!canStop}
+                  onClick={() => {
+                    cancel();
+                    // Stop's ENTIRE feedback used to be the spinner
+                    // disappearing, which reads the same as the turn finishing
+                    // on its own. So the click still says something — but about
+                    // the CLICK, not the outcome: the transcript already gets a
+                    // 「已取消。」 banner when the turn actually stops, and saying
+                    // it here too is how one press came to print the same news
+                    // twice.
+                    setComposerHint("正在停止這一輪…");
+                  }}
                   style={{
-                    padding: "6px 14px",
-                    borderRadius: "var(--radius-btn)",
-                    background: enabled ? "var(--accent)" : "var(--paper-3)",
-                    color: enabled ? "var(--white)" : "var(--text-paper-d)",
-                    fontSize: pxToRem(12),
-                    fontWeight: 500,
+                    ...iconButton,
+                    border: "1px solid var(--err)",
+                    color: canStop ? "var(--err)" : "var(--text-paper-d)",
+                    borderColor: canStop ? "var(--err)" : "var(--paper-3)",
                   }}
                 >
-                  {summoning ? "Notify" : "Send"}
+                  <Icon name="x" size={14} />
                 </button>
-              );
-            })()
-          )}
+                <button
+                  type="submit"
+                  aria-label={summoning ? "Notify" : "Send"}
+                  title={summoning ? "Notify" : "Send"}
+                  disabled={!canSend}
+                  style={{
+                    ...iconButton,
+                    background: canSend ? "var(--accent)" : "var(--paper-3)",
+                    color: canSend ? "var(--white)" : "var(--text-paper-d)",
+                  }}
+                >
+                  <Icon name={summoning ? "bell" : "arrow_r"} size={14} />
+                </button>
+              </>
+            );
+          })()}
         </div>
         </div>
       </form>

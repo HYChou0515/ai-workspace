@@ -321,3 +321,253 @@ describe("useChatSession", () => {
     );
   });
 });
+
+describe("the sender's own message", () => {
+  // The bubble used to be drawn only by the `user_message` broadcast, which
+  // `chat_send` publishes after the entire turn preamble — compaction, a cold
+  // sandbox wake, context and skill file reads, the `/tokenize` probe. So the
+  // one person who knows when they pressed send watched their words vanish for
+  // as long as all that took.
+  //
+  // `post` here NEVER resolves: the failure at its extreme, and the reason this
+  // cannot be tested by letting the fake transport return quickly. Nothing the
+  // backend does may stand between typing and seeing.
+  it("appears without waiting for the backend", async () => {
+    const t = fakeTransport({ post: vi.fn(() => new Promise<void>(() => {})) });
+    const { result } = render(t);
+    await waitFor(() => expect(result.current.log.entries).toHaveLength(1));
+
+    act(() => {
+      void result.current.send("hello");
+    });
+
+    await waitFor(() => expect(result.current.log.entries).toHaveLength(2));
+    const drawn = result.current.log.entries.at(-1);
+    expect(drawn?.kind === "message" && drawn.message.content).toBe("hello");
+    // Under the sender's own id, not a placeholder: the broadcast adopts this
+    // entry by author + content, so an id that disagrees with the one the
+    // backend stamps means the broadcast draws a second bubble instead.
+    expect(drawn?.kind === "message" && drawn.message.author).toBe("tester");
+    // And the composer is locked, which the broadcast used to be what did.
+    expect(result.current.log.streaming).toBe(true);
+  });
+});
+
+describe("stopping", () => {
+  // Stop used to flip `streaming` to false on the spot. That was a claim the
+  // backend had not made: teardown lags, and for as long as it did the composer
+  // said the turn had ended while it was still running — and, worse, unlocked
+  // itself, so the next message queued behind a turn nobody had actually
+  // stopped. `stopping` is the state that was missing: the request is out, the
+  // turn has not ended, and neither button should pretend otherwise.
+  it("stays streaming until the turn actually ends", async () => {
+    const t = fakeTransport();
+    const { result } = render(t);
+    await waitFor(() => expect(result.current.log.entries).toHaveLength(1));
+
+    act(() => {
+      void result.current.send("hello");
+    });
+    await waitFor(() => expect(result.current.log.streaming).toBe(true));
+
+    act(() => result.current.cancel());
+
+    expect(result.current.log.stopping).toBe(true);
+    // The turn has NOT ended — only the request to end it has been sent.
+    expect(result.current.log.streaming).toBe(true);
+  });
+
+  it("stops claiming to be stopping when the Stop itself could not be sent", async () => {
+    // `stopping` means the backend has been TOLD. If the request to tell it
+    // failed there is nothing stopping, and the state ends only on a terminal
+    // event that is now never coming — so it stuck, refusing every later send
+    // (`sendRefusal`) and disabling both buttons until a reload. Offline, that
+    // is one click away.
+    const t = fakeTransport({
+      requestCancel: vi.fn(() => Promise.reject(new TypeError("Failed to fetch"))),
+    });
+    const { result } = render(t);
+    await waitFor(() => expect(result.current.log.entries).toHaveLength(1));
+
+    act(() => {
+      void result.current.send("hello");
+    });
+    act(() => result.current.cancel());
+
+    await waitFor(() => expect(result.current.log.error).not.toBeNull());
+    expect(result.current.log.stopping).toBe(false);
+  });
+
+  it("clears when the turn's terminal event arrives", async () => {
+    let push: ((ev: AgentEvent) => void) | null = null;
+    const t = fakeTransport({
+      subscribe: async function* () {
+        const queue: AgentEvent[] = [];
+        let wake: (() => void) | null = null;
+        push = (ev) => {
+          queue.push(ev);
+          wake?.();
+        };
+        while (true) {
+          if (queue.length) {
+            yield queue.shift() as AgentEvent;
+            continue;
+          }
+          await new Promise<void>((r) => (wake = r));
+        }
+      },
+    });
+    const { result } = render(t);
+    await waitFor(() => expect(push).not.toBeNull());
+
+    act(() => {
+      void result.current.send("hello");
+    });
+    act(() => result.current.cancel());
+    await waitFor(() => expect(result.current.log.stopping).toBe(true));
+
+    act(() => push?.({ type: "run_cancelled" } as AgentEvent));
+
+    await waitFor(() => expect(result.current.log.stopping).toBe(false));
+    expect(result.current.log.streaming).toBe(false);
+  });
+});
+
+describe("a send that was refused leaves nothing behind", () => {
+  // `drawOwnAsk` puts the words on screen before the POST resolves, which is the
+  // point. When the POST then FAILS the message was never persisted, so no
+  // broadcast will ever adopt that entry and the store poll cannot remove it
+  // (`reconcileSnapshot` bails when the snapshot is shorter than the screen —
+  // exactly this case). It sat there, contradicted by the error beside it.
+  //
+  // Worse than cosmetic: an entry with no `at` counts as its own turn to
+  // `turnsFromEntry`, so "undo to here" asked the backend for one turn MORE than
+  // the user pointed at — and undo deletes irreversibly.
+  const refuse = (status: number) => {
+    const err = Object.assign(new Error("nope"), { status });
+    return vi.fn(() => Promise.reject(err));
+  };
+
+  it.each([
+    ["access revoked while the tab was open", 404],
+    ["the item was deleted", 410],
+    ["a limit refused it", 507],
+    ["no permission to send", 403],
+  ])("takes the message back when %s", async (_why, status) => {
+    // Every one of these is a refusal the backend answered with, and an answered
+    // refusal now means one thing: nothing was written. The endpoint carries
+    // that — a failure AFTER the write returns 202 and reports itself on the
+    // stream — so the client does not read the status at all.
+    //
+    // Two earlier versions did read it, first as a list and then as "any 4xx",
+    // and both were wrong for the same reason: the status is chosen by a
+    // type-keyed handler that cannot know where in the request the throw
+    // happened. These cases stay because they are the ones a person meets.
+    const err = Object.assign(new Error("nope"), { status });
+    const t = fakeTransport({ post: vi.fn(() => Promise.reject(err)) });
+    const { result } = render(t);
+    await waitFor(() => expect(result.current.log.entries).toHaveLength(1));
+
+    await act(async () => {
+      await result.current.send("please do the thing");
+    });
+
+    expect(result.current.log.entries).toHaveLength(1);
+  });
+
+  it("takes it back for a 500 too, because a 500 now means it was never written", async () => {
+    // There is no ambiguous status left. A failure after the write answers 202
+    // and reports itself on the stream, so reaching this branch at all means
+    // nothing was stored — whatever number came back. The status used to be
+    // asked, and it could not answer: it is chosen by a type-keyed handler that
+    // does not know where in the request the throw happened.
+    const err = Object.assign(new Error("who are you"), {
+      status: 500,
+      code: "request_env_failed",
+    });
+    const t = fakeTransport({ post: vi.fn(() => Promise.reject(err)) });
+    const { result } = render(t);
+    await waitFor(() => expect(result.current.log.entries).toHaveLength(1));
+
+    await act(async () => {
+      await result.current.send("please do the thing");
+    });
+
+    expect(result.current.log.entries).toHaveLength(1);
+  });
+
+  it("keeps it on a gateway cut, which is not a refusal", async () => {
+    // 502/504 mean the request was cut, not that the turn failed — the message
+    // may well be running server-side. Taking it back there would hide a
+    // message that IS in the thread.
+    const t = fakeTransport({ post: refuse(504) });
+    const { result } = render(t);
+    await waitFor(() => expect(result.current.log.entries).toHaveLength(1));
+
+    await act(async () => {
+      await result.current.send("please do the thing");
+    });
+
+    expect(result.current.log.entries).toHaveLength(2);
+  });
+
+  it("keeps it when the request was cut without an answer", async () => {
+    // The one case where nothing is known either way. A gateway cut says the
+    // request did not complete, not that the turn failed — the message may be in
+    // the thread and running — so it stays, and the stream or the store poll
+    // settles it. This is the branch that returns before the retraction.
+    const err = Object.assign(new Error("cut"), { status: 502 });
+    const t = fakeTransport({ post: vi.fn(() => Promise.reject(err)) });
+    const { result } = render(t);
+    await waitFor(() => expect(result.current.log.entries).toHaveLength(1));
+
+    await act(async () => {
+      await result.current.send("please do the thing");
+    });
+
+    expect(result.current.log.entries).toHaveLength(2);
+  });
+
+  it("keeps it when the request was never answered at all", async () => {
+    // A connection reset arrives from `fetch` as a bare `TypeError` with no
+    // status — `apiFetch` does not wrap it — so the status-keyed cut list never
+    // saw it and the message was taken back although the backend may well have
+    // stored it and be answering. The `0` in that list comes from an XHR upload
+    // path this send never takes, so it was covering nothing here.
+    //
+    // Unanswered is precisely the case where nothing is known either way.
+    const t = fakeTransport({
+      post: vi.fn(() => Promise.reject(new TypeError("Failed to fetch"))),
+    });
+    const { result } = render(t);
+    await waitFor(() => expect(result.current.log.entries).toHaveLength(1));
+
+    await act(async () => {
+      await result.current.send("please do the thing");
+    });
+
+    expect(result.current.log.entries).toHaveLength(2);
+  });
+
+  it("a new send clears a Stop that is still pending", async () => {
+    // `retryTurn` is `cancel()` then `send()`. Without this the retry inherits
+    // `stopping`, so the turn it just started cannot be stopped and nothing can
+    // be sent — and the terminal event that would clear it belongs to the turn
+    // being abandoned, which is the reason retry exists.
+    const t = fakeTransport();
+    const { result } = render(t);
+    await waitFor(() => expect(result.current.log.entries).toHaveLength(1));
+
+    act(() => {
+      void result.current.send("first");
+    });
+    act(() => result.current.cancel());
+    expect(result.current.log.stopping).toBe(true);
+
+    act(() => {
+      void result.current.send("again");
+    });
+
+    expect(result.current.log.stopping).toBe(false);
+  });
+});

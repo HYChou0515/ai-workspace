@@ -18,10 +18,18 @@ from __future__ import annotations
 import asyncio
 import posixpath
 import re
+import threading
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 from ...kb.vlm import IVlm
+
+
+class _Stopped(Exception):
+    """Raised inside the worker thread to unwind a model call nobody is waiting
+    for any more. Private and deliberately not an `Exception` the loop handles
+    elsewhere: it means "abandoned", never "this call failed"."""
+
 
 # Workspace-relative scratch files the loop writes. `build.js` is the model's
 # program; the rest are fixed craft assets it may `require`.
@@ -208,11 +216,37 @@ async def _ask_model(
         prompt = _review_prompt(req)
         images = feedback[1]
 
+    # `to_thread` cancels the FUTURE, never the thread — so a Stop left this
+    # call running to its own end, and `make_deck` is granted by default and
+    # runs several render-and-review passes by design: the longest turn someone
+    # is likely to stop, and the only one that would ignore them.
+    #
+    # A thread cannot be aborted, so this bounds the leak rather than closing
+    # it. `collect` already calls back per chunk, which makes `on_chunk` the one
+    # place the thread can be TOLD — it notices at the next chunk and unwinds,
+    # instead of finishing the whole call.
+    stopped = threading.Event()
+
     def _on_chunk(text: str, is_reasoning: bool) -> None:
+        if stopped.is_set():
+            raise _Stopped
         if is_reasoning and text.strip():
             _emit(progress, text)
 
-    return await asyncio.to_thread(io.vlm.collect, prompt, images=images, on_chunk=_on_chunk)
+    def _collect() -> str:
+        # Swallowed here, in the thread: by the time this fires the awaiting
+        # side has already been cancelled and its future abandoned, so raising
+        # would only surface as an exception nobody retrieved.
+        try:
+            return io.vlm.collect(prompt, images=images, on_chunk=_on_chunk)
+        except _Stopped:
+            return ""
+
+    try:
+        return await asyncio.to_thread(_collect)
+    except asyncio.CancelledError:
+        stopped.set()
+        raise
 
 
 def _intent_block(req: DeckRequest) -> str:

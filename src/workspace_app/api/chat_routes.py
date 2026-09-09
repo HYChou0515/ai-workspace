@@ -202,7 +202,7 @@ def register_chat_routes(
         investigation_id = locator.require_access(slug, item_id, "converse")
         # #43 Stop: anyone may interrupt the in-flight turn; the queue keeps
         # draining (queued messages from others are not dropped).
-        await turn_engine.cancel_current(investigation_id)
+        await turn_engine.cancel_current(investigation_id, by=get_user_id())
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.delete("/a/{slug}/items/{item_id}/messages")
@@ -526,7 +526,9 @@ def register_chat_routes(
     async def cancel_chat_message(slug: str, item_id: str, chat_id: str) -> Response:
         investigation_id = locator.require_access(slug, item_id, "converse")
         locator.require_chat(slug, item_id, chat_id)
-        await turn_engine.cancel_current(locator.engine_key(investigation_id, chat_id))
+        await turn_engine.cancel_current(
+            locator.engine_key(investigation_id, chat_id), by=get_user_id()
+        )
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.delete("/a/{slug}/items/{item_id}/chats/{chat_id}/messages")

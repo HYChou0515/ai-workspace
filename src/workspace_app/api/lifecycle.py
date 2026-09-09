@@ -221,6 +221,7 @@ def build_lifespan(
             settings=offhours,
             claims=SpecstarStretchClaims(spec),
             start_round=app.state.chat_send.start_offhours_round,
+            night_abandoned=app.state.chat_send.offhours_night_abandoned,
         )
         try:
             while True:

@@ -133,7 +133,7 @@ describe("useItemChat", () => {
     expect(client.mention).not.toHaveBeenCalled();
   });
 
-  it("cancel tells the backend to stop THIS chat and clears streaming immediately", async () => {
+  it("cancel tells the backend to stop THIS chat and registers immediately", async () => {
     const client = fakeClient({
       getChat: vi.fn().mockResolvedValue({ ...CHAT, messages: [{ role: "user", content: "prior" }] }),
     });
@@ -144,7 +144,10 @@ describe("useItemChat", () => {
     });
     act(() => result.current.cancel());
     expect(client.cancelMessage).toHaveBeenCalledWith("topic-hub", "it", "conversation:c1");
-    expect(result.current.log.streaming).toBe(false);
+    // `stopping`, not `streaming: false`: the request is out and the turn has
+    // not ended. Both chats share `useChatSession`, so this is the same rule as
+    // the workspace composer's — which is the point of them sharing it.
+    expect(result.current.log.stopping).toBe(true);
   });
 
   it("recovers a stuck chat when the broadcast stream is cross-pod silent (#202)", async () => {

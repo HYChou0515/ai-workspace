@@ -5,6 +5,9 @@ no-slides / review-pass / out-of-budget / never-ok) is exercised here."""
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import time
 from collections.abc import Iterator, Sequence
 
 import pytest
@@ -283,3 +286,69 @@ def test_craft_assets_load():
     assert "soffice" in a.render_script
     assert "module.exports" in a.theme_js
     assert "module.exports" in a.recipes_js  # the require-able craft library
+
+
+class _EndlessVlm(IVlm):
+    """Streams forever, a chunk at a time, and counts what it produced.
+
+    Stands in for a real multimodal call, which is slow and chunked in exactly
+    this way. `collect` runs it on a worker thread — and a thread cannot be
+    cancelled, so without a way to tell it to stop it keeps going long after
+    whoever asked has left.
+    """
+
+    def __init__(self) -> None:
+        self.chunks = 0
+        self.finished = False
+
+    def stream(
+        self, prompt: str, *, images: Sequence[tuple[bytes, str]]
+    ) -> Iterator[tuple[str, bool]]:
+        while self.chunks < 200:
+            self.chunks += 1
+            time.sleep(0.002)
+            yield ("thinking…", True)
+        self.finished = True  # pragma: no cover — reached only if nothing stops it
+
+
+async def test_stopping_a_deck_turn_lets_the_model_call_go():
+    """P5: the one thing in the agent path that a Stop genuinely could not reach.
+
+    `asyncio.to_thread` cancels the FUTURE, never the thread — so the model call
+    ran to its own end whatever the person did. `make_deck` is granted by default
+    and runs several render-and-review passes by design, which makes it both the
+    longest turn a person is likely to stop and the only one that would ignore
+    them.
+
+    The whole call still cannot be aborted mid-chunk — nothing can abort a thread
+    — so the leak is bounded rather than closed: `on_chunk` is already called per
+    chunk, and it is where the thread is told. One chunk, not the whole call.
+    """
+    vlm = _EndlessVlm()
+    io, _ = make_io(vlm, render_ok())
+    req = DeckRequest(goal="a deck", out_path="./deck.pptx")
+
+    asking = asyncio.create_task(L._ask_model(req, ASSETS, io, None, None))
+
+    async def under_way() -> None:
+        # Bounded, and it re-raises: a call that fell over before streaming
+        # anything would otherwise spin here forever with its own reason
+        # swallowed — the hang being the one failure that reports nothing.
+        while vlm.chunks < 5:
+            if asking.done():
+                await asking
+                raise AssertionError("the model call ended before it streamed")
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(under_way(), 5)
+
+    asking.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await asking
+
+    # Bounded: the thread is told at its next chunk, so a few more may land — but
+    # it must STOP. Left to itself it would run to 200.
+    seen = vlm.chunks
+    await asyncio.sleep(0.3)
+    assert vlm.chunks - seen <= 2, "the model call kept streaming after the Stop"
+    assert not vlm.finished
