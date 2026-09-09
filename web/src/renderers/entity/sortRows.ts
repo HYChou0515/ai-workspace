@@ -49,7 +49,7 @@ function sortKey(
       const id = fieldText(raw);
       return (users?.find((u) => u.id === id)?.name ?? id).toLowerCase();
     }
-    case "daterange":
+    case "datetimerange":
       return String(raw).slice(0, 10); // start date; ISO strings sort lexically
     case "date":
       return String(raw);

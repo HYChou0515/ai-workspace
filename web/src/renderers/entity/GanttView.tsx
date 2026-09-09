@@ -2,7 +2,7 @@
  * gantt view (#419 §B, #448 A2 / #450) — records as bars on a fixed px-per-day
  * timeline. Interactive:
  *   - drag a bar's body to reschedule (both ends, keeps duration); drag a left/
- *     right handle to resize one edge — a drop writes the daterange via `onPatch`
+ *     right handle to resize one edge — a drop writes the datetimerange via `onPatch`
  *     (the useEntityWrite optimistic + 409 path).
  *   - zoom day / week / month (px-per-day density) with horizontal scroll + a
  *     time axis + a "today" marker.

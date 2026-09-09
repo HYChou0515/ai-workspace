@@ -2,7 +2,7 @@
  * gantt time-scale + drag math (#448 A2 / #450) — pure, unit-tested, so the
  * `GanttView` component stays a thin pointer-event shell. The timeline is a
  * fixed px-per-day scale (zoom picks the density); a pixel drag converts to a
- * whole number of days, and a bar drag rewrites the record's `daterange` value.
+ * whole number of days, and a bar drag rewrites the record's `datetimerange` value.
  * A span edge is one of two shapes, both UTC, both fixed-width in their date
  * part so a same-shape comparison is still chronological: `YYYY-MM-DD`, which
  * names a WHOLE day, and `YYYY-MM-DDTHH:mm`, which names one minute of one
@@ -147,7 +147,7 @@ export function deltaDays(dx: number, ppd: number): number {
   return Math.round(dx / ppd);
 }
 
-/** Parse a `daterange` value (`"start/end"` string, `[start, end]`, or
+/** Parse a `datetimerange` value (`"start/end"` string, `[start, end]`, or
  * `{start,end}` / `{from,to}`) into `YYYY-MM-DD` strings, or `null` for junk /
  * a reversed range.
  *
@@ -169,7 +169,7 @@ export function spanToDates(value: unknown): Span | null {
   return { start: sa, end: sb };
 }
 
-/** The two canonical edges a `daterange` value carries, each `null` when it is
+/** The two canonical edges a `datetimerange` value carries, each `null` when it is
  * absent or unreadable. The ONE place the accepted shapes (`"a/b"`, `[a, b]`,
  * `{start,end}`, `{from,to}`) are taken apart — {@link spanToDates} folds a
  * missing edge onto the other one, {@link resolveSpan} computes a week from it,
@@ -347,7 +347,7 @@ export function applyDrag(span: Span, mode: DragMode, cols: number, scale: Scale
   return { start: span.start, end: before(end, span.start) ? span.start : end };
 }
 
-/** The canonical stored form of a span (matches the table daterange picker). */
+/** The canonical stored form of a span (matches the table datetimerange picker). */
 export function spanValue(span: Span): string {
   return `${span.start}/${span.end}`;
 }

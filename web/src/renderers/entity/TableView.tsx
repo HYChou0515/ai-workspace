@@ -432,7 +432,7 @@ function EditableCell({
   }
 
   // Native selects commit onChange with focus intact → close on pick. Text /
-  // date / daterange commit on blur, so closing on blur covers them.
+  // date / datetimerange commit on blur, so closing on blur covers them.
   const closeOnCommit = widget === "select" || widget === "actor" || widget === "ref";
   return (
     <span

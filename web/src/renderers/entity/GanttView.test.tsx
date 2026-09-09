@@ -23,7 +23,7 @@ const type: EntityType = {
   records_path: "issues",
   fields: [
     { name: "title", role: "text" },
-    { name: "span", role: "daterange" },
+    { name: "span", role: "datetimerange" },
     { name: "milestone", role: "ref", to: "milestone" },
     { name: "assignee", role: "actor" },
     {
@@ -224,7 +224,7 @@ describe("GanttView", () => {
       records_path: "milestones",
       fields: [
         { name: "title", role: "text" },
-        { name: "span", role: "daterange" },
+        { name: "span", role: "datetimerange" },
         { name: "issues", role: "backref", from: "issue.milestone" },
       ],
       form: [],
@@ -362,7 +362,7 @@ describe("GanttView", () => {
     });
   });
 
-  it("moves a bar by dragging its body and writes the shifted daterange", () => {
+  it("moves a bar by dragging its body and writes the shifted datetimerange", () => {
     const onPatch = vi.fn();
     render(<GanttView {...props({ entities: [rec(1, { title: "A", span: "2026-01-10/2026-01-20" })], onPatch })} />);
     const ppd = pxPerDay("week"); // default zoom
@@ -546,7 +546,7 @@ describe("GanttView", () => {
   });
 
   it("colours the end date: an inclusive Mon→Wed span is three days wide", () => {
-    // A `daterange` includes both ends — 7/13–7/15 is a three-day task — and the
+    // A `datetimerange` includes both ends — 7/13–7/15 is a three-day task — and the
     // chart width already counts it that way. A bar that stopped at the START of
     // its end date left that day blank, so the range looked a day short.
     render(<GanttView {...props({ entities: [rec(1, { title: "A", span: "2026-07-13/2026-07-15" })] })} />);

@@ -33,7 +33,7 @@ const milestoneType: EntityType = {
   records_path: "milestones",
   fields: [
     { name: "title", role: "text" },
-    { name: "span", role: "daterange" },
+    { name: "span", role: "datetimerange" },
     { name: "issues", role: "backref", from: "issue.milestone" },
   ],
   form: [],

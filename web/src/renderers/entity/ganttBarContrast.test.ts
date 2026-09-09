@@ -47,7 +47,7 @@ const type: EntityType = {
   records_path: "issues",
   fields: [
     { name: "title", role: "text" },
-    { name: "span", role: "daterange" },
+    { name: "span", role: "datetimerange" },
     { name: "assignee", role: "actor" },
     // named by the `schedule:` block a provisional bar needs to exist at all
     { name: "exp_days", role: "number" },
