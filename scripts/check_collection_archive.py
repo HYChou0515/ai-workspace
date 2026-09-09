@@ -211,12 +211,22 @@ def ask_with_image(client: httpx.Client, cid: str, question: str) -> str | None:
         "content": question,
         "image": {"data": base64.b64encode(_PNG_1X1).decode(), "mime": "image/png"},
     }
-    with client.stream("POST", f"/kb/chats/{chat_id}/messages", json=payload) as resp:
-        if resp.status_code == 400:
-            resp.read()
-            return None  # no VLM wired — the server says so rather than guessing
-        _expect(resp.status_code == 200, f"asking returned {resp.status_code}")
-        return "".join(line for line in resp.iter_lines())
+    # The send QUEUES (202) and answers with an empty body — the live events are
+    # on the chat's own stream now, and this check does not need them: it awaits
+    # its own turn (`send_await_timeout`), so by the time the POST returns the
+    # answer is in the thread. Reading the POST as an SSE body, as this did,
+    # simply produced nothing and failed the check.
+    resp = client.post(f"/kb/chats/{chat_id}/messages", json=payload)
+    if resp.status_code == 400:
+        return None  # no VLM wired — the server says so rather than guessing
+    _expect(resp.status_code == 202, f"asking returned {resp.status_code}")
+    thread = client.get(f"/kb/chats/{chat_id}")
+    _expect(thread.status_code == 200, f"reading the thread returned {thread.status_code}")
+    return "\n".join(
+        m.get("content") or ""
+        for m in thread.json().get("messages", [])
+        if m.get("role") in ("assistant", "tool")
+    )
 
 
 def main() -> int:

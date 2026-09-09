@@ -1089,9 +1089,21 @@ def register_kb_chat_routes(
 
     @app.delete("/kb/chats/{chat_id}/messages/current", status_code=204)
     async def cancel_message(chat_id: str) -> Response:
-        """Interrupt the chat's in-flight turn (its stream gets RunCancelled,
-        then closes). 204 even when nothing is running — same as RCA."""
-        await engine.cancel(chat_id)
+        """Interrupt the chat's in-flight turn (the broadcast carries
+        RunCancelled). 204 even when nothing is running — same as RCA.
+
+        `cancel_current`, not `cancel`: the two search different places.
+        `cancel` looks in `_sessions`, where `stream()` kept its turns — which
+        this chat no longer creates. An ENQUEUED turn lives in `_ws_sessions`
+        and only `cancel_current` reaches it, so Stop was left with nothing to
+        stop locally and the turn died only when the epoch watcher's poll
+        noticed: measured at a 507 ms median, against ~0 for the direct path.
+        Half a second of a button that has already said it stopped.
+
+        It is also the narrower one, which is what #43 wants: it interrupts the
+        RUNNING turn and leaves the queue alone, so a Stop does not throw away a
+        question somebody has already typed."""
+        await engine.cancel_current(chat_id, by=get_user_id())
         return Response(status_code=204)
 
 
