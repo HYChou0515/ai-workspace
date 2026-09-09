@@ -43,10 +43,42 @@ logger = logging.getLogger(__name__)
 
 # Maps the host's structured `{"error": <type>}` discriminator back to the
 # exception type the Sandbox Protocol promises callers.
+#: The words the host states in `{"error": ...}`, mapped to what they mean here.
+#: One table rather than a branch per call site, so teaching the client a new
+#: word is a dict entry.
 _ERRORS: dict[str, type[Exception]] = {
     "SandboxNotFound": SandboxNotFound,
     "FileNotFoundError": FileNotFoundError,
+    # A pod that has begun terminating (SIGTERM, or a PreStop hook hitting
+    # `/drain`) refuses NEW sandboxes with 503 `{"error": "draining"}` while the
+    # ones it already runs continue. That is `SandboxBusy`'s exact meaning —
+    # alive, not serving this right now — and it is the most retryable signal on
+    # the wire: another pod will take it. Untaught, `raise_for_status()` made it
+    # a bare `HTTPStatusError`, which is neither of the two exceptions the API
+    # boundary turns into a 503 + `Retry-After`, so a `rollout restart` — when
+    # EVERY sandbox is rebuilding at once — 500s through the one moment the
+    # system most needs to back off.
+    "draining": SandboxBusy,
 }
+
+
+def _stated_error(resp: httpx.Response) -> Exception | None:
+    """The exception this response NAMES, or ``None`` when it names nothing we
+    model (the caller then falls back to `raise_for_status`).
+
+    Reads the body defensively: an error path must not raise a DIFFERENT error
+    because the thing that failed also failed to be JSON."""
+    try:
+        body = resp.json()
+    except ValueError:
+        return None
+    if not isinstance(body, dict):
+        return None
+    stated = body.get("error")
+    if not isinstance(stated, str):
+        return None
+    exc_type = _ERRORS.get(stated)
+    return None if exc_type is None else exc_type(body.get("detail") or stated)
 
 
 def _encode_handle(pod_url: str, remote_id: str) -> str:
@@ -366,6 +398,15 @@ class HttpSandbox:
                 "pids_max": spec.pids_max,
             },
         )
+        # Before `raise_for_status`: a host that STATED its reason is answered
+        # with that reason, not with a generic status error.
+        if (stated := _stated_error(resp)) is not None:
+            logger.warning(
+                "sandbox-http: create refused for item %s -> %s",
+                sandbox_id,
+                type(stated).__name__,
+            )
+            raise stated
         resp.raise_for_status()
         data = resp.json()
         logger.info("sandbox-http: created sandbox for item %s", sandbox_id)

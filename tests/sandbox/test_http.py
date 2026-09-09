@@ -249,6 +249,35 @@ async def http_sandbox():
         yield HttpSandbox(base_url=_ADVERTISE, client=client)
 
 
+@pytest.fixture
+async def draining_host():
+    """A host that has begun terminating. `rollout restart` puts every host pod
+    through this state, and the app keeps sending to one until kubernetes drops
+    it from the endpoints — so this is the common path, not a race."""
+    app = FastAPI()
+
+    @app.post("/sandboxes")
+    async def _create() -> JSONResponse:
+        return JSONResponse(status_code=503, content={"error": "draining"})
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app)) as client:
+        yield HttpSandbox(base_url=_ADVERTISE, client=client)
+
+
+async def test_create_reads_a_draining_host_as_busy(draining_host: HttpSandbox):
+    """`draining` means "alive, but ask another pod" — the most retryable signal
+    the wire has. Nothing in the app knew the word, so `raise_for_status()` made
+    it a bare `HTTPStatusError`: not `SandboxBusy`, not `SandboxNotFound`, and
+    therefore invisible to the two handlers that would have turned it into a
+    503 + `Retry-After`. During a rollout that is every rebuild at once, so the
+    one moment the system most needs to back off is the one it 500s through.
+
+    `SandboxBusy` is the honest mapping: the host is up, it is simply refusing
+    NEW sandboxes while it terminates."""
+    with pytest.raises(SandboxBusy):
+        await draining_host.create(SandboxSpec())
+
+
 async def test_create_returns_unique_handles(http_sandbox: HttpSandbox):
     h1 = await http_sandbox.create(SandboxSpec())
     h2 = await http_sandbox.create(SandboxSpec())
