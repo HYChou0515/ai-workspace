@@ -119,7 +119,7 @@ UX hardening ran as two epics — #157 (round 1) and #169 (round 2) — plus sta
 | #161 | Onboarding + empty states: versioned welcome modal (platform + per-App) + empty-state copy | #168 | ✅ |
 | #162 | KB IA + index status: per-tab subtitles + collection-page index-status strip | #164 | ✅ |
 | #170 | Async status/progress feedback: KB index status strip rework + workflow gate card pinned + skeletons + tool-card running banner | #188 | ✅ |
-| #171 | De-jargon term sweep: terminology table (sandbox→執行環境, indexing→處理中, retrieval modes relabeled) | #187 | ✅ |
+| #171 | De-jargon term sweep: terminology table (~~sandbox→執行環境~~ **superseded: the term is 沙盒 / Sandbox again, swept and guarded in `web/src/lib/i18n.test.tsx`**, indexing→處理中, retrieval modes relabeled) | #187 | ✅ |
 | #172 | Core-action discoverability: upload buttons + drag-drop overlay, re-index on Documents tab, nav switcher labels, scope button | #189 | ✅ |
 | #173 | Inline concept help: expandable "what's here" strip, glossary framing, Wiki "AI-written, editable" badge | #174 | ✅ |
 | #118 | Sanity output modal: truncated Diagnostics output → click opens read-only full-text modal (+ grade/latency footer) | #153 | ✅ |

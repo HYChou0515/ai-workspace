@@ -63,13 +63,13 @@ class SandboxQuotaExceeded(Exception):
     ) -> None:
         super().__init__(
             f"{owner} is at their sandbox limit: {dimension} {used} of {limit} "
-            f"already in use by live environments"
+            f"already in use by live sandboxes"
         )
         self.owner = owner
         self.dimension = dimension
         self.used = used
         self.limit = limit
-        #: WHICH environments are holding it. The docstring above has always
+        #: WHICH sandboxes are holding it. The docstring above has always
         #: promised "what to close and how much it buys back", and the numbers
         #: alone answer only the second half — leaving the person to work out who
         #: is holding their quota, on a page they have to know exists. Ids and

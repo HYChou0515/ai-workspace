@@ -41,8 +41,16 @@ export type ItemEnvironmentPanelProps = {
   onClose?: () => void;
   /** One dimension at a time. An absent key means "not touched", which the
    *  caller turns into "keep what is stored" — the distinction that stops a cpu
-   *  edit from clearing memory. */
+   *  edit from clearing memory.
+   *
+   *  Called when a field LOSES FOCUS to something else in the panel. Closing the
+   *  modal is deliberately not that: its exits neither save nor ask, and the
+   *  comment in `ItemEnvironmentModal` says why both were tried and withdrawn. */
   onSave?: (edit: { cpuCores?: number | null; memory?: string | null }) => void;
+  /** Whether the last save was REFUSED. Every save is dispatched while this
+   *  panel is on screen — the modal's exits do not commit — so a refusal has
+   *  somewhere to be read, which is what makes fire-and-forget saving honest. */
+  saveFailed?: boolean;
 };
 
 function Meter({ used, limit }: { used: number; limit: number }) {
@@ -67,6 +75,7 @@ export function ItemEnvironmentPanel({
   canEdit,
   onClose,
   onSave,
+  saveFailed,
 }: ItemEnvironmentPanelProps) {
   const t = useT();
   const [draft, setDraft] = useState<string>(
@@ -95,9 +104,9 @@ export function ItemEnvironmentPanel({
   const boundByQuota = env.cpuBoundBy === "quota";
 
   return (
-    <section className="item-environment" aria-label={t("itemenv.heading")}>
-      <h3>{t("itemenv.heading")}</h3>
-
+    // The title lives on the modal's own header row — drawing it again here
+    // gave the panel two of them, one of which no `labelledBy` pointed at.
+    <section className="item-environment">
       {/* ── the machine half: always drawn ── */}
       <p data-testid="environment-status" className="summary">
         <span className="gauge-label">
@@ -212,9 +221,20 @@ export function ItemEnvironmentPanel({
               aria-label={t("resources.memory")}
               disabled={!canEdit || env.running}
               onChange={(e) => setMemoryDraft(e.target.value)}
-              onBlur={() => onSave?.({ memory: memoryDraft === "" ? null : memoryDraft })}
+              onBlur={() =>
+                onSave?.({ memory: memoryDraft === "" ? null : memoryDraft })
+              }
             />
           )}
+
+          {/* After BOTH inputs, not between them: one `save` mutation serves cpu,
+              memory and reset alike, so an alert sitting under the cpu field
+              points a refused MEMORY save at the wrong control. */}
+          {saveFailed ? (
+            <p data-testid="save-failed" className="detail" role="alert">
+              {t("itemenv.saveFailed")}
+            </p>
+          ) : null}
 
           <div data-testid="budget-gauge" className="gauge">
             <p className="summary">

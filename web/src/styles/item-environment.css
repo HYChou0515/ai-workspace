@@ -18,15 +18,12 @@
   padding: var(--space-12);
 }
 
-.item-environment > h3,
+/* The panel's own <h3> moved into the modal's header row, which is inline
+   styled, so the h3 half of this pair stopped matching anything. The two rules
+   are merged rather than one deleted: the second only ever overrode the first,
+   and what it computed to is written out here. */
 .item-environment > h4 {
-  margin: 0;
-  font-size: var(--text-body);
-  color: var(--text-paper);
-}
-
-.item-environment > h4 {
-  margin-top: var(--space-8);
+  margin: var(--space-8) 0 0;
   font-size: var(--text-body-sm);
   color: var(--text-paper-d);
 }

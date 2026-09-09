@@ -338,16 +338,16 @@ DELETE /admin/user-resources/{user_id}   # 清掉覆寫,回全站預設
 |---|---|---|
 | `workspace_quota_exceeded` | **這個 item** 的 disk | 刪這個 item 裡的檔案 |
 | `user_quota_exceeded` | 這個人**所有 item** 的 disk 加總 | 要刪的檔案可能在**別的 item** |
-| `sandbox_quota_exceeded` | 活著的 sandbox `count`/`cpu`/`memory`(`detail.dimension` 指明哪一個) | 關掉某個執行環境 |
+| `sandbox_quota_exceeded` | 活著的 sandbox `count`/`cpu`/`memory`(`detail.dimension` 指明哪一個) | 關掉某個沙盒 |
 
 擋在**使用者訊息存進去之前**(`chat_send.send`)、terminal 的 `POST /exec`、以及 workflow 執行;
 **item 已經有活著的 sandbox 就直接放行**,那格他早就佔著了。排程觸發的 headless workflow 一樣
 會被擋,但會留下可見的失敗紀錄——定時任務靜靜沒跑比擋下來更危險。
 
-被擋的人自己解決的地方是 **`/my-resources`**:列出活著的執行環境(附**關閉**鈕)與各 item 的
+被擋的人自己解決的地方是 **`/my-resources`**:列出活著的沙盒(附**關閉**鈕)與各 item 的
 儲存用量,兩者都配一條用量對上限的量表。實測一輪:`per_user.count: 1` 時第二個 item 的 exec 回
 `507 {"error":"sandbox_quota_exceeded","dimension":"sandboxes","used":2,"limit":1.0}` → 進畫面顯示
-`Live environments 1 / 1` → 按 Close → `0 / 1 · No live environments` → 同一個 exec 回 200。
+`Live sandboxes 1 / 1` → 按 Close → `0 / 1 · No live sandboxes.` → 同一個 exec 回 200。
 
 superuser 在同一頁的最下方多一個**個人額度**區塊,可以直接把某個人調高(見上一節)。
 
