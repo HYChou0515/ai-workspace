@@ -219,20 +219,23 @@ class UserScheduleSweeper:
         # API pod, un-gated by `run_consumers`, at O(items × paths × rows) per
         # tick, so a loop it holds is holding every request that pod is serving.
         for item_id, paths in await asyncio.to_thread(self._index.items_with_paths):
-            # The try covers the WHOLE item, reading its paths included. Reading
-            # them outside it meant one specstar error skipped every item after
-            # this one in the same tick — alphabetically, so the same items lose
-            # every time, and the lifespan loop swallows it so nothing crashes:
-            # some schedules are just late, sometimes. That is the opposite of
-            # the per-item resilience this module's header promises.
-            try:
-                for path in paths:
+            # PER PATH, because a page is a folder and the promise in this
+            # module's header is "one page's mistake costs that page only".
+            #
+            # This handler has now been wrong in both directions. It started
+            # outside the paths READ, so one specstar error skipped every item
+            # after this one; moving it in fixed that and widened it to the whole
+            # item at the same time, which made the alphabetically-first page
+            # cost every page after it — the same argument, one level down.
+            # `paths` arrives with the listing now, so nothing has to be read
+            # here and the handler can sit where the blast radius belongs.
+            for path in paths:
+                try:
                     fired += await self._one_file(item_id, path)
-            except Exception:
-                # One item's problem must not cost the rest their schedules — the
-                # failure that would otherwise be found weeks later, by somebody
-                # asking why their report stopped.
-                logger.exception("user schedules: item %s failed", item_id)
+                except Exception:
+                    # The failure that would otherwise be found weeks later, by
+                    # somebody asking why their report stopped.
+                    logger.exception("user schedules: item %s path %s failed", item_id, path)
         return fired
 
     def _say_once(self, item_id: str, path: str, level: int, message: str, *args: object) -> None:
@@ -407,7 +410,17 @@ class UserScheduleSweeper:
         fired = 0
         for row in rows:
             if offered is not None and row.run not in offered:
-                logger.warning(
+                # Memoised like the other two complaints about this file, and
+                # keyed on the ROW as well as the path: this is the only one of
+                # the three that multiplies by rows, so leaving it bare was a
+                # line per bad row per tick, on every pod, until somebody edits a
+                # page nothing has told them is broken. A lesson applied to two
+                # of three places is worse than one not applied at all — the memo
+                # makes the log look tamed while the line that floods it fires on.
+                self._say_once(
+                    item_id,
+                    f"{path}#{row.run}",
+                    logging.WARNING,
                     "user schedules: %s %s wants %r, which this app does not offer "
                     "(it offers %s) — that row will not run",
                     item_id,

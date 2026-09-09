@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from datetime import datetime, timedelta
 
@@ -1206,3 +1207,104 @@ def test_a_sub_daily_schedule_loses_one_hour_of_runs_at_the_autumn_switch(
         window_key(every, _in_zone(base + timedelta(minutes=m), "Asia/Taipei")) for m in range(120)
     }
     assert len(steady) == per_hour * 2, "the loss must be the SWITCH, not the arithmetic"
+
+
+def test_a_row_naming_a_workflow_the_app_does_not_offer_complains_once(caplog):
+    """The third repeating complaint — and the only one that multiplies by ROWS.
+
+    P39 memoised two of the three lines this module repeats and left this one a
+    bare `logger.warning` inside the per-row loop. It is the worst of the three
+    to leave behind: the other two are one line per file per tick, this one is a
+    line per BAD ROW per tick, on every pod, forever — until somebody edits a
+    page they have no reason to think is broken, because nothing tells them.
+
+    A lesson applied to two of three places is worse than one not applied at
+    all: the memo makes the log look tamed while the line that actually floods
+    it keeps firing.
+    """
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    files = _Files(
+        **{
+            f"{ITEM}{PATH}": _file(
+                {"every": "daily", "at": "09:00", "run": "nope"},
+                {"every": "daily", "at": "10:00", "run": "also-nope"},
+            )
+        }
+    )
+    sweeper = UserScheduleSweeper(
+        spec=spec,
+        index=ScheduleIndex(spec),
+        read=files.read,
+        read_live=files.read,
+        start=_Started(),
+        owner_of=lambda _item: "alice",
+        now=lambda: datetime(2026, 9, 5, 11, 0),
+        workflows_for=lambda _item: ("build-report",),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        for _ in range(3):
+            asyncio.run(sweeper.tick())
+
+    said = [r for r in caplog.records if "does not offer" in r.getMessage()]
+    assert len(said) == 2, (
+        f"two bad rows over three ticks produced {len(said)} lines — the complaint "
+        "repeats every tick, per row, for as long as the page stays as it is"
+    )
+
+
+def test_one_page_of_an_item_failing_does_not_cost_the_other_pages(caplog):
+    """A page is a FOLDER, so per-page resilience is per-PATH.
+
+    P39 moved the `try` outward so it covered reading the paths, and widened it
+    from one path to the whole item in the same edit. `paths` is sorted, so the
+    alphabetically-first page loses every time — which is exactly the argument
+    P39's own comment makes about items, reintroduced one level down. This
+    module's header promises "one page's mistake costs that page only".
+
+    Broken at the WINDOW LEDGER, not at the read: a read error is handled inside
+    `_one_file` (that is what the confirmation path is for), so a double that
+    breaks the read never reaches the handler under test and the test passes
+    while the defect is intact. `last_window` is the first call that genuinely
+    escapes.
+    """
+    spec = _spec()
+    index = ScheduleIndex(spec)
+    for page in ("/a", "/b"):
+        index.record(ITEM, f"{page}/{SCHEDULES_FILE}")
+    files = _Files(
+        **{f"{ITEM}/a/{SCHEDULES_FILE}": _file(DAILY), f"{ITEM}/b/{SCHEDULES_FILE}": _file(DAILY)}
+    )
+
+    started = _Started()
+    sweeper = UserScheduleSweeper(
+        spec=spec,
+        index=index,
+        read=files.read,
+        read_live=files.read,
+        start=started,
+        owner_of=lambda _item: "alice",
+        now=lambda: datetime(2026, 9, 5, 9, 30),
+    )
+
+    real_last_window = sweeper._store.last_window
+    calls = {"n": 0}
+
+    def _breaks_once(trigger_id: str) -> str:
+        calls["n"] += 1
+        if calls["n"] == 1:  # the first page, in sorted order
+            raise RuntimeError("a transient store error on the first page")
+        return real_last_window(trigger_id)
+
+    # Patched on the instance: the property under test is what `tick` does when a
+    # store call escapes `_one_file`, and `last_window` is the first one that can.
+    sweeper._store.last_window = _breaks_once  # ty: ignore[invalid-assignment]
+
+    with caplog.at_level(logging.ERROR):
+        fired = asyncio.run(sweeper.tick())
+
+    assert fired == 1, (
+        f"{fired} schedules fired — page /b was skipped because page /a failed, so "
+        "the alphabetically-first page costs every page after it, every tick"
+    )
