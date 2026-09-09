@@ -272,6 +272,11 @@ Read it back with `readFile` and render it: the file IS the state, so a page tha
 shows what it wrote is showing the truth. Cancelling a schedule is removing its
 row and writing the file again.
 
+⚠️ **Deleting the schedule's chat thread does not cancel it.** Each schedule
+drives one conversation, reused every fire, and the platform brings it back if
+it is missing — otherwise a stray delete would stop a nightly report with
+nothing anywhere saying why. Remove the row.
+
 What the platform guarantees, so you do not build it yourself:
 
 - **It fires once**, however many pods are running and however often the sweep

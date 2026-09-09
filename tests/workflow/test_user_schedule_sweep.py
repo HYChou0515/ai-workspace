@@ -433,19 +433,30 @@ def test_a_slow_confirmation_does_not_hold_up_every_other_item():
 
 
 def test_the_cap_counts_schedules_not_complaints():
-    """A file of 400 bad rows declares 400 schedules, not 1200.
+    """A file of N bad rows declares N schedules, not N times its complaints.
 
     `validate_user_schedules` emits several strings per bad row, so counting
     rows-plus-problems made the cap fire on files that never reached it — and the
     operator-facing message named the inflated number, so the one place they
     could check the claim disagreed with the file in front of them.
+
+    THE NUMBERS ARE SIZED TO CROSS THE LINE, which they were not before: the
+    fixture was 1 good plus 40 bad against a cap of 100, and the old expression
+    computes 1 + 80 = 81 — under the cap, so restoring the bug left this test
+    green. It was failing to catch the regression it is named after. (The old
+    comment said "three problems each"; the measured figure is two. A derived
+    number written from memory, in the test whose whole subject is a
+    miscounted total.)
+
+    91 declared rows against a cap of 100: honest count 91, passes; complaint
+    count 1 + 180 = 181, refused.
     """
     spec = _spec()
     ScheduleIndex(spec).record(ITEM, PATH)
     started = _Started()
-    # Three problems each, well under a cap of 100 by any honest count.
+    # Two problems each — measured, not recalled.
     bad = {"every": "monthly", "dom": 99, "at": "9am", "run": "x"}
-    rows = [DAILY, *[bad] * 40]
+    rows = [DAILY, *[bad] * 90]
     files = _Files(**{f"{ITEM}{PATH}": _file(*rows)})
 
     sweeper = UserScheduleSweeper(

@@ -250,10 +250,17 @@ async def start_page_schedule(
             payload=payload,
         )
     except Exception:
-        # Take the chat down with the run that never started: a chat with no
-        # `run_id` is a FREE chat, and the earliest free chat is what the item
-        # opens as its default. A schedule that fails nightly would otherwise
-        # install a new default conversation every night.
+        # Take the chat down with the run that never started, so a schedule
+        # whose FIRST fire failed does not leave an empty thread named after a
+        # workflow that never ran.
+        #
+        # ⚠️ This used to say "a chat with no `run_id` is a FREE chat, and a
+        # schedule that fails nightly would install a new default conversation
+        # every night". That is the reason for the INTERACTIVE entrance, whose
+        # `open_run_chat` really does create with `run_id=None`. It is not the
+        # reason here: `chat_for_schedule` creates with `""`, which is not free,
+        # so this chat could never have become the item's default. Copying the
+        # true sentence from one entrance to the other made it false.
         #
         # Suppressed so the cleanup cannot REPLACE the failure it is cleaning
         # up after: the caller needs the original reason, and a second error

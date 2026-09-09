@@ -177,3 +177,39 @@ def test_a_schedules_thread_never_becomes_the_items_default_conversation() -> No
     human = conv_rm.create(Conversation(item_id=item_id, title="mine", created_ms=1)).resource_id
     found = find_default_conversation(conv_rm, item_id)
     assert found is not None and found[0] == human, "a person's own chat is the default"
+
+
+def test_deleting_a_schedules_thread_does_not_stop_the_schedule() -> None:
+    """A TRADE-OFF, pinned so it cannot change by accident.
+
+    `chat_for_schedule` restores a soft-deleted row rather than minting a new
+    one, and that `restore` is load-bearing: without it the key resolves to a
+    deleted conversation and `workflow_exec.drive_turn`, which catches
+    `ResourceIDNotFoundError` and not `ResourceIsDeletedError`, crashes instead
+    of falling back.
+
+    The cost is real and worth stating plainly: a person who deletes a
+    schedule's thread gets it back on the next fire, history included. Deleting
+    the conversation is not how you stop a schedule — removing its row from
+    `schedules.json` is, and that is what `reference.md` tells the author.
+
+    The alternatives are worse. Minting a fresh chat would change the key every
+    time somebody tidied up, and the key is what `active_run_for_chat` collides
+    on — so the one-run rule would switch off for that schedule. Refusing to
+    fire would let a stray click stop a nightly report with nothing to say why.
+    """
+    spec, locator, item_id = _locator_and_item()
+    conv_rm = spec.get_resource_manager(Conversation)
+
+    key = "wui:i1:abc"
+    first, created = locator.chat_for_schedule(item_id, "build-report", key)
+    assert created is True
+    conv_rm.delete(first)
+
+    again, created_again = locator.chat_for_schedule(item_id, "build-report", key)
+
+    assert again == first, "the schedule lost its thread and would key on a new one"
+    assert created_again is False, "a restored thread is not this call's to clean up"
+    assert len(list_item_conversations(conv_rm, item_id)) == 1, (
+        "the delete left a second thread behind"
+    )
