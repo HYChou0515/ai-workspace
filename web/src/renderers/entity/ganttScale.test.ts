@@ -4,6 +4,7 @@ import {
   applyDrag,
   AXIS_DAY_OF_MONTH_PX,
   AXIS_MIN_LABEL_PX,
+  AXIS_MIN_HOUR_LABEL_PX,
   AXIS_WEEKDAY_PX,
   axisFor,
   canvasWidthFor,
@@ -307,6 +308,36 @@ describe("the slider reaches hours (#785)", () => {
     expect(sliderToPpd(1)).toBeGreaterThan(PPD_ANCHORS.day);
   });
 
+  it("reaches a ONE-hour tick, not merely hour grain", () => {
+    // "拉霸應該要能拉到小時 現在拉到最右邊有時也是 by 2hr". Reaching hour
+    // GRAIN is not the same as reaching an hourly AXIS: the fine row picks the
+    // first step from [1,2,3,6,12,24] whose width clears the label reservation,
+    // and the shared AXIS_MIN_LABEL_PX (36) is sized for a day label like
+    // "Mon 5". An hour label is two mono digits, so holding it to the same
+    // reservation made `1` unreachable at every density on the track — the end
+    // of the slider was 2-hourly and there was no way to ask for less.
+    const ppd = sliderToPpd(1);
+    expect(grainFor(ppd)).toBe("hour");
+
+    const axis = axisFor("2026-01-05", 48, ppd);
+    expect(axis.unit).toBe("hour");
+    const step = axis.fine[1].day - axis.fine[0].day;
+    expect(step, `densest fine step is ${step} column(s)`).toBe(1);
+
+    // ...and the labels still must not touch, or "1 hour" is only readable in
+    // the sense that the ticks exist.
+    expect(columnPx(ppd, "hour")).toBeGreaterThanOrEqual(AXIS_MIN_HOUR_LABEL_PX);
+  });
+
+  it("leaves the one-hour step room on the track rather than only at its very end", () => {
+    // A step that is only reachable at slider position 1.0 is one the user
+    // cannot hold: a pixel of travel back and the axis doubles. So the densest
+    // column has to clear the hour reservation by a margin, not exactly meet
+    // it. Stated as a fraction of the track so it survives a retuned PPD_MAX.
+    const onlyAtTheEnd = ppdToSlider(AXIS_MIN_HOUR_LABEL_PX * 24);
+    expect(onlyAtTheEnd).toBeLessThan(0.95);
+  });
+
   it("crosses the threshold without moving anything on screen", () => {
     // A day is one column at day grain and twenty-four at hour grain, and an
     // hour column is a twenty-fourth as wide — so the same date sits at the
@@ -458,7 +489,17 @@ describe("the axis at hour grain (#785)", () => {
   it("labels hours on the fine row and names the day in the band above", () => {
     const axis = axisFor("2026-01-05", 48, PPD);
     expect(axis.unit).toBe("hour");
-    expect(axis.fine.map((t) => t.label)).toContain("09");
+
+    // Every fine label is a two-digit hour. This used to look for "09", which
+    // only appears when the density happens to pick a 3-hour step — so the
+    // assertion was pinned to a thinning rule it was not about, and retuning
+    // that rule broke a test whose subject is "the fine row says hours".
+    const labels = axis.fine.map((t) => t.label);
+    expect(labels.length).toBeGreaterThan(0);
+    for (const l of labels) {
+      expect(l).toMatch(/^\d\d$/);
+      expect(Number(l)).toBeLessThan(24);
+    }
     expect(axis.coarse.map((b) => b.label)).toContain("Mon 5 Jan");
   });
 
