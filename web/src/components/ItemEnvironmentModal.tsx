@@ -48,16 +48,16 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useId } from "react";
+import { useId, useRef } from "react";
 
-import { itemEnvironmentApi } from "../api/itemEnvironment";
+import { type ItemSize, itemEnvironmentApi } from "../api/itemEnvironment";
 import { myResourcesApi } from "../api/myResources";
 import { useT } from "../lib/i18n";
 import { Icon } from "./Icon";
 import { ItemEnvironmentPanel } from "./ItemEnvironmentPanel";
 import { ModalShell } from "./ModalShell";
 import { budgetFrom } from "./useItemEnvironment";
-import { type SizeEdit, sizeToSave } from "./ItemEnvironmentSize";
+import { type SizeEdit, mergeEdit, sizeToSave } from "./ItemEnvironmentSize";
 
 export type ItemEnvironmentModalProps = {
   slug: string;
@@ -77,6 +77,10 @@ export function ItemEnvironmentModal({
   const t = useT();
   const qc = useQueryClient();
   const titleId = useId();
+  //: The last value SENT to the route, so a second edit merges onto it rather
+  //: than onto a server copy that has not caught up yet. Never cleared: it is
+  //: always at least as fresh as `env.data`.
+  const lastSentRef = useRef<ItemSize | null>(null);
 
   const env = useQuery({
     queryKey: ["item-environment", slug, itemId],
@@ -98,8 +102,19 @@ export function ItemEnvironmentModal({
     // The route REPLACES both dimensions, so the client owns the whole value.
     // Hard-coding `memory: null` here meant every cpu edit — and every "back to
     // default" click — silently destroyed a stored memory setting.
-    mutationFn: (edit: SizeEdit) =>
-      itemEnvironmentApi.setSize(slug, itemId, sizeToSave(env.data!, edit)),
+    mutationFn: (edit: SizeEdit) => {
+      // Merge onto what we last SENT, falling back to the server's copy only
+      // for the first edit. `env.data` moves when the invalidate-triggered
+      // refetch lands, which is one round trip AFTER the save — so editing cpu
+      // and then memory inside that window rebuilt the whole value from the cpu
+      // the server still had, silently undoing the first edit. Both requests
+      // answer 200, so nothing surfaced it.
+      const next = lastSentRef.current
+        ? mergeEdit(lastSentRef.current, edit)
+        : sizeToSave(env.data!, edit);
+      lastSentRef.current = next;
+      return itemEnvironmentApi.setSize(slug, itemId, next);
+    },
     onSuccess: refresh,
   });
   const close = useMutation({
@@ -174,6 +189,7 @@ export function ItemEnvironmentModal({
           }}
           onSave={(edit) => save.mutate(edit)}
           saveFailed={save.isError}
+          closeFailed={close.isError}
         />
       ) : (
         <p

@@ -983,6 +983,14 @@ export const messages = {
   // numbers is what `lib/quotaFailure.ts` exists for and would be the better
   // message; wiring it here is a bigger change than this frame, so this says
   // only what it knows rather than inventing a remedy.
+  // Closing spends nothing and frees the person's own budget, so a refusal here
+  // is almost always transient — but silence made the button look broken, which
+  // is the one reading that stops someone trying again. `/my-resources` has had
+  // wording for this operation the whole time; this is the same sentence.
+  "itemenv.closeFailed": {
+    "zh-TW": "目前關不掉這個沙盒，請稍後再試一次。",
+    en: "Couldn't shut this sandbox down just now. Try again shortly.",
+  },
   "itemenv.saveFailed": {
     "zh-TW": "沒有存起來:這個大小沒有套用。",
     en: "Not saved — that size wasn't applied.",
