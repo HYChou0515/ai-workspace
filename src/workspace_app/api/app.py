@@ -816,7 +816,13 @@ def create_app(
                 owner=owner,
                 used=others + new_size - growth,
                 quota=limit,
-                attempted=growth,
+                # `new_size`, the size the caller composed and therefore already
+                # holds. Publishing the DELTA let them derive `old = new_size -
+                # attempted` — the current size of a file they may not read —
+                # straight out of the 507 body, which `turn_gate.quota_body`
+                # ships verbatim. `used` is `others + old`, which they cannot
+                # split without knowing `others`.
+                attempted=new_size,
             )
         # Allowed: keep the row current so this person's next write in a
         # DIFFERENT item is judged against a total that includes this one.

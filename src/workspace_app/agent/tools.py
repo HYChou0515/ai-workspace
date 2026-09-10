@@ -585,10 +585,16 @@ async def edit_file_impl(
     current = await fs.edit(inv, path, old_string, new_string)
     if current is None:
         return f"edited {rel_path(path)}"
-    # No withheld branch here: this impl requires `read_content` above, so
-    # `_conflict_echo` cannot refuse. A branch the product cannot reach is a
-    # state nothing can test and nobody can trust.
-    assert (echo := _conflict_echo(ctx, path, current)) is not None
+    # This impl required `read_content` above, so `_conflict_echo` normally
+    # cannot refuse — but "normally" is not "never": `authorize_tool` re-reads
+    # the item on every call, and `fs.edit` above is a real suspension, so a
+    # `change_permission` landing inside it flips the answer. An `assert` would
+    # then reach the model as "an error occurred" (and `python -O` strips the
+    # walrus with it, leaving `echo` unbound on the everyday conflict path).
+    # A revoked reader gets the refusal, not a crash.
+    echo = _conflict_echo(ctx, path, current)
+    if echo is None:
+        return f"error: the edit to {rel_path(path)} did not apply, and you may no longer read it."
     return (
         f"error: could not apply the edit to {rel_path(path)} — `old_string` was not found "
         f"exactly once (the file may have changed). Current content:\n{echo}"
@@ -704,6 +710,9 @@ async def search_wiki_impl(ctx: RunContextWrapper[AgentToolContext], query: str)
     wiki, sandbox-free (in-process over the FileStore). Use it to find which
     existing pages mention a term before updating them, or to locate the
     pages relevant to a question."""
+    for verb in TOOL_VERBS["search_wiki"]:
+        if (denied := authorize_tool(ctx.context, verb)) is not None:
+            return denied
     from ..api.search import InvalidQuery, compile_query, search_text
 
     files = ctx.context.files
@@ -1957,6 +1966,9 @@ async def save_skill_impl(
     needs reference docs or scripts, write them with `write_file` into the same
     `.skill/<name>/` folder (e.g. `.skill/<name>/references/…`, `.skill/<name>/scripts/…`)
     and point to them from the body. Returns a confirmation or an `error:` note."""
+    for verb in TOOL_VERBS["save_skill"]:
+        if (denied := authorize_tool(ctx.context, verb)) is not None:
+            return denied
     from ..apps.skills import (
         SKILL_BODY_CAP,
         WORKSPACE_SKILL_DIR,
@@ -2199,6 +2211,9 @@ async def save_workflow_impl(
     check, or `{variable}` is off, it returns the problems so you can fix and re-save (don't
     guess; address each one). Re-saving the same id overwrites. On success the user can Run
     it, or download `.workflows/` to reuse elsewhere."""
+    for verb in TOOL_VERBS["save_workflow"]:
+        if (denied := authorize_tool(ctx.context, verb)) is not None:
+            return denied
     from ..workflow.workspace_store import (
         save_workspace_workflow,
         slugify_workflow_id,

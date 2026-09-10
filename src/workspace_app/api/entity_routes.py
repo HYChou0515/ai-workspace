@@ -24,6 +24,7 @@ from ..entity.schema import Role
 from ..entity.store import EntityConflict, EntityStore
 from ..files import WorkspaceFiles
 from ..filestore.protocol import FileNotFound
+from ..perm.model import Verb
 from ..users import UserDirectory
 from .activity import ActivityLog
 from .locator import ItemLocator
@@ -84,7 +85,11 @@ def register_entity_routes(
     locks: dict[str, asyncio.Lock] = {}
 
     async def _store(
-        slug: str, item_id: str, type_name: str | None = None
+        slug: str,
+        item_id: str,
+        type_name: str | None = None,
+        *,
+        verb: Verb = "read_content",
     ) -> tuple[str, EntityStore]:
         """`type_name` loads JUST that type — for a request that reads nothing
         but its own type. Rebuilding the whole catalog read every declared type's
@@ -95,7 +100,13 @@ def register_entity_routes(
         `query` and `update` PROJECT, and a projection crosses types — a
         milestone rolls up the issues pointing at it — so they still need the
         whole catalog, as do `entity_health` and `list_entity_types`."""
-        investigation_id = locator.require_item(slug, item_id)
+        # `require_ACCESS`, not `require_item` — whose own docstring says "this
+        # gate authorizes nobody". Every route in this file hung off that, so a
+        # caller with NO grants could read, create and rewrite the records of a
+        # PRIVATE item: `GET /entities` returned them as JSON while `GET /files`
+        # on the same item 404'd. #306 PR3 closed exactly this for the files,
+        # chat and stream routes; #419 added these and reintroduced it.
+        investigation_id = locator.require_access(slug, item_id, verb)
         catalog, _diags = (
             await load_entity_type(files, investigation_id, type_name)
             if type_name is not None
@@ -143,7 +154,7 @@ def register_entity_routes(
 
     @app.get("/a/{slug}/items/{item_id}/entities")
     async def list_entity_types(slug: str, item_id: str) -> _EntityCatalogOut:
-        investigation_id = locator.require_item(slug, item_id)
+        investigation_id = locator.require_access(slug, item_id, "read_content")
         catalog, diagnostics = await discover_catalog(files, investigation_id)
         types = []
         for name in catalog.names():
@@ -218,7 +229,7 @@ def register_entity_routes(
     async def create_entity(
         slug: str, item_id: str, type_name: str, body: _EntityCreateBody
     ) -> _EntityOut:
-        iid, store = await _store(slug, item_id, type_name)
+        iid, store = await _store(slug, item_id, type_name, verb="edit_content")
         _require_type(store.catalog, type_name)
         created = await store.create(
             type_name, body.args, actor=get_user_id(), now=datetime.now(UTC).date().isoformat()
@@ -231,7 +242,7 @@ def register_entity_routes(
     async def update_entity(
         slug: str, item_id: str, type_name: str, number: int, body: _EntityUpdateBody
     ) -> _EntityOut:
-        iid, store = await _store(slug, item_id)
+        iid, store = await _store(slug, item_id, verb="edit_content")
         _require_type(store.catalog, type_name)
         try:
             updated = await store.update(

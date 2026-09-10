@@ -22,7 +22,10 @@ from workspace_app.agent.tools import (
     query_entity_impl,
     read_file_impl,
     read_image_impl,
+    save_skill_impl,
     save_subagent_impl,
+    save_workflow_impl,
+    search_wiki_impl,
     show_file_impl,
     update_entity_impl,
     write_file_impl,
@@ -117,6 +120,9 @@ _CALLS = {
     "create_entity": lambda c: create_entity_impl(c, "issue", {"title": "t"}),
     "update_entity": lambda c: update_entity_impl(c, "issue", 1, {"title": "t"}),
     "link_entity": lambda c: link_entity_impl(c, "issue", 1, "milestone", 2),
+    "save_workflow": lambda c: save_workflow_impl(c, "flow", "{}"),
+    "save_skill": lambda c: save_skill_impl(c, "sk", "Does things", "body"),
+    "search_wiki": lambda c: search_wiki_impl(c, "anything"),
 }
 
 
@@ -630,3 +636,113 @@ async def test_a_personal_quota_refusal_does_not_name_the_owner_or_their_total()
     assert "bob" not in said  # the owner is not disclosed
     assert "9000000" in said and "10000000" in said  # the numbers the route returns
     assert "out of space" in said
+
+
+#: What each tool needs, written HERE and not derived from `TOOL_VERBS`. The
+#: impls index the table, so a guard that reads the table moves with the very
+#: thing it guards: four wrong-verb mutations passed against a version of this
+#: test that did. Changing a row must mean changing this literal too — which is
+#: the point, because that is the moment somebody decides the verb is right.
+_EXPECTED_VERBS: dict[str, tuple[str, ...]] = {
+    "read_file": ("read_content",),
+    "read_image": ("read_content",),
+    "show_file": ("read_content",),
+    "list_files": ("read_content",),
+    "exists": ("read_content",),
+    "query_entity": ("read_content",),
+    "search_wiki": ("read_content",),
+    "write_file": ("edit_content",),
+    "delete_file": ("edit_content",),
+    "create_entity": ("edit_content",),
+    "save_subagent": ("edit_content",),
+    "save_skill": ("edit_content",),
+    "save_workflow": ("edit_content",),
+    "edit_file": ("read_content", "edit_content"),
+    "update_entity": ("read_content", "edit_content"),
+    "link_entity": ("read_content", "edit_content"),
+    "infer_modules": ("read_content", "edit_content"),
+    "make_deck": ("read_content", "edit_content", "execute"),
+    "exec": ("execute",),
+}
+
+
+def test_the_table_says_what_each_tool_needs():
+    from workspace_app.agent.tool_authz import TOOL_VERBS
+
+    assert TOOL_VERBS == _EXPECTED_VERBS
+
+
+async def test_which_verb_every_tool_demands():
+    """The `TOOL_VERBS`-driven sweep gives its speaker `converse` only, so EVERY
+    verb refuses there: it proves a check exists and never that it is the RIGHT
+    one. Rows were added on the strength of it — a row could quietly demand
+    `edit_content` for a pure reader, or drop the write half of a tool that
+    writes, with nothing failing.
+
+    For every tool and every verb `_EXPECTED_VERBS` says it needs, a speaker
+    holding all the OTHER item verbs must still be refused, and the refusal must
+    name the one it lacks."""
+    every: tuple[Verb, ...] = ("read_content", "edit_content", "execute")
+    for name, verbs in _EXPECTED_VERBS.items():
+        for missing in verbs:
+            held = [v for v in every if v != missing]
+            spec, iid = _spec_with_item(
+                Permission(
+                    visibility="restricted",
+                    read_meta=["user:alice"],
+                    converse=["user:alice"],
+                    **{v: ["user:alice"] for v in held},
+                )
+            )
+            ctx = _ctx(spec, iid, acting_user="alice")
+            for v in held:  # it really does hold the others
+                assert authorize_tool(ctx.context, v) is None, (name, v)
+            out = str(await _CALLS[name](ctx))
+            assert missing.replace("_", " ") in out, (name, missing, out)
+
+
+async def test_a_permission_revoked_mid_edit_refuses_rather_than_crashes():
+    """`edit_file` checks `read_content` up front, so `_conflict_echo` normally
+    cannot refuse — but `fs.edit` is a real suspension and `authorize_tool`
+    re-reads the item every call, so a `change_permission` landing inside that
+    await flips the answer. An `assert` there would reach the model as "an
+    error occurred", and `python -O` would strip it and leave the name unbound
+    on the everyday conflict path."""
+    spec, iid = _spec_with_item(
+        Permission(
+            visibility="restricted",
+            read_meta=["user:alice"],
+            converse=["user:alice"],
+            read_content=["user:alice"],
+            edit_content=["user:alice"],
+        )
+    )
+    ctx = _ctx(spec, iid, acting_user="alice")
+    await ctx.context.files.write(iid, "/a.md", b"one two\n")
+
+    real_edit = ctx.context.files.edit
+
+    async def revoke_then_edit(*a, **k):
+        out = await real_edit(*a, **k)
+        rm = spec.get_resource_manager(RcaInvestigation)  # ty: ignore[unresolved-attribute]
+        with rm.using("bob") as op:
+            op.update(
+                iid,
+                RcaInvestigation(
+                    title="t",
+                    owner="bob",
+                    permission=Permission(
+                        visibility="restricted",
+                        read_meta=["user:alice"],
+                        converse=["user:alice"],
+                        edit_content=["user:alice"],  # read_content taken away
+                    ),
+                ),
+            )
+        return out
+
+    ctx.context.files.edit = revoke_then_edit
+    out = await edit_file_impl(ctx, "/a.md", "zzz-nope", "")
+
+    assert "may no longer read it" in out
+    assert "one two" not in out  # and it does not hand back what it just lost the right to

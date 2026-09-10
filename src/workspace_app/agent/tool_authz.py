@@ -10,24 +10,31 @@ tool the preset grants implies its verb — so there's no second config surface 
 drift. See ``docs/plan-permissions.md`` (#309).
 
 ``TOOL_VERBS`` IS THE SCOPE, and it is not yet every tool that touches an item.
-``save_workflow``, ``save_skill``, ``read_skill`` and ``update_todos`` still
-reach the workspace without passing here, as does every tool-package command
-(``tooling/registry.py`` runs code in the item's sandbox).
-``mention_user`` is outside it too and is the one that does not look like it:
-it writes a Notification carrying the item's id AND TITLE to arbitrary user ids
-— and a ``role="mention"`` message into the item's own chat — so it discloses a
-name to people who may not read the item, on nothing more than the ``converse``
-entry gate. So is ``search_wiki``, whose ``scopes`` fall back to the ITEM id
-when a turn has no collections, making it a full-text grep of the workspace
-that returns ``path:line: text``; no shipped App grants it, which is a
-convention with nothing enforcing it.
+What is still outside, and WHY — one reason each, because a shared reason is
+how five separate tools hid behind an argument that fitted two of them:
 
-That list is now what it is: an enumeration that has been short three times
-(``list_files``/``exists``, then ``infer_modules``, then these two). Closing it
-is its own change — it needs a ceiling that can express a package command's
-verb, and one that knows about tools ``build_tools`` grants outside
-``allowed_tools`` — and until that lands, a tool ABSENT from this table has not
-been judged safe; it has not been judged.
+* ``read_skill`` — ``build_tools`` appends it OUTSIDE ``allowed_tools`` while
+  ``ceiling_from_tools`` reads the stored list, so a row here would register a
+  tool that then refuses every call for any preset holding no other reader (the
+  #537 shape). Needs the ceiling to learn about that append first.
+* **tool-package commands** — their names are deploy-specific, so the ceiling
+  genuinely cannot enumerate them. Their VERB is not unknowable, though: the WUI
+  already gates the identical call on ``edit_content``
+  (``api/wui_routes.py``), so one mechanism is gated on two surfaces
+  differently.
+* ``mention_user`` — gating the SPEAKER does not fix it. The disclosure is to
+  the RECIPIENT (a Notification carrying the item's id and title, plus a
+  ``role="mention"`` message into the item's chat), and no row in this table can
+  express who may be told.
+* ``update_todos`` — not here because it does not touch the workspace at all:
+  it writes a specstar ``ConversationTodos`` row keyed by conversation. It was
+  listed for rounds under a reason that was simply untrue.
+
+This enumeration has been short FIVE times — ``list_files``/``exists``, then
+``infer_modules``, then ``make_deck``, then the entity tools, then
+``save_workflow``/``save_skill``/``search_wiki`` — every time because a list was
+doing the work of a reason. A tool ABSENT from the table has not been judged
+safe; it has not been judged.
 
 Two things the table cannot express, handled elsewhere rather than by widening
 a row:
@@ -65,9 +72,7 @@ to them. All are in the table now.
 ``test_every_tool_that_declares_a_verb_actually_checks_it`` fails on any entry
 that drifts back out; nothing yet fails on a tool that never joins.
 
-Closing the rest needs a ceiling that can express a package command's verb, and
-one that knows about tools ``build_tools`` grants outside ``allowed_tools`` (it
-appends ``read_skill`` itself).
+Closing the rest is described tool by tool above.
 """
 
 from __future__ import annotations
@@ -149,8 +154,31 @@ TOOL_VERBS: dict[str, tuple[Verb, ...]] = {
     # ordinary verbs.
     "query_entity": ("read_content",),
     "create_entity": ("edit_content",),
-    "update_entity": ("edit_content",),
-    "link_entity": ("edit_content",),
+    # BOTH: they read a record and hand back what they read. A version conflict
+    # quotes the file's sha256 (`issue #1 changed … now 2ed8cb1b…`), the lint
+    # suffix quotes field values the caller never sent, and both distinguish a
+    # record that exists from one that does not — all without writing anything.
+    # A content hash is a stronger oracle than the one-bit `edit_file` probe,
+    # not a weaker one: it confirms a guessed record whole, in one call.
+    "update_entity": ("read_content", "edit_content"),
+    "link_entity": ("read_content", "edit_content"),
+    # These three were on the "outside the funnel" list, and the reason given
+    # there — that closing it needs a ceiling able to express a package
+    # command's verb, or one that knows about tools `build_tools` grants
+    # outside `allowed_tools` — never applied to any of them. They are ordinary
+    # named tools with ordinary verbs, granted by every shipped App.
+    #
+    # `save_workflow` writes `.workflows/<slug>/` and what it writes is RUNNABLE
+    # from the item; `save_skill` writes `.skill/<slug>/SKILL.md`, a body every
+    # later turn can load. Both are the standing-instruction shape `save_subagent`
+    # was gated for — and this table's own `save_subagent` comment called the
+    # ungated state "a worse version of the `save_skill` hole", named it, and
+    # left it.
+    "save_workflow": ("edit_content",),
+    "save_skill": ("edit_content",),
+    # `search_wiki`'s `scopes` fall back to the ITEM id when a turn has no
+    # collections, so it greps the workspace and returns `path:line: text`.
+    "search_wiki": ("read_content",),
 }
 
 

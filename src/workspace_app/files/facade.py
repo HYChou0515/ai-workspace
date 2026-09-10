@@ -124,8 +124,14 @@ class WorkspaceFull(Exception):
     to delete something."""
 
     def __init__(self, used: int, quota: int, attempted: int) -> None:
+        # No delta. `attempted` is the request's own size for a blind write, the
+        # growth for `ensure_room_for`, and the whole body for an upload — so
+        # "N more" was false for two of the three, and a reader who subtracts it
+        # from what they sent learns the size of a file they may not read. This
+        # string is user-facing: `turn_gate.TurnRefused` joins it into the
+        # failure record a person reads.
         super().__init__(
-            f"workspace is full: {used} of {quota} bytes used, cannot write {attempted} more"
+            f"workspace is full: {used} of {quota} bytes used, and this write does not fit"
         )
         self.used = used
         self.quota = quota
