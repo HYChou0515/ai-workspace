@@ -10,16 +10,21 @@ tool the preset grants implies its verb — so there's no second config surface 
 drift. See ``docs/plan-permissions.md`` (#309).
 
 ``TOOL_VERBS`` IS THE SCOPE, and it is not yet every tool that touches an item.
-``save_workflow``, ``save_skill``, ``read_skill``, ``update_todos``, the entity
-tools and every tool-package command (``tooling/registry.py`` runs code in the
-item's sandbox) still reach the workspace without passing here. Two of them —
-``list_files`` and ``exists`` — were listed BELOW and gated nowhere, which is
-why the sentence above now names the table rather than a category: a docstring
-claiming the category is what let the gap live, and
-``test_every_tool_that_declares_a_verb_actually_checks_it`` now fails on any
-entry that drifts back out. Closing the rest needs a ceiling that can express a
-package command's verb, and one that knows about tools ``build_tools`` grants
-outside ``allowed_tools`` (it appends ``read_skill`` itself).
+``save_workflow``, ``save_skill``, ``read_skill``, ``update_todos`` and the
+entity tools still reach the workspace without passing here, as does every
+tool-package command (``tooling/registry.py`` runs code in the item's sandbox).
+
+The sentence above names the TABLE rather than a category because claiming the
+category is exactly what let gaps live: ``list_files`` and ``exists`` were listed
+below and gated nowhere, and the enumeration that replaced that claim missed
+``infer_modules`` — which creates, deletes and recreates a file at a path the
+model chooses. Both are now in the table.
+``test_every_tool_that_declares_a_verb_actually_checks_it`` fails on any entry
+that drifts back out; nothing yet fails on a tool that never joins.
+
+Closing the rest needs a ceiling that can express a package command's verb, and
+one that knows about tools ``build_tools`` grants outside ``allowed_tools`` (it
+appends ``read_skill`` itself).
 """
 
 from __future__ import annotations
@@ -56,9 +61,15 @@ TOOL_VERBS: dict[str, Verb] = {
     # is a SYSTEM PROMPT every later turn loads and any collaborator's
     # `run_agent` executes. The chat entry gate is `converse`, so leaving it
     # ungated let anyone who could talk to an item leave a standing instruction
-    # in it — a worse version of the `save_skill` hole, and reachable in every
-    # shipped App.
+    # in it — a worse version of the `save_skill` hole. Granted by `rca`, `pm`
+    # and `playground`; not by `_template` or `topic-hub`.
     "save_subagent": "edit_content",
+    # It reads the file named by `path` and CREATES-then-DELETES-then-CREATES the
+    # one named by `out`, both model-chosen. `edit_content` rather than a pair of
+    # checks: its only output channel IS that file, so a speaker who may not write
+    # learns nothing from it, and asking for two verbs would refuse a preset that
+    # grants this tool and no other reader (#537).
+    "infer_modules": "edit_content",
 }
 
 
@@ -155,18 +166,19 @@ def authorize_tool(context: AgentToolContext, verb: Verb) -> str | None:
         "authorize_tool: %s denied for user %s on %s item %s "
         "(owner=%s, visibility=%s, speaker groups=%s, in ai ceiling=%s)",
         verb,
-        actor.user_id,
+        context.acting_user,  # the speaker, not an actor that gets rebound below
         context.app_slug,
         context.investigation_id,
         created_by,
         # `permission is None` ≡ public, which DOES reach a refusal — through the
         # ceiling, on an item nobody has restricted.
         "public" if item.permission is None else item.permission.visibility,
-        # `n/a`, not `0`, when the ceiling refused: `actor` is then the throwaway
-        # built without groups, and a count read off it says "this user is in no
-        # groups" — the exact wrong conclusion for the symptom this line exists
-        # to diagnose. Reporting it honestly costs no query.
-        len(actor.groups) if verb in ceiling else "n/a",
+        # `n/a` unless the memberships were actually looked up. A count read off
+        # an actor built without them says "this user is in no groups" — the one
+        # wrong conclusion for the symptom this line exists to diagnose — and
+        # `verb in ceiling` was a PROXY for "did we look", which the empty-speaker
+        # path walked straight past. The context is what knows.
+        len(actor.groups) if context.speaker_groups_resolved else "n/a",
         verb in ceiling,
     )
     # One sentence, because the code checked one thing. The ceiling case wanted

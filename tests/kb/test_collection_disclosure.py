@@ -10,7 +10,7 @@ from workspace_app.kb.collections import (
     readable_collection_ids,
     resolve_withheld,
 )
-from workspace_app.perm import Permission
+from workspace_app.perm import DisclosurePartition, Permission
 from workspace_app.resources import make_spec
 from workspace_app.resources.kb import Collection, WithheldSource
 
@@ -166,3 +166,16 @@ def test_the_disclosure_universe_sees_a_group_grant_too():
 
     assert all_discoverable_collection_ids(spec, "alice") == []  # she can read it
     assert all_discoverable_collection_ids(spec, "carol") == [cid]  # control: non-member
+
+
+def test_an_empty_scope_costs_no_identity_lookup():
+    """Both helpers now resolve the caller's groups, and both are called with an
+    empty list on live paths — `subagent_bridge` for a chat that picked no
+    collections, and `_readable_collections_provider` (the access_scope for the
+    graph models) on an empty store. Deciding nothing must not cost a query."""
+    spec = make_spec()
+    spec.get_resource_manager = lambda *a, **k: (_ for _ in ()).throw(  # ty: ignore
+        AssertionError("the store was touched for an empty scope")
+    )
+    assert readable_collection_ids(spec, [], "alice") == []
+    assert partition_collection_disclosure(spec, [], "alice") == DisclosurePartition([], [], [])

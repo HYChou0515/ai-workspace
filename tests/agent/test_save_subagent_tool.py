@@ -366,19 +366,3 @@ async def test_a_legacy_name_in_the_parents_config_still_grants_the_renamed_tool
     assert not out.startswith("error:"), out
     defs = await workspace_subagent_defs(files, "inv-1")
     assert [d.tools for d in defs] == [["list_files"]]
-
-
-def test_what_save_subagent_accepts_is_exactly_what_the_clamp_keeps():
-    """The refusal rule and the strip rule are ONE function now. They were two
-    copies, and renaming in only the first made `save_subagent` answer "callable
-    now" for a tool `_subagent_defs`' clamp then dropped — so the sub-agent
-    started with an empty tool set and nothing said why."""
-    from workspace_app.agent.tools import held_tool_names
-    from workspace_app.apps.subagents import SubagentDef, clamp_tools
-
-    ceiling = held_tool_names(["ls", "read_file", "save_subagent"], None, None)
-    assert ceiling is not None
-    assert "list_files" in ceiling  # what save_subagent measured the request against
-
-    defn = SubagentDef(name="lister", description="Lists", tools=["list_files"], body="b")
-    assert clamp_tools(defn, ceiling).tools == ["list_files"]

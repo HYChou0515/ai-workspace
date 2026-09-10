@@ -540,9 +540,10 @@ class AgentToolContext:
     #: reached the person and was refused to the agent they were driving. It
     #: lives on the context rather than on each builder so that whichever of
     #: them is item-gated gets it without being asked twice — today that is the
-    #: chat turn (`build_chat_turn` is the only builder that sets BOTH `spec`
-    #: and `acting_user`; the WUI and workflow paths set neither, so
-    #: `authorize_tool` returns before an actor is ever built).
+    #: chat turn. `authorize_tool` needs `spec` AND `investigation_id` AND
+    #: `app_slug`, and only `build_chat_turn` sets all three: the KB chat sets
+    #: `spec` and `acting_user` but names no item, and the WUI and workflow
+    #: paths set no `spec` at all, so each returns before an actor is built.
     #:
     #: `init=False` on purpose: it belongs to `acting_user`, and
     #: `dataclasses.replace` — which `subagent_run` and `compaction` both use —
@@ -607,18 +608,22 @@ class AgentToolContext:
     #: ITEM instead, through `prepare_env_via`; see it above.
     _wake: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False, compare=False)
 
+    @property
+    def speaker_groups_resolved(self) -> bool:
+        """Whether `speaker_groups()` has actually been asked on this context.
+
+        The refusal log needs to tell "this speaker is in no groups" apart from
+        "nobody asked", and every proxy for that is wrong somewhere: keying off
+        the verb's ceiling missed the turn with no speaker at all. This is the
+        property itself."""
+        return self._speaker_groups is not None
+
     def speaker_groups(self) -> frozenset[str]:
         """Whose groups this turn acts with — see `_speaker_groups`. Callers
         must already hold a `spec`; the authorization funnel checks that first
-        and there is no other caller."""
+        and there is no other caller. An empty speaker is answered without a
+        query by `groups_of` itself."""
         assert self.spec is not None
-        if not self.acting_user:
-            # A turn with no speaker has no memberships to inherit, and asking
-            # anyway would send an empty string into a `members.contains(...)`
-            # query — which is element membership today, but degrades to a
-            # substring `LIKE` on a SQL backend the moment `Group.members` loses
-            # its list registration, and "" is a substring of every member.
-            return frozenset()
         if self._speaker_groups is None:
             # Local, like the `apps.registry` import in `tool_authz`: the
             # resources package pulls in every model, and this module is

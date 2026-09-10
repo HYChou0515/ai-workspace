@@ -343,3 +343,37 @@ async def test_the_curated_models_ride_create_app_onto_every_turn_context(monkey
         speaker=None,
     )
     assert ctx.subagent_models == (choice,)
+
+
+_LISTER = "---\nname: lister\ndescription: Lists things\ntools: [list_files]\n---\n\nYou list.\n"
+
+
+async def test_the_clamp_keeps_what_save_subagent_would_have_accepted(monkeypatch):
+    """`save_subagent` refuses against one rule and this clamp strips against
+    another; they were two copies of the same three lines, and renaming a stored
+    legacy name in only the first made the tool answer "callable now" for a tool
+    the clamp then removed — the sub-agent started with nothing and said why
+    nowhere.
+
+    Driven through `build_chat_turn`, not through the shared helper: a test that
+    feeds one `held_tool_names(...)` result to both sides proves the equality it
+    computed, not the one the turn performs."""
+    filestore, builder, item_id = _build(monkeypatch)
+    await filestore.write(item_id, "/.agent/lister/AGENT.md", _LISTER.encode())
+
+    ctx = await builder.build_chat_turn(
+        item_id,
+        # A STORED legacy name, which `build_tools` registers as `list_files`.
+        agent_config=AgentConfig(name="p", allowed_tools=["ls", "read_file", "run_agent"]),
+        run_subagent=_dummy_subagent,
+        history_messages=[],
+        reasoning_effort=None,
+        kb_enhancements=None,
+        collection_ids=[],
+        collection_tiers=[],
+        acting_user="u",
+        speaker=None,
+    )
+
+    assert [d.name for d in ctx.subagent_defs] == ["lister"]
+    assert ctx.subagent_defs[0].tools == ["list_files"]

@@ -312,3 +312,46 @@ def test_app_mounts_the_kbchat_migrate_route():
     make_spec().apply(app)
     paths = {p for r in app.routes if (p := getattr(r, "path", None)) is not None}
     assert "/kb-chat/migrate/execute" in paths
+
+
+# ── the list and the gate must answer the same question ────────────────────
+
+
+def test_a_group_shared_chat_is_listed_and_gated_the_same_way():
+    """`KbChat` is the one resource family whose `access_scope` resolves no
+    groups, so a `group:<id>` grant on a chat is honoured by NEITHER the listing
+    nor the gate. That is a real gap — `build_permission` accepts the subject
+    and nothing tells the person who set it — but the two halves have to agree
+    while it lasts: resolving groups in the gate ALONE made the chat openable,
+    writable and re-shareable by URL while staying invisible in every listing.
+
+    Asserted as an equality, not as a pair of expected values, so wiring the
+    scope's `groups_provider` later flips both together and keeps this green —
+    and doing it to one half turns it red."""
+    from workspace_app.resources.groups import Group
+
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    grm = spec.get_resource_manager(Group)
+    with grm.using("bob"):
+        gid = grm.create(Group(name="ops", members=["alice"])).resource_id
+    cid = _new_chat(client)
+    # The body is FLAT — a `grants: {...}` wrapper is silently dropped
+    # (`forbid_unknown_fields` is off), which would leave the chat with no group
+    # grant at all and make everything below vacuously equal.
+    assert client.put(
+        f"/kb/chats/{cid}/permission",
+        json={
+            "visibility": "restricted",
+            "read_meta": [f"group:{gid}"],
+            "read_chat": [f"group:{gid}"],
+        },
+    ).status_code in (200, 204)
+    stored = spec.get_resource_manager(KbChat).get(cid).data
+    assert stored.permission is not None
+    assert stored.permission.read_chat == [f"group:{gid}"]  # the grant really is on the row
+
+    holder["id"] = "alice"
+    listed = cid in {c["resource_id"] for c in client.get("/kb/chats").json()}
+    gated_open = client.get(f"/kb/chats/{cid}").status_code == 200
+    assert listed == gated_open

@@ -5,7 +5,6 @@ model can at worst do what the current speaker may do on the item, never more.
 
 import dataclasses
 
-import pytest
 from agents import RunContextWrapper
 
 from workspace_app.agent import AgentToolContext
@@ -15,6 +14,7 @@ from workspace_app.agent.tools import (
     edit_file_impl,
     exec_impl,
     exists_impl,
+    infer_modules_impl,
     list_files_impl,
     make_deck_impl,
     read_file_impl,
@@ -108,6 +108,7 @@ _CALLS = {
     "exec": lambda c: exec_impl(c, ["echo", "hi"]),
     "make_deck": lambda c: make_deck_impl(c, "a deck"),
     "save_subagent": lambda c: save_subagent_impl(c, "digger", "Digs logs", [], "You dig."),
+    "infer_modules": lambda c: infer_modules_impl(c, "/steps.csv"),
 }
 
 
@@ -348,22 +349,18 @@ def test_a_grant_refusal_reports_the_groups_it_actually_looked_at(caplog):
     assert "speaker groups=1" in said
 
 
-def test_a_turn_with_no_speaker_asks_for_no_groups(monkeypatch):
-    """`acting_user` is "" on paths with nobody behind them. Before this the AI
-    carried no groups at all, so nothing asked; now something does, and an empty
-    string into a `members.contains(...)` query is element membership today and
-    a substring `LIKE` the moment `Group.members` loses its list registration —
-    at which point "" is a substring of every member."""
-    from workspace_app.resources import groups as groups_module
-
-    monkeypatch.setattr(
-        groups_module,
-        "groups_of",
-        lambda spec, user: pytest.fail(f"asked for the groups of {user!r}"),
-    )
+def test_a_turn_with_no_speaker_reports_none_rather_than_not_asked(caplog):
+    """`acting_user` is "" on paths with nobody behind them. `groups_of` answers
+    that WITHOUT a query (its own guard, so an empty string never reaches a
+    `members.contains(...)`), but it is still a real answer: nobody is behind the
+    turn, so there are no memberships to inherit. `n/a` is reserved for the
+    ceiling refusal, where the question was never put — and the empty speaker
+    field in the same line is what tells a reader which case this is."""
     spec, iid = _spec_with_item(Permission(visibility="private"))
     ctx = _ctx(spec, iid, acting_user="").context
-    assert authorize_tool(ctx, "read_content") is not None
+    said = _one_warning(caplog, ctx, "read_content")
+    assert "for user  on" in said  # the speaker field is visibly empty
+    assert "speaker groups=0" in said
 
 
 def test_a_derived_context_does_not_inherit_the_memo():
@@ -373,8 +370,34 @@ def test_a_derived_context_does_not_inherit_the_memo():
     spec, iid, _ = _group_granted_item({"read_meta": ["user:alice"], "execute": ["group:{gid}"]})
     ctx = _ctx(spec, iid, acting_user="alice").context
     assert authorize_tool(ctx, "execute") is None
-    assert ctx._speaker_groups == frozenset({g for g in ctx._speaker_groups})  # resolved
-    assert ctx._speaker_groups  # non-empty, so inheriting it would be visible
+    assert ctx._speaker_groups  # resolved and non-empty, so inheriting it would show
 
     child = dataclasses.replace(ctx, history=[])
     assert child._speaker_groups is None
+
+
+async def test_the_write_verb_is_the_bar_for_the_two_tools_that_write():
+    """A speaker who may READ but not write. `save_subagent` writes a system
+    prompt into the workspace and `infer_modules` creates-deletes-recreates a
+    file at a path the model picks, so `read_content` is not the bar for either
+    — and with only the `TOOL_VERBS`-driven sweep (whose speaker holds nothing)
+    both guards could have degraded to a read-level check unnoticed."""
+    spec, iid = _spec_with_item(
+        Permission(
+            visibility="restricted",
+            read_meta=["user:alice"],
+            converse=["user:alice"],
+            read_content=["user:alice"],
+        )
+    )
+    ctx = _ctx(spec, iid, acting_user="alice")
+    assert "don't have permission" not in await read_file_impl(ctx, "/a.txt")
+    assert "don't have permission" in await save_subagent_impl(ctx, "d", "Digs", [], "You dig.")
+    assert "don't have permission" in str(await infer_modules_impl(ctx, "/steps.csv"))
+
+
+def test_the_two_write_tools_declare_the_write_verb():
+    """And the ceiling agrees: a preset granting either implies `edit_content`,
+    so the tool is not registered into a ceiling that can only refuse it."""
+    assert ceiling_from_tools(["save_subagent"]) == frozenset({"edit_content"})
+    assert ceiling_from_tools(["infer_modules"]) == frozenset({"edit_content"})

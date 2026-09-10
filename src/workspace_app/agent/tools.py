@@ -1531,6 +1531,8 @@ async def infer_modules_impl(
     classifier towards modules physically relevant to the defect when a
     step is ambiguous.
     """
+    if (denied := authorize_tool(ctx.context, "edit_content")) is not None:
+        return denied
     fs, inv = _workspace(ctx)
     try:
         data = await fs.read(inv, path)
@@ -2038,6 +2040,12 @@ def held_tool_names(
     a definition already saved). Renaming in only the first made them disagree
     in the worst possible direction: `save_subagent` accepted `list_files`,
     answered "callable now", and the clamp then handed the sub-agent nothing.
+
+    A THIRD reader, `_live_subagent_defs`, clamps with `_subagent_tool_ceiling`
+    — this set MINUS `SUBAGENT_FORBIDDEN_TOOLS` — so `run_agent`'s live re-read
+    is deliberately stricter than the turn's frozen index. That difference is
+    the sub-agent rule, not this one, and `subagent_run` strips those again in
+    the child either way.
 
     The rename is applied to a STORED list only. The profile branch reads
     authored manifest files, where a legacy name would be a config error rather
