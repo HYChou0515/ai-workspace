@@ -250,3 +250,35 @@ async def test_a_call_that_raises_still_owns_exactly_one_citation_slot():
     with pytest.raises(Exception):  # noqa: B017 - csv.Error, raised from the parser
         await infer_modules_impl(RunContextWrapper(ctx2), "wafer-history.csv")
     assert len(ctx2.subagent_citations["infer_modules"]) == 1
+
+
+async def test_two_calls_in_one_message_keep_their_own_citation_slots():
+    """`_book_citations` returns the INDEX, and nothing pinned that. Filling
+    `[-1]` instead looks right until two calls overlap — parallel tool calls are
+    live in production — and then the first call's citations land on the second
+    call's tool message and the second's are lost."""
+    import asyncio
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def run(_name, payload, _sink, _origin):
+        # The FIRST call parks; the second overtakes it and finishes first.
+        if "A" in payload:
+            started.set()
+            await release.wait()
+            return '{"module": "M1", "reason": "r"}', ["cite-A"]
+        return '{"module": "M2", "reason": "r"}', ["cite-B"]
+
+    ctx, files, inv = await _ctx_with_file(b"step_name\nA\n", run)
+    await files.create(inv, "b.csv", b"step_name\nB\n")
+
+    first = asyncio.create_task(infer_modules_impl(RunContextWrapper(ctx), "wafer-history.csv"))
+    await started.wait()
+    await infer_modules_impl(RunContextWrapper(ctx), "b.csv")  # overtakes
+    release.set()
+    await first
+
+    # Slot order is BOOKING order, so the Nth bucket still pairs with the Nth
+    # tool message of that name — which is the whole contract.
+    assert ctx.subagent_citations["infer_modules"] == [["cite-A"], ["cite-B"]]

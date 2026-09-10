@@ -490,12 +490,27 @@ async def test_a_rejected_write_does_not_hand_back_a_file_the_speaker_may_not_re
     assert "don't have permission" in await read_file_impl(ctx, "/secret.md")  # the control
 
     taken = await write_file_impl(ctx, "/secret.md", "x")
-    assert "already exists" in taken  # it still explains what went wrong
     missed = await edit_file_impl(ctx, "/secret.md", "zzz-nope", "")
-    assert "`old_string` was not found" in missed
+
+    # What it SAYS, not just what it omits: a test that only forbids two literals
+    # passes for an EMPTY echo (which the model reads as "the file is empty" — a
+    # wrong answer, not a withheld one) and for one that leaks a size or a line
+    # count instead of the text.
+    assert taken == (
+        "error: secret.md already exists and you do not have permission to see its "
+        "contents, so you cannot edit it either. Tell the user."
+    )
+    assert missed == (
+        "error: the edit to secret.md did not apply, and you do not have permission "
+        "to see the file, so you cannot tell why. Tell the user."
+    )
     for answer in (taken, missed):
         assert "BOARD SALARY" not in answer
         assert "must not read" not in answer
+        # No "Current content:" over a withheld echo, and no "delete it first":
+        # the one recovery still open to this speaker destroys the file.
+        assert "Current content" not in answer
+        assert "delete" not in answer
 
     # …and an ordinary write, which leaks nothing, is untouched.
     assert "wrote" in await write_file_impl(ctx, "/fresh.md", "hi")
@@ -549,3 +564,24 @@ def test_a_later_ceiling_refusal_does_not_report_an_earlier_calls_group_count(ca
     ).context
     assert authorize_tool(ctx, "read_content") is None  # resolves and memoises the groups
     assert "speaker groups=n/a" in _one_warning(caplog, ctx, "execute")
+
+
+async def test_a_personal_quota_refusal_does_not_name_the_owner_or_their_total():
+    """`UserDiskFull` is not a `WorkspaceFull`, so it escaped the guard and
+    reached the model through the SDK's default handler as `str(error)` — which
+    names the owner, their cap, and their usage ACROSS every workspace, to a
+    collaborator who may hold nothing but `edit_content` on one item. The HTTP
+    side refuses the same disclosure (`api/turn_gate.py` returns the numbers and
+    omits `owner` on purpose); this matches it."""
+    from workspace_app.agent.tools import _guard_workspace_full
+    from workspace_app.quota.disk_ledger import UserDiskFull
+
+    async def _boom(*_a, **_k):
+        raise UserDiskFull(owner="bob", used=9_000_000, quota=10_000_000, attempted=2)
+
+    guarded = _guard_workspace_full(_boom)
+    said = await guarded()
+
+    assert "bob" not in said  # the owner is not disclosed
+    assert "9000000" in said and "10000000" in said  # the numbers the route returns
+    assert "out of space" in said
