@@ -572,7 +572,10 @@ def test_rename_to_empty_reverts_to_name_hint():
     assert body["title"] == "" and body["name_hint"] == "reflow void investigation"
 
 
-def test_send_message_streams_and_persists_answer_with_citations():
+def test_send_message_persists_answer_with_citations():
+    # The send ACCEPTS (202) and the turn is queued; the live events are on the
+    # chat's own stream now, which `test_kb_chat_queue` covers — see the note
+    # there on why the POST stopped being the stream.
     runner = _KbRunner()
     client = _client(runner)
     cid = client.post("/kb/chats", json={"title": "t", "collection_ids": ["c"]}).json()[
@@ -580,9 +583,7 @@ def test_send_message_streams_and_persists_answer_with_citations():
     ]
 
     r = client.post(f"/kb/chats/{cid}/messages", json={"content": "why voids?"})
-    assert r.status_code == 200
-    body = r.text
-    assert "message_delta" in body and "done" in body  # streamed live
+    assert r.status_code == 202
     assert runner.seen_collections == ["c"]  # the thread's collections drove retrieval
 
     msgs = client.get(f"/kb/chats/{cid}").json()["messages"]
@@ -601,16 +602,19 @@ def test_send_message_streams_and_persists_answer_with_citations():
     assert cite["provenance"] == {"page": [3], "section": ["Root Cause"]}
 
 
-def test_run_error_is_streamed_and_persisted_as_an_error_message():
+def test_run_error_is_persisted_as_an_error_message():
     """#37 — a failed turn used to vanish (only the user msg persisted),
     making it undebuggable. Now the failure is kept as a `role="error"`
-    message so a reloaded thread shows it."""
+    message so a reloaded thread shows it.
+
+    The send accepts either way: since the turn is queued rather than streamed
+    back, whether it later fails cannot change this status — the write is the
+    acceptance, and the failure reports itself on the thread and the stream."""
     client = _client(_BoomRunner())
     cid = client.post("/kb/chats", json={"collection_ids": ["c"]}).json()["resource_id"]
 
     r = client.post(f"/kb/chats/{cid}/messages", json={"content": "boom?"})
-    assert r.status_code == 200
-    assert "error" in r.text  # the failure surfaces as a terminal SSE event
+    assert r.status_code == 202
 
     msgs = client.get(f"/kb/chats/{cid}").json()["messages"]
     assert [m["role"] for m in msgs] == ["user", "error"]
@@ -899,8 +903,7 @@ def test_kb_chat_message_body_agent_name_picks_the_matching_kb_chat_entry():
 
     # Default (no agent_name) → first kb_chats entry.
     r = client.post(f"/kb/chats/{cid}/messages", json={"content": "q"})
-    assert r.status_code == 200, r.text
-    _ = r.text  # drain the SSE stream so the runner finishes
+    assert r.status_code == 202, r.text
     assert captured["agent"] == "KB · Fast"
 
     # Explicit name → that entry.
@@ -1123,19 +1126,10 @@ def test_ask_knowledge_base_relays_kb_progress_to_the_run_sink():
     assert "weighing the evidence" in relayed  # its reasoning surfaced live
 
 
-def test_kb_chat_streams_tool_and_reasoning_before_the_answer():
-    # #4 Part B: the KB chat SSE carries the agent's intermediate events
-    # (tool calls + reasoning) live, not just the final answer.
-    client = _client(_ToolRunner())
-    cid = client.post("/kb/chats", json={"collection_ids": ["c"]}).json()["resource_id"]
-
-    r = client.post(f"/kb/chats/{cid}/messages", json={"content": "why voids?"})
-    assert r.status_code == 200
-    body = r.text
-    assert "tool_start" in body  # kb_search call streamed live
-    assert "tool_end" in body
-    assert "message_delta" in body  # answer streamed live
-    assert body.index("tool_start") < body.rindex("message_delta")  # tool before final answer
+# #4 Part B — "the KB chat carries the agent's intermediate events live" moved to
+# `test_kb_chat_queue.py` when the events did: they are on the chat's own stream
+# now, not in the POST's body. The rule went with its test rather than leaving a
+# green assertion here that no longer reaches the code it was written for.
 
 
 # --- #513 P10: a KB chat message can carry a transient image the platform

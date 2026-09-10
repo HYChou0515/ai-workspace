@@ -108,8 +108,27 @@ describe("turnPhase (wait-state selector)", () => {
     expect(turnPhase({ ...base, streaming: true, metrics: downMetrics })).toBe("answering");
   });
 
+  // The case this whole branch exists for, and the one the status line lost:
+  // a question queued behind an answer that is still streaming. Read off
+  // POSITION the trailing entry is that question, so the phase fell back to
+  // "waiting" — and `TurnStatus` then walks 等候模型回應 → 模型忙碌中 → 這次比較久,
+  // and past 60s offers 重新問一次, whose first act is to abandon a turn that is
+  // working perfectly.
+  it("is 'answering' while a queued question sits below the streaming answer", () => {
+    const streamingLog = reduceAgent(EMPTY_LOG, {
+      type: "message_delta",
+      text: "回答中",
+    } as never);
+    const queued = drawOwnAsk(streamingLog, { author: "alice", content: "再問一個" });
+    expect(turnPhase({ ...queued, streaming: true, metrics: downMetrics })).toBe("answering");
+  });
+
   it("stays 'waiting' on a fresh turn even if a previous answer is in the log", () => {
-    const base = fold([{ type: "message_delta", text: "old answer" }]);
+    // The `done` is not decoration: it is what ENDS the previous answer, and a
+    // fixture without it describes a state the reducer cannot produce — an
+    // answer still flagged as being written while the next turn starts. The
+    // assertion is untouched; only the sequence is now one that can happen.
+    const base = fold([{ type: "message_delta", text: "old answer" }, { type: "done" }]);
     const fresh: AgentLog = {
       ...base,
       streaming: true,
@@ -1362,6 +1381,136 @@ describe("the sender sees their own words at once", () => {
     // flight from the moment the message is sent.
     const sent = drawOwnAsk(EMPTY_LOG, { author: "alice", content: "yo" });
     expect(sent.streaming).toBe(true);
+  });
+});
+
+describe("a queued question must not split the answer that is still streaming", () => {
+  const answers = (log: AgentLog) =>
+    log.entries.filter(
+      (e): e is Extract<AgentEntry, { kind: "message" }> =>
+        e.kind === "message" && e.message.role === "assistant",
+    );
+
+  // The broadcast is part of the sequence ON PURPOSE. `chat_send` publishes
+  // `user_message` BEFORE it enqueues the turn, so a queued message is adopted
+  // (and stops being `pending`) within milliseconds — long before the turn it
+  // queued behind has finished. A test that stops at `drawOwnAsk` passes while
+  // the browser still splits the answer; that is exactly the false green this
+  // block exists to prevent.
+  const queueBehindAnswer = () => {
+    const streaming = reduceAgent(EMPTY_LOG, { type: "message_delta", text: "前半段" } as never);
+    const drawn = drawOwnAsk(streaming, { author: "alice", content: "第二個問題" });
+    return reduceAgent(drawn, {
+      type: "user_message",
+      author: "alice",
+      content: "第二個問題",
+      created_at: 100,
+    } as never);
+  };
+
+  it("keeps the answer in one block when a message is queued behind it", () => {
+    const after = reduceAgent(queueBehindAnswer(), {
+      type: "message_delta",
+      text: "後半段",
+    } as never);
+
+    expect(answers(after)).toHaveLength(1);
+    expect(answers(after)[0].message.content).toBe("前半段後半段");
+  });
+
+  // Same hazard, spectator side: somebody else's question queues behind MY
+  // turn's answer, and it must not chop that answer in half either.
+  it("does the same for a queued message drawn by someone else", () => {
+    const streaming = reduceAgent(EMPTY_LOG, { type: "message_delta", text: "前半段" } as never);
+    const queued = reduceAgent(streaming, {
+      type: "user_message",
+      author: "bob",
+      content: "我也問一個",
+      created_at: 100,
+    } as never);
+    const after = reduceAgent(queued, { type: "message_delta", text: "後半段" } as never);
+
+    expect(answers(after)).toHaveLength(1);
+    expect(answers(after)[0].message.content).toBe("前半段後半段");
+  });
+
+  // The control. It must redden on a DIFFERENT mutation than the two above:
+  // skipping every user message would pass them and break this one. Once the
+  // turn has ended, the queued question is a question again — the answer that
+  // follows it is its own.
+  it("starts a new answer once the turn the message queued behind has ended", () => {
+    const ended = reduceAgent(queueBehindAnswer(), { type: "done" } as never);
+    const after = reduceAgent(ended, { type: "message_delta", text: "第二個答案" } as never);
+
+    expect(answers(after)).toHaveLength(2);
+    expect(answers(after)[1].message.content).toBe("第二個答案");
+  });
+
+  // Both questions sent BEFORE the first token — seconds of window on a local
+  // model, and the case `queued` could not see, because it asked "is an answer
+  // already on screen" when the question is "is a turn already running".
+  it("keeps two answers apart when both questions were asked before either began", () => {
+    const askedTwice = reduceAgent(
+      drawOwnAsk(drawOwnAsk(EMPTY_LOG, { author: "alice", content: "A" }), {
+        author: "alice",
+        content: "B",
+      }),
+      { type: "message_delta", text: "答案A" } as never,
+    );
+    const firstDone = reduceAgent(askedTwice, { type: "done" } as never);
+    const after = reduceAgent(firstDone, { type: "message_delta", text: "答案B" } as never);
+
+    expect(answers(after).map((e) => e.message.content)).toEqual(["答案A", "答案B"]);
+  });
+
+  // Two questions waiting behind ONE answer. Releasing every queued entry at the
+  // terminal let the second turn's deltas treat the third question as a
+  // boundary, so the third answer appended to the second's block.
+  it("keeps the answers apart when two questions are queued behind one", () => {
+    let log = reduceAgent(EMPTY_LOG, { type: "message_delta", text: "答案A" } as never);
+    log = drawOwnAsk(log, { author: "alice", content: "B" });
+    log = drawOwnAsk(log, { author: "alice", content: "C" });
+    log = reduceAgent(log, { type: "done" } as never);
+    log = reduceAgent(log, { type: "message_delta", text: "答案B" } as never);
+    log = reduceAgent(log, { type: "done" } as never);
+    log = reduceAgent(log, { type: "message_delta", text: "答案C" } as never);
+
+    expect(answers(log).map((e) => e.message.content)).toEqual(["答案A", "答案B", "答案C"]);
+  });
+
+  // `live` is cleared by a tool call or a terminal, so a turn whose terminal
+  // never arrives — the stream dropped mid-answer — leaves it set, and the next
+  // turn's first `metrics` event would then read "answering" off the PREVIOUS
+  // turn's output. What bounds that is the re-hydrate: a snapshot rebuilt from
+  // the store carries no flag, so reconnecting ends the stale answer. Without
+  // this the window would be silent as well as open.
+  it("a re-hydrate ends an answer whose terminal never arrived", () => {
+    const dropped = reduceAgent(EMPTY_LOG, { type: "message_delta", text: "半句" } as never);
+    expect(dropped.entries.some((e) => e.kind === "message" && e.live)).toBe(true);
+
+    const rehydrated = reconcileSnapshot(dropped, {
+      messages: [
+        { role: "user", content: "問題" },
+        { role: "assistant", content: "半句" },
+        { role: "assistant", content: "整句" },
+      ] as never,
+    });
+    expect(rehydrated.entries.some((e) => e.kind === "message" && e.live)).toBe(false);
+  });
+
+  // The other control: an ordinary first question opens an answer of its own.
+  // A rule that marked every user message as "queued" would break this.
+  it("still opens a fresh answer for a question asked with nothing running", () => {
+    const asked = reduceAgent(EMPTY_LOG, {
+      type: "user_message",
+      author: "alice",
+      content: "第一個問題",
+      created_at: 100,
+    } as never);
+    const after = reduceAgent(asked, { type: "message_delta", text: "第一個答案" } as never);
+
+    expect(answers(after)).toHaveLength(1);
+    expect(answers(after)[0].message.content).toBe("第一個答案");
   });
 });
 

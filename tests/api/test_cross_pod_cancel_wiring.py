@@ -64,13 +64,37 @@ async def test_create_app_wires_a_shared_specstar_cancel_control():
         _FastRunner(), turn_control=SpecstarTurnControl(spec), poll_interval=0.01
     )
 
+    _, kb_engine = app.state.turn_engines
+
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
         cid = (await c.post("/kb/chats", json={})).json()["resource_id"]
+
+        # The cancellation arrives on the chat's BROADCAST now, not in the POST's
+        # body — the send queues and answers 202, so there is no stream to read it
+        # off. Subscribed before the send, exactly as a viewer is.
+        seen: list[str] = []
+
+        async def collect() -> None:
+            async for ev in kb_engine.subscribe(cid):
+                seen.append(type(ev).__name__)
+                if type(ev).__name__ == "RunCancelled":
+                    return
+
+        collector = asyncio.create_task(collect())
         post = asyncio.create_task(c.post(f"/kb/chats/{cid}/messages", json={"content": "go"}))
         await asyncio.wait_for(runner.started.wait(), 2)
 
-        await pod_b.cancel(cid)  # Stop pressed; request landed on the wrong replica
+        # Stop pressed; the request landed on the wrong replica. `cancel_current`
+        # is what the route calls — and on a pod holding no session for this chat
+        # all it can do is bump the SHARED epoch, which is precisely the wiring
+        # under test.
+        await pod_b.cancel_current(cid)
 
-        resp = await asyncio.wait_for(post, 3)
-        assert resp.status_code == 200
-        assert "run_cancelled" in resp.text  # the peer's Stop reached this pod's turn
+        # Bounded: the peer's Stop must reach this pod's turn through the epoch
+        # watcher, and a wait with no deadline would turn "it never did" into a
+        # hang, which reports nothing.
+        await asyncio.wait_for(collector, 3)
+        assert "RunCancelled" in seen, seen
+
+        resp = await asyncio.wait_for(post, 5)
+        assert resp.status_code == 202

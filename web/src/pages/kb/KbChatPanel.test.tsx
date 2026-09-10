@@ -130,7 +130,8 @@ describe("KbChatPanel collection picker (#271)", () => {
     }));
     const client = panelClient(EIGHT, [], {
       createChat,
-      streamMessage: async function* () {},
+      sendMessage: async () => {},
+      subscribeChat: async function* () {},
       getChat: async () => ({
         resource_id: "c-new",
         title: "",
@@ -167,7 +168,8 @@ describe("KbChatPanel collection picker (#271)", () => {
     }));
     const client = panelClient(EIGHT, [], {
       createChat,
-      streamMessage: async function* () {},
+      sendMessage: async () => {},
+      subscribeChat: async function* () {},
       getChat: async () => ({
         resource_id: "c-new",
         title: "",
@@ -207,7 +209,8 @@ describe("KbChatPanel global collections", () => {
   const sendClient = (collections: KbCollection[], createChat: ReturnType<typeof captureCreate>) =>
     panelClient(collections, [], {
       createChat,
-      streamMessage: async function* () {},
+      sendMessage: async () => {},
+      subscribeChat: async function* () {},
       getChat: async () => ({
         resource_id: "c-new",
         title: "",
@@ -321,8 +324,8 @@ describe("KbChatPanel wiki allowance stepper", () => {
 });
 
 describe("KbChatPanel image attach (#513 P10)", () => {
-  // A typed streamMessage spy so `.mock.calls[0][0]` carries SendKbMessageArgs.
-  const streamSpy = () => vi.fn((_args: SendKbMessageArgs) => (async function* () {})());
+  // A typed sendMessage spy so `.mock.calls[0][0]` carries SendKbMessageArgs.
+  const sendSpy = () => vi.fn(async (_args: SendKbMessageArgs) => {});
 
   const stageImage = async (bytes: number[], name: string, mime = "image/png") => {
     const file = new File([new Uint8Array(bytes)], name, { type: mime });
@@ -332,8 +335,8 @@ describe("KbChatPanel image attach (#513 P10)", () => {
   };
 
   it("stages an attached image and forwards it (base64) on send", async () => {
-    const stream = streamSpy();
-    const client = panelClient([coll({})], [], { streamMessage: stream });
+    const stream = sendSpy();
+    const client = panelClient([coll({})], [], { sendMessage: stream });
     render(<KbChatPanel chatId={null} collectionIds={["c1"]} client={client} />);
 
     await stageImage([1, 2, 3], "defect.png");
@@ -349,8 +352,8 @@ describe("KbChatPanel image attach (#513 P10)", () => {
   });
 
   it("clears the composer's staged image after sending", async () => {
-    const stream = streamSpy();
-    const client = panelClient([coll({})], [], { streamMessage: stream });
+    const stream = sendSpy();
+    const client = panelClient([coll({})], [], { sendMessage: stream });
     render(<KbChatPanel chatId={null} collectionIds={["c1"]} client={client} />);
 
     await stageImage([1], "one.png");
@@ -362,7 +365,7 @@ describe("KbChatPanel image attach (#513 P10)", () => {
   });
 
   it("removes a staged image on request", async () => {
-    const client = panelClient([coll({})], [], { streamMessage: vi.fn(async function* () {}) });
+    const client = panelClient([coll({})], [], { sendMessage: vi.fn(async () => {}) });
     render(<KbChatPanel chatId={null} collectionIds={["c1"]} client={client} />);
 
     await stageImage([9], "d.png");
@@ -374,14 +377,27 @@ describe("KbChatPanel image attach (#513 P10)", () => {
 
 describe("KB chat — send and stop are two buttons", () => {
   // The same defect as the workspace composer: one slot, swapped on
-  // `streaming`, so the control changed meaning under the pointer. KB chat's
-  // rules differ — its `cancel` aborts the local stream outright, and a send is
-  // refused while one is in flight rather than queued — but the button that
-  // becomes a different button while you reach for it is the same button.
-  it("shows both while a turn streams, with send disabled rather than absent", async () => {
-    const client = panelClient(EIGHT, [], {
-      streamMessage: vi.fn(() =>
+  // `streaming`, so the control changed meaning under the pointer.
+  //
+  // The old rule here was "a send is refused while one is in flight". It is
+  // gone: KB turns serialize server-side, so a question asked mid-answer QUEUES,
+  // and the composer that refused it produced no reaction at all — no bubble,
+  // no cleared box, no reason given.
+  const streamingClient = () =>
+    panelClient(EIGHT, [], {
+      sendMessage: vi.fn(async () => {}),
+      subscribeChat: vi.fn(() =>
         (async function* () {
+          // The question first, then the answer — the backend's own order
+          // (`publish(UserMessage)` before `enqueue`). It matters here: the
+          // question is what puts the log into "a turn is in flight", so a
+          // double that skipped it would show an idle panel mid-answer.
+          yield {
+            type: "user_message",
+            author: "default-user",
+            content: "hello",
+            created_at: 1,
+          } as never;
           yield { type: "message_delta", text: "thinking" } as never;
           await new Promise<void>(() => {}); // hangs: the turn is streaming
         })(),
@@ -395,36 +411,46 @@ describe("KB chat — send and stop are two buttons", () => {
         messages: [],
       }),
     });
-    render(
-      <KbChatPanel chatId="c-1" collectionIds={["help-1"]} hideCollectionPicker client={client} />,
-    );
 
-    fireEvent.change(screen.getByPlaceholderText("Ask the knowledge base…"), {
-      target: { value: "hello" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: /Send/ }));
+  it("keeps both present while a turn streams", async () => {
+    render(
+      <KbChatPanel
+        chatId="c-1"
+        collectionIds={["help-1"]}
+        hideCollectionPicker
+        client={streamingClient()}
+      />,
+    );
 
     await waitFor(() => expect(screen.getByRole("button", { name: /Stop/ })).toBeEnabled());
     // Present, not vanished — a button that disappears takes its position with it.
-    expect(screen.getByRole("button", { name: /Send/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Send/ })).toBeInTheDocument();
+  });
 
-    // …and disabled BECAUSE a turn is streaming, not because the composer went
-    // empty. `submit` clears the draft, so the assertion above passes with the
-    // `log.streaming` guard deleted — it was measuring `!draft.trim()`. Typing
-    // again separates the two: with a draft present, only the streaming turn can
-    // still be holding Send down. Deleting the guard makes THIS line fail, and
-    // a Send that is clickable mid-stream does nothing at all (`submit` returns
-    // early on `log.streaming`), which is the silent no-op the workspace
-    // composer spent a whole comment block eliminating.
-    fireEvent.change(screen.getByPlaceholderText("Ask the knowledge base…"), {
-      target: { value: "and another thing" },
-    });
-    expect(screen.getByRole("button", { name: /Send/ })).toBeDisabled();
+  it("lets you ask again while the answer is still arriving", async () => {
+    const client = streamingClient();
+    render(
+      <KbChatPanel chatId="c-1" collectionIds={["help-1"]} hideCollectionPicker client={client} />,
+    );
+    await waitFor(() => expect(screen.getByRole("button", { name: /Stop/ })).toBeEnabled());
+
+    const box = screen.getByPlaceholderText("Ask the knowledge base…");
+    fireEvent.change(box, { target: { value: "and another thing" } });
+    // Enabled BECAUSE there is something to send, not gated on the running turn.
+    expect(screen.getByRole("button", { name: /Send/ })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole("button", { name: /Send/ }));
+
+    // It really went — and the box was emptied, which is the half of this the
+    // user actually sees. A Send that is clickable but does nothing is worse
+    // than one that is greyed out.
+    await waitFor(() => expect(client.sendMessage).toHaveBeenCalled());
+    expect((box as HTMLTextAreaElement).value).toBe("");
   });
 
   it("has nothing to stop when nothing is streaming", () => {
     render(
-      <KbChatPanel chatId="c-1" collectionIds={["help-1"]} hideCollectionPicker client={panelClient(EIGHT, [], { streamMessage: async function* () {} })} />,
+      <KbChatPanel chatId="c-1" collectionIds={["help-1"]} hideCollectionPicker client={panelClient(EIGHT, [], { sendMessage: async () => {} })} />,
     );
     expect(screen.getByRole("button", { name: /Stop/ })).toBeDisabled();
   });

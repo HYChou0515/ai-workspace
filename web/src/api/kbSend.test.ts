@@ -30,7 +30,7 @@ function installFetchSpy() {
   };
 }
 
-describe("KB streamMessage request body", () => {
+describe("KB sendMessage request body", () => {
   let captured: ReturnType<typeof installFetchSpy>;
   beforeEach(() => {
     captured = installFetchSpy();
@@ -38,16 +38,12 @@ describe("KB streamMessage request body", () => {
   afterEach(() => captured.restore());
 
   it("carries the per-message max_kb_searches pick", async () => {
-    const gen = realKbApi.streamMessage({
+    await realKbApi.sendMessage({
       chatId: "chat-1",
       content: "why voids?",
       reasoningEffort: "high",
       maxKbSearches: 0,
     });
-    // Drain the async generator so the POST fires.
-    for await (const _ of gen) {
-      /* consume */
-    }
     const body = JSON.parse(captured.bodies[0]!);
     expect(body.content).toBe("why voids?");
     expect(body.reasoning_effort).toBe("high");

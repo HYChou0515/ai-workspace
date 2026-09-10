@@ -30,9 +30,8 @@ function BackProbe() {
 
 /** Run one full turn against the mock so a thread has a message to identify it. */
 async function seedTurn(chatId: string, content: string) {
-  for await (const _ of mockKbApi.streamMessage({ chatId, content })) {
-    /* drain the stream — the mock persists the turn as it goes */
-  }
+  // The send awaits its own turn, so the thread is persisted when this returns.
+  await mockKbApi.sendMessage({ chatId, content });
 }
 
 /** Mount the whole KB route subtree (the App's single source of truth for KB

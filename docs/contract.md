@@ -392,8 +392,9 @@ fixture 放在 seed 出來的 template 內(`/data/*.csv`)。
 | `GET`    | `/kb/chats`                              | 列出 thread：`[{resource_id, title, collection_ids, message_count}]` | ✅ |
 | `GET`    | `/kb/chats/{id}`                         | thread 細節：`{resource_id, title, collection_ids, messages:[KbMessage…]}`（缺失則 404） | ✅ |
 | `DELETE` | `/kb/chats/{id}`                         | 刪一個 thread → 204（硬刪除） | ✅ |
-| `POST`   | `/kb/chats/{id}/messages`                | 送出 user message → `AgentEvent` 的 SSE 串流（與 RCA 同一 union）；持久化答案 + `[n]` citation | ✅ |
-| `DELETE` | `/kb/chats/{id}/messages/current`        | 中斷進行中的 turn（RunCancelled 送到舊串流）；即使閒置也回 204 —— 與 RCA 端點一致 | ✅ |
+| `POST`   | `/kb/chats/{id}/messages`                | 送出 user message → **202**：turn 排進佇列（不取消進行中的那一場），事件走下面那條 stream；持久化答案 + `[n]` citation | ✅ |
+| `GET`    | `/kb/chats/{id}/stream`                  | 這個 thread 的長存事件串流（`AgentEvent` SSE，與 RCA 同一 union）。`?since={seq}` 讓重連先補播同一台 pod 上錯過的事件。gate 用 `read_chat` | ✅ |
+| `DELETE` | `/kb/chats/{id}/messages/current`        | 中斷**進行中**的 turn（RunCancelled 廣播到上面那條 stream），排隊中的訊息不動；即使閒置也回 204 —— 與 RCA 端點一致 | ✅ |
 
 資料夾上傳 = FE 把每個檔案以其相對路徑當 multipart
 filename 來 POST(一個檔案一個 SourceDoc,跟解開壓縮檔一樣)。Citation **不**

@@ -199,7 +199,13 @@ export function KbChatPanel({
   const submit = (text: string) => {
     const t = text.trim();
     // #513 P10: an image with no text is a valid turn (its VLM description is the query).
-    if ((!t && !image) || log.streaming) return;
+    //
+    // `log.streaming` is NOT a reason to refuse. KB turns serialize server-side
+    // now, so a question asked while an answer is still arriving queues behind
+    // it. Refusing here did the one thing a composer must never do: nothing at
+    // all — no bubble, no cleared box, no reason — which is indistinguishable
+    // from the app being broken.
+    if (!t && !image) return;
     setDraft("");
     const img = image;
     setImage(null);
@@ -407,11 +413,11 @@ export function KbChatPanel({
             {/* TWO buttons, both always here. They used to share one slot,
                 swapped on `streaming`, so the control changed meaning under the
                 pointer — you aimed at Send while a turn was still running and
-                stopped it instead. KB chat's rules differ from the workspace
-                composer's (its `cancel` aborts the local stream outright, and a
-                send is refused while one is in flight rather than queued), but
-                the button that becomes a different button while you reach for it
-                is the same button. Icon-only, so each carries an explicit
+                stopped it instead. KB chat's rules are the workspace composer's
+                now: a message asked during an answer QUEUES, so Send is held
+                down only by having nothing to send, and Stop interrupts the
+                running turn without touching the queue. Icon-only, so each
+                carries an explicit
                 `aria-label`: `title` would in fact supply an accessible name on
                 its own (measured — removing the label leaves the button findable
                 by name), but it is a fallback the spec applies only when nothing
@@ -432,7 +438,12 @@ export function KbChatPanel({
               className="kb-btn kb-btn--primary"
               aria-label="Send"
               title="Send"
-              disabled={log.streaming || (!draft.trim() && !image)}
+              // Only "there is nothing to send" disables this. A running turn
+              // does not: the message queues behind it. A disabled button says
+              // what will happen BEFORE the click, so leaving it grey while the
+              // composer beside it accepted the text was the two of them
+              // contradicting each other.
+              disabled={!draft.trim() && !image}
               onClick={() => submit(draft)}
             >
               <Icon name="arrow_r" size={13} />

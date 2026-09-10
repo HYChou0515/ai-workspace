@@ -944,17 +944,101 @@ export const mockKbApi: KbApi = {
   async cancelMessage(_chatId) {
     // No server turn to cancel in the mock; the FE aborts the stream locally.
   },
-  async *streamMessage(args: SendKbMessageArgs): AsyncGenerator<AgentEvent> {
+  async sendMessage(args: SendKbMessageArgs): Promise<void> {
     const chat = chats.get(args.chatId);
     if (!chat) throw new Error(`chat not found: ${args.chatId}`);
     chat.messages.push(blankUser(args.content));
     touchChat(chat.resource_id); // #357: a new turn bumps recency
+    // Broadcast the question BEFORE the turn runs, exactly as the backend does —
+    // that ordering is what lets the sender's optimistic bubble be adopted, and
+    // a double that got it wrong would hide a double bubble rather than show it.
+    kbPublish(args.chatId, {
+      type: "user_message",
+      // The id the backend stamps, NOT a display name: the sender's optimistic
+      // bubble is adopted by AUTHOR, so a double that broadcast "You" would draw
+      // a second bubble here and pass anyway — hiding the very defect the
+      // adoption exists to prevent.
+      author: MOCK_USER,
+      content: args.content,
+      created_at: Date.now(),
+    } as AgentEvent);
+    // …and QUEUE behind whatever is already running for this chat. A double that
+    // ran turns concurrently would pass a composer that queues and one that
+    // cancels equally well, which is the whole behaviour under test.
+    const prior = kbTurns.get(args.chatId) ?? Promise.resolve();
+    const mine = prior.then(() => kbRunTurn(chat, args));
+    kbTurns.set(
+      args.chatId,
+      mine.catch(() => undefined),
+    );
+    await mine;
+  },
+  async *subscribeChat(chatId: string, signal?: AbortSignal): AsyncGenerator<AgentEvent> {
+    const queue: AgentEvent[] = [];
+    let wake: (() => void) | null = null;
+    const deliver = (ev: AgentEvent) => {
+      queue.push(ev);
+      wake?.();
+    };
+    const subs = kbSubs.get(chatId) ?? new Set<(ev: AgentEvent) => void>();
+    subs.add(deliver);
+    kbSubs.set(chatId, subs);
+    try {
+      for (;;) {
+        if (signal?.aborted) return;
+        const next = queue.shift();
+        if (next !== undefined) {
+          yield next;
+          continue;
+        }
+        await new Promise<void>((resolve) => {
+          wake = resolve;
+          signal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+        wake = null;
+      }
+    } finally {
+      subs.delete(deliver);
+    }
+  },
+};
 
+/** Who the mock signs writes as — the same id `api.getCurrentUser()` answers, so
+ * author-keyed rules (bubble adoption) behave here as they do in the app. */
+const MOCK_USER = "default-user";
+
+const kbSubs = new Map<string, Set<(ev: AgentEvent) => void>>();
+/** The tail of each chat's turn chain — the mock's stand-in for the server-side
+ * FIFO queue, so a second send waits rather than cancelling. */
+const kbTurns = new Map<string, Promise<void>>();
+
+function kbPublish(chatId: string, ev: AgentEvent): void {
+  for (const fn of kbSubs.get(chatId) ?? []) fn(ev);
+}
+
+async function kbRunTurn(
+  chat: { resource_id: string; collection_ids: string[]; messages: KbChatMessage[] },
+  args: SendKbMessageArgs,
+): Promise<void> {
+  {
     const answer = "Per the knowledge base, reflow zone three drifted [1].";
     await delay(40);
-    yield { type: "tool_start", call_id: "t1", name: "kb_search", args: { query: args.content } };
-    yield { type: "tool_end", call_id: "t1", output: "[1] reflow.md: zone three drift" };
-    yield { type: "message_delta", text: answer, reasoning: false };
+    kbPublish(chat.resource_id, {
+      type: "tool_start",
+      call_id: "t1",
+      name: "kb_search",
+      args: { query: args.content },
+    } as AgentEvent);
+    kbPublish(chat.resource_id, {
+      type: "tool_end",
+      call_id: "t1",
+      output: "[1] reflow.md: zone three drift",
+    } as AgentEvent);
+    kbPublish(chat.resource_id, {
+      type: "message_delta",
+      text: answer,
+      reasoning: false,
+    } as AgentEvent);
     await delay(40);
 
     chat.messages.push({
@@ -988,9 +1072,9 @@ export const mockKbApi: KbApi = {
         },
       ],
     });
-    yield { type: "done" };
-  },
-};
+    kbPublish(chat.resource_id, { type: "done" } as AgentEvent);
+  }
+}
 
 function blankUser(content: string): KbChatMessage {
   return {

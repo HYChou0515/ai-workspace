@@ -111,7 +111,7 @@ flowchart TD
 
 **寫路徑**：`useMutation` 呼一個 api 方法，再對相關 `qk.*` 鍵（及依賴鍵）`invalidateQueries`。例如存 collections picker 會同時失效 `qk.itemCollections` 與 `qk.file(id, "/collections.json")`。
 
-**即時 agent 回合（核心路徑）**：使用者送訊息 → chat hook（`useAgent`/`useKbChat`/`useItemChat`）把 `log.streaming` 翻 true 並經 `api.sendMessage` POST（只 **enqueue**，202）。一條長存的 SSE 訂閱（`api.subscribeInvestigation` / `client.streamMessage` → `real.ts` async-generator → `parseSseStream`）吐出型別化 `AgentEvent`。每個事件由 `reduceAgent`（`agentLog.ts`）摺進 `AgentLog`；`AgentEntryView` 渲染每筆 entry。遇到終止事件（`isTerminal`），hook 會 **refetch 持久化的 Conversation/chat 並用 `logFromMessages` 重拍快照**——因為持久 thread 帶著 SSE 流刻意省略的 `[n]` 引用。`useAgent`/`useItemChat` 還有 #202 store-poll 後備，覆蓋廣播在另一個 pod 而本機 stream 沉默的跨 pod 情況。
+**即時 agent 回合（核心路徑）**：使用者送訊息 → chat hook（`useAgent`/`useKbChat`/`useItemChat`）把 `log.streaming` 翻 true 並經 `api.sendMessage` POST（只 **enqueue**，202）。一條長存的 SSE 訂閱（`api.subscribeInvestigation` / `client.subscribeChat` → `real.ts` async-generator → `parseSseStream`）吐出型別化 `AgentEvent`。每個事件由 `reduceAgent`（`agentLog.ts`）摺進 `AgentLog`；`AgentEntryView` 渲染每筆 entry。遇到終止事件（`isTerminal`），hook 會 **refetch 持久化的 Conversation/chat 並用 `logFromMessages` 重拍快照**——因為持久 thread 帶著 SSE 流刻意省略的 `[n]` 引用。`useAgent`/`useItemChat` 還有 #202 store-poll 後備，覆蓋廣播在另一個 pod 而本機 stream 沉默的跨 pod 情況。
 
 **side-effect 事件不進 log**：`file_changed` 不摺進 reducer，而是在 hook 裡失效 `qk.files`。workflow 的 step/phase 事件搭同一條 per-item stream，摺成 step/phase log entry（`reduceAgent` 的 `step_*`/`phase_entered` 分支）。引用在 `Message` 渲染時經 `kbCite`/`remarkKbCitation` 成為可點的 pill，點擊開啟來源文件。
 

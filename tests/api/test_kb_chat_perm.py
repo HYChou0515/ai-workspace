@@ -152,7 +152,7 @@ def test_setter_grants_converse_and_a_collaborator_can_send():
     assert r.status_code == 200
     assert r.json()["notified"] == ["alice"]
     holder["id"] = "alice"
-    assert client.post(f"/kb/chats/{cid}/messages", json={"content": "hi"}).status_code == 200
+    assert client.post(f"/kb/chats/{cid}/messages", json={"content": "hi"}).status_code == 202
     # the collaborator's message persisted, attributed to them
     msgs = client.get(f"/kb/chats/{cid}").json()["messages"]
     assert any(m["role"] == "user" and m["author"] == "alice" for m in msgs)
