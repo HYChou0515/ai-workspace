@@ -1,13 +1,25 @@
 """#309 — the agent-tool authorization funnel.
 
-Every item-level agent tool (file ops / exec) is gated here BEFORE it touches the
-workspace: the AI acts as ``Actor.ai(ceiling ∩ speaker)``, so it can only do what
-the current speaker may do on the item — a prompt-injected model can at worst
-exercise the speaker's own grants, never exceed them, and never ``use_terminal`` /
-``change_permission`` (hard-barred in ``authorize`` whatever the ceiling). The verb
-ceiling is DERIVED from the preset's tool allow-list — a tool the preset grants
-implies its verb — so there's no second config surface to drift. See
-``docs/plan-permissions.md`` (#309).
+Every tool listed in ``TOOL_VERBS`` is gated here BEFORE it touches the
+workspace: the AI acts as ``Actor.ai(ceiling ∩ speaker, groups included)``, so it
+can only do what the current speaker may do on the item — a prompt-injected model
+can at worst exercise the speaker's own grants, never exceed them, and never
+``use_terminal`` / ``change_permission`` (hard-barred in ``authorize`` whatever
+the ceiling). The verb ceiling is DERIVED from the preset's tool allow-list — a
+tool the preset grants implies its verb — so there's no second config surface to
+drift. See ``docs/plan-permissions.md`` (#309).
+
+``TOOL_VERBS`` IS THE SCOPE, and it is not yet every tool that touches an item.
+``save_workflow``, ``save_skill``, ``read_skill``, ``update_todos``, the entity
+tools and every tool-package command (``tooling/registry.py`` runs code in the
+item's sandbox) still reach the workspace without passing here. Two of them —
+``list_files`` and ``exists`` — were listed BELOW and gated nowhere, which is
+why the sentence above now names the table rather than a category: a docstring
+claiming the category is what let the gap live, and
+``test_every_tool_that_declares_a_verb_actually_checks_it`` now fails on any
+entry that drifts back out. Closing the rest needs a ceiling that can express a
+package command's verb, and one that knows about tools ``build_tools`` grants
+outside ``allowed_tools`` (it appends ``read_skill`` itself).
 """
 
 from __future__ import annotations
@@ -40,6 +52,13 @@ TOOL_VERBS: dict[str, Verb] = {
     "delete_file": "edit_content",
     "exec": "execute",
     "make_deck": "execute",
+    # It writes `.agent/<name>/AGENT.md` into the item's workspace, and that file
+    # is a SYSTEM PROMPT every later turn loads and any collaborator's
+    # `run_agent` executes. The chat entry gate is `converse`, so leaving it
+    # ungated let anyone who could talk to an item leave a standing instruction
+    # in it — a worse version of the `save_skill` hole, and reachable in every
+    # shipped App.
+    "save_subagent": "edit_content",
 }
 
 
@@ -49,11 +68,18 @@ TOOL_VERBS: dict[str, Verb] = {
 # working. #241: ``ls`` was renamed to ``list_files``.
 #
 # It lives HERE, beside the ceiling that has to apply it, and the tool layer
-# imports it. Every reader of a tool list has to go through the same map:
-# ``build_tools`` renamed before REGISTERING and this ceiling did not, so a
-# config saying ``ls`` got a working ``list_files`` that this funnel then
-# refused on every call — the #537 shape, where a tool that can only say no
-# reads to a model as "stop trying".
+# imports it, because two readers of one list must not disagree: ``build_tools``
+# renamed before REGISTERING and this ceiling did not, so a config saying ``ls``
+# would get a working ``list_files`` that this funnel refuses on every call —
+# the #537 shape, where a tool that can only say no reads as "stop trying".
+#
+# DEFENCE IN DEPTH, not a reported defect: on an item turn ``allowed_tools``
+# always comes from ``AppCatalog.resolve``, which iterates the App manifest's
+# own ``tools``, and no shipped ``app.json`` names a legacy tool — so a stored
+# ``ls`` cannot reach here today. It is applied where a reader can be shown to
+# disagree with registration, and NOT pushed into ceilings derived from authored
+# manifest files, where it would change a clamp and a validator with nothing
+# able to exercise either.
 LEGACY_TOOL_RENAMES: dict[str, str] = {"ls": "list_files"}
 
 
@@ -127,17 +153,20 @@ def authorize_tool(context: AgentToolContext, verb: Verb) -> str | None:
     # as often as the model retries.
     logger.warning(
         "authorize_tool: %s denied for user %s on %s item %s "
-        "(owner=%s, visibility=%s, speaker groups=%d, in ai ceiling=%s)",
+        "(owner=%s, visibility=%s, speaker groups=%s, in ai ceiling=%s)",
         verb,
         actor.user_id,
         context.app_slug,
         context.investigation_id,
         created_by,
-        # `getattr`, not a conditional: `permission is None` ≡ public, and a
-        # public item never reaches a refusal, so a branch here would be one
-        # nothing can execute.
-        getattr(item.permission, "visibility", "public"),
-        len(actor.groups),
+        # `permission is None` ≡ public, which DOES reach a refusal — through the
+        # ceiling, on an item nobody has restricted.
+        "public" if item.permission is None else item.permission.visibility,
+        # `n/a`, not `0`, when the ceiling refused: `actor` is then the throwaway
+        # built without groups, and a count read off it says "this user is in no
+        # groups" — the exact wrong conclusion for the symptom this line exists
+        # to diagnose. Reporting it honestly costs no query.
+        len(actor.groups) if verb in ceiling else "n/a",
         verb in ceiling,
     )
     # One sentence, because the code checked one thing. The ceiling case wanted

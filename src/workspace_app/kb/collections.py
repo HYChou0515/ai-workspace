@@ -112,7 +112,11 @@ def readable_collection_ids(
     WITH the caller's groups: a collection shared to `group:<id>` is listed to a
     member by the HTTP route (which resolves them) and was then dropped by this
     gate (which did not), so the person could see it and the agent they were
-    driving could not."""
+    driving could not — and, through `_readable_collections_provider`, the same
+    now holds for the graph rows scoped by this function."""
+    ids = list(ids)
+    if not ids:
+        return []  # nothing to decide; asking who the caller is costs a query
     rm = spec.get_resource_manager(Collection)
     actor = Actor.human(user, groups=groups_of(spec, user))
     out: list[str] = []
@@ -222,6 +226,9 @@ def partition_collection_disclosure(
     groups included — same point-get per id, same order), so swapping a caller
     onto this is a no-op for the searched scope; it only ADDS the middle tier.
     An unknown id is dropped; ``permission is None`` ≡ public."""
+    ids = list(ids)
+    if not ids:
+        return DisclosurePartition(readable=[], discoverable=[], hidden=[])
     rm = spec.get_resource_manager(Collection)
     actor = Actor.human(user, groups=groups_of(spec, user))
     entries: list[tuple[str, Any, str]] = []

@@ -141,3 +141,28 @@ def test_a_group_grant_lands_in_readable_not_discoverable():
     part = partition_collection_disclosure(spec, [cid], "alice")
     assert part.readable == [cid]
     assert part.discoverable == []
+
+
+def test_the_disclosure_universe_sees_a_group_grant_too():
+    """`all_discoverable_collection_ids` is the third `Actor.human` in this
+    module and the only one no test reached. `discoverable` is "may see exist
+    but NOT read", so a read_content grant that arrives through a group has to
+    take the collection OUT of the probe — otherwise the member is told "there
+    is an answer you can't read" about something they can read perfectly well."""
+    from workspace_app.resources.groups import Group
+
+    spec = make_spec()
+    grm = spec.get_resource_manager(Group)
+    with grm.using("bob"):
+        gid = grm.create(Group(name="ops", members=["alice"])).resource_id
+    rm = spec.get_resource_manager(Collection)
+    with rm.using("bob"):
+        cid = rm.create(
+            Collection(
+                name="c",
+                permission=Permission(visibility="restricted", read_content=[f"group:{gid}"]),
+            )
+        ).resource_id
+
+    assert all_discoverable_collection_ids(spec, "alice") == []  # she can read it
+    assert all_discoverable_collection_ids(spec, "carol") == [cid]  # control: non-member

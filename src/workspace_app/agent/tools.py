@@ -1903,6 +1903,8 @@ async def save_subagent_impl(
     call — it cannot be silently dropped by malformed frontmatter. Re-saving the
     same name overwrites, so refine freely. Returns a confirmation, or an
     `error:` note naming exactly what to fix."""
+    if (denied := authorize_tool(ctx.context, "edit_content")) is not None:
+        return denied
     from ..apps.subagents import (
         SUBAGENT_FORBIDDEN_TOOLS,
         WORKSPACE_AGENT_DIR,
@@ -2014,14 +2016,7 @@ def _subagent_tool_ceiling(ctx: AgentToolContext) -> set[str] | None:
     # "it can only use tools you hold yourself". The resolved list already IS the
     # answer to "what may this turn do"; anything further is a second, wrong rule.
     # Only when there is no resolved list does the profile stand in for it.
-    ceiling = (
-        # Through the same rename map registration and the authz ceiling use — a
-        # stored `ls` IS a held `list_files`, and readers disagreeing about that
-        # is how one of them refuses what another granted.
-        {LEGACY_TOOL_RENAMES.get(t, t) for t in held}
-        if held is not None
-        else _profile_tool_ceiling(ctx.app_slug, ctx.template_profile)
-    )
+    ceiling = held_tool_names(held, ctx.app_slug, ctx.template_profile)
     if ceiling is None:
         return None
     # Minus what a sub-agent can never hold, so those are REFUSED by name like
@@ -2029,6 +2024,28 @@ def _subagent_tool_ceiling(ctx: AgentToolContext) -> set[str] | None:
     # quiet trim this tool's own rule forbids — and the refusal's "Available:"
     # line would otherwise advertise them.
     return ceiling - SUBAGENT_FORBIDDEN_TOOLS
+
+
+def held_tool_names(
+    allowed: list[str] | None, app_slug: str | None, profile: str | None
+) -> set[str] | None:
+    """What a turn is HOLDING, in the names a model can actually call. ``None``
+    (skip the clamp) when neither source can answer.
+
+    One function because there were two copies of this three-line rule —
+    `_subagent_tool_ceiling` (which refuses a sub-agent definition naming a tool
+    the parent does not hold) and `_subagent_defs`' clamp (which strips one from
+    a definition already saved). Renaming in only the first made them disagree
+    in the worst possible direction: `save_subagent` accepted `list_files`,
+    answered "callable now", and the clamp then handed the sub-agent nothing.
+
+    The rename is applied to a STORED list only. The profile branch reads
+    authored manifest files, where a legacy name would be a config error rather
+    than old data, and normalising it would silently change a validator and a
+    clamp on a case no shipped manifest can produce."""
+    if allowed is not None:
+        return {LEGACY_TOOL_RENAMES.get(t, t) for t in allowed}
+    return _profile_tool_ceiling(app_slug, profile)
 
 
 def _profile_tool_ceiling(app_slug: str | None, profile: str | None) -> set[str] | None:
@@ -2048,11 +2065,12 @@ def _profile_tool_ceiling(app_slug: str | None, profile: str | None) -> set[str]
     except (FileNotFoundError, ModuleNotFoundError, OSError):
         return None
     pm_tools = load_profile(app_slug, profile).tools
-    narrowed = (set(pm_tools) & app_tools) if pm_tools is not UNSET else app_tools
-    # Normalised, like every other reader of a tool list: this ceiling is
-    # compared against names the model actually calls, and `build_tools`
-    # renames before it registers.
-    return {LEGACY_TOOL_RENAMES.get(t, t) for t in narrowed}
+    # NOT renamed. This ceiling comes from authored manifest files, not from
+    # stored config, and it feeds a clamp (`_subagent_defs` -> `clamp_tools`)
+    # and a validator (`save_workflow_impl`) as well as the two refusal
+    # messages. No shipped manifest names a legacy tool, so normalising here
+    # changed four consumers on a case none of them can be handed.
+    return (set(pm_tools) & app_tools) if pm_tools is not UNSET else app_tools
 
 
 async def save_workflow_impl(

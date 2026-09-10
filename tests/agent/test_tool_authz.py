@@ -3,6 +3,9 @@
 model can at worst do what the current speaker may do on the item, never more.
 """
 
+import dataclasses
+
+import pytest
 from agents import RunContextWrapper
 
 from workspace_app.agent import AgentToolContext
@@ -16,6 +19,7 @@ from workspace_app.agent.tools import (
     make_deck_impl,
     read_file_impl,
     read_image_impl,
+    save_subagent_impl,
     show_file_impl,
     write_file_impl,
 )
@@ -103,6 +107,7 @@ _CALLS = {
     "delete_file": lambda c: delete_file_impl(c, "/a.txt"),
     "exec": lambda c: exec_impl(c, ["echo", "hi"]),
     "make_deck": lambda c: make_deck_impl(c, "a deck"),
+    "save_subagent": lambda c: save_subagent_impl(c, "digger", "Digs logs", [], "You dig."),
 }
 
 
@@ -111,10 +116,11 @@ async def test_every_tool_that_declares_a_verb_actually_checks_it():
     refused, with the guard at the top of its impl, before it touches the
     workspace / sandbox / describer / deck machinery.
 
-    Driven from `TOOL_VERBS` rather than from a hand-kept list: the funnel's
-    docstring says "every item-level agent tool is gated here BEFORE it touches
-    the workspace", and `list_files` / `exists` made that sentence false for
-    everyone, always, regardless of any grant."""
+    Driven from `TOOL_VERBS` rather than from a hand-kept list: `list_files` and
+    `exists` were IN that table and gated nowhere, so they answered for everyone,
+    always, regardless of any grant. The table is the funnel's scope — it is not
+    yet every tool that touches an item, and the module docstring now says which
+    ones are still outside — but nothing may sit in it without a case here."""
     assert set(_CALLS) == set(TOOL_VERBS)
     spec, iid = _spec_with_item(
         Permission(visibility="restricted", read_meta=["user:alice"], converse=["user:alice"])
@@ -314,3 +320,61 @@ def test_a_legacy_tool_name_still_carries_its_verb():
     without renaming, so that tool was registered and then refused every call —
     the #537 shape (a tool that can only say no reads as "stop trying")."""
     assert ceiling_from_tools(["ls"]) == frozenset({"read_content"})
+
+
+def test_a_ceiling_refusal_does_not_claim_the_speaker_is_in_no_groups(caplog):
+    """The count is read off the actor, and on a CEILING refusal that actor is
+    the throwaway built without groups. Printing `0` there tells whoever is
+    diagnosing "this user is in no groups" — the one wrong conclusion for the
+    symptom the line exists to explain. Nothing is asked for, so nothing is
+    claimed."""
+    spec, iid = _spec_with_item(None)
+    ctx = _ctx(
+        spec,
+        iid,
+        acting_user="alice",
+        agent_config=AgentConfig(name="x", allowed_tools=["read_file"]),
+    ).context
+    said = _one_warning(caplog, ctx, "execute")
+    assert "speaker groups=n/a" in said
+    assert "visibility=public" in said  # a public item DOES reach a refusal, via the ceiling
+
+
+def test_a_grant_refusal_reports_the_groups_it_actually_looked_at(caplog):
+    """The control for the case above: where groups WERE resolved, the count is
+    the real one — so the two cases cannot be told apart by luck."""
+    spec, iid, _ = _group_granted_item({"read_meta": ["user:alice"]})
+    said = _one_warning(caplog, _ctx(spec, iid, acting_user="alice").context, "execute")
+    assert "speaker groups=1" in said
+
+
+def test_a_turn_with_no_speaker_asks_for_no_groups(monkeypatch):
+    """`acting_user` is "" on paths with nobody behind them. Before this the AI
+    carried no groups at all, so nothing asked; now something does, and an empty
+    string into a `members.contains(...)` query is element membership today and
+    a substring `LIKE` the moment `Group.members` loses its list registration —
+    at which point "" is a substring of every member."""
+    from workspace_app.resources import groups as groups_module
+
+    monkeypatch.setattr(
+        groups_module,
+        "groups_of",
+        lambda spec, user: pytest.fail(f"asked for the groups of {user!r}"),
+    )
+    spec, iid = _spec_with_item(Permission(visibility="private"))
+    ctx = _ctx(spec, iid, acting_user="").context
+    assert authorize_tool(ctx, "read_content") is not None
+
+
+def test_a_derived_context_does_not_inherit_the_memo():
+    """`_speaker_groups` belongs to `acting_user`. `dataclasses.replace` —
+    which `subagent_run` and `compaction` both use — must rebuild it rather than
+    carry one speaker's memberships onto a context built for another."""
+    spec, iid, _ = _group_granted_item({"read_meta": ["user:alice"], "execute": ["group:{gid}"]})
+    ctx = _ctx(spec, iid, acting_user="alice").context
+    assert authorize_tool(ctx, "execute") is None
+    assert ctx._speaker_groups == frozenset({g for g in ctx._speaker_groups})  # resolved
+    assert ctx._speaker_groups  # non-empty, so inheriting it would be visible
+
+    child = dataclasses.replace(ctx, history=[])
+    assert child._speaker_groups is None
