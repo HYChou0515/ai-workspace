@@ -474,6 +474,22 @@ const countUserMessages = (entries: readonly AgentEntry[]) =>
  * Use {@link logFromMessages} directly only where a smaller thread is the POINT
  * (initial hydration, undo).
  */
+/** Does this snapshot ADD to what is on screen — i.e. does re-hydrating bring
+ * something in rather than trade it for what is already there?
+ *
+ * Derived from the SAME count `reconcileSnapshot` bails on, so a caller deciding
+ * whether to re-hydrate and the function deciding whether to keep the screen
+ * cannot disagree. Spelled separately they did: a gate that skipped the read
+ * whenever the store's tail was a queued question threw away the finished answer
+ * above it, in the one case a re-hydrate exists for.
+ *
+ * A TIE is not an addition. That is the case that costs something — the snapshot
+ * neither shrinks nor grows, so `reconcileSnapshot` adopts it and the live
+ * entries the store does not have (a streaming answer) go with it. */
+export function snapshotAdds(prev: AgentLog, thread: { messages: readonly Message[] }): boolean {
+  return contentCount(logFromMessages(thread.messages).entries) > contentCount(prev.entries);
+}
+
 export function reconcileSnapshot(
   prev: AgentLog,
   thread: { messages: readonly Message[] },

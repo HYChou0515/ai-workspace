@@ -17,6 +17,7 @@ import {
   EMPTY_LOG,
   drawOwnAsk,
   retractOwnAsk,
+  snapshotAdds,
   type AgentLog,
   reduceAgent,
 } from "../pages/investigation/agentLog";
@@ -131,22 +132,28 @@ export function useKbChat({
   // thread it has only just created, without waiting a render for this effect.
   const subRef = useRef<{ id: string; controller: AbortController } | null>(null);
 
-  // `log.streaming`, so `send` can put it back if the send fails. `drawOwnAsk`
-  // sets `streaming`, so once it has run the log can no longer say whether a
-  // turn was already running when this send started.
-  //
-  // Committed in an effect rather than written during render: a render that
-  // React discards would otherwise leave its value behind, and a write during
-  // render is a side effect in a function that is supposed to have none.
   // How many sends are out right now. The reconnect re-hydrate must not run
   // while one is, because the screen legitimately holds a question the store has
   // not got yet — and no reading of the STORE can tell that.
   const sendsInFlight = useRef(0);
 
+  // `log.streaming`, so `send` can put it back if the send fails. `drawOwnAsk`
+  // sets `streaming`, so once it has run the log can no longer say whether a
+  // turn was already running when this send started.
   const streamingRef = useRef(false);
+  // The log itself, so the reconnect can ask whether a snapshot would ADD to
+  // what is on screen. Its closure captures the log of the render it was created
+  // in, which for a subscription living across turns is stale by definition.
+  const logRef = useRef(log);
+  // A LAYOUT effect, not a passive one: passive effects are scheduled through
+  // the Scheduler and an input event can be dispatched ahead of a pending one,
+  // so a `streaming` flip committed just before a click would not be in the ref
+  // when `send` read it. Committed rather than written during render, because a
+  // render React discards would otherwise leave its value behind.
   useLayoutEffect(() => {
     streamingRef.current = log.streaming;
-  }, [log.streaming]);
+    logRef.current = log;
+  }, [log]);
 
   const attach = useCallback(
     (id: string) => {
@@ -255,15 +262,28 @@ export function useKbChat({
           // turn being accepted. The client knows exactly when a send is out;
           // it does not have to infer it.
           //
-          // `turnEnded` is the STORE's fact, and it gates the whole read rather
-          // than just the `streaming` reset: a thread whose tail is the #624
-          // `notice` is MID-turn, and `notice` counts as content, so a snapshot
-          // taken then ties on `contentCount`, wins `reconcileSnapshot` and
-          // deletes the answer already on screen. If the turn has not ended
-          // there is nothing here to catch — the resumed stream will deliver it.
+          // The second gate asks whether re-hydrating ADDS anything
+          // (`snapshotAdds`) — the same count `reconcileSnapshot` bails on, so
+          // the two cannot disagree. A TIE is the case that costs: the snapshot
+          // neither shrinks nor grows, so it is adopted and the live entries the
+          // store does not have go with it — a streaming answer replaced by the
+          // #624 `notice` sitting where it should be.
+          //
+          // It must NOT be `turnEnded` alone. A question queued behind the
+          // running answer makes the store's tail a user message, and skipping
+          // the read there threw away the finished answer ABOVE it — in the one
+          // case this loop exists for, on this branch's headline feature.
           const fresh =
             sendsInFlight.current === 0 ? await client.getChat(id).catch(() => null) : null;
-          if (fresh && !controller.signal.aborted && turnEnded(fresh.messages)) {
+          // Re-checked AFTER the await as well: a send that starts during the
+          // round-trip is invisible to the check above, and the snapshot it
+          // would then apply is the pre-send thread.
+          if (
+            fresh &&
+            !controller.signal.aborted &&
+            sendsInFlight.current === 0 &&
+            (turnEnded(fresh.messages) || snapshotAdds(logRef.current, fresh))
+          ) {
             qc.setQueryData(qk.kb.chat(id), fresh);
             reconcile(fresh);
             // `reconcile` derives `streaming` itself, but only when it does not
