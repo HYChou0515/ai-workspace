@@ -307,6 +307,53 @@ describe("the slider reaches hours (#785)", () => {
     expect(sliderToPpd(1)).toBeGreaterThan(PPD_ANCHORS.day);
   });
 
+  it("spaces the named stops evenly along the track", () => {
+    // "你的拉桿不平均分配 day和hour中間差太遠". A pure log map over
+    // [PPD_MIN, PPD_MAX] put the stops at 14.5 / 30.5 / 44.1 / 89.4% — the last
+    // gap was 45% of the rail, three times either of the others, so three of
+    // the four names crowded into the left half and the right half was empty.
+    // The track is anchored ON the stops now: equal share per segment, log
+    // inside each one so a drag still feels like a constant zoom multiplier.
+    const at = (["month", "week", "day", "hour"] as const).map((z) => ppdToSlider(PPD_ANCHORS[z]));
+    const gaps = at.slice(1).map((v, i) => v - at[i]);
+    for (const g of gaps) expect(g).toBeCloseTo(gaps[0], 3);
+    // ...and the ends of the rail stay reachable past the outermost names.
+    expect(at[0]).toBeGreaterThan(0);
+    expect(at[at.length - 1]).toBeLessThan(1);
+  });
+
+  it("never gets NARROWER as the slider is dragged right", () => {
+    // "從day到hour時的某個地方，他的寬度會突然縮短然後繼續變寬". Measured: at
+    // ppd 147 the canvas fell 681 -> 637 and a bar fell 136 -> 49. Crossing into
+    // hour grain re-measures a PART day: 09:00-17:00 is one whole column at day
+    // grain and eight of twenty-four at hour grain, so everything shrank
+    // mid-drag. The old comment claimed "nothing on screen moves when the grain
+    // changes under it" — true only for spans that are whole days.
+    //
+    // Two answers, and this holds the first: the grain may only change AT a
+    // named stop, so a drag never crosses it by accident.
+    const MIN = "2026-03-02T09:00";
+    const MAX = "2026-03-06T17:00";
+    const scaleAt = (ppd: number) => ({ grain: grainFor(ppd), skipWeekends: true }) as const;
+
+    let prev = -1;
+    let changes = 0;
+    for (let pos = 0; pos <= 1.0001; pos += 0.005) {
+      const ppd = sliderToPpd(pos);
+      const s = scaleAt(ppd);
+      const w = barColumns({ start: MIN, end: MAX }, s) * columnPx(ppd, s.grain);
+      if (prev > 0 && grainFor(sliderToPpd(pos - 0.005)) !== s.grain) {
+        changes++;
+        // The one place it may jump is the `hour` stop itself.
+        expect(pos).toBeCloseTo(ppdToSlider(PPD_ANCHORS.hour), 2);
+      } else if (prev > 0) {
+        expect(w, `narrower at pos=${pos.toFixed(3)} ppd=${ppd.toFixed(0)}`).toBeGreaterThanOrEqual(prev - 0.01);
+      }
+      prev = w;
+    }
+    expect(changes, "the grain changes exactly once along the track").toBe(1);
+  });
+
   it("names an HOUR stop, and puts it where the axis is actually hourly", () => {
     // "還是沒有小時的label 我只看到month week day". The track reached hours from
     // #785 onward, but the only NAMED stops were month / week / day, so the

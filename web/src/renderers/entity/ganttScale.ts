@@ -34,32 +34,37 @@ const DAY_MS = 86_400_000;
  * because the `hour` stop below is derived from it. */
 export const AXIS_MIN_LABEL_PX = 36;
 
-/** The named zoom stops, in px-per-day — labelled anchor points the slider snaps
- * to. They are NOT the ends of the track: it travels past `hour` (zoom in
- * further) and past `month` (zoom out further), so the anchors sit INSIDE
- * [PPD_MIN, PPD_MAX].
+/** The density at which a column stops being a day and becomes an hour.
  *
- * `hour` is DERIVED, not chosen: the fine row only takes a one-hour step once a
- * column clears the label reservation, so anything less would be a stop that
- * says "hour" and leaves you on a 2-hour axis — the defect wearing a label.
- * Without this stop the hour zone was unlabelled rail: reachable by dragging
- * past the last name on the track, and findable only by accident. */
+ * ONE threshold, doing two jobs that were separate and disagreed. It used to be
+ * "6px is the least an hour column can be and still be worth drawing" (144),
+ * while the `hour` STOP sat at the density where an hour label actually fits
+ * (864) — so dragging from `day` towards `hour` crossed into hour grain 700
+ * px/day early, in the middle of the rail, with nothing on screen announcing
+ * it. Crossing re-measures a PART day (09:00-17:00 is one whole column at day
+ * grain and eight of twenty-four at hour grain), so the chart shrank mid-drag:
+ * measured, a bar fell 136px -> 49px at ppd 147.
+ *
+ * Tying the threshold to the label reservation makes the two agree: hours
+ * appear exactly where they can be READ, which is exactly where the `hour` stop
+ * is, so the grain can only change at a named position on the track. */
+export const PPD_HOUR_GRAIN = AXIS_MIN_LABEL_PX * 24;
+
+/** The named zoom stops, in px-per-day — labelled anchor points the slider snaps
+ * to, and the positions the track is divided by (see {@link sliderToPpd}). They
+ * are NOT the ends of the track: it travels past `hour` (zoom in further) and
+ * past `month` (zoom out further), so the anchors sit INSIDE [PPD_MIN, PPD_MAX].
+ *
+ * `hour` is DERIVED, not chosen — it IS {@link PPD_HOUR_GRAIN}. A stop that says
+ * "hour" while the columns are still days would be a label with nothing behind
+ * it; a grain change anywhere else would be a jump nobody asked for. */
 export const PPD_ANCHORS: Record<AxisUnit, number> = {
   month: 3,
   week: 10,
   day: 28,
-  hour: AXIS_MIN_LABEL_PX * 24,
+  hour: PPD_HOUR_GRAIN,
 };
 export const PPD_MIN = 1; // most zoomed-out (further out than the `month` anchor)
-
-/** How much room an hour column needs before hours are worth drawing at all.
- * Below this they are illegible and the chart is only a wider day view. */
-const MIN_HOUR_COLUMN_PX = 6;
-
-/** The density at which a column stops being a day and becomes an hour. Stated
- * in px-per-DAY like everything else on this scale, so it is directly
- * comparable with the anchors: 144 is a bit over five times the `day` anchor. */
-export const PPD_HOUR_GRAIN = MIN_HOUR_COLUMN_PX * 24;
 
 /** The densest the slider goes — 80px per hour column.
  *
@@ -93,18 +98,47 @@ export function clampPpd(ppd: number): number {
   return Math.min(PPD_MAX, Math.max(PPD_MIN, ppd));
 }
 
-/** Map a slider position in [0, 1] to px-per-day. Log-scaled — equal drags feel
- * like equal zoom multipliers — with the `month` anchor at 0 and `day` at 1.
- * Out-of-track positions clamp to the anchor densities. */
+/** The points the track is divided at, least dense first: both ends and every
+ * named stop. Each ADJACENT PAIR gets an equal share of the rail. */
+const TRACK: readonly number[] = [
+  PPD_MIN,
+  PPD_ANCHORS.month,
+  PPD_ANCHORS.week,
+  PPD_ANCHORS.day,
+  PPD_ANCHORS.hour,
+  PPD_MAX,
+];
+const SEGMENTS = TRACK.length - 1;
+
+/** Map a slider position in [0, 1] to px-per-day.
+ *
+ * Anchored ON the stops rather than log-scaled across the whole range. A single
+ * log over [PPD_MIN, PPD_MAX] is the obvious mapping and it distributes the
+ * NAMES terribly: `month`/`week`/`day` landed at 14.5 / 30.5 / 44.1% and `hour`
+ * at 89.4%, so three of the four crowded into the left half and 45% of the rail
+ * was one unlabelled gap. The density ratios are simply not evenly spread —
+ * `day` is 2.8x `week` while `hour` is 31x `day` — so no single exponent can
+ * space them.
+ *
+ * Log INSIDE each segment, so a drag still feels like a constant zoom
+ * multiplier; the rate just differs per segment, which is the price of the
+ * names being where you expect them. */
 export function sliderToPpd(pos: number): number {
-  const p = Math.min(1, Math.max(0, pos));
-  return PPD_MIN * (PPD_MAX / PPD_MIN) ** p;
+  const scaled = Math.min(1, Math.max(0, pos)) * SEGMENTS;
+  const i = Math.min(Math.floor(scaled), SEGMENTS - 1);
+  return TRACK[i] * (TRACK[i + 1] / TRACK[i]) ** (scaled - i);
 }
 
 /** The inverse of {@link sliderToPpd}: the slider position [0, 1] that shows a
  * given px-per-day. */
 export function ppdToSlider(ppd: number): number {
-  return Math.log(clampPpd(ppd) / PPD_MIN) / Math.log(PPD_MAX / PPD_MIN);
+  const v = clampPpd(ppd);
+  for (let i = 0; i < SEGMENTS; i++) {
+    if (v <= TRACK[i + 1]) {
+      return (i + Math.log(v / TRACK[i]) / Math.log(TRACK[i + 1] / TRACK[i])) / SEGMENTS;
+    }
+  }
+  return 1;
 }
 
 /** Which grain the columns are at this density. The slider is the only thing
@@ -114,11 +148,16 @@ export function grainFor(ppd: number): Grain {
   return ppd >= PPD_HOUR_GRAIN ? "hour" : "day";
 }
 
-/** The width of ONE column at this density. A day column is the density
- * itself; an hour column is a twenty-fourth of it. That is what makes crossing
- * {@link PPD_HOUR_GRAIN} continuous — a day is 1 column of width `ppd` on one
- * side and 24 columns of width `ppd/24` on the other, so nothing on screen
- * moves when the grain changes under it. */
+/** The width of ONE column at this density. A day column is the density itself;
+ * an hour column is a twenty-fourth of it, so a WHOLE day is the same width on
+ * either side of {@link PPD_HOUR_GRAIN}.
+ *
+ * A PART day is not: 09:00-17:00 is one whole column at day grain and eight of
+ * twenty-four at hour grain, so it shrinks to a third as the grain changes under
+ * it. That is the two scales disagreeing about how long a thing is, not a bug to
+ * round away — a day view cannot show a third of a column. It is why the grain
+ * may only change AT the `hour` stop: the jump is a mode the user selected,
+ * never something a drag runs into. */
 export function columnPx(ppd: number, grain: Grain): number {
   return grain === "hour" ? ppd / 24 : ppd;
 }
