@@ -10,17 +10,21 @@ from agents import RunContextWrapper
 from workspace_app.agent import AgentToolContext
 from workspace_app.agent.tool_authz import TOOL_VERBS, authorize_tool, ceiling_from_tools
 from workspace_app.agent.tools import (
+    create_entity_impl,
     delete_file_impl,
     edit_file_impl,
     exec_impl,
     exists_impl,
     infer_modules_impl,
+    link_entity_impl,
     list_files_impl,
     make_deck_impl,
+    query_entity_impl,
     read_file_impl,
     read_image_impl,
     save_subagent_impl,
     show_file_impl,
+    update_entity_impl,
     write_file_impl,
 )
 from workspace_app.apps.rca.model import RcaInvestigation
@@ -109,6 +113,10 @@ _CALLS = {
     "make_deck": lambda c: make_deck_impl(c, "a deck"),
     "save_subagent": lambda c: save_subagent_impl(c, "digger", "Digs logs", [], "You dig."),
     "infer_modules": lambda c: infer_modules_impl(c, "/steps.csv"),
+    "query_entity": lambda c: query_entity_impl(c, "issue"),
+    "create_entity": lambda c: create_entity_impl(c, "issue", {"title": "t"}),
+    "update_entity": lambda c: update_entity_impl(c, "issue", 1, {"title": "t"}),
+    "link_entity": lambda c: link_entity_impl(c, "issue", 1, "milestone", 2),
 }
 
 

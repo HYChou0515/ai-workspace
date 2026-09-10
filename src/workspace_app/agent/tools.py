@@ -457,11 +457,16 @@ def _workspace_full_msg(exc: WorkspaceFull) -> str:
     can't make more room appear, so the message names the ONE action that helps
     and the tool that does it — otherwise a model retries the same write, or
     invents a workaround like writing somewhere else."""
+    # No delta in the sentence. `attempted` is the request's own size for a blind
+    # write, the growth for `ensure_room_for`, and the whole body for an upload —
+    # so "N MORE bytes" was false for two of the three, and stating it as a delta
+    # let the reader subtract it from what they sent to learn the size of a file
+    # they may not read.
     return (
-        f"error: the workspace is full ({exc.used} of {exc.quota} bytes used) — "
-        f"writing {exc.attempted} more bytes would exceed it. Delete files that are "
-        f"no longer needed with delete_file, then retry. Tell the user what you "
-        f"deleted, or ask them which files they want to keep."
+        f"error: the workspace is full ({exc.used} of {exc.quota} bytes used) and this "
+        f"write does not fit. Delete files that are no longer needed with delete_file, "
+        f"then retry. Tell the user what you deleted, or ask them which files they "
+        f"want to keep."
     )
 
 
@@ -482,9 +487,8 @@ def _user_disk_full_msg(exc: UserDiskFull) -> str:
     come from a different item, which this agent may not be able to reach."""
     return (
         f"error: the owner of this workspace is out of space ({exc.used} of {exc.quota} bytes "
-        f"used in total) — writing {exc.attempted} more bytes would exceed it. Deleting files "
-        f"here may not be enough: tell the user, because the space may have to come from "
-        f"another of their workspaces."
+        f"used in total) and this write does not fit. Deleting files here may not be enough: "
+        f"tell the user, because the space may have to come from another of their workspaces."
     )
 
 
@@ -581,12 +585,10 @@ async def edit_file_impl(
     current = await fs.edit(inv, path, old_string, new_string)
     if current is None:
         return f"edited {rel_path(path)}"
-    echo = _conflict_echo(ctx, path, current)
-    if echo is None:
-        return (
-            f"error: the edit to {rel_path(path)} did not apply, and you do not have "
-            f"permission to see the file, so you cannot tell why. Tell the user."
-        )
+    # No withheld branch here: this impl requires `read_content` above, so
+    # `_conflict_echo` cannot refuse. A branch the product cannot reach is a
+    # state nothing can test and nobody can trust.
+    assert (echo := _conflict_echo(ctx, path, current)) is not None
     return (
         f"error: could not apply the edit to {rel_path(path)} — `old_string` was not found "
         f"exactly once (the file may have changed). Current content:\n{echo}"
@@ -2526,6 +2528,9 @@ async def create_entity_impl(
     `{"title": "Login broken", "status": "open"}`. The record gets the next
     permanent number automatically; reference it later by that number. Returns
     the new record's number (and any lint warnings)."""
+    for verb in TOOL_VERBS["create_entity"]:
+        if (denied := authorize_tool(ctx.context, verb)) is not None:
+            return denied
     store, err = await _entity_store(ctx, type_name)
     if store is None:
         return err
@@ -2554,6 +2559,9 @@ async def update_entity_impl(
     `expected_version` (the `version` query_entity reported for the record) to be
     told, instead of silently overwriting, if the record changed since you read
     it — then re-read and retry. Returns a confirmation (and any lint warnings)."""
+    for verb in TOOL_VERBS["update_entity"]:
+        if (denied := authorize_tool(ctx.context, verb)) is not None:
+            return denied
     from ..entity.store import EntityConflict
 
     store, err = await _entity_store(ctx, type_name)
@@ -2595,6 +2603,9 @@ async def query_entity_impl(
     (how many records the type has), `invalid` (numbers of records whose file
     couldn't be parsed, itself a page — `invalid_total` is how many there are),
     and `next_offset` when more records remain."""
+    for verb in TOOL_VERBS["query_entity"]:
+        if (denied := authorize_tool(ctx.context, verb)) is not None:
+            return denied
     store, err = await _entity_store(ctx, type_name)
     if store is None:
         return err
@@ -2644,6 +2655,9 @@ async def link_entity_impl(
     to milestone #1 with `type_name="issue", number=3, field="milestone",
     target=1`. `field` is the reference field on `type_name`; `target` is the
     referenced record's number. Returns a confirmation."""
+    for verb in TOOL_VERBS["link_entity"]:
+        if (denied := authorize_tool(ctx.context, verb)) is not None:
+            return denied
     store, err = await _entity_store(ctx, type_name)
     if store is None:
         return err

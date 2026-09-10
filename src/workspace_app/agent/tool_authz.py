@@ -10,9 +10,9 @@ tool the preset grants implies its verb — so there's no second config surface 
 drift. See ``docs/plan-permissions.md`` (#309).
 
 ``TOOL_VERBS`` IS THE SCOPE, and it is not yet every tool that touches an item.
-``save_workflow``, ``save_skill``, ``read_skill``, ``update_todos`` and the
-entity tools still reach the workspace without passing here, as does every
-tool-package command (``tooling/registry.py`` runs code in the item's sandbox).
+``save_workflow``, ``save_skill``, ``read_skill`` and ``update_todos`` still
+reach the workspace without passing here, as does every tool-package command
+(``tooling/registry.py`` runs code in the item's sandbox).
 ``mention_user`` is outside it too and is the one that does not look like it:
 it writes a Notification carrying the item's id AND TITLE to arbitrary user ids
 — and a ``role="mention"`` message into the item's own chat — so it discloses a
@@ -58,9 +58,10 @@ accident.
 
 The sentence above names the TABLE rather than a category because claiming the
 category is exactly what let gaps live: ``list_files`` and ``exists`` were listed
-below and gated nowhere, and the enumeration that replaced that claim missed
-``infer_modules`` — which creates, deletes and recreates a file at a path the
-model chooses. Both are now in the table.
+below and gated nowhere; the enumeration that replaced that claim missed
+``infer_modules``; the next one missed ``make_deck``; and the entity tools sat in
+the "outside the funnel" list for eight rounds on an argument that never applied
+to them. All are in the table now.
 ``test_every_tool_that_declares_a_verb_actually_checks_it`` fails on any entry
 that drifts back out; nothing yet fails on a tool that never joins.
 
@@ -139,6 +140,17 @@ TOOL_VERBS: dict[str, tuple[Verb, ...]] = {
     # thing `exists` is gated for. A preset holding this tool and no reader is
     # exactly the preset that must not be handed a reader for free.
     "infer_modules": ("read_content", "edit_content"),
+    # #419 entity tools. They read and write `.entity/` through the item's own
+    # `WorkspaceFiles`, and on `pm` — which grants all four — those records ARE
+    # the item's content, so `query_entity` returned the whole record set as JSON
+    # to a speaker `read_file` refused in the same turn. They were listed as
+    # "outside the funnel" for eight rounds on the strength of the package-command
+    # argument, which does not apply to them: they are ordinary named tools with
+    # ordinary verbs.
+    "query_entity": ("read_content",),
+    "create_entity": ("edit_content",),
+    "update_entity": ("edit_content",),
+    "link_entity": ("edit_content",),
 }
 
 

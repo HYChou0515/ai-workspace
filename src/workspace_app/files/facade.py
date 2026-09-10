@@ -820,12 +820,20 @@ class WorkspaceFiles:
         growth = new_size - old
         if growth > 0:
             if quota and used + growth > quota:
-                # `growth`, not `new_size`. The message says "writing N more
-                # bytes", so `new_size` made it arithmetically false — and it
-                # handed the caller `new_size - growth`, the CURRENT size of a
-                # file they may not be allowed to read. `ensure_room_for` below
-                # has always passed the growth.
-                raise WorkspaceFull(used=used, quota=quota, attempted=growth)
+                # `new_size` — what the caller composed, and therefore already
+                # knows. Handing back `growth` instead looked like the honest
+                # fix (the message said "N more bytes") and was the opposite:
+                # every BLIND write shares this path, and for those
+                # `old = new_size - growth` is the current size of a file the
+                # speaker may not be allowed to read. Free, repeatable, and it
+                # composes. The message is what was wrong, and the message is
+                # what changed.
+                #
+                # `ensure_room_for` passes the growth and `api/file_routes.py`
+                # passes the request size, so `attempted` already means
+                # different things per producer — which is why nothing may read
+                # it as a delta.
+                raise WorkspaceFull(used=used, quota=quota, attempted=new_size)
             if self._person_gate is not None:
                 await self._person_gate(workspace_id, used + growth, growth)
         return old
