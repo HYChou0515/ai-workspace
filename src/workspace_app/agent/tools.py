@@ -26,7 +26,7 @@ from .shown_files import (
     declare_shown_files,
     describe_for_display,
 )
-from .tool_authz import authorize_tool
+from .tool_authz import LEGACY_TOOL_RENAMES, authorize_tool
 
 if TYPE_CHECKING:
     from ..apps.subagents import SubagentDef
@@ -2660,7 +2660,6 @@ _WORKSPACE_TOOLS = [
 # This is input normalisation only — the old name is NOT a callable alias (the
 # model still calls the tool by its current registered name), it just keeps old
 # config data working. #241: `ls` was renamed to `list_files`.
-_LEGACY_TOOL_RENAMES = {"ls": "list_files"}
 
 
 # Tools whose args include a free-form `dict[str, Any]` (entity `args` / `patch`):
@@ -2846,7 +2845,7 @@ def build_tools(
     image, advertising an index for a tool that was never registered, wastes the
     turn on a call that cannot resolve."""
     names = allowed if allowed is not None else _WORKSPACE_TOOLS
-    names = [_LEGACY_TOOL_RENAMES.get(n, n) for n in names]
+    names = [LEGACY_TOOL_RENAMES.get(n, n) for n in names]
     if not delegation_is_available(names, has_subagents):
         names = [n for n in names if n != "run_agent"]
     # Not `append` unconditionally: a config that already names `read_skill`
@@ -2959,7 +2958,7 @@ def delegation_is_available(allowed: Collection[str] | None, has_subagents: bool
     # so the two readers cannot disagree — but they read the SAME list through
     # different paths, and the point of one predicate is that adding an alias
     # cannot quietly split them.
-    names = [_LEGACY_TOOL_RENAMES.get(n, n) for n in raw]
+    names = [LEGACY_TOOL_RENAMES.get(n, n) for n in raw]
     if "run_agent" not in names:
         return False
     return has_subagents or "save_subagent" in names

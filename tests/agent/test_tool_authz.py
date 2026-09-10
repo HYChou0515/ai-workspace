@@ -22,6 +22,8 @@ from workspace_app.files import WorkspaceFiles
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.perm import Permission
 from workspace_app.resources import make_spec
+from workspace_app.resources.agent_config import AgentConfig
+from workspace_app.resources.groups import Group
 
 
 def _spec_with_item(permission: Permission | None, *, owner: str = "bob") -> tuple[object, str]:
@@ -32,7 +34,13 @@ def _spec_with_item(permission: Permission | None, *, owner: str = "bob") -> tup
     return spec, iid
 
 
-def _ctx(spec: object, iid: str, *, acting_user: str) -> RunContextWrapper:
+def _ctx(
+    spec: object,
+    iid: str,
+    *,
+    acting_user: str,
+    agent_config: AgentConfig | None = None,
+) -> RunContextWrapper:
     return RunContextWrapper(
         AgentToolContext(
             investigation_id=iid,
@@ -40,6 +48,7 @@ def _ctx(spec: object, iid: str, *, acting_user: str) -> RunContextWrapper:
             spec=spec,  # ty: ignore[invalid-argument-type]
             app_slug="rca",
             acting_user=acting_user,
+            agent_config=agent_config,
         )
     )
 
@@ -138,3 +147,129 @@ def test_hard_barred_verbs_can_never_enter_a_tool_ceiling():
     every = ceiling_from_tools(list(TOOL_VERBS))
     assert "use_terminal" not in every
     assert "change_permission" not in every
+
+
+# ── the AI actor was the one actor built without the speaker's groups ──
+
+
+def _group_granted_item(verb_grants: dict[str, list[str]]) -> tuple[object, str, str]:
+    """An item whose grants may name a group alice belongs to. Returns
+    ``(spec, item id, group id)`` — the group id is only knowable after the
+    group exists, so the permission is written second."""
+    spec = make_spec(default_user="bob")
+    grm = spec.get_resource_manager(Group)
+    with grm.using("bob"):
+        gid = grm.create(Group(name="ops", members=["alice"])).resource_id
+    rm = spec.get_resource_manager(RcaInvestigation)
+    grants = {k: [g.format(gid=gid) for g in v] for k, v in verb_grants.items()}
+    with rm.using("bob"):
+        iid = rm.create(
+            RcaInvestigation(
+                title="t",
+                owner="bob",
+                permission=Permission(visibility="restricted", **grants),
+            )
+        ).resource_id
+    return spec, iid, gid
+
+
+def test_a_group_grant_reaches_the_ai_the_way_it_reaches_the_person():
+    """`Actor.ai` was the ONLY actor in the codebase built with no groups, while
+    every human path passes `groups_of(spec, user)`. So a verb granted to
+    `group:<id>` was reachable by the person and refused to the agent they were
+    driving — which reads, from a chat, as "I am an admin and my agent says I
+    have no permission", with the tools granted directly still working."""
+    spec, iid, _ = _group_granted_item(
+        {
+            "read_meta": ["user:alice"],
+            "read_content": ["user:alice"],
+            "execute": ["group:{gid}"],
+        }
+    )
+    ctx = _ctx(spec, iid, acting_user="alice").context
+    assert authorize_tool(ctx, "read_content") is None  # granted directly — always worked
+    assert authorize_tool(ctx, "execute") is None  # granted through the group
+
+
+def test_the_speakers_groups_are_read_once_for_the_whole_turn(monkeypatch):
+    """One indexed query per TURN, not per tool call. `authorize_tool` already
+    costs two point reads per call and sits on the request path; a third query
+    on every file the agent touches is the shape that pinned the loop before."""
+    from workspace_app.resources import groups as groups_module
+
+    seen: list[str] = []
+    real = groups_module.groups_of
+
+    def counting(spec: object, user: str) -> frozenset[str]:
+        seen.append(user)
+        return real(spec, user)  # ty: ignore[invalid-argument-type]
+
+    monkeypatch.setattr(groups_module, "groups_of", counting)
+    spec, iid, _ = _group_granted_item({"read_meta": ["user:alice"], "execute": ["group:{gid}"]})
+    ctx = _ctx(spec, iid, acting_user="alice").context
+    authorize_tool(ctx, "execute")
+    authorize_tool(ctx, "execute")
+    authorize_tool(ctx, "read_content")
+    assert seen == ["alice"]
+
+
+# ── one sentence was standing in for two unrelated causes ──
+
+
+def test_a_tool_switched_off_is_not_reported_as_a_permission_problem():
+    """The item is PUBLIC — nobody's permissions are involved. The agent simply
+    has no `exec` in its resolved tool set, and saying "you don't have permission"
+    sends the reader to the permission panel, where there is nothing to find and
+    nothing they could change would help."""
+    spec, iid = _spec_with_item(None)
+    ctx = _ctx(
+        spec,
+        iid,
+        acting_user="alice",
+        agent_config=AgentConfig(name="x", allowed_tools=["read_file", "list_files"]),
+    ).context
+    assert authorize_tool(ctx, "read_content") is None  # the tools it does hold still work
+    denied = authorize_tool(ctx, "execute")
+    assert denied is not None
+    assert "don't have permission" not in denied
+    assert "tool settings" in denied
+
+
+def test_a_permission_refusal_still_names_permission():
+    """The control for the test above: when the refusal really IS the person's
+    grants, the sentence must not drift into blaming the tool set."""
+    spec, iid = _spec_with_item(
+        Permission(visibility="restricted", read_meta=["user:alice"], converse=["user:alice"])
+    )
+    ctx = _ctx(spec, iid, acting_user="alice").context
+    denied = authorize_tool(ctx, "execute")
+    assert denied is not None
+    assert "don't have permission" in denied
+    assert "tool settings" not in denied
+
+
+def test_a_permission_refusal_leaves_a_log_line_naming_who_and_what(caplog):
+    """The ceiling refusal has logged a WARNING since #309; the grant refusal
+    logged NOTHING, so the more common of the two causes was invisible in a
+    deployment — which is why it could only be guessed at from a chat bubble."""
+    import logging
+
+    spec, iid = _spec_with_item(
+        Permission(visibility="restricted", read_meta=["user:alice"], converse=["user:alice"])
+    )
+    ctx = _ctx(spec, iid, acting_user="alice").context
+    with caplog.at_level(logging.WARNING, logger="workspace_app.agent.tool_authz"):
+        assert authorize_tool(ctx, "execute") is not None
+    said = " ".join(r.getMessage() for r in caplog.records)
+    assert "execute" in said
+    assert "alice" in said
+    assert iid in said
+    assert "restricted" in said
+
+
+def test_a_legacy_tool_name_still_carries_its_verb():
+    """`build_tools` renames legacy entries before it registers them, so a config
+    naming `ls` gets a working `list_files`. The ceiling read the SAME list
+    without renaming, so that tool was registered and then refused every call —
+    the #537 shape (a tool that can only say no reads as "stop trying")."""
+    assert ceiling_from_tools(["ls"]) == frozenset({"read_content"})

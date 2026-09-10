@@ -534,6 +534,20 @@ class AgentToolContext:
     # so agent/ stays decoupled from kb/wiki/.
     submit_wiki_correction: Callable[..., Awaitable[str]] | None = None
 
+    #: The speaker's group memberships, resolved lazily and held for the turn.
+    #:
+    #: `Actor.ai` was the one actor in the codebase built without them, so a
+    #: verb granted to `group:<id>` reached the person and was refused to the
+    #: agent they were driving. Resolving it here rather than at each of the
+    #: places that build a context covers every door by construction — a chat
+    #: turn, a WUI tool call, a workflow node — instead of one facade.
+    #:
+    #: Per TURN, not per tool call: `authorize_tool` already costs two point
+    #: reads per call and sits on the request path, and group membership is an
+    #: administrative act, which is the same reason the HTTP side holds it for a
+    #: window rather than asking per request.
+    _speaker_groups: frozenset[str] | None = field(default=None, repr=False, compare=False)
+
     #: #775: has this context's python environment been prepared SUCCESSFULLY?
     #: Not `handle is not None` — a failed preparation leaves a live handle,
     #: and treating that as done is how the failure went unseen.
@@ -580,6 +594,20 @@ class AgentToolContext:
     #: path deletes a directory all of them share. That one is guarded per
     #: ITEM instead, through `prepare_env_via`; see it above.
     _wake: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False, compare=False)
+
+    def speaker_groups(self) -> frozenset[str]:
+        """Whose groups this turn acts with — see `_speaker_groups`. Callers
+        must already hold a `spec`; the authorization funnel checks that first
+        and there is no other caller."""
+        assert self.spec is not None
+        if self._speaker_groups is None:
+            # Local, like the `apps.registry` import in `tool_authz`: the
+            # resources package pulls in every model, and this module is
+            # imported by the tool layer.
+            from ..resources.groups import groups_of
+
+            self._speaker_groups = groups_of(self.spec, self.acting_user)
+        return self._speaker_groups
 
     async def ensure_sandbox(
         self, *, prepare_env: bool = True, rebuild: bool = False
