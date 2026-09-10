@@ -423,6 +423,51 @@ def test_the_table_carries_every_verb_a_tool_exercises():
     reader gets a ceiling of `{edit_content}` while holding a tool that reads."""
     assert ceiling_from_tools(["save_subagent"]) == frozenset({"edit_content"})
     assert ceiling_from_tools(["infer_modules"]) == frozenset({"read_content", "edit_content"})
+    assert ceiling_from_tools(["make_deck"]) == frozenset(
+        {"read_content", "edit_content", "execute"}
+    )
+    # The one deliberate exception, written down rather than left to be
+    # rediscovered: a shell IS read and write, so splitting `execute` would
+    # describe an enforcement no gate can hold.
+    assert ceiling_from_tools(["exec"]) == frozenset({"execute"})
+
+
+async def test_running_commands_is_not_a_way_to_read_and_write_through_make_deck():
+    """`make_deck` grants no shell — it reads the sources the model names and
+    writes the deck where the model says, through callbacks. Gated on `execute`
+    alone, a speaker holding `converse` + `execute` and NEITHER content verb
+    could do both. Unlike `infer_modules`, `rca` and `playground` grant this
+    one today."""
+    spec, iid = _spec_with_item(
+        Permission(
+            visibility="restricted",
+            read_meta=["user:alice"],
+            converse=["user:alice"],
+            execute=["user:alice"],
+        )
+    )
+    ctx = _ctx(spec, iid, acting_user="alice")
+    # The `execute` grant really is there — asked of the funnel, not of
+    # `exec_impl`, which would need a sandbox this context has no reason to hold.
+    assert authorize_tool(ctx.context, "execute") is None
+    assert "don't have permission" in await make_deck_impl(ctx, "a deck")
+
+
+async def test_every_early_exit_books_exactly_one_citation_bucket():
+    """`chat_send` pairs buckets with tool messages BY POSITION, so a path that
+    books none shifts every later call's citations onto the wrong message. The
+    authorization gate was one such path; the two failure exits beside it and the
+    quota exit past the writes were three more, and only the first was pinned."""
+    from workspace_app.filestore.memory import MemoryFileStore
+
+    files = WorkspaceFiles(MemoryFileStore())
+    ctx = RunContextWrapper(AgentToolContext(investigation_id="inv-1", files=files))
+
+    assert "not found" in str(await infer_modules_impl(ctx, "/missing.csv"))
+    await files.write("inv-1", "/blank.csv", b"\n\n")
+    assert "no step names" in str(await infer_modules_impl(ctx, "/blank.csv"))
+
+    assert ctx.context.subagent_citations["infer_modules"] == [[], []]
 
 
 async def test_a_refused_call_still_books_its_citation_bucket():

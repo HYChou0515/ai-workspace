@@ -14,9 +14,20 @@ drift. See ``docs/plan-permissions.md`` (#309).
 entity tools still reach the workspace without passing here, as does every
 tool-package command (``tooling/registry.py`` runs code in the item's sandbox).
 ``mention_user`` is outside it too and is the one that does not look like it:
-it writes a Notification carrying the item's id AND TITLE to arbitrary user
-ids, so it discloses a name to people who may not read the item, on nothing
-more than the ``converse`` entry gate.
+it writes a Notification carrying the item's id AND TITLE to arbitrary user ids
+— and a ``role="mention"`` message into the item's own chat — so it discloses a
+name to people who may not read the item, on nothing more than the ``converse``
+entry gate. So is ``search_wiki``, whose ``scopes`` fall back to the ITEM id
+when a turn has no collections, making it a full-text grep of the workspace
+that returns ``path:line: text``; no shipped App grants it, which is a
+convention with nothing enforcing it.
+
+That list is now what it is: an enumeration that has been short three times
+(``list_files``/``exists``, then ``infer_modules``, then these two). Closing it
+is its own change — it needs a ceiling that can express a package command's
+verb, and one that knows about tools ``build_tools`` grants outside
+``allowed_tools`` — and until that lands, a tool ABSENT from this table has not
+been judged safe; it has not been judged.
 
 The sentence above names the TABLE rather than a category because claiming the
 category is exactly what let gaps live: ``list_files`` and ``exists`` were listed
@@ -63,8 +74,19 @@ TOOL_VERBS: dict[str, tuple[Verb, ...]] = {
     "write_file": ("edit_content",),
     "edit_file": ("edit_content",),
     "delete_file": ("edit_content",),
+    # `execute` is NOT decomposed, and that is the one deliberate exception to the
+    # rule above: the verb means "run arbitrary commands in this workspace", which
+    # is what a shell IS. A speaker who may run commands but may not read files is
+    # a state no gate can hold — the first command reads whatever it likes — so
+    # splitting it would describe an enforcement that does not exist.
     "exec": ("execute",),
-    "make_deck": ("execute",),
+    # `make_deck` is NOT that. It grants no shell: it reads the source files the
+    # model names, writes the deck where the model says, and lists directories,
+    # through callbacks handed to `run_make_deck`. Gated on `execute` alone, a
+    # speaker holding `converse` + `execute` and neither content verb could read
+    # any file and write any other — and unlike `infer_modules` this one is
+    # granted by `rca` and `playground` today.
+    "make_deck": ("read_content", "edit_content", "execute"),
     # It writes `.agent/<name>/AGENT.md` into the item's workspace, and that file
     # is a SYSTEM PROMPT every later turn loads and any collaborator's
     # `run_agent` executes. The chat entry gate is `converse`, so leaving it

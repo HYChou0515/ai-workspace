@@ -16,6 +16,7 @@ from agents import RunContextWrapper
 
 from workspace_app.agent.context import AgentToolContext
 from workspace_app.agent.tools import (
+    _guard_workspace_full,
     _infer_modules_summary,
     _module_map_csv,
     _parse_module_json,
@@ -23,6 +24,7 @@ from workspace_app.agent.tools import (
     infer_modules_impl,
 )
 from workspace_app.files import WorkspaceFiles
+from workspace_app.files.facade import WorkspaceFull
 from workspace_app.filestore.memory import MemoryFileStore
 
 
@@ -198,3 +200,29 @@ async def test_infer_modules_errors_on_missing_file():
     ctx, _files, _inv = await _ctx_with_file(b"step_name\nX\n", fake_run)
     result = await infer_modules_impl(RunContextWrapper(ctx), "does-not-exist.csv")
     assert "file not found" in result
+
+
+async def test_a_write_the_quota_refuses_still_books_exactly_one_citation_bucket():
+    """`_guard_workspace_full` turns a `WorkspaceFull` into a RETURNED string, so
+    the call ends normally and still produces a tool message — and `chat_send`
+    pairs citation buckets with those messages BY POSITION. Booking after the
+    write left that exit with none, so every later call's citations landed one
+    message early. The booking happens before the write for exactly this."""
+
+    async def run(_name, _payload, _sink, _origin):
+        return '{"module": "M1", "reason": "r"}', []
+
+    ctx, files, _inv = await _ctx_with_file(b"step_name\nA\n", run)
+
+    async def _full(*_a, **_k):
+        raise WorkspaceFull(used=10, quota=10, attempted=1)
+
+    files.create = _full
+    # Through the wrapper `build_tools` registers, not the bare impl: the guard is
+    # what turns the raise into a returned string, and that is the whole reason
+    # this exit produces a tool message at all.
+    guarded = _guard_workspace_full(infer_modules_impl)
+    out = await guarded(RunContextWrapper(ctx), "wafer-history.csv")
+
+    assert "full" in out  # the guard answered, rather than raising
+    assert len(ctx.subagent_citations["infer_modules"]) == 1

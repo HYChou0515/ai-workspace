@@ -363,8 +363,12 @@ async def make_deck_impl(
     tool isn't configured. Building runs several render+review passes, so it
     takes a while; its progress streams as it works.
     """
-    if (denied := authorize_tool(ctx.context, "execute")) is not None:
-        return denied
+    # Every verb it exercises: it reads the sources the model names and writes the
+    # deck where the model says, both through `fs` below, as well as running the
+    # toolchain. `execute` alone let a speaker with no content grants do both.
+    for verb in ("read_content", "edit_content", "execute"):
+        if (denied := authorize_tool(ctx.context, verb)) is not None:
+            return denied
     from .deck.tool import run_make_deck
 
     fs, inv = _workspace(ctx)
@@ -1588,6 +1592,12 @@ async def infer_modules_impl(
         rows.append((step, module, reason))
         all_cites.extend(cites)
 
+    # Booked BEFORE the writes. `_guard_workspace_full` turns a `WorkspaceFull`
+    # into a returned string, so the call ends normally and still produces a tool
+    # message — a fourth exit that owed a bucket and, booking only after the
+    # write, did not have one. Every path from here on has exactly one.
+    ctx.context.subagent_citations.setdefault("infer_modules", []).append(all_cites)
+
     csv_bytes = _module_map_csv(rows)
     # Overwrite: re-running a build replaces the map. create() refuses an
     # existing path (returns its content), so delete first when present.
@@ -1597,7 +1607,6 @@ async def infer_modules_impl(
         await fs.delete(inv, out)
         await fs.create(inv, out, csv_bytes)
 
-    ctx.context.subagent_citations.setdefault("infer_modules", []).append(all_cites)
     return _infer_modules_summary(rows, out)
 
 
