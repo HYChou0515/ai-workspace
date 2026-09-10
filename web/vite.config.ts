@@ -67,7 +67,14 @@ export default defineConfig({
         },
       },
     },
-    include: ["src/**/*.test.{ts,tsx}"],
+    // `tests/` as well as `src/`. The web IMAGE builds from `COPY web/ ./`
+    // alone (docker/Dockerfile), and `tsconfig` compiles `include: ["src"]` —
+    // so a test that has to reach outside the package (the shipped WUI example
+    // lives in `sample-skills/`, copied into the python stage only) fails
+    // `tsc --noEmit` inside the image while passing on a full checkout. Those
+    // tests live in `tests/`, outside the build's compile scope and inside
+    // vitest's. `tests/importBoundary.test.ts` keeps `src` itself self-contained.
+    include: ["src/**/*.test.{ts,tsx}", "tests/**/*.test.{ts,tsx}"],
     coverage: {
       provider: "v8",
       reporter: ["text", "lcov"],
