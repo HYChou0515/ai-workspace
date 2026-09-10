@@ -342,3 +342,27 @@ async def test_the_confirmation_still_says_so_when_the_turn_can_delegate():
     out = await save_subagent_impl(ctx, "digger", "Digs logs", ["read_file"], "You dig.")
 
     assert "it is callable now, including in this reply." in out
+
+
+async def test_a_legacy_name_in_the_parents_config_still_grants_the_renamed_tool():
+    """`build_tools` renames a stored `ls` before it registers, so the parent is
+    holding a working `list_files`. This ceiling read the stored list raw, so it
+    refused a sub-agent naming `list_files` — and its "Available:" line offered
+    `ls`, a name no model can call. Every reader of a tool list has to go
+    through the one rename map."""
+    files = WorkspaceFiles(MemoryFileStore())
+    ctx = RunContextWrapper(
+        AgentToolContext(
+            investigation_id="inv-1",
+            files=files,
+            agent_config=AgentConfig(
+                name="legacy", allowed_tools=["ls", "read_file", "save_subagent"]
+            ),
+        )
+    )
+
+    out = await save_subagent_impl(ctx, "lister", "Lists things", ["list_files"], "You list.")
+
+    assert not out.startswith("error:"), out
+    defs = await workspace_subagent_defs(files, "inv-1")
+    assert [d.tools for d in defs] == [["list_files"]]

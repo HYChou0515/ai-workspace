@@ -7,6 +7,7 @@ from specstar import SpecStar
 from workspace_app.kb.collections import readable_collection_ids
 from workspace_app.perm import Permission
 from workspace_app.resources import make_spec
+from workspace_app.resources.groups import Group
 from workspace_app.resources.kb import Collection
 
 
@@ -55,3 +56,38 @@ def test_superuser_reads_all():
 def test_unknown_id_is_dropped():
     spec = make_spec()
     assert readable_collection_ids(spec, ["ghost"], "alice") == []
+
+
+def _group_with(spec: SpecStar, member: str, *, by: str = "bob") -> str:
+    rm = spec.get_resource_manager(Group)
+    with rm.using(by):
+        return rm.create(Group(name="ops", members=[member])).resource_id
+
+
+def test_a_group_grant_is_readable_by_a_member():
+    """This gate is what a KB sub-agent's scope is filtered through, and it was
+    built with `Actor.human(user)` — no groups — while the HTTP route that LISTS
+    collections resolves them. So a collection shared to a group appeared in the
+    person's list and then could not be searched by the agent they were driving:
+    the same "I can see it, my agent says no" shape as the item-tool funnel."""
+    spec = make_spec()
+    gid = _group_with(spec, "alice")
+    cid = _new_collection(
+        spec,
+        by="bob",
+        permission=Permission(visibility="restricted", read_content=[f"group:{gid}"]),
+    )
+    assert readable_collection_ids(spec, [cid], "alice") == [cid]
+
+
+def test_a_group_grant_does_not_reach_a_non_member():
+    """The control: the group has to be the reason, not the mere presence of a
+    group grant."""
+    spec = make_spec()
+    gid = _group_with(spec, "alice")
+    cid = _new_collection(
+        spec,
+        by="bob",
+        permission=Permission(visibility="restricted", read_content=[f"group:{gid}"]),
+    )
+    assert readable_collection_ids(spec, [cid], "carol") == []

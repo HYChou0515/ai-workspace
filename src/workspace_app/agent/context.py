@@ -536,17 +536,29 @@ class AgentToolContext:
 
     #: The speaker's group memberships, resolved lazily and held for the turn.
     #:
-    #: `Actor.ai` was the one actor in the codebase built without them, so a
-    #: verb granted to `group:<id>` reached the person and was refused to the
-    #: agent they were driving. Resolving it here rather than at each of the
-    #: places that build a context covers every door by construction — a chat
-    #: turn, a WUI tool call, a workflow node — instead of one facade.
+    #: `Actor.ai` was built without them, so a verb granted to `group:<id>`
+    #: reached the person and was refused to the agent they were driving. It
+    #: lives on the context rather than on each builder so that whichever of
+    #: them is item-gated gets it without being asked twice — today that is the
+    #: chat turn (`build_chat_turn` is the only builder that sets BOTH `spec`
+    #: and `acting_user`; the WUI and workflow paths set neither, so
+    #: `authorize_tool` returns before an actor is ever built).
     #:
-    #: Per TURN, not per tool call: `authorize_tool` already costs two point
-    #: reads per call and sits on the request path, and group membership is an
-    #: administrative act, which is the same reason the HTTP side holds it for a
-    #: window rather than asking per request.
-    _speaker_groups: frozenset[str] | None = field(default=None, repr=False, compare=False)
+    #: `init=False` on purpose: it belongs to `acting_user`, and
+    #: `dataclasses.replace` — which `subagent_run` and `compaction` both use —
+    #: rebuilds the object, so the memo is dropped rather than carried onto a
+    #: context that may not be speaking for the same person.
+    #:
+    #: Held for the turn rather than per call. `authorize_tool` re-reads the
+    #: item and its meta EVERY call, so a permission change lands at once; a
+    #: group membership change does not, and this is the only stale input in
+    #: that decision. It is bounded by asking for it ONLY on a refusal (see
+    #: `authorize_tool`), so a turn that never depends on a group grant never
+    #: caches one — and by group membership being an administrative act, the
+    #: same reason `ItemLocator` holds it for a window rather than per request.
+    _speaker_groups: frozenset[str] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     #: #775: has this context's python environment been prepared SUCCESSFULLY?
     #: Not `handle is not None` — a failed preparation leaves a live handle,
@@ -600,6 +612,13 @@ class AgentToolContext:
         must already hold a `spec`; the authorization funnel checks that first
         and there is no other caller."""
         assert self.spec is not None
+        if not self.acting_user:
+            # A turn with no speaker has no memberships to inherit, and asking
+            # anyway would send an empty string into a `members.contains(...)`
+            # query — which is element membership today, but degrades to a
+            # substring `LIKE` on a SQL backend the moment `Group.members` loses
+            # its list registration, and "" is a substring of every member.
+            return frozenset()
         if self._speaker_groups is None:
             # Local, like the `apps.registry` import in `tool_authz`: the
             # resources package pulls in every model, and this module is

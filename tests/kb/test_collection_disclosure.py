@@ -117,3 +117,27 @@ def test_all_discoverable_is_empty_for_a_superuser_who_reads_everything():
     _coll(spec, by="bob", permission=Permission(visibility="restricted"))
     out = all_discoverable_collection_ids(spec, "root", superusers=frozenset({"root"}))
     assert out == []
+
+
+def test_a_group_grant_lands_in_readable_not_discoverable():
+    """`readable` is documented as byte-identical to `readable_collection_ids`.
+    It was — including in being blind to groups. Moving one and not the other
+    would have made the docstring false in the other direction."""
+    from workspace_app.resources.groups import Group
+
+    spec = make_spec()
+    grm = spec.get_resource_manager(Group)
+    with grm.using("bob"):
+        gid = grm.create(Group(name="ops", members=["alice"])).resource_id
+    rm = spec.get_resource_manager(Collection)
+    with rm.using("bob"):
+        cid = rm.create(
+            Collection(
+                name="c",
+                permission=Permission(visibility="restricted", read_content=[f"group:{gid}"]),
+            )
+        ).resource_id
+
+    part = partition_collection_disclosure(spec, [cid], "alice")
+    assert part.readable == [cid]
+    assert part.discoverable == []

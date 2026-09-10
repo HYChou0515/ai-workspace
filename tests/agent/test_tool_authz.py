@@ -6,21 +6,24 @@ model can at worst do what the current speaker may do on the item, never more.
 from agents import RunContextWrapper
 
 from workspace_app.agent import AgentToolContext
-from workspace_app.agent.tool_authz import authorize_tool, ceiling_from_tools
+from workspace_app.agent.tool_authz import TOOL_VERBS, authorize_tool, ceiling_from_tools
 from workspace_app.agent.tools import (
     delete_file_impl,
     edit_file_impl,
     exec_impl,
     exists_impl,
+    list_files_impl,
     make_deck_impl,
     read_file_impl,
     read_image_impl,
+    show_file_impl,
     write_file_impl,
 )
 from workspace_app.apps.rca.model import RcaInvestigation
 from workspace_app.files import WorkspaceFiles
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.perm import Permission
+from workspace_app.perm.model import Verb
 from workspace_app.resources import make_spec
 from workspace_app.resources.agent_config import AgentConfig
 from workspace_app.resources.groups import Group
@@ -62,7 +65,10 @@ async def test_write_file_denied_when_speaker_lacks_edit_content():
     ctx = _ctx(spec, iid, acting_user="alice")
     out = await write_file_impl(ctx, "/a.txt", "hi")
     assert "don't have permission" in out
-    assert await exists_impl(ctx, "/a.txt") is False  # the write was blocked
+    # Asked of the STORE, not of `exists` — that tool is gated too now, so it
+    # would answer with a refusal rather than with the truth about the file, and
+    # this assertion previously passed only because it was NOT gated.
+    assert await ctx.context.files.exists(iid, "/a.txt") is False
 
 
 async def test_write_file_allowed_when_speaker_has_edit_content():
@@ -81,24 +87,41 @@ async def test_public_item_is_unrestricted_zero_regression():
     assert "wrote" in await write_file_impl(ctx, "/a.txt", "hi")
 
 
-async def test_every_guarded_tool_is_denied_when_the_speaker_lacks_the_verb():
-    """alice can only converse — every read_content / edit_content / execute tool
-    the AI runs for her is refused (each guard sits at the top of its impl, before
-    it touches the sandbox / describer / deck machinery)."""
+#: One call per name in `TOOL_VERBS`. Keyed by name — and the test below asserts
+#: the keys ARE `TOOL_VERBS` — so a tool that declares a verb cannot be added
+#: without a case here proving it actually checks it. `list_files` and `exists`
+#: were declared here and gated nowhere; the old version of this test listed the
+#: seven impls somebody remembered, which is why nothing noticed.
+_CALLS = {
+    "read_file": lambda c: read_file_impl(c, "/a.txt"),
+    "read_image": lambda c: read_image_impl(c, "/a.png"),
+    "show_file": lambda c: show_file_impl(c, "/a.txt"),
+    "list_files": lambda c: list_files_impl(c),
+    "exists": lambda c: exists_impl(c, "/a.txt"),
+    "write_file": lambda c: write_file_impl(c, "/a.txt", "hi"),
+    "edit_file": lambda c: edit_file_impl(c, "/a.txt", "x", "y"),
+    "delete_file": lambda c: delete_file_impl(c, "/a.txt"),
+    "exec": lambda c: exec_impl(c, ["echo", "hi"]),
+    "make_deck": lambda c: make_deck_impl(c, "a deck"),
+}
+
+
+async def test_every_tool_that_declares_a_verb_actually_checks_it():
+    """alice can only converse — every tool `TOOL_VERBS` claims is item-gated is
+    refused, with the guard at the top of its impl, before it touches the
+    workspace / sandbox / describer / deck machinery.
+
+    Driven from `TOOL_VERBS` rather than from a hand-kept list: the funnel's
+    docstring says "every item-level agent tool is gated here BEFORE it touches
+    the workspace", and `list_files` / `exists` made that sentence false for
+    everyone, always, regardless of any grant."""
+    assert set(_CALLS) == set(TOOL_VERBS)
     spec, iid = _spec_with_item(
         Permission(visibility="restricted", read_meta=["user:alice"], converse=["user:alice"])
     )
     ctx = _ctx(spec, iid, acting_user="alice")
-    results = [
-        await read_file_impl(ctx, "/a.txt"),
-        await edit_file_impl(ctx, "/a.txt", "x", "y"),
-        await delete_file_impl(ctx, "/a.txt"),
-        await read_image_impl(ctx, "/a.png"),
-        await make_deck_impl(ctx, "a deck"),
-        await write_file_impl(ctx, "/a.txt", "hi"),
-        await exec_impl(ctx, ["echo", "hi"]),
-    ]
-    assert all("don't have permission" in r for r in results)
+    for name, call in _CALLS.items():
+        assert "don't have permission" in str(await call(ctx)), name
 
 
 def test_authorize_tool_is_noop_without_an_item_context():
@@ -142,8 +165,6 @@ def test_hard_barred_verbs_can_never_enter_a_tool_ceiling():
     acquire them through a preset (and `authorize` hard-bars them regardless) —
     the #309 guarantee that a prompt-injection can't rewire access or open a
     shell."""
-    from workspace_app.agent.tool_authz import TOOL_VERBS
-
     every = ceiling_from_tools(list(TOOL_VERBS))
     assert "use_terminal" not in every
     assert "change_permission" not in every
@@ -216,55 +237,75 @@ def test_the_speakers_groups_are_read_once_for_the_whole_turn(monkeypatch):
 # ── one sentence was standing in for two unrelated causes ──
 
 
-def test_a_tool_switched_off_is_not_reported_as_a_permission_problem():
-    """The item is PUBLIC — nobody's permissions are involved. The agent simply
-    has no `exec` in its resolved tool set, and saying "you don't have permission"
-    sends the reader to the permission panel, where there is nothing to find and
-    nothing they could change would help."""
-    spec, iid = _spec_with_item(None)
-    ctx = _ctx(
-        spec,
-        iid,
-        acting_user="alice",
-        agent_config=AgentConfig(name="x", allowed_tools=["read_file", "list_files"]),
-    ).context
-    assert authorize_tool(ctx, "read_content") is None  # the tools it does hold still work
-    denied = authorize_tool(ctx, "execute")
-    assert denied is not None
-    assert "don't have permission" not in denied
-    assert "tool settings" in denied
+def _one_warning(caplog, ctx, verb: Verb) -> str:
+    import logging
 
-
-def test_a_permission_refusal_still_names_permission():
-    """The control for the test above: when the refusal really IS the person's
-    grants, the sentence must not drift into blaming the tool set."""
-    spec, iid = _spec_with_item(
-        Permission(visibility="restricted", read_meta=["user:alice"], converse=["user:alice"])
-    )
-    ctx = _ctx(spec, iid, acting_user="alice").context
-    denied = authorize_tool(ctx, "execute")
-    assert denied is not None
-    assert "don't have permission" in denied
-    assert "tool settings" not in denied
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="workspace_app.agent.tool_authz"):
+        assert authorize_tool(ctx, verb) is not None
+    lines = [r.getMessage() for r in caplog.records if r.name == "workspace_app.agent.tool_authz"]
+    assert len(lines) == 1, lines  # one event, one line — the model may retry hard
+    return lines[0]
 
 
 def test_a_permission_refusal_leaves_a_log_line_naming_who_and_what(caplog):
     """The ceiling refusal has logged a WARNING since #309; the grant refusal
     logged NOTHING, so the more common of the two causes was invisible in a
     deployment — which is why it could only be guessed at from a chat bubble."""
-    import logging
-
     spec, iid = _spec_with_item(
         Permission(visibility="restricted", read_meta=["user:alice"], converse=["user:alice"])
     )
     ctx = _ctx(spec, iid, acting_user="alice").context
-    with caplog.at_level(logging.WARNING, logger="workspace_app.agent.tool_authz"):
-        assert authorize_tool(ctx, "execute") is not None
-    said = " ".join(r.getMessage() for r in caplog.records)
+    said = _one_warning(caplog, ctx, "execute")
     assert "execute" in said
     assert "alice" in said
     assert iid in said
-    assert "restricted" in said
+    assert "visibility=restricted" in said
+    assert "owner=bob" in said
+
+
+def test_the_log_says_which_of_the_two_refusals_it_was(caplog):
+    """The two causes need different moves from whoever reads them, and they are
+    told apart by measurement, not by advice: `verb in ceiling` is what the code
+    actually evaluated. It is NOT said to the model — the ceiling branch
+    short-circuits before any grant is looked at, so it cannot claim the grants
+    would have allowed it."""
+    # ceiling: a PUBLIC item, so nobody's grants are in play at all.
+    spec, iid = _spec_with_item(None)
+    ungranted = _ctx(
+        spec,
+        iid,
+        acting_user="alice",
+        agent_config=AgentConfig(name="x", allowed_tools=["read_file", "list_files"]),
+    ).context
+    assert authorize_tool(ungranted, "read_content") is None  # what it does hold still works
+    assert "in ai ceiling=False" in _one_warning(caplog, ungranted, "execute")
+
+    # grant: the tool is held, the person is not allowed.
+    spec, iid = _spec_with_item(
+        Permission(visibility="restricted", read_meta=["user:alice"], converse=["user:alice"])
+    )
+    assert "in ai ceiling=True" in _one_warning(
+        caplog, _ctx(spec, iid, acting_user="alice").context, "execute"
+    )
+
+
+def test_the_refusal_does_not_write_the_items_grant_lists_to_the_log(caplog):
+    """The grant lists are a roster of user ids — under SSO, an address list —
+    and this line fires on a path any speaker can trigger as often as the model
+    retries. It names the item so somebody can go and look; it does not copy
+    out who else can reach it."""
+    spec, iid = _spec_with_item(
+        Permission(
+            visibility="restricted",
+            read_meta=["user:alice"],
+            converse=["user:alice"],
+            execute=["user:carol@example.com", "group:payroll"],
+        )
+    )
+    said = _one_warning(caplog, _ctx(spec, iid, acting_user="alice").context, "execute")
+    assert "carol@example.com" not in said
+    assert "payroll" not in said
 
 
 def test_a_legacy_tool_name_still_carries_its_verb():

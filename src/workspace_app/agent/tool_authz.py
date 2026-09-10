@@ -43,21 +43,18 @@ TOOL_VERBS: dict[str, Verb] = {
 }
 
 
-# Names an older config may still carry. ``build_tools`` maps these before it
-# REGISTERS a tool, so the ceiling has to read the same list through the same map
-# — a config saying ``ls`` got a working ``list_files`` that this funnel then
-# refused on every call, which is the #537 shape: a tool that can only say no
-# reads to a model as "stop trying". One definition, imported by the tool layer.
+# Legacy tool names in a *stored* ``allowed_tools`` list, mapped to their current
+# name. Input normalisation only — the old name is NOT a callable alias (the
+# model still calls the tool by its registered name); it keeps old config data
+# working. #241: ``ls`` was renamed to ``list_files``.
+#
+# It lives HERE, beside the ceiling that has to apply it, and the tool layer
+# imports it. Every reader of a tool list has to go through the same map:
+# ``build_tools`` renamed before REGISTERING and this ceiling did not, so a
+# config saying ``ls`` got a working ``list_files`` that this funnel then
+# refused on every call — the #537 shape, where a tool that can only say no
+# reads to a model as "stop trying".
 LEGACY_TOOL_RENAMES: dict[str, str] = {"ls": "list_files"}
-
-# What each item verb lets the agent DO, for a refusal a reader can act on. The
-# keys are exactly ``TOOL_VERBS``' values; the fallback covers a verb added to
-# one and not the other rather than raising in the middle of a refusal.
-_VERB_ACTIONS: dict[Verb, str] = {
-    "read_content": "read files",
-    "edit_content": "change files",
-    "execute": "run commands",
-}
 
 
 def ceiling_from_tools(allowed: list[str] | None) -> frozenset[Verb]:
@@ -97,43 +94,57 @@ def authorize_tool(context: AgentToolContext, verb: Verb) -> str | None:
     assert isinstance(item, WorkItemBase)
     allowed = context.agent_config.allowed_tools if context.agent_config is not None else None
     ceiling = ceiling_from_tools(allowed)
-    # WITH the speaker's groups. Every human path builds its actor with
-    # `groups_of(spec, user)`; this one did not, so a verb granted to
-    # `group:<id>` was reachable by the person and refused to the agent they
-    # were driving — "ceiling ∩ speaker" was really "ceiling ∩ speaker minus
-    # their groups", which is not the guarantee this module documents.
-    actor = Actor.ai(context.acting_user, ceiling=ceiling, groups=context.speaker_groups())
     created_by = rm.get_meta(context.investigation_id).created_by
+    actor = Actor.ai(context.acting_user, ceiling=ceiling)
     if authorize(actor, verb, item.permission, created_by=created_by):
         return None
-    # Two unrelated causes were sharing one sentence, and the more common of the
-    # two logged NOTHING — so a refusal in a deployment could only be guessed at
-    # from the chat bubble that carried it. A ceiling refusal is a SETTING (the
-    # tool is switched off for this item, and no permission anyone holds would
-    # change it); a grant refusal is about this person. Sending the first one to
-    # the permission panel wastes the only move the reader has.
+    # Only now ask who the speaker's groups are, and only when they could
+    # matter. `authorize` is MONOTONE in `actor.groups` — steps 1-4 never read
+    # them and `_granted` only unions more subjects — so a refusal is the one
+    # state in which they can change the answer, and a refusal by the CEILING
+    # (step 3) is not even that: no membership lifts it. Asking here rather than
+    # up front keeps the query off every public / owner / direct-grant call, and
+    # shrinks the window in which a revoked membership is still believed to the
+    # turns that actually lean on a group grant.
     #
-    # `AI_FORBIDDEN` verbs cannot arrive here — no tool maps to them
-    # (`test_hard_barred_verbs_can_never_enter_a_tool_ceiling`).
-    if verb not in ceiling:
-        why = "not in this item's resolved tool set"
-        message = (
-            f"error: this item's agent cannot {_VERB_ACTIONS.get(verb, verb)} — those tools are "
-            "switched off in the item's tool settings. This is a setting, not your permissions."
-        )
-    else:
-        why = "the speaker holds no grant for it"
-        message = f"error: you don't have permission to {verb.replace('_', ' ')} in this workspace."
+    # They have to be here at all because `Actor.ai` was built without them
+    # while every human path passes `groups_of(spec, user)`: a verb granted to
+    # `group:<id>` was reachable by the person and refused to the agent they
+    # were driving, so "ceiling ∩ speaker" was really "ceiling ∩ speaker minus
+    # their groups" — not the guarantee this module documents.
+    if verb in ceiling:
+        actor = Actor.ai(context.acting_user, ceiling=ceiling, groups=context.speaker_groups())
+        if authorize(actor, verb, item.permission, created_by=created_by):
+            return None
+    # The refusal used to be silent. `authorize` logs the CEILING case — that
+    # one is a misconfiguration — and logged nothing for the grant case, which
+    # is the one that turns on data an operator can go and look at, so a
+    # deployment's only evidence was the sentence in a chat bubble. `verb in
+    # ceiling` says WHICH of the two this was without a second guess.
+    #
+    # It names the item and stops: the grant lists are a roster of user ids (an
+    # address list under SSO), and this fires on a path any speaker can trigger
+    # as often as the model retries.
     logger.warning(
-        "authorize_tool: %s denied on %s item %s for user %s (groups %s) — %s; "
-        "tools=%s permission=%r",
+        "authorize_tool: %s denied for user %s on %s item %s "
+        "(owner=%s, visibility=%s, speaker groups=%d, in ai ceiling=%s)",
         verb,
+        actor.user_id,
         context.app_slug,
         context.investigation_id,
-        actor.user_id,
-        sorted(actor.groups),
-        why,
-        "default" if allowed is None else sorted(allowed),
-        item.permission,
+        created_by,
+        # `getattr`, not a conditional: `permission is None` ≡ public, and a
+        # public item never reaches a refusal, so a branch here would be one
+        # nothing can execute.
+        getattr(item.permission, "visibility", "public"),
+        len(actor.groups),
+        verb in ceiling,
     )
-    return message
+    # One sentence, because the code checked one thing. The ceiling case wanted
+    # to say "this is a setting, not your permissions" — but the ceiling test
+    # short-circuits BEFORE any grant is evaluated, so it cannot know the grants
+    # would have allowed it, and a tool absent from the App's `agent.tools` is
+    # not in the item's tool settings for anyone to switch on. The distinction
+    # is real and belongs in the log above, where it is stated as what was
+    # measured rather than as advice.
+    return f"error: you don't have permission to {verb.replace('_', ' ')} in this workspace."

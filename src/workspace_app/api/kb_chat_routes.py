@@ -574,7 +574,9 @@ def register_kb_chat_routes(
         private chat)."""
         chat, owner = _load_rev(chat_id)
         perm = effective_permission(chat.permission, chat.shared_with)
-        actor = Actor.human(get_user_id())
+        # With groups, like its sibling below — a chat shared to a group was
+        # refused here while the list route showed it.
+        actor = Actor.human(get_user_id(), groups=groups_of(spec, get_user_id()))
         if not authorize(actor, "read_meta", perm, created_by=owner, superusers=superusers):
             raise HTTPException(status_code=404, detail="chat not found")
         if not authorize(actor, verb, perm, created_by=owner, superusers=superusers):

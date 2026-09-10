@@ -568,6 +568,8 @@ async def list_files_impl(
     workspace root (`notes.txt`, `data/`), which is the form the other file
     tools and `exec` both take. A long listing is cut with a notice — pass
     `offset` to read on from there. Use this instead of `exec(["ls", ...])`."""
+    if (denied := authorize_tool(ctx.context, "read_content")) is not None:
+        return denied
     fs, inv = _workspace(ctx)
     files, dirs = await fs.list_dir(inv, prefix)
     if not files and not dirs:
@@ -596,8 +598,15 @@ def _shown_prefix(prefix: str) -> str:
     return f"{rel_path(key)}/" if key else "the workspace root"
 
 
-async def exists_impl(ctx: RunContextWrapper[AgentToolContext], path: str) -> bool:
+async def exists_impl(ctx: RunContextWrapper[AgentToolContext], path: str) -> bool | str:
     """Check whether a file exists in the workspace file store."""
+    # `bool | str` so a refusal can SAY so. Returning `False` to a speaker who
+    # may not read would be a lie in the direction that matters — "that file is
+    # not there" is a claim about the workspace, and the agent repeats it to the
+    # person as fact. It is also why this tool went ungated for so long: a
+    # `-> bool` signature has nowhere to put a reason.
+    if (denied := authorize_tool(ctx.context, "read_content")) is not None:
+        return denied
     fs, inv = _workspace(ctx)
     return await fs.exists(inv, path)
 
@@ -2006,7 +2015,12 @@ def _subagent_tool_ceiling(ctx: AgentToolContext) -> set[str] | None:
     # answer to "what may this turn do"; anything further is a second, wrong rule.
     # Only when there is no resolved list does the profile stand in for it.
     ceiling = (
-        set(held) if held is not None else _profile_tool_ceiling(ctx.app_slug, ctx.template_profile)
+        # Through the same rename map registration and the authz ceiling use — a
+        # stored `ls` IS a held `list_files`, and readers disagreeing about that
+        # is how one of them refuses what another granted.
+        {LEGACY_TOOL_RENAMES.get(t, t) for t in held}
+        if held is not None
+        else _profile_tool_ceiling(ctx.app_slug, ctx.template_profile)
     )
     if ceiling is None:
         return None
@@ -2034,7 +2048,11 @@ def _profile_tool_ceiling(app_slug: str | None, profile: str | None) -> set[str]
     except (FileNotFoundError, ModuleNotFoundError, OSError):
         return None
     pm_tools = load_profile(app_slug, profile).tools
-    return (set(pm_tools) & app_tools) if pm_tools is not UNSET else app_tools
+    narrowed = (set(pm_tools) & app_tools) if pm_tools is not UNSET else app_tools
+    # Normalised, like every other reader of a tool list: this ceiling is
+    # compared against names the model actually calls, and `build_tools`
+    # renames before it registers.
+    return {LEGACY_TOOL_RENAMES.get(t, t) for t in narrowed}
 
 
 async def save_workflow_impl(
@@ -2654,13 +2672,6 @@ _WORKSPACE_TOOLS = [
     # alone doesn't reach them (the live-probe regression).
     "update_todos",
 ]
-
-# Legacy tool names in a *stored* `allowed_tools` list, mapped to their current
-# name so an AgentConfig persisted before a rename still provisions the tool.
-# This is input normalisation only — the old name is NOT a callable alias (the
-# model still calls the tool by its current registered name), it just keeps old
-# config data working. #241: `ls` was renamed to `list_files`.
-
 
 # Tools whose args include a free-form `dict[str, Any]` (entity `args` / `patch`):
 # a strict JSON schema forbids the `additionalProperties` such an open object
