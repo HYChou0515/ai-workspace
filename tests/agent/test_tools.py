@@ -992,3 +992,29 @@ async def test_tool_confirmations_leave_a_relative_path_unchanged(
     assert await write_file_impl(ctx, "data/x.csv", "hi") == "wrote 2 bytes to data/x.csv"
     assert await edit_file_impl(ctx, "data/x.csv", "hi", "yo") == "edited data/x.csv"
     assert await delete_file_impl(ctx, "data/x.csv") == "deleted data/x.csv"
+
+
+async def test_ask_knowledge_base_books_its_slot_before_anything_that_can_raise():
+    """Its sub-agent call can RAISE — an LLM error, a timeout, a transport
+    failure — and the SDK turns that into a tool message just the same, so the
+    exit consumes a pairing slot. The `assert run is not None` guard sat ABOVE
+    the booking, which is one of the four exits the helper's own docstring
+    enumerates; both are below it now."""
+    from agents import RunContextWrapper
+
+    from workspace_app.agent import AgentToolContext, ask_knowledge_base_impl
+
+    # (a) the wiring assert — nothing is wired at all
+    unwired = AgentToolContext()
+    with pytest.raises(AssertionError):
+        await ask_knowledge_base_impl(RunContextWrapper(unwired), "q")
+    assert unwired.subagent_citations["ask_knowledge_base"] == [[]]
+
+    # (b) the sub-agent itself falling over
+    async def _boom(*_a, **_k):
+        raise RuntimeError("the sub-agent fell over")
+
+    ctx = AgentToolContext(run_subagent=_boom)
+    with pytest.raises(RuntimeError):
+        await ask_knowledge_base_impl(RunContextWrapper(ctx), "q")
+    assert ctx.subagent_citations["ask_knowledge_base"] == [[]]

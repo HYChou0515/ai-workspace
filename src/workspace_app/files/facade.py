@@ -820,7 +820,12 @@ class WorkspaceFiles:
         growth = new_size - old
         if growth > 0:
             if quota and used + growth > quota:
-                raise WorkspaceFull(used=used, quota=quota, attempted=new_size)
+                # `growth`, not `new_size`. The message says "writing N more
+                # bytes", so `new_size` made it arithmetically false — and it
+                # handed the caller `new_size - growth`, the CURRENT size of a
+                # file they may not be allowed to read. `ensure_room_for` below
+                # has always passed the growth.
+                raise WorkspaceFull(used=used, quota=quota, attempted=growth)
             if self._person_gate is not None:
                 await self._person_gate(workspace_id, used + growth, growth)
         return old

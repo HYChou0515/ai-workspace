@@ -467,14 +467,14 @@ async def test_running_commands_is_not_a_way_to_read_and_write_through_make_deck
 
 
 async def test_a_rejected_write_does_not_hand_back_a_file_the_speaker_may_not_read():
-    """`fs.create` returns the existing bytes when the path is taken and `fs.edit`
-    returns the whole file when `old_string` misses — writing nothing. So
-    `edit_file(path, "zzz-nope", "")` was a pure READ primitive for a speaker
-    holding `edit_content` and not `read_content`, on a tool every App grants,
-    with the three real readers refusing in the same turn.
+    """`fs.create` returns the existing bytes when the path is taken, and the
+    rejection echoed them — a read for a speaker holding `edit_content` and not
+    `read_content`, on a tool every App grants, with the three real readers
+    refusing in the same turn.
 
-    The write itself stays allowed: the verb is exercised only on the conflict
-    branch, so the gate is on the echo, not on the tool."""
+    `write_file` keeps `edit_content` alone: an add-only collaborator creating
+    NEW files is a real shape, and the tool can learn nothing more about an
+    existing file than that it is there."""
     spec, iid = _spec_with_item(
         Permission(
             visibility="restricted",
@@ -490,8 +490,6 @@ async def test_a_rejected_write_does_not_hand_back_a_file_the_speaker_may_not_re
     assert "don't have permission" in await read_file_impl(ctx, "/secret.md")  # the control
 
     taken = await write_file_impl(ctx, "/secret.md", "x")
-    missed = await edit_file_impl(ctx, "/secret.md", "zzz-nope", "")
-
     # What it SAYS, not just what it omits: a test that only forbids two literals
     # passes for an EMPTY echo (which the model reads as "the file is empty" — a
     # wrong answer, not a withheld one) and for one that leaks a size or a line
@@ -500,20 +498,59 @@ async def test_a_rejected_write_does_not_hand_back_a_file_the_speaker_may_not_re
         "error: secret.md already exists and you do not have permission to see its "
         "contents, so you cannot edit it either. Tell the user."
     )
-    assert missed == (
-        "error: the edit to secret.md did not apply, and you do not have permission "
-        "to see the file, so you cannot tell why. Tell the user."
-    )
-    for answer in (taken, missed):
-        assert "BOARD SALARY" not in answer
-        assert "must not read" not in answer
-        # No "Current content:" over a withheld echo, and no "delete it first":
-        # the one recovery still open to this speaker destroys the file.
-        assert "Current content" not in answer
-        assert "delete" not in answer
+    assert "BOARD SALARY" not in taken
+    # No "Current content:" over a withheld echo, and no "delete it first": the
+    # one recovery still open to this speaker destroys the file.
+    assert "Current content" not in taken
+    assert "delete" not in taken
 
     # …and an ordinary write, which leaks nothing, is untouched.
     assert "wrote" in await write_file_impl(ctx, "/fresh.md", "hi")
+
+
+async def test_editing_is_reading_so_it_cannot_be_used_to_spell_a_file_out():
+    """`old_string` must match EXACTLY AND UNIQUELY, so `edit_file(path, X, X)`
+    answers "does X occur exactly once" while leaving the file alone — and an
+    agent is the automation that walks that one bit into the whole file (28 calls
+    recovered a secret digit by digit in review). "One bit per call" is not a
+    bound when the caller is an agent, so the tool is gated on `read_content`
+    and every probe now answers identically."""
+    spec, iid = _spec_with_item(
+        Permission(
+            visibility="restricted",
+            read_meta=["user:alice"],
+            converse=["user:alice"],
+            edit_content=["user:alice"],
+        )
+    )
+    ctx = _ctx(spec, iid, acting_user="alice")
+    await ctx.context.files.write(iid, "/secret.md", b"CEO bonus is 1234567 USD\n")
+
+    hit = await edit_file_impl(ctx, "/secret.md", "1", "1")  # occurs exactly once
+    miss = await edit_file_impl(ctx, "/secret.md", "9", "9")  # occurs never
+    absent = await edit_file_impl(ctx, "/nowhere.md", "1", "1")  # no such file
+
+    assert hit == miss == absent  # the answers carry no bit at all
+    assert "don't have permission to read content" in hit
+    assert await ctx.context.files.read(iid, "/secret.md") == b"CEO bonus is 1234567 USD\n"
+
+
+async def test_editing_still_works_for_a_speaker_who_may_read():
+    """The control for the gate above: `edit_file` is not made useless, it is
+    made to need what it already required in practice."""
+    spec, iid = _spec_with_item(
+        Permission(
+            visibility="restricted",
+            read_meta=["user:alice"],
+            converse=["user:alice"],
+            read_content=["user:alice"],
+            edit_content=["user:alice"],
+        )
+    )
+    ctx = _ctx(spec, iid, acting_user="alice")
+    await ctx.context.files.write(iid, "/a.md", b"one two\n")
+    assert "edited" in await edit_file_impl(ctx, "/a.md", "two", "three")
+    assert await ctx.context.files.read(iid, "/a.md") == b"one three\n"
 
 
 async def test_every_early_exit_books_exactly_one_citation_bucket():

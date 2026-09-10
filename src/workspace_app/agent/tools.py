@@ -507,13 +507,14 @@ def _conflict_echo(ctx: RunContextWrapper[AgentToolContext], path: str, current:
     # combination the share dialog's per-verb Custom mode can produce, on a tool
     # every App grants.
     #
-    # It is NOT the only read channel these two have, and saying so was wrong.
-    # `write_file` still answers "already exists" vs "wrote N bytes", and
-    # `edit_file(path, X, X)` still answers "edited" vs "not found exactly once"
-    # — one bit per call, non-destructively. Those are inherent to `edit_content`
-    # (you cannot be told whether your write landed without being told that), and
-    # they are named in `tool_authz`'s docstring beside `delete_file`'s. What is
-    # closed here is the one channel that was not one bit but the whole file.
+    # It is NOT the only read channel these two had, and calling the rest
+    # "one bit per call, accepted" was wrong twice over: an agent walks bits into
+    # whole files (28 `edit_file(path, X, X)` calls recovered a secret digit by
+    # digit), and that probe is not even non-destructive on a file that is not
+    # valid UTF-8. `edit_file` is gated on `read_content` for that reason and no
+    # longer reaches this branch without it. `write_file`'s "already exists" is
+    # the residual, named in `tool_authz`'s docstring: it is free, but it cannot
+    # be walked — the tool has nothing else to say about a file that is there.
     #
     # Gated HERE rather than by widening `TOOL_VERBS`: the verb is exercised
     # CONDITIONALLY — only on the conflict branch — so demanding `read_content`
@@ -573,8 +574,9 @@ async def edit_file_impl(
     the edit is rejected and the current content is returned, so re-read it and
     try again. To rewrite a whole file, pass its entire current content as
     `old_string`."""
-    if (denied := authorize_tool(ctx.context, "edit_content")) is not None:
-        return denied
+    for verb in TOOL_VERBS["edit_file"]:
+        if (denied := authorize_tool(ctx.context, verb)) is not None:
+            return denied
     fs, inv = _workspace(ctx)
     current = await fs.edit(inv, path, old_string, new_string)
     if current is None:
@@ -1250,9 +1252,6 @@ async def ask_knowledge_base_impl(
     meta-questions about this assistant, or general knowledge you already know.
     For any of those, answer directly without calling this tool.
     """
-    run = ctx.context.run_subagent
-    assert run is not None  # the API layer wires this for RCA runs
-
     # Citations are bucketed by TOOL NAME (the surface that produced them), not by
     # sub-agent purpose; persist() pairs the Nth bucket entry with the Nth tool
     # message of that name. Reserved UP FRONT rather than appended at each exit:
@@ -1261,6 +1260,12 @@ async def ask_knowledge_base_impl(
     # same, and an exit that books nothing shifts every later pairing.
     slot = _book_citations(ctx, "ask_knowledge_base")
     bucket = ctx.context.subagent_citations["ask_knowledge_base"]
+
+    # Below the booking: this assert is one of the four exits the helper's own
+    # docstring enumerates, and leaving it above kept the very shape the helper
+    # exists to remove.
+    run = ctx.context.run_subagent
+    assert run is not None  # the API layer wires this for RCA runs
 
     tiers = ctx.context.collection_tiers
     n = len(tiers)

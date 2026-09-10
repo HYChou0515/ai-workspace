@@ -37,10 +37,24 @@ a row:
   but demanding ``read_content`` up front would refuse an add-only collaborator
   every ordinary write. The echo itself is gated instead (``_conflict_echo``),
   so the rejection still explains itself and stops short of the contents.
-* An existence oracle that is INHERENT to the verb. ``delete_file`` answers
-  "not found" differently from "deleted", and no gate can hide that from
-  somebody who may delete: the probe costs them the file. Accepted, and named
-  here so the next reader does not have to rediscover it.
+* An existence oracle that is INHERENT to the verb, where the probe COSTS
+  something. ``delete_file`` answers "not found" differently from "deleted",
+  and no gate hides that from somebody who may delete — but each probe destroys
+  the file it asks about. ``write_file`` is the same shape ("already exists" vs
+  "wrote N bytes") and free, which is why it keeps ``edit_content`` alone: it
+  cannot address an existing file beyond learning that it is there.
+
+  ``edit_file`` was in this list and should not have been. Its probe is free AND
+  repeatable AND composable — see its row in the table — so it is gated on
+  ``read_content`` instead of accepted. "One bit per call" is not a bound when
+  the caller is an agent.
+
+Not accepted, and not this module's to fix: ``files/facade.py``'s ``edit``
+round-trips through ``decode(errors="replace")``, so an edit against a file that
+is not valid UTF-8 rewrites every invalid byte as U+FFFD and reports success. A
+20-byte PNG came back 32 bytes with its signature gone. Gating ``edit_file`` on
+``read_content`` narrows who can do it; it does not stop the owner doing it by
+accident.
 
 The sentence above names the TABLE rather than a category because claiming the
 category is exactly what let gaps live: ``list_files`` and ``exists`` were listed
@@ -85,7 +99,15 @@ TOOL_VERBS: dict[str, tuple[Verb, ...]] = {
     "list_files": ("read_content",),
     "exists": ("read_content",),
     "write_file": ("edit_content",),
-    "edit_file": ("edit_content",),
+    # BOTH, and not because of the echo: `old_string` must match the current file
+    # EXACTLY AND UNIQUELY, so every successful edit is a statement about content
+    # the caller had to have read. `edit_file(path, X, X)` replaces X with itself
+    # — the file is unchanged and the answer is one bit, "does X occur exactly
+    # once" — and an agent is precisely the automation that walks that bit into
+    # the whole file: 28 calls recovered a secret digit by digit in review.
+    # `write_file` stays single-verb: an add-only collaborator creating new files
+    # is a real shape, and it cannot address an existing file at all.
+    "edit_file": ("read_content", "edit_content"),
     "delete_file": ("edit_content",),
     # `execute` is NOT decomposed, and that is the one deliberate exception to the
     # rule above: the verb means "run arbitrary commands in this workspace", which

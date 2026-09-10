@@ -12,6 +12,7 @@ covered in tests/kb/wiki/test_reader.py.
 
 from __future__ import annotations
 
+import pytest
 from agents import RunContextWrapper
 
 from workspace_app.agent.context import AgentToolContext, WikiSearchBudget
@@ -122,3 +123,19 @@ async def test_an_uncapped_consultation_reports_no_budget_line():
 
     out = await ask_wiki_impl(RunContextWrapper(_ctx(consult)), "q")
     assert out == "answer"
+
+
+async def test_a_reader_that_raises_still_leaves_exactly_one_citation_slot():
+    """The consultation below the booking can RAISE — an LLM error, a timeout, a
+    transport failure — and the SDK turns that into a tool message just the same,
+    so that exit consumes a pairing slot. Booking at each exit therefore missed
+    the likeliest exit of all; reverting this tool to append-at-exit reddened
+    nothing before this test existed."""
+
+    async def _boom(*_a, **_k):
+        raise RuntimeError("the wiki reader fell over")
+
+    ctx = _ctx(_boom)
+    with pytest.raises(RuntimeError):
+        await ask_wiki_impl(RunContextWrapper(ctx), "anything")
+    assert ctx.subagent_citations["ask_wiki"] == [[]]

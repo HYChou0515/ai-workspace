@@ -532,3 +532,19 @@ async def test_a_write_path_charges_nothing_once_another_rule_has_refused():
         await files.ensure_room_for("ws1", 50)  # a copy that cannot happen
 
     assert recorded == [], "a refused write charged its owner"
+
+
+async def test_a_refusal_names_the_growth_not_the_resulting_size():
+    """The message says "writing N more bytes would exceed it", so `attempted`
+    has to BE the growth. Passing the resulting size made the sentence
+    arithmetically false AND handed the caller `new_size - growth` — the current
+    size of a file they may not be allowed to read, through a tool that was
+    gated only on `edit_content`. `ensure_room_for` has always passed growth."""
+    files = _files(300)
+    await files.write("ws", "/secret.md", b"x" * 246)
+
+    with pytest.raises(WorkspaceFull) as caught:
+        await files.write("ws", "/secret.md", b"x" * 346)
+
+    assert caught.value.attempted == 100  # 346 - 246, the growth
+    assert caught.value.used == 246
