@@ -17,7 +17,6 @@ import {
   EMPTY_LOG,
   drawOwnAsk,
   retractOwnAsk,
-  snapshotAdds,
   type AgentLog,
   reduceAgent,
 } from "../pages/investigation/agentLog";
@@ -140,20 +139,16 @@ export function useKbChat({
   // `log.streaming`, so `send` can put it back if the send fails. `drawOwnAsk`
   // sets `streaming`, so once it has run the log can no longer say whether a
   // turn was already running when this send started.
-  const streamingRef = useRef(false);
-  // The log itself, so the reconnect can ask whether a snapshot would ADD to
-  // what is on screen. Its closure captures the log of the render it was created
-  // in, which for a subscription living across turns is stale by definition.
-  const logRef = useRef(log);
+  //
   // A LAYOUT effect, not a passive one: passive effects are scheduled through
   // the Scheduler and an input event can be dispatched ahead of a pending one,
   // so a `streaming` flip committed just before a click would not be in the ref
   // when `send` read it. Committed rather than written during render, because a
   // render React discards would otherwise leave its value behind.
+  const streamingRef = useRef(false);
   useLayoutEffect(() => {
     streamingRef.current = log.streaming;
-    logRef.current = log;
-  }, [log]);
+  }, [log.streaming]);
 
   const attach = useCallback(
     (id: string) => {
@@ -262,28 +257,33 @@ export function useKbChat({
           // turn being accepted. The client knows exactly when a send is out;
           // it does not have to infer it.
           //
-          // The second gate asks whether re-hydrating ADDS anything
-          // (`snapshotAdds`) — the same count `reconcileSnapshot` bails on, so
-          // the two cannot disagree. A TIE is the case that costs: the snapshot
-          // neither shrinks nor grows, so it is adopted and the live entries the
-          // store does not have go with it — a streaming answer replaced by the
-          // #624 `notice` sitting where it should be.
+          // `turnEnded` is the STORE's fact, and it gates the whole read rather
+          // than just the `streaming` reset: a thread whose tail is the #624
+          // `notice` is MID-turn, and `notice` counts as content, so a snapshot
+          // taken then ties on `contentCount`, wins `reconcileSnapshot` and
+          // deletes the answer already on screen. If the turn has not ended
+          // there is nothing here to catch — the resumed stream will deliver it.
           //
-          // It must NOT be `turnEnded` alone. A question queued behind the
-          // running answer makes the store's tail a user message, and skipping
-          // the read there threw away the finished answer ABOVE it — in the one
-          // case this loop exists for, on this branch's headline feature.
+          // ⚠️ KNOWN LIMITATION, measured and deliberately not widened. While a
+          // question is QUEUED the store's tail is that question, so this read is
+          // skipped and an answer the screen missed (the drop happened while it
+          // was streaming) does not appear until the queue drains — at which
+          // point the tail becomes an answer and this brings in everything.
+          // Delayed and self-healing, not lost.
+          //
+          // One attempt to widen it (P15, reverted) gated on "does the snapshot
+          // ADD content" instead. It did not even reach this case — the queued
+          // question is usually already on screen, so the counts TIE — and it
+          // introduced two worse faults: `streaming` forced false while a turn
+          // ran, and a mid-turn snapshot with MORE entries adopted wholesale,
+          // deleting the answer being watched. A count answers "is there more",
+          // and the question here is "does the snapshot contain everything on
+          // screen", which no count can answer. Fixing it properly needs the
+          // same thing P13's ordering decision needs: a turn id on the persisted
+          // message. Until then this is the smaller wrong.
           const fresh =
             sendsInFlight.current === 0 ? await client.getChat(id).catch(() => null) : null;
-          // Re-checked AFTER the await as well: a send that starts during the
-          // round-trip is invisible to the check above, and the snapshot it
-          // would then apply is the pre-send thread.
-          if (
-            fresh &&
-            !controller.signal.aborted &&
-            sendsInFlight.current === 0 &&
-            (turnEnded(fresh.messages) || snapshotAdds(logRef.current, fresh))
-          ) {
+          if (fresh && !controller.signal.aborted && turnEnded(fresh.messages)) {
             qc.setQueryData(qk.kb.chat(id), fresh);
             reconcile(fresh);
             // `reconcile` derives `streaming` itself, but only when it does not

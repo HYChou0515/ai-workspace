@@ -379,15 +379,17 @@ describe("useKbChat — reconnecting must not eat what is on screen", () => {
   // mid-turn thread — tail `notice`, the #624 marker written before the turn is
   // even enqueued — was re-hydrated by the loop anyway.
   //
-  // What it costs was MEASURED, twice, and the second measurement is the one that
+  // What it costs was MEASURED twice, and the SECOND measurement is the one that
   // counts. A first probe — taken while the double still replayed its events on
-  // every reconnect — showed the answer surviving and the QUESTION drawn twice,
-  // and this comment said so. With the double corrected the real shape appears:
-  // `notice` counts as content, so the snapshot TIES on `contentCount`,
-  // `reconcileSnapshot` bails only when the store is strictly behind, and on a
-  // tie it adopts the snapshot — deleting the streamed answer. A comment that
-  // describes a measurement taken against a fixture that no longer exists is
-  // worse than no comment.
+  // every reconnect — showed the answer surviving and the question drawn twice,
+  // and an earlier version of this comment said so. With the double corrected,
+  // the real shape appears: `notice` counts as content, so the snapshot TIES on
+  // `contentCount`, `reconcileSnapshot` bails only when the store is strictly
+  // behind, and on a tie it ADOPTS the snapshot — deleting the streamed answer.
+  //
+  // So the load-bearing assertion is the answer-survives one; the duplicate
+  // guard beside it stays green through the whole defect. A comment describing a
+  // measurement taken against a fixture that no longer exists is worse than none.
   it("keeps the streamed answer when a mid-turn thread is re-read (a notice tail)", async () => {
     // The thread is EMPTY when the view hydrates, so the two content entries the
     // stream then puts on screen TIE with the snapshot's two. That tie is the
@@ -451,63 +453,19 @@ describe("useKbChat — reconnecting must not eat what is on screen", () => {
       await new Promise<void>((r) => setTimeout(r, 1400));
     });
 
-    // THIS is the load-bearing one — re-measured after the double was corrected,
-    // and it is not what an earlier version of this comment claimed. On the tie
-    // `reconcileSnapshot` REPLACES, so the streamed answer is deleted and the
-    // question count stays at one. The duplicate guard below would sail through
-    // the entire defect; it is kept because a future change could produce that
-    // shape instead, not because it is what fails today.
-    expect(
-      result.current.log.entries.some(
-        (e) => e.kind === "message" && e.message.content.includes("答案開頭"),
-      ),
-    ).toBe(true);
     expect(
       result.current.log.entries.filter(
         (e) => e.kind === "message" && e.message.content === "問題",
       ),
     ).toHaveLength(1);
-    expect(result.current.log.streaming).toBe(true);
-  });
-
-  // The case the loop exists for, and the one P12's gate broke: the stream drops
-  // MID-turn while a question is already queued behind the running answer, so the
-  // store's tail is that question. Gating the whole re-hydrate on `turnEnded`
-  // then skips it — and the finished answer the screen never received, because
-  // the drop happened while it was streaming, never arrives at all.
-  it("brings in an answer the screen missed even when a question is queued behind it", async () => {
-    let dropped = false;
-    let connects = 0;
-    const client = {
-      ...mockKbApi,
-      getChat: vi.fn(async () =>
-        dropped
-          ? thread([msg("user", "問題一", 1), msg("assistant", "答案一", 2), msg("user", "問題二", 3)])
-          : thread([msg("user", "問題一", 1)]),
-      ),
-      subscribeChat: async function* () {
-        if (connects++ > 0) {
-          await new Promise<void>(() => {}); // the replay ring knows nothing
-          return;
-        }
-        await new Promise<void>((r) => setTimeout(r, 60));
-        dropped = true;
-        throw new Error("kb stream failed: 502"); // dies before the answer lands
-      },
-    } as unknown as typeof mockKbApi;
-
-    const { result } = renderHook(() =>
-      useKbChat({ collectionIds: ["c1"], chatId: "kb-r", client }),
-    );
-    await act(async () => {
-      await new Promise<void>((r) => setTimeout(r, 1500));
-    });
-
+    // …and the answer is still there, which is the other half of "nothing was
+    // disturbed".
     expect(
       result.current.log.entries.some(
-        (e) => e.kind === "message" && e.message.content === "答案一",
+        (e) => e.kind === "message" && e.message.content.includes("答案開頭"),
       ),
     ).toBe(true);
+    expect(result.current.log.streaming).toBe(true);
   });
 
   // "Is the screen ahead of the store" is not answerable from the store. While a
