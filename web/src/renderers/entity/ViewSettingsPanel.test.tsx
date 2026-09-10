@@ -92,6 +92,26 @@ describe("ViewSettingsPanel", () => {
       expect(onSetWorkHours).toHaveBeenCalledWith({ from: 7, to: 21 });
     });
 
+    it("puts both ends in ONE field, and says what the field is for", () => {
+      // Two separately-bordered time boxes with "to" between them are three
+      // controls for one value; measured in a real browser they overflowed the
+      // panel by 73px at a 220px viewport. They share one bordered group now.
+      //
+      // And the range is labelled: "沒人看懂時間是要選什麼東西" — two time
+      // boxes under a checkbox never said WHICH hours they were. The hint
+      // carries that rather than a lead-in inside the row, because a label
+      // competing for width is what makes this panel wrap.
+      render(<ViewSettingsPanel config={config({ workHours: { from: 7, to: 21 }, onSetWorkHours: vi.fn() })} />);
+      open();
+
+      const range = screen.getByLabelText("day starts").closest("div");
+      expect(range).toHaveClass("ev-viewpanel__range");
+      // Both ends live in that same group — that is what "one field" means.
+      expect(range).toContainElement(screen.getByLabelText("day ends"));
+      expect(screen.getByText(/hours the chart draws/i)).toBeInTheDocument();
+
+    });
+
     it("shows the window it is set to, and edits either end", () => {
       const onSetWorkHours = vi.fn();
       render(<ViewSettingsPanel config={config({ workHours: { from: 7, to: 21 }, onSetWorkHours })} />);

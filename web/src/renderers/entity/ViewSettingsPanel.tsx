@@ -174,7 +174,12 @@ export function ViewSettingsPanel({ config }: { config: ViewConfig }) {
                     checked={config.skipWeekends ?? false}
                     onChange={() => config.onToggleSkipWeekends?.(!config.skipWeekends)}
                   />
-                  Skip weekends (Mon–Fri only)
+                  {/* Was "Skip weekends (Mon–Fri only)". The parenthetical
+                      restates the label and was the only string in the panel
+                      long enough to wrap — a 260px popover capped at 80vw is
+                      224px on a narrow viewport, and the label needed 204 of
+                      it. Nothing is lost: "weekends" is what Mon–Fri means. */}
+                  Skip weekends
                 </label>
               )}
               {config.onSetWorkHours && (
@@ -194,21 +199,45 @@ export function ViewSettingsPanel({ config }: { config: ViewConfig }) {
                     Skip non-working hours
                   </label>
                   {config.workHours && (
-                    <div className="ev-viewpanel__field">
+                    // ONE field, not three. Two bordered inputs with the word
+                    // "to" between them read as three controls and could not
+                    // fit the panel at its narrow end at any font size. A
+                    // single bordered group holding two borderless inputs is
+                    // the shape every date-range control uses.
+                    //
+                    // 12- vs 24-hour is the BROWSER's call, not ours: the
+                    // widget follows the user's locale and ignores `lang`
+                    // (measured across en-US / en-GB / zh-TW / ja-JP — all
+                    // four render identically at 65px). Left native anyway,
+                    // because the model takes half hours (8.5 -> "08:30") so
+                    // an hour dropdown would quietly remove a capability, and
+                    // the native control is what validates the input.
+                    <>
+                      {/* Two time boxes on their own name nothing: the panel
+                          never said WHICH hours were being picked, so the
+                          control read as a stray time field. The hint carries
+                          it rather than a lead-in inside the row, because a
+                          label competing for width is what makes this panel
+                          wrap in the first place. */}
+                      <div className="ev-viewpanel__hint">Hours the chart draws each day</div>
+                      <div className="ev-viewpanel__range">
                       <input
                         type="time"
                         aria-label="day starts"
                         value={clockText(config.workHours.from)}
                         onChange={(e) => setEnd(config, "from", e.target.value)}
                       />
-                      <span> to </span>
+                      <span aria-hidden="true" className="ev-viewpanel__range-sep">
+                        –
+                      </span>
                       <input
                         type="time"
                         aria-label="day ends"
                         value={clockText(config.workHours.to)}
                         onChange={(e) => setEnd(config, "to", e.target.value)}
                       />
-                    </div>
+                      </div>
+                    </>
                   )}
                 </>
               )}

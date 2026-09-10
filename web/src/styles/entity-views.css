@@ -631,7 +631,11 @@
   background: var(--paper-2);
 }
 /* native selects in the filter row / batch bar wear the field chrome. */
-.ev-select {
+/* The time range shares the select's chrome rather than carrying a copy: they
+ * are meant to read as the same control, and two rules that have to agree are
+ * two rules that will drift. */
+.ev-select,
+.ev-viewpanel__range {
   height: 28px;
   padding: 0 var(--space-8);
   border: 1px solid var(--paper-3);
@@ -639,6 +643,59 @@
   background: var(--white);
   color: var(--text-paper);
   font-size: var(--text-body-sm);
+}
+/* ONE field, not three. Two bordered inputs with "to" between them are three
+ * controls for one value, and at the panel's narrow end (224px) they did not
+ * fit at any font size. Wrapping them was worse — a control that reflows as
+ * you resize reads as broken. The border lives on the GROUP; the inputs inside
+ * are bare, which is the shape every date-range control uses. */
+.ev-viewpanel__range {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  width: fit-content;
+  max-width: 100%;
+}
+.ev-viewpanel__range input[type="time"] {
+  flex: 0 1 auto;
+  min-width: 0;
+  height: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font-family: var(--font-mono);
+  font-size: inherit;
+}
+/* The group says the FIELD has focus; the ring says WHICH END. The group alone
+ * cannot: it holds two inputs, so tabbing from "day starts" to "day ends" left
+ * the border already accent-coloured and the move was invisible. Dropping the
+ * outline without replacing it is what base.css means by "never to none" — so
+ * this takes the inset-ring form sheet.css already uses for a control whose
+ * outline would break its shape. */
+.ev-viewpanel__range input[type="time"]:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--accent);
+  border-radius: 3px;
+}
+.ev-viewpanel__range:focus-within {
+  border-color: var(--accent);
+}
+.ev-viewpanel__range input[type="time"]::-webkit-calendar-picker-indicator {
+  /* Two clock glyphs cost ~32px in a 224px panel and say nothing the field
+   * does not: the value is typed or arrow-keyed, and 24-hour text is
+   * unambiguous without them. */
+  display: none;
+}
+.ev-viewpanel__range-sep {
+  color: var(--text-paper-d);
+}
+.ev-viewpanel__field input[type="checkbox"] {
+  accent-color: var(--accent);
+  /* The one fixed-size thing in the row — a flex item shrinks by default, and
+   * a squashed checkbox beside a long label reads as an oval. */
+  flex: 0 0 auto;
+  margin: 0;
 }
 
 /* ── board / kanban (§A3) ────────────────────────────────────────────────── */
@@ -990,13 +1047,29 @@ button.ev-card__status:focus-visible {
   color: var(--text-paper-d);
   padding: 0 var(--space-8);
   background: var(--paper-2);
+  /* The lane sits in a fixed-width gutter at a fixed LANE_H — a wrapped group
+   * name has nowhere to put its second line and lands on the row below. */
+  white-space: nowrap;
+  overflow: hidden;
+  /* The caret's own `width: 1em` used to be the gap, which only read as one
+   * while the name was wrapping onto its own line underneath. On one line the
+   * glyph fills that em and the two run together ("▾PHOTORESIST"). */
+  gap: var(--space-4);
+}
+/* The ellipsis for BOTH gutter labels. It cannot live on the labels
+ * themselves: they are flex containers (a caret beside a name / a drag row),
+ * and `text-overflow` is ignored on a flex container and does not inherit into
+ * the anonymous flex item holding the text. So the text gets its own box. */
+.ev-gantt__trunc {
+  min-width: 0; /* or the flex item refuses to shrink below its content */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .ev-gantt__row-label {
   display: flex;
   align-items: center;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   padding: 0 var(--space-8);
   /* hairline per row, aligned with the canvas rows for a continuous grid */
   border-bottom: 1px solid color-mix(in srgb, var(--paper-3) 55%, transparent);
@@ -1133,10 +1206,13 @@ button.ev-card__status:focus-visible {
   color: var(--text-dark);
   /* Reserved whether or not it is drawn, so a coloured bar and an uncoloured
    * one occupy the same box — box-sizing is border-box, so this costs no
-   * width. A `color_by` bar paints it in its own ink (GanttView barColor): the
-   * chip fill is translucent, and on a grouped chart the neutral slot IS the
-   * lane-band colour, so without an edge the bar's start and end — the data —
-   * have nothing to read against. The solid fill used to do this job. */
+   * width. A `color_by` bar paints it in `--text-paper`, NOT in its own ink:
+   * the edge has to be legible against the LANE BAND behind the bar, and the
+   * ink is chosen to be legible on the FILL. `--ink` is one value in both
+   * themes, which made the dark-mode edge 1.09:1 on the band — no edge at all,
+   * and in a gantt the bar's start and end are the data. The fill cannot carry
+   * the boundary alone either: solid as it is, it measures 2.40:1 against the
+   * light band. Both numbers come from ganttBarContrast.test.ts. */
   border: 1px solid transparent;
   border-radius: var(--radius-chip);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.14);

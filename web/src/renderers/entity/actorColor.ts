@@ -69,6 +69,25 @@ const PINNED_HUE: Record<string, number | null> = {
   slate: null, gray: null, grey: null, neutral: null,
 };
 
+/**
+ * The same solid fill this palette paints, for a value whose hue comes from its
+ * chip SLOT instead of from a generated seat (#690 — "色卡樣式差太多").
+ *
+ * A gantt bar is a filled slab; a chip is a tinted pill. Painting a bar with
+ * the chip's `--cat-N-bg` — a 16%-alpha wash — next to a person's solid fill
+ * made one chart look like two controls. The FILL is what unifies here, not
+ * the hue: `SLOT_HUE` is each chip colour's own OKLCH angle, so `critical`
+ * stays the same colour family as the `critical` chip in the table, which is
+ * the property that stopped the two palettes being merged outright.
+ *
+ * Slot 7 (and any slot with no hue) is achromatic, the answer `selectColor`
+ * gives it too.
+ */
+export function solidForSlot(slot: number): ChipColor {
+  const hue = SLOT_HUE[slot - 1] ?? null;
+  return { bg: hue === null ? toHex(LIGHTNESS, 0, 0) : toHex(LIGHTNESS, CHROMA, hue), fg: INK };
+}
+
 /** The k-th term of the van der Corput sequence, base 2, over `[0, 1)`. */
 export function hueFraction(k: number): number {
   if (k <= 0) return 0;

@@ -52,13 +52,13 @@ import {
   unionSpan,
   spanValue,
   visibleDaysFor,
-  type Zoom,
+  type AxisUnit,
 } from "./ganttScale";
 import { backrefBuckets, type RefIndex } from "./refTraversal";
 import { fieldText, roleOf } from "./shared";
 import { usePersistentSet } from "../../hooks/usePersistentSet";
-import { actorPalette } from "./actorColor";
-import { type ChipColor, selectColor } from "./selectColor";
+import { actorPalette, solidForSlot } from "./actorColor";
+import { type ChipColor, slotFor } from "./selectColor";
 import { sortRows } from "./sortRows";
 import type { EntityViewProps } from "./types";
 
@@ -84,7 +84,13 @@ const FINE_H = 20; // fine tick row (weekdays / week codes / months)
 const SUB_H = 11;
 const LANE_H = 24;
 const ROW_H = 26;
-const ZOOMS: Zoom[] = ["day", "week", "month"];
+/** The slider's named stops, densest first. `hour` is here because the track has
+ * run into hour grain since #785 while the last NAME on it stayed `day` — so the
+ * hourly zone was blank rail, reachable only by dragging past the end of the
+ * labels and findable only by accident. Naming the stop is also what lets the
+ * fine row stay a bare `09`: the unit is stated once, here, instead of being
+ * spelled ":00" on all twenty-four ticks. */
+const ZOOMS: AxisUnit[] = ["hour", "day", "week", "month"];
 
 type Row = { e: EntityInstance; span: Span; source: SpanSource; reach: Span };
 
@@ -162,11 +168,14 @@ export function GanttView({
   const collapsed = usePersistentSet(`gantt-collapsed:${viewKey ?? spec.entity}`);
   const colorField = spec.color_by;
   const colorSpec = colorField ? roleOf(type, colorField) : undefined;
-  // Both halves of the palette entry or neither: `bg` is a translucent CHIP
-  // fill, legible only under its paired `fg`. Handing the bar the fill alone
-  // left it wearing the ink of the solid blue slab it used to be — cream on a
-  // 93%-white fill, 1.07:1, invisible in light mode (#690). The pair travels
-  // together now, guarded by ganttBarContrast.test.ts.
+  // Both halves of the palette entry or neither, guarded by
+  // ganttBarContrast.test.ts. The rule was written when the fill was the chip's
+  // translucent `bg` and handing the bar that alone left it wearing the ink of
+  // the solid blue slab it used to be (cream on a 93%-white fill, 1.07:1,
+  // invisible in light mode — #690). The bar no longer takes a chip fill at
+  // all: both branches below return an OPAQUE hex under `--ink`. The pairing
+  // rule outlives the wash that prompted it, because a fill chosen without its
+  // ink is how that defect happened, whatever the fill is made of.
   // An ACTOR field is a directory, not a vocabulary: it has no fixed value list
   // to pin colours to and no ceiling on how many values it holds, so it gets a
   // GENERATED hue per person (`actorPalette`) instead of the six chip slots,
@@ -188,10 +197,13 @@ export function GanttView({
   const barColor = (e: EntityInstance): ChipColor | undefined => {
     if (!colorField) return undefined;
     const value = fieldText(e.fields[colorField]) ?? "";
-    // Anything else is a closed vocabulary — keep the palette the chips already
-    // use. A second one would put one `status` value on two different colours in
-    // two places on the same screen.
-    return actorHues ? actorHues(value) : selectColor(value, colorSpec);
+    // Anything else is a closed vocabulary — keep the SLOT the chips already
+    // use (a second one would put a `status` value on two different colours in
+    // two places on the same screen), but paint it with the same solid fill a
+    // person gets. The chip's own `bg` is a 16%-alpha wash meant for a pill;
+    // on a slab beside a person's solid fill it read as a different control
+    // altogether (#690).
+    return actorHues ? actorHues(value) : solidForSlot(slotFor(value, colorSpec));
   };
   // null ⇒ auto-fit the whole project to the measured pane (fills the width on
   // open); a number ⇒ the user has taken over the zoom via the slider / anchors.
@@ -534,7 +546,7 @@ export function GanttView({
                     <span aria-hidden="true" className="ev-gantt__lane-caret">
                       {collapsed.has(lane.key) ? "\u25b8" : "\u25be"}
                     </span>
-                    <span>{lane.label}</span>
+                    <span className="ev-gantt__trunc">{lane.label}</span>
                   </button>
                 )}
                 {(collapsed.has(lane.key) ? [] : lane.rows).map((row) => (
@@ -553,7 +565,14 @@ export function GanttView({
 
           {/* right timeline: gridlines + axis ticks + today line + bars */}
           <div className="ev-gantt__canvas" style={{ width: canvasWidth }}>
-            {axis.fine.map((t) => (
+            {/* One rule per DAY at hour grain, per fine tick otherwise. A line
+                every hour is noise at 48px apart, and `axis.fine` is rendered
+                twice (here and as ticks below) — so on a long project the
+                one-hour step P3 unlocked would double the node count exactly
+                where the chart is densest (~13k -> ~25.5k on a two-year
+                weekday project). The day boundary is what a gridline means at
+                this grain anyway; it lines up with the band that names it. */}
+            {(axis.unit === "hour" ? axis.coarse : axis.fine).map((t) => (
               <div key={`grid-${t.day}`} className="ev-gantt__gridline" style={{ left: t.day * cpx }} />
             ))}
             <div className="ev-gantt__axis" style={{ height: axisH }}>
@@ -666,7 +685,18 @@ export function GanttView({
                             width,
                             background: c?.bg,
                             color: c?.fg,
-                            borderColor: c?.fg,
+                            // The edge answers a DIFFERENT question from the
+                            // ink and so cannot share its value. The ink has to
+                            // be readable on the FILL; the edge has to be
+                            // visible on the LANE BAND behind the bar, and in a
+                            // gantt the bar's start and end are the data. `fg`
+                            // is `--ink`, which is one value in both themes by
+                            // construction — 14.78:1 on the light band but
+                            // 1.09:1 on the dark one, i.e. no edge at all in
+                            // dark mode. `--text-paper` inverts with the theme,
+                            // which is exactly the property the band-facing
+                            // side needs: 14.32:1 light, 13.54:1 dark.
+                            borderColor: c ? "var(--text-paper)" : undefined,
                             "--bar-ink": c?.fg,
                           } as React.CSSProperties
                         }
@@ -723,7 +753,9 @@ function GutterRow({
 }: {
   number: number;
   enabled: boolean;
-  /** The whole label. The column ellipsises, and without this the only way to
+  /** The whole label. The column ellipsises (see `.ev-gantt__trunc` — the
+   * ellipsis is on the inner span, because this row is a flex container and
+   * `text-overflow` does nothing on one), and without this the only way to
    * read a cut-off title was to open the record. */
   title?: string;
   children: React.ReactNode;
@@ -744,7 +776,7 @@ function GutterRow({
       {...(enabled ? attributes : {})}
       {...(enabled ? listeners : {})}
     >
-      {children}
+      <span className="ev-gantt__trunc">{children}</span>
     </div>
   );
 }

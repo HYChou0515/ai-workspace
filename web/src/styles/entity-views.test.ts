@@ -54,6 +54,82 @@ describe("entity-views.css", () => {
     expect(bar).not.toMatch(/--accent\b/); // bars must not reuse it, or they blend in
   });
 
+  it("skins every control in the view panel, not just the select", () => {
+    // The panel styled its <select> and left the checkbox and the two
+    // <input type="time"> boxes at browser defaults, so "Skip non-working
+    // hours" and its time range sat in the middle of a designed popover
+    // wearing whatever the OS paints — "幾乎沒有 css 樣式看起來很隨便".
+
+    // The time range SHARES the select's rule rather than getting a second
+    // copy: they are meant to look like the same control, and two rules that
+    // must agree are two rules that will not.
+    expect(CSS).toMatch(/\.ev-select[^{]*\.ev-viewpanel__range[^{]*\{/);
+
+    // One field, not three: the border is on the GROUP and the inputs inside
+    // are bare. Two separately-bordered boxes with "to" between them are three
+    // controls for one value and did not fit the panel's narrow end.
+    const rangeInput = CSS.match(/\.ev-viewpanel__range input\[type="time"\]\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(rangeInput).toMatch(/border:\s*0/);
+    expect(rangeInput).toMatch(/background:\s*none/);
+    // The picker glyphs cost ~32px of a 224px panel and duplicate the value.
+    expect(CSS).toMatch(/::-webkit-calendar-picker-indicator\s*\{[^}]*display:\s*none/);
+
+    // Killing the outline is allowed (it would cut through the shared border);
+    // killing it without a replacement is not — base.css says "never to none".
+    // The group's own :focus-within cannot stand in for this: it holds TWO
+    // inputs, so tabbing between the ends would not change anything on screen.
+    const ring = CSS.match(/\.ev-viewpanel__range input\[type="time"\]:focus-visible\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(ring, "the focused END has no rule of its own").not.toBe("");
+    if (/outline:\s*none/.test(ring)) {
+      expect(ring, "outline removed with nothing put back").toMatch(/box-shadow:[^;]*var\(--accent/);
+    }
+
+    // NOTHING in the panel wraps. Wrapping was tried and is worse: on the
+    // shared field class it drops a checkbox's label below its box, and on the
+    // range it makes the control reflow as the panel resizes. Anything too
+    // wide is made to fit instead — shorter copy, or a field that shares one
+    // border.
+    for (const sel of ["\\.ev-viewpanel__field", "\\.ev-viewpanel__range"]) {
+      const rule = CSS.match(new RegExp(sel + "\\s*\\{[^}]*\\}"))?.[0] ?? "";
+      // A `not.toMatch` against "" passes having checked nothing, so renaming
+      // or deleting the rule would retire this guard in silence. Prove the
+      // rule was found BEFORE asserting what it does not contain.
+      expect(rule, `${sel} has no rule to check`).not.toBe("");
+      expect(rule, `${sel} must not wrap`).not.toMatch(/flex-wrap/);
+    }
+
+    const check = CSS.match(/\.ev-viewpanel__field input\[type="checkbox"\]\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(check).toMatch(/accent-color:\s*var\(--accent\)/);
+    // A flex item's default is to shrink; the box then goes oval next to a
+    // long label. It is the one thing in the row with a fixed size.
+    expect(check).toMatch(/flex:\s*0 0 auto|flex-shrink:\s*0/);
+  });
+
+  it("truncates the first column instead of wrapping it", () => {
+    // The gutter is a FIXED 150px beside rows of a FIXED height (GUTTER /
+    // ROW_H / LANE_H), so a label that wraps has nowhere to put the second
+    // line — it overlaps its neighbours. Three places already CLAIMED this
+    // column truncates (the GutterRow comment, and two test names) while the
+    // lane label had neither `nowrap` nor `overflow`, so a long group name
+    // wrapped and the rows collided.
+    const lane = CSS.match(/\.ev-gantt__lane-label\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(lane).toMatch(/white-space:\s*nowrap/);
+    expect(lane).toMatch(/overflow:\s*hidden/);
+
+    // `text-overflow` needs a BLOCK container: on a flex container it is
+    // ignored, and it does not inherit into the anonymous flex item holding
+    // the text. Both labels are flex (for the caret / vertical centring), so
+    // the ellipsis has to live on an inner element — which is what this class
+    // is for. Without it the text is chopped mid-glyph with no "…".
+    const trunc = CSS.match(/\.ev-gantt__trunc\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(trunc).toMatch(/text-overflow:\s*ellipsis/);
+    expect(trunc).toMatch(/overflow:\s*hidden/);
+    expect(trunc).toMatch(/white-space:\s*nowrap/);
+    // A flex item's automatic minimum is its CONTENT width, so without this it
+    // refuses to shrink and overflows the gutter rather than ellipsising.
+    expect(trunc).toMatch(/min-width:\s*0/);
+  });
+
   it("only references declared design tokens (no hardcoded brand colors)", () => {
     // Guard against a stray hex on a fill — everything routes through tokens.
     // Box-shadows are the one sanctioned rgba() exception (no shadow token).

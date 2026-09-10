@@ -5,8 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { EntityInstance, EntityType } from "../../api/entities";
 import { GanttView } from "./GanttView";
-import { actorPalette } from "./actorColor";
-import { selectColor } from "./selectColor";
+import { actorPalette, solidForSlot } from "./actorColor";
+import { selectColor, slotFor } from "./selectColor";
 import { pxPerDay } from "./ganttScale";
 import { buildRefIndex } from "./refTraversal";
 import type { EntityViewProps } from "./types";
@@ -454,6 +454,27 @@ describe("GanttView", () => {
     expect(screen.getByTestId("bar-1").style.width).not.toBe(weekWidth);
   });
 
+  it("names an hour stop on the slider, and clicking it lands on an hourly axis", () => {
+    // "還是沒有小時的label 我只看到month week day". Reaching hours by dragging
+    // past the last NAME on the track is not the same as being able to ask for
+    // them. Driven through the button a person actually presses: a stop that
+    // exists but leaves the fine row on a 2-hour step would pass any assertion
+    // about the anchor alone.
+    render(
+      <GanttView
+        {...props({ entities: [rec(1, { title: "A", span: "2026-01-05T09:00/2026-01-07T17:00" })] })} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "zoom hour" }));
+
+    const labels = Array.from(document.querySelectorAll(".ev-gantt__tick")).map((n) => n.textContent?.trim() ?? "");
+    expect(labels.length).toBeGreaterThan(2);
+    for (const l of labels) expect(l).toMatch(/^\d\d$/);
+    // Consecutive HOURS, so the axis is hourly and not merely in hour grain.
+    const hours = labels.slice(0, 3).map(Number);
+    expect((hours[1] - hours[0] + 24) % 24).toBe(1);
+    expect((hours[2] - hours[1] + 24) % 24).toBe(1);
+  });
+
   it("zooms continuously by dragging the density slider", () => {
     render(<GanttView {...props({ entities: [rec(1, { title: "A", span: "2026-01-01/2026-01-31" })] })} />);
     const slider = screen.getByRole("slider", { name: /zoom/i });
@@ -520,6 +541,33 @@ describe("GanttView", () => {
     // of clock and two of work — the night between them is not drawn, exactly
     // as a weekend between two working days is not drawn.
     expect(overnight).toBeCloseTo(allDay / 7);
+  });
+
+  it("rules one gridline per DAY at hour grain, not one per hour", () => {
+    // Every fine tick used to get a full-height gridline. That was fine while
+    // the finest step was days (or 2 hours). Now that the track reaches a
+    // one-hour step (P3), the same code rules a line every hour — visual noise
+    // at 48px apart, and `axis.fine` is rendered TWICE (gridline + tick), so a
+    // long project doubles its node count exactly where the chart is densest.
+    // Measured: a two-year weekday project goes from ~13,000 nodes to ~25,500.
+    //
+    // The day boundary is what a gridline is FOR at this grain — the band
+    // above already names the day, and this lines up with it.
+    render(
+      <GanttView
+        {...props({
+          entities: [rec(1, { title: "A", span: "2026-01-05T09:00/2026-01-08T17:00" })],
+        })}
+      />,
+    );
+    fireEvent.change(screen.getByRole("slider", { name: /zoom/i }), { target: { value: "1" } });
+
+    const gridlines = document.querySelectorAll(".ev-gantt__gridline").length;
+    const bands = document.querySelectorAll(".ev-gantt__coarse-band").length;
+    const ticks = document.querySelectorAll(".ev-gantt__tick").length;
+
+    expect(ticks, "hour ticks are still one per hour").toBeGreaterThan(bands);
+    expect(gridlines, "a gridline per hour is noise, and doubles the DOM").toBe(bands);
   });
 
   it("renders a month context band above the fine ticks (two-tier axis)", () => {
@@ -799,9 +847,66 @@ describe("GanttView colour source", () => {
       />,
     );
 
-    // The same palette the chips use — a second one would put `critical` on
-    // two different colours in two places on the same screen.
-    expect(screen.getByTestId("bar-1").style.background).toBe(selectColor("critical", urgencySpec).bg);
+    // The same SLOT the chips use — a second one would put `critical` on two
+    // different hues in two places on the same screen. The fill differs from
+    // the chip's on purpose (a slab is not a pill; see solidForSlot), which is
+    // why this reads the slot rather than `selectColor` directly.
+    expect(screen.getByTestId("bar-1").style.background).toBe(
+      solidForSlot(slotFor("critical", urgencySpec)).bg,
+    );
+  });
+
+  it("fills a select bar out of the same system as a person bar (#690)", () => {
+    // The two colour sources were two visual SYSTEMS: an actor got a generated
+    // solid fill under `--ink`, a select got the chip pair whose `bg` is a
+    // 16%-alpha wash (--cat-N-bg). Side by side on one chart they did not read
+    // as the same control — "色卡樣式差太多".
+    //
+    // They share the fill now. What stays separate is only how the HUE is
+    // picked: a directory GENERATES one per person (it has no fixed value
+    // list), a vocabulary keeps its chip slot (so `critical` is still the same
+    // hue as the `critical` chip in the table beside the chart). Pinning both
+    // to the same named colour is what makes that observable — if the two
+    // systems had drifted apart, these two bars would differ.
+    const pinned: EntityType = {
+      ...type,
+      fields: type.fields.map((f) => (f.name === "assignee" ? { ...f, colors: { alice: "red" } } : f)),
+    };
+    const spec = { view: "gantt", entity: "issue", span: "span", label: "title" } as const;
+
+    const bySelect = render(
+      <GanttView
+        {...props({
+          type: pinned,
+          spec: { ...spec, color_by: "urgency" },
+          entities: [rec(1, { title: "A", span, urgency: "critical" })],
+        })}
+      />,
+    );
+    const selectBar = bySelect.container.querySelector<HTMLElement>('[data-testid="bar-1"]');
+    const selectFill = selectBar?.style.background;
+    const selectInk = selectBar?.style.color;
+    cleanup();
+
+    const byPerson = render(
+      <GanttView
+        {...props({
+          type: pinned,
+          spec: { ...spec, color_by: "assignee" },
+          entities: [rec(1, { title: "A", span, assignee: "alice" })],
+          users,
+        })}
+      />,
+    );
+    const personBar = byPerson.container.querySelector<HTMLElement>('[data-testid="bar-1"]');
+
+    // `critical` is pinned red and so is alice: one system ⇒ one colour.
+    expect(selectFill).toBe(personBar?.style.background);
+    expect(selectInk).toBe(personBar?.style.color);
+    // ...and specifically the SOLID system, not the wash. Stated against the
+    // old value rather than as "is a hex", so it fails if the select side
+    // silently goes back to the chip pair.
+    expect(selectFill).not.toBe(selectColor("critical", urgencySpec).bg);
   });
 
   it("gives a record with nothing set the neutral slot rather than a hashed colour", () => {
@@ -814,7 +919,14 @@ describe("GanttView colour source", () => {
       />,
     );
 
-    expect(screen.getByTestId("bar-1").style.background).toBe(selectColor("", urgencySpec).bg);
+    const fill = screen.getByTestId("bar-1").style.background;
+    expect(fill).toBe(solidForSlot(slotFor("", urgencySpec)).bg);
+    // The neutral slot is the one with no hue, so "nothing set" has to read as
+    // ACHROMATIC rather than as one more colour someone has to decode. Stated
+    // on the channels because that is the property, not on the string.
+    const [, r, g, b] = /^#(\w\w)(\w\w)(\w\w)$/.exec(fill) ?? [];
+    expect(r, `neutral fill ${fill} is not grey`).toBe(g);
+    expect(g).toBe(b);
   });
 
   it("can colour by who is doing the work, not only by a select", () => {
@@ -935,6 +1047,33 @@ describe("long labels (#690 P6)", () => {
 
     expect(container.querySelector(".ev-gantt__row-label")).toHaveAttribute("title", long);
     expect(screen.getByTestId("bar-1")).toHaveAttribute("title", "2026-01-10/2026-01-20");
+  });
+
+  it("puts the truncating element AROUND the label text, not on the flex row", () => {
+    // The `title` above is the fallback for text that got cut off — it says
+    // nothing about whether anything cuts it off. Both labels are flex
+    // containers, and `text-overflow` on a flex container does nothing (it is
+    // not inherited into the anonymous flex item that holds the text), so the
+    // ellipsis only exists if the TEXT sits in its own element carrying it.
+    // Asserted on the DOM rather than the stylesheet because the defect is
+    // structural: the CSS was already correct-looking on the wrong box.
+    const { container } = render(
+      <GanttView
+        {...props({
+          spec: { view: "gantt", entity: "issue", span: "span", label: "title", group_by: "assignee" },
+          entities: [rec(1, { title: long, span, assignee: "alice" })],
+        })}
+      />,
+    );
+
+    const row = container.querySelector(".ev-gantt__row-label");
+    expect(row?.querySelector(".ev-gantt__trunc")).toHaveTextContent(long);
+
+    // The lane label wraps a caret AND the name; only the name may truncate,
+    // or the arrow is the thing that gets ellipsised away.
+    const lane = container.querySelector(".ev-gantt__lane-label");
+    expect(lane?.querySelector(".ev-gantt__trunc")).toHaveTextContent("alice");
+    expect(lane?.querySelector(".ev-gantt__lane-caret")).not.toHaveClass("ev-gantt__trunc");
   });
 
   it("carries the whole group name too", () => {
