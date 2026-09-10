@@ -14,6 +14,16 @@ from workspace_app.agent import (
 )
 from workspace_app.files import WorkspaceFiles
 from workspace_app.filestore.memory import MemoryFileStore
+from workspace_app.filestore.specstar_impl import SpecstarFileStore
+from workspace_app.resources import make_spec
+from workspace_app.sandbox.mock import MockSandbox
+from workspace_app.sandbox.protocol import (
+    SandboxBusy,
+    SandboxHandle,
+    SandboxNotFound,
+    SandboxSpec,
+)
+from workspace_app.sync import SandboxSync
 
 
 async def test_read_file_caps_lines_with_a_notice_and_supports_offset_limit():
@@ -131,6 +141,146 @@ async def test_a_file_tool_without_a_facade_fails_instead_of_bypassing_the_quota
     ctx = RunContextWrapper(AgentToolContext(investigation_id="inv-1", filestore=MemoryFileStore()))
     with pytest.raises(AssertionError):
         await write_file_impl(ctx, "/a.txt", "hi")
+
+
+class _ReapableSandbox(MockSandbox):
+    """A sandbox whose handles can be taken away mid-turn, the way the host's
+    idle reaper and a `rollout restart` both do."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.dead: set[str] = set()
+        self.busy = False
+        self.exec_handles: list[str] = []
+
+    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None):
+        self.exec_handles.append(handle.id)
+        if self.busy:
+            raise SandboxBusy(handle.id)
+        if handle.id in self.dead:
+            raise SandboxNotFound(handle.id)
+        return await super().exec(
+            handle, cmd, on_output=on_output, env=env, exec_timeout=exec_timeout
+        )
+
+
+def _reapable_ctx(sandbox: _ReapableSandbox) -> RunContextWrapper[AgentToolContext]:
+    """Wired like `ctx`, and — the part that matters — like the REGISTRY.
+
+    The first version of this double minted a fresh handle on every wake, which
+    made the recovery look like it worked and hid the defect review found: on
+    the `kind: local` backend `InvestigationRegistry.ensure_handle` re-acquires
+    only when the SESSION has no handle (its liveness probe is http-only), so
+    clearing the context's copy changed nothing and the retry got the same dead
+    handle back. A double that always says yes cannot fail the way the real
+    thing does.
+
+    So `wake` holds a session handle and reuses it, exactly as the registry
+    does, and only `rebuild` — the `force=True` path — clears it."""
+    spec = make_spec(default_user="test-user")
+    filestore = SpecstarFileStore(spec)
+    sync = SandboxSync(filestore=filestore, sandbox=sandbox)
+    holder: dict[str, SandboxHandle] = {}
+    session: dict[str, SandboxHandle | None] = {"handle": None}
+
+    async def _resolve(ws: str) -> SandboxHandle | None:
+        return holder.get(ws)
+
+    async def wake(on_progress=None, tools=None) -> SandboxHandle:
+        if session["handle"] is None:
+            h = await sandbox.create(SandboxSpec(tools=tools))
+            await sync.restore("ws-test", h, on_progress=on_progress)
+            holder["ws-test"] = h
+            session["handle"] = h
+        current = session["handle"]
+        assert current is not None
+        return current
+
+    async def rebuild(tools=None) -> SandboxHandle:
+        session["handle"] = None  # what `force=True` does to the session
+        return await wake(None, tools)
+
+    return RunContextWrapper(
+        AgentToolContext(
+            investigation_id="ws-test",
+            sandbox=sandbox,
+            filestore=filestore,
+            files=WorkspaceFiles(filestore, sandbox, _resolve),
+            sync=sync,
+            ensure_sandbox_via=wake,
+            rebuild_sandbox_via=rebuild,
+        )
+    )
+
+
+async def test_exec_rebuilds_and_reruns_when_the_sandbox_was_reaped():
+    """The host takes the sandbox away mid-turn — its 30-minute idle TTL, or a
+    `rollout restart` killing every pod at once — while this turn still holds
+    the handle it cached on its first exec.
+
+    The FILE tools have recovered from exactly this since #492: `_warm` probes
+    on every op and rebuilds, and its comment calls that probe "the RECOVERY
+    trigger". `exec` had no such path — the exception went straight to the SDK,
+    which showed the model `Error: <opaque base64 handle>` and told it to try
+    again, which it did, against the same dead handle, forever."""
+    sandbox = _ReapableSandbox()
+    ctx = _reapable_ctx(sandbox)
+
+    assert "hi" in await exec_impl(ctx, ["echo", "hi"])
+    first = ctx.context.handle
+    assert first is not None
+
+    sandbox.dead.add(first.id)  # the host reaps it out from under the turn
+
+    assert "back" in await exec_impl(ctx, ["echo", "back"])
+    assert ctx.context.handle is not None
+    assert ctx.context.handle.id != first.id, "should be running in a REBUILT sandbox"
+    # Attempted on the dead handle, then once on the fresh one — one retry, not a loop.
+    assert sandbox.exec_handles == [first.id, first.id, ctx.context.handle.id]
+
+
+async def test_a_rebuilt_sandbox_prepares_its_python_environment_again():
+    """`.venv/` is in `sync/ignore.py`'s ignores, so a rebuild brings the
+    workspace back WITHOUT it. The context remembers that the environment is
+    ready in `_project_env_ready`, and that belief outlived the sandbox it was
+    about: the re-run — and every later exec in the turn — would have executed
+    against a venv that no longer existed, silently, on the carrier python."""
+    sandbox = _ReapableSandbox()
+    ctx = _reapable_ctx(sandbox)
+    prepared: list[str] = []
+    ctx.context.prepare_env_via = lambda handle, on_output: _record(prepared, handle)
+
+    await exec_impl(ctx, ["echo", "hi"])
+    assert len(prepared) == 1
+    first = ctx.context.handle
+    assert first is not None
+
+    sandbox.dead.add(first.id)
+    await exec_impl(ctx, ["echo", "back"])
+
+    assert len(prepared) == 2, "the rebuilt sandbox never had its environment prepared"
+    assert prepared[1] != prepared[0], "it must be prepared for the NEW sandbox"
+
+
+async def _record(sink: list[str], handle) -> None:
+    sink.append(handle.id)
+
+
+async def test_exec_does_not_rerun_a_command_a_busy_sandbox_may_have_already_run():
+    """`SandboxBusy` is NOT the same permission to retry. The sandbox is ALIVE
+    (`registry._alive` reads busy as alive on purpose, #492) and the command may
+    already be running or done — a timeout on a stream says nothing about what
+    the far end did. Re-sending `rm -rf`, `git push` or a POST would be this
+    fix causing the damage it exists to prevent, so busy propagates and the
+    command is sent exactly once."""
+    sandbox = _ReapableSandbox()
+    ctx = _reapable_ctx(sandbox)
+    sandbox.busy = True
+
+    with pytest.raises(SandboxBusy):
+        await exec_impl(ctx, ["rm", "-rf", "/data"])
+
+    assert len(sandbox.exec_handles) == 1, "a busy sandbox must not be re-sent the command"
 
 
 async def test_exec_lazy_creates_sandbox_on_first_call(

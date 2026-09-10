@@ -505,6 +505,68 @@ def _held_sleep(clock: _Clock) -> tuple[list[float], Any]:
     return slept, sleep
 
 
+async def test_every_hold_logs_why_it_is_holding(caplog):
+    """The hold line ran on every wait — the common branch, dozens of times
+    across a budget that reaches two hours by default — and printed the model,
+    the hold count and the seconds, but never WHY.
+
+    So an operator watching a deployment throttle could see that it was waiting
+    and for how long, and could not tell a spend limit from a request-rate limit
+    from too much concurrency: three different remedies behind one line. The
+    reason is in hand at that moment — it is the exception being held for."""
+    clock = _Clock()
+    reg = CooldownRegistry(clock=clock)
+    _, sleep = _held_sleep(clock)
+    impls = {"primary": _FlakyModel([_429("7")], response="ok"), "backup": _FakeModel("never")}
+    m = FallbackModel(
+        [_ep("primary"), _ep("backup")], reg, make_model=lambda e: impls[e.model], sleep=sleep
+    )
+
+    with caplog.at_level("WARNING", logger="workspace_app.failover.model"):
+        assert await m.get_response() == "ok"
+
+    holds = [r.getMessage() for r in caplog.records if "rate-limited (hold" in r.getMessage()]
+    assert holds, "the hold must be logged at all"
+    assert any("RateLimitError" in h or "429" in h for h in holds), (
+        f"the hold line must name the cause it is holding for, got: {holds}"
+    )
+
+
+async def test_an_exhausted_chain_logs_the_429_not_the_least_informative_failure(caplog):
+    """`get_response` ends with `logger.warning(... last %r)` — and the comment
+    three lines below it says `last` "is often the least informative one — a dead
+    spare, not the throttle". The raise already prefers `rate_limited or last`
+    for exactly that reason; the log did not, so the line an operator greps for
+    named the wrong failure."""
+    clock = _Clock()
+    reg = CooldownRegistry(clock=clock)
+    _, sleep = _held_sleep(clock)
+    # primary throttles until its budget is spent; the spare is simply broken —
+    # and the broken one fails LAST, which is what `last` would report.
+    impls = {
+        "primary": _FlakyModel([_429("7")] * 3, response="never"),
+        "backup": _FlakyModel([RuntimeError("dead spare")] * 9, response="never"),
+    }
+    m = FallbackModel(
+        # The budget is read from the chain HEAD, so it goes on that endpoint:
+        # one hold and it is spent.
+        [_ep("primary", rate_limit_budget_s=1.0), _ep("backup")],
+        reg,
+        make_model=lambda e: impls[e.model],
+        sleep=sleep,
+    )
+
+    with (
+        caplog.at_level("WARNING", logger="workspace_app.failover.model"),
+        pytest.raises(AllProvidersFailed),
+    ):
+        await m.get_response()
+
+    final = [r.getMessage() for r in caplog.records if "all endpoints failed" in r.getMessage()]
+    assert final, "the exhausted-chain line must be logged"
+    assert "dead spare" not in final[-1], "it reported the dead spare, not the throttle"
+
+
 async def test_get_response_waits_out_a_429_at_the_same_endpoint():
     """The window the provider stated, at the endpoint that stated it — no
     switch, no cooldown, and `num_retries` (0 here) untouched: that budget is

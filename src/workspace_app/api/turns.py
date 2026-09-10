@@ -36,6 +36,7 @@ from fastapi.responses import StreamingResponse
 from ..agent.context import AgentToolContext
 from ..context_budget import SUMMARY_ROLE, estimate_messages
 from ..failover.core import AllProvidersFailed
+from ..failover.rate_limit import is_rate_limited
 from ..resources.conversation import MessageMetrics
 from ..turn_control import InMemoryTurnControl, ITurnControl
 from ..users.labels import speaker_label
@@ -320,6 +321,17 @@ _BUSY_MESSAGE = (
     "completed. Please try again in a moment."
 )
 
+#: The same chain, exhausted for a DIFFERENT reason. `failover/model.py` raises
+#: `AllProvidersFailed ... from (rate_limited or last)` on purpose — its comment
+#: says the turn loop tells "rate limited" from "broken" by walking exactly this
+#: chain — and this is the reading it was chained for. Saying "busy" here sent
+#: an operator looking at model load for a limit that a quota page explains, and
+#: "try again in a moment" is wrong advice for a limit that is deterministic.
+_RATE_LIMITED_MESSAGE = (
+    "The model endpoint is rate-limiting us, so this response couldn't be "
+    "completed. It is not a busy model: the limit has to clear, or be raised."
+)
+
 
 def _is_all_busy(exc: BaseException) -> bool:
     """True if ``exc`` (or anything in its cause/context chain — the SDK may wrap
@@ -335,10 +347,18 @@ def _is_all_busy(exc: BaseException) -> bool:
 
 
 def _terminal_error(exc: BaseException) -> RunError:
-    """A terminal `RunError` for a turn that died — readable busy notice when the
-    failover chain was exhausted, else the raw class+message for an operator."""
+    """A terminal `RunError` for a turn that died — a readable notice when the
+    failover chain was exhausted, else the raw class+message for an operator.
+
+    Two readings of the SAME exhausted chain, because they need different things
+    from the reader: a rate limit clears on its own schedule or is raised by
+    somebody, while genuinely busy models are a capacity question. `kind` is what
+    lets the FE say either in the reader's own language; the message stays as the
+    fallback for a client that has no wording for the kind."""
     if _is_all_busy(exc):
-        return RunError(message=_BUSY_MESSAGE)
+        if is_rate_limited(exc):
+            return RunError(message=_RATE_LIMITED_MESSAGE, kind="rate_limited")
+        return RunError(message=_BUSY_MESSAGE, kind="all_busy")
     return RunError(message=f"{type(exc).__name__}: {exc}")
 
 
@@ -355,7 +375,9 @@ def _error_message(item: RunError | RunCancelled | MaxTurnsExceeded) -> TurnMess
             content=f"The agent stopped after reaching its step limit ({item.turns}).",
             error_kind="max_turns",
         )
-    return TurnMessage(role="error", content=item.message, error_kind="error")
+    # `kind` when the failure named itself, so the FE can word it; `error`
+    # otherwise, which is what every terminal failure carried before.
+    return TurnMessage(role="error", content=item.message, error_kind=item.kind or "error")
 
 
 @dataclass

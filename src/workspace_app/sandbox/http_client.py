@@ -43,15 +43,100 @@ logger = logging.getLogger(__name__)
 
 # Maps the host's structured `{"error": <type>}` discriminator back to the
 # exception type the Sandbox Protocol promises callers.
+#: The words the host states in `{"error": ...}`, mapped to what they mean here.
+#: One table rather than a branch per call site, so teaching the client a new
+#: word is a dict entry.
 _ERRORS: dict[str, type[Exception]] = {
     "SandboxNotFound": SandboxNotFound,
     "FileNotFoundError": FileNotFoundError,
+    # A pod that has begun terminating (SIGTERM, or a PreStop hook hitting
+    # `/drain`) refuses NEW sandboxes with 503 `{"error": "draining"}` while the
+    # ones it already runs continue. That is `SandboxBusy`'s exact meaning —
+    # alive, not serving this right now — and it is the most retryable signal on
+    # the wire: another pod will take it. Untaught, `raise_for_status()` made it
+    # a bare `HTTPStatusError`, which is neither of the two exceptions the API
+    # boundary turns into a 503 + `Retry-After`, so a `rollout restart` — when
+    # EVERY sandbox is rebuilding at once — 500s through the one moment the
+    # system most needs to back off.
+    "draining": SandboxBusy,
 }
+
+
+def _stated_error(resp: httpx.Response) -> Exception | None:
+    """The exception this response NAMES, or ``None`` when it names nothing we
+    model (the caller then falls back to `raise_for_status`).
+
+    Reads the body defensively: an error path must not raise a DIFFERENT error
+    because the thing that failed also failed to be JSON."""
+    try:
+        body = resp.json()
+    except ValueError:
+        return None
+    if not isinstance(body, dict):
+        return None
+    stated = body.get("error")
+    if not isinstance(stated, str):
+        return None
+    exc_type = _ERRORS.get(stated)
+    return None if exc_type is None else exc_type(body.get("detail") or stated)
 
 
 def _encode_handle(pod_url: str, remote_id: str) -> str:
     raw = json.dumps({"u": pod_url, "r": remote_id}, separators=(",", ":")).encode()
     return base64.urlsafe_b64encode(raw).decode()
+
+
+def _sandbox_ref(handle: SandboxHandle) -> str:
+    """A short way to NAME a sandbox in a message a model will read.
+
+    `handle.id` is base64 of `{"u": <pod url>, "r": <remote id>}`. Every raise
+    site here used to pass it as the message, and the agents SDK renders a tool
+    exception as "…Please try again. Error: <str(exc)>" — so the model was handed
+    an opaque blob, told to try again, and did, against the same dead sandbox.
+    Decoded, that blob is the cluster's internal pod address, which then lived in
+    the agent's context and the saved transcript.
+
+    The full handle stays in the LOG on every one of these paths, which is where
+    an operator looks and the model does not."""
+    try:
+        _, remote_id = _decode_handle(handle)
+    except Exception:  # noqa: BLE001 — an unreadable handle must not replace the real error
+        return "unknown"
+    return remote_id[:8]
+
+
+def _gone_msg(handle: SandboxHandle) -> str:
+    """Said when the sandbox does not exist. Names the recovery, because the
+    reader is usually an agent deciding what to do next: the next attempt
+    rebuilds it from the durable archive, so retrying is right — and it is right
+    for a reason the model can act on rather than because a wrapper said so."""
+    return (
+        f"the workspace sandbox ({_sandbox_ref(handle)}) is gone — it was reaped or its "
+        "host restarted. It is rebuilt automatically on the next attempt; files in the "
+        "workspace are restored, anything only in memory or in a running process is not."
+    )
+
+
+def _with_host_detail(message: str, detail: object) -> str:
+    """The host's own words APPENDED, never substituted.
+
+    `detail or <ours>` read as "prefer the host's" — but the host states an id,
+    not an explanation, so the one sentence saying what actually happened was
+    dropped whenever the host said anything at all. Context belongs after the
+    diagnosis, not instead of it."""
+    text = str(detail).strip() if detail else ""
+    return f"{message} (host: {text})" if text else message
+
+
+def _busy_msg(handle: SandboxHandle) -> str:
+    """Said when the sandbox is ALIVE but did not answer in time. Deliberately
+    does NOT invite a blind retry: the command may already be running or done,
+    which is why nothing re-sends it automatically."""
+    return (
+        f"the workspace sandbox ({_sandbox_ref(handle)}) is running but did not answer in "
+        "time. It was not restarted, and the command may still be running — check before "
+        "sending it again."
+    )
 
 
 def _decode_handle(handle: SandboxHandle) -> tuple[str, str]:
@@ -268,7 +353,7 @@ class HttpSandbox:
             logger.warning(
                 "sandbox-http: %s %s busy (timeout) -> SandboxBusy %s", method, suffix, handle.id
             )
-            raise SandboxBusy(handle.id) from exc
+            raise SandboxBusy(_busy_msg(handle)) from exc
         except httpx.TransportError as exc:
             logger.warning(
                 "sandbox-http: %s %s transport error -> SandboxNotFound %s",
@@ -276,7 +361,7 @@ class HttpSandbox:
                 suffix,
                 handle.id,
             )
-            raise SandboxNotFound(handle.id) from exc
+            raise SandboxNotFound(_gone_msg(handle)) from exc
         if resp.status_code == 404:
             self._raise_mapped(resp, handle, method, suffix)
         resp.raise_for_status()
@@ -321,7 +406,16 @@ class HttpSandbox:
     ) -> None:
         body = resp.json()
         exc_type = _ERRORS.get(body.get("error", ""), SandboxNotFound)
-        message = body.get("detail") or handle.id
+        # Only a missing SANDBOX gets the missing-sandbox sentence. This branch
+        # also carries `FileNotFoundError` — a path the agent asked for that is
+        # not there — and telling someone their sandbox was reaped, on a sandbox
+        # that is plainly alive, sends them to rebuild instead of to the typo.
+        # The detail (which for that case IS the path) stays either way.
+        message = (
+            _with_host_detail(_gone_msg(handle), body.get("detail"))
+            if exc_type is SandboxNotFound
+            else str(body.get("detail") or _sandbox_ref(handle))
+        )
         if "error" not in body:
             # The host answers a real miss with its own `{"error": ...}`. A 404
             # WITHOUT that key is the framework's route-not-found, i.e. this host
@@ -366,6 +460,15 @@ class HttpSandbox:
                 "pids_max": spec.pids_max,
             },
         )
+        # Before `raise_for_status`: a host that STATED its reason is answered
+        # with that reason, not with a generic status error.
+        if (stated := _stated_error(resp)) is not None:
+            logger.warning(
+                "sandbox-http: create refused for item %s -> %s",
+                sandbox_id,
+                type(stated).__name__,
+            )
+            raise stated
         resp.raise_for_status()
         data = resp.json()
         logger.info("sandbox-http: created sandbox for item %s", sandbox_id)
@@ -483,7 +586,7 @@ class HttpSandbox:
                         logger.warning(
                             "sandbox-http: exec sandbox %s host error %s", handle.id, frame["error"]
                         )
-                        raise exc_type(frame.get("detail") or handle.id)
+                        raise exc_type(_with_host_detail(_gone_msg(handle), frame.get("detail")))
                     else:  # final {"exit","out","err"} frame
                         logger.info(
                             "sandbox-http: exec sandbox %s exit=%s", handle.id, frame["exit"]
@@ -508,15 +611,15 @@ class HttpSandbox:
             # above stands either way, and the sentence that no longer holds
             # would have been the one a reader trusted.
             logger.warning("sandbox-http: exec sandbox %s timed out -> SandboxBusy", handle.id)
-            raise SandboxBusy(handle.id) from exc
+            raise SandboxBusy(_busy_msg(handle)) from exc
         except httpx.TransportError as exc:
             logger.warning(
                 "sandbox-http: exec sandbox %s transport error -> SandboxNotFound", handle.id
             )
-            raise SandboxNotFound(handle.id) from exc
+            raise SandboxNotFound(_gone_msg(handle)) from exc
         # Stream closed before the final frame ⇒ the pod died mid-exec.
         logger.warning("sandbox-http: exec sandbox %s stream closed before final frame", handle.id)
-        raise SandboxNotFound(handle.id)
+        raise SandboxNotFound(_gone_msg(handle))
 
     async def upload(self, handle: SandboxHandle, data: bytes, remote_path: str) -> None:
         await self._io_request(handle, "PUT", "/file", params={"path": remote_path}, content=data)

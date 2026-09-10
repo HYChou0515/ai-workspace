@@ -232,6 +232,7 @@ class InvestigationRegistry:
         *,
         tools: dict[str, str] | None = None,
         on_progress: Callable[[int, int], None] | None = None,
+        force: bool = False,
     ) -> SandboxHandle:
         # Lock so concurrent callers see a single Sandbox.create — without
         # this, N parallel POSTs to the same investigation would each spin
@@ -248,8 +249,15 @@ class InvestigationRegistry:
             # execs a stale handle. Local shared-vol (address None) keeps the
             # create-once behaviour — its dir liveness is handled by #345 and
             # probing every wake would only churn.
-            if session.handle is None or (
-                self.address is not None and not await self._alive(session.handle)
+            # `force` is a caller that has just BEEN TOLD the sandbox is gone —
+            # an exec that raised `SandboxNotFound` (#797). The probe below is
+            # deliberately http-only (probing every local wake would churn), so
+            # without this a local session keeps handing back the handle whose
+            # directory `kill_idle` has already rmtree'd.
+            if (
+                force
+                or session.handle is None
+                or (self.address is not None and not await self._alive(session.handle))
             ):
                 logger.debug(
                     "registry: ensure_handle acquiring sandbox for item %s (no live handle cached)",

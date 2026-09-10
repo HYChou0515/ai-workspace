@@ -56,6 +56,28 @@ export function TurnStatus({
   if (active && startRef.current === null) startRef.current = Date.now();
   if (!active) startRef.current = null;
 
+  // The CURRENT wait, which is not the turn. A turn hands off, waits for a first
+  // token, thinks, answers, runs a tool, and waits again — and `statusText`
+  // describes the wait it is IN. Anchored on the turn, its stopwatch already
+  // read minutes by the second wait, so every escalation fired the instant the
+  // phase was entered and never came back: a fresh wait announced itself as a
+  // long one. The compaction clock below already reasons this way about itself
+  // ("folding it into the turn's would lend the turn its elapsed time"); this is
+  // the same rule applied to the phase it was written next to.
+  //
+  // The turn clock stays for everything else — `· Ns`, the abandoned detector
+  // and the retry offer all ask "how long have I been waiting for this ANSWER",
+  // which a per-phase reset would hide.
+  const phaseRef = useRef<TurnPhase | null>(null);
+  const waitStartRef = useRef<number | null>(null);
+  if (phaseRef.current !== phase) {
+    phaseRef.current = phase;
+    waitStartRef.current = active ? Date.now() : null;
+  }
+  const waitSec = waitStartRef.current
+    ? Math.floor((Date.now() - waitStartRef.current) / 1000)
+    : 0;
+
   // #739: the compaction runs BEFORE the turn and gets its own clock. Folding
   // it into the turn's would lend the turn its elapsed time whenever the two
   // events land in one render — a two-second-old turn presenting as ten minutes
@@ -225,7 +247,7 @@ export function TurnStatus({
   const switched = phase === "waiting" && log.failover != null;
   return (
     <div className={className} style={box}>
-      {switched ? "模型忙線,已自動切換,稍候…" : statusText(phase, elapsedSec)}
+      {switched ? "模型忙線,已自動切換,稍候…" : statusText(phase, waitSec)}
       {/* #748: a reasoning model can sit in `thinking` for minutes, and the
           backend pushes counts throughout it — they simply had nowhere to go.
           They are appended HERE rather than in a branch of their own, so this
@@ -260,9 +282,16 @@ const retryBtn: React.CSSProperties = {
 function statusText(phase: TurnPhase, sec: number): string {
   if (phase === "prep") return sec > 4 ? "還在準備,稍等一下" : "準備中…";
   if (phase === "thinking") return "思考中…";
-  // waiting — the long blank gap; escalate honest reassurance with elapsed time
-  // (never claim content volume or guess a cause; "busy" is true regardless).
+  // waiting — the long blank gap; escalate honest reassurance with the time
+  // spent IN THIS WAIT (never claim content volume or guess a cause). "busy"
+  // was chosen as a cause-free filler, but 「模型忙碌中」 does not read as one in
+  // Chinese: it reads as a diagnosis, and it was wrong on a deployment whose
+  // models were idle and whose real problem was elsewhere.
   if (sec > 40) return "這次比較久,可隨時按 Stop 重試";
-  if (sec > 15) return "模型忙碌中,請再稍候";
+  // NOT "模型忙碌中". This function is handed a stopwatch and nothing else — it
+  // never asked the model anything, and on a deployment whose models are idle
+  // it was asserting the one cause the operator had already ruled out. It says
+  // the condition it can actually see: the wait is on, and no output has begun.
+  if (sec > 15) return "還在等模型回應,尚未開始輸出";
   return "等候模型回應…";
 }

@@ -37,7 +37,7 @@ from ..agent.output_cap import cap_tool_outputs
 from ..agent.plot_review import run_review
 from ..agent.shown_files import declare_shown_files, describe_for_display
 from ..agent.tools import _exec_result_text
-from ..sandbox.protocol import ExecResult, SandboxHandle
+from ..sandbox.protocol import ExecResult, SandboxHandle, SandboxNotFound
 from .artifact import parse_env_declaration
 
 logger = logging.getLogger(__name__)
@@ -420,12 +420,25 @@ async def _exec_tool(
     """
     assert actx.sandbox is not None  # a provisioned tool implies a sandbox
     env = _tool_env(actx.user_env)
-    return await actx.sandbox.exec(
-        handle,
-        [f"{pkg.install_dir}/launch", cmd_name, args_json or "{}"],
-        on_output=actx.on_exec_output,
-        env=env or None,
-    )
+    argv = [f"{pkg.install_dir}/launch", cmd_name, args_json or "{}"]
+    try:
+        return await actx.sandbox.exec(handle, argv, on_output=actx.on_exec_output, env=env or None)
+    except SandboxNotFound:
+        # #797: this is the funnel EVERY third-party dispatch goes through — the
+        # agent's tool call, the #285 chart re-render, the WUI's `callTool` — and
+        # it holds a handle acquired earlier in the turn, so a reap between then
+        # and now lands here exactly as it does on the shell `exec`. Recovering
+        # one and not the other means a turn survives its own commands and dies
+        # on the first provisioned tool.
+        #
+        # The bundle has to be re-mounted, which is what `rebuild=True` asks the
+        # wake hook for; `pkg.install_dir` then resolves in the fresh sandbox.
+        logger.warning(
+            "tooling: sandbox was gone when dispatching %s — rebuilding and retrying once",
+            cmd_name,
+        )
+        fresh = await actx.ensure_sandbox(rebuild=True)
+        return await actx.sandbox.exec(fresh, argv, on_output=actx.on_exec_output, env=env or None)
 
 
 def _tool_env(user_env: dict[str, str]) -> dict[str, str]:

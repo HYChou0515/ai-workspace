@@ -19,6 +19,8 @@ from workspace_app.api import (
     ToolStart,
     create_app,
 )
+from workspace_app.api.turns import _BUSY_MESSAGE, _error_message, _terminal_error
+from workspace_app.failover.core import AllProvidersFailed
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.resources import Conversation, make_spec
 from workspace_app.sandbox.mock import MockSandbox
@@ -123,3 +125,64 @@ def test_cancelled_turn_persists_a_trace():
     produced = captured[0]
     assert [m.role for m in produced] == ["assistant", "error"]
     assert produced[-1].error_kind == "cancelled"
+
+
+class _Throttled(Exception):
+    """What a provider raises when it rate-limits us — `is_rate_limited` reads
+    exactly this attribute, anywhere in the cause chain."""
+
+    status_code = 429
+
+
+def _chained(cause: BaseException) -> AllProvidersFailed:
+    """`failover/model.py` raises `AllProvidersFailed ... from (rate_limited or
+    last)` ON PURPOSE — its comment says the turn loop upstream tells "rate
+    limited" from "broken" by walking exactly this chain."""
+    exc = AllProvidersFailed("all agent models failed or were cooling")
+    exc.__cause__ = cause
+    return exc
+
+
+def test_a_throttled_chain_is_not_reported_as_every_model_being_busy():
+    """`_terminal_error` walked the chain only far enough to ask "was this the
+    failover chain?", then said the same sentence either way — "All available
+    models are busy right now" — which is a different problem with a different
+    remedy, and says it in English in a product that speaks zh-TW.
+
+    The 429 is deliberately chained in; reading one more link is all it takes."""
+    err = _terminal_error(_chained(_Throttled("429 Too Many Requests")))
+
+    assert err.kind == "rate_limited"
+    # Banning the WORD would be the wrong guard — the new copy says "it is not a
+    # busy model" on purpose. What must not survive is the old sentence.
+    assert err.message != _BUSY_MESSAGE
+    assert "rate-limit" in err.message.lower()
+
+
+def test_a_chain_that_really_was_busy_still_says_so():
+    """The other side, so the fix is a DISTINCTION and not a rename: a chain
+    exhausted without any 429 in it is still the busy case."""
+    err = _terminal_error(_chained(RuntimeError("connection reset")))
+
+    assert err.kind == "all_busy"
+
+
+def test_the_kind_reaches_the_persisted_message_the_fe_words_from():
+    """The distinction is worthless if it stops at the event. The FE words a
+    stored failure from `error_kind` (`agentLog.persistedErrorText`), so that is
+    the exit the kind has to reach — and a mutation that dropped this line
+    reddened NOTHING until this test existed, which is the whole reason it does.
+    """
+    assert _error_message(_terminal_error(_chained(_Throttled()))).error_kind == "rate_limited"
+    assert _error_message(_terminal_error(_chained(RuntimeError("x")))).error_kind == "all_busy"
+    # Anything else keeps the value every terminal failure carried before.
+    assert _error_message(_terminal_error(ValueError("x"))).error_kind == "error"
+
+
+def test_an_ordinary_failure_is_neither():
+    """Nothing else is claimed. A failure that never reached the failover chain
+    keeps the raw class+message an operator needs."""
+    err = _terminal_error(ValueError("something else entirely"))
+
+    assert err.kind is None
+    assert "ValueError" in err.message

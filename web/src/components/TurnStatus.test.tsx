@@ -84,9 +84,51 @@ describe("TurnStatus", () => {
     try {
       render(<TurnStatus log={streaming({ metrics: up })} />);
       act(() => void vi.advanceTimersByTime(16_000));
-      expect(screen.getByText(/模型忙碌中/)).toBeInTheDocument();
+      // Not "模型忙碌中": this line knows a stopwatch and nothing else.
+      expect(screen.getByText(/尚未開始輸出/)).toBeInTheDocument();
       act(() => void vi.advanceTimersByTime(30_000)); // 46s total
       expect(screen.getByText(/可隨時按 Stop/)).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("restarts the wait clock when the turn moves on to a new phase", () => {
+    // A turn is not one wait. It hands off, waits for a first token, thinks,
+    // answers, runs a tool, and waits again — and this line describes THE
+    // CURRENT WAIT. It was anchored on when the turn started streaming, so by
+    // the second wait the stopwatch already read minutes: the escalations fired
+    // instantly and never came back. The compaction clock beside it got this
+    // right, for the reason its own comment gives — folding it into the turn's
+    // would lend it the turn's elapsed time.
+    vi.useFakeTimers();
+    try {
+      const { rerender } = render(<TurnStatus log={streaming()} />); // prep
+      act(() => void vi.advanceTimersByTime(20_000));
+      expect(screen.getByText(/還在準備/)).toBeInTheDocument();
+
+      rerender(<TurnStatus log={streaming({ metrics: up })} />); // → waiting
+      act(() => void vi.advanceTimersByTime(1_000));
+
+      expect(screen.getByText(/等候模型回應/)).toBeInTheDocument();
+      expect(screen.queryByText(/尚未開始輸出/)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still reports the whole turn's elapsed beside the phase line", () => {
+    // The reset is for the WAIT copy only. The `· Ns` figure answers a
+    // different question — how long have I been waiting for this answer overall
+    // — and resetting it would hide exactly what a person is trying to judge.
+    vi.useFakeTimers();
+    try {
+      const { rerender } = render(<TurnStatus log={streaming()} />);
+      act(() => void vi.advanceTimersByTime(20_000));
+      rerender(<TurnStatus log={streaming({ metrics: up })} />);
+      act(() => void vi.advanceTimersByTime(1_000));
+
+      expect(screen.getByText(/21s/)).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }

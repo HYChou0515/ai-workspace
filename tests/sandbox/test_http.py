@@ -249,6 +249,35 @@ async def http_sandbox():
         yield HttpSandbox(base_url=_ADVERTISE, client=client)
 
 
+@pytest.fixture
+async def draining_host():
+    """A host that has begun terminating. `rollout restart` puts every host pod
+    through this state, and the app keeps sending to one until kubernetes drops
+    it from the endpoints — so this is the common path, not a race."""
+    app = FastAPI()
+
+    @app.post("/sandboxes")
+    async def _create() -> JSONResponse:
+        return JSONResponse(status_code=503, content={"error": "draining"})
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app)) as client:
+        yield HttpSandbox(base_url=_ADVERTISE, client=client)
+
+
+async def test_create_reads_a_draining_host_as_busy(draining_host: HttpSandbox):
+    """`draining` means "alive, but ask another pod" — the most retryable signal
+    the wire has. Nothing in the app knew the word, so `raise_for_status()` made
+    it a bare `HTTPStatusError`: not `SandboxBusy`, not `SandboxNotFound`, and
+    therefore invisible to the two handlers that would have turned it into a
+    503 + `Retry-After`. During a rollout that is every rebuild at once, so the
+    one moment the system most needs to back off is the one it 500s through.
+
+    `SandboxBusy` is the honest mapping: the host is up, it is simply refusing
+    NEW sandboxes while it terminates."""
+    with pytest.raises(SandboxBusy):
+        await draining_host.create(SandboxSpec())
+
+
 async def test_create_returns_unique_handles(http_sandbox: HttpSandbox):
     h1 = await http_sandbox.create(SandboxSpec())
     h2 = await http_sandbox.create(SandboxSpec())
@@ -510,6 +539,53 @@ async def test_exec_unknown_handle_raises_via_error_frame(http_sandbox: HttpSand
     await http_sandbox.kill(h)
     with pytest.raises(SandboxNotFound):
         await http_sandbox.exec(h, ["echo", "hi"])
+
+
+async def test_a_gone_sandbox_says_so_rather_than_handing_back_its_handle(
+    http_sandbox: HttpSandbox,
+):
+    """The message a sandbox failure carries is read by two audiences that were
+    both being failed.
+
+    It reaches the MODEL: the agents SDK wraps a tool exception as "An error
+    occurred while running the tool. Please try again. Error: <str(exc)>", and
+    every raise site passed `handle.id` — a base64 blob. The model was handed
+    something it cannot act on and told to try again, which it did, against the
+    same dead sandbox.
+
+    And `handle.id` decodes to `{"u": <pod url>, "r": <remote id>}`, so the
+    cluster's internal address was going into the agent's context and the saved
+    transcript. The operator's need for the full handle is met by the log, which
+    is not the model's input."""
+    h = await http_sandbox.create(SandboxSpec())
+    await http_sandbox.kill(h)
+
+    with pytest.raises(SandboxNotFound) as caught:
+        await http_sandbox.exec(h, ["echo", "hi"])
+
+    message = str(caught.value)
+    assert h.id not in message, "the opaque handle must not BE the message"
+    assert _ADVERTISE not in message, "the pod url must not reach the model"
+    assert "sandbox" in message.lower(), "it must say what kind of thing is gone"
+
+
+async def test_a_busy_sandbox_says_so_rather_than_handing_back_its_handle():
+    """The same rule on the timeout path, which is a different raise site — a
+    fix that reaches only the one the user reported is half a fix."""
+
+    def _too_slow(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("no answer", request=request)
+
+    handle = SandboxHandle(id=_encode_handle(_ADVERTISE, "r-1"))
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_too_slow)) as client:
+        sb = HttpSandbox(base_url=_ADVERTISE, client=client)
+        with pytest.raises(SandboxBusy) as caught:
+            await sb.exec(handle, ["echo", "hi"])
+
+    message = str(caught.value)
+    assert handle.id not in message
+    assert _ADVERTISE not in message
+    assert "sandbox" in message.lower()
 
 
 async def test_exec_output_without_sink_is_dropped(http_sandbox: HttpSandbox):
