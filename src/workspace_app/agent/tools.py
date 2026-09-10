@@ -1504,6 +1504,18 @@ def _infer_modules_summary(rows: list[tuple[str, str, str]], out: str) -> str:
     )
 
 
+def _no_citations(ctx: RunContextWrapper[AgentToolContext], tool: str) -> None:
+    """Book an EMPTY citation bucket for a call that is ending early.
+
+    `chat_send` pairs buckets with tool messages BY POSITION, and a refused or
+    failed call still produces a tool message — so a path that returns without
+    booking one shifts every later call's citations onto the wrong message and
+    leaves the real one with none. `ask_knowledge_base` has always done this on
+    each of its early returns; `infer_modules` booked only on success, and the
+    authorization gate added a third path that did not."""
+    ctx.context.subagent_citations.setdefault(tool, []).append([])
+
+
 async def infer_modules_impl(
     ctx: RunContextWrapper[AgentToolContext],
     path: str,
@@ -1531,15 +1543,23 @@ async def infer_modules_impl(
     classifier towards modules physically relevant to the defect when a
     step is ambiguous.
     """
-    if (denied := authorize_tool(ctx.context, "edit_content")) is not None:
-        return denied
+    # BOTH verbs. `path` is a read channel — `_read_step_names` falls back to "every
+    # non-empty line is a step", and each step's sub-agent streams its queries and
+    # reasoning back through `on_exec_output` — so gating only the write would hand
+    # a preset with no reader a reader.
+    for verb in ("read_content", "edit_content"):
+        if (denied := authorize_tool(ctx.context, verb)) is not None:
+            _no_citations(ctx, "infer_modules")
+            return denied
     fs, inv = _workspace(ctx)
     try:
         data = await fs.read(inv, path)
     except FileNotFound:
+        _no_citations(ctx, "infer_modules")
         return f"error: file not found: {rel_path(path)}"
     steps = _read_step_names(data.decode("utf-8", errors="replace"), column)
     if not steps:
+        _no_citations(ctx, "infer_modules")
         return f"error: no step names found in {rel_path(path)} (looked for column {column!r})"
 
     run = ctx.context.run_subagent

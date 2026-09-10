@@ -123,7 +123,9 @@ async def test_show_file_exercises_the_read_content_verb():
     the agent is not a way around the speaker's own grants (#309)."""
     from workspace_app.agent.tool_authz import TOOL_VERBS
 
-    assert TOOL_VERBS["show_file"] == "read_content"
+    # A tuple: the table carries every verb a tool exercises, because a tool that
+    # reads AND writes has to name both or the ceiling under-describes it.
+    assert TOOL_VERBS["show_file"] == ("read_content",)
 
 
 async def test_show_file_keeps_the_declaration_out_of_what_the_model_reads():

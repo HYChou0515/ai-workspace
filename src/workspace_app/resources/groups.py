@@ -64,7 +64,8 @@ def groups_of(spec: SpecStar, user: str) -> frozenset[str]:
     today, but `.contains` degrades to a substring ``LIKE`` on a SQL backend the
     moment ``members`` loses its list registration — and "" is a substring of
     every member, so the one caller with no speaker would collect every group.
-    The guard lives here rather than in each caller because there are twelve."""
+    The guard lives here rather than in each caller: every caller resolving a
+    principal gets it, instead of the one that happened to think of it."""
     if not user:
         return frozenset()
     rm = spec.get_resource_manager(Group)

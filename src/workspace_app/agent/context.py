@@ -608,16 +608,6 @@ class AgentToolContext:
     #: ITEM instead, through `prepare_env_via`; see it above.
     _wake: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False, compare=False)
 
-    @property
-    def speaker_groups_resolved(self) -> bool:
-        """Whether `speaker_groups()` has actually been asked on this context.
-
-        The refusal log needs to tell "this speaker is in no groups" apart from
-        "nobody asked", and every proxy for that is wrong somewhere: keying off
-        the verb's ceiling missed the turn with no speaker at all. This is the
-        property itself."""
-        return self._speaker_groups is not None
-
     def speaker_groups(self) -> frozenset[str]:
         """Whose groups this turn acts with — see `_speaker_groups`. Callers
         must already hold a `spec`; the authorization funnel checks that first

@@ -396,8 +396,63 @@ async def test_the_write_verb_is_the_bar_for_the_two_tools_that_write():
     assert "don't have permission" in str(await infer_modules_impl(ctx, "/steps.csv"))
 
 
-def test_the_two_write_tools_declare_the_write_verb():
-    """And the ceiling agrees: a preset granting either implies `edit_content`,
-    so the tool is not registered into a ceiling that can only refuse it."""
+async def test_the_read_verb_is_also_the_bar_for_the_tool_that_reads():
+    """The mirror case, and the one a single `edit_content` check missed.
+    `infer_modules` is a READ channel however its output is described: a file
+    without the named column is split into one "step" per line, each step goes
+    to a sub-agent, and `on_exec_output` streams that sub-agent's queries and
+    reasoning back into the parent turn. A speaker who may write but not read
+    must not get that."""
+    spec, iid = _spec_with_item(
+        Permission(
+            visibility="restricted",
+            read_meta=["user:alice"],
+            converse=["user:alice"],
+            edit_content=["user:alice"],
+        )
+    )
+    ctx = _ctx(spec, iid, acting_user="alice")
+    assert "don't have permission" in await read_file_impl(ctx, "/a.txt")
+    assert "don't have permission" not in await write_file_impl(ctx, "/a.txt", "hi")
+    assert "don't have permission" in str(await infer_modules_impl(ctx, "/steps.csv"))
+
+
+def test_the_table_carries_every_verb_a_tool_exercises():
+    """`TOOL_VERBS` is what the ceiling is derived from, so a tool that reads AND
+    writes has to name both — otherwise a preset granting `infer_modules` and no
+    reader gets a ceiling of `{edit_content}` while holding a tool that reads."""
     assert ceiling_from_tools(["save_subagent"]) == frozenset({"edit_content"})
-    assert ceiling_from_tools(["infer_modules"]) == frozenset({"edit_content"})
+    assert ceiling_from_tools(["infer_modules"]) == frozenset({"read_content", "edit_content"})
+
+
+async def test_a_refused_call_still_books_its_citation_bucket():
+    """`chat_send` pairs citation buckets with tool messages BY POSITION, and a
+    refused call still produces a tool message. A gate that returns without
+    booking an empty bucket shifts every later call's citations onto the wrong
+    message — so the authorization guard owes one exactly like the two failure
+    paths beside it."""
+    spec, iid = _spec_with_item(
+        Permission(visibility="restricted", read_meta=["user:alice"], converse=["user:alice"])
+    )
+    ctx = _ctx(spec, iid, acting_user="alice")
+    assert "don't have permission" in str(await infer_modules_impl(ctx, "/steps.csv"))
+    assert ctx.context.subagent_citations["infer_modules"] == [[]]
+
+
+def test_a_later_ceiling_refusal_does_not_report_an_earlier_calls_group_count(caplog):
+    """One context, two calls. The first resolves the speaker's memberships; the
+    second is refused by the CEILING, where the actor carries none. Keying the
+    field off "were they ever resolved on this context" reported the FIRST
+    call's count against the second call's actor — the memo outlives the
+    decision, so it is not the same question."""
+    spec, iid, _ = _group_granted_item(
+        {"read_meta": ["user:alice"], "read_content": ["group:{gid}"]}
+    )
+    ctx = _ctx(
+        spec,
+        iid,
+        acting_user="alice",
+        agent_config=AgentConfig(name="x", allowed_tools=["read_file"]),
+    ).context
+    assert authorize_tool(ctx, "read_content") is None  # resolves and memoises the groups
+    assert "speaker groups=n/a" in _one_warning(caplog, ctx, "execute")

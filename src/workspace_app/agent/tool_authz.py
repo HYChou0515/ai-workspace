@@ -13,6 +13,10 @@ drift. See ``docs/plan-permissions.md`` (#309).
 ``save_workflow``, ``save_skill``, ``read_skill``, ``update_todos`` and the
 entity tools still reach the workspace without passing here, as does every
 tool-package command (``tooling/registry.py`` runs code in the item's sandbox).
+``mention_user`` is outside it too and is the one that does not look like it:
+it writes a Notification carrying the item's id AND TITLE to arbitrary user
+ids, so it discloses a name to people who may not read the item, on nothing
+more than the ``converse`` entry gate.
 
 The sentence above names the TABLE rather than a category because claiming the
 category is exactly what let gaps live: ``list_files`` and ``exists`` were listed
@@ -43,33 +47,41 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# The permission verb each item-level tool exercises. A tool absent here is not an
-# item-verb tool: kb tools (their cross-collection read is checked per #305),
-# mention/lookup (read-only directory), wiki/skill (their own contexts).
-TOOL_VERBS: dict[str, Verb] = {
-    "read_file": "read_content",
-    "read_image": "read_content",
-    "show_file": "read_content",
-    "list_files": "read_content",
-    "exists": "read_content",
-    "write_file": "edit_content",
-    "edit_file": "edit_content",
-    "delete_file": "edit_content",
-    "exec": "execute",
-    "make_deck": "execute",
+# The permission verbs each item-level tool exercises — ALL of them, because a
+# tool that reads and writes needs both checked and both in the ceiling. A tool
+# absent here is not an item-verb tool: kb tools (their cross-collection read is
+# checked per #305), `lookup_user` (a read-only directory), wiki/skill (their own
+# contexts). `mention_user` is absent and should not be read as safe: it WRITES a
+# Notification carrying the item's id and title to arbitrary user ids, on the
+# `converse` entry gate — see the module docstring.
+TOOL_VERBS: dict[str, tuple[Verb, ...]] = {
+    "read_file": ("read_content",),
+    "read_image": ("read_content",),
+    "show_file": ("read_content",),
+    "list_files": ("read_content",),
+    "exists": ("read_content",),
+    "write_file": ("edit_content",),
+    "edit_file": ("edit_content",),
+    "delete_file": ("edit_content",),
+    "exec": ("execute",),
+    "make_deck": ("execute",),
     # It writes `.agent/<name>/AGENT.md` into the item's workspace, and that file
     # is a SYSTEM PROMPT every later turn loads and any collaborator's
     # `run_agent` executes. The chat entry gate is `converse`, so leaving it
     # ungated let anyone who could talk to an item leave a standing instruction
     # in it — a worse version of the `save_skill` hole. Granted by `rca`, `pm`
     # and `playground`; not by `_template` or `topic-hub`.
-    "save_subagent": "edit_content",
-    # It reads the file named by `path` and CREATES-then-DELETES-then-CREATES the
-    # one named by `out`, both model-chosen. `edit_content` rather than a pair of
-    # checks: its only output channel IS that file, so a speaker who may not write
-    # learns nothing from it, and asking for two verbs would refuse a preset that
-    # grants this tool and no other reader (#537).
-    "infer_modules": "edit_content",
+    "save_subagent": ("edit_content",),
+    # BOTH, and the first version of this entry had only `edit_content` on the
+    # argument that "its only output channel is the file it writes". That was the
+    # wrong question. `_read_step_names` treats every non-empty line of a
+    # non-matching file as a step, each step is handed to a sub-agent, and
+    # `on_exec_output` streams that sub-agent's queries and reasoning back into
+    # the parent turn — so `path` is a read channel whatever `out` says. Its two
+    # distinct failure messages are also an existence oracle, which is the very
+    # thing `exists` is gated for. A preset holding this tool and no reader is
+    # exactly the preset that must not be handed a reader for free.
+    "infer_modules": ("read_content", "edit_content"),
 }
 
 
@@ -95,15 +107,13 @@ LEGACY_TOOL_RENAMES: dict[str, str] = {"ls": "list_files"}
 
 
 def ceiling_from_tools(allowed: list[str] | None) -> frozenset[Verb]:
-    """The AI's verb ceiling implied by the preset's allowed TOOLS. ``None`` ≡ the
-    default workspace toolset ⇒ every item verb. ``change_permission`` /
-    ``use_terminal`` are never tool verbs, so they can never enter the ceiling (and
-    are hard-barred in ``authorize`` regardless)."""
-    if allowed is None:
-        return frozenset(TOOL_VERBS.values())
-    return frozenset(
-        TOOL_VERBS[name] for n in allowed if (name := LEGACY_TOOL_RENAMES.get(n, n)) in TOOL_VERBS
-    )
+    """The AI's verb ceiling implied by the preset's allowed TOOLS — the union of
+    every verb each granted tool exercises. ``None`` ≡ the default workspace
+    toolset ⇒ every item verb. ``change_permission`` / ``use_terminal`` are never
+    tool verbs, so they can never enter the ceiling (and are hard-barred in
+    ``authorize`` regardless)."""
+    names = TOOL_VERBS if allowed is None else [LEGACY_TOOL_RENAMES.get(n, n) for n in allowed]
+    return frozenset(v for n in names if n in TOOL_VERBS for v in TOOL_VERBS[n])
 
 
 def authorize_tool(context: AgentToolContext, verb: Verb) -> str | None:
@@ -166,19 +176,29 @@ def authorize_tool(context: AgentToolContext, verb: Verb) -> str | None:
         "authorize_tool: %s denied for user %s on %s item %s "
         "(owner=%s, visibility=%s, speaker groups=%s, in ai ceiling=%s)",
         verb,
-        context.acting_user,  # the speaker, not an actor that gets rebound below
+        # Equal to `actor.user_id` on every path today (both actors are built
+        # from it); read from the speaker so it stays the speaker if one is ever
+        # built for somebody else.
+        context.acting_user,
         context.app_slug,
         context.investigation_id,
         created_by,
         # `permission is None` ≡ public, which DOES reach a refusal — through the
         # ceiling, on an item nobody has restricted.
         "public" if item.permission is None else item.permission.visibility,
-        # `n/a` unless the memberships were actually looked up. A count read off
-        # an actor built without them says "this user is in no groups" — the one
-        # wrong conclusion for the symptom this line exists to diagnose — and
-        # `verb in ceiling` was a PROXY for "did we look", which the empty-speaker
-        # path walked straight past. The context is what knows.
-        len(actor.groups) if context.speaker_groups_resolved else "n/a",
+        # Read off the actor THIS decision used: it carries groups exactly when
+        # `verb in ceiling`, so the count is never a number measured on a
+        # different object. A memo-backed "were they ever resolved?" is not the
+        # same question — it stays true for the rest of the turn, so a later
+        # ceiling refusal on the same context reported the earlier call's
+        # membership count against an actor that had none.
+        #
+        # An empty speaker legitimately reports 0: `groups_of` answers that
+        # without touching the store, and nobody-behind-the-turn genuinely has no
+        # memberships. `n/a` means the question was never put — a backstop today,
+        # since a registered built-in's verb is always in the ceiling it was
+        # derived from.
+        len(actor.groups) if verb in ceiling else "n/a",
         verb in ceiling,
     )
     # One sentence, because the code checked one thing. The ceiling case wanted
