@@ -450,7 +450,55 @@ async def test_running_commands_is_not_a_way_to_read_and_write_through_make_deck
     # The `execute` grant really is there — asked of the funnel, not of
     # `exec_impl`, which would need a sandbox this context has no reason to hold.
     assert authorize_tool(ctx.context, "execute") is None
-    assert "don't have permission" in await make_deck_impl(ctx, "a deck")
+    assert "read content" in await make_deck_impl(ctx, "a deck")
+
+    # And the write half, named separately: a test that only asserts "refused"
+    # passes when the loop checks any ONE of the three.
+    spec, iid = _spec_with_item(
+        Permission(
+            visibility="restricted",
+            read_meta=["user:alice"],
+            converse=["user:alice"],
+            execute=["user:alice"],
+            read_content=["user:alice"],
+        )
+    )
+    assert "edit content" in await make_deck_impl(_ctx(spec, iid, acting_user="alice"), "a deck")
+
+
+async def test_a_rejected_write_does_not_hand_back_a_file_the_speaker_may_not_read():
+    """`fs.create` returns the existing bytes when the path is taken and `fs.edit`
+    returns the whole file when `old_string` misses — writing nothing. So
+    `edit_file(path, "zzz-nope", "")` was a pure READ primitive for a speaker
+    holding `edit_content` and not `read_content`, on a tool every App grants,
+    with the three real readers refusing in the same turn.
+
+    The write itself stays allowed: the verb is exercised only on the conflict
+    branch, so the gate is on the echo, not on the tool."""
+    spec, iid = _spec_with_item(
+        Permission(
+            visibility="restricted",
+            read_meta=["user:alice"],
+            converse=["user:alice"],
+            edit_content=["user:alice"],
+        )
+    )
+    ctx = _ctx(spec, iid, acting_user="alice")
+    secret = "BOARD SALARY TABLE\nalice must not read this\n"
+    await ctx.context.files.write(iid, "/secret.md", secret.encode())
+
+    assert "don't have permission" in await read_file_impl(ctx, "/secret.md")  # the control
+
+    taken = await write_file_impl(ctx, "/secret.md", "x")
+    assert "already exists" in taken  # it still explains what went wrong
+    missed = await edit_file_impl(ctx, "/secret.md", "zzz-nope", "")
+    assert "`old_string` was not found" in missed
+    for answer in (taken, missed):
+        assert "BOARD SALARY" not in answer
+        assert "must not read" not in answer
+
+    # …and an ordinary write, which leaks nothing, is untouched.
+    assert "wrote" in await write_file_impl(ctx, "/fresh.md", "hi")
 
 
 async def test_every_early_exit_books_exactly_one_citation_bucket():

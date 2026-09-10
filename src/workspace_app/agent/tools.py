@@ -471,6 +471,21 @@ def _conflict_echo(ctx: RunContextWrapper[AgentToolContext], path: str, current:
     failed. Uncapped it was the widest hole in the toolset — the size of the
     echo is whatever the user uploaded, and a missed match on a big file is an
     everyday event."""
+    # The echo IS a read, and it is the only part of these two tools that is one:
+    # `fs.create` hands back the existing bytes when the path is taken, and
+    # `fs.edit` hands back the whole file when `old_string` misses — writing
+    # nothing. So `edit_file(path, old_string="zzz-nope", new_string="")` was a
+    # pure read primitive for a speaker holding `edit_content` and NOT
+    # `read_content`, a combination the share dialog's per-verb Custom mode can
+    # produce, on a tool every App grants.
+    #
+    # Gated HERE rather than by widening `TOOL_VERBS`: the verb is exercised
+    # CONDITIONALLY — only on the conflict branch — so demanding `read_content`
+    # up front would refuse an add-only collaborator every ordinary write, for a
+    # path that leaks nothing. The rejection still happens, and still says what
+    # went wrong; what it stops saying is the content.
+    if authorize_tool(ctx.context, "read_content") is not None:
+        return "(you do not have permission to see this file's contents)"
     return truncate_middle(
         current,
         ctx.context.exec_output_max_chars,
@@ -1508,16 +1523,23 @@ def _infer_modules_summary(rows: list[tuple[str, str, str]], out: str) -> str:
     )
 
 
-def _no_citations(ctx: RunContextWrapper[AgentToolContext], tool: str) -> None:
-    """Book an EMPTY citation bucket for a call that is ending early.
+def _book_citations(ctx: RunContextWrapper[AgentToolContext], tool: str) -> int:
+    """Reserve this call's citation slot NOW, empty, and return its index.
 
-    `chat_send` pairs buckets with tool messages BY POSITION, and a refused or
-    failed call still produces a tool message — so a path that returns without
-    booking one shifts every later call's citations onto the wrong message and
-    leaves the real one with none. `ask_knowledge_base` has always done this on
-    each of its early returns; `infer_modules` booked only on success, and the
-    authorization gate added a third path that did not."""
-    ctx.context.subagent_citations.setdefault(tool, []).append([])
+    `chat_send` pairs buckets with tool messages BY POSITION, and every way a
+    tool call can end — a refusal, a returned error, a `WorkspaceFull` the
+    quota guard converts to a string, an exception the SDK converts to one —
+    still produces a tool message. So a bucket booked per remembered exit is an
+    enumeration, and this one was short four separate times (the authz gate,
+    two returned errors, the quota path, then a `csv.Error` and an unwired
+    `run_subagent`). Booking up front makes it structural: whatever happens
+    after this line, the call owns exactly one slot.
+
+    The INDEX, not `[-1]`: two calls in one assistant message run concurrently,
+    so the last slot is not necessarily this call's."""
+    bucket = ctx.context.subagent_citations.setdefault(tool, [])
+    bucket.append([])
+    return len(bucket) - 1
 
 
 async def infer_modules_impl(
@@ -1547,23 +1569,23 @@ async def infer_modules_impl(
     classifier towards modules physically relevant to the defect when a
     step is ambiguous.
     """
+    # First statement of the body, so every exit past it — including the ones that
+    # raise and reach the model as the SDK's error string — owns exactly one slot.
+    slot = _book_citations(ctx, "infer_modules")
     # BOTH verbs. `path` is a read channel — `_read_step_names` falls back to "every
     # non-empty line is a step", and each step's sub-agent streams its queries and
     # reasoning back through `on_exec_output` — so gating only the write would hand
     # a preset with no reader a reader.
     for verb in ("read_content", "edit_content"):
         if (denied := authorize_tool(ctx.context, verb)) is not None:
-            _no_citations(ctx, "infer_modules")
             return denied
     fs, inv = _workspace(ctx)
     try:
         data = await fs.read(inv, path)
     except FileNotFound:
-        _no_citations(ctx, "infer_modules")
         return f"error: file not found: {rel_path(path)}"
     steps = _read_step_names(data.decode("utf-8", errors="replace"), column)
     if not steps:
-        _no_citations(ctx, "infer_modules")
         return f"error: no step names found in {rel_path(path)} (looked for column {column!r})"
 
     run = ctx.context.run_subagent
@@ -1592,11 +1614,7 @@ async def infer_modules_impl(
         rows.append((step, module, reason))
         all_cites.extend(cites)
 
-    # Booked BEFORE the writes. `_guard_workspace_full` turns a `WorkspaceFull`
-    # into a returned string, so the call ends normally and still produces a tool
-    # message — a fourth exit that owed a bucket and, booking only after the
-    # write, did not have one. Every path from here on has exactly one.
-    ctx.context.subagent_citations.setdefault("infer_modules", []).append(all_cites)
+    ctx.context.subagent_citations["infer_modules"][slot] = all_cites
 
     csv_bytes = _module_map_csv(rows)
     # Overwrite: re-running a build replaces the map. create() refuses an

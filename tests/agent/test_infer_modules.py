@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from agents import RunContextWrapper
 
 from workspace_app.agent.context import AgentToolContext
@@ -226,3 +227,26 @@ async def test_a_write_the_quota_refuses_still_books_exactly_one_citation_bucket
 
     assert "full" in out  # the guard answered, rather than raising
     assert len(ctx.subagent_citations["infer_modules"]) == 1
+
+
+async def test_a_call_that_raises_still_owns_exactly_one_citation_slot():
+    """Booking per remembered exit was an enumeration, and it was short four
+    times. These two escape as EXCEPTIONS — the SDK turns them into a tool
+    message just the same, so the by-position pairing still consumes a slot.
+    Booking up front is what makes that structural instead of remembered."""
+
+    async def run(_name, _payload, _sink, _origin):
+        return '{"module": "M1", "reason": "r"}', []
+
+    # `run_subagent` unwired: the impl asserts on it, after the reads.
+    ctx, _files, _inv = await _ctx_with_file(b"step_name\nA\n", None)
+    with pytest.raises(AssertionError):
+        await infer_modules_impl(RunContextWrapper(ctx), "wafer-history.csv")
+    assert len(ctx.subagent_citations["infer_modules"]) == 1
+
+    # A CSV field past Python's 131_072-char limit — user data, not a misconfig.
+    big = b"step_name\n" + b"x" * 200_000 + b"\n"
+    ctx2, _f2, _i2 = await _ctx_with_file(big, run)
+    with pytest.raises(Exception):  # noqa: B017 - csv.Error, raised from the parser
+        await infer_modules_impl(RunContextWrapper(ctx2), "wafer-history.csv")
+    assert len(ctx2.subagent_citations["infer_modules"]) == 1

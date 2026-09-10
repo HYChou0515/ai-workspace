@@ -29,6 +29,19 @@ verb, and one that knows about tools ``build_tools`` grants outside
 ``allowed_tools`` — and until that lands, a tool ABSENT from this table has not
 been judged safe; it has not been judged.
 
+Two things the table cannot express, handled elsewhere rather than by widening
+a row:
+
+* A verb a tool exercises only on ONE BRANCH. ``write_file`` / ``edit_file``
+  hand back the current content when the write is rejected, which is a read —
+  but demanding ``read_content`` up front would refuse an add-only collaborator
+  every ordinary write. The echo itself is gated instead (``_conflict_echo``),
+  so the rejection still explains itself and stops short of the contents.
+* An existence oracle that is INHERENT to the verb. ``delete_file`` answers
+  "not found" differently from "deleted", and no gate can hide that from
+  somebody who may delete: the probe costs them the file. Accepted, and named
+  here so the next reader does not have to rediscover it.
+
 The sentence above names the TABLE rather than a category because claiming the
 category is exactly what let gaps live: ``list_files`` and ``exists`` were listed
 below and gated nowhere, and the enumeration that replaced that claim missed
