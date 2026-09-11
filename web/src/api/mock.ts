@@ -287,8 +287,9 @@ const _mockAppItemSeed = [
   },
 ];
 
-// `owner` is the creator's user id, so the mock mirrors real specstar where
-// `created_by` == `owner` at creation time (revision metadata, always present).
+// The seed's `owner` is its creator, so the mock stamps `created_by` from it.
+// Real entries carry the creator separately (`meta.created_by`); a mock item
+// where the two differ would need its own `created_by`.
 const _mockAppItems: AppItem[] = _mockAppItemSeed.map((it) => ({
   ...it,
   created_by: it.owner,

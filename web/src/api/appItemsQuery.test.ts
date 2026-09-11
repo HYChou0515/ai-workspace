@@ -32,18 +32,24 @@ describe("countAppItems", () => {
   });
 });
 
-/** A specstar list/get entry: domain fields under `data`, the always-present
- * created/updated who+when under `revision_info`. */
+/** A specstar list/get entry: domain fields under `data`, the RESOURCE's who+when
+ * under `meta`, and one revision's who+when under `revision_info`. */
 function entry() {
+  // The real wire shape: `meta` is the RESOURCE (who created it), `revision_info`
+  // is one revision (who wrote it last). A fixture without `meta` let the FE read
+  // the owner off the wrong one for a year and stay green.
+  // Creator, last editor and domain owner all DIFFERENT, or the assertion below
+  // cannot tell which one was read.
   return {
-    data: { title: "Reflow drift", owner: "alice" },
+    data: { title: "Reflow drift", owner: "assignee-carol" },
+    meta: { created_by: "alice", created_time: "2026-06-15T08:00:00Z" },
     revision_info: {
       uid: "u1",
       resource_id: "INC-1",
-      revision_id: "rev-1",
-      created_time: "2026-06-15T08:00:00Z",
+      revision_id: "rev-2",
+      created_time: "2026-06-20T12:00:00Z",
       updated_time: "2026-06-20T12:00:00Z",
-      created_by: "alice",
+      created_by: "bob",
       updated_by: "bob",
     },
   };
@@ -52,7 +58,7 @@ function entry() {
 describe("listAppItems", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("surfaces created_time and created_by from revision_info onto each item", async () => {
+  it("surfaces created_time from revision_info and the CREATOR from meta onto each item", async () => {
     fetchSpy(JSON.stringify([entry()]));
     const [item] = await realApi.listAppItems("/rca-investigation");
     expect(item.created_time).toBe("2026-06-15T08:00:00Z");
@@ -63,7 +69,7 @@ describe("listAppItems", () => {
 describe("getAppItem", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("surfaces created_time and created_by from revision_info", async () => {
+  it("surfaces created_time from revision_info and the CREATOR from meta", async () => {
     fetchSpy(JSON.stringify(entry()));
     const item = await realApi.getAppItem("/rca-investigation", "INC-1");
     expect(item.created_time).toBe("2026-06-15T08:00:00Z");
