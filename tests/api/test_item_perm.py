@@ -23,12 +23,12 @@ from workspace_app.sandbox.mock import MockSandbox
 from ._client import TestClient
 
 
-def _client_and_spec(holder: dict[str, str], *, superusers=frozenset()):
+def _client_and_spec(holder: dict[str, str], *, superusers=frozenset(), filestore=None):
     spec = make_spec(default_user=lambda: holder["id"], superusers=superusers)
     app = create_app(
         spec=spec,
         sandbox=MockSandbox(),
-        filestore=MemoryFileStore(),
+        filestore=filestore or MemoryFileStore(),
         runner=ScriptedAgentRunner([]),
         get_user_id=lambda: holder["id"],
         superusers=superusers,
@@ -385,3 +385,53 @@ def test_a_deleted_items_chat_mirror_keeps_the_items_restrictions():
     )
     assert mirror["item_read_chat"] == ["user:carol"], mirror
     assert mirror["item_created_by"] == "bob", mirror
+
+
+# ── copy READS its source, so `add_content` alone must not open it ─────────────
+
+
+async def test_copy_needs_read_content_because_it_reads_the_source():
+    """`POST /files/copy` was gated on `add_content` alone, and `_transfer` does
+    `files.read(src)` before it writes. So a collaborator who may not `GET`
+    `/secret.bin` could copy it to a path they then own — and, when the copy was
+    refused for space, learn its exact size from the 507's `attempted`. The gate
+    said "add"; the route did "read, then add"."""
+    holder = {"id": "bob"}
+    files = MemoryFileStore()
+    client, spec = _client_and_spec(holder, filestore=files)
+    iid = _item(
+        spec,
+        by="bob",
+        permission=Permission(
+            visibility="restricted", read_meta=["user:carol"], add_content=["user:carol"]
+        ),
+    )
+    await files.write(iid, "/secret.bin", b"x" * 617)
+
+    holder["id"] = "carol"
+    assert client.get(_wp(iid, "/files/secret.bin")).status_code == 403  # the control
+    r = client.post(_wp(iid, "/files/copy"), json={"from": "/secret.bin", "to": "/mine.bin"})
+    assert r.status_code == 403
+    assert not await files.exists(iid, "/mine.bin")  # nothing landed where she could read it
+
+
+async def test_copy_works_for_a_speaker_who_may_read_and_add():
+    holder = {"id": "bob"}
+    files = MemoryFileStore()
+    client, spec = _client_and_spec(holder, filestore=files)
+    iid = _item(
+        spec,
+        by="bob",
+        permission=Permission(
+            visibility="restricted",
+            read_meta=["user:carol"],
+            read_content=["user:carol"],
+            add_content=["user:carol"],
+        ),
+    )
+    await files.write(iid, "/a.txt", b"hello")
+
+    holder["id"] = "carol"
+    r = client.post(_wp(iid, "/files/copy"), json={"from": "/a.txt", "to": "/b.txt"})
+    assert r.status_code == 204, r.text
+    assert await files.read(iid, "/b.txt") == b"hello"

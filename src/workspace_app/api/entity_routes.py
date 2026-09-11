@@ -112,6 +112,7 @@ def register_entity_routes(
         # field plus the markdown body, preserved verbatim under an empty
         # patch), so gated on `edit_content` alone it handed a read-denied
         # caller the record `GET /entities/{type}` had just refused them.
+        assert verbs, "a route that asks for no verb is `require_item` by another door"
         investigation_id = ""
         for verb in verbs:
             investigation_id = locator.require_access(slug, item_id, verb)

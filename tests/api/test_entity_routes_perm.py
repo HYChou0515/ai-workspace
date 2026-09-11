@@ -69,11 +69,18 @@ async def test_a_stranger_gets_404_on_every_entity_route():
     iid = await _bobs_item(spec, files, Permission(visibility="private"))
 
     holder["id"] = "mallory"  # no grants at all
-    assert client.get(_p(iid, "/entities")).status_code == 404
-    assert client.get(_p(iid, "/entity_health")).status_code == 404
-    assert client.get(_p(iid, "/entities/issue")).status_code == 404
-    assert client.post(_p(iid, "/entities/issue"), json={"args": {"title": "x"}}).status_code == 404
-    assert client.put(_p(iid, "/entities/issue/1"), json={"patch": {}}).status_code == 404
+    for r in (
+        client.get(_p(iid, "/entities")),
+        client.get(_p(iid, "/entity_health")),
+        client.get(_p(iid, "/entities/issue")),
+        client.post(_p(iid, "/entities/issue"), json={"args": {"title": "x"}}),
+        client.put(_p(iid, "/entities/issue/1"), json={"patch": {}}),
+    ):
+        assert r.status_code == 404
+        # The GATE's 404, not `_require_type`'s: with the gate gone, three of
+        # these still answered 404 — "unknown entity type" on an empty catalog —
+        # and the assertion could not tell the two apart.
+        assert r.json()["detail"] == "item not found", r.text
     # …and nothing was written behind the 404s.
     assert await files.read(iid, "/issues/1.md") == (
         b"---\ntitle: BOARD SALARY TABLE\nstatus: open\n---\n\nSECRET-BODY\n"
@@ -120,6 +127,23 @@ async def test_a_writer_who_may_not_read_is_not_handed_the_record_back():
     assert "SECRET-BODY" not in r.text
     r = client.post(_p(iid, "/entities/issue"), json={"args": {"title": "x"}})
     assert r.status_code == 403
+
+
+async def test_seeing_the_item_is_not_seeing_its_records():
+    """`read_meta` alone — the "discoverable" tier — must not open the catalog or
+    the health report: both are derived from workspace files the caller cannot
+    `GET`. Neither route had a test at this tier; dropping either to `read_meta`
+    stayed green."""
+    holder = {"id": "bob"}
+    client, spec, files = _app(holder)
+    iid = await _bobs_item(
+        spec, files, Permission(visibility="restricted", read_meta=["user:carol"])
+    )
+
+    holder["id"] = "carol"
+    assert client.get(_p(iid, "/entities")).status_code == 403
+    assert client.get(_p(iid, "/entity_health")).status_code == 403
+    assert client.get(_p(iid, "/entities/issue")).status_code == 403
 
 
 async def test_the_owner_still_does_everything():

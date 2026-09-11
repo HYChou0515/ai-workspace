@@ -154,7 +154,13 @@ TOOL_VERBS: dict[str, tuple[Verb, ...]] = {
     # argument, which does not apply to them: they are ordinary named tools with
     # ordinary verbs.
     "query_entity": ("read_content",),
-    "create_entity": ("edit_content",),
+    # BOTH, matching the route. Creating renders the type's skeleton — a
+    # workspace file the caller cannot `GET` — and answers with the record it
+    # produced plus its number (the record count); on a miss it lists every
+    # declared type. The route that does the same thing demands both, and one
+    # mechanism gated differently on two surfaces is the shape this module's
+    # docstring names for package commands.
+    "create_entity": ("read_content", "edit_content"),
     # BOTH: they read a record and hand back what they read. A version conflict
     # quotes the file's sha256 (`issue #1 changed … now 2ed8cb1b…`), the lint
     # suffix quotes field values the caller never sent, and both distinguish a

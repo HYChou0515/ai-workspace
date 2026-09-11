@@ -653,11 +653,11 @@ _EXPECTED_VERBS: dict[str, tuple[str, ...]] = {
     "search_wiki": ("read_content",),
     "write_file": ("edit_content",),
     "delete_file": ("edit_content",),
-    "create_entity": ("edit_content",),
     "save_subagent": ("edit_content",),
     "save_skill": ("edit_content",),
     "save_workflow": ("edit_content",),
     "edit_file": ("read_content", "edit_content"),
+    "create_entity": ("read_content", "edit_content"),
     "update_entity": ("read_content", "edit_content"),
     "link_entity": ("read_content", "edit_content"),
     "infer_modules": ("read_content", "edit_content"),
@@ -755,10 +755,13 @@ async def test_no_tool_demands_more_than_its_row_says():
     stayed green, and that is the #537 shape: a granted tool that refuses every
     call. So: a speaker holding EXACTLY the row's verbs must get PAST the gate.
 
-    Past the gate, not to a result — several impls then need a sandbox or a
-    sub-agent this context does not carry and raise. That is fine: the gate is
-    the first statement, so anything other than the refusal string means it was
-    passed. The refusal string is the one thing asserted absent."""
+    Past the gate, not to a result: the context carries a `MockSandbox` so
+    `exec` has somewhere to run, and the one impl that still needs more than
+    this context has (`infer_modules` wants a wired sub-agent) is named rather
+    than swallowed. A bare `except: continue` here let a tool that over-demands
+    by RAISING — or that raises before its gate — join the exempt set unseen."""
+    from workspace_app.sandbox.mock import MockSandbox
+
     for name, verbs in _EXPECTED_VERBS.items():
         spec, iid = _spec_with_item(
             Permission(
@@ -769,8 +772,12 @@ async def test_no_tool_demands_more_than_its_row_says():
             )
         )
         ctx = _ctx(spec, iid, acting_user="alice")
+        ctx.context.sandbox = MockSandbox()
         try:
             out = str(await _CALLS[name](ctx))
-        except Exception:  # noqa: BLE001 — raised PAST the gate: no sandbox / sub-agent here
+        except AssertionError:
+            # `infer_modules` asserts `run_subagent is not None` — PAST its gate,
+            # which is what we are here to prove. Nothing else may raise.
+            assert name == "infer_modules", name
             continue
         assert "don't have permission" not in out, (name, out)

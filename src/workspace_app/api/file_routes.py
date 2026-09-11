@@ -553,6 +553,14 @@ def register_file_routes(
         status_code=status.HTTP_204_NO_CONTENT,
     )
     async def copy_file(slug: str, item_id: str, body: _MoveBody) -> Response:
+        # `read_content` as well as `add_content`: `_transfer` does `files.read(src)`
+        # before it writes, so under `add_content` alone this was a way to read a
+        # file the caller may not `GET` — not its bytes (they land in a path the
+        # caller then owns, which is the same thing one step later) and, when the
+        # copy is refused for space, its exact SIZE through the 507's `attempted`.
+        # A collaborator who may not read `/secret.bin` could copy it and read
+        # the copy; the gate said "add" while the route did "read then add".
+        locator.require_access(slug, item_id, "read_content")
         investigation_id = locator.require_access(slug, item_id, "add_content")
         src = _workspace_path(body.from_)
         dst = _workspace_path(body.to)
