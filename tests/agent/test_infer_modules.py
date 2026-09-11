@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from agents import RunContextWrapper
 
 from workspace_app.agent.context import AgentToolContext
 from workspace_app.agent.tools import (
+    _guard_workspace_full,
     _infer_modules_summary,
     _module_map_csv,
     _parse_module_json,
@@ -23,6 +25,7 @@ from workspace_app.agent.tools import (
     infer_modules_impl,
 )
 from workspace_app.files import WorkspaceFiles
+from workspace_app.files.facade import WorkspaceFull
 from workspace_app.filestore.memory import MemoryFileStore
 
 
@@ -198,3 +201,84 @@ async def test_infer_modules_errors_on_missing_file():
     ctx, _files, _inv = await _ctx_with_file(b"step_name\nX\n", fake_run)
     result = await infer_modules_impl(RunContextWrapper(ctx), "does-not-exist.csv")
     assert "file not found" in result
+
+
+async def test_a_write_the_quota_refuses_still_books_exactly_one_citation_bucket():
+    """`_guard_workspace_full` turns a `WorkspaceFull` into a RETURNED string, so
+    the call ends normally and still produces a tool message — and `chat_send`
+    pairs citation buckets with those messages BY POSITION. Booking after the
+    write left that exit with none, so every later call's citations landed one
+    message early. The booking happens before the write for exactly this."""
+
+    async def run(_name, _payload, _sink, _origin):
+        return '{"module": "M1", "reason": "r"}', []
+
+    ctx, files, _inv = await _ctx_with_file(b"step_name\nA\n", run)
+
+    async def _full(*_a, **_k):
+        raise WorkspaceFull(used=10, quota=10, attempted=1)
+
+    files.create = _full
+    # Through the wrapper `build_tools` registers, not the bare impl: the guard is
+    # what turns the raise into a returned string, and that is the whole reason
+    # this exit produces a tool message at all.
+    guarded = _guard_workspace_full(infer_modules_impl)
+    out = await guarded(RunContextWrapper(ctx), "wafer-history.csv")
+
+    assert "full" in out  # the guard answered, rather than raising
+    assert len(ctx.subagent_citations["infer_modules"]) == 1
+
+
+async def test_a_call_that_raises_still_owns_exactly_one_citation_slot():
+    """Booking per remembered exit was an enumeration, and it was short four
+    times. These two escape as EXCEPTIONS — the SDK turns them into a tool
+    message just the same, so the by-position pairing still consumes a slot.
+    Booking up front is what makes that structural instead of remembered."""
+
+    async def run(_name, _payload, _sink, _origin):
+        return '{"module": "M1", "reason": "r"}', []
+
+    # `run_subagent` unwired: the impl asserts on it, after the reads.
+    ctx, _files, _inv = await _ctx_with_file(b"step_name\nA\n", None)
+    with pytest.raises(AssertionError):
+        await infer_modules_impl(RunContextWrapper(ctx), "wafer-history.csv")
+    assert len(ctx.subagent_citations["infer_modules"]) == 1
+
+    # A CSV field past Python's 131_072-char limit — user data, not a misconfig.
+    big = b"step_name\n" + b"x" * 200_000 + b"\n"
+    ctx2, _f2, _i2 = await _ctx_with_file(big, run)
+    with pytest.raises(Exception):  # noqa: B017 - csv.Error, raised from the parser
+        await infer_modules_impl(RunContextWrapper(ctx2), "wafer-history.csv")
+    assert len(ctx2.subagent_citations["infer_modules"]) == 1
+
+
+async def test_two_calls_in_one_message_keep_their_own_citation_slots():
+    """`_book_citations` returns the INDEX, and nothing pinned that. Filling
+    `[-1]` instead looks right until two calls overlap — parallel tool calls are
+    live in production — and then the first call's citations land on the second
+    call's tool message and the second's are lost."""
+    import asyncio
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def run(_name, payload, _sink, _origin):
+        # The FIRST call parks; the second overtakes it and finishes first.
+        if "A" in payload:
+            started.set()
+            await release.wait()
+            return '{"module": "M1", "reason": "r"}', ["cite-A"]
+        return '{"module": "M2", "reason": "r"}', ["cite-B"]
+
+    ctx, files, inv = await _ctx_with_file(b"step_name\nA\n", run)
+    await files.create(inv, "b.csv", b"step_name\nB\n")
+
+    first = asyncio.create_task(infer_modules_impl(RunContextWrapper(ctx), "wafer-history.csv"))
+    await started.wait()
+    await infer_modules_impl(RunContextWrapper(ctx), "b.csv")  # overtakes
+    release.set()
+    await first
+
+    # Slot order is BOOKING order, so the Nth bucket still pairs with the Nth
+    # tool message of that name — which is the whole contract.
+    assert ctx.subagent_citations["infer_modules"] == [["cite-A"], ["cite-B"]]

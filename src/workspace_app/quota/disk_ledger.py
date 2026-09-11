@@ -50,9 +50,10 @@ class UserDiskFull(Exception):
     different item."""
 
     def __init__(self, owner: str, used: int, quota: int, attempted: int) -> None:
+        # No delta — see `WorkspaceFull.__init__`, same reasoning, same reader.
         super().__init__(
             f"{owner} is out of space: {used} of {quota} bytes used across their "
-            f"workspaces, cannot write {attempted} more"
+            f"workspaces, and this write does not fit"
         )
         self.owner = owner
         self.used = used

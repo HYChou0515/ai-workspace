@@ -20,6 +20,7 @@ from specstar.types import ResourceIDNotFoundError
 
 from ..filestore.protocol import FileNotFound
 from ..perm import Actor, DisclosurePartition, authorize, partition_by_disclosure
+from ..resources.groups import groups_of
 from ..resources.kb import Collection, WithheldSource
 
 if TYPE_CHECKING:
@@ -106,9 +107,18 @@ def readable_collection_ids(
     speaker could read directly, so a private or since-tightened collection can't
     leak through the sub-agent. An unknown id is dropped; ``permission is None`` ≡
     public (back-compat). A point ``get`` per id (not a full scan) keeps the
-    infer_modules hot path — one pre-resolved collection — cheap."""
+    infer_modules hot path — one pre-resolved collection — cheap.
+
+    WITH the caller's groups: a collection shared to `group:<id>` is listed to a
+    member by the HTTP route (which resolves them) and was then dropped by this
+    gate (which did not), so the person could see it and the agent they were
+    driving could not — and, through `_readable_collections_provider`, the same
+    now holds for the graph rows scoped by this function."""
+    ids = list(ids)
+    if not ids:
+        return []  # nothing to decide; asking who the caller is costs a query
     rm = spec.get_resource_manager(Collection)
-    actor = Actor.human(user)
+    actor = Actor.human(user, groups=groups_of(spec, user))
     out: list[str] = []
     for cid in ids:
         try:
@@ -158,7 +168,7 @@ def all_discoverable_collection_ids(
     could search them), and hidden ones (private / no read_meta) never are."""
     rm = spec.get_resource_manager(Collection)
     excl = set(excluded)
-    actor = Actor.human(user)
+    actor = Actor.human(user, groups=groups_of(spec, user))
     entries: list[tuple[str, Any, str]] = []
     for r in rm.list_resources():
         rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
@@ -212,14 +222,15 @@ def partition_collection_disclosure(
     disclosure probe instead of dropped), and ``hidden`` (no read_meta — a uniform
     404, never disclosed).
 
-    ``readable`` is byte-identical to ``readable_collection_ids`` (same
-    ``Actor.human(user)`` — NO groups — same point-get per id, same order), so
-    swapping a caller onto this is a no-op for the searched scope; it only ADDS the
-    middle tier. Groups are intentionally omitted to stay consistent with
-    ``readable_collection_ids``; a future change adds them to BOTH at once. An
-    unknown id is dropped; ``permission is None`` ≡ public."""
+    ``readable`` is byte-identical to ``readable_collection_ids`` (same actor —
+    groups included — same point-get per id, same order), so swapping a caller
+    onto this is a no-op for the searched scope; it only ADDS the middle tier.
+    An unknown id is dropped; ``permission is None`` ≡ public."""
+    ids = list(ids)
+    if not ids:
+        return DisclosurePartition(readable=[], discoverable=[], hidden=[])
     rm = spec.get_resource_manager(Collection)
-    actor = Actor.human(user)
+    actor = Actor.human(user, groups=groups_of(spec, user))
     entries: list[tuple[str, Any, str]] = []
     for cid in ids:
         try:

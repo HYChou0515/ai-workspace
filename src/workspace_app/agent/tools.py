@@ -18,6 +18,7 @@ from agents import FunctionTool, RunContextWrapper, ToolOutputImage, function_to
 
 from ..files import WorkspaceFiles, WorkspaceFull, rel_path
 from ..filestore.protocol import FileNotFound
+from ..quota.disk_ledger import UserDiskFull
 from ..sandbox.protocol import ExecResult, OutputSink, SandboxNotFound
 from .context import AgentToolContext
 from .exit_codes import explain
@@ -26,7 +27,7 @@ from .shown_files import (
     declare_shown_files,
     describe_for_display,
 )
-from .tool_authz import authorize_tool
+from .tool_authz import LEGACY_TOOL_RENAMES, TOOL_VERBS, authorize_tool
 
 if TYPE_CHECKING:
     from ..apps.subagents import SubagentDef
@@ -363,8 +364,12 @@ async def make_deck_impl(
     tool isn't configured. Building runs several render+review passes, so it
     takes a while; its progress streams as it works.
     """
-    if (denied := authorize_tool(ctx.context, "execute")) is not None:
-        return denied
+    # Read from the table, not copied out of it: the impl and `TOOL_VERBS` are
+    # the refusal and the ceiling for one tool, and two spellings of one rule are
+    # a rule that will disagree with itself.
+    for verb in TOOL_VERBS["make_deck"]:
+        if (denied := authorize_tool(ctx.context, verb)) is not None:
+            return denied
     from .deck.tool import run_make_deck
 
     fs, inv = _workspace(ctx)
@@ -430,6 +435,8 @@ def _guard_workspace_full(impl: Callable[..., Any]) -> Callable[..., Any]:
                 return await impl(*args, **kwargs)
             except WorkspaceFull as exc:
                 return _workspace_full_msg(exc)
+            except UserDiskFull as exc:
+                return _user_disk_full_msg(exc)
 
         return _guarded_async
 
@@ -439,6 +446,8 @@ def _guard_workspace_full(impl: Callable[..., Any]) -> Callable[..., Any]:
             return impl(*args, **kwargs)
         except WorkspaceFull as exc:
             return _workspace_full_msg(exc)
+        except UserDiskFull as exc:
+            return _user_disk_full_msg(exc)
 
     return _guarded_sync
 
@@ -448,15 +457,42 @@ def _workspace_full_msg(exc: WorkspaceFull) -> str:
     can't make more room appear, so the message names the ONE action that helps
     and the tool that does it — otherwise a model retries the same write, or
     invents a workaround like writing somewhere else."""
+    # No delta in the sentence. `attempted` is the request's own size for a blind
+    # write, the growth for `ensure_room_for`, and the whole body for an upload —
+    # so "N MORE bytes" was false for two of the three, and stating it as a delta
+    # let the reader subtract it from what they sent to learn the size of a file
+    # they may not read.
     return (
-        f"error: the workspace is full ({exc.used} of {exc.quota} bytes used) — "
-        f"writing {exc.attempted} more bytes would exceed it. Delete files that are "
-        f"no longer needed with delete_file, then retry. Tell the user what you "
-        f"deleted, or ask them which files they want to keep."
+        f"error: the workspace is full ({exc.used} of {exc.quota} bytes used) and this "
+        f"write does not fit. Delete files that are no longer needed with delete_file, "
+        f"then retry. Tell the user what you deleted, or ask them which files they "
+        f"want to keep."
     )
 
 
-def _conflict_echo(ctx: RunContextWrapper[AgentToolContext], path: str, current: str) -> str:
+def _user_disk_full_msg(exc: UserDiskFull) -> str:
+    """The OWNER's personal total, told without naming them.
+
+    `UserDiskFull` is not a `WorkspaceFull`, so it escaped the guard entirely and
+    reached the model through the SDK's default handler as `str(error)` — which
+    is `"<owner> is out of space: <used> of <quota> bytes used across their
+    workspaces"`. A collaborator holding `edit_content` and nothing else learned
+    the owner's id, their cap, and their usage across items they cannot read at
+    all. `api/turn_gate.py` refuses the same disclosure on the HTTP side (it
+    returns the numbers and deliberately omits `owner`, because `owner` is a
+    field anyone with write access can point at somebody else), so this matches
+    the route rather than inventing a second policy.
+
+    The remedy differs from a full workspace on purpose: the space may have to
+    come from a different item, which this agent may not be able to reach."""
+    return (
+        f"error: the owner of this workspace is out of space ({exc.used} of {exc.quota} bytes "
+        f"used in total) and this write does not fit. Deleting files here may not be enough: "
+        f"tell the user, because the space may have to come from another of their workspaces."
+    )
+
+
+def _conflict_echo(ctx: RunContextWrapper[AgentToolContext], path: str, current: str) -> str | None:
     """The current content a rejected write/edit hands back so the agent can
     retry — capped like any other tool output.
 
@@ -467,6 +503,30 @@ def _conflict_echo(ctx: RunContextWrapper[AgentToolContext], path: str, current:
     failed. Uncapped it was the widest hole in the toolset — the size of the
     echo is whatever the user uploaded, and a missed match on a big file is an
     everyday event."""
+    # `None` when the speaker may not read: the echo IS a read. `fs.create` hands
+    # back the existing bytes when the path is taken, and `fs.edit` hands back the
+    # whole file when `old_string` misses — writing nothing. So
+    # `edit_file(path, old_string="zzz-nope", new_string="")` was a pure read
+    # primitive for a speaker holding `edit_content` and NOT `read_content`, a
+    # combination the share dialog's per-verb Custom mode can produce, on a tool
+    # every App grants.
+    #
+    # It is NOT the only read channel these two had, and calling the rest
+    # "one bit per call, accepted" was wrong twice over: an agent walks bits into
+    # whole files (28 `edit_file(path, X, X)` calls recovered a secret digit by
+    # digit), and that probe is not even non-destructive on a file that is not
+    # valid UTF-8. `edit_file` is gated on `read_content` for that reason and no
+    # longer reaches this branch without it. `write_file`'s "already exists" is
+    # the residual, named in `tool_authz`'s docstring: it is free, but it cannot
+    # be walked — the tool has nothing else to say about a file that is there.
+    #
+    # Gated HERE rather than by widening `TOOL_VERBS`: the verb is exercised
+    # CONDITIONALLY — only on the conflict branch — so demanding `read_content`
+    # up front would refuse an add-only collaborator every ordinary write, for a
+    # path that leaks nothing. The rejection still happens, and still says what
+    # went wrong; what it stops saying is the content.
+    if authorize_tool(ctx.context, "read_content") is not None:
+        return None
     return truncate_middle(
         current,
         ctx.context.exec_output_max_chars,
@@ -493,10 +553,18 @@ async def write_file_impl(ctx: RunContextWrapper[AgentToolContext], path: str, c
     # Input stays permissive — this is about what the tools teach.
     if current is None:
         return f"wrote {len(content)} bytes to {rel_path(path)}"
+    echo = _conflict_echo(ctx, path, current.decode("utf-8", errors="replace"))
+    if echo is None:
+        # No "Current content:" over a withheld echo — that reads as "the file is
+        # empty" — and no "delete it first": the one recovery still open to this
+        # speaker would destroy a file they are not allowed to see.
+        return (
+            f"error: {rel_path(path)} already exists and you do not have permission to see "
+            f"its contents, so you cannot edit it either. Tell the user."
+        )
     return (
         f"error: {rel_path(path)} already exists — use edit_file to modify it (or delete "
-        f"it first). Current content:\n"
-        f"{_conflict_echo(ctx, path, current.decode('utf-8', errors='replace'))}"
+        f"it first). Current content:\n{echo}"
     )
 
 
@@ -510,16 +578,26 @@ async def edit_file_impl(
     the edit is rejected and the current content is returned, so re-read it and
     try again. To rewrite a whole file, pass its entire current content as
     `old_string`."""
-    if (denied := authorize_tool(ctx.context, "edit_content")) is not None:
-        return denied
+    for verb in TOOL_VERBS["edit_file"]:
+        if (denied := authorize_tool(ctx.context, verb)) is not None:
+            return denied
     fs, inv = _workspace(ctx)
     current = await fs.edit(inv, path, old_string, new_string)
     if current is None:
         return f"edited {rel_path(path)}"
+    # This impl required `read_content` above, so `_conflict_echo` normally
+    # cannot refuse — but "normally" is not "never": `authorize_tool` re-reads
+    # the item on every call, and `fs.edit` above is a real suspension, so a
+    # `change_permission` landing inside it flips the answer. An `assert` would
+    # then reach the model as "an error occurred" (and `python -O` strips the
+    # walrus with it, leaving `echo` unbound on the everyday conflict path).
+    # A revoked reader gets the refusal, not a crash.
+    echo = _conflict_echo(ctx, path, current)
+    if echo is None:
+        return f"error: the edit to {rel_path(path)} did not apply, and you may no longer read it."
     return (
         f"error: could not apply the edit to {rel_path(path)} — `old_string` was not found "
-        f"exactly once (the file may have changed). Current content:\n"
-        f"{_conflict_echo(ctx, path, current)}"
+        f"exactly once (the file may have changed). Current content:\n{echo}"
     )
 
 
@@ -568,6 +646,8 @@ async def list_files_impl(
     workspace root (`notes.txt`, `data/`), which is the form the other file
     tools and `exec` both take. A long listing is cut with a notice — pass
     `offset` to read on from there. Use this instead of `exec(["ls", ...])`."""
+    if (denied := authorize_tool(ctx.context, "read_content")) is not None:
+        return denied
     fs, inv = _workspace(ctx)
     files, dirs = await fs.list_dir(inv, prefix)
     if not files and not dirs:
@@ -596,8 +676,15 @@ def _shown_prefix(prefix: str) -> str:
     return f"{rel_path(key)}/" if key else "the workspace root"
 
 
-async def exists_impl(ctx: RunContextWrapper[AgentToolContext], path: str) -> bool:
+async def exists_impl(ctx: RunContextWrapper[AgentToolContext], path: str) -> bool | str:
     """Check whether a file exists in the workspace file store."""
+    # `bool | str` so a refusal can SAY so. Returning `False` to a speaker who
+    # may not read would be a lie in the direction that matters — "that file is
+    # not there" is a claim about the workspace, and the agent repeats it to the
+    # person as fact. It is also why this tool went ungated for so long: a
+    # `-> bool` signature has nowhere to put a reason.
+    if (denied := authorize_tool(ctx.context, "read_content")) is not None:
+        return denied
     fs, inv = _workspace(ctx)
     return await fs.exists(inv, path)
 
@@ -623,6 +710,9 @@ async def search_wiki_impl(ctx: RunContextWrapper[AgentToolContext], query: str)
     wiki, sandbox-free (in-process over the FileStore). Use it to find which
     existing pages mention a term before updating them, or to locate the
     pages relevant to a question."""
+    for verb in TOOL_VERBS["search_wiki"]:
+        if (denied := authorize_tool(ctx.context, verb)) is not None:
+            return denied
     from ..api.search import InvalidQuery, compile_query, search_text
 
     files = ctx.context.files
@@ -1173,30 +1263,34 @@ async def ask_knowledge_base_impl(
     meta-questions about this assistant, or general knowledge you already know.
     For any of those, answer directly without calling this tool.
     """
-    run = ctx.context.run_subagent
-    assert run is not None  # the API layer wires this for RCA runs
-
     # Citations are bucketed by TOOL NAME (the surface that produced them), not by
     # sub-agent purpose; persist() pairs the Nth bucket entry with the Nth tool
-    # message of that name. So EVERY call must append exactly one bucket entry —
-    # including the early returns below — or the pairing drifts.
-    bucket = ctx.context.subagent_citations.setdefault("ask_knowledge_base", [])
+    # message of that name. Reserved UP FRONT rather than appended at each exit:
+    # the sub-agent call below can RAISE (an LLM error, a timeout, a transport
+    # failure — everyday events), the SDK turns that into a tool message just the
+    # same, and an exit that books nothing shifts every later pairing.
+    slot = _book_citations(ctx, "ask_knowledge_base")
+    bucket = ctx.context.subagent_citations["ask_knowledge_base"]
+
+    # Below the booking: this assert is one of the four exits the helper's own
+    # docstring enumerates, and leaving it above kept the very shape the helper
+    # exists to remove.
+    run = ctx.context.run_subagent
+    assert run is not None  # the API layer wires this for RCA runs
 
     tiers = ctx.context.collection_tiers
     n = len(tiers)
     if n == 0:
         # No priority tiers configured ⇒ search the whole KB (today's behaviour).
         if rank > 0:
-            bucket.append([])
-            return (
+            return (  # the slot booked above stays empty
                 f"There is no priority tier {rank} — this knowledge base isn't "
                 "organised into tiers. Call ask_knowledge_base without a rank."
             )
         scope: list[str] | None = None
         banner = ""
     elif rank < 0 or rank >= n:
-        bucket.append([])
-        return (
+        return (  # the slot booked above stays empty
             f"There is no priority tier {rank}; the lowest-priority tier is rank "
             f"{n - 1}. Answer from what you already found across the tiers."
         )
@@ -1223,7 +1317,7 @@ async def ask_knowledge_base_impl(
         # collides with the bridge's positional args.
         withheld_sink=ctx.context.withheld_collection_ids,
     )
-    bucket.append(citations)
+    bucket[slot] = citations
     return banner + answer
 
 
@@ -1349,22 +1443,21 @@ async def ask_wiki_impl(ctx: RunContextWrapper[AgentToolContext], question: str)
     """
     from ..kb.citations import parse_citations, shift_markers
 
-    # One bucket entry per call, early returns included — persist() pairs the Nth
-    # entry with the Nth `ask_wiki` tool message, so a skipped append drifts every
-    # later pairing (same contract as ask_knowledge_base above).
-    bucket = ctx.context.subagent_citations.setdefault("ask_wiki", [])
+    # Reserved up front, for the same reason as `ask_knowledge_base` above: the
+    # reader consulted below can raise, and a call that ends without a slot shifts
+    # every later pairing.
+    slot = _book_citations(ctx, "ask_wiki")
+    bucket = ctx.context.subagent_citations["ask_wiki"]
 
     consult = ctx.context.run_wiki_reader
     if consult is None:
-        bucket.append([])
-        return (
+        return (  # the slot booked above stays empty
             "There is no wiki in scope for this conversation, so there is nothing "
             "to consult. Answer from the documents and what you already have."
         )
 
     budget = ctx.context.wiki_search_budget
-    if budget.exhausted:
-        bucket.append([])
+    if budget.exhausted:  # the slot booked above stays empty
         cap = budget.max_calls
         return (
             f"Wiki budget spent for this reply ({cap} of {cap} used). Answer now "
@@ -1379,7 +1472,7 @@ async def ask_wiki_impl(ctx: RunContextWrapper[AgentToolContext], question: str)
     # every marker still resolves to the document it was written against.
     shifted = shift_markers(answer, len(ctx.context.kb_passages))
     ctx.context.kb_passages.extend(passages)
-    bucket.append(parse_citations(shifted, ctx.context.kb_passages))
+    bucket[slot] = parse_citations(shifted, ctx.context.kb_passages)
 
     if budget.max_calls is not None:
         shifted += (
@@ -1495,6 +1588,25 @@ def _infer_modules_summary(rows: list[tuple[str, str, str]], out: str) -> str:
     )
 
 
+def _book_citations(ctx: RunContextWrapper[AgentToolContext], tool: str) -> int:
+    """Reserve this call's citation slot NOW, empty, and return its index.
+
+    `chat_send` pairs buckets with tool messages BY POSITION, and every way a
+    tool call can end — a refusal, a returned error, a `WorkspaceFull` the
+    quota guard converts to a string, an exception the SDK converts to one —
+    still produces a tool message. So a bucket booked per remembered exit is an
+    enumeration, and this one was short four separate times (the authz gate,
+    two returned errors, the quota path, then a `csv.Error` and an unwired
+    `run_subagent`). Booking up front makes it structural: whatever happens
+    after this line, the call owns exactly one slot.
+
+    The INDEX, not `[-1]`: two calls in one assistant message run concurrently,
+    so the last slot is not necessarily this call's."""
+    bucket = ctx.context.subagent_citations.setdefault(tool, [])
+    bucket.append([])
+    return len(bucket) - 1
+
+
 async def infer_modules_impl(
     ctx: RunContextWrapper[AgentToolContext],
     path: str,
@@ -1522,6 +1634,16 @@ async def infer_modules_impl(
     classifier towards modules physically relevant to the defect when a
     step is ambiguous.
     """
+    # First statement of the body, so every exit past it — including the ones that
+    # raise and reach the model as the SDK's error string — owns exactly one slot.
+    slot = _book_citations(ctx, "infer_modules")
+    # BOTH verbs, read from the table. `path` is a read channel — `_read_step_names`
+    # falls back to "every non-empty line is a step", and each step's sub-agent
+    # streams its queries and reasoning back through `on_exec_output` — so gating
+    # only the write would hand a preset with no reader a reader.
+    for verb in TOOL_VERBS["infer_modules"]:
+        if (denied := authorize_tool(ctx.context, verb)) is not None:
+            return denied
     fs, inv = _workspace(ctx)
     try:
         data = await fs.read(inv, path)
@@ -1557,6 +1679,8 @@ async def infer_modules_impl(
         rows.append((step, module, reason))
         all_cites.extend(cites)
 
+    ctx.context.subagent_citations["infer_modules"][slot] = all_cites
+
     csv_bytes = _module_map_csv(rows)
     # Overwrite: re-running a build replaces the map. create() refuses an
     # existing path (returns its content), so delete first when present.
@@ -1566,7 +1690,6 @@ async def infer_modules_impl(
         await fs.delete(inv, out)
         await fs.create(inv, out, csv_bytes)
 
-    ctx.context.subagent_citations.setdefault("infer_modules", []).append(all_cites)
     return _infer_modules_summary(rows, out)
 
 
@@ -1843,6 +1966,9 @@ async def save_skill_impl(
     needs reference docs or scripts, write them with `write_file` into the same
     `.skill/<name>/` folder (e.g. `.skill/<name>/references/…`, `.skill/<name>/scripts/…`)
     and point to them from the body. Returns a confirmation or an `error:` note."""
+    for verb in TOOL_VERBS["save_skill"]:
+        if (denied := authorize_tool(ctx.context, verb)) is not None:
+            return denied
     from ..apps.skills import (
         SKILL_BODY_CAP,
         WORKSPACE_SKILL_DIR,
@@ -1894,6 +2020,8 @@ async def save_subagent_impl(
     call — it cannot be silently dropped by malformed frontmatter. Re-saving the
     same name overwrites, so refine freely. Returns a confirmation, or an
     `error:` note naming exactly what to fix."""
+    if (denied := authorize_tool(ctx.context, "edit_content")) is not None:
+        return denied
     from ..apps.subagents import (
         SUBAGENT_FORBIDDEN_TOOLS,
         WORKSPACE_AGENT_DIR,
@@ -2005,9 +2133,7 @@ def _subagent_tool_ceiling(ctx: AgentToolContext) -> set[str] | None:
     # "it can only use tools you hold yourself". The resolved list already IS the
     # answer to "what may this turn do"; anything further is a second, wrong rule.
     # Only when there is no resolved list does the profile stand in for it.
-    ceiling = (
-        set(held) if held is not None else _profile_tool_ceiling(ctx.app_slug, ctx.template_profile)
-    )
+    ceiling = held_tool_names(held, ctx.app_slug, ctx.template_profile)
     if ceiling is None:
         return None
     # Minus what a sub-agent can never hold, so those are REFUSED by name like
@@ -2015,6 +2141,34 @@ def _subagent_tool_ceiling(ctx: AgentToolContext) -> set[str] | None:
     # quiet trim this tool's own rule forbids — and the refusal's "Available:"
     # line would otherwise advertise them.
     return ceiling - SUBAGENT_FORBIDDEN_TOOLS
+
+
+def held_tool_names(
+    allowed: list[str] | None, app_slug: str | None, profile: str | None
+) -> set[str] | None:
+    """What a turn is HOLDING, in the names a model can actually call. ``None``
+    (skip the clamp) when neither source can answer.
+
+    One function because there were two copies of this three-line rule —
+    `_subagent_tool_ceiling` (which refuses a sub-agent definition naming a tool
+    the parent does not hold) and `_subagent_defs`' clamp (which strips one from
+    a definition already saved). Renaming in only the first made them disagree
+    in the worst possible direction: `save_subagent` accepted `list_files`,
+    answered "callable now", and the clamp then handed the sub-agent nothing.
+
+    A THIRD reader, `_live_subagent_defs`, clamps with `_subagent_tool_ceiling`
+    — this set MINUS `SUBAGENT_FORBIDDEN_TOOLS` — so `run_agent`'s live re-read
+    is deliberately stricter than the turn's frozen index. That difference is
+    the sub-agent rule, not this one, and `subagent_run` strips those again in
+    the child either way.
+
+    The rename is applied to a STORED list only. The profile branch reads
+    authored manifest files, where a legacy name would be a config error rather
+    than old data, and normalising it would silently change a validator and a
+    clamp on a case no shipped manifest can produce."""
+    if allowed is not None:
+        return {LEGACY_TOOL_RENAMES.get(t, t) for t in allowed}
+    return _profile_tool_ceiling(app_slug, profile)
 
 
 def _profile_tool_ceiling(app_slug: str | None, profile: str | None) -> set[str] | None:
@@ -2034,6 +2188,11 @@ def _profile_tool_ceiling(app_slug: str | None, profile: str | None) -> set[str]
     except (FileNotFoundError, ModuleNotFoundError, OSError):
         return None
     pm_tools = load_profile(app_slug, profile).tools
+    # NOT renamed. This ceiling comes from authored manifest files, not from
+    # stored config, and it feeds a clamp (`_subagent_defs` -> `clamp_tools`)
+    # and a validator (`save_workflow_impl`) as well as the two refusal
+    # messages. No shipped manifest names a legacy tool, so normalising here
+    # changed four consumers on a case none of them can be handed.
     return (set(pm_tools) & app_tools) if pm_tools is not UNSET else app_tools
 
 
@@ -2052,6 +2211,9 @@ async def save_workflow_impl(
     check, or `{variable}` is off, it returns the problems so you can fix and re-save (don't
     guess; address each one). Re-saving the same id overwrites. On success the user can Run
     it, or download `.workflows/` to reuse elsewhere."""
+    for verb in TOOL_VERBS["save_workflow"]:
+        if (denied := authorize_tool(ctx.context, verb)) is not None:
+            return denied
     from ..workflow.workspace_store import (
         save_workspace_workflow,
         slugify_workflow_id,
@@ -2381,6 +2543,9 @@ async def create_entity_impl(
     `{"title": "Login broken", "status": "open"}`. The record gets the next
     permanent number automatically; reference it later by that number. Returns
     the new record's number (and any lint warnings)."""
+    for verb in TOOL_VERBS["create_entity"]:
+        if (denied := authorize_tool(ctx.context, verb)) is not None:
+            return denied
     store, err = await _entity_store(ctx, type_name)
     if store is None:
         return err
@@ -2409,6 +2574,9 @@ async def update_entity_impl(
     `expected_version` (the `version` query_entity reported for the record) to be
     told, instead of silently overwriting, if the record changed since you read
     it — then re-read and retry. Returns a confirmation (and any lint warnings)."""
+    for verb in TOOL_VERBS["update_entity"]:
+        if (denied := authorize_tool(ctx.context, verb)) is not None:
+            return denied
     from ..entity.store import EntityConflict
 
     store, err = await _entity_store(ctx, type_name)
@@ -2450,6 +2618,9 @@ async def query_entity_impl(
     (how many records the type has), `invalid` (numbers of records whose file
     couldn't be parsed, itself a page — `invalid_total` is how many there are),
     and `next_offset` when more records remain."""
+    for verb in TOOL_VERBS["query_entity"]:
+        if (denied := authorize_tool(ctx.context, verb)) is not None:
+            return denied
     store, err = await _entity_store(ctx, type_name)
     if store is None:
         return err
@@ -2499,6 +2670,9 @@ async def link_entity_impl(
     to milestone #1 with `type_name="issue", number=3, field="milestone",
     target=1`. `field` is the reference field on `type_name`; `target` is the
     referenced record's number. Returns a confirmation."""
+    for verb in TOOL_VERBS["link_entity"]:
+        if (denied := authorize_tool(ctx.context, verb)) is not None:
+            return denied
     store, err = await _entity_store(ctx, type_name)
     if store is None:
         return err
@@ -2654,14 +2828,6 @@ _WORKSPACE_TOOLS = [
     # alone doesn't reach them (the live-probe regression).
     "update_todos",
 ]
-
-# Legacy tool names in a *stored* `allowed_tools` list, mapped to their current
-# name so an AgentConfig persisted before a rename still provisions the tool.
-# This is input normalisation only — the old name is NOT a callable alias (the
-# model still calls the tool by its current registered name), it just keeps old
-# config data working. #241: `ls` was renamed to `list_files`.
-_LEGACY_TOOL_RENAMES = {"ls": "list_files"}
-
 
 # Tools whose args include a free-form `dict[str, Any]` (entity `args` / `patch`):
 # a strict JSON schema forbids the `additionalProperties` such an open object
@@ -2846,7 +3012,7 @@ def build_tools(
     image, advertising an index for a tool that was never registered, wastes the
     turn on a call that cannot resolve."""
     names = allowed if allowed is not None else _WORKSPACE_TOOLS
-    names = [_LEGACY_TOOL_RENAMES.get(n, n) for n in names]
+    names = [LEGACY_TOOL_RENAMES.get(n, n) for n in names]
     if not delegation_is_available(names, has_subagents):
         names = [n for n in names if n != "run_agent"]
     # Not `append` unconditionally: a config that already names `read_skill`
@@ -2959,7 +3125,7 @@ def delegation_is_available(allowed: Collection[str] | None, has_subagents: bool
     # so the two readers cannot disagree — but they read the SAME list through
     # different paths, and the point of one predicate is that adding an alias
     # cannot quietly split them.
-    names = [_LEGACY_TOOL_RENAMES.get(n, n) for n in raw]
+    names = [LEGACY_TOOL_RENAMES.get(n, n) for n in raw]
     if "run_agent" not in names:
         return False
     return has_subagents or "save_subagent" in names

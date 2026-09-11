@@ -574,6 +574,15 @@ def register_kb_chat_routes(
         private chat)."""
         chat, owner = _load_rev(chat_id)
         perm = effective_permission(chat.permission, chat.shared_with)
+        # NO groups, deliberately — and not because groups are wrong here.
+        # `KbChat`'s access_scope (`kbchat_access_scope`, the only scope of the
+        # family that takes no `groups_provider`) resolves none, so the LIST
+        # route hides a group-shared chat. Resolving them HERE alone made the
+        # chat openable, writable, sendable and re-shareable by URL while
+        # staying invisible in every listing — two rules for one resource, and
+        # `_load_rev` is unscoped so this gate is the only one there is. The fix
+        # is to give the scope its provider, which is a change to what listings
+        # return; until then the two halves stay consistent with each other.
         actor = Actor.human(get_user_id())
         if not authorize(actor, "read_meta", perm, created_by=owner, superusers=superusers):
             raise HTTPException(status_code=404, detail="chat not found")

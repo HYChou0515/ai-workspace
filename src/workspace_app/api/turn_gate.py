@@ -116,12 +116,16 @@ def quota_body(
             ],
         }
     assert isinstance(exc, WorkspaceFull | UserDiskFull)
-    return {
-        "error": quota_code(exc),
-        "used": exc.used,
-        "quota": exc.quota,
-        "attempted": exc.attempted,
-    }
+    # `used` and `quota` only. `attempted` is gone from BOTH bodies: it was kept
+    # for the workspace gate on the argument that there it is "the caller's own
+    # request size" — true when the caller composed the bytes, false for copy
+    # (the source's size) and false for a chunked upload the quota cuts off
+    # mid-stream, where `remaining_quota` credits the existing file back and
+    # `attempted = remaining + 1` lets `old = attempted - 1 - quota + used` be
+    # solved for the size of the file being overwritten, untouched. Four rounds
+    # picked four values for this field; each was an oracle from some route.
+    # Nothing in `web/src` reads it (`quotaFailure.ts` has no such key).
+    return {"error": quota_code(exc), "used": exc.used, "quota": exc.quota}
 
 
 class TurnRefused(Exception):

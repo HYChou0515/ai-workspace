@@ -124,8 +124,14 @@ class WorkspaceFull(Exception):
     to delete something."""
 
     def __init__(self, used: int, quota: int, attempted: int) -> None:
+        # No delta. `attempted` is the request's own size for a blind write, the
+        # growth for `ensure_room_for`, and the whole body for an upload — so
+        # "N more" was false for two of the three, and a reader who subtracts it
+        # from what they sent learns the size of a file they may not read. This
+        # string is user-facing: `turn_gate.TurnRefused` joins it into the
+        # failure record a person reads.
         super().__init__(
-            f"workspace is full: {used} of {quota} bytes used, cannot write {attempted} more"
+            f"workspace is full: {used} of {quota} bytes used, and this write does not fit"
         )
         self.used = used
         self.quota = quota
@@ -820,6 +826,19 @@ class WorkspaceFiles:
         growth = new_size - old
         if growth > 0:
             if quota and used + growth > quota:
+                # `new_size` — what the caller composed, and therefore already
+                # knows. Handing back `growth` instead looked like the honest
+                # fix (the message said "N more bytes") and was the opposite:
+                # every BLIND write shares this path, and for those
+                # `old = new_size - growth` is the current size of a file the
+                # speaker may not be allowed to read. Free, repeatable, and it
+                # composes. The message is what was wrong, and the message is
+                # what changed.
+                #
+                # `ensure_room_for` passes the growth and `api/file_routes.py`
+                # passes the request size, so `attempted` already means
+                # different things per producer — which is why nothing may read
+                # it as a delta.
                 raise WorkspaceFull(used=used, quota=quota, attempted=new_size)
             if self._person_gate is not None:
                 await self._person_gate(workspace_id, used + growth, growth)

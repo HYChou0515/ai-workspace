@@ -10,7 +10,7 @@ from workspace_app.kb.collections import (
     readable_collection_ids,
     resolve_withheld,
 )
-from workspace_app.perm import Permission
+from workspace_app.perm import DisclosurePartition, Permission
 from workspace_app.resources import make_spec
 from workspace_app.resources.kb import Collection, WithheldSource
 
@@ -117,3 +117,65 @@ def test_all_discoverable_is_empty_for_a_superuser_who_reads_everything():
     _coll(spec, by="bob", permission=Permission(visibility="restricted"))
     out = all_discoverable_collection_ids(spec, "root", superusers=frozenset({"root"}))
     assert out == []
+
+
+def test_a_group_grant_lands_in_readable_not_discoverable():
+    """`readable` is documented as byte-identical to `readable_collection_ids`.
+    It was — including in being blind to groups. Moving one and not the other
+    would have made the docstring false in the other direction."""
+    from workspace_app.resources.groups import Group
+
+    spec = make_spec()
+    grm = spec.get_resource_manager(Group)
+    with grm.using("bob"):
+        gid = grm.create(Group(name="ops", members=["alice"])).resource_id
+    rm = spec.get_resource_manager(Collection)
+    with rm.using("bob"):
+        cid = rm.create(
+            Collection(
+                name="c",
+                permission=Permission(visibility="restricted", read_content=[f"group:{gid}"]),
+            )
+        ).resource_id
+
+    part = partition_collection_disclosure(spec, [cid], "alice")
+    assert part.readable == [cid]
+    assert part.discoverable == []
+
+
+def test_the_disclosure_universe_sees_a_group_grant_too():
+    """`all_discoverable_collection_ids` is the third `Actor.human` in this
+    module and the only one no test reached. `discoverable` is "may see exist
+    but NOT read", so a read_content grant that arrives through a group has to
+    take the collection OUT of the probe — otherwise the member is told "there
+    is an answer you can't read" about something they can read perfectly well."""
+    from workspace_app.resources.groups import Group
+
+    spec = make_spec()
+    grm = spec.get_resource_manager(Group)
+    with grm.using("bob"):
+        gid = grm.create(Group(name="ops", members=["alice"])).resource_id
+    rm = spec.get_resource_manager(Collection)
+    with rm.using("bob"):
+        cid = rm.create(
+            Collection(
+                name="c",
+                permission=Permission(visibility="restricted", read_content=[f"group:{gid}"]),
+            )
+        ).resource_id
+
+    assert all_discoverable_collection_ids(spec, "alice") == []  # she can read it
+    assert all_discoverable_collection_ids(spec, "carol") == [cid]  # control: non-member
+
+
+def test_an_empty_scope_costs_no_identity_lookup():
+    """Both helpers now resolve the caller's groups, and both are called with an
+    empty list on live paths — `subagent_bridge` for a chat that picked no
+    collections, and `_readable_collections_provider` (the access_scope for the
+    graph models) on an empty store. Deciding nothing must not cost a query."""
+    spec = make_spec()
+    spec.get_resource_manager = lambda *a, **k: (_ for _ in ()).throw(  # ty: ignore
+        AssertionError("the store was touched for an empty scope")
+    )
+    assert readable_collection_ids(spec, [], "alice") == []
+    assert partition_collection_disclosure(spec, [], "alice") == DisclosurePartition([], [], [])

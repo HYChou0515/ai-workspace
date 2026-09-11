@@ -211,3 +211,23 @@ def test_the_text_of_a_combined_refusal_names_every_limit():
     # back in as long as it happened to contain the word "quota".
     for refusal in [primary, *others]:
         assert str(refusal) in text, f"lost: {refusal}"
+
+
+def test_no_quota_body_carries_a_number_derived_from_the_write():
+    """Both 507 bodies are `used` and `quota` and nothing else.
+
+    Every value ever put in `attempted` was an oracle from SOME route: the
+    growth (one refused write → the target's size), the request size (the same
+    in two), the source's size (copy), and `remaining + 1` (a chunked upload the
+    quota cuts off, where `old = attempted - 1 - quota + used`). The previous
+    version of this test pinned the workspace gate's `attempted` as "the
+    caller's own number" — true for `write_file`, false for the upload route
+    beside it. Nothing in `web/src` reads the key."""
+    from workspace_app.api.turn_gate import quota_body
+    from workspace_app.files.facade import WorkspaceFull
+    from workspace_app.quota.disk_ledger import UserDiskFull
+
+    person = quota_body(UserDiskFull(owner="alice", used=999, quota=1000, attempted=137))
+    workspace = quota_body(WorkspaceFull(used=50, quota=100, attempted=5000))
+    assert set(person) == set(workspace) == {"error", "used", "quota"}
+    assert person["used"] == 999 and workspace["quota"] == 100

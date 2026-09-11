@@ -532,3 +532,30 @@ async def test_a_write_path_charges_nothing_once_another_rule_has_refused():
         await files.ensure_room_for("ws1", 50)  # a copy that cannot happen
 
     assert recorded == [], "a refused write charged its owner"
+
+
+async def test_a_refusal_tells_the_caller_nothing_it_did_not_already_know():
+    """`attempted` is the size the caller COMPOSED, so it discloses nothing.
+
+    Handing back the growth instead looked like the honest fix — the message
+    said "N more bytes" — and was the opposite: every BLIND write shares this
+    path, and for those `old = new_size - growth` is the exact current size of a
+    file the speaker may not be allowed to read. Free, repeatable, and it
+    composes into a size oracle over the whole namespace a tool can address.
+    The message stopped claiming a delta; the field stayed what the caller
+    already holds."""
+    files = _files(300)
+    await files.write("ws", "/secret.md", b"x" * 246)
+
+    with pytest.raises(WorkspaceFull) as caught:
+        await files.write("ws", "/secret.md", b"x" * 346)
+
+    assert caught.value.attempted == 346  # what the caller sent, not 346 - 246
+    assert caught.value.used == 246
+
+    from workspace_app.agent.tools import _workspace_full_msg
+
+    said = _workspace_full_msg(caught.value)
+    assert "346" not in said  # nothing to subtract `used` from
+    assert "more bytes" not in said
+    assert "does not fit" in said

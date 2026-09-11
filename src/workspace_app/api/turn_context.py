@@ -557,7 +557,7 @@ class TurnContextBuilder:
         sub-agent that could reach past its parent would turn a per-item tool
         toggle into a suggestion. Never breaks a turn — a workspace that cannot
         be listed simply has no sub-agents."""
-        from ..agent.tools import _profile_tool_ceiling
+        from ..agent.tools import held_tool_names
 
         app_slug, profile = facts.slug, facts.profile
         if app_slug is None or profile is None:
@@ -576,10 +576,10 @@ class TurnContextBuilder:
             app_grants_delegation = True  # unreadable manifest ⇒ load, don't lose the capability
         if not app_grants_delegation:
             return ()
-        ceiling: Any = (
-            agent_config.allowed_tools
-            if agent_config is not None and agent_config.allowed_tools is not None
-            else _profile_tool_ceiling(app_slug, profile)
+        # The SAME rule `save_subagent` refuses against — one function, so a
+        # definition it accepted cannot be silently stripped here.
+        ceiling: Any = held_tool_names(
+            agent_config.allowed_tools if agent_config is not None else None, app_slug, profile
         )
         try:
             defs = await load_subagents(self._files, item_id, app_slug, profile, ceiling=ceiling)

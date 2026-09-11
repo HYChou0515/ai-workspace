@@ -534,6 +534,33 @@ class AgentToolContext:
     # so agent/ stays decoupled from kb/wiki/.
     submit_wiki_correction: Callable[..., Awaitable[str]] | None = None
 
+    #: The speaker's group memberships, resolved lazily and held for the turn.
+    #:
+    #: `Actor.ai` was built without them, so a verb granted to `group:<id>`
+    #: reached the person and was refused to the agent they were driving. It
+    #: lives on the context rather than on each builder so that whichever of
+    #: them is item-gated gets it without being asked twice — today that is the
+    #: chat turn. `authorize_tool` needs `spec` AND `investigation_id` AND
+    #: `app_slug`, and only `build_chat_turn` sets all three: the KB chat sets
+    #: `spec` and `acting_user` but names no item, and the WUI and workflow
+    #: paths set no `spec` at all, so each returns before an actor is built.
+    #:
+    #: `init=False` on purpose: it belongs to `acting_user`, and
+    #: `dataclasses.replace` — which `subagent_run` and `compaction` both use —
+    #: rebuilds the object, so the memo is dropped rather than carried onto a
+    #: context that may not be speaking for the same person.
+    #:
+    #: Held for the turn rather than per call. `authorize_tool` re-reads the
+    #: item and its meta EVERY call, so a permission change lands at once; a
+    #: group membership change does not, and this is the only stale input in
+    #: that decision. It is bounded by asking for it ONLY on a refusal (see
+    #: `authorize_tool`), so a turn that never depends on a group grant never
+    #: caches one — and by group membership being an administrative act, the
+    #: same reason `ItemLocator` holds it for a window rather than per request.
+    _speaker_groups: frozenset[str] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
+
     #: #775: has this context's python environment been prepared SUCCESSFULLY?
     #: Not `handle is not None` — a failed preparation leaves a live handle,
     #: and treating that as done is how the failure went unseen.
@@ -580,6 +607,21 @@ class AgentToolContext:
     #: path deletes a directory all of them share. That one is guarded per
     #: ITEM instead, through `prepare_env_via`; see it above.
     _wake: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False, compare=False)
+
+    def speaker_groups(self) -> frozenset[str]:
+        """Whose groups this turn acts with — see `_speaker_groups`. Callers
+        must already hold a `spec`; the authorization funnel checks that first
+        and there is no other caller. An empty speaker is answered without a
+        query by `groups_of` itself."""
+        assert self.spec is not None
+        if self._speaker_groups is None:
+            # Local, like the `apps.registry` import in `tool_authz`: the
+            # resources package pulls in every model, and this module is
+            # imported by the tool layer.
+            from ..resources.groups import groups_of
+
+            self._speaker_groups = groups_of(self.spec, self.acting_user)
+        return self._speaker_groups
 
     async def ensure_sandbox(
         self, *, prepare_env: bool = True, rebuild: bool = False

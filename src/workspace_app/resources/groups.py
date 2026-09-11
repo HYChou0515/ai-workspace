@@ -58,7 +58,16 @@ def groups_of(spec: SpecStar, user: str) -> frozenset[str]:
     `members.contains(user)` query (not a scan). Folded into the caller's
     `Actor.groups` / `subjects_of` so a `group:<id>` grant resolves to its
     members. An empty result (the common no-groups case) is cheap and leaves
-    authorization exactly as it was before groups existed."""
+    authorization exactly as it was before groups existed.
+
+    An empty ``user`` is answered WITHOUT a query. It is element membership
+    today, but `.contains` degrades to a substring ``LIKE`` on a SQL backend the
+    moment ``members`` loses its list registration — and "" is a substring of
+    every member, so the one caller with no speaker would collect every group.
+    The guard lives here rather than in each caller: every caller resolving a
+    principal gets it, instead of the one that happened to think of it."""
+    if not user:
+        return frozenset()
     rm = spec.get_resource_manager(Group)
     return frozenset(
         r.info.resource_id  # ty: ignore[unresolved-attribute]
