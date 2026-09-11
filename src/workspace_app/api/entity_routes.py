@@ -89,7 +89,7 @@ def register_entity_routes(
         item_id: str,
         type_name: str | None = None,
         *,
-        verb: Verb = "read_content",
+        verbs: tuple[Verb, ...] = ("read_content",),
     ) -> tuple[str, EntityStore]:
         """`type_name` loads JUST that type — for a request that reads nothing
         but its own type. Rebuilding the whole catalog read every declared type's
@@ -106,7 +106,15 @@ def register_entity_routes(
         # PRIVATE item: `GET /entities` returned them as JSON while `GET /files`
         # on the same item 404'd. #306 PR3 closed exactly this for the files,
         # chat and stream routes; #419 added these and reintroduced it.
-        investigation_id = locator.require_access(slug, item_id, verb)
+        # EVERY verb the route exercises, checked in order — the same rule as
+        # `TOOL_VERBS` for the tool that does the same thing. The write routes
+        # need `read_content` too: `PUT` returns the whole updated record (every
+        # field plus the markdown body, preserved verbatim under an empty
+        # patch), so gated on `edit_content` alone it handed a read-denied
+        # caller the record `GET /entities/{type}` had just refused them.
+        investigation_id = ""
+        for verb in verbs:
+            investigation_id = locator.require_access(slug, item_id, verb)
         catalog, _diags = (
             await load_entity_type(files, investigation_id, type_name)
             if type_name is not None
@@ -229,7 +237,7 @@ def register_entity_routes(
     async def create_entity(
         slug: str, item_id: str, type_name: str, body: _EntityCreateBody
     ) -> _EntityOut:
-        iid, store = await _store(slug, item_id, type_name, verb="edit_content")
+        iid, store = await _store(slug, item_id, type_name, verbs=("read_content", "edit_content"))
         _require_type(store.catalog, type_name)
         created = await store.create(
             type_name, body.args, actor=get_user_id(), now=datetime.now(UTC).date().isoformat()
@@ -242,7 +250,7 @@ def register_entity_routes(
     async def update_entity(
         slug: str, item_id: str, type_name: str, number: int, body: _EntityUpdateBody
     ) -> _EntityOut:
-        iid, store = await _store(slug, item_id, verb="edit_content")
+        iid, store = await _store(slug, item_id, verbs=("read_content", "edit_content"))
         _require_type(store.catalog, type_name)
         try:
             updated = await store.update(

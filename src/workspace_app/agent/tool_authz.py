@@ -94,8 +94,9 @@ logger = logging.getLogger(__name__)
 # The permission verbs each item-level tool exercises — ALL of them, because a
 # tool that reads and writes needs both checked and both in the ceiling. A tool
 # absent here is not an item-verb tool: kb tools (their cross-collection read is
-# checked per #305), `lookup_user` (a read-only directory), wiki/skill (their own
-# contexts). `mention_user` is absent and should not be read as safe: it WRITES a
+# checked per #305), `lookup_user` (a read-only directory), `read_skill` and
+# `ask_wiki` (see the module docstring). `mention_user` is absent and should not
+# be read as safe: it WRITES a
 # Notification carrying the item's id and title to arbitrary user ids, on the
 # `converse` entry gate — see the module docstring.
 TOOL_VERBS: dict[str, tuple[Verb, ...]] = {

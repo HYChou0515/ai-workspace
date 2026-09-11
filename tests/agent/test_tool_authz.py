@@ -746,3 +746,31 @@ async def test_a_permission_revoked_mid_edit_refuses_rather_than_crashes():
 
     assert "may no longer read it" in out
     assert "one two" not in out  # and it does not hand back what it just lost the right to
+
+
+async def test_no_tool_demands_more_than_its_row_says():
+    """The other half. `test_which_verb_every_tool_demands` proves each impl
+    demands AT LEAST its verbs; nothing proved it demands no more — an impl
+    iterating a neighbour's tuple (say `save_skill` reading `TOOL_VERBS["make_deck"]`)
+    stayed green, and that is the #537 shape: a granted tool that refuses every
+    call. So: a speaker holding EXACTLY the row's verbs must get PAST the gate.
+
+    Past the gate, not to a result — several impls then need a sandbox or a
+    sub-agent this context does not carry and raise. That is fine: the gate is
+    the first statement, so anything other than the refusal string means it was
+    passed. The refusal string is the one thing asserted absent."""
+    for name, verbs in _EXPECTED_VERBS.items():
+        spec, iid = _spec_with_item(
+            Permission(
+                visibility="restricted",
+                read_meta=["user:alice"],
+                converse=["user:alice"],
+                **{v: ["user:alice"] for v in verbs},
+            )
+        )
+        ctx = _ctx(spec, iid, acting_user="alice")
+        try:
+            out = str(await _CALLS[name](ctx))
+        except Exception:  # noqa: BLE001 — raised PAST the gate: no sandbox / sub-agent here
+            continue
+        assert "don't have permission" not in out, (name, out)

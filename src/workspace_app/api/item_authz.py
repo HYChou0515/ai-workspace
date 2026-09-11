@@ -153,10 +153,11 @@ def refuse_if_gone(facts: ItemAccessFacts | None, item_id: str) -> None:
 
     `ItemLocator.require_item` calls it with no access check, because it has
     none to make: it validates the slug↔item pairing and nothing else, and the
-    routes behind it (tools / entity / capability / export) authorize nobody at
+    routes still behind it (tools / capability / export) authorize nobody at
     all. The 410 there discloses strictly less than the 200 beside it. That is a
     pre-existing hole in those routes rather than a licence — when they are
-    gated, this call moves after the gate like the other two.
+    gated, this call moves after the gate like the other two. The entity routes
+    were moved off it (they go through `require_access` now).
 
     404 and 410 are told apart deliberately. An outside system lists items and
     then acts on them (#700), so "that one is finished, open a new one" and "no
