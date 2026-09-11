@@ -466,12 +466,17 @@ async def test_replace_needs_read_content_because_it_reads_every_file():
     files = MemoryFileStore()
     client, iid = await _edit_only(files)
 
-    r = client.post(
-        _wp(iid, "/replace"),
-        json={"query": "hunter2", "replacement": "hunter2", "regex": False},
-    )
-    assert r.status_code == 403, r.text
-    assert "replaced" not in r.text  # not even the count
+    # An identity replacement AND an ordinary one: a gate that fired only when
+    # `query == replacement` — guarding the probe review pasted — stayed green,
+    # and every `X -> Y` replace reads every file just the same.
+    for body in (
+        {"query": "hunter2", "replacement": "hunter2", "regex": False},
+        {"query": "hunter2", "replacement": "changed", "regex": False},
+        {"query": "^password.*", "replacement": "\\g<0>", "regex": True},
+    ):
+        r = client.post(_wp(iid, "/replace"), json=body)
+        assert r.status_code == 403, (body, r.text)
+        assert "replaced" not in r.text  # not even the count
     assert await files.read(iid, "/secret.txt") == b"password: hunter2\n"
 
 
@@ -483,12 +488,16 @@ async def test_move_needs_read_content_because_it_reads_the_source():
     files = MemoryFileStore()
     client, iid = await _edit_only(files)
 
-    r = client.post(
-        _wp(iid, "/files/move"), json={"from": "/secret.txt", "to": "/.skill/leak/SKILL.md"}
-    )
-    assert r.status_code == 403, r.text
-    assert await files.exists(iid, "/secret.txt")
-    assert not await files.exists(iid, "/.skill/leak/SKILL.md")
+    # Two destinations: `.skill/` (which `read_skill` reads ungated) and a plain
+    # path. A gate keyed on the destination — guarding the probe review pasted —
+    # stayed green, and `.skill/` is not the only reader that skips
+    # `read_content`: the App's `context_files` (`collections.json` on rca) are
+    # read straight into the prompt every turn.
+    for to in ("/.skill/leak/SKILL.md", "/collections.json"):
+        r = client.post(_wp(iid, "/files/move"), json={"from": "/secret.txt", "to": to})
+        assert r.status_code == 403, (to, r.text)
+        assert await files.exists(iid, "/secret.txt")
+        assert not await files.exists(iid, to)
 
 
 async def test_copying_a_folder_needs_read_content_too():

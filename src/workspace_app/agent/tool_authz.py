@@ -63,6 +63,29 @@ is not valid UTF-8 rewrites every invalid byte as U+FFFD and reports success. A
 ``read_content`` narrows who can do it; it does not stop the owner doing it by
 accident.
 
+HTTP routes that read item content under a non-read verb, found by sweeping
+``api/`` and left as they are because each is a design of its own, not a row
+in this table (this list is where they are written down, so nobody re-derives
+them one review at a time):
+
+* ``PUT /files/{path}`` under ``edit_content``: ``remaining_quota`` credits the
+  file being overwritten back, and the upload is cut off mid-stream at exactly
+  ``remaining + 1`` bytes — so with an unbuffered ingress the CUT-OFF POSITION
+  is the file's size, non-destructively, with no JSON field involved. Closing
+  it means changing the quota's credit-back semantics or buffering uploads.
+* ``POST …/wui/tools/{name}/call`` under ``edit_content``: runs a package
+  command whose stdout comes back verbatim; a command that reads a
+  caller-named path is a reader. The package-command verb question, again.
+* ``POST …/skills/{name}/refresh`` under ``edit_content`` answers per file
+  whether it still equals the shipped bytes; ``GET …/skills`` under
+  ``read_meta`` returns workspace ``SKILL.md`` descriptions.
+* ``POST …/run`` (a workflow) under ``converse`` writes multipart uploads to
+  caller-named paths; ``POST …/event-triggers/backfill`` under ``converse``
+  parses every entity record and returns per-trigger counts.
+* ``used`` in every 507 is the workspace's (or, on the person gate, the
+  owner's) total, returned by design to explain the refusal; a caller who may
+  delete can difference it before and after — destructively.
+
 The sentence above names the TABLE rather than a category because claiming the
 category is exactly what let gaps live: ``list_files`` and ``exists`` were listed
 below and gated nowhere; the enumeration that replaced that claim missed
