@@ -227,11 +227,44 @@ class FallbackModel(Model):
             rate_limited or last
         )
 
+    def _first_event_timeout(
+        self, endpoint: LlmEndpoint, timed_out: set[str], deadline: float
+    ) -> float:
+        """How long to wait for the FIRST event from ``endpoint``.
+
+        `ttft_s` is a SWITCH signal, not a deadline — "this one is busy, another
+        is not". `factories.py` already refuses to use it as a deadline on a
+        single-endpoint deploy, in those words: "that 8s is a SWITCH signal and
+        there is nothing to switch to here, so it would only kill turns for
+        being slow."
+
+        On a chain there IS somewhere to switch to, so the signal holds — right
+        up until every endpoint has answered it the same way. Then the
+        hypothesis it encodes is refuted: slowness that appears at every
+        endpoint is not a property of any of them (a long prompt is slow
+        everywhere), and one more switch only re-pays the same prefill. Left
+        alone, that is a turn spending its whole `total_deadline_s` on attempts
+        NONE of which was allowed to finish — which is how adding a fallback
+        preset silently cut the first-token budget from `total_deadline_s` to
+        `ttft_s`, 15x by default, with nobody choosing it.
+
+        So once the sweep is clean, an attempt gets what is left of the
+        deadline. Nothing else changes: an endpoint that is genuinely down fails
+        on a transport error rather than a timeout and still switches at once,
+        and `total_deadline_s` still bounds the turn."""
+        if len(timed_out) < len(self._endpoints):
+            return endpoint.ttft_s
+        remaining = deadline - self._registry.now()
+        return max(endpoint.ttft_s, remaining)
+
     async def stream_response(self, *args: Any, **kwargs: Any) -> AsyncIterator[Any]:
         keys = [e.cooldown_key for e in self._endpoints]
         deadline = self._registry.now() + self._total_deadline_s
         last: BaseException | None = None
         rate_limited: BaseException | None = None
+        #: Endpoints that have gone quiet past `ttft_s` at least once in THIS
+        #: call — the evidence `_first_event_timeout` reads.
+        ttft_timed_out: set[str] = set()
         for round_idx in range(len(self._round_backoff_s) + 1):
             if round_idx > 0 and not await self._wait_before_round(
                 self._round_backoff_s[round_idx - 1], keys, deadline
@@ -247,13 +280,18 @@ class FallbackModel(Model):
                     stream = self._make_model(endpoint).stream_response(*args, **kwargs)
                     it = stream.__aiter__()
                     try:
-                        first = await asyncio.wait_for(it.__anext__(), timeout=endpoint.ttft_s)
+                        first = await asyncio.wait_for(
+                            it.__anext__(),
+                            timeout=self._first_event_timeout(endpoint, ttft_timed_out, deadline),
+                        )
                     except StopAsyncIteration:
                         return  # empty turn — a valid (if useless) success
                     except Exception as exc:  # noqa: BLE001 — any pre-first failure
-                        cause = (
-                            TtftTimeout(endpoint.model) if isinstance(exc, TimeoutError) else exc
-                        )
+                        if isinstance(exc, TimeoutError):
+                            cause: BaseException = TtftTimeout(endpoint.model)
+                            ttft_timed_out.add(endpoint.model)
+                        else:
+                            cause = exc
                         last = cause
                         # The SDK types stream_response as AsyncIterator, but at runtime
                         # it's an async generator — close it so the abandoned inner

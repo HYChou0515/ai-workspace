@@ -30,7 +30,7 @@ export type SizeEdit = {
 /** Bytes in the spelling the server parses, so the panel and `config.yaml`
  *  describe the same thing in the same words. Exact powers of two only —
  *  anything else stays a byte count rather than being rounded into a lie. */
-function toSizeString(bytes: number | null): string | null {
+export function toSizeString(bytes: number | null): string | null {
   if (bytes === null) return null;
   for (const [unit, size] of [
     ["G", 1024 ** 3],
@@ -40,6 +40,19 @@ function toSizeString(bytes: number | null): string | null {
     if (bytes >= size && bytes % size === 0) return `${bytes / size}${unit}`;
   }
   return String(bytes);
+}
+
+/** One edit folded onto the value we last SENT.
+ *
+ * `sizeToSave` reads the SERVER's copy, which is right for the first edit and
+ * wrong for every one after it inside the same round trip: the route replaces
+ * both dimensions, so rebuilding from a copy that has not caught up reverts
+ * whatever the previous save just changed. */
+export function mergeEdit(base: ItemSize, edit: SizeEdit): ItemSize {
+  return {
+    cpuCores: "cpuCores" in edit ? (edit.cpuCores ?? null) : base.cpuCores,
+    memory: "memory" in edit ? (edit.memory ?? null) : base.memory,
+  };
 }
 
 export function sizeToSave(stated: StatedSize, edit: SizeEdit): ItemSize {

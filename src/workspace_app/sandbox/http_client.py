@@ -128,6 +128,24 @@ def _with_host_detail(message: str, detail: object) -> str:
     return f"{message} (host: {text})" if text else message
 
 
+def _message_for(exc_type: type[Exception], handle: SandboxHandle, detail: object) -> str:
+    """The sentence that goes with ``exc_type`` — decided in ONE place.
+
+    `_raise_mapped` and the exec error-frame path both turn a stated
+    `{"error": ...}` into an exception, and both used to reach for
+    `_gone_msg`. Only one of them was made conditional, so the other kept
+    telling a `draining` or `FileNotFoundError` frame that the sandbox was
+    reaped and "is rebuilt automatically on the next attempt" — which nothing
+    performs for those, since `_exec_surviving_a_reap` deliberately does not
+    retry `SandboxBusy`. Two copies of a rule is a guarantee that one of them
+    goes stale; this is the copy."""
+    if exc_type is SandboxNotFound:
+        return _with_host_detail(_gone_msg(handle), detail)
+    if exc_type is SandboxBusy:
+        return _with_host_detail(_busy_msg(handle), detail)
+    return str(detail or _sandbox_ref(handle))
+
+
 def _busy_msg(handle: SandboxHandle) -> str:
     """Said when the sandbox is ALIVE but did not answer in time. Deliberately
     does NOT invite a blind retry: the command may already be running or done,
@@ -406,16 +424,7 @@ class HttpSandbox:
     ) -> None:
         body = resp.json()
         exc_type = _ERRORS.get(body.get("error", ""), SandboxNotFound)
-        # Only a missing SANDBOX gets the missing-sandbox sentence. This branch
-        # also carries `FileNotFoundError` — a path the agent asked for that is
-        # not there — and telling someone their sandbox was reaped, on a sandbox
-        # that is plainly alive, sends them to rebuild instead of to the typo.
-        # The detail (which for that case IS the path) stays either way.
-        message = (
-            _with_host_detail(_gone_msg(handle), body.get("detail"))
-            if exc_type is SandboxNotFound
-            else str(body.get("detail") or _sandbox_ref(handle))
-        )
+        message = _message_for(exc_type, handle, body.get("detail"))
         if "error" not in body:
             # The host answers a real miss with its own `{"error": ...}`. A 404
             # WITHOUT that key is the framework's route-not-found, i.e. this host
@@ -586,7 +595,7 @@ class HttpSandbox:
                         logger.warning(
                             "sandbox-http: exec sandbox %s host error %s", handle.id, frame["error"]
                         )
-                        raise exc_type(_with_host_detail(_gone_msg(handle), frame.get("detail")))
+                        raise exc_type(_message_for(exc_type, handle, frame.get("detail")))
                     else:  # final {"exit","out","err"} frame
                         logger.info(
                             "sandbox-http: exec sandbox %s exit=%s", handle.id, frame["exit"]

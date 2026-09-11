@@ -437,6 +437,9 @@ async def _exec_tool(
             "tooling: sandbox was gone when dispatching %s — rebuilding and retrying once",
             cmd_name,
         )
+        # `ensure_sandbox` also updates `actx.handle`, which is what every
+        # caller must read afterwards — a handle captured BEFORE the dispatch is
+        # stale the moment this branch runs.
         fresh = await actx.ensure_sandbox(rebuild=True)
         return await actx.sandbox.exec(fresh, argv, on_output=actx.on_exec_output, env=env or None)
 
@@ -495,10 +498,16 @@ async def _review_chart(
 
     async def render(style: dict[str, Any]) -> tuple[bytes, str]:
         merged = {**base_args, "style": style}
-        r = await _exec_tool(actx, handle, pkg, cmd.name, json.dumps(merged))
+        # Same reason as the call site above: re-read the handle the dispatch
+        # actually ran on. `render`'s own `sandbox.download` below is NOT inside
+        # a swallow, so a stale one turns a recovered exec into a failed tool.
+        r = await _exec_tool(actx, actx.handle or handle, pkg, cmd.name, json.dumps(merged))
         imgs = _images_from_stdout(r.stdout)
         path = imgs[0] if imgs else first
-        png = await sandbox.download(handle, "/" + path.lstrip("/"))
+        # AFTER the dispatch, which may itself have rebuilt: reading the handle
+        # captured when this closure was created would download from the sandbox
+        # the re-render just replaced.
+        png = await sandbox.download(actx.handle or handle, "/" + path.lstrip("/"))
         return png, path
 
     sink = actx.on_exec_output
@@ -600,7 +609,14 @@ def _to_function_tool(pkg: PackageInfo, cmd: CommandInfo) -> FunctionTool:
         # re-render can actually adjust the layout.
         best = ""
         if actx.describer is not None and _accepts_style(cmd.params_json_schema):
-            text, best = await _review_chart(actx, pkg, cmd, handle, args_json, result, text)
+            # `actx.handle`, NOT the local one: `_exec_tool` may have rebuilt the
+            # sandbox out from under it, and this path downloads the png with
+            # whatever it is handed. Behind an `except Exception`, a stale handle
+            # here does not fail loudly — the chart review simply stops
+            # happening, for the rest of the deployment's uptime.
+            text, best = await _review_chart(
+                actx, pkg, cmd, actx.handle or handle, args_json, result, text
+            )
         return await _declare_images(actx, result, text, best)
 
     return FunctionTool(
