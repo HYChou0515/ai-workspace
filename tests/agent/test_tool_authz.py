@@ -756,10 +756,13 @@ async def test_no_tool_demands_more_than_its_row_says():
     call. So: a speaker holding EXACTLY the row's verbs must get PAST the gate.
 
     Past the gate, not to a result: the context carries a `MockSandbox` so
-    `exec` has somewhere to run, and the one impl that still needs more than
-    this context has (`infer_modules` wants a wired sub-agent) is named rather
-    than swallowed. A bare `except: continue` here let a tool that over-demands
-    by RAISING — or that raises before its gate — join the exempt set unseen."""
+    `exec` has somewhere to run, and with it EVERY impl returns a string (none
+    raises — `infer_modules` answers "file not found" on the empty workspace
+    before it reaches its sub-agent assert). No `except` at all: a bare
+    `except: continue` here let a tool that over-demands by RAISING — or that
+    raises before its gate — join the exempt set unseen, and a narrower one
+    that named a raiser which never raised was a dead branch dressed as a
+    guard."""
     from workspace_app.sandbox.mock import MockSandbox
 
     for name, verbs in _EXPECTED_VERBS.items():
@@ -773,11 +776,5 @@ async def test_no_tool_demands_more_than_its_row_says():
         )
         ctx = _ctx(spec, iid, acting_user="alice")
         ctx.context.sandbox = MockSandbox()
-        try:
-            out = str(await _CALLS[name](ctx))
-        except AssertionError:
-            # `infer_modules` asserts `run_subagent is not None` — PAST its gate,
-            # which is what we are here to prove. Nothing else may raise.
-            assert name == "infer_modules", name
-            continue
+        out = str(await _CALLS[name](ctx))
         assert "don't have permission" not in out, (name, out)

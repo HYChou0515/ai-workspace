@@ -213,24 +213,21 @@ def test_the_text_of_a_combined_refusal_names_every_limit():
         assert str(refusal) in text, f"lost: {refusal}"
 
 
-def test_the_person_gate_body_carries_no_number_derived_from_the_write():
-    """`quota_body` for `UserDiskFull` returns `used` and `quota` and nothing else.
+def test_no_quota_body_carries_a_number_derived_from_the_write():
+    """Both 507 bodies are `used` and `quota` and nothing else.
 
-    `used` there is the OWNER's total across items the caller may not see, and
-    any second number derived from the write — the growth, the resulting size,
-    anything — lets a collaborator holding `edit_content` alone subtract their
-    way to the size of a file they may not read (two refused writes: one to a
-    fresh path, one to the target). Three attempts to pick a "safe" value for
-    `attempted` each moved that oracle rather than closing it. Nothing in
-    `web/src` reads the key, so the person gate stops publishing it; the
-    workspace gate keeps it, because there it is the caller's own request size."""
+    Every value ever put in `attempted` was an oracle from SOME route: the
+    growth (one refused write → the target's size), the request size (the same
+    in two), the source's size (copy), and `remaining + 1` (a chunked upload the
+    quota cuts off, where `old = attempted - 1 - quota + used`). The previous
+    version of this test pinned the workspace gate's `attempted` as "the
+    caller's own number" — true for `write_file`, false for the upload route
+    beside it. Nothing in `web/src` reads the key."""
     from workspace_app.api.turn_gate import quota_body
     from workspace_app.files.facade import WorkspaceFull
     from workspace_app.quota.disk_ledger import UserDiskFull
 
     person = quota_body(UserDiskFull(owner="alice", used=999, quota=1000, attempted=137))
-    assert set(person) == {"error", "used", "quota"}
-    assert person["used"] == 999 and person["quota"] == 1000
-
     workspace = quota_body(WorkspaceFull(used=50, quota=100, attempted=5000))
-    assert workspace["attempted"] == 5000  # the caller's own number, still published
+    assert set(person) == set(workspace) == {"error", "used", "quota"}
+    assert person["used"] == 999 and workspace["quota"] == 100

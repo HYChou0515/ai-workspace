@@ -116,17 +116,16 @@ def quota_body(
             ],
         }
     assert isinstance(exc, WorkspaceFull | UserDiskFull)
-    body: dict[str, object] = {"error": quota_code(exc), "used": exc.used, "quota": exc.quota}
-    if isinstance(exc, WorkspaceFull):
-        # The caller's own request size — a number they already hold. It is NOT
-        # published for the person gate: there `used` is the owner's total
-        # across items the caller may not see, and any second number derived
-        # from the write lets a collaborator subtract their way to the size of
-        # a file they may not read. Three attempts to pick a "safe" value for it
-        # each moved that oracle rather than closing it; nothing in `web/src`
-        # reads the key (`quotaFailure.ts` has no such field), so it goes.
-        body["attempted"] = exc.attempted
-    return body
+    # `used` and `quota` only. `attempted` is gone from BOTH bodies: it was kept
+    # for the workspace gate on the argument that there it is "the caller's own
+    # request size" — true when the caller composed the bytes, false for copy
+    # (the source's size) and false for a chunked upload the quota cuts off
+    # mid-stream, where `remaining_quota` credits the existing file back and
+    # `attempted = remaining + 1` lets `old = attempted - 1 - quota + used` be
+    # solved for the size of the file being overwritten, untouched. Four rounds
+    # picked four values for this field; each was an oracle from some route.
+    # Nothing in `web/src` reads it (`quotaFailure.ts` has no such key).
+    return {"error": quota_code(exc), "used": exc.used, "quota": exc.quota}
 
 
 class TurnRefused(Exception):

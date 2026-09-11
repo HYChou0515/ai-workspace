@@ -535,6 +535,11 @@ def register_file_routes(
         status_code=status.HTTP_204_NO_CONTENT,
     )
     async def move_file(slug: str, item_id: str, body: _MoveBody) -> Response:
+        # `read_content` too, for the same reason as copy: `_transfer` reads the
+        # source first. Move's own answer is a 204, but it relocates the file to
+        # a path the caller chooses — `.skill/<name>/SKILL.md`, say, which
+        # `read_skill` then reads with no `read_content` check of its own.
+        locator.require_access(slug, item_id, "read_content")
         investigation_id = locator.require_access(slug, item_id, "edit_content")
         src = _workspace_path(body.from_)
         dst = _workspace_path(body.to)
@@ -619,6 +624,13 @@ def register_file_routes(
 
     @app.post("/a/{slug}/items/{item_id}/replace")
     async def replace(slug: str, item_id: str, body: _ReplaceBody) -> dict:
+        # `read_content` too: `_search_files` reads EVERY file, and the answer
+        # is a match count. An identity replacement (`X` → `X`) changes nothing
+        # and reports whether `X` occurs; a regex self-replace (`\g<0>`) walks a
+        # file out character by character with its bytes untouched. `/search`
+        # beside it has always required `read_content`; this is `/search` plus a
+        # write, not instead of one.
+        locator.require_access(slug, item_id, "read_content")
         investigation_id = locator.require_access(slug, item_id, "edit_content")
         if not body.query:
             return {"replaced": 0}

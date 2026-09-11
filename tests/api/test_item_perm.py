@@ -435,3 +435,79 @@ async def test_copy_works_for_a_speaker_who_may_read_and_add():
     r = client.post(_wp(iid, "/files/copy"), json={"from": "/a.txt", "to": "/b.txt"})
     assert r.status_code == 204, r.text
     assert await files.read(iid, "/b.txt") == b"hello"
+
+
+# ── the other routes that READ under a write verb ───────────────────────────────
+
+
+async def _edit_only(files):
+    """bob's restricted item; carol may edit but may not read."""
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder, filestore=files)
+    iid = _item(
+        spec,
+        by="bob",
+        permission=Permission(
+            visibility="restricted", read_meta=["user:carol"], edit_content=["user:carol"]
+        ),
+    )
+    await files.write(iid, "/secret.txt", b"password: hunter2\n")
+    holder["id"] = "carol"
+    assert client.get(_wp(iid, "/files/secret.txt")).status_code == 403  # the control
+    return client, iid
+
+
+async def test_replace_needs_read_content_because_it_reads_every_file():
+    """`/replace` ran `_search_files` — a read of EVERY file — under
+    `edit_content` alone and answered with a match count. An identity
+    replacement changes nothing and says whether the text occurs; a regex
+    self-replace walks a file out character by character with its bytes
+    untouched. `/search` beside it has always required `read_content`."""
+    files = MemoryFileStore()
+    client, iid = await _edit_only(files)
+
+    r = client.post(
+        _wp(iid, "/replace"),
+        json={"query": "hunter2", "replacement": "hunter2", "regex": False},
+    )
+    assert r.status_code == 403, r.text
+    assert "replaced" not in r.text  # not even the count
+    assert await files.read(iid, "/secret.txt") == b"password: hunter2\n"
+
+
+async def test_move_needs_read_content_because_it_reads_the_source():
+    """Same shape as copy: `_transfer` reads the source before it writes. Move's
+    own answer is a 204, but it relocates the file to a path the caller picks —
+    `.skill/<name>/SKILL.md`, which `read_skill` then reads with no
+    `read_content` check of its own."""
+    files = MemoryFileStore()
+    client, iid = await _edit_only(files)
+
+    r = client.post(
+        _wp(iid, "/files/move"), json={"from": "/secret.txt", "to": "/.skill/leak/SKILL.md"}
+    )
+    assert r.status_code == 403, r.text
+    assert await files.exists(iid, "/secret.txt")
+    assert not await files.exists(iid, "/.skill/leak/SKILL.md")
+
+
+async def test_copying_a_folder_needs_read_content_too():
+    """The file-copy test pinned only the file path; a gate that fired for a
+    file source and not for a folder would have stayed green."""
+    holder = {"id": "bob"}
+    files = MemoryFileStore()
+    client, spec = _client_and_spec(holder, filestore=files)
+    iid = _item(
+        spec,
+        by="bob",
+        permission=Permission(
+            visibility="restricted", read_meta=["user:carol"], add_content=["user:carol"]
+        ),
+    )
+    await files.write(iid, "/vault/a.txt", b"one")
+    await files.write(iid, "/vault/b.txt", b"two")
+
+    holder["id"] = "carol"
+    r = client.post(_wp(iid, "/files/copy"), json={"from": "/vault", "to": "/mine"})
+    assert r.status_code == 403, r.text
+    assert not await files.exists(iid, "/mine/a.txt")
