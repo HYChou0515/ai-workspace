@@ -9,10 +9,18 @@
  * page then shows for a run that failed.
  *
  * So this drives it with the shapes the platform actually emits.
+ *
+ * OUTSIDE `src/` on purpose. The web image builds from `COPY web/ ./` alone
+ * (docker/Dockerfile), so `sample-skills/` is not there — and `tsconfig`
+ * includes `src`, so a file in `src` reaching across that boundary fails
+ * `tsc --noEmit` inside the image with "Cannot find module". Vitest scans the
+ * whole package by default and runs where the repo is whole, so the test still
+ * drives the SHIPPED file rather than a copy. `web/tests/importBoundary.test.ts`
+ * keeps `src` on its side of the line.
  */
 import { describe, expect, it } from "vitest";
 
-import { reduceRunEvent } from "../../../../sample-skills/wui/examples/complete/src/workspace";
+import { reduceRunEvent } from "../../sample-skills/wui/examples/complete/src/workspace";
 
 const FRESH = { note: "", done: false, failed: false };
 
