@@ -266,8 +266,9 @@ export type AppManifest = AppSummary & {
 
 /** One row in an App's item list — the WorkItem fields plus its resource id.
  * App-declared (Tier 3) fields are extra keys read dynamically via `layout`.
- * `created_time` / `created_by` come from specstar's revision metadata (always
- * present); the FE surfaces them directly rather than falling back to `data`. */
+ * `created_time` / `created_by` are the RESOURCE's (specstar `meta`), never the
+ * latest revision's — the two diverge the moment anybody else edits — and never
+ * the domain `owner` field, which any editor may repoint. */
 export type AppItem = {
   resource_id: string;
   title: string;

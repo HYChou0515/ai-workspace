@@ -60,7 +60,7 @@ type SpecstarRevisionInfo = {
  *  moment anybody else edits. */
 type SpecstarMeta = {
   created_by: string;
-  created_time?: string;
+  created_time: string;
   updated_time?: string;
 };
 
@@ -81,6 +81,14 @@ type SpecstarEntry<T> = {
  * let them straight in. `meta.created_by` is what the backend reads. */
 function creatorOf(e: SpecstarEntry<unknown>): string {
   return e.meta.created_by;
+}
+
+/** When the item was CREATED — the resource's time, not the latest revision's.
+ *  Same envelope, same confusion: `revision_info.created_time` is when THAT
+ *  revision was written, so the "Opened" footer showed the last-edit date the
+ *  moment anybody edited. */
+function createdAt(e: SpecstarEntry<unknown>): string {
+  return e.meta.created_time;
 }
 
 type ConversationStruct = {
@@ -234,7 +242,7 @@ export const realApi: ApiClient = {
     return arr.map(
       (e): AppItem => ({
         resource_id: e.revision_info.resource_id,
-        created_time: e.revision_info.created_time,
+        created_time: createdAt(e),
         updated_time: e.revision_info.updated_time,
         created_by: creatorOf(e),
         ...(e.data as { title: string; owner: string }),
@@ -252,7 +260,7 @@ export const realApi: ApiClient = {
     );
     return {
       resource_id: e.revision_info.resource_id,
-      created_time: e.revision_info.created_time,
+      created_time: createdAt(e),
       updated_time: e.revision_info.updated_time,
       created_by: creatorOf(e),
       ...(e.data as { title: string; owner: string }),
