@@ -54,11 +54,34 @@ type SpecstarRevisionInfo = {
   updated_by?: string;
 };
 
+/** Resource-level facts, as opposed to `revision_info`, which describes ONE
+ *  revision. `created_by` here is who created the resource; the same key on
+ *  `revision_info` is who wrote the latest revision, and the two diverge the
+ *  moment anybody else edits. */
+type SpecstarMeta = {
+  created_by: string;
+  created_time?: string;
+  updated_time?: string;
+};
+
 type SpecstarEntry<T> = {
   data: T;
   revision_info: SpecstarRevisionInfo;
-  meta?: unknown;
+  meta: SpecstarMeta;
 };
+
+/** The item's OWNER for access decisions — its creator, never its last editor.
+ *
+ * `useItemAccess` short-circuits every verb on `me === item.created_by`, and
+ * this used to be `revision_info.created_by`: the author of the newest revision.
+ * One edit by anyone else — an admin picking a preset, tweaking a description —
+ * rewrote that to the admin, and the creator became a stranger on their own
+ * restricted item: no `read_chat` grant, so the page drew the 🔒 locked row and
+ * "request access", while the backend (which reads the real creator) would have
+ * let them straight in. `meta.created_by` is what the backend reads. */
+function creatorOf(e: SpecstarEntry<unknown>): string {
+  return e.meta.created_by;
+}
 
 type ConversationStruct = {
   // #139: the backend `Conversation` struct serializes its owning-item handle
@@ -213,7 +236,7 @@ export const realApi: ApiClient = {
         resource_id: e.revision_info.resource_id,
         created_time: e.revision_info.created_time,
         updated_time: e.revision_info.updated_time,
-        created_by: e.revision_info.created_by,
+        created_by: creatorOf(e),
         ...(e.data as { title: string; owner: string }),
       }),
     );
@@ -231,7 +254,7 @@ export const realApi: ApiClient = {
       resource_id: e.revision_info.resource_id,
       created_time: e.revision_info.created_time,
       updated_time: e.revision_info.updated_time,
-      created_by: e.revision_info.created_by,
+      created_by: creatorOf(e),
       ...(e.data as { title: string; owner: string }),
     } satisfies AppItem;
   },
