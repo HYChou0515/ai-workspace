@@ -17,14 +17,6 @@ import { useT } from "../../lib/i18n";
 import { buildFileTree, pruneTree, type TreeNode } from "./fileTree";
 import { useLazyDirs } from "./useLazyDirs";
 
-/** A folder's open/closed state, as the rows read and flip it. */
-type OpenState = {
-  isOpen: (path: string) => boolean;
-  toggle: (path: string) => void;
-  /** An opened lazy folder whose level has not arrived: drawn as loading, so
-   * "still fetching" and "empty" do not look the same. */
-  isLoading: (path: string) => boolean;
-};
 import { basename } from "./renderer";
 import { nextSelection, type SelState, topLevel, visibleOrder } from "./treeSelection";
 import { folderState, toggleSubtree } from "./treeCheckbox";
@@ -37,6 +29,17 @@ import { relPath } from "../../lib/relPath";
 const isExternalDrag = (e: React.DragEvent): boolean =>
   !e.dataTransfer.types.includes("application/x-rca-file") &&
   e.dataTransfer.types.includes("Files");
+
+/** A folder's open/closed state, as the rows read and flip it. */
+type OpenState = {
+  isOpen: (path: string) => boolean;
+  toggle: (path: string) => void;
+  /** An opened lazy folder whose level has not arrived: drawn as loading, so
+   * "still fetching" and "empty" do not look the same. */
+  isLoading: (path: string) => boolean;
+  /** …and one whose fetch failed, so "could not load" and "empty" do not either. */
+  hasFailed: (path: string) => boolean;
+};
 
 type OpenFn = (path: string, opts?: { preview?: boolean }) => void;
 
@@ -237,7 +240,12 @@ export function FileTree({
         : { tree: fullTree, expand: NO_FORCE_OPEN },
     [searchable, fullTree, query],
   );
-  const open: OpenState = { isOpen, toggle: toggleOpen, isLoading: (p) => lazy.loading.has(p) };
+  const open: OpenState = {
+    isOpen,
+    toggle: toggleOpen,
+    isLoading: (p) => lazy.loading.has(p),
+    hasFailed: (p) => lazy.failed.has(p),
+  };
   const [menu, setMenu] = useState<Menu | null>(null);
   // Inline creator (VSCode-style): type the name straight in the tree.
   const [creating, setCreating] = useState<{ kind: "file" | "folder"; dir: string } | null>(null);
@@ -308,7 +316,22 @@ export function FileTree({
       // Preserve folder structure when a directory was picked.
       const rel = (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name;
       const path = `${targetDir}/${rel}`.replace(/\/+/g, "/");
-      if ((await pathExists(path)) && !confirm(`${path} exists. Overwrite?`)) continue;
+      // A failed "is it there?" is not "no" — that would be the silent
+      // overwrite again — and it must not abort the drop either: report this
+      // file, go on with the rest.
+      let taken: boolean;
+      try {
+        taken = await pathExists(path);
+      } catch (err) {
+        problems.push(
+          t("workspace.upload.error", {
+            name: f.name,
+            reason: err instanceof Error ? err.message : String(err),
+          }),
+        );
+        continue;
+      }
+      if (taken && !confirm(`${path} exists. Overwrite?`)) continue;
       try {
         await svc.writeFile(path, f);
       } catch (err) {
@@ -1050,6 +1073,7 @@ function TreeRow({
   readDragFile: (e: React.DragEvent) => { paths: string[] } | null;
 }) {
   const indent = 8 + depth * 12;
+  const t = useT();
   // A filter match forces this dir open even if the user had collapsed it (#402).
   const isCollapsed = !open.isOpen(node.path) && !forceOpen.has(node.path);
   const [dropOver, setDropOver] = useState(false);
@@ -1192,6 +1216,19 @@ function TreeRow({
         )}
         {!isCollapsed && (
           <>
+            {open.hasFailed(node.path) && (
+              <div
+                data-testid="lazy-failed"
+                role="status"
+                style={{
+                  padding: `2px 14px 2px ${indent + 20}px`,
+                  color: "var(--err)",
+                  fontSize: pxToRem(11),
+                }}
+              >
+                {t("workspace.tree.loadFailed")}
+              </div>
+            )}
             {open.isLoading(node.path) && (
               <div
                 data-testid="lazy-loading"

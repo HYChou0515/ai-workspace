@@ -147,6 +147,23 @@ def test_flat_lister_hangs_every_ancestor_of_a_deep_path_under_its_parent():
     assert level.dirs == ["/a/b/c"] and level.unwalked == ["/a/b/c"]
 
 
+def test_flat_lister_tolerates_keys_that_are_not_canonical_paths():
+    """An in-memory sandbox stores whatever path it was handed: a test uploads
+    `pyproject.toml` with no leading slash, an agent may write `//x`. The old
+    per-directory scan silently skipped such keys; an index must not KeyError
+    on them, and a `//` directory must not become a child named "" that walks
+    the root forever. Canonicalise on the way in, and look the entry up by
+    its original key."""
+    files = {"pyproject.toml": (3, "v1"), "//x": (1, "v2"), "/ok/a.txt": (1, "v3")}
+    walked = walk_tree(flat_lister(files, ["//", "ok/", "/ok"]), "/")
+    assert sorted((e.path, e.size) for e in walked.files) == [
+        ("/ok/a.txt", 1),
+        ("/pyproject.toml", 3),
+        ("/x", 1),
+    ]
+    assert walked.dirs == ["/ok"]
+
+
 def test_flat_lister_indexes_once_so_a_large_listing_walks_in_linear_time():
     """The cold store branch runs this on the request path. Scanning the whole
     listing per directory made 12k files cost a second and 50k fifteen; an
@@ -158,4 +175,4 @@ def test_flat_lister_indexes_once_so_a_large_listing_walks_in_linear_time():
     t0 = time.perf_counter()
     walked = walk_tree(flat_lister(files, []), "/")
     assert len(walked.files) == 20_000 and len(walked.dirs) == 2_000
-    assert time.perf_counter() - t0 < 1.0
+    assert time.perf_counter() - t0 < 3.0

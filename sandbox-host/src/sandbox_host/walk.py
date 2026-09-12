@@ -171,6 +171,15 @@ def flat_lister(files: Mapping[str, tuple[int, str]], dirs: Iterable[str]) -> Li
     # store branch.
     subdirs: dict[str, set[str]] = {"/": set()}
     subfiles: dict[str, list[str]] = {}
+    # Canonical path -> the key the listing spelled it with. An in-memory
+    # sandbox stores whatever it was handed (`pyproject.toml`, `//x`); the
+    # old per-directory scan silently skipped such keys, an index must not
+    # KeyError on them — and a `//` directory must not become a child named
+    # "" whose path is the root again, walked forever.
+    entry_key: dict[str, str] = {}
+
+    def canonical(path: str) -> str:
+        return "/" + "/".join(seg for seg in path.split("/") if seg)
 
     def record_dir(path: str) -> None:
         # Hang `path` under its parent, then the parent under ITS parent, and
@@ -186,11 +195,16 @@ def flat_lister(files: Mapping[str, tuple[int, str]], dirs: Iterable[str]) -> Li
             path = parent
 
     for d in dirs:
-        record_dir(d)
-    for f in files:
-        parent, _, name = f.rpartition("/")
+        record_dir(canonical(d))
+    for key in files:
+        path = canonical(key)
+        if path == "/":
+            continue
+        parent, _, name = path.rpartition("/")
         record_dir(parent)
-        subfiles.setdefault(parent or "/", []).append(name)
+        if path not in entry_key:
+            subfiles.setdefault(parent or "/", []).append(name)
+        entry_key[path] = key
 
     def list_dir(rel: str) -> Iterable[Entry]:
         if rel not in subdirs:
@@ -199,7 +213,7 @@ def flat_lister(files: Mapping[str, tuple[int, str]], dirs: Iterable[str]) -> Li
             yield Entry(name, "dir")
         base = "" if rel == "/" else rel
         for name in sorted(subfiles.get(rel, ())):
-            size, version = files[f"{base}/{name}"]
+            size, version = files[entry_key[f"{base}/{name}"]]
             yield Entry(name, "file", size, version)
 
     return list_dir

@@ -1245,6 +1245,10 @@ export const messages = {
   // collapsed and load on expand, so a filter can only see what has loaded.
   // Said only in that case — the derived folders (node_modules, …) are always
   // lazy, and every IDE leaves those out of a filter without a word.
+  "workspace.tree.loadFailed": {
+    "zh-TW": "這個資料夾載入失敗,收起再展開可重試。",
+    en: "This folder could not be loaded — collapse and expand it to retry.",
+  },
   "workspace.tree.partial": {
     "zh-TW": "檔案太多,部分資料夾要展開才會載入;篩選只涵蓋已載入的部分。",
     en: "Too many files: some folders load when expanded, and the filter only covers what has loaded.",

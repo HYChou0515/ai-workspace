@@ -363,6 +363,16 @@ CLAUDE.md 架構段加一條「檔案樹是預載修剪樹 + 懶目錄」,把 `T
 - `flat_lister` 每個目錄掃整份清單(O(dirs×entries)):12k 檔 1.1 秒、50k 檔 15 秒,在冷 specstar 路徑落在請求上。改成建一次索引。
 - 展開中的懶目錄沒有載入指示,跟「空的」分不出來。
 
+第三輪(只看第二輪的修法;源自它的發現:**2 條**):
+- `flat_lister` 的索引假設 key 是正規路徑:in-memory sandbox 存的是原字串(`pyproject.toml` 沒有前導 `/`、agent 可能寫 `//x`),
+  舊的逐目錄掃描會默默略過,索引則 `KeyError`;`//` 目錄會變成名為 `""` 的子節點、路徑又是 root → **無限迴圈**。
+  既有測試 `test_workflow_run_node_env.py` 因此紅。修:進索引前正規化、用原 key 查 entry、空名跳過。
+- upload 迴圈裡 `await pathExists` 在 try 外面:`exists` 失敗(502/斷線)→ 整批上傳靜默中止、什麼都沒顯示。修:接住、記進 `problems`、繼續下一個;
+  失敗**不等於**「不存在」。
+- 已知未修(LOW):`exists` 只答檔案,懶目錄底下**資料夾形狀**的撞名(新檔取了既有子資料夾的名字)沒有 Replace 提示 ——
+  搬移/改名走後端 409 會 alert,新檔在暖路徑 500、冷路徑在旁邊建同名檔。要修得開 `is_dir` 路由或讓 `exists` 回 kind;記著。
+- 懶目錄抓取失敗時畫「載入失敗」,不再看起來像空的(P3 起就有的洞,順手補)。
+
 ### 6.7 冷路徑 `prefix` 從「假的」變「真的」
 
 `nfs_tree` 的 `tree()` 從 `prefix` 開始 scandir,所以 `?prefix=/node_modules&depth=1` 在冷 item 上

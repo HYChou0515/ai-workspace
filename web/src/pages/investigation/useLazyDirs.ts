@@ -34,6 +34,8 @@ export type LazyDirs = {
   unwalked: string[];
   /** Opened lazy folders whose level has not arrived yet. */
   loading: ReadonlySet<string>;
+  /** Opened lazy folders whose fetch failed — drawn as such, not as empty. */
+  failed: ReadonlySet<string>;
 };
 
 /** How the tree answers "is this folder open" for the two kinds of folder —
@@ -81,6 +83,7 @@ export function useLazyDirs(
   // changed — and the tree's own memo (built from it) keeps paying off.
   const levels = useStable(results.map((r) => r.data));
   const pending = useStable(requested.filter((_, i) => results[i]!.isPending));
+  const errored = useStable(requested.filter((_, i) => results[i]!.isError));
   return useMemo(() => {
     const files: FileInfo[] = [];
     const dirs: string[] = [];
@@ -91,8 +94,8 @@ export function useLazyDirs(
       dirs.push(...level.dirs);
       nested.push(...level.unwalked);
     }
-    return { files, dirs, unwalked: nested, loading: new Set(pending) };
-  }, [levels, pending]);
+    return { files, dirs, unwalked: nested, loading: new Set(pending), failed: new Set(errored) };
+  }, [levels, pending, errored]);
 }
 
 /** The same array instance for as long as its elements are the same. */

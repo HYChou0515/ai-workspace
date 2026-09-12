@@ -285,4 +285,49 @@ describe("<FileTree /> lazy folders", () => {
     await user.click(screen.getByText("node_modules"));
     expect(await screen.findByTestId("lazy-loading")).toBeInTheDocument();
   });
+
+  it("reports a file whose 'is it there?' question failed, and keeps uploading the rest", async () => {
+    // A failed `exists` is not "no": treating it as one is the silent
+    // overwrite again, and letting it reject aborted the whole drop with
+    // nothing on screen — later files never attempted, no notice.
+    const { svc } = lazyService({});
+    const exists = vi.fn(async (path: string) => {
+      if (path === "/dist/bad.html") throw Object.assign(new Error("gateway"), { status: 502 });
+      return false;
+    });
+    const writeFile = vi.fn(async () => {});
+    renderWithQuery(
+      <FileServiceProvider value={{ ...svc, exists, writeFile }}>
+        <FileTree
+          files={[{ path: "/src/a.py", size: 1 }]}
+          dirs={["/src", "/dist"]}
+          unwalked={["/dist"]}
+          activePath={null}
+          onOpen={vi.fn()}
+        />
+      </FileServiceProvider>,
+    );
+    fireEvent.drop(screen.getByText("dist"), {
+      dataTransfer: {
+        types: ["Files"],
+        files: [new File(["x"], "bad.html"), new File(["y"], "good.html")],
+        items: [],
+        getData: () => "",
+      },
+    });
+    await waitFor(() => expect(writeFile).toHaveBeenCalledWith("/dist/good.html", expect.anything()));
+    expect(writeFile).not.toHaveBeenCalledWith("/dist/bad.html", expect.anything());
+    expect(await screen.findByTestId("upload-problems")).toHaveTextContent("bad.html");
+  });
+
+  it("says when an opened lazy folder failed to load, instead of looking empty", async () => {
+    const user = userEvent.setup();
+    const listTree = vi.fn(async () => {
+      throw Object.assign(new Error("gateway"), { status: 502 });
+    });
+    const svc: FileService = { ...investigationFileService("rca", "inv-lazy"), listTree };
+    renderTree(svc, ["/node_modules"]);
+    await user.click(screen.getByText("node_modules"));
+    expect(await screen.findByTestId("lazy-failed")).toBeInTheDocument();
+  });
 });
