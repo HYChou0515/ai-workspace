@@ -86,6 +86,23 @@ mirror(`sync/sandbox_sync.py:150,182`)、`disk_usage`(`sandbox/docker.py:221`)�
 | 樹的狀態:`usePersistentSet("rca:tree-collapsed:…")`,**收起集合、預設全展開** | `FileTree.tsx:159`、`:953` |
 | facade 有 `exists()` 點查(暖 → `sb.exists`,冷 → `fs.exists`),**沒有 HTTP 路由** | `facade.py:637-643` |
 
+### 1.6 正式環境的「冷」不是 §1.1 那條冷路徑
+
+正式環境是 `sandbox.kind: http` + `host_managed_durable`。這個拓撲下:
+
+| 事實 | 位置 |
+|---|---|
+| item 的 sandbox address **只在刪 item 時清掉**;閒置 reap、關閉環境都**不清** | `api/item_routes.py:889`;`registry.py:835-836` 明寫「never cleared here」 |
+| 所以閒置後重開:`_warm` 探到 `SandboxNotFound` → **rebuild**,不是走 nfs_tree 冷路徑 | `files/facade.py:330-336` |
+| rebuild = host `create` 內**同步** rsync restore 整個歸檔,回來才 `mark_ready` | `sandbox-host/app.py:343-350` |
+| 歸檔的 rsync **沒有任何排除清單**(`-rlptD`,無 `--exclude`);app-side 的 `DEFAULT_IGNORES` mirror 在 host-managed 下**根本不跑** | `nfs_archive.py:43`;`registry.py:160-163` |
+| 因此 `node_modules/`、`.venv/`、`.git/` 全在歸檔裡,restore 會**整批搬回來** | 同上 |
+| §1.1 的 nfs_tree 冷路徑只在**沒有 address** 的 item 走到:從沒跑過 turn 的、或 #366 之前建的 | `registry.py:199-204` |
+
+結論:**一個有 `node_modules/` 的 item(有跑過 npm install ⇒ 有 address),閒置後第一次打開付的是
+「rsync restore 一萬兩千個檔 + 暖路徑 walk 一萬兩千個 entry」兩段**,本計畫只修第二段。
+nfs_tree 冷路徑仍然要修(user 點名、而且它今天是假 prefix),但它不是那 50 秒的主場。
+
 ---
 
 ## 2. 鎖定的決策
@@ -93,7 +110,7 @@ mirror(`sync/sandbox_sync.py:150,182`)、`disk_usage`(`sandbox/docker.py:221`)�
 | 決策 | 內容 |
 |---|---|
 | **混合:預載修剪過的整棵** | 一次 walk,走到修剪清單裡的目錄**記下它存在、不進去**。修剪掉的目錄在樹上是**收起的節點、有 chevron**;展開 → `GET /tree?prefix=/node_modules&depth=1` 讀那一層,它的子目錄再懶 |
-| **修剪 ≠ 隱藏** | 修剪只決定「不預載」。mirror 照它自己的規則保存(`dist/` 會、`node_modules/` 一樣不會)、額度照算 bytes(#538 那條「樹顯示的就要算」不變)、展開看得到、⌘P / agent `show_file` 打得開 |
+| **修剪 ≠ 隱藏** | 修剪只決定「不預載」。保存規則**一個字不動**(app-side mirror 照 `DEFAULT_IGNORES` 不存 `node_modules/`;正式環境 host-managed 的 rsync 歸檔沒有排除清單、全部都存 —— §1.6)、額度照算 bytes(#538 那條「樹顯示的就要算」不變)、展開看得到、⌘P / agent `show_file` 打得開 |
 | **修剪清單 = `DEFAULT_IGNORES` 裡的目錄 pattern + `dist/` + `build/`** | user:「先把常用的放進去」。一個**新常數** `TREE_PRUNE`,從 `DEFAULT_IGNORES` **導出**(同一個變數,不是抄一份數字),再加兩個。**不改 `DEFAULT_IGNORES` 本身** —— 它有兩個消費者(§1.3),加 `dist/` 進去會停止備份 `dist/` 並把裡面的排程靜默關掉。「不預載」是第三種語意,前兩種不動 |
 | **只有目錄能修剪** | `*.pyc` 這種檔案 pattern 不進 `TREE_PRUNE`:檔案沒有「收起」可言,不列就是隱藏 |
 | **沒有新的 sandbox op** | `walk(handle, root, *, depth=None, prune=(), max_entries=None)`,三個可選參數,8 個既有呼叫者一行不改。`WalkResult` 多兩個欄位:`unwalked: list[str]`(列出了但沒進去的目錄)、`truncated: bool`。API 端 `GET /tree?prefix=&depth=`;修剪清單和上界是**伺服端政策**,前端只選 depth |
@@ -328,3 +345,17 @@ CLAUDE.md 架構段加一條「檔案樹是預載修剪樹 + 懶目錄」,把 `T
 `nfs_tree` 的 `tree()` 從 `prefix` 開始 scandir,所以 `?prefix=/node_modules&depth=1` 在冷 item 上
 真的只碰那一層。這是修正不是風險 —— 但它同時意味著**冷暖兩條路第一次有相同的成本形狀**,
 P2 的冷路徑測試要記「哪些目錄被列」,不是只看結果。
+
+### 6.7 做完之後,閒置後重開**還是會等** —— restore 那一段不在這包
+
+§1.6:正式環境閒置後第一次打開 = rsync restore 整個歸檔 + walk。本計畫把 walk 從「一萬兩千個 entry
+× 2.81 趟」壓到「幾百個 entry × ~1 趟」,但 restore 仍然搬一萬兩千個檔。**那 50 秒有多少是 restore、
+多少是 walk,從這裡量不出來**(NFS 延遲本機重現不了;要在 host 上對一個真歸檔跑一次 restore 計時)。
+
+修 restore 的方法是給歸檔的 rsync 加排除清單 —— 但那是**保存政策**:排掉 `node_modules/` 等於
+「閒置 reap 之後裝好的套件不會回來」,是資料保留的產品決定,不是檔案樹的效能決定。把它塞進這包會讓
+一個 UI 效能 PR 夾帶一條資料保留規則的改變。**分開決定,先量再談。**
+
+同一個發現順帶指出一件事:`/my-resources` 執行環境區那句「裝好的套件與版本紀錄不會保留」是照
+app-side mirror 寫的;host-managed 拓撲下 workspace 內的 `node_modules/`、`.venv/` **會**跟著歸檔回來
+(只有 `.home` 裡 pip `--user` 裝的不會)。那句話在正式環境上是半錯的 —— 另開一票,不在這包。
