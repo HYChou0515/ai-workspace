@@ -15,7 +15,15 @@ from typing import Protocol
 
 from msgspec import Struct
 
-_TOKEN = re.compile(r"\S+")
+from .tokens import CJK_RANGES
+
+# A token is ONE CJK character, or a maximal run of other non-whitespace. CJK
+# scripts have no word spaces, so a whitespace tokenizer (`\S+`) made a whole
+# line — or a whole paragraph — one token: measured, a 12k-char Chinese document
+# came out as ONE chunk, and PDF-style Chinese averaged 7,343 chars/chunk against
+# English's 1,797 (plan-rag-context P1). The character class is `tokens.py`'s,
+# so the "≈ N tokens" estimate and the chunker agree on what a CJK token is.
+_TOKEN = re.compile(f"[{CJK_RANGES}]|[^\\s{CJK_RANGES}]+")
 
 logger = logging.getLogger(__name__)
 

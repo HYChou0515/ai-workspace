@@ -381,3 +381,29 @@ collection 開過的部署，這五張表是空的，跑起來不會有任何列
 寫在 [部署說明 §11 —— 上下文窗口與自動壓縮](deployment.md#上下文窗口與自動壓縮誰決定怎麼確認什麼時候才需要你出手)。
 
 規則本身只寫在那一邊 —— 兩份會漂移。
+
+## 不是資料遷移,但升版後要跑一次:含中文文件的重新索引(plan-rag-context P1)
+
+`kb/chunker.py` 的 tokenizer 從「以空白隔開的一串算一個 token」改成「**每個 CJK 字算一個
+token**,其餘照舊」(字元類共用 `kb/tokens.py:CJK_RANGES`)。舊規則下中文沒有空白,一整行、
+一整段就是一個 token,所以 `max_tokens=256` 對中文等於 256 **段**:實測一份 12,358 字的中文
+文件切出來只有 **1 個 chunk**;PDF 樣式(每視覺行換行)平均 7,343 字/塊,英文同樣設定是
+1,797。一份文件一個向量 ⇒ 檢索排名對中文結構性地差,而且 rerank prompt 一次就是十幾萬字。
+
+**chunk 是衍生資料**:升版只影響之後索引的文件,既有 chunk 停在舊切法,直到重新索引。
+這不走 `migrate/execute`(chunk 不是「重抽 indexed_data」能修的,要重切、重 embed),走
+**整個 collection 的重讀**:
+
+```bash
+# 每個含中文文件的 collection 各打一次(#569 的全部重讀;#390 的 index cache 會先被丟掉,
+# 所以是真的重算,不會複製回舊切法的 chunk)
+curl -X POST "$BASE/api/kb/collections/<collection_id>/reindex"
+```
+
+怎麼判斷還沒跑:文件頁上一份幾千字的中文文件 chunk 數是 1(或個位數),就是舊切法。
+
+⚠️ **一個時間差**:`copy_from_cache`(上傳的快取路徑)在重讀跑完**之前**,對「以前索引過的
+相同內容」再上傳一次會直接複製舊切法的 chunk。重讀會把有文件對應的 cache entry 全換新;
+沒有任何文件對應的孤兒 entry 只在同內容再上傳時才會命中,遇到就對那份文件按一次 reindex。
+
+不需要跑的部署:語料裡沒有 CJK 文字的(英文文件的切法逐位元不變)。
