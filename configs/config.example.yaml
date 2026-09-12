@@ -714,6 +714,18 @@
 #                                           #   ignores this cap (it still searches every chunk
 #                                           #   via the vector index), so a capped-out chunk can
 #                                           #   still be retrieved. null (default) = uncapped.
+#     context_chars: 2000                   # neighbouring context (plan-rag-context P2): each
+#                                           #   hit is widened to AT LEAST this many chars
+#                                           #   before AND after it, in whole chunks, continuing
+#                                           #   into the adjacent documents (document-tree
+#                                           #   order, same collection) when the document runs
+#                                           #   out. The widened text is what rerank ranks and
+#                                           #   the agent reads; the citation still points at
+#                                           #   the hit. Unconditional on purpose: the text next
+#                                           #   to a match is worded differently, so vector
+#                                           #   search cannot reach it and the model cannot know
+#                                           #   it is missing. 0 = off. Default 2000 (~ one
+#                                           #   neighbouring chunk per side).
 #                                           #   Measure with a #535 eval run before lowering.
 # # Resolution: LLM tool args > caller (context) > default; clamped to max.
 # # Bundled = light (`expand=1, hyde=0, rerank=on`); operators raise expand/hyde

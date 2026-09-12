@@ -21,7 +21,12 @@ from specstar.types import ResourceIsDeletedError
 from ..agent.config_catalog import AgentConfigCatalog
 from ..agent.context import AgentToolContext
 from ..apps.subagents import SubagentDef
-from ..config.schema import EnhancementSettings, OffHoursSettings, PerUserResources
+from ..config.schema import (
+    EnhancementSettings,
+    OffHoursSettings,
+    PerUserResources,
+    RetrievalSettings,
+)
 from ..context_budget import DEFAULT_MAX_TOKENS_WINDOW_RATIO
 
 if TYPE_CHECKING:
@@ -539,6 +544,9 @@ def create_app(
     kb_quality_weight: float = 0.10,
     kb_quality_floor: int | None = None,
     kb_sparse_corpus_cap: int | None = None,
+    # plan-rag-context P2: neighbouring context per side (chars, whole chunks);
+    # `None` = the config default. `0` = off.
+    kb_context_chars: int | None = None,
     # #195: per-turn cap on `kb_search` calls for the KB chat turn + the
     # ask_knowledge_base bridge. `None` ⇒ unlimited (also what other surfaces
     # like Topic Hub use). __main__ threads `settings.kb.max_searches_per_turn`
@@ -1671,6 +1679,9 @@ def create_app(
         quality_weight=kb_quality_weight,
         quality_floor=kb_quality_floor,
         sparse_corpus_cap=kb_sparse_corpus_cap,
+        context_chars=(
+            RetrievalSettings.context_chars if kb_context_chars is None else kb_context_chars
+        ),
     )
     # #535: wire the retrieval-eval coordinator's retriever (built after
     # build_coordinators). Its EvalJob model + auto route are already registered;

@@ -1191,7 +1191,11 @@ def kb_search_impl(
             # cite "p.3 §2.1" in prose, not just an opaque filename.
             loc = format_location(passage.provenance)
             where = f"{passage.filename} ({loc})" if loc else passage.filename
-            lines.append(f"[{idx + 1}] {where}: {passage.text}")
+            # plan-rag-context P2: the agent reads the neighbouring CONTEXT (the
+            # hit widened in whole chunks, possibly into the next file, which is
+            # named on a boundary line); the registered passage above keeps the
+            # bare hit, so the citation snippet and highlight stay exact.
+            lines.append(f"[{idx + 1}] {where}: {passage.context_text or passage.text}")
             passage_texts.append(passage.text)
             passage_doc_ids.append(passage.document_id)
     except Exception:

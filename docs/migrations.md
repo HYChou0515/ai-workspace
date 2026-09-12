@@ -126,13 +126,14 @@ REINDEX TABLE CONCURRENTLY cluster_member_meta;
 | `graph-entity` | v1 | `e21369fb`（2026-08-03） | 走訪要逐列解 blob，慢 | §9 |
 | `graph-entity-link` | v1 | `e21369fb`（2026-08-03） | 走訪要逐列解 blob，慢 | §9 |
 | `graph-relationship` | v1 | `e21369fb`（2026-08-03） | 走訪要逐列解 blob，慢 | §9 |
+| `source-doc` | v10 | plan-rag-context P3（2026-09-12）；`path` 索引本身是 `d1004107`（#263，2026-06-27）加的但當時沒上帳 | ⚠️ **「限定資料夾」搜尋看不到舊文件**：資料夾範圍用 `path.starts_with` 解析，`path` 索引之前寫入的列答不了它，就被當成不在那個資料夾（是**少列**不是排錯）。P2 的前後文走訪是列整個 collection 再從 row 資料讀 `path`，**不**受影響 | §5（本列） |
 | `notification` | — | 待填（WUI 第三輪） | **想要的行為,不用回填**：舊通知不帶 `outbound` 索引值,所以外送掃描永遠看不到它們——第一次接上寄信通道時,不會把平台歷史上所有通知都寄出去一遍 | §5.6 |
 
 一次盤點全部（**dry-run 不寫回，安全**，§3）：
 
 ```bash
 uv run python scripts/run_migrate.py --dry-run \
-  workspace-file doc-chunk cluster-member \
+  workspace-file doc-chunk cluster-member source-doc \
   graph-claim graph-mention graph-entity graph-entity-link graph-relationship
 ```
 
@@ -155,6 +156,7 @@ uv run python scripts/run_migrate.py --dry-run \
 
 | 選項 | 帶進來的 PR | 不設會怎樣 | 細節 |
 | --- | --- | --- | --- |
+| `kb.retrieval.context_chars` | plan-rag-context P2（2026-09-12） | ⚠️ **行為有變**：預設 `2000`——每個檢索命中前後各至少多帶 2000 字元的原文（整塊 chunk、可跨到文件樹上的鄰居檔案），rerank 的 prompt 隨之變長，agent 看到的段落變寬；引用 `[n]` 仍指命中處。設 `0` 回到逐位元相同的舊行為 | configuration.md §9 `context_chars` |
 | `failover.rate_limit_budget_s` | #759（2026-09-03） | ⚠️ **行為有變**：agent 鏈碰到 429 從「快速燒完重試然後 giving up」變成「在原端點等它聲明的窗口」，等待秒數每次 agent run 共用一池，預設上限 2 小時；畫面會出現「請求過於頻繁，N 秒後自動重試」。設 `0` 回到一律切換的舊行為 | configuration.md §11 |
 | `agents.subagent_models` | #770（2026-09-03） | **完全不變**：`run_agent` 不長 `model` 參數，sub-agent 照舊跟 parent turn 同一顆模型（review 以逐位元比對驗證） | configuration.md §7 |
 | `history.max_tokens_window_ratio` | #767（2026-09-04） | ⚠️ **行為有變**：窗口解析多了一段「問 proxy 自己的 `/model/info`」。原本前四段全滅、上限只能是 `unknown` 的部署（自架模型掛在 litellm proxy 後面、用任意別名，最典型），`unknown` 的意思是**歷史從不裁切、自動壓縮從不執行**；現在若 proxy 只答得出 `max_tokens`，會用它 ×0.8 推出一個**標記為估計**的上限，於是裁切與壓縮開始運作。推導值裝不下已知開銷時一律拒收、退回 `unknown`（也就是舊行為）。⚠️ 這一格**沒有「設 0 回到舊行為」**——載入時要求 `0 < ratio <= 1`，`0` 會被擋下；要完全不走推導，就明確設 `history.context_limit`，讓第一段直接答得出來 | `configs/config.example.yaml` 的 `history:` 區塊 |

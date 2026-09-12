@@ -30,7 +30,10 @@ def rerank_passages(
     if not passages:
         logger.debug("rerank: no passages to rerank")
         return passages
-    listing = "\n".join(f"[{i + 1}] {p.text}" for i, p in enumerate(passages))
+    # plan-rag-context P2: rank the neighbouring CONTEXT (what the agent will
+    # read), not the bare hit — a fragment that lacks the answer its neighbours
+    # hold is exactly the passage expansion exists to rescue.
+    listing = "\n".join(f"[{i + 1}] {p.context_text or p.text}" for i, p in enumerate(passages))
     prompt = (
         "Rank the passages by how well they answer the question, most relevant "
         f"first. Reply with the passage numbers in order.\n\nQuestion: {query}\n\n{listing}"

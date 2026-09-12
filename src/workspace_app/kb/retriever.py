@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 import posixpath
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import cast
 
@@ -28,9 +28,10 @@ from specstar.query import ConditionBuilder
 from specstar.types import ResourceIDNotFoundError
 from specstar.util.vector_distance import cosine_distance
 
-from ..config.schema import EnhancementSettings
+from ..config.schema import EnhancementSettings, RetrievalSettings
 from ..resources.kb import DocChunk, RetrievedPassage, SourceDoc
 from .bm25 import bm25_rank, tokenize
+from .context import ChunkSpan, expand_passages
 from .embedder import Embedder
 from .fusion import mmr, rrf_scores
 from .image_embedder import ImageEmbedder
@@ -39,6 +40,7 @@ from .llm import ILlm, OnChunk
 from .merge import ScoredChunk, merge_passages
 from .query import expand_queries, hypothetical_document
 from .rerank import rerank_passages
+from .tree_order import tree_sort_key
 
 logger = logging.getLogger(__name__)
 
@@ -404,6 +406,179 @@ class _DocJoin:
         return out
 
 
+class _ContextSeams:
+    """plan-rag-context P2: the three seams `expand_passages` needs, backed by
+    queries bound to the SAME scope as every retrieval arm. Context fetches
+    documents retrieval did NOT return, so this is a new arm: it goes through
+    the same resource manager (storage-layer access_scope) and applies the same
+    #308 `exclude` AND the same #518 `restrict` — a neighbour the speaker cannot
+    read, or one outside the search's positive scope, is never listed, never
+    read, never named.
+
+    Per-search caches: a document's chunk boundaries are read once (metadata
+    only — never the vectors); a collection's tree order is listed once and only
+    when a walk actually reaches a document edge (the common case, a hit in the
+    middle of a long document, never lists anything).
+    """
+
+    #: SourceDoc fields the walk needs — never the text or the blob.
+    _META = ["/collection_id", "/path", "/content/file_id", "/parent_doc_id"]
+
+    def __init__(
+        self,
+        spec: SpecStar,
+        join: _DocJoin,
+        texts: dict[str, str],
+        text_of: Callable[[str], str],
+        exclude: _Exclusion | None,
+        restrict: _Restriction | None,
+        overlay: Overlay | None,
+        passages: Iterable[RetrievedPassage],
+    ) -> None:
+        self._spec = spec
+        self._join = join
+        self._texts = texts  # the search's batch text cache — extended, not copied
+        self._base_text_of = text_of
+        self._exclude = exclude
+        # #518: a positive scope ("only inside these documents" — a card's links,
+        # or a folder). Context may not leave it: a walk that spilled outside
+        # would deliver, and NAME, documents the search was told to ignore.
+        self._within = frozenset(restrict.doc_ids) if restrict is not None else None
+        self._overlay = overlay
+        self._spans: dict[str, list[ChunkSpan]] = {}
+        self._order: dict[str, list[str]] = {}  # collection_id -> doc ids, tree order
+        self._meta: dict[str, tuple[str, str, str]] = {}  # doc -> (collection, path, file_id)
+        # The hit documents' metadata, then their chunk boundaries, each in ONE
+        # batched read — not a query per candidate (the `_DocJoin` rule).
+        hit_docs = {p.document_id for p in passages}
+        self._load_meta(hit_docs)
+        self._load_spans(hit_docs)
+
+    def _load_meta(self, doc_ids: Iterable[str]) -> None:
+        missing = sorted(set(doc_ids) - set(self._meta))
+        if not missing:
+            return
+        rm = self._spec.get_resource_manager(SourceDoc)
+        query = QB.resource_id().in_(missing).build()
+        for r in rm.list_resources(query, returns=["data", "info"], partial=self._META):
+            doc = cast(SourceDoc, r.data)
+            rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
+            self._meta[rid] = (doc.collection_id, doc.path, _content_file_id(doc))
+
+    def chunks_of(self, doc_id: str) -> list[ChunkSpan]:
+        if self._overlay is not None and doc_id == self._overlay.shadow_doc_id:
+            # #328: the shadowed doc's chunks are the in-memory virtual ones, under
+            # the ids the candidate set gave them.
+            spans = sorted(
+                (
+                    ChunkSpan(f"__overlay__{i}", doc_id, vc.seq, vc.start, vc.end)
+                    for i, vc in enumerate(self._overlay.virtual_chunks)
+                ),
+                key=lambda sp: sp.seq,
+            )
+            self._spans[doc_id] = spans
+            return spans
+        if doc_id not in self._spans:  # a neighbour outside the hit set
+            self._load_spans([doc_id])
+        return self._spans[doc_id]
+
+    def _load_spans(self, doc_ids: Iterable[str]) -> None:
+        """Chunk boundaries (seq / start / end — never the vector) for every
+        document in `doc_ids` not yet cached, in ONE query. Content-addressed
+        first (#104): a chunk is attributed to each requested document holding its
+        `(collection, file_id)`, falling back to its own `source_doc_id` for
+        legacy rows. The same #308 `exclude` every arm applies."""
+        wanted = sorted(set(doc_ids) - set(self._spans))
+        if not wanted:
+            return
+        self._load_meta(wanted)
+        for d in wanted:
+            self._spans[d] = []  # a document that is gone / chunkless reads as empty
+        by_content: dict[tuple[str, str], list[str]] = {}
+        collections: set[str] = set()
+        for d in wanted:
+            meta = self._meta.get(d)
+            if meta is None:
+                continue
+            collection_id, _path, file_id = meta
+            collections.add(collection_id)
+            if file_id:
+                by_content.setdefault((collection_id, file_id), []).append(d)
+        if not collections:
+            return
+        by_doc = QB["source_doc_id"].in_(wanted)
+        fids = sorted({fid for _c, fid in by_content})
+        cond = (QB["source_file_id"].in_(fids) | by_doc) if fids else by_doc
+        cond = QB["collection_id"].in_(sorted(collections)) & cond
+        if self._exclude:
+            cond = cond & self._exclude.condition()
+        rm = self._spec.get_resource_manager(DocChunk)
+        fields = ["/seq", "/start", "/end", "/collection_id", "/source_doc_id", "/source_file_id"]
+        for r in rm.list_resources(cond.build(), returns=["data", "info"], partial=fields):
+            ch = cast(DocChunk, r.data)
+            rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
+            owners = by_content.get((ch.collection_id, ch.source_file_id), [])
+            if not owners and ch.source_doc_id in self._spans:
+                owners = [ch.source_doc_id]
+            for d in owners:
+                self._spans[d].append(ChunkSpan(rid, d, ch.seq, ch.start, ch.end))
+        for d in wanted:
+            self._spans[d].sort(key=lambda sp: sp.seq)
+
+    def text_of(self, doc_id: str) -> str:
+        # A neighbouring document is outside the search's batch: extend the batch
+        # cache through the same batched read, then serve it the usual way (which
+        # also keeps the overlay's virtual text and the legacy fallback in one
+        # place).
+        shadow = self._overlay is not None and doc_id == self._overlay.shadow_doc_id
+        if doc_id not in self._texts and not shadow:
+            self._texts.update(self._join.texts_for([doc_id]))
+        return self._base_text_of(doc_id)
+
+    def neighbours(self, doc_id: str) -> tuple[str | None, str | None]:
+        self._load_meta([doc_id])
+        meta = self._meta.get(doc_id)
+        if meta is None:
+            return (None, None)
+        order = self._tree_order(meta[0])
+        try:
+            i = order.index(doc_id)
+        except ValueError:  # not listed (e.g. a pre-index row) — no neighbours
+            return (None, None)
+        prev = order[i - 1] if i > 0 else None
+        nxt = order[i + 1] if i + 1 < len(order) else None
+        return (prev, nxt)
+
+    def _tree_order(self, collection_id: str) -> list[str]:
+        if collection_id in self._order:
+            return self._order[collection_id]
+        rm = self._spec.get_resource_manager(SourceDoc)
+        query = (QB["collection_id"] == collection_id).build()
+        denied = self._exclude.doc_ids_set if self._exclude else frozenset()
+        listed: list[tuple[str, str]] = []  # (path, doc_id)
+        for r in rm.list_resources(query, returns=["data", "info"], partial=self._META):
+            doc = cast(SourceDoc, r.data)
+            rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
+            self._meta[rid] = (doc.collection_id, doc.path, _content_file_id(doc))
+            # #513 P7 attachments are grouped under their parent in the FE tree, not
+            # placed in the path order — and a pre-v9 row has no `parent_doc_id`
+            # cell, so this is a Python-side test (missing = top-level), like the FE.
+            if doc.parent_doc_id or rid in denied:
+                continue
+            if self._within is not None and rid not in self._within:
+                continue
+            listed.append((doc.path, rid))
+        listed.sort(key=lambda t: tree_sort_key(t[0]))
+        order = [rid for _path, rid in listed]
+        self._order[collection_id] = order
+        return order
+
+    def label_of(self, doc_id: str) -> str:
+        meta = self._meta.get(doc_id)
+        path = meta[1] if meta is not None else self._join.path_of(doc_id)
+        return posixpath.basename(path) if path else doc_id
+
+
 def _content_file_id(doc: SourceDoc) -> str:
     """A doc's content hash, or ``""`` when unset — the content key chunks join on."""
     fid = getattr(doc.content, "file_id", None)
@@ -434,6 +609,7 @@ class Retriever:
         quality_floor: int | None = None,
         sparse_corpus_cap: int | None = None,
         disclosure_floor: float = 0.6,
+        context_chars: int = RetrievalSettings.context_chars,
     ) -> None:
         self._spec = spec
         self._embedder = embedder
@@ -478,6 +654,10 @@ class Retriever:
         # A hyperparameter; tune per embedder. cosine distance ∈ [0, 2]; 0.6 ≈
         # cosine similarity ≥ 0.4.
         self._disclosure_floor = disclosure_floor
+        # plan-rag-context P2: at least this many chars of neighbouring context
+        # each side of a hit, in whole chunks, across documents in tree order.
+        # The default is the config default — ONE number, not two literals.
+        self._context_chars = context_chars
 
     @property
     def top_k(self) -> int:
@@ -761,6 +941,12 @@ class Retriever:
             return cached if cached is not None else self._canonical_text(doc_id)
 
         passages = merge_passages(scored, text_of=text_of)
+        # plan-rag-context P2: widen every merged candidate BEFORE rerank, so the
+        # reranker ranks what will actually be delivered. Ranking the bare
+        # fragment while delivering the expansion would rank a different object,
+        # and with a direction: the passages whose fragment lacks the answer but
+        # whose neighbours hold it are exactly the ones this exists to rescue.
+        passages = self._expand(passages, join, texts, text_of, exclude, restrict, overlay)
         # Final LLM rerank over the merged passages — bool knob.
         if resolved.rerank:
             assert self._llm is not None
@@ -771,6 +957,32 @@ class Retriever:
         # #513 P9: pull in the parent of any attachment hit — AFTER the top_k cut,
         # so the parent context rides along without displacing a primary result.
         return self._augment_with_parents(passages[:limit], join)
+
+    def _expand(
+        self,
+        passages: list[RetrievedPassage],
+        join: _DocJoin,
+        texts: dict[str, str],
+        text_of: Callable[[str], str],
+        exclude: _Exclusion | None,
+        restrict: _Restriction | None,
+        overlay: Overlay | None,
+    ) -> list[RetrievedPassage]:
+        """plan-rag-context P2: neighbouring context for every merged candidate —
+        see `kb.context`. `0` is off and returns the passages untouched."""
+        if self._context_chars <= 0 or not passages:
+            return passages
+        seams = _ContextSeams(
+            self._spec, join, texts, text_of, exclude, restrict, overlay, passages
+        )
+        return expand_passages(
+            passages,
+            min_chars=self._context_chars,
+            chunks_of=seams.chunks_of,
+            text_of=seams.text_of,
+            neighbours=seams.neighbours,
+            label_of=seams.label_of,
+        )
 
     def _augment_with_parents(
         self, passages: list[RetrievedPassage], join: _DocJoin

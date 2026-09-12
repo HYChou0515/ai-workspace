@@ -64,3 +64,20 @@ def test_full_width_and_cjk_bracket_markers_resolve():
     ):
         cites = parse_citations(answer, passages)
         assert [c.marker for c in cites] == [1], answer
+
+
+def test_citation_records_how_far_the_context_reached_but_snippets_the_hit():
+    """plan-rag-context P2: what the model actually SAW is reconstructible from
+    the persisted citation (two offsets, like `start`/`end`), while `snippet`
+    stays the hit so the reference card shows the matched sentence, not two
+    thousand characters."""
+    import msgspec
+
+    hit = _passage("c1/u/a.md", "alpha passage", ["a#0"])
+    widened = msgspec.structs.replace(
+        hit, context_text="before alpha passage after", context_start=0, context_end=26
+    )
+    [c] = parse_citations("alpha [1].", [widened])
+    assert (c.context_start, c.context_end) == (0, 26)
+    assert c.snippet == "alpha passage"
+    assert (c.start, c.end) == (0, 13)

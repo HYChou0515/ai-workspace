@@ -568,6 +568,16 @@ class RetrievalSettings:
     # index), so a capped-out chunk can still be retrieved. null (default) =
     # uncapped. Tune against a #535 eval run before lowering it.
     sparse_corpus_cap: int | None = None
+    # plan-rag-context P2: neighbouring context. Each retrieved passage is
+    # widened to at least this many characters BEFORE the hit and at least this
+    # many AFTER it, taken in whole chunks, continuing into the adjacent
+    # documents (document-tree order, same collection) when the document runs
+    # out. The widened text is what the reranker ranks and the agent reads; the
+    # citation still points at the hit. Why unconditional: the text next to a
+    # match is written in different vocabulary, so vector search cannot reach
+    # it by construction, and the model cannot know it is missing. `0` = off.
+    # Set by judgment (not eval-gated); 2000 ≈ one neighbouring chunk per side.
+    context_chars: int = 2000
 
 
 @dataclass(frozen=True)

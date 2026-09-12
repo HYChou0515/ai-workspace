@@ -165,9 +165,14 @@ a JSON file of `[input names] → expected order` covering digits, leading
 zeros, case, CJK, mixed — is read by both test suites. A change on one side
 reddens the other.
 
-Finding "the next document" needs the folder's sibling listing
-(`SourceDoc.path` is indexed, `starts_with` is a real WHERE), bounded by
-sibling count × depth, and is only reached when a hit sits at a folder edge.
+Finding "the next document" (as implemented): the collection's documents are
+listed ONCE per search — `collection_id ==`, `path` projected from row data,
+attachments and denied / out-of-scope documents dropped, sorted with the rule —
+and only when a walk actually reaches a document edge; a hit in the middle of
+a long document never lists anything. Crossing out of the folder needs the
+whole collection's order anyway, so a per-folder `starts_with` listing would
+not have been simpler, and this way the walk does not depend on the `path`
+index at all.
 
 ### Permission — expansion is a new arm
 
@@ -244,16 +249,15 @@ Context is for the model, not the user: someone who opens the document sees
 the surroundings anyway, and highlighting two thousand characters is the same
 as highlighting nothing.
 
-### Deployment dependency — `source-doc` migrate
+### No deployment dependency (corrected during implementation)
 
-`SourceDoc.path` was made an indexed field on 2026-06-27 (#263, `d1004107`).
-`source-doc` is **not** in the `migrations.md` §5 ledger. A row written before
-that date has no `path` in `indexed_data` and **does not answer
-`starts_with`** — and when the index is filtered on rather than aggregated, a
-missed backfill is not a wrong number, it is a missing row: the neighbour
-lookup would silently skip an older document as if it did not exist. Phase 2
-ships with a `Schema` step for `SourceDoc`, a §5 ledger row, and the deploy
-order (roll out → `POST /source-doc/migrate/execute`).
+The walk lists the collection (`collection_id ==`, indexed since the model
+existed) and reads each row's `path` from its DATA via a projection, then sorts
+in Python — it never issues a `path` predicate, so it does not depend on the
+`path` index and needs no migrate. The plan first assumed a `starts_with`
+lookup here; that dependency is real for **Phase 3's folder scope** (which does
+resolve `path.starts_with(folder)`), and the `SourceDoc` v10 identity step +
+§5 ledger row ship for that.
 
 ## Phase 3 — Scoped search: semantic and exact
 
@@ -347,7 +351,7 @@ units** — a unit is offered where it exists and refused where it does not.
 
 One PR per phase, in order; each carries its own tests, `migrations.md` entry
 and (where a knob is added) example yaml. Phase 1 first — everything else is
-built on chunk boundaries. Phase 2's `source-doc` migrate is part of its deploy
-order, not a follow-up. The frontend sort change and the golden fixture land
+built on chunk boundaries. Phase 3's `source-doc` migrate (the `path` index behind the folder
+scope) is part of its deploy order, not a follow-up. The frontend sort change and the golden fixture land
 with Phase 2 (the backend rule is not "well-defined" for users until the tree
 shows it).

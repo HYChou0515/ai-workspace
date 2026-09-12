@@ -647,3 +647,28 @@ async def test_kb_search_without_glossary_cards_appends_nothing(
 
     assert "[1]" in out
     assert "glossary" not in out.lower()
+
+
+async def test_kb_search_shows_the_agent_the_neighbouring_context_but_registers_the_hit(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # plan-rag-context P2: the line the agent reads carries the widened context
+    # (here: into the next file, boundary named); the registered passage — what
+    # a later [n] cites — is still the hit, so the citation snippet stays exact.
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    ing.ingest(collection_id=cid, user="u", filename="01.md", data=b"a1 a2 a3")
+    ing.ingest(collection_id=cid, user="u", filename="02.md", data=b"b1 b2 b3")
+    ctx = RunContextWrapper(
+        AgentToolContext(
+            retriever=Retriever(spec, embedder=embedder, candidates=1, top_k=1, context_chars=2),
+            collection_ids=[cid],
+        )
+    )
+
+    out = kb_search_impl(ctx, "a1 a2 a3")
+
+    assert "── 02.md ──" in out and "b1 b2 b3" in out
+    [p] = ctx.context.kb_passages
+    assert p.text == "a1 a2 a3"
+    assert p.context_text.endswith("b1 b2 b3")

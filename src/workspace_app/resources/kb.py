@@ -792,7 +792,9 @@ class RetrievedPassage(Struct, frozen=True):
     # snippet, the highlight and every existing reader are untouched — context
     # is for the model, not the user. ``context_start`` / ``context_end`` are the
     # widened range WITHIN this document (what `Citation` records; the spill
-    # into neighbouring documents has no offset here).
+    # into neighbouring documents has no offset here) — the hit span itself
+    # when there was nothing to widen into, ``0 / 0`` only when the feature was
+    # off.
     context_text: str = ""
     context_start: int = 0
     context_end: int = 0

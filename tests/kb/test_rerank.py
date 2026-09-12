@@ -51,3 +51,19 @@ def test_rerank_with_no_numbers_keeps_original_order():
 
 def test_rerank_empty_is_noop():
     assert rerank_passages(_FakeLlm("1"), "q", []) == []
+
+
+def test_rerank_ranks_the_context_the_agent_will_read_not_the_bare_hit():
+    # plan-rag-context P2: the reranker must see what will be DELIVERED. A hit
+    # whose fragment lacks the answer but whose neighbouring context holds it
+    # is exactly the passage expansion exists to rescue; ranking the bare
+    # fragment would bury it.
+    import msgspec
+
+    widened = msgspec.structs.replace(
+        _p("a.md", "alpha"), context_text="before alpha after", context_start=0, context_end=18
+    )
+    llm = _FakeLlm("1")
+    rerank_passages(llm, "which?", [widened, _p("b.md", "beta")])
+    assert "before alpha after" in llm.prompts[0]
+    assert "[2] beta" in llm.prompts[0]  # an unexpanded passage still shows its hit
