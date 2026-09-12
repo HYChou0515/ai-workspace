@@ -458,19 +458,19 @@ async def test_tree_walks_the_workspace_once_for_both_halves() -> None:
     walks = {"n": 0}
 
     class _CountingWalk(MockSandbox):
-        async def walk(self, handle: SandboxHandle, root: str):  # noqa: ANN202
+        async def walk(self, handle: SandboxHandle, root: str, **opts):  # noqa: ANN202
             walks["n"] += 1
-            return await super().walk(handle, root)
+            return await super().walk(handle, root, **opts)
 
     sb = _CountingWalk()
     handle = await sb.create(SandboxSpec(), sandbox_id=WS)
     files = WorkspaceFiles(MemoryFileStore(), sandbox=sb, handle_for=_resolver(lambda _ws: handle))
     await files.write(WS, "/dir/a.md", b"a")
 
-    entries, dirs = await files.tree(WS)
+    listing = await files.tree(WS)
 
-    assert [p for p, _ in entries] == ["/dir/a.md"]
-    assert dirs == ["/dir"]
+    assert [p for p, _ in listing.files] == ["/dir/a.md"]
+    assert listing.dirs == ["/dir"]
     assert walks["n"] == 1, walks
 
 
@@ -485,10 +485,10 @@ async def test_tree_reports_a_folder_that_holds_no_files() -> None:
     await files.mkdir(WS, "/empty")
     await files.mkdir(WS, "/dir/nested/deep")
 
-    entries, dirs = await files.tree(WS)
+    listing = await files.tree(WS)
 
-    assert [p for p, _ in entries] == ["/dir/a.md"]
-    assert dirs == ["/dir", "/dir/nested", "/dir/nested/deep", "/empty"]
+    assert [p for p, _ in listing.files] == ["/dir/a.md"]
+    assert listing.dirs == ["/dir", "/dir/nested", "/dir/nested/deep", "/empty"]
 
 
 async def test_tree_stops_reporting_a_folder_once_it_is_removed() -> None:
@@ -501,6 +501,73 @@ async def test_tree_stops_reporting_a_folder_once_it_is_removed() -> None:
     await files.mkdir(WS, "/gone")
     await files.rmdir(WS, "/gone")
 
-    _entries, dirs = await files.tree(WS)
+    assert (await files.tree(WS)).dirs == []
 
-    assert dirs == []
+
+async def test_tree_lists_derived_folders_without_entering_them_warm() -> None:
+    """The warm branch hands the prune list and the budget to the sandbox's
+    own walk — the one place the round trips are actually saved — and expanding
+    a collapsed folder is the same call scoped to it, one level deep."""
+    sb = MockSandbox()
+    handle = await sb.create(SandboxSpec(), sandbox_id=WS)
+    files = WorkspaceFiles(MemoryFileStore(), sandbox=sb, handle_for=_resolver(lambda _ws: handle))
+    await files.write(WS, "/src/a.py", b"a")
+    await files.write(WS, "/node_modules/x/y.js", b"b")
+    await files.write(WS, "/dist/bundle.js", b"c")
+
+    listing = await files.tree(WS)
+    assert [p for p, _ in listing.files] == ["/src/a.py"]
+    assert listing.dirs == ["/dist", "/node_modules", "/src"]
+    assert listing.unwalked == ["/dist", "/node_modules"]
+    assert listing.truncated is False
+
+    level = await files.tree(WS, "/node_modules", depth=1)
+    assert level.files == [] and level.dirs == ["/node_modules/x"]
+    assert level.unwalked == ["/node_modules/x"]
+
+
+async def test_tree_lists_derived_folders_without_entering_them_cold() -> None:
+    """Cold — no sandbox — the durable listing is shaped by the same rule, so
+    the tree looks the same whether or not the item's sandbox is alive."""
+    files = WorkspaceFiles(MemoryFileStore())
+    await files.write(WS, "/src/a.py", b"a")
+    await files.write(WS, "/node_modules/x/y.js", b"b")
+
+    listing = await files.tree(WS)
+    assert [p for p, _ in listing.files] == ["/src/a.py"]
+    assert listing.unwalked == ["/node_modules"]
+    assert (await files.tree(WS, "/node_modules", depth=1)).dirs == ["/node_modules/x"]
+
+
+async def test_tree_cold_on_the_nfs_tree_reads_only_the_folder_it_was_asked_for(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The production cold store. Through the facade — not the store directly —
+    because the facade is what chooses between "the store lists from the
+    prefix" and "the store hands back everything and we prune in memory", and
+    only the first saves the NFS round trips. The assertion is which folders
+    were READ; the answer alone would pass either way."""
+    import os
+
+    from workspace_app.filestore.nfs_tree import NfsTreeFileStore
+
+    store = NfsTreeFileStore(tmp_path)
+    files = WorkspaceFiles(store)
+    for path in ("/src/a.py", "/node_modules/x/y.js", "/other/c.txt"):
+        await files.write(WS, path, b"x")
+    scanned: list[str] = []
+    real_scandir = os.scandir
+    monkeypatch.setattr(
+        os,
+        "scandir",
+        lambda p: (scanned.append(os.path.relpath(p, tmp_path / WS)), real_scandir(p))[1],
+    )
+
+    level = await files.tree(WS, "/src", depth=1)
+    assert [p for p, _ in level.files] == ["/src/a.py"]
+    assert scanned == ["src"], scanned
+
+    scanned.clear()
+    listing = await files.tree(WS)
+    assert listing.unwalked == ["/node_modules"]
+    assert not any(d.startswith("node_modules") for d in scanned), scanned

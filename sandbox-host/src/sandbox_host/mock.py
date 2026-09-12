@@ -3,19 +3,37 @@ subprocess/uid/cgroup needed to exercise `app.py`'s routing + error mapping."""
 
 import hashlib
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from .protocol import (
     EnforcedLimits,
     ExecResult,
-    FileEntry,
     OutputSink,
     SandboxHandle,
     SandboxNotFound,
     SandboxSpec,
     WalkResult,
 )
+from .walk import flat_lister, walk_tree
+
+
+def _canon(path: str) -> str:
+    """`pyproject.toml` / `//x` / `/a//b` → `/pyproject.toml` / `/x` / `/a/b`."""
+    return "/" + "/".join(seg for seg in path.split("/") if seg)
+
+
+def _stored_key(fs: dict[str, bytes], path: str) -> str | None:
+    """The key `path` names in `fs` — verbatim, or by canonical spelling.
+
+    The double stores the path it was handed while `walk` reports the
+    canonical form, as the real sandbox does — and a caller then reads by
+    what the walk said. A real backend resolves both spellings to one file;
+    so must this one."""
+    if path in fs:
+        return path
+    want = _canon(path)
+    return next((k for k in fs if _canon(k) == want), None)
 
 
 def _parent(path: str) -> str:
@@ -146,33 +164,42 @@ class MockSandbox:
 
     async def download(self, handle: SandboxHandle, remote_path: str) -> bytes:
         fs = self._require(handle)
-        if remote_path not in fs:
+        key = _stored_key(fs, remote_path)
+        if key is None:
             raise FileNotFoundError(remote_path)
-        return fs[remote_path]
+        return fs[key]
 
-    async def walk(self, handle: SandboxHandle, root: str) -> WalkResult:
+    async def walk(
+        self,
+        handle: SandboxHandle,
+        root: str,
+        *,
+        depth: int | None = None,
+        prune: Sequence[str] = (),
+        max_entries: int | None = None,
+    ) -> WalkResult:
         fs = self._require(handle)
         dirs = self._dirs.setdefault(handle.id, set())
-        prefix = root if root.endswith("/") else root + "/"
-        if root in ("/", ""):
-            items = list(fs.items())
-            under = sorted(dirs)
-        else:
-            items = [(p, d) for p, d in fs.items() if p.startswith(prefix)]
-            under = sorted(p for p in dirs if p.startswith(prefix))
-        return WalkResult(
-            files=[FileEntry(path=p, size=len(d), version=_version(d)) for p, d in items],
-            dirs=under,
+        rel = f"/{root.strip('/')}" if root.strip("/") else "/"
+        # Same traversal as the real sandbox over a dict: the mock's job is to
+        # answer like the host, so the options are not re-implemented here.
+        return walk_tree(
+            flat_lister({p: (len(d), _version(d)) for p, d in fs.items()}, dirs),
+            rel,
+            depth=depth,
+            prune=prune,
+            max_entries=max_entries,
         )
 
     async def exists(self, handle: SandboxHandle, path: str) -> bool:
-        return path in self._require(handle)
+        return _stored_key(self._require(handle), path) is not None
 
     async def delete(self, handle: SandboxHandle, path: str) -> None:
         fs = self._require(handle)
-        if path not in fs:
+        key = _stored_key(fs, path)
+        if key is None:
             raise FileNotFoundError(path)
-        del fs[path]
+        del fs[key]
 
     async def mkdir(self, handle: SandboxHandle, path: str) -> None:
         # Directories are tracked for real. This used to be a no-op, on the

@@ -18,10 +18,11 @@ import base64
 import json
 import socket
 from collections.abc import AsyncIterator
+from typing import Annotated
 
 import httpx
 import pytest
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Query, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from httpx import ASGITransport
 
@@ -153,13 +154,23 @@ def _fake_host(backend: MockSandbox, advertise_url: str) -> FastAPI:
         return {"ready": await backend.is_ready(SandboxHandle(id=rid))}
 
     @app.get("/sandboxes/{rid}/walk")
-    async def walk(rid: str, root: str) -> dict[str, list]:
-        walked = await backend.walk(SandboxHandle(id=rid), root)
+    async def walk(
+        rid: str,
+        root: str,
+        depth: int | None = None,
+        prune: Annotated[list[str] | None, Query()] = None,
+        max_entries: int | None = None,
+    ) -> dict[str, object]:
+        walked = await backend.walk(
+            SandboxHandle(id=rid), root, depth=depth, prune=prune or (), max_entries=max_entries
+        )
         return {
             "entries": [
                 {"path": e.path, "size": e.size, "version": e.version} for e in walked.files
             ],
             "dirs": walked.dirs,
+            "unwalked": walked.unwalked,
+            "truncated": walked.truncated,
         }
 
     @app.delete("/sandboxes/{rid}/file", status_code=204)
@@ -453,6 +464,28 @@ async def test_walk_carries_the_directory_half_over_the_wire(http_sandbox: HttpS
 
     assert walked.files == []
     assert walked.dirs == ["/empty", "/empty/deep"]
+
+
+async def test_walk_sends_the_stop_options_and_reads_back_what_was_not_entered(
+    http_sandbox: HttpSandbox,
+):
+    """`prune` / `depth` / `max_entries` ride the query string; `unwalked` and
+    `truncated` ride the reply. Without the wire carrying them the app would
+    prune nothing and draw every lazy node as an empty folder."""
+    h = await http_sandbox.create(SandboxSpec())
+    await http_sandbox.upload(h, b"x", "/node_modules/x/y.js")
+    await http_sandbox.upload(h, b"y", "/src/a.py")
+
+    walked = await http_sandbox.walk(h, "/", prune=["node_modules/"])
+    assert {e.path for e in walked.files} == {"/src/a.py"}
+    assert walked.unwalked == ["/node_modules"]
+    assert walked.truncated is False
+
+    walked = await http_sandbox.walk(h, "/", max_entries=1)
+    assert walked.truncated is True
+
+    walked = await http_sandbox.walk(h, "/node_modules", depth=1)
+    assert walked.dirs == ["/node_modules/x"] and walked.unwalked == ["/node_modules/x"]
 
 
 async def test_walk_degrades_when_the_host_predates_the_directory_half():

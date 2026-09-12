@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { FileInfo } from "../../api/types";
-import { DialogProvider } from "../../components/Dialog";
+import { QueryWrap } from "../../test/queryWrapper";
 import { FileTree } from "./FileTree";
 
 afterEach(() => {
@@ -28,7 +28,7 @@ const files: FileInfo[] = [
 function renderSelect(selected: Set<string> = new Set(), files_ = files) {
   const onChange = vi.fn();
   render(
-    <DialogProvider>
+    <QueryWrap>
       <FileTree
         files={files_}
         dirs={[]}
@@ -37,7 +37,7 @@ function renderSelect(selected: Set<string> = new Set(), files_ = files) {
         scopeId="pick"
         select={{ selected, onChange }}
       />
-    </DialogProvider>,
+    </QueryWrap>,
   );
   return { onChange };
 }

@@ -199,6 +199,129 @@ async def test_walk_reports_a_directory_that_holds_no_files(sandbox: LocalProces
     assert walked.dirs == ["/empty"]
 
 
+async def test_walk_lists_a_pruned_directory_but_never_enters_it(sandbox: LocalProcessSandbox):
+    """Pruned is NOT hidden: `node_modules` is on the tree (collapsed) and its
+    contents are not — the file tree draws the folder, and only expanding it
+    fetches what is inside."""
+    h = await sandbox.create(SandboxSpec())
+    await sandbox.upload(h, b"x", "/node_modules/x/y.js")
+    await sandbox.upload(h, b"y", "/src/a.py")
+    walked = await sandbox.walk(h, "/", prune=["node_modules/"])
+    assert {e.path for e in walked.files} == {"/src/a.py"}
+    assert "/node_modules" in walked.dirs
+    assert "/node_modules/x" not in walked.dirs
+    assert walked.unwalked == ["/node_modules"]
+    assert walked.truncated is False
+
+
+async def test_walk_stops_at_the_entry_budget_and_names_what_it_did_not_enter(
+    sandbox: LocalProcessSandbox,
+):
+    """The bound that turns a hang into an answer. Nothing is lost and nothing is
+    double-counted: every file is either in `files` or under a dir in `unwalked`."""
+    h = await sandbox.create(SandboxSpec())
+    all_files = [f"/d{i}/f{j}.txt" for i in range(3) for j in range(10)]
+    for path in all_files:
+        await sandbox.upload(h, b"x", path)
+    walked = await sandbox.walk(h, "/", max_entries=15)
+    assert walked.truncated is True
+    assert walked.unwalked, "something must have been left for later"
+    listed = {e.path for e in walked.files}
+    deferred = {f for f in all_files if any(f.startswith(u + "/") for u in walked.unwalked)}
+    assert listed.isdisjoint(deferred)
+    assert listed | deferred == set(all_files)
+    # The three dirs are all on the tree whether entered or not.
+    assert sorted(walked.dirs) == ["/d0", "/d1", "/d2"]
+
+
+async def test_walk_depth_one_lists_a_directory_without_entering_its_children(
+    sandbox: LocalProcessSandbox,
+):
+    """What expanding a collapsed folder fetches: that folder's own entries, with
+    every subfolder listed as a further collapsed node. One directory is one
+    unit of work, so this can never trip the entry budget."""
+    h = await sandbox.create(SandboxSpec())
+    await sandbox.upload(h, b"x", "/node_modules/lodash/index.js")
+    await sandbox.upload(h, b"x", "/node_modules/lodash/fp/map.js")
+    await sandbox.upload(h, b"x", "/node_modules/.package-lock.json")
+    walked = await sandbox.walk(h, "/node_modules", depth=1, max_entries=1)
+    assert {e.path for e in walked.files} == {"/node_modules/.package-lock.json"}
+    assert walked.dirs == ["/node_modules/lodash"]
+    assert walked.unwalked == ["/node_modules/lodash"]
+    assert walked.truncated is False
+
+
+async def test_walk_lists_a_symlinked_directory_but_never_offers_to_enter_it(
+    sandbox: LocalProcessSandbox,
+):
+    """A link to a directory is on the tree and empty — what the recursive walk
+    did — and NOT in `unwalked`: an on-demand fetch would follow the link, and
+    a link can point outside the workspace. A link to a file is a file, as before."""
+    import os
+
+    h = await sandbox.create(SandboxSpec())
+    await sandbox.upload(h, b"real", "/real/f.txt")
+    ws = sandbox.workspace_dir(h)
+    os.symlink(ws / "real", ws / "linkdir")
+    os.symlink(ws / "real" / "f.txt", ws / "linkfile")
+    os.mkfifo(ws / "pipe")
+    walked = await sandbox.walk(h, "/")
+    assert {e.path: e.size for e in walked.files} == {"/real/f.txt": 4, "/linkfile": 4}
+    assert sorted(walked.dirs) == ["/linkdir", "/real"]
+    assert walked.unwalked == []
+
+
+async def test_the_plain_walk_answers_exactly_what_the_recursive_walk_did(
+    sandbox: LocalProcessSandbox,
+):
+    """The mirror keys on `.files` (path, size, version) and the tree on `.dirs`,
+    and neither passes any of the new options. The oracle below IS the walk
+    this one replaced (`rglob` + `is_dir` + `is_file` + `stat`), kept here so a
+    drift in what counts as a file, a dir, or a version stamp is caught by a
+    test rather than by the mirror re-uploading a workspace."""
+    import os
+
+    def recursive_walk(cwd):
+        files, dirs = [], []
+        for p in cwd.rglob("*"):
+            rel = p.relative_to(cwd).as_posix()
+            if p.is_dir():
+                dirs.append(f"/{rel}")
+                continue
+            if not p.is_file():
+                continue
+            st = p.stat()
+            files.append((f"/{rel}", st.st_size, f"{st.st_mtime_ns}-{st.st_size}"))
+        return sorted(files), sorted(dirs)
+
+    h = await sandbox.create(SandboxSpec())
+    for i in range(3):
+        for sub in ("lib", "src"):
+            for j in range(4):
+                await sandbox.upload(h, b"x" * (i + j + 1), f"/pkg{i}/{sub}/f{j}.js")
+    await sandbox.mkdir(h, "/empty/nested")
+    await sandbox.upload(h, b"top", "/README.md")
+    ws = sandbox.workspace_dir(h)
+    os.symlink(ws / "pkg0", ws / "link-to-dir")
+    os.symlink(ws / "README.md", ws / "link-to-file")
+    os.symlink(ws / "nowhere", ws / "dangling")
+    os.mkfifo(ws / "pipe")
+
+    walked = await sandbox.walk(h, "/")
+    ours = sorted((e.path, e.size, e.version) for e in walked.files), sorted(walked.dirs)
+    assert ours == recursive_walk(ws)
+    assert walked.unwalked == [] and walked.truncated is False
+
+
+async def test_walk_of_a_directory_that_does_not_exist_is_empty(sandbox: LocalProcessSandbox):
+    """A prefix the user typed that names nothing lists nothing — the recursive
+    walk answered that with an empty result, and the file tree's callers turn a
+    raised error into a 500, not a 404."""
+    h = await sandbox.create(SandboxSpec())
+    walked = await sandbox.walk(h, "/nope")
+    assert walked.files == [] and walked.dirs == [] and walked.unwalked == []
+
+
 async def test_file_ops_exists_delete_mkdir_rmdir_rename(sandbox: LocalProcessSandbox):
     h = await sandbox.create(SandboxSpec())
     await sandbox.upload(h, b"x", "/src/a.txt")

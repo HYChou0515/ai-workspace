@@ -43,6 +43,7 @@ from .schemas import (
     _CellExecuteBody,
     _ExecBody,
     _FileEntry,
+    _FileExists,
     _ItemSkills,
     _ItemSkillState,
     _MkdirBody,
@@ -105,6 +106,7 @@ def _workspace_path(raw: str) -> str:
     checked against ``grep``:
 
     * ``write_file`` / ``read_file`` / ``delete_file`` — the ``{path:path}`` URL routes
+    * ``workspace_file_exists`` — the ``path`` query parameter
     * ``make_dir`` — the JSON body path
     * ``move_file`` / ``copy_file`` — BOTH sides of each
     * ``list_files`` / ``list_tree`` / ``prepare_files_download`` — via
@@ -343,9 +345,28 @@ def register_file_routes(
             quota=files.quota_of(investigation_id),
         )
 
+    @app.get("/a/{slug}/items/{item_id}/files/exists")
+    async def workspace_file_exists(slug: str, item_id: str, path: str) -> _FileExists:
+        """Whether ONE regular file is there — the facade's point query, over
+        the wire. Every FE save (`writeVerified`), every attachment and one
+        review button used to answer this by listing the whole workspace, so a
+        workspace with `node_modules/` paid the file tree's full walk per save.
+        A folder answers False, as `FileStore.exists` does. Registered before
+        the ``/files/{path:path}`` read route like ``usage``."""
+        investigation_id = locator.require_access(slug, item_id, "read_content")
+        return _FileExists(exists=await files.exists(investigation_id, _workspace_path(path)))
+
     @app.get("/a/{slug}/items/{item_id}/tree")
-    async def list_tree(slug: str, item_id: str, prefix: str = "") -> _WorkspaceTree:
-        """Files and folders from ONE traversal.
+    async def list_tree(
+        slug: str, item_id: str, prefix: str = "", depth: int | None = None
+    ) -> _WorkspaceTree:
+        """Files and folders from ONE traversal — one that stops.
+
+        No `depth` is the preload: everything the user wrote, with the derived
+        directories (`node_modules/`, `.venv/`, `.git/`, …) listed but not
+        entered and the whole thing bounded. `depth=1` with a `prefix` is what
+        expanding one of those collapsed folders asks for. `unwalked` names the
+        folders this response did not enter; `truncated` says the bound hit.
 
         They were `/files` and `/dirs`, always fetched together (one query key,
         one `Promise.all`) and each walking the whole workspace — two stats of
@@ -355,13 +376,19 @@ def register_file_routes(
         `dirs` still comes back separately rather than being derived client-side,
         because an EMPTY directory appears in no file path."""
         investigation_id = locator.require_access(slug, item_id, "read_content")
-        entries, dirs = await files.tree(investigation_id, _workspace_prefix(prefix))
+        if depth is not None and depth < 1:
+            # `depth=0` would mean "list nothing"; the walk reads it as 1, and a
+            # parameter that silently means something else is worse than a 400.
+            raise HTTPException(status_code=400, detail="depth must be >= 1")
+        listing = await files.tree(investigation_id, _workspace_prefix(prefix), depth=depth)
         return _WorkspaceTree(
             files=[
                 _FileEntry(path=p, size=size, read_only=_is_readonly_path(p))
-                for p, size in sorted(entries)
+                for p, size in sorted(listing.files)
             ],
-            dirs=sorted(dirs),
+            dirs=listing.dirs,
+            unwalked=listing.unwalked,
+            truncated=listing.truncated,
         )
 
     @app.post("/a/{slug}/items/{item_id}/files/refresh")

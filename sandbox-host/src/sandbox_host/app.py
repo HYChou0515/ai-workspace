@@ -25,9 +25,9 @@ import os
 import time
 from collections.abc import AsyncGenerator, Callable, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Query, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -164,6 +164,11 @@ class _WalkReply(BaseModel):
     # client that ignores the field, and an older host that omits it, both stay
     # on the previous (files-only) behaviour instead of failing.
     dirs: list[str] = []
+    # The subset of `dirs` this traversal listed but did not enter (pruned /
+    # beyond `depth` / past `max_entries`), and whether the budget is what
+    # stopped it. The app draws these as collapsed nodes and fetches on demand.
+    unwalked: list[str] = []
+    truncated: bool = False
 
 
 class _MkdirBody(BaseModel):
@@ -691,13 +696,23 @@ def make_host_app(
         return _ReadyReply(ready=ok)
 
     @app.get("/sandboxes/{rid}/walk")
-    async def walk(rid: str, root: str) -> _WalkReply:
-        walked = await sandbox.walk(SandboxHandle(id=rid), root)
+    async def walk(
+        rid: str,
+        root: str,
+        depth: int | None = None,
+        prune: Annotated[list[str] | None, Query()] = None,
+        max_entries: int | None = None,
+    ) -> _WalkReply:
+        walked = await sandbox.walk(
+            SandboxHandle(id=rid), root, depth=depth, prune=prune or (), max_entries=max_entries
+        )
         return _WalkReply(
             entries=[
                 _FileEntryModel(path=e.path, size=e.size, version=e.version) for e in walked.files
             ],
             dirs=walked.dirs,
+            unwalked=walked.unwalked,
+            truncated=walked.truncated,
         )
 
     @app.delete("/sandboxes/{rid}/file", status_code=204)

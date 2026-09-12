@@ -24,7 +24,7 @@ import tarfile
 import tempfile
 import uuid
 import warnings
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
@@ -39,6 +39,7 @@ from .protocol import (
     SandboxSpec,
     WalkResult,
 )
+from .walk import flat_lister, walk_tree
 
 if TYPE_CHECKING:
     from docker.models.containers import Container
@@ -281,7 +282,15 @@ class DockerSandbox:
         first = binds[0]
         return (first.get("HostIp") or "127.0.0.1", int(first["HostPort"]))
 
-    async def walk(self, handle: SandboxHandle, root: str) -> WalkResult:
+    async def walk(
+        self,
+        handle: SandboxHandle,
+        root: str,
+        *,
+        depth: int | None = None,
+        prune: Sequence[str] = (),
+        max_entries: int | None = None,
+    ) -> WalkResult:
         container = self._require(handle)
         target = PurePosixPath(_WORKDIR) / root.lstrip("/")
         # `find -printf` is a GNU extension but debian:12-slim has it; the
@@ -298,7 +307,20 @@ class DockerSandbox:
         out = result.output or b""
         if isinstance(out, tuple):  # pragma: no cover — demux=False edge case
             out = out[0] or b""
-        return _parse_find_output(out)
+        base = f"/{root.strip('/')}" if root.strip("/") else ""
+        found = _parse_find_output(out, base=base)
+        if depth is None and not prune and max_entries is None:
+            return found
+        # `find` already returned everything, so the options save nothing here
+        # (dev-only backend); they are honoured so the answer is the same shape
+        # every backend gives.
+        return walk_tree(
+            flat_lister({e.path: (e.size, e.version) for e in found.files}, found.dirs),
+            base or "/",
+            depth=depth,
+            prune=prune,
+            max_entries=max_entries,
+        )
 
 
 def _make_single_file_tar(name: str, data: bytes, mode: int = 0o644) -> bytes:
@@ -361,14 +383,18 @@ def _extract_tar_stream_to_file(stream: Any, name: str, local_path: Path) -> Non
         os.unlink(tarpath)
 
 
-def _parse_find_output(output: bytes) -> WalkResult:
+def _parse_find_output(output: bytes, base: str = "") -> WalkResult:
     """Split `find -printf "%y\\t%s\\t%T@\\t%P\\n"` output into files and dirs.
 
-    %P is the path relative to the find root. We re-prepend "/" so the
-    result mirrors FileStore-style canonical paths (the same shape
-    Mock/LocalProcess.walk returns). %y is the type char — `f` regular, `d`
-    directory; anything else (symlink, socket, fifo) is dropped, which is what
-    the old `-type f` filter did to everything that was not a regular file.
+    %P is the path relative to the find ROOT, so `base` — the walked root as a
+    workspace path ("" for the workspace itself, "/sub" for a subfolder) — is
+    prepended to give workspace-root-relative paths, the shape every other
+    backend's `walk` returns. Nothing sent a non-root `root` before the tree
+    started expanding folders on demand, so the relative form went unnoticed;
+    left as it was, an expanded `/node_modules` would have spliced its entries
+    in at the tree root. %y is the type char — `f` regular, `d` directory;
+    anything else (symlink, socket, fifo) is dropped, which is what the old
+    `-type f` filter did to everything that was not a regular file.
     """
     files: list[FileEntry] = []
     dirs: list[str] = []
@@ -383,11 +409,11 @@ def _parse_find_output(output: bytes) -> WalkResult:
         if not rel:  # the find root itself, dropped silently
             continue
         if kind_b == b"d":
-            dirs.append("/" + rel)
+            dirs.append(f"{base}/{rel}")
         elif kind_b == b"f":
             files.append(
                 FileEntry(
-                    path="/" + rel,
+                    path=f"{base}/{rel}",
                     size=int(size_b),
                     version=f"{mtime_b.decode()}-{size_b.decode()}",
                 )

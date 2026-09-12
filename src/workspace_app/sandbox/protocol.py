@@ -24,8 +24,8 @@ contracts; nothing else in the app needs to change (it's injected via
 `create_app(sandbox=...)`).
 """
 
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
@@ -196,10 +196,18 @@ class WalkResult:
     Both halves come from ONE walk because the file tree needs both and, warm,
     that traversal crosses the network — and because an EMPTY directory appears
     in no file path, so `dirs` cannot be derived from `files` afterwards. That
-    derivation is exactly why a folder holding no files was invisible."""
+    derivation is exactly why a folder holding no files was invisible.
+
+    `unwalked` is the subset of `dirs` the traversal listed but did NOT enter —
+    pruned, beyond `depth`, or past `max_entries` — so the file tree can draw
+    the folder collapsed and fetch its contents on demand. `truncated` says the
+    entry budget is what stopped it. Both default empty/False, so a caller of
+    the plain full walk (the mirror, disk usage) sees exactly what it always did."""
 
     files: list[FileEntry]
     dirs: list[str]
+    unwalked: list[str] = field(default_factory=list)
+    truncated: bool = False
 
 
 class Sandbox(Protocol):
@@ -352,7 +360,15 @@ class Sandbox(Protocol):
         #219). Raises `FileNotFoundError` if `remote_path` doesn't exist."""
         ...
 
-    async def walk(self, handle: SandboxHandle, root: str) -> WalkResult:
+    async def walk(
+        self,
+        handle: SandboxHandle,
+        root: str,
+        *,
+        depth: int | None = None,
+        prune: Sequence[str] = (),
+        max_entries: int | None = None,
+    ) -> WalkResult:
         """Traverse `root` once and return its regular files AND its
         directories, both with `/`-rooted paths. Symlinks are excluded (only
         real files round-trip to the FileStore). `root` is workspace-root-
@@ -360,7 +376,13 @@ class Sandbox(Protocol):
 
         `dirs` holds EVERY directory under `root`, including the ones that hold
         no files — those appear in no file path, so nothing downstream can
-        recover them from `files`."""
+        recover them from `files`.
+
+        The three keyword options all mean "list this directory but do not
+        enter it" (see `walk.walk_tree`): `prune` names directories never
+        entered, `depth` bounds how far down, `max_entries` bounds the total.
+        What was listed and not entered comes back in `unwalked`. Every
+        existing caller passes none of them."""
         ...
 
     async def exists(self, handle: SandboxHandle, path: str) -> bool:

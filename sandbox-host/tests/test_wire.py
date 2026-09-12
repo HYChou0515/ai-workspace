@@ -112,6 +112,30 @@ async def test_walk_lists_files_with_versions(client):
     assert entries[0]["version"]
 
 
+async def test_walk_passes_prune_depth_and_budget_through_and_reports_unwalked(client):
+    """The three 'list but do not enter' options ride the query string, and the
+    reply carries the two halves the app draws lazy nodes from."""
+    rid = await _create(client)
+    for path in ("/node_modules/x/y.js", "/src/a.py", "/src/deep/b.py"):
+        await client.put(f"/sandboxes/{rid}/file", params={"path": path}, content=b"x")
+
+    r = await client.get(f"/sandboxes/{rid}/walk", params={"root": "/", "prune": ["node_modules/"]})
+    body = r.json()
+    assert {e["path"] for e in body["entries"]} == {"/src/a.py", "/src/deep/b.py"}
+    assert "/node_modules" in body["dirs"] and "/node_modules/x" not in body["dirs"]
+    assert body["unwalked"] == ["/node_modules"]
+    assert body["truncated"] is False
+
+    body = (await client.get(f"/sandboxes/{rid}/walk", params={"root": "/src", "depth": 1})).json()
+    assert {e["path"] for e in body["entries"]} == {"/src/a.py"}
+    assert body["unwalked"] == ["/src/deep"]
+
+    body = (
+        await client.get(f"/sandboxes/{rid}/walk", params={"root": "/", "max_entries": 1})
+    ).json()
+    assert body["truncated"] is True
+
+
 async def test_delete_removes_file_and_missing_is_404(client):
     rid = await _create(client)
     await client.put(f"/sandboxes/{rid}/file", params={"path": "/a"}, content=b"x")

@@ -33,6 +33,23 @@ export type FileCaps = {
   download: boolean; // download a file (direct) or a folder/root (zip) — #247
 };
 
+/** One tree listing. `unwalked` is the subset of `dirs` the listing did NOT
+ * enter — derived folders (`node_modules/`, `.venv/`, …) the backend never
+ * preloads, or whatever lay past its entry budget — so the tree draws them
+ * collapsed and asks for one level (`listTree({ prefix, depth: 1 })`) when the
+ * user expands one. `truncated` says the budget is what stopped it. */
+export type TreeListing = {
+  items: FileInfo[];
+  dirs: string[];
+  unwalked: string[];
+  truncated: boolean;
+};
+
+/** `prefix` scopes the listing to one folder; `depth: 1` lists that folder's
+ * own entries with every subfolder reported in `unwalked`. Omitted → the
+ * preload: everything the user wrote, derived folders listed but not entered. */
+export type ListTreeOpts = { prefix?: string; depth?: number };
+
 export type FileService = {
   /** Stable id for query-key scoping + tree-collapse persistence. */
   readonly scopeId: string;
@@ -43,7 +60,10 @@ export type FileService = {
    * parallel walked the whole workspace twice for two halves of one answer, and
    * this hook shares a cache key with the shell's listing — so two hooks with
    * two different query functions were fetching the same thing. */
-  listTree(): Promise<{ items: FileInfo[]; dirs: string[] }>;
+  listTree(opts?: ListTreeOpts): Promise<TreeListing>;
+  /** Whether ONE file is there. The question a "did it land?" check asks;
+   * a service whose listing is cheap and complete may answer from it. */
+  exists(path: string): Promise<boolean>;
   readFile(path: string): Promise<FileContent>;
   writeFile(path: string, body: string | Blob | ArrayBuffer): Promise<void>;
   deleteFile(path: string): Promise<void>;
@@ -89,9 +109,9 @@ export function investigationFileService(slug: string, investigationId: string):
     },
     listFiles: (prefix) => api.listFiles(slug, investigationId, prefix),
     listDirs: () => api.listDirs(slug, investigationId),
-    listTree: async () => {
-      const { files, dirs } = await api.getTree(slug, investigationId);
-      return { items: files, dirs };
+    listTree: async (opts) => {
+      const { files, dirs, unwalked, truncated } = await api.getTree(slug, investigationId, opts);
+      return { items: files, dirs, unwalked, truncated };
     },
     readFile: (path) => api.readFile(slug, investigationId, path),
     // #493: "did the response come back OK" and "are the bytes there" differ
@@ -99,13 +119,14 @@ export function investigationFileService(slug: string, investigationId: string):
     // server has usually stored the file by then. Deciding that here means no
     // writer (file tree, attachments, skills/workflows/collections pickers, the
     // editor's save, both KB IDEs) can get it wrong by omission.
+    exists: (path) => api.fileExists(slug, investigationId, path),
     writeFile: (path, body) =>
       writeVerified(
         () => api.writeFile(slug, investigationId, path, body),
-        async () => {
-          const all = await api.listFiles(slug, investigationId);
-          return all.some((f) => f.path === path || f.path === `/${path.replace(/^\//, "")}`);
-        },
+        // One path, one question. Listing the whole workspace to scan for it
+        // was the file tree's full walk — with `node_modules/`, tens of
+        // thousands of NFS round trips — spent on a yes/no.
+        () => api.fileExists(slug, investigationId, path),
       ),
     deleteFile: (path) => api.deleteFile(slug, investigationId, path),
     moveFile: (from, to) => api.moveFile(slug, investigationId, from, to),
@@ -167,7 +188,7 @@ export function useOptionalFileService(): FileService | null {
 // ── derived hooks (read from whichever service is in context) ──────────────
 type FileListState =
   | { kind: "loading" }
-  | { kind: "ready"; items: FileInfo[]; dirs: string[]; refresh: () => void }
+  | ({ kind: "ready"; refresh: () => void } & TreeListing)
   | { kind: "error"; error: Error; refresh: () => void };
 
 /** The active service's file + dir listing, cached under `qk.files(scopeId)`
@@ -184,5 +205,5 @@ export function useFileList(): FileListState {
   const refresh = () => void q.refetch();
   if (q.isPending) return { kind: "loading" };
   if (q.isError) return { kind: "error", error: q.error, refresh };
-  return { kind: "ready", items: q.data.items, dirs: q.data.dirs, refresh };
+  return { kind: "ready", ...q.data, refresh };
 }

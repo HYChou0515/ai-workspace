@@ -111,3 +111,15 @@ async def test_rename_file_subtree_and_miss(sb: MockSandbox):
     assert await sb.download(h, "/e/c") == b"y"
     with pytest.raises(FileNotFoundError):
         await sb.rename(h, "/nope", "/z")
+
+
+async def test_a_path_the_walk_reports_can_be_read_back_however_it_was_uploaded(sb: MockSandbox):
+    """The double stores the path it was handed; `walk` reports the canonical
+    form, as the real sandbox does, and callers read by what the walk said."""
+    h = await sb.create(SandboxSpec())
+    await sb.upload(h, b"[tool]", "pyproject.toml")
+    assert [e.path for e in (await sb.walk(h, "/")).files] == ["/pyproject.toml"]
+    assert await sb.exists(h, "/pyproject.toml") is True
+    assert await sb.download(h, "/pyproject.toml") == b"[tool]"
+    await sb.delete(h, "/pyproject.toml")
+    assert await sb.exists(h, "pyproject.toml") is False

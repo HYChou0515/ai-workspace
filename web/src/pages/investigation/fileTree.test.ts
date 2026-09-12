@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildFileTree, pruneTree } from "./fileTree";
+import { buildFileTree, presenceOf, pruneTree } from "./fileTree";
 
 describe("buildFileTree", () => {
   it("nests files under inferred folders", () => {
@@ -44,6 +44,22 @@ describe("buildFileTree", () => {
     expect(data.children.map((c) => c.name)).toEqual(["inner"]);
     expect(data.children[0]!.isDir).toBe(true);
     expect(tree.find((n) => n.name === "empty")!.children).toEqual([]);
+  });
+
+  it("marks a folder the listing did not enter as lazy, with nothing under it yet", () => {
+    // Pruned is not hidden: `node_modules` is on the tree, collapsed, and its
+    // contents arrive only when it is expanded. A folder that was entered and
+    // is simply empty is NOT lazy — expanding it has nothing to fetch.
+    const tree = buildFileTree(
+      [{ path: "/src/a.py", size: 1 }],
+      ["/src", "/node_modules", "/empty"],
+      ["/node_modules"],
+    );
+    const byName = Object.fromEntries(tree.map((n) => [n.name, n]));
+    expect(byName["node_modules"]!.lazy).toBe(true);
+    expect(byName["node_modules"]!.children).toEqual([]);
+    expect(byName["empty"]!.lazy).toBe(false);
+    expect(byName["src"]!.lazy).toBe(false);
   });
 
   it("does not duplicate a dir that also has files", () => {
@@ -140,5 +156,23 @@ describe("pruneTree", () => {
     const { tree, expand } = pruneTree(input, "   ");
     expect(tree).toBe(input); // same reference — untouched
     expect(expand.size).toBe(0);
+  });
+});
+
+describe("presenceOf", () => {
+  const files = new Set(["/src/a.py"]);
+  const unwalked = ["/node_modules"];
+
+  it("answers present for a listed file and absent for one a walked folder lacks", () => {
+    expect(presenceOf("/src/a.py", files, unwalked)).toBe("present");
+    expect(presenceOf("/src/gone.py", files, unwalked)).toBe("absent");
+  });
+
+  it("answers unknown under a folder the listing never entered — and only there", () => {
+    expect(presenceOf("/node_modules/x/y.js", files, unwalked)).toBe("unknown");
+    // A folder that merely shares the prefix string is a different folder.
+    expect(presenceOf("/node_modules2/y.js", files, unwalked)).toBe("absent");
+    // The folder itself is a folder, not a file the listing failed to reach.
+    expect(presenceOf("/node_modules", files, unwalked)).toBe("absent");
   });
 });

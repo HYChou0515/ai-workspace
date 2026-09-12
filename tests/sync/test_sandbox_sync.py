@@ -241,6 +241,25 @@ def test_large_files_are_not_ignored():
     assert should_ignore("/totally_fine.bin", DEFAULT_IGNORES) is False
 
 
+def test_the_tree_prune_list_is_derived_from_the_ignore_list_and_holds_only_directories():
+    """`TREE_PRUNE` (what the file tree does not PRELOAD) must track
+    `DEFAULT_IGNORES` (what is not backed up) — one answer to "what counts as
+    machine-generated" — without being it: it may add build outputs the mirror
+    keeps, and it may never hold a file pattern, because a file cannot be
+    collapsed and so a file pattern would hide rather than defer."""
+    from workspace_app.sync.ignore import TREE_MAX_ENTRIES, TREE_PRUNE
+
+    ignored_dirs = {p for p in DEFAULT_IGNORES if p.endswith("/")}
+    assert ignored_dirs <= set(TREE_PRUNE)
+    assert all(p.endswith("/") for p in TREE_PRUNE), TREE_PRUNE
+    assert {"dist/", "build/"} <= set(TREE_PRUNE)
+    # And the ignore list itself did not grow to make that true — `dist/` in it
+    # would stop the mirror backing up build outputs and silence the schedules
+    # inside them (`ignore.py` header).
+    assert "dist/" not in DEFAULT_IGNORES and "build/" not in DEFAULT_IGNORES
+    assert TREE_MAX_ENTRIES > 0
+
+
 def test_ignore_literal_segment_pattern():
     """A pattern like 'secret' (no trailing /, no *.) matches a path
     segment with that exact name anywhere in the path."""
@@ -317,13 +336,13 @@ async def test_mirror_skips_deletion_when_readiness_drops_mid_walk_366(
             super().__init__()
             self.arm = False
 
-        async def walk(self, handle, root):  # type: ignore[override]
+        async def walk(self, handle, root, **opts):  # type: ignore[override]
             if self.arm and await self.is_ready(handle):
                 # teardown drops readiness FIRST, then starts removing files
                 self._ready.discard(handle.id)
                 await self.delete(handle, "/keep.txt")
                 self.arm = False
-            return await super().walk(handle, root)
+            return await super().walk(handle, root, **opts)
 
     sb = _ReadinessDropsMidWalk()
     h = await sb.create(SandboxSpec())
@@ -346,8 +365,8 @@ async def test_mirror_skips_deletion_when_sandbox_vanishes_mid_walk_366(
             super().__init__()
             self.arm = False
 
-        async def walk(self, handle, root):  # type: ignore[override]
-            entries = await super().walk(handle, root)
+        async def walk(self, handle, root, **opts):  # type: ignore[override]
+            entries = await super().walk(handle, root, **opts)
             if self.arm:
                 await self.kill(handle)  # whole sandbox gone right after we read it
                 self.arm = False
