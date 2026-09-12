@@ -121,6 +121,13 @@ export type AssetRead =
    * moment's, and is offered a way to look again. */
   | { kind: "failed"; reason: string; permanent: boolean };
 
+/** Statuses whose answer is about WHO is asking or WHAT they ask for, not
+ * the moment — trying again returns the same one. The one list, for every
+ * route a read can take. */
+export function isPermanentStatus(status: number): boolean {
+  return status === 401 || status === 403 || status === 410;
+}
+
 /**
  * What a failed read MEANS — the one place that decides it, for every read a
  * WUI makes: the page's assets (`readAsset`), its entry, and the view file
@@ -153,23 +160,16 @@ export function classifyReadFailure(err: unknown, path: string): Exclude<AssetRe
     // Not `err.message`: that is "read /w/index.html failed: 403", an
     // internal path and a bare number shown to someone who cannot open a
     // console. True, and not a sentence they can act on.
-    // Permanent: the answer is about WHO is asking or WHAT they ask for, not
-    // the moment — a 403 (a member without this right), a 401 (no session),
-    // a 410 (an item that was deleted). Trying again returns the same one.
-    if (err.status === 403) {
-      return { kind: "failed", reason: `You do not have permission to read ${path}.`, permanent: true };
-    }
-    if (err.status === 401) {
-      return { kind: "failed", reason: `Your session has ended — sign in again to read ${path}.`, permanent: true };
-    }
-    if (err.status === 410) {
-      return { kind: "failed", reason: `The item holding ${path} has been deleted.`, permanent: true };
-    }
-    return {
-      kind: "failed",
-      reason: `${path} could not be read (the workspace answered ${err.status}).`,
-      permanent: false,
-    };
+    const permanent = isPermanentStatus(err.status);
+    const reason =
+      err.status === 403
+        ? `You do not have permission to read ${path}.`
+        : err.status === 401
+          ? `Your session has ended — sign in again to read ${path}.`
+          : err.status === 410
+            ? `The item holding ${path} has been deleted.`
+            : `${path} could not be read (the workspace answered ${err.status}).`;
+    return { kind: "failed", reason, permanent };
   }
   if (err instanceof TypeError) {
     return { kind: "failed", reason: `Could not reach the workspace to read ${path}.`, permanent: false };
@@ -204,7 +204,7 @@ export async function readAsset(fs: FileService, path: string): Promise<AssetRea
   // exists but not what is in it; the raw route is where those bytes live.
   try {
     const resp = await fetch(fs.fileDownloadUrl(path));
-    if (!resp.ok) return { kind: "failed", reason: `could not read ${path} (${resp.status})`, permanent: resp.status === 403 };
+    if (!resp.ok) return { kind: "failed", reason: `could not read ${path} (${resp.status})`, permanent: isPermanentStatus(resp.status) };
     return { kind: "asset", asset: { kind: "binary", dataUrl: await toDataUrl(await resp.blob()) } };
   } catch {
     return { kind: "failed", reason: `could not read ${path}`, permanent: false };
@@ -246,7 +246,7 @@ function directoryOf(entryPath: string): string {
  * shown as itself. An explicit kind, not "no reason given": a proxy like
  * that is one reason-less `throw` away from calling a forbidden page
  * unpublished. */
-export type WuiEntryProblem = "absent" | "unreadable" | "forbidden" | "not-html" | "bad-entry";
+export type WuiEntryProblem = "absent" | "unreadable" | "permanent" | "not-html" | "bad-entry";
 
 /** Raised when the entry document itself cannot be opened — the one absence that
  * has nothing to degrade to, so it is reported by name rather than swallowed. */
@@ -279,7 +279,7 @@ export async function buildWuiDoc(fs: FileService, folder: string, entry: string
   const load = folderLoader(fs, folder, directoryOf(path));
   const read = await readAsset(fs, path);
   if (read.kind === "failed") {
-    throw new WuiEntryMissing(entry, read.permanent ? "forbidden" : "unreadable", read.reason);
+    throw new WuiEntryMissing(entry, read.permanent ? "permanent" : "unreadable", read.reason);
   }
   if (read.kind === "missing") throw new WuiEntryMissing(entry, "absent");
   if (read.asset.kind !== "text") {

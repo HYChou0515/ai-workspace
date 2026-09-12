@@ -346,6 +346,31 @@ describe("WuiPage: what a reader is handed", () => {
     expect(oldEntryReads()).toBe(staleReadsBefore);
   });
 
+  it("visibly acts on the reader's Try again while the re-read is in flight", async () => {
+    /**
+     * Review round 9 asked whether a press changed anything on screen. It
+     * does — a refetch of a query that never had data goes back through
+     * `pending`, so "Opening …" replaces the sentence — but only because of
+     * how this version of the query library behaves, so it is pinned here:
+     * a library that kept `error` while refetching would leave the button
+     * looking dead, and a second failure looking like no press at all.
+     */
+    let hold: () => void = () => {};
+    const gate = new Promise<void>((r) => (hold = r));
+    let reads = 0;
+    const readFile = vi.fn(async (path: string) => {
+      if (++reads > 1) await gate;
+      throw notFound(path);
+    });
+    renderAt("/w/rca/i1/scrap-review/page.ai.yaml", readFile);
+    fireEvent.click(await screen.findByRole("button", { name: /try again/i }));
+
+    expect(await screen.findByText(/^opening/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /try again/i })).toBeNull();
+    hold();
+    expect(await screen.findByRole("button", { name: /try again/i })).toBeInTheDocument();
+  });
+
   it("offers no Try again on an answer that will not change", async () => {
     /**
      * Review round 8: only a 403 was permanent; a 410 (the item was deleted)

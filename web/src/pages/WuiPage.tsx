@@ -82,6 +82,11 @@ export function WuiPage({
     retry: false,
   });
 
+  // Also what a press on Try again shows: a refetch of a query that never
+  // had data goes back through `pending`, so the sentence is replaced while
+  // the read is in flight and a second failure is visibly a second one.
+  // (Pinned by a test — a version of TanStack that kept `error` while
+  // refetching would leave the button looking dead.)
   if (view.isPending) return <Problem>Opening {path}…</Problem>;
   if (view.isError) {
     // Named, because the reader did not choose this path — somebody sent them
