@@ -2094,6 +2094,168 @@ describe("WuiView: Deploy", () => {
     expect(reads()).toBe(beforeDeploy + 1);
   });
 
+  /** Like `serveHeldBuild`, but every BUILD gets a gate of its own, so a
+   * test can let the first build finish and still hold the second. (Only
+   * build requests are numbered: the pane fetches other things too, and a
+   * gate handed to one of those is a `release(0)` that frees nothing.) */
+  function serveHeldBuilds(exitCode: number) {
+    const releases: Array<() => void> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: unknown) => {
+        const gate = new Promise<void>((r) => {
+          if (String(url).includes("/wui/build")) releases.push(r);
+        });
+        const encode = new TextEncoder();
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            async start(controller) {
+              controller.enqueue(encode.encode(sse({ type: "output", text: "> vite build" })));
+              await gate;
+              controller.enqueue(encode.encode(sse({ type: "done", exit_code: exitCode })));
+              controller.close();
+            },
+          }),
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        );
+      }),
+    );
+    return { release: (n: number) => releases[n]() };
+  }
+
+  it("keeps saying Deployed after any number of Refreshes — one counter numbers every read", async () => {
+    /**
+     * Review round 10: round 9 gave Deploy its own module counter, started
+     * high, while Refresh still counted `g + 1` from the pane's own number —
+     * so after ONE Deploy the pane stood at the counter's value, and two
+     * Refreshes later the next Deploy's number was BELOW the pane's. Its
+     * verdict was dropped as stale: a Deploy that ended with nothing on
+     * screen, and a page that stayed on the pre-edit read.
+     */
+    vi.stubGlobal("fetch", vi.fn());
+    const files: Record<string, string> = { ...PLAIN };
+    renderInFs(files);
+    fireEvent.click(await screen.findByRole("button", { name: /^deploy$/i }));
+    await screen.findByRole("textbox", { name: /address/i });
+
+    fireEvent.click(screen.getByRole("button", { name: /^refresh$/i }));
+    await waitFor(() => expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: /^refresh$/i }));
+    await act(async () => {});
+
+    files["/sales/index.html"] = "<html><body>v2</body></html>";
+    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+
+    expect(await screen.findByText(/^✓ deployed/i)).toBeInTheDocument();
+    await waitFor(() => expect(frame()?.getAttribute("srcdoc")).toContain("v2"));
+  });
+
+  it("keeps A's waiting verdict when Deploy is pressed on the sibling B and then cancelled", async () => {
+    /**
+     * Review round 10: ONE slot held every page's verdict, so B's "working"
+     * overwrote A's success still waiting for the pane to come back — and
+     * A's Deploy ended with nothing on screen. One verdict per view file.
+     */
+    const { release } = serveHeldBuilds(0);
+    const client = makeTestQueryClient();
+    const page = pages(svc({ ...BUILT }), client);
+    const view = render(page("/sales/a.ai.yaml"));
+    await screen.findByRole("button", { name: /^rebuild$/i });
+    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    await screen.findByText(/> vite build/);
+    view.rerender(page("/sales/b.ai.yaml"));
+    release(0);
+    await waitFor(() => expect(screen.getByRole("button", { name: /^deploy$/i })).toBeEnabled());
+
+    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    await waitFor(() => expect(buildCalls()).toHaveLength(2));
+    fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /^deploy$/i })).toBeEnabled());
+
+    view.rerender(page("/sales/a.ai.yaml"));
+    expect(await screen.findByText(/^✓ deployed/i)).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: /address/i })).toHaveValue(
+      `${window.location.origin}/w/rca/item1/sales/a.ai.yaml`,
+    );
+  });
+
+  it("tells A its waiting verdict was overtaken when B's Deploy rebuilt the folder first", async () => {
+    /**
+     * Review round 10, the other half: B's Deploy that SUCCEEDS rebuilds the
+     * folder, so A's waiting verdict is about a document the address no
+     * longer serves — it cannot be applied, and it must not vanish either.
+     */
+    const { release } = serveHeldBuilds(0);
+    const client = makeTestQueryClient();
+    const page = pages(svc({ ...BUILT }), client);
+    const view = render(page("/sales/a.ai.yaml"));
+    await screen.findByRole("button", { name: /^rebuild$/i });
+    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    await screen.findByText(/> vite build/);
+    view.rerender(page("/sales/b.ai.yaml"));
+    release(0);
+    await waitFor(() => expect(screen.getByRole("button", { name: /^deploy$/i })).toBeEnabled());
+
+    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    await waitFor(() => expect(buildCalls()).toHaveLength(2));
+    release(1);
+    expect(await screen.findByRole("textbox", { name: /address/i })).toHaveValue(
+      `${window.location.origin}/w/rca/item1/sales/b.ai.yaml`,
+    );
+
+    view.rerender(page("/sales/a.ai.yaml"));
+    expect(await screen.findByText(/deploy stopped/i)).toHaveTextContent(/deployed again/i);
+    expect(screen.queryByText(/^✓ deployed/i)).toBeNull();
+    expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull();
+  });
+
+  it("writes Cancelled. into the build log, so a cut-off log is not a dropped stream", async () => {
+    // Review round 10: Cancel aborted the stream and wrote nothing, and a log
+    // ending mid-output looks exactly like a proxy that dropped the build.
+    serveHeldBuild(0);
+    renderIn({ ...BUILT });
+    await screen.findByRole("button", { name: /^rebuild$/i });
+    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    await screen.findByText(/> vite build/);
+
+    fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+
+    const log = await screen.findByRole("log", { name: "Build output" });
+    await waitFor(() => expect(log).toHaveTextContent(/Cancelled\./));
+  });
+
+  it("does not re-read the manifest for the page's own save — only for somebody else's change", async () => {
+    /**
+     * Review round 10: the manifest re-read (round 7) sat BEFORE the
+     * self-write filter, so a page autosaving its data file re-read
+     * `package.json` on every keystroke.
+     */
+    vi.stubGlobal("fetch", vi.fn());
+    const { fs } = renderInFs({ ...BUILT });
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+    await screen.findByRole("button", { name: /^rebuild$/i });
+    const win = frame()?.contentWindow as Window;
+    const replies: unknown[] = [];
+    vi.spyOn(win, "postMessage").mockImplementation((m: unknown) => replies.push(m));
+    const manifestReads = () => vi.mocked(fs.readFile).mock.calls.filter(([p]) => p === "/sales/package.json").length;
+    const before = manifestReads();
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: { proto: WUI_PROTOCOL, id: "1", verb: "writeFile", args: { path: "data.json", text: "[]" } },
+        source: win,
+      }),
+    );
+    await waitFor(() => expect(replies).toHaveLength(1));
+    act(() => publishFileChanged("item1", "/sales/data.json"));
+    await act(async () => {});
+    expect(manifestReads()).toBe(before);
+
+    // The same path changed by somebody else is a change in the folder.
+    act(() => publishFileChanged("item1", "/sales/data.json"));
+    await waitFor(() => expect(manifestReads()).toBe(before + 1));
+  });
+
   it("names the page a hold is for on the sibling's button, so its Cancel is not a Cancel for nothing", async () => {
     /**
      * Review round 6: the button's LABEL came from the pane-wide hold, so

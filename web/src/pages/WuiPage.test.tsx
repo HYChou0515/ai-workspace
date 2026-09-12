@@ -371,6 +371,37 @@ describe("WuiPage: what a reader is handed", () => {
     expect(await screen.findByRole("button", { name: /try again/i })).toBeInTheDocument();
   });
 
+  it("visibly acts on Try again after a read that once succeeded, too", async () => {
+    /**
+     * Review round 10: the "Opening …" pin above holds only for a query that
+     * NEVER had data. One that read the view file fine and then could not —
+     * the pane's Try again re-reads it, and a restore answers 404 — keeps
+     * `error` while it refetches, so the reader's next press left the
+     * sentence and the button exactly as they were for the whole read.
+     */
+    let hold: () => void = () => {};
+    const gate = new Promise<void>((r) => (hold = r));
+    let viewReads = 0;
+    const readFile = vi.fn(async (path: string) => {
+      if (path !== "/scrap-review/page.ai.yaml") throw notFound(path);
+      viewReads += 1;
+      if (viewReads === 1) return { kind: "text", path, text: YAML, size: YAML.length, encoding: "utf-8" };
+      if (viewReads === 3) await gate;
+      throw notFound(path);
+    });
+    renderAt("/w/rca/i1/scrap-review/page.ai.yaml", readFile);
+    // The pane's Try again (no entry) re-reads the view file: now a 404.
+    fireEvent.click(await screen.findByRole("button", { name: /try again/i }));
+    expect(await screen.findByText(/there is no file at/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+
+    expect(await screen.findByText(/^looking again/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /try again/i })).toBeNull();
+    hold();
+    expect(await screen.findByRole("button", { name: /try again/i })).toBeInTheDocument();
+  });
+
   it("offers no Try again on an answer that will not change", async () => {
     /**
      * Review round 8: only a 403 was permanent; a 410 (the item was deleted)

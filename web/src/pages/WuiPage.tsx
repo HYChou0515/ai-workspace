@@ -82,12 +82,15 @@ export function WuiPage({
     retry: false,
   });
 
-  // Also what a press on Try again shows: a refetch of a query that never
-  // had data goes back through `pending`, so the sentence is replaced while
-  // the read is in flight and a second failure is visibly a second one.
-  // (Pinned by a test — a version of TanStack that kept `error` while
-  // refetching would leave the button looking dead.)
+  // A refetch of a query that NEVER had data goes back through `pending`, so
+  // the first press on Try again replaces the sentence while the read is in
+  // flight. A query that once HAD data keeps it — `status` stays `error`
+  // with `isFetching` — so the reader's Try again (below, after a read that
+  // succeeded and a later one that did not) would otherwise leave the
+  // sentence and the button exactly as they were for the whole read, and a
+  // second failure would look like a press that did nothing. Both pinned.
   if (view.isPending) return <Problem>Opening {path}…</Problem>;
+  if (view.isError && view.isFetching) return <Problem>Looking again for {path}…</Problem>;
   if (view.isError) {
     // Named, because the reader did not choose this path — somebody sent them
     // the link, and the path is the only thing they can forward back. What
