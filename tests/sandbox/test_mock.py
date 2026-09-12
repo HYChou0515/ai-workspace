@@ -317,3 +317,22 @@ async def test_the_mock_reports_what_it_is_holding():
 
     await sandbox.kill(b)
     assert [e.item_id for e in await sandbox.running_sandboxes() or []] == ["item-a"]
+
+
+async def test_a_path_the_walk_reports_can_be_read_back_however_it_was_uploaded():
+    """The double stores the path it was handed (`pyproject.toml`, no leading
+    slash — a real test does this); the walk reports the canonical form
+    (`/pyproject.toml`), as every real backend does. The mirror downloads by
+    what the walk said, so the double must answer for BOTH spellings — or a
+    mirror pass over such a file fails only under the double."""
+    sb = MockSandbox()
+    h = await sb.create(SandboxSpec())
+    await sb.upload(h, b"[tool]", "pyproject.toml")
+    walked = await sb.walk(h, "/")
+    assert [e.path for e in walked.files] == ["/pyproject.toml"]
+    assert await sb.exists(h, "/pyproject.toml") is True
+    assert await sb.download(h, "/pyproject.toml") == b"[tool]"
+    assert await sb.size_of(h, "/pyproject.toml") == 6
+    assert await sb.download(h, "pyproject.toml") == b"[tool]"  # the raw spelling still works
+    await sb.delete(h, "/pyproject.toml")
+    assert await sb.exists(h, "pyproject.toml") is False

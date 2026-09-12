@@ -330,4 +330,30 @@ describe("<FileTree /> lazy folders", () => {
     await user.click(screen.getByText("node_modules"));
     expect(await screen.findByTestId("lazy-failed")).toBeInTheDocument();
   });
+
+  it("keeps a loaded level on screen when its background refresh fails, without calling it unloaded", async () => {
+    const user = userEvent.setup();
+    let fail = false;
+    const listTree = vi.fn(async () => {
+      if (fail) throw Object.assign(new Error("gateway"), { status: 502 });
+      return {
+        items: [{ path: "/node_modules/.package-lock.json", size: 1 }],
+        dirs: [],
+        unwalked: [],
+        truncated: false,
+      };
+    });
+    const svc: FileService = { ...investigationFileService("rca", "inv-lazy"), listTree };
+    const { client } = renderTree(svc, ["/node_modules"]);
+    await user.click(screen.getByText("node_modules"));
+    await waitFor(() => expect(screen.getByText(".package-lock.json")).toBeInTheDocument());
+
+    fail = true;
+    await client.invalidateQueries({ queryKey: ["treeDir", "inv-lazy"] });
+    await waitFor(() => expect(listTree).toHaveBeenCalledTimes(2));
+
+    // The rows are still what we know; "could not be loaded" would be a lie.
+    expect(screen.getByText(".package-lock.json")).toBeInTheDocument();
+    expect(screen.queryByTestId("lazy-failed")).not.toBeInTheDocument();
+  });
 });

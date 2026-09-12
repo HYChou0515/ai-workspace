@@ -373,6 +373,14 @@ CLAUDE.md 架構段加一條「檔案樹是預載修剪樹 + 懶目錄」,把 `T
   搬移/改名走後端 409 會 alert,新檔在暖路徑 500、冷路徑在旁邊建同名檔。要修得開 `is_dir` 路由或讓 `exists` 回 kind;記著。
 - 懶目錄抓取失敗時畫「載入失敗」,不再看起來像空的(P3 起就有的洞,順手補)。
 
+第四輪(只看第三輪的修法;源自它的發現:**1 條 LOW + 1 條文案**,都只影響測試替身或措辭,修完收斂):
+- `flat_lister` 正規化後,in-memory `MockSandbox` 的 `exists/download/delete` 仍用原 key 比對 → walk 報 `/pyproject.toml`、mock 卻查不到。
+  只有測試替身會這樣(scandir / find / 耐久列都給正規 key);修在 mock:查不到原樣就以正規化等價比對。兩份 mock 一起。
+- 「載入失敗」只在**沒資料**時標:已載入的層背景重抓失敗,列還在,底下寫「載入失敗」是假話。
+
+**收斂梯度:6 → 0(P8)/ 殘留 6 → 2(P9)→ 1 LOW(P10)。** 判準是「幾條源自上輪修法」,不是「幾條」;
+第四輪那條連使用者都碰不到,停。
+
 ### 6.7 冷路徑 `prefix` 從「假的」變「真的」
 
 `nfs_tree` 的 `tree()` 從 `prefix` 開始 scandir,所以 `?prefix=/node_modules&depth=1` 在冷 item 上

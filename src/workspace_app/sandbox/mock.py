@@ -17,6 +17,24 @@ from .protocol import (
 from .walk import flat_lister, walk_tree
 
 
+def _canon(path: str) -> str:
+    """`pyproject.toml` / `//x` / `/a//b` → `/pyproject.toml` / `/x` / `/a/b`."""
+    return "/" + "/".join(seg for seg in path.split("/") if seg)
+
+
+def _stored_key(fs: dict[str, bytes], path: str) -> str | None:
+    """The key `path` names in `fs` — verbatim, or by canonical spelling.
+
+    The double stores the path it was handed (a test uploads `pyproject.toml`
+    with no leading slash) while `walk` reports the canonical form, as every
+    real backend does — and the mirror then downloads by what the walk said.
+    A real backend resolves both spellings to one file; so must this one."""
+    if path in fs:
+        return path
+    want = _canon(path)
+    return next((k for k in fs if _canon(k) == want), None)
+
+
 def _parent(path: str) -> str:
     """The directory holding `path` ("" when it sits at the workspace root)."""
     return path.rstrip("/").rsplit("/", 1)[0]
@@ -191,9 +209,10 @@ class MockSandbox:
 
     async def download(self, handle: SandboxHandle, remote_path: str) -> bytes:
         fs = self._require(handle)
-        if remote_path not in fs:
+        key = _stored_key(fs, remote_path)
+        if key is None:
             raise FileNotFoundError(remote_path)
-        return fs[remote_path]
+        return fs[key]
 
     async def upload_file(self, handle: SandboxHandle, local_path: Path, remote_path: str) -> None:
         fs = self._require(handle)
@@ -204,9 +223,10 @@ class MockSandbox:
         self, handle: SandboxHandle, remote_path: str, local_path: Path
     ) -> None:
         fs = self._require(handle)
-        if remote_path not in fs:
+        key = _stored_key(fs, remote_path)
+        if key is None:
             raise FileNotFoundError(remote_path)
-        local_path.write_bytes(fs[remote_path])
+        local_path.write_bytes(fs[key])
 
     async def walk(
         self,
@@ -231,20 +251,22 @@ class MockSandbox:
         )
 
     async def exists(self, handle: SandboxHandle, path: str) -> bool:
-        return path in self._require(handle)
+        return _stored_key(self._require(handle), path) is not None
 
     async def disk_usage(self, handle: SandboxHandle) -> int:
         return sum(len(d) for d in self._require(handle).values())
 
     async def size_of(self, handle: SandboxHandle, path: str) -> int | None:
-        data = self._require(handle).get(path)
-        return None if data is None else len(data)
+        fs = self._require(handle)
+        key = _stored_key(fs, path)
+        return None if key is None else len(fs[key])
 
     async def delete(self, handle: SandboxHandle, path: str) -> None:
         fs = self._require(handle)
-        if path not in fs:
+        key = _stored_key(fs, path)
+        if key is None:
             raise FileNotFoundError(path)
-        del fs[path]
+        del fs[key]
 
     async def mkdir(self, handle: SandboxHandle, path: str) -> None:
         # Directories are tracked for real. This used to be a no-op, on the

@@ -83,7 +83,12 @@ export function useLazyDirs(
   // changed — and the tree's own memo (built from it) keeps paying off.
   const levels = useStable(results.map((r) => r.data));
   const pending = useStable(requested.filter((_, i) => results[i]!.isPending));
-  const errored = useStable(requested.filter((_, i) => results[i]!.isError));
+  // "Failed" means there is NOTHING to show: a level whose background refresh
+  // failed still has its last answer, and calling that "could not be loaded"
+  // under the rows it is showing would be a lie.
+  const errored = useStable(
+    requested.filter((_, i) => results[i]!.isError && results[i]!.data === undefined),
+  );
   return useMemo(() => {
     const files: FileInfo[] = [];
     const dirs: string[] = [];
