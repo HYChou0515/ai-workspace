@@ -4,6 +4,8 @@ run (what CI executes) covers them too."""
 
 import os
 
+import pytest
+
 from sandbox_host.walk import Entry, flat_lister, scandir_lister, walk_tree
 
 
@@ -63,3 +65,72 @@ def test_scandir_lister_classifies_what_the_recursive_walk_did(tmp_path):
     assert f.kind == "file" and f.size == 4
     st = (tmp_path / "real" / "f.txt").stat()
     assert f.version == f"{st.st_mtime_ns}-{st.st_size}"
+
+
+def test_a_cyclic_symlink_is_skipped_and_its_siblings_are_still_listed(tmp_path):
+    """`Path.is_dir()` swallowed ELOOP and the old walk skipped the entry; a
+    `DirEntry.is_dir()` raises it. One bad link must not 500 the whole tree —
+    and on `kind: local` the mirror walks too, so it must not stop persisting."""
+    (tmp_path / "a.txt").write_bytes(b"x")
+    os.symlink("loop", tmp_path / "loop")
+    walked = walk_tree(scandir_lister(tmp_path), "/")
+    assert [e.path for e in walked.files] == ["/a.txt"]
+    assert walked.dirs == []
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads everything")
+def test_an_unreadable_directory_is_listed_but_not_entered(tmp_path):
+    """What `os.walk` / `Path.walk` do: the folder is there (its parent said
+    so), its contents are not ours to see, and the rest of the tree goes on."""
+    (tmp_path / "ok").mkdir()
+    (tmp_path / "ok" / "f.txt").write_bytes(b"x")
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    (locked / "secret.txt").write_bytes(b"x")
+    locked.chmod(0)
+    try:
+        walked = walk_tree(scandir_lister(tmp_path), "/")
+    finally:
+        locked.chmod(0o755)
+    assert sorted(walked.dirs) == ["/locked", "/ok"]
+    assert [e.path for e in walked.files] == ["/ok/f.txt"]
+
+
+def test_an_entry_that_vanishes_mid_listing_is_skipped_without_losing_its_siblings(
+    tmp_path, monkeypatch
+):
+    """An agent deletes temp files during a turn; the readdir has already
+    returned the name when the stat finds it gone. Only that entry is dropped
+    — dropping the whole directory would make the mirror delete its durable
+    copies of every sibling."""
+    for name in ("a.txt", "b.txt", "c.txt"):
+        (tmp_path / name).write_bytes(b"x")
+    real_scandir = os.scandir
+
+    class _Vanishing:
+        def __init__(self, it):
+            self._it = it
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            self._it.close()
+
+        def __iter__(self):
+            for e in self._it:
+                if e.name == "b.txt":
+                    os.unlink(e.path)  # gone between the readdir and the stat
+                yield e
+
+    monkeypatch.setattr(os, "scandir", lambda p: _Vanishing(real_scandir(p)))
+    walked = walk_tree(scandir_lister(tmp_path), "/")
+    assert sorted(e.path for e in walked.files) == ["/a.txt", "/c.txt"]
+
+
+def test_flat_lister_reaches_a_recorded_folder_whose_parent_was_never_recorded():
+    """A store row for `/a/b` with no row for `/a` (an orphan) still draws:
+    the old listing never walked, so it showed such a folder; the walk must
+    infer the missing ancestor rather than lose the subtree behind it."""
+    walked = walk_tree(flat_lister({}, ["/a/b"]), "/")
+    assert sorted(walked.dirs) == ["/a", "/a/b"]

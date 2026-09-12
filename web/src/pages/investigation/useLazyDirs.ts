@@ -36,10 +36,23 @@ export type LazyDirs = {
   loading: ReadonlySet<string>;
 };
 
+/** How the tree answers "is this folder open" for the two kinds of folder —
+ * the hook needs both, because a lazy folder is only worth fetching while
+ * every folder above it is open too. */
+export type OpenRules = {
+  lazyOpen: (path: string) => boolean;
+  walkedOpen: (path: string) => boolean;
+};
+
+const ancestorsOf = (path: string): string[] => {
+  const parts = path.split("/").filter(Boolean);
+  return parts.slice(0, -1).map((_, i) => "/" + parts.slice(0, i + 1).join("/"));
+};
+
 export function useLazyDirs(
   svc: FileService,
   unwalked: readonly string[],
-  isOpen: (path: string) => boolean,
+  open: OpenRules,
 ): LazyDirs {
   const qc = useQueryClient();
   const scope = svc.scopeId;
@@ -52,7 +65,11 @@ export function useLazyDirs(
   for (const [, data] of qc.getQueriesData<TreeListing>({ queryKey: ["treeDir", scope] })) {
     for (const p of data?.unwalked ?? []) pool.add(p);
   }
-  const requested = [...pool].filter(isOpen);
+  // Requested = opened AND on screen: a level whose parent is collapsed is
+  // not shown, so it is not fetched and not refetched on every invalidation
+  // either. Its query stays cached for the moment the parent opens again.
+  const isOpen = (p: string) => (pool.has(p) ? open.lazyOpen(p) : open.walkedOpen(p));
+  const requested = [...pool].filter((p) => isOpen(p) && ancestorsOf(p).every(isOpen));
   const results = useQueries({
     queries: requested.map((path) => ({
       queryKey: qk.treeDir(scope, path),

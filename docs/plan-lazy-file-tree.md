@@ -110,13 +110,13 @@ nfs_tree 冷路徑仍然要修(user 點名、而且它今天是假 prefix),但�
 | 決策 | 內容 |
 |---|---|
 | **混合:預載修剪過的整棵** | 一次 walk,走到修剪清單裡的目錄**記下它存在、不進去**。修剪掉的目錄在樹上是**收起的節點、有 chevron**;展開 → `GET /tree?prefix=/node_modules&depth=1` 讀那一層,它的子目錄再懶 |
-| **修剪 ≠ 隱藏** | 修剪只決定「不預載」。保存規則**一個字不動**(app-side mirror 照 `DEFAULT_IGNORES` 不存 `node_modules/`;正式環境 host-managed 的 rsync 歸檔沒有排除清單、全部都存 —— §1.6)、額度照算 bytes(#538 那條「樹顯示的就要算」不變)、展開看得到、⌘P / agent `show_file` 打得開 |
+| **修剪 ≠ 隱藏** | 修剪只決定「不預載」。保存規則**一個字不動**(app-side mirror 照 `DEFAULT_IGNORES` 不存 `node_modules/`;正式環境 host-managed 的 rsync 歸檔沒有排除清單、全部都存 —— §1.6)、額度照算 bytes(#538 那條「樹顯示的就要算」不變)、展開看得到、agent `show_file` / 直接給路徑打得開。⌘P 是對預載清單搜尋,**找不到**懶目錄裡的檔(跟 §6.5 篩選同類,預期行為) |
 | **修剪清單 = `DEFAULT_IGNORES` 裡的目錄 pattern + `dist/` + `build/`** | user:「先把常用的放進去」。一個**新常數** `TREE_PRUNE`,從 `DEFAULT_IGNORES` **導出**(同一個變數,不是抄一份數字),再加兩個。**不改 `DEFAULT_IGNORES` 本身** —— 它有兩個消費者(§1.3),加 `dist/` 進去會停止備份 `dist/` 並把裡面的排程靜默關掉。「不預載」是第三種語意,前兩種不動 |
 | **只有目錄能修剪** | `*.pyc` 這種檔案 pattern 不進 `TREE_PRUNE`:檔案沒有「收起」可言,不列就是隱藏 |
 | **沒有新的 sandbox op** | `walk(handle, root, *, depth=None, prune=(), max_entries=None)`,三個可選參數,8 個既有呼叫者一行不改。`WalkResult` 多兩個欄位:`unwalked: list[str]`(列出了但沒進去的目錄)、`truncated: bool`。API 端 `GET /tree?prefix=&depth=`;修剪清單和上界是**伺服端政策**,前端只選 depth |
 | **結構性上界 `TREE_MAX_ENTRIES = 5000`** | 就算剪掉那些,萬一使用者真有五萬個 CSV,walk 要停。BFS 逐目錄走、**在目錄之間**檢查總數;超過就停,queue 裡還沒列的目錄全部進 `unwalked`,`truncated = true`。前端把它們當懶節點,篩選列標「部分資料夾未載入」。常數,不是 config 旋鈕(§5) |
 | **一個機制,三個理由** | `unwalked` 的成員來自三個原因:在修剪清單裡、超過 `depth`、超過上界。前端不區分,全都是「展開才讀」 |
-| **展開狀態:一個集合,語意是「翻過預設」** | 預設:**走過的目錄展開(跟今天一樣)、`unwalked` 的收起**。持久化集合沿用 `rca:tree-collapsed:*` 的 key 與既有資料 —— 對走過的目錄它的意思一個位元都沒變(在集合裡 = 收起),對 unwalked 目錄「在集合裡 = 使用者打開過」。變數改名 `toggled`,key 不改:改 key 是一次沒有任何好處的 migration |
+| **展開狀態:一條規則、兩個集合** | 預設:**走過的目錄展開(跟今天一樣)、`unwalked` 的收起**。走過的沿用 `rca:tree-collapsed:*`(在集合裡 = 收起,一個位元都沒變);懶目錄用新的 `rca:tree-opened:*`(在集合裡 = 使用者打開過)。初稿想共用一個集合、語意「翻過預設」—— review 抓到那會把**使用者部署前親手收起的 `node_modules/`**(等最久的那批人)讀成「打開過」,部署後第一次進來就自動展開並抓取。兩個集合各自的預設就各自誠實 |
 | **不自動展開、不 reveal** | Q3。agent 寫檔不展開任何東西;開檔案也不展開它的祖先(今天也不會)。tab 存在的問題用下一條解,不用展開解 |
 | **「不在清單」不再等於「不存在」** | 一個 helper `presenceOf(path, files, unwalked) → "present" \| "absent" \| "unknown"`,`unknown` iff 某個祖先在 `unwalked`。§1.4 那四處**只在 `absent` 時**才關 tab / 剔除。判準只裝在一個地方 |
 | **失效:turn 結束、`file_changed` → 預載樹 + 已展開的懶目錄** | `qk.files(id)` 照舊 invalidate(現在只有幾百個 entry,便宜);另加 `["treeDir", id]` 前綴 invalidate —— TanStack 只重抓**還掛在畫面上的**(= 展開中的),收起的下次展開才讀。兩個入口共用一個 `invalidateTree(qc, id)` |
@@ -303,7 +303,7 @@ CLAUDE.md 架構段加一條「檔案樹是預載修剪樹 + 懶目錄」,把 `T
 - **不動 mirror 的 walk。** `registry.flush` / `SandboxSync` 每次 sweep 走整棵是耐久性的事,而且它
   **必須**看到 `dist/`(它要保存)。它拿到的 `WalkResult` 跟今天一樣(預設參數)。
 - **不動額度。** #538 那條「樹顯示的就要算」不變;`node_modules/` 照算。
-- **不動歸檔的 rsync(user 鎖定)。** restore 一個檔都不省 —— 排掉 derived 目錄會讓 reap 後的環境壞掉。§6.7。
+- **不動歸檔的 rsync(user 鎖定)。** restore 一個檔都不省 —— 排掉 derived 目錄會讓 reap 後的環境壞掉。§6.8。
 - **不改 `DEFAULT_IGNORES`。** §1.3。
 - **不做 reveal / 自動展開。** Q3。
 - **不做伺服端篩選 / 檔名索引。** `POST /search` 存在,篩選要不要接它是獨立決定;這包裡篩選語意
@@ -344,13 +344,22 @@ CLAUDE.md 架構段加一條「檔案樹是預載修剪樹 + 懶目錄」,把 `T
 預期行為,但**是**行為改變:今天篩 `lodash` 找得到 `node_modules/lodash/`,以後找不到(除非展開過)。
 不提示(§2)。如果有人真的靠這個,再談。
 
-### 6.6 冷路徑 `prefix` 從「假的」變「真的」
+### 6.6 review 第一輪抓到的、計畫沒想到的
+
+- **「存不存在」的問題不能只問預載清單**:`ensureReplaceable`、上傳撞名、Enter 開檔、「New file」落點原本都讀 `files`/`dirs` props,
+  懶目錄載入後的檔案不在裡面 → 在 `dist/` 裡新建 `index.html` **不會提示、直接清空**(HIGH)。修法:合併後的 `listing` 只算一次,
+  所有判斷都讀它。教訓:「清單」在這包裡有兩份,每個讀清單的地方都要問「哪一份」。
+- **scandir 的錯誤要逐 entry 接**:舊 rglob 靠 `Path.is_dir()` 吞掉 ELOOP/EACCES;新的 `DirEntry` 會丟。一個循環 symlink 讓整棵樹 500、
+  `kind: local` 的 mirror 停擺;一個 entry 在 readdir 與 stat 之間被刪,若在目錄層接錯誤,整個目錄回空 → mirror 刪掉所有同層的耐久副本。
+- symlink **root**:`?prefix=/link-to-outside&depth=1` 會跟出 workspace(舊 rglob 對 symlink base 也一樣;`read` 也從不檢查)。既有一類,沒在這包修,記著。
+
+### 6.7 冷路徑 `prefix` 從「假的」變「真的」
 
 `nfs_tree` 的 `tree()` 從 `prefix` 開始 scandir,所以 `?prefix=/node_modules&depth=1` 在冷 item 上
 真的只碰那一層。這是修正不是風險 —— 但它同時意味著**冷暖兩條路第一次有相同的成本形狀**,
 P2 的冷路徑測試要記「哪些目錄被列」,不是只看結果。
 
-### 6.7 做完之後,閒置後重開**還是會等** —— restore 那一段不在這包
+### 6.8 做完之後,閒置後重開**還是會等** —— restore 那一段不在這包
 
 §1.6:正式環境閒置後第一次打開 = rsync restore 整個歸檔 + walk。本計畫把 walk 從「一萬兩千個 entry
 × 2.81 趟」壓到「幾百個 entry × ~1 趟」,但 restore 仍然搬一萬兩千個檔。**那 50 秒有多少是 restore、

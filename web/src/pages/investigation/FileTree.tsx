@@ -163,27 +163,54 @@ export function FileTree({
   // Lazy folders: the ones the preload listed but did not enter. Their levels
   // load on expand and merge into the SAME tree, so the filter, the drag
   // targets and the keyboard order see them like any other folder.
-  const toggled = usePersistentSet(`rca:tree-collapsed:${svc.scopeId || scopeId || "default"}`);
-  const lazyPreload = useMemo(() => new Set(unwalked), [unwalked]);
-  // Open-state, one rule for every folder: the stored set holds the folders the
-  // user toggled AWAY from their default. A walked folder defaults open (so a
-  // stored entry still means "collapsed", byte for byte what it meant before
-  // folders could be lazy); a lazy one defaults closed, so for it the entry
-  // means "opened". Same key, same data, no migration.
-  const isLazyPath = (p: string) => lazyPreload.has(p) || lazy.unwalked.includes(p);
-  const isOpen = (p: string) => (isLazyPath(p) ? toggled.has(p) : !toggled.has(p));
-  const ensureOpen = (p: string) => {
-    if (!isOpen(p)) toggled.toggle(p);
-  };
-  const lazy = useLazyDirs(svc, unwalked, (p) => toggled.has(p));
-  const fullTree = useMemo(
-    () =>
-      buildFileTree(
-        lazy.files.length ? [...files, ...lazy.files] : files,
-        lazy.dirs.length ? [...dirs, ...lazy.dirs] : dirs,
-        lazy.unwalked.length ? [...unwalked, ...lazy.unwalked] : unwalked,
-      ),
+  // Open-state, one rule with two stores. A walked folder defaults OPEN and
+  // `collapsed` holds the ones the user closed — the same key and meaning as
+  // before folders could be lazy. A lazy folder defaults CLOSED and `opened`
+  // holds the ones the user expanded. Two stores rather than one "toggled
+  // away from default" set, because the one set would read a folder the
+  // user collapsed before this shipped (`node_modules`, for exactly the
+  // people who waited 50 s) as "opened" and expand it — fetching it — on
+  // the first visit after the deploy.
+  const scopeKey = svc.scopeId || scopeId || "default";
+  const collapsed = usePersistentSet(`rca:tree-collapsed:${scopeKey}`);
+  const opened = usePersistentSet(`rca:tree-opened:${scopeKey}`);
+  const lazy = useLazyDirs(svc, unwalked, {
+    lazyOpen: (p) => opened.has(p),
+    walkedOpen: (p) => !collapsed.has(p),
+  });
+  // ONE listing for every question the tree asks — what is drawn, what exists
+  // (the replace prompt, the upload collision check), what is a folder (Enter,
+  // where "New file" lands). The preload alone answers none of them for a
+  // file under a lazy folder, and a rule that read it would have let a new
+  // `dist/index.html` silently empty the built one.
+  const listing = useMemo(
+    () => ({
+      files: lazy.files.length ? [...files, ...lazy.files] : files,
+      dirs: lazy.dirs.length ? [...dirs, ...lazy.dirs] : dirs,
+      unwalked: lazy.unwalked.length ? [...unwalked, ...lazy.unwalked] : unwalked,
+    }),
     [files, dirs, unwalked, lazy],
+  );
+  const knownFiles = useMemo(() => new Set(listing.files.map((f) => f.path)), [listing]);
+  // Folders: the listed ones plus every ancestor a file path implies.
+  const knownDirs = useMemo(() => {
+    const out = new Set(listing.dirs);
+    for (const f of listing.files) {
+      const parts = f.path.split("/").filter(Boolean);
+      for (let i = 1; i < parts.length; i++) out.add("/" + parts.slice(0, i).join("/"));
+    }
+    return out;
+  }, [listing]);
+  const lazySet = useMemo(() => new Set(listing.unwalked), [listing]);
+  const isFolder = (p: string) => knownDirs.has(p);
+  const isOpen = (p: string) => (lazySet.has(p) ? opened.has(p) : !collapsed.has(p));
+  const toggleOpen = (p: string) => (lazySet.has(p) ? opened : collapsed).toggle(p);
+  const ensureOpen = (p: string) => {
+    if (!isOpen(p)) toggleOpen(p);
+  };
+  const fullTree = useMemo(
+    () => buildFileTree(listing.files, listing.dirs, listing.unwalked),
+    [listing],
   );
   // While a filter is active, `pruneTree` returns only the matching branches
   // plus the ancestor dirs to force open; an empty term is a no-op (full tree,
@@ -195,7 +222,7 @@ export function FileTree({
         : { tree: fullTree, expand: NO_FORCE_OPEN },
     [searchable, fullTree, query],
   );
-  const open: OpenState = { isOpen, toggle: (p) => toggled.toggle(p) };
+  const open: OpenState = { isOpen, toggle: toggleOpen };
   const [menu, setMenu] = useState<Menu | null>(null);
   // Inline creator (VSCode-style): type the name straight in the tree.
   const [creating, setCreating] = useState<{ kind: "file" | "folder"; dir: string } | null>(null);
@@ -224,8 +251,7 @@ export function FileTree({
   const createDir = (() => {
     const anchor = sel.anchor;
     if (!anchor) return "";
-    const isFolder = dirs.includes(anchor) || files.some((f) => f.path.startsWith(anchor + "/"));
-    return isFolder ? anchor : anchor.split("/").slice(0, -1).join("/");
+    return isFolder(anchor) ? anchor : anchor.split("/").slice(0, -1).join("/");
   })();
   // What the toolbar tooltips CALL that folder — relative (#549), since the tree
   // is where the user learns what a path here looks like.
@@ -238,7 +264,7 @@ export function FileTree({
     const mods = { ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey };
     setSel((s) => nextSelection(s, node.path, mods, order));
     if (mods.ctrl || mods.shift) return;
-    if (node.isDir) toggled.toggle(node.path);
+    if (node.isDir) toggleOpen(node.path);
     else onOpen(node.path, { preview: true });
   };
 
@@ -254,7 +280,7 @@ export function FileTree({
   // folder context menu passes an explicit dir.
   const upload = async (fileList: FileList | File[] | null, targetDir: string = createDir) => {
     if (!fileList || fileList.length === 0) return;
-    const existing = new Set(files.map((f) => f.path));
+    const existing = knownFiles;
     // A new attempt reports on itself: the previous report described files the
     // user has already dealt with (or re-dropped), so keeping it would leave
     // them reading stale failures next to fresh ones.
@@ -339,8 +365,7 @@ export function FileTree({
   // deleted first). VSCode-style replace prompt, shared by move/copy,
   // rename and new file/folder so the BE never has to clobber.
   const ensureReplaceable = async (dest: string): Promise<boolean> => {
-    const exists = files.some((f) => f.path === dest) || dirs.includes(dest);
-    if (!exists) return true;
+    if (!knownFiles.has(dest) && !isFolder(dest)) return true;
     const choice = await dialog.confirm({
       title: "Replace existing item",
       body: `“${basename(dest)}” already exists. Replace it?`,
@@ -369,7 +394,7 @@ export function FileTree({
       refresh();
       if (!copy && tops.length === 1) {
         const only = tops[0]!;
-        const isFolder = dirs.includes(only) || files.some((f) => f.path.startsWith(only + "/"));
+        const isFolder = knownDirs.has(only);
         if (!isFolder) onOpen(`${destDir}/${basename(only)}`.replace(/\/+/g, "/"), { preview: false });
       }
     } catch (e) {
@@ -475,10 +500,14 @@ export function FileTree({
   // The whole tree (root, prefix ""). Confirmed first since it can be a lot of
   // files; per-folder / per-file downloads are explicit and skip the prompt.
   const downloadAll = async () => {
-    const n = files.length;
+    // The zip holds the WHOLE workspace, lazy folders included; the count is
+    // only honest when nothing was left unwalked.
+    const n = listing.files.length;
     const choice = await dialog.confirm({
       title: "Download all",
-      body: `Download all ${n} file${n === 1 ? "" : "s"} as a zip?`,
+      body: listing.unwalked.length
+        ? "Download the whole workspace as a zip?"
+        : `Download all ${n} file${n === 1 ? "" : "s"} as a zip?`,
       actions: [
         { id: "download", label: "Download" },
         { id: "cancel", label: "Cancel" },
@@ -790,9 +819,7 @@ export function FileTree({
             // open every selected file (folders ignored)
             e.preventDefault();
             for (const p of sel.selected) {
-              if (!dirs.includes(p) && !files.some((f) => f.path.startsWith(p + "/"))) {
-                onOpen(p, { preview: false });
-              }
+              if (!isFolder(p)) onOpen(p, { preview: false });
             }
           }
         }}
@@ -837,9 +864,7 @@ export function FileTree({
             onActivate={activate}
             onDoubleOpen={(p) => {
               for (const t of targetsFor(p)) {
-                if (!dirs.includes(t) && !files.some((f) => f.path.startsWith(t + "/"))) {
-                  onOpen(t, { preview: false });
-                }
+                if (!isFolder(t)) onOpen(t, { preview: false });
               }
             }}
             dragPathsFor={targetsFor}

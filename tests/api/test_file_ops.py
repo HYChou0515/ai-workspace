@@ -492,6 +492,8 @@ def test_the_tree_lists_a_derived_folder_without_walking_into_it(harness: Harnes
     deeper = harness.client.get(tree, params={"prefix": "/node_modules/x", "depth": 1}).json()
     assert [f["path"] for f in deeper["files"]] == ["/node_modules/x/y.js"], deeper
     assert deeper["unwalked"] == []
+    # A depth that would mean "list nothing" is refused rather than read as 1.
+    assert harness.client.get(tree, params={"depth": 0}).status_code == 400
 
 
 async def test_conflict_details_name_the_file_the_way_the_ui_does(harness: Harness):

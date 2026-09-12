@@ -94,10 +94,10 @@ def walk_tree(
         try:
             entries = list(list_dir(here))
         except (FileNotFoundError, NotADirectoryError):
-            # A root that names nothing lists nothing (what the recursive walk
-            # answered, and what a user-typed prefix must get — not a 500); a
-            # child that vanished between its parent's listing and its own is
-            # still on the tree, just empty.
+            # A root that names nothing lists nothing — what the recursive walk
+            # answered, and what a user-typed prefix must get, not a 500. (A
+            # real-directory lister handles its own errors per entry; this is
+            # for a flat lister asked about a path it has no record of.)
             continue
         for entry in entries:
             seen += 1
@@ -121,17 +121,36 @@ def scandir_lister(cwd: Path) -> ListDir:
     anything that is not a symlink, so a regular file costs the one `stat` its
     size and mtime need, and a directory costs none."""
 
+    def classify(e: os.DirEntry[str]) -> Entry:
+        if e.is_dir():
+            return Entry(e.name, "linkdir" if e.is_symlink() else "dir")
+        if e.is_file():
+            st = e.stat()
+            # mtime(ns)+size — the change stamp the mirror keys on; unchanged.
+            return Entry(e.name, "file", st.st_size, f"{st.st_mtime_ns}-{st.st_size}")
+        return Entry(e.name, "other")
+
     def list_dir(rel: str) -> Iterable[Entry]:
-        with os.scandir(cwd / rel.lstrip("/")) as it:
+        # A directory we cannot open — gone, not a directory, unreadable — is
+        # still on the tree (its parent listed it); there is simply nothing to
+        # show under it. `os.walk` and `Path.walk` do the same, and the walk
+        # this replaced rode on them: one unreadable folder never stopped it.
+        try:
+            it = os.scandir(cwd / rel.lstrip("/"))
+        except OSError:
+            return
+        with it:
             for e in it:
-                if e.is_dir():
-                    yield Entry(e.name, "linkdir" if e.is_symlink() else "dir")
-                elif e.is_file():
-                    st = e.stat()
-                    # mtime(ns)+size — the change stamp the mirror keys on; unchanged.
-                    yield Entry(e.name, "file", st.st_size, f"{st.st_mtime_ns}-{st.st_size}")
-                else:
-                    yield Entry(e.name, "other")
+                # Per ENTRY, never per directory: a cyclic link (ELOOP) or a
+                # file unlinked between the readdir and its stat drops that
+                # one entry, exactly as `Path.is_dir()` swallowing the error
+                # did. Dropping the whole listing instead would answer "this
+                # folder is empty" — and the mirror would delete its durable
+                # copies of every sibling.
+                try:
+                    yield classify(e)
+                except OSError:
+                    continue
 
     return list_dir
 
@@ -144,7 +163,10 @@ def flat_lister(files: Mapping[str, tuple[int, str]], dirs: Iterable[str]) -> Li
     answer the same question the same way. Every ancestor of a file counts as
     a directory whether or not it was recorded."""
     known: set[str] = set(dirs)
-    for path in files:
+    # Every ancestor of a file OR a recorded directory is a directory too — a
+    # store that recorded `/a/b` without `/a` (an orphan row) must still let
+    # the walk reach `/a/b`, as the old listing (which never walked) did.
+    for path in [*known, *files]:
         parent = path.rpartition("/")[0]
         while parent:
             known.add(parent)

@@ -307,7 +307,8 @@ class DockerSandbox:
         out = result.output or b""
         if isinstance(out, tuple):  # pragma: no cover — demux=False edge case
             out = out[0] or b""
-        found = _parse_find_output(out)
+        base = f"/{root.strip('/')}" if root.strip("/") else ""
+        found = _parse_find_output(out, base=base)
         if depth is None and not prune and max_entries is None:
             return found
         # `find` already returned everything, so the options save nothing here
@@ -315,7 +316,7 @@ class DockerSandbox:
         # every backend gives.
         return walk_tree(
             flat_lister({e.path: (e.size, e.version) for e in found.files}, found.dirs),
-            "/",
+            base or "/",
             depth=depth,
             prune=prune,
             max_entries=max_entries,
@@ -382,14 +383,18 @@ def _extract_tar_stream_to_file(stream: Any, name: str, local_path: Path) -> Non
         os.unlink(tarpath)
 
 
-def _parse_find_output(output: bytes) -> WalkResult:
+def _parse_find_output(output: bytes, base: str = "") -> WalkResult:
     """Split `find -printf "%y\\t%s\\t%T@\\t%P\\n"` output into files and dirs.
 
-    %P is the path relative to the find root. We re-prepend "/" so the
-    result mirrors FileStore-style canonical paths (the same shape
-    Mock/LocalProcess.walk returns). %y is the type char — `f` regular, `d`
-    directory; anything else (symlink, socket, fifo) is dropped, which is what
-    the old `-type f` filter did to everything that was not a regular file.
+    %P is the path relative to the find ROOT, so `base` — the walked root as a
+    workspace path ("" for the workspace itself, "/sub" for a subfolder) — is
+    prepended to give workspace-root-relative paths, the shape every other
+    backend's `walk` returns. Nothing sent a non-root `root` before the tree
+    started expanding folders on demand, so the relative form went unnoticed;
+    left as it was, an expanded `/node_modules` would have spliced its entries
+    in at the tree root. %y is the type char — `f` regular, `d` directory;
+    anything else (symlink, socket, fifo) is dropped, which is what the old
+    `-type f` filter did to everything that was not a regular file.
     """
     files: list[FileEntry] = []
     dirs: list[str] = []
@@ -404,11 +409,11 @@ def _parse_find_output(output: bytes) -> WalkResult:
         if not rel:  # the find root itself, dropped silently
             continue
         if kind_b == b"d":
-            dirs.append("/" + rel)
+            dirs.append(f"{base}/{rel}")
         elif kind_b == b"f":
             files.append(
                 FileEntry(
-                    path="/" + rel,
+                    path=f"{base}/{rel}",
                     size=int(size_b),
                     version=f"{mtime_b.decode()}-{size_b.decode()}",
                 )

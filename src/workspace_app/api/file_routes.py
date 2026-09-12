@@ -376,6 +376,10 @@ def register_file_routes(
         `dirs` still comes back separately rather than being derived client-side,
         because an EMPTY directory appears in no file path."""
         investigation_id = locator.require_access(slug, item_id, "read_content")
+        if depth is not None and depth < 1:
+            # `depth=0` would mean "list nothing"; the walk reads it as 1, and a
+            # parameter that silently means something else is worse than a 400.
+            raise HTTPException(status_code=400, detail="depth must be >= 1")
         listing = await files.tree(investigation_id, _workspace_prefix(prefix), depth=depth)
         return _WorkspaceTree(
             files=[

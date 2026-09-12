@@ -8,7 +8,10 @@ import { type FileService, FileServiceProvider, investigationFileService } from 
 import { renderWithQuery } from "../../test/queryWrapper";
 import { FileTree } from "./FileTree";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  localStorage.clear();
+});
 
 /** A service whose `listTree` we count: the lazy fetch must go through the
  * same door every other listing does, once per expand, scoped to the folder. */
@@ -84,8 +87,11 @@ describe("<FileTree /> lazy folders", () => {
     expect(screen.queryByText(".package-lock.json")).not.toBeInTheDocument();
     await user.click(screen.getByText("node_modules"));
     expect(screen.getByText(".package-lock.json")).toBeInTheDocument();
-    await waitFor(() => expect(listTree).toHaveBeenCalledTimes(3));
-    expect(listTree).toHaveBeenLastCalledWith({ prefix: "/node_modules", depth: 1 });
+    // Both levels came back on screen, so both refresh — the nested one was
+    // not refetched while its parent was closed (nothing to show it in).
+    await waitFor(() => expect(listTree).toHaveBeenCalledTimes(4));
+    const refreshed = listTree.mock.calls.slice(2).map((c) => c[0]?.prefix);
+    expect(refreshed.sort()).toEqual(["/node_modules", "/node_modules/lodash"]);
   });
 
   it("keeps honouring a collapse the user persisted before folders could be lazy", () => {
@@ -96,7 +102,6 @@ describe("<FileTree /> lazy folders", () => {
     renderTree(svc, ["/node_modules"]);
     expect(screen.queryByText("a.py")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "src", expanded: false })).toBeInTheDocument();
-    localStorage.removeItem("rca:tree-collapsed:inv-lazy");
   });
 
   it("says the listing is partial only when the entry budget cut it, not for pruned folders", () => {
@@ -108,5 +113,84 @@ describe("<FileTree /> lazy folders", () => {
 
     renderTree(svc, ["/node_modules", "/data"], true);
     expect(screen.getByTestId("tree-partial")).toHaveTextContent(/展開|expanded/);
+  });
+
+  it("still asks before a new file would replace one inside a loaded lazy folder", async () => {
+    // The replace prompt used to read the preload listing; a file under `dist/`
+    // is never in it, so "New file… index.html" would have silently emptied
+    // the built page. Every "is it there?" question reads the merged tree.
+    const user = userEvent.setup();
+    const { svc, listTree } = lazyService({
+      "/dist": {
+        items: [{ path: "/dist/index.html", size: 1 }],
+        dirs: [],
+        unwalked: [],
+        truncated: false,
+      },
+    });
+    const writeFile = vi.fn(async () => {});
+    renderWithQuery(
+      <FileServiceProvider value={{ ...svc, writeFile }}>
+        <FileTree
+          files={[{ path: "/src/a.py", size: 1 }]}
+          dirs={["/src", "/dist"]}
+          unwalked={["/dist"]}
+          activePath={null}
+          onOpen={vi.fn()}
+        />
+      </FileServiceProvider>,
+    );
+    await user.click(screen.getByText("dist"));
+    await waitFor(() => expect(screen.getByText("index.html")).toBeInTheDocument());
+    expect(listTree).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByText("dist")); // select the folder → New file lands in it
+    await user.click(screen.getByText("dist"));
+    await user.click(screen.getByTitle("New file in dist/"));
+    await user.type(await screen.findByPlaceholderText("file name"), "index.html{Enter}");
+    expect(await screen.findByText(/already exists/i)).toBeInTheDocument();
+    expect(writeFile).not.toHaveBeenCalled();
+  });
+
+  it("does not open a collapsed-before-lazy folder just because it is in the old collapsed set", () => {
+    // Users who had collapsed `node_modules/` by hand (the ones who waited 50 s)
+    // must not find it auto-expanded — and fetched — after the deploy.
+    localStorage.setItem("rca:tree-collapsed:inv-lazy", JSON.stringify(["/node_modules"]));
+    const { svc, listTree } = lazyService({});
+    renderTree(svc, ["/node_modules"]);
+    expect(screen.getByRole("button", { name: "node_modules" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    expect(listTree).not.toHaveBeenCalled();
+  });
+
+  it("treats a nested lazy folder as a folder, not a file, for Enter", async () => {
+    const user = userEvent.setup();
+    const onOpen = vi.fn();
+    const { svc } = lazyService({
+      "/dist": {
+        items: [],
+        dirs: ["/dist/assets"],
+        unwalked: ["/dist/assets"],
+        truncated: false,
+      },
+    });
+    renderWithQuery(
+      <FileServiceProvider value={svc}>
+        <FileTree
+          files={[{ path: "/src/a.py", size: 1 }]}
+          dirs={["/src", "/dist"]}
+          unwalked={["/dist"]}
+          activePath={null}
+          onOpen={onOpen}
+        />
+      </FileServiceProvider>,
+    );
+    await user.click(screen.getByText("dist"));
+    await waitFor(() => expect(screen.getByText("assets")).toBeInTheDocument());
+    await user.click(screen.getByText("assets")); // selects (and toggles) the nested lazy folder
+    await user.keyboard("{Enter}");
+    expect(onOpen).not.toHaveBeenCalled();
   });
 });
