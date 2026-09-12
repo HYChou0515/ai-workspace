@@ -2,8 +2,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
 
 import { api } from "../api";
-import { qk } from "../api/queryKeys";
 import { useFileBufferStore } from "./fileBuffer";
+import { invalidateTree } from "./invalidateTree";
 import { useWorkspaceSlug } from "./useWorkspaceSlug";
 
 /**
@@ -40,9 +40,9 @@ export function useRefreshFiles(investigationId: string): () => Promise<void> {
     //    content. Prefix invalidation on `["file", id]` covers every
     //    `qk.file(id, *)` query — opened-file readers refetch on next render.
     await Promise.all([
-      // Files AND folders live under `qk.files` now — one traversal, one key.
-      // The separate `qk.dirs` bust had nothing left to invalidate.
-      queryClient.invalidateQueries({ queryKey: qk.files(investigationId) }),
+      // The tree: the pruned preload AND the lazily-listed folders that are
+      // open — one event, one helper, shared with the chat's `file_changed`.
+      invalidateTree(queryClient, investigationId),
       queryClient.invalidateQueries({ queryKey: ["file", investigationId] }),
     ]);
     // 3. Reload the editor's per-path buffers. Skip dirty ones — `reload()`

@@ -144,6 +144,7 @@ export function WorkspaceShell({
   files,
   dirs = [],
   unwalked = [],
+  truncated = false,
   ideCollapsed,
   onIdeCollapsedChange,
   onFilesChanged,
@@ -153,8 +154,10 @@ export function WorkspaceShell({
   manifest: AppManifest;
   files: FileInfo[];
   dirs?: string[];
-  /** Folders the listing did not enter (drawn collapsed, fetched on expand). */
+  /** Folders the listing did not enter (drawn collapsed, fetched on expand),
+   * and whether the listing hit its entry budget. */
   unwalked?: string[];
+  truncated?: boolean;
   // Optionally controlled: AppWorkspace lifts the IDE-collapse state so file
   // loading can follow it. Omitted ⇒ the shell owns its own persisted state.
   ideCollapsed?: boolean;
@@ -186,6 +189,7 @@ export function WorkspaceShell({
                 files={files}
                 dirs={dirs}
                 unwalked={unwalked}
+                truncated={truncated}
                 ideCollapsed={ideCollapsed}
                 onIdeCollapsedChange={onIdeCollapsedChange}
                 onFilesChanged={onFilesChanged}
@@ -206,6 +210,7 @@ function ShellBody({
   files,
   dirs = [],
   unwalked = [],
+  truncated = false,
   ideCollapsed: propIdeCollapsed,
   onIdeCollapsedChange: propOnIdeCollapsedChange,
   onFilesChanged,
@@ -217,6 +222,7 @@ function ShellBody({
   files: FileInfo[];
   dirs?: string[];
   unwalked?: string[];
+  truncated?: boolean;
   ideCollapsed?: boolean;
   onIdeCollapsedChange?: (b: boolean | ((prev: boolean) => boolean)) => void;
   onFilesChanged?: () => void;
@@ -693,6 +699,7 @@ function ShellBody({
                   files={files}
                   dirs={dirs}
                   unwalked={unwalked}
+                  truncated={truncated}
                   activePath={groups.activeFile}
                   recentFiles={recentFiles.values}
                   onOpenFile={openFile}
@@ -1619,6 +1626,7 @@ function ActivitySidebar(props: {
   files: FileInfo[];
   dirs: string[];
   unwalked: string[];
+  truncated: boolean;
   activePath: string | null;
   recentFiles: string[];
   onOpenFile: OpenFileFn;
@@ -1658,6 +1666,7 @@ function EvidenceSidebar({
   files,
   dirs,
   unwalked,
+  truncated,
   activePath,
   onOpenFile,
   onFilesChanged,
@@ -1667,6 +1676,7 @@ function EvidenceSidebar({
   files: FileInfo[];
   dirs: string[];
   unwalked: string[];
+  truncated: boolean;
   activePath: string | null;
   onOpenFile: OpenFileFn;
   onFilesChanged?: () => void;
@@ -1677,6 +1687,7 @@ function EvidenceSidebar({
         files={files}
         dirs={dirs}
         unwalked={unwalked}
+        truncated={truncated}
         activePath={activePath}
         onOpen={onOpenFile}
         onChanged={onFilesChanged}

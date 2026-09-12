@@ -103,6 +103,7 @@ export function FileTree({
   files,
   dirs = [],
   unwalked = [],
+  truncated = false,
   activePath,
   onOpen,
   onOpenInSplit,
@@ -117,6 +118,9 @@ export function FileTree({
   dirs?: string[];
   /** Folders the listing did not enter: drawn collapsed, fetched on expand. */
   unwalked?: string[];
+  /** The listing stopped at its entry budget — the one case the user is told
+   * the filter cannot see everything. Pruned folders alone never set it. */
+  truncated?: boolean;
   activePath: string | null;
   onOpen: OpenFn;
   onOpenInSplit?: (path: string) => void;
@@ -683,6 +687,21 @@ export function FileTree({
         />
       </div>
 
+      {truncated && (
+        <div
+          data-testid="tree-partial"
+          role="status"
+          style={{
+            margin: "0 10px 6px 14px",
+            padding: "4px 8px",
+            color: "var(--text-paper-d)",
+            fontSize: pxToRem(11),
+            lineHeight: 1.4,
+          }}
+        >
+          {t("workspace.tree.partial")}
+        </div>
+      )}
       {/* #692: what the last upload refused, next to the tree it was dropped on
           — re-readable, one line per file, and (when the remedy is another page)
           carrying the link that an alert() could never hold. */}

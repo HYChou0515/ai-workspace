@@ -23,13 +23,15 @@ function lazyService(levels: Record<string, Awaited<ReturnType<FileService["list
   return { svc, listTree };
 }
 
-function renderTree(svc: FileService, unwalked: string[]) {
+function renderTree(svc: FileService, unwalked: string[], truncated = false) {
   return renderWithQuery(
     <FileServiceProvider value={svc}>
       <FileTree
         files={[{ path: "/src/a.py", size: 1 }]}
         dirs={["/src", "/node_modules"]}
         unwalked={unwalked}
+        truncated={truncated}
+        searchable
         activePath={null}
         onOpen={vi.fn()}
       />
@@ -95,5 +97,16 @@ describe("<FileTree /> lazy folders", () => {
     expect(screen.queryByText("a.py")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "src", expanded: false })).toBeInTheDocument();
     localStorage.removeItem("rca:tree-collapsed:inv-lazy");
+  });
+
+  it("says the listing is partial only when the entry budget cut it, not for pruned folders", () => {
+    const { svc } = lazyService({});
+    const { unmount } = renderTree(svc, ["/node_modules"], false);
+    // Derived folders are always lazy; that is not "partial", every IDE does it silently.
+    expect(screen.queryByTestId("tree-partial")).not.toBeInTheDocument();
+    unmount();
+
+    renderTree(svc, ["/node_modules", "/data"], true);
+    expect(screen.getByTestId("tree-partial")).toHaveTextContent(/展開|expanded/);
   });
 });

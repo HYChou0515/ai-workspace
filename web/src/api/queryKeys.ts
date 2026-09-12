@@ -35,6 +35,8 @@ export const qk = {
    * Prefix-invalidate `["treeDir", id]` to refetch every EXPANDED one — a
    * collapsed folder has no observer, so it waits for its next expand. */
   treeDir: (id: string, path: string) => ["treeDir", id, path] as const,
+  /** The prefix over every lazily-listed folder of one scope. */
+  treeDirs: (id: string) => ["treeDir", id] as const,
   // #245: a workspace's storage usage vs quota (the upload usage bar). Invalidate
   // after any upload — success grows `used`, a 507 leaves it at the ceiling.
   workspaceUsage: (slug: string, itemId: string) =>

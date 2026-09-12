@@ -105,6 +105,7 @@ function WorkspaceLoaded({
   const items = files.kind === "ready" ? files.items : [];
   const dirs = files.kind === "ready" ? files.dirs : [];
   const unwalked = files.kind === "ready" ? files.unwalked : [];
+  const truncated = files.kind === "ready" ? files.truncated : false;
   const shell = (
     <WorkspaceShell
       item={item}
@@ -112,6 +113,7 @@ function WorkspaceLoaded({
       files={items}
       dirs={dirs}
       unwalked={unwalked}
+      truncated={truncated}
       ideCollapsed={ideCollapsed}
       onIdeCollapsedChange={setIdeCollapsed}
       onFilesChanged={onFilesChanged}
