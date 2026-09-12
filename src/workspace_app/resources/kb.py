@@ -784,3 +784,15 @@ class RetrievedPassage(Struct, frozen=True):
     # (``{"page": [3, 4], "section": ["Ch.2 > 2.1"]}``) — distinct values in
     # seq order across the merged chunks. ``{}`` when no chunk had provenance.
     provenance: dict[str, Any] = field(default_factory=dict)
+    # plan-rag-context P2: the neighbouring context the reranker ranks and the
+    # agent reads — the hit widened to at least N chars each side in whole
+    # chunks, possibly reaching into the adjacent documents. ``""`` = not
+    # expanded (the default every non-expansion writer leaves). Deliberately a
+    # SEPARATE field: ``text`` / ``start`` / ``end`` stay the HIT, so the citation
+    # snippet, the highlight and every existing reader are untouched — context
+    # is for the model, not the user. ``context_start`` / ``context_end`` are the
+    # widened range WITHIN this document (what `Citation` records; the spill
+    # into neighbouring documents has no offset here).
+    context_text: str = ""
+    context_start: int = 0
+    context_end: int = 0
