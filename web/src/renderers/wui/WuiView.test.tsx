@@ -1043,18 +1043,21 @@ describe("WuiView: rebuilding a page when it is opened", () => {
      * already built, never a build: tens of seconds and a sandbox woken on
      * behalf of someone who only came to look (docs/plan-wui-deploy.md).
      *
-     * The negative waits for the moment the build WOULD have fired — the
-     * manifest probe that decides `canBuild` — so "no build yet" cannot pass
-     * for a page that simply has not finished opening.
+     * A reader costs none of it: not the build, and not the manifest read
+     * whose only consumers are the author's controls (review round 1). So the
+     * negative is anchored on the page being OPEN — the only read a reader
+     * makes has landed — and then asserts that neither the probe nor the
+     * build was ever asked for. That is stronger than "no build yet", which
+     * could pass for a page that simply had not finished opening.
      */
     const files = { ...BUILT };
     serveBuild(sse({ type: "done", exit_code: 0 }));
     const { fs } = renderIn(files, "viewer");
 
     await waitFor(() => expect(frame()).toBeInTheDocument());
-    await waitFor(() => expect(fs.readFile).toHaveBeenCalledWith("/sales/package.json"));
     await act(async () => {});
 
+    expect(fs.readFile).not.toHaveBeenCalledWith("/sales/package.json");
     expect(buildCalls()).toHaveLength(0);
   });
 
@@ -1343,6 +1346,28 @@ describe("WuiView: Deploy", () => {
     );
   }
 
+  /** `renderIn`, but hands the service back and lets a test wrap its reads. */
+  function renderInFs(
+    files: Record<string, string>,
+    wrapRead?: (path: string, real: FileService["readFile"]) => ReturnType<FileService["readFile"]>,
+  ) {
+    const fs = svc(files);
+    if (wrapRead) {
+      const real = fs.readFile;
+      (fs as { readFile: FileService["readFile"] }).readFile = vi.fn((path: string) => wrapRead(path, real));
+    }
+    const view = render(
+      <QueryWrap>
+        <WorkspaceSlugProvider value="rca">
+          <FileServiceProvider value={fs}>
+            <WuiView path="/sales/page.ai.yaml" spec={{ view: "wui", entity: "" } as ViewSpec} />
+          </FileServiceProvider>
+        </WorkspaceSlugProvider>
+      </QueryWrap>,
+    );
+    return { ...view, fs };
+  }
+
   const sse = (payload: unknown) => `data: ${JSON.stringify(payload)}\n\n`;
   const buildCalls = () =>
     vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes("/wui/build"));
@@ -1350,9 +1375,12 @@ describe("WuiView: Deploy", () => {
   // The manual path: rebuilding on open is on by default, and a test about the
   // button has to say it is not testing the automatic one.
   beforeEach(() => setWuiAutoBuild(autoBuildScope("item1", "/sales"), false));
+  const realClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
   afterEach(() => {
     vi.unstubAllGlobals();
     localStorage.clear();
+    if (realClipboard) Object.defineProperty(navigator, "clipboard", realClipboard);
+    else delete (navigator as { clipboard?: unknown }).clipboard;
   });
 
   it("hands over the page's address at once when there is nothing to build", async () => {
@@ -1451,7 +1479,11 @@ describe("WuiView: Deploy", () => {
   it("copies the address, and says so when it could not", async () => {
     vi.stubGlobal("fetch", vi.fn());
     const writeText = vi.fn(async () => {});
-    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    // On the real Navigator, not a spread copy of it: spreading an instance
+    // drops every prototype getter (`userAgent`, `language`, `onLine`), and a
+    // code path reading one of those would behave differently in this test
+    // alone. Restored in `afterEach` below.
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
     renderIn(PLAIN);
     const deploy = await screen.findByRole("button", { name: /^deploy$/i });
     await waitFor(() => expect(deploy).toBeEnabled());
@@ -1496,38 +1528,109 @@ describe("WuiView: Deploy", () => {
     );
   });
 
-  it("is not pressable until the page's build has been looked for", async () => {
+  it("does not say Deployed when the page does not open — no build to blame", async () => {
     /**
-     * Found red: with the manifest read still in flight, `canBuild` is false
-     * and Deploy took the "nothing to build" shortcut — the address handed
-     * over pointed at the OLD `dist/`. The button is held until the probe has
-     * answered, whichever way.
+     * Review round 1: "Deployed" was declared on the build's exit code (or on
+     * the no-build shortcut), never on whether the page OPENS. A plain page
+     * with no `index.html` got "✓ Deployed" and an address rendered directly
+     * above the red "no index.html to open" error — and the reader following
+     * it saw "not published yet". Deployed has to mean the link works.
      */
     vi.stubGlobal("fetch", vi.fn());
-    let answer: () => void = () => {};
-    const gate = new Promise<void>((r) => (answer = r));
-    const files = { ...BUILT };
-    const fs = svc(files);
-    const realRead = fs.readFile;
-    (fs as { readFile: FileService["readFile"] }).readFile = vi.fn(async (path: string) => {
-      if (path.endsWith("package.json")) await gate;
-      return realRead(path);
-    });
+    renderIn({ "/sales/README.md": "nothing to open here" });
+    const deploy = await screen.findByRole("button", { name: /^deploy$/i });
+    await waitFor(() => expect(deploy).toBeEnabled());
+    fireEvent.click(deploy);
+
+    const said = await screen.findByText(/deploy failed/i);
+    expect(said).toHaveTextContent(/does not open/i);
+    expect(said).toHaveTextContent(/index\.html/);
+    expect(screen.queryByText(/^✓ deployed/i)).toBeNull();
+    expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull();
+  });
+
+  it("does not say Deployed when the build passed but left nothing to open", async () => {
+    // exit 0, and `dist/index.html` still is not there (an outDir that is not
+    // `dist/`, or a view file without `entry: dist/index.html`).
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(sse({ type: "done", exit_code: 0 }), {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      })),
+    );
     render(
       <QueryWrap>
         <WorkspaceSlugProvider value="rca">
-          <FileServiceProvider value={fs}>
-            <WuiView path="/sales/page.ai.yaml" spec={{ view: "wui", entity: "" } as ViewSpec} />
+          <FileServiceProvider value={svc({ "/sales/package.json": BUILT["/sales/package.json"] })}>
+            <WuiView
+              path="/sales/page.ai.yaml"
+              spec={{ view: "wui", entity: "", entry: "dist/index.html" } as ViewSpec}
+            />
           </FileServiceProvider>
         </WorkspaceSlugProvider>
       </QueryWrap>,
     );
+    await screen.findByRole("button", { name: /^rebuild$/i });
+    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
 
+    const said = await screen.findByText(/deploy failed/i);
+    expect(buildCalls()).toHaveLength(1);
+    expect(said).toHaveTextContent(/does not open/i);
+    expect(screen.queryByText(/^✓ deployed/i)).toBeNull();
+    expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull();
+  });
+
+  it("reads the manifest again when pressed, so a page that gained a build after opening is built", async () => {
+    /**
+     * Review round 1: `wuiBuildable` is a one-shot snapshot (staleTime
+     * Infinity, never invalidated). A page opened while still plain, then
+     * given a Vite build by the agent, deployed as "nothing to build" — an
+     * address to a folder with no `dist/`. Deploy re-reads the manifest at
+     * the moment it is pressed; the cached answer is from the moment the pane
+     * opened, and that is not the moment that matters.
+     */
+    const files: Record<string, string> = { ...PLAIN };
+    const { release } = serveHeldBuild(0);
+    const { fs } = renderInFs(files);
     await waitFor(() => expect(frame()).toBeInTheDocument());
-    expect(screen.getByRole("button", { name: /^deploy$/i })).toBeDisabled();
+    await waitFor(() => expect(fs.readFile).toHaveBeenCalledWith("/sales/package.json"));
+    expect(screen.queryByRole("button", { name: /^rebuild$/i })).toBeNull();
 
+    // The agent scaffolds a build under the open pane.
+    files["/sales/package.json"] = BUILT["/sales/package.json"];
+    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+
+    await screen.findByText(/> vite build/);
+    expect(buildCalls()).toHaveLength(1);
+    release();
+    expect(await screen.findByRole("textbox", { name: /address/i })).toHaveValue(ADDRESS);
+  });
+
+  it("waits for the manifest when pressed before it has been read, instead of taking the shortcut", async () => {
+    /**
+     * Found red in P2: with the manifest read still in flight, `canBuild` was
+     * false and Deploy took the "nothing to build" shortcut. Re-reading on
+     * press closes it by construction — the press joins the read in flight.
+     */
+    let answer: () => void = () => {};
+    const gate = new Promise<void>((r) => (answer = r));
+    const files = { ...BUILT };
+    const { release } = serveHeldBuild(0);
+    const { fs } = renderInFs(files, async (path, real) => {
+      if (path.endsWith("package.json")) await gate;
+      return real(path);
+    });
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+    expect(fs.readFile).toHaveBeenCalledWith("/sales/package.json");
+
+    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    expect(buildCalls()).toHaveLength(0); // still waiting on the manifest
     answer();
 
-    await waitFor(() => expect(screen.getByRole("button", { name: /^deploy$/i })).toBeEnabled());
+    await screen.findByText(/> vite build/);
+    expect(buildCalls()).toHaveLength(1);
+    release();
+    expect(await screen.findByRole("textbox", { name: /address/i })).toHaveValue(ADDRESS);
   });
 });

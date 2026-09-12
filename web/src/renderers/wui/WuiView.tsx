@@ -28,7 +28,7 @@ import { Switch } from "../../components/Switch";
 import { useCurrentUserState } from "../../hooks/useCurrentUser";
 import { useOpenFile } from "../../hooks/openFile";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
-import { HttpError } from "../../api/http";
+import { API_BASE, HttpError } from "../../api/http";
 import { publishAgentDraft } from "../../lib/agentDraftBus";
 import { subscribeFileChanged } from "../../lib/fileChangedBus";
 import { pxToRem } from "../../lib/pxToRem";
@@ -38,7 +38,7 @@ import { itemCallTool } from "./api";
 import { cleanBuildOutput, hasBuildScript, itemBuild } from "./build";
 import { itemRun } from "./run";
 import type { ViewSpec } from "../entity/types";
-import { buildWuiDoc } from "./assets";
+import { buildWuiDoc, WuiEntryMissing } from "./assets";
 import { dispatchWuiRequest } from "./bridge";
 import { wuiFolder } from "./paths";
 import { createSelfWrites } from "./selfWrites";
@@ -126,6 +126,11 @@ export function WuiView({
   const fs = useFileService();
   const folder = wuiFolder(path);
   const entry = viewParamString(spec, "entry") ?? DEFAULT_ENTRY;
+  /** The author's chrome — the toolbar, the build log, the reports, Deploy,
+   * and the reads that only feed them. One name for every gate, so "a reader
+   * sees and costs none of it" is one fact rather than comparisons that could
+   * drift apart. */
+  const author = chrome === "workspace";
 
   // Nothing reloads a WUI on its own (plan decision 9): an agent editing the
   // page while someone is halfway through using it should not yank the page out
@@ -153,8 +158,10 @@ export function WuiView({
    */
   const buildable = useQuery({
     // Never for a root-level page: `canBuild` is false there whatever the
-    // answer, so the read is a 404 nobody can use.
-    enabled: folder !== "",
+    // answer, so the read is a 404 nobody can use. And never for a reader:
+    // the answer feeds Rebuild and Deploy, neither of which they are shown,
+    // so the read was a round trip on every link open that nothing consumed.
+    enabled: author && folder !== "",
     queryKey: qk.wuiBuildable(fs.scopeId, folder),
     queryFn: () =>
       fs
@@ -166,11 +173,6 @@ export function WuiView({
     retry: false,
   });
   const canBuild = folder !== "" && hasBuildScript(buildable.data ?? "");
-  /** Whether `canBuild` is an ANSWER yet. Deploy takes "nothing to build" as
-   * licence to hand the address over at once; before the manifest has been
-   * read that is the same value as "not known", and acting on it handed over
-   * an address to the old `dist/`. A root-level page never asks. */
-  const buildLookedFor = folder === "" || !buildable.isPending;
 
   /** The build's output, newest last. `null` means no build has been run — the
    * panel is absent rather than empty, so the pane costs nothing until someone
@@ -195,13 +197,20 @@ export function WuiView({
   const [logOpen, setLogOpen] = useState(true);
   const logRef = useRef<HTMLDivElement | null>(null);
   const [autoBuild, setAutoBuild] = useWuiAutoBuild(autoBuildScope(fs.scopeId, folder));
-  /** Deploy: rebuild (where there is a build), then hand over the page's own
-   * address. `deploying` is Deploy's own build in flight — `building` is
-   * shared with Rebuild, and the button that started it is the one that
-   * should read "Deploying…". `done` shows the address; `failed` says so
-   * over the log. Reset when the pane moves to another page (below). */
-  const [deploying, setDeploying] = useState(false);
-  const [deployed, setDeployed] = useState<"idle" | "done" | "failed">("idle");
+  /** Deploy: re-read the manifest, rebuild where there is a build, confirm the
+   * page OPENS, then hand over its address. One status rather than parallel
+   * flags: `working` is Deploy's own run (the manifest read, its build, the
+   * open check — `building` alone is shared with Rebuild and covers only the
+   * middle step); `done` shows the address; `failed` names which step, so
+   * "see the build output" is never said over a log that is not there.
+   * Reset when the pane moves to another page (below). */
+  const [deploy, setDeploy] = useState<
+    | { state: "idle" }
+    | { state: "working" }
+    | { state: "done" }
+    | { state: "failed"; step: "build" }
+    | { state: "failed"; step: "open"; why: string }
+  >({ state: "idle" });
   const [copied, setCopied] = useState<"idle" | "done" | "failed">("idle");
   /** The page this pane has already rebuilt on open, so that "when I open this"
    * means what it says: once. React re-runs the effect whenever the preference
@@ -283,6 +292,10 @@ export function WuiView({
       if (!win || ev.source !== win) return;
 
       if (isWuiReportMessage(ev.data)) {
+        // A reader is shown no reports, so none are kept: a page erroring
+        // inside a timer would otherwise re-render this pane — and its frame —
+        // once per message for a list nobody can see.
+        if (!author) return;
         const { report, message, detail } = ev.data;
         setReports((rs) =>
           trimReports([...rs, { id: nextReportId.current++, kind: report, message, detail }]),
@@ -326,7 +339,7 @@ export function WuiView({
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [fs, folder, openFile, me, meReady, declaredTools, callTool, declaredWorkflows, startRun]);
+  }, [author, fs, folder, openFile, me, meReady, declaredTools, callTool, declaredWorkflows, startRun]);
 
   // Forwarded, not acted on: the platform cannot know whether a half-finished
   // form should be thrown away, and only the page does.
@@ -355,8 +368,8 @@ export function WuiView({
     setLogOpen(true);
     setBuilding(false);
     setFirstBuild(false);
-    setDeploying(false);
-    setDeployed("idle");
+    setDeploy({ state: "idle" });
+    setCopied("idle");
     // NOT `autoBuiltFor`. It already holds the FOLDER it built, so the guard is
     // folder-aware without help — and clearing it here defeated that guard
     // between StrictMode's two effect passes, which is two builds on mount.
@@ -486,7 +499,7 @@ export function WuiView({
     // A reader is handed what is already built, never a build — before the
     // setting is even consulted, so the preference an author left on cannot
     // wake a sandbox on a reader's account.
-    if (chrome === "viewer") return;
+    if (!author) return;
     if (!canBuild || !slug) return; // not a built page, or not known yet
     if (autoBuiltFor.current === folder) return;
     // The opening moment is spent HERE, whether or not it builds. Marking it
@@ -513,17 +526,16 @@ export function WuiView({
   };
 
   // The page's own address — what WuiPage answers at `/w/:slug/:itemId/*`
-  // (App.tsx). Slug and item id encoded the way `itemCallTool` encodes them;
-  // the path segment by segment, so a folder with a space or a CJK name still
-  // round-trips through the router's decoding.
-  const address = `${window.location.origin}/w/${encodeURIComponent(slug)}/${encodeURIComponent(fs.scopeId)}${path
+  // (App.tsx). Under the DEPLOY BASE (`API_BASE`, "" or "/my-svc/rca"): the
+  // router mounts there, and a link that started at the origin left the SPA
+  // on every sub-path deploy. Slug and item id encoded the way `itemCallTool`
+  // encodes them; the path segment by segment, so a folder with a space or a
+  // CJK name still round-trips through the router's decoding.
+  const address = `${window.location.origin}${API_BASE}/w/${encodeURIComponent(slug)}/${encodeURIComponent(fs.scopeId)}${path
     .split("/")
     .map(encodeURIComponent)
     .join("/")}`;
 
-  /** Rebuild where there is a build, then hand over the address — the
-   * publisher builds, the reader never does, so what the address points at is
-   * fresh at the moment it is handed over (docs/plan-wui-deploy.md). */
   const copyAddress = async () => {
     try {
       await navigator.clipboard.writeText(address);
@@ -535,23 +547,58 @@ export function WuiView({
     }
   };
 
-  const deploy = async () => {
+  /** Rebuild where there is a build, confirm the page opens, then hand over
+   * the address — the publisher builds, the reader never does, so what the
+   * address points at is fresh at the moment it is handed over
+   * (docs/plan-wui-deploy.md).
+   *
+   * Three facts are established HERE, not read off state:
+   * - whether there is a build — the manifest is re-read on press. The
+   *   cached answer (`canBuild`) is from the moment the pane opened, and a
+   *   page the agent gave a build to since then deployed as "nothing to
+   *   build". Pressing before that first read has landed simply joins it.
+   * - whether the build passed — `runBuild`'s answer.
+   * - whether the page OPENS — the same read the page makes. Exit 0 is not
+   *   that: a build whose outDir is not the entry, or a plain page with no
+   *   `index.html`, was declared Deployed above a red error, and the reader
+   *   who followed the link was told it had never been published. */
+  const runDeploy = async () => {
     const started = epoch.current;
-    setDeployed("idle");
+    const moved = () => epoch.current !== started; // the pane moved on; that page's reset wins
+    setDeploy({ state: "working" });
     setCopied("idle");
-    setDeploying(true);
-    try {
-      const ok = canBuild ? await runBuild() : true;
-      if (epoch.current !== started) return; // the pane moved on; that page's reset wins
-      setDeployed(ok ? "done" : "failed");
-    } finally {
-      if (epoch.current === started) setDeploying(false);
+    let hasBuild = false;
+    if (folder !== "") {
+      const fresh = await buildable.refetch();
+      if (moved()) return;
+      hasBuild = hasBuildScript(fresh.data ?? "");
     }
+    if (hasBuild) {
+      const ok = await runBuild();
+      if (moved()) return;
+      if (!ok) {
+        setDeploy({ state: "failed", step: "build" });
+        return;
+      }
+    }
+    try {
+      await buildWuiDoc(fs, folder, entry);
+    } catch (err) {
+      if (moved()) return;
+      setDeploy({
+        state: "failed",
+        step: "open",
+        why: err instanceof Error ? err.message : "The page could not be opened.",
+      });
+      return;
+    }
+    if (moved()) return;
+    setDeploy({ state: "done" });
   };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      {chrome === "workspace" && (
+      {author && (
       <div
         style={{
           display: "flex",
@@ -600,21 +647,22 @@ export function WuiView({
             Tell the agent ({reports.length})
           </Btn>
         )}
-        {/* Disabled on `building`, not only `deploying`: a Rebuild already in
-            flight is the same build, and starting a second one over it is what
-            the Rebuild button itself refuses. And held until the manifest has
-            been read — see `buildLookedFor`. */}
+        {/* Disabled on `building` too: a Rebuild already in flight is the same
+            build, and starting a second one over it is what the Rebuild button
+            itself refuses. And on no slug, like everything else that runs —
+            `runBuild` would return before writing a line, and "see the build
+            output" would point at output that does not exist. */}
         <Btn
           size="sm"
-          disabled={building || !buildLookedFor}
-          onClick={() => void deploy()}
+          disabled={building || deploy.state === "working" || !slug}
+          onClick={() => void runDeploy()}
           style={{ marginLeft: "auto" }}
         >
-          {deploying ? "Deploying…" : "Deploy"}
+          {deploy.state === "working" ? "Deploying…" : "Deploy"}
         </Btn>
       </div>
       )}
-      {chrome === "workspace" && deployed !== "idle" && (
+      {author && deploy.state !== "idle" && deploy.state !== "working" && (
         <div
           role="status"
           style={{
@@ -627,7 +675,7 @@ export function WuiView({
             fontSize: pxToRem(13),
           }}
         >
-          {deployed === "done" ? (
+          {deploy.state === "done" ? (
             <>
               <div style={{ fontWeight: 600 }}>✓ Deployed</div>
               <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -654,15 +702,20 @@ export function WuiView({
                 Anyone who can open this item can use this link.
               </div>
             </>
-          ) : (
+          ) : deploy.step === "build" ? (
             <div style={{ color: "var(--err)" }}>Deploy failed — see the build output.</div>
+          ) : (
+            // The page's own sentence about why it does not open — the same
+            // one the pane shows below — so the publisher is not sent to a
+            // build log for a page that has no build.
+            <div style={{ color: "var(--err)" }}>Deploy failed — the page does not open: {deploy.why}</div>
           )}
         </div>
       )}
       {/* The three author panes — toolbar, build log, reports — are gated on
           the same word, so "a reader sees none of them" holds by inspection
           rather than by an argument about which of them a reader could reach. */}
-      {chrome === "workspace" && buildLog !== null && (
+      {author && buildLog !== null && (
         <div
           style={{
             // The cap lives HERE, on the pane's flex item, because that is the
@@ -748,7 +801,7 @@ export function WuiView({
           )}
         </div>
       )}
-      {chrome === "workspace" && reports.length > 0 && (
+      {author && reports.length > 0 && (
         <div
           role="log"
           aria-label="Reports"
@@ -785,12 +838,15 @@ export function WuiView({
         <div role="status" style={{ padding: 12, color: "var(--text-paper-d)" }}>
           Building… the page appears when this finishes.
         </div>
-      ) : built.error && chrome === "viewer" ? (
+      ) : built.error instanceof WuiEntryMissing && built.error.reason === undefined && !author ? (
         // A reader followed a link to a page nobody has built (or one whose
         // entry is gone). They cannot rebuild it and did not choose the file,
         // so the sentence names the page's STATE, not the missing file — a
         // blank frame here reads as a broken page rather than an unpublished
-        // one. Not red: nothing they did is wrong.
+        // one. Not red: nothing they did is wrong. ONLY for a genuine absence:
+        // a read that failed, or an entry that is not HTML, carries its own
+        // reason below — told "not published", the reader reports that to the
+        // author, who re-deploys a page that was fine.
         <div role="status" style={{ padding: 12, color: "var(--text-paper-d)" }}>
           This page has not been published yet.
         </div>

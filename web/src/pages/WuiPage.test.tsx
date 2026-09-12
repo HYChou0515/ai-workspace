@@ -110,9 +110,6 @@ describe("WuiPage", () => {
     try {
       renderAt("/w/rca/i1/scrap-review/page.ai.yaml", readFile);
       await waitFor(() => expect(screen.getByTitle("Scrap review")).toBeTruthy());
-      // The moment an author's page would have started its build has passed:
-      // the manifest that decides it has been read.
-      await waitFor(() => expect(readFile).toHaveBeenCalledWith("/scrap-review/package.json"));
 
       const win = (screen.getByTitle("Scrap review") as HTMLIFrameElement).contentWindow as Window;
       window.dispatchEvent(
@@ -128,8 +125,11 @@ describe("WuiPage", () => {
 
     // The slug from the URL, not the empty-string default.
     expect(urls.find((u) => u.includes("/wui/tools/"))).toContain("/a/rca/items/i1/wui/tools/lot-status/call");
-    // And nothing was built on the reader's account.
+    // And nothing was built — nor even looked at for a build — on the
+    // reader's account (`WuiView.test.tsx` "never rebuilds on a reader's
+    // account" is the pane-level pin; this is the route-level one).
     expect(urls.filter((u) => u.includes("/wui/build"))).toHaveLength(0);
+    expect(readFile).not.toHaveBeenCalledWith("/scrap-review/package.json");
   });
 
   it("says so plainly when the view file is not there", async () => {
@@ -204,10 +204,46 @@ describe("WuiPage: what a reader is handed", () => {
 
     // The page itself is there — so an empty screen cannot pass the rest.
     await waitFor(() => expect(screen.getByTitle("Scrap review")).toBeTruthy());
-    for (const name of [/refresh/i, /rebuild/i, /auto-rebuild/i, /report a problem/i, /tell the agent/i]) {
+    // Every control the author's chrome can draw — the build-output toggle
+    // and Deploy included (review round 1 found them missing from this list
+    // while its docstring promised one-by-one coverage).
+    for (const name of [
+      /refresh/i,
+      /rebuild/i,
+      /auto-rebuild/i,
+      /report a problem/i,
+      /tell the agent/i,
+      /^deploy$/i,
+      /build output/i,
+    ]) {
       expect(screen.queryByRole("button", { name })).toBeNull();
       expect(screen.queryByRole("switch", { name })).toBeNull();
     }
+  });
+
+  it("does not call a page unpublished when it merely could not be read", async () => {
+    /**
+     * Review round 1: every `built.error` in viewer chrome was rendered as
+     * "not published yet" — a dropped connection, a 403, a 500, an entry that
+     * is not HTML. The reader then told the author the page was never
+     * published, and the author re-deployed a page that was fine.
+     * `WuiEntryMissing` carries a reason for exactly these; only a genuine
+     * absence (no reason) is "not published".
+     */
+    const files: Record<string, string> = { "/scrap-review/page.ai.yaml": YAML };
+    const readFile = vi.fn(async (path: string) => {
+      const text = files[path];
+      if (text !== undefined) return { kind: "text", path, text, size: text.length, encoding: "utf-8" };
+      // The three-outcome reader classes a TypeError as "failed" — the
+      // workspace could not be reached — not as "missing".
+      throw new TypeError("Failed to fetch");
+    });
+
+    renderAt("/w/rca/i1/scrap-review/page.ai.yaml", readFile);
+
+    const said = await screen.findByRole("status");
+    expect(said).toHaveTextContent(/could not reach the workspace/i);
+    expect(said).not.toHaveTextContent(/not been published/i);
   });
 
   it("opens a folder whose name had to be encoded into the address", async () => {

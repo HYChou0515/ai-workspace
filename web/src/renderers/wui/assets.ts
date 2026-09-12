@@ -210,7 +210,14 @@ function directoryOf(entryPath: string): string {
 /** Raised when the entry document itself cannot be opened — the one absence that
  * has nothing to degrade to, so it is reported by name rather than swallowed. */
 export class WuiEntryMissing extends Error {
-  constructor(readonly entry: string, reason?: string) {
+  /** Kept as a field, not only folded into the message: `undefined` means the
+   * entry is genuinely NOT THERE, and that is the one case a reader may be
+   * told "not published yet" — a read that failed, or an entry that is not
+   * HTML, carries a reason and must be shown as itself. */
+  constructor(
+    readonly entry: string,
+    readonly reason?: string,
+  ) {
     // The reason matters: telling a read-only viewer their page "has no
     // index.html" is a false sentence about a file they can see in the tree,
     // and it sends them looking for the wrong thing.
