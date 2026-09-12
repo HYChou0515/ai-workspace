@@ -678,7 +678,8 @@ export interface ApiClient {
   getTree(
     slug: string,
     investigationId: string,
-  ): Promise<{ files: FileInfo[]; dirs: string[] }>;
+    opts?: { prefix?: string; depth?: number },
+  ): Promise<{ files: FileInfo[]; dirs: string[]; unwalked: string[]; truncated: boolean }>;
   /** Just the folders — the file-tree service adapter's half of `getTree`. */
   listDirs(slug: string, investigationId: string): Promise<string[]>;
   /** DELETE /a/{slug}/items/{id}/files/{path} → 204. Removes a file, or a

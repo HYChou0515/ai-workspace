@@ -33,6 +33,23 @@ export type FileCaps = {
   download: boolean; // download a file (direct) or a folder/root (zip) — #247
 };
 
+/** One tree listing. `unwalked` is the subset of `dirs` the listing did NOT
+ * enter — derived folders (`node_modules/`, `.venv/`, …) the backend never
+ * preloads, or whatever lay past its entry budget — so the tree draws them
+ * collapsed and asks for one level (`listTree({ prefix, depth: 1 })`) when the
+ * user expands one. `truncated` says the budget is what stopped it. */
+export type TreeListing = {
+  items: FileInfo[];
+  dirs: string[];
+  unwalked: string[];
+  truncated: boolean;
+};
+
+/** `prefix` scopes the listing to one folder; `depth: 1` lists that folder's
+ * own entries with every subfolder reported in `unwalked`. Omitted → the
+ * preload: everything the user wrote, derived folders listed but not entered. */
+export type ListTreeOpts = { prefix?: string; depth?: number };
+
 export type FileService = {
   /** Stable id for query-key scoping + tree-collapse persistence. */
   readonly scopeId: string;
@@ -43,7 +60,7 @@ export type FileService = {
    * parallel walked the whole workspace twice for two halves of one answer, and
    * this hook shares a cache key with the shell's listing — so two hooks with
    * two different query functions were fetching the same thing. */
-  listTree(): Promise<{ items: FileInfo[]; dirs: string[] }>;
+  listTree(opts?: ListTreeOpts): Promise<TreeListing>;
   readFile(path: string): Promise<FileContent>;
   writeFile(path: string, body: string | Blob | ArrayBuffer): Promise<void>;
   deleteFile(path: string): Promise<void>;
@@ -89,9 +106,9 @@ export function investigationFileService(slug: string, investigationId: string):
     },
     listFiles: (prefix) => api.listFiles(slug, investigationId, prefix),
     listDirs: () => api.listDirs(slug, investigationId),
-    listTree: async () => {
-      const { files, dirs } = await api.getTree(slug, investigationId);
-      return { items: files, dirs };
+    listTree: async (opts) => {
+      const { files, dirs, unwalked, truncated } = await api.getTree(slug, investigationId, opts);
+      return { items: files, dirs, unwalked, truncated };
     },
     readFile: (path) => api.readFile(slug, investigationId, path),
     // #493: "did the response come back OK" and "are the bytes there" differ
@@ -167,7 +184,7 @@ export function useOptionalFileService(): FileService | null {
 // ── derived hooks (read from whichever service is in context) ──────────────
 type FileListState =
   | { kind: "loading" }
-  | { kind: "ready"; items: FileInfo[]; dirs: string[]; refresh: () => void }
+  | ({ kind: "ready"; refresh: () => void } & TreeListing)
   | { kind: "error"; error: Error; refresh: () => void };
 
 /** The active service's file + dir listing, cached under `qk.files(scopeId)`
@@ -184,5 +201,5 @@ export function useFileList(): FileListState {
   const refresh = () => void q.refetch();
   if (q.isPending) return { kind: "loading" };
   if (q.isError) return { kind: "error", error: q.error, refresh };
-  return { kind: "ready", items: q.data.items, dirs: q.data.dirs, refresh };
+  return { kind: "ready", ...q.data, refresh };
 }

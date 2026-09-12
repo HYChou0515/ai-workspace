@@ -985,11 +985,28 @@ export const mockApi: ApiClient = {
     await delay(10);
     return [...ensureDirs(investigationId)].sort();
   },
-  async getTree(slug: string, investigationId: string) {
+  async getTree(
+    slug: string,
+    investigationId: string,
+    opts?: { prefix?: string; depth?: number },
+  ) {
     await delay(10);
+    const all = await this.listFiles(slug, investigationId);
+    const dirs = [...ensureDirs(investigationId)].sort();
+    const root = (opts?.prefix ?? "/").replace(/\/$/, "") || "";
+    const under = (p: string) => root === "" || p === root || p.startsWith(root + "/");
+    const depthOf = (p: string) => p.slice(root.length).split("/").filter(Boolean).length;
+    // `depth` bounds how far below `prefix` an entry may sit; a folder at the
+    // boundary is listed but not entered, like the backend's walk.
+    const within = (p: string) => under(p) && (opts?.depth === undefined || depthOf(p) <= opts.depth);
+    const visibleDirs = dirs.filter(within);
+    const unwalked =
+      opts?.depth === undefined ? [] : visibleDirs.filter((d) => depthOf(d) === opts.depth);
     return {
-      files: await this.listFiles(slug, investigationId),
-      dirs: [...ensureDirs(investigationId)].sort(),
+      files: all.filter((f) => within(f.path)),
+      dirs: visibleDirs,
+      unwalked,
+      truncated: false,
     };
   },
 

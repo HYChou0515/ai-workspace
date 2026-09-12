@@ -12,10 +12,20 @@ export type TreeNode = {
   isDir: boolean;
   size?: number;
   children: TreeNode[];
+  /** A folder the listing did NOT enter (pruned as derived, or past the entry
+   * budget): it is on the tree, collapsed, and its contents are fetched when
+   * it is expanded. An entered-but-empty folder is not lazy — there is
+   * nothing to fetch for it. Only folders carry this. */
+  lazy: boolean;
 };
 
-export function buildFileTree(files: FileInfo[], dirs: string[] = []): TreeNode[] {
-  const root: TreeNode = { name: "", path: "", isDir: true, children: [] };
+export function buildFileTree(
+  files: FileInfo[],
+  dirs: string[] = [],
+  unwalked: string[] = [],
+): TreeNode[] {
+  const root: TreeNode = { name: "", path: "", isDir: true, children: [], lazy: false };
+  const lazyPaths = new Set(unwalked);
 
   // Both inserts below used to scan the parent's existing children, which is
   // O(N²) in the files sharing one directory — and the constant is the name
@@ -36,7 +46,13 @@ export function buildFileTree(files: FileInfo[], dirs: string[] = []): TreeNode[
       segPath += "/" + seg;
       let child = dirByPath.get(segPath);
       if (!child) {
-        child = { name: seg, path: segPath, isDir: true, children: [] };
+        child = {
+          name: seg,
+          path: segPath,
+          isDir: true,
+          children: [],
+          lazy: lazyPaths.has(segPath),
+        };
         node.children.push(child);
         dirByPath.set(segPath, child);
       }
@@ -66,6 +82,7 @@ export function buildFileTree(files: FileInfo[], dirs: string[] = []): TreeNode[
       isDir: false,
       size: f.size,
       children: [],
+      lazy: false,
     });
   }
 

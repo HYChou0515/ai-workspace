@@ -31,6 +31,10 @@ export const qk = {
   investigation: (id: string) => ["investigation", id] as const,
   files: (id: string) => ["files", id] as const,
   dirs: (id: string) => ["dirs", id] as const,
+  /** One lazily-listed folder of the tree (`listTree({ prefix, depth: 1 })`).
+   * Prefix-invalidate `["treeDir", id]` to refetch every EXPANDED one — a
+   * collapsed folder has no observer, so it waits for its next expand. */
+  treeDir: (id: string, path: string) => ["treeDir", id, path] as const,
   // #245: a workspace's storage usage vs quota (the upload usage bar). Invalidate
   // after any upload — success grows `used`, a 507 leaves it at the ceiling.
   workspaceUsage: (slug: string, itemId: string) =>

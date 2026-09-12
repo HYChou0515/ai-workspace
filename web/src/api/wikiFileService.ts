@@ -60,6 +60,8 @@ export function wikiFileService(
     listTree: async () => ({
       items: pages.map((p) => ({ path: normPath(p), size: 0 })),
       dirs: [] as string[],
+      unwalked: [] as string[],
+      truncated: false,
     }),
 
     async readFile(path: string): Promise<FileContent> {

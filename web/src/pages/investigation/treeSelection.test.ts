@@ -78,9 +78,10 @@ describe("visibleOrder", () => {
       name: "data",
       path: "/data",
       isDir: true,
-      children: [{ name: "x.csv", path: "/data/x.csv", isDir: false, children: [] }],
+      lazy: false,
+      children: [{ name: "x.csv", path: "/data/x.csv", isDir: false, lazy: false, children: [] }],
     },
-    { name: "a.md", path: "/a.md", isDir: false, children: [] },
+    { name: "a.md", path: "/a.md", isDir: false, lazy: false, children: [] },
   ];
 
   it("lists rows depth-first", () => {

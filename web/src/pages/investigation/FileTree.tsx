@@ -15,6 +15,13 @@ import { ResourceLinkText } from "../../components/ResourceLinkText";
 import { usePersistentSet } from "../../hooks/usePersistentSet";
 import { useT } from "../../lib/i18n";
 import { buildFileTree, pruneTree, type TreeNode } from "./fileTree";
+import { useLazyDirs } from "./useLazyDirs";
+
+/** A folder's open/closed state, as the rows read and flip it. */
+type OpenState = {
+  isOpen: (path: string) => boolean;
+  toggle: (path: string) => void;
+};
 import { basename } from "./renderer";
 import { nextSelection, type SelState, topLevel, visibleOrder } from "./treeSelection";
 import { folderState, toggleSubtree } from "./treeCheckbox";
@@ -64,7 +71,7 @@ const NO_SERVICE: FileService = {
   caps: NO_CAPS,
   listFiles: async () => [],
   listDirs: async () => [],
-  listTree: async () => ({ items: [], dirs: [] }),
+  listTree: async () => ({ items: [], dirs: [], unwalked: [], truncated: false }),
   readFile: async () => {
     throw new Error("no file service");
   },
@@ -95,6 +102,7 @@ const uploadMenuItem: React.CSSProperties = {
 export function FileTree({
   files,
   dirs = [],
+  unwalked = [],
   activePath,
   onOpen,
   onOpenInSplit,
@@ -107,6 +115,8 @@ export function FileTree({
 }: {
   files: FileInfo[];
   dirs?: string[];
+  /** Folders the listing did not enter: drawn collapsed, fetched on expand. */
+  unwalked?: string[];
   activePath: string | null;
   onOpen: OpenFn;
   onOpenInSplit?: (path: string) => void;
@@ -145,7 +155,31 @@ export function FileTree({
   // the data, and the prune only on the built tree plus the term; neither
   // depends on the selection, the menus, or the panel width, all of which
   // re-render this component too (as does the 1.5 s indexing poll).
-  const fullTree = useMemo(() => buildFileTree(files, dirs), [files, dirs]);
+  // Lazy folders: the ones the preload listed but did not enter. Their levels
+  // load on expand and merge into the SAME tree, so the filter, the drag
+  // targets and the keyboard order see them like any other folder.
+  const toggled = usePersistentSet(`rca:tree-collapsed:${svc.scopeId || scopeId || "default"}`);
+  const lazyPreload = useMemo(() => new Set(unwalked), [unwalked]);
+  // Open-state, one rule for every folder: the stored set holds the folders the
+  // user toggled AWAY from their default. A walked folder defaults open (so a
+  // stored entry still means "collapsed", byte for byte what it meant before
+  // folders could be lazy); a lazy one defaults closed, so for it the entry
+  // means "opened". Same key, same data, no migration.
+  const isLazyPath = (p: string) => lazyPreload.has(p) || lazy.unwalked.includes(p);
+  const isOpen = (p: string) => (isLazyPath(p) ? toggled.has(p) : !toggled.has(p));
+  const ensureOpen = (p: string) => {
+    if (!isOpen(p)) toggled.toggle(p);
+  };
+  const lazy = useLazyDirs(svc, unwalked, (p) => toggled.has(p));
+  const fullTree = useMemo(
+    () =>
+      buildFileTree(
+        lazy.files.length ? [...files, ...lazy.files] : files,
+        lazy.dirs.length ? [...dirs, ...lazy.dirs] : dirs,
+        lazy.unwalked.length ? [...unwalked, ...lazy.unwalked] : unwalked,
+      ),
+    [files, dirs, unwalked, lazy],
+  );
   // While a filter is active, `pruneTree` returns only the matching branches
   // plus the ancestor dirs to force open; an empty term is a no-op (full tree,
   // nothing forced) so the user's own collapse state is preserved (#402).
@@ -156,7 +190,7 @@ export function FileTree({
         : { tree: fullTree, expand: NO_FORCE_OPEN },
     [searchable, fullTree, query],
   );
-  const collapsed = usePersistentSet(`rca:tree-collapsed:${svc.scopeId || scopeId || "default"}`);
+  const open: OpenState = { isOpen, toggle: (p) => toggled.toggle(p) };
   const [menu, setMenu] = useState<Menu | null>(null);
   // Inline creator (VSCode-style): type the name straight in the tree.
   const [creating, setCreating] = useState<{ kind: "file" | "folder"; dir: string } | null>(null);
@@ -167,7 +201,7 @@ export function FileTree({
   const [sel, setSel] = useState<SelState>({ selected: [], anchor: null });
   const selectedSet = new Set(sel.selected);
   // A force-open (filter) ancestor counts as expanded for navigation order too.
-  const order = visibleOrder(tree, (p) => collapsed.has(p) && !expand.has(p));
+  const order = visibleOrder(tree, (p) => !isOpen(p) && !expand.has(p));
   const [rootDrop, setRootDrop] = useState(false);
   // #692: what went wrong with the last upload, one line per file, shown in the
   // tree until dismissed — see the note on the notice below for why this stopped
@@ -199,7 +233,7 @@ export function FileTree({
     const mods = { ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey };
     setSel((s) => nextSelection(s, node.path, mods, order));
     if (mods.ctrl || mods.shift) return;
-    if (node.isDir) collapsed.toggle(node.path);
+    if (node.isDir) toggled.toggle(node.path);
     else onOpen(node.path, { preview: true });
   };
 
@@ -365,7 +399,7 @@ export function FileTree({
       } else {
         // Real, honest folder — no .keep placeholder.
         await svc.mkdir(path);
-        if (collapsed.has(path)) collapsed.toggle(path);
+        ensureOpen(path);
         refresh();
       }
     } catch (e) {
@@ -548,7 +582,7 @@ export function FileTree({
             type="button"
             title={createDir ? `New file in ${createDirLabel}/` : "New file"}
             onClick={() => {
-              if (createDir && collapsed.has(createDir)) collapsed.toggle(createDir);
+              if (createDir) ensureOpen(createDir);
               setCreating({ kind: "file", dir: createDir });
             }}
             style={{ color: "var(--text-paper-d)", padding: 2 }}
@@ -561,7 +595,7 @@ export function FileTree({
             type="button"
             title={createDir ? `New folder in ${createDirLabel}/` : "New folder"}
             onClick={() => {
-              if (createDir && collapsed.has(createDir)) collapsed.toggle(createDir);
+              if (createDir) ensureOpen(createDir);
               setCreating({ kind: "folder", dir: createDir });
             }}
             style={{ color: "var(--text-paper-d)", padding: 2 }}
@@ -775,7 +809,7 @@ export function FileTree({
             selectedSet={selectedSet}
             multi={sel.selected.length > 1}
             select={select}
-            collapsed={collapsed}
+            open={open}
             forceOpen={expand}
             creating={creating}
             renaming={renaming}
@@ -905,7 +939,7 @@ function TreeRow({
   selectedSet,
   multi,
   select,
-  collapsed,
+  open,
   forceOpen,
   creating,
   renaming,
@@ -930,8 +964,8 @@ function TreeRow({
   selectedSet: Set<string>;
   multi: boolean;
   select?: SelectMode;
-  collapsed: ReturnType<typeof usePersistentSet>;
-  /** #402: dirs the active filter forces open, overriding `collapsed`. */
+  open: OpenState;
+  /** #402: dirs the active filter forces open, overriding the user's toggle. */
   forceOpen: ReadonlySet<string>;
   creating: Creating;
   renaming: string | null;
@@ -950,7 +984,7 @@ function TreeRow({
 }) {
   const indent = 8 + depth * 12;
   // A filter match forces this dir open even if the user had collapsed it (#402).
-  const isCollapsed = collapsed.has(node.path) && !forceOpen.has(node.path);
+  const isCollapsed = !open.isOpen(node.path) && !forceOpen.has(node.path);
   const [dropOver, setDropOver] = useState(false);
   const [dragging, setDragging] = useState(false);
   // Drag move/copy only when the service supports relocation (KB v1 doesn't).
@@ -995,7 +1029,7 @@ function TreeRow({
             />
             <button
               type="button"
-              onClick={() => collapsed.toggle(node.path)}
+              onClick={() => open.toggle(node.path)}
               aria-label={`${isCollapsed ? "expand" : "collapse"} ${node.name}`}
               style={{
                 display: "flex",
@@ -1055,6 +1089,7 @@ function TreeRow({
             }
           }}
           title="Drag onto another folder to move · Ctrl/⌘ to copy"
+          aria-expanded={!isCollapsed}
           style={{
             display: "flex",
             alignItems: "center",
@@ -1109,7 +1144,7 @@ function TreeRow({
                 selectedSet={selectedSet}
                 multi={multi}
                 select={select}
-                collapsed={collapsed}
+                open={open}
                 forceOpen={forceOpen}
                 creating={creating}
                 renaming={renaming}

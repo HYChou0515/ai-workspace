@@ -7,7 +7,7 @@ import { MemoryRouter } from "react-router-dom";
 
 import { type FileService, FileServiceProvider, investigationFileService } from "../../api/fileService";
 import type { FileInfo } from "../../api/types";
-import { DialogProvider } from "../../components/Dialog";
+import { QueryWrap } from "../../test/queryWrapper";
 import { FileTree } from "./FileTree";
 
 afterEach(cleanup);
@@ -21,14 +21,14 @@ const files: FileInfo[] = [
 function renderTree(onOpen = vi.fn(), opts: { files?: FileInfo[]; dirs?: string[] } = {}) {
   render(
     <FileServiceProvider value={investigationFileService("rca", "inv")}>
-      <DialogProvider>
+      <QueryWrap>
         <FileTree
           files={opts.files ?? files}
           dirs={opts.dirs ?? []}
           activePath={null}
           onOpen={onOpen}
         />
-      </DialogProvider>
+      </QueryWrap>
     </FileServiceProvider>,
   );
   return { onOpen };
@@ -153,9 +153,9 @@ describe("<FileTree /> reindex (#98)", () => {
     const onReindex = vi.fn();
     render(
       <FileServiceProvider value={investigationFileService("rca", "inv")}>
-        <DialogProvider>
+        <QueryWrap>
           <FileTree files={files} dirs={[]} activePath={null} onOpen={vi.fn()} onReindex={onReindex} />
-        </DialogProvider>
+        </QueryWrap>
       </FileServiceProvider>,
     );
     await user.click(screen.getByText("a.md"));
@@ -173,9 +173,9 @@ describe("<FileTree /> reindex (#98)", () => {
     const onReindex = vi.fn();
     render(
       <FileServiceProvider value={investigationFileService("rca", "inv")}>
-        <DialogProvider>
+        <QueryWrap>
           <FileTree files={files} dirs={[]} activePath={null} onOpen={vi.fn()} onReindex={onReindex} />
-        </DialogProvider>
+        </QueryWrap>
       </FileServiceProvider>,
     );
     await user.click(screen.getByText("a.md"));
@@ -269,9 +269,9 @@ describe("<FileTree /> download (#247)", () => {
   function renderWith(svc: FileService, fs: FileInfo[] = files) {
     render(
       <FileServiceProvider value={svc}>
-        <DialogProvider>
+        <QueryWrap>
           <FileTree files={fs} dirs={[]} activePath={null} onOpen={vi.fn()} />
-        </DialogProvider>
+        </QueryWrap>
       </FileServiceProvider>,
     );
   }
@@ -355,9 +355,9 @@ describe("<FileTree /> upload target", () => {
       // (#692), so the tree renders a real router link.
       <MemoryRouter>
         <FileServiceProvider value={svc}>
-          <DialogProvider>
+          <QueryWrap>
             <FileTree files={files} dirs={[]} activePath={null} onOpen={vi.fn()} />
-          </DialogProvider>
+          </QueryWrap>
         </FileServiceProvider>
       </MemoryRouter>,
     );
@@ -553,9 +553,9 @@ describe("<FileTree /> external drop + paste (#364)", () => {
   function renderWith(svc: FileService, fileList: FileInfo[]) {
     render(
       <FileServiceProvider value={svc}>
-        <DialogProvider>
+        <QueryWrap>
           <FileTree files={fileList} dirs={[]} activePath={null} onOpen={vi.fn()} />
-        </DialogProvider>
+        </QueryWrap>
       </FileServiceProvider>,
     );
   }
@@ -677,7 +677,7 @@ describe("<FileTree /> filter (#402)", () => {
   function renderSearchable(searchable: boolean) {
     render(
       <FileServiceProvider value={investigationFileService("rca", "inv")}>
-        <DialogProvider>
+        <QueryWrap>
           <FileTree
             files={tree}
             dirs={[]}
@@ -685,7 +685,7 @@ describe("<FileTree /> filter (#402)", () => {
             onOpen={vi.fn()}
             searchable={searchable}
           />
-        </DialogProvider>
+        </QueryWrap>
       </FileServiceProvider>,
     );
   }

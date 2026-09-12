@@ -74,7 +74,7 @@ function fakeFileService(content: string | { notFound: true }): {
     },
     listFiles: async () => [],
     listDirs: async () => [],
-    listTree: async () => ({ items: [], dirs: [] }),
+    listTree: async () => ({ items: [], dirs: [], unwalked: [], truncated: false }),
     readFile,
     writeFile,
     deleteFile: async () => {},

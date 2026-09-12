@@ -142,6 +142,7 @@ export function WorkspaceShell({
   manifest,
   files,
   dirs = [],
+  unwalked = [],
   ideCollapsed,
   onIdeCollapsedChange,
   onFilesChanged,
@@ -151,6 +152,8 @@ export function WorkspaceShell({
   manifest: AppManifest;
   files: FileInfo[];
   dirs?: string[];
+  /** Folders the listing did not enter (drawn collapsed, fetched on expand). */
+  unwalked?: string[];
   // Optionally controlled: AppWorkspace lifts the IDE-collapse state so file
   // loading can follow it. Omitted ⇒ the shell owns its own persisted state.
   ideCollapsed?: boolean;
@@ -181,6 +184,7 @@ export function WorkspaceShell({
                 manifest={manifest}
                 files={files}
                 dirs={dirs}
+                unwalked={unwalked}
                 ideCollapsed={ideCollapsed}
                 onIdeCollapsedChange={onIdeCollapsedChange}
                 onFilesChanged={onFilesChanged}
@@ -200,6 +204,7 @@ function ShellBody({
   manifest,
   files,
   dirs = [],
+  unwalked = [],
   ideCollapsed: propIdeCollapsed,
   onIdeCollapsedChange: propOnIdeCollapsedChange,
   onFilesChanged,
@@ -210,6 +215,7 @@ function ShellBody({
   manifest: AppManifest;
   files: FileInfo[];
   dirs?: string[];
+  unwalked?: string[];
   ideCollapsed?: boolean;
   onIdeCollapsedChange?: (b: boolean | ((prev: boolean) => boolean)) => void;
   onFilesChanged?: () => void;
@@ -676,6 +682,7 @@ function ShellBody({
                   manifest={manifest}
                   files={files}
                   dirs={dirs}
+                  unwalked={unwalked}
                   activePath={groups.activeFile}
                   recentFiles={recentFiles.values}
                   onOpenFile={openFile}
@@ -1601,6 +1608,7 @@ function ActivitySidebar(props: {
   manifest: AppManifest;
   files: FileInfo[];
   dirs: string[];
+  unwalked: string[];
   activePath: string | null;
   recentFiles: string[];
   onOpenFile: OpenFileFn;
@@ -1632,6 +1640,7 @@ function EvidenceSidebar({
   manifest,
   files,
   dirs,
+  unwalked,
   activePath,
   onOpenFile,
   onFilesChanged,
@@ -1640,6 +1649,7 @@ function EvidenceSidebar({
   manifest: AppManifest;
   files: FileInfo[];
   dirs: string[];
+  unwalked: string[];
   activePath: string | null;
   onOpenFile: OpenFileFn;
   onFilesChanged?: () => void;
@@ -1649,6 +1659,7 @@ function EvidenceSidebar({
       <FileTree
         files={files}
         dirs={dirs}
+        unwalked={unwalked}
         activePath={activePath}
         onOpen={onOpenFile}
         onChanged={onFilesChanged}

@@ -555,10 +555,18 @@ export const realApi: ApiClient = {
   async listDirs(slug: string, investigationId: string) {
     return (await this.getTree(slug, investigationId)).dirs;
   },
-  async getTree(slug: string, investigationId: string) {
-    return await json<{ files: FileInfo[]; dirs: string[] }>(
+  async getTree(
+    slug: string,
+    investigationId: string,
+    opts?: { prefix?: string; depth?: number },
+  ) {
+    const q = new URLSearchParams();
+    if (opts?.prefix) q.set("prefix", opts.prefix);
+    if (opts?.depth !== undefined) q.set("depth", String(opts.depth));
+    const query = q.size ? `?${q}` : "";
+    return await json<{ files: FileInfo[]; dirs: string[]; unwalked: string[]; truncated: boolean }>(
       await apiFetch(
-        `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/tree`,
+        `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/tree${query}`,
       ),
     );
   },

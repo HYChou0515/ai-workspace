@@ -178,7 +178,12 @@ describe("useFileList", () => {
       ...investigationFileService("rca", "col-1"),
       listFiles: vi.fn(async () => [{ path: "/a.md", size: 1 }]),
       listDirs: vi.fn(async () => ["/sub"]),
-      listTree: vi.fn(async () => ({ items: [{ path: "/a.md", size: 1 }], dirs: ["/sub"] })),
+      listTree: vi.fn(async () => ({
+        items: [{ path: "/a.md", size: 1 }],
+        dirs: ["/sub"],
+        unwalked: [],
+        truncated: false,
+      })),
       ...over,
     };
   }
@@ -257,7 +262,7 @@ describe("useFileList — one traversal", () => {
     // the same workspace twice over, and each half walked the whole tree.
     const listFiles = vi.fn(async () => []);
     const listDirs = vi.fn(async () => []);
-    const listTree = vi.fn(async () => ({ items: [], dirs: [] }));
+    const listTree = vi.fn(async () => ({ items: [], dirs: [], unwalked: [], truncated: false }));
     const svc = fakeService({ listFiles, listDirs, listTree });
     const wrapper = ({ children }: { children: ReactNode }) => (
       <QueryWrap>

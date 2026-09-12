@@ -46,6 +46,22 @@ describe("buildFileTree", () => {
     expect(tree.find((n) => n.name === "empty")!.children).toEqual([]);
   });
 
+  it("marks a folder the listing did not enter as lazy, with nothing under it yet", () => {
+    // Pruned is not hidden: `node_modules` is on the tree, collapsed, and its
+    // contents arrive only when it is expanded. A folder that was entered and
+    // is simply empty is NOT lazy — expanding it has nothing to fetch.
+    const tree = buildFileTree(
+      [{ path: "/src/a.py", size: 1 }],
+      ["/src", "/node_modules", "/empty"],
+      ["/node_modules"],
+    );
+    const byName = Object.fromEntries(tree.map((n) => [n.name, n]));
+    expect(byName["node_modules"]!.lazy).toBe(true);
+    expect(byName["node_modules"]!.children).toEqual([]);
+    expect(byName["empty"]!.lazy).toBe(false);
+    expect(byName["src"]!.lazy).toBe(false);
+  });
+
   it("does not duplicate a dir that also has files", () => {
     const tree = buildFileTree([{ path: "/data/a.csv", size: 1 }], ["/data"]);
     expect(tree.filter((n) => n.name === "data")).toHaveLength(1);
