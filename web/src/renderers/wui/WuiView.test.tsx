@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -15,7 +15,7 @@ import { makeTestQueryClient, QueryWrap } from "../../test/queryWrapper";
 import type { ViewSpec } from "../entity/types";
 import { WUI_CSP } from "./assemble";
 import { WUI_PROTOCOL } from "./protocol";
-import { MAX_REPORTS, WuiView } from "./WuiView";
+import { MAX_REPORTS, WuiView, type WuiChrome } from "./WuiView";
 
 const text = (path: string, body: string): FileContent => ({
   kind: "text",
@@ -40,11 +40,15 @@ function svc(files: Record<string, string>): FileService {
   } as unknown as FileService;
 }
 
-function renderWui(files: Record<string, string>, spec: Partial<ViewSpec> = {}) {
+function renderWui(files: Record<string, string>, spec: Partial<ViewSpec> = {}, chrome?: WuiChrome) {
   return render(
     <QueryWrap>
       <FileServiceProvider value={svc(files)}>
-        <WuiView path="/sales/page.ai.yaml" spec={{ view: "wui", entity: "", ...spec } as ViewSpec} />
+        <WuiView
+          path="/sales/page.ai.yaml"
+          spec={{ view: "wui", entity: "", ...spec } as ViewSpec}
+          chrome={chrome}
+        />
       </FileServiceProvider>
     </QueryWrap>,
   );
@@ -53,8 +57,8 @@ function renderWui(files: Record<string, string>, spec: Partial<ViewSpec> = {}) 
 const frame = () => document.querySelector("iframe");
 
 /** Speak as the page inside the frame, and capture what comes back. */
-async function withFrame(files: Record<string, string>) {
-  renderWui(files);
+async function withFrame(files: Record<string, string>, chrome?: WuiChrome) {
+  renderWui(files, {}, chrome);
   await waitFor(() => expect(frame()).toBeInTheDocument());
   const win = frame()?.contentWindow as Window;
   const replies: unknown[] = [];
@@ -196,6 +200,25 @@ describe("WuiView", () => {
     say({ proto: WUI_PROTOCOL, report: "error", message: "x is not a function (app.js:12)" });
 
     expect(await screen.findByText(/x is not a function/)).toBeInTheDocument();
+  });
+
+  it("keeps the page's reports from a reader, who has nobody to hand them to", async () => {
+    /**
+     * The test above is the positive control: the same report, in workspace
+     * chrome, is shown. The reports exist to be handed to the agent ("Tell the
+     * agent"), and a reader has no agent — a pane they can only stare at is
+     * the toolbar leak in another coat (docs/plan-wui-deploy.md, P1).
+     */
+    const { say, replies } = await withFrame({ "/sales/index.html": "<html><body>hi</body></html>" }, "viewer");
+
+    say({ proto: WUI_PROTOCOL, report: "error", message: "x is not a function (app.js:12)" });
+    // The message was received (the bridge is alive for a reader) …
+    say({ proto: WUI_PROTOCOL, id: "1", verb: "whoami" });
+    await waitFor(() => expect(replies).toHaveLength(1));
+
+    // … but nothing was drawn for it.
+    expect(screen.queryByRole("log", { name: /reports/i })).toBeNull();
+    expect(screen.queryByText(/x is not a function/)).toBeNull();
   });
 
   it("asks the page to enter pick mode when Report is pressed", async () => {
@@ -960,16 +983,22 @@ describe("WuiView: rebuilding a page when it is opened", () => {
   };
   const PLAIN = { "/sales/index.html": "<html><body>v1</body></html>" };
 
-  function renderIn(files: Record<string, string>) {
-    return render(
+  function renderIn(files: Record<string, string>, chrome?: WuiChrome) {
+    const fs = svc(files);
+    const view = render(
       <QueryWrap>
         <WorkspaceSlugProvider value="rca">
-          <FileServiceProvider value={svc(files)}>
-            <WuiView path="/sales/page.ai.yaml" spec={{ view: "wui", entity: "" } as ViewSpec} />
+          <FileServiceProvider value={fs}>
+            <WuiView
+              path="/sales/page.ai.yaml"
+              spec={{ view: "wui", entity: "" } as ViewSpec}
+              chrome={chrome}
+            />
           </FileServiceProvider>
         </WorkspaceSlugProvider>
       </QueryWrap>,
     );
+    return { ...view, fs };
   }
 
   const sse = (payload: unknown) => `data: ${JSON.stringify(payload)}\n\n`;
@@ -1004,6 +1033,29 @@ describe("WuiView: rebuilding a page when it is opened", () => {
     renderIn(files);
 
     expect(await screen.findByText(/Build finished/)).toBeInTheDocument();
+  });
+
+  it("never rebuilds on a reader's account", async () => {
+    /**
+     * The test above is this one's positive control: same folder, same
+     * setting (on by default), and in workspace chrome the build fires. A
+     * reader — somebody who followed the page's own URL — is handed what is
+     * already built, never a build: tens of seconds and a sandbox woken on
+     * behalf of someone who only came to look (docs/plan-wui-deploy.md).
+     *
+     * The negative waits for the moment the build WOULD have fired — the
+     * manifest probe that decides `canBuild` — so "no build yet" cannot pass
+     * for a page that simply has not finished opening.
+     */
+    const files = { ...BUILT };
+    serveBuild(sse({ type: "done", exit_code: 0 }));
+    const { fs } = renderIn(files, "viewer");
+
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+    await waitFor(() => expect(fs.readFile).toHaveBeenCalledWith("/sales/package.json"));
+    await act(async () => {});
+
+    expect(buildCalls()).toHaveLength(0);
   });
 
   it("builds ONCE, though its own success re-reads the folder", async () => {

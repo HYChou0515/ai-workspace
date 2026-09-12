@@ -103,7 +103,26 @@ export function trimReports(reports: WuiReport[]): WuiReport[] {
   ];
 }
 
-export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
+/**
+ * Whose page this is. `workspace` is the author's: the toolbar (Refresh,
+ * Rebuild, Auto-rebuild, Report a problem, Tell the agent), the build log and
+ * the reports. `viewer` is the reader's — somebody who followed the page's own
+ * URL (`/w/…`, `WuiPage`): they have nothing to rebuild, nobody to tell and
+ * nothing to pick, so none of that is drawn. An explicit prop rather than a
+ * context, because `WuiPage` already records what a missing provider does here
+ * — silently nothing — and that shape must not exist twice.
+ */
+export type WuiChrome = "workspace" | "viewer";
+
+export function WuiView({
+  path,
+  spec,
+  chrome = "workspace",
+}: {
+  path: string;
+  spec: ViewSpec;
+  chrome?: WuiChrome;
+}) {
   const fs = useFileService();
   const folder = wuiFolder(path);
   const entry = viewParamString(spec, "entry") ?? DEFAULT_ENTRY;
@@ -442,6 +461,10 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
   // waking the item's sandbox) is real enough that someone may not want to pay
   // it on every open.
   useEffect(() => {
+    // A reader is handed what is already built, never a build — before the
+    // setting is even consulted, so the preference an author left on cannot
+    // wake a sandbox on a reader's account.
+    if (chrome === "viewer") return;
     if (!canBuild || !slug) return; // not a built page, or not known yet
     if (autoBuiltFor.current === folder) return;
     // The opening moment is spent HERE, whether or not it builds. Marking it
@@ -453,7 +476,7 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
     // `runBuild` is deliberately not a dependency: it is rebuilt every render,
     // and the guard above is what decides when this may run.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canBuild, autoBuild, slug, folder]);
+  }, [chrome, canBuild, autoBuild, slug, folder]);
 
   // Cleaned HERE, over the joined stream, not chunk by chunk: an escape
   // sequence is a byte fragment too, and half of one arriving in the previous
@@ -469,6 +492,7 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+      {chrome === "workspace" && (
       <div
         style={{
           display: "flex",
@@ -518,7 +542,11 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
           </Btn>
         )}
       </div>
-      {buildLog !== null && (
+      )}
+      {/* The three author panes — toolbar, build log, reports — are gated on
+          the same word, so "a reader sees none of them" holds by inspection
+          rather than by an argument about which of them a reader could reach. */}
+      {chrome === "workspace" && buildLog !== null && (
         <div
           style={{
             // The cap lives HERE, on the pane's flex item, because that is the
@@ -604,7 +632,7 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
           )}
         </div>
       )}
-      {reports.length > 0 && (
+      {chrome === "workspace" && reports.length > 0 && (
         <div
           role="log"
           aria-label="Reports"
@@ -640,6 +668,15 @@ export function WuiView({ path, spec }: { path: string; spec: ViewSpec }) {
         // about to create it — is alarming and, seconds later, untrue.
         <div role="status" style={{ padding: 12, color: "var(--text-paper-d)" }}>
           Building… the page appears when this finishes.
+        </div>
+      ) : built.error && chrome === "viewer" ? (
+        // A reader followed a link to a page nobody has built (or one whose
+        // entry is gone). They cannot rebuild it and did not choose the file,
+        // so the sentence names the page's STATE, not the missing file — a
+        // blank frame here reads as a broken page rather than an unpublished
+        // one. Not red: nothing they did is wrong.
+        <div role="status" style={{ padding: 12, color: "var(--text-paper-d)" }}>
+          This page has not been published yet.
         </div>
       ) : built.error ? (
         // Plain language and the file's name: whoever hits this may have no

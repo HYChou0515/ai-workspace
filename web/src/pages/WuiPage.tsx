@@ -89,7 +89,10 @@ export function WuiPage({
     <WorkspaceSlugProvider value={slug}>
       <FileServiceProvider value={service}>
         <div style={{ position: "fixed", inset: 0, display: "flex", flexDirection: "column" }}>
-          <WuiView path={path} spec={spec} />
+          {/* The reader's chrome: no toolbar, no build log, no reports, and the
+              page is never rebuilt on their account — a link serves what is
+              already built (docs/plan-wui-deploy.md). */}
+          <WuiView path={path} spec={spec} chrome="viewer" />
         </div>
       </FileServiceProvider>
     </WorkspaceSlugProvider>

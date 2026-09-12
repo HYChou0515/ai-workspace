@@ -10,10 +10,12 @@
  * What it is FOR: a colleague who is already in the item should not have to go
  * hunting through a file tree. The URL is a shortcut, not a grant.
  */
+import "@testing-library/jest-dom/vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
+import { WUI_PROTOCOL } from "../renderers/wui/protocol";
 import { QueryWrap } from "../test/queryWrapper";
 import { WuiPage } from "./WuiPage";
 
@@ -70,22 +72,24 @@ describe("WuiPage", () => {
     await waitFor(() => expect(screen.getByTitle("Scrap review")).toBeTruthy());
   });
 
-  it("gives the page the slug, so rebuilding still works here", async () => {
+  it("gives the page the slug, so its tools still answer here", async () => {
     /**
      * `WuiView` reads the slug from a CONTEXT, not from the route. Outside the
      * workspace shell nothing provides it and the default is the empty string —
-     * at which point auto-rebuild never fires (the page shows a stale `dist/`)
-     * and `callTool` is null (every tool button does nothing). Neither says a
-     * word.
+     * at which point `callTool` is null and every tool button on the page does
+     * nothing, without a word.
      *
-     * Asserted through the real path — the build request the page actually makes
-     * — rather than by peeking at the context, so a production seam added just
-     * for this test cannot make it pass.
+     * Asserted through the real path — the tool request the page's own frame
+     * makes — rather than by peeking at the context, so a production seam added
+     * just for this test cannot make it pass. It used to be asserted through
+     * the build request instead; a reader's page no longer builds (below), and
+     * the tools are the one thing a reader is promised to keep.
      */
+    const yaml = `${YAML}tools: [lot-status]\n`;
     const files: Record<string, string> = {
-      "/scrap-review/page.ai.yaml": YAML,
+      "/scrap-review/page.ai.yaml": yaml,
       "/scrap-review/index.html": "<!doctype html><p>hello</p>",
-      // A built page: this is what makes auto-rebuild fire at all.
+      // Buildable: an author's page here WOULD rebuild on open.
       "/scrap-review/package.json": JSON.stringify({ scripts: { build: "vite build" } }),
     };
     const readFile = vi.fn(async (path: string) => {
@@ -98,20 +102,34 @@ describe("WuiPage", () => {
     const realFetch = globalThis.fetch;
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
       urls.push(String(input));
-      return new Response("data: {\"type\":\"done\",\"exit_code\":0}\n\n", {
-        headers: { "content-type": "text/event-stream" },
+      return new Response(JSON.stringify({ ok: true, result: {} }), {
+        headers: { "content-type": "application/json" },
       });
     }) as typeof globalThis.fetch;
 
     try {
       renderAt("/w/rca/i1/scrap-review/page.ai.yaml", readFile);
-      await waitFor(() => expect(urls.some((u) => u.includes("/wui/build"))).toBe(true));
+      await waitFor(() => expect(screen.getByTitle("Scrap review")).toBeTruthy());
+      // The moment an author's page would have started its build has passed:
+      // the manifest that decides it has been read.
+      await waitFor(() => expect(readFile).toHaveBeenCalledWith("/scrap-review/package.json"));
+
+      const win = (screen.getByTitle("Scrap review") as HTMLIFrameElement).contentWindow as Window;
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: { proto: WUI_PROTOCOL, id: "1", verb: "callTool", args: { name: "lot-status", args: {} } },
+          source: win,
+        }),
+      );
+      await waitFor(() => expect(urls.some((u) => u.includes("/wui/tools/"))).toBe(true));
     } finally {
       globalThis.fetch = realFetch;
     }
 
     // The slug from the URL, not the empty-string default.
-    expect(urls.find((u) => u.includes("/wui/build"))).toContain("/a/rca/items/i1/");
+    expect(urls.find((u) => u.includes("/wui/tools/"))).toContain("/a/rca/items/i1/wui/tools/lot-status/call");
+    // And nothing was built on the reader's account.
+    expect(urls.filter((u) => u.includes("/wui/build"))).toHaveLength(0);
   });
 
   it("says so plainly when the view file is not there", async () => {
@@ -155,5 +173,67 @@ describe("WuiPage", () => {
     renderAt("/w/rca/i1/board/board.ai.yaml", readFile);
 
     await waitFor(() => expect(screen.getByRole("alert").textContent).toMatch(/not a page/i));
+  });
+});
+
+describe("WuiPage: what a reader is handed", () => {
+  /**
+   * Somebody followed a link. They have nothing to rebuild, nobody to tell and
+   * nothing to pick — the toolbar is the author's, and every control on it was
+   * reaching the reader (docs/plan-wui-deploy.md, P1).
+   *
+   * Each control is asserted by its own name rather than "no toolbar": one
+   * control left behind is exactly the leak this guards against, and a
+   * toolbar-shaped assertion would not see it. The positive control is
+   * `WuiView.test.tsx`, which presses every one of these in workspace chrome.
+   */
+  it("shows the page and none of the author's controls", async () => {
+    const files: Record<string, string> = {
+      "/scrap-review/page.ai.yaml": YAML,
+      "/scrap-review/index.html": "<!doctype html><p>hello</p>",
+      // Buildable, so that Rebuild / Auto-rebuild WOULD be offered to an author.
+      "/scrap-review/package.json": JSON.stringify({ scripts: { build: "vite build" } }),
+    };
+    const readFile = vi.fn(async (path: string) => {
+      const text = files[path];
+      if (text === undefined) throw new Error(`not found: ${path}`);
+      return { kind: "text", path, text, size: text.length, encoding: "utf-8" };
+    });
+
+    renderAt("/w/rca/i1/scrap-review/page.ai.yaml", readFile);
+
+    // The page itself is there — so an empty screen cannot pass the rest.
+    await waitFor(() => expect(screen.getByTitle("Scrap review")).toBeTruthy());
+    for (const name of [/refresh/i, /rebuild/i, /auto-rebuild/i, /report a problem/i, /tell the agent/i]) {
+      expect(screen.queryByRole("button", { name })).toBeNull();
+      expect(screen.queryByRole("switch", { name })).toBeNull();
+    }
+  });
+
+  it("says the page is not published yet when there is nothing built", async () => {
+    /**
+     * A buildable page nobody has built: `dist/index.html` is not there. An
+     * author sees the file's name in red and a Rebuild button (the workspace
+     * test "names the missing file…" is the positive control). A reader can do
+     * neither — the sentence has to say what state the page is in, not which
+     * file is missing, or a blank frame reads as a broken page rather than an
+     * unpublished one.
+     */
+    const files: Record<string, string> = {
+      "/scrap-review/page.ai.yaml": `${YAML}entry: dist/index.html\n`,
+      "/scrap-review/package.json": JSON.stringify({ scripts: { build: "vite build" } }),
+    };
+    const readFile = vi.fn(async (path: string) => {
+      const text = files[path];
+      if (text === undefined) throw new Error(`not found: ${path}`);
+      return { kind: "text", path, text, size: text.length, encoding: "utf-8" };
+    });
+
+    renderAt("/w/rca/i1/scrap-review/page.ai.yaml", readFile);
+
+    const said = await screen.findByRole("status");
+    expect(said).toHaveTextContent(/not been published/i);
+    expect(said).not.toHaveTextContent("index.html");
+    expect(document.querySelector("iframe")).toBeNull();
   });
 });
