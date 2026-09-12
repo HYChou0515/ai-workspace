@@ -1509,6 +1509,108 @@ describe("WuiView: Deploy", () => {
     expect(vi.mocked(fs.readFile).mock.calls.filter(([p]) => p === "/sales/index.html")).toHaveLength(2);
   });
 
+  it("leaves the pane alone when the page does not open — no second read the verdict never saw", async () => {
+    /**
+     * Review round 3: on the failure path the pane was pointed at the failed
+     * generation, and a query in error with no data refetches on the key
+     * switch — a SECOND read the verdict never saw. During a sandbox restore
+     * that read can succeed, and the page then rendered directly under a red
+     * "the page does not open". The verdict is about the read Deploy made;
+     * the pane is not touched by a failure.
+     */
+    vi.stubGlobal("fetch", vi.fn());
+    const { fs } = renderInFs({ "/sales/README.md": "nothing to open here" });
+    await screen.findByRole("status");
+    const reads = () => vi.mocked(fs.readFile).mock.calls.filter(([p]) => p === "/sales/index.html").length;
+    const beforeDeploy = reads();
+
+    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    await screen.findByText(/deploy failed/i);
+    await act(async () => {});
+
+    // Exactly one read for the verdict, and none for the pane.
+    expect(reads()).toBe(beforeDeploy + 1);
+  });
+
+  it("still re-reads the folder when the pane moved to a sibling page mid-build", async () => {
+    /**
+     * Review round 3: Deploy runs its build with `reload: false` and does the
+     * reload itself — but when the pane had moved to a sibling view file in
+     * the same folder, it bailed before that reload, so the sibling's frame
+     * kept the `dist/` from before the build. The verdict belongs to the page
+     * that left; the reload belongs to the folder, which is still here.
+     */
+    const { release } = serveHeldBuild(0);
+    const files: Record<string, string> = {
+      ...BUILT,
+      "/sales/dist/index.html": "<html><body>b1</body></html>",
+    };
+    const fs = svc(files);
+    const page = (p: string) => (
+      <QueryWrap>
+        <WorkspaceSlugProvider value="rca">
+          <FileServiceProvider value={fs}>
+            <WuiView path={p} spec={{ view: "wui", entity: "", entry: "dist/index.html" } as ViewSpec} />
+          </FileServiceProvider>
+        </WorkspaceSlugProvider>
+      </QueryWrap>
+    );
+    const view = render(page("/sales/a.ai.yaml"));
+    await screen.findByRole("button", { name: /^rebuild$/i });
+    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    await screen.findByText(/> vite build/);
+
+    view.rerender(page("/sales/b.ai.yaml"));
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+    const distReads = () => vi.mocked(fs.readFile).mock.calls.filter(([p]) => p === "/sales/dist/index.html").length;
+    const beforeRelease = distReads();
+
+    release();
+
+    await waitFor(() => expect(distReads()).toBeGreaterThan(beforeRelease));
+    expect(screen.queryByText(/^✓ deployed/i)).toBeNull(); // A's verdict does not land on B
+  });
+
+  it("holds Refresh too while it runs — the pane is Deploy's until the verdict is in", async () => {
+    /**
+     * Review round 3: Refresh was not held, and Deploy's final generation
+     * write was absolute — two Refreshes during the open check moved the
+     * generation forward, Deploy's write moved it back, and the next Refresh
+     * landed on a key already cached as never-stale: a Refresh that did not
+     * refresh. One rule: nothing else touches the pane while Deploy runs.
+     */
+    let answer: () => void = () => {};
+    const gate = new Promise<void>((r) => (answer = r));
+    vi.stubGlobal("fetch", vi.fn());
+    let manifestReads = 0;
+    renderInFs({ ...PLAIN }, async (path, real) => {
+      if (path.endsWith("package.json") && ++manifestReads > 1) await gate;
+      return real(path);
+    });
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    expect(screen.getByRole("button", { name: /^refresh$/i })).toBeDisabled();
+    answer();
+    await screen.findByRole("textbox", { name: /address/i });
+    expect(screen.getByRole("button", { name: /^refresh$/i })).toBeEnabled();
+  });
+
+  it("is not offered where there is no slug to deploy under", async () => {
+    /**
+     * Review round 3: every workspace-chrome host drew Deploy, including ones
+     * with no slug (a `view: wui` file opened in the KB IDE), where it sat
+     * permanently disabled with no word why and its address would have read
+     * `…/w//…`. Like `callTool`, it exists only where the slug does.
+     */
+    vi.stubGlobal("fetch", vi.fn());
+    renderWui(PLAIN); // no WorkspaceSlugProvider
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+
+    expect(screen.queryByRole("button", { name: /^deploy$/i })).toBeNull();
+    expect(screen.getByRole("button", { name: /^refresh$/i })).toBeInTheDocument();
+  });
+
   it("hands over the page's address at once when there is nothing to build", async () => {
     vi.stubGlobal("fetch", vi.fn());
     renderIn(PLAIN);

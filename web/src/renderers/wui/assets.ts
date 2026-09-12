@@ -209,14 +209,20 @@ function directoryOf(entryPath: string): string {
 
 /** Raised when the entry document itself cannot be opened — the one absence that
  * has nothing to degrade to, so it is reported by name rather than swallowed. */
+/** Why a page's entry could not be opened. `absent` is the only kind a
+ * reader may be told "not published yet"; every other kind is a sentence
+ * about something that IS there — a read that failed, an entry that is not
+ * HTML, an `entry:` that does not name a file in the folder — and must be
+ * shown as itself. An explicit kind, not "no reason given": a proxy like
+ * that is one reason-less `throw` away from calling a forbidden page
+ * unpublished. */
+export type WuiEntryProblem = "absent" | "unreadable" | "not-html" | "bad-entry";
+
 export class WuiEntryMissing extends Error {
-  /** Kept as a field, not only folded into the message: `undefined` means the
-   * entry is genuinely NOT THERE, and that is the one case a reader may be
-   * told "not published yet" — a read that failed, or an entry that is not
-   * HTML, carries a reason and must be shown as itself. */
   constructor(
     readonly entry: string,
-    readonly reason?: string,
+    readonly kind: WuiEntryProblem,
+    reason?: string,
   ) {
     // The reason matters: telling a read-only viewer their page "has no
     // index.html" is a false sentence about a file they can see in the tree,
@@ -236,17 +242,17 @@ export async function buildWuiDoc(fs: FileService, folder: string, entry: string
   // mistake, not an absent file, so it carries a REASON: reason-less is the
   // one case a reader is told "not published yet", and this is not that.
   if (path === null) {
-    throw new WuiEntryMissing(entry, `${entry} is not a path inside this page's folder.`);
+    throw new WuiEntryMissing(entry, "bad-entry", `${entry} is not a path inside this page's folder.`);
   }
   const load = folderLoader(fs, folder, directoryOf(path));
   const read = await readAsset(fs, path);
-  if (read.kind === "failed") throw new WuiEntryMissing(entry, read.reason);
-  if (read.kind === "missing") throw new WuiEntryMissing(entry);
+  if (read.kind === "failed") throw new WuiEntryMissing(entry, "unreadable", read.reason);
+  if (read.kind === "missing") throw new WuiEntryMissing(entry, "absent");
   if (read.asset.kind !== "text") {
     // It IS there — saying it is not sends them looking for the wrong thing,
     // which is the same false-sentence class the `failed` branch above exists
     // to remove.
-    throw new WuiEntryMissing(entry, `${entry} is not a page this can open — a WUI's entry is HTML.`);
+    throw new WuiEntryMissing(entry, "not-html", `${entry} is not a page this can open — a WUI's entry is HTML.`);
   }
   const built = await assembleWuiDoc(read.asset.text, load);
   // The entry is code by definition; `assembleWuiDoc` only sees what it pulls IN.

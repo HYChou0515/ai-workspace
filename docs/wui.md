@@ -171,8 +171,9 @@ Refresh **不會** build，它只是重讀資料夾。所以 AI 改完 `src/` �
 工具列最右邊有一顆 **Deploy**：
 
 - 按下去做三件事：**重讀** `package.json`（不信開頁時的快取——頁面可能是開著之後才被
-  加上 build 的）；有 build 就**先 rebuild**；最後**確認頁面真的打得開**（跟讀者開頁時
-  同一次讀取），三件都成才把網址端出來——所以網址指到的一定是剛建好、而且打得開的成品，
+  加上 build 的）；有 build 就**先 rebuild**；最後**確認頁面真的打得開**（走的是跟讀者
+  開頁時同一條讀取路徑；讀者開頁時仍是他自己那一刻的讀取），三件都成才把網址端出來——
+  所以網址指到的一定是剛建好、而且**當下**打得開的成品，
   不會是舊的 `dist/`，也不會是一個 `entry` 指錯地方的空頁。任一步失敗就不會出現
   「Deployed」：build 壞了是「Deploy failed — see the build output」壓在 build 輸出
   上面；打不開是「Deploy failed — the page does not open: …」帶頁面自己的理由。
