@@ -384,28 +384,21 @@ collection 開過的部署，這五張表是空的，跑起來不會有任何列
 
 規則本身只寫在那一邊 —— 兩份會漂移。
 
-## 不是資料遷移,但升版後要跑一次:含中文文件的重新索引(plan-rag-context P1)
+## 不是資料遷移,升版後也**不用**跑:legacy 切段器的中文修正(plan-rag-context P1)
 
-`kb/chunker.py` 的 tokenizer 從「以空白隔開的一串算一個 token」改成「**每個 CJK 字算一個
-token**,其餘照舊」(字元類共用 `kb/tokens.py:CJK_RANGES`)。舊規則下中文沒有空白,一整行、
-一整段就是一個 token,所以 `max_tokens=256` 對中文等於 256 **段**:實測一份 12,358 字的中文
-文件切出來只有 **1 個 chunk**;PDF 樣式(每視覺行換行)平均 7,343 字/塊,英文同樣設定是
-1,797。一份文件一個向量 ⇒ 檢索排名對中文結構性地差,而且 rerank prompt 一次就是十幾萬字。
+`kb/chunker.py` 的 `FixedTokenChunker` 從「以空白隔開的一串算一個 token」改成「每個 CJK 字算一個
+token」(字元類共用 `kb/tokens.py:CJK_RANGES`)。舊規則下中文沒有空白,一整段就是一個 token,所以
+`max_tokens=256` 對中文等於 256 **段**:用這個切段器實測,一份 12,358 字的中文文件只切出 **1 個 chunk**。
 
-**chunk 是衍生資料**:升版只影響之後索引的文件,既有 chunk 停在舊切法,直到重新索引。
-這不走 `migrate/execute`(chunk 不是「重抽 indexed_data」能修的,要重切、重 embed),走
-**整個 collection 的重讀**:
+**但 production 不走這個切段器。** API 與 worker 都接 `kb_pipeline=get_doc_pipeline(...)`(LlamaIndex
+管線;`factories.py` 自己註明 legacy chunker 留給 tests + offline runs)。管線裡 PDF 文字層與純文字走
+`SentenceSplitter(256/32)`(tiktoken 為底),用**真入口**實測:中文散文 12,358 字 → **80 塊、平均 154 字**;
+中文 PDF 樣式 → 102 塊、平均 153;英文 50,038 字元 → 40 塊、平均 1,452。production 的中文切段本來就
+正常(甚至比英文細十倍),**這個修正對 production 的 chunk 零影響,不需要重新索引。**
 
-```bash
-# 每個含中文文件的 collection 各打一次(#569 的全部重讀;#390 的 index cache 會先被丟掉,
-# 所以是真的重算,不會複製回舊切法的 chunk)
-curl -X POST "$BASE/api/kb/collections/<collection_id>/reindex"
-```
+受影響的只有沒接 `kb_pipeline` 的 `create_app` 呼叫(測試、離線模式);那些環境的中文文件要重讀一次
+(`POST /api/kb/collections/<collection_id>/reindex`,#390 的 index cache 會先被丟掉)。
 
-怎麼判斷還沒跑:文件頁上一份幾千字的中文文件 chunk 數是 1(或個位數),就是舊切法。
-
-⚠️ **一個時間差**:`copy_from_cache`(上傳的快取路徑)在重讀跑完**之前**,對「以前索引過的
-相同內容」再上傳一次會直接複製舊切法的 chunk。重讀會把有文件對應的 cache entry 全換新;
-沒有任何文件對應的孤兒 entry 只在同內容再上傳時才會命中,遇到就對那份文件按一次 reindex。
-
-不需要跑的部署:語料裡沒有 CJK 文字的(英文文件的切法逐位元不變)。
+順帶一提在真入口量到的另一件事(**未修,另開處理**):管線對 **Markdown / VLM 輸出**走 `MarkdownNodeParser`,
+只按標題切、沒有 token 上限——沒有標題的 `.md`(或 VLM 描述)**不論多長都是 1 塊**(實測 50,038 字元英文 → 1 塊)。
+這是跨語言的 production 缺陷,跟中文無關。

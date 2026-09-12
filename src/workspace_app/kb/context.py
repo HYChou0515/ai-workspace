@@ -64,76 +64,19 @@ def expand_passages(
     label_of: LabelOf,
 ) -> list[RetrievedPassage]:
     """Return the passages with ``context_text`` (and the same-document
-    ``context_start`` / ``context_end``) filled in. ``min_chars <= 0`` is OFF:
-    the passages come back exactly as given.
+    ``context_start`` / ``context_end``) filled in, in the order given.
+    ``min_chars <= 0`` is OFF: the passages come back exactly as given.
 
-    Two hits in one document whose contexts overlap would deliver the same text
-    twice, so they are merged into ONE passage — hit span = the union (the
-    `merge.py` convention for nearby hits), both sets of chunk ids, the better
-    score — and that merged hit is expanded once. Output is in descending score
-    order, like `merge_passages`."""
+    Two hits in one document may end up with overlapping contexts (the same
+    neighbouring text delivered twice). They are deliberately NOT merged: a
+    merge would have to widen the HIT span to the union — thousands of chars
+    that never matched, under one ``[n]`` whose snippet and highlight the user
+    then cannot trust — and "the citation stays the hit" is the invariant this
+    whole layer promises. Duplicated context costs tokens; a widened citation
+    costs trust."""
     if min_chars <= 0:
         return list(passages)
-
-    def expand(p: RetrievedPassage) -> RetrievedPassage:
-        return _expand_one(p, min_chars, chunks_of, text_of, neighbours, label_of)
-
-    expanded = [expand(p) for p in passages]
-    by_doc: dict[str, list[RetrievedPassage]] = {}
-    for p in expanded:
-        by_doc.setdefault(p.document_id, []).append(p)
-
-    out: list[RetrievedPassage] = []
-    for group in by_doc.values():
-        group.sort(key=lambda p: p.context_start)
-        run: list[RetrievedPassage] = []
-        for p in group:
-            if run and p.context_start <= max(q.context_end for q in run):
-                run.append(p)
-            else:
-                if run:
-                    out.append(_coalesce(run, expand, text_of))
-                run = [p]
-        out.append(_coalesce(run, expand, text_of))
-    out.sort(key=lambda p: p.score, reverse=True)
-    return out
-
-
-def _coalesce(
-    run: list[RetrievedPassage],
-    expand: Callable[[RetrievedPassage], RetrievedPassage],
-    text_of: TextOf,
-) -> RetrievedPassage:
-    """One passage from a run of same-document hits whose contexts overlap. A
-    run of one is returned as is (already expanded)."""
-    if len(run) == 1:
-        return run[0]
-    by_start = sorted(run, key=lambda p: p.start)
-    start = min(p.start for p in run)
-    end = max(p.end for p in run)
-    doc = run[0].document_id
-    # Passage provenance is ALREADY the per-key list `aggregate_provenance`
-    # produces from chunks (``{"page": [3]}``), so merging passages is a union
-    # of those lists, order-preserving and deduped — folding them through
-    # `aggregate_provenance` again would nest them (``[[1], [3]]``).
-    provenance: dict[str, list[object]] = {}
-    for p in by_start:
-        for key, values in p.provenance.items():
-            bucket = provenance.setdefault(key, [])
-            bucket.extend(v for v in values if v not in bucket)
-    merged_hit = msgspec.structs.replace(
-        run[0],
-        start=start,
-        end=end,
-        source_chunk_ids=[cid for p in by_start for cid in p.source_chunk_ids],
-        text=text_of(doc)[start:end],
-        score=max(p.score for p in run),
-        provenance=provenance,
-        context_text="",
-        context_start=0,
-        context_end=0,
-    )
-    return expand(merged_hit)
+    return [_expand_one(p, min_chars, chunks_of, text_of, neighbours, label_of) for p in passages]
 
 
 def _expand_one(
@@ -188,9 +131,18 @@ def _expand_one(
 
     own = (p.document_id, text_of(p.document_id)[ctx_start:ctx_end])
     pieces = [*reversed(before), own, *after]
-    context = pieces[0][1] + "".join(
-        f"\n\n── {label_of(doc)} ──\n\n{text}" for doc, text in pieces[1:]
-    )
+    # Every piece from ANOTHER document is labelled — including the first one.
+    # The passage is rendered under the hit document's own header, so an
+    # unlabelled first piece from the previous file would read as the hit
+    # file's text and be cited as such. The hit's own piece is labelled only
+    # when something precedes it (a lone own piece needs no label).
+    parts: list[str] = []
+    for i, (doc, text) in enumerate(pieces):
+        if doc != p.document_id or i > 0:
+            parts.append(f"── {label_of(doc)} ──\n\n{text}")
+        else:
+            parts.append(text)
+    context = "\n\n".join(parts)
     return msgspec.structs.replace(
         p, context_text=context, context_start=ctx_start, context_end=ctx_end
     )

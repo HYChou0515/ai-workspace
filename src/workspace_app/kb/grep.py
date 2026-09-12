@@ -19,6 +19,7 @@ with the chunk's span widened by the pattern's length on each side.
 from __future__ import annotations
 
 import re
+from bisect import bisect_right
 from dataclasses import dataclass
 
 #: Longest line the hit carries — a match on a 40 kB single-line file must not
@@ -42,7 +43,23 @@ class GrepHit:
 @dataclass(frozen=True)
 class GrepResult:
     hits: list[GrepHit]
-    total: int  # before the cap
+    total: int  # before the hit cap
+    # The store pre-filter itself was capped (`MAX_CHUNKS`): the search did not
+    # see every chunk that contains the anchor, so `total` is a lower bound and
+    # the agent must narrow the query or the scope.
+    truncated: bool = False
+
+
+#: Shortest anchor the store may be pre-narrowed on. A one-character anchor
+#: (`kb_grep("1")`) matches nearly every chunk in the collection and would pull
+#: every document's text into memory; two characters is still a real term in
+#: CJK (`良率`). Enforced by the retriever, explained by the tool.
+MIN_ANCHOR_LEN = 2
+
+#: How many chunks the store pre-filter may return per grep. Bounds the work
+#: (texts loaded, lines scanned) for a common anchor; past it the result is
+#: marked `truncated` so the agent narrows instead of trusting a partial list.
+MAX_CHUNKS = 5000
 
 
 def anchor_of(query: str) -> str:
@@ -63,15 +80,32 @@ def occurrences(text: str, pattern: re.Pattern[str], lo: int, hi: int) -> list[i
     return [m.start() for m in pattern.finditer(text, lo, hi)]
 
 
+class LineIndex:
+    """Line lookups over one text in O(log n) per query after one O(n) pass —
+    `text.count("\\n", 0, offset)` per occurrence was quadratic on a document
+    with a hit on every line."""
+
+    def __init__(self, text: str) -> None:
+        self._text = text
+        self._starts = [0] + [i + 1 for i, c in enumerate(text) if c == "\n"]
+
+    def line_of(self, offset: int) -> int:
+        """1-based line number of the line containing `offset`."""
+        return bisect_right(self._starts, offset)
+
+    def line_text(self, line_no: int) -> str:
+        """The line's text, capped at MAX_LINE_LEN."""
+        start = self._starts[line_no - 1]
+        end = self._starts[line_no] - 1 if line_no < len(self._starts) else len(self._text)
+        line = self._text[start:end]
+        if len(line) > MAX_LINE_LEN:
+            line = line[:MAX_LINE_LEN] + "…"
+        return line
+
+
 def line_at(text: str, offset: int) -> tuple[int, str]:
     """``(1-based line number, the line's text capped at MAX_LINE_LEN)`` for the
-    line containing `offset`."""
-    line_no = text.count("\n", 0, offset) + 1
-    start = text.rfind("\n", 0, offset) + 1
-    end = text.find("\n", offset)
-    if end == -1:
-        end = len(text)
-    line = text[start:end]
-    if len(line) > MAX_LINE_LEN:
-        line = line[:MAX_LINE_LEN] + "…"
-    return line_no, line
+    line containing `offset` — the one-off form; use `LineIndex` in a loop."""
+    idx = LineIndex(text)
+    line_no = idx.line_of(offset)
+    return line_no, idx.line_text(line_no)

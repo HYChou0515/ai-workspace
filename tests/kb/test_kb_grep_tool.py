@@ -112,3 +112,37 @@ async def test_kb_grep_honours_the_speakers_document_exclusions(
     ctx = _ctx(spec, embedder, cid, exclude_doc_ids=frozenset({encode_doc_id(cid, "a.md")}))
     out = kb_grep_impl(ctx, "needle")
     assert "needle b" in out and "needle a" not in out and "a.md" not in out
+
+
+async def test_kb_grep_gives_a_denied_document_the_same_answer_as_a_missing_one(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    from workspace_app.kb.doc_id import encode_doc_id
+
+    cid = _kb(spec, chunker, embedder, {"hr/report.md": "needle secret", "pub/notes.md": "x"})
+    ctx = _ctx(spec, embedder, cid, exclude_doc_ids=frozenset({encode_doc_id(cid, "hr/report.md")}))
+    denied = kb_grep_impl(ctx, "needle", document="hr/report.md")
+    missing = kb_grep_impl(ctx, "needle", document="nope/report.md")
+    # The same SHAPE of answer (the message echoes the name asked for): no
+    # "no lines match" for the denied one vs "no document" for the missing one.
+    assert denied.startswith("No document matching") and missing.startswith("No document matching")
+    assert "secret" not in denied
+    # a folder whose documents are all denied is a folder that does not exist
+    assert "No documents under folder 'hr'" in kb_grep_impl(ctx, "needle", folder="hr")
+
+
+async def test_kb_grep_folder_scope_names_the_in_folder_holder_of_shared_content(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # #104: identical bytes at two paths share ONE chunk set, and attribution
+    # picks the earliest holder — which may sit outside the folder. A folder
+    # scope must name the holder INSIDE the folder.
+    cid = _kb(
+        spec,
+        chunker,
+        embedder,
+        {"archive/report.md": "needle shared", "2024/report.md": "needle shared"},
+    )
+    out = kb_grep_impl(_ctx(spec, embedder, cid), "needle", folder="2024")
+    assert "2024/report.md:1: needle shared" in out
+    assert "archive/" not in out

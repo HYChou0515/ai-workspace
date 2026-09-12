@@ -22,7 +22,7 @@ import posixpath
 import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import cast
+from typing import Any, cast
 
 from specstar import QB, SpecStar
 from specstar.query import ConditionBuilder
@@ -35,11 +35,20 @@ from .bm25 import bm25_rank, tokenize
 from .context import ChunkSpan, expand_passages
 from .embedder import Embedder
 from .fusion import mmr, rrf_scores
-from .grep import GrepHit, GrepResult, anchor_of, line_at, occurrences
+from .grep import (
+    MAX_CHUNKS,
+    MIN_ANCHOR_LEN,
+    GrepHit,
+    GrepResult,
+    LineIndex,
+    anchor_of,
+    occurrences,
+)
 from .image_embedder import ImageEmbedder
 from .ingest import normalize_text
 from .llm import ILlm, OnChunk
 from .merge import ScoredChunk, merge_passages
+from .provenance import page_of
 from .query import expand_queries, hypothetical_document
 from .rerank import rerank_passages
 from .tree_order import tree_sort_key
@@ -114,6 +123,24 @@ class LocationFilter:
     page_from: int | None = None
     page_to: int | None = None
     sheet: str | None = None
+
+    def admits(self, provenance: dict[str, Any]) -> bool:
+        """Whether a chunk with this provenance lies inside the filter — the
+        Python-side twin of `conditions()` for rows already in hand (the context
+        walk reads chunk boundaries in one batch and must not widen into pages or
+        sheets the search was scoped out of). The document scope is not checked
+        here: the walk is confined to the document separately."""
+        lo, hi = self.page_from, self.page_to
+        if lo is not None or hi is not None:
+            page = provenance.get("page")
+            if not isinstance(page, int):
+                return False
+            if lo is not None and hi is not None:
+                if not lo <= page <= hi:
+                    return False
+            elif page != (lo if lo is not None else hi):
+                return False
+        return self.sheet is None or provenance.get("sheet") == self.sheet
 
     def is_empty(self) -> bool:
         return (
@@ -300,9 +327,15 @@ class _DocJoin:
         spec: SpecStar,
         chunks: Iterable[DocChunk],
         denied_doc_ids: frozenset[str] = frozenset(),
+        prefer_doc_ids: frozenset[str] | None = None,
     ) -> None:
         self._spec = spec
         self._denied = denied_doc_ids
+        # #518 × #104: a positive scope (a card's links, a folder) is enforced by
+        # CONTENT, so shared bytes can match through a holder outside the scope;
+        # attribution must then name the holder INSIDE it, or a folder-scoped
+        # search returns — and names — a document outside the folder.
+        self._prefer = prefer_doc_ids
         chunk_list = list(chunks)
         rm = spec.get_resource_manager(SourceDoc)
         self._canonical: dict[tuple[str, str], str] = {}
@@ -317,7 +350,7 @@ class _DocJoin:
             # an unrequested combination lands under its own key and is never looked
             # up (and identical content in two collections still resolves per
             # collection, never bleeding across).
-            best: dict[tuple[str, str], tuple[float, str]] = {}
+            best: dict[tuple[str, str], tuple[int, float, str]] = {}
             query = (
                 QB["collection_id"].in_(sorted({c for c, _ in pairs}))
                 & QB["file_id"].in_(sorted({f for _, f in pairs}))
@@ -333,7 +366,8 @@ class _DocJoin:
                 # exists, and its path, to someone barred from it.
                 if rid in self._denied:
                     continue
-                stamp = (r.info.created_time.timestamp(), rid)  # ty: ignore[unresolved-attribute]
+                in_scope = 0 if self._prefer is None or rid in self._prefer else 1
+                stamp = (in_scope, r.info.created_time.timestamp(), rid)  # ty: ignore[unresolved-attribute]
                 if key not in best or stamp < best[key]:
                     best[key] = stamp
                     self._canonical[key] = rid
@@ -434,6 +468,7 @@ class _ContextSeams:
         text_of: Callable[[str], str],
         exclude: _Exclusion | None,
         restrict: _Restriction | None,
+        location: LocationFilter | None,
         overlay: Overlay | None,
         passages: Iterable[RetrievedPassage],
     ) -> None:
@@ -445,7 +480,16 @@ class _ContextSeams:
         # #518: a positive scope ("only inside these documents" — a card's links,
         # or a folder). Context may not leave it: a walk that spilled outside
         # would deliver, and NAME, documents the search was told to ignore.
-        self._within = frozenset(restrict.doc_ids) if restrict is not None else None
+        within = frozenset(restrict.doc_ids) if restrict is not None else None
+        # #263: a location scope ("this document, pages 30-31") confines the walk
+        # to that document and, via `admits`, to chunks inside the range — the
+        # search was told to ignore everything else, so the context may not
+        # bring it back.
+        self._location = location
+        if location is not None and location.source_doc_id is not None:
+            doc_scope = frozenset({location.source_doc_id})
+            within = doc_scope if within is None else (within & doc_scope)
+        self._within = within
         self._overlay = overlay
         self._spans: dict[str, list[ChunkSpan]] = {}
         self._order: dict[str, list[str]] = {}  # collection_id -> doc ids, tree order
@@ -515,13 +559,23 @@ class _ContextSeams:
         if self._exclude:
             cond = cond & self._exclude.condition()
         rm = self._spec.get_resource_manager(DocChunk)
-        fields = ["/seq", "/start", "/end", "/collection_id", "/source_doc_id", "/source_file_id"]
+        fields = [
+            "/seq",
+            "/start",
+            "/end",
+            "/collection_id",
+            "/source_doc_id",
+            "/source_file_id",
+            "/provenance",
+        ]
         for r in rm.list_resources(cond.build(), returns=["data", "info"], partial=fields):
             ch = cast(DocChunk, r.data)
             rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
             owners = by_content.get((ch.collection_id, ch.source_file_id), [])
             if not owners and ch.source_doc_id in self._spans:
                 owners = [ch.source_doc_id]
+            if self._location is not None and not self._location.admits(ch.provenance):
+                continue  # outside the page / sheet scope — not context either
             for d in owners:
                 self._spans[d].append(ChunkSpan(rid, d, ch.seq, ch.start, ch.end))
         for d in wanted:
@@ -579,17 +633,6 @@ class _ContextSeams:
         meta = self._meta.get(doc_id)
         path = meta[1] if meta is not None else self._join.path_of(doc_id)
         return posixpath.basename(path) if path else doc_id
-
-
-def _line_start(text: str, line_no: int) -> int:
-    """Char offset where 1-based `line_no` begins."""
-    pos = 0
-    for _ in range(line_no - 1):
-        nxt = text.find("\n", pos)
-        if nxt == -1:
-            return pos
-        pos = nxt + 1
-    return pos
 
 
 def _content_file_id(doc: SourceDoc) -> str:
@@ -911,7 +954,10 @@ class Retriever:
         # Resolve every candidate's doc (id → path / quality) in two batched queries
         # instead of several point reads per candidate — see `_DocJoin`.
         join = _DocJoin(
-            self._spec, cand_chunks.values(), exclude.doc_ids_set if exclude else frozenset()
+            self._spec,
+            cand_chunks.values(),
+            exclude.doc_ids_set if exclude else frozenset(),
+            prefer_doc_ids=frozenset(restrict.doc_ids) if restrict is not None else None,
         )
 
         # #105: second-phase document-quality prior. Recall (RRF + MMR above) is
@@ -959,7 +1005,7 @@ class Retriever:
         # fragment while delivering the expansion would rank a different object,
         # and with a direction: the passages whose fragment lacks the answer but
         # whose neighbours hold it are exactly the ones this exists to rescue.
-        passages = self._expand(passages, join, texts, text_of, exclude, restrict, overlay)
+        passages = self._expand(passages, join, texts, text_of, exclude, restrict, loc, overlay)
         # Final LLM rerank over the merged passages — bool knob.
         if resolved.rerank:
             assert self._llm is not None
@@ -995,7 +1041,7 @@ class Retriever:
         `read_lines` will show — with each chunk's span widened by the query's
         length so a phrase straddling two chunks is still found once.
         """
-        if not query.strip() or not collection_ids:
+        if not query.strip() or not collection_ids or len(anchor_of(query)) < MIN_ANCHOR_LEN:
             return GrepResult(hits=[], total=0)
         # Literal + case-insensitive: the same rule `api.search.compile_query`
         # applies for the wiki grep (a literal cannot fail to compile).
@@ -1016,13 +1062,23 @@ class Retriever:
             "/source_doc_id",
             "/source_file_id",
         ]
+        # `MAX_CHUNKS + 1` so a full page is distinguishable from an overflow.
         chunks: list[DocChunk] = [
             cast(DocChunk, r.data)
-            for r in rm.list_resources(cond.build(), returns=["data", "info"], partial=fields)
+            for r in rm.list_resources(
+                cond.limit(MAX_CHUNKS + 1).build(), returns=["data", "info"], partial=fields
+            )
         ]
+        truncated = len(chunks) > MAX_CHUNKS
+        chunks = chunks[:MAX_CHUNKS]
         if not chunks:
             return GrepResult(hits=[], total=0)
-        join = _DocJoin(self._spec, chunks, exclude.doc_ids_set if exclude else frozenset())
+        join = _DocJoin(
+            self._spec,
+            chunks,
+            exclude.doc_ids_set if exclude else frozenset(),
+            prefer_doc_ids=frozenset(restrict.doc_ids) if restrict is not None else None,
+        )
         by_doc: dict[str, list[DocChunk]] = {}
         for ch in chunks:
             doc_id = join.doc_id_for(ch)
@@ -1039,14 +1095,14 @@ class Retriever:
             assert path is not None  # filtered above
             # A line is reported once however many chunks overlap it; the page
             # is the first containing chunk's.
+            lines = LineIndex(text)
             seen_lines: dict[int, int | None] = {}
             for ch in doc_chunks:
-                page = ch.provenance.get("page")
+                page = page_of(ch.provenance)
                 for off in occurrences(text, pattern, ch.start - slack, ch.end + slack):
-                    line_no, _ = line_at(text, off)
-                    seen_lines.setdefault(line_no, page if isinstance(page, int) else None)
+                    seen_lines.setdefault(lines.line_of(off), page)
             for line_no, page in seen_lines.items():
-                _, line_text = line_at(text, _line_start(text, line_no))
+                line_text = lines.line_text(line_no)
                 hits.append(
                     GrepHit(
                         document_id=doc_id,
@@ -1058,7 +1114,7 @@ class Retriever:
                     )
                 )
         hits.sort(key=lambda h: (tree_sort_key(h.path), h.line))
-        return GrepResult(hits=hits[:limit], total=len(hits))
+        return GrepResult(hits=hits[:limit], total=len(hits), truncated=truncated)
 
     def _expand(
         self,
@@ -1068,6 +1124,7 @@ class Retriever:
         text_of: Callable[[str], str],
         exclude: _Exclusion | None,
         restrict: _Restriction | None,
+        location: LocationFilter | None,
         overlay: Overlay | None,
     ) -> list[RetrievedPassage]:
         """plan-rag-context P2: neighbouring context for every merged candidate —
@@ -1075,7 +1132,7 @@ class Retriever:
         if self._context_chars <= 0 or not passages:
             return passages
         seams = _ContextSeams(
-            self._spec, join, texts, text_of, exclude, restrict, overlay, passages
+            self._spec, join, texts, text_of, exclude, restrict, location, overlay, passages
         )
         return expand_passages(
             passages,
@@ -1468,7 +1525,16 @@ class Retriever:
         if not doc_ids:
             return None
         ordered = tuple(sorted(doc_ids))
-        fids = {fid for fid in (self._doc_file_id(d) for d in ordered) if fid}
+        # ONE batched read — a folder scope (plan-rag-context P3) hands in every
+        # document under the folder, and a point get per id was N round trips
+        # before the search even started (#518 only ever passed a card's few links).
+        rm = self._spec.get_resource_manager(SourceDoc)
+        query = QB.resource_id().in_(list(ordered)).build()
+        fids = {
+            fid
+            for r in rm.list_resources(query, returns=["data"], partial=["/content/file_id"])
+            if (fid := _content_file_id(cast(SourceDoc, r.data)))
+        }
         return _Restriction(doc_ids=ordered, file_ids=tuple(sorted(fids)))
 
     def _exclusion(self, collection_ids: list[str], doc_ids: frozenset[str]) -> _Exclusion | None:

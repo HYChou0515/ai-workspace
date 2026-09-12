@@ -30,6 +30,18 @@ _LABELS: list[tuple[str, str]] = [
 ]
 
 
+def page_of(provenance: dict[str, Any]) -> int | None:
+    """The page-shaped unit a chunk sits on — a PDF's ``page`` or a deck's
+    ``slide`` (`pdf_pages_to_documents` stamps whichever `page_word` the parser
+    chose). One accessor so `read_page`, `kb_grep` and the text-layer lookup
+    agree; ``None`` when the chunk has neither."""
+    for key in ("page", "slide"):
+        value = provenance.get(key)
+        if isinstance(value, int):
+            return value
+    return None
+
+
 def aggregate_provenance(provenances: Iterable[dict[str, Any]]) -> dict[str, Any]:
     """Union the per-chunk provenance dicts (already in seq order) into
     ``{key: [distinct values…]}``. Order-preserving + deduped, so a passage

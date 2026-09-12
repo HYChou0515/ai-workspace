@@ -111,6 +111,15 @@ async def test_read_lines_respects_the_speakers_document_exclusion(spec: SpecSta
     assert "hidden" not in out and "No document matching" in out
 
 
+async def test_read_lines_never_names_a_denied_document_when_disambiguating(spec: SpecStar):
+    from workspace_app.kb.doc_id import encode_doc_id
+
+    cid, emb = _kb(spec, {"hr/report.md": b"salary table", "pub/report.md": b"public notes"})
+    ctx = _ctx(spec, emb, cid, exclude_doc_ids=frozenset({encode_doc_id(cid, "hr/report.md")}))
+    out = await read_lines_impl(ctx, "report.md")
+    assert "public notes" in out and "hr/" not in out and "salary" not in out
+
+
 # ── read_page ─────────────────────────────────────────────────────────────
 
 
@@ -130,6 +139,35 @@ async def test_read_page_returns_the_pdf_page_as_an_image_plus_its_text_layer(
     [p] = ctx.context.kb_passages
     assert p.provenance == {"page": [2]}
     assert p.text == "described page"
+
+
+async def test_read_page_on_a_deck_uses_the_slide_provenance_and_keeps_pages_apart(
+    spec: SpecStar,
+):
+    # A slide deck's chunks carry `slide`, not `page` (pdf_pages_to_documents
+    # with page_word="slide"); the text layer must still be found, and two
+    # image-only pages (empty span) of one document must not share a marker.
+    import msgspec
+    from specstar import QB
+
+    from workspace_app.resources.kb import DocChunk
+
+    cid, emb = _kb(spec, {"deck.pdf": _blank_pdf(2)})
+    rm = spec.get_resource_manager(DocChunk)
+    for r in rm.list_resources((QB["collection_id"] == cid).build()):
+        ch = r.data
+        assert isinstance(ch, DocChunk)
+        prov = {"slide": ch.provenance["page"]}
+        rm.update(r.info.resource_id, msgspec.structs.replace(ch, provenance=prov))  # ty: ignore[unresolved-attribute]
+    ctx = _ctx(spec, emb, cid)
+    one = await read_page_impl(ctx, "deck.pdf", 1)
+    two = await read_page_impl(ctx, "deck.pdf", 2)
+    assert isinstance(one, list) and isinstance(two, list)
+    first, second = one[0], two[0]
+    assert isinstance(first, ToolOutputText) and isinstance(second, ToolOutputText)
+    assert "described page" in first.text  # found via `slide`
+    assert first.text.startswith("[1] ") and second.text.startswith("[2] ")
+    assert [p.provenance for p in ctx.context.kb_passages] == [{"page": [1]}, {"page": [2]}]
 
 
 async def test_read_page_out_of_range_says_how_many_pages_there_are(spec: SpecStar):

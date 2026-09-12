@@ -86,3 +86,40 @@ def test_grep_finds_a_phrase_that_straddles_two_chunks(
     cid = _collection(spec, chunker, embedder, {"p.md": "alpha beta gamma delta eps"})
     r = Retriever(spec, embedder=embedder).grep("beta gamma delta", [cid])
     assert [(h.line, h.text) for h in r.hits] == [(1, "alpha beta gamma delta eps")]
+
+
+def test_grep_refuses_an_anchor_too_short_to_narrow_on(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # A one-character anchor matches nearly every chunk and would pull every
+    # document's text into memory; the retriever declines instead.
+    cid = _collection(spec, chunker, embedder, {"p.md": "ab 1 c 1 d"})
+    r = Retriever(spec, embedder=embedder)
+    assert r.grep("1", [cid]).hits == []  # one-char anchor: refused
+    assert r.grep("c 1", [cid]).hits == []  # longest token is one char: refused
+    assert len(r.grep("ab 1", [cid]).hits) == 1  # a two-char anchor is enough (positive control)
+
+
+def test_grep_marks_the_result_truncated_when_the_store_cap_is_hit(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder, monkeypatch
+):
+    import workspace_app.kb.retriever as retriever_mod
+
+    cid = _collection(
+        spec, chunker, embedder, {"p.md": "\n".join(f"tok line {i}" for i in range(6))}
+    )
+    monkeypatch.setattr(retriever_mod, "MAX_CHUNKS", 2)
+    r = Retriever(spec, embedder=embedder).grep("tok", [cid])
+    assert r.truncated is True
+    assert 0 < r.total < 6  # a partial list, flagged as such
+
+
+def test_line_index_agrees_with_the_one_off_lookup():
+    from workspace_app.kb.grep import LineIndex, line_at
+
+    text = "alpha\nbeta gamma\n\ndelta"
+    idx = LineIndex(text)
+    for off in range(len(text)):
+        line_no, line = line_at(text, off)
+        assert idx.line_of(off) == line_no
+        assert idx.line_text(line_no) == line

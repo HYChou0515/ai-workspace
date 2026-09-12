@@ -82,6 +82,7 @@ def describe_budgets(
     wiki: WikiSearchBudget,
     glossary: bool,
     has_wiki: bool,
+    grep: KbGrepBudget | None = None,
 ) -> str:
     """The per-turn allowance block appended to the KB agent's prompt.
 
@@ -99,6 +100,12 @@ def describe_budgets(
     else:
         lines.append("- **The wiki**: none of the collections in scope keeps one.")
     lines.append(_allowance("Document search", kb.max_calls))
+    if grep is not None:
+        # plan-rag-context P3: the exact search is a document tool — off with the
+        # documents (the per-source switch), or on its own cap. Named either way
+        # (#480): an allowance the agent cannot see is one it cannot ask for.
+        grep_cap = 0 if kb.max_calls == 0 else grep.max_calls
+        lines.append(_allowance("Exact text search (kb_grep)", grep_cap))
     lines += [
         "",
         "Spend the cheap ones first and stop as soon as you can answer — an "
@@ -113,6 +120,7 @@ def allowance_note(
     kb: KbSearchBudget,
     wiki: WikiSearchBudget,
     has_wiki: bool,
+    grep: KbGrepBudget | None = None,
 ) -> str:
     """The prompt block for a turn, or `""` when this agent has no search tools.
 
@@ -130,4 +138,5 @@ def allowance_note(
         wiki=wiki,
         glossary="lookup_glossary" in allowed,
         has_wiki=has_wiki and WIKI_TOOL in allowed,
+        grep=grep if GREP_TOOL in allowed else None,
     )

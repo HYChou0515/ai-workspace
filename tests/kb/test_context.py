@@ -116,9 +116,13 @@ def test_walks_into_the_neighbouring_documents_when_this_one_runs_out():
         label_of=lambda d: f"{d}.md",
     )
     # b has nothing before or after the hit, so the context spills into a and c.
-    # A boundary line names each document so the model can tell it crossed a
-    # file (the hit's own document is labelled too, once something precedes it).
-    assert p.context_text == "AAAAAAAAAA\n\n── b.md ──\n\nBBBBBBBBBB\n\n── c.md ──\n\nCCCCCCCCCC"
+    # EVERY piece from another file is named — the first one too: the passage
+    # is rendered under b's header, so an unlabelled first piece from a would
+    # read as b's text and be cited as b. b's own piece is labelled because
+    # something precedes it.
+    assert p.context_text == (
+        "── a.md ──\n\nAAAAAAAAAA\n\n── b.md ──\n\nBBBBBBBBBB\n\n── c.md ──\n\nCCCCCCCCCC"
+    )
     # The same-document range is just the hit — the spill has no offset here.
     assert (p.context_start, p.context_end) == (0, 10)
 
@@ -165,15 +169,17 @@ def test_a_cyclic_neighbour_graph_terminates_at_the_structural_bound():
         neighbours=lambda d: (d, d),
         label_of=lambda d: d,
     )
-    assert p.context_text.count("── a ──") == 2 * 32
+    assert (
+        p.context_text.count("── a ──") == 2 * 32
+    )  # every piece IS doc a; only the first goes unlabelled
 
 
-def test_hits_whose_contexts_overlap_merge_into_one_passage():
-    # Five 10-char chunks; hits on chunk 1 and chunk 3. Alone they are 10 chars
-    # apart, but with N=5 each context reaches the chunk between them, so the
-    # two would deliver the same text twice. They merge: one passage whose hit
-    # span is the union (the `merge.py` convention for nearby hits), whose
-    # source ids are both, and whose context is computed once for the union.
+def test_hits_whose_contexts_overlap_stay_separate_hits_with_overlapping_context():
+    # Five 10-char chunks; hits on chunk 1 and chunk 3. With N=5 each context
+    # reaches the chunk between them, so the two contexts overlap — and that is
+    # fine. Merging them would widen the HIT span to [10, 40), a citation whose
+    # snippet and highlight cover 10 chars that never matched; the invariant is
+    # that the citation stays the hit, so each keeps its own span.
     text = "".join(str(i) * 10 for i in range(5))
     spans = [
         ChunkSpan(chunk_id=f"d#{i}", doc_id="d", seq=i, start=i * 10, end=i * 10 + 10)
@@ -201,15 +207,10 @@ def test_hits_whose_contexts_overlap_merge_into_one_passage():
         neighbours=lambda _d: (None, None),
         label_of=lambda d: d,
     )
-    assert len(out) == 1
-    [p] = out
-    assert (p.start, p.end) == (10, 40)
-    assert p.text == text[10:40]
-    assert p.source_chunk_ids == ["d#1", "d#3"]  # document order, both kept
-    assert p.score == 0.9  # the stronger hit's score survives
-    assert p.provenance == {"page": [1, 3]}
-    assert (p.context_start, p.context_end) == (0, 50)
-    assert p.context_text == text
+    assert [(p.start, p.end, p.text) for p in out] == [(30, 40, text[30:40]), (10, 20, text[10:20])]
+    assert [(p.context_start, p.context_end) for p in out] == [(20, 50), (0, 30)]
+    assert [p.score for p in out] == [0.9, 0.4]  # order preserved
+    assert [p.provenance for p in out] == [{"page": [3]}, {"page": [1]}]
 
 
 def test_hits_whose_contexts_do_not_touch_stay_separate():

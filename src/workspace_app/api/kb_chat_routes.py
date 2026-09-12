@@ -177,6 +177,7 @@ async def answer_question(
         kb=kb_budget,
         wiki=turn_wiki_budget,
         has_wiki=consultant is not None,
+        grep=turn_grep_budget,
     )
     agent_config = msgspec.structs.replace(
         agent_config,
@@ -883,6 +884,7 @@ def register_kb_chat_routes(
             kb=turn_kb_budget,
             wiki=turn_wiki_budget,
             has_wiki=turn_consultant is not None,
+            grep=turn_grep_budget,
         )
         agent_config = msgspec.structs.replace(
             agent_config,

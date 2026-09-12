@@ -35,26 +35,31 @@ Slide screenshots, scanned pages, a report split into chapters: file 5 and
 file 6 are consecutive pages of the same thing. "Next file in the folder" is
 the same relationship as "next paragraph in the file".
 
-**4. (Found on the way) Chinese text barely chunks.** `FixedTokenChunker`
-counts `\S+` runs as tokens (`kb/chunker.py:18`). Chinese has no spaces, so a
-whole line — or a whole paragraph — is one token, and `max_tokens=256` means
-256 *paragraphs*. Measured with the real chunker (`FixedTokenChunker()`
-defaults, 256/32):
+**4. (Found on the way, then CORRECTED in review) the legacy chunker does
+not chunk Chinese.** `FixedTokenChunker` counts `\S+` runs as tokens
+(`kb/chunker.py`); Chinese has no spaces, so a whole paragraph is one token and
+a 12,358-char Chinese document came out as **one chunk** — measured on that
+chunker. **But production does not use it.** The API and the worker wire
+`kb_pipeline=get_doc_pipeline(...)` (the LlamaIndex pipeline; `factories.py`
+says the legacy chunker is for tests and offline runs). Measured through the
+real pipeline (`build_doc_pipeline` → `Ingestor`), plain text / PDF text layer
+goes through `SentenceSplitter(256/32)` (tiktoken-based):
 
-| input | result |
+| input (production path) | result |
 | --- | --- |
-| Chinese prose, 12,358 chars, paragraph breaks | **1 chunk** |
-| Chinese prose, 12,240 chars, no breaks | **1 chunk** |
-| Chinese, PDF-style (newline per visual line), 13,599 chars | 2 chunks, **avg 7,343 chars** |
-| English, PDF-style, 31,599 chars | 20 chunks, **avg 1,797 chars** |
+| Chinese prose, 12,358 chars | **80 chunks, avg 154 chars** |
+| Chinese, PDF-style, 13,599 chars | 102 chunks, avg 153 chars |
+| English prose, 50,038 chars | 40 chunks, avg 1,452 chars |
 
-One vector per document averages the whole document's meaning into a point —
-"a bit like everything, not enough like anything" — so Chinese retrieval is
-structurally worse than English before any of the above even applies. It also
-means the rerank prompt (listwise, all merged passages in one call,
-`kb/rerank.py:33`) is already ~147k chars for a Chinese search
-(20 candidates × 7,343). And it makes "at least N chars of context" (Phase 2)
-meaningless: the neighbouring "chunk" is 7,000 chars whatever N says.
+So in production Chinese chunks are ~10× SMALLER than English ones, not 4×
+larger. The first version of this plan measured the wrong entry point and
+built Phase 1 and the rerank-cost argument on it; the numbers above replace
+those. What the real entry point DID show, unrelated to CJK: the pipeline
+routes Markdown — and every VLM description, which is Markdown — through
+`MarkdownNodeParser`, which splits on headings only, with no size cap. A
+heading-less `.md` of 50,038 English chars is **one chunk**, one vector. That
+is a genuine production defect; it is logged below as a follow-up, not fixed
+here.
 
 ## Decisions that cut across phases
 
@@ -78,26 +83,22 @@ meaningless: the neighbouring "chunk" is 7,000 chars whatever N says.
   Phase 2. People can only organise files for the algorithm if the algorithm's
   order is the order they see.
 
-## Phase 1 — Chinese-aware chunking
+## Phase 1 — Chinese-aware chunking (legacy chunker only)
 
 Change `_TOKEN` in `kb/chunker.py` so a CJK character counts as one token and
-other non-space runs count as one token each (today: `\S+`). Edit the existing
-`FixedTokenChunker` **in place** — no second chunker class. Two rules that
-"do the same thing" never stay the same; one rule, one place.
+other non-space runs count as one token each (was `\S+`), edited **in place**
+in `FixedTokenChunker`, with the character class shared with `kb/tokens.py`
+(`CJK_RANGES`) so the "≈ N tokens" estimate and the chunker agree.
 
-- `max_tokens` / `overlap` semantics unchanged (256 / 32). After the change,
-  256 tokens ≈ 256 Chinese characters ≈ one paragraph — the same order of
-  magnitude as 256 English words.
-- **Every document containing CJK text must be re-indexed** (chunks are
-  re-cut and re-embedded). Operator-triggered via the existing full-reindex
-  mechanism (#569). Mixed state (old chunks + new uploads) until then is
-  acceptable and documented in `migrations.md`.
-- Not verified: what the embedding endpoint does with over-long input. Our
-  side sends the whole chunk (`kb/embedder.py:214`, no truncation); whether
-  the provider truncates or errors is deployment-specific and must be checked
-  against the real endpoint. After Phase 1 it stops mattering for CJK.
+Delivered as specified — and, per the correction above, it reaches only the
+legacy path: `create_app` callers that do not wire `kb_pipeline` (tests,
+offline runs). **Production chunks are untouched and no reindex is needed.**
+`migrations.md` says so. Not verified either way: what the embedding endpoint
+does with over-long input (our side never truncates).
 
-Ships first because everything after it is built on chunk boundaries.
+Retained because the legacy chunker is still a shipped code path and the fix
+is correct for it; the plan's original claim that this was the production
+defect is withdrawn.
 
 ## Phase 2 — Automatic neighbouring context
 
@@ -123,7 +124,10 @@ language; raw chars would cut sentences.
 - **Per side.** N before *and* N after, not N total.
 - **`0` = off.** Not optional (see #767: a knob with no "set 0 to disable" was
   logged as a defect).
-- Default **2,000**.
+- Default **2,000** — on the production path that is ≈1.4 neighbouring
+  chunks per side for English (1,452-char chunks) and ≈13 for Chinese
+  (154-char chunks); the budget is chars, so both get about the same amount
+  of text, which is the point of the unit.
 - **Not** in this phase: per-call override by the model (that is the agentic
   layer's business — a tool argument changes the prompt surface and therefore
   model behaviour), per-collection setting (needs UI + storage + migration; add
@@ -212,16 +216,27 @@ fragment-level rerank systematically buries them. (`_augment_with_parents`
 sits after `top_k` for the opposite reason — it must *not* affect ranking — so
 its position is not a precedent here.)
 
-Cost, accepted: the rerank prompt roughly doubles for English (20 × ~1,800 →
-20 × ~3,600 chars); for Chinese it is bounded by Phase 1 (today it is already
-~147k chars regardless). The deployment's rerank model is stated to have a
-1M-token window; that is taken on trust (prod config is not visible here, and
-#767 — the real window behind the proxy — is still open), and window size does
-not remove listwise position bias.
+Cost — RESTATED with the corrected production numbers, because the figures
+the decision was taken on were wrong: the rerank listing (20 candidates) goes
+from ≈29k chars to ≈110k for English (1,452 + 2 × 2,000 per passage, ~4×)
+and from ≈3k to ≈84k for Chinese (154 + 2 × 2,000, **~27×**). Nothing caps
+the listing before `llm.collect`; a rerank model whose window is smaller
+than that truncates from the front — the question is at the front — and the
+reply's numbers are then noise that `rerank_passages` applies silently. The
+deployment's rerank model is stated to have a 1M-token window; that is taken
+on trust (prod config is not visible here, and #767 — the real window behind
+the proxy — is still open), and window size does not remove listwise
+position bias. This is flagged for the user to re-decide with the real
+numbers: keep as is, cap the per-passage context the reranker sees, or skip
+rerank (with a logged warning) past a size budget.
 
-After expansion, passages whose context ranges overlap are **merged again**:
-hit spans merge with the existing `merge.py` rule (union of `start`/`end`,
-concatenated `source_chunk_ids`); context ranges take the union.
+After expansion, passages whose context ranges overlap are **left as they
+are** (corrected during implementation: the plan first said "merge again").
+A merge would have to widen the HIT span to the union — with N=2,000 two
+matches up to ~4,000 chars apart would become one "hit" whose citation
+snippet and highlight cover thousands of characters that never matched —
+which contradicts the invariant this section promises. Duplicated context
+costs tokens; a widened citation costs trust.
 
 ### Data shape
 
@@ -385,6 +400,16 @@ units** — a unit is offered where it exists and refused where it does not.
   cross-encoder when one is available. Likely a bigger win for "RAG must be
   correct first" than context is.
 - Embedder behaviour on over-long input (see Phase 1).
+- **Heading-less Markdown is one chunk however long** (production;
+  `DispatchSplitter._split_markdown` → `MarkdownNodeParser` has no size cap;
+  50,038 English chars → 1 chunk, measured). Fix shape: run the
+  `SentenceSplitter` over any Markdown section larger than `chunk_size`.
+  Language-independent; affects every VLM description too. Not in scope here.
+- Context-walk cost on one-page-per-file collections: every hit sits at a
+  document edge, so every search lists the collection once (partial fields,
+  sorted in Python) and re-reads metadata `_DocJoin` already had. Measure
+  before optimising (a per-collection order cache with an invalidation key
+  is the obvious shape).
 - The real context window behind the proxy (#767).
 
 ## Rollout

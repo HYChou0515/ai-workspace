@@ -1,13 +1,14 @@
 """plan-rag-context P2 — neighbouring context through the real `Retriever.search`."""
 
-from specstar import SpecStar
+import msgspec
+from specstar import QB, SpecStar
 
 from workspace_app.kb.chunker import FixedTokenChunker
 from workspace_app.kb.doc_id import encode_doc_id
 from workspace_app.kb.embedder import HashEmbedder
 from workspace_app.kb.ingest import Ingestor
-from workspace_app.kb.retriever import Retriever
-from workspace_app.resources.kb import Collection
+from workspace_app.kb.retriever import LocationFilter, Retriever
+from workspace_app.resources.kb import Collection, DocChunk
 
 # With the conftest chunker (3 tokens, overlap 1) this is four chunks:
 # [0,8) "w1 w2 w3" · [6,14) "w3 w4 w5" · [12,20) "w5 w6 w7" · [18,26) "w7 w8 w9".
@@ -109,3 +110,53 @@ def test_context_never_leaves_a_positive_document_scope(
     )
     assert "02.md" not in p.context_text and "b1" not in p.context_text
     assert p.context_text == "a1 a2 a3\n\n── 03.md ──\n\nc1 c2 c3"
+
+
+def _stamp_pages(spec, cid, page_of_seq):
+    """Give the chunks of the only doc in `cid` a page each, by seq."""
+    rm = spec.get_resource_manager(DocChunk)
+    for r in rm.list_resources((QB["collection_id"] == cid).build()):
+        ch = r.data
+        assert isinstance(ch, DocChunk)
+        rm.update(
+            r.info.resource_id,
+            msgspec.structs.replace(ch, provenance={"page": page_of_seq[ch.seq]}),
+        )
+
+
+def test_a_page_scoped_search_keeps_its_context_inside_the_page_range(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # #263 location scope ("pages 2-2 of nine.md") is a scope like any other:
+    # the hit is confined to it, and so is the context — the first version
+    # widened into pages the user explicitly scoped out.
+    cid = _collection(spec, chunker, embedder, {"nine.md": _NINE, "next.md": "z1 z2 z3"})
+    # chunks 0..3 of nine.md → pages 1, 2, 2, 3
+    rm = spec.get_resource_manager(DocChunk)
+    nine = encode_doc_id(cid, "nine.md")
+    for r in rm.list_resources((QB["source_doc_id"] == nine).build()):
+        ch = r.data
+        assert isinstance(ch, DocChunk)
+        rm.update(
+            r.info.resource_id,  # ty: ignore[unresolved-attribute]
+            msgspec.structs.replace(ch, provenance={"page": [1, 2, 2, 3][ch.seq]}),
+        )
+    loc = LocationFilter(source_doc_id=nine, page_from=2, page_to=2)
+    [p] = Retriever(spec, embedder=embedder, candidates=1, top_k=1, context_chars=100).search(
+        "w3 w4 w5", [cid], location=loc
+    )
+    # Page 2 = chunks 1 and 2 = "w3 w4 w5 w6 w7"; pages 1 and 3 must not appear,
+    # and the walk must not leave the document either.
+    assert p.context_text == "w3 w4 w5 w6 w7"
+    assert "next.md" not in p.context_text and "w9" not in p.context_text
+
+
+def test_a_document_scoped_search_never_walks_into_another_document(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    cid = _collection(spec, chunker, embedder, {"01.md": "a1 a2 a3", "02.md": "b1 b2 b3"})
+    loc = LocationFilter(source_doc_id=encode_doc_id(cid, "01.md"))
+    [p] = Retriever(spec, embedder=embedder, candidates=1, top_k=1, context_chars=50).search(
+        "a1 a2 a3", [cid], location=loc
+    )
+    assert p.context_text == "a1 a2 a3"

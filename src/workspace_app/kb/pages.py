@@ -78,7 +78,9 @@ def page_text(spec: SpecStar, doc_id: str, doc: SourceDoc, page: int) -> tuple[s
     fid = getattr(doc.content, "file_id", None)
     by_doc = QB["source_doc_id"] == doc_id
     cond = (QB["source_file_id"] == fid) | by_doc if isinstance(fid, str) and fid else by_doc
-    cond = (QB["collection_id"] == doc.collection_id) & cond & (QB["page"] == page)
+    # A PDF stamps `page`, a deck stamps `slide` — both indexed (#263).
+    on_page = (QB["page"] == page) | (QB["slide"] == page)
+    cond = (QB["collection_id"] == doc.collection_id) & cond & on_page
     rm = spec.get_resource_manager(DocChunk)
     lo, hi = None, None
     for r in rm.list_resources(cond.build(), returns=["data"], partial=["/start", "/end"]):

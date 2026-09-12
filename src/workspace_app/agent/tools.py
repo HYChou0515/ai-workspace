@@ -20,6 +20,7 @@ from specstar.types import ResourceIDNotFoundError
 
 from ..files import WorkspaceFiles, WorkspaceFull, rel_path
 from ..filestore.protocol import FileNotFound
+from ..kb.doc_resolve import DocResolution
 from ..quota.disk_ledger import UserDiskFull
 from ..resources.kb import RetrievedPassage, SourceDoc
 from ..sandbox.protocol import ExecResult, OutputSink, SandboxNotFound
@@ -209,6 +210,99 @@ def _exec_result_text(ctx: AgentToolContext, name: str, result: ExecResult) -> s
     return cleaned
 
 
+@dataclasses.dataclass(frozen=True)
+class _LineWindow:
+    """A window of lines out of a text, `read_file`'s dialect: 1-based
+    `first`/`last`, the joined `body` (char-capped), and the notices a
+    truncation adds. `char_start` is where the window begins in the text — what
+    a citation of the window points at."""
+
+    body: str
+    first: int
+    last: int
+    total: int
+    char_start: int
+    notices: list[str]
+
+    def rendered(self) -> str:
+        if not self.notices:
+            return self.body
+        return (
+            f"{self.body}\n\n[truncated: {'; '.join(self.notices)} — use offset/limit to read more]"
+        )
+
+
+def _line_window(
+    text: str, offset: int | None, limit: int | None, *, max_lines: int, max_chars: int
+) -> _LineWindow:
+    """ONE rule for "read a window of lines" — `read_file` (workspace files) and
+    `read_lines` (knowledge-base documents) both render it, so a change to the
+    windowing or the notices lands in both."""
+    lines = text.split("\n")
+    total = len(lines)
+    start = max(0, (offset or 1) - 1)
+    count = limit if limit is not None else max_lines
+    window = lines[start : start + count]
+    body = "\n".join(window)
+    notices: list[str] = []
+    end = start + len(window)
+    if start > 0 or end < total:
+        notices.append(f"showing lines {start + 1}-{end} of {total}")
+    if len(body) > max_chars:
+        body = body[:max_chars]
+        notices.append(f"output capped at {max_chars} chars")
+    char_start = sum(len(line) + 1 for line in lines[:start])
+    return _LineWindow(body, start + 1, end, total, char_start, notices)
+
+
+@dataclasses.dataclass(frozen=True)
+class _KbScope:
+    """What `folder` / `document` resolved to for a KB tool: the folder's doc
+    ids (None = no folder) and the named document (None = no document)."""
+
+    folder: frozenset[str] | None
+    document: DocResolution | None
+
+
+def _resolve_kb_scope(
+    ctx: RunContextWrapper[AgentToolContext], *, folder: str | None, document: str | None
+) -> _KbScope | str:
+    """ONE rule for the scope arguments `kb_search` and `kb_grep` share — a
+    string is a message for the model. #308 exclusions apply inside the
+    resolvers, so a denied document reads as missing and an ambiguity never
+    names one; an empty folder is a message, never a fallback to everything;
+    a document outside the folder is refused rather than silently widened."""
+    from ..kb.doc_resolve import resolve_document, resolve_folder
+
+    if folder is None and document is None:
+        return _KbScope(folder=None, document=None)  # nothing to resolve, no spec needed
+    spec = ctx.context.spec
+    assert spec is not None  # a KB context that scopes always wires spec
+    denied = ctx.context.exclude_doc_ids
+    folder_scope: frozenset[str] | None = None
+    if folder is not None:
+        folder_scope = resolve_folder(spec, ctx.context.collection_ids, folder, exclude=denied)
+        if not folder_scope:
+            return (
+                f"No documents under folder {folder!r} in the current knowledge base — "
+                "check the path as shown in the file tree (or search without `folder`)."
+            )
+    res: DocResolution | None = None
+    if document is not None:
+        res = resolve_document(spec, ctx.context.collection_ids, document, exclude=denied)
+        if res.status == "not_found":
+            return (
+                f"No document matching {document!r} in the current knowledge base — "
+                "check the filename (or search without a document filter first)."
+            )
+        if res.status == "ambiguous":
+            opts = ", ".join(res.candidates)
+            return f"{document!r} matches several files; pass the full path, one of: {opts}"
+        if folder_scope is not None and res.doc_id not in folder_scope:
+            return f"{document!r} is not under folder {folder!r} — drop one of the two."
+    return _KbScope(folder=folder_scope, document=res)
+
+
 async def read_file_impl(
     ctx: RunContextWrapper[AgentToolContext],
     path: str,
@@ -227,24 +321,14 @@ async def read_file_impl(
     except FileNotFound:
         return f"error: file not found: {rel_path(path)}"
 
-    lines = data.decode("utf-8", errors="replace").split("\n")
-    total = len(lines)
-    start = max(0, (offset or 1) - 1)
-    count = limit if limit is not None else ctx.context.read_file_max_lines
-    window = lines[start : start + count]
-    body = "\n".join(window)
-
-    notices: list[str] = []
-    end = start + len(window)
-    if start > 0 or end < total:
-        notices.append(f"showing lines {start + 1}-{end} of {total}")
-    max_chars = ctx.context.read_file_max_chars
-    if len(body) > max_chars:
-        body = body[:max_chars]
-        notices.append(f"output capped at {max_chars} chars")
-    if notices:
-        body += f"\n\n[truncated: {'; '.join(notices)} — use offset/limit to read more]"
-    return body
+    window = _line_window(
+        data.decode("utf-8", errors="replace"),
+        offset,
+        limit,
+        max_lines=ctx.context.read_file_max_lines,
+        max_chars=ctx.context.read_file_max_chars,
+    )
+    return window.rendered()
 
 
 async def read_image_impl(
@@ -1075,7 +1159,6 @@ def kb_search_impl(
     neighbouring context stays inside it too. Combine with `document` to name a
     file within that folder.
     """
-    from ..kb.doc_resolve import resolve_document, resolve_folder
     from ..kb.provenance import format_location
     from ..kb.retriever import Enhancements, LocationFilter
 
@@ -1115,39 +1198,19 @@ def kb_search_impl(
     # — search, card anchoring and the neighbouring-context walk all stay inside
     # it. Resolved before the budget is spent; an empty folder is a message, never
     # a silent fallback to searching everything.
-    folder_scope: frozenset[str] | None = None
-    if folder is not None:
-        spec = ctx.context.spec
-        assert spec is not None  # a KB context always wires spec
-        folder_scope = resolve_folder(spec, ctx.context.collection_ids, folder)
-        if not folder_scope:
-            return (
-                f"No documents under folder {folder!r} in the current knowledge base — "
-                "check the path as shown in the file tree (or search without `folder`)."
-            )
-
+    if document is None and (page_from is not None or page_to is not None or sheet is not None):
+        return (
+            "To fetch by location, also pass `document` (the filename) — a page "
+            "or sheet on its own doesn't say which file."
+        )
+    scope = _resolve_kb_scope(ctx, folder=folder, document=document)
+    if isinstance(scope, str):
+        return scope
+    folder_scope = scope.folder
     location: LocationFilter | None = None
-    if document is not None or page_from is not None or page_to is not None or sheet is not None:
-        if document is None:
-            return (
-                "To fetch by location, also pass `document` (the filename) — a page "
-                "or sheet on its own doesn't say which file."
-            )
-        spec = ctx.context.spec
-        assert spec is not None  # a KB context always wires spec
-        res = resolve_document(spec, ctx.context.collection_ids, document)
-        if res.status == "not_found":
-            return (
-                f"No document matching {document!r} in the current knowledge base — "
-                "check the filename (try kb_search without a document filter first)."
-            )
-        if res.status == "ambiguous":
-            opts = ", ".join(res.candidates)
-            return f"{document!r} matches several files; pass the full path, one of: {opts}"
-        if folder_scope is not None and res.doc_id not in folder_scope:
-            return f"{document!r} is not under folder {folder!r} — drop one of the two."
+    if scope.document is not None:
         location = LocationFilter(
-            source_doc_id=res.doc_id, page_from=page_from, page_to=page_to, sheet=sheet
+            source_doc_id=scope.document.doc_id, page_from=page_from, page_to=page_to, sheet=sheet
         )
 
     registry = ctx.context.kb_passages
@@ -1303,12 +1366,8 @@ def kb_grep_impl(
     read_page(document, <page>) to see the page itself, and cite from what
     you read. Long phrases work, but keep the query to the distinctive part.
     """
-    from ..kb.doc_resolve import resolve_document, resolve_folder
-
     retriever = ctx.context.retriever
     assert retriever is not None  # kb_grep implies a KB context
-    spec = ctx.context.spec
-    assert spec is not None  # a KB context always wires spec
 
     budget = ctx.context.kb_grep_budget
     if budget.exhausted:
@@ -1319,31 +1378,26 @@ def kb_grep_impl(
             f"Exact-search budget exhausted for this reply ({cap} of {cap} used). "
             "Work from the locations already found; do not call kb_grep again."
         )
+    from ..kb.grep import MIN_ANCHOR_LEN, anchor_of
+
     if not query.strip():
         return "error: `query` is empty — pass the exact text to look for."
+    if len(anchor_of(query)) < MIN_ANCHOR_LEN:
+        return (
+            f"{query!r} is too short to search for exactly — its longest word must be at "
+            f"least {MIN_ANCHOR_LEN} characters (a one-character string matches everything)."
+        )
 
     # Scope: the same positive scope kb_search uses (`restrict_to_doc_ids`, #518).
     # Resolved BEFORE the budget is spent, and an empty folder is a message, never
     # a fallback to searching everything.
-    scope: frozenset[str] = frozenset()
-    if folder is not None:
-        scope = resolve_folder(spec, ctx.context.collection_ids, folder)
-        if not scope:
-            return (
-                f"No documents under folder {folder!r} in the current knowledge base — "
-                "check the path as shown in the file tree (or search without `folder`)."
-            )
-    if document is not None:
-        res = resolve_document(spec, ctx.context.collection_ids, document)
-        if res.status == "not_found":
-            return f"No document matching {document!r} in the current knowledge base."
-        if res.status == "ambiguous":
-            opts = ", ".join(res.candidates)
-            return f"{document!r} matches several files; pass the full path, one of: {opts}"
-        assert res.doc_id is not None
-        if scope and res.doc_id not in scope:
-            return f"{document!r} is not under folder {folder!r} — drop one of the two."
-        scope = frozenset({res.doc_id})
+    resolved = _resolve_kb_scope(ctx, folder=folder, document=document)
+    if isinstance(resolved, str):
+        return resolved
+    scope: frozenset[str] = resolved.folder or frozenset()
+    if resolved.document is not None:
+        assert resolved.document.doc_id is not None
+        scope = frozenset({resolved.document.doc_id})
 
     budget.used += 1  # a completed grep costs one unit, even a no-match
 
@@ -1361,6 +1415,11 @@ def kb_grep_impl(
             where = f"{h.path} (p.{h.page})" if h.page is not None else h.path
             lines.append(f"{where}:{h.line}: {h.text}")
         head = f"{result.total} matching lines"
+        if result.truncated:
+            head = (
+                f"at least {result.total} matching lines (the search stopped early — "
+                "narrow the query or the scope)"
+            )
         if result.total > len(result.hits):
             head += (
                 f" (showing the first {len(result.hits)} in document order — "
@@ -1386,16 +1445,13 @@ def _kb_document(
     door. Blobs are NOT loaded (`read_page` restores them itself). A document
     the speaker's #308 override denies reads as "no document matching", never as
     "denied": naming it would disclose that it exists."""
-    from ..kb.doc_resolve import resolve_document
-
     spec = ctx.context.spec
     assert spec is not None  # a KB context always wires spec
-    res = resolve_document(spec, ctx.context.collection_ids, document)
-    if res.status == "ambiguous":
-        opts = ", ".join(res.candidates)
-        return f"{document!r} matches several files; pass the full path, one of: {opts}"
-    if res.status != "ok" or res.doc_id is None or res.doc_id in ctx.context.exclude_doc_ids:
-        return f"No document matching {document!r} in the current knowledge base."
+    scope = _resolve_kb_scope(ctx, folder=None, document=document)
+    if isinstance(scope, str):
+        return scope
+    res = scope.document
+    assert res is not None and res.doc_id is not None  # a document was named
     rm = spec.get_resource_manager(SourceDoc)
     try:
         doc = rm.get(res.doc_id).data
@@ -1423,12 +1479,20 @@ def _register_read(
     same registry and the same `(document, span)` dedup `kb_search` uses, so a
     later ``[n]`` resolves through `parse_citations` to exactly this span.
     Returns the 1-based marker."""
-    from ..kb.provenance import aggregate_provenance
+    from ..kb.provenance import aggregate_provenance, page_of
 
     registry = ctx.context.kb_passages
-    key = (doc_id, start, end)
+    # A page with no text layer registers an empty span; two such pages of one
+    # document must not collapse onto one marker, so the page is part of the key.
+    page = page_of(provenance) if provenance else None
+    key = (doc_id, start, end, page)
     for i, existing in enumerate(registry):
-        if (existing.document_id, existing.start, existing.end) == key:
+        if (
+            existing.document_id,
+            existing.start,
+            existing.end,
+            page_of(existing.provenance),
+        ) == key:
             return i + 1
     registry.append(
         RetrievedPassage(
@@ -1474,29 +1538,22 @@ async def read_lines_impl(
         )
     if doc.text is None:
         return f"{doc.path} has no extracted text yet (indexing, or a document to reindex)."
-    lines = doc.text.split("\n")
-    total = len(lines)
-    start = max(0, (offset or 1) - 1)
-    count = limit if limit is not None else ctx.context.read_file_max_lines
-    window = lines[start : start + count]
-    body = "\n".join(window)
-    notices: list[str] = []
-    end = start + len(window)
-    if start > 0 or end < total:
-        notices.append(f"showing lines {start + 1}-{end} of {total}")
-    max_chars = ctx.context.read_file_max_chars
-    if len(body) > max_chars:
-        body = body[:max_chars]
-        notices.append(f"output capped at {max_chars} chars")
-    # The window's char span in the canonical text — what a citation points at.
-    char_start = sum(len(line) + 1 for line in lines[:start])
-    marker = _register_read(
-        ctx, doc_id=doc_id, doc=doc, start=char_start, end=char_start + len(body), text=body
+    window = _line_window(
+        doc.text,
+        offset,
+        limit,
+        max_lines=ctx.context.read_file_max_lines,
+        max_chars=ctx.context.read_file_max_chars,
     )
-    head = f"[{marker}] {doc.path} (lines {start + 1}-{end}):"
-    if notices:
-        body += f"\n\n[truncated: {'; '.join(notices)} — use offset/limit to read more]"
-    return f"{head}\n{body}"
+    marker = _register_read(
+        ctx,
+        doc_id=doc_id,
+        doc=doc,
+        start=window.char_start,
+        end=window.char_start + len(window.body),
+        text=window.body,
+    )
+    return f"[{marker}] {doc.path} (lines {window.first}-{window.last}):\n{window.rendered()}"
 
 
 async def read_page_impl(
@@ -1548,6 +1605,9 @@ async def read_page_impl(
     )
     header = f"[{marker}] {doc.path} — page {page} of {source.pages}"
     text = f"{header}\n\n{layer}" if layer else header
+    # The text part is bounded here, so the `[text, image]` list never trips the
+    # output cap (which can only degrade a list to text, losing the image).
+    text = _truncate_middle(text, ctx.context.read_file_max_chars)
 
     if vision:
         b64 = base64.b64encode(png).decode("ascii")

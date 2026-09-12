@@ -576,7 +576,9 @@ class RetrievalSettings:
     # citation still points at the hit. Why unconditional: the text next to a
     # match is written in different vocabulary, so vector search cannot reach
     # it by construction, and the model cannot know it is missing. `0` = off.
-    # Set by judgment (not eval-gated); 2000 ≈ one neighbouring chunk per side.
+    # Set by judgment (not eval-gated); 2000 ≈ 1.4 English / 13 Chinese chunks per
+    # side on the production SentenceSplitter — the budget is chars, so both get
+    # about the same amount of text.
     context_chars: int = 2000
 
 

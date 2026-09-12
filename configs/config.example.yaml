@@ -724,8 +724,11 @@
 #                                           #   the hit. Unconditional on purpose: the text next
 #                                           #   to a match is worded differently, so vector
 #                                           #   search cannot reach it and the model cannot know
-#                                           #   it is missing. 0 = off. Default 2000 (~ one
-#                                           #   neighbouring chunk per side).
+#                                           #   it is missing. 0 = off. Default 2000 (~1.4
+#                                           #   English chunks / ~13 Chinese chunks per side
+#                                           #   on the production splitter; the budget is
+#                                           #   chars so both get about the same text). The
+#                                           #   rerank listing grows accordingly (see docs).
 #                                           #   Measure with a #535 eval run before lowering.
 # # Resolution: LLM tool args > caller (context) > default; clamped to max.
 # # Bundled = light (`expand=1, hyde=0, rerank=on`); operators raise expand/hyde
