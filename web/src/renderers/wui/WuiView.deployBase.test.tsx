@@ -8,7 +8,7 @@
  * module-wide and every other Deploy test asserts the base-less form.
  */
 import "@testing-library/jest-dom/vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { FileServiceProvider, type FileService } from "../../api/fileService";
@@ -47,7 +47,6 @@ describe("WuiView: Deploy under a sub-path deploy", () => {
       </QueryWrap>,
     );
     const deploy = await screen.findByRole("button", { name: /^deploy$/i });
-    await waitFor(() => expect(deploy).toBeEnabled());
     fireEvent.click(deploy);
 
     expect(await screen.findByRole("textbox", { name: /address/i })).toHaveValue(

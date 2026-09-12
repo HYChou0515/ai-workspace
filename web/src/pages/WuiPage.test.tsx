@@ -11,7 +11,7 @@
  * hunting through a file tree. The URL is a shortcut, not a grant.
  */
 import "@testing-library/jest-dom/vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
@@ -204,18 +204,13 @@ describe("WuiPage: what a reader is handed", () => {
 
     // The page itself is there — so an empty screen cannot pass the rest.
     await waitFor(() => expect(screen.getByTitle("Scrap review")).toBeTruthy());
-    // Every control the author's chrome can draw — the build-output toggle
-    // and Deploy included (review round 1 found them missing from this list
-    // while its docstring promised one-by-one coverage).
-    for (const name of [
-      /refresh/i,
-      /rebuild/i,
-      /auto-rebuild/i,
-      /report a problem/i,
-      /tell the agent/i,
-      /^deploy$/i,
-      /build output/i,
-    ]) {
+    // Every control the toolbar draws unconditionally, Deploy included. NOT
+    // "Tell the agent" or the build-output toggle: those exist only once a
+    // report or a build log exists, states a reader cannot produce, so their
+    // absence here proved nothing (review round 2). What keeps them from a
+    // reader is pinned where it lives — `WuiView.test.tsx` "keeps the page's
+    // reports from a reader" and "never rebuilds on a reader's account".
+    for (const name of [/refresh/i, /^rebuild$/i, /auto-rebuild/i, /report a problem/i, /^deploy$/i]) {
       expect(screen.queryByRole("button", { name })).toBeNull();
       expect(screen.queryByRole("switch", { name })).toBeNull();
     }
@@ -244,6 +239,75 @@ describe("WuiPage: what a reader is handed", () => {
     const said = await screen.findByRole("status");
     expect(said).toHaveTextContent(/could not reach the workspace/i);
     expect(said).not.toHaveTextContent(/not been published/i);
+  });
+
+  it("does not call a page unpublished when its entry is not a path inside the folder", async () => {
+    /**
+     * Review round 2: a malformed `entry:` (`/abs.html`, `../x`, `.`) was
+     * thrown as a missing entry with NO reason, and the reason-less case is
+     * the one that reads "not published yet". A view-file mistake sent the
+     * reader to ask the author to deploy.
+     */
+    const files: Record<string, string> = { "/scrap-review/page.ai.yaml": `${YAML}entry: /abs.html\n` };
+    const readFile = vi.fn(async (path: string) => {
+      const text = files[path];
+      if (text === undefined) throw new Error(`not found: ${path}`);
+      return { kind: "text", path, text, size: text.length, encoding: "utf-8" };
+    });
+
+    renderAt("/w/rca/i1/scrap-review/page.ai.yaml", readFile);
+
+    const said = await screen.findByRole("status");
+    expect(said).not.toHaveTextContent(/not been published/i);
+    expect(said).toHaveTextContent(/abs\.html/);
+  });
+
+  it("does not say the view file is missing when the reader merely cannot open the item", async () => {
+    /**
+     * Review round 2: on this route every failure of the view-file read —
+     * a 403 for someone outside the item, a dropped connection — read as
+     * "There is no file at … in this item", and the reader reported a
+     * missing file to an author who could see it. Same class as the
+     * `WuiView` fix one level down; this is the function above it.
+     */
+    const { HttpError } = await import("../api/http");
+    const readFile = vi.fn(async () => {
+      throw new HttpError(403, "read failed: 403");
+    });
+
+    renderAt("/w/rca/i1/scrap-review/page.ai.yaml", readFile);
+
+    // Not `findByRole("alert")`: the "Opening …" placeholder is an alert too,
+    // and resolves first.
+    const said = await screen.findByText(/cannot open this item/i);
+    expect(said).not.toHaveTextContent(/no file/i);
+    expect(screen.queryByText(/no file at/i)).toBeNull();
+  });
+
+  it("lets a reader try again, because a missing entry may only be a sandbox mid-restore", async () => {
+    /**
+     * Review round 2: on this platform a 404 is not proof of absence — a read
+     * during a sandbox restore answers "not there" (`_warm` does not wait on
+     * `.ready`). Declaring "not published" on it, with no way back, sends a
+     * false report to the author. The sentence stays tentative and the
+     * reader can look again — a re-read, never a build.
+     */
+    const files: Record<string, string> = { "/scrap-review/page.ai.yaml": YAML };
+    const readFile = vi.fn(async (path: string) => {
+      const text = files[path];
+      if (text === undefined) throw new Error(`not found: ${path}`);
+      return { kind: "text", path, text, size: text.length, encoding: "utf-8" };
+    });
+    renderAt("/w/rca/i1/scrap-review/page.ai.yaml", readFile);
+    const said = await screen.findByRole("status");
+    expect(said).toHaveTextContent(/not been published|try again/i);
+    expect(said).toHaveTextContent(/try again/i);
+
+    // The restore finishes; the reader tries again and gets the page.
+    files["/scrap-review/index.html"] = "<!doctype html><p>hello</p>";
+    fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+
+    await waitFor(() => expect(screen.getByTitle("Scrap review")).toBeTruthy());
   });
 
   it("opens a folder whose name had to be encoded into the address", async () => {

@@ -232,8 +232,14 @@ export async function buildWuiDoc(fs: FileService, folder: string, entry: string
   // which collapses them: an entry that exists but could not be READ is not the
   // same as one that is not there, and this is the one place a person is told.
   const path = resolveInFolder(folder, entry);
-  const load = folderLoader(fs, folder, path === null ? folder : directoryOf(path));
-  const read = path === null ? ({ kind: "missing" } as const) : await readAsset(fs, path);
+  // A malformed `entry:` — `/abs.html`, `../x.html`, `.` — is a view-file
+  // mistake, not an absent file, so it carries a REASON: reason-less is the
+  // one case a reader is told "not published yet", and this is not that.
+  if (path === null) {
+    throw new WuiEntryMissing(entry, `${entry} is not a path inside this page's folder.`);
+  }
+  const load = folderLoader(fs, folder, directoryOf(path));
+  const read = await readAsset(fs, path);
   if (read.kind === "failed") throw new WuiEntryMissing(entry, read.reason);
   if (read.kind === "missing") throw new WuiEntryMissing(entry);
   if (read.asset.kind !== "text") {

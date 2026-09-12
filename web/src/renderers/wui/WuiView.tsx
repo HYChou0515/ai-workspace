@@ -18,7 +18,7 @@
  *   an open exfiltration route past the other two.
  */
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useFileService } from "../../api/fileService";
@@ -124,6 +124,7 @@ export function WuiView({
   chrome?: WuiChrome;
 }) {
   const fs = useFileService();
+  const queryClient = useQueryClient();
   const folder = wuiFolder(path);
   const entry = viewParamString(spec, "entry") ?? DEFAULT_ENTRY;
   /** The author's chrome — the toolbar, the build log, the reports, Deploy,
@@ -230,6 +231,15 @@ export function WuiView({
    * this pane ACTING on a build; the server hears nothing until the request is
    * aborted. */
   const inFlight = useRef<AbortController | null>(null);
+  /** The current `path` and `generation`, readable from inside an async run
+   * that outlives the render it was started in. Deploy checks the first to
+   * know whether the pane has moved to a SIBLING page (same folder, so
+   * `epoch` does not bump) and reads the second to name the generation it
+   * verifies. Mirrored every render, never written elsewhere. */
+  const pathRef = useRef(path);
+  pathRef.current = path;
+  const generationRef = useRef(generation);
+  generationRef.current = generation;
 
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const openFile = useOpenFile();
@@ -368,12 +378,19 @@ export function WuiView({
     setLogOpen(true);
     setBuilding(false);
     setFirstBuild(false);
-    setDeploy({ state: "idle" });
-    setCopied("idle");
     // NOT `autoBuiltFor`. It already holds the FOLDER it built, so the guard is
     // folder-aware without help — and clearing it here defeated that guard
     // between StrictMode's two effect passes, which is two builds on mount.
   }, [folder]);
+
+  // A Deploy verdict is about ONE view file, and its address is computed from
+  // `path` — so it is forgotten on `path`, not `folder`: two view files in one
+  // folder (an `a.ai.yaml` deployed, a `b.ai.yaml` whose entry nobody built)
+  // otherwise shared one "✓ Deployed" over whichever address was current.
+  useEffect(() => {
+    setDeploy({ state: "idle" });
+    setCopied("idle");
+  }, [path]);
 
   // Closing the pane is leaving too: without this the build outlives the whole
   // view, not just the page.
@@ -414,20 +431,23 @@ export function WuiView({
     });
 
   /**
-   * Rebuild the page, showing the build's output as it arrives.
+   * Rebuild the page, showing the build's output as it arrives, and say
+   * whether it finished with exit 0 — `false` for a failure, a build that
+   * could not start, a stream that ended without a verdict, or one the pane
+   * moved away from. Deploy is the caller that needs the answer: it hands
+   * over the page's address only once what the address points at is fresh.
    *
    * On success the page is re-read — the whole point is that `dist/` and what
-   * you are looking at stop being different things. On failure it is left
+   * you are looking at stop being different things. Deploy passes
+   * `reload: false` and does that read itself, through the pane's query, so
+   * the verdict and the frame come from ONE read. On failure it is left
    * alone: the build produced no new `dist/`, so swapping the frame would
    * replace the page with the same page and call it a rebuild.
    */
-  /** Runs the build and says whether it finished with exit 0 — `false` for a
-   * failure, a build that could not start, or one the pane moved away from.
-   * Deploy is the caller that needs the answer: it hands over the page's
-   * address only once what the address points at is fresh. */
-  const runBuild = async ({ automatic = false } = {}): Promise<boolean> => {
+  const runBuild = async ({ automatic = false, reload = true } = {}): Promise<boolean> => {
     if (!slug) return false;
     let ok = false;
+    let verdict = false;
     const mine = folder;
     const startedAt = epoch.current;
     // Every path that could start a second build already stopped the first:
@@ -449,13 +469,22 @@ export function WuiView({
         if (event.type === "output") say(event.text);
         else if (event.exit_code === 0) {
           ok = true;
+          verdict = true;
           note("Build finished.");
           // Fold it away: the page below IS the result, and it is what the
           // reader came for. One line stays, and opens it again.
           setLogOpen(false);
-          setGeneration((g) => g + 1);
-        } else note(`Build failed (exit ${event.exit_code}).`);
+          if (reload) setGeneration((g) => g + 1);
+        } else {
+          verdict = true;
+          note(`Build failed (exit ${event.exit_code}).`);
+        }
       }
+      // A stream that closed without a `done` — a proxy's read timeout on a
+      // long build, a connection cut mid-way — is not a failure the log
+      // shows, and a caller told "see the build output" would find ordinary
+      // vite lines and no verdict. Say so, in the log, where they will look.
+      if (!verdict && !stale()) note("The build's output ended without a verdict.");
     } catch (err) {
       // An abort is this pane's own doing, not something to report.
       if (stale() || control.signal.aborted) return false;
@@ -558,42 +587,78 @@ export function WuiView({
    *   page the agent gave a build to since then deployed as "nothing to
    *   build". Pressing before that first read has landed simply joins it.
    * - whether the build passed — `runBuild`'s answer.
-   * - whether the page OPENS — the same read the page makes. Exit 0 is not
-   *   that: a build whose outDir is not the entry, or a plain page with no
-   *   `index.html`, was declared Deployed above a red error, and the reader
-   *   who followed the link was told it had never been published. */
+   * - whether the page OPENS — ONE read, through the pane's own query, so
+   *   the frame shows exactly what was verified. Exit 0 is not that: a build
+   *   whose outDir is not the entry, or a plain page with no `index.html`,
+   *   was declared Deployed above a red error. And a private read outside
+   *   the query was not it either: it passed while the pane kept its cached
+   *   red error, and the two disagreed on screen.
+   *
+   * While it runs, nothing else builds: Rebuild and Auto-rebuild are held
+   * (the button), and this IS the rebuild-on-open for this folder
+   * (`autoBuiltFor`), or the manifest re-read flipping `canBuild` would let
+   * the on-open effect start a second build beside this one. Every await is
+   * followed by `moved()`: the pane may have gone to another folder (epoch)
+   * or to a sibling view file in the same one (path), and a verdict for the
+   * page that left must not land on the page that arrived. */
   const runDeploy = async () => {
     const started = epoch.current;
-    const moved = () => epoch.current !== started; // the pane moved on; that page's reset wins
+    const startedPath = path;
+    const moved = () => epoch.current !== started || pathRef.current !== startedPath;
     setDeploy({ state: "working" });
     setCopied("idle");
-    let hasBuild = false;
-    if (folder !== "") {
-      const fresh = await buildable.refetch();
-      if (moved()) return;
-      hasBuild = hasBuildScript(fresh.data ?? "");
-    }
-    if (hasBuild) {
-      const ok = await runBuild();
-      if (moved()) return;
-      if (!ok) {
-        setDeploy({ state: "failed", step: "build" });
+    autoBuiltFor.current = folder;
+    try {
+      let hasBuild = false;
+      if (folder !== "") {
+        const fresh = await buildable.refetch();
+        if (moved()) return;
+        hasBuild = hasBuildScript(fresh.data ?? "");
+      }
+      if (hasBuild) {
+        const ok = await runBuild({ reload: false });
+        if (moved()) return;
+        if (!ok) {
+          setDeploy({ state: "failed", step: "build" });
+          return;
+        }
+      }
+      // The verdict's read IS the pane's next generation: fetched into the
+      // cache under that key, then the pane is pointed at it. On failure the
+      // pane is pointed at it too — its own read then shows the same error
+      // the verdict names, instead of a cached page that looks fine.
+      const next = generationRef.current + 1;
+      try {
+        await queryClient.fetchQuery({
+          queryKey: qk.wuiDoc(fs.scopeId, path, next),
+          queryFn: () => buildWuiDoc(fs, folder, entry),
+          staleTime: Infinity,
+          retry: false,
+        });
+      } catch (err) {
+        if (moved()) return;
+        setGeneration(next);
+        setDeploy({
+          state: "failed",
+          step: "open",
+          why: err instanceof Error ? err.message : "The page could not be opened.",
+        });
         return;
       }
-    }
-    try {
-      await buildWuiDoc(fs, folder, entry);
+      if (moved()) return;
+      setGeneration(next);
+      setDeploy({ state: "done" });
     } catch (err) {
+      // Nothing above is expected to throw — but a run that did would leave
+      // the button on "Deploying…" for the rest of the page's life, and a
+      // loud failure needs a catcher.
       if (moved()) return;
       setDeploy({
         state: "failed",
         step: "open",
-        why: err instanceof Error ? err.message : "The page could not be opened.",
+        why: err instanceof Error ? err.message : "Deploy stopped unexpectedly.",
       });
-      return;
     }
-    if (moved()) return;
-    setDeploy({ state: "done" });
   };
 
   return (
@@ -622,7 +687,11 @@ export function WuiView({
         </Btn>
         {canBuild && (
           <>
-            <Btn size="sm" disabled={building} onClick={() => void runBuild()}>
+            {/* Held while Deploy runs, not only while a build does: Deploy has
+                phases with no build in flight (the manifest re-read, the open
+                check), and a Rebuild pressed in one of them started a second
+                `pnpm run build` in the same folder beside Deploy's. */}
+            <Btn size="sm" disabled={building || deploy.state === "working"} onClick={() => void runBuild()}>
               {building ? "Building…" : "Rebuild"}
             </Btn>
             {/* A switch, not a checkbox: flipping it takes effect at once, and
@@ -633,6 +702,7 @@ export function WuiView({
             <Switch
               checked={autoBuild}
               onChange={setAutoBuild}
+              disabled={deploy.state === "working"}
               title="Rebuild this page whenever you open it"
             >
               Auto-rebuild
@@ -712,10 +782,11 @@ export function WuiView({
           )}
         </div>
       )}
-      {/* The three author panes — toolbar, build log, reports — are gated on
-          the same word, so "a reader sees none of them" holds by inspection
-          rather than by an argument about which of them a reader could reach. */}
-      {author && buildLog !== null && (
+      {/* No `author &&` here or on the reports pane: neither state can arise
+          for a reader — no build is ever started on their account, and their
+          reports are dropped at the listener — and a second gate that no test
+          can turn red is a guard that only looks like one. */}
+      {buildLog !== null && (
         <div
           style={{
             // The cap lives HERE, on the pane's flex item, because that is the
@@ -801,7 +872,7 @@ export function WuiView({
           )}
         </div>
       )}
-      {author && reports.length > 0 && (
+      {reports.length > 0 && (
         <div
           role="log"
           aria-label="Reports"
@@ -847,8 +918,22 @@ export function WuiView({
         // a read that failed, or an entry that is not HTML, carries its own
         // reason below — told "not published", the reader reports that to the
         // author, who re-deploys a page that was fine.
-        <div role="status" style={{ padding: 12, color: "var(--text-paper-d)" }}>
-          This page has not been published yet.
+        //
+        // Tentative, and with a way back: on this platform "not there" is
+        // what a read answers while the item's sandbox is still being
+        // restored (`_warm` does not wait on `.ready`), so a published page
+        // can answer 404 for a moment. "Try again" is a re-read of the folder
+        // — never a build — the same thing Refresh does for an author.
+        <div
+          role="status"
+          style={{ padding: 12, color: "var(--text-paper-d)", display: "flex", gap: 8, alignItems: "center" }}
+        >
+          <span>
+            This page has not been published yet — or it is still being restored. Try again in a moment.
+          </span>
+          <Btn size="sm" onClick={() => setGeneration((g) => g + 1)}>
+            Try again
+          </Btn>
         </div>
       ) : built.error ? (
         // Plain language and the file's name: whoever hits this may have no

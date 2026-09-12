@@ -20,6 +20,7 @@ import { useMemo } from "react";
 import { useParams } from "react-router-dom";
 
 import { FileServiceProvider, investigationFileService, type FileService } from "../api/fileService";
+import { HttpError } from "../api/http";
 import { parseViewSpec } from "../renderers/entity/EntityViews";
 import { VIEW_KIND } from "../renderers/entity/types";
 import { WorkspaceSlugProvider } from "../hooks/useWorkspaceSlug";
@@ -68,7 +69,26 @@ export function WuiPage({
   if (view.isPending) return <Problem>Opening {path}…</Problem>;
   if (view.isError) {
     // Named, because the reader did not choose this path — somebody sent them
-    // the link, and the path is the only thing they can forward back.
+    // the link, and the path is the only thing they can forward back. But
+    // only "not there" is "no file": a 403 is somebody outside the item, and
+    // a dropped connection is neither — both used to read as a missing file,
+    // and the reader reported one to an author who could see it. The same
+    // classes `readAsset` (assets.ts) draws one level down, so the two
+    // sentences a reader can meet on this route agree.
+    const err = view.error;
+    if (err instanceof HttpError && err.status === 403) {
+      return <Problem>You cannot open this item, so {path} cannot be shown.</Problem>;
+    }
+    if (err instanceof HttpError && err.status !== 404) {
+      return (
+        <Problem>
+          {path} could not be read (the workspace answered {err.status}). Try again in a moment.
+        </Problem>
+      );
+    }
+    if (err instanceof TypeError) {
+      return <Problem>Could not reach the workspace to read {path}. Try again in a moment.</Problem>;
+    }
     return <Problem>There is no file at {path} in this item.</Problem>;
   }
 
@@ -81,10 +101,10 @@ export function WuiPage({
 
   return (
     // The slug comes from a CONTEXT, not from the route params, and `WuiView`
-    // reads it to build and to call tools. Without this provider both would go
-    // quietly missing here: auto-rebuild would never fire (so the page shows a
-    // stale `dist/`) and `callTool` would be null (so every tool button does
-    // nothing). Neither says anything, which is why it is provided rather than
+    // reads it to call tools and start workflows — the one thing a reader's
+    // page keeps (it never builds here, by design: `chrome="viewer"`). Without
+    // this provider `callTool` would be null and every tool button would do
+    // nothing, without a word — which is why it is provided rather than
     // relied on.
     <WorkspaceSlugProvider value={slug}>
       <FileServiceProvider value={service}>
