@@ -26,6 +26,7 @@
 | [plan-kb-parsers.md](plan-kb-parsers.md) | #39 KB 解析器：parser 吐整檔 Document、splitter 掌管切塊粒度 |
 | [plan-llamaindex-ingest.md](plan-llamaindex-ingest.md) | 以 LlamaIndex 重構攝取管線 |
 | [plan-kb-retrieval-enhancements.md](plan-kb-retrieval-enhancements.md) | multi-query / HyDE / rerank 的 enhancement 旋鈕設計 |
+| [plan-rag-context.md](plan-rag-context.md) | RAG 前後文四階段：中文切段修正（`\S+` 讓中文整份一塊）、自動字元窗擴展（可跨檔案、樹序、rerank 之前、citation 留在命中處）、限定文件/資料夾的語意與精確關鍵字搜尋、分頁讀圖 + 分行讀文字 |
 | [plan-retrieval-llm-refactor.md](plan-retrieval-llm-refactor.md) | 檢索 LLM 介面重構 |
 | [plan-llm-wiki.md](plan-llm-wiki.md) | #50 LLM wiki：與 chunk-RAG 平行的第二條維基管線 |
 | [plan-context-cards.md](plan-context-cards.md) | #106 Context cards：輕量、確定性的詞彙卡（glossary） |
