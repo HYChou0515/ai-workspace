@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -192,5 +192,97 @@ describe("<FileTree /> lazy folders", () => {
     await user.click(screen.getByText("assets")); // selects (and toggles) the nested lazy folder
     await user.keyboard("{Enter}");
     expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  // A lazy folder the user has NOT opened has no level in the listing at all,
+  // so "is that file already there?" cannot be answered from the tree. It is
+  // answered by asking the server — one path, one question (`svc.exists`).
+  it("asks the server before an upload would overwrite a file in a folder that is not loaded", async () => {
+    const { svc, listTree } = lazyService({});
+    const exists = vi.fn(async (path: string) => path === "/dist/index.html");
+    const writeFile = vi.fn(async () => {});
+    const confirm = vi.fn(() => false);
+    vi.stubGlobal("confirm", confirm);
+    renderWithQuery(
+      <FileServiceProvider value={{ ...svc, exists, writeFile }}>
+        <FileTree
+          files={[{ path: "/src/a.py", size: 1 }]}
+          dirs={["/src", "/dist"]}
+          unwalked={["/dist"]}
+          activePath={null}
+          onOpen={vi.fn()}
+        />
+      </FileServiceProvider>,
+    );
+    const drop = {
+      dataTransfer: {
+        types: ["Files"],
+        files: [new File(["x"], "index.html")],
+        items: [],
+        getData: () => "",
+      },
+    };
+    fireEvent.drop(screen.getByText("dist"), drop);
+    await waitFor(() => expect(exists).toHaveBeenCalledWith("/dist/index.html"));
+    expect(confirm).toHaveBeenCalled();
+    expect(writeFile).not.toHaveBeenCalled();
+    expect(listTree).not.toHaveBeenCalled(); // the level need not load to answer
+    vi.unstubAllGlobals();
+  });
+
+  it("asks the server before a new file would overwrite one in a level that has not arrived yet", async () => {
+    const user = userEvent.setup();
+    const listTree = vi.fn(() => new Promise<never>(() => {})); // the level never arrives
+    const svc: FileService = { ...investigationFileService("rca", "inv-lazy"), listTree };
+    const exists = vi.fn(async (path: string) => path === "/dist/index.html");
+    const writeFile = vi.fn(async () => {});
+    renderWithQuery(
+      <FileServiceProvider value={{ ...svc, exists, writeFile }}>
+        <FileTree
+          files={[{ path: "/src/a.py", size: 1 }]}
+          dirs={["/src", "/dist"]}
+          unwalked={["/dist"]}
+          activePath={null}
+          onOpen={vi.fn()}
+        />
+      </FileServiceProvider>,
+    );
+    await user.click(screen.getByText("dist")); // opens it; the level is pending
+    await user.click(screen.getByTitle("New file in dist/"));
+    await user.type(await screen.findByPlaceholderText("file name"), "index.html{Enter}");
+    expect(await screen.findByText(/already exists/i)).toBeInTheDocument();
+    expect(writeFile).not.toHaveBeenCalled();
+  });
+
+  it("opens a collapsed lazy folder and shows the creator when its context menu says New file", async () => {
+    const user = userEvent.setup();
+    const { svc, listTree } = lazyService({
+      "/dist": { items: [], dirs: [], unwalked: [], truncated: false },
+    });
+    renderWithQuery(
+      <FileServiceProvider value={svc}>
+        <FileTree
+          files={[{ path: "/src/a.py", size: 1 }]}
+          dirs={["/src", "/dist"]}
+          unwalked={["/dist"]}
+          activePath={null}
+          onOpen={vi.fn()}
+        />
+      </FileServiceProvider>,
+    );
+    fireEvent.contextMenu(screen.getByText("dist"));
+    await user.click(await screen.findByRole("button", { name: "New file…" }));
+    expect(await screen.findByPlaceholderText("file name")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "dist" })).toHaveAttribute("aria-expanded", "true");
+    await waitFor(() => expect(listTree).toHaveBeenCalledTimes(1));
+  });
+
+  it("shows that an opened lazy folder is still loading, so empty and pending look different", async () => {
+    const user = userEvent.setup();
+    const listTree = vi.fn(() => new Promise<never>(() => {}));
+    const svc: FileService = { ...investigationFileService("rca", "inv-lazy"), listTree };
+    renderTree(svc, ["/node_modules"]);
+    await user.click(screen.getByText("node_modules"));
+    expect(await screen.findByTestId("lazy-loading")).toBeInTheDocument();
   });
 });

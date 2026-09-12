@@ -134,3 +134,28 @@ def test_flat_lister_reaches_a_recorded_folder_whose_parent_was_never_recorded()
     infer the missing ancestor rather than lose the subtree behind it."""
     walked = walk_tree(flat_lister({}, ["/a/b"]), "/")
     assert sorted(walked.dirs) == ["/a", "/a/b"]
+
+
+def test_flat_lister_hangs_every_ancestor_of_a_deep_path_under_its_parent():
+    """`/a/b/c/f.txt` alone must produce the chain `/a` → `/a/b` → `/a/b/c`,
+    each listed by its parent — the index must not stop registering at the
+    first ancestor it happens to have created a slot for."""
+    walked = walk_tree(flat_lister({"/a/b/c/f.txt": (1, "v")}, []), "/")
+    assert sorted(walked.dirs) == ["/a", "/a/b", "/a/b/c"]
+    assert [e.path for e in walked.files] == ["/a/b/c/f.txt"]
+    level = walk_tree(flat_lister({"/a/b/c/f.txt": (1, "v")}, []), "/a/b", depth=1)
+    assert level.dirs == ["/a/b/c"] and level.unwalked == ["/a/b/c"]
+
+
+def test_flat_lister_indexes_once_so_a_large_listing_walks_in_linear_time():
+    """The cold store branch runs this on the request path. Scanning the whole
+    listing per directory made 12k files cost a second and 50k fifteen; an
+    index makes 20k files with 2k folders a few tens of milliseconds. The
+    bound is ~20× the measured cost, so it fails on the algorithm, not the box."""
+    import time
+
+    files = {f"/pkg{i}/lib/f{j}.js": (1, "v") for i in range(1000) for j in range(20)}
+    t0 = time.perf_counter()
+    walked = walk_tree(flat_lister(files, []), "/")
+    assert len(walked.files) == 20_000 and len(walked.dirs) == 2_000
+    assert time.perf_counter() - t0 < 1.0

@@ -353,6 +353,16 @@ CLAUDE.md 架構段加一條「檔案樹是預載修剪樹 + 懶目錄」,把 `T
   `kind: local` 的 mirror 停擺;一個 entry 在 readdir 與 stat 之間被刪,若在目錄層接錯誤,整個目錄回空 → mirror 刪掉所有同層的耐久副本。
 - symlink **root**:`?prefix=/link-to-outside&depth=1` 會跟出 workspace(舊 rglob 對 symlink base 也一樣;`read` 也從不檢查)。既有一類,沒在這包修,記著。
 
+第二輪(源自第一輪修法的發現:**0 條**;但第一輪那條 HIGH 修得不完整):
+- **懶目錄還沒載入時**(收起、剛點開還沒回來),合併清單本來就不可能知道裡面有什麼 —— 右鍵「上傳到這裡」、拖放、剛開就打字,
+  仍然無提示覆寫。判準不能只看清單:路徑在懶目錄底下就問伺服器 `exists`(P6 開的那條路,「一個路徑一個問題」)。
+- 右鍵「New file…」對收起的目錄沒有 `ensureOpen`,輸入框畫在目錄裡面 → 什麼都沒出現(master 對收起的走過目錄也如此,只是走過的預設展開很少碰到)。
+- `URLSearchParams.size` 舊瀏覽器(Chrome<113/Safari<17/Firefox<115)沒有 → query 被丟掉 → 每次展開抓到整棵預載。改 `toString()`。
+- `usePersistentSet` 換 key 時把**舊 key 的狀態存進新 key**(hook 本來就有的缺陷);有了「已開啟的懶目錄」集合後症狀變成 B item 的 `node_modules` 自動展開抓取。
+  修在 hook(state 記住它是從哪個 key 載的),deque 同類一起修。
+- `flat_lister` 每個目錄掃整份清單(O(dirs×entries)):12k 檔 1.1 秒、50k 檔 15 秒,在冷 specstar 路徑落在請求上。改成建一次索引。
+- 展開中的懶目錄沒有載入指示,跟「空的」分不出來。
+
 ### 6.7 冷路徑 `prefix` 從「假的」變「真的」
 
 `nfs_tree` 的 `tree()` 從 `prefix` 開始 scandir,所以 `?prefix=/node_modules&depth=1` 在冷 item 上

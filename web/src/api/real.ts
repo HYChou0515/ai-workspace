@@ -572,7 +572,11 @@ export const realApi: ApiClient = {
     const q = new URLSearchParams();
     if (opts?.prefix) q.set("prefix", opts.prefix);
     if (opts?.depth !== undefined) q.set("depth", String(opts.depth));
-    const query = q.size ? `?${q}` : "";
+    // `URLSearchParams.size` is missing on Chrome < 113 / Safari < 17 /
+    // Firefox < 115; there `q.size ?` was always false and every expand
+    // fetched the whole preload as the folder's level.
+    const qs = q.toString();
+    const query = qs ? `?${qs}` : "";
     return await json<{ files: FileInfo[]; dirs: string[]; unwalked: string[]; truncated: boolean }>(
       await apiFetch(
         `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/tree${query}`,

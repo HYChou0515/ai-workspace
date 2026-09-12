@@ -162,31 +162,43 @@ def flat_lister(files: Mapping[str, tuple[int, str]], dirs: Iterable[str]) -> Li
     run, a durable store's rows). They save no round trips this way, but they
     answer the same question the same way. Every ancestor of a file counts as
     a directory whether or not it was recorded."""
-    known: set[str] = set(dirs)
+    # Index the listing ONCE: each directory's own subdirectories and files.
     # Every ancestor of a file OR a recorded directory is a directory too — a
     # store that recorded `/a/b` without `/a` (an orphan row) must still let
     # the walk reach `/a/b`, as the old listing (which never walked) did.
-    for path in [*known, *files]:
-        parent = path.rpartition("/")[0]
-        while parent:
-            known.add(parent)
-            parent = parent.rpartition("/")[0]
+    # Scanning the whole listing per directory instead made a 12k-file tree
+    # cost a second and a 50k one fifteen — on the request path of the cold
+    # store branch.
+    subdirs: dict[str, set[str]] = {"/": set()}
+    subfiles: dict[str, list[str]] = {}
 
-    def children_of(rel: str, paths: Iterable[str]) -> set[str]:
-        prefix = "/" if rel == "/" else rel + "/"
-        return {
-            p[len(prefix) :]
-            for p in paths
-            if p.startswith(prefix) and "/" not in p[len(prefix) :] and p != prefix
-        }
+    def record_dir(path: str) -> None:
+        # Hang `path` under its parent, then the parent under ITS parent, and
+        # stop at the first ancestor already hung — everything above it is.
+        while path and path != "/":
+            parent, _, name = path.rpartition("/")
+            parent = parent or "/"
+            siblings = subdirs.setdefault(parent, set())
+            subdirs.setdefault(path, set())
+            if name in siblings:
+                break
+            siblings.add(name)
+            path = parent
+
+    for d in dirs:
+        record_dir(d)
+    for f in files:
+        parent, _, name = f.rpartition("/")
+        record_dir(parent)
+        subfiles.setdefault(parent or "/", []).append(name)
 
     def list_dir(rel: str) -> Iterable[Entry]:
-        if rel != "/" and rel not in known:
+        if rel not in subdirs:
             raise FileNotFoundError(rel)
-        for name in sorted(children_of(rel, known)):
+        for name in sorted(subdirs[rel]):
             yield Entry(name, "dir")
         base = "" if rel == "/" else rel
-        for name in sorted(children_of(rel, files)):
+        for name in sorted(subfiles.get(rel, ())):
             size, version = files[f"{base}/{name}"]
             yield Entry(name, "file", size, version)
 

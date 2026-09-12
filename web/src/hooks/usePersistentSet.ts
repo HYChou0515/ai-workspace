@@ -12,18 +12,28 @@ export function usePersistentSet(
   toggle: (id: string) => void;
   values: string[];
 } {
-  const [state, setState] = useState<Set<string>>(() => loadSet(key));
+  // The state remembers WHICH key it was loaded from. A component that stays
+  // mounted while its key changes (the file tree across items) used to keep
+  // the old key's set and save it under the new key on the next effect — so
+  // item A's opened folders became item B's. The pair is replaced during the
+  // render that sees a new key, before any effect can save the stale one.
+  const [entry, setEntry] = useState<{ key: string; set: Set<string> }>(() => ({
+    key,
+    set: loadSet(key),
+  }));
+  if (entry.key !== key) setEntry({ key, set: loadSet(key) });
+  const state = entry.key === key ? entry.set : loadSet(key);
 
   useEffect(() => {
-    saveSet(key, state);
-  }, [key, state]);
+    if (entry.key === key) saveSet(key, entry.set);
+  }, [key, entry]);
 
   const toggle = useCallback((id: string) => {
-    setState((prev) => {
-      const next = new Set(prev);
+    setEntry((prev) => {
+      const next = new Set(prev.set);
       if (next.has(id)) next.delete(id);
       else next.add(id);
-      return next;
+      return { key: prev.key, set: next };
     });
   }, []);
 
@@ -66,23 +76,29 @@ export function usePersistentDeque(
   push: (id: string) => void;
   clear: () => void;
 } {
-  const [state, setState] = useState<string[]>(() => loadList(key));
+  // Same key-aware pair as `usePersistentSet`, for the same reason.
+  const [entry, setEntry] = useState<{ key: string; list: string[] }>(() => ({
+    key,
+    list: loadList(key),
+  }));
+  if (entry.key !== key) setEntry({ key, list: loadList(key) });
+  const state = entry.key === key ? entry.list : loadList(key);
 
   useEffect(() => {
-    saveList(key, state);
-  }, [key, state]);
+    if (entry.key === key) saveList(key, entry.list);
+  }, [key, entry]);
 
   const push = useCallback(
     (id: string) => {
-      setState((prev) => {
-        const without = prev.filter((x) => x !== id);
-        return [id, ...without].slice(0, limit);
+      setEntry((prev) => {
+        const without = prev.list.filter((x) => x !== id);
+        return { key: prev.key, list: [id, ...without].slice(0, limit) };
       });
     },
     [limit],
   );
 
-  const clear = useCallback(() => setState([]), []);
+  const clear = useCallback(() => setEntry((prev) => ({ key: prev.key, list: [] })), []);
   return { values: state, push, clear };
 }
 

@@ -21,6 +21,9 @@ import { useLazyDirs } from "./useLazyDirs";
 type OpenState = {
   isOpen: (path: string) => boolean;
   toggle: (path: string) => void;
+  /** An opened lazy folder whose level has not arrived: drawn as loading, so
+   * "still fetching" and "empty" do not look the same. */
+  isLoading: (path: string) => boolean;
 };
 import { basename } from "./renderer";
 import { nextSelection, type SelState, topLevel, visibleOrder } from "./treeSelection";
@@ -203,6 +206,18 @@ export function FileTree({
   }, [listing]);
   const lazySet = useMemo(() => new Set(listing.unwalked), [listing]);
   const isFolder = (p: string) => knownDirs.has(p);
+  // "Is something already at `path`?" — from the listing where the listing
+  // can know, from the server where it cannot: a path under a lazy folder
+  // whose level is not loaded (closed, or opened a moment ago and still
+  // pending) is invisible to `knownFiles`, and answering "no" there is how a
+  // new `dist/index.html` would silently empty the built one. One path, one
+  // question — the same `exists` every "did it land?" check asks.
+  const underLazy = (p: string) => {
+    for (const dir of lazySet) if (p.startsWith(dir + "/")) return true;
+    return false;
+  };
+  const pathExists = async (p: string): Promise<boolean> =>
+    knownFiles.has(p) || isFolder(p) || (underLazy(p) && (await svc.exists(p)));
   const isOpen = (p: string) => (lazySet.has(p) ? opened.has(p) : !collapsed.has(p));
   const toggleOpen = (p: string) => (lazySet.has(p) ? opened : collapsed).toggle(p);
   const ensureOpen = (p: string) => {
@@ -222,7 +237,7 @@ export function FileTree({
         : { tree: fullTree, expand: NO_FORCE_OPEN },
     [searchable, fullTree, query],
   );
-  const open: OpenState = { isOpen, toggle: toggleOpen };
+  const open: OpenState = { isOpen, toggle: toggleOpen, isLoading: (p) => lazy.loading.has(p) };
   const [menu, setMenu] = useState<Menu | null>(null);
   // Inline creator (VSCode-style): type the name straight in the tree.
   const [creating, setCreating] = useState<{ kind: "file" | "folder"; dir: string } | null>(null);
@@ -280,7 +295,6 @@ export function FileTree({
   // folder context menu passes an explicit dir.
   const upload = async (fileList: FileList | File[] | null, targetDir: string = createDir) => {
     if (!fileList || fileList.length === 0) return;
-    const existing = knownFiles;
     // A new attempt reports on itself: the previous report described files the
     // user has already dealt with (or re-dropped), so keeping it would leave
     // them reading stale failures next to fresh ones.
@@ -294,7 +308,7 @@ export function FileTree({
       // Preserve folder structure when a directory was picked.
       const rel = (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name;
       const path = `${targetDir}/${rel}`.replace(/\/+/g, "/");
-      if (existing.has(path) && !confirm(`${path} exists. Overwrite?`)) continue;
+      if ((await pathExists(path)) && !confirm(`${path} exists. Overwrite?`)) continue;
       try {
         await svc.writeFile(path, f);
       } catch (err) {
@@ -365,7 +379,7 @@ export function FileTree({
   // deleted first). VSCode-style replace prompt, shared by move/copy,
   // rename and new file/folder so the BE never has to clobber.
   const ensureReplaceable = async (dest: string): Promise<boolean> => {
-    if (!knownFiles.has(dest) && !isFolder(dest)) return true;
+    if (!(await pathExists(dest))) return true;
     const choice = await dialog.confirm({
       title: "Replace existing item",
       body: `“${basename(dest)}” already exists. Replace it?`,
@@ -894,8 +908,16 @@ export function FileTree({
           multi={selectedSet.has(menu.node.path) && sel.selected.length > 1}
           canSplit={!!onOpenInSplit && !menu.node.isDir}
           onClose={() => setMenu(null)}
-          onNewFile={(dir) => setCreating({ kind: "file", dir })}
-          onNewFolder={(dir) => setCreating({ kind: "folder", dir })}
+          onNewFile={(dir) => {
+            // The creator renders INSIDE the folder, so a closed one shows
+            // nothing — the toolbar path already opened it; this one did not.
+            if (dir) ensureOpen(dir);
+            setCreating({ kind: "file", dir });
+          }}
+          onNewFolder={(dir) => {
+            if (dir) ensureOpen(dir);
+            setCreating({ kind: "folder", dir });
+          }}
           onUploadHere={(dir, kind) => {
             uploadDirRef.current = dir;
             (kind === "folder" ? folderInputRef : fileInputRef).current?.click();
@@ -1170,6 +1192,18 @@ function TreeRow({
         )}
         {!isCollapsed && (
           <>
+            {open.isLoading(node.path) && (
+              <div
+                data-testid="lazy-loading"
+                style={{
+                  padding: `2px 14px 2px ${indent + 20}px`,
+                  color: "var(--text-paper-d2)",
+                  fontSize: pxToRem(11),
+                }}
+              >
+                …
+              </div>
+            )}
             {creating && creating.dir === node.path && (
               <InlineEdit
                 kind={creating.kind}
