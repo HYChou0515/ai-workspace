@@ -349,15 +349,28 @@ units** — a unit is offered where it exists and refused where it does not.
   model receives a `ToolOutputImage` and sees the pixels; a text-only main
   model goes through the `kb.vlm_llm` describer; neither configured → the same
   "not available, do not retry" error.
-- Getting the page image: PDF via the existing `_render_page_png`
-  (`kb/parsers/pdf.py:92`); image files are the image (page 1); **PPTX is
-  converted with LibreOffice to a PDF at ingest and that PDF is currently a
-  temp file** — persist it as a derived blob so `read_page` does not pay a
-  multi-second `soffice` round-trip per read (storage bought for latency).
+- Getting the page image: PDF via `render_page_png` (`kb/parsers/pdf.py`,
+  the ingest-time rasteriser made public); image files are the image (page
+  1); a slide deck's LibreOffice-converted PDF turned out to be **already
+  persisted** — `PptxParser` hands it back through `on_preview` and the
+  Ingestor stores it on `SourceDoc.preview` for the browser viewer — so
+  `read_page` rasterises from that blob and no new persistence was needed
+  (the plan's "persist it" item was already true).
 - Text layer for a page comes from the chunks whose `provenance.page` matches
-  (indexed), sliced from the canonical text.
-- No separate read budget (same as `read_image`); `max_turns` and the output
-  caps bound it.
+  (indexed), sliced from the canonical text (`kb/pages.py`).
+- **Reads are citable.** "What you read is what you cite from" has to be
+  true in code, not only in the prompt: both tools register what they showed
+  as a passage in the turn's registry — the same `(document, span)` dedup
+  `kb_search` uses — and prefix the output with its `[n]`. `read_lines`
+  registers the window's char span; `read_page` registers the page's
+  text-layer span with `{"page": N}` provenance, so the reference card can
+  say "p.N". `kb_grep` stays locate-only.
+- Both are document tools under #537's per-source switch: withheld with the
+  documents (`kb_search_max == 0`), granted with them otherwise, no budget of
+  their own (same as `read_image`); `max_turns` and the output caps bound them.
+- A vision main model receives `[ToolOutputText, ToolOutputImage]` (the SDK
+  accepts a list of parts); a text-only main model receives the text layer
+  plus the `kb.vlm_llm` description of the page image.
 
 ## Out of scope — and findings logged for separate work
 

@@ -34,6 +34,8 @@ KB_SEARCH_TOOL = "kb_search"
 WIKI_TOOL = "ask_wiki"
 # plan-rag-context P3: the exact-string arm. Same budget contract as the other two.
 GREP_TOOL = "kb_grep"
+# plan-rag-context P4: the read tools are document tools too — off with the documents.
+READ_TOOLS = ("read_page", "read_lines")
 
 
 def tools_within_budget(
@@ -57,6 +59,8 @@ def tools_within_budget(
     # documents (the per-source switch), or on its own cap.
     if kb.max_calls == 0 or (grep is not None and grep.max_calls == 0):
         off.add(GREP_TOOL)
+    if kb.max_calls == 0:
+        off.update(READ_TOOLS)
     return [t for t in allowed if t not in off]
 
 

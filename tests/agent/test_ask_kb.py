@@ -11,7 +11,14 @@ from workspace_app.agent.ask_kb import AskKbSpec, build_ask_kb_context, make_ask
 
 
 def test_default_spec_grants_both_sources_and_the_glossary():
-    assert AskKbSpec().allowed_tools() == ["kb_search", "kb_grep", "ask_wiki", "lookup_glossary"]
+    assert AskKbSpec().allowed_tools() == [
+        "kb_search",
+        "kb_grep",
+        "read_page",
+        "read_lines",
+        "ask_wiki",
+        "lookup_glossary",
+    ]
 
 
 def test_wiki_max_zero_omits_the_wiki_tool():
@@ -19,6 +26,8 @@ def test_wiki_max_zero_omits_the_wiki_tool():
     assert AskKbSpec(wiki_search_max=0).allowed_tools() == [
         "kb_search",
         "kb_grep",
+        "read_page",
+        "read_lines",
         "lookup_glossary",
     ]
 
@@ -35,11 +44,23 @@ def test_kb_max_zero_omits_document_search():
 def test_both_sources_off_leaves_only_the_free_lookup():
     assert AskKbSpec(kb_search_max=0, wiki_search_max=0).allowed_tools() == ["lookup_glossary"]
     # plan-rag-context P3: the exact search also has its OWN switch.
-    assert AskKbSpec(kb_grep_max=0).allowed_tools() == ["kb_search", "ask_wiki", "lookup_glossary"]
+    assert AskKbSpec(kb_grep_max=0).allowed_tools() == [
+        "kb_search",
+        "read_page",
+        "read_lines",
+        "ask_wiki",
+        "lookup_glossary",
+    ]
 
 
 def test_glossary_false_omits_lookup_glossary():
-    assert AskKbSpec(glossary=False).allowed_tools() == ["kb_search", "kb_grep", "ask_wiki"]
+    assert AskKbSpec(glossary=False).allowed_tools() == [
+        "kb_search",
+        "kb_grep",
+        "read_page",
+        "read_lines",
+        "ask_wiki",
+    ]
 
 
 def test_build_stamps_budgets_from_spec():

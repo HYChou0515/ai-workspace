@@ -9,16 +9,19 @@ import inspect
 import io
 import json
 import logging
+import posixpath
 import re
 from collections.abc import Callable, Collection
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 import magic
-from agents import FunctionTool, RunContextWrapper, ToolOutputImage, function_tool
+from agents import FunctionTool, RunContextWrapper, ToolOutputImage, ToolOutputText, function_tool
+from specstar.types import ResourceIDNotFoundError
 
 from ..files import WorkspaceFiles, WorkspaceFull, rel_path
 from ..filestore.protocol import FileNotFound
 from ..quota.disk_ledger import UserDiskFull
+from ..resources.kb import RetrievedPassage, SourceDoc
 from ..sandbox.protocol import ExecResult, OutputSink, SandboxNotFound
 from .context import AgentToolContext
 from .exit_codes import explain
@@ -1296,8 +1299,9 @@ def kb_grep_impl(
     or `folder` (a folder path; recursive), or both.
 
     The result LOCATES; it does not give you a passage to cite. To read what
-    is there, open the document at that line or page and cite from what you
-    read. Long phrases work, but keep the query to the distinctive part.
+    is there, call read_lines(document, offset=<line>) for the text, or
+    read_page(document, <page>) to see the page itself, and cite from what
+    you read. Long phrases work, but keep the query to the distinctive part.
     """
     from ..kb.doc_resolve import resolve_document, resolve_folder
 
@@ -1372,6 +1376,191 @@ def kb_grep_impl(
             f"{budget.remaining} left.)"
         )
     return body
+
+
+def _kb_document(
+    ctx: RunContextWrapper[AgentToolContext], document: str
+) -> tuple[str, SourceDoc] | str:
+    """Resolve a filename / path the agent named to ``(doc_id, SourceDoc)`` within
+    the turn's collections (plan-rag-context P4) — the read tools' shared front
+    door. Blobs are NOT loaded (`read_page` restores them itself). A document
+    the speaker's #308 override denies reads as "no document matching", never as
+    "denied": naming it would disclose that it exists."""
+    from ..kb.doc_resolve import resolve_document
+
+    spec = ctx.context.spec
+    assert spec is not None  # a KB context always wires spec
+    res = resolve_document(spec, ctx.context.collection_ids, document)
+    if res.status == "ambiguous":
+        opts = ", ".join(res.candidates)
+        return f"{document!r} matches several files; pass the full path, one of: {opts}"
+    if res.status != "ok" or res.doc_id is None or res.doc_id in ctx.context.exclude_doc_ids:
+        return f"No document matching {document!r} in the current knowledge base."
+    rm = spec.get_resource_manager(SourceDoc)
+    try:
+        doc = rm.get(res.doc_id).data
+    except ResourceIDNotFoundError:
+        return f"No document matching {document!r} in the current knowledge base."
+    assert isinstance(doc, SourceDoc)
+    return res.doc_id, doc
+
+
+def _is_image_doc(doc: SourceDoc) -> bool:
+    return (doc.content.content_type or "").startswith("image/")
+
+
+def _register_read(
+    ctx: RunContextWrapper[AgentToolContext],
+    *,
+    doc_id: str,
+    doc: SourceDoc,
+    start: int,
+    end: int,
+    text: str,
+    provenance: dict[str, Any] | None = None,
+) -> int:
+    """Register what a read tool showed the model as a citable passage — the
+    same registry and the same `(document, span)` dedup `kb_search` uses, so a
+    later ``[n]`` resolves through `parse_citations` to exactly this span.
+    Returns the 1-based marker."""
+    from ..kb.provenance import aggregate_provenance
+
+    registry = ctx.context.kb_passages
+    key = (doc_id, start, end)
+    for i, existing in enumerate(registry):
+        if (existing.document_id, existing.start, existing.end) == key:
+            return i + 1
+    registry.append(
+        RetrievedPassage(
+            collection_id=doc.collection_id,
+            document_id=doc_id,
+            filename=posixpath.basename(doc.path),
+            start=start,
+            end=end,
+            source_chunk_ids=[],
+            text=text[:_WIKI_SNIPPET_MAX],
+            score=0.0,
+            provenance=aggregate_provenance([provenance]) if provenance else {},
+        )
+    )
+    return len(registry)
+
+
+async def read_lines_impl(
+    ctx: RunContextWrapper[AgentToolContext],
+    document: str,
+    offset: int | None = None,
+    limit: int | None = None,
+) -> str:
+    """Read a knowledge-base document's TEXT by line — the original, not the
+    pre-cut chunks. `document` is a filename or path as shown in the file tree
+    (or as a kb_grep hit names it); `offset` is the 1-based first line (default
+    1), `limit` the number of lines (default: the configured cap). A long
+    window is truncated with a notice; page through it with `offset`/`limit`.
+
+    Use it after kb_search or kb_grep told you WHERE something is and you need
+    more of the surrounding text than the result carried. Works on anything
+    with text, a PDF included (its text layer). A screenshot has no lines — use
+    read_page for it.
+    """
+    resolved = _kb_document(ctx, document)
+    if isinstance(resolved, str):
+        return resolved
+    doc_id, doc = resolved
+    if _is_image_doc(doc):
+        return (
+            f"{doc.path} is an image and has no lines — use read_page({document!r}, 1) "
+            "to look at it."
+        )
+    if doc.text is None:
+        return f"{doc.path} has no extracted text yet (indexing, or a document to reindex)."
+    lines = doc.text.split("\n")
+    total = len(lines)
+    start = max(0, (offset or 1) - 1)
+    count = limit if limit is not None else ctx.context.read_file_max_lines
+    window = lines[start : start + count]
+    body = "\n".join(window)
+    notices: list[str] = []
+    end = start + len(window)
+    if start > 0 or end < total:
+        notices.append(f"showing lines {start + 1}-{end} of {total}")
+    max_chars = ctx.context.read_file_max_chars
+    if len(body) > max_chars:
+        body = body[:max_chars]
+        notices.append(f"output capped at {max_chars} chars")
+    # The window's char span in the canonical text — what a citation points at.
+    char_start = sum(len(line) + 1 for line in lines[:start])
+    marker = _register_read(
+        ctx, doc_id=doc_id, doc=doc, start=char_start, end=char_start + len(body), text=body
+    )
+    head = f"[{marker}] {doc.path} (lines {start + 1}-{end}):"
+    if notices:
+        body += f"\n\n[truncated: {'; '.join(notices)} — use offset/limit to read more]"
+    return f"{head}\n{body}"
+
+
+async def read_page_impl(
+    ctx: RunContextWrapper[AgentToolContext],
+    document: str,
+    page: int,
+) -> str | list[ToolOutputText | ToolOutputImage]:
+    """Look at ONE PAGE of a knowledge-base document as it actually looks — the
+    page image plus its text layer. `document` is a filename or path as shown
+    in the file tree; `page` is 1-based (a kb_grep hit shows it as `(p.N)`).
+
+    Use it for what text cannot carry: a figure, a chart, a table's layout, a
+    screenshot, a slide. Works on PDFs, slide decks and image files (an image
+    is its own single page). A Markdown / text / code document has no pages —
+    use read_lines for it. What you read here is what you cite from.
+    """
+    from ..kb.pages import page_png, page_source, page_text
+
+    # Same gate as read_image: a vision main model sees the pixels itself; a
+    # text-only one needs the `kb.vlm_llm` describer; neither → not available.
+    ac = ctx.context.agent_config
+    vision = ac is not None and ac.vision
+    describer = ctx.context.describer
+    if not vision and describer is None:
+        return (
+            "error: page reading is not available — this deployment has no vision "
+            "model configured. Use read_lines for the text layer instead. Do not retry."
+        )
+    resolved = _kb_document(ctx, document)
+    if isinstance(resolved, str):
+        return resolved
+    doc_id, doc = resolved
+    spec = ctx.context.spec
+    assert spec is not None
+    rm = spec.get_resource_manager(SourceDoc)
+    doc = rm.restore_binary(doc)  # the blobs: the PDF / image, or a deck's preview PDF
+    source = page_source(doc)
+    if source is None:
+        return f"{doc.path} has no pages (it is text) — use read_lines({document!r}) to read it."
+    if page < 1 or page > source.pages:
+        unit = "page" if source.pages == 1 else "pages"
+        return f"{doc.path} has {source.pages} {unit}; pass a page from 1 to {source.pages}."
+    png, mime = page_png(source, page)
+    layer, lo, hi = page_text(spec, doc_id, doc, page)
+    # Citable: the page's text layer, with its page as provenance (a page with no
+    # text layer — an image file — registers an empty span so [n] still names it).
+    marker = _register_read(
+        ctx, doc_id=doc_id, doc=doc, start=lo, end=hi, text=layer, provenance={"page": page}
+    )
+    header = f"[{marker}] {doc.path} — page {page} of {source.pages}"
+    text = f"{header}\n\n{layer}" if layer else header
+
+    if vision:
+        b64 = base64.b64encode(png).decode("ascii")
+        return [
+            ToolOutputText(text=text),
+            ToolOutputImage(image_url=f"data:{mime};base64,{b64}"),
+        ]
+    assert describer is not None  # the text-only path is guarded above
+    sink = ctx.context.on_exec_output
+    on_chunk = (lambda t, _r: sink(t.encode("utf-8"))) if sink is not None else None
+    described = describer.describe(png, mime, on_chunk=on_chunk)
+    out = f"{text}\n\n[page image, described]\n{described}"
+    return _truncate_middle(out, ctx.context.read_file_max_chars)
 
 
 async def ask_knowledge_base_impl(
@@ -2885,6 +3074,10 @@ _IMPLS = {
     "kb_search": kb_search_impl,
     # plan-rag-context P3: the exact-string arm — Ctrl+F, locate-only, not citable.
     "kb_grep": kb_grep_impl,
+    # plan-rag-context P4: read the original — a page as an image + text layer, or
+    # lines of text. Where a kb_grep hit leads; what a citation is read from.
+    "read_page": read_page_impl,
+    "read_lines": read_lines_impl,
     # #537: the KB agent's wiki entry point. Delegating like ask_knowledge_base —
     # the index-first navigation runs in a throwaway context and only the answer
     # comes back — NOT a leaf like `search_wiki`, which is why granting it to a KB

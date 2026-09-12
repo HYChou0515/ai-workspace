@@ -80,6 +80,10 @@ class AskKbSpec:
         # cap can withhold it alone. It never draws from the semantic budget.
         if self.kb_search_max != 0 and self.kb_grep_max != 0:
             tools.append("kb_grep")
+        # P4: reading the original is a document capability too — granted with the
+        # documents, no budget of its own (like read_image; `max_turns` bounds it).
+        if self.kb_search_max != 0:
+            tools.extend(("read_page", "read_lines"))
         if self.wiki_search_max != 0:
             tools.append("ask_wiki")
         if self.glossary:

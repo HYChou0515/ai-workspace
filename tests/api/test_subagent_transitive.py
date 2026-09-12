@@ -88,7 +88,13 @@ async def test_bridge_forwards_ask_kb_spec_and_wiki_budget_to_the_sub_agent():
     )
 
     # the spec's authoritative set
-    assert runner.seen_tools == ["kb_search", "kb_grep", "lookup_glossary"]
+    assert runner.seen_tools == [
+        "kb_search",
+        "kb_grep",
+        "read_page",
+        "read_lines",
+        "lookup_glossary",
+    ]
     assert runner.seen_wiki_budget == 4  # the wiki cap rode through
 
 

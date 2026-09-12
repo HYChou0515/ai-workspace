@@ -198,6 +198,8 @@ export const messages = {
   "tool.ask_knowledge_base": { "zh-TW": "查詢知識庫", en: "Ask the knowledge base" },
   "tool.kb_search": { "zh-TW": "搜尋知識庫", en: "Search the knowledge base" },
   "tool.kb_grep": { "zh-TW": "精確搜尋字串", en: "Find exact text" },
+  "tool.read_page": { "zh-TW": "看文件頁面", en: "Read a page" },
+  "tool.read_lines": { "zh-TW": "讀文件內文", en: "Read document lines" },
   "tool.search_wiki": { "zh-TW": "搜尋知識百科", en: "Search the wiki" },
   "tool.resolve_collection": { "zh-TW": "確認知識集", en: "Resolve collection" },
   "tool.lookup_glossary": { "zh-TW": "查詢詞彙", en: "Look up glossary" },
