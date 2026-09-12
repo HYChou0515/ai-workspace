@@ -28,7 +28,8 @@ import { Switch } from "../../components/Switch";
 import { useCurrentUserState } from "../../hooks/useCurrentUser";
 import { useOpenFile } from "../../hooks/openFile";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
-import { API_BASE, encodePath, HttpError } from "../../api/http";
+import { API_BASE, HttpError } from "../../api/http";
+import { encodePath } from "../../api/refPath";
 import { publishAgentDraft } from "../../lib/agentDraftBus";
 import { subscribeFileChanged } from "../../lib/fileChangedBus";
 import { pxToRem } from "../../lib/pxToRem";
@@ -66,7 +67,7 @@ export const DEFAULT_ENTRY = "index.html";
  */
 function wuiDocQuery(fs: FileService, path: string, entry: string, instance: number, generation: number) {
   return queryOptions({
-    queryKey: qk.wuiDoc(fs.scopeId, path, instance, generation),
+    queryKey: qk.wuiDoc(fs.scopeId, path, entry, instance, generation),
     queryFn: () => buildWuiDoc(fs, wuiFolder(path), entry),
     staleTime: Infinity,
     retry: false,
@@ -164,6 +165,11 @@ type WuiViewProps = {
   path: string;
   spec: ViewSpec;
   chrome?: WuiChrome;
+  /** Viewer chrome: what the reader's "Try again" should re-read BESIDES the
+   * folder — the host's copy of the view file (`WuiPage` holds it in a query
+   * of its own). Without it, a view file read while the sandbox was restoring
+   * kept its stale `entry:` through every press. */
+  onRetry?: () => void;
 };
 
 /**
@@ -190,7 +196,7 @@ export function WuiView(props: WuiViewProps) {
   return <WuiPane key={`${fs.scopeId}:${wuiFolder(props.path)}`} {...props} />;
 }
 
-function WuiPane({ path, spec, chrome = "workspace" }: WuiViewProps) {
+function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
   const fs = useFileService();
   const queryClient = useQueryClient();
   const folder = wuiFolder(path);
@@ -297,16 +303,21 @@ function WuiPane({ path, spec, chrome = "workspace" }: WuiViewProps) {
     deploy.path !== path || (deploy.state !== "idle" && deploy.state !== "working" && deploy.generation !== generation)
       ? ({ path, state: "idle" } as const)
       : deploy;
-  // A success that settled while the pane was on a SIBLING page verified a
-  // generation the pane has not shown yet — it did not reload the sibling
-  // (plan decision 9: nothing reloads a page under someone's hands). It is
-  // applied here instead, the moment the pane is back on the page it is
-  // about: arriving is a fresh open, not an interruption.
+  // A success is applied HERE — the pane pointed at the generation it
+  // verified — and only while the pane is on the page it is about. Settled
+  // on that page, that is at once; settled while the pane was on a SIBLING,
+  // it waits (plan decision 9: nothing reloads a page under someone's hands)
+  // and is applied the moment the pane is back: arriving is a fresh open,
+  // not an interruption. Unless the verified document has meanwhile left the
+  // cache (`gcTime`, five minutes unobserved): then "✓ Deployed" would sit
+  // over a fresh read the verdict never saw, so the verdict is dropped
+  // instead — Deploy again is one press.
   useEffect(() => {
-    if (deploy.path === path && deploy.state === "done" && deploy.generation > generation) {
-      setGeneration(deploy.generation);
-    }
-  }, [deploy, path, generation]);
+    if (deploy.path !== path || deploy.state !== "done" || deploy.generation <= generation) return;
+    const verified = queryClient.getQueryData(qk.wuiDoc(fs.scopeId, path, entry, instance, deploy.generation));
+    if (verified === undefined) setDeploy({ path, state: "idle" });
+    else setGeneration(deploy.generation);
+  }, [deploy, path, entry, generation, queryClient, fs.scopeId, instance]);
   const [copied, setCopied] = useState<"idle" | "done" | "failed">("idle");
   /** The page this pane has already rebuilt on open, so that "when I open this"
    * means what it says: once. React re-runs the effect whenever the preference
@@ -326,16 +337,6 @@ function WuiPane({ path, spec, chrome = "workspace" }: WuiViewProps) {
    * this pane ACTING on a build; the server hears nothing until the request is
    * aborted. */
   const inFlight = useRef<AbortController | null>(null);
-  /** The committed `path`, readable from inside a Deploy run that outlives
-   * the render it started in: when the run settles, is the pane still on the
-   * page it is about? Written in an EFFECT, not during render — a ref set by
-   * a render that is then thrown away would tell the run the pane had moved
-   * when no commit ever did (the `epoch` comment above says the same). */
-  const pathRef = useRef(path);
-  useEffect(() => {
-    pathRef.current = path;
-  }, [path]);
-
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const openFile = useOpenFile();
   const { id: me, ready: meReady } = useCurrentUserState();
@@ -451,6 +452,15 @@ function WuiPane({ path, spec, chrome = "workspace" }: WuiViewProps) {
   useEffect(
     () =>
       subscribeFileChanged(fs.scopeId, (changed) => {
+        // The manifest is the one file the PANE itself acts on, so the pane's
+        // knowledge of it follows the file: a build script the agent adds
+        // mid-session offers Rebuild at once, and one it removes takes the
+        // button away — the cache is never-stale otherwise, and guessing
+        // which of those had happened from a failed read (review round 6)
+        // made a removed manifest a permanent failure.
+        if (changed === `${folder}/package.json`) {
+          void queryClient.invalidateQueries({ queryKey: qk.wuiBuildable(fs.scopeId, folder) });
+        }
         // The broadcast goes to everyone looking at the item, the writer
         // included. Told about its own save, an editor warns "somebody else
         // changed this" every time it saves — and the one warning that matters
@@ -459,7 +469,7 @@ function WuiPane({ path, spec, chrome = "workspace" }: WuiViewProps) {
         const event: WuiEvent = { proto: WUI_PROTOCOL, event: "file_changed", path: changed };
         frameRef.current?.contentWindow?.postMessage(event, "*");
       }),
-    [fs.scopeId],
+    [fs.scopeId, folder, queryClient],
   );
 
   // There is deliberately NO "moving to another folder starts clean" effect
@@ -632,6 +642,14 @@ function WuiPane({ path, spec, chrome = "workspace" }: WuiViewProps) {
   const logLines = logText.trimEnd().split("\n");
   const logSummary = logLines[logLines.length - 1] || "Build output";
 
+  /** The reader's way back: re-read the folder — and, through the host, the
+   * view file it was opened with, whose stale `entry:` a folder re-read alone
+   * cannot shake. Never a build. */
+  const tryAgain = () => {
+    setGeneration((g) => g + 1);
+    onRetry?.();
+  };
+
   const tellTheAgent = () => {
     publishAgentDraft(fs.scopeId, formatReportsForAgent(folder, reports));
     setReports([]);
@@ -714,32 +732,28 @@ function WuiPane({ path, spec, chrome = "workspace" }: WuiViewProps) {
       // toolbar learns the answer too — a page that gained a build since the
       // pane opened now shows Rebuild). Three answers, not two:
       // - a readable manifest: build if it has a script;
+      // - not there: "no build" — a plain page is exactly this, every time.
+      //   (A folder mid-restore can answer 404 for a manifest that is there,
+      //   and this trusts it; the client-side guess that tried to tell the
+      //   two apart made a deliberately removed manifest a permanent failure.
+      //   The read follows the file now — see the `fileChangedBus` effect —
+      //   and the restore race is the platform's to close: `_warm` does not
+      //   wait on `.ready`.)
       // - could not read it (a dropped connection, a 5xx): a failed Deploy —
       //   it used to fold into "nothing to build", skip the build, verify the
-      //   OLD `dist/` and say "✓ Deployed";
-      // - not there: "no build" — a plain page is exactly this, every time —
-      //   UNLESS the pane already knew this folder HAS a build. A manifest
-      //   that was there a moment ago and is not now is not a page losing
-      //   its build; on this platform it is a folder mid-restore answering
-      //   404, and trusting it deployed the old `dist/` too. Either failure
-      //   puts the toolbar's previous answer back, so Rebuild does not vanish.
+      //   OLD `dist/` and say "✓ Deployed". A failed read says nothing about
+      //   the file, so the toolbar's previous answer is put back; a read that
+      //   ANSWERED replaces it.
       let hasBuild = false;
       if (folder !== "") {
         const key = qk.wuiBuildable(fs.scopeId, folder);
         const before = queryClient.getQueryData<AssetRead>(key);
         const manifest = await queryClient.fetchQuery({ ...wuiManifestQuery(fs, folder), staleTime: 0 });
         if (moved()) return;
-        const knewBuild = hasBuildScript(manifestText(before));
-        const problem =
-          manifest.kind === "failed"
-            ? manifest.reason
-            : manifest.kind === "missing" && knewBuild
-              ? `${folder}/package.json could not be read just now (it was there a moment ago).`
-              : null;
-        if (problem !== null) {
+        if (manifest.kind === "failed") {
           if (before !== undefined) queryClient.setQueryData(key, before);
           autoBuiltFor.current = autoBuiltBefore;
-          setDeploy({ path: mine, generation: shown, state: "failed", step: "manifest", why: problem });
+          setDeploy({ path: mine, generation: shown, state: "failed", step: "manifest", why: manifest.reason });
           return;
         }
         hasBuild = hasBuildScript(manifestText(manifest));
@@ -784,7 +798,11 @@ function WuiPane({ path, spec, chrome = "workspace" }: WuiViewProps) {
         return;
       }
       if (moved()) return;
-      if (pathRef.current === mine) setGeneration(next);
+      // Not `setGeneration(next)` here: whether the pane is on this page is a
+      // fact about the COMMITTED tree, and the effect beside `deployHere` is
+      // where that is read. Doing it here as well, off a ref, had a window —
+      // a commit that moved the pane to the sibling, before the effect that
+      // mirrored the path — in which the sibling was reloaded after all.
       setDeploy({ path: mine, generation: next, state: "done" });
     } catch (err) {
       // Nothing above is expected to throw — but a run that did would leave
@@ -1087,7 +1105,7 @@ function WuiPane({ path, spec, chrome = "workspace" }: WuiViewProps) {
           <span>
             This page has not been published yet — or it is still being restored. Try again in a moment.
           </span>
-          <TryAgain onClick={() => setGeneration((g) => g + 1)} />
+          <TryAgain onClick={tryAgain} />
         </div>
       ) : built.error ? (
         // Plain language and the file's name: whoever hits this may have no
@@ -1095,12 +1113,17 @@ function WuiPane({ path, spec, chrome = "workspace" }: WuiViewProps) {
         // A reader gets the same way back as on the "not published" branch —
         // a 503 mid-restore or a dropped connection is as transient as the
         // 404 is, and only one of them offering Try again made no sense.
+        // Not for a 403: that is who the reader is, not the moment they read
+        // at, and a button that returns the same sentence every press only
+        // hides the one fix (being added to the item).
         <div
           role="status"
           style={{ padding: 12, color: "var(--err)", display: "flex", gap: 8, alignItems: "center" }}
         >
           <span>{built.error instanceof Error ? built.error.message : "This WUI could not be opened."}</span>
-          {!author && <TryAgain onClick={() => setGeneration((g) => g + 1)} />}
+          {!author && !(built.error instanceof WuiEntryMissing && built.error.kind === "forbidden") && (
+            <TryAgain onClick={tryAgain} />
+          )}
         </div>
       ) : (
         <iframe

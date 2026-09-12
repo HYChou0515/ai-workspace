@@ -34,7 +34,6 @@ import { useQuery } from "@tanstack/react-query";
 function Problem({ children, retry }: { children: React.ReactNode; retry?: () => void }) {
   return (
     <div
-      role="alert"
       style={{
         display: "flex",
         flexDirection: "column",
@@ -47,7 +46,12 @@ function Problem({ children, retry }: { children: React.ReactNode; retry?: () =>
         color: "var(--ink-2)",
       }}
     >
-      <p style={{ maxWidth: "42rem", margin: 0 }}>{children}</p>
+      {/* The SENTENCE is the alert; the button sits beside it. An `alert` is a
+          live region assistive tech announces and does not expect controls
+          in, so a button inside one is read as text and may not be reached. */}
+      <p role="alert" style={{ maxWidth: "42rem", margin: 0 }}>
+        {children}
+      </p>
       {retry && <TryAgain onClick={retry} />}
     </div>
   );
@@ -86,7 +90,11 @@ export function WuiPage({
     // it.
     const why = classifyReadFailure(view.error, path);
     const retry = () => void view.refetch();
-    if (why.kind === "failed") return <Problem retry={retry}>{why.reason}</Problem>;
+    if (why.kind === "failed") {
+      // A permanent failure (a 403 — the reader, not the moment) offers no
+      // Try again: the same sentence every press hides the only fix.
+      return <Problem retry={why.permanent ? undefined : retry}>{why.reason}</Problem>;
+    }
     return (
       <Problem retry={retry}>
         There is no file at {path} in this item — or the item is still being restored. Try again in a
@@ -115,7 +123,7 @@ export function WuiPage({
           {/* The reader's chrome: no toolbar, no build log, no reports, and the
               page is never rebuilt on their account — a link serves what is
               already built (docs/plan-wui-deploy.md). */}
-          <WuiView path={path} spec={spec} chrome="viewer" />
+          <WuiView path={path} spec={spec} chrome="viewer" onRetry={() => void view.refetch()} />
         </div>
       </FileServiceProvider>
     </WorkspaceSlugProvider>

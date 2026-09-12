@@ -48,8 +48,11 @@ export const qk = {
   // `generation` at 0 while the previous instance's documents are still cached
   // (never stale, five minutes) — without it, generation 1 of the new pane
   // was the old pane's generation 1, and a "verified" Deploy read nothing.
-  wuiDoc: (id: string, path: string, instance: number, generation: number) =>
-    ["wuiDoc", id, path, instance, generation] as const,
+  // `entry` too: the document IS the entry file folded with its folder, so a
+  // view file whose `entry:` changed (an author pointing it at the built
+  // `dist/index.html`) is a different document, not the same one re-read.
+  wuiDoc: (id: string, path: string, entry: string, instance: number, generation: number) =>
+    ["wuiDoc", id, path, entry, instance, generation] as const,
   // Whether a WUI's folder declares a build. Its own key rather than `file`:
   // that one holds a `FileContent`, and two shapes under one key is a cache
   // that hands a consumer the other one's answer.

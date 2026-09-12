@@ -40,3 +40,19 @@ export function resolveRefPath(fromPath: string, src: string): string {
 export function isExternalRef(src: string): boolean {
   return /^(?:[a-z][a-z0-9+.-]*:|#|\/\/)/i.test(src);
 }
+
+/** A workspace path as URL segments — the ONE spelling of that rule, for
+ * everything that puts a workspace path into an address: the `/files/` routes
+ * (`real.ts`), the KB leaf routes (`leafPath.ts`), asset URLs
+ * (`fileService.ts`) and the WUI's own `/w/` link (`WuiView`). Four copies of
+ * these three lines had accumulated by review round 7; a fix to one (a
+ * literal `%`, a `.` segment) must reach them all. Here, in the
+ * dependency-free path module, rather than beside the HTTP client: a
+ * renderer wanting path encoding should not import `fetch`, and the client
+ * module is mocked in tests that never intend to touch this. */
+export function encodePath(path: string): string {
+  // Drop the leading slash before joining: workspace paths reach the FE in both
+  // dialects (a `shown_files` declaration normalises to absolute, a file tree row
+  // is relative) and `…/files/` + `/out/a.png` would otherwise emit `files//out`.
+  return path.replace(/^\/+/, "").split("/").map(encodeURIComponent).join("/");
+}

@@ -307,8 +307,37 @@ describe("WuiPage: what a reader is handed", () => {
     const said = await screen.findByText(/do not have permission to read/i);
     expect(said).toHaveTextContent("/scrap-review/page.ai.yaml");
     expect(screen.queryByText(/no file at/i)).toBeNull();
-    // Transient or not, a reader can look again without reloading the tab.
-    expect(screen.getByRole("button", { name: /try again/i })).toBeInTheDocument();
+    // A 403 is who the reader is, not the moment they read at: no Try again
+    // (review round 7) — the same sentence every press would only hide the
+    // one fix, being added to the item. The sentence is still the alert.
+    expect(screen.queryByRole("button", { name: /try again/i })).toBeNull();
+    expect(screen.getByRole("alert")).toHaveTextContent(/permission/i);
+  });
+
+  it("re-reads the view file too when the reader tries again", async () => {
+    /**
+     * Review round 7: the pane's Try again re-read the FOLDER, but the view
+     * file lives in this route's own query — a stale `entry:` read during a
+     * restore stayed through every press. The pane hands the press back up.
+     */
+    const files: Record<string, string> = { "/scrap-review/page.ai.yaml": YAML };
+    const readFile = vi.fn(async (path: string) => {
+      const text = files[path];
+      if (text === undefined) throw notFound(path);
+      return { kind: "text", path, text, size: text.length, encoding: "utf-8" };
+    });
+    renderAt("/w/rca/i1/scrap-review/page.ai.yaml", readFile);
+    await screen.findByRole("status");
+    const viewReads = () => readFile.mock.calls.filter(([p]) => p === "/scrap-review/page.ai.yaml").length;
+    const before = viewReads();
+
+    // The author fixes the view file to point at the built entry.
+    files["/scrap-review/page.ai.yaml"] = `${YAML}entry: dist/index.html\n`;
+    files["/scrap-review/dist/index.html"] = "<!doctype html><p>built</p>";
+    fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+
+    await waitFor(() => expect(viewReads()).toBeGreaterThan(before));
+    await waitFor(() => expect(screen.getByTitle("Scrap review")).toBeTruthy());
   });
 
   it("lets a reader try again, because a missing entry may only be a sandbox mid-restore", async () => {

@@ -116,7 +116,10 @@ function toDataUrl(blob: Blob): Promise<string> {
 export type AssetRead =
   | { kind: "asset"; asset: WuiAsset }
   | { kind: "missing" }
-  | { kind: "failed"; reason: string };
+  /** `permanent`: trying again cannot change the answer — a 403 is who the
+   * reader is, not the moment they read at. Every other failure may be a
+   * moment's, and is offered a way to look again. */
+  | { kind: "failed"; reason: string; permanent: boolean };
 
 /**
  * What a failed read MEANS — the one place that decides it, for every read a
@@ -144,16 +147,16 @@ export function classifyReadFailure(err: unknown, path: string): Exclude<AssetRe
     // Not `err.message`: that is "read /w/index.html failed: 403", an
     // internal path and a bare number shown to someone who cannot open a
     // console. True, and not a sentence they can act on.
-    return {
-      kind: "failed",
-      reason:
-        err.status === 403
-          ? `You do not have permission to read ${path}.`
-          : `${path} could not be read (the workspace answered ${err.status}).`,
-    };
+    return err.status === 403
+      ? { kind: "failed", reason: `You do not have permission to read ${path}.`, permanent: true }
+      : {
+          kind: "failed",
+          reason: `${path} could not be read (the workspace answered ${err.status}).`,
+          permanent: false,
+        };
   }
   if (err instanceof TypeError) {
-    return { kind: "failed", reason: `Could not reach the workspace to read ${path}.` };
+    return { kind: "failed", reason: `Could not reach the workspace to read ${path}.`, permanent: false };
   }
   return { kind: "missing" };
 }
@@ -185,10 +188,10 @@ export async function readAsset(fs: FileService, path: string): Promise<AssetRea
   // exists but not what is in it; the raw route is where those bytes live.
   try {
     const resp = await fetch(fs.fileDownloadUrl(path));
-    if (!resp.ok) return { kind: "failed", reason: `could not read ${path} (${resp.status})` };
+    if (!resp.ok) return { kind: "failed", reason: `could not read ${path} (${resp.status})`, permanent: resp.status === 403 };
     return { kind: "asset", asset: { kind: "binary", dataUrl: await toDataUrl(await resp.blob()) } };
   } catch {
-    return { kind: "failed", reason: `could not read ${path}` };
+    return { kind: "failed", reason: `could not read ${path}`, permanent: false };
   }
 }
 
@@ -227,7 +230,7 @@ function directoryOf(entryPath: string): string {
  * shown as itself. An explicit kind, not "no reason given": a proxy like
  * that is one reason-less `throw` away from calling a forbidden page
  * unpublished. */
-export type WuiEntryProblem = "absent" | "unreadable" | "not-html" | "bad-entry";
+export type WuiEntryProblem = "absent" | "unreadable" | "forbidden" | "not-html" | "bad-entry";
 
 /** Raised when the entry document itself cannot be opened — the one absence that
  * has nothing to degrade to, so it is reported by name rather than swallowed. */
@@ -259,7 +262,9 @@ export async function buildWuiDoc(fs: FileService, folder: string, entry: string
   }
   const load = folderLoader(fs, folder, directoryOf(path));
   const read = await readAsset(fs, path);
-  if (read.kind === "failed") throw new WuiEntryMissing(entry, "unreadable", read.reason);
+  if (read.kind === "failed") {
+    throw new WuiEntryMissing(entry, read.permanent ? "forbidden" : "unreadable", read.reason);
+  }
   if (read.kind === "missing") throw new WuiEntryMissing(entry, "absent");
   if (read.asset.kind !== "text") {
     // It IS there — saying it is not sends them looking for the wrong thing,

@@ -14,7 +14,8 @@
 
 import type { AgentEvent, CellEvent } from "../events";
 import { decodeBytes } from "./encoding";
-import { API_PREFIX, apiFetch, encodePath, HttpError, errorCode, errorInfo, httpErrorFrom } from "./http";
+import { API_PREFIX, apiFetch, HttpError, errorCode, errorInfo, httpErrorFrom } from "./http";
+import { encodePath } from "./refPath";
 import { parseSseStream } from "./sse";
 import type {
   ActivityEntry,

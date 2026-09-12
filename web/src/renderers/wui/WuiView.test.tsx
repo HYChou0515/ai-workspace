@@ -5,6 +5,7 @@ import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FileServiceProvider, type FileService } from "../../api/fileService";
+import { HttpError } from "../../api/http";
 import { qk } from "../../api/queryKeys";
 import { WorkspaceSlugProvider } from "../../hooks/useWorkspaceSlug";
 import { autoBuildScope, getWuiAutoBuild, setWuiAutoBuild } from "../../lib/wuiAutoBuild";
@@ -26,12 +27,18 @@ const text = (path: string, body: string): FileContent => ({
   encoding: "utf-8",
 });
 
+/** What the real service throws for a file that is not there — an
+ * `HttpError(404)`, the one shape `classifyReadFailure` treats as certain
+ * absence. A plain `Error` reached "missing" through its lenient catch-all
+ * instead, so no test here exercised the 404 branch production takes. */
+const notFound = (path: string) => new HttpError(404, `read ${path} failed: 404`);
+
 function svc(files: Record<string, string>): FileService {
   return {
     scopeId: "item1",
     caps: { write: true, delete: true },
     readFile: vi.fn(async (path: string) => {
-      if (!(path in files)) throw new Error(`not found: ${path}`);
+      if (!(path in files)) throw notFound(path);
       return text(path, files[path]);
     }),
     writeFile: vi.fn(async (path: string, body: string) => {
@@ -1634,19 +1641,38 @@ describe("WuiView: Deploy", () => {
     );
   });
 
-  it("does not trust a 'no manifest' that contradicts what it knew a moment ago", async () => {
+  it("follows the manifest: a build script removed mid-session makes this a plain page", async () => {
     /**
-     * Review round 6: a mid-restore 404 on `package.json` read as "no build"
-     * — Deploy skipped the build, verified the OLD `dist/`, said "✓ Deployed",
-     * and the answer overwrote the toolbar's cache so Rebuild vanished. A
-     * plain page IS "no manifest" every time, so 404 cannot simply be a
-     * failure; but a 404 for a manifest the pane has already SEEN is not a
-     * page losing its build, it is a folder mid-restore.
+     * Review round 7: round 6 had guessed that a manifest "there a moment ago
+     * and not now" was a folder mid-restore, and put the old answer back —
+     * which made a DELIBERATELY removed `package.json` a permanent failure:
+     * every Deploy refused, Rebuild drawn over a page with no build, until a
+     * tab reload. The pane's knowledge of the manifest now follows the file
+     * (the `fileChangedBus` effect), and a fresh "not there" is what it says.
      */
+    vi.stubGlobal("fetch", vi.fn());
+    const files: Record<string, string> = { ...BUILT };
+    renderInFs(files);
+    await screen.findByRole("button", { name: /^rebuild$/i });
+
+    // The agent converts the page to a plain one.
+    delete files["/sales/package.json"];
+    act(() => publishFileChanged("item1", "/sales/package.json"));
+    await waitFor(() => expect(screen.queryByRole("button", { name: /^rebuild$/i })).toBeNull());
+
+    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+
+    expect(await screen.findByRole("textbox", { name: /address/i })).toHaveValue(ADDRESS);
+    expect(buildCalls()).toHaveLength(0);
+  });
+
+  it("keeps the toolbar's answer when the manifest merely could not be read", async () => {
+    // A failed read says nothing about the file: Rebuild stays, Deploy fails
+    // with the reason, and nothing is guessed.
     vi.stubGlobal("fetch", vi.fn());
     let manifestReads = 0;
     renderInFs({ ...BUILT }, async (path, real) => {
-      if (path === "/sales/package.json" && ++manifestReads > 1) throw new Error("not found");
+      if (path === "/sales/package.json" && ++manifestReads > 1) throw new TypeError("Failed to fetch");
       return real(path);
     });
     await screen.findByRole("button", { name: /^rebuild$/i });
@@ -1654,8 +1680,35 @@ describe("WuiView: Deploy", () => {
 
     expect(await screen.findByText(/deploy failed/i)).toHaveTextContent(/could not check/i);
     expect(buildCalls()).toHaveLength(0);
-    expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull();
     expect(screen.getByRole("button", { name: /^rebuild$/i })).toBeInTheDocument();
+  });
+
+  it("drops a waiting verdict whose document has left the cache, rather than claim a fresh read", async () => {
+    /**
+     * Review round 7: a verdict that waited on a sibling pointed at a
+     * document nothing observed — gone after `gcTime` — and returning to the
+     * page then pointed the pane at a key that had to be read again, under a
+     * "✓ Deployed" that claimed the frame showed what was verified.
+     */
+    const { release } = serveHeldBuild(0);
+    const client = makeTestQueryClient();
+    const files: Record<string, string> = { ...BUILT, "/sales/dist/index.html": "<html><body>v1</body></html>" };
+    const page = pages(svc(files), client);
+    const view = render(page("/sales/a.ai.yaml", "dist/index.html"));
+    await screen.findByRole("button", { name: /^rebuild$/i });
+    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    await screen.findByText(/> vite build/);
+    view.rerender(page("/sales/b.ai.yaml", "dist/index.html"));
+    release();
+    await waitFor(() => expect(screen.getByRole("button", { name: /^rebuild$/i })).toBeEnabled());
+
+    // Five minutes pass on B: the verified document is collected.
+    client.removeQueries({ queryKey: ["wuiDoc"] });
+
+    view.rerender(page("/sales/a.ai.yaml", "dist/index.html"));
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+    expect(screen.queryByText(/^✓ deployed/i)).toBeNull();
+    expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull();
   });
 
   it("starts clean on a page in another folder while a Deploy was running", async () => {
