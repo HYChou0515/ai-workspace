@@ -64,6 +64,31 @@ def resolve_document(spec: SpecStar, collection_ids: list[str], name: str) -> Do
     return DocResolution(status="not_found")
 
 
+def resolve_folder(spec: SpecStar, collection_ids: list[str], folder: str) -> frozenset[str]:
+    """plan-rag-context P3: the ids of every document UNDER ``folder`` (recursive)
+    within ``collection_ids`` — the positive scope a folder-limited search or
+    grep is restricted to (`restrict_to_doc_ids`, #518, which the context walk
+    honours too). The match is on ``folder + "/"`` so ``a`` never bleeds into
+    ``ab/…``; leading / trailing slashes are the same folder. Empty when nothing
+    is under it (the caller says so — an empty scope must not fall back to an
+    unscoped search).
+
+    An INDEXED ``path.starts_with`` — the reason `source-doc` carries a
+    migrations.md row: a row indexed before the `path` index has no cell to
+    answer this and reads as "not in the folder"."""
+    if not collection_ids:
+        return frozenset()
+    prefix = folder.strip("/")
+    if not prefix:
+        return frozenset()
+    rm = spec.get_resource_manager(SourceDoc)
+    cond = (QB["collection_id"].in_(collection_ids)) & QB["path"].starts_with(prefix + "/")
+    return frozenset(
+        r.info.resource_id  # ty: ignore[unresolved-attribute]
+        for r in rm.list_resources(cond.build(), returns=["info"])
+    )
+
+
 def _ok(rev: object) -> DocResolution:
     return DocResolution(
         status="ok",

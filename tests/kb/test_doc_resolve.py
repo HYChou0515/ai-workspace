@@ -78,3 +78,20 @@ def test_resolve_is_scoped_to_the_given_collections(spec):
     # Searching only collection A must not reach collection B's doc.
     assert resolve_document(spec, [a], "secret.pdf").status == "not_found"
     assert resolve_document(spec, [a, b], "secret.pdf").status == "ok"
+
+
+def test_resolve_folder_is_a_recursive_prefix_that_does_not_bleed_into_siblings(spec):
+    """plan-rag-context P3: "the documents under this folder". `a` covers `a/x`
+    and `a/b/y` but NOT `ab/z` — the match is on `a/`, never on the bare `a`."""
+    from workspace_app.kb.doc_resolve import resolve_folder
+
+    cid = _coll(spec)
+    for path in ("a/x.md", "a/b/y.md", "ab/z.md", "c.md"):
+        _add_doc(spec, cid, path)
+    inside = {encode_doc_id(cid, "a/x.md"), encode_doc_id(cid, "a/b/y.md")}
+    assert resolve_folder(spec, [cid], "a") == inside
+    assert resolve_folder(spec, [cid], "a/") == inside  # a trailing slash is the same folder
+    assert resolve_folder(spec, [cid], "/a") == inside  # so is a leading one
+    assert resolve_folder(spec, [cid], "a/b") == {encode_doc_id(cid, "a/b/y.md")}
+    assert resolve_folder(spec, [cid], "nope") == frozenset()
+    assert resolve_folder(spec, [], "a") == frozenset()

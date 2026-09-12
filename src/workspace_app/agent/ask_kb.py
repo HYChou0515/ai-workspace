@@ -23,7 +23,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
-from .context import KbSearchBudget, WikiSearchBudget
+from .context import KbGrepBudget, KbSearchBudget, WikiSearchBudget
 
 if TYPE_CHECKING:
     from ..resources.kb import Citation
@@ -52,6 +52,11 @@ class AskKbSpec:
 
     kb_search_max: int | None = 3
     wiki_search_max: int | None = 3
+    # plan-rag-context P3: the exact-string search's own cap — `0` withholds the
+    # tool, `None` (default) unlimited: a grep is cheap and deterministic, and the
+    # sub-agent's `max_turns` bounds it structurally. `kb_search_max == 0` (the
+    # documents OFF) withholds it too — it is a document tool.
+    kb_grep_max: int | None = None
     glossary: bool = True
     prompt: str | None = None
     scope: list[str] | None = None
@@ -70,6 +75,11 @@ class AskKbSpec:
         tools = []
         if self.kb_search_max != 0:
             tools.append("kb_search")
+        # The exact search is a DOCUMENT tool: the per-source switch (#537 —
+        # documents / wiki / glossary) turns it off with kb_search, and its own
+        # cap can withhold it alone. It never draws from the semantic budget.
+        if self.kb_search_max != 0 and self.kb_grep_max != 0:
+            tools.append("kb_grep")
         if self.wiki_search_max != 0:
             tools.append("ask_wiki")
         if self.glossary:
@@ -88,6 +98,7 @@ def build_ask_kb_context(spec: AskKbSpec, base: AgentToolContext) -> AgentToolCo
         collection_ids=list(spec.scope) if spec.scope is not None else base.collection_ids,
         kb_search_budget=KbSearchBudget(max_calls=spec.kb_search_max),
         wiki_search_budget=WikiSearchBudget(max_calls=spec.wiki_search_max),
+        kb_grep_budget=KbGrepBudget(max_calls=spec.kb_grep_max),
     )
 
 
@@ -122,6 +133,7 @@ def make_ask_knowledge_base(spec: AskKbSpec, bridge_run: RunSubagent) -> RunSuba
             collection_ids=list(spec.scope) if spec.scope is not None else scope,
             budget=KbSearchBudget(max_calls=spec.kb_search_max),
             wiki_budget=WikiSearchBudget(max_calls=spec.wiki_search_max),
+            grep_budget=KbGrepBudget(max_calls=spec.kb_grep_max),
             ask_kb_spec=spec,
         )
 

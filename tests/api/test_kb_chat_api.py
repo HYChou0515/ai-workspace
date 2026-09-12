@@ -698,7 +698,7 @@ async def test_answer_question_applies_ask_kb_spec_tools_and_wiki_budget():
     )
 
     assert runner.ctx is not None and runner.ctx.agent_config is not None
-    assert runner.ctx.agent_config.allowed_tools == ["kb_search", "lookup_glossary"]
+    assert runner.ctx.agent_config.allowed_tools == ["kb_search", "kb_grep", "lookup_glossary"]
     assert runner.ctx.wiki_search_budget.max_calls == 2
 
 

@@ -295,9 +295,36 @@ Ctrl+F:
 
 **Do not copy `search_wiki`'s loop.** It reads every page in scope and greps
 in Python — fine for a wiki, a full scan for a collection of thousands of
-documents. Use the existing pg_trgm trigram index on `DocChunk.text` (the
-`.fuzzy` pre-narrowing the sparse arm already uses) to shortlist chunks, then
-exact-match on the canonical text to produce line and page.
+documents. The store is pre-narrowed through the pg_trgm index on
+`DocChunk.text`, then the exact match is verified on the canonical text to
+produce line and page.
+
+Two things settled while implementing (`Retriever.grep`, `kb/grep.py`):
+
+- **Pre-narrow with `icontains`, never `.fuzzy`, and on ONE token.** `.fuzzy`
+  is trigram *similarity* — a short query inside a long chunk scores low and
+  the chunk is dropped, which is wrong for an exact search (BM25 accepts that
+  loss; grep cannot). `icontains` is an exact, case-insensitive substring
+  (`ILIKE`, index-accelerated). And it is applied to the query's **longest
+  token**, not the whole phrase: a phrase longer than the chunker's overlap can
+  straddle two chunks, so a whole-phrase pre-filter never sees it (a test pins
+  this with a three-token phrase over three-token windows). Any occurrence's
+  longest token lies whole inside some chunk; the exact phrase is then verified
+  on the canonical text with the chunk span widened by the query's length.
+- **The exact search is a DOCUMENT tool.** #537's allowance is per *source*
+  (documents / wiki / glossary), so "documents off" (`kb_search_max == 0`)
+  withholds `kb_grep` too — a user who set "0 document searches" must not find
+  the agent still grepping the documents. It has its own switch as well
+  (`kb_grep_max == 0`) and its own counter (`KbGrepBudget`, unlimited by
+  default — deterministic, no LLM, `max_turns` is the structural bound), and it
+  never draws from the semantic budget. Threaded through every door the other
+  two budgets go through (KB turn, `answer_question`, the sub-agent bridge,
+  `chat_send`, `AskKbSpec`).
+
+The `folder` scope composes with the #518 card anchor by intersection, and the
+"widen" pass widens to the folder, never past it: an anchor with nothing inside
+the folder yields nothing so the caller widens — passing an empty
+`restrict_to_doc_ids` would have meant *unscoped*, a leak outside the folder.
 
 Solves the `Fig. 1` case (and part numbers, error codes, section numbers)
 without a figure-label parser — that idea is withdrawn.

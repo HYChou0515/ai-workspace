@@ -197,6 +197,7 @@ export const messages = {
   "tool.delete_file": { "zh-TW": "刪除檔案", en: "Delete file" },
   "tool.ask_knowledge_base": { "zh-TW": "查詢知識庫", en: "Ask the knowledge base" },
   "tool.kb_search": { "zh-TW": "搜尋知識庫", en: "Search the knowledge base" },
+  "tool.kb_grep": { "zh-TW": "精確搜尋字串", en: "Find exact text" },
   "tool.search_wiki": { "zh-TW": "搜尋知識百科", en: "Search the wiki" },
   "tool.resolve_collection": { "zh-TW": "確認知識集", en: "Resolve collection" },
   "tool.lookup_glossary": { "zh-TW": "查詢詞彙", en: "Look up glossary" },

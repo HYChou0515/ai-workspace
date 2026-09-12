@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import posixpath
+import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import cast
@@ -34,6 +35,7 @@ from .bm25 import bm25_rank, tokenize
 from .context import ChunkSpan, expand_passages
 from .embedder import Embedder
 from .fusion import mmr, rrf_scores
+from .grep import GrepHit, GrepResult, anchor_of, line_at, occurrences
 from .image_embedder import ImageEmbedder
 from .ingest import normalize_text
 from .llm import ILlm, OnChunk
@@ -579,6 +581,17 @@ class _ContextSeams:
         return posixpath.basename(path) if path else doc_id
 
 
+def _line_start(text: str, line_no: int) -> int:
+    """Char offset where 1-based `line_no` begins."""
+    pos = 0
+    for _ in range(line_no - 1):
+        nxt = text.find("\n", pos)
+        if nxt == -1:
+            return pos
+        pos = nxt + 1
+    return pos
+
+
 def _content_file_id(doc: SourceDoc) -> str:
     """A doc's content hash, or ``""`` when unset — the content key chunks join on."""
     fid = getattr(doc.content, "file_id", None)
@@ -957,6 +970,95 @@ class Retriever:
         # #513 P9: pull in the parent of any attachment hit — AFTER the top_k cut,
         # so the parent context rides along without displacing a primary result.
         return self._augment_with_parents(passages[:limit], join)
+
+    def grep(
+        self,
+        query: str,
+        collection_ids: list[str],
+        *,
+        exclude_doc_ids: frozenset[str] = frozenset(),
+        restrict_to_doc_ids: frozenset[str] = frozenset(),
+        limit: int = 200,
+    ) -> GrepResult:
+        """plan-rag-context P3: every LINE in scope containing `query` (literal,
+        case-insensitive), in document-tree order — the Ctrl+F arm. It locates;
+        it does not rank, and its hits are not passages.
+
+        Same scope as every other arm: the #308 exclusion and the #518
+        restriction go into the store query, and attribution runs through
+        `_DocJoin` so a denied holder of shared content is never named.
+
+        The store is pre-narrowed on the query's longest token via the trigram
+        index (`icontains` — exact substring, case-insensitive, never the fuzzy
+        similarity BM25 uses, which would drop a long chunk holding a short
+        query). The exact match is then verified on the CANONICAL text — what
+        `read_lines` will show — with each chunk's span widened by the query's
+        length so a phrase straddling two chunks is still found once.
+        """
+        if not query.strip() or not collection_ids:
+            return GrepResult(hits=[], total=0)
+        # Literal + case-insensitive: the same rule `api.search.compile_query`
+        # applies for the wiki grep (a literal cannot fail to compile).
+        pattern = re.compile(re.escape(query), re.IGNORECASE)
+        exclude = self._exclusion(collection_ids, exclude_doc_ids)
+        restrict = self._restriction(restrict_to_doc_ids)
+        cond = QB["collection_id"].in_(collection_ids) & QB["text"].icontains(anchor_of(query))
+        if exclude:
+            cond = cond & exclude.condition()
+        if restrict is not None:
+            cond = cond & restrict.condition()
+        rm = self._spec.get_resource_manager(DocChunk)
+        fields = [
+            "/start",
+            "/end",
+            "/provenance",
+            "/collection_id",
+            "/source_doc_id",
+            "/source_file_id",
+        ]
+        chunks: list[DocChunk] = [
+            cast(DocChunk, r.data)
+            for r in rm.list_resources(cond.build(), returns=["data", "info"], partial=fields)
+        ]
+        if not chunks:
+            return GrepResult(hits=[], total=0)
+        join = _DocJoin(self._spec, chunks, exclude.doc_ids_set if exclude else frozenset())
+        by_doc: dict[str, list[DocChunk]] = {}
+        for ch in chunks:
+            doc_id = join.doc_id_for(ch)
+            if doc_id is not None and join.path_of(doc_id) is not None:
+                by_doc.setdefault(doc_id, []).append(ch)
+        texts = join.texts_for(by_doc)
+        slack = len(query)
+        hits: list[GrepHit] = []
+        for doc_id, doc_chunks in by_doc.items():
+            text = texts.get(doc_id)
+            if text is None:
+                text = self._canonical_text(doc_id)
+            path = join.path_of(doc_id)
+            assert path is not None  # filtered above
+            # A line is reported once however many chunks overlap it; the page
+            # is the first containing chunk's.
+            seen_lines: dict[int, int | None] = {}
+            for ch in doc_chunks:
+                page = ch.provenance.get("page")
+                for off in occurrences(text, pattern, ch.start - slack, ch.end + slack):
+                    line_no, _ = line_at(text, off)
+                    seen_lines.setdefault(line_no, page if isinstance(page, int) else None)
+            for line_no, page in seen_lines.items():
+                _, line_text = line_at(text, _line_start(text, line_no))
+                hits.append(
+                    GrepHit(
+                        document_id=doc_id,
+                        path=path,
+                        filename=posixpath.basename(path),
+                        line=line_no,
+                        text=line_text,
+                        page=page,
+                    )
+                )
+        hits.sort(key=lambda h: (tree_sort_key(h.path), h.line))
+        return GrepResult(hits=hits[:limit], total=len(hits))
 
     def _expand(
         self,

@@ -1035,6 +1035,7 @@ def kb_search_impl(
     page_from: int | None = None,
     page_to: int | None = None,
     sheet: str | None = None,
+    folder: str | None = None,
 ) -> str:
     """Semantic search over the knowledge base; returns numbered passages to cite as [n].
 
@@ -1064,8 +1065,14 @@ def kb_search_impl(
     location AND still ranks by `query`, so pair it with a real question. A
     page/sheet filter REQUIRES `document` (a page number is meaningless without a
     file). Use the filename the user gave — its folder is optional.
+
+    To search only INSIDE one folder — "the 2024 reports", "the screenshots next
+    to that file" — pass `folder` (a path as shown in the file tree, e.g.
+    `2024` or `projects/alpha`). It covers the folder recursively, and the
+    neighbouring context stays inside it too. Combine with `document` to name a
+    file within that folder.
     """
-    from ..kb.doc_resolve import resolve_document
+    from ..kb.doc_resolve import resolve_document, resolve_folder
     from ..kb.provenance import format_location
     from ..kb.retriever import Enhancements, LocationFilter
 
@@ -1101,6 +1108,21 @@ def kb_search_impl(
     # source-doc id within the active collections (the opaque id never touches
     # the model). Resolution failures are recoverable messages the model fixes,
     # not exceptions — and they return BEFORE the budget is spent.
+    # plan-rag-context P3: `folder` is a POSITIVE scope (#518 `restrict_to_doc_ids`)
+    # — search, card anchoring and the neighbouring-context walk all stay inside
+    # it. Resolved before the budget is spent; an empty folder is a message, never
+    # a silent fallback to searching everything.
+    folder_scope: frozenset[str] | None = None
+    if folder is not None:
+        spec = ctx.context.spec
+        assert spec is not None  # a KB context always wires spec
+        folder_scope = resolve_folder(spec, ctx.context.collection_ids, folder)
+        if not folder_scope:
+            return (
+                f"No documents under folder {folder!r} in the current knowledge base — "
+                "check the path as shown in the file tree (or search without `folder`)."
+            )
+
     location: LocationFilter | None = None
     if document is not None or page_from is not None or page_to is not None or sheet is not None:
         if document is None:
@@ -1119,6 +1141,8 @@ def kb_search_impl(
         if res.status == "ambiguous":
             opts = ", ".join(res.candidates)
             return f"{document!r} matches several files; pass the full path, one of: {opts}"
+        if folder_scope is not None and res.doc_id not in folder_scope:
+            return f"{document!r} is not under folder {folder!r} — drop one of the two."
         location = LocationFilter(
             source_doc_id=res.doc_id, page_from=page_from, page_to=page_to, sheet=sheet
         )
@@ -1164,6 +1188,15 @@ def kb_search_impl(
         anchor = _card_anchor_doc_ids(ctx.context, query)
 
         def run(restrict: frozenset[str]):
+            # A folder is the outer scope: the card anchor narrows WITHIN it, and
+            # the "widen" pass (`restrict` empty) widens to the folder, never past
+            # it. An anchor with nothing inside the folder yields nothing here so
+            # the caller widens — `restrict_to_doc_ids=frozenset()` would mean
+            # UNSCOPED, i.e. a leak outside the folder.
+            if folder_scope is not None:
+                restrict = (restrict & folder_scope) if restrict else folder_scope
+                if not restrict:
+                    return []
             return retriever.search(
                 query,
                 ctx.context.collection_ids,
@@ -1240,6 +1273,103 @@ def kb_search_impl(
             f"\n\n(Search budget: {budget.used} of {budget.max_calls} used, "
             f"{budget.remaining} left. Only search again for genuinely different "
             "information.)"
+        )
+    return body
+
+
+def kb_grep_impl(
+    ctx: RunContextWrapper[AgentToolContext],
+    query: str,
+    document: str | None = None,
+    folder: str | None = None,
+) -> str:
+    """Find every line in the knowledge base that contains `query` EXACTLY
+    (case-insensitive) — Ctrl+F over the documents. Returns
+    ``path (p.N):line: text`` in document order, NOT ranked.
+
+    Use this, not kb_search, for a specific string: "Fig. 1", a part number,
+    an error code, a section number, a name — anything where the words
+    themselves matter and a semantic search comes back with look-alikes.
+    kb_search matches on meaning; this matches on characters.
+
+    Narrow it with `document` (a filename or path as shown in the file tree)
+    or `folder` (a folder path; recursive), or both.
+
+    The result LOCATES; it does not give you a passage to cite. To read what
+    is there, open the document at that line or page and cite from what you
+    read. Long phrases work, but keep the query to the distinctive part.
+    """
+    from ..kb.doc_resolve import resolve_document, resolve_folder
+
+    retriever = ctx.context.retriever
+    assert retriever is not None  # kb_grep implies a KB context
+    spec = ctx.context.spec
+    assert spec is not None  # a KB context always wires spec
+
+    budget = ctx.context.kb_grep_budget
+    if budget.exhausted:
+        cap = budget.max_calls
+        if cap == 0:
+            return "No exact searches are allowed for this reply; do not call kb_grep."
+        return (
+            f"Exact-search budget exhausted for this reply ({cap} of {cap} used). "
+            "Work from the locations already found; do not call kb_grep again."
+        )
+    if not query.strip():
+        return "error: `query` is empty — pass the exact text to look for."
+
+    # Scope: the same positive scope kb_search uses (`restrict_to_doc_ids`, #518).
+    # Resolved BEFORE the budget is spent, and an empty folder is a message, never
+    # a fallback to searching everything.
+    scope: frozenset[str] = frozenset()
+    if folder is not None:
+        scope = resolve_folder(spec, ctx.context.collection_ids, folder)
+        if not scope:
+            return (
+                f"No documents under folder {folder!r} in the current knowledge base — "
+                "check the path as shown in the file tree (or search without `folder`)."
+            )
+    if document is not None:
+        res = resolve_document(spec, ctx.context.collection_ids, document)
+        if res.status == "not_found":
+            return f"No document matching {document!r} in the current knowledge base."
+        if res.status == "ambiguous":
+            opts = ", ".join(res.candidates)
+            return f"{document!r} matches several files; pass the full path, one of: {opts}"
+        assert res.doc_id is not None
+        if scope and res.doc_id not in scope:
+            return f"{document!r} is not under folder {folder!r} — drop one of the two."
+        scope = frozenset({res.doc_id})
+
+    budget.used += 1  # a completed grep costs one unit, even a no-match
+
+    result = retriever.grep(
+        query,
+        ctx.context.collection_ids,
+        exclude_doc_ids=ctx.context.exclude_doc_ids,  # #308: per-doc override
+        restrict_to_doc_ids=scope,
+    )
+    if not result.hits:
+        body = f"No lines match {query!r}."
+    else:
+        lines = []
+        for h in result.hits:
+            where = f"{h.path} (p.{h.page})" if h.page is not None else h.path
+            lines.append(f"{where}:{h.line}: {h.text}")
+        head = f"{result.total} matching lines"
+        if result.total > len(result.hits):
+            head += (
+                f" (showing the first {len(result.hits)} in document order — "
+                "narrow the query or the scope)"
+            )
+        body = head + ":\n" + "\n".join(lines)
+        cap = ctx.context.exec_output_max_chars
+        body = _truncate_middle(body, cap) if len(body) > cap else body
+
+    if budget.max_calls is not None:
+        body += (
+            f"\n\n(Exact-search budget: {budget.used} of {budget.max_calls} used, "
+            f"{budget.remaining} left.)"
         )
     return body
 
@@ -2753,6 +2883,8 @@ _IMPLS = {
     "ask_knowledge_base": ask_knowledge_base_impl,
     "infer_modules": infer_modules_impl,
     "kb_search": kb_search_impl,
+    # plan-rag-context P3: the exact-string arm — Ctrl+F, locate-only, not citable.
+    "kb_grep": kb_grep_impl,
     # #537: the KB agent's wiki entry point. Delegating like ask_knowledge_base —
     # the index-first navigation runs in a throwaway context and only the answer
     # comes back — NOT a leaf like `search_wiki`, which is why granting it to a KB
