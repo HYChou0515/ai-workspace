@@ -38,10 +38,11 @@ import { itemCallTool } from "./api";
 import { cleanBuildOutput, hasBuildScript, itemBuild } from "./build";
 import { itemRun } from "./run";
 import type { ViewSpec } from "../entity/types";
-import { buildWuiDoc, readAsset, WuiEntryMissing } from "./assets";
+import { buildWuiDoc, readAsset, WuiEntryMissing, type AssetRead } from "./assets";
 import { dispatchWuiRequest } from "./bridge";
 import { wuiFolder } from "./paths";
 import { createSelfWrites } from "./selfWrites";
+import { TryAgain } from "./TryAgain";
 import { WUI_PROTOCOL, isWuiRequest, refuse, type WuiEvent } from "./protocol";
 import {
   formatReportsForAgent,
@@ -60,16 +61,43 @@ export const DEFAULT_ENTRY = "index.html";
  * key and function are how the verdict and the frame came to read the
  * folder separately and disagree on screen; a copy that drifts (an `entry`
  * added to the key, a `staleTime` changed on one side) would bring that
- * back with every test green.
+ * back with every test green. The folder is DERIVED from the path here, so a
+ * caller cannot hand the key one page and the read another.
  */
-function wuiDocQuery(fs: FileService, folder: string, entry: string, path: string, generation: number) {
+function wuiDocQuery(fs: FileService, path: string, entry: string, instance: number, generation: number) {
   return queryOptions({
-    queryKey: qk.wuiDoc(fs.scopeId, path, generation),
-    queryFn: () => buildWuiDoc(fs, folder, entry),
+    queryKey: qk.wuiDoc(fs.scopeId, path, instance, generation),
+    queryFn: () => buildWuiDoc(fs, wuiFolder(path), entry),
     staleTime: Infinity,
     retry: false,
   });
 }
+
+/**
+ * The folder's manifest, as ONE query definition and ONE reader — the
+ * three-outcome one, so "no manifest" (a plain page, the ordinary case) and
+ * "could not read the manifest" (a dropped connection, a folder mid-restore)
+ * are different answers. The toolbar observes it to decide whether to offer
+ * Rebuild; Deploy fetches it fresh to decide whether to build. Round 5 had
+ * given those two their own readers, one of which folded every failure into
+ * "" — and the two were already one change away from disagreeing.
+ */
+function wuiManifestQuery(fs: FileService, folder: string) {
+  return queryOptions({
+    queryKey: qk.wuiBuildable(fs.scopeId, folder),
+    queryFn: () => readAsset(fs, `${folder}/package.json`),
+    staleTime: Infinity,
+    retry: false,
+  });
+}
+
+/** The manifest's text, or "" where there is none (or none readable). */
+function manifestText(read: AssetRead | undefined): string {
+  return read?.kind === "asset" && read.asset.kind === "text" ? read.asset.text : "";
+}
+
+/** Each mounted pane gets its own number — see `qk.wuiDoc`. */
+let paneSeq = 0;
 
 /**
  * How many of a page's reports we keep.
@@ -139,16 +167,18 @@ type WuiViewProps = {
 };
 
 /**
- * The pane, keyed by FOLDER — here, once, rather than at each of its mount
- * points (the IDE's `AiYamlRenderer`, the reader's `WuiPage`), so no door
- * can be left unkeyed.
+ * The pane, keyed by ITEM and FOLDER — here, once, rather than at each of
+ * its mount points (the IDE's `AiYamlRenderer`, the reader's `WuiPage`), so
+ * no door can be left unkeyed.
  *
- * A folder is the unit: its build, its `dist/`, its log. Moving to a page
- * in another folder is therefore a new instance, and everything the old one
- * held — a build in flight (aborted by its cleanup), the log, the flags, a
- * Deploy verdict — goes with it, by construction. Moving to a SIBLING view
- * file in the same folder keeps the instance: the folder, and the build that
- * may be running in it, are still what the pane is looking at.
+ * A folder in an item is the unit: its build, its `dist/`, its log. Moving to
+ * a page in another folder — or to the same path in another item, which two
+ * items of one App share (`dashboard/page.ai.yaml`) — is therefore a new
+ * instance, and everything the old one held — a build in flight (aborted by
+ * its cleanup), the log, the flags, a Deploy verdict, the rebuild-on-open
+ * guard — goes with it, by construction. Moving to a SIBLING view file in
+ * the same folder keeps the instance: the folder, and the build that may be
+ * running in it, are still what the pane is looking at.
  *
  * This replaces a hand-written "moving to another folder starts clean"
  * effect that reset each state by name and, in review round 5, was found to
@@ -156,7 +186,8 @@ type WuiViewProps = {
  * the next page for the rest of the view's life.
  */
 export function WuiView(props: WuiViewProps) {
-  return <WuiPane key={wuiFolder(props.path)} {...props} />;
+  const fs = useFileService();
+  return <WuiPane key={`${fs.scopeId}:${wuiFolder(props.path)}`} {...props} />;
 }
 
 function WuiPane({ path, spec, chrome = "workspace" }: WuiViewProps) {
@@ -164,6 +195,9 @@ function WuiPane({ path, spec, chrome = "workspace" }: WuiViewProps) {
   const queryClient = useQueryClient();
   const folder = wuiFolder(path);
   const entry = viewParamString(spec, "entry") ?? DEFAULT_ENTRY;
+  /** This pane's own number, for its document keys — see `qk.wuiDoc`. Lazy,
+   * so a re-render does not burn one. */
+  const [instance] = useState(() => ++paneSeq);
   /** The author's chrome — the toolbar, the build log, the reports, Deploy,
    * and the reads that only feed them. One name for every gate, so "a reader
    * sees and costs none of it" is one fact rather than comparisons that could
@@ -176,36 +210,31 @@ function WuiPane({ path, spec, chrome = "workspace" }: WuiViewProps) {
   // fresh document — and a fresh frame, so the page's state goes with it.
   const [generation, setGeneration] = useState(0);
 
-  const built = useQuery(wuiDocQuery(fs, folder, entry, path, generation));
+  const built = useQuery(wuiDocQuery(fs, path, entry, instance, generation));
 
   /**
    * Does this page have a build step?
    *
    * `scripts.build` decides, because `pnpm run build` is what the route runs.
    * Most pages are plain files with nothing to build, and a Rebuild button in
-   * front of them would fail loudly over a page that is perfectly fine.
+   * front of them would fail loudly over a page that is perfectly fine — so a
+   * manifest that is absent, or could not be read, offers no button (the
+   * toolbar has no explanation to give; Deploy, which does, treats those two
+   * differently).
    *
    * The workspace root is excluded: a root-level page has no folder to build in
    * and the route answers 400, so offering the button would only make the
    * platform look broken.
    */
   const buildable = useQuery({
+    ...wuiManifestQuery(fs, folder),
     // Never for a root-level page: `canBuild` is false there whatever the
     // answer, so the read is a 404 nobody can use. And never for a reader:
     // the answer feeds Rebuild and Deploy, neither of which they are shown,
     // so the read was a round trip on every link open that nothing consumed.
     enabled: author && folder !== "",
-    queryKey: qk.wuiBuildable(fs.scopeId, folder),
-    queryFn: () =>
-      fs
-        .readFile(`${folder}/package.json`)
-        .then((content) => (content.kind === "text" ? content.text : ""))
-        // No manifest is the ordinary case, not a fault worth reporting.
-        .catch(() => ""),
-    staleTime: Infinity,
-    retry: false,
   });
-  const canBuild = folder !== "" && hasBuildScript(buildable.data ?? "");
+  const canBuild = folder !== "" && hasBuildScript(manifestText(buildable.data));
 
   /** The build's output, newest last. `null` means no build has been run — the
    * panel is absent rather than empty, so the pane costs nothing until someone
@@ -268,6 +297,16 @@ function WuiPane({ path, spec, chrome = "workspace" }: WuiViewProps) {
     deploy.path !== path || (deploy.state !== "idle" && deploy.state !== "working" && deploy.generation !== generation)
       ? ({ path, state: "idle" } as const)
       : deploy;
+  // A success that settled while the pane was on a SIBLING page verified a
+  // generation the pane has not shown yet — it did not reload the sibling
+  // (plan decision 9: nothing reloads a page under someone's hands). It is
+  // applied here instead, the moment the pane is back on the page it is
+  // about: arriving is a fresh open, not an interruption.
+  useEffect(() => {
+    if (deploy.path === path && deploy.state === "done" && deploy.generation > generation) {
+      setGeneration(deploy.generation);
+    }
+  }, [deploy, path, generation]);
   const [copied, setCopied] = useState<"idle" | "done" | "failed">("idle");
   /** The page this pane has already rebuilt on open, so that "when I open this"
    * means what it says: once. React re-runs the effect whenever the preference
@@ -287,6 +326,16 @@ function WuiPane({ path, spec, chrome = "workspace" }: WuiViewProps) {
    * this pane ACTING on a build; the server hears nothing until the request is
    * aborted. */
   const inFlight = useRef<AbortController | null>(null);
+  /** The committed `path`, readable from inside a Deploy run that outlives
+   * the render it started in: when the run settles, is the pane still on the
+   * page it is about? Written in an EFFECT, not during render — a ref set by
+   * a render that is then thrown away would tell the run the pane had moved
+   * when no commit ever did (the `epoch` comment above says the same). */
+  const pathRef = useRef(path);
+  useEffect(() => {
+    pathRef.current = path;
+  }, [path]);
+
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const openFile = useOpenFile();
   const { id: me, ready: meReady } = useCurrentUserState();
@@ -651,30 +700,51 @@ function WuiPane({ path, spec, chrome = "workspace" }: WuiViewProps) {
     const moved = () => epoch.current !== started;
     setDeploy({ path: mine, state: "working" });
     setCopied("idle");
+    // This IS the rebuild-on-open for this folder — claimed up front, before
+    // the manifest read whose answer could flip `canBuild` and let the
+    // on-open effect start a second build beside this one. Given BACK if no
+    // build runs (a manifest that could not be read, a page with none), so a
+    // Deploy that stopped short does not silently spend the on-open rebuild
+    // the setting promises.
+    const autoBuiltBefore = autoBuiltFor.current;
     autoBuiltFor.current = folder;
     try {
-      // Whether there is a build: read the manifest through the three-outcome
-      // reader, not the toolbar's query. That query's `.catch(() => "")` is
-      // right for a toolbar (no manifest is the ordinary case, and a button
-      // that is not there needs no explanation) and wrong for a verdict: it
-      // turned a dropped connection or a mid-restore 404 into "nothing to
-      // build" — Deploy skipped the build, verified the OLD `dist/` and said
-      // "✓ Deployed", and refetching had overwritten the cache's correct
-      // answer with "", so Rebuild vanished from the toolbar as well.
+      // Whether there is a build: the manifest, read FRESH through the same
+      // query the toolbar observes (one reader, one classification, and the
+      // toolbar learns the answer too — a page that gained a build since the
+      // pane opened now shows Rebuild). Three answers, not two:
+      // - a readable manifest: build if it has a script;
+      // - could not read it (a dropped connection, a 5xx): a failed Deploy —
+      //   it used to fold into "nothing to build", skip the build, verify the
+      //   OLD `dist/` and say "✓ Deployed";
+      // - not there: "no build" — a plain page is exactly this, every time —
+      //   UNLESS the pane already knew this folder HAS a build. A manifest
+      //   that was there a moment ago and is not now is not a page losing
+      //   its build; on this platform it is a folder mid-restore answering
+      //   404, and trusting it deployed the old `dist/` too. Either failure
+      //   puts the toolbar's previous answer back, so Rebuild does not vanish.
       let hasBuild = false;
       if (folder !== "") {
-        const manifest = await readAsset(fs, `${folder}/package.json`);
+        const key = qk.wuiBuildable(fs.scopeId, folder);
+        const before = queryClient.getQueryData<AssetRead>(key);
+        const manifest = await queryClient.fetchQuery({ ...wuiManifestQuery(fs, folder), staleTime: 0 });
         if (moved()) return;
-        if (manifest.kind === "failed") {
-          setDeploy({ path: mine, generation: shown, state: "failed", step: "manifest", why: manifest.reason });
+        const knewBuild = hasBuildScript(manifestText(before));
+        const problem =
+          manifest.kind === "failed"
+            ? manifest.reason
+            : manifest.kind === "missing" && knewBuild
+              ? `${folder}/package.json could not be read just now (it was there a moment ago).`
+              : null;
+        if (problem !== null) {
+          if (before !== undefined) queryClient.setQueryData(key, before);
+          autoBuiltFor.current = autoBuiltBefore;
+          setDeploy({ path: mine, generation: shown, state: "failed", step: "manifest", why: problem });
           return;
         }
-        const text = manifest.kind === "asset" && manifest.asset.kind === "text" ? manifest.asset.text : "";
-        // A definite answer, so the toolbar learns it too (a page that gained
-        // a build since the pane opened now shows Rebuild).
-        queryClient.setQueryData(qk.wuiBuildable(fs.scopeId, folder), text);
-        hasBuild = hasBuildScript(text);
+        hasBuild = hasBuildScript(manifestText(manifest));
       }
+      if (!hasBuild) autoBuiltFor.current = autoBuiltBefore;
       if (hasBuild) {
         const ok = await runBuild({ reload: false });
         if (moved()) return;
@@ -686,7 +756,9 @@ function WuiPane({ path, spec, chrome = "workspace" }: WuiViewProps) {
       // The verdict's read IS the pane's next generation: the pane's own
       // query options, fetched into the cache under that key, then the pane
       // is pointed at it — a cache hit, so the frame shows what was verified
-      // without a second read.
+      // without a second read. Pointed at it only while the pane is still on
+      // THIS page: a sibling is not reloaded under someone's hands (plan
+      // decision 9); the verdict waits, and is applied when the pane is back.
       //
       // On failure the pane is NOT pointed at it: a query in error with no
       // data refetches on the key switch, and that second read — one the
@@ -695,7 +767,7 @@ function WuiPane({ path, spec, chrome = "workspace" }: WuiViewProps) {
       // carries the sentence; the pane keeps showing what it showed.
       const next = shown + 1;
       try {
-        await queryClient.fetchQuery(wuiDocQuery(fs, folder, entry, mine, next));
+        await queryClient.fetchQuery(wuiDocQuery(fs, mine, entry, instance, next));
       } catch (err) {
         if (moved()) return;
         setDeploy({
@@ -712,7 +784,7 @@ function WuiPane({ path, spec, chrome = "workspace" }: WuiViewProps) {
         return;
       }
       if (moved()) return;
-      setGeneration(next);
+      if (pathRef.current === mine) setGeneration(next);
       setDeploy({ path: mine, generation: next, state: "done" });
     } catch (err) {
       // Nothing above is expected to throw — but a run that did would leave
@@ -800,7 +872,7 @@ function WuiPane({ path, spec, chrome = "workspace" }: WuiViewProps) {
             onClick={() => void runDeploy()}
             style={{ marginLeft: "auto" }}
           >
-            {deploying ? "Deploying…" : "Deploy"}
+            {deployHere.state === "working" ? "Deploying…" : "Deploy"}
           </Btn>
         )}
       </div>
@@ -983,12 +1055,15 @@ function WuiPane({ path, spec, chrome = "workspace" }: WuiViewProps) {
         <div role="status" style={{ padding: 12, color: "var(--text-paper-d)" }}>
           Building… the page appears when this finishes.
         </div>
-      ) : built.error && building ? (
+      ) : built.error && (building || deployHere.state === "working") ? (
         // The first open of a page nobody has built yet: `dist/` really is
         // absent, and saying so in red — under a log showing the build that is
-        // about to create it — is alarming and, seconds later, untrue.
+        // about to create it — is alarming and, seconds later, untrue. The
+        // same for the moments of a Deploy with no build running (its manifest
+        // read, its open check): the old red error flashed back between the
+        // build's end and the verified page, "broken, then fixed".
         <div role="status" style={{ padding: 12, color: "var(--text-paper-d)" }}>
-          Building… the page appears when this finishes.
+          {building ? "Building…" : "Deploying…"} the page appears when this finishes.
         </div>
       ) : built.error instanceof WuiEntryMissing && built.error.kind === "absent" && !author ? (
         // A reader followed a link to a page nobody has built (or one whose
@@ -1012,9 +1087,7 @@ function WuiPane({ path, spec, chrome = "workspace" }: WuiViewProps) {
           <span>
             This page has not been published yet — or it is still being restored. Try again in a moment.
           </span>
-          <Btn size="sm" onClick={() => setGeneration((g) => g + 1)}>
-            Try again
-          </Btn>
+          <TryAgain onClick={() => setGeneration((g) => g + 1)} />
         </div>
       ) : built.error ? (
         // Plain language and the file's name: whoever hits this may have no
@@ -1027,11 +1100,7 @@ function WuiPane({ path, spec, chrome = "workspace" }: WuiViewProps) {
           style={{ padding: 12, color: "var(--err)", display: "flex", gap: 8, alignItems: "center" }}
         >
           <span>{built.error instanceof Error ? built.error.message : "This WUI could not be opened."}</span>
-          {!author && (
-            <Btn size="sm" onClick={() => setGeneration((g) => g + 1)}>
-              Try again
-            </Btn>
-          )}
+          {!author && <TryAgain onClick={() => setGeneration((g) => g + 1)} />}
         </div>
       ) : (
         <iframe

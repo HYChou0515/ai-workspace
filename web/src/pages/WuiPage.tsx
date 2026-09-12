@@ -20,8 +20,8 @@ import { useMemo } from "react";
 import { useParams } from "react-router-dom";
 
 import { FileServiceProvider, investigationFileService, type FileService } from "../api/fileService";
-import { Btn } from "../components/Btn";
 import { classifyReadFailure } from "../renderers/wui/assets";
+import { TryAgain } from "../renderers/wui/TryAgain";
 import { parseViewSpec } from "../renderers/entity/EntityViews";
 import { VIEW_KIND } from "../renderers/entity/types";
 import { WorkspaceSlugProvider } from "../hooks/useWorkspaceSlug";
@@ -48,11 +48,7 @@ function Problem({ children, retry }: { children: React.ReactNode; retry?: () =>
       }}
     >
       <p style={{ maxWidth: "42rem", margin: 0 }}>{children}</p>
-      {retry && (
-        <Btn size="sm" onClick={retry}>
-          Try again
-        </Btn>
-      )}
+      {retry && <TryAgain onClick={retry} />}
     </div>
   );
 }

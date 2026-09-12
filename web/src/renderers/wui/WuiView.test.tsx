@@ -11,6 +11,7 @@ import { autoBuildScope, getWuiAutoBuild, setWuiAutoBuild } from "../../lib/wuiA
 import type { FileContent } from "../../api/types";
 import { subscribeAgentDraft } from "../../lib/agentDraftBus";
 import { publishFileChanged } from "../../lib/fileChangedBus";
+import type { QueryClient } from "@tanstack/react-query";
 import { makeTestQueryClient, QueryWrap } from "../../test/queryWrapper";
 import type { ViewSpec } from "../entity/types";
 import { WUI_CSP } from "./assemble";
@@ -1159,10 +1160,12 @@ describe("WuiView: rebuilding a page when it is opened", () => {
     // are separated by an await and none of this is exercised. Warm — every
     // visit after the first — they run back to back.
     const client = makeTestQueryClient();
-    client.setQueryData(
-      qk.wuiBuildable("item1", "/sales"),
-      JSON.stringify({ scripts: { build: "vite build" } }),
-    );
+    // Primed in the shape the manifest query holds — the three-outcome
+    // reader's `AssetRead`, not the bare text it used to be.
+    client.setQueryData(qk.wuiBuildable("item1", "/sales"), {
+      kind: "asset",
+      asset: { kind: "text", text: JSON.stringify({ scripts: { build: "vite build" } }) },
+    });
     serveBuild(sse({ type: "output", text: "built" }) + sse({ type: "done", exit_code: 0 }));
     render(
       <StrictMode>
@@ -1509,6 +1512,152 @@ describe("WuiView: Deploy", () => {
     expect(vi.mocked(fs.readFile).mock.calls.filter(([p]) => p === "/sales/index.html")).toHaveLength(2);
   });
 
+  /** One QueryClient across rerenders, as production has one — `QueryWrap`
+   * without a client makes a NEW one per render, which silently defeats any
+   * test about the cache outliving an instance. */
+  function pages(fs: FileService, client: QueryClient) {
+    return (p: string, entry?: string) => (
+      <QueryWrap client={client}>
+        <WorkspaceSlugProvider value="rca">
+          <FileServiceProvider value={fs}>
+            <WuiView path={p} spec={{ view: "wui", entity: "", ...(entry ? { entry } : {}) } as ViewSpec} />
+          </FileServiceProvider>
+        </WorkspaceSlugProvider>
+      </QueryWrap>
+    );
+  }
+
+  it("reads the folder again after the pane was remounted — never a cached verdict", async () => {
+    /**
+     * Review round 6: keying the pane by folder (round 5) made a cross-folder
+     * move a remount, and a remount starts `generation` at 0 — while the old
+     * instance's `(scopeId, path, generation)` documents are still in the
+     * cache for five minutes, never stale. Deploy's `fetchQuery` for
+     * generation 1 hit the PREVIOUS Deploy's document and said "✓ Deployed"
+     * without reading the folder at all. Every instance keys its documents by
+     * its own nonce, so no instance can ever hit another's.
+     */
+    vi.stubGlobal("fetch", vi.fn());
+    setWuiAutoBuild(autoBuildScope("item1", "/b"), false);
+    const client = makeTestQueryClient();
+    const files: Record<string, string> = {
+      "/a/index.html": "<html><body>a</body></html>",
+      "/b/index.html": "<html><body>b</body></html>",
+    };
+    const page = pages(svc(files), client);
+    const view = render(page("/a/page.ai.yaml"));
+    fireEvent.click(await screen.findByRole("button", { name: /^deploy$/i }));
+    await screen.findByRole("textbox", { name: /address/i });
+
+    view.rerender(page("/b/page.ai.yaml"));
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+    view.rerender(page("/a/page.ai.yaml"));
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+
+    // The agent broke the page while the pane was away.
+    delete files["/a/index.html"];
+    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+
+    expect(await screen.findByText(/deploy failed/i)).toHaveTextContent(/does not open/i);
+    expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull();
+  });
+
+  it("is a new pane for the same folder in another item", async () => {
+    /**
+     * Review round 6: the key was the folder alone. Two items of one App
+     * share template paths (`dashboard/page.ai.yaml`), so switching item
+     * reused the instance — build log, verdict, the running build and
+     * `autoBuiltFor` all carried over, and the new item's rebuild-on-open was
+     * silently skipped.
+     */
+    vi.stubGlobal("fetch", vi.fn());
+    const client = makeTestQueryClient();
+    const files = { ...PLAIN };
+    const pageIn = (scopeId: string) => {
+      const fs = svc({ ...files });
+      (fs as { scopeId: string }).scopeId = scopeId;
+      return pages(fs, client)("/sales/page.ai.yaml");
+    };
+    const view = render(pageIn("item1"));
+    fireEvent.click(await screen.findByRole("button", { name: /^deploy$/i }));
+    await screen.findByRole("textbox", { name: /address/i });
+
+    view.rerender(pageIn("item2"));
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+
+    expect(screen.queryByText(/^✓ deployed/i)).toBeNull();
+    expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull();
+  });
+
+  it("does not reload a sibling page under someone's hands — the reload waits for the page it is about", async () => {
+    /**
+     * Review round 6, citing plan decision 9 (nothing reloads a page on its
+     * own — a person halfway through a form is not yanked out of it). Round 3
+     * had A's finished build reload sibling B; that was the decision
+     * violated. A's verdict and A's reload now wait until the pane is on A
+     * again — arriving there is a fresh open, not an interruption.
+     */
+    const { release } = serveHeldBuild(0);
+    const client = makeTestQueryClient();
+    const files: Record<string, string> = {
+      ...BUILT,
+      "/sales/dist/index.html": "<html><body>v1</body></html>",
+    };
+    const fs = svc(files);
+    const page = pages(fs, client);
+    const distReads = () => vi.mocked(fs.readFile).mock.calls.filter(([p]) => p === "/sales/dist/index.html").length;
+    const view = render(page("/sales/a.ai.yaml", "dist/index.html"));
+    await screen.findByRole("button", { name: /^rebuild$/i });
+    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    await screen.findByText(/> vite build/);
+
+    view.rerender(page("/sales/b.ai.yaml", "dist/index.html"));
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+    const bFrame = frame();
+    const readsBeforeRelease = distReads();
+
+    release();
+    await waitFor(() => expect(screen.getByRole("button", { name: /^rebuild$/i })).toBeEnabled());
+    await act(async () => {});
+
+    // B: same frame, same document, nothing re-read on its account.
+    expect(frame()).toBe(bFrame);
+    expect(distReads()).toBe(readsBeforeRelease + 1); // Deploy's own verify read of the folder, nothing for B
+    expect(screen.queryByText(/^✓ deployed/i)).toBeNull();
+    expect(screen.getByRole("button", { name: /^deploy$/i })).toHaveTextContent(/^deploy$/i);
+
+    // Back on A: the verdict, and the document it verified.
+    view.rerender(page("/sales/a.ai.yaml", "dist/index.html"));
+    expect(await screen.findByText(/^✓ deployed/i)).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: /address/i })).toHaveValue(
+      `${window.location.origin}/w/rca/item1/sales/a.ai.yaml`,
+    );
+  });
+
+  it("does not trust a 'no manifest' that contradicts what it knew a moment ago", async () => {
+    /**
+     * Review round 6: a mid-restore 404 on `package.json` read as "no build"
+     * — Deploy skipped the build, verified the OLD `dist/`, said "✓ Deployed",
+     * and the answer overwrote the toolbar's cache so Rebuild vanished. A
+     * plain page IS "no manifest" every time, so 404 cannot simply be a
+     * failure; but a 404 for a manifest the pane has already SEEN is not a
+     * page losing its build, it is a folder mid-restore.
+     */
+    vi.stubGlobal("fetch", vi.fn());
+    let manifestReads = 0;
+    renderInFs({ ...BUILT }, async (path, real) => {
+      if (path === "/sales/package.json" && ++manifestReads > 1) throw new Error("not found");
+      return real(path);
+    });
+    await screen.findByRole("button", { name: /^rebuild$/i });
+    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+
+    expect(await screen.findByText(/deploy failed/i)).toHaveTextContent(/could not check/i);
+    expect(buildCalls()).toHaveLength(0);
+    expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull();
+    expect(screen.getByRole("button", { name: /^rebuild$/i })).toBeInTheDocument();
+  });
+
   it("starts clean on a page in another folder while a Deploy was running", async () => {
     /**
      * Review round 5 (reproduced): with a Deploy in flight, moving the same
@@ -1724,43 +1873,32 @@ describe("WuiView: Deploy", () => {
     expect(reads()).toBe(beforeDeploy + 1);
   });
 
-  it("still re-reads the folder when the pane moved to a sibling page mid-build", async () => {
+  it("says 'Deploying…' only on the page being deployed — the sibling's button says Deploy", async () => {
     /**
-     * Review round 3: Deploy runs its build with `reload: false` and does the
-     * reload itself — but when the pane had moved to a sibling view file in
-     * the same folder, it bailed before that reload, so the sibling's frame
-     * kept the `dist/` from before the build. The verdict belongs to the page
-     * that left; the reload belongs to the folder, which is still here.
+     * Review round 6: the button's LABEL came from the pane-wide hold, so
+     * while A deployed, the sibling B's button read "Deploying…" — a claim
+     * about A hung under B's name. The hold stays pane-wide (B's button is
+     * still disabled); the word is the page's.
+     *
+     * (This replaces a round-3 test that had A's finished build reload B —
+     * the behaviour plan decision 9 forbids; see "does not reload a sibling
+     * page under someone's hands".)
      */
     const { release } = serveHeldBuild(0);
-    const files: Record<string, string> = {
-      ...BUILT,
-      "/sales/dist/index.html": "<html><body>b1</body></html>",
-    };
-    const fs = svc(files);
-    const page = (p: string) => (
-      <QueryWrap>
-        <WorkspaceSlugProvider value="rca">
-          <FileServiceProvider value={fs}>
-            <WuiView path={p} spec={{ view: "wui", entity: "", entry: "dist/index.html" } as ViewSpec} />
-          </FileServiceProvider>
-        </WorkspaceSlugProvider>
-      </QueryWrap>
-    );
+    const client = makeTestQueryClient();
+    const page = pages(svc({ ...BUILT }), client);
     const view = render(page("/sales/a.ai.yaml"));
     await screen.findByRole("button", { name: /^rebuild$/i });
     fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
     await screen.findByText(/> vite build/);
+    expect(screen.getByRole("button", { name: /^deploying/i })).toBeInTheDocument();
 
     view.rerender(page("/sales/b.ai.yaml"));
-    await waitFor(() => expect(frame()).toBeInTheDocument());
-    const distReads = () => vi.mocked(fs.readFile).mock.calls.filter(([p]) => p === "/sales/dist/index.html").length;
-    const beforeRelease = distReads();
 
+    const b = screen.getByRole("button", { name: /^deploy$/i });
+    expect(b).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /deploying/i })).toBeNull();
     release();
-
-    await waitFor(() => expect(distReads()).toBeGreaterThan(beforeRelease));
-    expect(screen.queryByText(/^✓ deployed/i)).toBeNull(); // A's verdict does not land on B
   });
 
   it("holds Refresh too while it runs — the pane is Deploy's until the verdict is in", async () => {

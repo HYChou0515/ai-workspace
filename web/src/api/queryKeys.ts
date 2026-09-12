@@ -44,8 +44,12 @@ export const qk = {
   // cache-buster: a WUI is deliberately never reloaded on its own, so a NEW key
   // is the only thing that rebuilds one — and it also drops the old frame,
   // which is what makes Refresh mean "start over" rather than "re-render".
-  wuiDoc: (id: string, path: string, generation: number) =>
-    ["wuiDoc", id, path, generation] as const,
+  // `instance` is the pane's own nonce: a remounted pane restarts its
+  // `generation` at 0 while the previous instance's documents are still cached
+  // (never stale, five minutes) — without it, generation 1 of the new pane
+  // was the old pane's generation 1, and a "verified" Deploy read nothing.
+  wuiDoc: (id: string, path: string, instance: number, generation: number) =>
+    ["wuiDoc", id, path, instance, generation] as const,
   // Whether a WUI's folder declares a build. Its own key rather than `file`:
   // that one holds a `FileContent`, and two shapes under one key is a cache
   // that hands a consumer the other one's answer.
