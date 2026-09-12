@@ -210,6 +210,28 @@ describe("WuiPage: what a reader is handed", () => {
     }
   });
 
+  it("opens a folder whose name had to be encoded into the address", async () => {
+    /**
+     * The other half of `WuiView.test.tsx` "encodes a folder name…": the
+     * address Deploy hands over must land on the file it was made from. A
+     * space or a CJK name is the ordinary case, not the edge.
+     */
+    const files: Record<string, string> = {
+      "/報告 v2/page.ai.yaml": YAML,
+      "/報告 v2/index.html": "<!doctype html><p>hello</p>",
+    };
+    const readFile = vi.fn(async (path: string) => {
+      const text = files[path];
+      if (text === undefined) throw new Error(`not found: ${path}`);
+      return { kind: "text", path, text, size: text.length, encoding: "utf-8" };
+    });
+
+    renderAt("/w/rca/i1/%E5%A0%B1%E5%91%8A%20v2/page.ai.yaml", readFile);
+
+    await waitFor(() => expect(screen.getByTitle("Scrap review")).toBeTruthy());
+    expect(readFile).toHaveBeenCalledWith("/報告 v2/page.ai.yaml");
+  });
+
   it("says the page is not published yet when there is nothing built", async () => {
     /**
      * A buildable page nobody has built: `dist/index.html` is not there. An

@@ -166,6 +166,11 @@ export function WuiView({
     retry: false,
   });
   const canBuild = folder !== "" && hasBuildScript(buildable.data ?? "");
+  /** Whether `canBuild` is an ANSWER yet. Deploy takes "nothing to build" as
+   * licence to hand the address over at once; before the manifest has been
+   * read that is the same value as "not known", and acting on it handed over
+   * an address to the old `dist/`. A root-level page never asks. */
+  const buildLookedFor = folder === "" || !buildable.isPending;
 
   /** The build's output, newest last. `null` means no build has been run — the
    * panel is absent rather than empty, so the pane costs nothing until someone
@@ -190,6 +195,14 @@ export function WuiView({
   const [logOpen, setLogOpen] = useState(true);
   const logRef = useRef<HTMLDivElement | null>(null);
   const [autoBuild, setAutoBuild] = useWuiAutoBuild(autoBuildScope(fs.scopeId, folder));
+  /** Deploy: rebuild (where there is a build), then hand over the page's own
+   * address. `deploying` is Deploy's own build in flight — `building` is
+   * shared with Rebuild, and the button that started it is the one that
+   * should read "Deploying…". `done` shows the address; `failed` says so
+   * over the log. Reset when the pane moves to another page (below). */
+  const [deploying, setDeploying] = useState(false);
+  const [deployed, setDeployed] = useState<"idle" | "done" | "failed">("idle");
+  const [copied, setCopied] = useState<"idle" | "done" | "failed">("idle");
   /** The page this pane has already rebuilt on open, so that "when I open this"
    * means what it says: once. React re-runs the effect whenever the preference
    * changes — and in StrictMode, twice on mount — and neither is somebody
@@ -342,6 +355,8 @@ export function WuiView({
     setLogOpen(true);
     setBuilding(false);
     setFirstBuild(false);
+    setDeploying(false);
+    setDeployed("idle");
     // NOT `autoBuiltFor`. It already holds the FOLDER it built, so the guard is
     // folder-aware without help — and clearing it here defeated that guard
     // between StrictMode's two effect passes, which is two builds on mount.
@@ -393,8 +408,13 @@ export function WuiView({
    * alone: the build produced no new `dist/`, so swapping the frame would
    * replace the page with the same page and call it a rebuild.
    */
-  const runBuild = async ({ automatic = false } = {}) => {
-    if (!slug) return;
+  /** Runs the build and says whether it finished with exit 0 — `false` for a
+   * failure, a build that could not start, or one the pane moved away from.
+   * Deploy is the caller that needs the answer: it hands over the page's
+   * address only once what the address points at is fresh. */
+  const runBuild = async ({ automatic = false } = {}): Promise<boolean> => {
+    if (!slug) return false;
+    let ok = false;
     const mine = folder;
     const startedAt = epoch.current;
     // Every path that could start a second build already stopped the first:
@@ -412,9 +432,10 @@ export function WuiView({
     setLogOpen(true);
     try {
       for await (const event of itemBuild(slug, fs.scopeId)(mine, control.signal)) {
-        if (stale()) return;
+        if (stale()) return false;
         if (event.type === "output") say(event.text);
         else if (event.exit_code === 0) {
+          ok = true;
           note("Build finished.");
           // Fold it away: the page below IS the result, and it is what the
           // reader came for. One line stays, and opens it again.
@@ -424,7 +445,7 @@ export function WuiView({
       }
     } catch (err) {
       // An abort is this pane's own doing, not something to report.
-      if (stale() || control.signal.aborted) return;
+      if (stale() || control.signal.aborted) return false;
       // A build that could not be STARTED — a viewer without `execute`, a
       // folder the server refuses — arrives as a status, not as output. Unsaid,
       // the button looks like it did nothing at all.
@@ -452,6 +473,7 @@ export function WuiView({
         setFirstBuild(false);
       }
     }
+    return ok;
   };
 
   // Rebuild on open, when this page is set to. This is what closes the gap for
@@ -488,6 +510,43 @@ export function WuiView({
   const tellTheAgent = () => {
     publishAgentDraft(fs.scopeId, formatReportsForAgent(folder, reports));
     setReports([]);
+  };
+
+  // The page's own address — what WuiPage answers at `/w/:slug/:itemId/*`
+  // (App.tsx). Slug and item id encoded the way `itemCallTool` encodes them;
+  // the path segment by segment, so a folder with a space or a CJK name still
+  // round-trips through the router's decoding.
+  const address = `${window.location.origin}/w/${encodeURIComponent(slug)}/${encodeURIComponent(fs.scopeId)}${path
+    .split("/")
+    .map(encodeURIComponent)
+    .join("/")}`;
+
+  /** Rebuild where there is a build, then hand over the address — the
+   * publisher builds, the reader never does, so what the address points at is
+   * fresh at the moment it is handed over (docs/plan-wui-deploy.md). */
+  const copyAddress = async () => {
+    try {
+      await navigator.clipboard.writeText(address);
+      setCopied("done");
+    } catch {
+      // No clipboard here (a non-secure context). The field above is the
+      // fallback — say so rather than looking like the button did nothing.
+      setCopied("failed");
+    }
+  };
+
+  const deploy = async () => {
+    const started = epoch.current;
+    setDeployed("idle");
+    setCopied("idle");
+    setDeploying(true);
+    try {
+      const ok = canBuild ? await runBuild() : true;
+      if (epoch.current !== started) return; // the pane moved on; that page's reset wins
+      setDeployed(ok ? "done" : "failed");
+    } finally {
+      if (epoch.current === started) setDeploying(false);
+    }
   };
 
   return (
@@ -541,7 +600,64 @@ export function WuiView({
             Tell the agent ({reports.length})
           </Btn>
         )}
+        {/* Disabled on `building`, not only `deploying`: a Rebuild already in
+            flight is the same build, and starting a second one over it is what
+            the Rebuild button itself refuses. And held until the manifest has
+            been read — see `buildLookedFor`. */}
+        <Btn
+          size="sm"
+          disabled={building || !buildLookedFor}
+          onClick={() => void deploy()}
+          style={{ marginLeft: "auto" }}
+        >
+          {deploying ? "Deploying…" : "Deploy"}
+        </Btn>
       </div>
+      )}
+      {chrome === "workspace" && deployed !== "idle" && (
+        <div
+          role="status"
+          style={{
+            flex: "0 0 auto",
+            display: "flex",
+            flexDirection: "column",
+            gap: 6,
+            padding: "8px 12px",
+            borderBottom: "1px solid var(--paper-3)",
+            fontSize: pxToRem(13),
+          }}
+        >
+          {deployed === "done" ? (
+            <>
+              <div style={{ fontWeight: 600 }}>✓ Deployed</div>
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                {/* Read-only and selectable: this IS the fallback when the
+                    clipboard is unavailable (a non-secure context), so there is
+                    one way to show the address, not two. */}
+                <input
+                  aria-label="Page address"
+                  readOnly
+                  value={address}
+                  onFocus={(e) => e.currentTarget.select()}
+                  style={{ flex: 1, minWidth: 0, font: "inherit", padding: "4px 6px" }}
+                />
+                <Btn size="sm" onClick={() => void copyAddress()}>
+                  {copied === "done" ? "Copied" : copied === "failed" ? "Copy failed — select it" : "Copy"}
+                </Btn>
+                <a href={address} target="_blank" rel="noreferrer">
+                  Open
+                </a>
+              </div>
+              {/* P17's decision, spoken to the publisher: the address is a
+                  shortcut, not a grant. */}
+              <div style={{ color: "var(--text-paper-d)" }}>
+                Anyone who can open this item can use this link.
+              </div>
+            </>
+          ) : (
+            <div style={{ color: "var(--err)" }}>Deploy failed — see the build output.</div>
+          )}
+        </div>
       )}
       {/* The three author panes — toolbar, build log, reports — are gated on
           the same word, so "a reader sees none of them" holds by inspection

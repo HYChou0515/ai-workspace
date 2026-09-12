@@ -1316,3 +1316,218 @@ describe("WuiView: rebuilding a page when it is opened", () => {
     expect(getWuiAutoBuild(autoBuildScope("item1", "/sales"))).toBe(false);
   });
 });
+
+describe("WuiView: Deploy", () => {
+  /**
+   * Deploy = rebuild, then hand over the page's own address. The publisher
+   * builds; the reader (WuiPage, `chrome="viewer"`) never does — so the
+   * address appears only once what it points at is fresh
+   * (docs/plan-wui-deploy.md, P2).
+   */
+  const PLAIN = { "/sales/index.html": "<html><body>v1</body></html>" };
+  const BUILT = {
+    ...PLAIN,
+    "/sales/package.json": JSON.stringify({ scripts: { build: "vite build" } }),
+  };
+  const ADDRESS = `${window.location.origin}/w/rca/item1/sales/page.ai.yaml`;
+
+  function renderIn(files: Record<string, string>) {
+    return render(
+      <QueryWrap>
+        <WorkspaceSlugProvider value="rca">
+          <FileServiceProvider value={svc(files)}>
+            <WuiView path="/sales/page.ai.yaml" spec={{ view: "wui", entity: "" } as ViewSpec} />
+          </FileServiceProvider>
+        </WorkspaceSlugProvider>
+      </QueryWrap>,
+    );
+  }
+
+  const sse = (payload: unknown) => `data: ${JSON.stringify(payload)}\n\n`;
+  const buildCalls = () =>
+    vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes("/wui/build"));
+
+  // The manual path: rebuilding on open is on by default, and a test about the
+  // button has to say it is not testing the automatic one.
+  beforeEach(() => setWuiAutoBuild(autoBuildScope("item1", "/sales"), false));
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    localStorage.clear();
+  });
+
+  it("hands over the page's address at once when there is nothing to build", async () => {
+    vi.stubGlobal("fetch", vi.fn());
+    renderIn(PLAIN);
+
+    // Pressable once the page has been looked at for a build and found to
+    // have none (the last test in this block is why it is held until then).
+    const deploy = await screen.findByRole("button", { name: /^deploy$/i });
+    await waitFor(() => expect(deploy).toBeEnabled());
+    fireEvent.click(deploy);
+
+    // The address, verbatim, in a field the publisher can select by hand —
+    // it must match the route WuiPage answers (`/w/:slug/:itemId/*`).
+    expect(await screen.findByRole("textbox", { name: /address/i })).toHaveValue(ADDRESS);
+    expect(screen.getByText(/deployed/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /open/i })).toHaveAttribute("href", ADDRESS);
+    // Count the BUILD calls, not every fetch: the pane also asks who you are.
+    expect(buildCalls()).toHaveLength(0);
+  });
+
+  /** A build whose end waits on a gate, so the moment BEFORE it finishes can
+   * be looked at. */
+  function serveHeldBuild(exitCode: number) {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        const encode = new TextEncoder();
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            async start(controller) {
+              controller.enqueue(encode.encode(sse({ type: "output", text: "> vite build" })));
+              await gate;
+              controller.enqueue(encode.encode(sse({ type: "done", exit_code: exitCode })));
+              controller.close();
+            },
+          }),
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        );
+      }),
+    );
+    return { release };
+  }
+
+  it("builds first, and hands over the address only once the build has finished", async () => {
+    const { release } = serveHeldBuild(0);
+    renderIn(BUILT);
+
+    // Rebuild appearing is the sign the manifest has been read and the page
+    // is known to have a build — the moment Deploy is allowed to be pressed.
+    await screen.findByRole("button", { name: /^rebuild$/i });
+    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+
+    // Mid-build: the build is running, the button says so and refuses a
+    // second press, and there is NO address yet — handing it over now would
+    // point at the old `dist/`.
+    await screen.findByText(/> vite build/);
+    expect(buildCalls()).toHaveLength(1);
+    const deploying = screen.getByRole("button", { name: /deploying/i });
+    expect(deploying).toBeDisabled();
+    expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull();
+
+    release();
+
+    expect(await screen.findByRole("textbox", { name: /address/i })).toHaveValue(ADDRESS);
+    expect(screen.getByText(/deployed/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^deploy$/i })).toBeEnabled();
+  });
+
+  it("says the deploy failed, over the build's own words, and hands nothing over", async () => {
+    /**
+     * A failed build leaves the old `dist/` up (documented). Handing over the
+     * address anyway would be a "Deployed" that points at the page from
+     * before — worse than no address. The log stays open: the compiler's
+     * error is the only explanation on screen.
+     */
+    const { release } = serveHeldBuild(1);
+    renderIn(BUILT);
+    await screen.findByRole("button", { name: /^rebuild$/i });
+    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    await screen.findByText(/> vite build/);
+
+    release();
+
+    expect(await screen.findByText(/deploy failed/i)).toBeInTheDocument();
+    expect(screen.queryByText(/^✓ deployed/i)).toBeNull();
+    expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull();
+    // The build's own verdict and output are still on screen.
+    expect(screen.getByText(/Build failed \(exit 1\)/)).toBeInTheDocument();
+    expect(screen.getByText(/> vite build/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^deploy$/i })).toBeEnabled();
+  });
+
+  it("copies the address, and says so when it could not", async () => {
+    vi.stubGlobal("fetch", vi.fn());
+    const writeText = vi.fn(async () => {});
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    renderIn(PLAIN);
+    const deploy = await screen.findByRole("button", { name: /^deploy$/i });
+    await waitFor(() => expect(deploy).toBeEnabled());
+    fireEvent.click(deploy);
+    await screen.findByRole("textbox", { name: /address/i });
+
+    fireEvent.click(screen.getByRole("button", { name: /^copy$/i }));
+    await screen.findByRole("button", { name: /^copied$/i });
+    expect(writeText).toHaveBeenCalledWith(ADDRESS);
+
+    // Now with no clipboard to write to (a non-secure context): the button
+    // must not pretend, and the field is already there to select from.
+    writeText.mockRejectedValueOnce(new Error("NotAllowedError"));
+    fireEvent.click(screen.getByRole("button", { name: /^copied$/i }));
+    await screen.findByRole("button", { name: /copy failed/i });
+    expect(screen.getByRole("textbox", { name: /address/i })).toHaveValue(ADDRESS);
+  });
+
+  it("encodes a folder name the address bar would otherwise break on", async () => {
+    /**
+     * A space or a CJK folder name is the ordinary case here, not the edge.
+     * Encoded segment by segment — the `/` between them must survive as a
+     * separator, and the router on the other end (`/w/:slug/:itemId/*`)
+     * decodes each segment back; `WuiPage.test.tsx` holds that half.
+     */
+    vi.stubGlobal("fetch", vi.fn());
+    render(
+      <QueryWrap>
+        <WorkspaceSlugProvider value="rca">
+          <FileServiceProvider value={svc({ "/報告 v2/index.html": "<html><body>v1</body></html>" })}>
+            <WuiView path="/報告 v2/page.ai.yaml" spec={{ view: "wui", entity: "" } as ViewSpec} />
+          </FileServiceProvider>
+        </WorkspaceSlugProvider>
+      </QueryWrap>,
+    );
+    const deploy = await screen.findByRole("button", { name: /^deploy$/i });
+    await waitFor(() => expect(deploy).toBeEnabled());
+    fireEvent.click(deploy);
+
+    expect(await screen.findByRole("textbox", { name: /address/i })).toHaveValue(
+      `${window.location.origin}/w/rca/item1/%E5%A0%B1%E5%91%8A%20v2/page.ai.yaml`,
+    );
+  });
+
+  it("is not pressable until the page's build has been looked for", async () => {
+    /**
+     * Found red: with the manifest read still in flight, `canBuild` is false
+     * and Deploy took the "nothing to build" shortcut — the address handed
+     * over pointed at the OLD `dist/`. The button is held until the probe has
+     * answered, whichever way.
+     */
+    vi.stubGlobal("fetch", vi.fn());
+    let answer: () => void = () => {};
+    const gate = new Promise<void>((r) => (answer = r));
+    const files = { ...BUILT };
+    const fs = svc(files);
+    const realRead = fs.readFile;
+    (fs as { readFile: FileService["readFile"] }).readFile = vi.fn(async (path: string) => {
+      if (path.endsWith("package.json")) await gate;
+      return realRead(path);
+    });
+    render(
+      <QueryWrap>
+        <WorkspaceSlugProvider value="rca">
+          <FileServiceProvider value={fs}>
+            <WuiView path="/sales/page.ai.yaml" spec={{ view: "wui", entity: "" } as ViewSpec} />
+          </FileServiceProvider>
+        </WorkspaceSlugProvider>
+      </QueryWrap>,
+    );
+
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: /^deploy$/i })).toBeDisabled();
+
+    answer();
+
+    await waitFor(() => expect(screen.getByRole("button", { name: /^deploy$/i })).toBeEnabled());
+  });
+});
