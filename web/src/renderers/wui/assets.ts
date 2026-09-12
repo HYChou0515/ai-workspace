@@ -118,40 +118,53 @@ export type AssetRead =
   | { kind: "missing" }
   | { kind: "failed"; reason: string };
 
+/**
+ * What a failed read MEANS — the one place that decides it, for every read a
+ * WUI makes: the page's assets (`readAsset`), its entry, and the view file
+ * the reader's route opens (`WuiPage`). Two copies of these four branches
+ * drifted once already (review round 5); a class added here — a typed KB
+ * failure, a 429 filed as transient — now reaches every sentence at once.
+ *
+ * Only the workspace service throws a typed error, and only it can tell
+ * "not there" from "not allowed": a 404 is absence, any other status is a
+ * fault worth showing. A `TypeError` is `fetch` failing to complete at all —
+ * a dropped connection — which is emphatically not absence and used to be
+ * filed as one.
+ *
+ * Everything else falls to absence, and that is a WEAKER answer than it
+ * looks: `kbFileService` throws a plain `Error` for ANY non-ok status, so a
+ * KB 403 lands here as "not there". Fixing that means giving those services
+ * a typed failure of their own, which is theirs to do — this is where it
+ * would be read, not where it can be decided. It is also why every "not
+ * there" sentence a reader sees is tentative and offers a way to look again.
+ */
+export function classifyReadFailure(err: unknown, path: string): Exclude<AssetRead, { kind: "asset" }> {
+  if (err instanceof HttpError) {
+    if (err.status === 404) return { kind: "missing" };
+    // Not `err.message`: that is "read /w/index.html failed: 403", an
+    // internal path and a bare number shown to someone who cannot open a
+    // console. True, and not a sentence they can act on.
+    return {
+      kind: "failed",
+      reason:
+        err.status === 403
+          ? `You do not have permission to read ${path}.`
+          : `${path} could not be read (the workspace answered ${err.status}).`,
+    };
+  }
+  if (err instanceof TypeError) {
+    return { kind: "failed", reason: `Could not reach the workspace to read ${path}.` };
+  }
+  return { kind: "missing" };
+}
+
 /** Read one workspace file in the shape a page can hold. */
 export async function readAsset(fs: FileService, path: string): Promise<AssetRead> {
   let content;
   try {
     content = await fs.readFile(path);
   } catch (err) {
-    // Only the workspace service throws a typed error, and only it can tell
-    // "not there" from "not allowed": a 404 is absence, any other status is a
-    // fault worth showing. A `TypeError` is `fetch` failing to complete at all
-    // — a dropped connection — which is emphatically not absence and used to be
-    // filed as one.
-    //
-    // Everything else falls to absence, and that is a WEAKER answer than it
-    // looks: `kbFileService` throws a plain `Error` for ANY non-ok status, so a
-    // KB 403 lands here as "not there". Fixing that means giving those services
-    // a typed failure of their own, which is theirs to do — this is where it
-    // would be read, not where it can be decided.
-    if (err instanceof HttpError) {
-      if (err.status === 404) return { kind: "missing" };
-      // Not `err.message`: that is "read /w/index.html failed: 403", an
-      // internal path and a bare number shown to someone who cannot open a
-      // console. True, and not a sentence they can act on.
-      return {
-        kind: "failed",
-        reason:
-          err.status === 403
-            ? `You do not have permission to read ${path}.`
-            : `${path} could not be read (the workspace answered ${err.status}).`,
-      };
-    }
-    if (err instanceof TypeError) {
-      return { kind: "failed", reason: `Could not reach the workspace to read ${path}.` };
-    }
-    return { kind: "missing" };
+    return classifyReadFailure(err, path);
   }
 
   if (content.kind === "text") {

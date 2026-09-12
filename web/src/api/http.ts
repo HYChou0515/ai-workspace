@@ -18,6 +18,20 @@ export const API_BASE = import.meta.env.BASE_URL.replace(/\/+$/, "");
 // Root of every backend URL (#177). "" + "/api" → "/api"; "/sub" + "/api" → "/sub/api".
 export const API_PREFIX = `${API_BASE}/api`;
 
+/** A workspace path as URL segments — the ONE spelling of that rule, for
+ * everything that puts a workspace path into an address: the `/files/` routes
+ * (`real.ts`) and the WUI's own `/w/` link (`WuiView`), so the two can never
+ * encode the same file name two different ways. Lives here, beside
+ * `API_BASE`, rather than in the client module: a renderer that wants three
+ * lines of path encoding should not have to import the HTTP client to get
+ * them. */
+export function encodePath(path: string): string {
+  // Drop the leading slash before joining: workspace paths reach the FE in both
+  // dialects (a `shown_files` declaration normalises to absolute, a file tree row
+  // is relative) and `…/files/` + `/out/a.png` would otherwise emit `files//out`.
+  return path.replace(/^\/+/, "").split("/").map(encodeURIComponent).join("/");
+}
+
 export async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   const resp = await fetch(API_PREFIX + path, init);
   // Version-skew handshake: a stale cached bundle against a newer api reloads

@@ -28,8 +28,7 @@ import { Switch } from "../../components/Switch";
 import { useCurrentUserState } from "../../hooks/useCurrentUser";
 import { useOpenFile } from "../../hooks/openFile";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
-import { API_BASE, HttpError } from "../../api/http";
-import { encodePath } from "../../api/real";
+import { API_BASE, encodePath, HttpError } from "../../api/http";
 import { publishAgentDraft } from "../../lib/agentDraftBus";
 import { subscribeFileChanged } from "../../lib/fileChangedBus";
 import { pxToRem } from "../../lib/pxToRem";
@@ -39,7 +38,7 @@ import { itemCallTool } from "./api";
 import { cleanBuildOutput, hasBuildScript, itemBuild } from "./build";
 import { itemRun } from "./run";
 import type { ViewSpec } from "../entity/types";
-import { buildWuiDoc, WuiEntryMissing } from "./assets";
+import { buildWuiDoc, readAsset, WuiEntryMissing } from "./assets";
 import { dispatchWuiRequest } from "./bridge";
 import { wuiFolder } from "./paths";
 import { createSelfWrites } from "./selfWrites";
@@ -133,15 +132,34 @@ export function trimReports(reports: WuiReport[]): WuiReport[] {
  */
 export type WuiChrome = "workspace" | "viewer";
 
-export function WuiView({
-  path,
-  spec,
-  chrome = "workspace",
-}: {
+type WuiViewProps = {
   path: string;
   spec: ViewSpec;
   chrome?: WuiChrome;
-}) {
+};
+
+/**
+ * The pane, keyed by FOLDER — here, once, rather than at each of its mount
+ * points (the IDE's `AiYamlRenderer`, the reader's `WuiPage`), so no door
+ * can be left unkeyed.
+ *
+ * A folder is the unit: its build, its `dist/`, its log. Moving to a page
+ * in another folder is therefore a new instance, and everything the old one
+ * held — a build in flight (aborted by its cleanup), the log, the flags, a
+ * Deploy verdict — goes with it, by construction. Moving to a SIBLING view
+ * file in the same folder keeps the instance: the folder, and the build that
+ * may be running in it, are still what the pane is looking at.
+ *
+ * This replaces a hand-written "moving to another folder starts clean"
+ * effect that reset each state by name and, in review round 5, was found to
+ * have forgotten one — the Deploy verdict — which then held every button on
+ * the next page for the rest of the view's life.
+ */
+export function WuiView(props: WuiViewProps) {
+  return <WuiPane key={wuiFolder(props.path)} {...props} />;
+}
+
+function WuiPane({ path, spec, chrome = "workspace" }: WuiViewProps) {
   const fs = useFileService();
   const queryClient = useQueryClient();
   const folder = wuiFolder(path);
@@ -226,25 +244,28 @@ export function WuiView({
    * landed its verdict there. Keying it here replaces a reset effect and a
    * render-time ref that tried to track the same thing. */
   const [deploy, setDeploy] = useState<
-    { path: string } & (
-      | { state: "idle" }
-      | { state: "working" }
-      | { state: "done"; generation: number }
-      | { state: "failed"; step: "build" }
-      | { state: "failed"; step: "open"; why: string }
-      | { state: "failed"; step: "unknown" }
-    )
+    | { path: string; state: "idle" }
+    | { path: string; state: "working" }
+    | ({ path: string; generation: number } & (
+        | { state: "done" }
+        | { state: "failed"; step: "build" }
+        | { state: "failed"; step: "manifest"; why: string }
+        | { state: "failed"; step: "open"; why: string }
+        | { state: "failed"; step: "unknown" }
+      ))
   >({ path, state: "idle" });
   /** The HOLD is the pane's, whatever page it is on: a run for A is still a
    * build in this folder while the pane shows B, and B's Rebuild pressed then
    * is the second build the hold exists to prevent. */
   const deploying = deploy.state === "working";
   /** What is SHOWN is the page's — a verdict about a sibling is not shown —
-   * and, for a success, the read's: "✓ Deployed" is a fact about the
-   * generation it verified, so a Refresh (a new read) retires it rather
-   * than leaving an address over whatever the new read found. */
+   * and the read's: EVERY settled verdict is a fact about the generation the
+   * pane showed when it settled, so a Refresh (a new read) retires it — a
+   * "✓ Deployed" over whatever the new read found, or a red "does not open"
+   * over a page that now does, were both this rule applied to only half the
+   * verdicts. */
   const deployHere =
-    deploy.path !== path || (deploy.state === "done" && deploy.generation !== generation)
+    deploy.path !== path || (deploy.state !== "idle" && deploy.state !== "working" && deploy.generation !== generation)
       ? ({ path, state: "idle" } as const)
       : deploy;
   const [copied, setCopied] = useState<"idle" | "done" | "failed">("idle");
@@ -266,16 +287,6 @@ export function WuiView({
    * this pane ACTING on a build; the server hears nothing until the request is
    * aborted. */
   const inFlight = useRef<AbortController | null>(null);
-  /** The committed `generation`, readable from inside an async run that
-   * outlives the render it was started in — Deploy names the generation it
-   * verifies. Written in an EFFECT, for the reason `epoch` gives above: a
-   * ref written during a render that is then thrown away would hand the run
-   * a generation no commit ever had. */
-  const generationRef = useRef(generation);
-  useEffect(() => {
-    generationRef.current = generation;
-  }, [generation]);
-
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const openFile = useOpenFile();
   const { id: me, ready: meReady } = useCurrentUserState();
@@ -402,24 +413,17 @@ export function WuiView({
     [fs.scopeId],
   );
 
-  // Moving to another page starts clean. Its log, its fold, and the fact that
-  // one has already been built on open are all facts about the page that left —
-  // and until the log survived Refresh (P12), clearing it there hid this.
-  useEffect(() => {
-    epoch.current += 1;
-    inFlight.current?.abort();
-    inFlight.current = null;
-    setBuildLog(null);
-    setLogOpen(true);
-    setBuilding(false);
-    setFirstBuild(false);
-    // NOT `autoBuiltFor`. It already holds the FOLDER it built, so the guard is
-    // folder-aware without help — and clearing it here defeated that guard
-    // between StrictMode's two effect passes, which is two builds on mount.
-  }, [folder]);
+  // There is deliberately NO "moving to another folder starts clean" effect
+  // here. `WuiView` keys this pane by folder, so another folder is another
+  // instance: every state — the log, its fold, the build flags, the Deploy
+  // verdict, the reports — starts fresh by construction, and the cleanup
+  // below is what stops the build that was running. The hand-written reset
+  // this replaces forgot one state (the Deploy verdict), which held every
+  // button on the next page for the rest of the view's life; a list that has
+  // to be kept in step with every new `useState` will forget another.
 
-  // Closing the pane is leaving too: without this the build outlives the whole
-  // view, not just the page.
+  // Closing the pane is leaving too — and so, now, is moving to another
+  // folder: without this the build outlives the whole view, not just the page.
   //
   // The guard goes with it. StrictMode mounts, unmounts and mounts again, so
   // this cleanup runs between the two passes — aborting the build the first
@@ -636,46 +640,67 @@ export function WuiView({
   const runDeploy = async () => {
     const started = epoch.current;
     const mine = path;
+    // The generation the pane shows now. The hold keeps it there for the whole
+    // run (Refresh, Rebuild and Auto-rebuild are all held), so the closure's
+    // value IS the current one — a ref mirrored by an effect and a `max` on
+    // the write were guarding a state the hold already makes impossible, and
+    // their failure mode was a verdict silently dropped. A settled verdict
+    // names this generation (or the next, on success) and is shown only while
+    // the pane is on it.
+    const shown = generation;
     const moved = () => epoch.current !== started;
     setDeploy({ path: mine, state: "working" });
     setCopied("idle");
     autoBuiltFor.current = folder;
     try {
+      // Whether there is a build: read the manifest through the three-outcome
+      // reader, not the toolbar's query. That query's `.catch(() => "")` is
+      // right for a toolbar (no manifest is the ordinary case, and a button
+      // that is not there needs no explanation) and wrong for a verdict: it
+      // turned a dropped connection or a mid-restore 404 into "nothing to
+      // build" — Deploy skipped the build, verified the OLD `dist/` and said
+      // "✓ Deployed", and refetching had overwritten the cache's correct
+      // answer with "", so Rebuild vanished from the toolbar as well.
       let hasBuild = false;
       if (folder !== "") {
-        // `cancelRefetch: false`: a first read still in flight is JOINED, not
-        // cancelled and re-issued — the default would have made "press Deploy
-        // as the page opens" two manifest reads, the first thrown away.
-        const fresh = await buildable.refetch({ cancelRefetch: false });
+        const manifest = await readAsset(fs, `${folder}/package.json`);
         if (moved()) return;
-        hasBuild = hasBuildScript(fresh.data ?? "");
+        if (manifest.kind === "failed") {
+          setDeploy({ path: mine, generation: shown, state: "failed", step: "manifest", why: manifest.reason });
+          return;
+        }
+        const text = manifest.kind === "asset" && manifest.asset.kind === "text" ? manifest.asset.text : "";
+        // A definite answer, so the toolbar learns it too (a page that gained
+        // a build since the pane opened now shows Rebuild).
+        queryClient.setQueryData(qk.wuiBuildable(fs.scopeId, folder), text);
+        hasBuild = hasBuildScript(text);
       }
       if (hasBuild) {
         const ok = await runBuild({ reload: false });
         if (moved()) return;
         if (!ok) {
-          setDeploy({ path: mine, state: "failed", step: "build" });
+          setDeploy({ path: mine, generation: shown, state: "failed", step: "build" });
           return;
         }
       }
       // The verdict's read IS the pane's next generation: the pane's own
       // query options, fetched into the cache under that key, then the pane
       // is pointed at it — a cache hit, so the frame shows what was verified
-      // without a second read. `max`, not an absolute write: the generation
-      // only ever moves forward, whatever else touched it.
+      // without a second read.
       //
       // On failure the pane is NOT pointed at it: a query in error with no
       // data refetches on the key switch, and that second read — one the
       // verdict never saw — could succeed (a sandbox restore finishing) and
       // render the page directly under "the page does not open". The panel
       // carries the sentence; the pane keeps showing what it showed.
-      const next = generationRef.current + 1;
+      const next = shown + 1;
       try {
         await queryClient.fetchQuery(wuiDocQuery(fs, folder, entry, mine, next));
       } catch (err) {
         if (moved()) return;
         setDeploy({
           path: mine,
+          generation: shown,
           state: "failed",
           step: "open",
           // Only `WuiEntryMissing` carries a sentence written for a person;
@@ -687,18 +712,18 @@ export function WuiView({
         return;
       }
       if (moved()) return;
-      setGeneration((g) => Math.max(g, next));
-      setDeploy({ path: mine, state: "done", generation: next });
+      setGeneration(next);
+      setDeploy({ path: mine, generation: next, state: "done" });
     } catch (err) {
       // Nothing above is expected to throw — but a run that did would leave
       // the button on "Deploying…" for the rest of the page's life, and a
       // loud failure needs a catcher. Named as what it is, not as a page
-      // problem: a throw from the manifest read or the build stage sent the
-      // publisher to look at a page that opened fine.
+      // problem: a throw from the build stage sent the publisher to look at
+      // a page that opened fine.
       if (moved()) return;
       // Logged, not shown: the message is internal (see the open branch).
       console.error("wui: deploy stopped unexpectedly", err);
-      setDeploy({ path: mine, state: "failed", step: "unknown" });
+      setDeploy({ path: mine, generation: shown, state: "failed", step: "unknown" });
     }
   };
 
@@ -822,6 +847,10 @@ export function WuiView({
             </>
           ) : deployHere.step === "build" ? (
             <div style={{ color: "var(--err)" }}>Deploy failed — see the build output.</div>
+          ) : deployHere.step === "manifest" ? (
+            <div style={{ color: "var(--err)" }}>
+              Deploy failed — could not check whether this page has a build: {deployHere.why}
+            </div>
           ) : deployHere.step === "open" ? (
             // The page's own sentence about why it does not open — the same
             // one the pane shows below — so the publisher is not sent to a

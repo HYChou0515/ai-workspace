@@ -20,20 +20,25 @@ import { useMemo } from "react";
 import { useParams } from "react-router-dom";
 
 import { FileServiceProvider, investigationFileService, type FileService } from "../api/fileService";
-import { HttpError } from "../api/http";
+import { Btn } from "../components/Btn";
+import { classifyReadFailure } from "../renderers/wui/assets";
 import { parseViewSpec } from "../renderers/entity/EntityViews";
 import { VIEW_KIND } from "../renderers/entity/types";
 import { WorkspaceSlugProvider } from "../hooks/useWorkspaceSlug";
 import { WuiView } from "../renderers/wui/WuiView";
 import { useQuery } from "@tanstack/react-query";
 
-/** A sentence, centred, for the two ways this URL can be wrong. */
-function Problem({ children }: { children: React.ReactNode }) {
+/** A sentence, centred, for the ways this URL can be wrong — and, where the
+ * wrongness may be a moment's (a read that failed, a file a restoring sandbox
+ * answered "not there" for), a way to look again without reloading the tab. */
+function Problem({ children, retry }: { children: React.ReactNode; retry?: () => void }) {
   return (
     <div
       role="alert"
       style={{
         display: "flex",
+        flexDirection: "column",
+        gap: 12,
         alignItems: "center",
         justifyContent: "center",
         height: "100%",
@@ -42,7 +47,12 @@ function Problem({ children }: { children: React.ReactNode }) {
         color: "var(--ink-2)",
       }}
     >
-      <p style={{ maxWidth: "42rem" }}>{children}</p>
+      <p style={{ maxWidth: "42rem", margin: 0 }}>{children}</p>
+      {retry && (
+        <Btn size="sm" onClick={retry}>
+          Try again
+        </Btn>
+      )}
     </div>
   );
 }
@@ -69,27 +79,24 @@ export function WuiPage({
   if (view.isPending) return <Problem>Opening {path}…</Problem>;
   if (view.isError) {
     // Named, because the reader did not choose this path — somebody sent them
-    // the link, and the path is the only thing they can forward back. But
-    // only "not there" is "no file": a 403 is somebody outside the item, and
-    // a dropped connection is neither — both used to read as a missing file,
-    // and the reader reported one to an author who could see it. The same
-    // classes `readAsset` (assets.ts) draws one level down, so the two
-    // sentences a reader can meet on this route agree.
-    const err = view.error;
-    if (err instanceof HttpError && err.status === 403) {
-      return <Problem>You cannot open this item, so {path} cannot be shown.</Problem>;
-    }
-    if (err instanceof HttpError && err.status !== 404) {
-      return (
-        <Problem>
-          {path} could not be read (the workspace answered {err.status}). Try again in a moment.
-        </Problem>
-      );
-    }
-    if (err instanceof TypeError) {
-      return <Problem>Could not reach the workspace to read {path}. Try again in a moment.</Problem>;
-    }
-    return <Problem>There is no file at {path} in this item.</Problem>;
+    // the link, and the path is the only thing they can forward back. What
+    // the failure MEANS is decided once, in `classifyReadFailure`, for every
+    // read a WUI makes — a 403 is somebody outside the item, a dropped
+    // connection is not absence — so this sentence and the one the pane
+    // shows for the entry cannot disagree. And "not there" is tentative,
+    // with a way to look again: on this platform a read during a sandbox
+    // restore answers 404 for a file that is there, and a reader told "there
+    // is no file" in the indicative reported one to an author who could see
+    // it.
+    const why = classifyReadFailure(view.error, path);
+    const retry = () => void view.refetch();
+    if (why.kind === "failed") return <Problem retry={retry}>{why.reason}</Problem>;
+    return (
+      <Problem retry={retry}>
+        There is no file at {path} in this item — or the item is still being restored. Try again in a
+        moment.
+      </Problem>
+    );
   }
 
   const spec = parseViewSpec(view.data ?? "");

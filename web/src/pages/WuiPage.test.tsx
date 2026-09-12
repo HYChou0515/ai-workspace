@@ -140,14 +140,23 @@ describe("WuiPage", () => {
     expect(readFile).not.toHaveBeenCalledWith("/scrap-review/package.json");
   });
 
-  it("says so plainly when the view file is not there", async () => {
+  it("says so plainly when the view file is not there — and lets the reader look again", async () => {
     /**
      * The reader of this URL cannot open a console and did not choose the path —
      * somebody sent them the link. "Not found" has to be a sentence naming what
      * was looked for, or they have nothing to forward back.
+     *
+     * Review round 5: and it has to be TENTATIVE, with a way back. On this
+     * platform a 404 during a sandbox restore is not proof of absence — the
+     * PR already says so one level down, for the entry — and this route said
+     * "there is no file" in the indicative and offered nothing, so the reader
+     * reported a missing file to an author who could see it.
      */
+    const files: Record<string, string> = {};
     const readFile = vi.fn(async (path: string) => {
-      throw notFound(path);
+      const text = files[path];
+      if (text === undefined) throw notFound(path);
+      return { kind: "text", path, text, size: text.length, encoding: "utf-8" };
     });
 
     renderAt("/w/rca/i1/gone/page.ai.yaml", readFile);
@@ -160,7 +169,14 @@ describe("WuiPage", () => {
       const said = screen.getByRole("alert").textContent ?? "";
       expect(said).toContain("/gone/page.ai.yaml");
       expect(said).toMatch(/no file/i);
+      expect(said).toMatch(/try again/i);
     });
+
+    // The restore finishes; the reader looks again and the page is there.
+    files["/gone/page.ai.yaml"] = YAML;
+    files["/gone/index.html"] = "<!doctype html><p>hello</p>";
+    fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+    await waitFor(() => expect(screen.getByTitle("Scrap review")).toBeTruthy());
   });
 
   it("refuses a file that is not a WUI", async () => {
@@ -285,10 +301,14 @@ describe("WuiPage: what a reader is handed", () => {
     renderAt("/w/rca/i1/scrap-review/page.ai.yaml", readFile);
 
     // Not `findByRole("alert")`: the "Opening …" placeholder is an alert too,
-    // and resolves first.
-    const said = await screen.findByText(/cannot open this item/i);
-    expect(said).not.toHaveTextContent(/no file/i);
+    // and resolves first. The sentence is `classifyReadFailure`'s — the same
+    // one the pane shows for an entry a reader may not read — not a second
+    // wording of the same class (review round 5).
+    const said = await screen.findByText(/do not have permission to read/i);
+    expect(said).toHaveTextContent("/scrap-review/page.ai.yaml");
     expect(screen.queryByText(/no file at/i)).toBeNull();
+    // Transient or not, a reader can look again without reloading the tab.
+    expect(screen.getByRole("button", { name: /try again/i })).toBeInTheDocument();
   });
 
   it("lets a reader try again, because a missing entry may only be a sandbox mid-restore", async () => {

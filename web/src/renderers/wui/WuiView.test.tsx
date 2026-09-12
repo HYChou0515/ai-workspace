@@ -1509,6 +1509,106 @@ describe("WuiView: Deploy", () => {
     expect(vi.mocked(fs.readFile).mock.calls.filter(([p]) => p === "/sales/index.html")).toHaveLength(2);
   });
 
+  it("starts clean on a page in another folder while a Deploy was running", async () => {
+    /**
+     * Review round 5 (reproduced): with a Deploy in flight, moving the same
+     * pane to a page in ANOTHER folder aborted the build, every `moved()`
+     * returned before a `setDeploy`, and the state stayed `working` — the
+     * new page's Refresh, Rebuild and Deploy were held forever, the button
+     * reading "Deploying…" until the whole view unmounted. Cross-folder is a
+     * remount now (the pane is keyed by folder), so no hand-written reset
+     * can forget a state again.
+     */
+    // The build is HELD, as a real 30-second build is: the assertions below
+    // are made while it is still running. (A first version of this test let
+    // the old run finish at once, and passed with the key removed — for the
+    // wrong reason. Found by mutation, not by review.)
+    const { release } = serveHeldBuild(0);
+    // The manual path for the destination folder too — `beforeEach` only
+    // covers `/sales`, and a fresh `/reports` pane would otherwise start its
+    // own rebuild-on-open, which is a hold of its own, not the leak under test.
+    setWuiAutoBuild(autoBuildScope("item1", "/reports"), false);
+    const files = {
+      ...BUILT,
+      "/reports/index.html": "<html><body>r</body></html>",
+      "/reports/package.json": BUILT["/sales/package.json"],
+    };
+    const fs = svc(files);
+    const page = (p: string) => (
+      <QueryWrap>
+        <WorkspaceSlugProvider value="rca">
+          <FileServiceProvider value={fs}>
+            <WuiView path={p} spec={{ view: "wui", entity: "" } as ViewSpec} />
+          </FileServiceProvider>
+        </WorkspaceSlugProvider>
+      </QueryWrap>
+    );
+    const view = render(page("/sales/page.ai.yaml"));
+    await screen.findByRole("button", { name: /^rebuild$/i });
+    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    await screen.findByText(/> vite build/);
+    expect(screen.getByRole("button", { name: /deploying/i })).toBeInTheDocument();
+
+    view.rerender(page("/reports/dash.ai.yaml"));
+    await screen.findByRole("button", { name: /^rebuild$/i });
+    await act(async () => {});
+
+    // Still mid-build for /sales — and the /reports page owes it nothing.
+    expect(screen.getByRole("button", { name: /^deploy$/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^refresh$/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^rebuild$/i })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: /deploying/i })).toBeNull();
+    expect(screen.queryByText(/> vite build/)).toBeNull(); // nor its log
+    release();
+  });
+
+  it("fails, and says so, when it cannot check for a build — never 'nothing to build'", async () => {
+    /**
+     * Review round 5 (reproduced): the manifest query's `.catch(() => "")`
+     * turned a dropped connection, a 5xx, or a mid-restore 404 into "no
+     * build" — Deploy skipped the build, verified the OLD `dist/` and said
+     * "✓ Deployed", while the cache's correct answer was overwritten with ""
+     * and Rebuild vanished from the toolbar. Deploy reads the manifest
+     * through the three-outcome reader: absent is "no build", a failed read
+     * is a failed Deploy.
+     */
+    vi.stubGlobal("fetch", vi.fn());
+    let manifestReads = 0;
+    renderInFs({ ...BUILT }, async (path, real) => {
+      if (path === "/sales/package.json" && ++manifestReads > 1) throw new TypeError("Failed to fetch");
+      return real(path);
+    });
+    await screen.findByRole("button", { name: /^rebuild$/i });
+    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+
+    const said = await screen.findByText(/deploy failed/i);
+    expect(said).toHaveTextContent(/could not check/i);
+    expect(buildCalls()).toHaveLength(0);
+    expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull();
+    // The toolbar still knows the page has a build.
+    expect(screen.getByRole("button", { name: /^rebuild$/i })).toBeInTheDocument();
+  });
+
+  it("forgets a FAILED verdict on Refresh too — it was about one read as well", async () => {
+    /**
+     * Review round 5 (reproduced): round 4 tied the SUCCESS verdict to the
+     * generation it verified and left the failed one to live forever — a red
+     * "the page does not open" stayed above a page that, after the agent
+     * wrote `index.html` and Refresh read it, opened fine.
+     */
+    vi.stubGlobal("fetch", vi.fn());
+    const files: Record<string, string> = { "/sales/README.md": "nothing" };
+    renderInFs(files);
+    fireEvent.click(await screen.findByRole("button", { name: /^deploy$/i }));
+    await screen.findByText(/deploy failed/i);
+
+    files["/sales/index.html"] = PLAIN["/sales/index.html"];
+    fireEvent.click(screen.getByRole("button", { name: /^refresh$/i }));
+
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+    expect(screen.queryByText(/deploy failed/i)).toBeNull();
+  });
+
   it("holds the sibling page too — the lock is the pane's, the verdict is the page's", async () => {
     /**
      * Review round 4: keying the state by path (round 3) also keyed the HOLD
