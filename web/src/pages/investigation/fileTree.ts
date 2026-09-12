@@ -90,6 +90,33 @@ export function buildFileTree(
   return root.children;
 }
 
+export type Presence = "present" | "absent" | "unknown";
+
+/**
+ * Whether `path` exists, as far as ONE listing can tell. The listing is a
+ * pruned preload: folders in `unwalked` were listed but never entered, so a
+ * file under one of them is simply not in `files` — not gone. "Not in the
+ * list" therefore splits into two answers, and every rule that used to close
+ * a tab, drop a recent file or forget an initial tab on "not in the list"
+ * must act only on `absent`.
+ *
+ * Deliberately conservative: anything under an unwalked folder is `unknown`
+ * even once that folder's level has been fetched. Deciding `absent` from a
+ * loaded level would make "does this file exist" change with which folders
+ * happen to be open — a presence that follows UI state is the kind of wrong
+ * a review does not catch. The cost is a deleted file under `node_modules/`
+ * keeping its tab until the user closes it.
+ */
+export function presenceOf(
+  path: string,
+  files: ReadonlySet<string>,
+  unwalked: readonly string[],
+): Presence {
+  if (files.has(path)) return "present";
+  for (const dir of unwalked) if (path.startsWith(dir + "/")) return "unknown";
+  return "absent";
+}
+
 /**
  * Filter a built tree down to the nodes whose (case-insensitive) full path
  * contains `term`. A directory survives if it matches directly OR has any

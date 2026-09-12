@@ -34,6 +34,7 @@ import { ItemChatShell } from "../../components/ItemChatShell";
 import { ItemAccessDialog, ItemMembersPanel } from "../../components/ItemMembersPanel";
 import { ShareChatDialog } from "../../components/ShareChatDialog";
 import { resolveUploadDir } from "./attach";
+import { presenceOf } from "./fileTree";
 import { useDialog } from "../../components/Dialog";
 import { useDirtyClose } from "../../hooks/useDirtyClose";
 import { FileServiceProvider, investigationFileService } from "../../api/fileService";
@@ -240,9 +241,17 @@ function ShellBody({
   // those that actually exist — not a hardcoded RCA design-view list. A
   // "views"-first App (#419 §B5) opens its `layout.views` instead of default_tabs.
   const surfaceTabs = mainSurfaceTabs(manifest);
+  // One presence rule for every "is this file still there" question in the
+  // shell: the listing is a pruned preload, so a path under an unwalked folder
+  // is `unknown`, not missing — a view an App keeps under `dist/` must open.
+  const filePaths = useMemo(() => new Set(files.map((f) => f.path)), [files]);
+  const presence = useCallback(
+    (p: string) => presenceOf(p, filePaths, unwalked),
+    [filePaths, unwalked],
+  );
   const initialPaths = useMemo(
-    () => surfaceTabs.filter((p) => files.some((f) => f.path === p)),
-    [surfaceTabs, files],
+    () => surfaceTabs.filter((p) => presence(p) !== "absent"),
+    [surfaceTabs, presence],
   );
   const groups = useEditorGroups(initialPaths);
   // Attached to `page-item` below. Every width decision in this shell is made
@@ -503,18 +512,19 @@ function ShellBody({
 
   // VSCode-style delete-open-file handling: when a file disappears from the
   // listing (deleted in the tree), auto-close its CLEAN tabs; keep dirty
-  // ones open so ⌘S can re-create the file.
-  const filePaths = useMemo(() => new Set(files.map((f) => f.path)), [files]);
+  // ones open so ⌘S can re-create the file. Only a file the listing can VOUCH
+  // is gone: one under a folder the preload never entered is unknown, and a
+  // tab is not thrown away on a guess.
   useEffect(() => {
     const g = gRef.current;
     for (const [gid, grp] of Object.entries(g.groups)) {
       for (const t of grp.tabs) {
-        if (!filePaths.has(t.path) && !bufferStore.isDirty(t.path)) {
+        if (presence(t.path) === "absent" && !bufferStore.isDirty(t.path)) {
           g.closeTab(gid, t.path);
         }
       }
     }
-  }, [filePaths, bufferStore]);
+  }, [presence, bufferStore]);
 
   // Close a tab, prompting to save when it's the LAST open view of a dirty
   // file (a sibling pane still showing it means no data is at risk).
@@ -1625,7 +1635,14 @@ function ActivitySidebar(props: {
         />
       );
     case "history":
-      return <HistorySidebar files={props.files} recentFiles={props.recentFiles} onOpenFile={props.onOpenFile} />;
+      return (
+        <HistorySidebar
+          files={props.files}
+          unwalked={props.unwalked}
+          recentFiles={props.recentFiles}
+          onOpenFile={props.onOpenFile}
+        />
+      );
     case "members":
       return <MembersSidebar manifest={props.manifest} item={props.item} />;
     case "activity":
@@ -1684,15 +1701,19 @@ export function extractHeadings(md: string): { level: number; text: string }[] {
 
 function HistorySidebar({
   files,
+  unwalked,
   recentFiles,
   onOpenFile,
 }: {
   files: FileInfo[];
+  unwalked: string[];
   recentFiles: string[];
   onOpenFile: OpenFileFn;
 }) {
-  // Filter recentFiles to those still present in the file listing.
-  const items = recentFiles.filter((p) => files.some((f) => f.path === p));
+  // Drop only the recent files the listing can vouch are gone; one under a
+  // folder the preload never entered is unknown, not missing.
+  const filePaths = new Set(files.map((f) => f.path));
+  const items = recentFiles.filter((p) => presenceOf(p, filePaths, unwalked) !== "absent");
   return (
     <aside style={sidebarStyle}>
       <div style={sidebarHeader}>
