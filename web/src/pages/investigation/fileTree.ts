@@ -1,10 +1,12 @@
 /**
  * Build a nested folder tree from the flat file listing the BE returns,
  * plus an explicit `dirs` list so empty folders (which have no files to
- * infer them from) still appear. Dirs sort before files, both alphabetical.
+ * infer them from) still appear. Dirs sort before files, siblings in natural
+ * order (`lib/treeOrder.ts` — the same rule the backend walks documents in).
  */
 
 import type { FileInfo } from "../../api/types";
+import { compareSiblings } from "../../lib/treeOrder";
 
 export type TreeNode = {
   name: string;
@@ -109,16 +111,14 @@ export function pruneTree(
   return { tree: filter(tree), expand };
 }
 
-// `a.localeCompare(b)` builds a fresh collator on every call; one reused
-// collator is the same ordering (identical defaults) for a fraction of the cost,
-// and sorting is the other half of the build with real, long, prefix-sharing
-// names. See https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/
-// Global_Objects/Intl/Collator — "when comparing large numbers of strings".
-const byName = new Intl.Collator(undefined, { usage: "sort" });
-
+// The order is the ONE tree-order rule (plan-rag-context P2): dirs before
+// files, natural sort, locale-independent — see `lib/treeOrder.ts`. The
+// backend walks neighbouring documents in this same order, so what the user
+// sees here is what the retrieval context follows; that only holds while both
+// sides implement one rule (the shared golden fixture keeps them honest). The
+// previous `Intl.Collator(undefined)` depended on the runtime locale and put
+// `10.png` before `9.png`.
 function sortTree(node: TreeNode): void {
-  node.children.sort((a, b) =>
-    a.isDir !== b.isDir ? (a.isDir ? -1 : 1) : byName.compare(a.name, b.name),
-  );
+  node.children.sort(compareSiblings);
   node.children.forEach(sortTree);
 }
