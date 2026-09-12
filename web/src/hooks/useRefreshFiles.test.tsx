@@ -32,6 +32,10 @@ describe("useRefreshFiles", () => {
     client.setQueryData(qk.files(id), { items: [], dirs: [] });
     client.setQueryData(qk.file(id, "/a.md"), { text: "old" });
     client.setQueryData(qk.file(id, "/b.md"), { text: "old-b" });
+    // A WUI folder's manifest — the one file the WUI pane acts on, and one the
+    // agent's tool writes (which reach the FE only through this chokepoint)
+    // scaffold or remove (docs/plan-wui-deploy.md, review round 8).
+    client.setQueryData(qk.wuiBuildable(id, "/sales"), { kind: "missing" });
     // Pre-populate the editor buffer for one path so reload should fire.
     const store = new FileBufferStore({
       readFile: vi.fn(async () => ({
@@ -65,6 +69,7 @@ describe("useRefreshFiles", () => {
     expect(client.getQueryState(qk.files(id))?.isInvalidated).toBe(true);
     expect(client.getQueryState(qk.file(id, "/a.md"))?.isInvalidated).toBe(true);
     expect(client.getQueryState(qk.file(id, "/b.md"))?.isInvalidated).toBe(true);
+    expect(client.getQueryState(qk.wuiBuildable(id, "/sales"))?.isInvalidated).toBe(true);
     // 3. Editor buffer was reloaded.
     expect(reloadSpy).toHaveBeenCalledWith("/a.md");
   });

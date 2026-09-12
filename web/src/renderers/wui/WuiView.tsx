@@ -100,6 +100,28 @@ function manifestText(read: AssetRead | undefined): string {
 /** Each mounted pane gets its own number — see `qk.wuiDoc`. */
 let paneSeq = 0;
 
+/** Deploy's status, keyed by the view file it is about; a settled one also
+ * names the generation the pane showed when it settled. See `WuiPane`. */
+type DeployState =
+  | { path: string; state: "idle" }
+  | { path: string; state: "working" }
+  | ({ path: string; generation: number } & (
+      | { state: "done" }
+      | { state: "failed"; step: "build" }
+      | { state: "failed"; step: "manifest"; why: string }
+      | { state: "failed"; step: "open"; why: string }
+      | { state: "failed"; step: "changed" }
+      | { state: "failed"; step: "unknown" }
+    ));
+
+/** Is this verdict about the page and generation the pane shows now? The one
+ * predicate behind both "show it" and "apply it". */
+function verdictFor(deploy: DeployState, path: string, generation: number): boolean {
+  if (deploy.path !== path) return false;
+  if (deploy.state === "idle" || deploy.state === "working") return true;
+  return deploy.generation === generation;
+}
+
 /**
  * How many of a page's reports we keep.
  *
@@ -278,17 +300,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
    * current, and a run that finished after the pane had moved to the sibling
    * landed its verdict there. Keying it here replaces a reset effect and a
    * render-time ref that tried to track the same thing. */
-  const [deploy, setDeploy] = useState<
-    | { path: string; state: "idle" }
-    | { path: string; state: "working" }
-    | ({ path: string; generation: number } & (
-        | { state: "done" }
-        | { state: "failed"; step: "build" }
-        | { state: "failed"; step: "manifest"; why: string }
-        | { state: "failed"; step: "open"; why: string }
-        | { state: "failed"; step: "unknown" }
-      ))
-  >({ path, state: "idle" });
+  const [deploy, setDeploy] = useState<DeployState>({ path, state: "idle" });
   /** The HOLD is the pane's, whatever page it is on: a run for A is still a
    * build in this folder while the pane shows B, and B's Rebuild pressed then
    * is the second build the hold exists to prevent. */
@@ -298,24 +310,25 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
    * pane showed when it settled, so a Refresh (a new read) retires it — a
    * "✓ Deployed" over whatever the new read found, or a red "does not open"
    * over a page that now does, were both this rule applied to only half the
-   * verdicts. */
-  const deployHere =
-    deploy.path !== path || (deploy.state !== "idle" && deploy.state !== "working" && deploy.generation !== generation)
-      ? ({ path, state: "idle" } as const)
-      : deploy;
+   * verdicts. ONE predicate (`verdictFor`), shared with the effect below that
+   * applies a waiting success: two copies of it could only drift. */
+  const deployHere = verdictFor(deploy, path, generation) ? deploy : ({ path, state: "idle" } as const);
   // A success is applied HERE — the pane pointed at the generation it
   // verified — and only while the pane is on the page it is about. Settled
   // on that page, that is at once; settled while the pane was on a SIBLING,
   // it waits (plan decision 9: nothing reloads a page under someone's hands)
   // and is applied the moment the pane is back: arriving is a fresh open,
-  // not an interruption. Unless the verified document has meanwhile left the
-  // cache (`gcTime`, five minutes unobserved): then "✓ Deployed" would sit
-  // over a fresh read the verdict never saw, so the verdict is dropped
-  // instead — Deploy again is one press.
+  // not an interruption. Unless the verified document is no longer there to
+  // point at — it left the cache (`gcTime`, five minutes unobserved), or the
+  // page's `entry:` was edited while the run was out, so the document the
+  // run verified is not the one this page now names. Then "✓ Deployed" would
+  // sit over a read the verdict never saw, so the verdict is not applied —
+  // and says so, rather than vanishing: a Deploy that ended with nothing on
+  // screen is the silent failure this pane is written to avoid.
   useEffect(() => {
     if (deploy.path !== path || deploy.state !== "done" || deploy.generation <= generation) return;
     const verified = queryClient.getQueryData(qk.wuiDoc(fs.scopeId, path, entry, instance, deploy.generation));
-    if (verified === undefined) setDeploy({ path, state: "idle" });
+    if (verified === undefined) setDeploy({ path, generation, state: "failed", step: "changed" });
     else setGeneration(deploy.generation);
   }, [deploy, path, entry, generation, queryClient, fs.scopeId, instance]);
   const [copied, setCopied] = useState<"idle" | "done" | "failed">("idle");
@@ -567,7 +580,15 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
           // Fold it away: the page below IS the result, and it is what the
           // reader came for. One line stays, and opens it again.
           setLogOpen(false);
-          if (reload) setGeneration((g) => g + 1);
+          if (reload) {
+            // A build the whole folder now reflects. A Deploy verdict still
+            // WAITING for its page (settled while the pane was on a sibling)
+            // pointed at the document before this build — applying it later
+            // would show that older document under "✓ Deployed" while the
+            // address served this one. It is retired; Deploy again is a press.
+            setDeploy((d) => (d.state === "done" ? { path: d.path, state: "idle" } : d));
+            setGeneration((g) => g + 1);
+          }
         } else {
           outcome = "failed";
           note(`Build failed (exit ${event.exit_code}).`);
@@ -633,7 +654,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
     // `runBuild` is deliberately not a dependency: it is rebuilt every render,
     // and the guard above is what decides when this may run.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chrome, canBuild, autoBuild, slug, folder]);
+  }, [author, canBuild, autoBuild, slug, folder]);
 
   // Cleaned HERE, over the joined stream, not chunk by chunk: an escape
   // sequence is a byte fragment too, and half of one arriving in the previous
@@ -646,8 +667,25 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
    * view file it was opened with, whose stale `entry:` a folder re-read alone
    * cannot shake. Never a build. */
   const tryAgain = () => {
-    setGeneration((g) => g + 1);
-    onRetry?.();
+    // Where the host holds the view file, the host does the whole re-read —
+    // the view file first, then a fresh pane with what it now says. Bumping
+    // the generation here as well read the folder twice, first with the old
+    // `entry:`, and showed "not published" for the moment in between.
+    if (onRetry) onRetry();
+    else setGeneration((g) => g + 1);
+  };
+
+  /** Abort the running Deploy and release the pane. The build is aborted
+   * (`inFlight`), and the epoch is bumped so the run's every remaining write
+   * sees `moved()` and stops — the log keeps what it had. */
+  const cancelDeploy = () => {
+    inFlight.current?.abort();
+    inFlight.current = null;
+    epoch.current += 1;
+    setBuilding(false);
+    setFirstBuild(false);
+    autoBuiltFor.current = null; // the on-open build did not happen after all
+    setDeploy({ path, state: "idle" });
   };
 
   const tellTheAgent = () => {
@@ -813,6 +851,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
       if (moved()) return;
       // Logged, not shown: the message is internal (see the open branch).
       console.error("wui: deploy stopped unexpectedly", err);
+      autoBuiltFor.current = autoBuiltBefore; // no build ran on this path either
       setDeploy({ path: mine, generation: shown, state: "failed", step: "unknown" });
     }
   };
@@ -893,6 +932,17 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
             {deployHere.state === "working" ? "Deploying…" : "Deploy"}
           </Btn>
         )}
+        {/* The hold's way out. A build stream that never closes — a gateway
+            holding the SSE open, a `pnpm run build` that hangs — would
+            otherwise hold Refresh, Rebuild and Deploy for the life of the pane,
+            with closing the file the only exit; a hold with no bound is the
+            one failure nothing can report. Cancel aborts the build and
+            releases the pane; the run that was cancelled writes nothing more. */}
+        {deploying && (
+          <Btn size="sm" onClick={cancelDeploy}>
+            Cancel
+          </Btn>
+        )}
       </div>
       )}
       {author && deployHere.state !== "idle" && deployHere.state !== "working" && (
@@ -947,6 +997,11 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
             // build log for a page that has no build.
             <div style={{ color: "var(--err)" }}>
               Deploy failed — the page does not open: {deployHere.why}
+            </div>
+          ) : deployHere.step === "changed" ? (
+            <div style={{ color: "var(--err)" }}>
+              Deploy stopped — the page changed while it ran (its entry, or the pane was away long
+              enough for the result to expire). Deploy again.
             </div>
           ) : (
             <div style={{ color: "var(--err)" }}>Deploy stopped unexpectedly — see the browser console.</div>
@@ -1073,13 +1128,17 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
         <div role="status" style={{ padding: 12, color: "var(--text-paper-d)" }}>
           Building… the page appears when this finishes.
         </div>
-      ) : built.error && (building || deployHere.state === "working") ? (
+      ) : built.error && ((building && !deploying) || deployHere.state === "working") ? (
         // The first open of a page nobody has built yet: `dist/` really is
         // absent, and saying so in red — under a log showing the build that is
         // about to create it — is alarming and, seconds later, untrue. The
         // same for the moments of a Deploy with no build running (its manifest
         // read, its open check): the old red error flashed back between the
-        // build's end and the verified page, "broken, then fixed".
+        // build's end and the verified page, "broken, then fixed". Only for a
+        // page that WILL be reloaded, though: a Rebuild reloads every page in
+        // the folder, but a Deploy reloads only the page it is about, so a
+        // sibling shown during A's Deploy keeps its own error rather than a
+        // promise the run will not keep.
         <div role="status" style={{ padding: 12, color: "var(--text-paper-d)" }}>
           {building ? "Building…" : "Deploying…"} the page appears when this finishes.
         </div>
@@ -1103,7 +1162,8 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
           style={{ padding: 12, color: "var(--text-paper-d)", display: "flex", gap: 8, alignItems: "center" }}
         >
           <span>
-            This page has not been published yet — or it is still being restored. Try again in a moment.
+            This page has not been published yet — or it is still being restored, or you may not have
+            access to this item. Try again in a moment.
           </span>
           <TryAgain onClick={tryAgain} />
         </div>

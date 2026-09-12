@@ -44,6 +44,14 @@ export function useRefreshFiles(investigationId: string): () => Promise<void> {
       // The separate `qk.dirs` bust had nothing left to invalidate.
       queryClient.invalidateQueries({ queryKey: qk.files(investigationId) }),
       queryClient.invalidateQueries({ queryKey: ["file", investigationId] }),
+      // A WUI folder's manifest (`package.json`) is a file the WUI pane itself
+      // acts on — whether it offers Rebuild, whether Deploy builds — and the
+      // writer that scaffolds or removes one is the agent, whose tool writes
+      // reach the FE through THIS chokepoint and not the `file_changed` bus.
+      // (`WuiView` listens on the bus too, for a human's save; one rule, two
+      // doors.) Without this the toolbar kept its opening answer until the
+      // tab was reloaded.
+      queryClient.invalidateQueries({ queryKey: ["wuiBuildable", investigationId] }),
     ]);
     // 3. Reload the editor's per-path buffers. Skip dirty ones — `reload()`
     //    would silently clobber the user's unsaved edits.

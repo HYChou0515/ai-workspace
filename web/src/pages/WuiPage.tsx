@@ -16,7 +16,7 @@
  * are for navigating a workspace; someone who followed a link to one page has
  * nowhere to navigate to and no context for the crumbs.
  */
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { FileServiceProvider, investigationFileService, type FileService } from "../api/fileService";
@@ -66,6 +66,12 @@ export function WuiPage({
   const { slug = "", itemId = "", "*": rest = "" } = useParams();
   const path = `/${rest}`;
   const service = useMemo(() => makeService(slug, itemId), [makeService, slug, itemId]);
+  /** Bumped by the reader's Try again AFTER the view file has been re-read,
+   * and keyed onto the pane: a fresh pane then reads the folder once, with
+   * what the view file now says. Re-reading the folder first (with the old
+   * `entry:`) and the view file second read it twice and showed "not
+   * published" for the moment in between. */
+  const [attempt, setAttempt] = useState(0);
 
   const view = useQuery({
     queryKey: ["wui-page", slug, itemId, path],
@@ -81,7 +87,8 @@ export function WuiPage({
     // Named, because the reader did not choose this path — somebody sent them
     // the link, and the path is the only thing they can forward back. What
     // the failure MEANS is decided once, in `classifyReadFailure`, for every
-    // read a WUI makes — a 403 is somebody outside the item, a dropped
+    // read a WUI makes — a 403 is a member without this right (an outsider
+    // gets 404: the item's existence is not theirs to probe), a dropped
     // connection is not absence — so this sentence and the one the pane
     // shows for the entry cannot disagree. And "not there" is tentative,
     // with a way to look again: on this platform a read during a sandbox
@@ -95,10 +102,14 @@ export function WuiPage({
       // Try again: the same sentence every press hides the only fix.
       return <Problem retry={why.permanent ? undefined : retry}>{why.reason}</Problem>;
     }
+    // "Not there" names the access case too: the backend answers 404, not
+    // 403, to a reader who may not see the item at all — the colleague the
+    // author forgot to add — and a sentence about a missing file sent them
+    // to report one.
     return (
       <Problem retry={retry}>
-        There is no file at {path} in this item — or the item is still being restored. Try again in a
-        moment.
+        There is no file at {path} in this item, or you may not have access to this item — or it is
+        still being restored. Try again in a moment.
       </Problem>
     );
   }
@@ -123,7 +134,13 @@ export function WuiPage({
           {/* The reader's chrome: no toolbar, no build log, no reports, and the
               page is never rebuilt on their account — a link serves what is
               already built (docs/plan-wui-deploy.md). */}
-          <WuiView path={path} spec={spec} chrome="viewer" onRetry={() => void view.refetch()} />
+          <WuiView
+            key={attempt}
+            path={path}
+            spec={spec}
+            chrome="viewer"
+            onRetry={() => void view.refetch().then(() => setAttempt((n) => n + 1))}
+          />
         </div>
       </FileServiceProvider>
     </WorkspaceSlugProvider>

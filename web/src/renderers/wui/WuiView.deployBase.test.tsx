@@ -12,6 +12,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { FileServiceProvider, type FileService } from "../../api/fileService";
+import { HttpError } from "../../api/http";
 import { WorkspaceSlugProvider } from "../../hooks/useWorkspaceSlug";
 import { QueryWrap } from "../../test/queryWrapper";
 import type { ViewSpec } from "../entity/types";
@@ -32,7 +33,7 @@ describe("WuiView: Deploy under a sub-path deploy", () => {
       scopeId: "item1",
       caps: { write: true, delete: true },
       readFile: vi.fn(async (path: string) => {
-        if (path !== "/sales/index.html") throw new Error(`not found: ${path}`);
+        if (path !== "/sales/index.html") throw new HttpError(404, `read ${path} failed: 404`);
         return { kind: "text", path, size: body.length, text: body, encoding: "utf-8" };
       }),
       fileDownloadUrl: (path: string) => `/api/files${path}`,

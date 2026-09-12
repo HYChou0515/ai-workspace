@@ -334,10 +334,32 @@ describe("WuiPage: what a reader is handed", () => {
     // The author fixes the view file to point at the built entry.
     files["/scrap-review/page.ai.yaml"] = `${YAML}entry: dist/index.html\n`;
     files["/scrap-review/dist/index.html"] = "<!doctype html><p>built</p>";
+    const oldEntryReads = () => readFile.mock.calls.filter(([p]) => p === "/scrap-review/index.html").length;
+    const staleReadsBefore = oldEntryReads();
     fireEvent.click(screen.getByRole("button", { name: /try again/i }));
 
     await waitFor(() => expect(viewReads()).toBeGreaterThan(before));
     await waitFor(() => expect(screen.getByTitle("Scrap review")).toBeTruthy());
+    // The view file first, then ONE folder read with what it now says — not a
+    // read with the old entry first, and a "not published" in between
+    // (review round 8).
+    expect(oldEntryReads()).toBe(staleReadsBefore);
+  });
+
+  it("offers no Try again on an answer that will not change", async () => {
+    /**
+     * Review round 8: only a 403 was permanent; a 410 (the item was deleted)
+     * and a 401 (the session ended) offered a Try again that returned the
+     * same sentence every press.
+     */
+    const readFile = vi.fn(async () => {
+      throw new HttpError(410, "gone");
+    });
+    renderAt("/w/rca/i1/scrap-review/page.ai.yaml", readFile);
+
+    const said = await screen.findByText(/has been deleted/i);
+    expect(said).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /try again/i })).toBeNull();
   });
 
   it("lets a reader try again, because a missing entry may only be a sandbox mid-restore", async () => {

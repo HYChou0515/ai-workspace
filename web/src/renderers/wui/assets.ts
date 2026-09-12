@@ -134,6 +134,12 @@ export type AssetRead =
  * a dropped connection — which is emphatically not absence and used to be
  * filed as one.
  *
+ * "Absence" is itself a weaker word than it looks: the backend answers 404,
+ * not 403, to anyone who may not even see the ITEM (`item_authz.py` —
+ * `read_meta` refused reads as "item not found", so an outsider cannot probe
+ * which items exist). So a 404 is "not there, or not yours to see", and every
+ * sentence built on `missing` says both.
+ *
  * Everything else falls to absence, and that is a WEAKER answer than it
  * looks: `kbFileService` throws a plain `Error` for ANY non-ok status, so a
  * KB 403 lands here as "not there". Fixing that means giving those services
@@ -147,13 +153,23 @@ export function classifyReadFailure(err: unknown, path: string): Exclude<AssetRe
     // Not `err.message`: that is "read /w/index.html failed: 403", an
     // internal path and a bare number shown to someone who cannot open a
     // console. True, and not a sentence they can act on.
-    return err.status === 403
-      ? { kind: "failed", reason: `You do not have permission to read ${path}.`, permanent: true }
-      : {
-          kind: "failed",
-          reason: `${path} could not be read (the workspace answered ${err.status}).`,
-          permanent: false,
-        };
+    // Permanent: the answer is about WHO is asking or WHAT they ask for, not
+    // the moment — a 403 (a member without this right), a 401 (no session),
+    // a 410 (an item that was deleted). Trying again returns the same one.
+    if (err.status === 403) {
+      return { kind: "failed", reason: `You do not have permission to read ${path}.`, permanent: true };
+    }
+    if (err.status === 401) {
+      return { kind: "failed", reason: `Your session has ended — sign in again to read ${path}.`, permanent: true };
+    }
+    if (err.status === 410) {
+      return { kind: "failed", reason: `The item holding ${path} has been deleted.`, permanent: true };
+    }
+    return {
+      kind: "failed",
+      reason: `${path} could not be read (the workspace answered ${err.status}).`,
+      permanent: false,
+    };
   }
   if (err instanceof TypeError) {
     return { kind: "failed", reason: `Could not reach the workspace to read ${path}.`, permanent: false };
