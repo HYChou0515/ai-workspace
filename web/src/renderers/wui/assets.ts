@@ -116,7 +116,66 @@ function toDataUrl(blob: Blob): Promise<string> {
 export type AssetRead =
   | { kind: "asset"; asset: WuiAsset }
   | { kind: "missing" }
-  | { kind: "failed"; reason: string };
+  /** `permanent`: trying again cannot change the answer — a 403 is who the
+   * reader is, not the moment they read at. Every other failure may be a
+   * moment's, and is offered a way to look again. */
+  | { kind: "failed"; reason: string; permanent: boolean };
+
+/** Statuses whose answer is about WHO is asking or WHAT they ask for, not
+ * the moment — trying again returns the same one. The one list, for every
+ * route a read can take. */
+export function isPermanentStatus(status: number): boolean {
+  return status === 401 || status === 403 || status === 410;
+}
+
+/**
+ * What a failed read MEANS — the one place that decides it, for every read a
+ * WUI makes: the page's assets (`readAsset`), its entry, and the view file
+ * the reader's route opens (`WuiPage`). Two copies of these four branches
+ * drifted once already (review round 5); a class added here — a typed KB
+ * failure, a 429 filed as transient — now reaches every sentence at once.
+ *
+ * Only the workspace service throws a typed error, and only it can tell
+ * "not there" from "not allowed": a 404 is absence, any other status is a
+ * fault worth showing. A `TypeError` is `fetch` failing to complete at all —
+ * a dropped connection — which is emphatically not absence and used to be
+ * filed as one.
+ *
+ * "Absence" is itself a weaker word than it looks: the backend answers 404,
+ * not 403, to anyone who may not even see the ITEM (`item_authz.py` —
+ * `read_meta` refused reads as "item not found", so an outsider cannot probe
+ * which items exist). So a 404 is "not there, or not yours to see", and every
+ * sentence built on `missing` says both.
+ *
+ * Everything else falls to absence, and that is a WEAKER answer than it
+ * looks: `kbFileService` throws a plain `Error` for ANY non-ok status, so a
+ * KB 403 lands here as "not there". Fixing that means giving those services
+ * a typed failure of their own, which is theirs to do — this is where it
+ * would be read, not where it can be decided. It is also why every "not
+ * there" sentence a reader sees is tentative and offers a way to look again.
+ */
+export function classifyReadFailure(err: unknown, path: string): Exclude<AssetRead, { kind: "asset" }> {
+  if (err instanceof HttpError) {
+    if (err.status === 404) return { kind: "missing" };
+    // Not `err.message`: that is "read /w/index.html failed: 403", an
+    // internal path and a bare number shown to someone who cannot open a
+    // console. True, and not a sentence they can act on.
+    const permanent = isPermanentStatus(err.status);
+    const reason =
+      err.status === 403
+        ? `You do not have permission to read ${path}.`
+        : err.status === 401
+          ? `Your session has ended — sign in again to read ${path}.`
+          : err.status === 410
+            ? `The item holding ${path} has been deleted.`
+            : `${path} could not be read (the workspace answered ${err.status}).`;
+    return { kind: "failed", reason, permanent };
+  }
+  if (err instanceof TypeError) {
+    return { kind: "failed", reason: `Could not reach the workspace to read ${path}.`, permanent: false };
+  }
+  return { kind: "missing" };
+}
 
 /** Read one workspace file in the shape a page can hold. */
 export async function readAsset(fs: FileService, path: string): Promise<AssetRead> {
@@ -124,34 +183,7 @@ export async function readAsset(fs: FileService, path: string): Promise<AssetRea
   try {
     content = await fs.readFile(path);
   } catch (err) {
-    // Only the workspace service throws a typed error, and only it can tell
-    // "not there" from "not allowed": a 404 is absence, any other status is a
-    // fault worth showing. A `TypeError` is `fetch` failing to complete at all
-    // — a dropped connection — which is emphatically not absence and used to be
-    // filed as one.
-    //
-    // Everything else falls to absence, and that is a WEAKER answer than it
-    // looks: `kbFileService` throws a plain `Error` for ANY non-ok status, so a
-    // KB 403 lands here as "not there". Fixing that means giving those services
-    // a typed failure of their own, which is theirs to do — this is where it
-    // would be read, not where it can be decided.
-    if (err instanceof HttpError) {
-      if (err.status === 404) return { kind: "missing" };
-      // Not `err.message`: that is "read /w/index.html failed: 403", an
-      // internal path and a bare number shown to someone who cannot open a
-      // console. True, and not a sentence they can act on.
-      return {
-        kind: "failed",
-        reason:
-          err.status === 403
-            ? `You do not have permission to read ${path}.`
-            : `${path} could not be read (the workspace answered ${err.status}).`,
-      };
-    }
-    if (err instanceof TypeError) {
-      return { kind: "failed", reason: `Could not reach the workspace to read ${path}.` };
-    }
-    return { kind: "missing" };
+    return classifyReadFailure(err, path);
   }
 
   if (content.kind === "text") {
@@ -172,10 +204,10 @@ export async function readAsset(fs: FileService, path: string): Promise<AssetRea
   // exists but not what is in it; the raw route is where those bytes live.
   try {
     const resp = await fetch(fs.fileDownloadUrl(path));
-    if (!resp.ok) return { kind: "failed", reason: `could not read ${path} (${resp.status})` };
+    if (!resp.ok) return { kind: "failed", reason: `could not read ${path} (${resp.status})`, permanent: isPermanentStatus(resp.status) };
     return { kind: "asset", asset: { kind: "binary", dataUrl: await toDataUrl(await resp.blob()) } };
   } catch {
-    return { kind: "failed", reason: `could not read ${path}` };
+    return { kind: "failed", reason: `could not read ${path}`, permanent: false };
   }
 }
 
@@ -207,10 +239,23 @@ function directoryOf(entryPath: string): string {
   return cut <= 0 ? "" : entryPath.slice(0, cut);
 }
 
+/** Why a page's entry could not be opened. `absent` is the only kind a
+ * reader may be told "not published yet"; every other kind is a sentence
+ * about something that IS there — a read that failed, an entry that is not
+ * HTML, an `entry:` that does not name a file in the folder — and must be
+ * shown as itself. An explicit kind, not "no reason given": a proxy like
+ * that is one reason-less `throw` away from calling a forbidden page
+ * unpublished. */
+export type WuiEntryProblem = "absent" | "unreadable" | "permanent" | "not-html" | "bad-entry";
+
 /** Raised when the entry document itself cannot be opened — the one absence that
  * has nothing to degrade to, so it is reported by name rather than swallowed. */
 export class WuiEntryMissing extends Error {
-  constructor(readonly entry: string, reason?: string) {
+  constructor(
+    readonly entry: string,
+    readonly kind: WuiEntryProblem,
+    reason?: string,
+  ) {
     // The reason matters: telling a read-only viewer their page "has no
     // index.html" is a false sentence about a file they can see in the tree,
     // and it sends them looking for the wrong thing.
@@ -225,15 +270,23 @@ export async function buildWuiDoc(fs: FileService, folder: string, entry: string
   // which collapses them: an entry that exists but could not be READ is not the
   // same as one that is not there, and this is the one place a person is told.
   const path = resolveInFolder(folder, entry);
-  const load = folderLoader(fs, folder, path === null ? folder : directoryOf(path));
-  const read = path === null ? ({ kind: "missing" } as const) : await readAsset(fs, path);
-  if (read.kind === "failed") throw new WuiEntryMissing(entry, read.reason);
-  if (read.kind === "missing") throw new WuiEntryMissing(entry);
+  // A malformed `entry:` — `/abs.html`, `../x.html`, `.` — is a view-file
+  // mistake, not an absent file, so it carries a REASON: reason-less is the
+  // one case a reader is told "not published yet", and this is not that.
+  if (path === null) {
+    throw new WuiEntryMissing(entry, "bad-entry", `${entry} is not a path inside this page's folder.`);
+  }
+  const load = folderLoader(fs, folder, directoryOf(path));
+  const read = await readAsset(fs, path);
+  if (read.kind === "failed") {
+    throw new WuiEntryMissing(entry, read.permanent ? "permanent" : "unreadable", read.reason);
+  }
+  if (read.kind === "missing") throw new WuiEntryMissing(entry, "absent");
   if (read.asset.kind !== "text") {
     // It IS there — saying it is not sends them looking for the wrong thing,
     // which is the same false-sentence class the `failed` branch above exists
     // to remove.
-    throw new WuiEntryMissing(entry, `${entry} is not a page this can open — a WUI's entry is HTML.`);
+    throw new WuiEntryMissing(entry, "not-html", `${entry} is not a page this can open — a WUI's entry is HTML.`);
   }
   const built = await assembleWuiDoc(read.asset.text, load);
   // The entry is code by definition; `assembleWuiDoc` only sees what it pulls IN.

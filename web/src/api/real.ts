@@ -15,6 +15,7 @@
 import type { AgentEvent, CellEvent } from "../events";
 import { decodeBytes } from "./encoding";
 import { API_PREFIX, apiFetch, HttpError, errorCode, errorInfo, httpErrorFrom } from "./http";
+import { encodePath } from "./refPath";
 import { parseSseStream } from "./sse";
 import type {
   ActivityEntry,
@@ -119,13 +120,6 @@ function toQuery(params?: SearchParams): string {
   }
   const s = sp.toString();
   return s ? `?${s}` : "";
-}
-
-function encodePath(path: string): string {
-  // Drop the leading slash before joining: workspace paths reach the FE in both
-  // dialects (a `shown_files` declaration normalises to absolute, a file tree row
-  // is relative) and `…/files/` + `/out/a.png` would otherwise emit `files//out`.
-  return path.replace(/^\/+/, "").split("/").map(encodeURIComponent).join("/");
 }
 
 /** Map FE SearchOptions → the BE _SearchBody field names. */

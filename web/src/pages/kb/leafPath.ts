@@ -8,16 +8,14 @@
  * naturally: `/kb/collections/c1/documents/a%20dir/x.md`.
  */
 
-import { normPath } from "../../api/refPath";
+import { encodePath, normPath } from "../../api/refPath";
 
 /** Canonical leaf path → splat tail: drop the leading slash, percent-encode
- * each segment, rejoin with "/". */
+ * each segment, rejoin with "/". The one rule (`encodePath`) — the `/files/`
+ * routes, the WUI `/w/` link and these splat routes must never encode the
+ * same name three ways. */
 export function encodeLeafPath(path: string): string {
-  return path
-    .replace(/^\/+/, "")
-    .split("/")
-    .map(encodeURIComponent)
-    .join("/");
+  return encodePath(path);
 }
 
 /** Splat tail → canonical (leading-slash) leaf path. react-router already

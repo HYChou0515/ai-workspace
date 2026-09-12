@@ -17,7 +17,7 @@ import { writeVerified } from "./writeVerified";
 import { API_PREFIX, apiFetch } from "./http";
 import type { DownloadPrepared } from "./kb";
 import { qk } from "./queryKeys";
-import { isExternalRef, resolveRefPath } from "./refPath";
+import { encodePath, isExternalRef, resolveRefPath } from "./refPath";
 import type { FileContent, FileInfo } from "./types";
 
 /** What file operations a service supports — the tree hides actions it can't do
@@ -141,9 +141,9 @@ export function investigationFileService(slug: string, investigationId: string):
 export function resolveServiceUrl(base: string, src: string | undefined): string {
   if (!src) return "";
   if (isExternalRef(src)) return src;
-  const cleaned = src.replace(/^\.\//, "").replace(/^\/+/, "");
-  const path = cleaned.split("/").map(encodeURIComponent).join("/");
-  return `${API_PREFIX}/${base}/${path}`;
+  // `./` is a page-relative spelling, not part of the path; the rest is the
+  // one path-encoding rule (`encodePath`), shared with every other route.
+  return `${API_PREFIX}/${base}/${encodePath(src.replace(/^\.\//, ""))}`;
 }
 
 // ── React context ──────────────────────────────────────────────────────────
