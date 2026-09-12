@@ -43,6 +43,7 @@ from .schemas import (
     _CellExecuteBody,
     _ExecBody,
     _FileEntry,
+    _FileExists,
     _ItemSkills,
     _ItemSkillState,
     _MkdirBody,
@@ -105,6 +106,7 @@ def _workspace_path(raw: str) -> str:
     checked against ``grep``:
 
     * ``write_file`` / ``read_file`` / ``delete_file`` — the ``{path:path}`` URL routes
+    * ``workspace_file_exists`` — the ``path`` query parameter
     * ``make_dir`` — the JSON body path
     * ``move_file`` / ``copy_file`` — BOTH sides of each
     * ``list_files`` / ``list_tree`` / ``prepare_files_download`` — via
@@ -342,6 +344,17 @@ def register_file_routes(
             used=await files.workspace_usage(investigation_id),
             quota=files.quota_of(investigation_id),
         )
+
+    @app.get("/a/{slug}/items/{item_id}/files/exists")
+    async def workspace_file_exists(slug: str, item_id: str, path: str) -> _FileExists:
+        """Whether ONE regular file is there — the facade's point query, over
+        the wire. Every FE save (`writeVerified`), every attachment and one
+        review button used to answer this by listing the whole workspace, so a
+        workspace with `node_modules/` paid the file tree's full walk per save.
+        A folder answers False, as `FileStore.exists` does. Registered before
+        the ``/files/{path:path}`` read route like ``usage``."""
+        investigation_id = locator.require_access(slug, item_id, "read_content")
+        return _FileExists(exists=await files.exists(investigation_id, _workspace_path(path)))
 
     @app.get("/a/{slug}/items/{item_id}/tree")
     async def list_tree(

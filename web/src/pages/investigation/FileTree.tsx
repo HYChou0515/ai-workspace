@@ -72,6 +72,7 @@ const NO_SERVICE: FileService = {
   listFiles: async () => [],
   listDirs: async () => [],
   listTree: async () => ({ items: [], dirs: [], unwalked: [], truncated: false }),
+  exists: async () => false,
   readFile: async () => {
     throw new Error("no file service");
   },

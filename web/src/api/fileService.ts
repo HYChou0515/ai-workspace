@@ -61,6 +61,9 @@ export type FileService = {
    * this hook shares a cache key with the shell's listing — so two hooks with
    * two different query functions were fetching the same thing. */
   listTree(opts?: ListTreeOpts): Promise<TreeListing>;
+  /** Whether ONE file is there. The question a "did it land?" check asks;
+   * a service whose listing is cheap and complete may answer from it. */
+  exists(path: string): Promise<boolean>;
   readFile(path: string): Promise<FileContent>;
   writeFile(path: string, body: string | Blob | ArrayBuffer): Promise<void>;
   deleteFile(path: string): Promise<void>;
@@ -116,13 +119,14 @@ export function investigationFileService(slug: string, investigationId: string):
     // server has usually stored the file by then. Deciding that here means no
     // writer (file tree, attachments, skills/workflows/collections pickers, the
     // editor's save, both KB IDEs) can get it wrong by omission.
+    exists: (path) => api.fileExists(slug, investigationId, path),
     writeFile: (path, body) =>
       writeVerified(
         () => api.writeFile(slug, investigationId, path, body),
-        async () => {
-          const all = await api.listFiles(slug, investigationId);
-          return all.some((f) => f.path === path || f.path === `/${path.replace(/^\//, "")}`);
-        },
+        // One path, one question. Listing the whole workspace to scan for it
+        // was the file tree's full walk — with `node_modules/`, tens of
+        // thousands of NFS round trips — spent on a yes/no.
+        () => api.fileExists(slug, investigationId, path),
       ),
     deleteFile: (path) => api.deleteFile(slug, investigationId, path),
     moveFile: (from, to) => api.moveFile(slug, investigationId, from, to),

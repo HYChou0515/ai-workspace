@@ -57,6 +57,7 @@ export function wikiFileService(
     listFiles: async (): Promise<FileInfo[]> => pages.map((p) => ({ path: normPath(p), size: 0 })),
     listDirs: async (): Promise<string[]> => [],
     // Wiki pages are a flat set — one listing, no folders to traverse for.
+    exists: async (path: string) => pages.some((p) => normPath(p) === normPath(path)),
     listTree: async () => ({
       items: pages.map((p) => ({ path: normPath(p), size: 0 })),
       dirs: [] as string[],

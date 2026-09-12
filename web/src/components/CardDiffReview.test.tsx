@@ -44,6 +44,8 @@ function fakeSvc(files: Record<string, string>): { svc: FileService; writes: [st
     async (): Promise<FileInfo[]> =>
       Object.keys(files).map((p) => ({ path: p, size: files[p]!.length })),
   );
+  // The presence question is ONE path, answered without a listing.
+  const exists = vi.fn(async (path: string) => path in files);
   const readFile = vi.fn(async (path: string): Promise<FileContent> => {
     if (!(path in files)) {
       const err = new Error("404") as Error & { status: number };
@@ -60,6 +62,7 @@ function fakeSvc(files: Record<string, string>): { svc: FileService; writes: [st
     scopeId: "it",
     caps: { write: true, create: true, upload: true, delete: true, move: true, copy: true, folders: true },
     listFiles,
+    exists,
     readFile,
     writeFile,
     deleteFile: vi.fn(),
@@ -89,8 +92,11 @@ describe("CardDiffReview", () => {
   it("hides the View-changes button when the gate has no proposed-cards file", async () => {
     const { svc } = fakeSvc({ "/memory.todo.md": "x" }); // a different gate's file
     render(svc);
-    await waitFor(() => expect(svc.listFiles).toHaveBeenCalled());
+    await waitFor(() => expect(svc.exists).toHaveBeenCalled());
     expect(screen.queryByTestId("card-diff-open")).not.toBeInTheDocument();
+    // Never the whole workspace for one path: on one with `node_modules/`
+    // that listing is the file tree's full walk, per mount of this button.
+    expect(svc.listFiles).not.toHaveBeenCalled();
   });
 
   it("shows the button and opens a diff of current vs proposed", async () => {

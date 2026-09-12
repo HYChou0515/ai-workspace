@@ -13,7 +13,7 @@ resolver would pass while the number never reached the gate.
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 
 import pytest
 from fastapi import FastAPI
@@ -27,7 +27,7 @@ from workspace_app.perm.model import Permission
 from workspace_app.quota.limits import ResourceLimits
 from workspace_app.resources import make_spec
 from workspace_app.sandbox.mock import MockSandbox
-from workspace_app.sandbox.protocol import SandboxHandle, SandboxSpec, WalkResult
+from workspace_app.sandbox.protocol import SandboxHandle, SandboxSpec
 
 from ..api._client import TestClient as ApiTestClient
 
@@ -57,22 +57,15 @@ class _RecordingSandbox(MockSandbox):
         self.specs.append(spec)
         return await super().create(spec, sandbox_id)
 
-    async def walk(
-        self,
-        handle: SandboxHandle,
-        root: str,
-        *,
-        depth: int | None = None,
-        prune: Sequence[str] = (),
-        max_entries: int | None = None,
-    ) -> WalkResult:
-        # `_is_cold` probes with `walk` (measured, not guessed), so this is the
-        # method that decides whether the item's dir "still exists". Answering
-        # for a killed sandbox is what `kind: local` really does: the dir is on
-        # a shared volume and outlives the processes until the reaper rmtrees it.
+    async def exists(self, handle: SandboxHandle, path: str) -> bool:
+        # `_is_cold` probes with `exists` on the root (the same point probe
+        # `_alive` uses — measured, not guessed), so this is the method that
+        # decides whether the item's dir "still exists". Answering for a killed
+        # sandbox is what `kind: local` really does: the dir is on a shared
+        # volume and outlives the processes until the reaper rmtrees it.
         if self.pretend_dir_survives:
-            return WalkResult(files=[], dirs=[])
-        return await super().walk(handle, root, depth=depth, prune=prune, max_entries=max_entries)
+            return False  # the dir is there; "/" is not a regular file
+        return await super().exists(handle, path)
 
 
 #: Who the next request is from. A mutable holder rather than a header,

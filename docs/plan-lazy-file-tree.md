@@ -39,12 +39,12 @@ pathlib,每一步都經過 Python,所以 2.81 是真的;`os.scandir` 版的省�
 | `useFiles` → `api.getTree` | 畫樹 | `web/src/hooks/useInvestigation.ts:20-29` |
 | `useRefreshFiles`:**每輪 turn 結束、每次 terminal exec 結束** | invalidate `qk.files` → 整棵重抓 | `hooks/useRefreshFiles.ts:24,45` |
 | `file_changed` SSE | invalidate `qk.files` → 整棵重抓 | `hooks/useChatSession.tsx:329-332` |
-| `writeVerified`:**每一次前端存檔**後列整個 workspace 確認一個檔案在 | #493 | `api/fileService.ts:104-108` |
-| `attachmentLanded`:附件上傳後列整個 workspace 確認一個檔案在 | 同上 | `pages/investigation/AgentPanel.tsx:454-457` |
-| `CardDiffReview`:列整個 workspace 看一個固定路徑在不在 | 同上 | `components/CardDiffReview.tsx:55-58` |
+| `writeVerified`:存檔的回應被切斷(0/502/503/504)時,列整個 workspace 確認那個檔案在不在 | #493;**只在不確定時**,不是每次存檔——本計畫初稿寫成「每一次存檔」,查證後改正 | `api/writeVerified.ts:42-53`、`api/fileService.ts:104-108` |
+| `attachmentLanded`:附件上傳被切斷時,同上 | 同上 | `pages/investigation/AgentPanel.tsx:454-457` |
+| `CardDiffReview`:**每次掛載**列整個 workspace 看一個固定路徑在不在 | 這條是真的每次 | `components/CardDiffReview.tsx:55-58` |
 | `registry._is_cold`:`walk(probe, "/")` 只為問「目錄存在嗎」 | 只有 `kind: local`;http 走 `_alive` = `exists` | `api/registry.py:531-543`、`:368-378` |
 
-所以那 50 秒**不是付一次**:開頁一次、每輪 turn 一次、每次存檔一次、每個附件一次。
+所以那 50 秒**不是付一次**:開頁一次、每輪 turn 一次、每個 review 按鈕掛載一次、連線斷掉的那次存檔/附件再一次。
 懶載入對 turn 結束的收益比對開頁還大。
 
 **不是這包的**(它們走整棵有自己的理由,在自己的 sweep 上跑,不落在使用者的請求上):
@@ -121,7 +121,7 @@ nfs_tree 冷路徑仍然要修(user 點名、而且它今天是假 prefix),但�
 | **「不在清單」不再等於「不存在」** | 一個 helper `presenceOf(path, files, unwalked) → "present" \| "absent" \| "unknown"`,`unknown` iff 某個祖先在 `unwalked`。§1.4 那四處**只在 `absent` 時**才關 tab / 剔除。判準只裝在一個地方 |
 | **失效:turn 結束、`file_changed` → 預載樹 + 已展開的懶目錄** | `qk.files(id)` 照舊 invalidate(現在只有幾百個 entry,便宜);另加 `["treeDir", id]` 前綴 invalidate —— TanStack 只重抓**還掛在畫面上的**(= 展開中的),收起的下次展開才讀。兩個入口共用一個 `invalidateTree(qc, id)` |
 | **篩選** | 跑在「預載樹 + 已載入的懶目錄」上,語意跟今天一樣完整 —— 對使用者自己的檔案而言。`node_modules/` 不在篩選範圍是**預期行為**(每個 IDE 都這樣),不提示;只有 `truncated` 才提示 |
-| **同一個病因一起掃:「列整個 workspace 只為確認一個路徑」** | 開一個 `GET /files/exists?path=` 路由接到既有的 `facade.exists`;`FileService.exists(path)`;`writeVerified`、`attachmentLanded`、`CardDiffReview` 三處改用;後端 `_is_cold` 改成跟 `_alive` 同一個探針(`exists(probe, "/")`)。**這條可以拆掉單獨做**,但它是同一個 50 秒、而且落在每一次存檔上,不寫下來會被當成「存檔很慢」另開一票 |
+| **同一個病因一起掃:「列整個 workspace 只為確認一個路徑」** | 開一個 `GET /files/exists?path=` 路由接到既有的 `facade.exists`;`FileService.exists(path)`;`writeVerified`、`attachmentLanded`、`CardDiffReview` 三處改用;後端 `_is_cold` 改成跟 `_alive` 同一個探針(`exists(probe, "/")`)。**這條可以拆掉單獨做**,但它是同一個病因,寫下來免得各自另開一票。誠實的份量:`writeVerified`/附件只在連線斷掉時才列(少見),`CardDiffReview` 每次掛載都列(常見),`_is_cold` 只有 `kind: local` |
 
 ### 為什麼不是「把 rglob 換成 scandir 就好」
 

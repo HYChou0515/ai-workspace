@@ -985,6 +985,11 @@ export const mockApi: ApiClient = {
     await delay(10);
     return [...ensureDirs(investigationId)].sort();
   },
+  async fileExists(slug: string, investigationId: string, path: string) {
+    await delay(5);
+    const want = `/${path.replace(/^\//, "")}`;
+    return (await this.listFiles(slug, investigationId)).some((f) => f.path === want);
+  },
   async getTree(
     slug: string,
     investigationId: string,

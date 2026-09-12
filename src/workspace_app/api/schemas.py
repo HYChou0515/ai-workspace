@@ -120,6 +120,14 @@ class _ItemSkills(BaseModel):
     skills: list[_ItemSkillState]
 
 
+class _FileExists(BaseModel):
+    """Whether one regular file is present — the answer to a question the FE
+    used to ask by listing the whole workspace (after every save, after every
+    attachment) and scanning for the path."""
+
+    exists: bool
+
+
 class _WorkspaceUsage(BaseModel):
     """A workspace's total storage usage vs its quota (#245), for the upload
     usage bar. ``used`` is the durable logical byte total; ``quota`` of 0 means

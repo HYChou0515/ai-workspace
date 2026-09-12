@@ -555,6 +555,15 @@ export const realApi: ApiClient = {
   async listDirs(slug: string, investigationId: string) {
     return (await this.getTree(slug, investigationId)).dirs;
   },
+  async fileExists(slug: string, investigationId: string, path: string) {
+    const q = new URLSearchParams({ path });
+    const body = await json<{ exists: boolean }>(
+      await apiFetch(
+        `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/files/exists?${q}`,
+      ),
+    );
+    return body.exists;
+  },
   async getTree(
     slug: string,
     investigationId: string,

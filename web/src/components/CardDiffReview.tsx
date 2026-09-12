@@ -52,12 +52,13 @@ export function CardDiffReview({
   const [open, setOpen] = useState(false);
   // Show the button only when this gate produced a proposed-cards file (the
   // →collections review). Other gates (e.g. →memory) have none → no button.
-  const files = useQuery({
+  // One path, one question. This used to list the whole workspace on every
+  // mount to look for one file — the file tree's full walk, per gate.
+  const presence = useQuery({
     queryKey: ["cardDiffPresence", slug, itemId],
-    queryFn: () => svc.listFiles(),
+    queryFn: () => svc.exists(TODO_PATH),
   });
-  const hasDiff = (files.data ?? []).some((f) => f.path === TODO_PATH);
-  if (!hasDiff) return null;
+  if (!presence.data) return null;
 
   return (
     <>

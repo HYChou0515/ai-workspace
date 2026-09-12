@@ -682,6 +682,10 @@ export interface ApiClient {
   ): Promise<{ files: FileInfo[]; dirs: string[]; unwalked: string[]; truncated: boolean }>;
   /** Just the folders — the file-tree service adapter's half of `getTree`. */
   listDirs(slug: string, investigationId: string): Promise<string[]>;
+  /** GET /a/{slug}/items/{id}/files/exists?path= — whether ONE regular file
+   * is there. The question every "did it land?" check asks; listing the whole
+   * workspace to answer it was the file tree's full walk spent on a yes/no. */
+  fileExists(slug: string, investigationId: string, path: string): Promise<boolean>;
   /** DELETE /a/{slug}/items/{id}/files/{path} → 204. Removes a file, or a
    * folder and its whole subtree when the path is a directory. */
   deleteFile(slug: string, investigationId: string, path: string): Promise<void>;

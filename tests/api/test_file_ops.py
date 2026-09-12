@@ -456,6 +456,21 @@ def test_the_file_tree_arrives_in_one_request(harness: Harness) -> None:
     assert "/empty" in body["dirs"], body
 
 
+def test_one_files_existence_is_one_question_not_a_whole_listing(harness: Harness) -> None:
+    """Every FE save, every attachment and one review button used to list the
+    WHOLE workspace to learn whether a single path is there — on a workspace
+    with `node_modules/`, the file tree's 50 s, paid per save. This is the
+    point query the facade already had, over the wire. A folder is not a file
+    (mirrors `FileStore.exists`), so `exists` says no for one."""
+    harness.client.put(harness.wpath("/files/a.md"), content=b"a")
+    harness.client.post(harness.wpath("/files/mkdir"), json={"path": "d"})
+    exists = harness.wpath("/files/exists")
+    assert harness.client.get(exists, params={"path": "/a.md"}).json() == {"exists": True}
+    assert harness.client.get(exists, params={"path": "a.md"}).json() == {"exists": True}
+    assert harness.client.get(exists, params={"path": "/nope.md"}).json() == {"exists": False}
+    assert harness.client.get(exists, params={"path": "/d"}).json() == {"exists": False}
+
+
 def test_the_tree_lists_a_derived_folder_without_walking_into_it(harness: Harness) -> None:
     """Pruned is not hidden. `node_modules/` is on the tree, collapsed, and its
     twelve thousand entries are not in the response; expanding it asks for
