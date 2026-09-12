@@ -344,8 +344,16 @@ def register_file_routes(
         )
 
     @app.get("/a/{slug}/items/{item_id}/tree")
-    async def list_tree(slug: str, item_id: str, prefix: str = "") -> _WorkspaceTree:
-        """Files and folders from ONE traversal.
+    async def list_tree(
+        slug: str, item_id: str, prefix: str = "", depth: int | None = None
+    ) -> _WorkspaceTree:
+        """Files and folders from ONE traversal — one that stops.
+
+        No `depth` is the preload: everything the user wrote, with the derived
+        directories (`node_modules/`, `.venv/`, `.git/`, …) listed but not
+        entered and the whole thing bounded. `depth=1` with a `prefix` is what
+        expanding one of those collapsed folders asks for. `unwalked` names the
+        folders this response did not enter; `truncated` says the bound hit.
 
         They were `/files` and `/dirs`, always fetched together (one query key,
         one `Promise.all`) and each walking the whole workspace — two stats of
@@ -355,13 +363,15 @@ def register_file_routes(
         `dirs` still comes back separately rather than being derived client-side,
         because an EMPTY directory appears in no file path."""
         investigation_id = locator.require_access(slug, item_id, "read_content")
-        entries, dirs = await files.tree(investigation_id, _workspace_prefix(prefix))
+        listing = await files.tree(investigation_id, _workspace_prefix(prefix), depth=depth)
         return _WorkspaceTree(
             files=[
                 _FileEntry(path=p, size=size, read_only=_is_readonly_path(p))
-                for p, size in sorted(entries)
+                for p, size in sorted(listing.files)
             ],
-            dirs=sorted(dirs),
+            dirs=listing.dirs,
+            unwalked=listing.unwalked,
+            truncated=listing.truncated,
         )
 
     @app.post("/a/{slug}/items/{item_id}/files/refresh")

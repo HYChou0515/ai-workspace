@@ -169,6 +169,46 @@ async def test_listdir_of_missing_workspace_is_empty(fs: NfsTreeFileStore):
     assert await fs.listdir("ghost") == []
 
 
+async def test_tree_lists_from_the_prefix_and_never_touches_the_rest(
+    fs: NfsTreeFileStore, root: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Cold, `prefix` used to be applied AFTER a full `rglob` of the item — so
+    expanding one folder of a reaped item walked every folder. `tree` lists
+    directory by directory from the prefix, and the assertion is about which
+    directories were READ, not about the answer: a full walk filtered down
+    gives the same answer and is exactly the defect."""
+    import os
+
+    for path in ("/src/a.py", "/src/deep/b.py", "/node_modules/x/y.js", "/other/c.txt"):
+        await fs.write("ws-1", path, b"x")
+    scanned: list[str] = []
+    real_scandir = os.scandir
+
+    def counting_scandir(path):  # noqa: ANN001, ANN202
+        scanned.append("/" + Path(path).relative_to(root / "ws-1").as_posix())
+        return real_scandir(path)
+
+    monkeypatch.setattr(os, "scandir", counting_scandir)
+
+    listing = await fs.tree("ws-1", "/src", depth=1)
+    assert [e.path for e in listing.files] == ["/src/a.py"]
+    assert listing.dirs == ["/src/deep"] and listing.unwalked == ["/src/deep"]
+    assert scanned == ["/src"], scanned
+
+    scanned.clear()
+    listing = await fs.tree("ws-1", "/", prune=["node_modules/"])
+    assert {e.path for e in listing.files} == {"/src/a.py", "/src/deep/b.py", "/other/c.txt"}
+    assert listing.unwalked == ["/node_modules"]
+    assert "/node_modules" not in scanned and "/node_modules/x" not in scanned, scanned
+
+
+async def test_tree_of_a_missing_workspace_or_prefix_is_empty(fs: NfsTreeFileStore):
+    assert (await fs.tree("ghost", "/")).files == []
+    await fs.write("ws-1", "/a.txt", b"x")
+    listing = await fs.tree("ws-1", "/nope")
+    assert listing.files == [] and listing.dirs == []
+
+
 # ── streaming variants (#219) ───────────────────────────────────────────────
 
 

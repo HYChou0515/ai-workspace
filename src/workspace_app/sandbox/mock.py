@@ -1,13 +1,12 @@
 import hashlib
 import shlex
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from .protocol import (
     EnforcedLimits,
     ExecResult,
-    FileEntry,
     OutputSink,
     RunningSandbox,
     SandboxHandle,
@@ -15,6 +14,7 @@ from .protocol import (
     SandboxSpec,
     WalkResult,
 )
+from .walk import flat_lister, walk_tree
 
 
 def _parent(path: str) -> str:
@@ -208,19 +208,26 @@ class MockSandbox:
             raise FileNotFoundError(remote_path)
         local_path.write_bytes(fs[remote_path])
 
-    async def walk(self, handle: SandboxHandle, root: str) -> WalkResult:
+    async def walk(
+        self,
+        handle: SandboxHandle,
+        root: str,
+        *,
+        depth: int | None = None,
+        prune: Sequence[str] = (),
+        max_entries: int | None = None,
+    ) -> WalkResult:
         fs = self._require(handle)
         dirs = self._dirs.setdefault(handle.id, set())
-        prefix = root if root.endswith("/") else root + "/"
-        if root in ("/", ""):
-            items = list(fs.items())
-            under = sorted(dirs)
-        else:
-            items = [(p, d) for p, d in fs.items() if p.startswith(prefix)]
-            under = sorted(p for p in dirs if p.startswith(prefix))
-        return WalkResult(
-            files=[FileEntry(path=p, size=len(d), version=_version(d)) for p, d in items],
-            dirs=under,
+        rel = f"/{root.strip('/')}" if root.strip("/") else "/"
+        # Same traversal as the real sandbox over a dict: the mock's job is to
+        # answer like the host, so the options are not re-implemented here.
+        return walk_tree(
+            flat_lister({p: (len(d), _version(d)) for p, d in fs.items()}, dirs),
+            rel,
+            depth=depth,
+            prune=prune,
+            max_entries=max_entries,
         )
 
     async def exists(self, handle: SandboxHandle, path: str) -> bool:

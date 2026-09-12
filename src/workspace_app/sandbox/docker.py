@@ -24,7 +24,7 @@ import tarfile
 import tempfile
 import uuid
 import warnings
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
@@ -39,6 +39,7 @@ from .protocol import (
     SandboxSpec,
     WalkResult,
 )
+from .walk import flat_lister, walk_tree
 
 if TYPE_CHECKING:
     from docker.models.containers import Container
@@ -281,7 +282,15 @@ class DockerSandbox:
         first = binds[0]
         return (first.get("HostIp") or "127.0.0.1", int(first["HostPort"]))
 
-    async def walk(self, handle: SandboxHandle, root: str) -> WalkResult:
+    async def walk(
+        self,
+        handle: SandboxHandle,
+        root: str,
+        *,
+        depth: int | None = None,
+        prune: Sequence[str] = (),
+        max_entries: int | None = None,
+    ) -> WalkResult:
         container = self._require(handle)
         target = PurePosixPath(_WORKDIR) / root.lstrip("/")
         # `find -printf` is a GNU extension but debian:12-slim has it; the
@@ -298,7 +307,19 @@ class DockerSandbox:
         out = result.output or b""
         if isinstance(out, tuple):  # pragma: no cover — demux=False edge case
             out = out[0] or b""
-        return _parse_find_output(out)
+        found = _parse_find_output(out)
+        if depth is None and not prune and max_entries is None:
+            return found
+        # `find` already returned everything, so the options save nothing here
+        # (dev-only backend); they are honoured so the answer is the same shape
+        # every backend gives.
+        return walk_tree(
+            flat_lister({e.path: (e.size, e.version) for e in found.files}, found.dirs),
+            "/",
+            depth=depth,
+            prune=prune,
+            max_entries=max_entries,
+        )
 
 
 def _make_single_file_tar(name: str, data: bytes, mode: int = 0o644) -> bytes:

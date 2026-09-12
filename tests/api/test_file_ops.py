@@ -361,10 +361,10 @@ class _BusySandbox(MockSandbox):
 
     busy = False
 
-    async def walk(self, handle, root):  # type: ignore[no-untyped-def]
+    async def walk(self, handle, root, **opts):  # type: ignore[no-untyped-def]
         if self.busy:
             raise SandboxBusy("still starting up")
-        return await super().walk(handle, root)
+        return await super().walk(handle, root, **opts)
 
     async def exists(self, handle, path):  # type: ignore[no-untyped-def]
         if self.busy:
@@ -454,6 +454,29 @@ def test_the_file_tree_arrives_in_one_request(harness: Harness) -> None:
 
     assert any(f["path"] == "/a.md" for f in body["files"]), body
     assert "/empty" in body["dirs"], body
+
+
+def test_the_tree_lists_a_derived_folder_without_walking_into_it(harness: Harness) -> None:
+    """Pruned is not hidden. `node_modules/` is on the tree, collapsed, and its
+    twelve thousand entries are not in the response; expanding it asks for
+    exactly that one level, whose own subfolders are collapsed in turn."""
+    harness.client.put(harness.wpath("/files/src/a.py"), content=b"a")
+    harness.client.put(harness.wpath("/files/node_modules/x/y.js"), content=b"b")
+
+    body = harness.client.get(harness.wpath("/tree")).json()
+    assert {f["path"] for f in body["files"]} == {"/src/a.py"}, body
+    assert "/node_modules" in body["dirs"] and "/node_modules/x" not in body["dirs"], body
+    assert body["unwalked"] == ["/node_modules"]
+    assert body["truncated"] is False
+
+    tree = harness.wpath("/tree")
+    level = harness.client.get(tree, params={"prefix": "/node_modules", "depth": 1}).json()
+    assert level["files"] == [] and level["dirs"] == ["/node_modules/x"], level
+    assert level["unwalked"] == ["/node_modules/x"]
+
+    deeper = harness.client.get(tree, params={"prefix": "/node_modules/x", "depth": 1}).json()
+    assert [f["path"] for f in deeper["files"]] == ["/node_modules/x/y.js"], deeper
+    assert deeper["unwalked"] == []
 
 
 async def test_conflict_details_name_the_file_the_way_the_ui_does(harness: Harness):

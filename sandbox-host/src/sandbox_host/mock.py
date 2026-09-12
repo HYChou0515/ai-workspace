@@ -15,7 +15,7 @@ from .protocol import (
     SandboxSpec,
     WalkResult,
 )
-from .walk import dict_lister, walk_tree
+from .walk import flat_lister, walk_tree
 
 
 def _parent(path: str) -> str:
@@ -165,7 +165,7 @@ class MockSandbox:
         # Same traversal as the real sandbox over a dict: the mock's job is to
         # answer like the host, so the options are not re-implemented here.
         return walk_tree(
-            dict_lister(fs, dirs, _version),
+            flat_lister({p: (len(d), _version(d)) for p, d in fs.items()}, dirs),
             rel,
             depth=depth,
             prune=prune,

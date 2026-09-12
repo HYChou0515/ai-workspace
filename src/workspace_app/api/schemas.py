@@ -77,10 +77,18 @@ class _WorkspaceTree(BaseModel):
     """The file tree in one response (#657 perf). The two halves used to be two
     endpoints that each walked the whole workspace, though nothing ever wanted
     one without the other. `dirs` carries the EMPTY directories too, which no
-    file path implies — the only thing the second call ever added."""
+    file path implies — the only thing the second call ever added.
+
+    `unwalked` is the subset of `dirs` this response listed but did not enter
+    — derived directories the tree never preloads, or whatever lay past the
+    entry budget — so the client draws them collapsed and fetches on expand
+    (`?prefix=<dir>&depth=1`). `truncated` says the budget is what stopped it,
+    which is the one case the client tells the user its filter is partial."""
 
     files: list[_FileEntry]
     dirs: list[str]
+    unwalked: list[str] = []
+    truncated: bool = False
 
 
 class _ItemSkillState(BaseModel):

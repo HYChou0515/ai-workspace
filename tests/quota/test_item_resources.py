@@ -13,7 +13,7 @@ resolver would pass while the number never reached the gate.
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 
 import pytest
 from fastapi import FastAPI
@@ -57,14 +57,22 @@ class _RecordingSandbox(MockSandbox):
         self.specs.append(spec)
         return await super().create(spec, sandbox_id)
 
-    async def walk(self, handle: SandboxHandle, root: str) -> WalkResult:
+    async def walk(
+        self,
+        handle: SandboxHandle,
+        root: str,
+        *,
+        depth: int | None = None,
+        prune: Sequence[str] = (),
+        max_entries: int | None = None,
+    ) -> WalkResult:
         # `_is_cold` probes with `walk` (measured, not guessed), so this is the
         # method that decides whether the item's dir "still exists". Answering
         # for a killed sandbox is what `kind: local` really does: the dir is on
         # a shared volume and outlives the processes until the reaper rmtrees it.
         if self.pretend_dir_survives:
             return WalkResult(files=[], dirs=[])
-        return await super().walk(handle, root)
+        return await super().walk(handle, root, depth=depth, prune=prune, max_entries=max_entries)
 
 
 #: Who the next request is from. A mutable holder rather than a header,

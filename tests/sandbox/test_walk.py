@@ -4,7 +4,7 @@ run (what CI executes) covers them too."""
 
 import os
 
-from sandbox_host.walk import Entry, flat_lister, scandir_lister, walk_tree
+from workspace_app.sandbox.walk import Entry, flat_lister, scandir_lister, walk_tree
 
 
 def test_a_root_that_names_nothing_lists_nothing():
