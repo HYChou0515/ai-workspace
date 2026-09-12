@@ -207,8 +207,6 @@ function directoryOf(entryPath: string): string {
   return cut <= 0 ? "" : entryPath.slice(0, cut);
 }
 
-/** Raised when the entry document itself cannot be opened — the one absence that
- * has nothing to degrade to, so it is reported by name rather than swallowed. */
 /** Why a page's entry could not be opened. `absent` is the only kind a
  * reader may be told "not published yet"; every other kind is a sentence
  * about something that IS there — a read that failed, an entry that is not
@@ -218,6 +216,8 @@ function directoryOf(entryPath: string): string {
  * unpublished. */
 export type WuiEntryProblem = "absent" | "unreadable" | "not-html" | "bad-entry";
 
+/** Raised when the entry document itself cannot be opened — the one absence that
+ * has nothing to degrade to, so it is reported by name rather than swallowed. */
 export class WuiEntryMissing extends Error {
   constructor(
     readonly entry: string,

@@ -15,11 +15,19 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
+import { HttpError } from "../api/http";
 import { WUI_PROTOCOL } from "../renderers/wui/protocol";
 import { QueryWrap } from "../test/queryWrapper";
 import { WuiPage } from "./WuiPage";
 
 const YAML = "view: wui\ntitle: Scrap review\n";
+
+/** What the real service throws for a file that is not there — an
+ * `HttpError(404)`, which is the ONE shape the classifiers (`readAsset`,
+ * `WuiPage`) treat as certain absence. A double throwing a plain `Error`
+ * reached "not found" through their lenient catch-all instead, so these
+ * tests never exercised the 404 branch production takes. */
+const notFound = (path: string) => new HttpError(404, `read ${path} failed: 404`);
 
 function renderAt(path: string, readFile: (p: string) => Promise<unknown>) {
   vi.mock("../api/fileService", async () => {
@@ -62,7 +70,7 @@ describe("WuiPage", () => {
     };
     const readFile = vi.fn(async (path: string) => {
       const text = files[path];
-      if (text === undefined) throw new Error(`not found: ${path}`);
+      if (text === undefined) throw notFound(path);
       return { kind: "text", path, text, size: text.length, encoding: "utf-8" };
     });
 
@@ -94,7 +102,7 @@ describe("WuiPage", () => {
     };
     const readFile = vi.fn(async (path: string) => {
       const text = files[path];
-      if (text === undefined) throw new Error(`not found: ${path}`);
+      if (text === undefined) throw notFound(path);
       return { kind: "text", path, text, size: text.length, encoding: "utf-8" };
     });
 
@@ -139,7 +147,7 @@ describe("WuiPage", () => {
      * was looked for, or they have nothing to forward back.
      */
     const readFile = vi.fn(async (path: string) => {
-      throw new Error(`not found: ${path}`);
+      throw notFound(path);
     });
 
     renderAt("/w/rca/i1/gone/page.ai.yaml", readFile);
@@ -196,7 +204,7 @@ describe("WuiPage: what a reader is handed", () => {
     };
     const readFile = vi.fn(async (path: string) => {
       const text = files[path];
-      if (text === undefined) throw new Error(`not found: ${path}`);
+      if (text === undefined) throw notFound(path);
       return { kind: "text", path, text, size: text.length, encoding: "utf-8" };
     });
 
@@ -251,7 +259,7 @@ describe("WuiPage: what a reader is handed", () => {
     const files: Record<string, string> = { "/scrap-review/page.ai.yaml": `${YAML}entry: /abs.html\n` };
     const readFile = vi.fn(async (path: string) => {
       const text = files[path];
-      if (text === undefined) throw new Error(`not found: ${path}`);
+      if (text === undefined) throw notFound(path);
       return { kind: "text", path, text, size: text.length, encoding: "utf-8" };
     });
 
@@ -270,7 +278,6 @@ describe("WuiPage: what a reader is handed", () => {
      * missing file to an author who could see it. Same class as the
      * `WuiView` fix one level down; this is the function above it.
      */
-    const { HttpError } = await import("../api/http");
     const readFile = vi.fn(async () => {
       throw new HttpError(403, "read failed: 403");
     });
@@ -295,7 +302,7 @@ describe("WuiPage: what a reader is handed", () => {
     const files: Record<string, string> = { "/scrap-review/page.ai.yaml": YAML };
     const readFile = vi.fn(async (path: string) => {
       const text = files[path];
-      if (text === undefined) throw new Error(`not found: ${path}`);
+      if (text === undefined) throw notFound(path);
       return { kind: "text", path, text, size: text.length, encoding: "utf-8" };
     });
     renderAt("/w/rca/i1/scrap-review/page.ai.yaml", readFile);
@@ -322,7 +329,7 @@ describe("WuiPage: what a reader is handed", () => {
     };
     const readFile = vi.fn(async (path: string) => {
       const text = files[path];
-      if (text === undefined) throw new Error(`not found: ${path}`);
+      if (text === undefined) throw notFound(path);
       return { kind: "text", path, text, size: text.length, encoding: "utf-8" };
     });
 
@@ -347,7 +354,7 @@ describe("WuiPage: what a reader is handed", () => {
     };
     const readFile = vi.fn(async (path: string) => {
       const text = files[path];
-      if (text === undefined) throw new Error(`not found: ${path}`);
+      if (text === undefined) throw notFound(path);
       return { kind: "text", path, text, size: text.length, encoding: "utf-8" };
     });
 

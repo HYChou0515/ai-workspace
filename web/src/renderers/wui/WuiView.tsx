@@ -29,6 +29,7 @@ import { useCurrentUserState } from "../../hooks/useCurrentUser";
 import { useOpenFile } from "../../hooks/openFile";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { API_BASE, HttpError } from "../../api/http";
+import { encodePath } from "../../api/real";
 import { publishAgentDraft } from "../../lib/agentDraftBus";
 import { subscribeFileChanged } from "../../lib/fileChangedBus";
 import { pxToRem } from "../../lib/pxToRem";
@@ -228,15 +229,24 @@ export function WuiView({
     { path: string } & (
       | { state: "idle" }
       | { state: "working" }
-      | { state: "done" }
+      | { state: "done"; generation: number }
       | { state: "failed"; step: "build" }
       | { state: "failed"; step: "open"; why: string }
-      | { state: "failed"; step: "unknown"; why: string }
+      | { state: "failed"; step: "unknown" }
     )
   >({ path, state: "idle" });
-  /** This page's Deploy, or idle: a verdict about a sibling is not shown. */
-  const deployHere = deploy.path === path ? deploy : ({ path, state: "idle" } as const);
-  const deploying = deployHere.state === "working";
+  /** The HOLD is the pane's, whatever page it is on: a run for A is still a
+   * build in this folder while the pane shows B, and B's Rebuild pressed then
+   * is the second build the hold exists to prevent. */
+  const deploying = deploy.state === "working";
+  /** What is SHOWN is the page's — a verdict about a sibling is not shown —
+   * and, for a success, the read's: "✓ Deployed" is a fact about the
+   * generation it verified, so a Refresh (a new read) retires it rather
+   * than leaving an address over whatever the new read found. */
+  const deployHere =
+    deploy.path !== path || (deploy.state === "done" && deploy.generation !== generation)
+      ? ({ path, state: "idle" } as const)
+      : deploy;
   const [copied, setCopied] = useState<"idle" | "done" | "failed">("idle");
   /** The page this pane has already rebuilt on open, so that "when I open this"
    * means what it says: once. React re-runs the effect whenever the preference
@@ -421,6 +431,11 @@ export function WuiView({
     () => () => {
       inFlight.current?.abort();
       autoBuiltFor.current = null;
+      // Leaving the view is leaving the folder: a Deploy still in its
+      // manifest re-read would otherwise wake with `moved()` false and START
+      // a build for a page nobody is looking at, with no one left to abort
+      // it. The same epoch every run already watches.
+      epoch.current += 1;
     },
     [],
   );
@@ -575,10 +590,7 @@ export function WuiView({
   // on every sub-path deploy. Slug and item id encoded the way `itemCallTool`
   // encodes them; the path segment by segment, so a folder with a space or a
   // CJK name still round-trips through the router's decoding.
-  const address = `${window.location.origin}${API_BASE}/w/${encodeURIComponent(slug)}/${encodeURIComponent(fs.scopeId)}${path
-    .split("/")
-    .map(encodeURIComponent)
-    .join("/")}`;
+  const address = `${window.location.origin}${API_BASE}/w/${encodeURIComponent(slug)}/${encodeURIComponent(fs.scopeId)}/${encodePath(path)}`;
 
   const copyAddress = async () => {
     try {
@@ -631,7 +643,10 @@ export function WuiView({
     try {
       let hasBuild = false;
       if (folder !== "") {
-        const fresh = await buildable.refetch();
+        // `cancelRefetch: false`: a first read still in flight is JOINED, not
+        // cancelled and re-issued — the default would have made "press Deploy
+        // as the page opens" two manifest reads, the first thrown away.
+        const fresh = await buildable.refetch({ cancelRefetch: false });
         if (moved()) return;
         hasBuild = hasBuildScript(fresh.data ?? "");
       }
@@ -663,13 +678,17 @@ export function WuiView({
           path: mine,
           state: "failed",
           step: "open",
-          why: err instanceof Error ? err.message : "The page could not be opened.",
+          // Only `WuiEntryMissing` carries a sentence written for a person;
+          // any other throw here (the assembler, a base64 RangeError, a
+          // cancelled query) is an internal message, and shown raw it is
+          // "Maximum call stack size exceeded" in somebody's toolbar.
+          why: err instanceof WuiEntryMissing ? err.message : "The page could not be opened.",
         });
         return;
       }
       if (moved()) return;
       setGeneration((g) => Math.max(g, next));
-      setDeploy({ path: mine, state: "done" });
+      setDeploy({ path: mine, state: "done", generation: next });
     } catch (err) {
       // Nothing above is expected to throw — but a run that did would leave
       // the button on "Deploying…" for the rest of the page's life, and a
@@ -677,12 +696,9 @@ export function WuiView({
       // problem: a throw from the manifest read or the build stage sent the
       // publisher to look at a page that opened fine.
       if (moved()) return;
-      setDeploy({
-        path: mine,
-        state: "failed",
-        step: "unknown",
-        why: err instanceof Error ? err.message : "Deploy stopped unexpectedly.",
-      });
+      // Logged, not shown: the message is internal (see the open branch).
+      console.error("wui: deploy stopped unexpectedly", err);
+      setDeploy({ path: mine, state: "failed", step: "unknown" });
     }
   };
 
@@ -814,7 +830,7 @@ export function WuiView({
               Deploy failed — the page does not open: {deployHere.why}
             </div>
           ) : (
-            <div style={{ color: "var(--err)" }}>Deploy stopped unexpectedly: {deployHere.why}</div>
+            <div style={{ color: "var(--err)" }}>Deploy stopped unexpectedly — see the browser console.</div>
           )}
         </div>
       )}
@@ -974,8 +990,19 @@ export function WuiView({
       ) : built.error ? (
         // Plain language and the file's name: whoever hits this may have no
         // console to open, and this text is what they forward to the agent.
-        <div role="status" style={{ padding: 12, color: "var(--err)" }}>
-          {built.error instanceof Error ? built.error.message : "This WUI could not be opened."}
+        // A reader gets the same way back as on the "not published" branch —
+        // a 503 mid-restore or a dropped connection is as transient as the
+        // 404 is, and only one of them offering Try again made no sense.
+        <div
+          role="status"
+          style={{ padding: 12, color: "var(--err)", display: "flex", gap: 8, alignItems: "center" }}
+        >
+          <span>{built.error instanceof Error ? built.error.message : "This WUI could not be opened."}</span>
+          {!author && (
+            <Btn size="sm" onClick={() => setGeneration((g) => g + 1)}>
+              Try again
+            </Btn>
+          )}
         </div>
       ) : (
         <iframe

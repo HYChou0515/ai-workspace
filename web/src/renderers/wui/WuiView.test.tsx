@@ -1509,6 +1509,98 @@ describe("WuiView: Deploy", () => {
     expect(vi.mocked(fs.readFile).mock.calls.filter(([p]) => p === "/sales/index.html")).toHaveLength(2);
   });
 
+  it("holds the sibling page too — the lock is the pane's, the verdict is the page's", async () => {
+    /**
+     * Review round 4: keying the state by path (round 3) also keyed the HOLD
+     * by path, so while A deployed, the sibling B in the same folder had
+     * Rebuild, Refresh and Deploy live again — two builds in one folder came
+     * back through the sibling. What is shown is the page's; what is held is
+     * the whole pane's.
+     */
+    let answer: () => void = () => {};
+    const gate = new Promise<void>((r) => (answer = r));
+    const { release } = serveHeldBuild(0);
+    const files = { ...BUILT };
+    const fs = svc(files);
+    const real = fs.readFile;
+    let manifestReads = 0;
+    (fs as { readFile: FileService["readFile"] }).readFile = vi.fn(async (path: string) => {
+      if (path.endsWith("package.json") && ++manifestReads > 1) await gate;
+      return real(path);
+    });
+    const page = (p: string) => (
+      <QueryWrap>
+        <WorkspaceSlugProvider value="rca">
+          <FileServiceProvider value={fs}>
+            <WuiView path={p} spec={{ view: "wui", entity: "" } as ViewSpec} />
+          </FileServiceProvider>
+        </WorkspaceSlugProvider>
+      </QueryWrap>
+    );
+    const view = render(page("/sales/a.ai.yaml"));
+    await screen.findByRole("button", { name: /^rebuild$/i });
+    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+
+    view.rerender(page("/sales/b.ai.yaml"));
+    expect(screen.getByRole("button", { name: /^rebuild$/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^refresh$/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /deploy/i })).toBeDisabled();
+
+    answer();
+    await screen.findByText(/> vite build/);
+    release();
+    await waitFor(() => expect(screen.getByRole("button", { name: /^rebuild$/i })).toBeEnabled());
+    expect(buildCalls()).toHaveLength(1);
+  });
+
+  it("forgets the verdict on Refresh — it was about the generation it verified", async () => {
+    /**
+     * Review round 4: "✓ Deployed" never expired. Deploy verified generation
+     * g; the agent deleted `index.html`; Refresh read generation g+1 and the
+     * pane went red — under a panel still offering the address. A verdict is
+     * a fact about one read, so it is shown only while that read is what the
+     * pane shows.
+     */
+    vi.stubGlobal("fetch", vi.fn());
+    const files: Record<string, string> = { ...PLAIN };
+    renderInFs(files);
+    fireEvent.click(await screen.findByRole("button", { name: /^deploy$/i }));
+    await screen.findByRole("textbox", { name: /address/i });
+
+    delete files["/sales/index.html"];
+    fireEvent.click(screen.getByRole("button", { name: /^refresh$/i }));
+
+    await screen.findByText(/no index\.html to open/);
+    expect(screen.queryByText(/^✓ deployed/i)).toBeNull();
+    expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull();
+  });
+
+  it("does not start a build for a pane that has been closed", async () => {
+    /**
+     * Review round 4: the unmount cleanup aborted a build in flight but did
+     * not bump the epoch, so a Deploy still in its manifest re-read woke up
+     * with `moved()` false and STARTED a build — for a page nobody was
+     * looking at, with no one left to abort it.
+     */
+    let answer: () => void = () => {};
+    const gate = new Promise<void>((r) => (answer = r));
+    serveHeldBuild(0);
+    let manifestReads = 0;
+    const view = renderInFs({ ...BUILT }, async (path, real) => {
+      if (path.endsWith("package.json") && ++manifestReads > 1) await gate;
+      return real(path);
+    });
+    await screen.findByRole("button", { name: /^rebuild$/i });
+    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+
+    view.unmount();
+    answer();
+    await act(async () => {});
+    await act(async () => {});
+
+    expect(buildCalls()).toHaveLength(0);
+  });
+
   it("leaves the pane alone when the page does not open — no second read the verdict never saw", async () => {
     /**
      * Review round 3: on the failure path the pane was pointed at the failed

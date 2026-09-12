@@ -121,7 +121,11 @@ function toQuery(params?: SearchParams): string {
   return s ? `?${s}` : "";
 }
 
-function encodePath(path: string): string {
+/** A workspace path as URL segments — the ONE spelling of that rule, shared
+ * with everything else that puts a workspace path into an address (the WUI
+ * Deploy link), so the `/files/` route and the `/w/` route can never encode
+ * the same file name two different ways. */
+export function encodePath(path: string): string {
   // Drop the leading slash before joining: workspace paths reach the FE in both
   // dialects (a `shown_files` declaration normalises to absolute, a file tree row
   // is relative) and `…/files/` + `/out/a.png` would otherwise emit `files//out`.
