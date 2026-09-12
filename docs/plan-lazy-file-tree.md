@@ -175,6 +175,9 @@ walk_tree(list_dir, root, *, depth, prune, max_entries) -> WalkResult
   一個目錄裡有五萬個檔案 → 展開它回五萬筆。**已知,不在這包處理**(§5)。
 - symlink 目錄:今天 rglob 不進、`is_dir()` 列出。保留:列在 `dirs`、**不**進 `unwalked` —— 進了
   `unwalked` 就會有人展開它,`depth=1` 從 link 走 scandir 會跟過去,而 link 可以指到 workspace 外面。
+- symlink **檔案**:實作時查到今天的 `p.is_file()` 會跟 link,所以指向檔案的 symlink 是**列成檔案**
+  (size 是目標的),不是「跳過」。保留(mirror 靠它);上面虛擬碼的「regular file」讀成「`is_file()` 為真」。
+  P1 的回歸對照組(舊 rglob 走法當 oracle)就是為了抓這種細節。
 
 ### 3.2 API
 

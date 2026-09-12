@@ -16,6 +16,13 @@ Adding a pattern is a product decision about scheduling, not only about disk.
 `tests/api/test_schedule_index.py` pins the ordinary page shapes, so a pattern
 that swallows one fails there rather than in somebody's missing report.
 
+A THIRD consumer reads a DERIVED list, not this one: `TREE_PRUNE` (below) is
+what the file tree lists without walking into — the directory patterns here
+plus the build outputs the mirror does keep. Widening `TREE_PRUNE` changes
+only what preloads; widening `DEFAULT_IGNORES` changes what is backed up AND
+what is scheduled AND what preloads. Put a pattern where its consequences are
+the ones intended.
+
 There is deliberately NO per-file size cap: the mirror is a COMPLETE backup, so
 a big agent-produced file (a model dump, a generated dataset) is persisted like
 any other — else it would silently vanish on sandbox reap and under-count in the
