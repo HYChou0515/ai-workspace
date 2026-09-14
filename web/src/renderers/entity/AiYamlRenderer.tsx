@@ -30,6 +30,7 @@ import { useItemCanWrite } from "../../hooks/useItemCanWrite";
 import { useUsers } from "../../hooks/useUsers";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { TextRenderer } from "../TextRenderer";
+import { wuiFolder } from "../wui/paths";
 import { WuiView } from "../wui/WuiView";
 import { YamlTree } from "../YamlTree";
 import { EntityRecordModal } from "./EntityRecordModal";
@@ -116,9 +117,35 @@ export function AiYamlRenderer({ path }: { path: string }) {
     // its number means something different under a different entity type.
     setOpenRecord(null);
   }
+  // The last WUI this instance drew, so a switch to a SIBLING view file in
+  // the same folder does not unmount the pane while the sibling's buffer is
+  // fetched. The pane is keyed by folder and keeps a running build, its log,
+  // the hold and every Deploy verdict across a sibling switch — but only if
+  // it stays mounted, and the "Loading …" below unmounted it on every cold
+  // switch (found in a real browser: the build was aborted by the pane's own
+  // unmount cleanup, the verdict gone, nothing said). Set during render, the
+  // same way `statePath` is, so it never lags a paint.
+  // (Compared by path and text, not by `spec`: that is parsed afresh every
+  // render, and a state set from a value that is new every render never
+  // settles.)
+  const [lastWui, setLastWui] = useState<{ path: string; text: string; spec: NonNullable<typeof spec> } | null>(
+    null,
+  );
+  if (
+    spec?.view === VIEW_KIND.wui &&
+    entry.status === "ready" &&
+    (lastWui === null || lastWui.path !== path || lastWui.text !== entry.text)
+  ) {
+    setLastWui({ path, text: entry.text, spec });
+  }
 
   if (isEditing(path)) return <TextRenderer path={path} />;
   if (entry.status === "loading") {
+    // A sibling of the WUI on screen: keep that pane up until this file's
+    // spec is known. If it turns out not to be a WUI, the pane unmounts then.
+    if (lastWui !== null && wuiFolder(path) === wuiFolder(lastWui.path)) {
+      return <WuiView path={lastWui.path} spec={lastWui.spec} />;
+    }
     return <div style={{ color: "var(--text-paper-d)" }}>Loading {path}…</div>;
   }
   if (entry.status === "error") {
