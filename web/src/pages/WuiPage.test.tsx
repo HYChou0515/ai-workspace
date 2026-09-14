@@ -402,6 +402,21 @@ describe("WuiPage: what a reader is handed", () => {
     expect(await screen.findByRole("button", { name: /try again/i })).toBeInTheDocument();
   });
 
+  it("offers no Try again when the session has ended, either", async () => {
+    // Review round 11 (veracity lens): 401 was claimed permanent and only
+    // 410 was tested; dropping 401 from `isPermanentStatus` left the suite
+    // green.
+    const readFile = vi.fn(async () => {
+      throw new HttpError(401, "unauthorized");
+    });
+    renderAt("/w/rca/i1/scrap-review/page.ai.yaml", readFile);
+
+    // The 401 sentence, not the first `alert` — "Opening …" is one too, and
+    // waiting on the role passed before the error had rendered.
+    await screen.findByText(/session has ended/i);
+    expect(screen.queryByRole("button", { name: /try again/i })).toBeNull();
+  });
+
   it("offers no Try again on an answer that will not change", async () => {
     /**
      * Review round 8: only a 403 was permanent; a 410 (the item was deleted)

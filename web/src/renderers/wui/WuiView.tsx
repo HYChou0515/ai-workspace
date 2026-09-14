@@ -100,16 +100,18 @@ function manifestText(read: AssetRead | undefined): string {
 /** Each mounted pane gets its own number — see `qk.wuiDoc`. */
 let paneSeq = 0;
 
-/** Deploy's status, keyed by the view file it is about; a settled one also
- * names the generation the pane showed when it settled — for a success, the
- * generation of the read that verified it, and `applied` once the pane has
- * been pointed there (a success that settled while the pane was on a sibling
- * waits, un-applied, for the pane to come back). See `WuiPane`. */
+/** Deploy's status, keyed by the view file it is about. A settled verdict
+ * carries `at` — the pane's read counter when it settled (for a success, the
+ * number of the read that verified it) — and `applied` once the pane, ON
+ * that page, has taken it in: a success is applied by pointing the pane at
+ * the verified read, a failure by being shown. A verdict that settles while
+ * the pane is on a sibling waits, un-applied, for the pane to come back; it
+ * is never dropped in silence. See `WuiPane`. */
 type DeployState =
   | { path: string; state: "idle" }
   | { path: string; state: "working" }
-  | ({ path: string; generation: number } & (
-      | { state: "done"; applied?: true }
+  | ({ path: string; at: number; applied?: true } & (
+      | { state: "done" }
       | { state: "failed"; step: "build" }
       | { state: "failed"; step: "manifest"; why: string }
       | { state: "failed"; step: "open"; why: string }
@@ -118,12 +120,16 @@ type DeployState =
       | { state: "failed"; step: "unknown" }
     ));
 
-/** Is this verdict about the page and generation the pane shows now? The one
- * predicate behind both "show it" and "apply it". */
-function verdictFor(deploy: DeployState, path: string, generation: number): boolean {
+/** Is this verdict about the page the pane shows, and still current? A
+ * settled verdict is shown once applied and only while its read is the
+ * LATEST the pane has numbered: every later read — a Refresh, a Rebuild's
+ * reload, another Deploy's verify, on this page or a sibling — retires it,
+ * because the folder those reads saw may not be the one it was about. The
+ * one predicate behind "show it"; the apply effect shares its two facts. */
+function verdictFor(deploy: DeployState, path: string, latest: number): boolean {
   if (deploy.path !== path) return false;
   if (deploy.state === "idle" || deploy.state === "working") return true;
-  return deploy.generation === generation;
+  return deploy.applied === true && deploy.at === latest;
 }
 
 /**
@@ -309,83 +315,87 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
    * the same thing. */
   const [deploys, setDeploys] = useState<Record<string, DeployState>>({});
   const setDeploy = (state: DeployState) => setDeploys((d) => ({ ...d, [state.path]: state }));
-  /** `undefined` (not a fresh idle object) when nothing was ever recorded
-   * for this page, so the apply effect below keys on a value that only
-   * changes when a verdict does. */
-  const deploy: DeployState | undefined = deploys[path];
   /** The run in flight, whichever page it is for. The HOLD is the pane's,
    * whatever page it is on: a run for A is still a build in this folder
    * while the pane shows B, and B's Rebuild pressed then is the second
    * build the hold exists to prevent. */
   const running = Object.values(deploys).find((d) => d.state === "working");
   const deploying = running !== undefined;
-  /** ONE source for every generation the pane ever shows — Refresh, a
-   * Rebuild's reload, the reader's Try again, and the number a Deploy
-   * verifies under. Two sources (the pane's `g + 1` and a module counter)
-   * collided: a Rebuild landed on a verdict's number and served the
-   * pre-rebuild document; then a counter started high enough to avoid that
-   * fell BELOW a generation it had itself set, and a verdict was dropped as
-   * stale. Distinct and increasing, by construction, per pane. */
+  /** ONE counter numbers every read this pane makes — Refresh, a Rebuild's
+   * reload, the reader's Try again, and the read a Deploy verifies with.
+   * `draw()` takes the next number; `latest` is that number as state, so a
+   * render can ask "is this verdict's read still the newest?" (`verdictFor`)
+   * without reading a ref. `generation` is a different thing: the number of
+   * the read the CURRENT page shows — it follows `latest` on a Refresh, and
+   * moves to a verified read when a success is applied, but a sibling's
+   * Deploy drawing a number must not move it (plan decision 9: that would
+   * re-read this page under someone's hands). Two counters (the pane's
+   * `g + 1` and a module-level one) collided twice before this; one that
+   * only ever increments cannot. */
   const nextGen = useRef(0);
-  const bumpGeneration = () => setGeneration(++nextGen.current);
+  const [latest, setLatest] = useState(0);
+  const draw = () => {
+    const n = ++nextGen.current;
+    setLatest(n);
+    return n;
+  };
+  const bumpGeneration = () => setGeneration(draw());
   /** What is SHOWN is the page's — a verdict about a sibling is not shown —
-   * and the read's: EVERY settled verdict is a fact about the generation the
-   * pane showed when it settled, so a Refresh (a new read) retires it — a
-   * "✓ Deployed" over whatever the new read found, or a red "does not open"
-   * over a page that now does, were both this rule applied to only half the
-   * verdicts. ONE predicate (`verdictFor`), shared with the effect below that
-   * applies a waiting success: two copies of it could only drift. */
+   * and only while current (`verdictFor`): a "✓ Deployed" over whatever a
+   * later read found, or a red "does not open" over a page that now does,
+   * were both this rule applied to only half the verdicts. */
+  const deploy: DeployState | undefined = deploys[path];
   const deployHere: DeployState =
-    deploy !== undefined && verdictFor(deploy, path, generation) ? deploy : { path, state: "idle" };
-  // A success is applied HERE — the pane pointed at the generation it
-  // verified — once, and only while the pane is on the page it is about.
-  // Settled on that page, that is at once; settled while the pane was on a
-  // SIBLING, it waits (plan decision 9: nothing reloads a page under
-  // someone's hands) and is applied the moment the pane is back: arriving is
-  // a fresh open, not an interruption. Unless, while it waited, the pane
-  // moved on — a Refresh or Rebuild on the sibling, or the sibling's own
-  // Deploy, all of which take every later read past the one this verdict is
-  // about (a Rebuild rewrites the whole folder: applying the verdict then
-  // would show the PRE-rebuild document under "✓ Deployed" while the address
-  // served the rebuilt one) — or the verified document left the cache
-  // (`gcTime`, five minutes unobserved). Either way "✓ Deployed" would sit
-  // over a read the verdict never saw, so it is not applied — and says so,
-  // rather than vanishing: a Deploy that ended with nothing on screen is the
-  // silent failure this pane is written to avoid. (A verdict already applied
-  // and then moved past retires in silence: whoever pressed Refresh on this
-  // page saw it go. An `entry:` edited meanwhile is neither case: the
-  // document is keyed without `entry`, so the verified document is still the
-  // one shown — decision 9 — and the new entry is what Refresh will read.)
+    deploy !== undefined && verdictFor(deploy, path, latest) ? deploy : { path, state: "idle" };
+  // A settled verdict is APPLIED here, once, and only while the pane is on
+  // the page it is about: a success by pointing the pane at the read it
+  // verified (a cache hit — the frame shows exactly what was verified), a
+  // failure by being shown. Settled on that page, that is at once; settled
+  // while the pane was on a SIBLING, it waits (decision 9: nothing reloads a
+  // page under someone's hands) and is applied the moment the pane is back —
+  // arriving is a fresh open, not an interruption. Unless, while it waited,
+  // the pane numbered a later read — a Refresh or Rebuild on the sibling, or
+  // the sibling's own Deploy verifying (a Rebuild rewrites the whole folder:
+  // applying the verdict then would show the PRE-rebuild document under
+  // "✓ Deployed" while the address served the rebuilt one) — or the verified
+  // document left the cache (`gcTime`, five minutes unobserved). Either way
+  // the verdict is not applied — and says so, rather than vanishing: a
+  // Deploy that ended with nothing on screen is the silent failure this pane
+  // is written to avoid. A failure is stamped with the pane's counter when
+  // it is SHOWN, not when the run was pressed: a run's write used to name
+  // the generation at press time, and a sibling's success applied meanwhile
+  // moved the pane past it before anyone had seen it. (A verdict already
+  // applied and then moved past retires in silence: whoever pressed Refresh
+  // saw it go. An `entry:` edited meanwhile is neither case: the document is
+  // keyed without `entry`, so the verified document is still the one shown —
+  // decision 9 — and the new entry is what Refresh will read.)
   useEffect(() => {
-    if (deploy === undefined || deploy.path !== path || deploy.state !== "done" || deploy.applied) return;
-    const fail = (step: "superseded" | "changed") =>
-      setDeploys((d) => ({ ...d, [path]: { path, generation, state: "failed", step } }));
-    if (deploy.generation <= generation) return fail("superseded");
-    if (queryClient.getQueryData(qk.wuiDoc(fs.scopeId, path, instance, deploy.generation)) === undefined) {
-      return fail("changed");
+    if (deploy === undefined || deploy.state === "idle" || deploy.state === "working" || deploy.applied) return;
+    const settle = (state: DeployState) => setDeploys((d) => ({ ...d, [path]: state }));
+    if (deploy.at < latest) return settle({ path, at: latest, applied: true, state: "failed", step: "superseded" });
+    if (deploy.state === "done") {
+      if (queryClient.getQueryData(qk.wuiDoc(fs.scopeId, path, instance, deploy.at)) === undefined) {
+        return settle({ path, at: latest, applied: true, state: "failed", step: "changed" });
+      }
+      setGeneration(deploy.at);
     }
-    setDeploys((d) => ({ ...d, [path]: { ...deploy, applied: true } }));
-    setGeneration(deploy.generation);
-  }, [deploy, path, generation, queryClient, fs.scopeId, instance]);
+    settle({ ...deploy, applied: true });
+  }, [deploy, path, latest, queryClient, fs.scopeId, instance]);
   const [copied, setCopied] = useState<"idle" | "done" | "failed">("idle");
   /** The page this pane has already rebuilt on open, so that "when I open this"
    * means what it says: once. React re-runs the effect whenever the preference
    * changes — and in StrictMode, twice on mount — and neither is somebody
    * opening the page. */
   const autoBuiltFor = useRef<string | null>(null);
-  /** What `autoBuiltFor` held before the running Deploy claimed it. ONE
-   * claim and ONE give-back, used by the run's no-build paths and by Cancel
-   * alike — two copies of the value (a ref and a local) restored on four
-   * paths were one path away from spending, or un-spending, the on-open
-   * build twice. */
-  const autoBuiltBeforeDeploy = useRef<string | null>(null);
-  const claimOnOpenBuild = () => {
-    autoBuiltBeforeDeploy.current = autoBuiltFor.current;
-    autoBuiltFor.current = folder;
-  };
-  const giveBackOnOpenClaim = () => {
-    autoBuiltFor.current = autoBuiltBeforeDeploy.current;
-  };
+  /** True while a Deploy runs. Deploy IS the rebuild-on-open for this
+   * folder, so the on-open effect must not start one beside it — but that is
+   * a different fact from "the opening moment has been spent"
+   * (`autoBuiltFor`), and keeping both in one ref (claim it, give it back)
+   * had a window: a Deploy pressed before the manifest had answered claimed
+   * `null`, the effect ran while the claim was held and could not spend the
+   * moment, and Cancel gave `null` back — so the next flip of the switch
+   * counted as opening the page and started a build. */
+  const deployHold = useRef(false);
   /** Bumped whenever the pane moves to another page. A build started for one
    * page can still be running when `path` changes without unmounting, and
    * everything it does on the way out — the log, the verdict, the re-read that
@@ -524,17 +534,22 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
         // included. Told about its own save, an editor warns "somebody else
         // changed this" every time it saves — and the one warning that matters
         // arrives already discredited.
-        if (selfWrites.current.consume(changed)) return;
+        const own = selfWrites.current.consume(changed);
         // Any change INSIDE the folder, not the manifest's exact path: a
         // move publishes its destination and a folder delete its folder, so
         // a manifest renamed away or removed with its folder matched neither.
         // A manifest read is one small request; a wrong "buildable" is a
-        // Rebuild that fails over a page with no build. AFTER the self-write
-        // filter: a page autosaving its own data file must not re-read the
-        // manifest on every keystroke.
-        if (changed === folder || changed.startsWith(`${folder}/`)) {
+        // Rebuild that fails over a page with no build. NOT for the page's
+        // own writes — a page autosaving its own data file must not re-read
+        // the manifest on every keystroke — except the manifest itself: a
+        // page that edits its own build script is the one writer whose
+        // change the pane must follow, and a self-write is an exact path,
+        // so the manifest's own path is the whole of that exception.
+        const inFolder = changed === folder || changed.startsWith(`${folder}/`);
+        if (changed === `${folder}/package.json` || (!own && inFolder)) {
           void queryClient.invalidateQueries({ queryKey: qk.wuiBuildable(fs.scopeId, folder) });
         }
+        if (own) return;
         const event: WuiEvent = { proto: WUI_PROTOCOL, event: "file_changed", path: changed };
         frameRef.current?.contentWindow?.postMessage(event, "*");
       }),
@@ -701,14 +716,16 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
     if (!slug || buildable.isPending) return; // not known yet: the manifest is still being read
     if (autoBuiltFor.current === folder) return;
     // The opening moment is spent HERE, once the manifest has ANSWERED —
-    // whatever it said, and whether or not it builds. Spending it only on a
-    // buildable answer left a plain page's moment unspent, and the manifest
-    // is re-read whenever the file changes now: the agent scaffolding a
-    // build mid-session flipped `canBuild` and this started a build under
-    // the page someone was using — the reload plan decision 9 forbids. And
-    // marking it only on the way to a build made ticking the box later count
-    // as opening the page, which is not what the box says.
+    // whatever it said, whether or not it builds, and whether or not a
+    // Deploy is the one building. Spending it only on a buildable answer
+    // left a plain page's moment unspent, and the manifest is re-read
+    // whenever the file changes now: the agent scaffolding a build
+    // mid-session flipped `canBuild` and this started a build under the page
+    // someone was using — the reload plan decision 9 forbids. And marking it
+    // only on the way to a build made ticking the box later count as opening
+    // the page, which is not what the box says.
     autoBuiltFor.current = folder;
+    if (deployHold.current) return; // Deploy is this open's build
     if (!canBuild || !autoBuild) return;
     void runBuild({ automatic: true });
     // `runBuild` is deliberately not a dependency: it is rebuilt every render,
@@ -745,7 +762,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
     epoch.current += 1;
     setBuilding(false);
     setFirstBuild(false);
-    giveBackOnOpenClaim();
+    deployHold.current = false;
     // The log says what happened. The aborted stream's own `stale()` guard
     // keeps `runBuild` from writing its "ended without a verdict" line, and
     // a log cut mid-output with no word after it is indistinguishable from
@@ -813,24 +830,21 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
   const runDeploy = async () => {
     const started = epoch.current;
     const mine = path;
-    // The generation the pane shows now. The hold keeps it there for the whole
-    // run (Refresh, Rebuild and Auto-rebuild are all held), so the closure's
-    // value IS the current one — a ref mirrored by an effect and a `max` on
-    // the write were guarding a state the hold already makes impossible, and
-    // their failure mode was a verdict silently dropped. A settled verdict
-    // names this generation (or the next, on success) and is shown only while
-    // the pane is on it.
-    const shown = generation;
     const moved = () => epoch.current !== started;
+    // A failed verdict carries the counter as it stands when the run stops
+    // (`nextGen.current`) — NOT a generation captured at press. Nothing
+    // holds the pane's numbers still for a run: a sibling's success applied
+    // meanwhile moves `generation`, and a verdict named after a number the
+    // pane had left was never shown.
+    const failed = (
+      why: { step: "build" } | { step: "manifest"; why: string } | { step: "unknown" },
+    ): DeployState => ({ path: mine, at: nextGen.current, state: "failed", ...why });
     setDeploy({ path: mine, state: "working" });
     setCopied("idle");
-    // This IS the rebuild-on-open for this folder — claimed up front, before
+    // This IS the rebuild-on-open for this folder — held up front, before
     // the manifest read whose answer could flip `canBuild` and let the
-    // on-open effect start a second build beside this one. Given BACK if no
-    // build runs (a manifest that could not be read, a page with none), so a
-    // Deploy that stopped short does not silently spend the on-open rebuild
-    // the setting promises.
-    claimOnOpenBuild();
+    // on-open effect start a second build beside this one.
+    deployHold.current = true;
     try {
       // Whether there is a build: the manifest, read FRESH through the same
       // query the toolbar observes (one reader, one classification, and the
@@ -857,43 +871,44 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
         if (moved()) return;
         if (manifest.kind === "failed") {
           if (before !== undefined) queryClient.setQueryData(key, before);
-          giveBackOnOpenClaim();
-          setDeploy({ path: mine, generation: shown, state: "failed", step: "manifest", why: manifest.reason });
+          setDeploy(failed({ step: "manifest", why: manifest.reason }));
           return;
         }
         hasBuild = hasBuildScript(manifestText(manifest));
       }
-      if (!hasBuild) giveBackOnOpenClaim();
       if (hasBuild) {
         const ok = await runBuild({ reload: false });
         if (moved()) return;
         if (!ok) {
-          setDeploy({ path: mine, generation: shown, state: "failed", step: "build" });
+          setDeploy(failed({ step: "build" }));
           return;
         }
       }
-      // The verdict's read IS the pane's next generation: the pane's own
-      // query options, fetched FRESH (`staleTime: 0` — never a cache hit, so
-      // the folder it just rebuilt is what it reads) into the cache under a
-      // generation of this run's own (`nextGen`), then the pane is pointed
-      // at it — a cache hit there, so the frame shows what was verified
-      // without a second read. Pointed at it only while the pane is still on
-      // THIS page: a sibling is not reloaded under someone's hands (plan
-      // decision 9); the verdict waits, and is applied when the pane is back.
+      // The verdict's read IS a read of the pane's — the pane's own query
+      // options, fetched FRESH (`staleTime: 0` — never a cache hit, so the
+      // folder it just rebuilt is what it reads) into the cache under a
+      // number drawn from the pane's counter, then the pane is pointed at it
+      // — a cache hit there, so the frame shows what was verified without a
+      // second read. Pointed at it only while the pane is still on THIS
+      // page: a sibling is not reloaded under someone's hands (plan decision
+      // 9); the verdict waits, and is applied when the pane is back. Drawing
+      // the number also retires every verdict shown for an EARLIER read, on
+      // this page or a sibling: the folder they were about may just have
+      // been rebuilt.
       //
       // On failure the pane is NOT pointed at it: a query in error with no
       // data refetches on the key switch, and that second read — one the
       // verdict never saw — could succeed (a sandbox restore finishing) and
       // render the page directly under "the page does not open". The panel
       // carries the sentence; the pane keeps showing what it showed.
-      const next = ++nextGen.current;
+      const next = draw();
       try {
         await queryClient.fetchQuery({ ...wuiDocQuery(fs, mine, entry, instance, next), staleTime: 0 });
       } catch (err) {
         if (moved()) return;
         setDeploy({
           path: mine,
-          generation: shown,
+          at: next,
           state: "failed",
           step: "open",
           // Only `WuiEntryMissing` carries a sentence written for a person;
@@ -910,7 +925,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
       // where that is read. Doing it here as well, off a ref, had a window —
       // a commit that moved the pane to the sibling, before the effect that
       // mirrored the path — in which the sibling was reloaded after all.
-      setDeploy({ path: mine, generation: next, state: "done" });
+      setDeploy({ path: mine, at: next, state: "done" });
     } catch (err) {
       // Nothing above is expected to throw — but a run that did would leave
       // the button on "Deploying…" for the rest of the page's life, and a
@@ -920,8 +935,9 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
       if (moved()) return;
       // Logged, not shown: the message is internal (see the open branch).
       console.error("wui: deploy stopped unexpectedly", err);
-      giveBackOnOpenClaim(); // no build ran on this path either
-      setDeploy({ path: mine, generation: shown, state: "failed", step: "unknown" });
+      setDeploy(failed({ step: "unknown" }));
+    } finally {
+      deployHold.current = false;
     }
   };
 

@@ -3,8 +3,9 @@
 一個 **WUI** 就是 item workspace 裡的**一個資料夾**，裡面有一份 `*.ai.yaml` 寫著
 `view: wui`。點那份 yaml，資料夾就以網頁的形式跑起來。
 
-沒有「發布」這個動作，沒有註冊表，也沒有部署——寫進檔案就會動，跟 `board.ai.yaml` 會變成
-看板是同一個機制。
+沒有註冊表，也沒有部署流程——寫進檔案就會動，跟 `board.ai.yaml` 會變成看板是同一個機制。
+（工具列上的 **Deploy** 不是部署：它重建、確認頁面打得開，然後把這一頁本來就有的網址端出來
+——見下方「發布（Deploy）」。）
 
 ```
 銷售儀表板/
@@ -175,9 +176,19 @@ Refresh **不會** build，它只是重讀資料夾。所以 AI 改完 `src/` �
   開頁時同一條讀取路徑；讀者開頁時仍是他自己那一刻的讀取），三件都成才把網址端出來——
   所以網址指到的一定是剛建好、而且**當下**打得開的成品，
   不會是舊的 `dist/`，也不會是一個 `entry` 指錯地方的空頁。任一步失敗就不會出現
-  「Deployed」：build 壞了是「Deploy failed — see the build output」壓在 build 輸出
-  上面；打不開是「Deploy failed — the page does not open: …」帶頁面自己的理由。
-  什麼都不端出來。
+  「Deployed」，而是一句說明是哪一步：build 壞了是「Deploy failed — see the build
+  output」壓在 build 輸出上面；打不開是「Deploy failed — the page does not open: …」
+  帶頁面自己的理由；`package.json` 讀不到是「could not check whether this page has a
+  build: …」。什麼都不端出來。
+- 跑的期間**整個 pane 是 Deploy 的**：Refresh、Rebuild、Auto-rebuild 都按不下去（同一個
+  資料夾裡不能有兩個 build 在寫 `dist/`），旁邊多一顆 **Cancel**——一個永遠不結束的
+  build（卡住的 `pnpm run build`、被 gateway 吊著的串流）不會把 pane 鎖到關檔為止。
+  Cancel 會中止 build、在 build 輸出裡寫一行「Cancelled.」，而且那一次什麼都不會端出來。
+- 同一個資料夾裡有**兩份 view 檔**時，判定是**每一頁各自的**：在 A 按 Deploy、切到 B、
+  A 跑完——B 不會被重載（設計決定 9），A 的結果等你切回 A 才套用。等的期間如果 pane
+  又讀過一次資料夾（在 B 按了 Refresh、Rebuild 或 Deploy），回到 A 看到的是
+  「Deploy stopped — the pane was refreshed, rebuilt or deployed again before it was
+  back on this page. Deploy again.」——不會假裝那個結果還算數，也不會無聲消失。
 - 面板上是網址、**Copy**、**Open**，和一句話：**能打開這個 item 的人才能用這個連結。**
   網址是**捷徑，不是授權**——它不給任何人原本沒有的權限，API 在這裡拒絕的跟在工作區裡
   拒絕的一模一樣。要給 item 外的人看，先把他加進 item。
