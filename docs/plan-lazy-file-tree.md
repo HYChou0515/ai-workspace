@@ -409,6 +409,11 @@ CLAUDE.md 架構段加一條「檔案樹是預載修剪樹 + 懶目錄」,把 `T
 - M2 `tree` 的 legacy 半邊沒正規化 prefix(`"src"` 會少掉 legacy 的列)→ 進場正規化一次。
 - 麵包屑上一層的瀏覽器看不到懶目錄(`dirChildren` 只從檔案路徑推目錄)→ 用 `LazyFoldersContext` 補進去。
 
+第七輪(只驗 P13):源自 P13 的 **1 條 MEDIUM** —— 麵包屑注入的懶目錄 entry 帶前導斜線,`dirChildren` 的寫法沒有,
+點下去變成 `//node_modules` → 又顯示「Empty」,正是這條修法要避免的字(修法壓力下的新碼最密)。改成瀏覽器的寫法、
+測試改成**點進去**看到「尚未載入」(突變驗紅)。另:host 端 mock 的兩個 P13 改動零測試 → 鏡射 app 的測試(突變驗紅)。
+既有(不是 P13):mock 的 `rename("/d", "/")` 會留下 `//a.txt` 這種非正規 key,破壞 P12 的「一個路徑一個 entry」;真後端 ENOTEMPTY。記著。
+
 **既有、不在這包、要另開票**(第六輪順帶查證):
 - `nfs_tree` 對指向 item 外的 symlink **檔案**照樣列出且 `read` 會讀出 API pod 的檔(`ln -s /etc/hostname hn`)。這包只圍堵了目錄 link 的**列出**;檔案 link 的**讀取**是同類、更大,`read` 從來沒查。
 - `DELETE …/files/` 空路徑會 rmtree 整個 workspace root(`_workspace_path("")` = `"/"`)。

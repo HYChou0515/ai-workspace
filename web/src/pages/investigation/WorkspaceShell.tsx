@@ -2482,12 +2482,20 @@ function DirBrowser({
   // "Empty" once inside it.
   const entries = useMemo(() => {
     const own = dirChildren(paths, dir);
+    // `dirChildren` spells folder entries WITHOUT the leading slash (`dir` is
+    // slash-less too); `lazy` is slash-rooted. The injected entries must use
+    // the browser's spelling, or clicking one drills into `//node_modules` —
+    // which is "Empty" again, the exact text this exists to avoid.
     const seen = new Set(own.map((e) => e.path));
     const parent = dir ? full : "";
     const extra = lazy
-      .filter((u) => u.slice(0, u.lastIndexOf("/")) === parent && !seen.has(u))
-      .map((u) => ({ name: u.slice(u.lastIndexOf("/") + 1), path: u, isDir: true }));
-    return [...extra, ...own];
+      .filter((u) => u.slice(0, u.lastIndexOf("/")) === parent && !seen.has(u.slice(1)))
+      .map((u) => ({ name: u.slice(u.lastIndexOf("/") + 1), path: u.slice(1), isDir: true }));
+    // Folders first, one alphabet — the same order the tree draws them in.
+    const folders = [...own.filter((e) => e.isDir), ...extra].sort((a, b) =>
+      a.name.localeCompare(b.name),
+    );
+    return [...folders, ...own.filter((e) => !e.isDir)];
   }, [paths, dir, lazy, full]);
   const notLoaded = lazy.some((u) => full === u || full.startsWith(`${u}/`));
   const t = useT();

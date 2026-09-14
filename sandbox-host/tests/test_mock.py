@@ -128,3 +128,10 @@ async def test_a_path_the_walk_reports_can_be_read_back_however_it_was_uploaded(
     assert await sb.download(h, "pyproject.toml") == b"two"
     await sb.delete(h, "pyproject.toml")
     assert await sb.exists(h, "/pyproject.toml") is False
+    # `.` is not a folder: the same rule the walk applies to its root.
+    await sb.mkdir(h, "./m")
+    assert (await sb.walk(h, "/")).dirs == ["/m"]
+    # The root is the whole workspace, as the real backend's rmtree makes it.
+    await sb.upload(h, b"x", "/d/a.txt")
+    await sb.rmdir(h, "/")
+    assert (await sb.walk(h, "/")).files == [] and (await sb.walk(h, "/")).dirs == []
