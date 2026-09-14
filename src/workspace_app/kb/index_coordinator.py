@@ -685,7 +685,15 @@ class IndexCoordinator:
         # after finalize cleared staging would only leave a row behind). A
         # job redelivered after a crash mid-write is NOT done yet and stages.
         run = self._runs.get(doc_id)
-        if run is None or payload.batch_index in run.done:
+        if run is None:
+            return
+        if payload.batch_index in run.done:
+            # Already counted — but the delivery that counted it may have
+            # crashed between `mark_done` and the claim (round 8): the gate is
+            # a CAS no-op when already claimed, so try it rather than leave the
+            # doc to the stuck sweep's five-minute clock.
+            if self._runs.claim_finalize(doc_id):
+                self._enqueue_finalize(doc_id, payload.collection_id, requester)
             return
         self._stage_text(doc_id, payload.batch_index, text)
         # #248: this batch covered [unit_start, unit_end) — add its units so the

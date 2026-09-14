@@ -723,3 +723,41 @@ def test_fanout_rows_are_create_only_so_a_second_writer_changes_nothing():
     assert rows == [1_000_000, 1_000_001]
     kept = rm.get(chunk_id(doc_id, 1_000_000)).data
     assert isinstance(kept, DocChunk) and (kept.start, kept.end) == (40, 48)
+
+
+async def test_a_redelivery_of_a_batch_that_crashed_before_claiming_still_claims():
+    """Round 8: the last batch's delivery crashed between `mark_done` and
+    `claim_finalize`. Its redelivery finds the batch already done and — before
+    P18 — returned without claiming, leaving the run to the stuck sweep's
+    five-minute clock. The gate is a CAS no-op when already claimed, so the
+    redelivery just tries it."""
+    from workspace_app.kb.index_jobs import IndexJobPayload
+
+    spec = make_spec(default_user="u")
+    cid = spec.get_resource_manager(Collection).create(Collection(name="c")).resource_id
+    ingestor, coord = _build(spec, csv_batch=2)
+    doc_id = _store_csv(ingestor, cid, rows=5)
+
+    def job(kind: str, b: int = 0, s: int = 0, e: int = 0) -> IndexJobPayload:
+        return IndexJobPayload(
+            doc_id=doc_id, collection_id=cid, kind=kind, unit_start=s, unit_end=e, batch_index=b
+        )
+
+    coord._handle_split(job("split"), "u", 0, 0)
+    coord._handle_process(job("process", 0, 0, 2), "u")
+    coord._handle_process(job("process", 1, 2, 4), "u")
+    # Batch 2's first delivery: rows written, text staged, marked done — then
+    # the pod died before `claim_finalize`.
+    text = ingestor.index_units(doc_id, (4, 5), seq_base=2 * 1_000_000)
+    coord._stage_text(doc_id, 2, text)
+    coord._runs.mark_done(doc_id, 2, batch_units=1)
+    run = spec.get_resource_manager(IndexRun).get(doc_id).data
+    assert isinstance(run, IndexRun) and not run.finalized
+    # The redelivery: nothing to write or stage, but the claim is still open.
+    coord._handle_process(job("process", 2, 4, 5), "u")
+    run = spec.get_resource_manager(IndexRun).get(doc_id).data
+    assert isinstance(run, IndexRun) and run.finalized
+    await coord.aclose()  # drains the finalize job it enqueued
+    doc = spec.get_resource_manager(SourceDoc).get(doc_id).data
+    assert isinstance(doc, SourceDoc) and doc.status == "ready" and doc.text is not None
+    assert all(doc.text[c.start : c.end] == c.text for c in _chunks(spec, doc_id))

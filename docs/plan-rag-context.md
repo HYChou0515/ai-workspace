@@ -741,6 +741,56 @@ finalize's), plus the primitive itself: a second `index_units` for a batch
 whose rows exist changes nothing, and one whose rows are half missing fills
 only the gaps.
 
+## Phase 18 — review round 8 on the create-only rows
+
+One lens, one question, on P17. Nothing in P17's own changes could be made
+to fail except one latency regression, fixed here: a redelivery of the last
+batch after its first delivery crashed between `mark_done` and the claim
+returned at the done-check without claiming, leaving the document to the
+stuck sweep's five-minute clock — the gate is a CAS no-op when already
+claimed, so the redelivery just tries it.
+
+What the round established about the primitive, recorded rather than
+patched: specstar's `create(…, if_not_exists=True)` is documented as an
+"atomic create-only … first-wins mutex" but implemented as `storage.exists`
+then an upsert (`INSERT … ON CONFLICT DO UPDATE` on Postgres, a dict store
+in memory) — two creators of the same id in flight are not serialised. For
+a fan-out batch this means: a duplicate delivery whose `exists` check ran
+before the original's save and whose own save lands after finalize's
+rebase (one stalled statement across the original's tail, a queue hop and
+the rebase) still writes a batch-relative row past `ready` — forced with an
+event on `save_meta`; the shipped tests gate the whole `index_units` and
+cannot see it. The fix belongs in the primitive (an atomic insert with a
+rowcount, no upsert on create); the issue text is below, for the specstar
+repository. On our side the window is the narrowest any design without an
+atomic primitive can reach, and the failure is confined to that one row.
+
+Two holes the same lens surfaced that PREDATE this plan (#227) and are not
+touched here — logged below with the others: a duplicate FINALIZE (the
+`status == running` guard is the same check-then-act shape P12–P17 closed
+for process jobs; a second finalize reading staging after the first cleared
+it publishes `text=None`), and the missing run epoch.
+
+### specstar issue draft — `create(if_not_exists=True)` is not atomic
+
+> `IResourceManager.create(data, resource_id=…, if_not_exists=True)` is
+> documented as "an atomic create-only that can be used as a cross-worker
+> first-wins mutex / lock primitive" (`resource_manager/core.py`, the
+> `create` docstring). The implementation is `if self.storage.exists(rid):
+> raise DuplicateResourceError` followed by `save_revision` + `save_meta`;
+> on Postgres both saves are `INSERT … ON CONFLICT … DO UPDATE`
+> (`meta_store/postgres.py`, `resource_store/postgres.py`) and both creators
+> mint revision `{rid}:1`, so two workers that pass `exists` concurrently
+> both succeed and the later save wins. In memory the store is a dict with
+> the same check-then-set shape. A first-wins primitive needs the insert
+> itself to reject the duplicate (a plain `INSERT` on the meta row with the
+> conflict surfaced as `DuplicateResourceError`, and no upsert on create),
+> or the docstring should say "best-effort". Reproduction: two threads,
+> gate one between `exists` and `save_meta`, let the other create and a
+> third party `patch` the row, release — the patched row is overwritten.
+> Found while making a fan-out batch's rows create-only (ai-workspace
+> plan-rag-context P17).
+
 ## Out of scope — and findings logged for separate work
 
 Found by the review rounds, pre-existing on master, not touched here:
@@ -761,8 +811,17 @@ Found by the review rounds, pre-existing on master, not touched here:
 - The fan-out has no run epoch: a batch from run N that completes after run
   N+1's split passes the guard and, with create-only rows, wins the rows
   run N+1's own batch would have written — benign for the same content,
-  stale chunks if the content was edited between the runs. Pre-existing
-  (#227); P15–P17 do not close it.
+  stale chunks if the content was edited between the runs; a stale finalize
+  of run N during run N+1 publishes a partial document `ready`. Pre-existing
+  (#227); P15–P18 do not close it.
+- A duplicate FINALIZE delivery: `_handle_finalize`'s `status == "running"`
+  guard is check-then-act; a second finalize that reads staging after the
+  first cleared it (before the first's `finish`) publishes `text=None` with
+  every row dangling; one that reads mid-clear publishes a partial text. The
+  sweep's `finalized and age ≥ 3600` re-drive is a second producer. Same
+  shape P12–P17 closed for process jobs; pre-existing (#227).
+- specstar `create(if_not_exists=True)` is check-then-upsert, not the atomic
+  first-wins its docstring promises (Phase 18, issue draft above).
 - Finalize's per-chunk patch cost (above).
 
 - Eval-gated tuning; per-call / per-collection context knob.
