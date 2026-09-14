@@ -354,6 +354,7 @@ def build_lifespan(
         ``app.state.workflow_orchestrator``, symmetric with ``index_sweeper``."""
         from ..workflow.triggers import (
             OrchestratorOrphanOps,
+            ScanLease,
             SpecstarTriggerStore,
             TriggerSweeper,
             build_trigger_start,
@@ -362,14 +363,18 @@ def build_lifespan(
 
         assert trigger_check_interval is not None  # gated by caller
         orchestrator = app.state.workflow_orchestrator
+        store = SpecstarTriggerStore(spec)
         sweeper = TriggerSweeper(
             load=discover_schedule_triggers,
-            store=SpecstarTriggerStore(spec),
+            store=store,
             start=build_trigger_start(orchestrator.start),
             now_utc=_utcnow,
             # #429 P8: chase orphaned triggered runs (a pod died mid-run) — resume from the
             # journal, then abandon to a discoverable terminal once the resume budget is spent.
             orphan=OrchestratorOrphanOps(orchestrator),
+            # #804: one pod per window re-reads the profiles' triggers.json and walks
+            # the ledger; the rest skip the tick. A window is one tick.
+            lease=ScanLease(store, "triggers", interval_s=trigger_check_interval.total_seconds()),
         )
         try:
             while True:

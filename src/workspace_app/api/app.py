@@ -64,6 +64,7 @@ from ..workflow.discovery import load_run_callable
 from ..workflow.orchestrator import (
     WorkflowOrchestrator,
 )
+from ..workflow.triggers import ScanLease, SpecstarTriggerStore
 from ..workflow.user_schedule_sweep import DEFAULT_MAX_ROWS, UserScheduleSweeper
 from . import perf_trace
 from .activity import ActivityLog
@@ -1275,6 +1276,20 @@ def create_app(
             # deferred wiring `_start_page_schedule` explains above.
             workflows_for=lambda item_id: _workflows_for_item(item_id),
             max_rows=max_page_schedules,
+            # #804: one pod per window reads the pages' schedules.json; the rest
+            # skip the tick. Same ledger as the per-schedule claim, one more row.
+            # The interval is the same knob that paces the tick — a window is one
+            # tick — so a deploy with triggers off (None) builds no lease, and
+            # the sweeper is never started anyway (`lifecycle` gates both on it).
+            lease=(
+                ScanLease(
+                    SpecstarTriggerStore(spec),
+                    "user-schedules",
+                    interval_s=trigger_check_interval.total_seconds(),
+                )
+                if trigger_check_interval is not None
+                else None
+            ),
         ),
         notification_channel=notification_channel,
         offhours=goal_offhours,  # #615: the after-hours goal sweeper

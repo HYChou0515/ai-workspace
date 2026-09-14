@@ -14,6 +14,7 @@ from specstar import SpecStar
 from workspace_app.resources import make_spec
 from workspace_app.workflow.triggers import (
     ITriggerStore,
+    ScanLease,
     Schedule,
     ScheduleTrigger,
     SpecstarTriggerStore,
@@ -433,6 +434,77 @@ async def test_sweeper_skips_disabled_and_not_due_triggers():
 
 
 # ── specstar-backed store (#429 P7) ──────────────────────────────────────────
+
+
+async def test_one_pod_per_window_scans_the_triggers(spec_instance: SpecStar):
+    """#804: every pod used to re-read every profile's triggers.json and re-query every
+    trigger's ledger on every tick — N pods doing the same scan so that one could win each
+    claim. With a scan lease over the same ledger, one pod per window scans at all; the
+    others skip the tick without loading anything. The next window is a fresh election."""
+    register_trigger_store(spec_instance)
+    store = SpecstarTriggerStore(spec_instance)
+    clock = {"t": 1_000_000.0}
+    loads = {"a": 0, "b": 0}
+
+    def sweeper(name: str) -> TriggerSweeper:
+        def load() -> list[ScheduleTrigger]:
+            loads[name] += 1
+            return []
+
+        return TriggerSweeper(
+            load=load,
+            store=store,
+            start=lambda t, w: None,  # ty: ignore[invalid-argument-type]
+            now_utc=_fixed_now(datetime(2026, 7, 4, 3, 30)),
+            lease=ScanLease(store, "triggers", interval_s=60, now=lambda: clock["t"]),
+        )
+
+    a, b = sweeper("a"), sweeper("b")
+    await a.tick()
+    await b.tick()
+    assert loads == {"a": 1, "b": 0}  # one scan this window; the peer did not even load
+
+    clock["t"] += 60  # next window: an election again, and either pod may win it
+    await b.tick()
+    await a.tick()
+    assert loads == {"a": 1, "b": 1}
+
+
+async def test_a_winner_that_dies_mid_scan_forfeits_only_that_window(spec_instance: SpecStar):
+    """The claim is taken before the scan and never given back: a pod that crashes
+    mid-scan costs that window (nobody re-scans it), and the next window is a fresh
+    election — so a schedule is at most one interval late, which is what the
+    interval already promised. Releasing on failure would let a poisoned scan be
+    retried by every pod in turn, each failing the same way."""
+    register_trigger_store(spec_instance)
+    store = SpecstarTriggerStore(spec_instance)
+    clock = {"t": 1_000_000.0}
+    loads = {"a": 0, "b": 0}
+
+    def sweeper(name: str, *, boom: bool) -> TriggerSweeper:
+        def load() -> list[ScheduleTrigger]:
+            loads[name] += 1
+            if boom:
+                raise RuntimeError("triggers.json unreadable")
+            return []
+
+        return TriggerSweeper(
+            load=load,
+            store=store,
+            start=lambda t, w: None,  # ty: ignore[invalid-argument-type]
+            now_utc=_fixed_now(datetime(2026, 7, 4, 3, 30)),
+            lease=ScanLease(store, "triggers", interval_s=60, now=lambda: clock["t"]),
+        )
+
+    a, b = sweeper("a", boom=True), sweeper("b", boom=False)
+    with pytest.raises(RuntimeError):
+        await a.tick()
+    await b.tick()
+    assert loads == {"a": 1, "b": 0}  # the window is spent; the peer does not retry it
+
+    clock["t"] += 60
+    await b.tick()
+    assert loads == {"a": 1, "b": 1}  # the next window is scanned
 
 
 def test_specstar_store_claims_each_window_exactly_once(spec_instance: SpecStar):

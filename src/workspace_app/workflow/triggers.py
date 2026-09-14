@@ -26,6 +26,7 @@ import asyncio
 import calendar
 import contextlib
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -551,6 +552,46 @@ class SpecstarTriggerStore(ITriggerStore):
         )
 
 
+class ScanLease:
+    """One pod per window gets to SCAN (#804); the others skip the tick entirely.
+
+    Every pod used to run the whole sweep — re-read every profile's triggers.json
+    (or every page's schedules.json), re-query every ledger row — so that ONE of
+    them could win each trigger's per-window claim. The per-trigger claim only
+    de-duplicates the firing; the scan itself was N pods deep, every tick, with
+    zero traffic. This is the same shape as the cluster sweep that grew the API
+    heap, one size smaller.
+
+    The lease is one more row on the same window ledger, keyed by ``key`` (so it
+    can never collide with a real trigger's ``slug:profile:id``) and windowed by
+    ``interval_s`` of wall-clock: the first pod to tick in a window claims it, the
+    rest see the claim and do nothing. A winner that dies mid-scan forfeits that
+    window only — the next window is a fresh election, so a schedule is at most
+    one interval late, which is what the interval already promised. The
+    per-trigger claim stays: it is what keeps a window from firing twice across
+    restarts, and this lease does not replace it.
+    """
+
+    def __init__(
+        self,
+        store: ITriggerStore,
+        key: str,
+        *,
+        interval_s: float,
+        now: Callable[[], float] = time.time,
+    ) -> None:
+        self._store = store
+        self._key = f"__scan__:{key}"
+        self._interval_s = interval_s
+        self._now = now
+
+    def claim(self) -> bool:
+        """True for the one pod that scans this window. Blocking specstar I/O —
+        call it off the loop, like the store's other calls."""
+        window = str(int(self._now() // self._interval_s))
+        return self._store.try_claim(self._key, window)
+
+
 StartTrigger = Callable[["ScheduleTrigger", str], Awaitable[str | None]]
 OrchestratorStart = Callable[..., Awaitable[str]]
 
@@ -677,6 +718,7 @@ class TriggerSweeper:
         orphan: IOrphanOps | None = None,
         grace_ms: int = _DEFAULT_ORPHAN_GRACE_MS,
         max_resume_attempts: int = _DEFAULT_MAX_RESUME_ATTEMPTS,
+        lease: ScanLease | None = None,
     ) -> None:
         self._load = load
         self._store = store
@@ -685,6 +727,9 @@ class TriggerSweeper:
         self._orphan = orphan
         self._grace_ms = grace_ms
         self._max_attempts = max_resume_attempts
+        # #804: None ⇒ every caller scans (a single process, or a test that is
+        # not about pods). The API passes one so that N pods cost one scan.
+        self._lease = lease
 
     def _local_now(self, tz: str) -> datetime:
         """``now`` in the schedule's zone as a naive datetime (the period math is naive-
@@ -692,6 +737,8 @@ class TriggerSweeper:
         return self._now_utc().astimezone(ZoneInfo(tz or "UTC")).replace(tzinfo=None)
 
     async def tick(self) -> None:
+        if self._lease is not None and not await asyncio.to_thread(self._lease.claim):
+            return  # another pod is scanning this window
         for t in self._load():
             if t.enabled:
                 await self._tick_one(t)
