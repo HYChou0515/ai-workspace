@@ -416,8 +416,8 @@ PPTX 每張、CSV/XLSX 每列、JSONL 每行各是一個 Document,用 `\n\n` 接
 **既有的多頁/多列文件與重複文字的文件,在重讀前位移仍是舊的**——症狀是 `read_page(N≥2)` 顯示第 1 頁的文字、`kb_grep`
 找不到第 2 頁起的字、引用卡的前後文接錯段。受影響的是「有第 2 頁/第 2 列」的所有文件,實務上就是整個 collection。
 
-`DocChunk` 多了一個欄位 `unit_start: int | None`(#227 fan-out 用,其他路徑與舊列都是 `None`)、`IndexRun` 多了
-`batch_bases: dict[str, int]`(P15,finalize 寫入):都是 msgspec 預設值,**不需要 migrate**。
+`DocChunk` 多了一個欄位 `unit_start: int | None`(#227 fan-out 用,其他路徑與舊列都是 `None`):msgspec 預設值,
+**不需要 migrate**。fan-out 的 chunk row 改為「不存在才建立」(P17):重複投遞的 batch 不再覆寫任何列。
 
 ### P9:P6 切出來的視窗沒有 page/section
 

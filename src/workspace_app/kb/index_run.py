@@ -115,13 +115,6 @@ class IndexRunStore:
         _LOGGER.info("index_run: doc=%s finalize claim won=%s", doc_id, claimed)
         return claimed
 
-    def set_batch_bases(self, doc_id: str, bases: dict[int, int]) -> None:
-        """Publish where every batch's text starts in the rejoined document (P15)
-        — finalize writes this before it rebases a single chunk, so a late
-        replay of a batch can rebase itself (see ``IndexRun.batch_bases``)."""
-        stamped = {str(k): v for k, v in bases.items()}
-        self._cas(doc_id, lambda run: msgspec.structs.replace(run, batch_bases=stamped))
-
     def finish(self, doc_id: str, *, status: str) -> None:
         """Stamp the terminal status (``done`` / ``error``) once finalize has run
         — this is what closes the active-run guard."""

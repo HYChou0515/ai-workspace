@@ -677,13 +677,15 @@ class IndexCoordinator:
             if not is_transient(exc):
                 raise NoRetry(str(exc)) from exc  # permanent → dead-letter now
             raise  # transient → broker re-delivers this batch
-        # P15: the guard above is check-then-act — a duplicate delivery that
-        # passed it can have its chunk write land AFTER finalize rebased the
-        # batch (its embedding outlived the other batches and the finalize).
-        # Finalize publishes the batch bases on the run BEFORE rebasing, so a
-        # write that landed after that point sees them here and rebases its
-        # own chunks; staging a text row now would only leak one.
-        if self._late_replay(doc_id, payload.batch_index, requester):
+        # P17: a duplicate delivery that passed the guard writes NO rows — the
+        # chunk rows are create-only (`Ingestor._emit_packet`), so the first
+        # writer wins each one and finalize is the only thing that ever
+        # touches offsets. A batch the run already counts as done was
+        # delivered by someone else: nothing left to stage or count (a stage
+        # after finalize cleared staging would only leave a row behind). A
+        # job redelivered after a crash mid-write is NOT done yet and stages.
+        run = self._runs.get(doc_id)
+        if run is None or payload.batch_index in run.done:
             return
         self._stage_text(doc_id, payload.batch_index, text)
         # #248: this batch covered [unit_start, unit_end) — add its units so the
@@ -691,35 +693,8 @@ class IndexCoordinator:
         self._runs.mark_done(
             doc_id, payload.batch_index, batch_units=payload.unit_end - payload.unit_start
         )
-        # P16: the read above was itself a check-then-act — finalize can have
-        # consumed staging between it and the stage write. Look again: if the
-        # bases are out now, the row just written is a leak of ours to remove,
-        # and the chunks are ours to rebase.
-        if self._late_replay(doc_id, payload.batch_index, requester):
-            self._clear_staged_row(doc_id, payload.batch_index)
-            return
         if self._runs.claim_finalize(doc_id):
             self._enqueue_finalize(doc_id, payload.collection_id, requester)
-
-    def _late_replay(self, doc_id: str, batch_index: int, requester: str) -> bool:
-        """Whether this batch's write landed after finalize published the bases
-        — and if so, the batch's own rebase (P15) and, when the run has already
-        finished, a fresh #390 cache snapshot: the one finalize took may have
-        caught this batch's rows before the rebase (round 6). Recomputed from
-        `unit_start`, so a second snapshot of already-canonical rows is the
-        same snapshot. True also when the run is gone (nothing left to do)."""
-        run = self._runs.get(doc_id)
-        if run is None:
-            return True
-        if not run.batch_bases:
-            return False
-        base = run.batch_bases.get(str(batch_index))
-        if base is not None:
-            self._rebase_fanout_offsets(doc_id, {batch_index: base}, requester)
-            after = self._runs.get(doc_id)
-            if after is not None and after.status == "done":
-                self._cache_hook(doc_id)
-        return True
 
     def _enqueue_finalize(self, doc_id: str, collection_id: str, requester: str) -> None:
         # #186: the job manager has no default user, so a finalize job MUST be
@@ -763,12 +738,9 @@ class IndexCoordinator:
         # the batches are rejoined, every chunk's offset into the WHOLE text is
         # known. Before the text is published and before the #390 cache
         # snapshots the chunks. Recomputed from `unit_start`, so a re-driven
-        # finalize lands on the same numbers (idempotent by construction).
-        # P15: the bases go on the run FIRST, so a batch replayed from here on
-        # rebases itself (`_handle_process`).
-        bases = _batch_bases(staged)
-        self._runs.set_batch_bases(doc_id, bases)
-        self._rebase_fanout_offsets(doc_id, bases, requester)
+        # finalize lands on the same numbers (idempotent by construction) —
+        # and finalize is the ONLY writer of offsets (P17).
+        self._rebase_fanout_offsets(doc_id, _batch_bases(staged), requester)
         with doc_rm.using(user=updater):
             doc_rm.update(
                 doc_id,
@@ -975,11 +947,6 @@ class IndexCoordinator:
                 if (start, end) != (chunks[i].start, chunks[i].end):
                     rid = rows[i].info.resource_id  # ty: ignore[unresolved-attribute]
                     chunk_rm.patch(rid, MergePatch({"start": start, "end": end}))
-
-    def _clear_staged_row(self, doc_id: str, batch_index: int) -> None:
-        rm = self._spec.get_resource_manager(IndexUnitText)
-        with contextlib.suppress(ResourceIDNotFoundError):
-            rm.permanently_delete(f"{doc_id}.t{batch_index}")
 
     def _clear_staged_text(self, doc_id: str) -> None:
         rm = self._spec.get_resource_manager(IndexUnitText)

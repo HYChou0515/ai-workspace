@@ -711,6 +711,36 @@ P15's edges, fixed here:
   `__getstate__` would strip it from the LIVE instance on copy / pickle. It
   is a `PrivateAttr` now.
 
+## Phase 17 — a duplicate delivery writes nothing
+
+Round 7 (one lens, one question) forced two more races out of P15/P16, both
+the same shape: the duplicate had become a concurrent WRITER against
+finalize — rebasing its own rows, re-snapshotting the cache, deleting its
+staged row — and two writers with no ordering between them lose to each
+other in some window (finalize's cache put after the duplicate's; the
+duplicate's row delete under finalize's list-then-delete, which then raised
+after the document was `ready` and re-drove finalize on half the staging).
+Adding a CAS to each write would have been the fourth layer on a design
+whose premise was wrong.
+
+The premise: #227 made a redelivered batch OVERWRITE its slice, harmless
+while the rows it rewrote were identical. P8 made a batch's rows
+provisional (batch-relative offsets, rebased at finalize), and every fix
+since tried to make the late overwrite safe. P17 removes the overwrite:
+a fan-out batch's rows are **create-only** (specstar's `create(…,
+if_not_exists=True)`, its documented first-wins primitive), so the first
+writer wins each row and a duplicate delivery writes nothing — it is never
+a writer against finalize at all. A job redelivered after a crash
+mid-write completes the rows it is missing; a batch the run already counts
+as done is delivered and stages nothing. Finalize is the only writer of
+offsets and the only one that touches staging (the split-time clear stays).
+`IndexRun.batch_bases`, the self-rebase, the re-snapshot and the row delete
+are gone. The round-6/7 interleavings are kept as tests with the new
+invariant (the duplicate changed no row; one rebase, one snapshot, both
+finalize's), plus the primitive itself: a second `index_units` for a batch
+whose rows exist changes nothing, and one whose rows are half missing fills
+only the gaps.
+
 ## Out of scope — and findings logged for separate work
 
 Found by the review rounds, pre-existing on master, not touched here:
@@ -729,10 +759,10 @@ Found by the review rounds, pre-existing on master, not touched here:
   pre-heading section.
 - `CsvParser` never sets the `row` provenance key `_PROVENANCE_KEYS` lists.
 - The fan-out has no run epoch: a batch from run N that completes after run
-  N+1's split passes both guards and stages its text into run N+1's slot —
-  benign for the same content, a mixed `SourceDoc.text` if the content was
-  edited between the runs. Pre-existing (#227); P15/P16 narrow it, do not
-  close it.
+  N+1's split passes the guard and, with create-only rows, wins the rows
+  run N+1's own batch would have written — benign for the same content,
+  stale chunks if the content was edited between the runs. Pre-existing
+  (#227); P15–P17 do not close it.
 - Finalize's per-chunk patch cost (above).
 
 - Eval-gated tuning; per-call / per-collection context knob.

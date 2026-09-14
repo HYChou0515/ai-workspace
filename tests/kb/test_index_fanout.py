@@ -11,7 +11,7 @@ no VLM — but the machinery is parser-agnostic.
 from __future__ import annotations
 
 from specstar import QB, SpecStar
-from specstar.types import TaskStatus
+from specstar.types import MergePatch, TaskStatus
 
 from workspace_app.kb.embedder import HashEmbedder
 from workspace_app.kb.index_coordinator import IndexCoordinator
@@ -464,14 +464,13 @@ async def test_a_process_job_replayed_after_finalize_is_a_noop():
     assert list(staged) == []
 
 
-async def test_a_batch_replayed_while_finalize_runs_rebases_itself():
-    """plan-rag-context P15 (round 5): the P12 guard is check-then-act. A
-    duplicate delivery that passed it (run still `running`) and whose chunk
+async def test_a_batch_replayed_while_finalize_runs_writes_nothing():
+    """plan-rag-context P15→P17 (rounds 5–7): the P12 guard is check-then-act.
+    A duplicate delivery that passed it (run still `running`) and whose chunk
     write lands AFTER finalize rebased the batch — its embedding outlived the
     other batches and the finalize — used to put that batch back to
-    batch-relative offsets and leak a staged row. Finalize now publishes the
-    batch bases on the run before rebasing; a late write sees them and rebases
-    its own chunks, staging nothing."""
+    batch-relative offsets. The rows are create-only now: the duplicate's
+    writes are refused row by row, finalize stays the only writer of offsets."""
     from workspace_app.kb.index_jobs import IndexJobPayload
 
     spec = make_spec(default_user="u")
@@ -517,7 +516,6 @@ async def test_a_batch_replayed_while_finalize_runs_rebases_itself():
     assert list(staged) == []
     run = spec.get_resource_manager(IndexRun).get(doc_id).data
     assert isinstance(run, IndexRun) and run.status == "done"
-    assert set(run.batch_bases) == {"0", "1", "2"}
 
 
 async def test_a_staged_row_left_by_an_earlier_run_never_reaches_the_next_text():
@@ -572,11 +570,11 @@ def _assert_canonical_everywhere(spec, ingestor, doc_id) -> None:
     assert isinstance(run, IndexRun) and run.status == "done"
 
 
-def test_bases_are_published_before_the_rebase_so_a_late_write_can_see_them():
-    """P16 pins P15's load-bearing order (round 6: swapping the two lines left
-    every test green). The duplicate's chunk write lands AFTER finalize's
-    rebase, and its run re-read happens BEFORE finalize would have published
-    the bases had the order been the other way round."""
+def test_a_duplicate_whose_write_lands_after_the_rebase_changes_no_row():
+    """Round 6's forced interleaving, kept as the pin for P17's rule: the
+    duplicate's chunk write lands AFTER finalize's rebase while finalize is
+    still in flight. Create-only rows mean the write is refused and the
+    rebased rows stand; finalize completes with canonical rows everywhere."""
     import threading
 
     spec = make_spec(default_user="u")
@@ -630,12 +628,11 @@ def test_bases_are_published_before_the_rebase_so_a_late_write_can_see_them():
     _assert_canonical_everywhere(spec, ingestor, doc_id)
 
 
-def test_a_late_replay_refreshes_the_cache_snapshot_finalize_took_too_early():
-    """Round 6 residual: the duplicate's write landed after finalize's rebase and
-    its self-rebase landed after finalize's #390 snapshot — the live chunks
-    healed, the cache entry kept batch-relative offsets, and `copy_from_cache`
-    would have replayed them into every later same-content document. A late
-    replay whose run has finished re-snapshots after rebasing."""
+def test_a_duplicate_landing_between_the_rebase_and_the_cache_snapshot_changes_no_row():
+    """Rounds 6–7: with a duplicate that could overwrite, the #390 snapshot
+    caught its batch-relative rows (and, once the duplicate re-snapshotted,
+    two blind puts raced). Create-only rows: the duplicate's write is refused,
+    the snapshot finalize takes is canonical, and nobody else puts."""
     import threading
 
     spec = make_spec(default_user="u")
@@ -644,12 +641,10 @@ def test_a_late_replay_refreshes_the_cache_snapshot_finalize_took_too_early():
     doc_id = _store_csv(ingestor, cid, rows=5)
     job = _fanout_to_the_last_batch(spec, coord, ingestor, cid, doc_id)
 
-    # The interleaving: finalize rebases → the duplicate's write lands →
-    # finalize snapshots the cache (catching the batch-relative rows) → the
-    # duplicate rebases itself → (P16) re-snapshots.
+    # The interleaving: finalize rebases → the duplicate's write lands (and is
+    # refused) → finalize snapshots the cache → the duplicate finishes.
     rebased = threading.Event()
     written = threading.Event()
-    snapshotted = threading.Event()
     orig_write_cache = ingestor.write_cache
     orig_index_units = ingestor.index_units
     orig_rebase = coord._rebase_fanout_offsets
@@ -657,12 +652,9 @@ def test_a_late_replay_refreshes_the_cache_snapshot_finalize_took_too_early():
     calls: list[str] = []
 
     def rebase(doc, bases, requester):
-        if getattr(in_finalize, "yes", False):
-            orig_rebase(doc, bases, requester)
-            rebased.set()
-        else:
-            assert snapshotted.wait(10), "finalize never snapshotted"
-            orig_rebase(doc, bases, requester)
+        orig_rebase(doc, bases, requester)
+        calls.append("rebase:finalize" if getattr(in_finalize, "yes", False) else "rebase:dup")
+        rebased.set()
 
     def index_units(*a, **kw):
         assert rebased.wait(10), "finalize never rebased"
@@ -671,14 +663,9 @@ def test_a_late_replay_refreshes_the_cache_snapshot_finalize_took_too_early():
         return out
 
     def write_cache(doc):
-        if getattr(in_finalize, "yes", False):
-            assert written.wait(10), "the duplicate never wrote"
-            orig_write_cache(doc)
-            calls.append("finalize")
-            snapshotted.set()
-        else:
-            orig_write_cache(doc)
-            calls.append("replay")
+        assert written.wait(10), "the duplicate never wrote"
+        orig_write_cache(doc)
+        calls.append("cache:finalize" if getattr(in_finalize, "yes", False) else "cache:dup")
 
     ingestor.write_cache = write_cache
     ingestor.index_units = index_units
@@ -692,7 +679,6 @@ def test_a_late_replay_refreshes_the_cache_snapshot_finalize_took_too_early():
         except BaseException as e:  # noqa: BLE001
             errors.append(e)
             rebased.set()
-            snapshotted.set()
 
     def duplicate():
         try:
@@ -707,5 +693,33 @@ def test_a_late_replay_refreshes_the_cache_snapshot_finalize_took_too_early():
     tf.join(20)
     td.join(20)
     assert not errors, errors
-    assert calls == ["finalize", "replay"]
+    assert calls == ["rebase:finalize", "cache:finalize"]  # the duplicate touched nothing
     _assert_canonical_everywhere(spec, ingestor, doc_id)
+
+
+def test_fanout_rows_are_create_only_so_a_second_writer_changes_nothing():
+    """P17's primitive, directly: `index_units` for a batch whose rows exist
+    refuses every row (specstar's create-only), and a batch with SOME rows
+    missing (a job redelivered after a crash mid-write) fills only the gaps."""
+    spec = make_spec(default_user="u")
+    cid = spec.get_resource_manager(Collection).create(Collection(name="c")).resource_id
+    ingestor, _coord = _build(spec, csv_batch=2)
+    doc_id = _store_csv(ingestor, cid, rows=5)
+    from workspace_app.kb.ingest import chunk_id
+
+    ingestor.index_units(doc_id, (2, 4), seq_base=1_000_000)
+    rm = spec.get_resource_manager(DocChunk)
+    first = rm.get(chunk_id(doc_id, 1_000_000)).data
+    assert isinstance(first, DocChunk)
+    # Someone (finalize) moved the row; a second delivery must not move it back.
+    rm.patch(chunk_id(doc_id, 1_000_000), MergePatch({"start": 40, "end": 48}))
+    ingestor.index_units(doc_id, (2, 4), seq_base=1_000_000)
+    again = rm.get(chunk_id(doc_id, 1_000_000)).data
+    assert isinstance(again, DocChunk) and (again.start, again.end) == (40, 48)
+    # A crashed job that wrote only the first row: the redelivery fills the second.
+    rm.permanently_delete(chunk_id(doc_id, 1_000_001))
+    ingestor.index_units(doc_id, (2, 4), seq_base=1_000_000)
+    rows = sorted(c.seq for c in _chunks(spec, doc_id) if c.seq >= 1_000_000)
+    assert rows == [1_000_000, 1_000_001]
+    kept = rm.get(chunk_id(doc_id, 1_000_000)).data
+    assert isinstance(kept, DocChunk) and (kept.start, kept.end) == (40, 48)

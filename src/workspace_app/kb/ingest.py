@@ -25,7 +25,7 @@ import xxhash
 from llama_index.core.ingestion import IngestionPipeline
 from llama_index.core.schema import Document
 from specstar import QB, SpecStar
-from specstar.types import Binary, ResourceIDNotFoundError
+from specstar.types import Binary, DuplicateResourceError, ResourceIDNotFoundError
 
 from ..resources.kb import CachedChunk, Collection, DocChunk, IndexCache, SourceDoc
 from .chunker import Chunker
@@ -1102,7 +1102,25 @@ class Ingestor:
         )
         for chunk in chunks:
             if deterministic:
-                chrm.create_or_update(chunk_id(doc_id, chunk.seq), chunk)
+                # plan-rag-context P17: create-only. #227 made a redelivered
+                # batch OVERWRITE its slice, harmless while the rows it rewrote
+                # were identical; since P8 a batch's rows are provisional
+                # (batch-relative offsets, rebased at finalize), and a
+                # duplicate delivery that finished after the finalize put them
+                # back. Now the first writer wins each row and a duplicate
+                # writes nothing — it is never a concurrent writer against
+                # finalize (rounds 5–7 found three shapes of that race). A job
+                # redelivered after a crash mid-write completes the rows it is
+                # missing. `prepare_fanout` hard-deletes the previous run's
+                # rows, so a re-index starts from an empty slice.
+                try:
+                    chrm.create(
+                        chunk,
+                        resource_id=chunk_id(doc_id, chunk.seq),
+                        if_not_exists=True,  # ty: ignore[unknown-argument] — on the concrete manager, not the protocol
+                    )
+                except DuplicateResourceError:
+                    continue
             else:
                 chrm.create(chunk)
         return len(chunks)
