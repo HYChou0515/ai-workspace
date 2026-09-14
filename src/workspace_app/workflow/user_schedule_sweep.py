@@ -25,9 +25,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Sequence
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any, Protocol
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from specstar import SpecStar
 
@@ -35,7 +34,7 @@ from ..api.schedule_index import ScheduleIndex
 from ..filestore.protocol import FileNotFound
 from .orchestrator import ActiveRunExists
 from .triggers import SpecstarTriggerStore, fire_window, is_due
-from .user_schedules import declared_count, trigger_id_for, usable_rows
+from .user_schedules import declared_count, in_zone, trigger_id_for, usable_rows, utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -103,46 +102,6 @@ OwnerOf = Callable[[str], str]
 WorkflowsFor = Callable[[str], Awaitable[Sequence[str] | None]]
 
 
-def _utc_now() -> datetime:
-    """Now, in UTC, naive — the period math here is naive-local, so each row is
-    converted into ITS zone before any of it runs.
-
-    Deliberately not `datetime.now`: a server-local clock makes a schedule fire
-    at a different moment depending on which pod ran the sweep, and a page that
-    named no zone would silently mean "wherever this happens to be deployed".
-    """
-    return datetime.now(UTC).replace(tzinfo=None)
-
-
-def _in_zone(now_utc: datetime, tz: str) -> datetime:
-    """`now` as the wall clock in `tz`, naive. An empty zone means UTC, which is
-    the same rule the engineer-authored triggers use (`TriggerSweeper._local_now`)
-    so the two engines cannot disagree about what "09:00" means.
-
-    A zone that cannot be resolved falls back to UTC rather than raising, because
-    taking down one page's whole file — every other row in it included — over a
-    typo in a zone name is a worse answer than firing an hour out.
-
-    THE FULL SET, not just "not found". `ZoneInfo` raises `ValueError` for an
-    absolute path or a traversal (`"/absolute"`, `"../x"`) and `OSError` for a key
-    long enough to reach the filesystem. Catching only `ZoneInfoNotFoundError` is
-    what made a single bad row raise out of the loop and stop every good schedule
-    in the same file — the exact outcome this fallback exists to prevent, and the
-    opposite of this module's "one page's mistake costs that page only".
-
-    `validate_user_schedules` now lints `tz` too, so a bad zone should never get
-    this far. Both, deliberately: the lint is what TELLS the author, and this is
-    what keeps a miss from being fatal. Neither alone is enough.
-    """
-    if not tz:
-        return now_utc
-    try:
-        return now_utc.replace(tzinfo=UTC).astimezone(ZoneInfo(tz)).replace(tzinfo=None)
-    except (ZoneInfoNotFoundError, ValueError, OSError):
-        logger.warning("user schedules: unusable time zone %r — using UTC", tz)
-        return now_utc
-
-
 class StartRun(Protocol):
     """Launch one run. Kept narrow on purpose: the sweep decides WHEN, and
     nothing about how a workflow runs.
@@ -182,7 +141,7 @@ class UserScheduleSweeper:
         start: StartRun,
         owner_of: OwnerOf,
         workflows_for: WorkflowsFor | None = None,
-        now: Callable[[], datetime] = _utc_now,
+        now: Callable[[], datetime] = utc_now,
         max_rows: int = DEFAULT_MAX_ROWS,
         confirm_timeout_s: float = DEFAULT_CONFIRM_TIMEOUT_S,
     ) -> None:
@@ -449,7 +408,7 @@ class UserScheduleSweeper:
             # never consulted — the sweep asked the server what time it was. A
             # page saying "09:00, Asia/Taipei" on a UTC pod fired at 17:00 Taipei
             # time, every day, with nothing to notice: the report still arrived.
-            now = _in_zone(now_utc, row.tz)
+            now = in_zone(now_utc, row.tz)
             last = await asyncio.to_thread(self._store.last_window, trigger_id)
             if not is_due(schedule, now, last):
                 continue

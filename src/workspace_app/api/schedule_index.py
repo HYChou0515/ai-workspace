@@ -42,11 +42,11 @@ from specstar.types import (
 )
 
 from ..sync.ignore import DEFAULT_IGNORES, should_ignore
+from ..workflow.user_schedules import SCHEDULES_FILE
 
 logger = logging.getLogger(__name__)
 
 #: The file a page writes its schedules into, inside its own folder.
-SCHEDULES_FILE = "schedules.json"
 
 
 class _ScheduleIndex(Struct):

@@ -65,6 +65,7 @@ from ..workflow.orchestrator import (
     WorkflowOrchestrator,
 )
 from ..workflow.user_schedule_sweep import DEFAULT_MAX_ROWS, UserScheduleSweeper
+from ..workflow.user_schedules import SchedulePolicy
 from . import perf_trace
 from .activity import ActivityLog
 from .agent_progress import progress_line
@@ -1948,6 +1949,13 @@ def create_app(
         infer_modules_parallelism=infer_modules_parallelism,
         history_max_messages=history_max_messages,
         history_max_context_tokens=history_max_context_tokens,
+        # The SAME two knobs the sweep runs under (`max_rows` above,
+        # `trigger_check_interval` in the lifespan), so what `save_schedules`
+        # tells the agent is what the sweep will do — not a third copy of either.
+        schedule_policy=SchedulePolicy(
+            max_rows=max_page_schedules,
+            sweep_enabled=trigger_check_interval is not None,
+        ),
         # #624: the operator's declared ceiling for this endpoint (the escape
         # hatch); unset ⇒ resolved per turn, and unknown ⇒ no trimming.
         context_limit=context_limit,

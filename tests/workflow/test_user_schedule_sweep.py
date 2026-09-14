@@ -34,9 +34,8 @@ from workspace_app.workflow.triggers import register_trigger_store, window_key
 from workspace_app.workflow.user_schedule_sweep import (
     MAX_START_ATTEMPTS,
     UserScheduleSweeper,
-    _in_zone,
 )
-from workspace_app.workflow.user_schedules import trigger_id_for, usable_rows
+from workspace_app.workflow.user_schedules import in_zone, trigger_id_for, usable_rows
 
 ITEM = "i1"
 PAGE = "/scrap-review"
@@ -1254,7 +1253,7 @@ def test_a_sub_daily_schedule_loses_one_hour_of_runs_at_the_autumn_switch(
     hour of runs, once a year, in a DST-observing zone.
 
     Not fixed, deliberately. Distinguishing the two 02:00s needs the offset in
-    the key, which needs `_in_zone` to hand back an AWARE datetime, which
+    the key, which needs `in_zone` to hand back an AWARE datetime, which
     `period_target` then cannot compare against the naive ones it builds — a
     change to the window mechanism shared with the engineer-authored triggers
     and #435's notification fingerprint, to buy back one run a year. The zone
@@ -1266,14 +1265,13 @@ def test_a_sub_daily_schedule_loses_one_hour_of_runs_at_the_autumn_switch(
     """
     base = datetime(2025, 10, 26, 0, 0)  # UTC, the two hours local 02 covers
     keys = {
-        window_key(every, _in_zone(base + timedelta(minutes=m), "Europe/Berlin"))
-        for m in range(120)
+        window_key(every, in_zone(base + timedelta(minutes=m), "Europe/Berlin")) for m in range(120)
     }
     assert len(keys) == per_hour, f"{every} produced {len(keys)} buckets over two real hours"
 
     # The control: in a zone that does not switch, the same stretch buckets fully.
     steady = {
-        window_key(every, _in_zone(base + timedelta(minutes=m), "Asia/Taipei")) for m in range(120)
+        window_key(every, in_zone(base + timedelta(minutes=m), "Asia/Taipei")) for m in range(120)
     }
     assert len(steady) == per_hour * 2, "the loss must be the SWITCH, not the arithmetic"
 
@@ -1534,7 +1532,7 @@ def test_an_unusable_zone_falls_back_to_utc_instead_of_raising(zone: str, raises
     the author, and this is what keeps a miss from being fatal. Neither alone is
     enough." Only the lint was held. `validate_user_schedules` now rejects a bad
     zone with the same `_valid_tz` predicate, so `usable_rows` drops the row
-    before `_in_zone` can see it — which means the test named after this catch
+    before `in_zone` can see it — which means the test named after this catch
     was exercising the LINT, and removing the widened `except` left 125 tests
     green while the branch also stopped being covered at all.
 
@@ -1550,7 +1548,7 @@ def test_an_unusable_zone_falls_back_to_utc_instead_of_raising(zone: str, raises
     now = datetime(2026, 9, 5, 9, 30)
 
     with caplog.at_level(logging.WARNING):
-        assert _in_zone(now, zone) == now, "the fallback did not return the UTC clock"
+        assert in_zone(now, zone) == now, "the fallback did not return the UTC clock"
 
     assert any("unusable time zone" in r.getMessage() for r in caplog.records), (
         "the zone was silently ignored — the operator has nothing to look at"

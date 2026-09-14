@@ -28,12 +28,17 @@ from __future__ import annotations
 import functools
 import hashlib
 import json
+import logging
+from datetime import UTC, datetime
 from typing import Any, cast
-from zoneinfo import available_timezones
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 from msgspec import Struct
 
-from .triggers import Schedule, _valid_tz
+from .triggers import Schedule, _valid_tz, next_run
+from .workspace_store import WORKSPACE_WORKFLOW_DIR
+
+logger = logging.getLogger(__name__)
 
 #: The periods a page may pick. `daily` / `weekly` / `monthly` are the words
 #: `triggers.json` already uses — reused rather than re-spelled, so one
@@ -370,3 +375,97 @@ def trigger_id_for(item_id: str, folder: str, row: UserSchedule) -> str:
     )
     digest = hashlib.sha256(fingerprint.encode()).hexdigest()[:16]
     return f"wui:{item_id}:{digest}"
+
+
+def utc_now() -> datetime:
+    """The clock, naive UTC — a module attribute so a test can pin it."""
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
+def in_zone(now_utc: datetime, tz: str) -> datetime:
+    """`now` as the wall clock in `tz`, naive. An empty zone means UTC, which is
+    the same rule the engineer-authored triggers use (`TriggerSweeper._local_now`)
+    so the two engines cannot disagree about what "09:00" means.
+
+    ONE function for the sweep that fires a row and the tool that saves it, so
+    the "next run" the agent reports is computed on the clock the sweep will
+    actually fire on.
+
+    A zone that cannot be resolved falls back to UTC rather than raising, because
+    taking down one page's whole file — every other row in it included — over a
+    typo in a zone name is a worse answer than firing an hour out.
+
+    THE FULL SET, not just "not found". `ZoneInfo` raises `ValueError` for an
+    absolute path or a traversal (`"/absolute"`, `"../x"`) and `OSError` for a key
+    long enough to reach the filesystem. Catching only `ZoneInfoNotFoundError` is
+    what made a single bad row raise out of the loop and stop every good schedule
+    in the same file — the exact outcome this fallback exists to prevent, and the
+    opposite of the sweep's "one page's mistake costs that page only".
+
+    `validate_user_schedules` lints `tz` too, so a bad zone should never get
+    this far. Both, deliberately: the lint is what TELLS the author, and this is
+    what keeps a miss from being fatal. Neither alone is enough.
+    """
+    if not tz:
+        return now_utc
+    try:
+        return now_utc.replace(tzinfo=UTC).astimezone(ZoneInfo(tz)).replace(tzinfo=None)
+    except (ZoneInfoNotFoundError, ValueError, OSError):
+        logger.warning("user schedules: unusable time zone %r — using UTC", tz)
+        return now_utc
+
+
+class SchedulePolicy(Struct, frozen=True):
+    """What THIS deployment does with a schedules file — handed to the agent's
+    `save_schedules` so it can say so instead of guessing.
+
+    `max_rows` is the same runaway guard the sweep applies (`server.max_page_schedules`),
+    checked at save time so the refusal reaches the author rather than a log.
+    `sweep_enabled` is whether the deploy runs scheduled work at all
+    (`server.trigger_check_interval_sec` > 0): a saved file on a deploy with the
+    sweep off is a file nothing will ever read, and the ONE thing the tool must
+    not do is let the agent report that as "set up".
+    """
+
+    max_rows: int
+    sweep_enabled: bool
+
+
+#: The one filename that means "schedules" — a page's sits in the page's own
+#: folder, an item's beside its workflows. `api.schedule_index.is_schedule_file`
+#: matches on this exact name; spelled once here so the two cannot drift.
+SCHEDULES_FILE = "schedules.json"
+
+#: Where an ITEM's own schedules live — beside its workflows, the folder the
+#: agent's `save_workflow` already writes. `is_schedule_file` accepts both this
+#: and a page's, and the sweep treats them alike: one rule, two declaration points.
+ITEM_SCHEDULES_PATH = f"/{WORKSPACE_WORKFLOW_DIR}/{SCHEDULES_FILE}"
+
+
+def describe_row(row: UserSchedule) -> str:
+    """The row in words, for the reply the agent relays: `daily at 09:00
+    Asia/Taipei`, `weekly on mon at 08:00 UTC`, `every 15 minutes`."""
+    zone = row.tz or "UTC"
+    if row.every == "minutes":
+        return f"every {row.n} minutes ({zone})"
+    if row.every == "hourly":
+        return f"hourly ({zone})"
+    if row.every == "weekly":
+        return f"weekly on {row.dow} at {row.at} {zone}"
+    if row.every == "monthly":
+        return f"monthly on day {row.dom} at {row.at} {zone}"
+    return f"daily at {row.at} {zone}"
+
+
+def describe_next_run(row: UserSchedule, now_utc: datetime, last_window: str) -> str:
+    """When this row fires next, in ITS zone, on the rule the sweep fires by.
+
+    A row that is due right now says so instead of naming tomorrow: a missed
+    window fires late, so a daily 09:00 saved at 10:00 runs within the minute
+    (the catch-up rule the sweep's reference documents), and the reply must not
+    contradict the manual it is standing in for.
+    """
+    when = next_run(row.as_schedule(), in_zone(now_utc, row.tz), last_window)
+    if when is None:
+        return "on the next sweep (this period is already due and has not run yet)"
+    return f"{when:%Y-%m-%d %H:%M} {row.tz or 'UTC'}"
