@@ -140,10 +140,19 @@ class DispatchSplitter(TransformComponent):
                     if breadcrumb:
                         n.text = f"{breadcrumb}\n\n{content}"
                     out.append(n)
-                else:
-                    out.extend(windows)
-                continue
-            out.extend(self._emit_table_segments(body, base, tables, breadcrumb))
+                    continue
+                pieces = windows
+            else:
+                pieces = self._emit_table_segments(body, base, tables, breadcrumb)
+            # P9: a node built FROM a section (a window, a table, a row, the
+            # prose beside a table) stands in for it, so it carries the
+            # section's metadata — the page / outline section the parser knew
+            # (`DocChunk.provenance`) and the `section` the #254 fold reads. The
+            # bare TextNodes `_table_node` makes had none, so every dense page's
+            # VLM description (always windowed) lost its page on the way out.
+            for piece in pieces:
+                piece.metadata = dict(n.metadata)
+            out.extend(pieces)
         return out
 
     def _prose_nodes(self, body: str, base: int, breadcrumb: str) -> list[BaseNode] | None:

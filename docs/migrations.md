@@ -400,9 +400,9 @@ token」(字元類共用 `kb/tokens.py:CJK_RANGES`)。舊規則下中文沒有�
 受影響的只有沒接 `kb_pipeline` 的 `create_app` 呼叫(測試、離線模式);那些環境的中文文件要重讀一次
 (`POST /api/kb/collections/<collection_id>/reindex`,#390 的 index cache 會先被丟掉)。
 
-## 不是資料遷移,但升版後要跑一次:整個 collection 重讀(plan-rag-context P6 + P8)
+## 不是資料遷移,但升版後要跑一次:整個 collection 重讀(plan-rag-context P6 + P8 + P9)
 
-兩個 phase 都改了 chunk 的**衍生資料**,都要靠重新索引才會落到既有文件上。找不出哪些文件受影響的話,
+三個 phase 都改了 chunk 的**衍生資料**,都要靠重新索引才會落到既有文件上。找不出哪些文件受影響的話,
 **每個 collection 重讀一次**(`POST /api/kb/collections/<collection_id>/reindex`;#390 的 index cache 會先被丟掉,
 不會複製回舊資料)。
 
@@ -417,6 +417,12 @@ PPTX 每張、CSV/XLSX 每列、JSONL 每行各是一個 Document,用 `\n\n` 接
 
 `DocChunk` 多了一個欄位 `unit_start: int | None`(#227 fan-out 用,其他路徑與舊列都是 `None`):msgspec 預設值,
 **不需要 migrate**。
+
+### P9:P6 切出來的視窗沒有 page/section
+
+P6 把長 Markdown 段落(含每一頁的 VLM 描述)切成多塊時,新的塊**沒帶** section 的 metadata,所以 `DocChunk.provenance`
+是空的:`read_page(N)` 找不到那頁的文字層、`kb_grep` 不顯示 `(p.N)`、引用卡沒頁碼、#254 的 section 前綴也沒折進去。
+P9 起視窗/表格/表格列都帶著 section 的 metadata;**P6 部署後、P9 部署前索引過的文件**要重讀才會補回頁碼。
 
 ### P6:超長 Markdown 段落
 

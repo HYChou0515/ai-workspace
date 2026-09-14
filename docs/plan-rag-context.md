@@ -494,6 +494,24 @@ a multi-row CSV and a repetitive `.txt`, plus the three consumers on page 2.
 **This changes the stored offsets of every multi-Document and repetitive
 document: they are wrong until re-indexed** — `migrations.md` says so.
 
+## Phase 9 — a window carries its section's metadata
+
+The regression lens of round 3, through the real entry point (`PdfParser` +
+a VLM fake + `build_doc_pipeline` + `Ingestor`): P6's windows were built as
+bare `TextNode`s with empty metadata, and `DocChunk.provenance` is collected
+from node metadata — so a dense page (every real VLM description is longer
+than the sentence window) lost its `page` / `section` on the way out.
+`read_page(2)` found no text layer and registered an empty span as citable,
+`kb_grep` printed no `(p.2)`, the reference card lost its page, and the #254
+section fold (which reads `metadata["section"]`) never ran. The base already
+lost the metadata on the narrower table path; P6 widened it to every long
+section. Every node built FROM a section — a window, a small table, a row,
+the prose beside a table — now carries the section's metadata (one place,
+`_split_markdown`). Pinned through the real entry point: a three-page PDF
+whose VLM description windows, every chunk with its page and section, and
+`read_page` / `kb_grep` on page 2. Covered by the same collection re-read as
+P8.
+
 ## Out of scope — and findings logged for separate work
 
 - Eval-gated tuning; per-call / per-collection context knob.
