@@ -587,9 +587,18 @@ class ScanLease:
 
     def claim(self) -> bool:
         """True for the one pod that scans this window. Blocking specstar I/O —
-        call it off the loop, like the store's other calls."""
-        window = str(int(self._now() // self._interval_s))
-        return self._store.try_claim(self._key, window)
+        call it off the loop, like the store's other calls.
+
+        Monotonic, unlike the per-trigger claim underneath it: that one advances
+        to ANY different window (right for catch-up firing), which for a lease
+        means two pods whose clocks differ by an interval would take turns
+        "advancing" backwards and forwards and both scan every tick — the lease
+        silently gone. A window at or behind the one already claimed is a loss."""
+        window = int(self._now() // self._interval_s)
+        last = self._store.last_window(self._key)
+        if last and int(last) >= window:
+            return False
+        return self._store.try_claim(self._key, str(window))
 
 
 StartTrigger = Callable[["ScheduleTrigger", str], Awaitable[str | None]]

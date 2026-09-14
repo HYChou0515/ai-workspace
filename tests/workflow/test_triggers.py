@@ -507,6 +507,24 @@ async def test_a_winner_that_dies_mid_scan_forfeits_only_that_window(spec_instan
     assert loads == {"a": 1, "b": 1}  # the next window is scanned
 
 
+def test_a_pod_whose_clock_lags_does_not_rescan_a_window_a_peer_moved_past(
+    spec_instance: SpecStar,
+):
+    """The ledger's per-trigger claim advances to ANY different window, which is
+    right for catch-up firing but wrong for a scan lease: two pods whose clocks
+    differ by an interval would take turns "advancing" backwards and forwards,
+    and both would scan every tick — the lease silently gone. The scan lease is
+    monotonic: a window at or behind the one already claimed is a loss."""
+    register_trigger_store(spec_instance)
+    store = SpecstarTriggerStore(spec_instance)
+    ahead = ScanLease(store, "triggers", interval_s=60, now=lambda: 1_000_120.0)  # window 16668
+    behind = ScanLease(store, "triggers", interval_s=60, now=lambda: 1_000_000.0)  # window 16666
+
+    assert ahead.claim() is True
+    assert behind.claim() is False  # behind the claimed window: not a fresh election
+    assert behind.claim() is False  # and it stays that way, tick after tick
+
+
 def test_specstar_store_claims_each_window_exactly_once(spec_instance: SpecStar):
     """The durable store elects a single winner per (trigger, window): the first claim of a
     window wins, a second claim of the SAME window loses (once-per-period across pods), and a

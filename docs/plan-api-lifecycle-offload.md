@@ -53,13 +53,18 @@ pod-local 狀態** —— 還有四個，決定跟 #804 一起做完、不拆：
    filestore/specstar 全域的維護，沒有 KB 的 domain home；`maintenance` 是誠實的名字，之後同類
    的維護工作（例如 #778 幽靈列 sweep）有地方去。cluster sweep 掛 card-gen 是因為 reconcile
    本來就住那裡 —— 兩者判準一致：**跟它同 domain 的 worker；沒有就開自己的**。
-3. **B + C 併成一條 loop、一個 lease。** 兩者本來就共用 `trigger_check_interval` 與同一個
-   window-claim ledger（`SpecstarTriggerStore.try_claim(key, window)` 就是「一個 window 一人贏」
-   的 CAS）；用合成 key `__sweep__:scheduled-work`、window = `floor(now / interval)` 當掃描
-   lease。輸家整個 tick 不做（不 load、不讀檔）。贏家死在半路 ⇒ 那個 window 的掃描沒了，
-   下個 window 別人接手 ⇒ 最多遲到一個 interval，跟現在 `trigger_check_interval` 的語意
-   （「最晚會遲到多久」）一致。**每個 schedule / trigger 自己的 window claim 保留**（跨重啟的
-   冪等性靠它）。
+3. **B + C 各自一個掃描 lease，loop 不併。**（實作時改的：原本寫「併成一條 loop、一個 lease」。
+   兩條 loop 不動、每個 sweeper 多一個 `lease` 建構參數，回歸面最小，而且兩個 sweeper 各自
+   在自己的 seam 可測；合併 loop 只是外觀。）兩者共用同一個 window-claim ledger
+   （`SpecstarTriggerStore.try_claim(key, window)` 就是「一個 window 一人贏」的 CAS）；
+   `ScanLease` 用合成 key `__scan__:triggers` / `__scan__:user-schedules`、window =
+   `floor(now / interval)`。輸家整個 tick 不做（不 load、不讀檔）。贏家死在半路 ⇒ 那個 window
+   的掃描沒了，下個 window 別人接手 ⇒ 最多遲到一個 interval，跟現在 `trigger_check_interval`
+   的語意（「最晚會遲到多久」）一致。**每個 schedule / trigger 自己的 window claim 保留**
+   （跨重啟的冪等性靠它）。review 抓到一條：底層 `try_claim` 對「不同的 window」一律前進
+   （catch-up 觸發要這樣），對 lease 卻表示時鐘差一個 interval 的兩顆 pod 會輪流前進/後退、
+   兩邊都掃 —— lease 靜默消失；所以 `ScanLease.claim` 是**單調的**（先讀 `last_window`，
+   不比它新的 window 一律輸）。
 4. **D 的 `seed_help_collection_best_effort` 多一個 `index` seam**：lifespan 傳
    `index_coordinator.enqueue`；不傳（scripts / tests）就是原本的 inline `ingestor.index`。
    「best-effort、embedder 掛了不擋開機」這個性質由 job 天然給。
@@ -96,11 +101,11 @@ pod-local 狀態** —— 還有四個，決定跟 #804 一起做完、不拆：
 
 ### P5 — 掃描 lease：`user_schedule_loop` + `trigger_sweeper` 併成一條、一個 window 一顆 pod
 
-- `workflow/triggers.py`：`TriggerSweeper.tick()` 前先 `claim_scan(window)`；輸 ⇒ 整個 tick 不做。
-  `UserScheduleSweeper.tick()` 同。兩者共用一個 `ScanLease(store, key, interval)` 小物件
-  （`claimed(now) -> bool`，底層就是 `store.try_claim(key, window)`）。
-- `api/lifecycle.py`：兩個 task 合成 `scheduled_work_sweeper`：一次 claim，贏了才跑
-  `trigger_sweeper.tick()` + `user_schedule_sweeper.tick()`（各自仍 `suppress(Exception)`）。
+- `workflow/triggers.py`：`ScanLease(store, key, interval_s=…)`；`TriggerSweeper(lease=…)` 的
+  `tick()` 先 `claim()`；輸 ⇒ 整個 tick 不做。`UserScheduleSweeper(lease=…)` 同。`lease=None`
+  ⇒ 行為不變（單 process / 既有測試）。
+- `api/lifecycle.py` 建 trigger 的 lease；`api/app.py` 建 user-schedule 的 lease（兩者都只在
+  `trigger_check_interval` 有值時）。loop 不動。
 - **Tests（先紅）**：
   1. 兩個 `TriggerSweeper` 共用同一個 store（兩顆 pod），同一 window 各 `tick()` 一次 ⇒
      注入的 `load` 只被叫 **1** 次；下一個 window 再叫 1 次。
