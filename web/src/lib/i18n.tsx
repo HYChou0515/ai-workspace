@@ -693,9 +693,11 @@ export const messages = {
   // plan-rag-context P2/P11: the document-tree order is a rule the KB agent's
   // neighbouring-context walk follows, so people uploading must be able to
   // steer it — one line, where the files are added and where they are seen.
+  // One line, as the plan promised — the full rule (folders first, natural
+  // sort, the walk follows it) is in the docs; here only what to DO about it.
   "kb.orderRule": {
-    "zh-TW": "文件依樹狀順序排列（資料夾在前、檔名自然排序），AI 補前後文時也照這個順序。要控制順序，檔名前加阿拉伯數字：01_intro.pdf、02_method.pdf。",
-    en: "Documents are ordered as the tree shows them (folders first, names sorted naturally); the assistant reads neighbouring context in the same order. To control it, prefix names with Arabic numerals: 01_intro.pdf, 02_method.pdf.",
+    "zh-TW": "AI 讀前後文照這棵樹的順序。要控制順序，檔名前加數字：01_intro.pdf、02_method.pdf。",
+    en: "The assistant reads context in this tree's order. To control it, prefix names with numbers: 01_intro.pdf, 02_method.pdf.",
   },
 
   // Investigation terminal (TerminalPane). #171 renamed sandbox → 執行環境 to

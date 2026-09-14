@@ -2428,6 +2428,17 @@
   line-height: 1.4;
   color: var(--text-paper-d2);
 }
+/* Under the tree it must stay in view however long the tree is: pinned to the
+   bottom of the scrolling pane (the "Files" header is pinned to its top the
+   same way), on the pane's own surface so rows scroll under it. */
+.kb-ide__tree > .kb-ide__order-rule {
+  position: sticky;
+  bottom: 0;
+  margin: 0;
+  padding: 8px 12px 10px;
+  background: var(--white);
+  border-top: 1px solid var(--paper-3);
+}
 
 .kb-ide__tree {
   /* Width comes from the inline `style.width` (draggable, #402); default 260. */
@@ -2436,8 +2447,10 @@
   overflow: auto;
   /* #460 P3: no top padding — the sticky "Files" header owns its own top
      spacing, so there is no transparent band above the pin for rows to peek
-     through as the tree scrolls. Keep the bottom breathing room. */
-  padding: 0 0 10px;
+     through as the tree scrolls. The bottom breathing room lives on the
+     pinned order-rule line for the same reason: a sticky child cannot leave
+     the content box, so a padding band below it would show rows through. */
+  padding: 0;
   border-right: 1px solid var(--paper-3);
   background: transparent;
   /* #346: the FileTree "Files" header is sticky; here the tree sits on the
