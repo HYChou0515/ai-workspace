@@ -536,8 +536,12 @@ class InvestigationRegistry:
         probe = self._handle_for_id(investigation_id)
         if probe is None:
             return True
+        # One bit — "is the dir there" — asked with the same point probe
+        # `_alive` uses. This used to be a full `walk`, which on a shared NFS
+        # volume listed every file in the workspace to learn that the folder
+        # exists: the file tree's whole cost, spent on a yes/no.
         try:
-            await self.sandbox.walk(probe, "/")
+            await self.sandbox.exists(probe, "/")
         except SandboxNotFound:
             return True
         return False

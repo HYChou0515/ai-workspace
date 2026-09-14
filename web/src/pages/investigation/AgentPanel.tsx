@@ -451,10 +451,10 @@ export function AgentPanel({
   /** Did `path` actually land? Answers the inconclusive upload outcomes (a
    * network drop or a gateway status arrives after the body was sent, so the
    * file may well be on disk) instead of accusing the upload of failing. */
-  const attachmentLanded = async (path: string): Promise<boolean> => {
-    const listed = await api.listFiles(slug, investigationId);
-    return listed.some((f) => f.path === path || f.path === `/${path}`);
-  };
+  // One path, one question — not a listing of the whole workspace to scan
+  // for it (the file tree's full walk, spent on a yes/no).
+  const attachmentLanded = (path: string): Promise<boolean> =>
+    api.fileExists(slug, investigationId, path);
 
   const doAttach = async (files: File[]) => {
     if (!files.length || attaching) return;

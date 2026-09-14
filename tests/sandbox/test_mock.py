@@ -317,3 +317,53 @@ async def test_the_mock_reports_what_it_is_holding():
 
     await sandbox.kill(b)
     assert [e.item_id for e in await sandbox.running_sandboxes() or []] == ["item-a"]
+
+
+async def test_a_path_the_walk_reports_can_be_read_back_however_it_was_uploaded():
+    """The double stores the path it was handed (`pyproject.toml`, no leading
+    slash — a real test does this); the walk reports the canonical form
+    (`/pyproject.toml`), as every real backend does. The mirror downloads by
+    what the walk said, so the double must answer for BOTH spellings — or a
+    mirror pass over such a file fails only under the double."""
+    sb = MockSandbox()
+    h = await sb.create(SandboxSpec())
+    await sb.upload(h, b"[tool]", "pyproject.toml")
+    walked = await sb.walk(h, "/")
+    assert [e.path for e in walked.files] == ["/pyproject.toml"]
+    assert await sb.exists(h, "/pyproject.toml") is True
+    assert await sb.download(h, "/pyproject.toml") == b"[tool]"
+    assert await sb.size_of(h, "/pyproject.toml") == 6
+    assert await sb.download(h, "pyproject.toml") == b"[tool]"  # the raw spelling still works
+    # A slash-less root file is a FILE: no phantom directory named after it,
+    # or the mirror would mkdir over the file it had just written.
+    assert walked.dirs == []
+    await sb.delete(h, "/pyproject.toml")
+    assert await sb.exists(h, "pyproject.toml") is False
+
+
+async def test_one_path_is_one_entry_whatever_spelling_wrote_it():
+    """Like a real filesystem: `a.txt` and `/a.txt` are the same file, the last
+    write wins, and deleting by either spelling deletes it. A double that kept
+    both let `disk_usage` double-count and `exists` say yes after a delete —
+    the direction where a test passes and production fails."""
+    sb = MockSandbox()
+    h = await sb.create(SandboxSpec())
+    await sb.upload(h, b"one", "a.txt")
+    await sb.upload(h, b"two", "/a.txt")
+    assert await sb.download(h, "a.txt") == b"two"
+    assert await sb.disk_usage(h) == 3
+    assert [e.path for e in (await sb.walk(h, "/")).files] == ["/a.txt"]
+    await sb.delete(h, "a.txt")
+    assert await sb.exists(h, "/a.txt") is False
+    await sb.upload(h, b"x", "d/e.txt")
+    await sb.rmdir(h, "/d")
+    assert await sb.exists(h, "/d/e.txt") is False
+    await sb.upload(h, b"y", "f.txt")
+    await sb.rename(h, "/f.txt", "/g.txt")
+    assert await sb.exists(h, "f.txt") is False and await sb.exists(h, "g.txt") is True
+    # `.` is not a folder: the same rule the walk applies to its root.
+    await sb.mkdir(h, "./m")
+    assert (await sb.walk(h, "/")).dirs == ["/m"]
+    # The root is the whole workspace, as the real backend's rmtree makes it.
+    await sb.rmdir(h, "/")
+    assert (await sb.walk(h, "/")).files == [] and await sb.disk_usage(h) == 0

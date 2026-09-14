@@ -12,10 +12,20 @@ export type TreeNode = {
   isDir: boolean;
   size?: number;
   children: TreeNode[];
+  /** A folder the listing did NOT enter (pruned as derived, or past the entry
+   * budget): it is on the tree, collapsed, and its contents are fetched when
+   * it is expanded. An entered-but-empty folder is not lazy — there is
+   * nothing to fetch for it. Only folders carry this. */
+  lazy: boolean;
 };
 
-export function buildFileTree(files: FileInfo[], dirs: string[] = []): TreeNode[] {
-  const root: TreeNode = { name: "", path: "", isDir: true, children: [] };
+export function buildFileTree(
+  files: FileInfo[],
+  dirs: string[] = [],
+  unwalked: string[] = [],
+): TreeNode[] {
+  const root: TreeNode = { name: "", path: "", isDir: true, children: [], lazy: false };
+  const lazyPaths = new Set(unwalked);
 
   // Both inserts below used to scan the parent's existing children, which is
   // O(N²) in the files sharing one directory — and the constant is the name
@@ -36,7 +46,13 @@ export function buildFileTree(files: FileInfo[], dirs: string[] = []): TreeNode[
       segPath += "/" + seg;
       let child = dirByPath.get(segPath);
       if (!child) {
-        child = { name: seg, path: segPath, isDir: true, children: [] };
+        child = {
+          name: seg,
+          path: segPath,
+          isDir: true,
+          children: [],
+          lazy: lazyPaths.has(segPath),
+        };
         node.children.push(child);
         dirByPath.set(segPath, child);
       }
@@ -66,11 +82,39 @@ export function buildFileTree(files: FileInfo[], dirs: string[] = []): TreeNode[
       isDir: false,
       size: f.size,
       children: [],
+      lazy: false,
     });
   }
 
   sortTree(root);
   return root.children;
+}
+
+export type Presence = "present" | "absent" | "unknown";
+
+/**
+ * Whether `path` exists, as far as ONE listing can tell. The listing is a
+ * pruned preload: folders in `unwalked` were listed but never entered, so a
+ * file under one of them is simply not in `files` — not gone. "Not in the
+ * list" therefore splits into two answers, and every rule that used to close
+ * a tab, drop a recent file or forget an initial tab on "not in the list"
+ * must act only on `absent`.
+ *
+ * Deliberately conservative: anything under an unwalked folder is `unknown`
+ * even once that folder's level has been fetched. Deciding `absent` from a
+ * loaded level would make "does this file exist" change with which folders
+ * happen to be open — a presence that follows UI state is the kind of wrong
+ * a review does not catch. The cost is a deleted file under `node_modules/`
+ * keeping its tab until the user closes it.
+ */
+export function presenceOf(
+  path: string,
+  files: ReadonlySet<string>,
+  unwalked: readonly string[],
+): Presence {
+  if (files.has(path)) return "present";
+  for (const dir of unwalked) if (path.startsWith(dir + "/")) return "unknown";
+  return "absent";
 }
 
 /**

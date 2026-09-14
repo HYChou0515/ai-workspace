@@ -13,6 +13,7 @@ import {
 import { publishFileChanged } from "../lib/fileChangedBus";
 import type { MsgKey } from "../lib/i18n";
 import { type QuotaDetail, type QuotaKind, quotaMessage } from "../lib/quotaFailure";
+import { invalidateTree } from "./invalidateTree";
 import { holdingFromSendError } from "./useChatSessionHolding";
 import { type ChatThread, useChatLog } from "./useChatLog";
 import { useCurrentUser } from "./useCurrentUser";
@@ -328,8 +329,11 @@ export function useChatSession(
             if (isTurnProgress(ev)) turnInFlightRef.current = true;
             if (ev.type === "file_changed") {
               // A human edited a workspace file — refetch the tree. Not a turn
-              // event, so it never folds into the log.
-              void qc.invalidateQueries({ queryKey: transport.filesKey });
+              // event, so it never folds into the log. The tree is the pruned
+              // preload plus the lazy folders on screen; `invalidateTree` is the
+              // one helper that stales both, shared with the turn-end refresh.
+              if (transport.fileScopeId) void invalidateTree(qc, transport.fileScopeId);
+              else void qc.invalidateQueries({ queryKey: transport.filesKey });
               // A tree can re-read whenever it likes; a WUI holding half-entered
               // state cannot, so it is told which file moved and decides for
               // itself. Announced here rather than from the tree's refetch,

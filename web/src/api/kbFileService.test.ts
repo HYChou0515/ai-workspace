@@ -366,3 +366,11 @@ describe("kbFileService", () => {
     });
   });
 });
+
+describe("kbFileService — nothing is lazy", () => {
+  it("lists every document up front: no unwalked folders, never truncated", async () => {
+    const tree = await kbFileService("col-1", docs, makeKb()).listTree();
+    expect(tree.unwalked).toEqual([]);
+    expect(tree.truncated).toBe(false);
+  });
+});

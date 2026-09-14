@@ -178,7 +178,12 @@ describe("useFileList", () => {
       ...investigationFileService("rca", "col-1"),
       listFiles: vi.fn(async () => [{ path: "/a.md", size: 1 }]),
       listDirs: vi.fn(async () => ["/sub"]),
-      listTree: vi.fn(async () => ({ items: [{ path: "/a.md", size: 1 }], dirs: ["/sub"] })),
+      listTree: vi.fn(async () => ({
+        items: [{ path: "/a.md", size: 1 }],
+        dirs: ["/sub"],
+        unwalked: [],
+        truncated: false,
+      })),
       ...over,
     };
   }
@@ -211,37 +216,40 @@ describe("investigationFileService.writeFile — one definition of success", () 
     vi.spyOn(api, "writeFile").mockRejectedValue(
       Object.assign(new Error("network error"), { status: 0 }),
     );
-    const list = vi
-      .spyOn(api, "listFiles")
-      .mockResolvedValue([{ path: "/uploads/a.txt", size: 1 } as never]);
+    // ONE question about ONE path — not a listing of the whole workspace to
+    // scan for it, which on a workspace with `node_modules/` is the file
+    // tree's full walk spent on a yes/no.
+    const exists = vi.spyOn(api, "fileExists").mockResolvedValue(true);
+    const list = vi.spyOn(api, "listFiles");
 
     await expect(
       investigationFileService("rca", "inv").writeFile("/uploads/a.txt", "x"),
     ).resolves.toBeUndefined();
-    expect(list).toHaveBeenCalled();
+    expect(exists).toHaveBeenCalledWith("rca", "inv", "/uploads/a.txt");
+    expect(list).not.toHaveBeenCalled();
   });
 
   it("still fails when the write really did not land", async () => {
     vi.spyOn(api, "writeFile").mockRejectedValue(
       Object.assign(new Error("gateway timeout"), { status: 504 }),
     );
-    vi.spyOn(api, "listFiles").mockResolvedValue([]);
+    vi.spyOn(api, "fileExists").mockResolvedValue(false);
 
     await expect(
       investigationFileService("rca", "inv").writeFile("/uploads/a.txt", "x"),
     ).rejects.toMatchObject({ status: 504 });
   });
 
-  it("does not ask the file list about a definite refusal", async () => {
+  it("does not ask about a definite refusal", async () => {
     vi.spyOn(api, "writeFile").mockRejectedValue(
       Object.assign(new Error("too large"), { status: 413 }),
     );
-    const list = vi.spyOn(api, "listFiles");
+    const exists = vi.spyOn(api, "fileExists");
 
     await expect(
       investigationFileService("rca", "inv").writeFile("/uploads/a.txt", "x"),
     ).rejects.toMatchObject({ status: 413 });
-    expect(list).not.toHaveBeenCalled();
+    expect(exists).not.toHaveBeenCalled();
   });
 });
 
@@ -257,7 +265,7 @@ describe("useFileList — one traversal", () => {
     // the same workspace twice over, and each half walked the whole tree.
     const listFiles = vi.fn(async () => []);
     const listDirs = vi.fn(async () => []);
-    const listTree = vi.fn(async () => ({ items: [], dirs: [] }));
+    const listTree = vi.fn(async () => ({ items: [], dirs: [], unwalked: [], truncated: false }));
     const svc = fakeService({ listFiles, listDirs, listTree });
     const wrapper = ({ children }: { children: ReactNode }) => (
       <QueryWrap>

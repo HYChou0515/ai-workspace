@@ -65,6 +65,31 @@ describe("useChatSession", () => {
     );
   });
 
+  // The tree is a pruned preload plus lazily-listed folders; a human's edit
+  // (which is what `file_changed` reports) stales BOTH, and only the folders
+  // on screen refetch — a collapsed one has no observer.
+  it("stales the preload and the open lazy folders on file_changed", async () => {
+    const { QueryClientProvider } = await import("@tanstack/react-query");
+    const { makeTestQueryClient } = await import("../test/queryWrapper");
+    const qc = makeTestQueryClient();
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+    );
+    const empty = { items: [], dirs: [], unwalked: [], truncated: false };
+    qc.setQueryData(["files", "it"], empty);
+    qc.setQueryData(["treeDir", "it", "/node_modules"], empty);
+    const t = fakeTransport({
+      fileScopeId: "it",
+      subscribe: async function* () {
+        yield { type: "file_changed", path: "/node_modules/x.js" } as AgentEvent;
+        await new Promise<void>(() => {});
+      },
+    });
+    renderHook(() => useChatSession(t, 60_000), { wrapper });
+    await waitFor(() => expect(qc.getQueryState(["files", "it"])?.isInvalidated).toBe(true));
+    expect(qc.getQueryState(["treeDir", "it", "/node_modules"])?.isInvalidated).toBe(true);
+  });
+
   // #613: `todos_updated` is panel state, not transcript — it must land in the
   // todos query cache (whole-list replace) and never fold into the log.
   it("writes todos_updated into the todos cache and keeps it out of the log", async () => {
