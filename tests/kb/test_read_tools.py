@@ -46,10 +46,10 @@ def _png() -> bytes:
     return buf.getvalue()
 
 
-def _kb(spec, docs: dict[str, bytes]):
+def _kb(spec, docs: dict[str, bytes], *, vlm: IVlm | None = None):
     cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
     embedder = HashEmbedder(dim=EMBED_DIM)
-    registry = ParserRegistry().register(PdfParser(VlmDescriber(_FakeVlm())))
+    registry = ParserRegistry().register(PdfParser(VlmDescriber(vlm or _FakeVlm())))
     ing = Ingestor(
         spec,
         pipeline=build_doc_pipeline(embedder=embedder),
@@ -104,9 +104,13 @@ async def test_read_lines_past_the_end_mints_no_citation(spec: SpecStar):
     out = await read_lines_impl(ctx, "notes.md", offset=100)
     assert out == "notes.md has 3 lines; pass an offset from 1 to 3."
     assert ctx.context.kb_passages == []
-    # The other way to read nothing — a limit below 1 — is the same class.
-    out = await read_lines_impl(ctx, "notes.md", limit=0)
-    assert out == "nothing to read: limit must be at least 1 (got 0)."
+    # The other way to read nothing — a limit below 1 — is the same class, and
+    # is refused up front: `lines[0:-1]` is NOT empty, so a `-1` (a common
+    # "everything" convention) used to read n-1 lines with a truncation notice
+    # and mint a citation, while `-5` was refused. One rule, before the slice.
+    for limit in (0, -1, -5):
+        out = await read_lines_impl(ctx, "notes.md", limit=limit)
+        assert out == f"nothing to read: limit must be at least 1 (got {limit})."
     assert ctx.context.kb_passages == []
 
 
@@ -215,14 +219,47 @@ async def test_read_page_refuses_a_text_document_and_points_at_read_lines(spec: 
 async def test_read_page_on_a_text_only_model_goes_through_the_describer(spec: SpecStar):
     # No vision on the main model: the page image is described by `kb.vlm_llm`
     # (the same branch `read_image` takes) and the text layer still rides along.
+    class _ReadTimeVlm(IVlm):
+        calls = 0
+
+        def stream(
+            self, prompt: str, *, images: Sequence[tuple[bytes, str]]
+        ) -> Iterator[tuple[str, bool]]:
+            _ReadTimeVlm.calls += 1
+            yield "a bar chart, read at request time", False
+
     cid, emb = _kb(spec, {"deck.pdf": _blank_pdf(1)})
-    ctx = _ctx(spec, emb, cid, vision=False, describer=VlmDescriber(_FakeVlm()))
+    ctx = _ctx(spec, emb, cid, vision=False, describer=VlmDescriber(_ReadTimeVlm()))
     out = await read_page_impl(ctx, "deck.pdf", 1)
     assert isinstance(out, str)
-    assert "described page" in out
+    # The ingest-time description ("described page") is the text layer; the
+    # describer's own words are what prove the image was looked at NOW.
+    assert "described page" in out and "a bar chart, read at request time" in out
+    assert _ReadTimeVlm.calls == 1
 
 
 async def test_read_page_without_any_vision_model_says_so(spec: SpecStar):
     cid, emb = _kb(spec, {"deck.pdf": _blank_pdf(1)})
     out = await read_page_impl(_ctx(spec, emb, cid, vision=False), "deck.pdf", 1)
     assert isinstance(out, str) and "no vision model" in out
+
+
+async def test_read_page_bounds_its_text_part_so_the_image_survives_the_output_cap(
+    spec: SpecStar,
+):
+    # A long text layer is middle-truncated INSIDE the tool: the output cap
+    # can only degrade a [text, image] list to text (losing the image), so the
+    # text part must never be what trips it.
+    class _LongVlm(IVlm):
+        def stream(
+            self, prompt: str, *, images: Sequence[tuple[bytes, str]]
+        ) -> Iterator[tuple[str, bool]]:
+            yield " ".join(f"word{i}" for i in range(400)), False
+
+    cid, emb = _kb(spec, {"deck.pdf": _blank_pdf(1)}, vlm=_LongVlm())
+    ctx = _ctx(spec, emb, cid, read_file_max_chars=300)
+    out = await read_page_impl(ctx, "deck.pdf", 1)
+    assert isinstance(out, list) and len(out) == 2
+    assert isinstance(out[0], ToolOutputText) and isinstance(out[1], ToolOutputImage)
+    assert len(out[0].text) <= 300 + 120 and "chars omitted" in out[0].text
+    assert out[0].text.startswith("[1] deck.pdf — page 1 of 1")

@@ -146,3 +146,45 @@ async def test_kb_grep_folder_scope_names_the_in_folder_holder_of_shared_content
     out = kb_grep_impl(_ctx(spec, embedder, cid), "needle", folder="2024")
     assert "2024/report.md:1: needle shared" in out
     assert "archive/" not in out
+
+
+# ── review round 3: guards that existed but nothing pinned ────────────────
+
+
+async def test_kb_grep_explains_a_too_short_query_instead_of_matching_everything(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    cid = _kb(spec, chunker, embedder, {"a.md": "alpha\nbeta\n"})
+    ctx = _ctx(spec, embedder, cid)
+    out = kb_grep_impl(ctx, "a")
+    assert "too short to search for exactly" in out and "at least 2 characters" in out
+    assert "a.md" not in out
+
+
+async def test_kb_grep_output_is_capped_with_middle_truncation(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # Every line of a big document matches: the listing is bounded by the same
+    # cap every tool output honours, cut in the middle so both ends survive.
+    body = "\n".join(f"needle line {i:03d} with some padding text" for i in range(200))
+    cid = _kb(spec, chunker, embedder, {"big.md": body})
+    ctx = _ctx(spec, embedder, cid, exec_output_max_chars=600)
+    out = kb_grep_impl(ctx, "needle")
+    assert len(out) <= 600 + 100  # the cap plus the truncation notice
+    assert "big.md:1: needle line 000" in out and "needle line 199" in out
+    assert "chars omitted" in out
+
+
+async def test_kb_grep_says_the_search_stopped_early_when_the_chunk_cap_hit(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder, monkeypatch
+):
+    # The retriever's `truncated` flag (a full page of candidate chunks) is
+    # pinned at the retriever; this is its agent-facing half — the count is a
+    # floor and the agent is told to narrow.
+    from workspace_app.kb import retriever as retriever_mod
+
+    monkeypatch.setattr(retriever_mod, "MAX_CHUNKS", 1)
+    body = "\n".join(f"needle {i} " + "pad " * 8 for i in range(6))  # several chunks
+    cid = _kb(spec, chunker, embedder, {"many.md": body})
+    out = kb_grep_impl(_ctx(spec, embedder, cid), "needle")
+    assert "at least 1 matching lines (the search stopped early" in out

@@ -1539,6 +1539,13 @@ async def read_lines_impl(
         )
     if doc.text is None:
         return f"{doc.path} has no extracted text yet (indexing, or a document to reindex)."
+    # Nothing read means nothing to cite: no marker, no empty span in the
+    # registry (same shape as read_page's range error). A limit below 1 is
+    # refused BEFORE the slice — `lines[0:-1]` is not empty, so judging by the
+    # window let `-1` read n-1 lines with a truncation notice and a citation
+    # while `-5` was refused (review round 3).
+    if limit is not None and limit < 1:
+        return f"nothing to read: limit must be at least 1 (got {limit})."
     window = _line_window(
         doc.text,
         offset,
@@ -1546,14 +1553,9 @@ async def read_lines_impl(
         max_lines=ctx.context.read_file_max_lines,
         max_chars=ctx.context.read_file_max_chars,
     )
-    if window.last < window.first:
-        # An empty line range (offset past the end, or a limit below 1) read
-        # nothing, so there is nothing to cite: no marker, and no empty span in
-        # the registry (same shape as read_page's range error).
-        if window.first > window.total:
-            unit = "line" if window.total == 1 else "lines"
-            return f"{doc.path} has {window.total} {unit}; pass an offset from 1 to {window.total}."
-        return f"nothing to read: limit must be at least 1 (got {limit})."
+    if window.first > window.total:
+        unit = "line" if window.total == 1 else "lines"
+        return f"{doc.path} has {window.total} {unit}; pass an offset from 1 to {window.total}."
     marker = _register_read(
         ctx,
         doc_id=doc_id,

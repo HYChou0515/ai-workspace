@@ -1,5 +1,7 @@
 """plan-rag-context P2 — neighbouring context through the real `Retriever.search`."""
 
+from collections.abc import Iterator
+
 import msgspec
 from specstar import QB, SpecStar
 
@@ -7,7 +9,8 @@ from workspace_app.kb.chunker import FixedTokenChunker
 from workspace_app.kb.doc_id import encode_doc_id
 from workspace_app.kb.embedder import HashEmbedder
 from workspace_app.kb.ingest import Ingestor
-from workspace_app.kb.retriever import LocationFilter, Retriever
+from workspace_app.kb.llm import ILlm
+from workspace_app.kb.retriever import Enhancements, LocationFilter, Retriever
 from workspace_app.resources.kb import Collection, DocChunk
 
 # With the conftest chunker (3 tokens, overlap 1) this is four chunks:
@@ -110,6 +113,32 @@ def test_context_never_leaves_a_positive_document_scope(
     )
     assert "02.md" not in p.context_text and "b1" not in p.context_text
     assert p.context_text == "a1 a2 a3\n\n── 03.md ──\n\nc1 c2 c3"
+
+
+class _RecordingLlm(ILlm):
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+        self.prompts.append(prompt)
+        yield "1", False
+
+
+def test_the_reranker_is_shown_the_expanded_context_not_the_bare_hit(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # The plan's central Phase 2 argument: the reranker ranks what will be
+    # DELIVERED, so expansion runs before rerank, on the candidates. Moving
+    # `_expand` after the rerank block left every test green (review round 3);
+    # this one reads the prompt the reranker actually received.
+    cid = _collection(spec, chunker, embedder, {"nine.md": _NINE})
+    llm = _RecordingLlm()
+    Retriever(spec, embedder=embedder, llm=llm, candidates=1, top_k=1).search(
+        "w3 w4 w5", [cid], enhancements=Enhancements(expand=0, hyde=0, rerank=True)
+    )
+    [prompt] = [p for p in llm.prompts if "w3 w4 w5" in p]
+    # w9 is not in the hit chunk ("w3 w4 w5"); only the walk brings it.
+    assert "w9" in prompt
 
 
 def _stamp_pages(spec, cid, page_of_seq):

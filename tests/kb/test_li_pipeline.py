@@ -1152,3 +1152,26 @@ def test_windows_of_a_long_markdown_section_are_positional():
         piece = n.get_content().split("\n\n", 1)[1]  # after the "T" breadcrumb
         sliced = body[n.start_char_idx : n.end_char_idx]
         assert sliced.startswith(piece[:8]) and sliced.endswith(piece[-8:])
+
+
+def test_long_prose_beside_a_table_is_windowed_too():
+    # P6's "one rule": a prose region between / around tables that is larger
+    # than the sentence window is split like a whole section would be — not
+    # left as one oversized chunk because a table happened to sit next to it.
+    from workspace_app.kb.li_pipeline import DispatchSplitter
+
+    prose = " ".join(f"Sentence {i} of the long discussion before the table." for i in range(120))
+    text = (
+        "## Results\n\n"
+        + prose
+        + "\n\n| week | yield |\n| --- | --- |\n| W1 | 92% |\n| W2 | 95% |\n| W3 | 90% |\n"
+    )
+    nodes = DispatchSplitter(table_max_rows=2)([_md_image_doc(text)])
+    prose_nodes = [
+        n for n in nodes if "Sentence 0 of" in n.get_content() or "Sentence 119" in n.get_content()
+    ]
+    assert len(prose_nodes) >= 2  # head and tail of the prose live in different windows
+    assert all(
+        n.start_char_idx is not None and text[n.start_char_idx :].startswith("Sentence")
+        for n in prose_nodes
+    )

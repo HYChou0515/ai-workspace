@@ -718,6 +718,29 @@ async def test_kb_search_folder_with_nothing_under_it_says_so_instead_of_searchi
     assert ctx.context.kb_passages == []
 
 
+async def test_kb_search_card_anchor_outside_the_folder_widens_to_the_folder_not_past_it(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # A card matched by the query links ONLY a document outside the folder.
+    # Anchor ∩ folder is empty; the widen pass must widen to the folder — an
+    # empty restriction reaching the retriever means UNSCOPED, and the 2025
+    # document would come back from a search the user scoped to 2024. Review
+    # round 3 deleted this guard and every kb_search test stayed green.
+    cid = _two_folders(spec, chunker, embedder)
+    _linked_card(spec, cid, ["widget"], [encode_doc_id(cid, "2025/report.md")])
+    ctx = RunContextWrapper(
+        AgentToolContext(
+            spec=spec, retriever=Retriever(spec, embedder=embedder), collection_ids=[cid]
+        )
+    )
+    out = kb_search_impl(ctx, "widget yield", folder="2024")
+    assert "widget yield fell" in out
+    assert "rose" not in out
+    assert [p.document_id for p in ctx.context.kb_passages] == [
+        encode_doc_id(cid, "2024/report.md")
+    ]
+
+
 async def test_kb_search_document_outside_the_folder_is_refused(
     spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
 ):

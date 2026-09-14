@@ -1694,6 +1694,7 @@ def create_app(
     # #535: wire the retrieval-eval coordinator's retriever (built after
     # build_coordinators). Its EvalJob model + auto route are already registered;
     # this lets an all-in-one deploy (run_consumers=true) also consume eval jobs.
+    app.state.kb_retriever = kb_retriever
     eval_coordinator = coordinators.eval
     if eval_coordinator is not None:
         eval_coordinator.set_retriever(kb_retriever)

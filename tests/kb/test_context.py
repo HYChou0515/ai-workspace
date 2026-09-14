@@ -161,12 +161,22 @@ def test_a_cyclic_neighbour_graph_terminates_at_the_structural_bound():
         source_chunk_ids=["a#0"],
         text="A" * 10,
     )
+    calls = 0
+
+    def cyclic(d: str) -> tuple[str, str]:
+        # A hang is the one failure a test cannot report: cap the fake so a walk
+        # that ignores its structural bound RAISES within milliseconds instead.
+        nonlocal calls
+        calls += 1
+        assert calls <= 1000, "the walk did not stop — the per-side bound is gone"
+        return (d, d)
+
     [p] = expand_passages(
         [hit],
         min_chars=10**9,
         chunks_of=_one_chunk_doc,
         text_of=lambda _d: "A" * 10,
-        neighbours=lambda d: (d, d),
+        neighbours=cyclic,
         label_of=lambda d: d,
     )
     assert (

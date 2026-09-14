@@ -122,3 +122,29 @@ def test_consume_until_stopped_drains_in_flight_jobs_then_stops():
 
     assert ing.indexed == [doc_id]  # the in-flight job drained before exit
     assert not bundle.index.consuming  # consumer torn down on stop
+
+
+def test_build_bundle_forwards_the_context_knobs_to_the_eval_retriever(tmp_path):
+    """The worker's composition root builds its own Retriever(s) from settings —
+    the door where `context_chars: null` crashed (P7). The knobs it reads must
+    be the ones the operator set."""
+    from textwrap import dedent
+
+    from workspace_app.config.loader import load
+    from workspace_app.worker.__main__ import build_bundle
+
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        dedent("""
+            kb:
+              retrieval:
+                context_chars: 7
+                rerank_context_chars: 0
+        """),
+        encoding="utf-8",
+    )
+    settings = load(config_path=cfg, env={})
+    bundle = build_bundle(settings, make_spec(default_user="u"))
+    assert bundle.eval is not None
+    r = bundle.eval._retriever
+    assert r is not None and (r._context_chars, r._rerank_context_chars) == (7, 0)
