@@ -28,7 +28,7 @@ _APP = Path(__file__).resolve().parents[2] / "src" / "workspace_app" / "api" / "
 def test_the_sweep_does_not_read_through_the_live_sandbox() -> None:
     source = _APP.read_text(encoding="utf-8")
 
-    call = re.search(r"UserScheduleSweeper\((.*?)\n        \)", source, re.DOTALL)
+    call = re.search(r"UserScheduleSweeper\((.*?)\n    \)", source, re.DOTALL)
     assert call is not None, "the sweeper is no longer built here — move this guard with it"
 
     read_arg = re.search(r"\bread=([\w.]+)", call.group(1))

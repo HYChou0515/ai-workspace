@@ -98,7 +98,9 @@ OwnerOf = Callable[[str], str]
 #: Which workflows this app offers the given item, or None for "unrestricted".
 #: Unset means the deploy wired no resolver and behaves as it did before this
 #: existed — the same rule the tool ceiling keeps, never "refuse everything".
-WorkflowsFor = Callable[[str], Sequence[str] | None]
+#: Awaited: the item's own `.workflows/` are files, and one shared resolver
+#: (`workflow.offered`) answers this for every entrance.
+WorkflowsFor = Callable[[str], Awaitable[Sequence[str] | None]]
 
 
 def _utc_now() -> datetime:
@@ -400,7 +402,7 @@ class UserScheduleSweeper:
         # not stop the other schedules in the same file.
         offered: set[str] | None = None
         if self._workflows_for is not None:
-            answer = await asyncio.to_thread(self._workflows_for, item_id)
+            answer = await self._workflows_for(item_id)
             # `None` from the RESOLVER means unrestricted, exactly as an unwired
             # resolver does — `set(... or ())` collapsed it to the empty set,
             # which refuses every row. The outer check only ever covered "no

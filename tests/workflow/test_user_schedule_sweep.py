@@ -94,6 +94,15 @@ def spec() -> SpecStar:
     return _spec()
 
 
+def _offers(ids):
+    """The resolver seam, awaited — the real one lists the item's `.workflows/`."""
+
+    async def _resolve(_item: str):
+        return ids
+
+    return _resolve
+
+
 def _sweeper(spec: SpecStar, files: _Files, started: _Started, now: datetime):
     return UserScheduleSweeper(
         spec=spec,
@@ -545,7 +554,7 @@ def test_an_unset_workflow_ceiling_means_unrestricted():
         read_live=files.read,
         start=started,
         owner_of=lambda _item: "alice",
-        workflows_for=lambda _item: None,
+        workflows_for=_offers(None),
         now=lambda: datetime(2026, 9, 5, 9, 30),
     )
     asyncio.run(sweeper.tick())
@@ -569,7 +578,7 @@ def test_an_empty_workflow_ceiling_still_refuses_everything():
         read_live=files.read,
         start=started,
         owner_of=lambda _item: "alice",
-        workflows_for=lambda _item: [],
+        workflows_for=_offers([]),
         now=lambda: datetime(2026, 9, 5, 9, 30),
     )
     asyncio.run(sweeper.tick())
@@ -665,8 +674,10 @@ def test_the_sweep_never_holds_the_event_loop():
         current = getattr(sweeper, attr, None)
         # `workflows_for` is optional and this fixture leaves it unwired; wrapping
         # `None` would turn "not configured" into "configured", which is a
-        # different behaviour from the one under test.
-        if callable(current):
+        # different behaviour from the one under test. And it is AWAITED — an
+        # async resolver is not a blocking call to slow, the same exemption the
+        # holder loop above makes.
+        if callable(current) and not inspect.iscoroutinefunction(current):
             setattr(sweeper, attr, _slow(current))
             slowed.append(attr)
 
@@ -909,7 +920,7 @@ def test_a_row_naming_a_workflow_this_app_does_not_offer_is_named_and_skipped():
         start=started,
         owner_of=lambda _item: "alice",
         now=lambda: datetime(2026, 9, 5, 9, 30),
-        workflows_for=lambda _item: ["build-report"],
+        workflows_for=_offers(["build-report"]),
     )
 
     asyncio.run(sweeper.tick())
@@ -1298,7 +1309,7 @@ def test_a_row_naming_a_workflow_the_app_does_not_offer_complains_once(caplog):
         start=_Started(),
         owner_of=lambda _item: "alice",
         now=lambda: datetime(2026, 9, 5, 11, 0),
-        workflows_for=lambda _item: ("build-report",),
+        workflows_for=_offers(("build-report",)),
     )
 
     with caplog.at_level(logging.WARNING):
@@ -1572,7 +1583,7 @@ def test_a_row_fixed_and_broken_again_complains_again(caplog):
         start=_Started(),
         owner_of=lambda _item: "alice",
         now=lambda: datetime(2026, 9, 5, 11, 0),
-        workflows_for=lambda _item: ("build-report",),
+        workflows_for=_offers(("build-report",)),
     )
 
     def _lines() -> int:

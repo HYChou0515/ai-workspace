@@ -124,18 +124,17 @@ def register_workflow_routes(
 
     async def _workflow_manifest_or_404(slug: str, item_id: str, workflow_id: str):
         """Validate the item belongs to the slug AND carries the requested workflow —
-        a package workflow on its profile (manual §4) OR a WORKSPACE-authored
-        ``.workflows/<id>.json`` (§22 P4, shadowing same-id package). Returns
-        (investigation_id, profile, manifest)."""
-        from ..apps.profiles import load_profile_workflow
-        from ..workflow.workspace_store import load_workspace_workflow
+        one the item OFFERS, by the same rule every entrance consults
+        (`workflow.offered`): a package workflow on its profile (manual §4) or a
+        WORKSPACE-authored ``.workflows/<id>.json`` (§22 P4), the workspace one
+        shadowing a same-id package one. Returns (investigation_id, profile, manifest)."""
+        from ..workflow.offered import resolve_offered_workflow
 
         investigation_id = locator.require_access(slug, item_id, "read_meta")
         profile = locator.profile_of(investigation_id)
-        manifest = load_profile_workflow(slug, profile, workflow_id)
-        if manifest is None and workflow_id:  # fall through to a workspace-authored one
-            res = await load_workspace_workflow(files, investigation_id, workflow_id)
-            manifest = res[1] if res is not None else None
+        manifest = await resolve_offered_workflow(
+            files, investigation_id, slug=slug, profile=profile, workflow_id=workflow_id
+        )
         if manifest is None:
             raise HTTPException(
                 status_code=422,
