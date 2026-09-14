@@ -37,6 +37,7 @@ import { resolveUploadDir } from "./attach";
 import { presenceOf } from "./fileTree";
 import { useDialog } from "../../components/Dialog";
 import { useDirtyClose } from "../../hooks/useDirtyClose";
+import { useT } from "../../lib/i18n";
 import { FileServiceProvider, investigationFileService } from "../../api/fileService";
 import { WorkspaceSlugProvider, useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { EditModeProvider, useEditMode } from "../../hooks/editMode";
@@ -86,6 +87,12 @@ export type ActivityMode = "evidence" | "search" | "history" | "members" | "acti
 /** Close a tab through the dirty-aware path (save-on-close prompt). Provided
  * by ShellBody so the deep tab strip can request closes without prop drilling. */
 const RequestCloseContext = createContext<(groupId: string, path: string) => void>(() => {});
+
+/** The folders the preload listed but did not enter (`unwalked`), for the
+ * pieces of the shell that read the listing as a fact about the workspace —
+ * the breadcrumb's folder browser, first. A listing that is pruned must not be
+ * read as complete four components down from where it arrived. */
+export const LazyFoldersContext = createContext<readonly string[]>([]);
 
 /** #159: whether the file IDE starts collapsed (chat as the main stage) when an
  * item first opens. Chat-first Apps collapse it; ide-first Apps (RCA) open it.
@@ -183,6 +190,7 @@ export function WorkspaceShell({
         <AgentProvider investigationId={item.resource_id}>
           <FileBufferProvider store={bufferStore}>
             <EditModeProvider>
+              <LazyFoldersContext.Provider value={unwalked}>
               <ShellBody
                 item={item}
                 manifest={manifest}
@@ -196,6 +204,7 @@ export function WorkspaceShell({
                 onInvestigationChanged={onInvestigationChanged}
                 bufferStore={bufferStore}
               />
+              </LazyFoldersContext.Provider>
             </EditModeProvider>
           </FileBufferProvider>
         </AgentProvider>
@@ -2466,6 +2475,13 @@ function DirBrowser({
 }) {
   const [dir, setDir] = useState(startDir);
   const entries = useMemo(() => dirChildren(paths, dir), [paths, dir]);
+  // `paths` is the preload; a folder the listing never entered has no
+  // children in it. That is "not loaded", and saying "Empty" there would be
+  // the one place pruned reads as hidden.
+  const lazy = useContext(LazyFoldersContext);
+  const full = `/${dir}`;
+  const notLoaded = lazy.some((u) => full === u || full.startsWith(`${u}/`));
+  const t = useT();
   return (
     <div className="scrollable" style={{ minWidth: 220, maxHeight: 320, overflowY: "auto" }}>
       {dir && (
@@ -2488,7 +2504,7 @@ function DirBrowser({
       )}
       {entries.length === 0 && (
         <div style={{ padding: "6px 10px", fontSize: pxToRem(12), color: "var(--text-paper-d2)" }}>
-          Empty
+          {notLoaded ? t("workspace.tree.notLoadedCrumb") : "Empty"}
         </div>
       )}
       {entries.map((e) => (

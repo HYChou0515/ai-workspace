@@ -122,8 +122,9 @@ class _ItemSkills(BaseModel):
 
 class _FileExists(BaseModel):
     """Whether one regular file is present — the answer to a question the FE
-    used to ask by listing the whole workspace (after every save, after every
-    attachment) and scanning for the path."""
+    used to ask by listing the whole workspace and scanning for the path
+    (after a cut-connection save or attachment; on every mount of the
+    card-review button)."""
 
     exists: bool
 

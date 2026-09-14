@@ -1245,6 +1245,12 @@ export const messages = {
   // collapsed and load on expand, so a filter can only see what has loaded.
   // Said only in that case — the derived folders (node_modules, …) are always
   // lazy, and every IDE leaves those out of a filter without a word.
+  // The breadcrumb's folder browser reads the preload; under a folder the
+  // tree never entered it has nothing to list — which is not "empty".
+  "workspace.tree.notLoadedCrumb": {
+    "zh-TW": "尚未載入 — 在檔案樹展開這個資料夾就能瀏覽。",
+    en: "Not loaded — expand this folder in the file tree to browse it.",
+  },
   "workspace.tree.loadFailed": {
     "zh-TW": "這個資料夾載入失敗,收起再展開可重試。",
     en: "This folder could not be loaded — collapse and expand it to retry.",

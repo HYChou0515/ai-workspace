@@ -539,6 +539,29 @@ async def test_tree_lists_derived_folders_without_entering_them_cold() -> None:
     assert (await files.tree(WS, "/node_modules", depth=1)).dirs == ["/node_modules/x"]
 
 
+async def test_tree_applies_the_entry_budget_on_every_branch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The bound is what turns a hang into an answer — and it is only real if
+    the facade PASSES it. The walk-level tests prove the walk stops when told;
+    this proves the tree tells it, warm and cold. Dropping `max_entries` from
+    either branch reddens this and nothing else."""
+    import workspace_app.files.facade as facade
+
+    monkeypatch.setattr(facade, "TREE_MAX_ENTRIES", 3)
+    sb = MockSandbox()
+    handle = await sb.create(SandboxSpec(), sandbox_id=WS)
+    warm = WorkspaceFiles(MemoryFileStore(), sandbox=sb, handle_for=_resolver(lambda _ws: handle))
+    cold = WorkspaceFiles(MemoryFileStore())
+    for files in (warm, cold):
+        for i in range(3):
+            for j in range(3):
+                await files.write(WS, f"/d{i}/f{j}.txt", b"x")
+        listing = await files.tree(WS)
+        assert listing.truncated is True, "the budget was not passed on this branch"
+        assert listing.unwalked, "past the budget, folders come back as lazy"
+
+
 async def test_tree_cold_on_the_nfs_tree_reads_only_the_folder_it_was_asked_for(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

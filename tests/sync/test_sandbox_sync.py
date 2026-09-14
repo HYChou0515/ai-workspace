@@ -35,6 +35,23 @@ async def test_restore_uploads_every_filestore_path_to_sandbox(
     assert await sandbox.download(h, "/sub/b.txt") == b"BB"
 
 
+async def test_mirror_copes_with_a_file_uploaded_without_a_leading_slash(
+    fs: SpecstarFileStore, sandbox: MockSandbox
+):
+    """The path the walk reports (`/pyproject.toml`) is what the mirror
+    downloads by and what it mkdirs the parent of; a double that stored the
+    raw spelling (`pyproject.toml`) failed the download, and — once reads
+    were made lenient — registered a phantom DIRECTORY of that name that the
+    mirror then mkdir-ed over the file it had just written."""
+    h = await sandbox.create(SandboxSpec())
+    await sandbox.upload(h, b"[tool]", "pyproject.toml")
+    await sandbox.mark_ready(h)
+    sync = SandboxSync(filestore=fs, sandbox=sandbox)
+    assert await sync.mirror("ws", h) == 1
+    assert await fs.read("ws", "/pyproject.toml") == b"[tool]"
+    assert await fs.listdir("ws") == []
+
+
 async def test_restore_on_empty_workspace_is_a_noop(fs: SpecstarFileStore, sandbox: MockSandbox):
     h = await sandbox.create(SandboxSpec())
     sync = SandboxSync(filestore=fs, sandbox=sandbox)

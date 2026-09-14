@@ -21,8 +21,11 @@ an operator retires ``legacy`` and swaps this wrapper for the bare ``primary``.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from pathlib import Path
 
+from ..sandbox.protocol import WalkResult
+from ..sandbox.walk import flat_lister, walk_tree
 from .protocol import FileExists, FileNotFound, FileStore
 
 logger = logging.getLogger(__name__)
@@ -110,6 +113,60 @@ class MigratingFileStore:
         for path, size in await self._primary.stat_all(workspace_id, prefix):  # ty: ignore[unresolved-attribute]
             merged[path] = size  # primary wins on a collision
         return list(merged.items())
+
+    async def tree(
+        self,
+        workspace_id: str,
+        prefix: str = "/",
+        *,
+        depth: int | None = None,
+        prune: Sequence[str] = (),
+        max_entries: int | None = None,
+    ) -> WalkResult:
+        """The file tree's listing, unioned like every other listing here —
+        and with primary's round-trip saving intact. Without this the facade
+        saw no `tree` on the wrapper and fell back to a FULL rglob of primary
+        (twice), pruning in memory: the cold path saved nothing under the very
+        topology the deployment template ships (`migrate_from: specstar`).
+        Primary lists directory by directory from the prefix; legacy is a
+        store of indexed rows, so its listing under the prefix is cheap and is
+        shaped by the same traversal. Primary wins on a collision."""
+        opts = {"depth": depth, "prune": prune, "max_entries": max_entries}
+        primary_tree = getattr(self._primary, "tree", None)
+        if primary_tree is not None:
+            p = await primary_tree(workspace_id, prefix, **opts)
+        else:  # pragma: no cover — every primary this wraps is the NFS tree
+            p = await self._flat_tree(self._primary, workspace_id, prefix, **opts)
+        legacy = await self._flat_tree(self._legacy, workspace_id, prefix, **opts)
+        files = {e.path: e for e in legacy.files}
+        files.update({e.path: e for e in p.files})
+        return WalkResult(
+            files=list(files.values()),
+            dirs=list(dict.fromkeys([*p.dirs, *legacy.dirs])),
+            unwalked=list(dict.fromkeys([*p.unwalked, *legacy.unwalked])),
+            truncated=p.truncated or legacy.truncated,
+        )
+
+    @staticmethod
+    async def _flat_tree(
+        store: FileStore,
+        workspace_id: str,
+        prefix: str,
+        *,
+        depth: int | None,
+        prune: Sequence[str],
+        max_entries: int | None,
+    ) -> WalkResult:
+        root = prefix if prefix and prefix != "/" else ""
+        sizes = await store.stat_all(workspace_id, root)  # ty: ignore[unresolved-attribute]
+        dirs = await store.listdir(workspace_id, root)
+        return walk_tree(
+            flat_lister({path: (size, "") for path, size in sizes}, dirs),
+            prefix or "/",
+            depth=depth,
+            prune=prune,
+            max_entries=max_entries,
+        )
 
     async def workspace_usage(self, workspace_id: str) -> int:
         merged: dict[str, int] = {}

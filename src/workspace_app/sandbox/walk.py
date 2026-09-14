@@ -76,6 +76,12 @@ def walk_tree(
     max_entries: int | None = None,
 ) -> WalkResult:
     """Breadth-first over directories from `root`. See the module docstring."""
+    # `root` arrives as typed (`.`, `dir//sub`, `dir/./sub/` — the route refuses
+    # only `..`); the recursive walk normalised it through the filesystem, and
+    # every path this reports is built from it by string joining, so it is
+    # canonicalised here once. Otherwise `/./a.txt` comes back — a path nothing
+    # downstream would match again.
+    root = "/" + "/".join(seg for seg in root.split("/") if seg and seg != ".")
     files: list[FileEntry] = []
     dirs: list[str] = []
     unwalked: list[str] = []
@@ -166,9 +172,9 @@ def flat_lister(files: Mapping[str, tuple[int, str]], dirs: Iterable[str]) -> Li
     # Every ancestor of a file OR a recorded directory is a directory too — a
     # store that recorded `/a/b` without `/a` (an orphan row) must still let
     # the walk reach `/a/b`, as the old listing (which never walked) did.
-    # Scanning the whole listing per directory instead made a 12k-file tree
-    # cost a second and a 50k one fifteen — on the request path of the cold
-    # store branch.
+    # Scanning the whole listing per directory instead was O(dirs × entries):
+    # a second for a 12k-file tree, several for 50k (shape-dependent) — on
+    # the request path of the cold store branch.
     subdirs: dict[str, set[str]] = {"/": set()}
     subfiles: dict[str, list[str]] = {}
     # Canonical path -> the key the listing spelled it with. An in-memory

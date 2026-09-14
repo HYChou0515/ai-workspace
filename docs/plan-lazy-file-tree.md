@@ -118,7 +118,7 @@ nfs_tree 冷路徑仍然要修(user 點名、而且它今天是假 prefix),但�
 | **一個機制,三個理由** | `unwalked` 的成員來自三個原因:在修剪清單裡、超過 `depth`、超過上界。前端不區分,全都是「展開才讀」 |
 | **展開狀態:一條規則、兩個集合** | 預設:**走過的目錄展開(跟今天一樣)、`unwalked` 的收起**。走過的沿用 `rca:tree-collapsed:*`(在集合裡 = 收起,一個位元都沒變);懶目錄用新的 `rca:tree-opened:*`(在集合裡 = 使用者打開過)。初稿想共用一個集合、語意「翻過預設」—— review 抓到那會把**使用者部署前親手收起的 `node_modules/`**(等最久的那批人)讀成「打開過」,部署後第一次進來就自動展開並抓取。兩個集合各自的預設就各自誠實 |
 | **不自動展開、不 reveal** | Q3。agent 寫檔不展開任何東西;開檔案也不展開它的祖先(今天也不會)。tab 存在的問題用下一條解,不用展開解 |
-| **「不在清單」不再等於「不存在」** | 一個 helper `presenceOf(path, files, unwalked) → "present" \| "absent" \| "unknown"`,`unknown` iff 某個祖先在 `unwalked`。§1.4 那四處**只在 `absent` 時**才關 tab / 剔除。判準只裝在一個地方 |
+| **「不在清單」不再等於「不存在」** | 一個 helper `presenceOf(path, files, unwalked) → "present" \| "absent" \| "unknown"`,`unknown` iff 某個祖先在 `unwalked`。§1.4 的三個**存在性判斷**(初始 tab、自動關 tab、最近檔案)**只在 `absent` 時**才關 / 剔除;麵包屑是列表,懶目錄下說「尚未載入」。判準只裝在一個地方 |
 | **失效:turn 結束、`file_changed` → 預載樹 + 已展開的懶目錄** | `qk.files(id)` 照舊 invalidate(現在只有幾百個 entry,便宜);另加 `["treeDir", id]` 前綴 invalidate —— TanStack 只重抓**還掛在畫面上的**(= 展開中的),收起的下次展開才讀。兩個入口共用一個 `invalidateTree(qc, id)` |
 | **篩選** | 跑在「預載樹 + 已載入的懶目錄」上,語意跟今天一樣完整 —— 對使用者自己的檔案而言。`node_modules/` 不在篩選範圍是**預期行為**(每個 IDE 都這樣),不提示;只有 `truncated` 才提示 |
 | **同一個病因一起掃:「列整個 workspace 只為確認一個路徑」** | 開一個 `GET /files/exists?path=` 路由接到既有的 `facade.exists`;`FileService.exists(path)`;`writeVerified`、`attachmentLanded`、`CardDiffReview` 三處改用;後端 `_is_cold` 改成跟 `_alive` 同一個探針(`exists(probe, "/")`)。**這條可以拆掉單獨做**,但它是同一個病因,寫下來免得各自另開一票。誠實的份量:`writeVerified`/附件只在連線斷掉時才列(少見),`CardDiffReview` 每次掛載都列(常見),`_is_cold` 只有 `kind: local` |
@@ -200,8 +200,10 @@ GET /a/{slug}/items/{id}/files/exists?path=
 - `buildFileTree(files, dirs, unwalked)`:`unwalked` 裡的目錄建成 `lazy: true` 的節點,children 空。
 - 懶節點展開 → `useQuery(qk.treeDir(id, path), () => svc.listTree({prefix: path, depth: 1}))`,
   結果 splice 進那個節點;它回來的 `unwalked` 再建成懶節點。收起 → query 失去 observer,不再重抓。
-- `toggled` 集合(原 `collapsed`):`open = node.lazy ? toggled.has(p) : !toggled.has(p)`。
-- `presenceOf` 在 `fileTree.ts`,四個消費者改用。
+- 兩個持久化集合:走過的目錄 `collapsed`(在集合裡 = 收起,沿用 `rca:tree-collapsed:*`)、懶目錄 `opened`(在集合裡 = 打開過,新 key `rca:tree-opened:*`);
+  `open = node.lazy ? opened.has(p) : !collapsed.has(p)`。(初稿寫的是一個 `toggled` 集合,§2 記錄了為何改成兩個。)
+- `presenceOf` 在 `fileTree.ts`,三個**存在性判斷**改用(初始 tab、自動關 tab、最近檔案);麵包屑的同層瀏覽是**列表**不是存在性判斷,
+  不套 `presenceOf`,但在懶目錄底下要說「尚未載入」而不是「Empty」(`LazyFoldersContext`)。
 - `invalidateTree(qc, id)`:`qk.files(id)` + `["treeDir", id]`;`useRefreshFiles` 與 `file_changed` 都叫它。
 - KB adapter:`unwalked: []`、`truncated: false`,其餘不動。
 
@@ -255,11 +257,11 @@ GET /a/{slug}/items/{id}/files/exists?path=
 - `buildFileTree` 把 `unwalked` 建成 `lazy` 節點、children 空。
 - 懶節點初始收起、有 chevron;點開 → 對 `listTree({prefix, depth: 1})` **恰好一次**呼叫(fetch stub
   要先濾路由);回來的子目錄又是懶節點。
-- 走過的目錄**預設展開**(既有測試不動 —— 它們就是回歸對照組);unwalked 目錄預設收起;`toggled` 對兩種
-  節點各自翻轉;**既有 `rca:tree-collapsed:*` 的資料**照舊讓走過的目錄收起。
+- 走過的目錄**預設展開**(既有測試不動 —— 它們就是回歸對照組);unwalked 目錄預設收起;兩個集合各管一種;
+  **既有 `rca:tree-collapsed:*` 的資料**照舊讓走過的目錄收起、**不會**讓部署前收起的懶目錄變成打開。
 - KB adapter 的樹一個節點都不是 lazy。
 
-### Phase 4 — 前端:`presenceOf` 與四個消費者
+### Phase 4 — 前端:`presenceOf` 與它的消費者
 
 `fileTree.ts`(helper)、`WorkspaceShell.tsx:238,501-511,1684,2346`。
 
@@ -267,8 +269,9 @@ GET /a/{slug}/items/{id}/files/exists?path=
 - 開著 `/node_modules/x/y.js` 的 tab,預載樹 refetch(清單裡沒有它、`unwalked` 有 `/node_modules`)→
   **tab 還在**。
 - 開著 `/src/a.py` 的 tab,refetch 後清單裡沒有它、`unwalked` 空 → **tab 關掉**(正向對照組:規則沒壞)。
-- dirty 的 tab 在兩種情況都不關(既有行為)。
-- 最近檔案、麵包屑同層、`surfaceTabs` 各一條 `unknown` 不剔除的測試。
+- dirty 的 tab 在兩種情況都不關(既有行為)。**未寫**:shell 內部自建 buffer store、happy-dom 開不了 Monaco,
+  沒有乾淨的入口把 tab 弄髒;基準線上也沒有這條測試。誠實記著,不假裝有。
+- 最近檔案 `unknown` 不剔除、`surfaceTabs`(由初始 tab 測試覆蓋)、麵包屑在懶目錄下顯示「尚未載入」—— 各一條。
 
 ### Phase 5 — 前端:失效與篩選提示
 
@@ -379,7 +382,25 @@ CLAUDE.md 架構段加一條「檔案樹是預載修剪樹 + 懶目錄」,把 `T
 - 「載入失敗」只在**沒資料**時標:已載入的層背景重抓失敗,列還在,底下寫「載入失敗」是假話。
 
 **收斂梯度:6 → 0(P8)/ 殘留 6 → 2(P9)→ 1 LOW(P10)。** 判準是「幾條源自上輪修法」,不是「幾條」;
-第四輪那條連使用者都碰不到,停。
+第四輪那條連使用者都碰不到,本想停 —— user 問「不需要再 review 了嗎」,再開一輪,**換鏡頭**。
+
+第五輪(四把平行、互不知情:符合度 / 真實性 / 回歸 / 缺陷(只看 P11);前三把之前一次都沒跑過):
+- **回歸**:真 `web/node_modules`(31,551 entry、1,063 個 symlink 目錄)舊 rglob 與新 scandir **逐筆相同**(1.98s → 0.19s)。
+  抓到:(a) 冷路徑 `nfs_tree.tree(prefix=<symlink>)` 會跟著 link 列出 **API pod 的 `/etc`**(舊冷路徑不跟)→ realpath 圍堵;
+  (b) `prefix=.`/`//`/`/./` 在暖路徑回未正規化路徑 → `walk_tree` 進場正規化 root;
+  (c) **已知行為差、不修**:mode 644 的目錄(可列不可進)舊版整個 walk 500,新版把裡面的檔略過 —— mirror 會把它們當已刪除
+  (再次可進時重新上傳)。跟 `os.walk` 語意一致,只有非 root 的 walker 遇得到。
+- **缺陷(P11)**:mock 的讀寬寫窄 —— `upload("a.txt")`+`upload("/a.txt")` 兩個檔、`delete` 漏雙胞胎、`_parent("pyproject.toml")`
+  註冊幽靈目錄讓 commit 說修好的 mirror 路徑下一行又掛。改成**寫入邊界正規化**:一個檔一個 entry、查找 O(1)、`_stored_key` 拿掉。
+- **符合度**:上界只在 walk 層被測,facade 不傳 `max_entries` 全綠 → 補 facade 兩分支的 budget 測試(突變驗過);
+  計畫承諾的測試有五條沒寫(最近檔案——還原規則整套 FE 3797 條照樣綠、麵包屑、KB adapter、`exists` 對未知 handle、dirty tab)→ 補四條,dirty tab 誠實標未寫;
+  麵包屑對懶目錄說「Empty」→ 改「尚未載入」;§3.3/§4 還寫著一個 `toggled` 集合 → 改。
+- **真實性**:數字全部重跑無誤(2.81、36,301、20k 檔 53ms、CI 11/11);「守衛可刪而不紅」三條:budget 接線、`exists`→`SandboxNotFound`、
+  「收起的懶目錄不重抓」→ 各補一條會紅的測試;`exists` 路由/schema docstring 仍寫「每次存檔」→ 改;
+  **M2 包裝(`migrate_from: specstar`,repo 自己的部署範本)沒有 `tree`** → 冷路徑一毛都沒省(216 次 scandir vs 1)→ 給 wrapper 一個 `tree`:primary 從 prefix 逐目錄列、legacy 的索引列聯集。
+
+第五輪之後:源自 P11 的 1 條(mock)+ 三把新鏡頭各自的第一輪發現。新鏡頭第一次跑一定有東西,不算「沒收斂」;
+接下來若再一輪,判準仍是「源自本輪修法的有幾條」。
 
 ### 6.7 冷路徑 `prefix` 從「假的」變「真的」
 

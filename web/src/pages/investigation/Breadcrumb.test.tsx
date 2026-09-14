@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { FileInfo } from "../../api/types";
-import { Breadcrumb } from "./WorkspaceShell";
+import { Breadcrumb, LazyFoldersContext } from "./WorkspaceShell";
 
 afterEach(cleanup);
 
@@ -52,5 +52,22 @@ describe("<Breadcrumb />", () => {
     await user.click(await screen.findByText("data")); // folder, unique here
     await user.click(await screen.findByText("meta.json"));
     expect(onOpen).toHaveBeenCalledWith("/data/meta.json");
+  });
+});
+
+describe("<Breadcrumb /> under a folder the listing did not enter", () => {
+  it("says the level is not loaded instead of calling it empty", async () => {
+    // The crumb browser is a listing over the preload; a file under
+    // `node_modules/` has no siblings in it. "Empty" would be the one place
+    // where pruned reads as hidden.
+    const user = userEvent.setup();
+    render(
+      <LazyFoldersContext.Provider value={["/node_modules"]}>
+        <Breadcrumb activeTab="/node_modules/lodash/index.js" files={files} onOpen={vi.fn()} />
+      </LazyFoldersContext.Provider>,
+    );
+    await user.click(screen.getByRole("button", { name: "index.js" }));
+    expect(await screen.findByText(/not loaded|尚未載入/)).toBeInTheDocument();
+    expect(screen.queryByText("Empty")).not.toBeInTheDocument();
   });
 });

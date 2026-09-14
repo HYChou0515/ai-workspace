@@ -230,7 +230,11 @@ async def test_readiness_marker_lives_outside_workspace_366(sandbox: LocalProces
     assert await sandbox.exists(h, "/.ready") is False
 
 
-@pytest.mark.parametrize("op_name", ["exec", "upload", "download", "kill"])
+# `exists` is in this list because the registry's cold probe (`_is_cold`) and
+# the liveness probe (`_alive`) both read "the dir is gone" from THIS raising
+# — an `exists` that answered False instead would make a reaped item open
+# empty, skipping its restore. The old probe used `walk`; the pin moved with it.
+@pytest.mark.parametrize("op_name", ["exec", "upload", "download", "kill", "exists"])
 async def test_op_on_unknown_handle_raises(sandbox: LocalProcessSandbox, op_name: str):
     fake = SandboxHandle(id="not-real")
     ops = {
@@ -238,6 +242,7 @@ async def test_op_on_unknown_handle_raises(sandbox: LocalProcessSandbox, op_name
         "upload": lambda: sandbox.upload(fake, b"x", "/x"),
         "download": lambda: sandbox.download(fake, "/x"),
         "kill": lambda: sandbox.kill(fake),
+        "exists": lambda: sandbox.exists(fake, "/"),
     }
     with pytest.raises(SandboxNotFound):
         await ops[op_name]()

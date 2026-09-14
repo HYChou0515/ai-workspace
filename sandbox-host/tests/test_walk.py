@@ -128,6 +128,21 @@ def test_an_entry_that_vanishes_mid_listing_is_skipped_without_losing_its_siblin
     assert sorted(e.path for e in walked.files) == ["/a.txt", "/c.txt"]
 
 
+def test_a_root_spelled_oddly_still_reports_canonical_paths(tmp_path):
+    """`?prefix=.` / `dir//sub` / `dir/./sub` reach the walk as typed (the
+    route refuses only `..`). The recursive walk normalised through the
+    filesystem; a lister that joins strings would have answered `/./a.txt`
+    and `/dir//sub/x` — paths nothing downstream would match again."""
+    (tmp_path / "dir" / "sub").mkdir(parents=True)
+    (tmp_path / "dir" / "sub" / "x.txt").write_bytes(b"x")
+    (tmp_path / "a.txt").write_bytes(b"x")
+    whole = walk_tree(scandir_lister(tmp_path), ".")
+    assert sorted(e.path for e in whole.files) == ["/a.txt", "/dir/sub/x.txt"]
+    for odd in ("dir//sub", "dir/./sub/", "/./dir/sub"):
+        walked = walk_tree(scandir_lister(tmp_path), odd)
+        assert [e.path for e in walked.files] == ["/dir/sub/x.txt"], odd
+
+
 def test_flat_lister_reaches_a_recorded_folder_whose_parent_was_never_recorded():
     """A store row for `/a/b` with no row for `/a` (an orphan) still draws:
     the old listing never walked, so it showed such a folder; the walk must
@@ -168,7 +183,7 @@ def test_flat_lister_indexes_once_so_a_large_listing_walks_in_linear_time():
     """The cold store branch runs this on the request path. Scanning the whole
     listing per directory made 12k files cost a second and 50k fifteen; an
     index makes 20k files with 2k folders a few tens of milliseconds. The
-    bound is ~20× the measured cost, so it fails on the algorithm, not the box."""
+    bound is ~50× the measured cost, so it fails on the algorithm, not the box."""
     import time
 
     files = {f"/pkg{i}/lib/f{j}.js": (1, "v") for i in range(1000) for j in range(20)}

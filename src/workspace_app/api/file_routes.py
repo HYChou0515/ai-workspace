@@ -348,9 +348,10 @@ def register_file_routes(
     @app.get("/a/{slug}/items/{item_id}/files/exists")
     async def workspace_file_exists(slug: str, item_id: str, path: str) -> _FileExists:
         """Whether ONE regular file is there — the facade's point query, over
-        the wire. Every FE save (`writeVerified`), every attachment and one
-        review button used to answer this by listing the whole workspace, so a
-        workspace with `node_modules/` paid the file tree's full walk per save.
+        the wire. The FE used to answer this by listing the whole workspace:
+        after a save or an attachment whose connection was cut (`writeVerified`
+        asks only then), and on every mount of the card-review button — on a
+        workspace with `node_modules/`, the file tree's full walk for a yes/no.
         A folder answers False, as `FileStore.exists` does. Registered before
         the ``/files/{path:path}`` read route like ``usage``."""
         investigation_id = locator.require_access(slug, item_id, "read_content")

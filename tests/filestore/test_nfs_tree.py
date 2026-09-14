@@ -202,6 +202,29 @@ async def test_tree_lists_from_the_prefix_and_never_touches_the_rest(
     assert "/node_modules" not in scanned and "/node_modules/x" not in scanned, scanned
 
 
+async def test_tree_never_lists_outside_the_item_through_a_symlinked_prefix(
+    fs: NfsTreeFileStore, root: Path, tmp_path: Path
+):
+    """`?prefix=` is user-supplied and the durable tree lives on the API pod.
+    A link an agent made (`ln -s /etc outside`) is listed by its parent as a
+    folder — never entered by the walk — but a prefix naming it would have
+    scandir'd the TARGET: the API pod's own filesystem, from a cold item.
+    The lexical `..` check cannot see a link; only the resolved path can."""
+    import os
+
+    await fs.write("ws-1", "/real/a.txt", b"x")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "secret.txt").write_bytes(b"x")
+    os.symlink(elsewhere, root / "ws-1" / "outside")
+
+    assert sorted((await fs.tree("ws-1", "/")).dirs) == ["/outside", "/real"]  # listed, as before
+    leaked = await fs.tree("ws-1", "/outside", depth=1)
+    assert leaked.files == [] and leaked.dirs == []
+    # Positive control: a real folder under the same prefix shape still lists.
+    assert [e.path for e in (await fs.tree("ws-1", "/real", depth=1)).files] == ["/real/a.txt"]
+
+
 async def test_tree_of_a_missing_workspace_or_prefix_is_empty(fs: NfsTreeFileStore):
     assert (await fs.tree("ghost", "/")).files == []
     await fs.write("ws-1", "/a.txt", b"x")

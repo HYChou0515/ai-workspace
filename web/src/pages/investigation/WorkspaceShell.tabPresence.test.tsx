@@ -10,7 +10,7 @@
  */
 import "@testing-library/jest-dom/vitest";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -120,5 +120,20 @@ describe("WorkspaceShell — tabs under a folder the listing did not enter", () 
 
     await waitFor(() => expect(tabNames().join(" ")).not.toContain("b.py"));
     expect(tabNames().join(" ")).toContain("a.py");
+  });
+});
+
+describe("WorkspaceShell — recent files under a folder the listing did not enter", () => {
+  it("keeps a recent file whose folder was never entered, and drops one that is really gone", async () => {
+    localStorage.setItem(
+      "rca:recent-files:PG-1",
+      JSON.stringify(["/node_modules/x/y.js", "/src/gone.py", "/src/a.py"]),
+    );
+    openShell([], [{ path: "/src/a.py", size: 1 }], ["/node_modules"]);
+    await waitFor(() => expect(screen.getByTitle("History")).toBeInTheDocument());
+    fireEvent.click(screen.getByTitle("History"));
+    await waitFor(() => expect(screen.getByText("a.py")).toBeInTheDocument());
+    expect(screen.getByText("y.js")).toBeInTheDocument(); // unknown, kept
+    expect(screen.queryByText("gone.py")).not.toBeInTheDocument(); // absent, dropped
   });
 });

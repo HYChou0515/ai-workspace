@@ -357,3 +357,34 @@ describe("<FileTree /> lazy folders", () => {
     expect(screen.queryByTestId("lazy-failed")).not.toBeInTheDocument();
   });
 });
+
+describe("<FileTree /> invalidation reaches only the folders on screen", () => {
+  it("refetches an open lazy folder and leaves a collapsed one for its next expand", async () => {
+    const user = userEvent.setup();
+    const empty = { items: [], dirs: [], unwalked: [], truncated: false };
+    const { svc, listTree } = lazyService({ "/dist": empty, "/node_modules": empty });
+    const { client } = renderWithQuery(
+      <FileServiceProvider value={svc}>
+        <FileTree
+          files={[{ path: "/src/a.py", size: 1 }]}
+          dirs={["/src", "/dist", "/node_modules"]}
+          unwalked={["/dist", "/node_modules"]}
+          activePath={null}
+          onOpen={vi.fn()}
+        />
+      </FileServiceProvider>,
+    );
+    await user.click(screen.getByText("dist"));
+    await user.click(screen.getByText("node_modules"));
+    await waitFor(() => expect(listTree).toHaveBeenCalledTimes(2));
+    await user.click(screen.getByText("node_modules")); // collapse it again
+
+    await client.invalidateQueries({ queryKey: ["treeDir", "inv-lazy"] });
+    await waitFor(() => expect(listTree).toHaveBeenCalledTimes(3));
+    expect(listTree).toHaveBeenLastCalledWith({ prefix: "/dist", depth: 1 });
+    // The collapsed one is left alone: a turn end must not re-list every
+    // `node_modules` level a user ever opened.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(listTree).toHaveBeenCalledTimes(3);
+  });
+});

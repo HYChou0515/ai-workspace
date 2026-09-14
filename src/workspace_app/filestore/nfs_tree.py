@@ -207,15 +207,29 @@ class NfsTreeFileStore:
         cost nothing to honour. A prefix that names nothing lists nothing."""
         item_root = self._item_root(workspace_id)
         rel = "/" + _norm(prefix).strip("/") if _norm(prefix).strip("/") else "/"
-        self._abs(workspace_id, rel)  # refuse a prefix that escapes the item
-        return await asyncio.to_thread(
-            walk_tree,
-            scandir_lister(item_root),
-            rel,
-            depth=depth,
-            prune=prune,
-            max_entries=max_entries,
-        )
+        target = self._abs(workspace_id, rel)  # refuse a prefix that escapes lexically
+
+        def walk() -> WalkResult:
+            # …and one that escapes through a LINK. The walk never enters a
+            # symlinked folder on its own (`walk.py`), but `prefix` is
+            # user-supplied, and this tree lives on the API pod: an agent's
+            # `ln -s /etc outside` plus `?prefix=/outside` would have listed
+            # the pod's own filesystem. The lexical check cannot see a link;
+            # only the resolved path can. Outside ⇒ nothing here, like a
+            # prefix that names nothing.
+            inside = os.path.realpath(item_root)
+            resolved = os.path.realpath(target)
+            if resolved != inside and not resolved.startswith(inside + os.sep):
+                return WalkResult(files=[], dirs=[])
+            return walk_tree(
+                scandir_lister(item_root),
+                rel,
+                depth=depth,
+                prune=prune,
+                max_entries=max_entries,
+            )
+
+        return await asyncio.to_thread(walk)
 
     async def is_dir(self, workspace_id: str, path: str) -> bool:
         target = self._abs(workspace_id, path)
