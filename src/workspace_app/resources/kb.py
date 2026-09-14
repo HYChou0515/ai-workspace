@@ -464,6 +464,15 @@ class DocChunk(Struct):  # → resource "doc-chunk"
     # → merge → Citation so the LLM and the FE can say "p.3 §2.1", not an
     # opaque char span. Not embedded — see the breadcrumb fold in li_pipeline.
     provenance: dict[str, Any] = field(default_factory=dict)
+    # plan-rag-context P8: a #227 fan-out batch chunks its own units and knows
+    # only its own text, so it writes `start` relative to THAT and records the
+    # same number here; finalize, which rejoins the batches and so learns where
+    # each one lands, recomputes `start = unit_start + batch base` (and `end`
+    # from the unchanged length). Recomputed from this immutable value however
+    # many times finalize is re-driven — idempotent by construction, no crash
+    # window. `None` on every other path (single-job index, dry-run, cache
+    # copy) and on rows written before this field existed: nothing to rebase.
+    unit_start: int | None = None
     # P3.0: exactly one of `embedding` / `embedding_alt` is populated per
     # chunk — `embedder_id == 0` chunks use `embedding` (default text model),
     # `embedder_id != 0` chunks use `embedding_alt` (code-specialised model).

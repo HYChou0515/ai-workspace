@@ -10,7 +10,7 @@ adapter, and Ingestor maps the resulting LI `BaseNode`s back to our
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from llama_index.core.ingestion import IngestionPipeline
@@ -20,7 +20,7 @@ from llama_index.core.node_parser import (
     MarkdownNodeParser,
     SentenceSplitter,
 )
-from llama_index.core.schema import BaseNode, TextNode, TransformComponent
+from llama_index.core.schema import BaseNode, NodeRelationship, TextNode, TransformComponent
 
 from .code_lang import code_language_for, symbol_path
 from .embedder import Embedder
@@ -88,13 +88,25 @@ class DispatchSplitter(TransformComponent):
             content_format = str(node.metadata.get("content_format", "")).lower()
             code_lang = code_language_for(filename)
             if content_format == "markdown" or mime == "text/markdown" or filename.endswith(".md"):
-                out.extend(self._split_markdown(node))
+                pieces = self._split_markdown(node)
             elif mime == "application/json" or filename.endswith((".json", ".jsonl")):
-                out.extend(self.json_parser.get_nodes_from_documents([node]))
+                # JSON nodes are `key path value` renderings, not slices — there
+                # is nothing to locate; they keep the parser's (absent) span.
+                pieces = self.json_parser.get_nodes_from_documents([node])
             elif code_lang is not None:
-                out.extend(self._split_code(node, code_lang))
+                pieces = self._split_code(node, code_lang)
             else:
-                out.extend(self.sentence_splitter.get_nodes_from_documents([node]))
+                pieces = self.sentence_splitter.get_nodes_from_documents([node])
+                _relocate(node.get_content(), pieces)
+            # plan-rag-context P8: every chunk knows which Document it came from
+            # — `Ingestor._build_chunks` turns a Document-relative span into an
+            # offset into the canonical text (one Document per PDF page / slide /
+            # CSV row, joined with "\n\n"). The sub-splitters set this for their
+            # own output; the nodes this class builds itself (`_table_node`, the
+            # P6 prose windows re-split from a scratch TextNode) did not.
+            for n in pieces:
+                n.relationships[NodeRelationship.SOURCE] = node.as_related_node_info()
+            out.extend(pieces)
         for n in out:
             _fold_section(n)
         return out
@@ -105,7 +117,11 @@ class DispatchSplitter(TransformComponent):
         and (issue #116) row-explode any large Markdown table within a section
         into `col: value` row chunks."""
         out: list[BaseNode] = []
-        for n in self.markdown_parser.get_nodes_from_documents([node]):
+        sections = self.markdown_parser.get_nodes_from_documents([node])
+        # The section spans are the base every table / window span below adds
+        # to, so they must be positions (P8), not first occurrences.
+        _relocate(node.get_content(), sections)
+        for n in sections:
             assert isinstance(n, TextNode)  # MarkdownNodeParser only emits TextNodes
             breadcrumb = _heading_breadcrumb(n)
             content = n.get_content()
@@ -137,21 +153,29 @@ class DispatchSplitter(TransformComponent):
         `MarkdownNodeParser` splits on headings only, with no size cap — a
         heading-less `.md` of 50,000 chars was ONE chunk and ONE vector, its
         meaning averaged into a point (measured through this pipeline), and
-        every VLM description is Markdown too. The sentence splitter's pieces
-        are verbatim slices with relative offsets, so each window's span is
-        `base + offset` into the canonical text — what citations and the
-        context walk index into — and carries the breadcrumb like every other
-        Markdown chunk. A region that fits returns ``None`` so the caller keeps
-        the section parser's own node: the common case stays byte-identical
-        (the #390 index cache keys on the chunk set)."""
+        every VLM description is Markdown too. Each window's span is
+        `base + where the piece sits in the region` (`_relocate`: by position,
+        not first occurrence — P8), into the canonical text that citations and
+        the context walk index; a piece the splitter's phrase fallback
+        rewrote (it drops consecutive punctuation, so `exec(...)` comes back
+        as `exec(.)` — 4.6% of windows on real docs) is anchored on its longest
+        verbatim head and tail, and one that cannot be anchored at all spans
+        the whole region rather than a made-up sub-span. Every window carries
+        the breadcrumb like every other Markdown chunk. A region that fits
+        returns ``None`` so the caller keeps the section parser's own node: the
+        common case stays byte-identical (the #390 index cache keys on the
+        chunk set)."""
         pieces = self.sentence_splitter.get_nodes_from_documents([TextNode(text=body)])
         if len(pieces) <= 1:
             return None
+        _relocate(body, pieces)
         out: list[BaseNode] = []
         for piece in pieces:
             assert isinstance(piece, TextNode)  # SentenceSplitter only emits TextNodes
-            rel_start = piece.start_char_idx or 0
-            rel_end = piece.end_char_idx if piece.end_char_idx is not None else len(body)
+            if piece.start_char_idx is None or piece.end_char_idx is None:
+                rel_start, rel_end = 0, len(body)
+            else:
+                rel_start, rel_end = piece.start_char_idx, piece.end_char_idx
             out.append(
                 _table_node(breadcrumb, piece.get_content(), base + rel_start, base + rel_end)
             )
@@ -220,6 +244,7 @@ class DispatchSplitter(TransformComponent):
             self.code_splitters[language] = splitter
         chunks = splitter.get_nodes_from_documents([node])
         source = node.get_content()
+        _relocate(source, chunks)  # P8: before the fold below hides the verbatim text
         # `_split_code` is only reached for a filename that `code_language_for`
         # matched, so `path` is always a non-empty code filename.
         path = str(node.metadata.get("filename", "")).strip()
@@ -229,6 +254,71 @@ class DispatchSplitter(TransformComponent):
             crumb = f"{path} > {' > '.join(symbols)}" if symbols else path
             n.text = f"{crumb}\n\n{n.get_content()}"
         return chunks
+
+
+# A non-verbatim piece is anchored on its longest verbatim head; a head shorter
+# than this (or than the piece) is a coincidence, not an anchor.
+_ANCHOR_MIN = 8
+
+
+def _locate(text: str, piece: str, cursor: int) -> tuple[int, int] | None:
+    """Where ``piece`` sits in ``text`` at or after ``cursor``.
+
+    plan-rag-context P8. LlamaIndex stamps each split with
+    ``text.find(piece)`` — the FIRST occurrence — so a document that repeats a
+    paragraph put 36 of 38 chunks inside its first 1.8k chars and the context
+    walk went 18k chars back and 0 forward. Searching from the previous
+    piece's start makes the offsets positions.
+
+    A verbatim piece is found directly. A piece the sentence splitter's phrase
+    fallback rewrote (it drops consecutive punctuation) is anchored on the
+    longest head that occurs and the longest tail that occurs after it —
+    both are monotone in length, hence the binary searches — giving the
+    tightest span that still covers it. ``None`` when not even a head of
+    `_ANCHOR_MIN` chars is there."""
+    if not piece:
+        return None
+    pos = text.find(piece, cursor)
+    if pos >= 0:
+        return pos, pos + len(piece)
+    head = _longest(lambda n: text.find(piece[:n], cursor) >= 0, len(piece))
+    if head < min(_ANCHOR_MIN, len(piece)):
+        return None
+    start = text.find(piece[:head], cursor)
+    tail = _longest(lambda n: text.find(piece[-n:], start) >= 0, len(piece))
+    end = text.find(piece[-tail:], start) + tail if tail else start + head
+    return start, max(end, start + head)
+
+
+def _longest(holds: Callable[[int], bool], upper: int) -> int:
+    """The largest ``n`` in ``[0, upper]`` for which ``holds(n)`` — ``holds``
+    is monotone (true up to some length, false beyond) and ``holds(0)`` is
+    taken as true."""
+    lo, hi = 0, upper
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if holds(mid):
+            lo = mid
+        else:
+            hi = mid - 1
+    return lo
+
+
+def _relocate(text: str, nodes: Sequence[BaseNode]) -> None:
+    """Stamp each node's char span with where its content sits in ``text``,
+    walking forward: a piece starts after the previous one started (overlap
+    only ever reaches back INTO the previous piece, never before it). A node
+    whose content is not in ``text`` at all (a breadcrumb already folded in,
+    a `col: value` row) keeps the span it carries."""
+    cursor = 0
+    for n in nodes:
+        if not isinstance(n, TextNode):
+            continue
+        span = _locate(text, n.get_content(), cursor)
+        if span is not None:
+            n.start_char_idx, n.end_char_idx = span
+        if n.start_char_idx is not None:
+            cursor = max(cursor, n.start_char_idx + 1)
 
 
 def _fold_section(node: BaseNode) -> None:
@@ -326,12 +416,21 @@ def build_doc_pipeline(*, embedder: Embedder) -> IngestionPipeline:
     """The production doc-ingest pipeline: dispatch-split → embed. The
     Ingestor feeds `Document` objects (carrying mime + filename metadata)
     into `pipeline.run`, then maps the resulting embedded nodes back to
-    `DocChunk` storage."""
+    `DocChunk` storage.
+
+    LlamaIndex's per-pipeline transformation cache is OFF (P8): on a hit it
+    hands back the nodes computed for an EARLIER run's Documents — same text,
+    different objects — so their SOURCE relationship named Documents this run
+    never passed in, and `_build_chunks` could not map a chunk back to the
+    Document it came from (the #328 dry-run re-parses the same bytes and hit
+    this every time). Dedup of identical content is ours to do, and is: the
+    #390 index cache."""
     return IngestionPipeline(
         transformations=[
             DispatchSplitter(),
             EmbedderAdapter(embedder),
         ],
+        disable_cache=True,
     )
 
 

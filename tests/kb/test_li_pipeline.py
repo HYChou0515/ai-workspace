@@ -1109,3 +1109,46 @@ def test_a_small_markdown_section_is_byte_identical_to_before(
     [doc_id] = ingestor.ingest(collection_id=cid, user="alice", filename="t.md", data=data)
     [c] = _chunks_of(spec, doc_id)
     assert (c.start, c.end) == (2, 21)  # what the section parser gives today
+
+
+# ── plan-rag-context P8: offsets are positions ────────────────────────────
+
+
+def test_locate_is_positional_and_anchors_a_rewritten_piece():
+    from workspace_app.kb.li_pipeline import _locate
+
+    text = "alpha beta. alpha beta. gamma exec(...) delta. alpha beta."
+    # Verbatim, walking forward: the SECOND "alpha beta." is found from a cursor
+    # past the first — `str.find` from 0 would return the first every time.
+    assert _locate(text, "alpha beta.", 0) == (0, 11)
+    assert _locate(text, "alpha beta.", 1) == (12, 23)
+    assert _locate(text, "alpha beta.", 24) == (47, 58)
+    # The sentence splitter's phrase fallback drops consecutive punctuation
+    # (`exec(...)` → `exec(.)`): the piece is anchored on its longest verbatim
+    # head and tail, the tightest span that still covers it.
+    assert _locate(text, "gamma exec(.) delta.", 0) == (24, 46)
+    # Nothing to anchor on (no 8-char head occurs): None, never a made-up span.
+    assert _locate(text, "zzzzzzzzzzzz", 0) is None
+    assert _locate(text, "", 0) is None
+
+
+def test_windows_of_a_long_markdown_section_are_positional():
+    # A section that repeats a paragraph: with first-occurrence offsets every
+    # window sat inside the first repetition. Spans advance, and each is a slice
+    # of the section — or, for a piece the splitter rewrote, at least covers it.
+    from llama_index.core.schema import Document, TextNode
+
+    from workspace_app.kb.li_pipeline import DispatchSplitter
+
+    para = "Repeated paragraph text goes here and it keeps going for a while. "
+    body = "# T\n\n" + para * 30 + "Unique sentence with exec(...) inside it. " + para * 30
+    doc = Document(text=body, metadata={"filename": "r.md", "mime": "text/markdown"})
+    nodes = DispatchSplitter()([doc])
+    assert len(nodes) > 3
+    starts = [n.start_char_idx for n in nodes]
+    assert starts == sorted(starts) and len(set(starts)) == len(starts)
+    for n in nodes:
+        assert isinstance(n, TextNode)
+        piece = n.get_content().split("\n\n", 1)[1]  # after the "T" breadcrumb
+        sliced = body[n.start_char_idx : n.end_char_idx]
+        assert sliced.startswith(piece[:8]) and sliced.endswith(piece[-8:])

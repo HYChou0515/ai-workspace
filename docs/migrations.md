@@ -400,7 +400,25 @@ token」(字元類共用 `kb/tokens.py:CJK_RANGES`)。舊規則下中文沒有�
 受影響的只有沒接 `kb_pipeline` 的 `create_app` 呼叫(測試、離線模式);那些環境的中文文件要重讀一次
 (`POST /api/kb/collections/<collection_id>/reindex`,#390 的 index cache 會先被丟掉)。
 
-## 不是資料遷移,但升版後要跑一次:超長 Markdown 段落的重新索引(plan-rag-context P6)
+## 不是資料遷移,但升版後要跑一次:整個 collection 重讀(plan-rag-context P6 + P8)
+
+兩個 phase 都改了 chunk 的**衍生資料**,都要靠重新索引才會落到既有文件上。找不出哪些文件受影響的話,
+**每個 collection 重讀一次**(`POST /api/kb/collections/<collection_id>/reindex`;#390 的 index cache 會先被丟掉,
+不會複製回舊資料)。
+
+### P8:chunk 的 `start`/`end` 在多頁/多列文件和重複文字上是錯的
+
+管線路徑的 chunk 位移一直是「相對於它那一頁/那一列的 Document」,不是相對於整份 `SourceDoc.text`(PDF 每頁、
+PPTX 每張、CSV/XLSX 每列、JSONL 每行各是一個 Document,用 `\n\n` 接起來才是 canonical text);另外 LlamaIndex 用
+`text.find(piece)`(**第一次出現**)定位切片,重複段落多的文件裡後面的 chunk 全指回前面。master 上沒人拿位移去切原文,
+所以看不出來;這條分支的前後文、`kb_grep`、`read_page` 文字層都靠它,第 2 頁起全錯。P8 起新索引的位移是正確的位置;
+**既有的多頁/多列文件與重複文字的文件,在重讀前位移仍是舊的**——症狀是 `read_page(N≥2)` 顯示第 1 頁的文字、`kb_grep`
+找不到第 2 頁起的字、引用卡的前後文接錯段。受影響的是「有第 2 頁/第 2 列」的所有文件,實務上就是整個 collection。
+
+`DocChunk` 多了一個欄位 `unit_start: int | None`(#227 fan-out 用,其他路徑與舊列都是 `None`):msgspec 預設值,
+**不需要 migrate**。
+
+### P6:超長 Markdown 段落
 
 在真入口量到的 production 缺陷:管線對 **Markdown / VLM 輸出**走 `MarkdownNodeParser`,只按標題切、
 **沒有大小上限**——沒有標題的 `.md`(或任何一個超長的段落、VLM 對一頁的描述)**不論多長都是 1 塊、1 個向量**
@@ -410,8 +428,7 @@ P6 起,超過 sentence 窗口(256 token)的 Markdown 段落會再被 `SentenceSp
 帶標題 breadcrumb);**能放進一塊的段落逐位元不變**(#390 index cache 的 key 不受影響)。真入口實測:同一份無標題
 英文 `.md` 從 1 塊 → 35 塊(平均 1,630 字元)、中文 → 80 塊(平均 154 字)。
 
-**chunk 是衍生資料**:升版只影響之後索引的文件,既有的超長段落仍是一塊,直到重新索引。要修的是**含長 Markdown
-段落的文件**——典型是無標題的 `.md`、匯出的筆記、以及所有靠 VLM 描述的圖片 / 掃描頁。找不出哪些的話,整個 collection
-重讀一次(`POST /api/kb/collections/<collection_id>/reindex`;#390 的 index cache 會先被丟掉,不會複製回舊切法)。
+升版只影響之後索引的文件,既有的超長段落仍是一塊,直到重新索引。要修的是**含長 Markdown 段落的文件**——典型是
+無標題的 `.md`、匯出的筆記、以及所有靠 VLM 描述的圖片 / 掃描頁。
 
 怎麼判斷還沒跑:文件頁上一份幾千字、沒有標題的 `.md` chunk 數是 1,就是舊切法。

@@ -406,9 +406,11 @@ entry point showed: `MarkdownNodeParser` splits on headings only, with no
 size cap, so a heading-less `.md` — or a VLM description — of any length was
 one chunk and one vector. `DispatchSplitter._prose_nodes` now runs the
 sentence splitter over a prose region larger than its window; each piece's
-span is `base + relative offset`, a verbatim slice of the canonical text (the
-splitter's pieces are verbatim with relative offsets — verified), with the
-breadcrumb folded in like every Markdown chunk. Applied to a whole section
+span is `base + where the piece sits in the region`, with the breadcrumb
+folded in like every Markdown chunk. (The first version trusted the
+splitter's own offsets as "verbatim, relative — verified"; review round 3
+showed they are first occurrences, not positions, and that the splitter's
+phrase fallback rewrites ~5% of pieces — Phase 8 replaced that mechanism.) Applied to a whole section
 AND to the prose regions between tables (one rule). A region that fits
 returns the section parser's own node, byte-identical to before, so the
 common case and the #390 cache keys are untouched. Measured through the
@@ -446,6 +448,51 @@ Five findings on P1–P6, all in this branch's own code; the first was round
   same line, "the first containing chunk's page" was whichever row the store
   returned first (unspecified). Chunks are walked by `start`, so the
   earliest one wins deterministically.
+
+## Phase 8 — offsets are positions
+
+Review round 3 (four lenses in parallel) found, independently in three of
+them, that the invariant every consumer on this branch rests on — **a chunk's
+`start`/`end` is where its text sits in `SourceDoc.text`** — was never
+established by the pipeline path. Two defects, one class:
+
+- **Per-Document, not per-document.** LlamaIndex stamps a split with an offset
+  into the Document it came from, and a page-shaped parser emits one Document
+  per page (slide, CSV row, JSONL line), joined with `"\n\n"` into the
+  canonical text. Page 2's chunks pointed into page 1: `read_page(2)` showed
+  page 1's text layer, `kb_grep` was blind past the first page, the context
+  walk widened into the wrong text, `merge_passages` folded three pages'
+  identical spans into one. Pre-existing on master — nothing on master sliced
+  the text at a chunk's offset — and invisible to every fixture on this branch
+  (blank pages, one fake VLM string for every page).
+- **First occurrence, not position.** LlamaIndex locates each split with
+  `text.find(piece)`. A document that repeats a paragraph put 36 of 38 chunks
+  inside its first 1.8k chars; the walk went 18k chars back and 0 forward.
+
+The fix is at the two places the offsets are made:
+
+- `DispatchSplitter` relocates every verbatim piece by walking forward
+  (`_locate` / `_relocate`: a piece starts after the previous one started),
+  anchors a piece the splitter's phrase fallback rewrote (it drops consecutive
+  punctuation, ~5% of windows on real docs) on its longest verbatim head and
+  tail, and points every node at its Document (the `SOURCE` relationship —
+  the nodes this class builds itself never had one). Its transformation cache
+  is off: on a hit it returned nodes bound to an earlier run's Documents.
+- `Ingestor._build_chunks` adds each Document's base in the join (minus the
+  join's stripped lead) and clamps to the text. The #227 fan-out is the one
+  path that cannot know its base while chunking — a batch sees only its own
+  units — so it records the batch-relative start on the chunk
+  (`DocChunk.unit_start`) and finalize, which rejoins the batches, recomputes
+  `start = unit_start + base` before publishing the text and before the #390
+  cache snapshots the chunks. Recomputed from an immutable value, so a
+  re-driven finalize lands on the same numbers: idempotent by construction,
+  no crash window to reason about.
+
+Pinned by `tests/kb/test_chunk_offsets.py` on every path (single job, dry-run,
+fan-out finalize, the cache snapshot) with a real multi-page text-layer PDF,
+a multi-row CSV and a repetitive `.txt`, plus the three consumers on page 2.
+**This changes the stored offsets of every multi-Document and repetitive
+document: they are wrong until re-indexed** — `migrations.md` says so.
 
 ## Out of scope — and findings logged for separate work
 

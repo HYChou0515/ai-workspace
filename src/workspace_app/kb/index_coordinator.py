@@ -26,13 +26,14 @@ import logging
 import math
 import time
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import msgspec
 from specstar import QB, Schema, SpecStar
 from specstar.events import OnSuccessPatch, do
 from specstar.message_queue import NoRetry
 from specstar.types import (
+    MergePatch,
     PreconditionFailedError,
     ResourceAction,
     ResourceIDNotFoundError,
@@ -43,6 +44,7 @@ from ..failover.retry import is_transient
 from ..resources import Collection, DocChunk, IndexRun, IndexUnitText, SourceDoc
 from .index_jobs import IndexJob, IndexJobPayload
 from .index_run import IndexRunStore
+from .ingest import rebase_offsets
 from .job_audit import preserve_job_creator
 from .tokens import count_tokens
 
@@ -62,6 +64,16 @@ _DRAIN_INTERVAL = 0.02  # aclose() poll cadence while waiting for the queue to d
 # independent process jobs never collide on `seq` (which is cosmetic ordering —
 # merge adjacency uses char offsets). Far above any realistic chunks-per-batch.
 _SEQ_STRIDE = 1_000_000
+
+
+def _join_staged(rows: list[IndexUnitText]) -> str:
+    """The rejoined document text of a fan-out: every batch's staged text, in
+    batch order, "\n\n" between, stripped — the ONE rule `_rebase_fanout_offsets`
+    must agree with (each staged text is already stripped and non-empty when it
+    joins, so nothing is stripped off the front)."""
+    return "\n\n".join(r.text for r in rows if r.text).strip()
+
+
 # The verdict the stuck-doc sweep writes. Phrased as what happened + what to do,
 # because it lands in the user-facing failure list next to real parser errors.
 _INTERRUPTED = "processing was interrupted before it finished — re-read to try again"
@@ -685,7 +697,14 @@ class IndexCoordinator:
         assert isinstance(doc, SourceDoc)
         status = "error" if run.failed else "ready"
         detail = "" if status == "ready" else f"{len(run.failed)} batch(es) failed to index"
-        text = self._joined_staged_text(doc_id)
+        staged = self._staged_rows(doc_id)
+        text = _join_staged(staged)
+        # P8: each batch wrote chunk offsets relative to its own text; now that
+        # the batches are rejoined, every chunk's offset into the WHOLE text is
+        # known. Before the text is published and before the #390 cache
+        # snapshots the chunks. Recomputed from `unit_start`, so a re-driven
+        # finalize lands on the same numbers (idempotent by construction).
+        self._rebase_fanout_offsets(doc_id, staged, requester)
         with doc_rm.using(user=updater):
             doc_rm.update(
                 doc_id,
@@ -866,12 +885,41 @@ class IndexCoordinator:
             IndexUnitText(doc_id=doc_id, batch_index=batch_index, text=text),
         )
 
-    def _joined_staged_text(self, doc_id: str) -> str:
+    def _staged_rows(self, doc_id: str) -> list[IndexUnitText]:
+        """Every batch's staged text, in batch order."""
         rm = self._spec.get_resource_manager(IndexUnitText)
         rows = [r.data for r in rm.list_resources((QB["doc_id"] == doc_id).build())]
         rows = [r for r in rows if isinstance(r, IndexUnitText)]
         rows.sort(key=lambda r: r.batch_index)
-        return "\n\n".join(r.text for r in rows if r.text).strip()
+        return rows
+
+    def _rebase_fanout_offsets(
+        self, doc_id: str, staged: list[IndexUnitText], requester: str
+    ) -> None:
+        """P8: shift every fan-out chunk's span by where its batch's text
+        starts in the rejoined document (`_join_staged`: batches with text,
+        in order, "\n\n" between). A chunk whose batch staged no text (a
+        failed batch) is left where it is — the doc is `error` anyway."""
+        bases: dict[int, int] = {}
+        pos = 0
+        for r in staged:
+            if not r.text:
+                continue
+            bases[r.batch_index] = pos
+            pos += len(r.text) + 2
+        chunk_rm = self._spec.get_resource_manager(DocChunk)
+        rows = chunk_rm.list_resources(
+            (QB["source_doc_id"] == doc_id).build(),
+            returns=["data", "info"],
+            partial=["/seq", "/start", "/end", "/unit_start"],
+        )
+        rows = list(rows)
+        chunks = [cast(DocChunk, r.data) for r in rows]
+        with chunk_rm.using(user=requester):
+            for i, start, end in rebase_offsets(chunks, lambda seq: bases.get(seq // _SEQ_STRIDE)):
+                if (start, end) != (chunks[i].start, chunks[i].end):
+                    rid = rows[i].info.resource_id  # ty: ignore[unresolved-attribute]
+                    chunk_rm.patch(rid, MergePatch({"start": start, "end": end}))
 
     def _clear_staged_text(self, doc_id: str) -> None:
         rm = self._spec.get_resource_manager(IndexUnitText)
