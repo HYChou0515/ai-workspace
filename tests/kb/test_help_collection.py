@@ -141,3 +141,30 @@ def test_best_effort_seed_swallows_an_ingest_failure(spec: SpecStar):
     coll = spec.get_resource_manager(Collection).get(cid).data
     assert isinstance(coll, Collection)
     assert coll.name == HELP_COLLECTION_NAME
+
+
+def test_best_effort_seed_hands_changed_docs_to_the_index_and_unchanged_ones_to_nobody(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    """#804: with an ``index`` wired (the API's index queue), the seed only STORES
+    — a changed doc is handed over, still ``indexing``, and no chunk is written
+    here. Identical bytes on the next boot are a no-op all the way: nothing is
+    handed over either, so N pods booting on unchanged content enqueue nothing."""
+    ingestor = Ingestor(spec, chunker=chunker, embedder=embedder)
+    handed: list[tuple[str, str, str]] = []
+
+    def index(doc_id: str, collection_id: str, requested_by: str = "") -> bool:
+        handed.append((doc_id, collection_id, requested_by))
+        return True
+
+    cid = seed_help_collection_best_effort(spec, ingestor, index=index)
+
+    docs = _docs_in(spec, cid)
+    assert docs and all(d.status == "indexing" for d in docs)  # stored, not embedded here
+    assert len(handed) == len(docs)
+    assert {c for _, c, _ in handed} == {cid}
+    assert {u for _, _, u in handed} == {"system"}  # credited to the seed owner, not a worker
+
+    handed.clear()
+    seed_help_collection_best_effort(spec, ingestor, index=index)
+    assert handed == []  # unchanged bytes ⇒ nothing to hand over

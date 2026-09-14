@@ -498,12 +498,15 @@ def build_lifespan(
             with boot_step("start archive-import consumer"):
                 app.state.import_coordinator.start_consuming()
         # #230: seed the platform Help collection from packaged content (repo =
-        # source of truth; identical bytes are a no-op). Ingestion needs the
-        # embedder, so it runs here (off the loop) and is best-effort — a dead
-        # embedder leaves the collection readable-but-unindexed, never blocking
-        # boot. The id is stashed for the /help route. #281 will later feed
-        # source-code-derived wiki into this same collection. The ingestor is
-        # read off app.state (built after the FastAPI app, like the coordinators).
+        # source of truth; identical bytes are a no-op). The STORE runs here (off
+        # the loop, best-effort — a dead backend leaves the collection
+        # readable-but-unindexed, never blocking boot); a doc that changed is
+        # handed to the index queue, not chunked + embedded on this pod (#804 —
+        # every booting pod used to run its own embedding pass; the upload route
+        # never did). The id is stashed for the /help route. #281 will later feed
+        # source-code-derived wiki into this same collection. The ingestor and
+        # the index coordinator are read off app.state (built after the FastAPI
+        # app, like the other coordinators).
         from ..kb.help_collection import HELP_SYSTEM_USER, seed_help_collection_best_effort
 
         with boot_step("seed help collection"):
@@ -512,6 +515,7 @@ def build_lifespan(
                 spec,
                 app.state.ingestor,
                 user=HELP_SYSTEM_USER,
+                index=app.state.index_coordinator.enqueue,
             )
         # (#345's activity-heartbeat model is registered in `create_app`, right
         # after `spec.apply` — it must exist whether or not a lifespan ran, since
