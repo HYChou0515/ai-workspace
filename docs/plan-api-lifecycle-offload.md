@@ -14,7 +14,7 @@ pod-local 狀態** —— 還有四個，決定跟 #804 一起做完、不拆：
 
 | # | 現況 | 為什麼不該在那 | 搬去哪 |
 | --- | --- | --- | --- |
-| A | `blob_gc_sweeper` → `spec.gc(mode="reconcile")`：搶到 lease 的那顆 API pod 每小時掃遍**所有 model 的所有 revision**，把每個 live blob id 收進一個 Python `set`，再走一遍所有 blob | 全 store 讀進記憶體；跟 cluster_sweeper 同類，只是有 lease、頻率低 | 新的 `maintenance` JobType + `rca-worker-maintenance`；API 只留 producer tick |
+| A | `blob_gc_sweeper` → `spec.gc(mode="reconcile")`：搶到 lease 的那顆 API pod 每小時掃遍**所有 model 的所有 revision**，把每個 live blob id 收進一個 Python `set`，再走一遍所有 blob | 全 store 讀進記憶體；跟 cluster_sweeper 同類，只是有 lease、頻率低 | **不搬（見下）** |
 | B | `user_schedule_loop`：**每顆 pod** 每 tick 透過 files facade 讀索引裡每一頁的 `schedules.json` | CAS 只去重「觸發」不去重「讀」；N pod × N 頁 × 每分鐘 | 同一份 window-claim ledger 加一個「掃描 lease」，一個 window 一顆 pod 掃 |
 | C | `trigger_sweeper`：每顆 pod 每 tick 重讀所有 profile 的 `triggers.json` + 逐 trigger specstar 讀 | 同 B 的形狀，成本較小 | 跟 B 併成一條 loop，同一個 lease |
 | D | 開機 `seed help collection`：`Ingestor.ingest` = store + **同步 index**（chunk + embed）在 API 上做 | 上傳路徑的慣例是 store + 排 index job；這裡沒照做，變成 readiness 延遲（本機 fresh store 49s） | `store` + `index_coordinator.enqueue` |
@@ -34,13 +34,21 @@ pod-local 狀態** —— 還有四個，決定跟 #804 一起做完、不拆：
 
 ## 已拍板的決定
 
-1. **A 走「API producer tick → `maintenance` job → 專屬 worker」，不走 CronJob。**
+0. **A 不搬。** 動手前讀了 `filestore/blob_gc.py` 的 module docstring：**GC 必須跑在所有會引用 blob
+   的 model 都已註冊的 spec 上**。specstar 的 `_gc_reconcile` 只從 `self.resource_managers`（已註冊的
+   model）收 live set；worker 的 spec 沒有 filestore ⇒ 沒有 `WorkspaceFile`，而 `make_spec` 之外還有
+   30 個 `add_model` 註冊點（filestore、monitor、各 job model、lifespan 的 coordination model）。搬到
+   worker ⇒ 那些 model 的 blob 全被當孤兒 ⇒ t1 後 quarantine、t2 後**永久刪除**。這是資料遺失，不是
+   效能。API 上的它有 lease（一顆 pod、一小時一次），不是 per-pod 重複那一類，記憶體是 pass 結束就
+   釋放的暫時集合 —— 留著是對的。要搬的前提是 specstar 的 GC 改成按 table 探索而非按已註冊 model
+   （specstar 的功能，不在這個 PR）。以下 1–2 因此作廢，留作紀錄。
+1. ~~**A 走「API producer tick → `maintenance` job → 專屬 worker」，不走 CronJob。**~~（作廢）
    repo 的 CronJob 先例（`cronjob-graph.yaml`）是 `curl POST /api/graph-job`，後面本來就要有
    worker；既然 worker 一定要有，API 留一個純 producer tick（跟 cluster sweep 同形、coalesce）
    就能保住 `filestore.gc_interval_sec` 的原意（「多久跑一次；0/None = 關」），不必改 k8s
    CronJob、不必動 config 語意。CronJob 是 wall-clock 排程（每週六 03:00）才需要的東西。
    先前「改成 CronJob 最乾淨」的說法在此收回。
-2. **A 開新的 JobType `maintenance`（自己的 worker），不掛在 kb-import 上。** blob GC 是
+2. ~~**A 開新的 JobType `maintenance`（自己的 worker），不掛在 kb-import 上。**~~（作廢） blob GC 是
    filestore/specstar 全域的維護，沒有 KB 的 domain home；`maintenance` 是誠實的名字，之後同類
    的維護工作（例如 #778 幽靈列 sweep）有地方去。cluster sweep 掛 card-gen 是因為 reconcile
    本來就住那裡 —— 兩者判準一致：**跟它同 domain 的 worker；沒有就開自己的**。
@@ -57,7 +65,7 @@ pod-local 狀態** —— 還有四個，決定跟 #804 一起做完、不拆：
 
 ## Phases（接續 P1–P3；flat integer）
 
-### P4 — `maintenance` coordinator + `blob_gc` job；API 變 producer
+### P4 — ~~`maintenance` coordinator + `blob_gc` job；API 變 producer~~（作廢，見決定 0）
 
 - `src/workspace_app/maintenance/coordinator.py`（新）：`MaintenanceJob(Job[MaintenancePayload,
   MaintenanceArtifact])`，`MaintenancePayload.kind = "blob_gc"`，`partition_key = "blob_gc"`
@@ -124,6 +132,8 @@ pod-local 狀態** —— 還有四個，決定跟 #804 一起做完、不拆：
 
 ## 不做的
 
+- **blob GC 留在 API**（決定 0）。
+
 - 不動 `mirror_warm` 的每 tick 走檔案樹（pod-local，cost ∝ 這顆 pod 的 warm item，是 #345 的設計）。
 - 不把 `goal_offhours_sweeper` 搬走（它要 turn engine）。
 - 不新增 CronJob、不改 `filestore.gc_interval_sec` 的語意。
@@ -133,7 +143,7 @@ pod-local 狀態** —— 還有四個，決定跟 #804 一起做完、不拆：
 ## 驗證
 
 - 每個 phase：targeted tests + `ruff check` / `ruff format --check` / `ty check`，commit 一次。
-- 全部推完：真入口起一顆 `run_consumers: false` 的 API（本機）⇒ 30 秒內看到 `blob_gc`、
-  `cluster_sweep` job 各 pending、help SourceDoc `indexing`、沒有 DocChunk；再起
-  `python -m workspace_app.worker maintenance` + `card-gen` + `index` ⇒ 三者都被吃掉。
+- 全部推完：真入口起一顆 `run_consumers: false` 的 API（本機）⇒ 看到 `cluster_sweep` job
+  pending、help SourceDoc `indexing`、沒有 DocChunk；再起 `python -m workspace_app.worker
+  card-gen` + `index` ⇒ 兩者都被吃掉。
 - CI 綠 + review 乾淨才報。
