@@ -1246,13 +1246,13 @@ def create_app(
         read_live=files.read,
         start=_start_page_schedule,
         owner_of=_owner_of_item,
-        # The SAME ceiling the page's own `startRun` is held to. Without it
-        # the two entrances disagreed about what a page may start, and the
-        # scheduled one said nothing at all when the answer was no.
-        # Through a lambda because the resolver is defined further down and
-        # this is built here — resolved when the sweep fires, the same
-        # deferred wiring `_start_page_schedule` explains above.
-        workflows_for=lambda item_id: _workflows_for_item(item_id),
+        # The SAME rule the page's own `startRun` is held to (`workflow.offered`),
+        # answered from the DURABLE store — `_workflows_for_sweep`, for the same
+        # reason `read=` above is the snapshot and not the facade. Through a
+        # lambda because the resolver is defined further down and this is built
+        # here — resolved when the sweep fires, the same deferred wiring
+        # `_start_page_schedule` explains above.
+        workflows_for=lambda item_id: _workflows_for_sweep(item_id),
         max_rows=max_page_schedules,
     )
     lifespan = build_lifespan(
@@ -2264,17 +2264,35 @@ def create_app(
     async def _workflows_for_item(item_id: str) -> Sequence[str]:
         """Which workflows this item may start — the ONE list every entrance
         consults (`workflow.offered`): the profile's workflows plus the ones
-        the item authored under `.workflows/`.
+        the item authored under `.workflows/`. For a REQUEST (a page's
+        `startRun`), so the listing is the facade's: somebody is using the item.
 
         Awaited, because the item's own workflows are files, and the locator
-        lookups are offloaded so the sweep and the page route never hold the
-        loop on a specstar read.
+        lookups are offloaded so the route never holds the loop on a specstar
+        read.
         """
         slug, profile = await asyncio.gather(
             asyncio.to_thread(locator.slug_of, item_id),
             asyncio.to_thread(locator.profile_of, item_id),
         )
-        return await offered_workflow_ids(files, item_id, slug=slug or "", profile=profile)
+        return await offered_workflow_ids(files.ls, item_id, slug=slug or "", profile=profile)
+
+    async def _workflows_for_sweep(item_id: str) -> Sequence[str]:
+        """The SAME list, for the schedule sweep — from the DURABLE store, not the
+        facade. The facade's `ls` is warm-first, and on the hosted backend that
+        probe is the recovery trigger: an address the reaper did not clear plus a
+        sandbox it did take away means the listing REBUILDS it. Per item with a
+        schedule, per tick, on every pod — permanently undoing idle reap for
+        exactly those items, which is the trap the sweeper's `read=filestore.read`
+        wiring above already names. The snapshot lags by at most one mirror
+        interval; for a workflow saved minutes before its first 09:00 that is
+        no lag at all.
+        """
+        slug, profile = await asyncio.gather(
+            asyncio.to_thread(locator.slug_of, item_id),
+            asyncio.to_thread(locator.profile_of, item_id),
+        )
+        return await offered_workflow_ids(filestore.ls, item_id, slug=slug or "", profile=profile)
 
     register_wui_routes(
         api,

@@ -23,7 +23,9 @@ Two shapes, because the callers ask two questions:
 * `offered_workflow_ids` — the LIST, for a gate ("is `run` one of these?"). A
   listing of `.workflows/` and nothing more: it does not read the files, so a
   malformed one is still named here and fails LOUDLY at start, where the
-  orchestrator says why, rather than vanishing from the list in silence.
+  orchestrator says why, rather than vanishing from the list in silence. The
+  listing itself is handed in (`ListFiles`), because WHICH store answers it is
+  the caller's responsibility — see the note on that type.
 * `resolve_offered_workflow` — ONE manifest, for a route that needs the phases
   or the title. Workspace first, so a shadowed package workflow's manifest is
   never handed out for a run that will execute the workspace one.
@@ -31,33 +33,50 @@ Two shapes, because the callers ask two questions:
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+
 from ..apps.profiles import load_profile_workflow, profile_workflows
 from ..files import WorkspaceFiles
 from .manifest import WorkflowManifest
-from .workspace_store import WORKSPACE_WORKFLOW_DIR, load_workspace_workflow
+from .workspace_store import (
+    WORKSPACE_WORKFLOW_DIR,
+    is_workspace_workflow_path,
+    load_workspace_workflow,
+)
+
+#: `ls(workspace_id, prefix) -> paths`. The SOURCE is the caller's choice and
+#: the difference is not cosmetic: `WorkspaceFiles.ls` (the facade) is warm-first,
+#: and on the hosted backend that probe is the recovery trigger — a reaped
+#: sandbox whose address is still held gets REBUILT by it. Right for a request
+#: (somebody is about to use the item); wrong for the schedule sweep, which
+#: would then resurrect every reaped sandbox that has a schedule, once per tick,
+#: on every pod — the exact thing its `read=filestore.read` wiring avoids. The
+#: sweep hands in the durable store's `ls`; a request hands in the facade's.
+ListFiles = Callable[[str, str], Awaitable[list[str]]]
 
 
-async def workspace_workflow_ids(files: WorkspaceFiles, item_id: str) -> list[str]:
+async def workspace_workflow_ids(ls: ListFiles, item_id: str) -> list[str]:
     """The ids of the workflows saved under this item's `.workflows/` — flat
     `<id>.json` only, the same shape `workspace_workflow_metas` lists, without
-    reading any of them."""
+    reading any of them. The item's `schedules.json` lives in the same folder
+    and is not one of them."""
     prefix = f"/{WORKSPACE_WORKFLOW_DIR}/"
     return sorted(
         path[len(prefix) : -len(".json")]
-        for path in await files.ls(item_id, prefix)
-        if "/" not in path[len(prefix) :] and path.endswith(".json")
+        for path in await ls(item_id, prefix)
+        if is_workspace_workflow_path(path)
     )
 
 
 async def offered_workflow_ids(
-    files: WorkspaceFiles, item_id: str, *, slug: str, profile: str
+    ls: ListFiles, item_id: str, *, slug: str, profile: str
 ) -> list[str]:
     """Every workflow id this item may start: the profile's plus the item's own.
     Empty when the item belongs to no app."""
     if not slug:
         return []
     package = [w.id for w in profile_workflows(slug, profile)]
-    own = await workspace_workflow_ids(files, item_id)
+    own = await workspace_workflow_ids(ls, item_id)
     return sorted(set(package) | set(own))
 
 

@@ -37,7 +37,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 from msgspec import Struct
 
 from .triggers import Schedule, _valid_tz, next_run
-from .workspace_store import WORKSPACE_WORKFLOW_DIR
+from .workspace_store import SCHEDULES_FILE, WORKSPACE_WORKFLOW_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -431,11 +431,6 @@ class SchedulePolicy(Struct, frozen=True):
     max_rows: int
     sweep_enabled: bool
 
-
-#: The one filename that means "schedules" — a page's sits in the page's own
-#: folder, an item's beside its workflows. `api.schedule_index.is_schedule_file`
-#: matches on this exact name; spelled once here so the two cannot drift.
-SCHEDULES_FILE = "schedules.json"
 
 #: Where an ITEM's own schedules live — beside its workflows, the folder the
 #: agent's `save_workflow` already writes. `is_schedule_file` accepts both this

@@ -220,3 +220,32 @@ def test_the_turn_boundary_reconciles_the_schedule_index() -> None:
     )
     assert "index=schedule_index" in flat, "it is called without the index to write to"
     assert "ls=files.ls" in flat, "it is called without a way to list the item"
+
+
+def test_the_sweep_lists_the_items_workflows_from_the_durable_store() -> None:
+    """The third read the sweep makes, and the same trap as `read=`: the item's
+    own workflows are files under `.workflows/`, listed to decide whether a row's
+    `run` is one this item offers. Listing through the facade is warm-first, and
+    on the hosted backend that probe is the recovery trigger — every reaped
+    sandbox with a schedule would be rebuilt once per tick, on every pod. The
+    review that found this measured it as "permanently undoing idle reap for
+    exactly those items". Guarded the way its siblings are: what is under test
+    is a WIRING choice that reads as a harmless simplification up close."""
+    source = _APP.read_text(encoding="utf-8")
+
+    call = re.search(r"UserScheduleSweeper\((.*?)\n    \)", source, re.DOTALL)
+    assert call is not None, "the sweeper is no longer built here — move this guard with it"
+    wired = re.search(r"workflows_for=lambda item_id: (\w+)\(item_id\)", call.group(1))
+    assert wired is not None, "the sweeper is built without a workflow resolver"
+    resolver = wired.group(1)
+    assert resolver != "_workflows_for_item", (
+        "the sweep shares the REQUEST resolver, which lists through the facade — "
+        "warm-first, so every reaped sandbox with a schedule is rebuilt per tick"
+    )
+
+    body = source.split(f"async def {resolver}(", 1)[-1].split("\n\n    ", 1)[0]
+    assert "offered_workflow_ids(" in body, f"{resolver} no longer consults the shared rule"
+    assert "filestore.ls" in body and "files.ls" not in body, (
+        f"{resolver} must list the item's workflows from the durable store (filestore.ls), "
+        "never the facade"
+    )

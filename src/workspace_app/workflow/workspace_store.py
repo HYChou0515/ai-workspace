@@ -34,6 +34,27 @@ def slugify_workflow_id(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
 
 
+#: The one filename that means "schedules" — an item's sits here beside its
+#: workflows, a page's in the page's own folder. Defined in this leaf module
+#: (beside `WORKSPACE_WORKFLOW_DIR`) so `user_schedules` and the index can both
+#: import it without a cycle; spelled once.
+SCHEDULES_FILE = "schedules.json"
+
+
+def is_workspace_workflow_path(path: str) -> bool:
+    """Is `path` a workflow file of the workspace — a FLAT `.workflows/<id>.json`?
+    Nested files are not, and neither is the item's `schedules.json`, which
+    lives in the same folder and would otherwise be offered as a workflow
+    named `schedules` (accepted by the gates, unrunnable by the orchestrator).
+    One predicate for the id listing and the manifest listing, so the two
+    cannot disagree about what counts."""
+    prefix = f"/{WORKSPACE_WORKFLOW_DIR}/"
+    if not path.startswith(prefix):
+        return False
+    rest = path[len(prefix) :]
+    return "/" not in rest and rest.endswith(".json") and rest != SCHEDULES_FILE
+
+
 def workspace_workflow_path(slug: str) -> str:
     return f"/{WORKSPACE_WORKFLOW_DIR}/{slug}.json"
 
@@ -92,8 +113,7 @@ async def workspace_workflow_metas(
     wanted = [
         path
         for path in sorted(await files.ls(workspace_id, prefix))
-        # only flat .workflows/<id>.json (no nested dirs)
-        if "/" not in path[len(prefix) :] and path.endswith(".json")
+        if is_workspace_workflow_path(path)
     ]
     # One operation, one resolution of where the workspace lives — reading them
     # a call at a time put a second sandbox round trip in front of every file.

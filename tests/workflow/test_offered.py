@@ -35,7 +35,7 @@ def test_an_item_offers_its_profiles_workflows_and_its_own() -> None:
     asyncio.run(files.write(item, "/.workflows/nested/deep.json", _DEF))  # not flat → not offered
     asyncio.run(files.write(item, "/.workflows/notes.md", b"x"))  # not a workflow
 
-    ids = asyncio.run(offered_workflow_ids(files, item, slug="playground", profile="multi"))
+    ids = asyncio.run(offered_workflow_ids(files.ls, item, slug="playground", profile="multi"))
 
     assert ids == ["alpha", "beta", "nightly"]
 
@@ -46,16 +46,52 @@ def test_an_interactive_profile_offers_only_what_the_item_authored() -> None:
     files, item = _files()
     asyncio.run(files.write(item, "/.workflows/nightly.json", _DEF))
 
-    ids = asyncio.run(offered_workflow_ids(files, item, slug="playground", profile="default"))
+    ids = asyncio.run(offered_workflow_ids(files.ls, item, slug="playground", profile="default"))
 
     assert ids == ["nightly"]
+
+
+def test_the_schedules_file_is_not_a_workflow() -> None:
+    """`.workflows/schedules.json` sits in the same folder and is `.json` too. It
+    used to be listed as a workflow called `schedules`: save_schedules accepted
+    `run: "schedules"`, the sweep's gate passed it and it failed deep inside
+    `orchestrator.start`, while the panel's Run list (which parses) never showed
+    it — the one list every entrance consults disagreed with the panel by
+    construction."""
+    files, item = _files()
+    asyncio.run(files.write(item, "/.workflows/nightly.json", _DEF))
+    asyncio.run(files.write(item, "/.workflows/schedules.json", b'{"schedules": []}'))
+
+    ids = asyncio.run(offered_workflow_ids(files.ls, item, slug="playground", profile="default"))
+
+    assert ids == ["nightly"]
+
+
+def test_the_listing_source_is_the_callers_choice() -> None:
+    """The rule is one; the SOURCE is not. A request answers from the facade
+    (live sandbox first); the sweep must answer from the durable store, because
+    the facade's warm-first probe is the recovery trigger on the hosted backend
+    and would rebuild every reaped sandbox that has a schedule, once per tick.
+    So the listing is handed in, and whatever answers `ls(item, prefix)` decides."""
+    calls: list[tuple[str, str]] = []
+
+    async def durable_ls(item_id: str, prefix: str = "") -> list[str]:
+        calls.append((item_id, prefix))
+        return [f"{prefix}nightly.json"]
+
+    ids = asyncio.run(
+        offered_workflow_ids(durable_ls, "item-1", slug="playground", profile="default")
+    )
+
+    assert ids == ["nightly"]
+    assert calls == [("item-1", "/.workflows/")]
 
 
 def test_an_item_of_no_app_offers_nothing() -> None:
     files, item = _files()
     asyncio.run(files.write(item, "/.workflows/nightly.json", _DEF))
 
-    assert asyncio.run(offered_workflow_ids(files, item, slug="", profile="")) == []
+    assert asyncio.run(offered_workflow_ids(files.ls, item, slug="", profile="")) == []
     assert (
         asyncio.run(
             resolve_offered_workflow(files, item, slug="", profile="", workflow_id="nightly")

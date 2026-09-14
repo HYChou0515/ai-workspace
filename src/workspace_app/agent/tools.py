@@ -2286,7 +2286,7 @@ async def save_schedules_impl(ctx: RunContextWrapper[AgentToolContext], schedule
             f"{policy.max_rows} per file — fold the fan-out into the workflow instead"
         )
     offered = await offered_workflow_ids(
-        files, inv, slug=ctx.context.app_slug or "", profile=ctx.context.template_profile or ""
+        files.ls, inv, slug=ctx.context.app_slug or "", profile=ctx.context.template_profile or ""
     )
     unknown = sorted({row.run for row in rows if row.run not in offered})
     if unknown:

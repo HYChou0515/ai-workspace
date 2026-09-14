@@ -5,13 +5,14 @@ import type { FileService } from "../api/fileService";
 import { qk } from "../api/queryKeys";
 import { TemplateConflictError, workflowTemplatesApi } from "../api/workflowTemplates";
 import { workflowApi } from "../api/workflows";
-import { SCHEDULES_PATH, type ScheduleRow } from "../api/schedules";
+import { SCHEDULES_PATH, type ScheduleRow, schedulesApi } from "../api/schedules";
 import { WORKFLOWS_DIR } from "../api/workspaceWorkflows";
 import { useItemSchedules } from "../hooks/useItemSchedules";
 import { useWorkflowTemplates } from "../hooks/useWorkflowTemplates";
 import { useWorkspaceWorkflows } from "../hooks/useWorkspaceWorkflows";
 import { type MsgKey, useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
+import { sameShape } from "../lib/sameShape";
 import { Icon } from "./Icon";
 import { useDirtyClose } from "../hooks/useDirtyClose";
 import { useDialog } from "./Dialog";
@@ -118,9 +119,16 @@ export function WorkflowsModal({
   /** Cancel one schedule: rewrite the file minus that row, through the ordinary
    * file write so it lands on the path the platform indexes. Every OTHER row is
    * kept exactly as written — the refused ones included — because a rewrite that
-   * dropped them would cancel schedules nobody asked to cancel. */
+   * dropped them would cancel schedules nobody asked to cancel.
+   *
+   * From the file AS IT IS NOW, not from what this panel loaded: the query is a
+   * cache with a 30s staleTime, and between the load and the click the agent's
+   * `save_schedules` may have added a row. Rewriting from the cache would write
+   * that row out of existence, silently — the exact failure the sentence above
+   * promises to avoid. So: fetch, find the clicked row by what it SAYS (the
+   * index may have shifted), and rewrite from that. A row that is already gone
+   * means nothing to write. */
   const removeSchedule = async (row: ScheduleRow) => {
-    const rows = schedules.data?.rows ?? [];
     const choice = await dialog.confirm({
       title: t("schedules.removeTitle"),
       body: t("schedules.removeConfirm", {
@@ -134,10 +142,18 @@ export function WorkflowsModal({
     if (choice !== "remove") return;
     setBusy(true);
     try {
-      const kept = rows.filter((r) => r.index !== row.index).map((r) => r.raw);
-      await fileService.writeFile(SCHEDULES_PATH, JSON.stringify({ schedules: kept }, null, 2));
+      const fresh = await qc.fetchQuery({
+        queryKey: qk.itemSchedules(slug, itemId),
+        queryFn: () => schedulesApi.list(slug, itemId),
+        staleTime: 0,
+      });
+      const target = fresh.rows.find((r) => sameShape(r.raw, row.raw));
+      if (target) {
+        const kept = fresh.rows.filter((r) => r !== target).map((r) => r.raw);
+        await fileService.writeFile(SCHEDULES_PATH, JSON.stringify({ schedules: kept }, null, 2));
+        await qc.invalidateQueries({ queryKey: qk.files(itemId) });
+      }
       await qc.invalidateQueries({ queryKey: qk.itemSchedules(slug, itemId) });
-      await qc.invalidateQueries({ queryKey: qk.files(itemId) });
     } finally {
       setBusy(false);
     }
@@ -417,10 +433,12 @@ function describeSchedule(raw: Record<string, unknown>, t: ReturnType<typeof use
       words = t("schedules.every.monthly", { dom: Number(raw.dom) || 0, at });
       break;
     case "daily":
+    case undefined:
+      // The parser's own default: a row that names no period is daily.
       words = t("schedules.every.daily", { at });
       break;
     default:
-      words = String(raw.every ?? "?");
+      words = String(raw.every);
   }
   return `${words} (${tz})`;
 }

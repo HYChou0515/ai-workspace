@@ -180,6 +180,52 @@ describe("WorkflowsModal — schedules", () => {
     });
   });
 
+  it("removing rewrites from the FILE AS IT IS NOW, not from what the panel loaded earlier", async () => {
+    // The panel opened with [A]. Meanwhile the agent's save_schedules added B.
+    // Removing A from the loaded list would write [] — cancelling B, which
+    // nobody asked to cancel. The rewrite must start from a fresh read.
+    listMock.mockResolvedValue([]);
+    const b = { ...NIGHTLY, index: 1, raw: { every: "hourly", run: "nightly" } };
+    schedulesMock.mockResolvedValueOnce(schedules({ rows: [NIGHTLY] }));
+    schedulesMock.mockResolvedValue(schedules({ rows: [NIGHTLY, b] }));
+    const { svc, writes } = fakeService();
+    render(svc);
+
+    fireEvent.click(await screen.findByTestId("schedule-remove-0"));
+    fireEvent.click(await screen.findByRole("button", { name: "移除" }));
+
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(JSON.parse(writes[0].body)).toEqual({
+      schedules: [{ every: "hourly", run: "nightly" }],
+    });
+  });
+
+  it("removing a row that is already gone writes nothing", async () => {
+    listMock.mockResolvedValue([]);
+    schedulesMock.mockResolvedValueOnce(schedules({ rows: [NIGHTLY] }));
+    schedulesMock.mockResolvedValue(schedules({ rows: [] })); // the agent removed it first
+    const { svc, writes } = fakeService();
+    render(svc);
+
+    fireEvent.click(await screen.findByTestId("schedule-remove-0"));
+    fireEvent.click(await screen.findByRole("button", { name: "移除" }));
+
+    await waitFor(() => expect(screen.queryByTestId("schedule-row-0")).toBeNull());
+    expect(writes).toHaveLength(0);
+  });
+
+  it("a row without `every` reads as daily, the way the sweep reads it", async () => {
+    listMock.mockResolvedValue([]);
+    schedulesMock.mockResolvedValue(
+      schedules({ rows: [{ ...NIGHTLY, raw: { at: "09:00", run: "nightly" } }] }),
+    );
+    render(fakeService().svc);
+
+    const row = await screen.findByTestId("schedule-row-0");
+    expect(row).toHaveTextContent("每天 09:00");
+    expect(row).not.toHaveTextContent("?");
+  });
+
   it("removing asks once, and a cancel writes nothing", async () => {
     listMock.mockResolvedValue([]);
     schedulesMock.mockResolvedValue(schedules());

@@ -213,7 +213,7 @@ def register_workflow_routes(
         except FileNotFound:
             return SchedulesOut(enabled=schedule_policy.sweep_enabled, rows=[], problems=[])
         profile = locator.profile_of(investigation_id)
-        offered = await offered_workflow_ids(files, investigation_id, slug=slug, profile=profile)
+        offered = await offered_workflow_ids(files.ls, investigation_id, slug=slug, profile=profile)
         # One hop off the loop: the ledger reads inside are blocking specstar I/O.
         views, problems = await asyncio.to_thread(
             schedule_views,
