@@ -462,3 +462,74 @@ async def test_a_process_job_replayed_after_finalize_is_a_noop():
         (QB["doc_id"] == doc_id).build()
     )
     assert list(staged) == []
+
+
+async def test_a_batch_replayed_while_finalize_runs_rebases_itself():
+    """plan-rag-context P15 (round 5): the P12 guard is check-then-act. A
+    duplicate delivery that passed it (run still `running`) and whose chunk
+    write lands AFTER finalize rebased the batch — its embedding outlived the
+    other batches and the finalize — used to put that batch back to
+    batch-relative offsets and leak a staged row. Finalize now publishes the
+    batch bases on the run before rebasing; a late write sees them and rebases
+    its own chunks, staging nothing."""
+    from workspace_app.kb.index_jobs import IndexJobPayload
+
+    spec = make_spec(default_user="u")
+    cid = spec.get_resource_manager(Collection).create(Collection(name="c")).resource_id
+    ingestor, coord = _build(spec, csv_batch=2)
+    doc_id = _store_csv(ingestor, cid, rows=5)  # 3 batches: (0,2) (2,4) (4,5)
+
+    def job(kind: str, b: int = 0, s: int = 0, e: int = 0) -> IndexJobPayload:
+        return IndexJobPayload(
+            doc_id=doc_id, collection_id=cid, kind=kind, unit_start=s, unit_end=e, batch_index=b
+        )
+
+    coord._handle_split(job("split"), "u", 0, 0)
+    coord._handle_process(job("process", 0, 0, 2), "u")
+    coord._handle_process(job("process", 1, 2, 4), "u")
+    coord._handle_process(job("process", 2, 4, 5), "u")  # claims finalize (queued)
+    # Delivery B of batch 2: the guard passes (still running); finalize runs
+    # inside B's index_units window, so B's chunk write lands after the rebase.
+    orig = ingestor.index_units
+    fired = 0
+
+    def interposed(*a, **kw):
+        nonlocal fired
+        fired += 1
+        if fired == 1:
+            coord._handle_finalize(job("finalize"), "u")
+        return orig(*a, **kw)
+
+    ingestor.index_units = interposed
+    try:
+        coord._handle_process(job("process", 2, 4, 5), "u")
+    finally:
+        ingestor.index_units = orig
+    assert fired == 1
+    doc = spec.get_resource_manager(SourceDoc).get(doc_id).data
+    assert isinstance(doc, SourceDoc) and doc.status == "ready" and doc.text is not None
+    chunks = _chunks(spec, doc_id)
+    assert len(chunks) == 5
+    assert all(doc.text[c.start : c.end] == c.text for c in chunks)
+    staged = spec.get_resource_manager(IndexUnitText).list_resources(
+        (QB["doc_id"] == doc_id).build()
+    )
+    assert list(staged) == []
+    run = spec.get_resource_manager(IndexRun).get(doc_id).data
+    assert isinstance(run, IndexRun) and run.status == "done"
+    assert set(run.batch_bases) == {"0", "1", "2"}
+
+
+async def test_a_staged_row_left_by_an_earlier_run_never_reaches_the_next_text():
+    # P15: the split step clears staging, so a row a late replay left behind
+    # cannot be rejoined into a later run's `SourceDoc.text`.
+    spec = make_spec(default_user="u")
+    cid = spec.get_resource_manager(Collection).create(Collection(name="c")).resource_id
+    ingestor, coord = _build(spec, csv_batch=2)
+    doc_id = _store_csv(ingestor, cid, rows=5)
+    coord._stage_text(doc_id, 7, "STALE TEXT FROM A PREVIOUS RUN")
+    coord.enqueue(doc_id, cid)
+    await coord.aclose()
+    doc = spec.get_resource_manager(SourceDoc).get(doc_id).data
+    assert isinstance(doc, SourceDoc) and doc.text is not None
+    assert "STALE" not in doc.text

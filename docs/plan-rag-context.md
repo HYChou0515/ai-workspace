@@ -667,6 +667,21 @@ table of contents is fully spanned and `kb_grep` finds its entries, repeated
 code sits at the splitter's cuts. 3.5 MB ingests in 11.4 s (P12: 11.2 s),
 8,006 of 8,006 chunks verbatim at their span.
 
+## Phase 15 — a batch replayed during finalize rebases itself
+
+Round 5: the P12 guard on `_handle_process` is check-then-act. A duplicate
+delivery (#227's at-least-once broker) that passed the guard while the run
+was still running, and whose embedding outlived the other batches AND the
+finalize, wrote its chunks batch-relative after the rebase and staged a
+text row after staging was cleared — with the run `done`, nothing would
+ever rebase them, and the stale row would be rejoined into the NEXT run's
+text. Finalize now publishes every batch's base on the `IndexRun`
+(`batch_bases`) BEFORE it rebases a single chunk; a batch whose write lands
+after that point reads its base and rebases its own chunks, staging
+nothing; and the split step clears staging so nothing an earlier run left
+can reach a later one. Driven through the real handlers with `index_units`
+interposed so finalize runs inside the duplicate's window — red on P14.
+
 ## Out of scope — and findings logged for separate work
 
 Found by the review rounds, pre-existing on master, not touched here:

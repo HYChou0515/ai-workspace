@@ -66,6 +66,19 @@ _DRAIN_INTERVAL = 0.02  # aclose() poll cadence while waiting for the queue to d
 _SEQ_STRIDE = 1_000_000
 
 
+def _batch_bases(rows: list[IndexUnitText]) -> dict[int, int]:
+    """Where each batch's text starts in `_join_staged(rows)` — batches with
+    text, in order, "\n\n" between; the ONE rule the two must agree on."""
+    bases: dict[int, int] = {}
+    pos = 0
+    for r in rows:
+        if not r.text:
+            continue
+        bases[r.batch_index] = pos
+        pos += len(r.text) + 2
+    return bases
+
+
 def _join_staged(rows: list[IndexUnitText]) -> str:
     """The rejoined document text of a fan-out: every batch's staged text, in
     batch order, "\n\n" between, stripped — the ONE rule `_rebase_fanout_offsets`
@@ -536,6 +549,9 @@ class IndexCoordinator:
         batch = self._unit_batch_sizes.get(parser_id, self._default_unit_batch)
         nbatches = math.ceil(units / batch)
         self._ingestor.prepare_fanout(doc_id)  # clear chunks ONCE before fan-out
+        # P15: a replay that staged its text after the previous run's finalize
+        # cleared staging would otherwise be rejoined into THIS run's text.
+        self._clear_staged_text(doc_id)
         # #248: seed the run with the doc's unit count (PDF pages, CSV rows, …) so
         # the FE can show a real done/total progress bar.
         self._runs.start(doc_id, cid, total=nbatches, units_total=units)
@@ -661,6 +677,20 @@ class IndexCoordinator:
             if not is_transient(exc):
                 raise NoRetry(str(exc)) from exc  # permanent → dead-letter now
             raise  # transient → broker re-delivers this batch
+        # P15: the guard above is check-then-act — a duplicate delivery that
+        # passed it can have its chunk write land AFTER finalize rebased the
+        # batch (its embedding outlived the other batches and the finalize).
+        # Finalize publishes the batch bases on the run BEFORE rebasing, so a
+        # write that landed after that point sees them here and rebases its
+        # own chunks; staging a text row now would only leak one.
+        run = self._runs.get(doc_id)
+        if run is None:
+            return
+        if run.batch_bases:
+            base = run.batch_bases.get(str(payload.batch_index))
+            if base is not None:
+                self._rebase_fanout_offsets(doc_id, {payload.batch_index: base}, requester)
+            return
         self._stage_text(doc_id, payload.batch_index, text)
         # #248: this batch covered [unit_start, unit_end) — add its units so the
         # run's progress aggregate climbs as each batch finishes.
@@ -713,7 +743,11 @@ class IndexCoordinator:
         # known. Before the text is published and before the #390 cache
         # snapshots the chunks. Recomputed from `unit_start`, so a re-driven
         # finalize lands on the same numbers (idempotent by construction).
-        self._rebase_fanout_offsets(doc_id, staged, requester)
+        # P15: the bases go on the run FIRST, so a batch replayed from here on
+        # rebases itself (`_handle_process`).
+        bases = _batch_bases(staged)
+        self._runs.set_batch_bases(doc_id, bases)
+        self._rebase_fanout_offsets(doc_id, bases, requester)
         with doc_rm.using(user=updater):
             doc_rm.update(
                 doc_id,
@@ -902,20 +936,11 @@ class IndexCoordinator:
         rows.sort(key=lambda r: r.batch_index)
         return rows
 
-    def _rebase_fanout_offsets(
-        self, doc_id: str, staged: list[IndexUnitText], requester: str
-    ) -> None:
+    def _rebase_fanout_offsets(self, doc_id: str, bases: dict[int, int], requester: str) -> None:
         """P8: shift every fan-out chunk's span by where its batch's text
-        starts in the rejoined document (`_join_staged`: batches with text,
-        in order, "\n\n" between). A chunk whose batch staged no text (a
-        failed batch) is left where it is — the doc is `error` anyway."""
-        bases: dict[int, int] = {}
-        pos = 0
-        for r in staged:
-            if not r.text:
-                continue
-            bases[r.batch_index] = pos
-            pos += len(r.text) + 2
+        starts in the rejoined document (`_batch_bases`). A chunk whose batch
+        has no base (a failed batch staged no text) is left where it is — the
+        doc is `error` anyway."""
         chunk_rm = self._spec.get_resource_manager(DocChunk)
         rows = chunk_rm.list_resources(
             (QB["source_doc_id"] == doc_id).build(),

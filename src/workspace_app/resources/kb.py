@@ -562,6 +562,13 @@ class IndexRun(Struct):  # → resource "index-run"
     failed: list[int] = field(default_factory=list)  # batch indices that gave up
     finalized: bool = False  # the exactly-once finalize gate (CAS-claimed)
     status: str = "running"  # running | done | error
+    # plan-rag-context P15: where each batch's text starts in the rejoined
+    # document, keyed by batch index (a JSON key, hence str), written by
+    # finalize BEFORE it rebases the chunks. A batch replayed after that point
+    # (at-least-once delivery; its embedding outlived the other batches and the
+    # finalize) finds its base here and rebases its own chunks instead of
+    # staging a stale text row for a finalize that will never run again.
+    batch_bases: dict[str, int] = field(default_factory=dict)
     # #248: a real progress aggregate for the FE bar. `units_total` is the doc's
     # unit count (e.g. PDF pages) seeded at fan-out; `units_done` is the sum of
     # completed batches' unit counts, bumped once per batch under the same CAS as
