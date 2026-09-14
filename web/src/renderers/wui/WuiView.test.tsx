@@ -2599,6 +2599,47 @@ describe("WuiView: Deploy", () => {
     );
   });
 
+  it("Deploy, Cancel, Deploy — all inside one slow first manifest read — is one build, not two", async () => {
+    /**
+     * Review round 12: P14 held the on-open build with a boolean, and a
+     * cancelled run's `finally` cleared it — after the NEXT run had set it.
+     * With Auto-rebuild on (the default) and the first manifest read slow (a
+     * folder mid-restore), Deploy → Cancel → Deploy let the on-open effect
+     * start an automatic build beside the second Deploy's own; the pair
+     * wrote one `dist/`, and the automatic build's reload superseded the
+     * Deploy's verdict on its own page. A token per run, cleared only by
+     * its owner.
+     */
+    setWuiAutoBuild(autoBuildScope("item1", "/sales"), true);
+    const { release } = serveHeldBuilds(0);
+    let answer: () => void = () => {};
+    const gate = new Promise<void>((r) => (answer = r));
+    let manifestReads = 0;
+    renderInFs({ ...BUILT }, async (path, real) => {
+      if (path.endsWith("package.json") && ++manifestReads === 1) await gate; // the FIRST read, slow
+      return real(path);
+    });
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    await screen.findByRole("button", { name: /^cancel$/i });
+    fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /^deploy$/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    await screen.findByRole("button", { name: /^cancel$/i });
+    expect(manifestReads).toBe(1); // both runs joined the one read in flight
+
+    answer();
+    await screen.findByText(/> vite build/);
+    await act(async () => {});
+    await act(async () => {});
+
+    expect(buildCalls()).toHaveLength(1);
+    release(0);
+    expect(await screen.findByRole("textbox", { name: /address/i })).toHaveValue(ADDRESS);
+    expect(screen.queryByText(/deploy stopped/i)).toBeNull();
+  });
+
   it("names the page a hold is for on the sibling's button, so its Cancel is not a Cancel for nothing", async () => {
     /**
      * Review round 6: the button's LABEL came from the pane-wide hold, so

@@ -387,15 +387,20 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
    * changes — and in StrictMode, twice on mount — and neither is somebody
    * opening the page. */
   const autoBuiltFor = useRef<string | null>(null);
-  /** True while a Deploy runs. Deploy IS the rebuild-on-open for this
-   * folder, so the on-open effect must not start one beside it — but that is
-   * a different fact from "the opening moment has been spent"
-   * (`autoBuiltFor`), and keeping both in one ref (claim it, give it back)
-   * had a window: a Deploy pressed before the manifest had answered claimed
-   * `null`, the effect ran while the claim was held and could not spend the
-   * moment, and Cancel gave `null` back — so the next flip of the switch
-   * counted as opening the page and started a build. */
-  const deployHold = useRef(false);
+  /** The Deploy in flight, as a token of its own, or null. Deploy IS the
+   * rebuild-on-open for this folder, so the on-open effect must not start
+   * one beside it — but that is a different fact from "the opening moment
+   * has been spent" (`autoBuiltFor`), and keeping both in one ref (claim it,
+   * give it back) had a window: a Deploy pressed before the manifest had
+   * answered claimed `null`, the effect ran while the claim was held and
+   * could not spend the moment, and Cancel gave `null` back — so the next
+   * flip of the switch counted as opening the page and started a build. A
+   * TOKEN per run, cleared only by its owner (the `inFlight` idiom): a
+   * boolean was cleared by a cancelled run's `finally` after the NEXT run
+   * had set it — Deploy, Cancel, Deploy again inside one slow first manifest
+   * read — and the effect then started an automatic build beside that run's
+   * own, whose reload superseded the run's verdict on its own page. */
+  const deployHold = useRef<object | null>(null);
   /** Bumped whenever the pane moves to another page. A build started for one
    * page can still be running when `path` changes without unmounting, and
    * everything it does on the way out — the log, the verdict, the re-read that
@@ -725,7 +730,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
     // only on the way to a build made ticking the box later count as opening
     // the page, which is not what the box says.
     autoBuiltFor.current = folder;
-    if (deployHold.current) return; // Deploy is this open's build
+    if (deployHold.current !== null) return; // Deploy is this open's build
     if (!canBuild || !autoBuild) return;
     void runBuild({ automatic: true });
     // `runBuild` is deliberately not a dependency: it is rebuilt every render,
@@ -762,7 +767,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
     epoch.current += 1;
     setBuilding(false);
     setFirstBuild(false);
-    deployHold.current = false;
+    deployHold.current = null;
     // The log says what happened. The aborted stream's own `stale()` guard
     // keeps `runBuild` from writing its "ended without a verdict" line, and
     // a log cut mid-output with no word after it is indistinguishable from
@@ -844,7 +849,8 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
     // This IS the rebuild-on-open for this folder — held up front, before
     // the manifest read whose answer could flip `canBuild` and let the
     // on-open effect start a second build beside this one.
-    deployHold.current = true;
+    const hold = {};
+    deployHold.current = hold;
     try {
       // Whether there is a build: the manifest, read FRESH through the same
       // query the toolbar observes (one reader, one classification, and the
@@ -937,7 +943,9 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
       console.error("wui: deploy stopped unexpectedly", err);
       setDeploy(failed({ step: "unknown" }));
     } finally {
-      deployHold.current = false;
+      // Only this run's own hold: a cancelled run waking from a slow read
+      // must not release the hold the run pressed after it is holding.
+      if (deployHold.current === hold) deployHold.current = null;
     }
   };
 
