@@ -2420,6 +2420,15 @@
   flex: 1;
   min-height: 0;
 }
+/* The one-line document-order rule, under the tree and in the empty-state
+   CTA (plan-rag-context): muted, wraps, never competes with the rows. */
+.kb-ide__order-rule {
+  margin: 10px 12px 0;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--text-paper-d2);
+}
+
 .kb-ide__tree {
   /* Width comes from the inline `style.width` (draggable, #402); default 260. */
   width: 260px;

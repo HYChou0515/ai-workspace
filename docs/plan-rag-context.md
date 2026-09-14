@@ -1,7 +1,7 @@
 # RAG context — neighbouring text, scoped search, reading the original
 
 Design of record. Resolved through `/grill-me`; this file is the canonical spec.
-Delivered as four PRs, one per Phase (see *Rollout*).
+Delivered as one branch, one commit per phase (`P1` … `P11`; see *Rollout*).
 
 The whole thing rests on one slogan: **the chunk is a retrieval artifact, not
 the document.** Retrieval finds the spot; context is what makes the spot
@@ -258,7 +258,9 @@ transient value object — so adding a field costs nothing durable.
   `context_end: int` — **offsets, not text**. Near-zero storage; the same kind
   of thing as the existing `start` / `end` (and the same staleness if the
   document is re-indexed or edited — not a new weakness); lets #748-style
-  "what did the model actually see" be reconstructed. `snippet` unchanged.
+  "what did the model actually see" be reconstructed for the same-document
+  part of the context (the cross-document spill has no offsets — it is
+  recomputable from the tree order, not stored). `snippet` unchanged.
 
 Context is for the model, not the user: someone who opens the document sees
 the surroundings anyway, and highlighting two thousand characters is the same
@@ -300,8 +302,12 @@ Ctrl+F:
   has pages, line always — in **document (tree) order, not ranked**. "Should
   keywords participate in ranking" dissolves: this does not rank.
 - Output capped at `exec_output_max_chars` with middle truncation; its own
-  per-turn budget, symmetric to the kb / wiki budgets, charged even on a
-  no-match.
+  per-turn budget type (`KbGrepBudget`), threaded through the same doors as
+  the kb / wiki budgets and charged even on a no-match — but with no operator
+  knob and no per-message picker in this plan (only `AskKbSpec.kb_grep_max`);
+  off with the documents.
+- Hits print the document's `path` (as the file tree shows it), not the bare
+  filename — the read tools take a path, and two files can share a basename.
 - **Not citable.** It locates; citing means reading (Phase 4). Same as
   `search_wiki`, same as a person.
 - Query semantics follow `api/search.compile_query`.
@@ -360,7 +366,8 @@ units** — a unit is offered where it exists and refused where it does not.
   no lines". No synthetic pages for Markdown, no synthetic lines for a
   screenshot.
 - Both coordinates appear in the grep output, so the model knows which to call.
-- Image delivery reuses `read_image`'s branch verbatim: a vision-capable main
+- Image delivery copies `read_image`'s branch (the same gate and shapes, not
+  shared code): a vision-capable main
   model receives a `ToolOutputImage` and sees the pixels; a text-only main
   model goes through the `kb.vlm_llm` describer; neither configured → the same
   "not available, do not retry" error.
@@ -386,6 +393,29 @@ units** — a unit is offered where it exists and refused where it does not.
 - A vision main model receives `[ToolOutputText, ToolOutputImage]` (the SDK
   accepts a list of parts); a text-only main model receives the text layer
   plus the `kb.vlm_llm` description of the page image.
+
+## Phase 5 — review round 1
+
+Fifteen findings on P1–P4; thirteen fixed here, two became the Phase 6
+re-decisions. The ones that changed behaviour on paths that existed before
+this plan:
+
+- `read_page`'s image never reached the model: the multi-part
+  `[ToolOutputText, ToolOutputImage]` output was `str()`-ed by the output cap
+  and by the litellm runner's tool-output rendering. Both doors now measure
+  and render the text parts and pass the image through.
+- The context walk leaked scope: a #518 card restriction and a #263 location
+  filter confined the HIT but not the neighbours it pulled in. The seams now
+  share one `_within` rule with `dense()`.
+- `resolve_document` applies the #308 exclusions before deciding "exact /
+  ambiguous / missing", so a denied document answers like a missing one
+  (`kb_search(document=)` included).
+- `_DocJoin` prefers the in-scope holder of shared content when attributing a
+  chunk (any #518 restriction), so a restricted search never names a document
+  outside the restriction.
+- `_restriction` batches its lookups; the numbers in this plan and the docs
+  were corrected to the production splitter's (P1's premise was measured on
+  the legacy chunker).
 
 ## Phase 6 — the two re-decisions after review round 1
 
@@ -512,6 +542,36 @@ whose VLM description windows, every chunk with its page and section, and
 `read_page` / `kb_grep` on page 2. Covered by the same collection re-read as
 P8.
 
+## Phase 10 — every guard has a test that reddens
+
+Round 3's veracity lens deleted each enforcement on a snapshot: eleven
+mechanisms stayed green without their guard. Each now has a test run against
+the mutant (folder ∩ card-anchor = ∅, expansion before rerank read off the
+reranker's prompt, the read-time describer's own words, the create_app and
+worker doors, the walk's per-side bound as a failure rather than a hang, the
+prose beside a table, `kb_grep`'s cap / stopped-early head / too-short
+message, `read_page`'s pre-bounded text part). One behaviour fix in the same
+class: `read_lines` refuses a limit below 1 before the slice.
+
+## Phase 11 — what the plan promised and the prose claimed
+
+- The ordering rule is shown where files are added (the empty-collection
+  CTA) and where they are seen (under the tree), in both languages — the
+  Phase 2 promise that was silently dropped.
+- The workspace breadcrumb dropdown (`dirChildren`) sorts with `treeOrder`
+  too; the two lists in one UI agreed under locale order and disagreed after
+  Phase 2 changed only the tree.
+- The allowance block names `read_lines` / `read_page` as off when the
+  documents are off (the prompt still describes them).
+- The example yaml's kb presets list the three new tools; `configuration.md`
+  and `migrations.md` say a custom kb preset that pins `allowed_tools` must
+  add them.
+- Claims trimmed to what holds: `context_chars: 0` is "off", not
+  "byte-identical" (the P5 holder-naming fix applies regardless); the
+  reranker cap keeps the hit in the window when it fits; the grep budget has
+  no knob or picker; `Citation.context_*` reconstructs the same-document
+  part; `read_page` copies `read_image`'s branch; one branch, not four PRs.
+
 ## Out of scope — and findings logged for separate work
 
 - Eval-gated tuning; per-call / per-collection context knob.
@@ -534,8 +594,8 @@ P8.
 
 ## Rollout
 
-One PR per phase, in order; each carries its own tests, `migrations.md` entry
-and (where a knob is added) example yaml. Phase 1 first — everything else is
+One commit per phase, in order, on one branch; each carries its own tests,
+`migrations.md` entry and (where a knob is added) example yaml. Phase 1 first — everything else is
 built on chunk boundaries. Phase 3's `source-doc` migrate (the `path` index behind the folder
 scope) is part of its deploy order, not a follow-up. The frontend sort change and the golden fixture land
 with Phase 2 (the backend rule is not "well-defined" for users until the tree

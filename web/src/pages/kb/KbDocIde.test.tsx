@@ -168,6 +168,22 @@ describe("KbDocIde", () => {
     expect(await screen.findByText(/upload markdown, text, or an archive/i)).toBeInTheDocument();
   });
 
+  /** plan-rag-context: the tree order is a rule the KB agent's context walk
+   * follows, so it is stated where files are added (the empty-collection CTA)
+   * and where they are seen (under the tree) — not only in the docs. */
+  it("states the document-order rule in the upload CTA and under the tree", async () => {
+    renderWithQuery(
+      <KbDocIde collectionId="c1" client={stubClient([])} onPickFiles={() => {}} uploading={false} />,
+    );
+    expect(await screen.findByTestId("kb-docs-empty-cta")).toHaveTextContent(/01_intro\.pdf/);
+    cleanup();
+    renderWithQuery(
+      <KbDocIde collectionId="c1" client={stubClient([doc({ path: "/notes.md" })])} />,
+    );
+    await screen.findByText("notes.md");
+    expect(screen.getByText(/01_intro\.pdf/)).toBeInTheDocument();
+  });
+
   it("shows an open doc's attachments as cards and opens one in the drawer (#513 P8)", async () => {
     const user = userEvent.setup();
     const client = stubClient(

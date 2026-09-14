@@ -930,11 +930,14 @@
 #     claude-opus:           { model: claude-opus-4-7,        prompt: pkg:.../rca/prompts/system.md }
 #     openai-mini:           { model: openai/gpt-4o-mini,     prompt: pkg:.../rca/prompts/system.md }
 #     kb-default:            { model: ollama_chat/qwen3:14b,  prompt: pkg:.../kb/prompts/system.md,
-#                              allowed_tools: [kb_search, lookup_glossary] }
+#                              allowed_tools: [kb_search, kb_grep, read_page, read_lines, lookup_glossary] }
 #     kb-claude:             { model: claude-opus-4-7,        prompt: pkg:.../kb/prompts/system.md,
-#                              allowed_tools: [kb_search, lookup_glossary] }
+#                              allowed_tools: [kb_search, kb_grep, read_page, read_lines, lookup_glossary] }
 #     kb-openai:             { model: openai/gpt-4o-mini,     prompt: pkg:.../kb/prompts/system.md,
-#                              allowed_tools: [kb_search, lookup_glossary] }
+#                              allowed_tools: [kb_search, kb_grep, read_page, read_lines, lookup_glossary] }
+#     # The kb prompt describes kb_grep / read_page / read_lines (plan-rag-context
+#     # P3/P4); a custom kb preset that pins `allowed_tools` must list them too,
+#     # or the model is told about tools it cannot call (see migrations.md).
 #     infer-modules-default: { model: ollama_chat/qwen3:14b,  prompt: pkg:.../kb/prompts/infer_modules.md,
 #                              allowed_tools: [kb_search] }
 #     kb-retrieval:          { model: ollama_chat/qwen3:14b }   # LLM-only — no prompt/tools

@@ -188,6 +188,24 @@ def test_the_allowance_names_the_exact_search_including_when_it_is_off():
         grep=KbGrepBudget(max_calls=None),
     )
     assert "Exact text search (kb_grep)**: OFF" in docs_off
+    # The read tools go with the documents and are named the same way: the
+    # prompt still describes them, so "documents off" must say they are gone.
+    reads_off = allowance_note(
+        [*ALL, "kb_grep", "read_lines", "read_page"],
+        kb=KbSearchBudget(max_calls=0),
+        wiki=WikiSearchBudget(max_calls=3),
+        has_wiki=True,
+        grep=KbGrepBudget(max_calls=None),
+    )
+    assert "Reading a document (read_lines, read_page)**: OFF" in reads_off
+    reads_on = allowance_note(
+        [*ALL, "kb_grep", "read_lines", "read_page"],
+        kb=KbSearchBudget(max_calls=3),
+        wiki=WikiSearchBudget(max_calls=3),
+        has_wiki=True,
+        grep=KbGrepBudget(max_calls=None),
+    )
+    assert "Reading a document (read_lines, read_page)**: as often as you need" in reads_on
     # an agent that never had kb_grep gets no line about it
     none = allowance_note(
         ALL,

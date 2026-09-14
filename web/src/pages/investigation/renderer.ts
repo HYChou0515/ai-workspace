@@ -7,6 +7,8 @@
  * renderer uses; keeping it out of the registry avoids an import cycle).
  */
 
+import { compareNames } from "../../lib/treeOrder";
+
 /** MIME type for an image path, for building a Blob URL from edited bytes. */
 export function imageMime(path: string): string {
   const ext = path.toLowerCase().split(".").pop() ?? "";
@@ -67,10 +69,13 @@ export function dirChildren(paths: string[], dir: string): DirEntry[] {
       dirs.add(rest.slice(0, slash));
     }
   }
+  // The same order as the file tree (`treeOrder`, shared with the backend's
+  // document walk) — the breadcrumb dropdown and the tree must not disagree
+  // on where `10.png` sits relative to `9.png`.
   const dirsOut: DirEntry[] = [...dirs]
-    .sort((a, b) => a.localeCompare(b))
+    .sort(compareNames)
     .map((name) => ({ name, path: `${prefix}${name}`, isDir: true }));
-  filesOut.sort((a, b) => a.name.localeCompare(b.name));
+  filesOut.sort((a, b) => compareNames(a.name, b.name));
   return [...dirsOut, ...filesOut];
 }
 

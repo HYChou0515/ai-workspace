@@ -52,8 +52,9 @@ def rerank_passages(
 
     `context_cap` (plan-rag-context P6) bounds what each candidate contributes
     to the one listwise prompt: the neighbouring context (P2) is trimmed to at
-    most that many chars, centred on the hit so the matched text is always in
-    the window. `None` = uncapped; `0` = the bare hit. Without a bound the
+    most that many chars, centred on the hit so the matched text is in the
+    window whenever it fits (a merged hit longer than the cap is itself cut to
+    the cap). `None` = uncapped; `0` = the bare hit. Without a bound the
     prompt grows ~4× (English) / ~27× (Chinese) at the default context width,
     and a reranker whose window is smaller truncates from the FRONT — the
     question — and its reply's numbers are then noise applied silently."""

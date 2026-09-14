@@ -70,9 +70,19 @@ describe("dirChildren", () => {
   });
 
   it("lists leaf files", () => {
+    // Tree order (shared rule): "spc2.csv" splits into runs spc | 2 | .csv and
+    // "spc" is a prefix of "spc.csv", so it sorts first — as in the file tree.
     expect(dirChildren(files, "data/raw")).toEqual([
-      { name: "spc.csv", path: "/data/raw/spc.csv", isDir: false },
       { name: "spc2.csv", path: "/data/raw/spc2.csv", isDir: false },
+      { name: "spc.csv", path: "/data/raw/spc.csv", isDir: false },
     ]);
+  });
+
+  it("orders entries like the file tree, not the locale (numbers by value)", () => {
+    // The tree sorts with `treeOrder`; the breadcrumb dropdown must agree, or
+    // 10.png sits before 9.png in one and after it in the other.
+    const shots = ["/shots/9.png", "/shots/10.png", "/shots/2.png", "/b/x", "/a10/x", "/a9/x"];
+    expect(dirChildren(shots, "shots").map((e) => e.name)).toEqual(["2.png", "9.png", "10.png"]);
+    expect(dirChildren(shots, "").map((e) => e.name)).toEqual(["a9", "a10", "b", "shots"]);
   });
 });

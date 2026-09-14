@@ -690,6 +690,13 @@ export const messages = {
   "kb.uploadFolder": { "zh-TW": "上傳資料夾", en: "Upload folder" },
   "kb.dropToUpload": { "zh-TW": "放開以上傳", en: "Drop to upload" },
   "kb.dropHint": { "zh-TW": "把檔案拖到這裡開始", en: "Drag files here to start" },
+  // plan-rag-context P2/P11: the document-tree order is a rule the KB agent's
+  // neighbouring-context walk follows, so people uploading must be able to
+  // steer it — one line, where the files are added and where they are seen.
+  "kb.orderRule": {
+    "zh-TW": "文件依樹狀順序排列（資料夾在前、檔名自然排序），AI 補前後文時也照這個順序。要控制順序，檔名前加阿拉伯數字：01_intro.pdf、02_method.pdf。",
+    en: "Documents are ordered as the tree shows them (folders first, names sorted naturally); the assistant reads neighbouring context in the same order. To control it, prefix names with Arabic numerals: 01_intro.pdf, 02_method.pdf.",
+  },
 
   // Investigation terminal (TerminalPane). #171 renamed sandbox → 執行環境 to
   // de-jargon it; that is reversed — the product calls this one thing 沙盒 /

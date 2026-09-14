@@ -156,8 +156,9 @@ uv run python scripts/run_migrate.py --dry-run \
 
 | 選項 | 帶進來的 PR | 不設會怎樣 | 細節 |
 | --- | --- | --- | --- |
+| `agents.presets.<自訂 kb preset>.allowed_tools` | plan-rag-context P3/P4（2026-09-12） | **釘死 `allowed_tools` 的自訂 kb preset 要加 `kb_grep`、`read_page`、`read_lines`**：內建的 `kb-*` preset 已加，kb prompt（`kb/prompts/system.md`）無條件描述這三個工具，自訂 preset 少列的話模型會被告知能用卻呼叫不到——#537 修過的「授予了卻拒絕」同一類。`kb_search_max=0` 時三個會跟文件一起關（prompt 會說明） | configuration.md §7 KB 聊天換模型 |
 | `kb.retrieval.rerank_context_chars` | plan-rag-context P6（2026-09-14） | **新增上限，預設 4000**：rerank 每個候選最多看到 4000 字元的前後文（以命中為中心）。沒設時 `context_chars` 會讓 rerank prompt 長 4×／27×；設 `null` 才是不封頂、`0` 只看命中 | configuration.md §9 `rerank_context_chars` |
-| `kb.retrieval.context_chars` | plan-rag-context P2（2026-09-12） | ⚠️ **行為有變**：預設 `2000`——每個檢索命中前後各至少多帶 2000 字元的原文（整塊 chunk、可跨到文件樹上的鄰居檔案），rerank 的 prompt 隨之變長，agent 看到的段落變寬；引用 `[n]` 仍指命中處。設 `0` 回到逐位元相同的舊行為；`null`／負數**拒絕載入**（P7：之前 `null` 會過 loader、worker 第一次檢索就炸）| configuration.md §9 `context_chars` |
+| `kb.retrieval.context_chars` | plan-rag-context P2（2026-09-12） | ⚠️ **行為有變**：預設 `2000`——每個檢索命中前後各至少多帶 2000 字元的原文（整塊 chunk、可跨到文件樹上的鄰居檔案），rerank 的 prompt 隨之變長，agent 看到的段落變寬；引用 `[n]` 仍指命中處。設 `0` 關掉（唯一不同於舊版的是 P5 的持有者命名修正，見 configuration.md）；`null`／負數**拒絕載入**（P7：之前 `null` 會過 loader、worker 第一次檢索就炸）| configuration.md §9 `context_chars` |
 | `failover.rate_limit_budget_s` | #759（2026-09-03） | ⚠️ **行為有變**：agent 鏈碰到 429 從「快速燒完重試然後 giving up」變成「在原端點等它聲明的窗口」，等待秒數每次 agent run 共用一池，預設上限 2 小時；畫面會出現「請求過於頻繁，N 秒後自動重試」。設 `0` 回到一律切換的舊行為 | configuration.md §11 |
 | `agents.subagent_models` | #770（2026-09-03） | **完全不變**：`run_agent` 不長 `model` 參數，sub-agent 照舊跟 parent turn 同一顆模型（review 以逐位元比對驗證） | configuration.md §7 |
 | `history.max_tokens_window_ratio` | #767（2026-09-04） | ⚠️ **行為有變**：窗口解析多了一段「問 proxy 自己的 `/model/info`」。原本前四段全滅、上限只能是 `unknown` 的部署（自架模型掛在 litellm proxy 後面、用任意別名，最典型），`unknown` 的意思是**歷史從不裁切、自動壓縮從不執行**；現在若 proxy 只答得出 `max_tokens`，會用它 ×0.8 推出一個**標記為估計**的上限，於是裁切與壓縮開始運作。推導值裝不下已知開銷時一律拒收、退回 `unknown`（也就是舊行為）。⚠️ 這一格**沒有「設 0 回到舊行為」**——載入時要求 `0 < ratio <= 1`，`0` 會被擋下；要完全不走推導，就明確設 `history.context_limit`，讓第一段直接答得出來 | `configs/config.example.yaml` 的 `history:` 區塊 |

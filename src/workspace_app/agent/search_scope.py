@@ -83,6 +83,7 @@ def describe_budgets(
     glossary: bool,
     has_wiki: bool,
     grep: KbGrepBudget | None = None,
+    reads: bool = False,
 ) -> str:
     """The per-turn allowance block appended to the KB agent's prompt.
 
@@ -106,6 +107,17 @@ def describe_budgets(
         # (#480): an allowance the agent cannot see is one it cannot ask for.
         grep_cap = 0 if kb.max_calls == 0 else grep.max_calls
         lines.append(_allowance("Exact text search (kb_grep)", grep_cap))
+    if reads:
+        # plan-rag-context P4: the read tools are document tools with no cap of
+        # their own — withheld with the documents, otherwise free. Named for the
+        # same reason as kb_grep: when the documents are off, the prompt's
+        # sections 5–6 still describe them, so the agent must be told they are
+        # gone too (review round 3).
+        lines.append(
+            _allowance(
+                "Reading a document (read_lines, read_page)", 0 if kb.max_calls == 0 else None
+            )
+        )
     lines += [
         "",
         "Spend the cheap ones first and stop as soon as you can answer — an "
@@ -139,4 +151,5 @@ def allowance_note(
         glossary="lookup_glossary" in allowed,
         has_wiki=has_wiki and WIKI_TOOL in allowed,
         grep=grep if GREP_TOOL in allowed else None,
+        reads=any(t in allowed for t in READ_TOOLS),
     )

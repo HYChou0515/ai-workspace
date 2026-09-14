@@ -74,7 +74,7 @@ uv run python -m workspace_app            # API + SPA 一起跑在 127.0.0.1:800
 |---|---|
 | **全部換成 OpenAI / Claude** | `agents.presets.*.model` 改模型字串 + `agents.presets.*.llm.api_key: ${OPENAI_API_KEY}`（範例 2） |
 | **只加一個調過 prompt 的模型到 picker** | 新增一個 `agents.presets.<name>` + 加進 `agents.workspace_chat[]`（範例 1） |
-| **KB 聊天換模型** | 加 `agents.kb_chat[]` 條目；接非 `kb-default` 的 preset **必須**補 `allowed_tools: [kb_search]`（範例 3/4） |
+| **KB 聊天換模型** | 加 `agents.kb_chat[]` 條目；接非 `kb-default` 的 preset **必須**補 `allowed_tools: [kb_search, kb_grep, read_page, read_lines]`（範例 3/4；kb prompt 會描述這四個工具，少列的就是「說了卻不能用」） |
 | **選了 VLM 當主 agent，要牠自己直接看圖** | `agents.presets.<name>.vision: true`（[§7](#vlm-主-agent-直接讀圖vision)） |
 | **檔案要持久化（重啟不掉）** | `filestore.kind: specstar` + `filestore.pg_dsn: ${SPECSTAR_PG_DSN}` + `disk_root` |
 | **上多 pod（k8s）** | `sandbox.kind: http` + `sandbox.http.base_url` ＋ 共享 filestore ＋ 共享 MQ backend（見 [§5 階梯 C](#c-多-podk8s)） |
@@ -524,7 +524,7 @@ collection 內、樹的順序 = 你在文件樹看到的順序，資料夾在前
 | 設定 | 效果 |
 | --- | --- |
 | `2000`（預設） | production 管線下英文約多帶 1.4 塊（一塊 ≈1,452 字元）、中文約 13 塊（一塊 ≈154 字）——預算是字元,兩邊拿到的文字量差不多,這正是用字元當單位的用意 |
-| `0` | 關掉，行為與此版之前逐位元相同 |
+| `0` | 關掉：不補前後文、rerank 只看命中（只有一處不同於舊版——同一份內容被多個 collection 持有時，命名以搜尋範圍內的持有者為準，這是 P5 的修正、不受此 knob 影響） |
 | `null` / 負數 | **拒絕載入**（開機即報錯、點名這個鍵）——這裡沒有「不設上限」，關掉請用 `0` |
 | 更大 | 模型讀到的段落更寬；rerank 那邊由 `rerank_context_chars` 另外封頂（見下），不會跟著等比例長 |
 
