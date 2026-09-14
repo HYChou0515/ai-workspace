@@ -18,7 +18,7 @@ from workspace_app.kb.ingest import Ingestor
 from workspace_app.kb.li_pipeline import build_doc_pipeline
 from workspace_app.kb.parsers import ParserRegistry
 from workspace_app.kb.parsers.pdf import PdfParser
-from workspace_app.kb.provenance import aggregate_provenance, format_location
+from workspace_app.kb.provenance import aggregate_provenance, format_location, page_of, pages_of
 from workspace_app.kb.retriever import Retriever
 from workspace_app.kb.vlm import IVlm, VlmDescriber
 from workspace_app.resources import Collection, DocChunk, make_spec
@@ -144,3 +144,19 @@ def test_kb_search_line_carries_passage_location_end_to_end():
     out = kb_search_impl(ctx, "described body figure")
     assert "m.pdf (p." in out
     assert "Chapter" in out
+
+
+def test_page_of_reads_a_chunk_and_pages_of_reads_the_stored_aggregate():
+    """Two accessors for two shapes: a chunk carries ``{"page": 3}``; a stored
+    `RetrievedPassage` carries the aggregated ``{"page": [3, 4]}``. Reading the
+    stored form through `page_of` yields None — which is how the read registry's
+    dedup key never matched and every re-read of a page minted a new marker."""
+    assert page_of({"page": 3}) == 3
+    assert page_of({"slide": 7}) == 7
+    assert page_of({"page": [3]}) is None  # the aggregated form is not a chunk's
+    assert page_of({"section": "Intro"}) is None
+    assert pages_of({"page": [3, 4]}) == (3, 4)
+    assert pages_of({"slide": [7]}) == (7,)
+    assert pages_of({"page": 3}) == ()  # a chunk's form is not the stored one
+    assert pages_of({"page": []}) == ()
+    assert pages_of({"section": ["Intro"]}) == ()

@@ -1476,22 +1476,23 @@ def _register_read(
     provenance: dict[str, Any] | None = None,
 ) -> int:
     """Register what a read tool showed the model as a citable passage — the
-    same registry and the same `(document, span)` dedup `kb_search` uses, so a
-    later ``[n]`` resolves through `parse_citations` to exactly this span.
-    Returns the 1-based marker."""
-    from ..kb.provenance import aggregate_provenance, page_of
+    same registry `kb_search` fills, deduped on its `(document, span)` key plus
+    the page, so a later ``[n]`` resolves through `parse_citations` to exactly
+    this span. Returns the 1-based marker."""
+    from ..kb.provenance import aggregate_provenance, pages_of
 
     registry = ctx.context.kb_passages
     # A page with no text layer registers an empty span; two such pages of one
-    # document must not collapse onto one marker, so the page is part of the key.
-    page = page_of(provenance) if provenance else None
-    key = (doc_id, start, end, page)
+    # document must not collapse onto one marker, so the page is part of the
+    # key — read off the stored (aggregated) form on BOTH sides.
+    stored = aggregate_provenance([provenance]) if provenance else {}
+    key = (doc_id, start, end, pages_of(stored))
     for i, existing in enumerate(registry):
         if (
             existing.document_id,
             existing.start,
             existing.end,
-            page_of(existing.provenance),
+            pages_of(existing.provenance),
         ) == key:
             return i + 1
     registry.append(
@@ -1504,7 +1505,7 @@ def _register_read(
             source_chunk_ids=[],
             text=text[:_WIKI_SNIPPET_MAX],
             score=0.0,
-            provenance=aggregate_provenance([provenance]) if provenance else {},
+            provenance=stored,
         )
     )
     return len(registry)
@@ -1545,6 +1546,14 @@ async def read_lines_impl(
         max_lines=ctx.context.read_file_max_lines,
         max_chars=ctx.context.read_file_max_chars,
     )
+    if window.last < window.first:
+        # An empty line range (offset past the end, or a limit below 1) read
+        # nothing, so there is nothing to cite: no marker, and no empty span in
+        # the registry (same shape as read_page's range error).
+        if window.first > window.total:
+            unit = "line" if window.total == 1 else "lines"
+            return f"{doc.path} has {window.total} {unit}; pass an offset from 1 to {window.total}."
+        return f"nothing to read: limit must be at least 1 (got {limit})."
     marker = _register_read(
         ctx,
         doc_id=doc_id,

@@ -1050,7 +1050,12 @@ class Retriever:
         `read_lines` will show — with each chunk's span widened by the query's
         length so a phrase straddling two chunks is still found once.
         """
-        if not query.strip() or not collection_ids or len(anchor_of(query)) < MIN_ANCHOR_LEN:
+        # One stripped query for the anchor AND the exact match: the anchor
+        # already ignored surrounding whitespace (`split()`), so a query with a
+        # stray trailing space passed the pre-filter and then failed the exact
+        # match — a silent "no lines match" for text plainly there.
+        query = query.strip()
+        if not query or not collection_ids or len(anchor_of(query)) < MIN_ANCHOR_LEN:
             return GrepResult(hits=[], total=0)
         # Literal + case-insensitive: the same rule `api.search.compile_query`
         # applies for the wiki grep (a literal cannot fail to compile).
@@ -1103,10 +1108,11 @@ class Retriever:
             path = join.path_of(doc_id)
             assert path is not None  # filtered above
             # A line is reported once however many chunks overlap it; the page
-            # is the first containing chunk's.
+            # is the EARLIEST containing chunk's — by `start`, not by the order
+            # the store happened to return the rows (unspecified).
             lines = LineIndex(text)
             seen_lines: dict[int, int | None] = {}
-            for ch in doc_chunks:
+            for ch in sorted(doc_chunks, key=lambda c: (c.start, c.end)):
                 page = page_of(ch.provenance)
                 for off in occurrences(text, pattern, ch.start - slack, ch.end + slack):
                     seen_lines.setdefault(lines.line_of(off), page)

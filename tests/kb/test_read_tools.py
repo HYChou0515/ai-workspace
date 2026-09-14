@@ -96,6 +96,20 @@ async def test_read_lines_returns_a_window_in_the_read_file_dialect_and_is_citab
     assert out2.startswith("[2] ")
 
 
+async def test_read_lines_past_the_end_mints_no_citation(spec: SpecStar):
+    # An offset beyond the last line reads nothing; nothing read means nothing
+    # to cite — no [n], no empty past-EOF span in the registry.
+    cid, emb = _kb(spec, {"notes.md": b"one\ntwo\nthree"})
+    ctx = _ctx(spec, emb, cid)
+    out = await read_lines_impl(ctx, "notes.md", offset=100)
+    assert out == "notes.md has 3 lines; pass an offset from 1 to 3."
+    assert ctx.context.kb_passages == []
+    # The other way to read nothing — a limit below 1 — is the same class.
+    out = await read_lines_impl(ctx, "notes.md", limit=0)
+    assert out == "nothing to read: limit must be at least 1 (got 0)."
+    assert ctx.context.kb_passages == []
+
+
 async def test_read_lines_refuses_a_screenshot_and_points_at_read_page(spec: SpecStar):
     cid, emb = _kb(spec, {"shot.png": _png()})
     out = await read_lines_impl(_ctx(spec, emb, cid), "shot.png")
@@ -168,6 +182,14 @@ async def test_read_page_on_a_deck_uses_the_slide_provenance_and_keeps_pages_apa
     assert "described page" in first.text  # found via `slide`
     assert first.text.startswith("[1] ") and second.text.startswith("[2] ")
     assert [p.provenance for p in ctx.context.kb_passages] == [{"page": [1]}, {"page": [2]}]
+    # …and reading a page AGAIN reuses its marker: the dedup key compares the
+    # page on both sides in the same form (the first version compared an int
+    # against the aggregated list and never matched, so every read minted a
+    # new [n] — and this test passed for the wrong reason).
+    again = await read_page_impl(ctx, "deck.pdf", 1)
+    assert isinstance(again, list) and isinstance(again[0], ToolOutputText)
+    assert again[0].text.startswith("[1] ")
+    assert len(ctx.context.kb_passages) == 2
 
 
 async def test_read_page_out_of_range_says_how_many_pages_there_are(spec: SpecStar):

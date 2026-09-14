@@ -632,6 +632,36 @@ def test_operator_can_set_retrieval_scalar_knobs(tmp_path: Path):
     assert r.enhancements.expand.default == 1
 
 
+@pytest.mark.parametrize(
+    ("yaml_value", "key"),
+    [
+        ("null", "context_chars"),  # 0 is the off switch; there is no "unlimited"
+        ("-1", "context_chars"),
+        ("true", "context_chars"),
+        ("-1", "rerank_context_chars"),
+        ("2.5", "rerank_context_chars"),
+    ],
+)
+def test_context_knobs_reject_what_the_retriever_cannot_take(
+    tmp_path: Path, yaml_value: str, key: str
+):
+    """`context_chars: null` used to load fine and crash the WORKER's retriever on
+    its first search (`None <= 0`) — the API door mapped None to the default, the
+    worker door forwarded it verbatim. The rule lives where the value is made:
+    the loader refuses it, naming the key and what 0 means."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        dedent(f"""
+            kb:
+              retrieval:
+                {key}: {yaml_value}
+        """),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match=rf"kb\.retrieval\.{key} must be"):
+        load(config_path=cfg, env={})
+
+
 def test_retrieval_scalar_knobs_keep_defaults_when_unset(tmp_path: Path):
     """Omitting them leaves the dataclass defaults — the cap in particular defaults
     to null (uncapped), so an operator who never sets it gets today's behaviour."""

@@ -42,6 +42,19 @@ def page_of(provenance: dict[str, Any]) -> int | None:
     return None
 
 
+def pages_of(aggregated: dict[str, Any]) -> tuple[int, ...]:
+    """`page_of` for the AGGREGATED form a `RetrievedPassage` stores
+    (``{"page": [3, 4]}``): the page-shaped values as a tuple, ``()`` when there
+    are none. A dedup key over stored passages must read both sides through
+    this — comparing `page_of` (an int off a chunk) against the stored list
+    never matched, so every re-read of a page minted a new marker."""
+    for key in ("page", "slide"):
+        values = aggregated.get(key)
+        if isinstance(values, list) and values and all(isinstance(v, int) for v in values):
+            return tuple(values)
+    return ()
+
+
 def aggregate_provenance(provenances: Iterable[dict[str, Any]]) -> dict[str, Any]:
     """Union the per-chunk provenance dicts (already in seq order) into
     ``{key: [distinct values…]}``. Order-preserving + deduped, so a passage

@@ -417,6 +417,36 @@ pipeline: the 50,038-char heading-less `.md` went from 1 chunk to 35
 production chunks: documents holding long Markdown sections need a
 collection re-read — `migrations.md` says which and how.
 
+## Phase 7 — review round 2
+
+Five findings on P1–P6, all in this branch's own code; the first was round
+1's fix. Each is pinned by a test that was red against the unfixed code.
+
+- **The read registry's page dedup never matched.** `_register_read` keyed
+  the new read on `page_of(provenance)` (an int off a chunk-shaped dict) but
+  the registry stores the AGGREGATED form (`{"page": [N]}`), which `page_of`
+  reads as `None` — so every re-read of a page minted a new `[n]`, and the
+  test that "kept pages apart" passed for the wrong reason. Both sides now
+  go through `pages_of`, the accessor for the stored form.
+- **A `read_lines` that read nothing minted a citation.** An offset past the
+  end (or a limit below 1) registered an empty span past EOF as citable. An
+  empty line range now answers with the document's line count, no marker —
+  the same shape as `read_page`'s range error.
+- **`kb.retrieval.context_chars: null` loaded and crashed the worker.** The
+  API door mapped `None` to the default; the worker forwarded it verbatim and
+  the retriever's first search raised (`None <= 0`). The rule lives where the
+  value is made: the loader refuses anything but a non-negative integer
+  (`0` is the off switch; there is no "uncapped" for this knob) and checks
+  `rerank_context_chars` for sign and type (`null` stays legal there).
+- **`kb_grep` required a stray space literally.** The anchor ignored
+  surrounding whitespace (`split()`), the exact pattern did not — a query
+  with a trailing space passed the pre-filter and then matched nothing.
+  One stripped query feeds both.
+- **A grep hit's page depended on store order.** With two chunks over the
+  same line, "the first containing chunk's page" was whichever row the store
+  returned first (unspecified). Chunks are walked by `start`, so the
+  earliest one wins deterministically.
+
 ## Out of scope — and findings logged for separate work
 
 - Eval-gated tuning; per-call / per-collection context knob.

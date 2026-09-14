@@ -123,3 +123,47 @@ def test_line_index_agrees_with_the_one_off_lookup():
         line_no, line = line_at(text, off)
         assert idx.line_of(off) == line_no
         assert idx.line_text(line_no) == line
+
+
+def test_grep_ignores_surrounding_whitespace_in_the_query(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # A model-supplied trailing / leading space must not be required literally:
+    # the anchor was already stripped (split()), so the pre-filter matched and
+    # the exact match then missed — a silent "no lines match" for text that is
+    # plainly there.
+    cid = _collection(spec, chunker, embedder, {"p.md": "see Fig. 1\nmore"})
+    r = Retriever(spec, embedder=embedder)
+    assert [h.line for h in r.grep("Fig. 1 ", [cid]).hits] == [1]
+    assert [h.line for h in r.grep(" Fig. 1", [cid]).hits] == [1]
+
+
+def test_grep_reports_the_page_of_the_earliest_containing_chunk(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # Two chunks overlap the same line but carry different pages; the page shown
+    # must not depend on the order the store returns rows. Sorting by `start`
+    # makes the earliest chunk win, deterministically.
+    import msgspec
+    from specstar import QB
+
+    from workspace_app.resources.kb import DocChunk
+
+    cid = _collection(spec, chunker, embedder, {"p.md": "alpha beta gamma delta"})
+    rm = spec.get_resource_manager(DocChunk)
+    # 3-token windows, overlap 1: "gamma" sits in both chunks.
+    a, b = rm.list_resources((QB["collection_id"] == cid).build())
+    assert isinstance(a.data, DocChunk) and isinstance(b.data, DocChunk)
+    assert (a.data.start, b.data.start) == (0, 11)
+    # Swap the two chunks' bodies so the row the store yields FIRST (insertion
+    # order on the in-memory backend) now holds the LATER chunk.
+    rm.update(
+        a.info.resource_id,  # ty: ignore[unresolved-attribute]
+        msgspec.structs.replace(b.data, provenance={"page": 2}),
+    )
+    rm.update(
+        b.info.resource_id,  # ty: ignore[unresolved-attribute]
+        msgspec.structs.replace(a.data, provenance={"page": 1}),
+    )
+    [h] = Retriever(spec, embedder=embedder).grep("gamma", [cid]).hits
+    assert h.page == 1
