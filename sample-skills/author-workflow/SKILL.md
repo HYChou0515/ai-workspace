@@ -66,3 +66,26 @@ Two consequences you design around:
 Keep it small. Two jobs → two workflows. A workflow that needs unbounded loops, arbitrary
 branching, or heavy custom computation is past what this expresses — say so, and suggest the
 dev team build it as code (`run.py`).
+
+## Running it on a clock
+
+"Every night", "every Monday at nine", "the first of the month" — a saved workflow can run
+without anyone pressing Run. Declare it with **`save_schedules`**: it writes this item's
+`.workflows/schedules.json`, the same file a page can write, and the platform's sweep reads
+it. The tool's own description has the row format (`run`, `every`, `at`, `dow`, `dom`, `tz`,
+`with`); it **validates before saving** and refuses a `run` this item does not have, so save
+the workflow first, then the schedule.
+
+Three things to get right, because each one is a report that quietly never arrives:
+
+- **Name the zone** (`"tz": "Asia/Taipei"`) whenever the time is one the user chose. The
+  default is UTC, not wherever the server is.
+- **The file is replaced, not appended.** To add a second schedule, `read_file` the current
+  `.workflows/schedules.json` and pass every row you want to keep.
+- **Relay what the tool answers** — when each row runs next, and the WARNING if this
+  deployment has scheduled work switched off. A row whose time has already passed today runs
+  on the next sweep, not tomorrow; say so rather than promising tomorrow.
+
+When a schedule fires, nobody is signed in: there is no request and no personal token.
+Anything the run needs comes from the item's own environment. Each run opens its own
+conversation in this item; to stop a schedule, save the list without its row.

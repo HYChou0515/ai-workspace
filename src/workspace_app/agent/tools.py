@@ -2210,7 +2210,8 @@ async def save_workflow_impl(
     workflow.json text. This VALIDATES it before saving — if a step type, phase, capability,
     check, or `{variable}` is off, it returns the problems so you can fix and re-save (don't
     guess; address each one). Re-saving the same id overwrites. On success the user can Run
-    it, or download `.workflows/` to reuse elsewhere."""
+    it, download `.workflows/` to reuse elsewhere, or you can put it on a clock with
+    `save_schedules`."""
     for verb in TOOL_VERBS["save_workflow"]:
         if (denied := authorize_tool(ctx.context, verb)) is not None:
             return denied
@@ -2237,7 +2238,10 @@ async def save_workflow_impl(
     return (
         f"saved workflow '{slug}' to {rel_path(path)}. The user can Run it from this "
         "item, or download "
-        "the .workflows folder from the Workflows panel to reuse or hand it to the dev team."
+        "the .workflows folder from the Workflows panel to reuse or hand it to the dev team. "
+        # The moment a workflow exists is the moment "and every night?" comes up
+        # — name the next tool here rather than leave it to be discovered.
+        f"To run it on a clock (nightly, every Monday, …) call save_schedules with `run: {slug!r}`."
     )
 
 

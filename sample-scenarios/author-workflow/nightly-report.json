@@ -1,0 +1,10 @@
+{
+  "name": "nightly-report",
+  "note": "The reported gap. The user asks for a recurring job in plain words that name no tool. The right behaviour is to save the workflow AND declare the schedule with save_schedules (the workflow first — the schedule refuses a run the item does not have), then relay when it runs next. Answering that schedules are not a thing, or writing the file with write_file (unvalidated, one typo = silent never-fires), is the failure.",
+  "prompt": "Make a workflow that reads notes.md and writes a one-paragraph summary to summary.md, and run it every night at 21:00 Taipei time.",
+  "expect": {
+    "must_call": ["save_workflow", "save_schedules"],
+    "must_not_call": ["write_file"],
+    "must_mention": [["21:00", "9 pm", "9pm"], ["Asia/Taipei", "Taipei"]]
+  }
+}

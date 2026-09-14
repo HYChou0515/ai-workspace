@@ -1,0 +1,9 @@
+{
+  "name": "one-off-stays-one-off",
+  "note": "The opposite failure: guidance about clocks must not make the model schedule things nobody asked to repeat. A one-time request gets a workflow at most — no schedule.",
+  "prompt": "Make a workflow that reads notes.md and writes a one-paragraph summary to summary.md. I'll run it myself when I need it.",
+  "expect": {
+    "must_call": ["save_workflow"],
+    "must_not_call": ["save_schedules"]
+  }
+}
