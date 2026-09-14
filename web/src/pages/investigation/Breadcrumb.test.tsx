@@ -70,4 +70,17 @@ describe("<Breadcrumb /> under a folder the listing did not enter", () => {
     expect(await screen.findByText(/not loaded|尚未載入/)).toBeInTheDocument();
     expect(screen.queryByText("Empty")).not.toBeInTheDocument();
   });
+
+  it("lists the lazy folder at its parent's level — pruned is not hidden there either", async () => {
+    const user = userEvent.setup();
+    render(
+      <LazyFoldersContext.Provider value={["/node_modules"]}>
+        <Breadcrumb activeTab="/node_modules/lodash/index.js" files={files} onOpen={vi.fn()} />
+      </LazyFoldersContext.Provider>,
+    );
+    await user.click(screen.getByRole("button", { name: "node_modules" })); // root-level browser
+    expect(await screen.findByText("data")).toBeInTheDocument(); // positive control: a walked folder
+    // The crumb itself plus the browser's entry for the lazy folder.
+    expect(screen.getAllByRole("button", { name: "node_modules" })).toHaveLength(2);
+  });
 });

@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { type FileService, FileServiceProvider, investigationFileService } from "../../api/fileService";
+import { invalidateTree } from "../../hooks/invalidateTree";
 import { renderWithQuery } from "../../test/queryWrapper";
 import { FileTree } from "./FileTree";
 
@@ -379,7 +380,10 @@ describe("<FileTree /> invalidation reaches only the folders on screen", () => {
     await waitFor(() => expect(listTree).toHaveBeenCalledTimes(2));
     await user.click(screen.getByText("node_modules")); // collapse it again
 
-    await client.invalidateQueries({ queryKey: ["treeDir", "inv-lazy"] });
+    // Through the real door — `invalidateTree` is what turn end and
+    // `file_changed` call — so its refetch scope is what this pins, not just
+    // the hook's observer gate.
+    await invalidateTree(client, "inv-lazy");
     await waitFor(() => expect(listTree).toHaveBeenCalledTimes(3));
     expect(listTree).toHaveBeenLastCalledWith({ prefix: "/dist", depth: 1 });
     // The collapsed one is left alone: a turn end must not re-list every

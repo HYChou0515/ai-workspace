@@ -2474,12 +2474,21 @@ function DirBrowser({
   close: () => void;
 }) {
   const [dir, setDir] = useState(startDir);
-  const entries = useMemo(() => dirChildren(paths, dir), [paths, dir]);
-  // `paths` is the preload; a folder the listing never entered has no
-  // children in it. That is "not loaded", and saying "Empty" there would be
-  // the one place pruned reads as hidden.
   const lazy = useContext(LazyFoldersContext);
   const full = `/${dir}`;
+  // `paths` is the preload; `dirChildren` derives folders from file paths, so
+  // a folder the listing never entered is absent from its PARENT's level too.
+  // List it there (pruned is not hidden), and say "not loaded" rather than
+  // "Empty" once inside it.
+  const entries = useMemo(() => {
+    const own = dirChildren(paths, dir);
+    const seen = new Set(own.map((e) => e.path));
+    const parent = dir ? full : "";
+    const extra = lazy
+      .filter((u) => u.slice(0, u.lastIndexOf("/")) === parent && !seen.has(u))
+      .map((u) => ({ name: u.slice(u.lastIndexOf("/") + 1), path: u, isDir: true }));
+    return [...extra, ...own];
+  }, [paths, dir, lazy, full]);
   const notLoaded = lazy.some((u) => full === u || full.startsWith(`${u}/`));
   const t = useT();
   return (

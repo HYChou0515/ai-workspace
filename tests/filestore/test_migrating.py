@@ -320,3 +320,8 @@ async def test_tree_lists_from_the_prefix_on_primary_and_unions_legacy(
     level = await fs.tree("ws", "/src", depth=1)
     assert [e.path for e in level.files] == ["/src/a.py"]
     assert scanned == ["src"], scanned
+    # One spelling for both halves: a slash-less prefix must not leave the
+    # legacy rows out of the union.
+    await legacy.write("ws", "/src/legacy.py", b"d")
+    both = await fs.tree("ws", "src", depth=1)
+    assert sorted(e.path for e in both.files) == ["/src/a.py", "/src/legacy.py"]

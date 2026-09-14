@@ -19,7 +19,9 @@ from .walk import flat_lister, walk_tree
 
 def _canon(path: str) -> str:
     """The one spelling a path has in this store: `pyproject.toml` / `//x` /
-    `/a//b/` → `/pyproject.toml` / `/x` / `/a/b`; `""` and `"/"` → `"/"`.
+    `/a//b/` / `./x` → `/pyproject.toml` / `/x` / `/a/b` / `/x`; `""` and
+    `"/"` → `"/"`. The same rule `walk_tree` applies to its root, so a path
+    written one way and walked another meets itself.
 
     Every op canonicalises at its boundary, so the store holds ONE entry per
     file whatever spelling a caller used — a real filesystem resolves
@@ -28,7 +30,7 @@ def _canon(path: str) -> str:
     let `delete` miss its twin, and registered a phantom directory for a
     slash-less root file (`_parent("pyproject.toml")` had no `/` to split
     on) that the mirror then `mkdir`-ed over the file it had just written."""
-    return "/" + "/".join(seg for seg in path.split("/") if seg)
+    return "/" + "/".join(seg for seg in path.split("/") if seg and seg != ".")
 
 
 def _parent(path: str) -> str:
@@ -278,7 +280,10 @@ class MockSandbox:
         fs = self._require(handle)
         dirs = self._dirs.setdefault(handle.id, set())
         base = _canon(path)
-        prefix = base + "/"
+        # `rmdir("/")` is the whole workspace — the real backend rmtrees it
+        # (reachable: `DELETE …/files/` with an empty path). A double that
+        # refused here would let a "root is protected" test pass falsely.
+        prefix = "/" if base == "/" else base + "/"
         victims = [p for p in fs if p == base or p.startswith(prefix)]
         gone = {p for p in dirs if p == base or p.startswith(prefix)}
         if not victims and not gone:

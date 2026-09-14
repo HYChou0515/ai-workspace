@@ -128,9 +128,14 @@ class MigratingFileStore:
         saw no `tree` on the wrapper and fell back to a FULL rglob of primary
         (twice), pruning in memory: the cold path saved nothing under the very
         topology the deployment template ships (`migrate_from: specstar`).
-        Primary lists directory by directory from the prefix; legacy is a
-        store of indexed rows, so its listing under the prefix is cheap and is
-        shaped by the same traversal. Primary wins on a collision."""
+        Primary lists directory by directory from the prefix; legacy hands
+        back its rows under the prefix (the specstar store filters them in
+        Python after a whole-workspace metadata listing — the cost the old
+        fallback already paid, not a new one) and they are shaped by the same
+        traversal. Primary wins on a collision."""
+        # One spelling for both halves: primary's own `tree` normalises, and
+        # legacy's `stat_all("src")` would match nothing over `/`-rooted rows.
+        prefix = "/" + "/".join(seg for seg in prefix.split("/") if seg and seg != ".")
         opts = {"depth": depth, "prune": prune, "max_entries": max_entries}
         primary_tree = getattr(self._primary, "tree", None)
         if primary_tree is not None:
@@ -157,12 +162,12 @@ class MigratingFileStore:
         prune: Sequence[str],
         max_entries: int | None,
     ) -> WalkResult:
-        root = prefix if prefix and prefix != "/" else ""
+        root = "" if prefix == "/" else prefix
         sizes = await store.stat_all(workspace_id, root)  # ty: ignore[unresolved-attribute]
         dirs = await store.listdir(workspace_id, root)
         return walk_tree(
             flat_lister({path: (size, "") for path, size in sizes}, dirs),
-            prefix or "/",
+            prefix,
             depth=depth,
             prune=prune,
             max_entries=max_entries,

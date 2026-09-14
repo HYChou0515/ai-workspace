@@ -402,6 +402,18 @@ CLAUDE.md 架構段加一條「檔案樹是預載修剪樹 + 懶目錄」,把 `T
 第五輪之後:源自 P11 的 1 條(mock)+ 三把新鏡頭各自的第一輪發現。新鏡頭第一次跑一定有東西,不算「沒收斂」;
 接下來若再一輪,判準仍是「源自本輪修法的有幾條」。
 
+第六輪(只驗 P12 換掉的三個機制,用舊輸入比對;源自 P12 的:**0 條到得了使用者**,4 條守衛/替身層級):
+- budget 測試漏了 facade 的第三個接線(`durable_tree`,正式環境的冷路徑)—— 拿掉它 36 條全綠 → 補 `NfsTreeFileStore` 那一分支(突變驗紅)。
+- 「收起不重抓」測試直接呼叫 `client.invalidateQueries`,沒走 `invalidateTree` 本尊 → 改走本尊(`refetchType` 的預設就被釘住)。
+- mock 的 `rmdir("/")` 變成拒絕,真後端會 rmtree 整個 workspace(`DELETE …/files/` 空路徑就到得了)→ 對齊;`_canon` 也丟 `.` 段,跟 `walk_tree` 一致。
+- M2 `tree` 的 legacy 半邊沒正規化 prefix(`"src"` 會少掉 legacy 的列)→ 進場正規化一次。
+- 麵包屑上一層的瀏覽器看不到懶目錄(`dirChildren` 只從檔案路徑推目錄)→ 用 `LazyFoldersContext` 補進去。
+
+**既有、不在這包、要另開票**(第六輪順帶查證):
+- `nfs_tree` 對指向 item 外的 symlink **檔案**照樣列出且 `read` 會讀出 API pod 的檔(`ln -s /etc/hostname hn`)。這包只圍堵了目錄 link 的**列出**;檔案 link 的**讀取**是同類、更大,`read` 從來沒查。
+- `DELETE …/files/` 空路徑會 rmtree 整個 workspace root(`_workspace_path("")` = `"/"`)。
+- specstar 的 `_stat_all_sync` 是整個 workspace 列完再 Python 過濾;M2 冷路徑每次展開懶目錄仍付一次(跟改前一樣,不是回歸)。
+
 ### 6.7 冷路徑 `prefix` 從「假的」變「真的」
 
 `nfs_tree` 的 `tree()` 從 `prefix` 開始 scandir,所以 `?prefix=/node_modules&depth=1` 在冷 item 上

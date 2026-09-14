@@ -540,20 +540,25 @@ async def test_tree_lists_derived_folders_without_entering_them_cold() -> None:
 
 
 async def test_tree_applies_the_entry_budget_on_every_branch(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
     """The bound is what turns a hang into an answer — and it is only real if
     the facade PASSES it. The walk-level tests prove the walk stops when told;
-    this proves the tree tells it, warm and cold. Dropping `max_entries` from
-    either branch reddens this and nothing else."""
+    this proves the tree tells it on all THREE branches — warm, the durable
+    store's own `tree` (the NFS tree: production's cold path), and the flat
+    fallback. Dropping `max_entries` from any one reddens this and nothing
+    else; the first cut of this test covered two and missed the one that
+    matters in production."""
     import workspace_app.files.facade as facade
+    from workspace_app.filestore.nfs_tree import NfsTreeFileStore
 
     monkeypatch.setattr(facade, "TREE_MAX_ENTRIES", 3)
     sb = MockSandbox()
     handle = await sb.create(SandboxSpec(), sandbox_id=WS)
     warm = WorkspaceFiles(MemoryFileStore(), sandbox=sb, handle_for=_resolver(lambda _ws: handle))
-    cold = WorkspaceFiles(MemoryFileStore())
-    for files in (warm, cold):
+    cold_nfs = WorkspaceFiles(NfsTreeFileStore(tmp_path))
+    cold_flat = WorkspaceFiles(MemoryFileStore())
+    for files in (warm, cold_nfs, cold_flat):
         for i in range(3):
             for j in range(3):
                 await files.write(WS, f"/d{i}/f{j}.txt", b"x")

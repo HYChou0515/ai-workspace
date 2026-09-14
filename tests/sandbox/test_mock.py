@@ -361,3 +361,9 @@ async def test_one_path_is_one_entry_whatever_spelling_wrote_it():
     await sb.upload(h, b"y", "f.txt")
     await sb.rename(h, "/f.txt", "/g.txt")
     assert await sb.exists(h, "f.txt") is False and await sb.exists(h, "g.txt") is True
+    # `.` is not a folder: the same rule the walk applies to its root.
+    await sb.mkdir(h, "./m")
+    assert (await sb.walk(h, "/")).dirs == ["/m"]
+    # The root is the whole workspace, as the real backend's rmtree makes it.
+    await sb.rmdir(h, "/")
+    assert (await sb.walk(h, "/")).files == [] and await sb.disk_usage(h) == 0
