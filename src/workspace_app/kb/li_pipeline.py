@@ -15,6 +15,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from llama_index.core.bridge.pydantic import PrivateAttr
 from llama_index.core.ingestion import IngestionPipeline
 from llama_index.core.node_parser import (
     CodeSplitter,
@@ -69,13 +70,14 @@ class OffsetSentenceSplitter(SentenceSplitter):
     than stamping plausible-looking offsets (the ingest marks the document
     `error`).
 
-    Per-call state (the splits and the raw, unstripped chunks the base class
-    hands to `_postprocess_chunks`) lives in a thread-local: the pipeline is
-    shared by concurrent ingests."""
+    Per-call state (the raw, unstripped chunks the base class hands to
+    `_postprocess_chunks`, the spans) lives in a thread-local: the pipeline is
+    shared by concurrent ingests. A pydantic private attribute, not a plain
+    `__dict__` entry (round 6): the base component's `__getstate__` strips
+    unpicklable `__dict__` keys from the LIVE instance on copy / pickle, and
+    `to_json()` would choke on it."""
 
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-        object.__setattr__(self, "_p14", threading.local())
+    _p14: threading.local = PrivateAttr(default_factory=threading.local)
 
     def _split(self, text: str, chunk_size: int) -> list[_Split]:  # type: ignore[override]
         return self._split_at(text, chunk_size, 0)

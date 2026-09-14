@@ -682,6 +682,35 @@ nothing; and the split step clears staging so nothing an earlier run left
 can reach a later one. Driven through the real handlers with `index_units`
 interposed so finalize runs inside the duplicate's window — red on P14.
 
+## Phase 16 — review round 6
+
+Two lenses on P14/P15. **The span machinery came back clean**: the
+regression lens found P15's chunks identical to P13's in text and count over
+283 documents, every one of 16,323 sentence-split chunks at exactly the span
+an independent oracle computes, the three ingest paths agreeing, cost flat,
+and 352 concurrent calls on one shared splitter with 0 disagreements (the
+positive control — a shared namespace instead of the thread-local — fails);
+the defect lens fuzzed ~1,000 adversarial texts (CRLF, tabs, NBSP,
+zero-width, combining marks, emoji, CJK, 300-char words, chunk sizes 8–256,
+overlaps 0–32) against three oracles and found nothing. What it found was in
+P15's edges, fixed here:
+
+- The #390 cache could still snapshot a replayed batch's rows before that
+  batch rebased itself (a few round-trips wide), and `copy_from_cache`
+  restores spans verbatim — persistent, silent. A late replay whose run has
+  already finished now re-snapshots after rebasing.
+- The P15 re-read before staging was itself check-then-act: finalize could
+  consume staging between it and the stage write, leaving a row past the
+  finished run. The batch looks again after staging and removes its own row.
+- "Bases go on the run FIRST" — the whole mechanism of P15 — had no test
+  that reddened when the two lines were swapped. It has one now (two
+  threads, the duplicate's write after the rebase and its re-read before the
+  publish), and so does the cache window.
+- `OffsetSentenceSplitter`'s per-call state was a plain `__dict__` entry on a
+  pydantic model: `to_json()` raised, and the base component's
+  `__getstate__` would strip it from the LIVE instance on copy / pickle. It
+  is a `PrivateAttr` now.
+
 ## Out of scope — and findings logged for separate work
 
 Found by the review rounds, pre-existing on master, not touched here:
@@ -699,6 +728,11 @@ Found by the review rounds, pre-existing on master, not touched here:
   empty-text chunk (`start == end == 0`, embedded) from the parser's empty
   pre-heading section.
 - `CsvParser` never sets the `row` provenance key `_PROVENANCE_KEYS` lists.
+- The fan-out has no run epoch: a batch from run N that completes after run
+  N+1's split passes both guards and stages its text into run N+1's slot —
+  benign for the same content, a mixed `SourceDoc.text` if the content was
+  edited between the runs. Pre-existing (#227); P15/P16 narrow it, do not
+  close it.
 - Finalize's per-chunk patch cost (above).
 
 - Eval-gated tuning; per-call / per-collection context knob.

@@ -683,13 +683,7 @@ class IndexCoordinator:
         # Finalize publishes the batch bases on the run BEFORE rebasing, so a
         # write that landed after that point sees them here and rebases its
         # own chunks; staging a text row now would only leak one.
-        run = self._runs.get(doc_id)
-        if run is None:
-            return
-        if run.batch_bases:
-            base = run.batch_bases.get(str(payload.batch_index))
-            if base is not None:
-                self._rebase_fanout_offsets(doc_id, {payload.batch_index: base}, requester)
+        if self._late_replay(doc_id, payload.batch_index, requester):
             return
         self._stage_text(doc_id, payload.batch_index, text)
         # #248: this batch covered [unit_start, unit_end) — add its units so the
@@ -697,8 +691,35 @@ class IndexCoordinator:
         self._runs.mark_done(
             doc_id, payload.batch_index, batch_units=payload.unit_end - payload.unit_start
         )
+        # P16: the read above was itself a check-then-act — finalize can have
+        # consumed staging between it and the stage write. Look again: if the
+        # bases are out now, the row just written is a leak of ours to remove,
+        # and the chunks are ours to rebase.
+        if self._late_replay(doc_id, payload.batch_index, requester):
+            self._clear_staged_row(doc_id, payload.batch_index)
+            return
         if self._runs.claim_finalize(doc_id):
             self._enqueue_finalize(doc_id, payload.collection_id, requester)
+
+    def _late_replay(self, doc_id: str, batch_index: int, requester: str) -> bool:
+        """Whether this batch's write landed after finalize published the bases
+        — and if so, the batch's own rebase (P15) and, when the run has already
+        finished, a fresh #390 cache snapshot: the one finalize took may have
+        caught this batch's rows before the rebase (round 6). Recomputed from
+        `unit_start`, so a second snapshot of already-canonical rows is the
+        same snapshot. True also when the run is gone (nothing left to do)."""
+        run = self._runs.get(doc_id)
+        if run is None:
+            return True
+        if not run.batch_bases:
+            return False
+        base = run.batch_bases.get(str(batch_index))
+        if base is not None:
+            self._rebase_fanout_offsets(doc_id, {batch_index: base}, requester)
+            after = self._runs.get(doc_id)
+            if after is not None and after.status == "done":
+                self._cache_hook(doc_id)
+        return True
 
     def _enqueue_finalize(self, doc_id: str, collection_id: str, requester: str) -> None:
         # #186: the job manager has no default user, so a finalize job MUST be
@@ -954,6 +975,11 @@ class IndexCoordinator:
                 if (start, end) != (chunks[i].start, chunks[i].end):
                     rid = rows[i].info.resource_id  # ty: ignore[unresolved-attribute]
                     chunk_rm.patch(rid, MergePatch({"start": start, "end": end}))
+
+    def _clear_staged_row(self, doc_id: str, batch_index: int) -> None:
+        rm = self._spec.get_resource_manager(IndexUnitText)
+        with contextlib.suppress(ResourceIDNotFoundError):
+            rm.permanently_delete(f"{doc_id}.t{batch_index}")
 
     def _clear_staged_text(self, doc_id: str) -> None:
         rm = self._spec.get_resource_manager(IndexUnitText)

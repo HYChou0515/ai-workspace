@@ -533,3 +533,179 @@ async def test_a_staged_row_left_by_an_earlier_run_never_reaches_the_next_text()
     doc = spec.get_resource_manager(SourceDoc).get(doc_id).data
     assert isinstance(doc, SourceDoc) and doc.text is not None
     assert "STALE" not in doc.text
+
+
+def _fanout_to_the_last_batch(spec, coord, ingestor, cid, doc_id):
+    """Split + the three batches by hand (the finalize job is claimed, not run)."""
+    from workspace_app.kb.index_jobs import IndexJobPayload
+
+    def job(kind: str, b: int = 0, s: int = 0, e: int = 0) -> IndexJobPayload:
+        return IndexJobPayload(
+            doc_id=doc_id, collection_id=cid, kind=kind, unit_start=s, unit_end=e, batch_index=b
+        )
+
+    coord._handle_split(job("split"), "u", 0, 0)
+    coord._handle_process(job("process", 0, 0, 2), "u")
+    coord._handle_process(job("process", 1, 2, 4), "u")
+    coord._handle_process(job("process", 2, 4, 5), "u")
+    return job
+
+
+def _assert_canonical_everywhere(spec, ingestor, doc_id) -> None:
+    from workspace_app.kb.index_cache import IndexCacheStore
+
+    doc = spec.get_resource_manager(SourceDoc).get(doc_id).data
+    assert isinstance(doc, SourceDoc) and doc.status == "ready" and doc.text is not None
+    chunks = _chunks(spec, doc_id)
+    assert len(chunks) == 5
+    bad = [(c.seq, c.start, c.end, c.text) for c in chunks if doc.text[c.start : c.end] != c.text]
+    assert not bad, bad
+    cached = IndexCacheStore(spec).get(ingestor.cache_key(doc_id))
+    assert cached is not None
+    bad = [(c.seq, c.start, c.end) for c in cached.chunks if doc.text[c.start : c.end] != c.text]
+    assert not bad, ("the #390 cache snapshot", bad)
+    staged = spec.get_resource_manager(IndexUnitText).list_resources(
+        (QB["doc_id"] == doc_id).build()
+    )
+    assert list(staged) == []
+    run = spec.get_resource_manager(IndexRun).get(doc_id).data
+    assert isinstance(run, IndexRun) and run.status == "done"
+
+
+def test_bases_are_published_before_the_rebase_so_a_late_write_can_see_them():
+    """P16 pins P15's load-bearing order (round 6: swapping the two lines left
+    every test green). The duplicate's chunk write lands AFTER finalize's
+    rebase, and its run re-read happens BEFORE finalize would have published
+    the bases had the order been the other way round."""
+    import threading
+
+    spec = make_spec(default_user="u")
+    cid = spec.get_resource_manager(Collection).create(Collection(name="c")).resource_id
+    ingestor, coord = _build(spec, csv_batch=2)
+    doc_id = _store_csv(ingestor, cid, rows=5)
+    job = _fanout_to_the_last_batch(spec, coord, ingestor, cid, doc_id)
+
+    rebased = threading.Event()  # finalize's real rebase is done
+    dup_done = threading.Event()  # the duplicate's tail ran
+    orig_rebase = coord._rebase_fanout_offsets
+    orig_index_units = ingestor.index_units
+    in_finalize = threading.local()
+
+    def rebase(doc, bases, requester):
+        orig_rebase(doc, bases, requester)
+        if getattr(in_finalize, "yes", False) and not rebased.is_set():
+            rebased.set()
+            assert dup_done.wait(10), "the duplicate never finished"
+
+    def index_units(*a, **kw):
+        assert rebased.wait(10), "finalize never rebased"
+        return orig_index_units(*a, **kw)  # the write lands after the rebase
+
+    coord._rebase_fanout_offsets = rebase
+    ingestor.index_units = index_units
+    errors: list[BaseException] = []
+
+    def finalize():
+        in_finalize.yes = True
+        try:
+            coord._handle_finalize(job("finalize"), "u")
+        except BaseException as e:  # noqa: BLE001
+            errors.append(e)
+            rebased.set()
+
+    def duplicate():
+        try:
+            coord._handle_process(job("process", 2, 4, 5), "u")
+        except BaseException as e:  # noqa: BLE001
+            errors.append(e)
+        finally:
+            dup_done.set()
+
+    tf, td = threading.Thread(target=finalize), threading.Thread(target=duplicate)
+    tf.start()
+    td.start()
+    td.join(20)
+    tf.join(20)
+    assert not errors, errors
+    _assert_canonical_everywhere(spec, ingestor, doc_id)
+
+
+def test_a_late_replay_refreshes_the_cache_snapshot_finalize_took_too_early():
+    """Round 6 residual: the duplicate's write landed after finalize's rebase and
+    its self-rebase landed after finalize's #390 snapshot — the live chunks
+    healed, the cache entry kept batch-relative offsets, and `copy_from_cache`
+    would have replayed them into every later same-content document. A late
+    replay whose run has finished re-snapshots after rebasing."""
+    import threading
+
+    spec = make_spec(default_user="u")
+    cid = spec.get_resource_manager(Collection).create(Collection(name="c")).resource_id
+    ingestor, coord = _build(spec, csv_batch=2)
+    doc_id = _store_csv(ingestor, cid, rows=5)
+    job = _fanout_to_the_last_batch(spec, coord, ingestor, cid, doc_id)
+
+    # The interleaving: finalize rebases → the duplicate's write lands →
+    # finalize snapshots the cache (catching the batch-relative rows) → the
+    # duplicate rebases itself → (P16) re-snapshots.
+    rebased = threading.Event()
+    written = threading.Event()
+    snapshotted = threading.Event()
+    orig_write_cache = ingestor.write_cache
+    orig_index_units = ingestor.index_units
+    orig_rebase = coord._rebase_fanout_offsets
+    in_finalize = threading.local()
+    calls: list[str] = []
+
+    def rebase(doc, bases, requester):
+        if getattr(in_finalize, "yes", False):
+            orig_rebase(doc, bases, requester)
+            rebased.set()
+        else:
+            assert snapshotted.wait(10), "finalize never snapshotted"
+            orig_rebase(doc, bases, requester)
+
+    def index_units(*a, **kw):
+        assert rebased.wait(10), "finalize never rebased"
+        out = orig_index_units(*a, **kw)
+        written.set()
+        return out
+
+    def write_cache(doc):
+        if getattr(in_finalize, "yes", False):
+            assert written.wait(10), "the duplicate never wrote"
+            orig_write_cache(doc)
+            calls.append("finalize")
+            snapshotted.set()
+        else:
+            orig_write_cache(doc)
+            calls.append("replay")
+
+    ingestor.write_cache = write_cache
+    ingestor.index_units = index_units
+    coord._rebase_fanout_offsets = rebase
+    errors: list[BaseException] = []
+
+    def finalize():
+        in_finalize.yes = True
+        try:
+            coord._handle_finalize(job("finalize"), "u")
+        except BaseException as e:  # noqa: BLE001
+            errors.append(e)
+            rebased.set()
+            snapshotted.set()
+
+    def duplicate():
+        try:
+            coord._handle_process(job("process", 2, 4, 5), "u")
+        except BaseException as e:  # noqa: BLE001
+            errors.append(e)
+            written.set()
+
+    td, tf = threading.Thread(target=duplicate), threading.Thread(target=finalize)
+    td.start()
+    tf.start()
+    tf.join(20)
+    td.join(20)
+    assert not errors, errors
+    assert calls == ["finalize", "replay"]
+    _assert_canonical_everywhere(spec, ingestor, doc_id)
