@@ -229,6 +229,27 @@ async def test_a_turn_without_the_deployments_policy_declines(clock) -> None:
     assert not await ctx.context.files.exists(ctx.context.investigation_id, SCHEDULES)
 
 
+async def test_a_workflow_cannot_take_the_schedules_files_name(clock) -> None:
+    """`save_workflow("Schedules")` slugified to `schedules` and wrote
+    `.workflows/schedules.json` — over the item's schedules. Every schedule was
+    silently cancelled, the new workflow was unrunnable (the read side reserves
+    the name) and absent from the panel, and the index pointed at a file the
+    sweep reports as "has no `schedules` list". The read side reserving a name
+    the write side still hands out is half a rule."""
+    from workspace_app.agent.tools import save_workflow_impl
+
+    ctx = _ctx()
+    await _with_workflow(ctx)
+    await save_schedules_impl(ctx, _rows({"every": "hourly", "run": "nightly"}))
+    before = await ctx.context.files.read(ctx.context.investigation_id, SCHEDULES)
+
+    out = await save_workflow_impl(ctx, "Schedules", _WORKFLOW.decode())
+
+    assert out.startswith("error:") and "save_schedules" in out
+    after = await ctx.context.files.read(ctx.context.investigation_id, SCHEDULES)
+    assert after == before, "the schedules file was overwritten"
+
+
 async def test_no_workspace_on_this_turn_is_an_error() -> None:
     out = await save_schedules_impl(RunContextWrapper(AgentToolContext()), _rows())
     assert out.startswith("error:")

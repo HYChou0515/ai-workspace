@@ -34,7 +34,7 @@ from ..api.schedule_index import ScheduleIndex
 from ..filestore.protocol import FileNotFound
 from .orchestrator import ActiveRunExists
 from .triggers import SpecstarTriggerStore, fire_window, is_due
-from .user_schedules import declared_count, in_zone, trigger_id_for, usable_rows, utc_now
+from .user_schedules import in_zone, over_cap, trigger_id_for, usable_rows, utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -309,22 +309,14 @@ class UserScheduleSweeper:
         # BEFORE the parse, because the cap exists to bound exactly that work.
         # Counting after it meant a runaway file paid its full parse and was then
         # refused — every tick, on every pod, for as long as it stayed indexed.
-        declared = declared_count(raw)
-        if declared is not None and declared > self._max_rows:
+        if (capped := over_cap(raw, self._max_rows)) is not None:
             # The WHOLE file, unlike a single invalid row. A file with a thousand
             # entries was not typed by a person, so there is no good half worth
             # preserving — and half-processing would leave a durable ledger row
             # for every one it got through, which is the thing this bounds.
+            # The sentence is `over_cap`'s, shared with the panel's listing.
             self._say_once(
-                item_id,
-                path,
-                logging.ERROR,
-                "user schedules: %s %s declares %d schedules, over the limit of %d — "
-                "none will run until it is reduced",
-                item_id,
-                path,
-                declared,
-                self._max_rows,
+                item_id, path, logging.ERROR, "user schedules: %s %s %s", item_id, path, capped
             )
             return 0
 

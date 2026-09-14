@@ -226,6 +226,24 @@ describe("WorkflowsModal — schedules", () => {
     expect(row).not.toHaveTextContent("?");
   });
 
+  it("a row that is not an object is written back exactly as it was", async () => {
+    // `5` is refused ("must be an object") — and stays `5` in the file after a
+    // rewrite, not a substitute the author never typed.
+    listMock.mockResolvedValue([]);
+    const notAnObject = { ...NIGHTLY, index: 0, raw: 5, run: "", problems: ["schedules[0]: each schedule must be an object."] };
+    const nightly = { ...NIGHTLY, index: 1 };
+    schedulesMock.mockResolvedValue(schedules({ rows: [notAnObject, nightly] }));
+    const { svc, writes } = fakeService();
+    render(svc);
+
+    expect(await screen.findByTestId("schedule-row-0")).toHaveTextContent("must be an object");
+    fireEvent.click(screen.getByTestId("schedule-remove-1"));
+    fireEvent.click(await screen.findByRole("button", { name: "移除" }));
+
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(JSON.parse(writes[0].body)).toEqual({ schedules: [5] });
+  });
+
   it("removing asks once, and a cancel writes nothing", async () => {
     listMock.mockResolvedValue([]);
     schedulesMock.mockResolvedValue(schedules());

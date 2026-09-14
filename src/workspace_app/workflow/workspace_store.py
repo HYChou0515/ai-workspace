@@ -89,12 +89,28 @@ async def load_workspace_workflow(
     return d, msgspec.structs.replace(build_manifest(d), id=workflow_id)
 
 
+#: The one workflow id no workspace may use: its file would BE the item's
+#: schedules file. The read side (`is_workspace_workflow_path`) already treats
+#: the name as reserved; a write side that still handed it out let
+#: `save_workflow("Schedules")` overwrite every schedule the item had, silently,
+#: with a workflow nothing could then run or list.
+RESERVED_WORKFLOW_ID = SCHEDULES_FILE[: -len(".json")]
+
+
+class ReservedWorkflowId(ValueError):
+    """`slug` names the schedules file, not a workflow."""
+
+
 async def save_workspace_workflow(
     files: WorkspaceFiles, workspace_id: str, slug: str, d: WorkflowDef
 ) -> str:
     """Write ``d`` to ``.workflows/<slug>.json`` (canonical msgspec JSON, ``id`` forced to
     ``slug`` so the filename is authoritative). Returns the workspace path. Re-saving the
-    same slug overwrites (refine freely)."""
+    same slug overwrites (refine freely). Raises `ReservedWorkflowId` for the one slug
+    whose file is the item's schedules — checked HERE, the write chokepoint, so every
+    caller is held to it and not only the one that remembered."""
+    if slug == RESERVED_WORKFLOW_ID:
+        raise ReservedWorkflowId(slug)
     path = workspace_workflow_path(slug)
     await files.write(workspace_id, path, msgspec.json.encode(msgspec.structs.replace(d, id=slug)))
     return path

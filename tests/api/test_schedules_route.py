@@ -131,6 +131,63 @@ def test_a_deployment_with_the_sweep_off_says_so() -> None:
     assert r.json()["rows"][0]["run"] == "nightly"
 
 
+def test_a_file_over_the_deployments_cap_is_reported_as_the_sweep_treats_it() -> None:
+    """The sweep refuses the WHOLE file over `max_page_schedules` — none of its
+    rows run — with one log line nobody reads. The tool refuses at save, but it
+    is not the only writer (`write_file`, `exec`, the file PUT), and a panel that
+    listed every row with a "Next: …" would be showing rows as if they will
+    fire: the exact thing this route exists to prevent."""
+    spec = make_spec()
+    runner = ScriptedAgentRunner([MessageDelta(text="ack"), RunDone()])
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=SpecstarFileStore(spec),
+        runner=runner,
+        trigger_check_interval=timedelta(hours=1),
+        max_page_schedules=2,
+    )
+    item_id = (
+        spec.get_resource_manager(PlaygroundItem)
+        .create(PlaygroundItem(title="t", owner="u", profile="default"))
+        .resource_id
+    )
+    client = TestClient(app)
+    with client:
+        _put(client, item_id, ".workflows/nightly.json", _NIGHTLY)
+        _put(
+            client,
+            item_id,
+            ".workflows/schedules.json",
+            json.dumps({"schedules": [{"every": "hourly", "run": "nightly"}] * 3}),
+        )
+        r = client.get(f"{_base(item_id)}/schedules")
+
+    body = r.json()
+    assert len(body["rows"]) == 3, "the rows are still shown — a person has to fix the file"
+    assert any("over the limit of 2" in p for p in body["problems"]), body["problems"]
+
+
+def test_a_row_that_is_not_an_object_keeps_its_original_value() -> None:
+    """The panel rewrites the file minus one row from `raw`. A substitute
+    (`{"_": 5}`) written back in place of `5` is a line the author never typed,
+    and its problem text changes under them ("must be an object" → "needs run")."""
+    client, _, item_id = _app()
+    with client:
+        _put(client, item_id, ".workflows/nightly.json", _NIGHTLY)
+        _put(
+            client,
+            item_id,
+            ".workflows/schedules.json",
+            json.dumps({"schedules": [5, {"every": "hourly", "run": "nightly"}]}),
+        )
+        r = client.get(f"{_base(item_id)}/schedules")
+
+    bad, good = r.json()["rows"]
+    assert bad["raw"] == 5
+    assert bad["problems"] and good["run"] == "nightly"
+
+
 def test_a_file_that_is_not_json_is_a_file_level_problem_not_a_500() -> None:
     client, _, item_id = _app()
     with client:

@@ -146,3 +146,31 @@ workflow 那邊已有排程機制 `triggers.json`,但它**住在 repo 裡**
 - DST 回撥那一小時,sub-daily 排程少跑一小時份。
 - 改一列 = 新排程,可能在同一週期再跑一次。
 - 刪掉排程的對話不會停掉排程;要停就移掉那一列。
+
+## 第一輪 review(2026-09-14,P1–P5 之後,四條,全部成立 → P6)
+
+判準照 plan-wui.md:看「幾條源自上輪修法」。這一輪 4 條裡 **3 條是 P1/P4 引進的**,全在沒有測試
+看著的地方:
+
+| 找到什麼 | 誰造成的 | 修法 |
+|---|---|---|
+| sweep 的 `workflows_for` 走 façade 的 `files.ls`(warm-first)—— 正式環境 `kind: http` 上每 tick 把被回收的 sandbox 重建一次,正是 sweeper 用 `read=filestore.read` 刻意避掉的事,一個參數之隔又放了回來 | P1 | 規則仍只有一份(`offered_workflow_ids`),**listing 由呼叫端交進來**:request 給 façade 的 `ls`,sweep 給 durable store 的;`read=` 旁的原文守衛擴到 `workflows_for`(突變回 façade 會紅) |
+| `.workflows/schedules.json` 被列成一個叫 `schedules` 的 workflow —— 工具與 gate 接受、orchestrator 跑不動、面板的 Run 清單(有 parse)又不列,「一份清單」和面板由構造上就不一致 | P1 | 一個判準 `is_workspace_workflow_path`(平坦 `.workflows/<id>.json`、排除 `schedules.json`)給 id 清單和 manifest 清單共用;`SCHEDULES_FILE` 搬到 `workspace_store`(和 `WORKSPACE_WORKFLOW_DIR` 同一個葉模組),拼一次、無循環 import |
+| 面板「移除」用 ≤30s 的快取整份重寫 —— 面板開著時 AI 用 `save_schedules` 加的列會被靜默寫掉,正是程式碼註解宣稱避免的事 | P4 | 移除前 `fetchQuery(staleTime: 0)` 重讀,用 `sameShape` 認列(索引可能位移),列已不在就什麼都不寫 |
+| 缺 `every` 的列後端當 daily、前端畫 `?` | P4 | 前端 `undefined` 走 daily 分支 |
+
+live check 是在 P6 之後做的(`docs/plan-item-schedules.md` 上方的 DoD),結果貼在 PR #805。
+**AI 那半沒有 live 驗到**:本機只有 CPU-only 的 `qwen3:8b`,兩次都在 litellm 600s 內出不了第一個
+token;工具由 11 條單元測試走真函式覆蓋,`sample-scenarios/author-workflow/` 兩個情境是有模型的
+部署該跑的 live check。
+
+## 第二輪 review(2026-09-14,P6 之後,三條,全部成立 → P7)
+
+3 條裡 **1 條源自上輪修法**(P6 在讀端保留了 `schedules` 這個名字,寫端沒擋),其餘兩條是 P4 的縫。
+沒有換機制,只加守衛,所以不再開第三輪(判準:換機制才再一輪)。
+
+| 找到什麼 | 誰造成的 | 修法 |
+|---|---|---|
+| `save_workflow("Schedules")` slug 成 `schedules`,寫進 `.workflows/schedules.json` 把整份排程蓋掉,而那個 workflow 又跑不動也列不出 | P6 | `RESERVED_WORKFLOW_ID` 在寫入咽喉點 `save_workspace_workflow` 拒絕(每個呼叫者都受約束),工具先攔並指向 `save_schedules` |
+| 列表路由沒套 sweep 的整檔上限:超過 `max_page_schedules` 時 sweep 一列都不跑,面板卻每列給「下次」 | P4 | `over_cap(raw, max_rows)` 一句話,sweep 的 log 和路由的 file-level `problems` 共用 |
+| 非物件的列被換成 `{"_": 5}` 寫回 | P4 | `raw` 保留原 JSON 值(`Any` / `unknown`),前端描述時才降級,重寫時原樣寫回 |

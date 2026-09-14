@@ -2216,6 +2216,7 @@ async def save_workflow_impl(
         if (denied := authorize_tool(ctx.context, verb)) is not None:
             return denied
     from ..workflow.workspace_store import (
+        RESERVED_WORKFLOW_ID,
         save_workspace_workflow,
         slugify_workflow_id,
         validate_workflow_json,
@@ -2228,6 +2229,14 @@ async def save_workflow_impl(
     slug = slugify_workflow_id(id)
     if not slug:
         return f"error: {id!r} has no letters or digits to make a workflow id from"
+    if slug == RESERVED_WORKFLOW_ID:
+        # Before validating: the name is wrong whatever the body says, and
+        # `save_workspace_workflow` would refuse it anyway — this is the
+        # sentence that tells the model what to do instead.
+        return (
+            f"error: {slug!r} is the name of this item's schedules file, not a workflow id — "
+            "pick another id. To put a workflow on a clock, call save_schedules."
+        )
     ceiling = _profile_tool_ceiling(ctx.context.app_slug, ctx.context.template_profile)
     workflow, errs = validate_workflow_json(workflow_json, tool_ceiling=ceiling)
     if workflow is None or errs:

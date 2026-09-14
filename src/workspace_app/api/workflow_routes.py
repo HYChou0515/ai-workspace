@@ -59,7 +59,7 @@ class ScheduleRowOut(BaseModel):
     """One row of the item's schedules file, as the sweep will treat it."""
 
     index: int
-    raw: dict[str, Any]
+    raw: Any
     problems: list[str]
     run: str = ""
     describe: str = ""
@@ -203,6 +203,7 @@ def register_workflow_routes(
         from ..workflow.user_schedules import (
             ITEM_SCHEDULES_PATH,
             last_window_lookup,
+            over_cap,
             schedule_views,
             utc_now,
         )
@@ -224,6 +225,11 @@ def register_workflow_routes(
                 spec if schedule_policy.sweep_enabled else None, investigation_id
             ),
         )
+        # The sweep's whole-file cap, in the sweep's own words: over it, NONE of
+        # these rows run, and listing them with a "next" would show them as if
+        # they will. The tool refuses at save, but it is not the only writer.
+        if (capped := over_cap(raw, schedule_policy.max_rows)) is not None:
+            problems = [*problems, capped]
         return SchedulesOut(
             enabled=schedule_policy.sweep_enabled,
             rows=[ScheduleRowOut(**msgspec.to_builtins(v)) for v in views],

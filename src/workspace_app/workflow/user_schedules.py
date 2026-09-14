@@ -302,6 +302,19 @@ def declared_count(raw: str) -> int | None:
     return len(rows) if isinstance(rows, list) else None
 
 
+def over_cap(raw: str, max_rows: int) -> str | None:
+    """The sentence the sweep logs when a file declares more schedules than the
+    deployment allows — and refuses the WHOLE file — or None when it is within
+    the cap. One sentence, so the panel says exactly what the sweep will do."""
+    declared = declared_count(raw)
+    if declared is None or declared <= max_rows:
+        return None
+    return (
+        f"declares {declared} schedules, over the limit of {max_rows} — "
+        "none will run until it is reduced"
+    )
+
+
 def usable_rows(raw: str) -> tuple[list[UserSchedule], list[str]]:
     """The rows that can be run, and what is wrong with the rest.
 
@@ -489,7 +502,10 @@ class ScheduleView(Struct):
     """
 
     index: int
-    raw: dict[str, Any]
+    raw: Any
+    """The row EXACTLY as written — whatever JSON value it was, an object or not
+    — because a rewrite that dropped one row must put the others back untouched,
+    and a substitute for a malformed one is a line the author never typed."""
     problems: list[str]
     run: str = ""
     describe: str = ""
@@ -523,22 +539,19 @@ def schedule_views(
 
     views: list[ScheduleView] = []
     for i, raw in enumerate(rows):
-        raw_dict: dict[str, Any] = (
-            {str(k): v for k, v in raw.items()} if isinstance(raw, dict) else {"_": raw}
-        )
         one = json.dumps({"schedules": [raw]})
         problems = [
             p.replace("schedules[0]", f"schedules[{i}]") for p in validate_user_schedules(one)
         ]
         if problems:
-            views.append(ScheduleView(index=i, raw=raw_dict, problems=problems))
+            views.append(ScheduleView(index=i, raw=raw, problems=problems))
             continue
         try:
             (row,) = parse_user_schedules(one)
         except Exception as exc:
             views.append(
                 ScheduleView(
-                    index=i, raw=raw_dict, problems=[f"schedules[{i}]: could not be read ({exc})."]
+                    index=i, raw=raw, problems=[f"schedules[{i}]: could not be read ({exc})."]
                 )
             )
             continue
@@ -547,7 +560,7 @@ def schedule_views(
         views.append(
             ScheduleView(
                 index=i,
-                raw=raw_dict,
+                raw=raw,
                 problems=[],
                 run=row.run,
                 describe=describe_row(row),

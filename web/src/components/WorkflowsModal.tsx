@@ -283,7 +283,7 @@ export function WorkflowsModal({
                     <div style={{ fontWeight: 600, fontSize: "var(--text-body-sm)" }}>
                       {describeSchedule(row.raw, t)}
                       {" → "}
-                      {invalid ? String(row.raw.run ?? "?") : titleOf(row.run)}
+                      {invalid ? rawRun(row.raw) : titleOf(row.run)}
                     </div>
                     <div style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
                       {invalid ? (
@@ -412,7 +412,13 @@ export function WorkflowsModal({
 /** The recurrence in the reader's words, from the row as written (`every`, `at`,
  * `dow`, `dom`, `n`, `tz`). Only vocabulary: when a row fires NEXT is computed on
  * the backend, by the same rule the sweep fires it by, and arrives as `next_at`. */
-function describeSchedule(raw: Record<string, unknown>, t: ReturnType<typeof useT>): string {
+function describeSchedule(value: unknown, t: ReturnType<typeof useT>): string {
+  // A row that is not an object has no fields to read; the backend has already
+  // said so in `problems`, and the rewrite still carries the value as written.
+  const raw: Record<string, unknown> =
+    value !== null && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
   const at = typeof raw.at === "string" ? raw.at : "00:00";
   const tz = typeof raw.tz === "string" && raw.tz ? raw.tz : "UTC";
   let words: string;
@@ -441,6 +447,14 @@ function describeSchedule(raw: Record<string, unknown>, t: ReturnType<typeof use
       words = String(raw.every);
   }
   return `${words} (${tz})`;
+}
+
+/** What a refused row SAID it would run, for the line that shows it. */
+function rawRun(value: unknown): string {
+  if (value !== null && typeof value === "object" && "run" in value) {
+    return String((value as { run?: unknown }).run ?? "?");
+  }
+  return "?";
 }
 
 const DOW_KEYS: Record<string, MsgKey> = {

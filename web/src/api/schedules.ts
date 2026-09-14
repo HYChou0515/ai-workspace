@@ -13,8 +13,9 @@ const enc = encodeURIComponent;
 export type ScheduleRow = {
   /** Position in the file — the handle a rewrite removes by. */
   index: number;
-  /** The row as written, so a rewrite keeps what it did not touch. */
-  raw: Record<string, unknown>;
+  /** The row EXACTLY as written — whatever JSON value it was, an object or not —
+   * so a rewrite keeps what it did not touch, byte for byte. */
+  raw: unknown;
   /** Why the sweep refuses this row; empty when it will fire. */
   problems: string[];
   run: string;
