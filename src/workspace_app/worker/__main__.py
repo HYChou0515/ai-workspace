@@ -13,10 +13,16 @@ import logging
 import signal
 import threading
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ..config.schema import Settings
 from ..coordinators import CoordinatorBundle, build_coordinators, build_ingestor
 from . import _JOBTYPE_ATTR, consume_until_stopped, select_coordinator
+
+if TYPE_CHECKING:
+    from ..kb.embedder import Embedder
+    from ..kb.llm import ILlm
+    from ..kb.retriever import Retriever
 
 logger = logging.getLogger(__name__)
 
@@ -92,9 +98,9 @@ def build_bundle(
     # drafting instead of re-asking / re-proposing what the collection documents. The
     # drafter's ask_knowledge_base leaf needs a retriever — built from the same
     # embedder / kb_llm the ingestor uses so query + document vectors are comparable.
+    retriever = _build_retriever(settings, spec, embedder=embedder, kb_llm=kb_llm)
     if card_drafter_llm is not None:
         from ..api.card_drafter_agent import wire_agentic_card_drafter
-        from ..kb.retriever import Retriever
 
         kb_chats = catalog.kb_chats()
         assert kb_chats, "a settings-built catalog always populates kb_chats"
@@ -102,18 +108,7 @@ def build_bundle(
             bundle.card_gen,
             spec=spec,
             runner=runner,
-            retriever=Retriever(
-                spec,
-                embedder=embedder,
-                llm=kb_llm,
-                code_embedder=f.get_code_embedder(settings),
-                enhancement_defaults=settings.kb.retrieval.enhancements,
-                quality_weight=settings.kb.retrieval.quality_weight,
-                quality_floor=settings.kb.retrieval.quality_floor,
-                sparse_corpus_cap=settings.kb.retrieval.sparse_corpus_cap,
-                context_chars=settings.kb.retrieval.context_chars,
-                rerank_context_chars=settings.kb.retrieval.rerank_context_chars,
-            ),
+            retriever=retriever,
             catalog=catalog,
             kb_agent_config=kb_chats[0],
             max_searches=settings.kb.max_searches_per_turn,
@@ -122,23 +117,35 @@ def build_bundle(
     # ingestor uses, so query and document vectors are comparable. Injected here
     # because the Retriever is built after build_coordinators.
     if bundle.eval is not None:
-        from ..kb.retriever import Retriever
-
-        bundle.eval.set_retriever(
-            Retriever(
-                spec,
-                embedder=embedder,
-                llm=kb_llm,
-                code_embedder=f.get_code_embedder(settings),
-                enhancement_defaults=settings.kb.retrieval.enhancements,
-                quality_weight=settings.kb.retrieval.quality_weight,
-                quality_floor=settings.kb.retrieval.quality_floor,
-                sparse_corpus_cap=settings.kb.retrieval.sparse_corpus_cap,
-                context_chars=settings.kb.retrieval.context_chars,
-                rerank_context_chars=settings.kb.retrieval.rerank_context_chars,
-            )
-        )
+        bundle.eval.set_retriever(retriever)
     return bundle
+
+
+def _build_retriever(
+    settings: Settings, spec: object, *, embedder: Embedder, kb_llm: ILlm | None
+) -> Retriever:
+    """The worker's ONE Retriever, from the same knobs `create_app` reads — the
+    card drafter and the eval handler share it (two hand-copied kwargs blocks
+    used to sit here; the P10 door test pinned one of them and review round 4
+    dropped the knobs from the other without anything reddening)."""
+    from specstar import SpecStar
+
+    from .. import factories as f
+    from ..kb.retriever import Retriever
+
+    assert isinstance(spec, SpecStar)
+    return Retriever(
+        spec,
+        embedder=embedder,
+        llm=kb_llm,
+        code_embedder=f.get_code_embedder(settings),
+        enhancement_defaults=settings.kb.retrieval.enhancements,
+        quality_weight=settings.kb.retrieval.quality_weight,
+        quality_floor=settings.kb.retrieval.quality_floor,
+        sparse_corpus_cap=settings.kb.retrieval.sparse_corpus_cap,
+        context_chars=settings.kb.retrieval.context_chars,
+        rerank_context_chars=settings.kb.retrieval.rerank_context_chars,
+    )
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:

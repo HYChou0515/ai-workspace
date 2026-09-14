@@ -320,6 +320,10 @@ async def read_file_impl(
         data = await fs.read(inv, path)
     except FileNotFound:
         return f"error: file not found: {rel_path(path)}"
+    if limit is not None and limit < 1:
+        # Same rule as read_lines: `lines[0:-1]` is not empty, so a limit below
+        # 1 read n-1 lines with a notice instead of being refused.
+        return f"nothing to read: limit must be at least 1 (got {limit})."
 
     window = _line_window(
         data.decode("utf-8", errors="replace"),

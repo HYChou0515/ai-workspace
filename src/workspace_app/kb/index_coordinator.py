@@ -634,6 +634,15 @@ class IndexCoordinator:
         updater = self._last_updater(doc_id)
         if updater is None:
             return  # doc deleted between split and run
+        run = self._runs.get(doc_id)
+        if run is None or run.status != "running":
+            # At-least-once delivery can replay a batch AFTER finalize. Before P8
+            # that was a harmless identical overwrite; now a batch's write is
+            # provisional (batch-relative offsets, rebased at finalize), so a
+            # replay would put its chunks back to batch-relative and stage a
+            # stale text row with no finalize left to fix either. The run says
+            # the work is done: the replay has nothing to add.
+            return
         doc_rm = self._spec.get_resource_manager(SourceDoc)
         chunk_rm = self._spec.get_resource_manager(DocChunk)
         # #227 SEQ_STRIDE: each batch numbers its chunks from batch_index*stride so

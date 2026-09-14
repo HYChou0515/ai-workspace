@@ -192,3 +192,51 @@ def test_rebase_is_idempotent_by_construction():
     # No unit_start (single-job / legacy rows) or no base (a failed batch): untouched.
     assert rebase_offsets([chunk(0, 5, 9, None)], lambda _seq: 0) == []
     assert rebase_offsets([chunk(3 * stride, 0, 9, 0)], lambda seq: bases.get(seq // stride)) == []
+
+
+def test_a_short_chunk_absorbed_as_overlap_keeps_the_next_chunk_in_place(spec: SpecStar):
+    # Review round 4: `SentenceSplitter` closes a short sentence (≤ overlap
+    # tokens) as its own chunk and then carries it WHOLE into the next chunk as
+    # overlap — two consecutive pieces with the SAME start. P8's walk assumed
+    # "the next piece starts after the previous one started", so the long
+    # piece was not found from start+1 and got anchored on its head — which,
+    # when that short sentence recurs later, is the later recurrence: a
+    # 1.2k-char chunk pinned to 58 chars near the end, and kb_grep blind to
+    # everything in it. P7 (LlamaIndex's own first-occurrence) had it right.
+    unit = "the quick brown fox jumps over the lazy dog and keeps running through the field "
+    big = (unit * 11).strip() + " " + " ".join(["word"] * 75) + "."
+    body = "Note: see below. " + big + " Note: see below again, later in the document, and the end."
+    ing, emb = _ingestor(spec)
+    cid = _collection(spec)
+    [doc_id] = ing.ingest(collection_id=cid, user="u", filename="notes.txt", data=body.encode())
+    chunks = _chunks(spec, doc_id)
+    _assert_spans_index_the_text(_text(spec, doc_id), chunks)
+    # The shape this test is about really occurred: a piece that starts where
+    # the previous one started (else the splitter changed and the test is moot).
+    starts = [c.start for c in chunks]
+    assert len(starts) != len(set(starts)), starts
+    out = kb_grep_impl(_ctx(spec, emb, cid), "lazy dog")
+    assert "notes.txt:1:" in out
+
+
+def test_periodic_text_lands_on_the_cuts_not_one_period_apart(spec: SpecStar):
+    # Round 4 (veracity): on the very document the "36 of 38 chunks in the
+    # first 1.8k chars" number came from, P8 still crowded the chunks — the walk
+    # from the previous START found the NEXT occurrence one period (~385 chars)
+    # later, not the cut one chunk (~1k chars) later, so the context walk still
+    # went 12k chars back. The next piece starts at or after the previous END
+    # minus the overlap: the walk starts THERE.
+    para = "The same paragraph appears again and again in this report, sentence after sentence. "
+    body = para * 250  # ~21k chars, period 86 < a chunk (~1.1k): every chunk's text recurs
+    ing, _ = _ingestor(spec)
+    cid = _collection(spec)
+    [doc_id] = ing.ingest(collection_id=cid, user="u", filename="rep.txt", data=body.encode())
+    chunks = _chunks(spec, doc_id)
+    text = _text(spec, doc_id)
+    _assert_spans_index_the_text(text, chunks)
+    assert len(chunks) >= 10
+    # Consecutive chunks are a chunk apart (minus overlap), and the last one
+    # reaches the end of the text — nothing is left uncovered by the crowding.
+    gaps = [b.start - a.start for a, b in zip(chunks, chunks[1:], strict=False)]
+    assert min(gaps) > len(para) * 5, gaps  # far more than one period
+    assert chunks[-1].end >= len(text) - len(para)

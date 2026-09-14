@@ -131,7 +131,8 @@ def _validate_kb_search_granted(
             f"agents.{purpose}[{index}] resolves to allowed_tools="
             f"{resolved.allowed_tools!r}, which does not include `kb_search` "
             f"— the sub-agent has no way to query the knowledge base. "
-            f"Add `allowed_tools: [kb_search]` either on the referenced "
+            f"Add `allowed_tools: [kb_search, kb_grep, read_page, read_lines, "
+            f"lookup_glossary]` (the tools the kb prompt describes) either on the referenced "
             f"preset ({preset_name!r}) or as a usage-level override under "
             f"`agents.{purpose}[{index}]`."
         )

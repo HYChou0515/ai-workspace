@@ -422,3 +422,43 @@ async def test_fanout_transient_error_is_redelivered_by_the_broker():
     await coord.aclose()
 
     assert emb.calls > 2  # each batch was re-delivered (more calls than batches)
+
+
+async def test_a_process_job_replayed_after_finalize_is_a_noop():
+    """plan-rag-context P12 (round 4): at-least-once delivery can replay a batch
+    AFTER finalize. P8 made a batch's chunk write provisional (batch-relative
+    offsets, rebased at finalize), so a replay rewrote its chunks batch-relative
+    and staged a stale text row — with the run `done`, nothing would ever rebase
+    them again. The run says the work is done: the replay writes nothing."""
+    from workspace_app.kb.index_jobs import IndexJobPayload
+
+    spec = make_spec(default_user="u")
+    cid = spec.get_resource_manager(Collection).create(Collection(name="c")).resource_id
+    ingestor, coord = _build(spec, csv_batch=2)
+    doc_id = _store_csv(ingestor, cid, rows=5)
+    coord.enqueue(doc_id, cid)
+    await coord.aclose()
+    doc = spec.get_resource_manager(SourceDoc).get(doc_id).data
+    assert isinstance(doc, SourceDoc) and doc.text is not None
+    before = sorted((c.seq, c.start, c.end) for c in _chunks(spec, doc_id))
+    assert all(
+        doc.text[s:e] == c.text
+        for c in _chunks(spec, doc_id)
+        for (_, s, e) in [(c.seq, c.start, c.end)]
+    )
+    coord._handle_process(
+        IndexJobPayload(
+            doc_id=doc_id,
+            collection_id=cid,
+            kind="process",
+            unit_start=2,
+            unit_end=4,
+            batch_index=1,
+        ),
+        "u",
+    )
+    assert sorted((c.seq, c.start, c.end) for c in _chunks(spec, doc_id)) == before
+    staged = spec.get_resource_manager(IndexUnitText).list_resources(
+        (QB["doc_id"] == doc_id).build()
+    )
+    assert list(staged) == []

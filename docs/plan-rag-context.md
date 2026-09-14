@@ -502,12 +502,16 @@ established by the pipeline path. Two defects, one class:
 The fix is at the two places the offsets are made:
 
 - `DispatchSplitter` relocates every verbatim piece by walking forward
-  (`_locate` / `_relocate`: a piece starts after the previous one started),
+  (`_locate` / `_relocate`; the rule was corrected in Phase 12: a piece
+  starts at or after the previous piece's END minus the splitter's overlap),
   anchors a piece the splitter's phrase fallback rewrote (it drops consecutive
-  punctuation, ~5% of windows on real docs) on its longest verbatim head and
-  tail, and points every node at its Document (the `SOURCE` relationship —
-  the nodes this class builds itself never had one). Its transformation cache
-  is off: on a hit it returned nodes bound to an earlier run's Documents.
+  punctuation, ~5% of windows on real docs) on its longest verbatim head with
+  the smallest region containing the piece as a subsequence as its end, and
+  points every node at its Document (the `SOURCE` relationship — the nodes
+  this class builds itself never had one). Its transformation cache is off:
+  on a hit it returned nodes bound to an earlier run's Documents (and, the
+  regression lens measured, never evicted: +223 MB over 20 re-runs of 300
+  rows; off, +1.7 MB — and each first run is faster).
 - `Ingestor._build_chunks` adds each Document's base in the join (minus the
   join's stripped lead) and clamps to the text. The #227 fan-out is the one
   path that cannot know its base while chunking — a batch sees only its own
@@ -572,7 +576,73 @@ class: `read_lines` refuses a limit below 1 before the slice.
   no knob or picker; `Citation.context_*` reconstructs the same-document
   part; `read_page` copies `read_image`'s branch; one branch, not four PRs.
 
+## Phase 12 — review round 4 on the offsets
+
+Three lenses on P8–P11 (regression: 283 documents / 15,941 chunks, nothing
+right on P7 wrong on HEAD, correct spans 4,367 → 14,936, non-monotonic
+111 → 0, out-of-bounds 6 → 0; the three ingest paths agree on every input).
+What they found in the new mechanism, fixed here:
+
+- **A short chunk absorbed as overlap.** The sentence splitter closes a
+  sentence shorter than the overlap as its own chunk and then carries it
+  WHOLE into the next chunk, so two consecutive pieces share a start. P8's
+  walk ("the next piece starts after the previous start") could not find
+  the long piece from start+1, anchored on its head — and when that short
+  sentence recurs later, pinned a 1.2k-char chunk to the recurrence;
+  `kb_grep` was blind to it. P7 had it right. The walk now accepts an equal
+  start.
+- **Periodic text still crowded.** On the very document the "36 of 38"
+  number came from, HEAD still walked 11,940 chars back: searching from the
+  previous START finds the next occurrence one period on, not the cut one
+  chunk on. Consecutive pieces are contiguous, so the next one starts at or
+  after the previous END minus the overlap — the search starts there, with
+  the overlap in the splitter's own unit (tokens × a char bound for
+  sentences, exactly the last N lines for code, 0 for Markdown sections).
+  That document now tiles at the splitter's cuts (chunk 17 at 17,462; the
+  walk goes ~2k back). What remains is the limit of locating by text: a
+  period shorter than the overlap bound can drift by one period.
+- **A tail anchor with no minimum** under-covered 1 of 15,941 spans (a 3-char
+  tail found early). The end is now the smallest region from the head that
+  contains the piece as a subsequence — exact, and never shorter than the
+  piece.
+- **Cost.** Every search is bounded to the neighbourhood the next piece can
+  be in (a failed unbounded `find` scans to the end: 3 MB of rewritten pieces
+  took 50 s), and `as_related_node_info()` — which re-hashes the whole
+  Document — runs once per Document, not once per piece (+44% on 3.5 MB).
+- **A process job replayed after finalize.** #227's at-least-once delivery
+  can replay a batch after the run finished. Before P8 that was an identical
+  overwrite; with batch-relative offsets it rewrote the batch's chunks and
+  staged a stale row, with no finalize left to rebase them. A batch whose run
+  is not `running` is stale and writes nothing.
+- The worker builds ONE Retriever for the card drafter and the eval handler
+  (two hand-copied kwargs blocks; the door test pinned one). The boot hint
+  names the tools the kb prompt describes. `read_file` (workspace) gets the
+  same "limit below 1" rule as `read_lines`. The `_split_markdown` /
+  `_split_code` relocations and the `_ANCHOR_MIN` floor have tests.
+
+Known cost left as is: finalize patches every moved fan-out chunk one row at
+a time (a 5,000-row CSV: 4,500 patches, ~11 s in memory) — correct and
+idempotent; a bulk shape needs `patch_many` with per-row values, which
+specstar does not have. Logged below with the pre-existing findings.
+
 ## Out of scope — and findings logged for separate work
+
+Found by the review rounds, pre-existing on master, not touched here:
+
+- **HTML / DOCX chunking is non-deterministic**: `HTMLTagReader` /
+  `DocxReader` stamp a random temp `file_path` into Document metadata, and
+  `SentenceSplitter` subtracts the metadata's token count from its budget,
+  so chunk boundaries move with the temp name (3 runs, 2 different chunk
+  sets). Undermines the #390 cache key and "the three paths agree" for those
+  types.
+- A fan-out's `SourceDoc.text` can differ from the single-job text by a
+  trailing space at a batch boundary (the batch `.strip()`); each path's
+  offsets index its own text, so no consumer sees it today.
+- A `.md` that starts with blank lines before its first heading persists an
+  empty-text chunk (`start == end == 0`, embedded) from the parser's empty
+  pre-heading section.
+- `CsvParser` never sets the `row` provenance key `_PROVENANCE_KEYS` lists.
+- Finalize's per-chunk patch cost (above).
 
 - Eval-gated tuning; per-call / per-collection context knob.
 - Wiki / glossary interactions.
