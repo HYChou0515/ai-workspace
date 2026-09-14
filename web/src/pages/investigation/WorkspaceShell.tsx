@@ -34,8 +34,10 @@ import { ItemChatShell } from "../../components/ItemChatShell";
 import { ItemAccessDialog, ItemMembersPanel } from "../../components/ItemMembersPanel";
 import { ShareChatDialog } from "../../components/ShareChatDialog";
 import { resolveUploadDir } from "./attach";
+import { presenceOf } from "./fileTree";
 import { useDialog } from "../../components/Dialog";
 import { useDirtyClose } from "../../hooks/useDirtyClose";
+import { useT } from "../../lib/i18n";
 import { FileServiceProvider, investigationFileService } from "../../api/fileService";
 import { WorkspaceSlugProvider, useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { EditModeProvider, useEditMode } from "../../hooks/editMode";
@@ -85,6 +87,12 @@ export type ActivityMode = "evidence" | "search" | "history" | "members" | "acti
 /** Close a tab through the dirty-aware path (save-on-close prompt). Provided
  * by ShellBody so the deep tab strip can request closes without prop drilling. */
 const RequestCloseContext = createContext<(groupId: string, path: string) => void>(() => {});
+
+/** The folders the preload listed but did not enter (`unwalked`), for the
+ * pieces of the shell that read the listing as a fact about the workspace —
+ * the breadcrumb's folder browser, first. A listing that is pruned must not be
+ * read as complete four components down from where it arrived. */
+export const LazyFoldersContext = createContext<readonly string[]>([]);
 
 /** #159: whether the file IDE starts collapsed (chat as the main stage) when an
  * item first opens. Chat-first Apps collapse it; ide-first Apps (RCA) open it.
@@ -142,6 +150,8 @@ export function WorkspaceShell({
   manifest,
   files,
   dirs = [],
+  unwalked = [],
+  truncated = false,
   ideCollapsed,
   onIdeCollapsedChange,
   onFilesChanged,
@@ -151,6 +161,10 @@ export function WorkspaceShell({
   manifest: AppManifest;
   files: FileInfo[];
   dirs?: string[];
+  /** Folders the listing did not enter (drawn collapsed, fetched on expand),
+   * and whether the listing hit its entry budget. */
+  unwalked?: string[];
+  truncated?: boolean;
   // Optionally controlled: AppWorkspace lifts the IDE-collapse state so file
   // loading can follow it. Omitted ⇒ the shell owns its own persisted state.
   ideCollapsed?: boolean;
@@ -176,17 +190,21 @@ export function WorkspaceShell({
         <AgentProvider investigationId={item.resource_id}>
           <FileBufferProvider store={bufferStore}>
             <EditModeProvider>
+              <LazyFoldersContext.Provider value={unwalked}>
               <ShellBody
                 item={item}
                 manifest={manifest}
                 files={files}
                 dirs={dirs}
+                unwalked={unwalked}
+                truncated={truncated}
                 ideCollapsed={ideCollapsed}
                 onIdeCollapsedChange={onIdeCollapsedChange}
                 onFilesChanged={onFilesChanged}
                 onInvestigationChanged={onInvestigationChanged}
                 bufferStore={bufferStore}
               />
+              </LazyFoldersContext.Provider>
             </EditModeProvider>
           </FileBufferProvider>
         </AgentProvider>
@@ -200,6 +218,8 @@ function ShellBody({
   manifest,
   files,
   dirs = [],
+  unwalked = [],
+  truncated = false,
   ideCollapsed: propIdeCollapsed,
   onIdeCollapsedChange: propOnIdeCollapsedChange,
   onFilesChanged,
@@ -210,6 +230,8 @@ function ShellBody({
   manifest: AppManifest;
   files: FileInfo[];
   dirs?: string[];
+  unwalked?: string[];
+  truncated?: boolean;
   ideCollapsed?: boolean;
   onIdeCollapsedChange?: (b: boolean | ((prev: boolean) => boolean)) => void;
   onFilesChanged?: () => void;
@@ -234,9 +256,17 @@ function ShellBody({
   // those that actually exist — not a hardcoded RCA design-view list. A
   // "views"-first App (#419 §B5) opens its `layout.views` instead of default_tabs.
   const surfaceTabs = mainSurfaceTabs(manifest);
+  // One presence rule for every "is this file still there" question in the
+  // shell: the listing is a pruned preload, so a path under an unwalked folder
+  // is `unknown`, not missing — a view an App keeps under `dist/` must open.
+  const filePaths = useMemo(() => new Set(files.map((f) => f.path)), [files]);
+  const presence = useCallback(
+    (p: string) => presenceOf(p, filePaths, unwalked),
+    [filePaths, unwalked],
+  );
   const initialPaths = useMemo(
-    () => surfaceTabs.filter((p) => files.some((f) => f.path === p)),
-    [surfaceTabs, files],
+    () => surfaceTabs.filter((p) => presence(p) !== "absent"),
+    [surfaceTabs, presence],
   );
   const groups = useEditorGroups(initialPaths);
   // Attached to `page-item` below. Every width decision in this shell is made
@@ -497,18 +527,19 @@ function ShellBody({
 
   // VSCode-style delete-open-file handling: when a file disappears from the
   // listing (deleted in the tree), auto-close its CLEAN tabs; keep dirty
-  // ones open so ⌘S can re-create the file.
-  const filePaths = useMemo(() => new Set(files.map((f) => f.path)), [files]);
+  // ones open so ⌘S can re-create the file. Only a file the listing can VOUCH
+  // is gone: one under a folder the preload never entered is unknown, and a
+  // tab is not thrown away on a guess.
   useEffect(() => {
     const g = gRef.current;
     for (const [gid, grp] of Object.entries(g.groups)) {
       for (const t of grp.tabs) {
-        if (!filePaths.has(t.path) && !bufferStore.isDirty(t.path)) {
+        if (presence(t.path) === "absent" && !bufferStore.isDirty(t.path)) {
           g.closeTab(gid, t.path);
         }
       }
     }
-  }, [filePaths, bufferStore]);
+  }, [presence, bufferStore]);
 
   // Close a tab, prompting to save when it's the LAST open view of a dirty
   // file (a sibling pane still showing it means no data is at risk).
@@ -676,6 +707,8 @@ function ShellBody({
                   manifest={manifest}
                   files={files}
                   dirs={dirs}
+                  unwalked={unwalked}
+                  truncated={truncated}
                   activePath={groups.activeFile}
                   recentFiles={recentFiles.values}
                   onOpenFile={openFile}
@@ -1601,6 +1634,8 @@ function ActivitySidebar(props: {
   manifest: AppManifest;
   files: FileInfo[];
   dirs: string[];
+  unwalked: string[];
+  truncated: boolean;
   activePath: string | null;
   recentFiles: string[];
   onOpenFile: OpenFileFn;
@@ -1617,7 +1652,14 @@ function ActivitySidebar(props: {
         />
       );
     case "history":
-      return <HistorySidebar files={props.files} recentFiles={props.recentFiles} onOpenFile={props.onOpenFile} />;
+      return (
+        <HistorySidebar
+          files={props.files}
+          unwalked={props.unwalked}
+          recentFiles={props.recentFiles}
+          onOpenFile={props.onOpenFile}
+        />
+      );
     case "members":
       return <MembersSidebar manifest={props.manifest} item={props.item} />;
     case "activity":
@@ -1632,6 +1674,8 @@ function EvidenceSidebar({
   manifest,
   files,
   dirs,
+  unwalked,
+  truncated,
   activePath,
   onOpenFile,
   onFilesChanged,
@@ -1640,6 +1684,8 @@ function EvidenceSidebar({
   manifest: AppManifest;
   files: FileInfo[];
   dirs: string[];
+  unwalked: string[];
+  truncated: boolean;
   activePath: string | null;
   onOpenFile: OpenFileFn;
   onFilesChanged?: () => void;
@@ -1649,6 +1695,8 @@ function EvidenceSidebar({
       <FileTree
         files={files}
         dirs={dirs}
+        unwalked={unwalked}
+        truncated={truncated}
         activePath={activePath}
         onOpen={onOpenFile}
         onChanged={onFilesChanged}
@@ -1673,15 +1721,19 @@ export function extractHeadings(md: string): { level: number; text: string }[] {
 
 function HistorySidebar({
   files,
+  unwalked,
   recentFiles,
   onOpenFile,
 }: {
   files: FileInfo[];
+  unwalked: string[];
   recentFiles: string[];
   onOpenFile: OpenFileFn;
 }) {
-  // Filter recentFiles to those still present in the file listing.
-  const items = recentFiles.filter((p) => files.some((f) => f.path === p));
+  // Drop only the recent files the listing can vouch are gone; one under a
+  // folder the preload never entered is unknown, not missing.
+  const filePaths = new Set(files.map((f) => f.path));
+  const items = recentFiles.filter((p) => presenceOf(p, filePaths, unwalked) !== "absent");
   return (
     <aside style={sidebarStyle}>
       <div style={sidebarHeader}>
@@ -2422,7 +2474,31 @@ function DirBrowser({
   close: () => void;
 }) {
   const [dir, setDir] = useState(startDir);
-  const entries = useMemo(() => dirChildren(paths, dir), [paths, dir]);
+  const lazy = useContext(LazyFoldersContext);
+  const full = `/${dir}`;
+  // `paths` is the preload; `dirChildren` derives folders from file paths, so
+  // a folder the listing never entered is absent from its PARENT's level too.
+  // List it there (pruned is not hidden), and say "not loaded" rather than
+  // "Empty" once inside it.
+  const entries = useMemo(() => {
+    const own = dirChildren(paths, dir);
+    // `dirChildren` spells folder entries WITHOUT the leading slash (`dir` is
+    // slash-less too); `lazy` is slash-rooted. The injected entries must use
+    // the browser's spelling, or clicking one drills into `//node_modules` —
+    // which is "Empty" again, the exact text this exists to avoid.
+    const seen = new Set(own.map((e) => e.path));
+    const parent = dir ? full : "";
+    const extra = lazy
+      .filter((u) => u.slice(0, u.lastIndexOf("/")) === parent && !seen.has(u.slice(1)))
+      .map((u) => ({ name: u.slice(u.lastIndexOf("/") + 1), path: u.slice(1), isDir: true }));
+    // Folders first, one alphabet — the same order the tree draws them in.
+    const folders = [...own.filter((e) => e.isDir), ...extra].sort((a, b) =>
+      a.name.localeCompare(b.name),
+    );
+    return [...folders, ...own.filter((e) => !e.isDir)];
+  }, [paths, dir, lazy, full]);
+  const notLoaded = lazy.some((u) => full === u || full.startsWith(`${u}/`));
+  const t = useT();
   return (
     <div className="scrollable" style={{ minWidth: 220, maxHeight: 320, overflowY: "auto" }}>
       {dir && (
@@ -2445,7 +2521,7 @@ function DirBrowser({
       )}
       {entries.length === 0 && (
         <div style={{ padding: "6px 10px", fontSize: pxToRem(12), color: "var(--text-paper-d2)" }}>
-          Empty
+          {notLoaded ? t("workspace.tree.notLoadedCrumb") : "Empty"}
         </div>
       )}
       {entries.map((e) => (

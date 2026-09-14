@@ -282,3 +282,46 @@ async def test_backfill_is_idempotent_and_skips_already_present(
     n = await fs.backfill_workspace("ws")
     assert n == 0  # already in primary → not overwritten
     assert await primary.read("ws", "/a") == b"already-newer"
+
+
+async def test_tree_lists_from_the_prefix_on_primary_and_unions_legacy(
+    fs: MigratingFileStore,
+    primary: NfsTreeFileStore,
+    legacy: MemoryFileStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The file tree's listing under M2 — the repo's own deployment template
+    (`SANDBOX_DURABLE_MIGRATE_FROM: specstar`). Without a `tree` on this
+    wrapper the facade fell back to a FULL rglob of primary (twice) and pruned
+    in memory: the cold path saved nothing exactly where the plan promised it
+    would. Primary lists directory by directory from the prefix; legacy's
+    indexed rows are unioned so a not-yet-migrated file still draws."""
+    import os
+
+    await primary.write("ws", "/src/a.py", b"a")
+    await primary.write("ws", "/node_modules/x/y.js", b"b")
+    await legacy.write("ws", "/old/b.py", b"c")
+    scanned: list[str] = []
+    real_scandir = os.scandir
+    root = tmp_path / "nfs" / "ws"
+
+    def counting_scandir(path):  # noqa: ANN001, ANN202
+        scanned.append(os.path.relpath(path, root))
+        return real_scandir(path)
+
+    monkeypatch.setattr(os, "scandir", counting_scandir)
+    listing = await fs.tree("ws", "/", prune=["node_modules/"])
+    assert sorted(e.path for e in listing.files) == ["/old/b.py", "/src/a.py"]
+    assert listing.unwalked == ["/node_modules"]
+    assert not any(d.startswith("node_modules") for d in scanned), scanned
+
+    scanned.clear()
+    level = await fs.tree("ws", "/src", depth=1)
+    assert [e.path for e in level.files] == ["/src/a.py"]
+    assert scanned == ["src"], scanned
+    # One spelling for both halves: a slash-less prefix must not leave the
+    # legacy rows out of the union.
+    await legacy.write("ws", "/src/legacy.py", b"d")
+    both = await fs.tree("ws", "src", depth=1)
+    assert sorted(e.path for e in both.files) == ["/src/a.py", "/src/legacy.py"]

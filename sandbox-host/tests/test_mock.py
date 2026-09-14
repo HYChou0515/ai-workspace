@@ -111,3 +111,27 @@ async def test_rename_file_subtree_and_miss(sb: MockSandbox):
     assert await sb.download(h, "/e/c") == b"y"
     with pytest.raises(FileNotFoundError):
         await sb.rename(h, "/nope", "/z")
+
+
+async def test_a_path_the_walk_reports_can_be_read_back_however_it_was_uploaded(sb: MockSandbox):
+    """One path is one entry, whatever spelling wrote it — like a real
+    filesystem, and like the canonical form `walk` reports. A double that
+    stored the raw string held two files for one path, and registered a
+    phantom DIRECTORY for a slash-less root file."""
+    h = await sb.create(SandboxSpec())
+    await sb.upload(h, b"one", "pyproject.toml")
+    await sb.upload(h, b"two", "/pyproject.toml")  # the same file, last write wins
+    walked = await sb.walk(h, "/")
+    assert [e.path for e in walked.files] == ["/pyproject.toml"]
+    assert walked.dirs == []  # a file, not a phantom directory of the same name
+    assert await sb.download(h, "/pyproject.toml") == b"two"
+    assert await sb.download(h, "pyproject.toml") == b"two"
+    await sb.delete(h, "pyproject.toml")
+    assert await sb.exists(h, "/pyproject.toml") is False
+    # `.` is not a folder: the same rule the walk applies to its root.
+    await sb.mkdir(h, "./m")
+    assert (await sb.walk(h, "/")).dirs == ["/m"]
+    # The root is the whole workspace, as the real backend's rmtree makes it.
+    await sb.upload(h, b"x", "/d/a.txt")
+    await sb.rmdir(h, "/")
+    assert (await sb.walk(h, "/")).files == [] and (await sb.walk(h, "/")).dirs == []

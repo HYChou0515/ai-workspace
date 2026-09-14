@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { FileServiceProvider, investigationFileService } from "../../api/fileService";
 import type { FileInfo } from "../../api/types";
-import { DialogProvider } from "../../components/Dialog";
+import { QueryWrap } from "../../test/queryWrapper";
 import { FileTree } from "./FileTree";
 
 afterEach(cleanup);
@@ -15,9 +15,9 @@ const files: FileInfo[] = [{ path: "/a.md", size: 1 }];
 function renderTree() {
   render(
     <FileServiceProvider value={investigationFileService("rca", "inv")}>
-      <DialogProvider>
+      <QueryWrap>
         <FileTree files={files} dirs={[]} activePath={null} onOpen={vi.fn()} />
-      </DialogProvider>
+      </QueryWrap>
     </FileServiceProvider>,
   );
 }

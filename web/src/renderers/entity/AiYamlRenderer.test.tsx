@@ -79,6 +79,181 @@ describe("AiYamlRenderer", () => {
     expect(await screen.findByRole("button", { name: /refresh/i })).toBeInTheDocument();
   });
 
+  it("keeps the WUI pane mounted while a sibling view file in the same folder loads", async () => {
+    /**
+     * Found in a real browser (review round 11's fix, verified by hand):
+     * every unit test switched siblings by swapping `path` on one mounted
+     * pane, but the IDE goes through this renderer, whose "Loading …"
+     * branch UNMOUNTS the pane while the sibling's buffer is fetched the
+     * first time — taking a running build (aborted by the pane's unmount
+     * cleanup), its log, the hold and every verdict with it. A Deploy whose
+     * result "waits until the pane is back on that page" was a promise the
+     * pane could not keep across a cold switch. The old pane stays up until
+     * the sibling's spec is known.
+     */
+    let releaseB: () => void = () => {};
+    const gateB = new Promise<void>((r) => (releaseB = r));
+    const texts: Record<string, string> = { "/sales/a.ai.yaml": WUI, "/sales/b.ai.yaml": "view: wui\ntitle: B\n" };
+    const store = new FileBufferStore({
+      readFile: vi.fn(async (path: string) => {
+        if (path === "/sales/b.ai.yaml") await gateB;
+        const text = texts[path];
+        return { kind: "text" as const, path, size: text.length, text, encoding: "utf-8" as const };
+      }),
+      writeFile: vi.fn(async () => {}),
+    });
+    const at = (path: string) => (
+      <QueryWrap>
+        <WorkspaceSlugProvider value="pm">
+          <FileServiceProvider value={investigationFileService("pm", "item1")}>
+            <EditModeProvider>
+              <FileBufferProvider store={store}>
+                <AiYamlRenderer path={path} />
+              </FileBufferProvider>
+            </EditModeProvider>
+          </FileServiceProvider>
+        </WorkspaceSlugProvider>
+      </QueryWrap>
+    );
+    const view = render(at("/sales/a.ai.yaml"));
+    const refresh = await screen.findByRole("button", { name: /refresh/i });
+
+    view.rerender(at("/sales/b.ai.yaml")); // B's buffer is cold: its read is held
+
+    // Still the pane — the same toolbar element, not "Loading …" and not a
+    // remount.
+    expect(screen.queryByText(/loading/i)).toBeNull();
+    expect(screen.getByRole("button", { name: /refresh/i })).toBe(refresh);
+
+    releaseB();
+    await waitFor(() => expect(screen.getByRole("button", { name: /refresh/i })).toBe(refresh));
+    expect(screen.queryByText(/loading/i)).toBeNull();
+  });
+
+  it("still says Loading — and lets the pane go — for a cold view file in ANOTHER folder", async () => {
+    // The control for the test above: a WUI must not be kept on screen over
+    // an unrelated folder's file while that file loads.
+    let releaseB: () => void = () => {};
+    const gateB = new Promise<void>((r) => (releaseB = r));
+    const texts: Record<string, string> = { "/sales/a.ai.yaml": WUI, "/ops/b.ai.yaml": BOARD };
+    const store = new FileBufferStore({
+      readFile: vi.fn(async (path: string) => {
+        if (path === "/ops/b.ai.yaml") await gateB;
+        const text = texts[path];
+        return { kind: "text" as const, path, size: text.length, text, encoding: "utf-8" as const };
+      }),
+      writeFile: vi.fn(async () => {}),
+    });
+    const at = (path: string) => (
+      <QueryWrap>
+        <WorkspaceSlugProvider value="pm">
+          <FileServiceProvider value={investigationFileService("pm", "item1")}>
+            <EditModeProvider>
+              <FileBufferProvider store={store}>
+                <AiYamlRenderer path={path} />
+              </FileBufferProvider>
+            </EditModeProvider>
+          </FileServiceProvider>
+        </WorkspaceSlugProvider>
+      </QueryWrap>
+    );
+    const view = render(at("/sales/a.ai.yaml"));
+    await screen.findByRole("button", { name: /refresh/i });
+
+    view.rerender(at("/ops/b.ai.yaml"));
+
+    expect(screen.getByText(/loading/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /refresh/i })).toBeNull();
+    releaseB();
+  });
+
+  it("forgets the pane once it has drawn something else — a cold board in the WUI's folder loads as Loading", async () => {
+    /**
+     * Review round 13: "the last WUI this instance ever drew" was never
+     * cleared, so A (WUI) → a board in another folder → a COLD board file in
+     * A's folder mounted a fresh pane for A while the board loaded — and its
+     * on-open build started, then was aborted, for opening a board.
+     */
+    let releaseB: () => void = () => {};
+    const gateB = new Promise<void>((r) => (releaseB = r));
+    const texts: Record<string, string> = {
+      "/sales/a.ai.yaml": WUI,
+      "/ops/b.ai.yaml": BOARD,
+      "/sales/board.ai.yaml": BOARD,
+    };
+    const store = new FileBufferStore({
+      readFile: vi.fn(async (path: string) => {
+        if (path === "/sales/board.ai.yaml") await gateB;
+        const text = texts[path];
+        return { kind: "text" as const, path, size: text.length, text, encoding: "utf-8" as const };
+      }),
+      writeFile: vi.fn(async () => {}),
+    });
+    const at = (path: string) => (
+      <QueryWrap>
+        <WorkspaceSlugProvider value="pm">
+          <FileServiceProvider value={investigationFileService("pm", "item1")}>
+            <EditModeProvider>
+              <FileBufferProvider store={store}>
+                <AiYamlRenderer path={path} />
+              </FileBufferProvider>
+            </EditModeProvider>
+          </FileServiceProvider>
+        </WorkspaceSlugProvider>
+      </QueryWrap>
+    );
+    const view = render(at("/sales/a.ai.yaml"));
+    await screen.findByRole("button", { name: /refresh/i });
+    view.rerender(at("/ops/b.ai.yaml"));
+    await waitFor(() => expect(screen.queryByRole("button", { name: /refresh/i })).toBeNull());
+
+    view.rerender(at("/sales/board.ai.yaml")); // cold, in the WUI's folder
+
+    expect(screen.getByText(/loading/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /refresh/i })).toBeNull();
+    releaseB();
+  });
+
+  it("keeps the WUI pane mounted while its OWN buffer is re-read", async () => {
+    // Review round 13: the common trigger — `useRefreshFiles` reloads every
+    // clean buffer at the end of an agent turn, which puts this very file
+    // through "loading" again. The sibling rule covers it; pinned here.
+    let held = false;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const store = new FileBufferStore({
+      readFile: vi.fn(async (path: string) => {
+        if (held) await gate;
+        return { kind: "text" as const, path, size: WUI.length, text: WUI, encoding: "utf-8" as const };
+      }),
+      writeFile: vi.fn(async () => {}),
+    });
+    const at = (path: string) => (
+      <QueryWrap>
+        <WorkspaceSlugProvider value="pm">
+          <FileServiceProvider value={investigationFileService("pm", "item1")}>
+            <EditModeProvider>
+              <FileBufferProvider store={store}>
+                <AiYamlRenderer path={path} />
+              </FileBufferProvider>
+            </EditModeProvider>
+          </FileServiceProvider>
+        </WorkspaceSlugProvider>
+      </QueryWrap>
+    );
+    const view = render(at("/sales/a.ai.yaml"));
+    const refresh = await screen.findByRole("button", { name: /refresh/i });
+
+    held = true;
+    void store.reload("/sales/a.ai.yaml"); // the buffer goes back through "loading"
+    view.rerender(at("/sales/a.ai.yaml"));
+
+    expect(screen.queryByText(/loading/i)).toBeNull();
+    expect(screen.getByRole("button", { name: /refresh/i })).toBe(refresh);
+    release();
+    await waitFor(() => expect(screen.getByRole("button", { name: /refresh/i })).toBe(refresh));
+  });
+
   it("does not run the entity queries for a WUI, which draws no records", async () => {
     renderView("/sales/page.ai.yaml", WUI);
 

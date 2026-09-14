@@ -12,8 +12,8 @@ backend (`IsolatedProcessSandbox` in production, `MockSandbox` in tests).
 network-service path in v1, and the wire API exposes no such endpoint.
 """
 
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
@@ -104,10 +104,18 @@ class WalkResult:
     directory has no content, so `size`/`version` would be meaningless for one,
     and a caller handed directories as file entries would mirror or bill them.
     `dirs` includes directories holding no files — those appear in no file path,
-    so nothing downstream can recover them from `files`."""
+    so nothing downstream can recover them from `files`.
+
+    `unwalked` is the subset of `dirs` the traversal listed but did NOT enter —
+    pruned, beyond `depth`, or past `max_entries` — so a caller can draw the
+    folder collapsed and fetch its contents on demand. `truncated` says the
+    entry budget was what stopped it. Both default empty/False so a caller of
+    the plain full walk (the mirror, disk usage) sees exactly what it always did."""
 
     files: list[FileEntry]
     dirs: list[str]
+    unwalked: list[str] = field(default_factory=list)
+    truncated: bool = False
 
 
 class Sandbox(Protocol):
@@ -144,7 +152,20 @@ class Sandbox(Protocol):
 
     async def upload(self, handle: SandboxHandle, data: bytes, remote_path: str) -> None: ...
     async def download(self, handle: SandboxHandle, remote_path: str) -> bytes: ...
-    async def walk(self, handle: SandboxHandle, root: str) -> WalkResult: ...
+    async def walk(
+        self,
+        handle: SandboxHandle,
+        root: str,
+        *,
+        depth: int | None = None,
+        prune: Sequence[str] = (),
+        max_entries: int | None = None,
+    ) -> WalkResult:
+        """Files and directories under `root`. The three keyword options all
+        mean "list this directory but do not enter it" — see `walk.walk_tree`
+        — and every existing caller passes none of them."""
+        ...
+
     async def disk_usage(self, handle: SandboxHandle) -> int:
         """#538: total apparent bytes of the walked workspace (not the infra
         area beside it) — the app's quota basis, answered by the side that owns
