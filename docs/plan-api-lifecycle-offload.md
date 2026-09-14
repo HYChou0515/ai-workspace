@@ -29,6 +29,7 @@ pod-local 狀態** —— 還有四個，決定跟 #804 一起做完、不拆：
 > lifecycle 裡的 loop 只能是兩種：**pod-local**（只碰這顆 pod 自己的 session / scratch），
 > 或 **純 producer**（列出該做的事、enqueue 給 worker，每 tick 的讀是索引查詢）。
 > 全表讀、打模型、走整個 store 的 —— 一律是 job，跑在 worker 上。
+> 唯一例外：blob GC（它的正確性需要 API 才有的完整 model 集；靠 lease 讓一顆 pod 跑）。
 
 這句話落到 `CLAUDE.md` 的 Key conventions（P7）。
 
@@ -122,12 +123,13 @@ pod-local 狀態** —— 還有四個，決定跟 #804 一起做完、不拆：
 ### P7 — 帳本 + 慣例 + review
 
 - `docs/migrations.md` §5.5：
-  - `filestore.gc_interval_sec / gc_t1 / gc_t2`（既有選項，語意改變）：GC 不再在 API pod 上跑；
-    `run_consumers: false` 而沒有 `rca-worker-maintenance` 的部署 ⇒ GC job 永遠 pending、
-    **孤兒 blob 不再回收**（以前 API 默默做）。這是這張表上少數「不動設定、但一定要動部署」的一列。
-  - `server.trigger_check_interval_sec`（既有，語意再擴大）：現在也是「掃描最多遲到多久」。
-- `CLAUDE.md` Key conventions 加一條上面的判準（lifecycle = pod-local 或純 producer）。
-- `docs/deployment.md` / `docs/configuration.md` 提到 blob GC 在 API 上跑的段落改掉。
+  - ~~`filestore.gc_*`~~（P4 作廢，GC 不動，沒有帳要記）。
+  - `server.trigger_check_interval_sec`（既有，語意再擴大）：現在也是掃描的 window；單 pod 不變。
+  - 開機 help seed（無選項）：只 store、變動文件排 index job；`run_consumers: false` 而沒 index
+    worker 的部署 help 文件停在 `indexing`（那種部署本來所有 KB 索引都不動，同一個洞）。
+- `CLAUDE.md` Key conventions 加一條上面的判準（lifecycle = pod-local 或純 producer；blob GC 是例外及理由）。
+- `docs/configuration.md`（`trigger_check_interval_sec` 多 pod 語意）、
+  `docs/subsystems/boot-and-config.md`（lifespan 敘述：seed 只 store、sweeper 兩類）。
 - 對抗式 review 一輪（換鏡頭：符合度 / 真實性 / 回歸），有發現就砍 CI 重推。
 
 ## 不做的
