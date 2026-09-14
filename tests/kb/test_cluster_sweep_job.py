@@ -91,6 +91,21 @@ async def test_asking_twice_before_a_consumer_runs_queues_one_sweep():
     await coord.aclose()
 
 
+async def test_a_coordinator_with_no_reconciler_ignores_the_ask():
+    """No embedder ⇒ nothing to project with. The ask is dropped at the producer,
+    not turned into a job that could only fail on the worker."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    _done_run_with_unprojected_proposal(spec, cid, "RZ3")
+    coord = CardGenCoordinator(spec, NullCardDrafter())  # reconciler=None
+
+    coord.enqueue_cluster_sweep(cid)
+    await coord.aclose()
+
+    assert _sweep_jobs(spec, cid) == []
+    assert _members(spec, cid) == []
+
+
 def _onehot(i: int) -> list[float]:
     v = [0.0] * EMBED_DIM
     v[i] = 1.0

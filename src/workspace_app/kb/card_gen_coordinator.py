@@ -428,11 +428,10 @@ class CardGenCoordinator:
             self._handle_split(payload, requester)
 
     def _handle_cluster_sweep(self, collection_id: str) -> None:
-        """Run the collection's sweep (:meth:`enqueue_cluster_sweep`). A job whose
-        reconciler was unwired after enqueue (a worker built without an embedder)
-        has nothing to project with and completes as a no-op."""
-        if self._reconciler is None:
-            return
+        """Run the collection's sweep (:meth:`enqueue_cluster_sweep`)."""
+        # Only a coordinator with a reconciler ever enqueues one; a job reaching a
+        # consumer without one is a wiring bug, and a failed job says so.
+        assert self._reconciler is not None
         report = self._reconciler.sweep(collection_id)
         _LOGGER.info(
             "card_gen: cluster sweep of %s backfilled=%d merged=%d",
