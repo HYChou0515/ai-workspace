@@ -1279,8 +1279,6 @@ def create_app(
         notification_channel=notification_channel,
         offhours=goal_offhours,  # #615: the after-hours goal sweeper
         cluster_sweep_seconds=kb_cluster_sweep_seconds,
-        cluster_tau=kb_cluster_tau,
-        cluster_merge_tau=kb_cluster_merge_tau,
         # #674: warm every app's declared third-party bundles at boot.
         prewarm_tools=lambda: prewarm_external_tools(sandbox, _declared_external_tools()),
         # Asked of the BACKEND, on the serving loop — see `lifecycle` for why not
@@ -1524,10 +1522,6 @@ def create_app(
     # map" is not to. `app.state` is where this file already puts such handles.
     app.state.item_facts = _item_facts
     app.state.ingestor = ingestor
-    # #506 P8: the cluster sweeper (api/lifecycle.py) reads the KB text embedder off
-    # app.state for the same reason — it is built here, after the FastAPI app, so the
-    # already-constructed lifespan closures can't capture it directly.
-    app.state.kb_embedder = embedder
     # #312: the background job coordinators are built by the shared
     # `build_coordinators` composition root — the SAME one the standalone worker
     # entrypoint uses — so the API can run as a pure producer (its consumers
@@ -1559,6 +1553,7 @@ def create_app(
         cluster_tau=kb_cluster_tau,
         suppress_tau=kb_cluster_suppress_tau,
         update_tau=kb_cluster_update_tau,
+        merge_tau=kb_cluster_merge_tau,
         wiki_maintainer_max_turns=wiki_maintainer_max_turns,
         wiki_model=wiki_model,
         wiki_llm_base_url=wiki_llm_base_url,

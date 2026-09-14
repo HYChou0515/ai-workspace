@@ -27,7 +27,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from fastapi import FastAPI
-from specstar import SpecStar
+from specstar import QB, SpecStar
 
 from ..config.schema import OffHoursSettings
 from ..filestore.blob_gc import register_gc_lease, run_blob_gc
@@ -62,14 +62,15 @@ INDEX_STUCK_AFTER_S = 3600.0
 # wiki collection is due (the actual cadence is once-a-day per collection, gated on
 # last_reflected_at; this is just the poll granularity, like the code-sync sweeper).
 _WIKI_REFLECT_CHECK_INTERVAL_S = 300.0
-# #506 P8: how often the API folds the review-inbox cluster store — backfills any
-# candidate that has no ClusterMember yet, then merges race-split clusters — so the
-# grouped 待審核 inbox converges without a reindex. A slow cadence: pure catch-up
-# maintenance off any request path, and idempotent + deterministic so it is safe to
-# run unguarded on every pod. The taus are the join / fold cosine thresholds.
+# #506 P8: how often the API ASKS for each collection's review-inbox cluster fold —
+# backfill any candidate that has no ClusterMember yet, then merge race-split
+# clusters — so the grouped 待審核 inbox converges without a reindex. Asking is all
+# it does: the fold itself is a card-gen job (`Reconciler.sweep`, on the card-gen
+# worker). It used to run here, on every pod, and that is what grew the API heap
+# until the pod OOMed — a full ClusterMember read per collection plus an embedding
+# call per candidate, N pods deep, with zero traffic. The join / fold thresholds
+# live with the reconciler now (`kb.cluster.*` → build_coordinators), not here.
 _CLUSTER_SWEEP_INTERVAL_S = 900.0
-_CLUSTER_SWEEP_TAU = 0.9  # join a candidate to a cluster at >= this cosine similarity
-_CLUSTER_MERGE_TAU = 0.95  # fold two clusters whose centroids are >= this similarity
 
 logger = logging.getLogger(__name__)
 
@@ -105,8 +106,6 @@ def build_lifespan(
     notification_delivery_interval: timedelta = _NOTIFY_DELIVERY_INTERVAL,
     offhours: OffHoursSettings | None = None,
     cluster_sweep_seconds: float = _CLUSTER_SWEEP_INTERVAL_S,
-    cluster_tau: float = _CLUSTER_SWEEP_TAU,
-    cluster_merge_tau: float = _CLUSTER_MERGE_TAU,
     prewarm_tools: Callable[[], Awaitable[dict[str, str]]],
     warn_resources: Callable[[], Awaitable[list[str]]] | None = None,
 ) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
@@ -237,28 +236,32 @@ def build_lifespan(
             return
 
     async def cluster_sweeper(app: FastAPI) -> None:
-        """#506 P8: periodically fold the review-inbox cluster store — backfill any
-        pending proposal / open question that has no ClusterMember yet (a run
-        finalized before P6, or by a build with no embedder), then merge race-split
-        clusters — so the grouped 待審核 inbox converges without a reindex. Both passes
-        are idempotent + deterministic, so it runs unguarded on every pod (a duplicate
-        write is a no-op). Tick-first (then sleep) so a fresh pod catches the store up
-        at startup; off the loop (blocking specstar I/O + an occasional embed of a
-        never-projected candidate). Errors are swallowed so one bad tick never wedges
-        the loop. The KB embedder — built after the FastAPI app — is read off
-        ``app.state.kb_embedder`` post-construction, symmetric with the coordinators."""
-        from ..kb.reconcile import sweep_clusters
+        """#506 P8: periodically ask for every collection's review-inbox cluster fold
+        — backfill any pending proposal / open question that has no ClusterMember yet
+        (a run finalized before P6, or by a build with no embedder), then merge
+        race-split clusters — so the grouped 待審核 inbox converges without a reindex.
+        A pure producer, like ``reflect_sweeper``: each tick enqueues one
+        ``cluster_sweep`` card-gen job per collection and the card-gen worker does
+        the fold (``CardGenCoordinator.enqueue_cluster_sweep`` coalesces, so N pods
+        asking on the same tick cost one job). Tick-first (then sleep) so a fresh
+        deploy catches the store up at startup; off the loop (blocking specstar
+        I/O). Per-collection resilient — one bad enqueue must not cost the rest
+        their tick — and the whole tick is guarded so it never wedges the loop. The
+        coordinator — built after the FastAPI app — is read off
+        ``app.state.card_gen_coordinator`` post-construction, like the others."""
+        from ..resources import Collection
+
+        def enqueue_all() -> None:
+            coordinator = app.state.card_gen_coordinator
+            rm = spec.get_resource_manager(Collection)
+            for r in rm.list_resources(QB.all()):  # ty: ignore[invalid-argument-type]
+                with contextlib.suppress(Exception):
+                    coordinator.enqueue_cluster_sweep(r.info.resource_id)  # ty: ignore[unresolved-attribute]
 
         try:
             while True:
                 with contextlib.suppress(Exception):
-                    await asyncio.to_thread(
-                        sweep_clusters,
-                        spec,
-                        app.state.kb_embedder,
-                        cluster_tau=cluster_tau,
-                        merge_tau=cluster_merge_tau,
-                    )
+                    await asyncio.to_thread(enqueue_all)
                 await asyncio.sleep(cluster_sweep_seconds)
         except asyncio.CancelledError:
             return

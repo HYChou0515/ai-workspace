@@ -196,6 +196,38 @@ class CardGenCoordinator:
             )
         return run_id
 
+    def enqueue_cluster_sweep(self, collection_id: str, *, requested_by: str | None = None) -> None:
+        """#506 P8: ask for the collection's cluster maintenance pass — backfill
+        un-projected candidates + fold race-split clusters (:meth:`Reconciler.sweep`)
+        — to run HERE, on the card-gen consumer, not on the caller. Synchronous (a
+        pure specstar enqueue) so the API's timer thread can call it directly.
+        Coalesces onto a sweep already queued/running for the collection, so N API
+        pods asking on the same tick cost one job; ``partition_key`` = the collection
+        id so it also serialises with the collection's ``finalize`` (both write the
+        same ``ClusterMember`` rows). No-op when no reconciler is wired — there is no
+        embedder to project with, and the job would only fail on the worker."""
+        if self._reconciler is None:
+            return
+        actor = requested_by if requested_by is not None else self._get_user_id()
+        with self._job_rm.using(user=actor):
+            if self._has_active_cluster_sweep(collection_id):
+                return
+            self._job_rm.create(
+                CardGenJob(
+                    payload=CardGenPayload(collection_id=collection_id, kind="cluster_sweep"),
+                    partition_key=collection_id,
+                )
+            )
+
+    def _has_active_cluster_sweep(self, collection_id: str) -> bool:
+        """Coalescing guard: a sweep is in flight if a collection-keyed
+        ``cluster_sweep`` job is still queued/running."""
+        q = (QB["status"].in_(_ACTIVE) & (QB["partition_key"] == collection_id)).build()
+        return any(
+            isinstance(r.data, CardGenJob) and r.data.payload.kind == "cluster_sweep"
+            for r in self._job_rm.list_resources(q)
+        )
+
     # ── status / proposals (read off the run) ────────────────────────
     def status(self, run_id: str) -> TaskStatus:
         """The run's current status (PENDING / PROCESSING / COMPLETED / FAILED),
@@ -390,8 +422,24 @@ class CardGenCoordinator:
             self._handle_process(payload, requester)
         elif payload.kind == "finalize":
             self._finalize(payload.run_id)
+        elif payload.kind == "cluster_sweep":
+            self._handle_cluster_sweep(payload.collection_id)
         else:
             self._handle_split(payload, requester)
+
+    def _handle_cluster_sweep(self, collection_id: str) -> None:
+        """Run the collection's sweep (:meth:`enqueue_cluster_sweep`). A job whose
+        reconciler was unwired after enqueue (a worker built without an embedder)
+        has nothing to project with and completes as a no-op."""
+        if self._reconciler is None:
+            return
+        report = self._reconciler.sweep(collection_id)
+        _LOGGER.info(
+            "card_gen: cluster sweep of %s backfilled=%d merged=%d",
+            collection_id,
+            report.backfilled,
+            report.merged,
+        )
 
     def _handle_split(self, payload: CardGenPayload, requester: str) -> None:
         """Plan the run: mark it running, then fan out one ``process`` job per
