@@ -501,14 +501,13 @@ established by the pipeline path. Two defects, one class:
 
 The fix is at the two places the offsets are made:
 
-- `DispatchSplitter` relocates every verbatim piece by walking forward
-  (`_locate` / `_relocate`; the rule was corrected in Phase 12: a piece
-  starts at or after the previous piece's END minus the splitter's overlap),
-  anchors a piece the splitter's phrase fallback rewrote (it drops consecutive
-  punctuation, ~5% of windows on real docs) on its longest verbatim head with
-  the smallest region containing the piece as a subsequence as its end, and
-  points every node at its Document (the `SOURCE` relationship — the nodes
-  this class builds itself never had one). Its transformation cache is off:
+- `DispatchSplitter` (as first shipped in P8, corrected in P12 and REPLACED
+  in Phase 14) located every piece by searching the text; since Phase 14 the
+  sentence splitter itself reports where it cut (`OffsetSentenceSplitter`),
+  Markdown sections and code chunks — disjoint and in order — sit at their
+  first occurrence after the previous one's end, and every node points at
+  its Document (the `SOURCE` relationship — the nodes this class builds
+  itself never had one). Its transformation cache is off:
   on a hit it returned nodes bound to an earlier run's Documents (and, the
   regression lens measured, never evicted: +223 MB over 20 re-runs of 300
   rows; off, +1.7 MB — and each first run is faster).
@@ -624,6 +623,49 @@ Known cost left as is: finalize patches every moved fan-out chunk one row at
 a time (a 5,000-row CSV: 4,500 patches, ~11 s in memory) — correct and
 idempotent; a bulk shape needs `patch_many` with per-row values, which
 specstar does not have. Logged below with the pre-existing findings.
+
+## Phase 14 — the splitter reports where it cut
+
+Round 5 (two lenses on P12) settled the question the rounds had been
+circling: **a chunk's position cannot be recovered by searching the text.**
+The search floor must approximate an overlap the splitter computes as a
+token sum over whole splits, and every char bound was wrong somewhere —
+inert on CJK (256 tokens ≈ 155 chars, so the P12 rule degenerated to "next
+occurrence" and the P7 defect stood at larger magnitude: 66 of 67 chunks of a
+32-char Chinese sentence × 400 inside the first 2.2k of 12.8k chars), a
+period too loose on English one word longer than the test's sentence (the
+P12 test passed on 16 tokens × 2 = 32), compounding per chunk either way;
+the code "overlap" bounded an overlap this `CodeSplitter` never has
+(`chunk_lines_overlap` is declared and never read); the cover limit for
+rewritten pieces collapsed every chunk of a dot-leader table of contents to
+its 45-char head and blinded `kb_grep` on it (P11 was right there); after
+~8 KB of drift the one unique line — the one a query hits — was anchored onto
+boilerplate. Each fix had failed one step further out: the mechanism, not
+the parameters, was wrong.
+
+`OffsetSentenceSplitter` subclasses LlamaIndex's `SentenceSplitter` and
+carries the char offset of every split through its own `_split` (each split
+located in ITS parent — exact, since the split functions return the text's
+pieces in order); `_merge` stays LlamaIndex's, and each chunk's span is
+reconstructed from the run of consecutive splits it was merged from, with
+the overlap rule `_merge` applies (the maximal tail whose token sizes fit in
+`chunk_overlap`). Exact for verbatim chunks; for the ~5% the phrase fallback
+rewrote, the run's extent — which covers the dropped punctuation. The stock
+`_postprocess_parsed_nodes` (where LlamaIndex stamps the first-occurrence
+offsets, after `_parse_nodes`) is overridden to put the spans back. If an
+upgrade changes how chunks are formed, the reconstruction raises and the
+ingest marks the document `error` — loud, not plausible-looking offsets.
+`_locate`, `_relocate`, `_cover_end`, `_longest`, `_ANCHOR_MIN`,
+`_NEAR_SLACK` and the overlap bounds are gone; Markdown sections and code
+chunks use `_place_after` (first occurrence after the previous end — exact
+for disjoint, ordered chunks). Pinned by `tests/kb/test_offset_splitter.py`
+(thirteen text shapes: same chunks as the stock splitter, exact or covering
+spans, tiling, metadata-aware chunk size, the loud failure) and the round-5
+shapes through `Ingestor` — periodic text of any period or language tiles
+the document, the unique line after 800 repeated lines is where it is, the
+table of contents is fully spanned and `kb_grep` finds its entries, repeated
+code sits at the splitter's cuts. 3.5 MB ingests in 11.4 s (P12: 11.2 s),
+8,006 of 8,006 chunks verbatim at their span.
 
 ## Out of scope — and findings logged for separate work
 

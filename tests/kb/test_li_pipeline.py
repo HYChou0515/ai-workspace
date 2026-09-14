@@ -1114,38 +1114,6 @@ def test_a_small_markdown_section_is_byte_identical_to_before(
 # ── plan-rag-context P8: offsets are positions ────────────────────────────
 
 
-def test_locate_is_positional_and_anchors_a_rewritten_piece():
-    from workspace_app.kb.li_pipeline import _locate
-
-    text = "alpha beta. alpha beta. gamma exec(...) delta. alpha beta."
-
-    def at(piece: str, prev_start: int | None, prev_len: int = 11) -> tuple[int, int] | None:
-        return _locate(text, piece, prev_start=prev_start, prev_len=prev_len, max_overlap=4)
-
-    # Verbatim, walking forward from the previous piece's END minus the overlap
-    # bound: the SECOND "alpha beta." — `str.find` from 0 would return the first.
-    assert at("alpha beta.", None) == (0, 11)
-    assert at("alpha beta.", 0) == (12, 23)
-    assert at("alpha beta.", 23) == (47, 58)
-    # The sentence splitter's phrase fallback drops consecutive punctuation
-    # (`exec(...)` → `exec(.)`): the head fixes the start, the smallest region
-    # containing the piece as a subsequence fixes the end — it covers the piece.
-    assert at("gamma exec(.) delta.", None) == (24, 46)
-    # A tail that also occurs INSIDE the piece's own region does not end it early
-    # (round 4: the tail-anchored version under-covered 1 of 146 real windows).
-    t2 = "x here. the end. here. the end.!!! z"
-    assert _locate(
-        t2, "x here. the end. here. the end.! z", prev_start=None, prev_len=0, max_overlap=0
-    ) == (0, len(t2))
-    # Nothing to anchor on (no 8-char head occurs): None, never a made-up span.
-    assert at("zzzzzzzzzzzz", None) is None
-    assert at("", None) is None
-    # `_ANCHOR_MIN` is a floor, not just "> 0": a 7-char head that happens to
-    # occur is a coincidence, not an anchor.
-    assert _locate("alpha b", "alpha bZZZZ", prev_start=None, prev_len=0, max_overlap=0) is None
-    assert _locate("alpha be", "alpha beZZZ", prev_start=None, prev_len=0, max_overlap=0) == (0, 8)
-
-
 def test_windows_of_a_long_markdown_section_are_positional():
     # A section that repeats a paragraph: with first-occurrence offsets every
     # window sat inside the first repetition. Spans advance, and each is a slice
@@ -1189,26 +1157,6 @@ def test_long_prose_beside_a_table_is_windowed_too():
         n.start_char_idx is not None and text[n.start_char_idx :].startswith("Sentence")
         for n in prose_nodes
     )
-
-
-def test_relocate_allows_a_piece_to_start_where_the_previous_one_started():
-    from llama_index.core.schema import TextNode
-
-    from workspace_app.kb.li_pipeline import _relocate
-
-    text = "Note: this. " + "long body " * 20 + "Note: this. tail."
-    # [short], [short + long] — the absorbed-overlap shape: equal starts.
-    pieces = [
-        TextNode(text="Note: this."),
-        TextNode(text="Note: this. " + ("long body " * 20).strip()),
-    ]
-    _relocate(text, pieces, overlap_of=lambda prev: min(len(prev), 192))
-    assert [(p.start_char_idx, p.end_char_idx) for p in pieces] == [(0, 11), (0, 12 + 199)]
-    # …while identical pieces at DIFFERENT positions still walk forward.
-    text = "A. A. A. A."
-    pieces = [TextNode(text="A. A."), TextNode(text="A. A.")]
-    _relocate(text, pieces, overlap_of=lambda prev: min(len(prev), 192))
-    assert [(p.start_char_idx, p.end_char_idx) for p in pieces] == [(0, 5), (3, 8)]
 
 
 def test_repeated_markdown_sections_and_code_are_positioned_not_first_occurrence():

@@ -10,7 +10,9 @@ adapter, and Ingestor maps the resulting LI `BaseNode`s back to our
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+import threading
+from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from llama_index.core.ingestion import IngestionPipeline
@@ -20,11 +22,181 @@ from llama_index.core.node_parser import (
     MarkdownNodeParser,
     SentenceSplitter,
 )
-from llama_index.core.schema import BaseNode, NodeRelationship, TextNode, TransformComponent
+from llama_index.core.node_parser.node_utils import build_nodes_from_splits
+from llama_index.core.node_parser.text.sentence import _Split
+from llama_index.core.schema import (
+    BaseNode,
+    Document,
+    MetadataMode,
+    NodeRelationship,
+    TextNode,
+    TransformComponent,
+)
 
 from .code_lang import code_language_for, symbol_path
 from .embedder import Embedder
 from .markdown_table import find_markdown_tables, row_as_col_value
+
+
+@dataclass
+class _OffsetSplit(_Split):
+    """A `SentenceSplitter` split that knows where it sits in the text."""
+
+    offset: int = 0
+
+
+class OffsetSentenceSplitter(SentenceSplitter):
+    """LlamaIndex's `SentenceSplitter`, whose nodes carry the TRUE char span of
+    each chunk (plan-rag-context P14).
+
+    The stock splitter stamps `start_char_idx` with `text.find(chunk)` — the
+    first occurrence — and three review rounds showed that no search over the
+    text can recover the position: the floor has to approximate an overlap
+    the splitter computes as a token sum over whole splits, and every char
+    bound was either inert (CJK: 256 tokens ≈ 155 chars) or a period too loose
+    (an English sentence one word longer than the test's), with the error
+    compounding per chunk. The splitter knows where it cut. This subclass
+    carries the offset of every split through `_split` (its own recursive
+    splitter, with each split located in ITS parent — exact, since the split
+    functions return the text's pieces in order) and reconstructs each chunk's
+    span from the run of splits `_merge` joined it from: a chunk is a run of
+    consecutive splits, and the run carried into the next chunk as overlap is
+    the maximal tail whose token sizes sum to at most `chunk_overlap` — the
+    rule `_merge` applies. The span of a chunk the phrase fallback rewrote
+    (it drops consecutive punctuation) is therefore the run's extent, which
+    covers the dropped characters. `_merge` itself is not copied; if an
+    upgrade changes how chunks are formed, `_spans_of_runs` raises rather
+    than stamping plausible-looking offsets (the ingest marks the document
+    `error`).
+
+    Per-call state (the splits and the raw, unstripped chunks the base class
+    hands to `_postprocess_chunks`) lives in a thread-local: the pipeline is
+    shared by concurrent ingests."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        object.__setattr__(self, "_p14", threading.local())
+
+    def _split(self, text: str, chunk_size: int) -> list[_Split]:  # type: ignore[override]
+        return self._split_at(text, chunk_size, 0)
+
+    def _split_at(self, text: str, chunk_size: int, base: int) -> list[_Split]:
+        token_size = self._token_size(text)
+        if token_size <= chunk_size:
+            return [_OffsetSplit(text, True, token_size, base)]
+        pieces, is_sentence = self._get_splits_by_fns(text)
+        out: list[_Split] = []
+        cursor = 0
+        for piece in pieces:
+            # The split functions return the text's pieces in order — contiguous
+            # (separators kept, sentence spans) or with dropped punctuation
+            # between them (the phrase regex) — so the first occurrence at or
+            # after the previous piece's end is the piece.
+            pos = text.find(piece, cursor)
+            if pos < 0:  # pragma: no cover — a split function that rewrites text
+                raise RuntimeError("LlamaIndex split function returned text not in its input")
+            cursor = pos + len(piece)
+            size = self._token_size(piece)
+            if size <= chunk_size:
+                out.append(_OffsetSplit(piece, is_sentence, size, base + pos))
+            else:
+                out.extend(self._split_at(piece, chunk_size, base + pos))
+        return out
+
+    def _postprocess_chunks(self, chunks: list[str]) -> list[str]:
+        self._p14.raw = list(chunks)  # the unstripped runs, before blanks are dropped
+        return super()._postprocess_chunks(chunks)
+
+    def _split_text(self, text: str, chunk_size: int) -> list[str]:
+        if text == "":
+            self._p14.spans = [(0, 0)]
+            return [text]
+        splits = self._split(text, chunk_size)
+        chunks = self._merge(list(splits), chunk_size)  # `_merge` pops its list
+        self._p14.spans = _spans_of_runs(splits, self._p14.raw, chunk_overlap=self.chunk_overlap)
+        if len(self._p14.spans) != len(chunks):  # pragma: no cover — guarded in _spans_of_runs
+            raise RuntimeError("LlamaIndex changed how chunks are post-processed")
+        return chunks
+
+    def _parse_nodes(  # type: ignore[override]
+        self, nodes: Sequence[BaseNode], show_progress: bool = False, **kwargs: Any
+    ) -> list[BaseNode]:
+        # The base class's loop, plus the span each chunk was cut at — remembered
+        # by node id, because `NodeParser._postprocess_parsed_nodes` runs AFTER
+        # this and stamps `parent_doc.text.find(chunk)` (the first occurrence)
+        # over whatever the node carries; the override below puts ours back.
+        all_nodes: list[BaseNode] = []
+        spans_by_id: dict[str, tuple[int, int]] = {}
+        for node in nodes:
+            metadata_str = self._get_metadata_str(node)
+            chunks = self.split_text_metadata_aware(
+                node.get_content(metadata_mode=MetadataMode.NONE), metadata_str=metadata_str
+            )
+            spans = list(self._p14.spans)
+            built = build_nodes_from_splits(chunks, node, id_func=self.id_func)
+            for n, (start, end) in zip(built, spans, strict=True):
+                n.start_char_idx, n.end_char_idx = start, end
+                spans_by_id[n.node_id] = (start, end)
+            all_nodes.extend(built)
+        self._p14.spans_by_id = spans_by_id
+        return all_nodes
+
+    def _postprocess_parsed_nodes(  # type: ignore[override]
+        self, nodes: list[BaseNode], parent_doc_map: dict[str, Document]
+    ) -> list[BaseNode]:
+        out = super()._postprocess_parsed_nodes(nodes, parent_doc_map)
+        spans_by_id: dict[str, tuple[int, int]] = getattr(self._p14, "spans_by_id", {})
+        for n in out:
+            span = spans_by_id.get(n.node_id)
+            if span is not None:
+                n.start_char_idx, n.end_char_idx = span
+        return out
+
+
+def _spans_of_runs(
+    splits: Sequence[_Split], raw_chunks: Sequence[str], *, chunk_overlap: int
+) -> list[tuple[int, int]]:
+    """The char span of every non-blank chunk, from the runs of consecutive
+    splits `_merge` joined them from (see `OffsetSentenceSplitter`). Raises
+    when a chunk is not such a run — a changed LlamaIndex, loudly."""
+    spans: list[tuple[int, int]] = []
+    a = 0
+    for raw in raw_chunks:
+        b, length = a, 0
+        while length < len(raw) and b < len(splits):
+            length += len(splits[b].text)
+            b += 1
+        if length != len(raw) or "".join(sp.text for sp in splits[a:b]) != raw:
+            raise RuntimeError("LlamaIndex changed how chunks are merged; spans cannot be trusted")
+        if raw.strip():
+            spans.append(_run_span(splits[a:b]))
+        # The overlap carried into the next chunk: the maximal tail of this run
+        # whose token sizes fit in `chunk_overlap` — `_merge`'s rule.
+        n, tokens = 0, 0
+        for sp in reversed(splits[a:b]):
+            if tokens + sp.token_size > chunk_overlap:
+                break
+            tokens += sp.token_size
+            n += 1
+        a = b - n
+    return spans
+
+
+def _run_span(run: Sequence[_Split]) -> tuple[int, int]:
+    """The extent of a run of splits with the chunk's own leading / trailing
+    whitespace stripped — walked split by split, so a gap the phrase fallback
+    dropped between two splits never enters the arithmetic."""
+    head = 0
+    while head < len(run) and not run[head].text.strip():
+        head += 1
+    tail = len(run) - 1
+    while tail >= head and not run[tail].text.strip():
+        tail -= 1
+    first, last = run[head], run[tail]
+    assert isinstance(first, _OffsetSplit) and isinstance(last, _OffsetSplit)
+    start = first.offset + (len(first.text) - len(first.text.lstrip()))
+    end = last.offset + len(last.text.rstrip())
+    return start, end
 
 
 class DispatchSplitter(TransformComponent):
@@ -43,7 +215,7 @@ class DispatchSplitter(TransformComponent):
     """
 
     # Default sub-splitters; overridable per instance for tests/tuning.
-    sentence_splitter: SentenceSplitter
+    sentence_splitter: OffsetSentenceSplitter
     markdown_parser: MarkdownNodeParser
     # Issue #39 P7: JSON-aware splitter — one node per top-level array
     # element, leaf lines rendered as "key path value" so the embedding
@@ -66,7 +238,7 @@ class DispatchSplitter(TransformComponent):
         table_max_rows: int = 10,
     ) -> None:
         super().__init__(
-            sentence_splitter=SentenceSplitter(
+            sentence_splitter=OffsetSentenceSplitter(
                 chunk_size=sentence_max_tokens,
                 chunk_overlap=sentence_overlap,
             ),
@@ -96,8 +268,9 @@ class DispatchSplitter(TransformComponent):
             elif code_lang is not None:
                 pieces = self._split_code(node, code_lang)
             else:
+                # `OffsetSentenceSplitter`: every piece already carries its
+                # true span (P14) — no locating.
                 pieces = self.sentence_splitter.get_nodes_from_documents([node])
-                _relocate(node.get_content(), pieces, overlap_of=self._sentence_overlap)
             # plan-rag-context P8: every chunk knows which Document it came from
             # — `Ingestor._build_chunks` turns a Document-relative span into an
             # offset into the canonical text (one Document per PDF page / slide /
@@ -120,10 +293,10 @@ class DispatchSplitter(TransformComponent):
         out: list[BaseNode] = []
         sections = self.markdown_parser.get_nodes_from_documents([node])
         # The section spans are the base every table / window span below adds
-        # to, so they must be positions (P8), not first occurrences.
-        _relocate(
-            node.get_content(), sections, overlap_of=lambda _prev: 0
-        )  # sections never overlap
+        # to, so they must be positions (P8), not first occurrences: sections
+        # are disjoint and in order, so each sits at its first occurrence
+        # after the previous one's end.
+        _place_after(node.get_content(), sections)
         for n in sections:
             assert isinstance(n, TextNode)  # MarkdownNodeParser only emits TextNodes
             breadcrumb = _heading_breadcrumb(n)
@@ -158,12 +331,6 @@ class DispatchSplitter(TransformComponent):
             out.extend(pieces)
         return out
 
-    def _sentence_overlap(self, prev: str) -> int:
-        """How far back into the previous sentence-split piece the next one can
-        start: the splitter's overlap in tokens, as a char bound (a generous
-        chars-per-token), never more than the piece itself. See `_locate`."""
-        return min(len(prev), self.sentence_splitter.chunk_overlap * _MAX_CHARS_PER_TOKEN)
-
     def _prose_nodes(self, body: str, base: int, breadcrumb: str) -> list[BaseNode] | None:
         """plan-rag-context P6: window a Markdown prose region that is larger
         than the sentence splitter's chunk, or return ``None`` when it fits.
@@ -172,28 +339,24 @@ class DispatchSplitter(TransformComponent):
         heading-less `.md` of 50,000 chars was ONE chunk and ONE vector, its
         meaning averaged into a point (measured through this pipeline), and
         every VLM description is Markdown too. Each window's span is
-        `base + where the piece sits in the region` (`_relocate`: by position,
-        not first occurrence — P8), into the canonical text that citations and
-        the context walk index; a piece the splitter's phrase fallback
-        rewrote (it drops consecutive punctuation, so `exec(...)` comes back
-        as `exec(.)` — 4.6% of windows on real docs) is anchored on its longest
-        verbatim head and tail, and one that cannot be anchored at all spans
-        the whole region rather than a made-up sub-span. Every window carries
-        the breadcrumb like every other Markdown chunk. A region that fits
-        returns ``None`` so the caller keeps the section parser's own node: the
-        common case stays byte-identical (the #390 index cache keys on the
-        chunk set)."""
+        `base + the splitter's own span for the piece` (`OffsetSentenceSplitter`,
+        P14) into the canonical text that citations and the context walk
+        index — exact for a verbatim piece, and for one the splitter's phrase
+        fallback rewrote (it drops consecutive punctuation, so `exec(...)`
+        comes back as `exec(.)` — 4.6% of windows on real docs) the run of
+        splits it was merged from, which covers the dropped characters. Every
+        window carries the breadcrumb like every other Markdown chunk. A
+        region that fits returns ``None`` so the caller keeps the section
+        parser's own node: the common case stays byte-identical (the #390
+        index cache keys on the chunk set)."""
         pieces = self.sentence_splitter.get_nodes_from_documents([TextNode(text=body)])
         if len(pieces) <= 1:
             return None
-        _relocate(body, pieces, overlap_of=self._sentence_overlap)
         out: list[BaseNode] = []
         for piece in pieces:
             assert isinstance(piece, TextNode)  # SentenceSplitter only emits TextNodes
-            if piece.start_char_idx is None or piece.end_char_idx is None:
-                rel_start, rel_end = 0, len(body)
-            else:
-                rel_start, rel_end = piece.start_char_idx, piece.end_char_idx
+            assert piece.start_char_idx is not None and piece.end_char_idx is not None
+            rel_start, rel_end = piece.start_char_idx, piece.end_char_idx
             out.append(
                 _table_node(breadcrumb, piece.get_content(), base + rel_start, base + rel_end)
             )
@@ -262,11 +425,11 @@ class DispatchSplitter(TransformComponent):
             self.code_splitters[language] = splitter
         chunks = splitter.get_nodes_from_documents([node])
         source = node.get_content()
-        # P8: before the fold below hides the verbatim text. The overlap is in
-        # LINES here: the next chunk reaches back at most the previous chunk's
-        # last `chunk_lines_overlap` lines.
-        overlap_lines = splitter.chunk_lines_overlap
-        _relocate(source, chunks, overlap_of=lambda prev: _tail_lines_len(prev, overlap_lines))
+        # P8/P14: before the fold below hides the verbatim text. This
+        # `CodeSplitter` chunks by `max_chars` only — contiguous, no overlap
+        # (`chunk_lines_overlap` is declared and never read, review round 5) —
+        # so each chunk sits at its first occurrence after the previous end.
+        _place_after(source, chunks)
         # `_split_code` is only reached for a filename that `code_language_for`
         # matched, so `path` is always a non-empty code filename.
         path = str(node.metadata.get("filename", "")).strip()
@@ -278,150 +441,21 @@ class DispatchSplitter(TransformComponent):
         return chunks
 
 
-# A non-verbatim piece is anchored on its longest verbatim head; a head shorter
-# than this (or than the piece) is a coincidence, not an anchor.
-_ANCHOR_MIN = 8
-
-
-# A char bound on one token, for turning the sentence splitter's overlap
-# (tokens) into "how far back into the previous piece the next piece can
-# start". Generous on purpose: too small only costs a periodic document a drift
-# of one period; too large lets the walk land a period early.
-_MAX_CHARS_PER_TOKEN = 6
-
-
-def _tail_lines_len(text: str, lines: int) -> int:
-    """The length of the last ``lines`` lines of ``text`` — a line-overlap
-    splitter's reach back into the previous chunk, exactly."""
-    if lines <= 0:
-        return 0
-    parts = text.split("\n")
-    return len("\n".join(parts[-lines:]))
-
-
-# How far past the previous piece the next one can begin: pieces are
-# contiguous, so at most the whitespace the splitter dropped between them.
-# Bounding every search to this keeps the walk linear — a failed unbounded
-# `find` scans to the end, which made a 3 MB document of rewritten pieces take
-# 50 s (review round 4).
-_NEAR_SLACK = 8192
-
-
-def _locate(
-    text: str, piece: str, *, prev_start: int | None, prev_len: int, max_overlap: int
-) -> tuple[int, int] | None:
-    """Where ``piece`` sits in ``text``, given the previous piece.
-
-    plan-rag-context P8. LlamaIndex stamps each split with
-    ``text.find(piece)`` — the FIRST occurrence — so a document that repeats a
-    paragraph put 36 of 38 chunks inside its first 1.8k chars and the context
-    walk went 18k chars back and 0 forward. Consecutive pieces are contiguous:
-    the next one starts no earlier than the previous one's END minus the
-    splitter's overlap (``max_overlap`` chars, a bound) — searching from THERE
-    lands on the cut, not on an earlier repetition of the same text (review
-    round 4: searching from the previous START still put a periodic document's
-    chunks one period apart instead of one chunk apart). What remains is the
-    limit of locating by text: text that repeats with a period shorter than
-    the overlap bound can drift by up to one period.
-
-    Order of preference, every search bounded to the neighbourhood the next
-    piece can be in (`_NEAR_SLACK`):
-    1. verbatim, from the previous END minus the overlap bound;
-    2. verbatim, from just after the previous START — an overlap larger than
-       the bound (unusually long tokens / lines);
-    3. verbatim AT the previous start — the sentence splitter closes a short
-       sentence as its own chunk and then carries it whole into the next chunk
-       as overlap, so two pieces can share a start (round 4: skipping this
-       pinned a 1.2k-char chunk to a later 58-char recurrence of its head);
-    4. a piece the splitter's phrase fallback rewrote (it drops consecutive
-       punctuation, ~5% of windows on real docs): its longest verbatim head
-       (binary search — occurrence is monotone in length) fixes the start, and
-       the smallest region from there that contains the piece as a
-       SUBSEQUENCE (greedy, exact) fixes the end — the span covers the piece;
-    5. verbatim anywhere after the previous start, unbounded — a piece far from
-       its predecessor (a pathological whitespace run);
-    6. ``None``: keep whatever span the node carries."""
-    if not piece:
-        return None
-    if prev_start is None:
-        loose = strict = 0
-    else:
-        loose = prev_start + 1
-        strict = max(loose, prev_start + prev_len - max_overlap)
-    horizon = strict + len(piece) + _NEAR_SLACK
-    for floor in (strict, loose):
-        pos = text.find(piece, floor, horizon + len(piece))
-        if pos >= 0:
-            return pos, pos + len(piece)
-    if prev_start is not None and text.startswith(piece, prev_start):
-        return prev_start, prev_start + len(piece)
-    for floor in (strict, loose):
-        head = _longest(
-            lambda n, floor=floor: text.find(piece[:n], floor, horizon + n) >= 0, len(piece)
-        )
-        if head >= min(_ANCHOR_MIN, len(piece)):
-            start = text.find(piece[:head], floor, horizon + head)
-            end = _cover_end(text, piece, start, start + 2 * len(piece))
-            return start, end if end is not None else start + head
-    pos = text.find(piece, loose)
-    if pos >= 0:
-        return pos, pos + len(piece)
-    return None
-
-
-def _cover_end(text: str, piece: str, start: int, limit: int) -> int | None:
-    """The smallest ``end`` such that ``piece`` is a subsequence of
-    ``text[start:end]`` — greedy earliest matching is minimal. ``None`` when
-    the piece is not contained before ``limit`` (the head anchor was a
-    coincidence)."""
-    i = start
-    for ch in piece:
-        j = text.find(ch, i, limit)
-        if j < 0:
-            return None
-        i = j + 1
-    return i
-
-
-def _longest(holds: Callable[[int], bool], upper: int) -> int:
-    """The largest ``n`` in ``[0, upper]`` for which ``holds(n)`` — ``holds``
-    is monotone (true up to some length, false beyond) and ``holds(0)`` is
-    taken as true."""
-    lo, hi = 0, upper
-    while lo < hi:
-        mid = (lo + hi + 1) // 2
-        if holds(mid):
-            lo = mid
-        else:
-            hi = mid - 1
-    return lo
-
-
-def _relocate(text: str, nodes: Sequence[BaseNode], *, overlap_of: Callable[[str], int]) -> None:
-    """Stamp each node's char span with where its content sits in ``text``,
-    walking forward from the previous piece (`_locate`; ``overlap_of(prev)`` is
-    how far back into the previous piece's content the next one can start —
-    the splitter's overlap, in that splitter's unit). A node whose content is
-    not in ``text`` at all (a breadcrumb already folded in, a `col: value` row)
-    keeps the span it carries."""
-    prev_start: int | None = None
-    prev_content = ""
+def _place_after(text: str, nodes: Sequence[BaseNode]) -> None:
+    """Stamp each node's span with its first occurrence at or after the
+    previous node's end — exact for a splitter whose chunks are disjoint and
+    in order (Markdown sections, this `CodeSplitter`). A node whose content is
+    not in ``text`` (a byte-sliced fragment) keeps the span it carries."""
+    cursor = 0
     for n in nodes:
         if not isinstance(n, TextNode):
             continue
         content = n.get_content()
-        span = _locate(
-            text,
-            content,
-            prev_start=prev_start,
-            prev_len=len(prev_content),
-            max_overlap=overlap_of(prev_content) if prev_content else 0,
-        )
-        if span is not None:
-            n.start_char_idx, n.end_char_idx = span
-        if n.start_char_idx is not None:
-            prev_start = max(prev_start or 0, n.start_char_idx)
-            prev_content = content
+        pos = text.find(content, cursor) if content else -1
+        if pos >= 0:
+            n.start_char_idx, n.end_char_idx = pos, pos + len(content)
+        if n.end_char_idx is not None:
+            cursor = max(cursor, n.end_char_idx)
 
 
 def _fold_section(node: BaseNode) -> None:

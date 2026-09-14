@@ -18,6 +18,7 @@ nothing on master sliced the text at a chunk's offset."""
 
 from __future__ import annotations
 
+import pytest
 from agents import RunContextWrapper, ToolOutputText
 from specstar import QB, SpecStar
 
@@ -240,3 +241,89 @@ def test_periodic_text_lands_on_the_cuts_not_one_period_apart(spec: SpecStar):
     gaps = [b.start - a.start for a, b in zip(chunks, chunks[1:], strict=False)]
     assert min(gaps) > len(para) * 5, gaps  # far more than one period
     assert chunks[-1].end >= len(text) - len(para)
+
+
+@pytest.mark.parametrize(
+    "para",
+    [
+        "The same paragraph appears again and again in this report, sentence after sentence. ",
+        "The same paragraph appears again and again in this long report, sentence after sentence. ",
+        "Row 17: temperature 21.5 C, humidity 40 percent, pressure 1013 hPa, wind 3 m/s. ",
+        "這是一個重複出現的中文句子，用來測量位置偏移的大小，每次都一樣。",
+    ],
+)
+def test_periodic_text_of_any_period_or_language_tiles_the_document(spec: SpecStar, para: str):
+    # Round 5: P12's periodic test passed on a coincidence (16 tokens × 2 = the
+    # 32-token overlap); one word more and the chunks drifted, compounding per
+    # chunk; Chinese was untouched (256 tokens ≈ 155 chars < the 192-char
+    # bound, so the rule degenerated to "next occurrence"). Offsets now come
+    # from the splitter, so the shape of the text cannot matter.
+    body = para * 250
+    ing, _ = _ingestor(spec)
+    cid = _collection(spec)
+    [doc_id] = ing.ingest(collection_id=cid, user="u", filename="rep.txt", data=body.encode())
+    chunks = _chunks(spec, doc_id)
+    text = _text(spec, doc_id)
+    _assert_spans_index_the_text(text, chunks)
+    assert len(chunks) >= 10
+    gaps = [b.start - a.start for a, b in zip(chunks, chunks[1:], strict=False)]
+    assert min(gaps) > len(para) * 3, gaps  # chunks apart, not periods apart
+    assert chunks[-1].end == len(text)  # and the last one reaches the end
+
+
+def test_the_unique_line_after_a_long_repetition_is_where_it_is(spec: SpecStar):
+    # Round 5 (regression lens): after > 8 KB of drift, the one unique line —
+    # the one a query hits — was anchored onto boilerplate 10 KB earlier.
+    zh = "這是一個重複出現的中文句子，用來測量位置偏移的大小，每次都一樣。"
+    body = zh * 400 + "最後這一句只出現一次，查詢會命中它。"
+    ing, emb = _ingestor(spec)
+    cid = _collection(spec)
+    [doc_id] = ing.ingest(collection_id=cid, user="u", filename="zh.txt", data=body.encode())
+    chunks = _chunks(spec, doc_id)
+    text = _text(spec, doc_id)
+    _assert_spans_index_the_text(text, chunks)
+    last = chunks[-1]
+    assert "只出現一次" in last.text and last.end == len(text)
+    out = kb_grep_impl(_ctx(spec, emb, cid), "查詢會命中它")
+    assert "zh.txt:1:" in out
+
+
+def test_a_dot_leader_table_of_contents_is_fully_spanned(spec: SpecStar):
+    # Round 5: the phrase fallback drops runs of dots, so a TOC line loses ~60
+    # chars; P12's cover limit collapsed every chunk to its ~45-char head and
+    # kb_grep went blind on the whole TOC. The span is the run of splits the
+    # chunk was merged from — it covers the dropped leaders.
+    toc = "\n".join(f"Section {i} title of the chapter {'.' * 60} {i * 3 + 1}" for i in range(60))
+    ing, emb = _ingestor(spec)
+    cid = _collection(spec)
+    [doc_id] = ing.ingest(collection_id=cid, user="u", filename="toc.txt", data=toc.encode())
+    chunks = _chunks(spec, doc_id)
+    text = _text(spec, doc_id)
+    assert len(chunks) >= 3
+    for c in chunks:
+        region = text[c.start : c.end]
+        assert len(region) >= len(c.text) and region.startswith(c.text[:12]), (c.start, c.end)
+    assert chunks[0].start == 0 and chunks[-1].end == len(text)
+    for needle in ("Section 30 title", "Section 2 title", "Section 59 title"):
+        assert "toc.txt:" in kb_grep_impl(_ctx(spec, emb, cid), needle), needle
+
+
+def test_repeated_code_is_positioned_at_the_splitter_cuts():
+    # CodeSplitter (this LlamaIndex) chunks by max_chars only — contiguous, no
+    # overlap — so every chunk sits right after the previous one.
+    from llama_index.core.schema import Document
+
+    from workspace_app.kb.li_pipeline import DispatchSplitter
+
+    py = "def f(x):\n    return x + 1\n\n" * 400
+    nodes = DispatchSplitter()(
+        [Document(text=py, metadata={"filename": "r.py", "mime": "text/x-python"})]
+    )
+    cur = 0
+    truth = []
+    for n in nodes:
+        body = n.get_content().split("\n\n", 1)[1]
+        pos = py.find(body, cur)
+        truth.append((pos, pos + len(body)))
+        cur = pos + len(body)
+    assert [(n.start_char_idx, n.end_char_idx) for n in nodes] == truth
