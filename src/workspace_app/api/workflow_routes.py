@@ -9,12 +9,15 @@ mechanics live behind the ``WorkflowOrchestrator`` and the ``WorkflowExecutor``.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
+from typing import Any
 
 import msgspec
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
 from starlette.datastructures import UploadFile
@@ -32,6 +35,7 @@ from ..workflow.orchestrator import (
 )
 from ..workflow.preflight import can_run as _preflight_can_run
 from ..workflow.run import WorkflowRun
+from ..workflow.user_schedules import SchedulePolicy
 from .activity import ActivityLog
 from .events import FileChanged
 from .locator import ItemLocator
@@ -49,6 +53,29 @@ from .turns import ChatTurnEngine
 from .workflow_exec import WorkflowExecutor
 
 logger = logging.getLogger(__name__)
+
+
+class ScheduleRowOut(BaseModel):
+    """One row of the item's schedules file, as the sweep will treat it."""
+
+    index: int
+    raw: dict[str, Any]
+    problems: list[str]
+    run: str = ""
+    describe: str = ""
+    next_run: str = ""
+    next_at: str = ""
+    due_now: bool = False
+    tz: str = "UTC"
+    known: bool = False
+    payload: dict[str, Any] = {}
+
+
+class SchedulesOut(BaseModel):
+    enabled: bool
+    path: str = ".workflows/schedules.json"
+    rows: list[ScheduleRowOut]
+    problems: list[str]
 
 
 async def _staged_run_uploads(
@@ -102,6 +129,7 @@ def register_workflow_routes(
     workflow_orchestrator: WorkflowOrchestrator,
     workflow_executor: WorkflowExecutor,
     event_dispatcher: EventTriggerDispatcher,
+    schedule_policy: SchedulePolicy,
 ) -> None:
     """Mount the workflow profile + run routes onto ``app``."""
 
@@ -153,6 +181,54 @@ def register_workflow_routes(
         investigation_id = locator.require_access(slug, item_id, "read_meta")
         metas = await workspace_workflow_metas(files, investigation_id)
         return [msgspec.to_builtins(m) for m in metas]
+
+    @app.get("/a/{slug}/items/{item_id}/schedules", response_model=SchedulesOut)
+    async def list_item_schedules(slug: str, item_id: str) -> SchedulesOut:
+        """The item's own `.workflows/schedules.json`, read the way the SWEEP reads
+        it — same parser, same next-run rule, same ledger — for the Workflows panel.
+
+        Every row in the file, in file order, the refused ones included and each
+        carrying what was written: the panel rewrites the file minus one row to
+        cancel a schedule, and could not do that faithfully from a list that had
+        already dropped the rows the linter refuses. `known` is whether `run`
+        names a workflow this item offers (the P1 rule) — a row whose workflow
+        was deleted is skipped by the sweep with a log line nobody reads, so this
+        is where it gets said. `enabled` is whether this deploy runs scheduled
+        work at all: a file on a deploy with the sweep off is a file nothing
+        reads, and the panel must say so rather than list rows as if they will
+        fire.
+        """
+        from ..filestore.protocol import FileNotFound
+        from ..workflow.offered import offered_workflow_ids
+        from ..workflow.user_schedules import (
+            ITEM_SCHEDULES_PATH,
+            last_window_lookup,
+            schedule_views,
+            utc_now,
+        )
+
+        investigation_id = locator.require_access(slug, item_id, "read_meta")
+        try:
+            raw = (await files.read(investigation_id, ITEM_SCHEDULES_PATH)).decode("utf-8")
+        except FileNotFound:
+            return SchedulesOut(enabled=schedule_policy.sweep_enabled, rows=[], problems=[])
+        profile = locator.profile_of(investigation_id)
+        offered = await offered_workflow_ids(files, investigation_id, slug=slug, profile=profile)
+        # One hop off the loop: the ledger reads inside are blocking specstar I/O.
+        views, problems = await asyncio.to_thread(
+            schedule_views,
+            raw,
+            offered=offered,
+            now_utc=utc_now(),
+            last_window=last_window_lookup(
+                spec if schedule_policy.sweep_enabled else None, investigation_id
+            ),
+        )
+        return SchedulesOut(
+            enabled=schedule_policy.sweep_enabled,
+            rows=[ScheduleRowOut(**msgspec.to_builtins(v)) for v in views],
+            problems=problems,
+        )
 
     @app.get("/a/{slug}/items/{item_id}/workflow-templates")
     async def list_workflow_templates(slug: str, item_id: str) -> list[dict]:

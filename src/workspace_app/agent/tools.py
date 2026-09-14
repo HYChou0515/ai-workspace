@@ -2253,12 +2253,10 @@ async def save_schedules_impl(ctx: RunContextWrapper[AgentToolContext], schedule
         if (denied := authorize_tool(ctx.context, verb)) is not None:
             return denied
     from ..workflow.offered import offered_workflow_ids
-    from ..workflow.triggers import SpecstarTriggerStore
     from ..workflow.user_schedules import (
         ITEM_SCHEDULES_PATH,
-        describe_next_run,
-        describe_row,
-        trigger_id_for,
+        last_window_lookup,
+        schedule_views,
         usable_rows,
         utc_now,
     )
@@ -2304,29 +2302,21 @@ async def save_schedules_impl(ctx: RunContextWrapper[AgentToolContext], schedule
         inv, ITEM_SCHEDULES_PATH, json.dumps({"schedules": doc["schedules"]}, indent=2).encode()
     )
 
-    # "Next run" as the sweep will actually compute it — including the ledger
-    # of what already fired, so an unchanged row re-saved after today's run
-    # says tomorrow, and a new one says "now". Best effort: without a ledger
-    # (no spec, or the sweep is off and never registered its store) every row
-    # reads as never fired, which is the truth for a file that cannot run.
-    folder = ITEM_SCHEDULES_PATH.rsplit("/", 1)[0]
-    last: dict[int, str] = {}
-    spec = ctx.context.spec
-    if policy.sweep_enabled and spec is not None:
-        store = SpecstarTriggerStore(spec)
-        for i, row in enumerate(rows):
-            try:
-                last[i] = await asyncio.to_thread(
-                    store.last_window, trigger_id_for(inv, folder, row)
-                )
-            except Exception:  # noqa: BLE001 — a reply, not a run; a missing ledger reads as "never"
-                last[i] = ""
-    now_utc = utc_now()
+    # "Next run" as the sweep will actually compute it — the same views the
+    # Workflows panel lists, ledger included, so an unchanged row re-saved after
+    # today's run says tomorrow and a new one says "now". Without a ledger (no
+    # spec, or the sweep is off and never registered its store) every row reads
+    # as never fired, which is the truth for a file that cannot run. Off the
+    # loop as one hop: the ledger reads inside are blocking specstar I/O.
+    last = last_window_lookup(ctx.context.spec if policy.sweep_enabled else None, inv)
+    views, _ = await asyncio.to_thread(
+        schedule_views, schedules_json, offered=offered, now_utc=utc_now(), last_window=last
+    )
     lines = [
-        f"- {row.run}: {describe_row(row)}"
-        + (f" with {json.dumps(row.payload, sort_keys=True)}" if row.payload else "")
-        + f" — next run {describe_next_run(row, now_utc, last.get(i, ''))}"
-        for i, row in enumerate(rows)
+        f"- {v.run}: {v.describe}"
+        + (f" with {json.dumps(v.payload, sort_keys=True)}" if v.payload else "")
+        + f" — next run {v.next_run}"
+        for v in views
     ]
     noun = "schedule" if len(rows) == 1 else "schedules"
     out = [

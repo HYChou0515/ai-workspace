@@ -86,6 +86,11 @@ export const qk = {
   workspaceWorkflows: (slug: string, itemId: string) =>
     ["workspaceWorkflows", slug, itemId] as const,
 
+  // An item's schedules (`.workflows/schedules.json`), interpreted by the backend
+  // the way the sweep reads them. The Workflows panel reads this; removing a row
+  // rewrites the file and invalidates it.
+  itemSchedules: (slug: string, itemId: string) => ["itemSchedules", slug, itemId] as const,
+
   // #520: the shipped starter templates, with per-item compatibility. Keyed by item
   // because the compatibility flag depends on the item's profile, not just the app.
   workflowTemplates: (slug: string, itemId: string) =>

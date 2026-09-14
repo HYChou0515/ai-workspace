@@ -5,10 +5,12 @@ import type { FileService } from "../api/fileService";
 import { qk } from "../api/queryKeys";
 import { TemplateConflictError, workflowTemplatesApi } from "../api/workflowTemplates";
 import { workflowApi } from "../api/workflows";
+import { SCHEDULES_PATH, type ScheduleRow } from "../api/schedules";
 import { WORKFLOWS_DIR } from "../api/workspaceWorkflows";
+import { useItemSchedules } from "../hooks/useItemSchedules";
 import { useWorkflowTemplates } from "../hooks/useWorkflowTemplates";
 import { useWorkspaceWorkflows } from "../hooks/useWorkspaceWorkflows";
-import { useT } from "../lib/i18n";
+import { type MsgKey, useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 import { Icon } from "./Icon";
 import { useDirtyClose } from "../hooks/useDirtyClose";
@@ -44,6 +46,7 @@ export function WorkflowsModal({
   const dialog = useDialog();
   const workflows = useWorkspaceWorkflows(slug, itemId);
   const templates = useWorkflowTemplates(slug, itemId);
+  const schedules = useItemSchedules(slug, itemId);
   const importRef = useRef<HTMLInputElement | null>(null);
   const [busy, setBusy] = useState(false);
   // #779: an import/apply in flight. Closing does not cancel it — it just takes
@@ -112,7 +115,38 @@ export function WorkflowsModal({
     }
   };
 
+  /** Cancel one schedule: rewrite the file minus that row, through the ordinary
+   * file write so it lands on the path the platform indexes. Every OTHER row is
+   * kept exactly as written — the refused ones included — because a rewrite that
+   * dropped them would cancel schedules nobody asked to cancel. */
+  const removeSchedule = async (row: ScheduleRow) => {
+    const rows = schedules.data?.rows ?? [];
+    const choice = await dialog.confirm({
+      title: t("schedules.removeTitle"),
+      body: t("schedules.removeConfirm", {
+        what: `${describeSchedule(row.raw, t)} → ${row.run || "?"}`,
+      }),
+      actions: [
+        { id: "remove", label: t("schedules.remove"), variant: "danger" },
+        { id: "cancel", label: t("schedules.cancel") },
+      ],
+    });
+    if (choice !== "remove") return;
+    setBusy(true);
+    try {
+      const kept = rows.filter((r) => r.index !== row.index).map((r) => r.raw);
+      await fileService.writeFile(SCHEDULES_PATH, JSON.stringify({ schedules: kept }, null, 2));
+      await qc.invalidateQueries({ queryKey: qk.itemSchedules(slug, itemId) });
+      await qc.invalidateQueries({ queryKey: qk.files(itemId) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const list = workflows.data ?? [];
+  const titleOf = (run: string) => list.find((w) => w.id === run)?.title || run;
+  const sched = schedules.data;
+  const showSchedules = !!sched && (sched.rows.length > 0 || sched.problems.length > 0);
 
   return (
     <ModalShell
@@ -190,6 +224,82 @@ export function WorkflowsModal({
             ))
           )}
         </div>
+
+        {showSchedules && (
+          <div
+            data-testid="schedules-section"
+            style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}
+          >
+            <strong style={{ fontSize: "var(--text-body-sm)" }}>{t("schedules.heading")}</strong>
+            <p style={{ margin: 0, fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
+              {t("schedules.intro")}
+            </p>
+            {!sched.enabled && (
+              <p
+                data-testid="schedules-disabled"
+                role="status"
+                style={{ margin: 0, fontSize: pxToRem(11), color: "var(--err)" }}
+              >
+                {t("schedules.disabled")}
+              </p>
+            )}
+            {sched.problems.length > 0 && (
+              <p style={{ margin: 0, fontSize: pxToRem(11), color: "var(--err)" }}>
+                {t("schedules.fileProblem")} {sched.problems.join(" ")}
+              </p>
+            )}
+            {sched.rows.map((row) => {
+              const invalid = row.problems.length > 0;
+              return (
+                <div
+                  key={row.index}
+                  data-testid={`schedule-row-${row.index}`}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    padding: "6px 8px",
+                    border: "1px solid var(--paper-3)",
+                    borderRadius: "var(--radius-btn)",
+                  }}
+                >
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, fontSize: "var(--text-body-sm)" }}>
+                      {describeSchedule(row.raw, t)}
+                      {" → "}
+                      {invalid ? String(row.raw.run ?? "?") : titleOf(row.run)}
+                    </div>
+                    <div style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
+                      {invalid ? (
+                        <span style={{ color: "var(--err)" }}>
+                          {t("schedules.invalidRow")} {row.problems.join(" ")}
+                        </span>
+                      ) : !row.known ? (
+                        <span data-testid={`schedule-unknown-${row.index}`} style={{ color: "var(--err)" }}>
+                          {t("schedules.unknownWorkflow")}
+                        </span>
+                      ) : row.due_now ? (
+                        t("schedules.nextSweep")
+                      ) : (
+                        t("schedules.next", { at: `${row.next_at} ${row.tz}` })
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    data-testid={`schedule-remove-${row.index}`}
+                    aria-label={`${t("schedules.remove")} ${describeSchedule(row.raw, t)}`}
+                    disabled={busy}
+                    onClick={() => void removeSchedule(row)}
+                    style={pillBtn}
+                  >
+                    <Icon name="x" size={12} /> {t("schedules.remove")}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
 
         {(templates.data ?? []).length > 0 && (
           <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}>
@@ -282,6 +392,48 @@ export function WorkflowsModal({
     </ModalShell>
   );
 }
+
+/** The recurrence in the reader's words, from the row as written (`every`, `at`,
+ * `dow`, `dom`, `n`, `tz`). Only vocabulary: when a row fires NEXT is computed on
+ * the backend, by the same rule the sweep fires it by, and arrives as `next_at`. */
+function describeSchedule(raw: Record<string, unknown>, t: ReturnType<typeof useT>): string {
+  const at = typeof raw.at === "string" ? raw.at : "00:00";
+  const tz = typeof raw.tz === "string" && raw.tz ? raw.tz : "UTC";
+  let words: string;
+  switch (raw.every) {
+    case "minutes":
+      words = t("schedules.every.minutes", { n: Number(raw.n) || 0 });
+      break;
+    case "hourly":
+      words = t("schedules.every.hourly");
+      break;
+    case "weekly": {
+      const dow = typeof raw.dow === "string" ? raw.dow : "";
+      const key = DOW_KEYS[dow];
+      words = t("schedules.every.weekly", { dow: key ? t(key) : dow, at });
+      break;
+    }
+    case "monthly":
+      words = t("schedules.every.monthly", { dom: Number(raw.dom) || 0, at });
+      break;
+    case "daily":
+      words = t("schedules.every.daily", { at });
+      break;
+    default:
+      words = String(raw.every ?? "?");
+  }
+  return `${words} (${tz})`;
+}
+
+const DOW_KEYS: Record<string, MsgKey> = {
+  mon: "schedules.dow.mon",
+  tue: "schedules.dow.tue",
+  wed: "schedules.dow.wed",
+  thu: "schedules.dow.thu",
+  fri: "schedules.dow.fri",
+  sat: "schedules.dow.sat",
+  sun: "schedules.dow.sun",
+};
 
 const pillBtn: React.CSSProperties = {
   display: "inline-flex",

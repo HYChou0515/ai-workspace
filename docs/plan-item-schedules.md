@@ -114,11 +114,16 @@ workflow 那邊已有排程機制 `triggers.json`,但它**住在 repo 裡**
   `save_workflow_impl` 存成功的回覆句加一句;`save_schedules` 的工具說明含格式表,`every` 那格
   從 `EVERY` 產生。測試:工具說明裡列的 `every` 值 == `EVERY`(突變任一邊會紅);skill eval
   scenario(`sample-scenarios/author-workflow/`)一條「使用者要每天跑」→ `must_call: save_schedules`。
-- **P4 Workflows 面板排程區。** 後端:meta 多回 `schedules_enabled: bool`(`trigger_check_interval > 0`)。
-  前端 `WorkflowsModal.tsx`:讀 `.workflows/schedules.json`(既有檔案讀取 API),列每列 + 下次
-  時間(前端算,tz 用列上的,預設 UTC)+ `run` 不在面板 workflow 清單裡就標紅 + 「移除」寫回
-  + `schedules_enabled === false` 時的警告條。FE 測試:dirty/clean 不適用(不是表單);要有
-  「移除後檔案內容少那一列」和「run 不存在標紅」兩條。
+- **P4 Workflows 面板排程區。** ~~後端:meta 多回 `schedules_enabled`;前端讀檔、自己算下次時間~~
+  **實作時改掉**:「下次時間」若在前端算,等於用 TS 再寫一份 `period_target`/`next_run`(兩套
+  規則),而且看不到租約帳本(已經跑過這一期的列會被說成「下一輪」)。所以後端開一個
+  **`GET /a/{slug}/items/{id}/schedules`**:用 sweep 同一個 parser、同一個 `next_run`、同一個
+  帳本,回每一列(含被 linter 拒絕的列,帶 `raw` 和 `problems`,檔案順序)+ `known`(`run` 在
+  P1 清單裡)+ `next_at`/`due_now`/`tz` + `enabled`。`schedule_views` 是唯一的解讀實作,
+  `save_schedules` 的回覆和這個路由都用它。前端只渲染:週期詞彙由 `raw` 在地化(純字彙,不算
+  時間)、`known=false` 標紅、`due_now` 顯示「下一輪」、`enabled=false` 警告條、「移除」= 前端用
+  既有檔案寫入 API 把整份檔案少那一列寫回(保留其他列,壞列也保留)。FE 測試八條:列出/空/
+  run 不存在/壞列/到期/未啟用/移除寫回/取消不寫。
 - **P5 釘住與文件。** 測試:用 sandbox `exec` 寫 `.workflows/schedules.json` → turn 結束 → 索引有它
   (它一到就綠,守的是新路徑)。`docs/workflows.md` §22 加一段「定時跑」;`docs/migrations.md`
   記「無 config 變更;`trigger_check_interval_sec` 仍是前提」;`docs/wui.md` 若有列舉宣告點要同步。

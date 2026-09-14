@@ -1928,6 +1928,14 @@ def create_app(
     # interactive send path (`_send_into`) and the workflow node driver
     # (`_wf_drive_turn`) build their ctx through this, so a new ctx field is added
     # once instead of in two hand-rolled constructions that can drift.
+    # The SAME two knobs the sweep runs under (`max_rows`, `trigger_check_interval`
+    # in the lifespan), as ONE value: what `save_schedules` tells the agent and
+    # what the Workflows panel lists are what the sweep will do — never a third
+    # copy of either knob.
+    schedule_policy = SchedulePolicy(
+        max_rows=max_page_schedules,
+        sweep_enabled=trigger_check_interval is not None,
+    )
     turn_ctx = TurnContextBuilder(
         sandbox=sandbox,
         filestore=filestore,
@@ -1949,13 +1957,7 @@ def create_app(
         infer_modules_parallelism=infer_modules_parallelism,
         history_max_messages=history_max_messages,
         history_max_context_tokens=history_max_context_tokens,
-        # The SAME two knobs the sweep runs under (`max_rows` above,
-        # `trigger_check_interval` in the lifespan), so what `save_schedules`
-        # tells the agent is what the sweep will do — not a third copy of either.
-        schedule_policy=SchedulePolicy(
-            max_rows=max_page_schedules,
-            sweep_enabled=trigger_check_interval is not None,
-        ),
+        schedule_policy=schedule_policy,
         # #624: the operator's declared ceiling for this endpoint (the escape
         # hatch); unset ⇒ resolved per turn, and unknown ⇒ no trimming.
         context_limit=context_limit,
@@ -2123,6 +2125,7 @@ def create_app(
         workflow_orchestrator=workflow_orchestrator,
         workflow_executor=workflow_executor,
         event_dispatcher=event_dispatcher,
+        schedule_policy=schedule_policy,
     )
 
     chat_send_svc = ChatSendService(

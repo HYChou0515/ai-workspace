@@ -29,6 +29,7 @@ import functools
 import hashlib
 import json
 import logging
+from collections.abc import Callable, Collection
 from datetime import UTC, datetime
 from typing import Any, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
@@ -457,15 +458,140 @@ def describe_row(row: UserSchedule) -> str:
     return f"daily at {row.at} {zone}"
 
 
-def describe_next_run(row: UserSchedule, now_utc: datetime, last_window: str) -> str:
-    """When this row fires next, in ITS zone, on the rule the sweep fires by.
+def next_run_at(row: UserSchedule, now_utc: datetime, last_window: str) -> str:
+    """When this row fires next as `YYYY-MM-DD HH:MM` in ITS zone, on the rule
+    the sweep fires by — or `""` when it is due right now (the next sweep).
 
-    A row that is due right now says so instead of naming tomorrow: a missed
-    window fires late, so a daily 09:00 saved at 10:00 runs within the minute
-    (the catch-up rule the sweep's reference documents), and the reply must not
-    contradict the manual it is standing in for.
+    The empty case is the one worth keeping distinct rather than rounding away:
+    a missed window fires late, so a daily 09:00 saved at 10:00 runs within the
+    minute (the catch-up rule the sweep's reference documents), and a reply or a
+    panel that said "tomorrow" would contradict the manual it stands in for.
     """
     when = next_run(row.as_schedule(), in_zone(now_utc, row.tz), last_window)
-    if when is None:
+    return "" if when is None else f"{when:%Y-%m-%d %H:%M}"
+
+
+def describe_next_run(row: UserSchedule, now_utc: datetime, last_window: str) -> str:
+    """`next_run_at` as the sentence the agent relays."""
+    at = next_run_at(row, now_utc, last_window)
+    if not at:
         return "on the next sweep (this period is already due and has not run yet)"
-    return f"{when:%Y-%m-%d %H:%M} {row.tz or 'UTC'}"
+    return f"{at} {row.tz or 'UTC'}"
+
+
+class ScheduleView(Struct):
+    """One row of a schedules file as a PERSON (or the agent) should see it —
+    what the sweep will do with it, not what was typed.
+
+    Every row in the file is here, in file order, the refused ones included:
+    a panel that dropped them could not rewrite the file minus one row without
+    silently losing the others, and a person cannot fix a line they are not
+    shown. `raw` is the row as written, for exactly that rewrite.
+
+    Two renderings of one fact, derived from the same value: `next_run` is the
+    English sentence the agent relays, `next_at` / `due_now` / `tz` are the
+    pieces a panel localises. Neither is computed twice.
+    """
+
+    index: int
+    raw: dict[str, Any]
+    problems: list[str]
+    run: str = ""
+    describe: str = ""
+    next_run: str = ""
+    next_at: str = ""
+    due_now: bool = False
+    tz: str = "UTC"
+    known: bool = False
+    payload: dict[str, Any] = {}
+
+
+def schedule_views(
+    raw_text: str,
+    *,
+    offered: Collection[str],
+    now_utc: datetime,
+    last_window: Callable[[UserSchedule], str],
+) -> tuple[list[ScheduleView], list[str]]:
+    """Every row of a schedules file, described the way the sweep reads it —
+    same parser, same next-run rule, same ledger (`last_window`) — plus the
+    file-level problems when the file itself cannot be read. ONE implementation
+    of "what does this row mean", used by the agent's `save_schedules` reply and
+    the panel's listing, so the two cannot disagree."""
+    try:
+        doc = json.loads(raw_text)
+        rows = doc["schedules"] if isinstance(doc, dict) else None
+        if not isinstance(rows, list):
+            raise ValueError("no `schedules` list")
+    except Exception:
+        return [], validate_user_schedules(raw_text)
+
+    views: list[ScheduleView] = []
+    for i, raw in enumerate(rows):
+        raw_dict: dict[str, Any] = (
+            {str(k): v for k, v in raw.items()} if isinstance(raw, dict) else {"_": raw}
+        )
+        one = json.dumps({"schedules": [raw]})
+        problems = [
+            p.replace("schedules[0]", f"schedules[{i}]") for p in validate_user_schedules(one)
+        ]
+        if problems:
+            views.append(ScheduleView(index=i, raw=raw_dict, problems=problems))
+            continue
+        try:
+            (row,) = parse_user_schedules(one)
+        except Exception as exc:
+            views.append(
+                ScheduleView(
+                    index=i, raw=raw_dict, problems=[f"schedules[{i}]: could not be read ({exc})."]
+                )
+            )
+            continue
+        last = last_window(row)
+        at = next_run_at(row, now_utc, last)
+        views.append(
+            ScheduleView(
+                index=i,
+                raw=raw_dict,
+                problems=[],
+                run=row.run,
+                describe=describe_row(row),
+                next_run=describe_next_run(row, now_utc, last),
+                next_at=at,
+                due_now=not at,
+                tz=row.tz or "UTC",
+                known=row.run in offered,
+                payload=row.payload,
+            )
+        )
+    return views, []
+
+
+def last_window_lookup(spec: Any, item_id: str) -> Callable[[UserSchedule], str]:
+    """A `last_window` resolver over the sweep's ledger for THIS item's own
+    schedules file, or one that answers "never" when there is no ledger to ask
+    (no spec, or a deploy whose sweep is off never registered the store).
+
+    The lookup is a BLOCKING specstar read per distinct row. `schedule_views`
+    calls it inline, so a caller on the event loop runs the whole
+    `schedule_views(...)` under `asyncio.to_thread` — one hop for the file, not
+    one per row.
+    """
+    if spec is None:
+        return lambda _row: ""
+    from .triggers import SpecstarTriggerStore
+
+    store = SpecstarTriggerStore(spec)
+    folder = ITEM_SCHEDULES_PATH.rsplit("/", 1)[0]
+    cache: dict[str, str] = {}
+
+    def _lookup(row: UserSchedule) -> str:
+        key = trigger_id_for(item_id, folder, row)
+        if key not in cache:
+            try:
+                cache[key] = store.last_window(key)
+            except Exception:  # noqa: BLE001 — a listing, not a run; no ledger reads as "never"
+                cache[key] = ""
+        return cache[key]
+
+    return _lookup
