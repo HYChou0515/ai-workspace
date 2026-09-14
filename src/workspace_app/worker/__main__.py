@@ -112,6 +112,7 @@ def build_bundle(
                 quality_floor=settings.kb.retrieval.quality_floor,
                 sparse_corpus_cap=settings.kb.retrieval.sparse_corpus_cap,
                 context_chars=settings.kb.retrieval.context_chars,
+                rerank_context_chars=settings.kb.retrieval.rerank_context_chars,
             ),
             catalog=catalog,
             kb_agent_config=kb_chats[0],
@@ -134,6 +135,7 @@ def build_bundle(
                 quality_floor=settings.kb.retrieval.quality_floor,
                 sparse_corpus_cap=settings.kb.retrieval.sparse_corpus_cap,
                 context_chars=settings.kb.retrieval.context_chars,
+                rerank_context_chars=settings.kb.retrieval.rerank_context_chars,
             )
         )
     return bundle

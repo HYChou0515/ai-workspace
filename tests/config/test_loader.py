@@ -618,6 +618,7 @@ def test_operator_can_set_retrieval_scalar_knobs(tmp_path: Path):
                 quality_floor: 33
                 sparse_corpus_cap: 750
                 context_chars: 0
+                rerank_context_chars: null
         """),
         encoding="utf-8",
     )
@@ -626,6 +627,7 @@ def test_operator_can_set_retrieval_scalar_knobs(tmp_path: Path):
     assert r.quality_floor == 33
     assert r.sparse_corpus_cap == 750
     assert r.context_chars == 0  # the off switch must actually reach the retriever
+    assert r.rerank_context_chars is None  # null = uncapped must survive the loader
     # untouched knobs keep their bundled defaults
     assert r.enhancements.expand.default == 1
 
@@ -649,6 +651,7 @@ def test_retrieval_scalar_knobs_keep_defaults_when_unset(tmp_path: Path):
     assert r.quality_floor is None
     assert r.sparse_corpus_cap is None
     assert r.context_chars == 2000
+    assert r.rerank_context_chars == 4000
 
 
 def test_unknown_enhancement_key_raises_with_path(tmp_path: Path):

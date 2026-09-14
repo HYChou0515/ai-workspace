@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as importlib_version
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from agents.tracing import set_trace_processors
 from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
@@ -547,6 +547,9 @@ def create_app(
     # plan-rag-context P2: neighbouring context per side (chars, whole chunks);
     # `None` = the config default. `0` = off.
     kb_context_chars: int | None = None,
+    # P6: the reranker's per-candidate context cap; the sentinel `"default"` keeps
+    # the config default because `None` is itself a meaningful value (uncapped).
+    kb_rerank_context_chars: int | None | Literal["default"] = "default",
     # #195: per-turn cap on `kb_search` calls for the KB chat turn + the
     # ask_knowledge_base bridge. `None` ⇒ unlimited (also what other surfaces
     # like Topic Hub use). __main__ threads `settings.kb.max_searches_per_turn`
@@ -1681,6 +1684,11 @@ def create_app(
         sparse_corpus_cap=kb_sparse_corpus_cap,
         context_chars=(
             RetrievalSettings.context_chars if kb_context_chars is None else kb_context_chars
+        ),
+        rerank_context_chars=(
+            RetrievalSettings.rerank_context_chars
+            if kb_rerank_context_chars == "default"
+            else kb_rerank_context_chars
         ),
     )
     # #535: wire the retrieval-eval coordinator's retriever (built after

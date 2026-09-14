@@ -527,6 +527,8 @@ _TOP_SCHEMA: dict[str, Any] = {
             "sparse_corpus_cap": set(),
             # plan-rag-context P2: neighbouring context per side — scalar int leaf.
             "context_chars": set(),
+            # P6: the reranker's per-candidate context cap — scalar int|null leaf.
+            "rerank_context_chars": set(),
         },
         # #506: reconcile / cluster-sweeper thresholds (all scalar float leaves).
         "cluster": _dataclass_keys(ClusterSettings),
@@ -1019,7 +1021,13 @@ def _build_retrieval(d: dict[str, Any]) -> RetrievalSettings:
     e = d["enhancements"]
     scalars = {
         key: d[key]
-        for key in ("quality_weight", "quality_floor", "sparse_corpus_cap", "context_chars")
+        for key in (
+            "quality_weight",
+            "quality_floor",
+            "sparse_corpus_cap",
+            "context_chars",
+            "rerank_context_chars",
+        )
         if key in d
     }
     return RetrievalSettings(

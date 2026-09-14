@@ -666,6 +666,7 @@ class Retriever:
         sparse_corpus_cap: int | None = None,
         disclosure_floor: float = 0.6,
         context_chars: int = RetrievalSettings.context_chars,
+        rerank_context_chars: int | None = RetrievalSettings.rerank_context_chars,
     ) -> None:
         self._spec = spec
         self._embedder = embedder
@@ -714,6 +715,8 @@ class Retriever:
         # each side of a hit, in whole chunks, across documents in tree order.
         # The default is the config default — ONE number, not two literals.
         self._context_chars = context_chars
+        # P6: what the listwise reranker sees of that context per candidate.
+        self._rerank_context_chars = rerank_context_chars
 
     @property
     def top_k(self) -> int:
@@ -1011,7 +1014,13 @@ class Retriever:
             assert self._llm is not None
             step("\n↻ rerank\n")
             logger.debug("retriever: reranking %d merged passages via llm", len(passages))
-            passages = rerank_passages(self._llm, query, passages, on_progress=on_progress)
+            passages = rerank_passages(
+                self._llm,
+                query,
+                passages,
+                on_progress=on_progress,
+                context_cap=self._rerank_context_chars,
+            )
         logger.info("retriever: search complete, ranked=%d limit=%d", len(passages), limit)
         # #513 P9: pull in the parent of any attachment hit — AFTER the top_k cut,
         # so the parent context rides along without displacing a primary result.

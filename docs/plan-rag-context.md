@@ -58,8 +58,7 @@ those. What the real entry point DID show, unrelated to CJK: the pipeline
 routes Markdown — and every VLM description, which is Markdown — through
 `MarkdownNodeParser`, which splits on headings only, with no size cap. A
 heading-less `.md` of 50,038 English chars is **one chunk**, one vector. That
-is a genuine production defect; it is logged below as a follow-up, not fixed
-here.
+is a genuine production defect — fixed in Phase 6 (added after the review).
 
 ## Decisions that cut across phases
 
@@ -111,9 +110,10 @@ boundaries in tree order. The widened text is what the reranker ranks and what
 the agent reads; the citation still points at the hit.
 
 "At least N, in whole chunks" is deliberate: the budget is in a language-neutral
-unit, but the granularity is the retrieval unit, so a 1,797-char English chunk
-and a (post-Phase-1) Chinese chunk both satisfy N=2,000 with one or two whole
-neighbours. Chunk count alone would mean different amounts of text per
+unit, but the granularity is the retrieval unit, so a 1,452-char English chunk
+and a 154-char Chinese chunk (the production splitter's sizes) both satisfy
+N=2,000 with whole neighbours — about two for English, about thirteen for
+Chinese, the same amount of text either way. Chunk count alone would mean different amounts of text per
 language; raw chars would cut sentences.
 
 ### The knob
@@ -387,6 +387,36 @@ units** — a unit is offered where it exists and refused where it does not.
   accepts a list of parts); a text-only main model receives the text layer
   plus the `kb.vlm_llm` description of the page image.
 
+## Phase 6 — the two re-decisions after review round 1
+
+Added after the review corrected the production numbers (user: "Ok" to both).
+
+**The reranker's context is capped.** `kb.retrieval.rerank_context_chars`
+(default 4,000; `null` = uncapped, `0` = the bare hit) bounds what each
+candidate contributes to the one listwise prompt, centred on the hit so the
+matched text is always inside the window. Without it `context_chars` alone
+grew the prompt ~4× (English) / ~27× (Chinese), and a reranker whose window
+is smaller truncates from the front — the question — and returns noise that
+`rerank_passages` applied silently. The reranker still ranks what will be
+delivered; the prompt is now bounded. Threaded through the same three doors
+as `context_chars`.
+
+**Long Markdown sections are windowed.** The production defect the real
+entry point showed: `MarkdownNodeParser` splits on headings only, with no
+size cap, so a heading-less `.md` — or a VLM description — of any length was
+one chunk and one vector. `DispatchSplitter._prose_nodes` now runs the
+sentence splitter over a prose region larger than its window; each piece's
+span is `base + relative offset`, a verbatim slice of the canonical text (the
+splitter's pieces are verbatim with relative offsets — verified), with the
+breadcrumb folded in like every Markdown chunk. Applied to a whole section
+AND to the prose regions between tables (one rule). A region that fits
+returns the section parser's own node, byte-identical to before, so the
+common case and the #390 cache keys are untouched. Measured through the
+pipeline: the 50,038-char heading-less `.md` went from 1 chunk to 35
+(avg 1,630 chars); Chinese from 1 to 80 (avg 154). This DOES change
+production chunks: documents holding long Markdown sections need a
+collection re-read — `migrations.md` says which and how.
+
 ## Out of scope — and findings logged for separate work
 
 - Eval-gated tuning; per-call / per-collection context knob.
@@ -400,11 +430,6 @@ units** — a unit is offered where it exists and refused where it does not.
   cross-encoder when one is available. Likely a bigger win for "RAG must be
   correct first" than context is.
 - Embedder behaviour on over-long input (see Phase 1).
-- **Heading-less Markdown is one chunk however long** (production;
-  `DispatchSplitter._split_markdown` → `MarkdownNodeParser` has no size cap;
-  50,038 English chars → 1 chunk, measured). Fix shape: run the
-  `SentenceSplitter` over any Markdown section larger than `chunk_size`.
-  Language-independent; affects every VLM description too. Not in scope here.
 - Context-walk cost on one-page-per-file collections: every hit sits at a
   document edge, so every search lists the collection once (partial fields,
   sorted in Python) and re-reads metadata `_DocJoin` already had. Measure

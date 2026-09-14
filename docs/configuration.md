@@ -468,6 +468,7 @@ kb:
     quality_floor: null         # #105 絕對門檻：分數低於此的文件直接剔除；null=只降權不剔除
     sparse_corpus_cap: null     # 關鍵字（BM25）一次最多撈回幾個 chunk；null=不封頂（見下）
     context_chars: 2000         # 命中前後各至少帶多少字元的前後文（整塊取、可跨檔）；0=關（見下）
+    rerank_context_chars: 4000  # rerank 每個候選最多看到多少前後文（以命中為中心）；null=不設上限、0=只看命中
   max_searches_per_turn: 3      # 每則 KB 回覆的 kb_search 次數上限（#195）；null=不限
   max_searches_ceiling: 10      # FE per-message 次數 picker 的上限（#334）
   vlm_llm:   { preset: kb-vlm } # 圖片/PDF 視覺頁；null=圖片上傳存 0 chunk 直到設好再重索引
@@ -524,7 +525,13 @@ collection 內、樹的順序 = 你在文件樹看到的順序，資料夾在前
 | --- | --- |
 | `2000`（預設） | production 管線下英文約多帶 1.4 塊（一塊 ≈1,452 字元）、中文約 13 塊（一塊 ≈154 字）——預算是字元,兩邊拿到的文字量差不多,這正是用字元當單位的用意 |
 | `0` | 關掉，行為與此版之前逐位元相同 |
-| 更大 | rerank 的 prompt 等比例變長（listwise，一次把所有候選塞進同一個 prompt；預設值下英文 20 個候選約 11 萬字元、中文約 8.4 萬——比沒開時大 4× / 27×，rerank 模型窗口不夠會**從前面截斷、問題被截掉**、排序變雜訊且不報錯） |
+| 更大 | 模型讀到的段落更寬；rerank 那邊由 `rerank_context_chars` 另外封頂（見下），不會跟著等比例長 |
+
+**`rerank_context_chars`**：rerank 是 listwise——約 20 個候選塞進**同一個** prompt。沒有上限時，預設的
+`context_chars=2000` 會讓那個 prompt 從英文約 2.9 萬字元長到 11 萬（4×）、中文從 3 千長到 8.4 萬（**27×**）；
+rerank 模型的窗口不夠時會**從前面截斷、問題被截掉**、排序變雜訊且不報錯。所以每個候選送給 rerank 的前後文
+以命中為中心封頂在 `rerank_context_chars`（預設 4000）：模型仍然是在排「會交付的東西」的核心，但 prompt 大小有界。
+確定 rerank 模型有 1M 窗口的部署可以設 `null`；`0` 回到只看命中（此版之前的行為）。
 
 **權限**：前後文會讀到「檢索沒選中」的文件，所以它套用**跟檢索一模一樣**的範圍——集合層／單文件的
 權限、`#308` 的個人排除、`#518` 的正向限定（卡片連結、P3 的資料夾）。讀不到的鄰居會被**跳過、

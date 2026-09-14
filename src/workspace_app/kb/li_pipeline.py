@@ -114,13 +114,47 @@ class DispatchSplitter(TransformComponent):
             # so absolute offsets stay correct) before scanning for tables.
             body, body_offset = _strip_leading_heading(content, n)
             tables = find_markdown_tables(body)
-            if not tables:
-                if breadcrumb:
-                    n.text = f"{breadcrumb}\n\n{content}"
-                out.append(n)
-                continue
             base = (n.start_char_idx or 0) + body_offset
+            if not tables:
+                # plan-rag-context P6: a section larger than the sentence window
+                # is windowed (see `_prose_nodes`); one that fits stays the
+                # section parser's own node, byte-identical to before.
+                windows = self._prose_nodes(body, base, breadcrumb)
+                if windows is None:
+                    if breadcrumb:
+                        n.text = f"{breadcrumb}\n\n{content}"
+                    out.append(n)
+                else:
+                    out.extend(windows)
+                continue
             out.extend(self._emit_table_segments(body, base, tables, breadcrumb))
+        return out
+
+    def _prose_nodes(self, body: str, base: int, breadcrumb: str) -> list[BaseNode] | None:
+        """plan-rag-context P6: window a Markdown prose region that is larger
+        than the sentence splitter's chunk, or return ``None`` when it fits.
+
+        `MarkdownNodeParser` splits on headings only, with no size cap — a
+        heading-less `.md` of 50,000 chars was ONE chunk and ONE vector, its
+        meaning averaged into a point (measured through this pipeline), and
+        every VLM description is Markdown too. The sentence splitter's pieces
+        are verbatim slices with relative offsets, so each window's span is
+        `base + offset` into the canonical text — what citations and the
+        context walk index into — and carries the breadcrumb like every other
+        Markdown chunk. A region that fits returns ``None`` so the caller keeps
+        the section parser's own node: the common case stays byte-identical
+        (the #390 index cache keys on the chunk set)."""
+        pieces = self.sentence_splitter.get_nodes_from_documents([TextNode(text=body)])
+        if len(pieces) <= 1:
+            return None
+        out: list[BaseNode] = []
+        for piece in pieces:
+            assert isinstance(piece, TextNode)  # SentenceSplitter only emits TextNodes
+            rel_start = piece.start_char_idx or 0
+            rel_end = piece.end_char_idx if piece.end_char_idx is not None else len(body)
+            out.append(
+                _table_node(breadcrumb, piece.get_content(), base + rel_start, base + rel_end)
+            )
         return out
 
     def _emit_table_segments(
@@ -136,7 +170,7 @@ class DispatchSplitter(TransformComponent):
         for t in tables:
             prose = body[cursor : t.start]
             if prose.strip():
-                out.append(_table_node(breadcrumb, prose.strip(), base + cursor, base + t.start))
+                out.extend(self._prose_segment(prose, base + cursor, breadcrumb))
             span_start, span_end = base + t.start, base + t.end
             if len(t.rows) <= self.table_max_rows:
                 out.append(_table_node(breadcrumb, body[t.start : t.end], span_start, span_end))
@@ -153,8 +187,17 @@ class DispatchSplitter(TransformComponent):
             cursor = t.end
         tail = body[cursor:]
         if tail.strip():
-            out.append(_table_node(breadcrumb, tail.strip(), base + cursor, base + len(body)))
+            out.extend(self._prose_segment(tail, base + cursor, breadcrumb))
         return out
+
+    def _prose_segment(self, prose: str, base: int, breadcrumb: str) -> list[BaseNode]:
+        """A prose region between / around tables: one node when it fits (as
+        before), windowed when it does not (P6 — the same rule as a whole
+        section, so a long run of prose next to a table is not one chunk either)."""
+        windows = self._prose_nodes(prose, base, breadcrumb)
+        if windows is not None:
+            return windows
+        return [_table_node(breadcrumb, prose.strip(), base, base + len(prose))]
 
     def _split_code(self, node: BaseNode, language: str) -> list[BaseNode]:
         """Run LI's tree-sitter `CodeSplitter` for `language` (instantiated on

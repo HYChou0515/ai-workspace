@@ -729,6 +729,14 @@
 #                                           #   on the production splitter; the budget is
 #                                           #   chars so both get about the same text). The
 #                                           #   rerank listing grows accordingly (see docs).
+#     rerank_context_chars: 4000            # how much of that context the LISTWISE reranker
+#                                           #   sees per candidate (chars, centred on the hit).
+#                                           #   All ~20 candidates share ONE prompt; unbounded
+#                                           #   it grows ~4x (English) / ~27x (Chinese) and a
+#                                           #   reranker with a smaller window truncates from
+#                                           #   the FRONT - the question - and returns noise
+#                                           #   silently. null = uncapped (a 1M-window model);
+#                                           #   0 = the bare hit.
 #                                           #   Measure with a #535 eval run before lowering.
 # # Resolution: LLM tool args > caller (context) > default; clamped to max.
 # # Bundled = light (`expand=1, hyde=0, rerank=on`); operators raise expand/hyde

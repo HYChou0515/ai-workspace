@@ -156,6 +156,7 @@ uv run python scripts/run_migrate.py --dry-run \
 
 | 選項 | 帶進來的 PR | 不設會怎樣 | 細節 |
 | --- | --- | --- | --- |
+| `kb.retrieval.rerank_context_chars` | plan-rag-context P6（2026-09-14） | **新增上限，預設 4000**：rerank 每個候選最多看到 4000 字元的前後文（以命中為中心）。沒設時 `context_chars` 會讓 rerank prompt 長 4×／27×；設 `null` 才是不封頂、`0` 只看命中 | configuration.md §9 `rerank_context_chars` |
 | `kb.retrieval.context_chars` | plan-rag-context P2（2026-09-12） | ⚠️ **行為有變**：預設 `2000`——每個檢索命中前後各至少多帶 2000 字元的原文（整塊 chunk、可跨到文件樹上的鄰居檔案），rerank 的 prompt 隨之變長，agent 看到的段落變寬；引用 `[n]` 仍指命中處。設 `0` 回到逐位元相同的舊行為 | configuration.md §9 `context_chars` |
 | `failover.rate_limit_budget_s` | #759（2026-09-03） | ⚠️ **行為有變**：agent 鏈碰到 429 從「快速燒完重試然後 giving up」變成「在原端點等它聲明的窗口」，等待秒數每次 agent run 共用一池，預設上限 2 小時；畫面會出現「請求過於頻繁，N 秒後自動重試」。設 `0` 回到一律切換的舊行為 | configuration.md §11 |
 | `agents.subagent_models` | #770（2026-09-03） | **完全不變**：`run_agent` 不長 `model` 參數，sub-agent 照舊跟 parent turn 同一顆模型（review 以逐位元比對驗證） | configuration.md §7 |
@@ -399,6 +400,18 @@ token」(字元類共用 `kb/tokens.py:CJK_RANGES`)。舊規則下中文沒有�
 受影響的只有沒接 `kb_pipeline` 的 `create_app` 呼叫(測試、離線模式);那些環境的中文文件要重讀一次
 (`POST /api/kb/collections/<collection_id>/reindex`,#390 的 index cache 會先被丟掉)。
 
-順帶一提在真入口量到的另一件事(**未修,另開處理**):管線對 **Markdown / VLM 輸出**走 `MarkdownNodeParser`,
-只按標題切、沒有 token 上限——沒有標題的 `.md`(或 VLM 描述)**不論多長都是 1 塊**(實測 50,038 字元英文 → 1 塊)。
-這是跨語言的 production 缺陷,跟中文無關。
+## 不是資料遷移,但升版後要跑一次:超長 Markdown 段落的重新索引(plan-rag-context P6)
+
+在真入口量到的 production 缺陷:管線對 **Markdown / VLM 輸出**走 `MarkdownNodeParser`,只按標題切、
+**沒有大小上限**——沒有標題的 `.md`(或任何一個超長的段落、VLM 對一頁的描述)**不論多長都是 1 塊、1 個向量**
+(實測 50,038 字元英文 → 1 塊;中文 12,358 字 → 1 塊)。跨語言,跟中文無關。
+
+P6 起,超過 sentence 窗口(256 token)的 Markdown 段落會再被 `SentenceSplitter` 切成多塊(每塊 span 仍是原文的逐字切片、
+帶標題 breadcrumb);**能放進一塊的段落逐位元不變**(#390 index cache 的 key 不受影響)。真入口實測:同一份無標題
+英文 `.md` 從 1 塊 → 35 塊(平均 1,630 字元)、中文 → 80 塊(平均 154 字)。
+
+**chunk 是衍生資料**:升版只影響之後索引的文件,既有的超長段落仍是一塊,直到重新索引。要修的是**含長 Markdown
+段落的文件**——典型是無標題的 `.md`、匯出的筆記、以及所有靠 VLM 描述的圖片 / 掃描頁。找不出哪些的話,整個 collection
+重讀一次(`POST /api/kb/collections/<collection_id>/reindex`;#390 的 index cache 會先被丟掉,不會複製回舊切法)。
+
+怎麼判斷還沒跑:文件頁上一份幾千字、沒有標題的 `.md` chunk 數是 1,就是舊切法。

@@ -580,6 +580,13 @@ class RetrievalSettings:
     # side on the production SentenceSplitter — the budget is chars, so both get
     # about the same amount of text.
     context_chars: int = 2000
+    # plan-rag-context P6: how much of that context the LISTWISE reranker sees
+    # per candidate (chars, centred on the hit). All ~20 candidates go into ONE
+    # prompt, so `context_chars` alone grows it ~4× (English) / ~27× (Chinese);
+    # a reranker whose window is smaller truncates from the front — the
+    # question — and its reply's numbers become noise applied silently. `null`
+    # = uncapped (a 1M-window reranker); `0` = the bare hit; default 4000.
+    rerank_context_chars: int | None = 4000
 
 
 @dataclass(frozen=True)

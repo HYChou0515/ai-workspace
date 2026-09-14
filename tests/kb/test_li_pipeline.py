@@ -1072,3 +1072,40 @@ def test_parser_preview_persists_on_sourcedoc(spec: SpecStar, embedder: HashEmbe
     assert restored.preview is not None and restored.preview.data == b"%PDF-converted"
     # Original upload untouched.
     assert restored.content.data == b"\x00deck"
+
+
+def test_an_oversized_markdown_section_is_windowed_with_verbatim_spans(
+    spec: SpecStar, embedder: HashEmbedder
+):
+    """plan-rag-context P6: `MarkdownNodeParser` splits on headings only, with no
+    size cap — a heading-less `.md` of 50k chars was ONE chunk, one vector
+    (measured through this pipeline), and every VLM description is Markdown
+    too. A section larger than the sentence splitter's window is now windowed
+    by it; each piece's span is a verbatim slice of the canonical text (what
+    citations and the context walk index into) and carries the breadcrumb."""
+    cid = _new_collection(spec)
+    ingestor = Ingestor(spec, pipeline=build_doc_pipeline(embedder=embedder), embedder=embedder)
+    paragraphs = "\n\n".join(f"Paragraph {i}. " + "word " * 120 for i in range(6))
+    data = f"# Notes\n\n{paragraphs}\n".encode()
+    [doc_id] = ingestor.ingest(collection_id=cid, user="alice", filename="notes.md", data=data)
+    text = data.decode()
+
+    chunks = sorted(_chunks_of(spec, doc_id), key=lambda c: c.seq)
+    assert len(chunks) >= 3, "a 3,700-char section must not stay one chunk"
+    for c in chunks:
+        assert c.end - c.start <= 1500  # windowed, not the whole section
+        assert "Notes" in c.text  # the breadcrumb still rides on every piece
+        assert text[c.start : c.end].strip() in c.text  # the span is verbatim
+
+
+def test_a_small_markdown_section_is_byte_identical_to_before(
+    spec: SpecStar, embedder: HashEmbedder
+):
+    # The windowing must not change a section that already fits: same single
+    # chunk, same span — the #390 index cache keys on the chunk set.
+    cid = _new_collection(spec)
+    ingestor = Ingestor(spec, pipeline=build_doc_pipeline(embedder=embedder), embedder=embedder)
+    data = b"# T\n\nshort body here.\n"
+    [doc_id] = ingestor.ingest(collection_id=cid, user="alice", filename="t.md", data=data)
+    [c] = _chunks_of(spec, doc_id)
+    assert (c.start, c.end) == (2, 21)  # what the section parser gives today
