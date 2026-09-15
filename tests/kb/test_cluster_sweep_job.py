@@ -273,3 +273,25 @@ async def test_a_collection_keeps_at_most_one_finished_sweep_row():
         await coord.aclose()
 
     assert [j.status for j in _sweep_jobs(spec, cid)] == [TaskStatus.COMPLETED]
+
+
+async def test_a_collection_whose_sweep_keeps_failing_keeps_at_most_one_row_too():
+    """The bound must hold on the path where it matters most: a collection whose
+    sweep fails every window (an embedder that rejects one candidate) is asked
+    again every window, and with no retry each ask ends FAILED. Pruning only after
+    a SUCCESSFUL sweep would leave one FAILED row per window for as long as the
+    failure lasts — so the prune runs before the sweep, whatever the sweep does."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    _done_run_with_unprojected_proposal(spec, cid, "BOOM")
+    coord = CardGenCoordinator(
+        spec,
+        NullCardDrafter(),
+        reconciler=Reconciler(spec, _BoomEmbedder(), cluster_tau=0.9, merge_tau=0.95),
+    )
+
+    for _ in range(3):
+        coord.enqueue_cluster_sweep(cid)
+        await coord.aclose()
+
+    assert [j.status for j in _sweep_jobs(spec, cid)] == [TaskStatus.FAILED]

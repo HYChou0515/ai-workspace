@@ -526,11 +526,12 @@ def backfill_collection(
     remainder is picked up next tick. Returns the number of members newly projected."""
     rm = spec.get_resource_manager(ClusterMember)
     seen: set[str] = set()
-    # Ids only: this set decides what is already projected, and a member's
-    # payload is an embedding — loading every vector to build it cost ~85 KiB
-    # per member (measured: 5000 members ≈ 420 MiB) for nothing.
-    for r in rm.list_resources((QB["collection_id"] == collection_id).build(), returns=["info"]):
-        seen.add(r.info.resource_id)  # ty: ignore[unresolved-attribute]
+    # Ids only, off the search meta: this set decides what is already projected,
+    # and a member's payload is an embedding — loading every vector to build it
+    # cost ~85 KiB per member (measured: 5000 members ≈ 420 MiB) for nothing,
+    # and `returns=["info"]` would still be one store read per row.
+    for r in rm.list_resources((QB["collection_id"] == collection_id).build(), returns=["meta"]):
+        seen.add(r.meta.resource_id)  # ty: ignore[unresolved-attribute]
     n = 0
     # #511 P2: proposals live in first-class CardProposal rows now (not the nested
     # CardGenRun.proposals), so read the collection's ACTIVE proposals from there.

@@ -442,6 +442,12 @@ class CardGenCoordinator:
         # Only a coordinator with a reconciler ever enqueues one; a job reaching a
         # consumer without one is a wiring bug, and a failed job says so.
         assert self._reconciler is not None
+        # BEFORE the sweep, so the bound holds whatever the sweep does: a
+        # collection whose sweep fails every window (no retry ⇒ FAILED each time)
+        # would otherwise keep one FAILED row per window for as long as the
+        # failure lasts — pruning "after success" is no bound on the path where
+        # rows actually pile up.
+        self._prune_finished_sweeps(collection_id)
         report = self._reconciler.sweep(collection_id)
         _LOGGER.info(
             "card_gen: cluster sweep of %s backfilled=%d merged=%d",
@@ -449,17 +455,16 @@ class CardGenCoordinator:
             report.backfilled,
             report.merged,
         )
-        self._prune_finished_sweeps(collection_id)
 
     def _prune_finished_sweeps(self, collection_id: str) -> None:
         """Hard-delete the collection's other, finished ``cluster_sweep`` rows.
 
         A sweep is asked for on a timer, forever, and every ask is a durable job
-        row plus its status revisions — the one unconditional per-window writer on
-        the platform, and nothing else reclaims job rows. The in-process sweep
-        this replaced left no row behind. Only the running job (PROCESSING, so
-        not matched here) survives, so a collection carries at most one finished
-        sweep between windows. Best effort: housekeeping must not fail the sweep."""
+        row — the one unconditional per-window writer on the platform, and
+        nothing else reclaims job rows. The in-process sweep this replaced left
+        no row behind. The running job is PROCESSING (never matched here), so a
+        collection carries at most one finished sweep — COMPLETED or FAILED —
+        between windows. Best effort: housekeeping must not fail the sweep."""
         done = (
             QB["status"].in_([TaskStatus.COMPLETED, TaskStatus.FAILED])
             & (QB["partition_key"] == collection_id)

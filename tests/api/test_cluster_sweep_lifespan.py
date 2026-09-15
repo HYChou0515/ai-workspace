@@ -197,6 +197,26 @@ def test_the_ask_is_leased_and_skips_a_deleted_collection() -> None:
         assert _sweep_jobs(spec, gone) == []
 
 
+def test_a_pod_that_loses_the_ask_lease_asks_for_nothing() -> None:
+    """The row existing proves the lease is taken, not that losing it does
+    anything: a pod that only CLAIMED and ignored the answer would leave the same
+    row. So: another pod already holds this window (the default 900 s one) — this
+    app boots, ticks first, and must enqueue nothing."""
+    from workspace_app.workflow.triggers import (
+        ScanLease,
+        SpecstarTriggerStore,
+        register_trigger_store,
+    )
+
+    spec = make_spec(default_user="u")
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    register_trigger_store(spec)
+    assert ScanLease(SpecstarTriggerStore(spec), "cluster-sweep", interval_s=900).claim()
+
+    with _app(spec, run_consumers=False):
+        assert not asyncio.run(_until(lambda: bool(_sweep_jobs(spec, cid)), budget_s=1.0))
+
+
 def test_one_collections_bad_ask_does_not_cost_the_others_their_tick() -> None:
     """The producer is per-collection resilient: an enqueue that raises for one
     collection (here, a coordinator that refuses it) still leaves every other

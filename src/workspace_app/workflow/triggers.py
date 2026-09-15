@@ -585,11 +585,8 @@ class SpecstarTriggerStore(ITriggerStore):
                 )
             except PreconditionFailedError:  # pragma: no cover - cross-pod CAS race
                 continue  # a peer moved it between our get and modify → re-read, re-compare
-            # One revision per window per lease adds up (1440/day at a 60 s tick);
-            # only the current one carries meaning, so the trail is pruned here —
-            # housekeeping, never allowed to turn a won claim into a failure.
-            with contextlib.suppress(Exception):
-                rm.prune_revisions(trigger_id, keep_last_n=1)
+            # A draft `modify` rewrites the row's one revision in place, so a lease
+            # row never grows a revision trail however often it is claimed.
             return True
         raise RuntimeError(  # pragma: no cover - only under pathological churn
             f"scan lease CAS exhausted retries for {trigger_id!r}"
@@ -619,9 +616,9 @@ class ScanLease:
     the ledger outlives a deploy, and a number whose meaning depends on the
     interval would make every window after an operator RAISES the interval
     smaller than the stored one — every pod refused, silently, for good. A
-    start time stays comparable across interval changes: raising costs at most
-    one new-interval window before the lease is claimable again, lowering costs
-    nothing. The claim is forward-only inside the store's CAS (``try_advance``),
+    start time stays comparable across interval changes: a change costs at most
+    one window of the NEW interval before the lease is claimable again. The
+    claim is forward-only inside the store's CAS (``try_advance``),
     so two pods whose clocks disagree cannot take turns moving it backwards and
     both scan.
     """
@@ -646,7 +643,7 @@ class ScanLease:
         # keeps its resolution: whole-second arithmetic would make every such
         # window "0", won once and never again.
         interval_ms = max(1, int(round(self._interval_s * 1000)))
-        start_ms = (int(self._now() * 1000) // interval_ms) * interval_ms
+        start_ms = (int(round(self._now() * 1000)) // interval_ms) * interval_ms
         return self._store.try_advance(self._key, start_ms)
 
 

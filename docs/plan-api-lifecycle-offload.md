@@ -68,8 +68,9 @@ pod-local 狀態** —— 還有四個，決定跟 #804 一起做完、不拆：
    ledger 又活得比部署久，operator 一把 interval 調大，新 window 的數字全比存的小 ⇒ 所有 pod 永遠輸、
    無聲、沒有 admin 路由能救。修法換機制：window 改存 **window 起點的 epoch 毫秒**（毫秒是為了讓測試用的 50ms interval 也保有解析度）（意義不隨 interval
    變；調大最多遲一個新 interval、調小免費），比較搬進 store 的 CAS 迴圈（`ITriggerStore.try_advance`，
-   forward-only），每次 claim 後 `prune_revisions(keep_last_n=1)` 把 ledger 的 revision 尾巴修掉
-   （60s 一 tick 是每天 1440 個 revision/lease）。
+   forward-only）。第三輪抓到我在這裡多加的 `prune_revisions(keep_last_n=1)` 是**死碼**——draft
+   `modify` 原地改寫,lease 列永遠只有一個 revision,沒東西可修;已刪。真正會長的是 specstar store
+   每次改寫留下的前一個 uid 孤兒 payload,上游性質、每個 draft 寫入者都一樣,另開 specstar issue。
 4. **D 的 `seed_help_collection_best_effort` 多一個 `index` seam**：lifespan 傳
    `index_coordinator.enqueue`；不傳（scripts / tests）就是原本的 inline `ingestor.index`。
    「best-effort、embedder 掛了不擋開機」這個性質由 job 天然給。
@@ -155,11 +156,13 @@ pod-local 狀態** —— 還有四個，決定跟 #804 一起做完、不拆：
 - **MEDIUM（缺陷 + 回歸）** ask 沒有 fleet-wide 去重（pod 各自的 tick 相位不同，coalesce 只擋在跑的
   那幾毫秒）⇒ worker 每 interval 做 N 次；而且每次 ask 留一列永久 job row（96 × N /天/collection，
   舊 in-process sweep 不留任何東西）。修：ask 上同一個 `ScanLease`（`__scan__:cluster-sweep`）；
-  handler 完成後 `permanently_delete` 同 collection 其他終態的 sweep 列（每個 collection 最多留一列）；
+  handler **開始前** `permanently_delete` 同 collection 其他終態的 sweep 列（每個 collection 最多留一列；
+  第三輪抓到「完成後才 prune」在一直失敗的 collection 上不成立——每個 window 留一列 FAILED——所以搬到前面）；
   `max_retries=0`（queue 預設 3 會把失敗的 sweep 連做四次，下個 window 自然重問）；
   `enqueue_all` 跳過 soft-deleted collection。
 - **MEDIUM（缺陷，量過）** `backfill_collection` 為了建 `seen` 把每個 member **連向量**讀進來
-  （5000 members ≈ 420 MiB）。修：`returns=["info"]` 只讀 id。`merge_near_clusters` 仍全讀 + O(K²)，
+  （5000 members ≈ 420 MiB）。修：`returns=["meta"]`，id 直接來自 search meta，每列零次 store 讀取
+  （第三輪指出 `["info"]` 仍是每列一次讀取）。`merge_near_clusters` 仍全讀 + O(K²)，
   是既有機制，列為後續（見「不做的」）。
 - **LOW（真實性 / 符合度）** 沒釘住的保證：API 入口的 `merge_tau`（只釘了 worker 那半）、producer 的
   per-collection suppress、同步 seed ⇒ `ready`、user-schedule 測試數的是檔案讀取不是索引列舉、

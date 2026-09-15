@@ -527,8 +527,8 @@ def test_a_pod_whose_clock_lags_does_not_rescan_a_window_a_peer_moved_past(
     monotonic: a window at or behind the one already claimed is a loss."""
     register_trigger_store(spec_instance)
     store = SpecstarTriggerStore(spec_instance)
-    ahead = ScanLease(store, "triggers", interval_s=60, now=lambda: 1_000_120.0)  # start 1_000_080
-    behind = ScanLease(store, "triggers", interval_s=60, now=lambda: 1_000_000.0)  # start 999_960
+    ahead = ScanLease(store, "triggers", interval_s=60, now=lambda: 1_000_120.0)  # 1_000_080_000 ms
+    behind = ScanLease(store, "triggers", interval_s=60, now=lambda: 1_000_000.0)  # 999_960_000 ms
 
     assert ahead.claim() is True
     assert behind.claim() is False  # behind the claimed window: not a fresh election
