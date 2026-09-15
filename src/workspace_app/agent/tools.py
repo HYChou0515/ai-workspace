@@ -2326,12 +2326,17 @@ async def save_schedules_impl(ctx: RunContextWrapper[AgentToolContext], schedule
         max_rows=policy.max_rows,
         enabled=policy.sweep_enabled,
     )
+    # The returns above leave the switch as the only gate a row here can fail
+    # (`run` is offered, the file is within the cap, and `indexed` is left at
+    # its default because the write just went through the facade, which
+    # records it), so the sentence is keyed on the switch — the cause — rather
+    # than on the verdict, which would attribute any other failure to it.
     lines = [
         f"- {v.run}: {v.describe}"
         + (f" with {json.dumps(v.payload, sort_keys=True)}" if v.payload else "")
         + (
             f" — next run {v.next_run}"
-            if v.runnable
+            if policy.sweep_enabled
             else " — will not run (scheduled work is switched off on this deployment)"
         )
         for v in views

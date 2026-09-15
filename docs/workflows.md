@@ -893,7 +893,8 @@ sandbox 熱著時的改動要等一個 mirror 週期（預設 5 秒）或那個 
 
 **用 shell 寫出來的檔也會被看到**：turn 結束的對帳（`api/schedule_reconcile.py`）列一次
 workspace 把所有 `is_schedule_file` 的路徑登記進索引，`.workflows/schedules.json` 也在內。
-已知小縫：workflow run 結束沒接對帳——排程跑的 workflow 用 shell step 自己寫的新排程檔，要等
-下一次聊天 turn 才被登記。
+已知小縫（只在 host-managed 部署）：workflow run 結束沒接對帳——排程跑的 workflow 用 shell step
+自己寫的新排程檔，在 host-managed 部署（`_writeback` 交給 host `persist`，不經 mirror）要等下一次
+聊天 turn 才被登記；其他部署每個 sandbox step 結束的 flush 走 mirror 的 `on_write` 就登記了。
 
 完整的決策與被否決的替代方案：[`plan-item-schedules.md`](plan-item-schedules.md)。

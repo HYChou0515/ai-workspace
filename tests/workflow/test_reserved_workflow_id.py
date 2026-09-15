@@ -33,6 +33,7 @@ from workspace_app.workflow.workspace_store import (
     ReservedWorkflowId,
     is_workspace_workflow_path,
     save_workspace_workflow,
+    workspace_workflow_metas,
 )
 
 _DEF = json.dumps(
@@ -112,6 +113,20 @@ def test_the_manifest_resolver_does_not_hand_out_a_workflow_by_the_reserved_id()
     )
 
     assert got is None
+
+
+def test_the_panel_listing_does_not_list_the_schedules_file_as_a_workflow() -> None:
+    """`workspace_workflow_metas` is the Workflows panel's data source, and it
+    reads every `.json` under the folder. The sharp case is a schedules file
+    whose bytes happen to parse as a workflow: without the predicate applied
+    HERE it is listed as a workflow named `schedules`, Run and all."""
+    files, item = WorkspaceFiles(MemoryFileStore()), "item-1"
+    asyncio.run(files.write(item, "/.workflows/schedules.json", _DEF.encode()))
+    asyncio.run(files.write(item, "/.workflows/good.json", _DEF.encode()))
+
+    metas = asyncio.run(workspace_workflow_metas(files, item))
+
+    assert [m.id for m in metas] == ["good"]
 
 
 def test_the_path_predicate_answers_for_paths_outside_the_folder_too() -> None:

@@ -212,8 +212,8 @@ def register_workflow_routes(
         warm-first and the sweep reads the durable snapshot, so a change made
         while the sandbox is warm (the panel's Remove, the tool's save) reaches
         the sweep within one mirror interval (5 s by default) or at the end of
-        the turn that made it. The parity test does not cover that window; the
-        sweep's reference documents the lag for a page's file the same way.
+        the turn that made it. The parity test does not cover that window;
+        `UserScheduleSweeper._one_file` carries the sweep's side of the same note.
         """
         from ..filestore.protocol import FileNotFound
         from ..workflow.offered import offered_workflow_ids

@@ -14,6 +14,7 @@ import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { FileService } from "../api/fileService";
+import { workflowTemplatesApi } from "../api/workflowTemplates";
 import type { ItemSchedules } from "../api/schedules";
 import { renderWithQuery } from "../test/queryWrapper";
 import { DialogProvider } from "./Dialog";
@@ -350,6 +351,67 @@ describe("WorkflowsModal — schedules", () => {
     expect(JSON.parse(writes[0].body)).toEqual({
       schedules: [{ every: "hourly", run: "nightly", with: { ids: [1, 2] } }],
     });
+  });
+
+  it("a deployment with the sweep off gets ONE notice — not also 'starts after the next turn'", async () => {
+    // The two file-level notices contradict each other: "will not run on its
+    // own" and "starts running on its own after the next conversation turn".
+    // The index is kept whether the sweep runs or not, so a file the index has
+    // not seen on a sweep-off deployment is a file that will not run, full stop.
+    listMock.mockResolvedValue([]);
+    schedulesMock.mockResolvedValue(
+      schedules({ enabled: false, indexed: false, rows: [{ ...NIGHTLY, runnable: false }] }),
+    );
+    render(fakeService().svc);
+
+    expect(await screen.findByTestId("schedules-disabled")).toBeInTheDocument();
+    expect(screen.queryByTestId("schedules-unindexed")).toBeNull();
+  });
+
+  it("copying a template refreshes the schedules too — a red row may just have found its workflow", async () => {
+    // Same door as import, one button over: a row whose `run` names a
+    // workflow the item lacks reads red until the workflow exists, and Copy is
+    // one way it comes to exist.
+    listMock.mockResolvedValue([]);
+    schedulesMock.mockResolvedValue(schedules());
+    vi.mocked(workflowTemplatesApi.list).mockResolvedValue([
+      {
+        id: "nightly",
+        title: "Nightly",
+        description: "",
+        tag: "",
+        hint: "",
+        phases: [],
+        compatible: true,
+        problems: [],
+      },
+    ]);
+    render(fakeService().svc);
+    await screen.findByTestId("schedule-row-0");
+    const before = schedulesMock.mock.calls.length;
+
+    fireEvent.click(await screen.findByTestId("workflow-template-copy-nightly"));
+
+    await waitFor(() => expect(schedulesMock.mock.calls.length).toBeGreaterThan(before));
+  });
+
+  it("an empty object or list for `every` reads as daily — Python's `or`, not JavaScript's", async () => {
+    // `{}` and `[]` are falsy to the parser (`row.get("every") or "daily"`) and
+    // truthy to `||`; the sweep runs both rows daily, so the panel must not
+    // draw "[object Object]" or a blank period beside a real next time.
+    listMock.mockResolvedValue([]);
+    schedulesMock.mockResolvedValue(
+      schedules({
+        rows: [
+          { ...NIGHTLY, index: 0, raw: { every: {}, run: "nightly" } },
+          { ...NIGHTLY, index: 1, raw: { every: [], at: [], run: "nightly" } },
+        ],
+      }),
+    );
+    render(fakeService().svc);
+
+    expect(await screen.findByTestId("schedule-row-0")).toHaveTextContent(/^每天 00:00 \(UTC\)/);
+    expect(screen.getByTestId("schedule-row-1")).toHaveTextContent(/^每天 00:00 \(UTC\)/);
   });
 
   it("removing asks once, and a cancel writes nothing", async () => {

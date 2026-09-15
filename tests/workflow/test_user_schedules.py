@@ -453,6 +453,24 @@ def test_writing_null_for_a_field_means_the_same_as_leaving_it_out(field: str) -
     )
 
 
+def test_a_monthly_row_with_dom_null_is_graded_like_one_without_dom() -> None:
+    """The null-means-omitted class, on the one read the sweep of that class
+    missed: the monthly branch read `dom` as `.get("dom", 0)`, so `null` reached
+    the range check as `None` — which `isinstance(_, int)` waved through — while
+    an absent `dom` was refused as 0. The parser decodes both as 0 and the sweep
+    fired the null row on day 1, a day nobody wrote, and the panel showed it as
+    "day 0" with a next time beside it. The class test above uses a daily row,
+    where `dom` is never looked at, so it could not see this."""
+    base = {"every": "monthly", "dom": 15, "at": "09:00", "run": "r"}
+    omitted = {k: v for k, v in base.items() if k != "dom"}
+    nulled = {**base, "dom": None}
+
+    assert validate_user_schedules(_file(omitted)) == validate_user_schedules(_file(nulled)), (
+        "`dom: null` on a monthly row is graded differently from omitting `dom`"
+    )
+    assert validate_user_schedules(_file(nulled)), "a monthly row with no day of month was accepted"
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [("dom", "x"), ("dom", "3"), ("with", ["a", "b"]), ("with", "not a dict")],

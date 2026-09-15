@@ -75,6 +75,9 @@ export function WorkflowsModal({
         await workflowTemplatesApi.copy(slug, itemId, id, { overwrite: true });
       }
       await qc.invalidateQueries({ queryKey: qk.workspaceWorkflows(slug, itemId) });
+      // A schedule row is red while its `run` names a workflow the item lacks,
+      // and a copied template is one way the workflow comes to exist.
+      await qc.invalidateQueries({ queryKey: qk.itemSchedules(slug, itemId) });
       await qc.invalidateQueries({ queryKey: qk.files(itemId) });
     } finally {
       setBusy(false);
@@ -261,7 +264,10 @@ export function WorkflowsModal({
                 {t("schedules.disabled")}
               </p>
             )}
-            {!sched.indexed && (
+            {sched.enabled && !sched.indexed && (
+              // "starts on its own after the next turn" is false beside "will
+              // not run on its own": with the sweep off, the first notice says
+              // all there is to say.
               <p
                 data-testid="schedules-unindexed"
                 role="status"
@@ -433,12 +439,12 @@ function describeSchedule(value: unknown, t: ReturnType<typeof useT>): string {
     value !== null && typeof value === "object" && !Array.isArray(value)
       ? (value as Record<string, unknown>)
       : {};
-  // The parser's rule for every one of these is Python's `or`: a falsy value —
-  // absent, null, "", 0, false — is the default. Mirrored exactly, so the
-  // panel never shows "0 (UTC)" for a row the sweep runs daily at 00:00.
+  // The parser's rule for every one of these is Python's `or`: a falsy value
+  // is the default. Python's falsy JSON values are null, false, 0, "", [] and
+  // {} — the last two are truthy to `||`, so `||` is not the mirror.
   const at = typeof raw.at === "string" && raw.at ? raw.at : "00:00";
   const tz = typeof raw.tz === "string" && raw.tz ? raw.tz : "UTC";
-  const every = raw.every || "daily";
+  const every = pyFalsy(raw.every) ? "daily" : raw.every;
   let words: string;
   switch (every) {
     case "minutes":
@@ -465,13 +471,25 @@ function describeSchedule(value: unknown, t: ReturnType<typeof useT>): string {
   return `${words} (${tz})`;
 }
 
+/** Python's truth test over a decoded JSON value: `null`, `false`, `0`, `""`,
+ * `[]` and `{}` are falsy; everything else is truthy. */
+function pyFalsy(value: unknown): boolean {
+  if (value === null || value === undefined || value === false || value === 0 || value === "") {
+    return true;
+  }
+  if (Array.isArray(value)) return value.length === 0;
+  if (typeof value === "object") return Object.keys(value).length === 0;
+  return false;
+}
+
 /**
  * Order-preserving JSON equality — the identity of a schedule row. NOT
  * `sameShape`: that one compares arrays as sets (right for grant lists, whose
  * order nobody arranges), and two rows that differ only in the order of an array
  * inside `with` are two DIFFERENT schedules to the sweep (`trigger_id_for`
- * fingerprints the payload as written), so Remove must tell them apart.
- * Object key order is not identity (the file was parsed, not diffed as text).
+ * fingerprints the payload with keys sorted and lists as they are), so Remove
+ * must tell them apart. Object key order is not identity (the file was parsed,
+ * not diffed as text).
  */
 function sameJson(a: unknown, b: unknown): boolean {
   if (a === b) return true;

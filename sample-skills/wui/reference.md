@@ -214,7 +214,7 @@ title: Scrap review
 workflows: [judge]
 ```
 
-A rejected `callTool` is a different thing again, and the message says which:
+A rejected `callTool` or `startRun` is a different thing again, and the message says which:
 
 | message | what the reader must change |
 |---|---|

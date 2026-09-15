@@ -187,7 +187,7 @@ parity 測試支撐(sweep 是 oracle);每句面向人的話逐句對程式碼;�
 |---|---|---|---|
 | 路由和 sweep 讀法**不一樣**四處:未索引的檔路由列成會跑;非 UTF-8 路由 500、sweep 用 replace;超上限每列仍給「下次」(**這條是 P7 自己宣稱修了卻只加了檔案層級句子的殘留**);`every: null` 前端畫 "null" | 真實性、回歸 | P4/P6/**P7** | **parity 測試**(`test_schedules_route_parity.py`):同一份檔餵路由與 `sweeper.tick()`,斷言「路由 `runnable` 的列 = sweep 開火的列」,8 種輸入 + 未索引;後端 `schedule_views` 算出 `runnable`(無問題 ∧ 認得 ∧ 未超上限 ∧ sweep 開 ∧ 已索引),只有 runnable 才有「下次」;路由 `decode("utf-8","replace")`、回 `indexed`;`usable_rows`/`schedule_views`/`declared_count` 共用 `file_rows`+`parse_row`(之前是兩份逐列解析) |
 | 「每次執行開新對話」——假的,一條排程重用同一個對話 | 真實性 | P2/P3/P4 | 工具回覆、skill、i18n、plan 改成事實;PR 留言在 push 時更正(commit 改不到 PR) |
-| `raise ReservedWorkflowId` 零覆蓋;範本路由碰到會 500;`resolve_offered_workflow` 沒套保留名判準 | 回歸、符合度 | P6/P7 | 直接打咽喉點的測試;範本路由 422;resolver 套 `is_workspace_workflow_path` |
+| `raise ReservedWorkflowId` 零覆蓋;範本路由碰到會 500;`resolve_offered_workflow` 沒套保留名判準 | 回歸、符合度 | P6/P7 | 直接打咽喉點的測試;範本路由 422;`load_workspace_workflow` 本身拒絕保留名(每個讀者共用的那個 loader;推前草稿先套在 resolver,推之前改到 loader) |
 | Remove 用 `sameShape`(陣列當集合)認列,只差陣列順序的兩條排程會刪錯 | 回歸 | P6 | 改成保序的 `sameJson`;測試:兩列 `with.ids` 順序相反,按第二列只刪第二列(突變回集合語意會紅) |
 | P5 釘住測試沒走 exec 路徑、docstring 卻說涵蓋 | 符合度 | P5 | 兩條測試、各說各釘的東西:**直接寫進 store**(無 sandbox,只有對帳能索引;量過:對帳改 no-op 就紅)和**寫進熱 sandbox**(這種部署 mirror 的 `on_write` hook 先索引,釘的是那扇門不是機制);斷言都在 `TestClient` 裡面——第一版斷言在外面,被 shutdown 的 writeback 滿足,對 reconcile 任何突變都不紅 |
 | `wui_routes` 的 "This app does not offer … to its pages" 就是起因裡的誤診句;`wui/reference.md` 兩句 `run` 規則是 P1 前的 | 符合度 | P1 | 改成「This item has no workflow named X(it has: …)」;reference.md 兩句改成 P1 後的規則 |
@@ -197,11 +197,16 @@ parity 測試支撐(sweep 是 oracle);每句面向人的話逐句對程式碼;�
 
 ## P8 自審(推之前,三把鏡頭審 8b1298cd 的 diff)
 
-新規則「推前先自己審」抓到 **15 條**(去重),全部修進 P8 才推。判準「幾條源自上輪修法」:15 條裡
-**15 條都是 P8 自己的**——這輪的 review 找到的是我這輪寫的東西,不是舊債。最重的三條:
+新規則「推前先自己審」抓到 **12 條**(去重;下面 3 條重的 + 9 條其餘),全部修進 P8 才推。判準
+「幾條源自上輪修法」:**9 條是 P8 草稿自己的,3 條是舊的**——`app.py` 的「opens its OWN conversation」
+docstring 在 master 就有;parity 那個 flake 的成因是 master 既有的 `_warm` 不看 `.ready`,P8 只是把它曝露
+出來;`every`/`at` 的 falsy 顯示是 P4 的。(第一版寫「15 條、15 條都是 P8 自己的」——數字對不回清單,
+歸因也錯,第三輪真實性鏡頭抓到。)最重的三條:
 
 - **釘住測試的斷言在 `TestClient` 外面**,被 shutdown 的 writeback 滿足,對 reconcile 的任何突變都不紅——
-  和 P5 同一個形狀,發生在宣稱要改掉這個形狀的那一輪。修法:斷言搬進 `with`、逾時就紅;拆成兩條各釘一扇門。
+  **不是 P5 的形狀**:P5 原版直接寫 store、沒有 sandbox,shutdown 的 writeback 沒東西可 mirror,對帳改 no-op
+  就紅(第三輪量過);不會紅的是 P8 推前草稿——它喚醒 sandbox 並 `upload`,writeback 才有了第二個答案。
+  (第一版寫「和 P5 同一個形狀」,錯。)修法:斷言搬進 `with`、逾時就紅;拆成兩條各釘一扇門。
 - **parity 的 "all good" 案例 5 次紅 1 次**:同一 tick 開兩個 workflow,第一個喚醒 sandbox,第二個的 manifest
   被 façade 導到還沒 restore 完的 sandbox(master 既有的 `_warm` 不看 `.ready`,memory 標「未修」)。
   修法:tick 前先 `/exec` 喚醒;重跑 10 次 10 綠。
@@ -213,5 +218,30 @@ parity 測試支撐(sweep 是 oracle);每句面向人的話逐句對程式碼;�
 `every`/`at` 的 falsy 值對齊 Python 的 `or`;匯入後 invalidate 補測試;`app.py` 的「opens its OWN
 conversation」docstring;§22.11 補 `runnable`/未索引告示/5 秒窗口;第三輪表格三處歸因與完成式更正。
 
-**live check(短的)**:見 PR 留言——面板一列有「下次」;直接寫進 store 的檔出現「還沒登記」告示;送一個 turn
-後告示消失。開火那條鏈沒再動,不重跑。
+**live check(短的)**:見 PR 留言——面板一列有「下次」、intro 句已改。「還沒登記」告示**沒有看到**:本機
+`kind: local`/mock 的公開入口都立刻索引(façade hook、`/exec` 路由的 flush、mirror hook;agent 自己的 `exec`
+工具寫的檔要等 ≤5 秒的 mirror,手動抓不到),只有 route/parity/vitest 覆蓋。(第一版寫「告示出現、送 turn 後
+消失」——寫在做之前、然後沒做;第三輪真實性鏡頭比對 app log 抓到:零 `POST …/messages`。)開火那條鏈沒再動,
+不重跑。
+
+commit 1f48f11d 的訊息有三處不準:「exec-door pin」——那條測試走的是 `upload`(sandbox 門),不是 `/exec`;
+`schedule_index.py` 的 import 調整沒提;「offered.py, workspace_store.py, user_schedule_sweep.py 100%」只有
+前兩者對這分支的測試檔成立,`workspace_store.py` 要加上分支沒動的既有 `test_workspace_store.py` 才 100%
+(沒蓋到的 129-150 行是分支之前的)。截圖在對話裡交給 user、沒放上 PR。
+
+## P9(第三輪:三把鏡頭審 P8 本身)
+
+判準「幾條源自上輪修法」:回歸鏡頭的結論是 **P8 的碼沒有壞掉任何已出貨的路徑**,推前自審的每條修法都
+有測試守著(它逐條跑過;`enabled`/`indexed` 門和 reconcile 那三條是用突變驗的)。剩下的是:
+
+| 發現 | 鏡頭 | 源自 | 修法(先紅後綠) |
+|---|---|---|---|
+| Copy 範本沒 invalidate 排程區——匯入那條修法的同類,隔壁那顆按鈕 | 回歸 | master(類別是 P8 命名的) | vitest:Copy 後排程重抓 |
+| `every: {}`/`[]` 對 JS 的 `\|\|` 是真、對 Python 的 `or` 是假;面板畫 `[object Object]` | 回歸、真實性 | P4 | `pyFalsy` 列舉 Python 的 falsy JSON 值;vitest 兩列 |
+| sweep 關著時兩則告示互相矛盾(「不會自己跑」+「下一次 turn 後會自己跑」) | 符合度、回歸 | P8 | 未索引告示只在 sweep 開著時畫;vitest |
+| `monthly` + `dom: null` 被放行、開在 1 日、面板寫「0 日」 | 回歸 | 舊債(9e2d9ce4) | `row.get("dom") or 0`,和同函式其他欄位一樣;pytest 對「省略 vs null 同判」 |
+| 工具每列「不會跑」的理由硬寫成開關 | 符合度、回歸 | P8 | 句子改鍵在 `policy.sweep_enabled`(原因)而非 `runnable`(判決) |
+| `workspace_workflow_metas` 套判斷式那一行沒有分支測試 | 符合度 | P6 | 新測試;突變掉判斷式恰好它紅 |
+| 三句假話:live check、「和 P5 同一個形狀」、「15 條」;route docstring 指向不存在的 reference 段;reconcile 測試 docstring 說錯是哪一版不會紅;skill「the same file a page can write」;§22.11 與 PR body 的 known gap 沒限定 host-managed;wui reference 表格開頭只寫 `callTool` | 真實性 | P8/P3 | 上面各段已改;每句對著碼改 |
+
+沒有換機制,不再開一輪。

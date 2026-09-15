@@ -385,7 +385,7 @@ class UserScheduleSweeper:
                     item_id,
                     f"{path}#{row.run}",
                     logging.WARNING,
-                    "user schedules: %s %s: %s — that row will not run",
+                    "user schedules: %s %s: %s That row will not run.",
                     item_id,
                     path,
                     no_such_workflow(row.run, offered),

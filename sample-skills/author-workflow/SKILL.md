@@ -71,8 +71,8 @@ dev team build it as code (`run.py`).
 
 "Every night", "every Monday at nine", "the first of the month" — a saved workflow can run
 without anyone pressing Run. Declare it with **`save_schedules`**: it writes this item's
-`.workflows/schedules.json`, the same file a page can write, and the platform's sweep reads
-it. The tool's own description has the row format (`run`, `every`, `at`, `dow`, `dom`, `tz`,
+`.workflows/schedules.json` — the same format and the same sweep as a page's own
+`schedules.json`, but this item's file, not a page's. The tool's own description has the row format (`run`, `every`, `at`, `dow`, `dom`, `tz`,
 `with`); it **validates before saving** and refuses a `run` this item does not have, so save
 the workflow first, then the schedule.
 

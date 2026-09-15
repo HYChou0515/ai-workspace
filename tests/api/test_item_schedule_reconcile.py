@@ -6,9 +6,11 @@ the mirror's `on_write` (WUI P40 — fires when the sandbox is mirrored to the
 store, which a host-managed deployment never does through the mirror) and the
 turn-end reconcile (WUI P48 — lists the workspace after every chat turn). Both
 predate the item-level location. Two doors, two tests, and each says what it
-pins — because the first version of this file asserted AFTER the `TestClient`
-exit, where the shutdown writeback satisfied it, and could not redden on any
-change to the reconcile at all.
+pins — because a rewrite of this file (the pre-push P8 draft, which woke a
+sandbox and uploaded into it) asserted AFTER the `TestClient` exit, where the
+shutdown writeback satisfied it, and could not redden on any change to the
+reconcile at all. P5's original — a raw-store write, no sandbox — did redden;
+it was the sandbox door that made the shutdown writeback a second answer.
 
 Both assert INSIDE the client, at the end of the turn: a poll that times out
 fails.

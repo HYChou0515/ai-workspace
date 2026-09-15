@@ -242,7 +242,7 @@ def validate_user_schedules(raw: str) -> list[str]:
         if every == "weekly" and row.get("dow") not in _DOW:
             problems.append(f"{where}: a weekly schedule needs `dow` ({', '.join(_DOW)}).")
         if every == "monthly":
-            dom = row.get("dom", 0)
+            dom = row.get("dom") or 0  # `null` means omitted, as for every field above
             # RANGE only. The type is graded once, above, on every row —
             # because the parser decodes `dom` on every row. Testing
             # `isinstance` here as well meant one mistake produced two
