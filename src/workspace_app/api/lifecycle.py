@@ -240,21 +240,38 @@ def build_lifespan(
         — backfill any pending proposal / open question that has no ClusterMember yet
         (a run finalized before P6, or by a build with no embedder), then merge
         race-split clusters — so the grouped 待審核 inbox converges without a reindex.
-        A pure producer, like ``reflect_sweeper``: each tick enqueues one
-        ``cluster_sweep`` card-gen job per collection and the card-gen worker does
-        the fold (``CardGenCoordinator.enqueue_cluster_sweep`` coalesces, so N pods
-        asking on the same tick cost one job). Tick-first (then sleep) so a fresh
-        deploy catches the store up at startup; off the loop (blocking specstar
-        I/O). Per-collection resilient — one bad enqueue must not cost the rest
-        their tick — and the whole tick is guarded so it never wedges the loop. The
+        A pure producer, like ``reflect_sweeper``: each window ONE pod (the
+        ``ScanLease`` below) enqueues one ``cluster_sweep`` card-gen job per live
+        collection and the card-gen worker does the fold; the coordinator's own
+        coalescing (``enqueue_cluster_sweep``) covers an ask that overlaps a sweep
+        still queued or running. Tick-first (then sleep) so a fresh deploy catches
+        the store up at startup; off the loop (blocking specstar I/O).
+        Per-collection resilient — one bad enqueue must not cost the rest their
+        tick — and the whole tick is guarded so it never wedges the loop. The
         coordinator — built after the FastAPI app — is read off
         ``app.state.card_gen_coordinator`` post-construction, like the others."""
         from ..resources import Collection
+        from ..workflow.triggers import ScanLease, SpecstarTriggerStore
+
+        # One asker per window across the fleet. Coalescing on the coordinator
+        # only collapses asks that land while a sweep is still queued/running —
+        # milliseconds on a converged collection — and pods tick on their own
+        # boot-relative clocks, so without this every pod's tick would land its
+        # own job: N sweeps per collection per interval on the worker, and N
+        # durable job rows. Same lease the scheduled-work sweeps take.
+        lease = ScanLease(
+            SpecstarTriggerStore(spec), "cluster-sweep", interval_s=cluster_sweep_seconds
+        )
 
         def enqueue_all() -> None:
+            if not lease.claim():
+                return  # another pod asked this window
             coordinator = app.state.card_gen_coordinator
             rm = spec.get_resource_manager(Collection)
-            for r in rm.list_resources(QB.all()):  # ty: ignore[invalid-argument-type]
+            # `list_resources` happily returns soft-deleted rows; a deleted
+            # collection would otherwise be asked about every window, forever.
+            live = (QB.is_deleted() == False).build()  # noqa: E712
+            for r in rm.list_resources(live):
                 with contextlib.suppress(Exception):
                     coordinator.enqueue_cluster_sweep(r.info.resource_id)  # ty: ignore[unresolved-attribute]
 
@@ -547,6 +564,14 @@ def build_lifespan(
         register_conversation_todos(spec)
         register_conversation_goal(spec)
         register_work_calendar(spec)  # #615 P1
+        # #429 P7 / #804: the shared window-ledger model — the per-trigger claims AND
+        # every scan lease (triggers, page schedules, the cluster-sweep ask) live on
+        # it. Registered post-apply so its CRUD routes are never emitted (same
+        # reason as the blob-GC lease), unconditionally, because the cluster-sweep
+        # ask below takes a lease on it whether or not scheduled work is on.
+        from ..workflow.triggers import register_trigger_store
+
+        register_trigger_store(spec)
         bg = [asyncio.create_task(idle_killer()), asyncio.create_task(mirror_sweeper(app))]
         if perf_trace.enabled():
             # Only ever sleeps, so any delay it observes beyond its own sleep is
@@ -594,12 +619,7 @@ def build_lifespan(
             bg.append(asyncio.create_task(notification_delivery_sweeper()))
 
         if trigger_check_interval is not None:
-            # #429 P7: register the shared window-ledger model (post-apply, so its CRUD
-            # routes are never emitted — same reason as the blob-GC lease above), then run
-            # the schedule-trigger poll loop.
-            from ..workflow.triggers import register_trigger_store
-
-            register_trigger_store(spec)
+            # #429 P7: the schedule-trigger poll loop (its ledger is registered above).
             bg.append(asyncio.create_task(trigger_sweeper(app)))
             logger.debug("lifespan: schedule-trigger sweeper enabled")
         try:
@@ -621,23 +641,30 @@ def build_lifespan(
                 with contextlib.suppress(BaseException):
                     await engine.aclose()
             logger.debug("lifespan: draining coordinators + kernels")
-            # Drain in-flight wiki maintenance before exit (bounded). Pending
-            # jobs are durable — they survive to be picked up after restart.
-            with contextlib.suppress(BaseException):
-                await app.state.wiki_coordinator.aclose()
-            with contextlib.suppress(BaseException):
-                await app.state.index_coordinator.aclose()
-            if app.state.sanity_coordinator is not None:
+            # Drain in-flight jobs before exit (bounded) — ONLY on a pod that
+            # consumes. `aclose()` starts a consumer on a coordinator that never
+            # consumed "so it still flushes"; on a pure producer (#312,
+            # `run_consumers=False`) that would run every pending job on this
+            # pod as it exits — the sweeps and index jobs it enqueued precisely
+            # so a worker would do them (#804) — on every rollout, holding the
+            # pod past its grace period. A pure producer has nothing in flight;
+            # pending jobs are durable and the workers pick them up.
+            if run_consumers:
                 with contextlib.suppress(BaseException):
-                    await app.state.sanity_coordinator.aclose()
-            if app.state.eval_coordinator is not None:
+                    await app.state.wiki_coordinator.aclose()
                 with contextlib.suppress(BaseException):
-                    await app.state.eval_coordinator.aclose()
-            if app.state.graph_coordinator is not None:
+                    await app.state.index_coordinator.aclose()
+                if app.state.sanity_coordinator is not None:
+                    with contextlib.suppress(BaseException):
+                        await app.state.sanity_coordinator.aclose()
+                if app.state.eval_coordinator is not None:
+                    with contextlib.suppress(BaseException):
+                        await app.state.eval_coordinator.aclose()
+                if app.state.graph_coordinator is not None:
+                    with contextlib.suppress(BaseException):
+                        await app.state.graph_coordinator.aclose()
                 with contextlib.suppress(BaseException):
-                    await app.state.graph_coordinator.aclose()
-            with contextlib.suppress(BaseException):
-                await app.state.card_gen_coordinator.aclose()
+                    await app.state.card_gen_coordinator.aclose()
             await kernels.shutdown_all()
             await registry.close_all()
             logger.info("lifespan: shutdown complete")

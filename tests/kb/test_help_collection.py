@@ -67,7 +67,11 @@ def test_seed_creates_collection_and_ingests_docs(
     coll = spec.get_resource_manager(Collection).get(cid).data
     assert isinstance(coll, Collection)
     assert coll.name == HELP_COLLECTION_NAME
-    assert {d.path for d in _docs_in(spec, cid)} == {"getting-started.md", "CHANGELOG.md"}
+    docs = _docs_in(spec, cid)
+    assert {d.path for d in docs} == {"getting-started.md", "CHANGELOG.md"}
+    # The synchronous path indexes inline: a doc is `ready` when the call returns
+    # (#804 hands indexing to a queue ONLY when an `index` seam is given).
+    assert {d.status for d in docs} == {"ready"}
 
 
 def test_reseeding_is_idempotent(

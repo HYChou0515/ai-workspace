@@ -37,6 +37,7 @@ durable FE-facing state, so there is no separate state row to keep coherent.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import Callable
 
@@ -201,11 +202,15 @@ class CardGenCoordinator:
         un-projected candidates + fold race-split clusters (:meth:`Reconciler.sweep`)
         — to run HERE, on the card-gen consumer, not on the caller. Synchronous (a
         pure specstar enqueue) so the API's timer thread can call it directly.
-        Coalesces onto a sweep already queued/running for the collection, so N API
-        pods asking on the same tick cost one job; ``partition_key`` = the collection
+        Coalesces onto a sweep already queued/running for the collection (the
+        fleet-wide "one asker per window" is the API's ``ScanLease``; this covers
+        an ask that overlaps a sweep in flight); ``partition_key`` = the collection
         id so it also serialises with the collection's ``finalize`` (both write the
-        same ``ClusterMember`` rows). No-op when no reconciler is wired — there is no
-        embedder to project with, and the job would only fail on the worker."""
+        same ``ClusterMember`` rows). A finished sweep prunes the collection's
+        earlier finished ones (:meth:`_prune_finished_sweeps`), so a timer that
+        asks forever leaves a bounded number of rows. No-op when no reconciler is
+        wired — there is no embedder to project with, and the job would only fail
+        on the worker."""
         if self._reconciler is None:
             return
         actor = requested_by if requested_by is not None else self._get_user_id()
@@ -216,6 +221,11 @@ class CardGenCoordinator:
                 CardGenJob(
                     payload=CardGenPayload(collection_id=collection_id, kind="cluster_sweep"),
                     partition_key=collection_id,
+                    # No retry budget: the next window asks again, which is the
+                    # cadence the old in-process sweep retried at. The queue's
+                    # default (3) would run a failing collection's sweep four
+                    # times back to back on the worker.
+                    max_retries=0,
                 )
             )
 
@@ -439,6 +449,26 @@ class CardGenCoordinator:
             report.backfilled,
             report.merged,
         )
+        self._prune_finished_sweeps(collection_id)
+
+    def _prune_finished_sweeps(self, collection_id: str) -> None:
+        """Hard-delete the collection's other, finished ``cluster_sweep`` rows.
+
+        A sweep is asked for on a timer, forever, and every ask is a durable job
+        row plus its status revisions — the one unconditional per-window writer on
+        the platform, and nothing else reclaims job rows. The in-process sweep
+        this replaced left no row behind. Only the running job (PROCESSING, so
+        not matched here) survives, so a collection carries at most one finished
+        sweep between windows. Best effort: housekeeping must not fail the sweep."""
+        done = (
+            QB["status"].in_([TaskStatus.COMPLETED, TaskStatus.FAILED])
+            & (QB["partition_key"] == collection_id)
+        ).build()
+        for r in self._job_rm.list_resources(done):
+            if not (isinstance(r.data, CardGenJob) and r.data.payload.kind == "cluster_sweep"):
+                continue
+            with contextlib.suppress(Exception):
+                self._job_rm.permanently_delete(r.info.resource_id)  # ty: ignore[unresolved-attribute]
 
     def _handle_split(self, payload: CardGenPayload, requester: str) -> None:
         """Plan the run: mark it running, then fan out one ``process`` job per

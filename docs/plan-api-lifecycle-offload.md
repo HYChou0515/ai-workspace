@@ -63,8 +63,13 @@ pod-local 狀態** —— 還有四個，決定跟 #804 一起做完、不拆：
    的語意（「最晚會遲到多久」）一致。**每個 schedule / trigger 自己的 window claim 保留**
    （跨重啟的冪等性靠它）。review 抓到一條：底層 `try_claim` 對「不同的 window」一律前進
    （catch-up 觸發要這樣），對 lease 卻表示時鐘差一個 interval 的兩顆 pod 會輪流前進/後退、
-   兩邊都掃 —— lease 靜默消失；所以 `ScanLease.claim` 是**單調的**（先讀 `last_window`，
-   不比它新的 window 一律輸）。
+   兩邊都掃 —— lease 靜默消失；所以 `ScanLease.claim` 是**單調的**。review 第二輪（P9）再抓到
+   兩條：(a) 單調守衛是 read-then-CAS，不在 CAS 裡；(b) **致命的**：window 存的是 `now // interval`，
+   ledger 又活得比部署久，operator 一把 interval 調大，新 window 的數字全比存的小 ⇒ 所有 pod 永遠輸、
+   無聲、沒有 admin 路由能救。修法換機制：window 改存 **window 起點的 epoch 秒**（意義不隨 interval
+   變；調大最多遲一個新 interval、調小免費），比較搬進 store 的 CAS 迴圈（`ITriggerStore.try_advance`，
+   forward-only），每次 claim 後 `prune_revisions(keep_last_n=1)` 把 ledger 的 revision 尾巴修掉
+   （60s 一 tick 是每天 1440 個 revision/lease）。
 4. **D 的 `seed_help_collection_best_effort` 多一個 `index` seam**：lifespan 傳
    `index_coordinator.enqueue`；不傳（scripts / tests）就是原本的 inline `ingestor.index`。
    「best-effort、embedder 掛了不擋開機」這個性質由 job 天然給。
@@ -99,7 +104,7 @@ pod-local 狀態** —— 還有四個，決定跟 #804 一起做完、不拆：
      的 `GcStats` 反映它（釘 worker 那條接線；突變：拿掉 kwarg 必紅）。
   5. `select_coordinator(bundle, "maintenance")` 回 maintenance coordinator。
 
-### P5 — 掃描 lease：`user_schedule_loop` + `trigger_sweeper` 併成一條、一個 window 一顆 pod
+### P5 — 掃描 lease：`user_schedule_loop` + `trigger_sweeper` 各自一個 lease、一個 window 一顆 pod
 
 - `workflow/triggers.py`：`ScanLease(store, key, interval_s=…)`；`TriggerSweeper(lease=…)` 的
   `tick()` 先 `claim()`；輸 ⇒ 整個 tick 不做。`UserScheduleSweeper(lease=…)` 同。`lease=None`
@@ -137,7 +142,35 @@ pod-local 狀態** —— 還有四個，決定跟 #804 一起做完、不拆：
   `docs/subsystems/boot-and-config.md`（lifespan 敘述：seed 只 store、sweeper 兩類）。
 - 對抗式 review 一輪（換鏡頭：符合度 / 真實性 / 回歸），有發現就砍 CI 重推。
 
+### P9 — review 第二輪（四把鏡頭平行：符合度 / 真實性 / 缺陷 / 回歸）
+
+最嚴重的兩條都在**這個 PR 自己加的機制**上，不在被搬走的工作裡：
+
+- **HIGH（缺陷）** `ScanLease` 的 window 編碼隨 interval 變意義（見決定 3 的補記）。
+- **MEDIUM（回歸）** lifespan 關機時對每個 coordinator `aclose()`，而 `aclose` 對「從沒 consume
+  過」的 coordinator 會**先起一個 consumer** 把 pending job 做完 —— pure-producer pod 在每次 rollout
+  關機時把搬走的工作（sweep、help 文件的 chunk + embed、連使用者的 card-gen）全做在 API 上，並拖住
+  grace period。機制是舊的，這個 PR 讓它每顆 pod 都命中。修：`run_consumers` 為假時不 `aclose`
+  coordinator（pending job 是耐久的，worker 會撿）。
+- **MEDIUM（缺陷 + 回歸）** ask 沒有 fleet-wide 去重（pod 各自的 tick 相位不同，coalesce 只擋在跑的
+  那幾毫秒）⇒ worker 每 interval 做 N 次；而且每次 ask 留一列永久 job row（96 × N /天/collection，
+  舊 in-process sweep 不留任何東西）。修：ask 上同一個 `ScanLease`（`__scan__:cluster-sweep`）；
+  handler 完成後 `permanently_delete` 同 collection 其他終態的 sweep 列（每個 collection 最多留一列）；
+  `max_retries=0`（queue 預設 3 會把失敗的 sweep 連做四次，下個 window 自然重問）；
+  `enqueue_all` 跳過 soft-deleted collection。
+- **MEDIUM（缺陷，量過）** `backfill_collection` 為了建 `seen` 把每個 member **連向量**讀進來
+  （5000 members ≈ 420 MiB）。修：`returns=["info"]` 只讀 id。`merge_near_clusters` 仍全讀 + O(K²)，
+  是既有機制，列為後續（見「不做的」）。
+- **LOW（真實性 / 符合度）** 沒釘住的保證：API 入口的 `merge_tau`（只釘了 worker 那半）、producer 的
+  per-collection suppress、同步 seed ⇒ `ready`、user-schedule 測試數的是檔案讀取不是索引列舉、
+  worker 測試缺陽性對照；CLAUDE.md 的「indexed queries」與「唯一例外」兩句不對（`goal_offhours` 與
+  `notification_delivery` 也不是 pod-local / 純 producer，各有理由）；`config.example.yaml` 註解過時。
+  全部補齊。
+
 ## 不做的
+
+- `merge_near_clusters` 的串流化（per-key 累加取代全讀 + O(K²) 配對）：換機制，量到的成本是
+  300 clusters 2.8s / 600 clusters 10.9s，另開票。
 
 - **blob GC 留在 API**（決定 0）。
 

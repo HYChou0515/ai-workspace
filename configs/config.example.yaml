@@ -719,17 +719,22 @@
 # # Bundled = light (`expand=1, hyde=0, rerank=on`); operators raise expand/hyde
 # # when recall trumps latency. Setting max below default is fine — `min(...)`
 # # clamps the default down too.
-#   cluster:                                # #506: card-gen reconcile + cluster-sweeper
+#   cluster:                                # #506: card-gen reconcile + cluster-sweep
 #                                           #   thresholds (dedup duplicate proposals + the
 #                                           #   questions raised across runs). All τ are cosine
 #                                           #   SIMILARITY in [0,1]; HIGHER = stricter (fewer
 #                                           #   merges / suppressions). Exact-key overlap ignores
 #                                           #   these. Lower them to dedup more aggressively.
+#                                           #   Every τ reaches the reconciler on the card-gen
+#                                           #   worker (#804), where both the finalize-time
+#                                           #   reconcile and the periodic sweep run.
 #     cluster_tau: 0.9                      #   join a candidate to a cluster at >= this sim
 #     suppress_tau: 0.92                    #   >= this near a card (or a wiki hit) → auto-drop
 #     update_tau: 0.8                       #   >= this (but < suppress) → suggest updating that card
-#     merge_tau: 0.95                       #   background sweeper folds clusters within this sim
-#     sweep_interval_seconds: 900           #   how often the API sweep backfills + folds clusters
+#     merge_tau: 0.95                       #   the sweep folds clusters within this sim
+#     sweep_interval_seconds: 900           #   how often the API ASKS for each collection's sweep
+#                                           #   (a card-gen job; one asker per window fleet-wide).
+#                                           #   The API does none of the sweep itself.
 #   disclosure:                             # issue #605: "answer exists, but you lack
 #     enabled: true                         #   permission" disclosure. true (default) = every
 #                                           #   KB turn runs a scores-only probe over the

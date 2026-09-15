@@ -396,6 +396,16 @@ class ITriggerStore(abc.ABC):
         run slot (``run_id``/``attempts``) — a fresh window is a fresh run."""
 
     @abc.abstractmethod
+    def try_advance(self, trigger_id: str, window: int) -> bool:
+        """Atomically advance ``trigger_id``'s ledger to ``window`` IFF ``window`` is
+        strictly newer than what it holds. Returns True for the single caller that
+        moved it forward, False when the ledger already holds this window or a later
+        one. Unlike :meth:`try_claim` (which advances to ANY different window — right
+        for catch-up firing), the comparison is inside the CAS, so a caller that read
+        a stale ledger cannot move it backwards. The window is an epoch-second start,
+        so its ordering does not depend on any interval. A #804 scan lease's claim."""
+
+    @abc.abstractmethod
     def release_claim(self, trigger_id: str, claimed: str, back_to: str) -> None:
         """Give back a claim whose run never started, so the window can be tried again.
 
@@ -551,6 +561,39 @@ class SpecstarTriggerStore(ITriggerStore):
             f"trigger claim CAS exhausted retries for {trigger_id!r}"
         )
 
+    def try_advance(self, trigger_id: str, window: int) -> bool:
+        rm = self._spec.get_resource_manager(_TriggerWindow)
+        row = _TriggerWindow(trigger_id=trigger_id, last_window=str(window))
+        try:
+            rm.create(row, resource_id=trigger_id, if_not_exists=True)  # ty: ignore[unknown-argument]
+            return True
+        except DuplicateResourceError:
+            pass  # a ledger row already exists — CAS-advance it below
+        for _ in range(_MAX_CAS_RETRIES):
+            res = rm.get(trigger_id)
+            data = res.data
+            assert isinstance(data, _TriggerWindow)
+            if int(data.last_window) >= window:
+                return False  # this window, or a later one, is already claimed
+            try:
+                rm.modify(
+                    trigger_id,
+                    row,
+                    status=RevisionStatus.draft,
+                    expected_etag=res.info.etag,  # ty: ignore[unknown-argument]
+                )
+            except PreconditionFailedError:  # pragma: no cover - cross-pod CAS race
+                continue  # a peer moved it between our get and modify → re-read, re-compare
+            # One revision per window per lease adds up (1440/day at a 60 s tick);
+            # only the current one carries meaning, so the trail is pruned here —
+            # housekeeping, never allowed to turn a won claim into a failure.
+            with contextlib.suppress(Exception):
+                rm.prune_revisions(trigger_id, keep_last_n=1)
+            return True
+        raise RuntimeError(  # pragma: no cover - only under pathological churn
+            f"scan lease CAS exhausted retries for {trigger_id!r}"
+        )
+
 
 class ScanLease:
     """One pod per window gets to SCAN (#804); the others skip the tick entirely.
@@ -570,6 +613,16 @@ class ScanLease:
     one interval late, which is what the interval already promised. The
     per-trigger claim stays: it is what keeps a window from firing twice across
     restarts, and this lease does not replace it.
+
+    The window is the window's START in epoch seconds, not ``now // interval``:
+    the ledger outlives a deploy, and a number whose meaning depends on the
+    interval would make every window after an operator RAISES the interval
+    smaller than the stored one — every pod refused, silently, for good. A
+    start time stays comparable across interval changes: raising costs at most
+    one new-interval window before the lease is claimable again, lowering costs
+    nothing. The claim is forward-only inside the store's CAS (``try_advance``),
+    so two pods whose clocks disagree cannot take turns moving it backwards and
+    both scan.
     """
 
     def __init__(
@@ -587,18 +640,9 @@ class ScanLease:
 
     def claim(self) -> bool:
         """True for the one pod that scans this window. Blocking specstar I/O —
-        call it off the loop, like the store's other calls.
-
-        Monotonic, unlike the per-trigger claim underneath it: that one advances
-        to ANY different window (right for catch-up firing), which for a lease
-        means two pods whose clocks differ by an interval would take turns
-        "advancing" backwards and forwards and both scan every tick — the lease
-        silently gone. A window at or behind the one already claimed is a loss."""
-        window = int(self._now() // self._interval_s)
-        last = self._store.last_window(self._key)
-        if last and int(last) >= window:
-            return False
-        return self._store.try_claim(self._key, str(window))
+        call it off the loop, like the store's other calls."""
+        start = int(self._now() // self._interval_s) * int(self._interval_s)
+        return self._store.try_advance(self._key, start)
 
 
 StartTrigger = Callable[["ScheduleTrigger", str], Awaitable[str | None]]

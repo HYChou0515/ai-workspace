@@ -267,8 +267,16 @@ def test_one_pod_per_window_reads_the_pages_schedules():
     spec = _spec()
     ScheduleIndex(spec).record(ITEM, PATH)
     started = _Started()
-    files = _Files(**{f"{ITEM}{PATH}": _file(NOON)})  # nothing due: only the READS are counted
+    files = _Files(**{f"{ITEM}{PATH}": _file(NOON)})  # nothing due: only the SCANS are counted
+    listings: list[int] = []
     reads: list[str] = []
+
+    class _CountedIndex(ScheduleIndex):
+        """The scan's first step is listing the index; a loser must not even do that."""
+
+        def items_with_paths(self) -> list[tuple[str, list[str]]]:
+            listings.append(1)
+            return super().items_with_paths()
 
     async def counted_read(item_id: str, path: str) -> bytes:
         reads.append(item_id)
@@ -279,7 +287,7 @@ def test_one_pod_per_window_reads_the_pages_schedules():
     def pod() -> UserScheduleSweeper:
         return UserScheduleSweeper(
             spec=spec,
-            index=ScheduleIndex(spec),
+            index=_CountedIndex(spec),
             read=counted_read,
             read_live=counted_read,
             start=started,
@@ -292,11 +300,13 @@ def test_one_pod_per_window_reads_the_pages_schedules():
 
     asyncio.run(pod().tick())
     asyncio.run(pod().tick())
-    assert reads == [ITEM]  # one pod read the page this window; the peer did not
+    assert len(listings) == 1  # one pod listed the index this window; the peer did not
+    assert reads == [ITEM]  # …nor read the page
 
     clock["t"] += 60
     asyncio.run(pod().tick())
-    assert reads == [ITEM, ITEM]  # a new window, a new scan
+    assert len(listings) == 2  # a new window, a new scan
+    assert reads == [ITEM, ITEM]
 
 
 def test_the_next_day_is_a_new_window():

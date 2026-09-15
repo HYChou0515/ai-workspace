@@ -162,32 +162,38 @@ async def test_the_sweep_folds_at_the_reconcilers_threshold_not_a_number_of_its_
     assert {m.cluster_key for m in _members(spec, cid)} == {"zeta", "alpha"}
 
 
-async def test_the_card_gen_worker_folds_at_the_configured_merge_tau():
+def test_the_card_gen_worker_folds_at_the_configured_merge_tau():
     """`kb.cluster.merge_tau` reached the API sweeper before; the worker is where
     the sweep runs now, so the knob has to reach the worker's bundle — through its
     real composition root, or a forgotten kwarg leaves the setting silently dead."""
+    import asyncio
     import dataclasses
 
     from workspace_app.config.schema import Settings
     from workspace_app.worker.__main__ import build_bundle
 
-    spec = make_spec(default_user="u")
-    cid = _collection(spec)
-    _member(spec, cid, "z1", cluster_key="zeta", vec=_onehot(0))
-    _member(spec, cid, "a1", cluster_key="alpha", vec=_onehot(0))
-    settings = Settings()
-    settings = dataclasses.replace(
-        settings,
-        kb=dataclasses.replace(
-            settings.kb, cluster=dataclasses.replace(settings.kb.cluster, merge_tau=1.01)
-        ),
-    )
-    coord = build_bundle(settings, spec).card_gen
+    def keys_after_worker_sweep(merge_tau: float) -> set[str]:
+        spec = make_spec(default_user="u")
+        cid = _collection(spec)
+        _member(spec, cid, "z1", cluster_key="zeta", vec=_onehot(0))
+        _member(spec, cid, "z2", cluster_key="zeta", vec=_onehot(0))
+        _member(spec, cid, "a1", cluster_key="alpha", vec=_onehot(0))
+        settings = Settings()
+        settings = dataclasses.replace(
+            settings,
+            kb=dataclasses.replace(
+                settings.kb, cluster=dataclasses.replace(settings.kb.cluster, merge_tau=merge_tau)
+            ),
+        )
+        coord = build_bundle(settings, spec).card_gen
+        coord.enqueue_cluster_sweep(cid)
+        asyncio.run(coord.aclose())
+        return {m.cluster_key for m in _members(spec, cid)}
 
-    coord.enqueue_cluster_sweep(cid)
-    await coord.aclose()
-
-    assert {m.cluster_key for m in _members(spec, cid)} == {"zeta", "alpha"}
+    assert keys_after_worker_sweep(1.01) == {"zeta", "alpha"}  # unreachable ⇒ no fold
+    # The control: a reachable threshold folds — so "no fold" above means the knob
+    # arrived, not that no reconciler was wired at all (both leave the keys apart).
+    assert keys_after_worker_sweep(0.5) == {"zeta"}
 
 
 def test_a_converged_collection_sweeps_to_a_zero_report():
@@ -212,9 +218,11 @@ class _BoomEmbedder:
 
     def __init__(self) -> None:
         self._h = HashEmbedder(dim=EMBED_DIM)
+        self.booms = 0
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         if any("BOOM" in t for t in texts):
+            self.booms += 1
             raise RuntimeError("embed exploded")
         return self._h.embed_documents(texts)
 
@@ -231,10 +239,11 @@ async def test_one_collections_failing_sweep_does_not_hold_up_another():
     good = _collection(spec)
     _done_run_with_unprojected_proposal(spec, bad, "BOOM")
     _done_run_with_unprojected_proposal(spec, good, "OK")
+    boom = _BoomEmbedder()
     coord = CardGenCoordinator(
         spec,
         NullCardDrafter(),
-        reconciler=Reconciler(spec, _BoomEmbedder(), cluster_tau=0.9, merge_tau=0.95),
+        reconciler=Reconciler(spec, boom, cluster_tau=0.9, merge_tau=0.95),
     )
 
     coord.enqueue_cluster_sweep(bad)
@@ -244,3 +253,23 @@ async def test_one_collections_failing_sweep_does_not_hold_up_another():
     assert [m.ref_id for m in _members(spec, good) if m.kind == "proposal"] == ["0"]
     assert _members(spec, bad) == []
     assert [j.status for j in _sweep_jobs(spec, bad)] == [TaskStatus.FAILED]
+    # Tried ONCE. The queue's default retry budget would run a failing sweep four
+    # times back to back; the next window asks again, which is retry enough — and
+    # the cadence the in-process sweep this replaced retried at.
+    assert boom.booms == 1
+
+
+async def test_a_collection_keeps_at_most_one_finished_sweep_row():
+    """Every ask is a durable job row — on a timer, forever, on the one platform
+    writer that fires with nobody around. The in-process sweep this replaced left
+    nothing behind; this one cleans up after itself: a finished sweep hard-deletes
+    the collection's earlier finished ones, so the rows do not grow with uptime."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    coord = _coordinator(spec)
+
+    for _ in range(3):
+        coord.enqueue_cluster_sweep(cid)
+        await coord.aclose()
+
+    assert [j.status for j in _sweep_jobs(spec, cid)] == [TaskStatus.COMPLETED]

@@ -49,6 +49,13 @@ class FakeStore(ITriggerStore):
         self._run.pop(trigger_id, None)  # a fresh window resets the run slot
         return True
 
+    def try_advance(self, trigger_id: str, window: int) -> bool:
+        last = self._last.get(trigger_id, "")
+        if last and int(last) >= window:
+            return False
+        self._last[trigger_id] = str(window)
+        return True
+
     def release_claim(self, trigger_id: str, claimed: str, back_to: str) -> None:
         # Only when the row still reads what we claimed — the same rule the real
         # store keeps, so a fake cannot make a caller look correct that isn't.
@@ -273,6 +280,9 @@ async def test_sweeper_keys_the_store_by_the_globally_qualified_trigger_id():
 
         def try_claim(self, trigger_id: str, fire_window: str) -> bool:
             claimed.append(trigger_id)
+            return True
+
+        def try_advance(self, trigger_id: str, window: int) -> bool:
             return True
 
         def release_claim(self, trigger_id: str, claimed: str, back_to: str) -> None: ...
@@ -517,12 +527,33 @@ def test_a_pod_whose_clock_lags_does_not_rescan_a_window_a_peer_moved_past(
     monotonic: a window at or behind the one already claimed is a loss."""
     register_trigger_store(spec_instance)
     store = SpecstarTriggerStore(spec_instance)
-    ahead = ScanLease(store, "triggers", interval_s=60, now=lambda: 1_000_120.0)  # window 16668
-    behind = ScanLease(store, "triggers", interval_s=60, now=lambda: 1_000_000.0)  # window 16666
+    ahead = ScanLease(store, "triggers", interval_s=60, now=lambda: 1_000_120.0)  # start 1_000_080
+    behind = ScanLease(store, "triggers", interval_s=60, now=lambda: 1_000_000.0)  # start 999_960
 
     assert ahead.claim() is True
     assert behind.claim() is False  # behind the claimed window: not a fresh election
     assert behind.claim() is False  # and it stays that way, tick after tick
+
+
+def test_raising_the_interval_does_not_lock_the_lease_forever(spec_instance: SpecStar):
+    """The lease persists its window in the ledger, which outlives a deploy. If the
+    window were `now // interval`, raising the interval (60 s → 600 s — what the
+    docs invite) would make every new window a smaller number than the stored one
+    and the monotonic guard would refuse every pod, silently, until the year 2500.
+    The window is therefore the window's START in epoch seconds — a quantity whose
+    meaning does not change with the interval — so a raised interval costs at most
+    one new-interval window before the lease is claimable again, and lowering it
+    costs nothing."""
+    register_trigger_store(spec_instance)
+    store = SpecstarTriggerStore(spec_instance)
+    t0 = 1_000_000.0
+    assert ScanLease(store, "triggers", interval_s=60, now=lambda: t0).claim() is True
+
+    raised = ScanLease(store, "triggers", interval_s=600, now=lambda: t0 + 600)
+    assert raised.claim() is True  # within one 600 s window of the change
+
+    lowered = ScanLease(store, "triggers", interval_s=60, now=lambda: t0 + 1200)
+    assert lowered.claim() is True
 
 
 def test_specstar_store_claims_each_window_exactly_once(spec_instance: SpecStar):
