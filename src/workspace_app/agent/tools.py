@@ -2608,11 +2608,13 @@ async def save_workflow_impl(
     workflow.json text. This VALIDATES it before saving — if a step type, phase, capability,
     check, or `{variable}` is off, it returns the problems so you can fix and re-save (don't
     guess; address each one). Re-saving the same id overwrites. On success the user can Run
-    it, or download `.workflows/` to reuse elsewhere."""
+    it, download `.workflows/` to reuse elsewhere, or you can put it on a clock with
+    `save_schedules`."""
     for verb in TOOL_VERBS["save_workflow"]:
         if (denied := authorize_tool(ctx.context, verb)) is not None:
             return denied
     from ..workflow.workspace_store import (
+        RESERVED_WORKFLOW_ID,
         save_workspace_workflow,
         slugify_workflow_id,
         validate_workflow_json,
@@ -2625,6 +2627,14 @@ async def save_workflow_impl(
     slug = slugify_workflow_id(id)
     if not slug:
         return f"error: {id!r} has no letters or digits to make a workflow id from"
+    if slug == RESERVED_WORKFLOW_ID:
+        # Before validating: the name is wrong whatever the body says, and
+        # `save_workspace_workflow` would refuse it anyway — this is the
+        # sentence that tells the model what to do instead.
+        return (
+            f"error: {slug!r} is the name of this item's schedules file, not a workflow id — "
+            "pick another id. To put a workflow on a clock, call save_schedules."
+        )
     ceiling = _profile_tool_ceiling(ctx.context.app_slug, ctx.context.template_profile)
     workflow, errs = validate_workflow_json(workflow_json, tool_ceiling=ceiling)
     if workflow is None or errs:
@@ -2635,8 +2645,145 @@ async def save_workflow_impl(
     return (
         f"saved workflow '{slug}' to {rel_path(path)}. The user can Run it from this "
         "item, or download "
-        "the .workflows folder from the Workflows panel to reuse or hand it to the dev team."
+        "the .workflows folder from the Workflows panel to reuse or hand it to the dev team. "
+        # The moment a workflow exists is the moment "and every night?" comes up
+        # — name the next tool here rather than leave it to be discovered.
+        f"To run it on a clock (nightly, every Monday, …) call save_schedules with `run: {slug!r}`."
     )
+
+
+async def save_schedules_impl(ctx: RunContextWrapper[AgentToolContext], schedules_json: str) -> str:
+    # The docstring — what the model reads as this tool's description — is
+    # assigned below, built from the vocabulary the validator accepts, so the
+    # words offered here can never drift from the words that pass.
+    for verb in TOOL_VERBS["save_schedules"]:
+        if (denied := authorize_tool(ctx.context, verb)) is not None:
+            return denied
+    from ..workflow.offered import no_such_workflow, offered_workflow_ids
+    from ..workflow.user_schedules import (
+        ITEM_SCHEDULES_PATH,
+        last_window_lookup,
+        schedule_views,
+        usable_rows,
+        utc_now,
+    )
+
+    files = ctx.context.files
+    inv = ctx.context.investigation_id
+    if files is None or inv is None:
+        return "error: save_schedules needs a workspace (none on this turn)"
+    policy = ctx.context.schedule_policy
+    if policy is None:
+        # Not "assume the sweep runs": a turn that cannot say what the deploy
+        # does with the file cannot promise anything about it.
+        return "error: save_schedules is not available on this turn"
+
+    rows, problems = usable_rows(schedules_json)
+    if problems:
+        # The WHOLE file, unlike the sweep, which skips a bad row and keeps the
+        # rest: the sweep has nobody to tell, and this has the author on the
+        # line. Writing the good rows here would leave a file that is
+        # half of what was asked, reported as saved.
+        return "error: the schedules have problems — fix these and save again:\n- " + "\n- ".join(
+            problems
+        )
+    if len(rows) > policy.max_rows:
+        return (
+            f"error: {len(rows)} schedules is over this deployment's cap of "
+            f"{policy.max_rows} per file — fold the fan-out into the workflow instead"
+        )
+    offered = await offered_workflow_ids(
+        files.ls, inv, slug=ctx.context.app_slug or "", profile=ctx.context.template_profile or ""
+    )
+    unknown = sorted({row.run for row in rows if row.run not in offered})
+    if unknown:
+        return (
+            "error: "
+            + " ".join(no_such_workflow(u, offered) for u in unknown)
+            + " Save the workflow first with save_workflow, then the schedules."
+        )
+
+    doc = json.loads(schedules_json)
+    await files.write(
+        inv, ITEM_SCHEDULES_PATH, json.dumps({"schedules": doc["schedules"]}, indent=2).encode()
+    )
+
+    # "Next run" as the sweep will actually compute it — the same views the
+    # Workflows panel lists, ledger included, so an unchanged row re-saved after
+    # today's run says tomorrow and a new one says "now". Without a ledger (no
+    # spec, or the sweep is off and never registered its store) every row reads
+    # as never fired, which is the truth for a file that cannot run. Off the
+    # loop as one hop: the ledger reads inside are blocking specstar I/O.
+    last = last_window_lookup(ctx.context.spec if policy.sweep_enabled else None, inv)
+    views, _ = await asyncio.to_thread(
+        schedule_views,
+        schedules_json,
+        offered=offered,
+        now_utc=utc_now(),
+        last_window=last,
+        max_rows=policy.max_rows,
+        enabled=policy.sweep_enabled,
+    )
+    # The returns above leave the switch as the only gate a row here can fail
+    # (`run` is offered, the file is within the cap, and `indexed` is left at
+    # its default because the write just went through the facade, which
+    # records it), so the sentence is keyed on the switch — the cause — rather
+    # than on the verdict, which would attribute any other failure to it.
+    lines = [
+        f"- {v.run}: {v.describe}"
+        + (f" with {json.dumps(v.payload, sort_keys=True)}" if v.payload else "")
+        + (
+            f" — next run {v.next_run}"
+            if policy.sweep_enabled
+            else " — will not run (scheduled work is switched off on this deployment)"
+        )
+        for v in views
+    ]
+    noun = "schedule" if len(rows) == 1 else "schedules"
+    out = [
+        f"saved {len(rows)} {noun} to {rel_path(ITEM_SCHEDULES_PATH)} — the whole file, so "
+        "these are the only rows now:",
+        *lines,
+        "A schedule's runs share one conversation in this item (named after the workflow). "
+        "To change or cancel one, save the full list again without it.",
+    ]
+    if not policy.sweep_enabled:
+        out.append(
+            "WARNING: this deployment has scheduled work switched off "
+            "(server.trigger_check_interval_sec is 0). The file is saved, but NOTHING will "
+            "run until an operator turns the sweep on — tell the user so, plainly."
+        )
+    return "\n".join(out)
+
+
+def _save_schedules_doc() -> str:
+    from ..workflow.user_schedules import EVERY
+
+    every = " · ".join(f"`{e}`" for e in EVERY)
+    return (
+        "Put a workflow of THIS item on a clock — nightly reports, hourly pollers, the "
+        "first-of-the-month close — by saving the item's `.workflows/schedules.json`. "
+        '`schedules_json` is the WHOLE file as JSON text: `{"schedules": [row, ...]}`. '
+        "Saving REPLACES the file, so pass every row you want to keep; to add one, "
+        "read_file('.workflows/schedules.json') first and include the existing rows. An "
+        "empty list cancels everything.\n\n"
+        "Each row: `run` (a workflow id this item has — one you saved with "
+        "save_workflow, or one the app ships; check with the Workflows panel or by "
+        "listing .workflows/), `every` (one of " + every + "), and for `minutes` an `n` "
+        'that divides 60; `at` as "HH:MM" for daily/weekly/monthly; `dow` (ONE of '
+        'mon..sun) for weekly — "every weekday" is five rows; `dom` (1-31, clamped) for '
+        'monthly; `tz` an IANA zone like "Asia/Taipei" (defaults to UTC — name the zone '
+        "whenever the time is one a person chose); `with` a payload handed to the "
+        "workflow as-is.\n\n"
+        "This VALIDATES before saving and returns the problems so you can fix and "
+        "re-save (address each one; don't guess), and refuses a `run` this item does "
+        "not have. On success it says when each row runs next — relay that to the "
+        "user, including the WARNING when this deployment has schedules switched off. "
+        "A row that is already due today runs on the next sweep, not tomorrow."
+    )
+
+
+save_schedules_impl.__doc__ = _save_schedules_doc()
 
 
 def resolve_collection_impl(ctx: RunContextWrapper[AgentToolContext], ref: str) -> str:
@@ -3194,6 +3341,10 @@ _IMPLS = {
     # `save_workflow` (#323) — same shape: an opt-in tool the apps that ship the
     # `author-workflow` meta-skill grant. Validates + writes a workspace workflow.json.
     "save_workflow": save_workflow_impl,
+    # `save_schedules` — the same shape one step on: validates + writes the item's
+    # `.workflows/schedules.json`, so a workflow the agent saved can be put on a
+    # clock without a page. Granted wherever `save_workflow` is.
+    "save_schedules": save_schedules_impl,
     # #419 entity tools — the AI write path into the file-first entity framework
     # (same EntityStore pipeline as the quick-create UI + workflows). Opt-in per
     # app; need `function.workspace` (they touch the item's files).

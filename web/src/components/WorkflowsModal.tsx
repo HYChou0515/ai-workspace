@@ -5,10 +5,12 @@ import type { FileService } from "../api/fileService";
 import { qk } from "../api/queryKeys";
 import { TemplateConflictError, workflowTemplatesApi } from "../api/workflowTemplates";
 import { workflowApi } from "../api/workflows";
+import { SCHEDULES_PATH, type ScheduleRow, schedulesApi } from "../api/schedules";
 import { WORKFLOWS_DIR } from "../api/workspaceWorkflows";
+import { useItemSchedules } from "../hooks/useItemSchedules";
 import { useWorkflowTemplates } from "../hooks/useWorkflowTemplates";
 import { useWorkspaceWorkflows } from "../hooks/useWorkspaceWorkflows";
-import { useT } from "../lib/i18n";
+import { type MsgKey, useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 import { Icon } from "./Icon";
 import { useDirtyClose } from "../hooks/useDirtyClose";
@@ -44,6 +46,7 @@ export function WorkflowsModal({
   const dialog = useDialog();
   const workflows = useWorkspaceWorkflows(slug, itemId);
   const templates = useWorkflowTemplates(slug, itemId);
+  const schedules = useItemSchedules(slug, itemId);
   const importRef = useRef<HTMLInputElement | null>(null);
   const [busy, setBusy] = useState(false);
   // #779: an import/apply in flight. Closing does not cancel it — it just takes
@@ -72,6 +75,9 @@ export function WorkflowsModal({
         await workflowTemplatesApi.copy(slug, itemId, id, { overwrite: true });
       }
       await qc.invalidateQueries({ queryKey: qk.workspaceWorkflows(slug, itemId) });
+      // A schedule row is red while its `run` names a workflow the item lacks,
+      // and a copied template is one way the workflow comes to exist.
+      await qc.invalidateQueries({ queryKey: qk.itemSchedules(slug, itemId) });
       await qc.invalidateQueries({ queryKey: qk.files(itemId) });
     } finally {
       setBusy(false);
@@ -106,13 +112,62 @@ export function WorkflowsModal({
         await fileService.writeFile(`${WORKFLOWS_DIR}/${f.name}`, await f.arrayBuffer());
       }
       await qc.invalidateQueries({ queryKey: qk.workspaceWorkflows(slug, itemId) });
+      // A `schedules.json` is a legitimate thing to import — it lands in the
+      // same folder — so the schedules section must not show the old rows.
+      await qc.invalidateQueries({ queryKey: qk.itemSchedules(slug, itemId) });
       await qc.invalidateQueries({ queryKey: qk.files(itemId) });
     } finally {
       setBusy(false);
     }
   };
 
+  /** Cancel one schedule: rewrite the file minus that row, through the ordinary
+   * file write so it lands on the path the platform indexes. Every OTHER row is
+   * kept exactly as written — the refused ones included — because a rewrite that
+   * dropped them would cancel schedules nobody asked to cancel.
+   *
+   * From the file AS IT IS NOW, not from what this panel loaded: the query is a
+   * cache with a 30s staleTime, and between the load and the click the agent's
+   * `save_schedules` may have added a row. Rewriting from the cache would write
+   * that row out of existence, silently — the exact failure the sentence above
+   * promises to avoid. So: fetch, find the clicked row by what it SAYS (the
+   * index may have shifted), and rewrite from that. A row that is already gone
+   * means nothing to write. */
+  const removeSchedule = async (row: ScheduleRow) => {
+    const choice = await dialog.confirm({
+      title: t("schedules.removeTitle"),
+      body: t("schedules.removeConfirm", {
+        what: `${describeSchedule(row.raw, t)} → ${row.run || "?"}`,
+      }),
+      actions: [
+        { id: "remove", label: t("schedules.remove"), variant: "danger" },
+        { id: "cancel", label: t("schedules.cancel") },
+      ],
+    });
+    if (choice !== "remove") return;
+    setBusy(true);
+    try {
+      const fresh = await qc.fetchQuery({
+        queryKey: qk.itemSchedules(slug, itemId),
+        queryFn: () => schedulesApi.list(slug, itemId),
+        staleTime: 0,
+      });
+      const target = fresh.rows.find((r) => sameJson(r.raw, row.raw));
+      if (target) {
+        const kept = fresh.rows.filter((r) => r !== target).map((r) => r.raw);
+        await fileService.writeFile(SCHEDULES_PATH, JSON.stringify({ schedules: kept }, null, 2));
+        await qc.invalidateQueries({ queryKey: qk.files(itemId) });
+      }
+      await qc.invalidateQueries({ queryKey: qk.itemSchedules(slug, itemId) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const list = workflows.data ?? [];
+  const titleOf = (run: string) => list.find((w) => w.id === run)?.title || run;
+  const sched = schedules.data;
+  const showSchedules = !!sched && (sched.rows.length > 0 || sched.problems.length > 0);
 
   return (
     <ModalShell
@@ -190,6 +245,97 @@ export function WorkflowsModal({
             ))
           )}
         </div>
+
+        {showSchedules && (
+          <div
+            data-testid="schedules-section"
+            style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}
+          >
+            <strong style={{ fontSize: "var(--text-body-sm)" }}>{t("schedules.heading")}</strong>
+            <p style={{ margin: 0, fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
+              {t("schedules.intro")}
+            </p>
+            {!sched.enabled && (
+              <p
+                data-testid="schedules-disabled"
+                role="status"
+                style={{ margin: 0, fontSize: pxToRem(11), color: "var(--err)" }}
+              >
+                {t("schedules.disabled")}
+              </p>
+            )}
+            {sched.enabled && !sched.indexed && (
+              // "starts on its own after the next turn" is false beside "will
+              // not run on its own": with the sweep off, the first notice says
+              // all there is to say.
+              <p
+                data-testid="schedules-unindexed"
+                role="status"
+                style={{ margin: 0, fontSize: pxToRem(11), color: "var(--err)" }}
+              >
+                {t("schedules.unindexed")}
+              </p>
+            )}
+            {sched.problems.length > 0 && (
+              <p
+                data-testid="schedules-file-problems"
+                style={{ margin: 0, fontSize: pxToRem(11), color: "var(--err)" }}
+              >
+                {t("schedules.fileProblems")} {sched.problems.join(" ")}
+              </p>
+            )}
+            {sched.rows.map((row) => {
+              const invalid = row.problems.length > 0;
+              return (
+                <div
+                  key={row.index}
+                  data-testid={`schedule-row-${row.index}`}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    padding: "6px 8px",
+                    border: "1px solid var(--paper-3)",
+                    borderRadius: "var(--radius-btn)",
+                  }}
+                >
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, fontSize: "var(--text-body-sm)" }}>
+                      {describeSchedule(row.raw, t)}
+                      {" → "}
+                      {invalid ? rawRun(row.raw) : titleOf(row.run)}
+                    </div>
+                    <div style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
+                      {invalid ? (
+                        <span style={{ color: "var(--err)" }}>
+                          {t("schedules.invalidRow")} {row.problems.join(" ")}
+                        </span>
+                      ) : !row.known ? (
+                        <span data-testid={`schedule-unknown-${row.index}`} style={{ color: "var(--err)" }}>
+                          {t("schedules.unknownWorkflow")}
+                        </span>
+                      ) : !row.runnable ? null : row.due_now ? (
+                        t("schedules.nextSweep")
+                      ) : (
+                        t("schedules.next", { at: `${row.next_at} ${row.tz}` })
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    data-testid={`schedule-remove-${row.index}`}
+                    aria-label={`${t("schedules.remove")} ${describeSchedule(row.raw, t)}`}
+                    disabled={busy}
+                    onClick={() => void removeSchedule(row)}
+                    style={pillBtn}
+                  >
+                    <Icon name="x" size={12} /> {t("schedules.remove")}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
 
         {(templates.data ?? []).length > 0 && (
           <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}>
@@ -282,6 +428,111 @@ export function WorkflowsModal({
     </ModalShell>
   );
 }
+
+/** The recurrence in the reader's words, from the row as written (`every`, `at`,
+ * `dow`, `dom`, `n`, `tz`). Only vocabulary: when a row fires NEXT is computed on
+ * the backend, by the same rule the sweep fires it by, and arrives as `next_at`. */
+function describeSchedule(value: unknown, t: ReturnType<typeof useT>): string {
+  // A row that is not an object has no fields to read; the backend has already
+  // said so in `problems`, and the rewrite still carries the value as written.
+  const raw: Record<string, unknown> =
+    value !== null && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
+  // The parser's rule for every one of these is Python's `or`: a falsy value
+  // is the default. Python's falsy JSON values are null, false, 0, "", [] and
+  // {} — the last two are truthy to `||`, so `||` is not the mirror.
+  const at = typeof raw.at === "string" && raw.at ? raw.at : "00:00";
+  const tz = typeof raw.tz === "string" && raw.tz ? raw.tz : "UTC";
+  const every = pyFalsy(raw.every) ? "daily" : raw.every;
+  let words: string;
+  switch (every) {
+    case "minutes":
+      words = t("schedules.every.minutes", { n: Number(raw.n) || 0 });
+      break;
+    case "hourly":
+      words = t("schedules.every.hourly");
+      break;
+    case "weekly": {
+      const dow = typeof raw.dow === "string" ? raw.dow : "";
+      const key = DOW_KEYS[dow];
+      words = t("schedules.every.weekly", { dow: key ? t(key) : dow, at });
+      break;
+    }
+    case "monthly":
+      words = t("schedules.every.monthly", { dom: Number(raw.dom) || 0, at });
+      break;
+    case "daily":
+      words = t("schedules.every.daily", { at });
+      break;
+    default:
+      words = String(every);
+  }
+  return `${words} (${tz})`;
+}
+
+/** Python's truth test over a decoded JSON value: `null`, `false`, `0`, `""`,
+ * `[]` and `{}` are falsy; everything else is truthy. */
+function pyFalsy(value: unknown): boolean {
+  if (value === null || value === undefined || value === false || value === 0 || value === "") {
+    return true;
+  }
+  if (Array.isArray(value)) return value.length === 0;
+  if (typeof value === "object") return Object.keys(value).length === 0;
+  return false;
+}
+
+/**
+ * Order-preserving JSON equality — the identity of a schedule row. NOT
+ * `sameShape`: that one compares arrays as sets (right for grant lists, whose
+ * order nobody arranges), and two rows that differ only in the order of an array
+ * inside `with` are two DIFFERENT schedules to the sweep (`trigger_id_for`
+ * fingerprints the payload with keys sorted and lists as they are), so Remove
+ * must tell them apart. Object key order is not identity (the file was parsed,
+ * not diffed as text).
+ */
+function sameJson(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return (
+      Array.isArray(a) &&
+      Array.isArray(b) &&
+      a.length === b.length &&
+      a.every((x, i) => sameJson(x, b[i]))
+    );
+  }
+  if (a !== null && b !== null && typeof a === "object" && typeof b === "object") {
+    const ka = Object.keys(a).sort();
+    const kb = Object.keys(b).sort();
+    return (
+      ka.length === kb.length &&
+      ka.every(
+        (k, i) =>
+          k === kb[i] &&
+          sameJson((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]),
+      )
+    );
+  }
+  return false;
+}
+
+/** What a refused row SAID it would run, for the line that shows it. */
+function rawRun(value: unknown): string {
+  if (value !== null && typeof value === "object" && "run" in value) {
+    return String((value as { run?: unknown }).run ?? "?");
+  }
+  return "?";
+}
+
+const DOW_KEYS: Record<string, MsgKey> = {
+  mon: "schedules.dow.mon",
+  tue: "schedules.dow.tue",
+  wed: "schedules.dow.wed",
+  thu: "schedules.dow.thu",
+  fri: "schedules.dow.fri",
+  sat: "schedules.dow.sat",
+  sun: "schedules.dow.sun",
+};
 
 const pillBtn: React.CSSProperties = {
   display: "inline-flex",

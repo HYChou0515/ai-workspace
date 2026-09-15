@@ -214,12 +214,13 @@ title: Scrap review
 workflows: [judge]
 ```
 
-A rejected `callTool` is a different thing again, and the message says which:
+A rejected `callTool` or `startRun` is a different thing again, and the message says which:
 
 | message | what the reader must change |
 |---|---|
 | "did not declare X" | add it to `tools:` in the view file — yours to fix |
-| "does not offer X" | this app does not grant it; an operator must add it |
+| "does not offer X" | (a tool) this app does not grant it; an operator must add it |
+| "has no workflow named X" | (a workflow) this item has none by that id — the agent saves one with `save_workflow`, or the profile declares it |
 | "X is unavailable: …" | the app grants it but it could not be resolved |
 
 Show the message as it arrives. Collapsing these into "it failed" sends the
@@ -253,7 +254,7 @@ await workspace.writeFile("schedules.json", JSON.stringify({
 | `dow` | ONE of `mon`…`sun`, for weekly. Not a list and not `weekdays` — "every weekday at nine" is **five rows**, one per day |
 | `dom` | 1–31, for monthly; a day past the month's end clamps to its last day |
 | `tz` | an IANA zone (`"Asia/Taipei"`); **defaults to UTC** |
-| `run` | a workflow id this app offers — the same ones `workflows:` may list. An id it does not offer is **skipped with a log line naming what is on offer**, and the other rows still run |
+| `run` | a workflow id this ITEM has: one its profile declares, or one saved in the item's own `.workflows/` (the agent's `save_workflow`) — the same list `workflows:` may name. An id the item does not have is **skipped with a log line naming what it has**, and the other rows still run |
 | `with` | the payload, handed to the workflow exactly as `startRun` does |
 
 `tz` is optional and defaults to **UTC**, not to wherever the server happens to

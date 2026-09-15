@@ -46,6 +46,7 @@ from ..sandbox.protocol import Sandbox, SandboxSpec
 from ..sync import SandboxSync
 from ..tokens import CallLane
 from ..tooling.external import ExternalTools, confine_to_mounted, resolve_external_tools
+from ..workflow.user_schedules import SchedulePolicy
 from .locator import TurnFacts
 from .turns import history_items
 
@@ -156,6 +157,7 @@ class TurnContextBuilder:
         infer_modules_parallelism: int,
         history_max_messages: int,
         history_max_context_tokens: int,
+        schedule_policy: SchedulePolicy,
         context_limit: int | None = None,
         max_tokens_window_ratio: float = DEFAULT_MAX_TOKENS_WINDOW_RATIO,
         wiki_coordinator: WikiMaintenanceCoordinator | None = None,
@@ -179,6 +181,11 @@ class TurnContextBuilder:
         self._read_file_max_chars = read_file_max_chars
         self._tool_output_max_chars = tool_output_max_chars
         self._exec_output_max_chars = exec_output_max_chars
+        # What this deploy does with a `.workflows/schedules.json` — the row cap
+        # and whether the sweep runs — so `save_schedules` can say so. Required,
+        # not defaulted: a default here would be a guess about the deployment,
+        # and the tool's whole point is not to guess.
+        self._schedule_policy = schedule_policy
         self._infer_modules_parallelism = infer_modules_parallelism
         self._history_max_messages = history_max_messages
         self._history_max_context_tokens = history_max_context_tokens
@@ -747,6 +754,7 @@ class TurnContextBuilder:
             read_file_max_chars=self._read_file_max_chars,
             tool_output_max_chars=self._tool_output_max_chars,
             exec_output_max_chars=self._exec_output_max_chars,
+            schedule_policy=self._schedule_policy,
             history=history,
             history_trimmed=cut[0] if cut else 0,
             history_reduced_note=said[0] if said else "",

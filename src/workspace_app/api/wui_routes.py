@@ -27,7 +27,7 @@ import codecs
 import json
 import logging
 import shlex
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +39,7 @@ from ..agent.context import AgentToolContext
 from ..sandbox.protocol import ExecResult, Sandbox, SandboxSpec
 from ..tooling.external import ExternalTools
 from ..tooling.registry import PackageInfo, exec_package_command, find_allowed_command
+from ..workflow.offered import no_such_workflow
 from .locator import ItemLocator
 from .request_env import IRequestEnv
 from .turn_context import resolve_item_tools
@@ -157,6 +158,11 @@ class CallToolOut(BaseModel):
     exit_code: int
 
 
+async def _no_workflows(_item: str) -> Sequence[str]:
+    """The default when nothing is wired: an item offers no workflow to its pages."""
+    return ()
+
+
 def register_wui_routes(
     app: FastAPI | APIRouter,
     *,
@@ -170,7 +176,7 @@ def register_wui_routes(
     get_user_id: Callable[[], str] | None = None,
     orchestrator: Any = None,
     turn_engine: Any = None,
-    workflows_for: Callable[[str], Sequence[str]] = lambda _item: (),
+    workflows_for: Callable[[str], Awaitable[Sequence[str]]] = _no_workflows,
 ) -> None:
     """Mount the WUI tool-call route.
 
@@ -390,16 +396,16 @@ def register_wui_routes(
         """
         investigation_id = locator.require_access(slug, item_id, "execute")
 
-        allowed = list(workflows_for(investigation_id))
+        allowed = list(await workflows_for(investigation_id))
         if body.workflow not in allowed:
             # Named, because this reaches a person through the page's own error
-            # panel and "which one, and why not" is all they can act on. Same
-            # ceiling shape as `tools:` — the app's list is the gate; the page's
-            # own declaration is disclosure enforced in the bridge.
-            raise HTTPException(
-                status_code=403,
-                detail=f"This app does not offer {body.workflow} to its pages.",
-            )
+            # panel and "which one, and why not" is all they can act on. The
+            # list is the ONE every entrance consults (`workflow.offered`: the
+            # profile's workflows plus the item's own `.workflows/`), so the
+            # true cause is "this item has no such workflow" — not the "app does
+            # not offer" the old wording said, which read as an authorisation an
+            # operator had to grant when saving the workflow is all it takes.
+            raise HTTPException(status_code=403, detail=no_such_workflow(body.workflow, allowed))
 
         # A REAL conversation, not a minted label. `chat_id` is looked up by
         # `workflow_exec.drive_turn`, and one that resolves to nothing falls back

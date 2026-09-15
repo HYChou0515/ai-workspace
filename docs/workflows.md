@@ -857,3 +857,44 @@ v1 出貨 `image-to-knowledge`：VLM 讀圖 → 把圖說的話存成可搜尋�
 
 反過來省略第 2、3 關的代價很具體：agent step 會照著 prompt 對**每一個**上傳檔產出東西，
 所以一個爛 prompt 不是產生一個爛結果，是產生一整批——而且是寫進共用 collection 的那種。
+
+### 22.11 放上時鐘：item 自己的 `schedules.json`
+
+「每天晚上跑」「每週一早上九點」——存好的 workflow 可以不用人按 Run。宣告是一份**資料**：
+`.workflows/schedules.json`，和 workflow 放在同一個資料夾。它是 WUI 頁面那份
+`<page>/schedules.json`（plan-wui.md 第三輪）的**第二個宣告點**，不是第二套機制：同一個
+sweep、同一個 validator（`workflow/user_schedules.py`）、同一個 `_TriggerWindow` 租約、同一個
+`server.max_page_schedules` 上限、同一顆 `server.trigger_check_interval_sec` 開關（**預設 0 =
+完全不掃，且沒有訊息**——migrations.md §5.5）。時間語彙（`every` / `at` / `dow` / `dom` /
+`tz` / `n`）與頁面版完全相同，見 `sample-skills/wui/reference.md`。
+
+**三個入口看同一份清單。** 排程的 `run`、頁面的 `startRun`、Workflows 面板的 Run，能啟動的
+workflow 都由 `workflow/offered.py` 一個規則決定：profile 宣告的 ∪ item 自己 `.workflows/` 裡的，
+同名時 workspace 蓋過 package（orchestrator 既有語意）。在此之前頁面與排程只看 profile，於是
+interactive profile 的 item（候選是空集合）上，AI 用 `save_workflow` 存的 workflow 面板跑得起來、
+頁面與排程卻答「This app does not offer …」——那不是授權問題，是 gate 沒看那個資料夾。
+
+**AI 用 `save_schedules` 寫，不直接寫檔。** 工具先驗（同 sweep 的 linter）、拒絕 item 沒有的
+`run`（並列出它有的）、套用列數上限，才走 façade 寫檔（所以會被索引）；參數是**整份**清單
+（覆蓋，不是追加——同頁面 `writeFile` 的規則），空清單即取消全部。回覆是**查過的事**：每列下次
+何時跑，含租約帳本——所以 10:00 存一條 daily 09:00 會說「下一輪 sweep」（漏掉的視窗補跑，
+reference.md 明文），而同一列跑過之後再存會說明天；sweep 沒開的部署會**照存但大聲警告**。
+教它的地方在 `author-workflow` skill（每個 app 都授權）、`save_workflow` 的成功回覆句、以及工具
+自己的說明（`every` 的字從 `EVERY` 產生，測試釘住不會漂移）。
+
+**人在 Workflows 面板看。** `GET /a/{slug}/items/{id}/schedules` 用 sweep 同一套解讀回每一列
+（含被拒絕的列，帶 `raw` 與 `problems`），每列一個 **`runnable`** 判決（列能解析 ∧ `run` 是這個
+item 有的 ∧ 整檔沒超上限 ∧ sweep 開著 ∧ 檔案已被索引），只有 runnable 的列才有「下次」——
+`tests/api/test_schedules_route_parity.py` 把同一份檔餵路由和 sweep，斷言兩邊一致。前端只渲染：
+`run` 已不存在標紅、到期顯示「下一輪」、sweep 沒開顯示警告、檔案還沒被索引（直接寫進 store、
+還沒有下一次 turn）顯示告示、「移除」把整份檔案少那一列寫回（其他列原樣保留，壞列也保留）。
+匯入 `schedules.json` 是合法的匯入。已知的一個窗口：façade 是熱優先、sweep 讀 durable 快照，
+sandbox 熱著時的改動要等一個 mirror 週期（預設 5 秒）或那個 turn 結束才到 sweep。
+
+**用 shell 寫出來的檔也會被看到**：turn 結束的對帳（`api/schedule_reconcile.py`）列一次
+workspace 把所有 `is_schedule_file` 的路徑登記進索引，`.workflows/schedules.json` 也在內。
+已知小縫（只在 host-managed 部署）：workflow run 結束沒接對帳——排程跑的 workflow 用 shell step
+自己寫的新排程檔，在 host-managed 部署（`_writeback` 交給 host `persist`，不經 mirror）要等下一次
+聊天 turn 才被登記；其他部署每個 sandbox step 結束的 flush 走 mirror 的 `on_write` 就登記了。
+
+完整的決策與被否決的替代方案：[`plan-item-schedules.md`](plan-item-schedules.md)。

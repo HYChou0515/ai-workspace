@@ -22,6 +22,7 @@ from workspace_app.agent.tools import (
     query_entity_impl,
     read_file_impl,
     read_image_impl,
+    save_schedules_impl,
     save_skill_impl,
     save_subagent_impl,
     save_workflow_impl,
@@ -121,6 +122,7 @@ _CALLS = {
     "update_entity": lambda c: update_entity_impl(c, "issue", 1, {"title": "t"}),
     "link_entity": lambda c: link_entity_impl(c, "issue", 1, "milestone", 2),
     "save_workflow": lambda c: save_workflow_impl(c, "flow", "{}"),
+    "save_schedules": lambda c: save_schedules_impl(c, "{}"),
     "save_skill": lambda c: save_skill_impl(c, "sk", "Does things", "body"),
     "search_wiki": lambda c: search_wiki_impl(c, "anything"),
 }
@@ -656,6 +658,7 @@ _EXPECTED_VERBS: dict[str, tuple[str, ...]] = {
     "save_subagent": ("edit_content",),
     "save_skill": ("edit_content",),
     "save_workflow": ("edit_content",),
+    "save_schedules": ("edit_content",),
     "edit_file": ("read_content", "edit_content"),
     "create_entity": ("read_content", "edit_content"),
     "update_entity": ("read_content", "edit_content"),

@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from ..resources.kb import RetrievedPassage
     from ..tooling.registry import PackageInfo
     from ..users.protocol import User, UserDirectory
+    from ..workflow.user_schedules import SchedulePolicy
 
 
 @dataclass
@@ -276,6 +277,14 @@ class AgentToolContext:
     # KB-flavour contexts (no App/profile).
     app_slug: str | None = None
     template_profile: str | None = None
+
+    # What this deployment does with a `.workflows/schedules.json` — the row cap
+    # the sweep applies and whether the sweep runs at all — so `save_schedules`
+    # can refuse at the cap and SAY when nothing will fire, instead of the agent
+    # reporting "set up" on a deploy where it is not. Set by the app-turn factory
+    # (`TurnContextBuilder`); None on a context without it, where the tool
+    # declines rather than guessing.
+    schedule_policy: SchedulePolicy | None = None
 
     # #380: the item's per-turn tri-state skill override (`attached_skill_prefs`),
     # set by the API layer. `read_skill` refuses a skill pinned OFF here (a skill

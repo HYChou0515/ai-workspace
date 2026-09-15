@@ -205,6 +205,10 @@ TOOL_VERBS: dict[str, tuple[Verb, ...]] = {
     # ungated state "a worse version of the `save_skill` hole", named it, and
     # left it.
     "save_workflow": ("edit_content",),
+    # `save_schedules` writes `.workflows/schedules.json`, and what it writes STARTS
+    # runs on a clock as the item's owner — a standing instruction if ever there
+    # was one. Same verb as the workflow it schedules.
+    "save_schedules": ("edit_content",),
     "save_skill": ("edit_content",),
     # `search_wiki`'s `scopes` fall back to the ITEM id when a turn has no
     # collections, so it greps the workspace and returns `path:line: text`.

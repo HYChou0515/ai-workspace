@@ -632,6 +632,58 @@ export const messages = {
   },
   "workflows.close": { "zh-TW": "關閉", en: "Close" },
   "workflows.steps": { "zh-TW": "{n} 個步驟", en: "{n} steps" },
+  // The item's schedules — what the assistant (or a page) put on a clock. Copy
+  // speaks in outcomes; the deployment knob that turns the sweep on is an
+  // operator's word, never shown here.
+  "schedules.heading": { "zh-TW": "定時執行", en: "Scheduled runs" },
+  "schedules.intro": {
+    "zh-TW": "這些工作流程會照時間自動執行；同一條排程的每次執行都寫進同一個對話。",
+    en: "These workflows run on their own at the times below; a schedule's runs share one conversation.",
+  },
+  "schedules.every.minutes": { "zh-TW": "每 {n} 分鐘", en: "Every {n} minutes" },
+  "schedules.every.hourly": { "zh-TW": "每小時", en: "Hourly" },
+  "schedules.every.daily": { "zh-TW": "每天 {at}", en: "Daily at {at}" },
+  "schedules.every.weekly": { "zh-TW": "每週{dow} {at}", en: "Weekly on {dow} at {at}" },
+  "schedules.every.monthly": { "zh-TW": "每月 {dom} 日 {at}", en: "Monthly on day {dom} at {at}" },
+  "schedules.dow.mon": { "zh-TW": "一", en: "Mon" },
+  "schedules.dow.tue": { "zh-TW": "二", en: "Tue" },
+  "schedules.dow.wed": { "zh-TW": "三", en: "Wed" },
+  "schedules.dow.thu": { "zh-TW": "四", en: "Thu" },
+  "schedules.dow.fri": { "zh-TW": "五", en: "Fri" },
+  "schedules.dow.sat": { "zh-TW": "六", en: "Sat" },
+  "schedules.dow.sun": { "zh-TW": "日", en: "Sun" },
+  "schedules.next": { "zh-TW": "下次：{at}", en: "Next: {at}" },
+  "schedules.nextSweep": {
+    "zh-TW": "下次：下一輪掃描（這一期已到期，尚未執行）",
+    en: "Next: on the next sweep (this period is due and has not run yet)",
+  },
+  "schedules.unknownWorkflow": {
+    "zh-TW": "找不到這個工作流程，這一條不會執行",
+    en: "No such workflow in this workspace — this one will not run",
+  },
+  "schedules.invalidRow": {
+    "zh-TW": "這一條寫得不對，不會執行：",
+    en: "This row is not valid and will not run:",
+  },
+  "schedules.remove": { "zh-TW": "移除", en: "Remove" },
+  "schedules.cancel": { "zh-TW": "取消", en: "Cancel" },
+  "schedules.removeTitle": { "zh-TW": "移除排程", en: "Remove schedule" },
+  "schedules.removeConfirm": {
+    "zh-TW": "要移除「{what}」這條定時執行嗎？之後就不會再自動執行。",
+    en: "Remove the schedule “{what}”? It will no longer run on its own.",
+  },
+  "schedules.disabled": {
+    "zh-TW": "這個系統沒有開啟定時執行，以下的排程不會自動執行。請聯絡管理員。",
+    en: "Scheduled runs are switched off on this system; the schedules below will not run on their own. Ask an administrator.",
+  },
+  "schedules.fileProblems": {
+    "zh-TW": "排程檔有問題：",
+    en: "Problems with the schedules file:",
+  },
+  "schedules.unindexed": {
+    "zh-TW": "這份排程檔還沒被登記，下一次對話之後才會開始自動執行。",
+    en: "This schedules file is not registered yet; it starts running on its own after the next conversation turn.",
+  },
   // #520: shipped starter templates. Copy speaks in outcomes ("copy one to edit"),
   // never in internals like `.workflows/` or tool ceilings.
   "templates.heading": { "zh-TW": "現成範本", en: "Ready-made templates" },

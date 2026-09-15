@@ -28,12 +28,18 @@ from __future__ import annotations
 import functools
 import hashlib
 import json
+import logging
+from collections.abc import Callable, Collection
+from datetime import UTC, datetime
 from typing import Any, cast
-from zoneinfo import available_timezones
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 from msgspec import Struct
 
-from .triggers import Schedule, _valid_tz
+from .triggers import Schedule, _valid_tz, next_run
+from .workspace_store import SCHEDULES_FILE, WORKSPACE_WORKFLOW_DIR
+
+logger = logging.getLogger(__name__)
 
 #: The periods a page may pick. `daily` / `weekly` / `monthly` are the words
 #: `triggers.json` already uses — reused rather than re-spelled, so one
@@ -236,7 +242,7 @@ def validate_user_schedules(raw: str) -> list[str]:
         if every == "weekly" and row.get("dow") not in _DOW:
             problems.append(f"{where}: a weekly schedule needs `dow` ({', '.join(_DOW)}).")
         if every == "monthly":
-            dom = row.get("dom", 0)
+            dom = row.get("dom") or 0  # `null` means omitted, as for every field above
             # RANGE only. The type is graded once, above, on every row —
             # because the parser decodes `dom` on every row. Testing
             # `isinstance` here as well meant one mistake produced two
@@ -268,6 +274,17 @@ def _looks_like_time(at: object) -> bool:
     return 0 <= int(hh) <= 23 and 0 <= int(mm) <= 59
 
 
+def file_rows(raw: str) -> list[Any] | None:
+    """The `schedules` list of a file, or None when the file is not that shape
+    (not JSON, not an object, no list) — the one decode both readers share."""
+    try:
+        doc = json.loads(raw)
+        rows = doc["schedules"] if isinstance(doc, dict) else None
+    except Exception:
+        return None
+    return rows if isinstance(rows, list) else None
+
+
 def declared_count(raw: str) -> int | None:
     """How many schedules this file DECLARES, or None when it is not that shape.
 
@@ -286,14 +303,43 @@ def declared_count(raw: str) -> int | None:
     declares nothing" are different answers, and only one of them means the cap
     is satisfied.
     """
+    rows = file_rows(raw)
+    return None if rows is None else len(rows)
+
+
+def over_cap(raw: str, max_rows: int) -> str | None:
+    """The sentence the sweep logs when a file declares more schedules than the
+    deployment allows — and refuses the WHOLE file — or None when it is within
+    the cap. One sentence, so the panel says exactly what the sweep will do."""
+    declared = declared_count(raw)
+    if declared is None or declared <= max_rows:
+        return None
+    return (
+        f"declares {declared} schedules, over the limit of {max_rows} — "
+        "none will run until it is reduced"
+    )
+
+
+def parse_row(i: int, raw: Any) -> tuple[UserSchedule | None, list[str]]:
+    """ONE row: the parsed schedule, or the problems that refuse it — renumbered
+    to the row's real position so the message points at the line the author has
+    to fix rather than always at zero. The single reading the sweep and the
+    panel share, so they cannot disagree about a row."""
+    one = json.dumps({"schedules": [raw]})
+    bad = validate_user_schedules(one)
+    if bad:
+        return None, [p.replace("schedules[0]", f"schedules[{i}]") for p in bad]
     try:
-        doc = json.loads(raw)
-    except ValueError:
-        return None
-    if not isinstance(doc, dict):
-        return None
-    rows = doc.get("schedules")
-    return len(rows) if isinstance(rows, list) else None
+        (row,) = parse_user_schedules(one)
+    except Exception as exc:
+        # BELT AND BRACES, and the belt is the linter above. A decode that
+        # raises here would take the file's GOOD rows with it — the opposite of
+        # `usable_rows`'s whole promise — and the author would see nothing,
+        # because the linter is the only thing that reaches them. Every known
+        # case is linted now; this keeps the next unknown one costing its own
+        # row only.
+        return None, [f"schedules[{i}]: could not be read ({exc})."]
+    return row, []
 
 
 def usable_rows(raw: str) -> tuple[list[UserSchedule], list[str]]:
@@ -305,34 +351,17 @@ def usable_rows(raw: str) -> tuple[list[UserSchedule], list[str]]:
     fat-fingers it, and the OTHER report they rely on stops arriving too, with
     nothing anywhere saying why.
     """
-    try:
-        doc = json.loads(raw)
-        rows = doc["schedules"] if isinstance(doc, dict) else None
-        if not isinstance(rows, list):
-            raise ValueError("no `schedules` list")
-    except Exception:
+    rows = file_rows(raw)
+    if rows is None:
         return [], validate_user_schedules(raw)
-
     good: list[UserSchedule] = []
     problems: list[str] = []
-    for i, row in enumerate(rows):
-        one = json.dumps({"schedules": [row]})
-        bad = validate_user_schedules(one)
-        if bad:
-            # Renumbered to this row's real position, so the message points at
-            # the line the author has to fix rather than always at zero.
-            problems.extend(p.replace("schedules[0]", f"schedules[{i}]") for p in bad)
-            continue
-        try:
-            good.extend(parse_user_schedules(one))
-        except Exception as exc:
-            # BELT AND BRACES, and the belt is the linter above. A decode that
-            # raises here escaped before `return good, problems` and took the
-            # file's GOOD rows with it — the opposite of this function's whole
-            # promise — and the author saw nothing, because the linter is the
-            # only thing that reaches them. Every known case is linted now; this
-            # keeps the next unknown one costing its own row only.
-            problems.append(f"schedules[{i}]: could not be read ({exc}).")
+    for i, raw_row in enumerate(rows):
+        row, bad = parse_row(i, raw_row)
+        if row is None:
+            problems.extend(bad)
+        else:
+            good.append(row)
     return good, problems
 
 
@@ -370,3 +399,223 @@ def trigger_id_for(item_id: str, folder: str, row: UserSchedule) -> str:
     )
     digest = hashlib.sha256(fingerprint.encode()).hexdigest()[:16]
     return f"wui:{item_id}:{digest}"
+
+
+def utc_now() -> datetime:
+    """The clock, naive UTC — a module attribute so a test can pin it."""
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
+def in_zone(now_utc: datetime, tz: str) -> datetime:
+    """`now` as the wall clock in `tz`, naive. An empty zone means UTC, which is
+    the same rule the engineer-authored triggers use (`TriggerSweeper._local_now`)
+    so the two engines cannot disagree about what "09:00" means.
+
+    ONE function for the sweep that fires a row and the tool that saves it, so
+    the "next run" the agent reports is computed on the clock the sweep will
+    actually fire on.
+
+    A zone that cannot be resolved falls back to UTC rather than raising, because
+    taking down one page's whole file — every other row in it included — over a
+    typo in a zone name is a worse answer than firing an hour out.
+
+    THE FULL SET, not just "not found". `ZoneInfo` raises `ValueError` for an
+    absolute path or a traversal (`"/absolute"`, `"../x"`) and `OSError` for a key
+    long enough to reach the filesystem. Catching only `ZoneInfoNotFoundError` is
+    what made a single bad row raise out of the loop and stop every good schedule
+    in the same file — the exact outcome this fallback exists to prevent, and the
+    opposite of the sweep's "one page's mistake costs that page only".
+
+    `validate_user_schedules` lints `tz` too, so a bad zone should never get
+    this far. Both, deliberately: the lint is what TELLS the author, and this is
+    what keeps a miss from being fatal. Neither alone is enough.
+    """
+    if not tz:
+        return now_utc
+    try:
+        return now_utc.replace(tzinfo=UTC).astimezone(ZoneInfo(tz)).replace(tzinfo=None)
+    except (ZoneInfoNotFoundError, ValueError, OSError):
+        logger.warning("user schedules: unusable time zone %r — using UTC", tz)
+        return now_utc
+
+
+class SchedulePolicy(Struct, frozen=True):
+    """What THIS deployment does with a schedules file — handed to the agent's
+    `save_schedules` so it can say so instead of guessing.
+
+    `max_rows` is the same runaway guard the sweep applies (`server.max_page_schedules`),
+    checked at save time so the refusal reaches the author rather than a log.
+    `sweep_enabled` is whether the deploy runs scheduled work at all
+    (`server.trigger_check_interval_sec` > 0): a saved file on a deploy with the
+    sweep off is a file nothing will ever read, and the ONE thing the tool must
+    not do is let the agent report that as "set up".
+    """
+
+    max_rows: int
+    sweep_enabled: bool
+
+
+#: Where an ITEM's own schedules live — beside its workflows, the folder the
+#: agent's `save_workflow` already writes. `is_schedule_file` accepts both this
+#: and a page's, and the sweep treats them alike: one rule, two declaration points.
+ITEM_SCHEDULES_PATH = f"/{WORKSPACE_WORKFLOW_DIR}/{SCHEDULES_FILE}"
+
+
+def describe_row(row: UserSchedule) -> str:
+    """The row in words, for the reply the agent relays: `daily at 09:00
+    Asia/Taipei`, `weekly on mon at 08:00 UTC`, `every 15 minutes`."""
+    zone = row.tz or "UTC"
+    if row.every == "minutes":
+        return f"every {row.n} minutes ({zone})"
+    if row.every == "hourly":
+        return f"hourly ({zone})"
+    if row.every == "weekly":
+        return f"weekly on {row.dow} at {row.at} {zone}"
+    if row.every == "monthly":
+        return f"monthly on day {row.dom} at {row.at} {zone}"
+    return f"daily at {row.at} {zone}"
+
+
+def next_run_at(row: UserSchedule, now_utc: datetime, last_window: str) -> str:
+    """When this row fires next as `YYYY-MM-DD HH:MM` in ITS zone, on the rule
+    the sweep fires by — or `""` when it is due right now (the next sweep).
+
+    The empty case is the one worth keeping distinct rather than rounding away:
+    a missed window fires late, so a daily 09:00 saved at 10:00 runs within the
+    minute (the catch-up rule the sweep's reference documents), and a reply or a
+    panel that said "tomorrow" would contradict the manual it stands in for.
+    """
+    when = next_run(row.as_schedule(), in_zone(now_utc, row.tz), last_window)
+    return "" if when is None else f"{when:%Y-%m-%d %H:%M}"
+
+
+def describe_next_run(row: UserSchedule, at: str) -> str:
+    """`next_run_at`'s answer as the sentence the agent relays."""
+    if not at:
+        return "on the next sweep (this period is already due and has not run yet)"
+    return f"{at} {row.tz or 'UTC'}"
+
+
+class ScheduleView(Struct):
+    """One row of a schedules file as a PERSON (or the agent) should see it —
+    what the sweep will do with it, not what was typed.
+
+    Every row in the file is here, in file order, the refused ones included:
+    a panel that dropped them could not rewrite the file minus one row without
+    silently losing the others, and a person cannot fix a line they are not
+    shown. `raw` is the row as written, for exactly that rewrite.
+
+    `runnable` is THE verdict — will the sweep fire this row — and the next-run
+    fields are filled only when it is true: a "next" on a row the sweep will
+    skip is a report promised that never arrives. `next_run` is the English
+    sentence the agent relays; `next_at` / `due_now` / `tz` are the pieces a
+    panel localises, derived from the one `next_run_at` call.
+    """
+
+    index: int
+    raw: Any
+    """The row EXACTLY as written — whatever JSON value it was, an object or not
+    — because a rewrite that dropped one row must put the others back untouched,
+    and a substitute for a malformed one is a line the author never typed."""
+    problems: list[str]
+    run: str = ""
+    describe: str = ""
+    runnable: bool = False
+    next_run: str = ""
+    next_at: str = ""
+    due_now: bool = False
+    tz: str = "UTC"
+    known: bool = False
+    payload: dict[str, Any] = {}
+
+
+def schedule_views(
+    raw_text: str,
+    *,
+    offered: Collection[str],
+    now_utc: datetime,
+    last_window: Callable[[UserSchedule], str],
+    max_rows: int | None = None,
+    enabled: bool = True,
+    indexed: bool = True,
+) -> tuple[list[ScheduleView], list[str]]:
+    """Every row of a schedules file, described the way the sweep reads it —
+    same parser, same cap, same next-run rule, same ledger (`last_window`) —
+    plus the file-level problems. ONE implementation of "what will the sweep do
+    with this row", used by the agent's `save_schedules` reply and the panel's
+    listing, and held to the sweep by `tests/api/test_schedules_route_parity.py`.
+
+    A row is `runnable` only when EVERYTHING the sweep checks holds: the row
+    parses, its `run` is one the item offers, the file is within the cap
+    (`max_rows`, the sweep refuses the WHOLE file over it), the deployment runs
+    scheduled work at all (`enabled`), and the sweep knows the file exists
+    (`indexed` — it reads only what the index names). Each of those is a way a
+    row silently never fires, so each is said here rather than rounded away.
+    """
+    rows = file_rows(raw_text)
+    if rows is None:
+        return [], validate_user_schedules(raw_text)
+
+    file_problems: list[str] = []
+    capped = over_cap(raw_text, max_rows) if max_rows is not None else None
+    if capped is not None:
+        file_problems.append(capped)
+
+    views: list[ScheduleView] = []
+    for i, raw in enumerate(rows):
+        row, problems = parse_row(i, raw)
+        if row is None:
+            views.append(ScheduleView(index=i, raw=raw, problems=problems))
+            continue
+        known = row.run in offered
+        runnable = known and capped is None and enabled and indexed
+        at = next_run_at(row, now_utc, last_window(row)) if runnable else ""
+        views.append(
+            ScheduleView(
+                index=i,
+                raw=raw,
+                # The cap is the FILE's problem (said once, above); each row's
+                # own record stays clean and its `runnable` carries the verdict.
+                problems=[],
+                run=row.run,
+                describe=describe_row(row),
+                runnable=runnable,
+                next_run=describe_next_run(row, at) if runnable else "",
+                next_at=at,
+                due_now=runnable and not at,
+                tz=row.tz or "UTC",
+                known=known,
+                payload=row.payload,
+            )
+        )
+    return views, file_problems
+
+
+def last_window_lookup(spec: Any, item_id: str) -> Callable[[UserSchedule], str]:
+    """A `last_window` resolver over the sweep's ledger for THIS item's own
+    schedules file, or one that answers "never" when there is no ledger to ask
+    (no spec, or a deploy whose sweep is off never registered the store).
+
+    The lookup is a BLOCKING specstar read per distinct row. `schedule_views`
+    calls it inline, so a caller on the event loop runs the whole
+    `schedule_views(...)` under `asyncio.to_thread` — one hop for the file, not
+    one per row.
+    """
+    if spec is None:
+        return lambda _row: ""
+    from .triggers import SpecstarTriggerStore
+
+    store = SpecstarTriggerStore(spec)
+    folder = ITEM_SCHEDULES_PATH.rsplit("/", 1)[0]
+    cache: dict[str, str] = {}
+
+    def _lookup(row: UserSchedule) -> str:
+        key = trigger_id_for(item_id, folder, row)
+        if key not in cache:
+            try:
+                cache[key] = store.last_window(key)
+            except Exception:  # noqa: BLE001 — a listing, not a run; no ledger reads as "never"
+                cache[key] = ""
+        return cache[key]
+
+    return _lookup

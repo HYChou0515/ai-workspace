@@ -71,6 +71,7 @@ from ..workflow.orchestrator import (
 )
 from ..workflow.triggers import ScanLease, SpecstarTriggerStore
 from ..workflow.user_schedule_sweep import DEFAULT_MAX_ROWS, UserScheduleSweeper
+from ..workflow.user_schedules import ITEM_SCHEDULES_PATH, SchedulePolicy
 from . import perf_trace
 from .activity import ActivityLog
 from .agent_progress import progress_line
@@ -229,8 +230,9 @@ async def start_page_schedule(
     called the function. `create_app` still resolves the orchestrator at CALL
     time through a thin closure, which is where that deferral belongs.
 
-    It opens its OWN conversation, exactly as the interactive entrance does.
-    Without a `chat_id` the run keys on the item, `workflow_exec.drive_turn`
+    It runs in the schedule's OWN conversation — one per schedule, reused on
+    every fire (`chat_for_schedule`), where the interactive entrance mints one
+    per run. Without a `chat_id` the run keys on the item, `workflow_exec.drive_turn`
     looks that up, finds no conversation and falls back to the item's DEFAULT
     chat — so a scheduled page run would read the user's own chat history as
     its context and append its turns there, every night, on the entrance
@@ -1237,6 +1239,49 @@ def create_app(
             key=key,
         )
 
+    user_schedule_sweeper = UserScheduleSweeper(
+        spec=spec,
+        index=schedule_index,
+        # The DURABLE snapshot, not the facade. `files.read` routes warm-first,
+        # and on the hosted backend that probe is also the recovery trigger:
+        # an address the reaper did not clear plus a sandbox it did take away
+        # means the read REBUILDS it. Right for a person opening a file, wrong
+        # for a sweep — it would resurrect the sandbox of every item with a
+        # `schedules.json` once per tick on every pod, permanently undoing
+        # idle reap for exactly those items, with nothing to look at. The
+        # snapshot lags by at most one mirror interval (5s), which for a
+        # declaration that fires on the hour is no lag at all.
+        read=filestore.read,
+        # Asked ONLY when the snapshot says a schedules.json is missing, to
+        # tell "the mirror has not caught up" apart from "somebody deleted
+        # it" — identical from the snapshot, opposite right answers. Rare by
+        # construction, so the ordinary tick still wakes nothing.
+        read_live=files.read,
+        start=_start_page_schedule,
+        owner_of=_owner_of_item,
+        # The SAME rule the page's own `startRun` is held to (`workflow.offered`),
+        # answered from the DURABLE store — `_workflows_for_sweep`, for the same
+        # reason `read=` above is the snapshot and not the facade. Through a
+        # lambda because the resolver is defined further down and this is built
+        # here — resolved when the sweep fires, the same deferred wiring
+        # `_start_page_schedule` explains above.
+        workflows_for=lambda item_id: _workflows_for_sweep(item_id),
+        max_rows=max_page_schedules,
+        # #804: one pod per window reads the pages' schedules.json; the rest
+        # skip the tick. Same ledger as the per-schedule claim, one more row.
+        # The interval is the same knob that paces the tick — a window is one
+        # tick — so a deploy with triggers off (None) builds no lease, and
+        # the sweeper is never started anyway (`lifecycle` gates both on it).
+        lease=(
+            ScanLease(
+                SpecstarTriggerStore(spec),
+                "user-schedules",
+                interval_s=trigger_check_interval.total_seconds(),
+            )
+            if trigger_check_interval is not None
+            else None
+        ),
+    )
     lifespan = build_lifespan(
         registry=registry,
         spec=spec,
@@ -1259,49 +1304,7 @@ def create_app(
         # #WUI P15: fires the schedules pages declared. Built here so it shares
         # the one `spec`, the one index and the item-owner lookup the rest of the
         # app already resolved.
-        user_schedule_sweeper=UserScheduleSweeper(
-            spec=spec,
-            index=schedule_index,
-            # The DURABLE snapshot, not the facade. `files.read` routes warm-first,
-            # and on the hosted backend that probe is also the recovery trigger:
-            # an address the reaper did not clear plus a sandbox it did take away
-            # means the read REBUILDS it. Right for a person opening a file, wrong
-            # for a sweep — it would resurrect the sandbox of every item with a
-            # `schedules.json` once per tick on every pod, permanently undoing
-            # idle reap for exactly those items, with nothing to look at. The
-            # snapshot lags by at most one mirror interval (5s), which for a
-            # declaration that fires on the hour is no lag at all.
-            read=filestore.read,
-            # Asked ONLY when the snapshot says a schedules.json is missing, to
-            # tell "the mirror has not caught up" apart from "somebody deleted
-            # it" — identical from the snapshot, opposite right answers. Rare by
-            # construction, so the ordinary tick still wakes nothing.
-            read_live=files.read,
-            start=_start_page_schedule,
-            owner_of=_owner_of_item,
-            # The SAME ceiling the page's own `startRun` is held to. Without it
-            # the two entrances disagreed about what a page may start, and the
-            # scheduled one said nothing at all when the answer was no.
-            # Through a lambda because the resolver is defined further down and
-            # this is built here — resolved when the sweep fires, the same
-            # deferred wiring `_start_page_schedule` explains above.
-            workflows_for=lambda item_id: _workflows_for_item(item_id),
-            max_rows=max_page_schedules,
-            # #804: one pod per window reads the pages' schedules.json; the rest
-            # skip the tick. Same ledger as the per-schedule claim, one more row.
-            # The interval is the same knob that paces the tick — a window is one
-            # tick — so a deploy with triggers off (None) builds no lease, and
-            # the sweeper is never started anyway (`lifecycle` gates both on it).
-            lease=(
-                ScanLease(
-                    SpecstarTriggerStore(spec),
-                    "user-schedules",
-                    interval_s=trigger_check_interval.total_seconds(),
-                )
-                if trigger_check_interval is not None
-                else None
-            ),
-        ),
+        user_schedule_sweeper=user_schedule_sweeper,
         notification_channel=notification_channel,
         offhours=goal_offhours,  # #615: the after-hours goal sweeper
         cluster_sweep_seconds=kb_cluster_sweep_seconds,
@@ -1956,6 +1959,14 @@ def create_app(
     # interactive send path (`_send_into`) and the workflow node driver
     # (`_wf_drive_turn`) build their ctx through this, so a new ctx field is added
     # once instead of in two hand-rolled constructions that can drift.
+    # The SAME two knobs the sweep runs under (`max_rows`, `trigger_check_interval`
+    # in the lifespan), as ONE value: what `save_schedules` tells the agent and
+    # what the Workflows panel lists are what the sweep will do — never a third
+    # copy of either knob.
+    schedule_policy = SchedulePolicy(
+        max_rows=max_page_schedules,
+        sweep_enabled=trigger_check_interval is not None,
+    )
     turn_ctx = TurnContextBuilder(
         sandbox=sandbox,
         filestore=filestore,
@@ -1977,6 +1988,7 @@ def create_app(
         infer_modules_parallelism=infer_modules_parallelism,
         history_max_messages=history_max_messages,
         history_max_context_tokens=history_max_context_tokens,
+        schedule_policy=schedule_policy,
         # #624: the operator's declared ceiling for this endpoint (the escape
         # hatch); unset ⇒ resolved per turn, and unknown ⇒ no trimming.
         context_limit=context_limit,
@@ -2019,8 +2031,9 @@ def create_app(
     # ── Workflows (#100) ─────────────────────────────────────────────
     # A run drives its own WORKFLOW CHAT (§3): agent nodes stream into that chat and
     # the orchestrator overlays phase/step events on the same per-chat stream.
-    from ..apps.profiles import load_profile_workflow, profile_workflows
+    from ..apps.profiles import load_profile_workflow
     from ..workflow.dsl import build_run
+    from ..workflow.offered import offered_workflow_ids
     from ..workflow.workspace_store import load_workspace_workflow
 
     async def _load_workspace(item_id: str, workflow_id: str):
@@ -2080,6 +2093,10 @@ def create_app(
         keep_last_runs=workflow_keep_last_runs,
     )
     app.state.workflow_orchestrator = workflow_orchestrator
+    # Reachable by an app-level test that drives one tick, like the other
+    # coordinators — the sweep's entrance rule is wiring, and wiring is only
+    # provable from the composition root.
+    app.state.user_schedule_sweeper = user_schedule_sweeper
 
     # #429 P9: entity-write event triggers. The dispatcher matches an entity create/update
     # against declared event triggers and fires runs (under each trigger's acting_user); the
@@ -2139,6 +2156,10 @@ def create_app(
         workflow_orchestrator=workflow_orchestrator,
         workflow_executor=workflow_executor,
         event_dispatcher=event_dispatcher,
+        schedule_policy=schedule_policy,
+        # Whether the sweep will read the item's own schedules file at all — the
+        # same index the sweep iterates, asked the same way.
+        schedule_indexed=lambda item_id: ITEM_SCHEDULES_PATH in schedule_index.paths(item_id),
     )
 
     chat_send_svc = ChatSendService(
@@ -2274,18 +2295,38 @@ def create_app(
         async def start(self, **kw: Any) -> str:
             return await self._get().start(**kw)
 
-    def _workflows_for_item(item_id: str) -> Sequence[str]:
-        """Which workflows a page in this item may start.
+    async def _workflows_for_item(item_id: str) -> Sequence[str]:
+        """Which workflows this item may start — the ONE list every entrance
+        consults (`workflow.offered`): the profile's workflows plus the ones
+        the item authored under `.workflows/`. For a REQUEST (a page's
+        `startRun`), so the listing is the facade's: somebody is using the item.
 
-        The profile's list — the same ceiling shape `tools:` uses, so there is
-        one way to ask "may this page do that" rather than a second scoping model
-        to keep in step.
+        Awaited, because the item's own workflows are files, and the locator
+        lookups are offloaded so the route never holds the loop on a specstar
+        read.
         """
-        profile = locator.profile_of(item_id)
-        slug = locator.slug_of(item_id)
-        if not slug:
-            return ()
-        return [w.id for w in profile_workflows(slug, profile)]
+        slug, profile = await asyncio.gather(
+            asyncio.to_thread(locator.slug_of, item_id),
+            asyncio.to_thread(locator.profile_of, item_id),
+        )
+        return await offered_workflow_ids(files.ls, item_id, slug=slug or "", profile=profile)
+
+    async def _workflows_for_sweep(item_id: str) -> Sequence[str]:
+        """The SAME list, for the schedule sweep — from the DURABLE store, not the
+        facade. The facade's `ls` is warm-first, and on the hosted backend that
+        probe is the recovery trigger: an address the reaper did not clear plus a
+        sandbox it did take away means the listing REBUILDS it. Per item with a
+        schedule, per tick, on every pod — permanently undoing idle reap for
+        exactly those items, which is the trap the sweeper's `read=filestore.read`
+        wiring above already names. The snapshot lags by at most one mirror
+        interval; for a workflow saved minutes before its first 09:00 that is
+        no lag at all.
+        """
+        slug, profile = await asyncio.gather(
+            asyncio.to_thread(locator.slug_of, item_id),
+            asyncio.to_thread(locator.profile_of, item_id),
+        )
+        return await offered_workflow_ids(filestore.ls, item_id, slug=slug or "", profile=profile)
 
     register_wui_routes(
         api,

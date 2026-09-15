@@ -362,6 +362,43 @@ def is_due(s: Schedule, now: datetime, last_window: str) -> bool:
     return now >= period_target(s, now) and last_window != fire_window(s, now)
 
 
+def next_run(s: Schedule, now: datetime, last_window: str) -> datetime | None:
+    """When the sweep will fire this schedule next, on the same rule ``is_due`` fires
+    it by — or ``None`` when it is due RIGHT NOW (this period's target has passed
+    and the window has not fired), i.e. the next sweep tick, whenever that is.
+
+    The ``None`` case is the one worth stating rather than rounding away: a
+    daily 09:00 row saved at 10:00 runs within the minute, not tomorrow, because a
+    missed window fires late (the catch-up rule). Reporting "tomorrow 09:00" for
+    it would be the sweep's own reference manual contradicted by the tool that
+    is supposed to read it.
+    """
+    target = period_target(s, now)
+    if now < target:
+        return target
+    if last_window != fire_window(s, now):
+        return None
+    return period_target(s, _next_period(s, now))
+
+
+def _next_period(s: Schedule, now: datetime) -> datetime:
+    """An instant inside the period AFTER ``now``'s, for ``period_target`` to place the
+    schedule in. Sub-daily periods are bucketed, so the next one starts at the end
+    of this bucket; calendar periods step a day / a week / to the first of next month."""
+    if s.every == "hourly":
+        return _bucket_start(s.every, now) + timedelta(hours=1)
+    if s.every.startswith("minutes:"):
+        _, _, width = s.every.partition(":")
+        n = int(width) if width.isdigit() and int(width) > 0 else 1
+        return _bucket_start(s.every, now) + timedelta(minutes=n)
+    if s.every == "weekly":
+        return now + timedelta(days=7)
+    if s.every == "monthly":
+        first_next = (now.replace(day=1) + timedelta(days=32)).replace(day=1)
+        return first_next.replace(hour=0, minute=0, second=0, microsecond=0)
+    return now + timedelta(days=1)
+
+
 def _valid_tz(tz: str) -> bool:
     from zoneinfo import ZoneInfoNotFoundError
 

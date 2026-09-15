@@ -9,12 +9,15 @@ mechanics live behind the ``WorkflowOrchestrator`` and the ``WorkflowExecutor``.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
+from typing import Any
 
 import msgspec
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
 from starlette.datastructures import UploadFile
@@ -32,6 +35,7 @@ from ..workflow.orchestrator import (
 )
 from ..workflow.preflight import can_run as _preflight_can_run
 from ..workflow.run import WorkflowRun
+from ..workflow.user_schedules import SchedulePolicy
 from .activity import ActivityLog
 from .events import FileChanged
 from .locator import ItemLocator
@@ -49,6 +53,34 @@ from .turns import ChatTurnEngine
 from .workflow_exec import WorkflowExecutor
 
 logger = logging.getLogger(__name__)
+
+
+class ScheduleRowOut(BaseModel):
+    """One row of the item's schedules file, as the sweep will treat it."""
+
+    index: int
+    raw: Any
+    problems: list[str]
+    run: str = ""
+    describe: str = ""
+    runnable: bool = False
+    next_run: str = ""
+    next_at: str = ""
+    due_now: bool = False
+    tz: str = "UTC"
+    known: bool = False
+    payload: dict[str, Any] = {}
+
+
+class SchedulesOut(BaseModel):
+    enabled: bool
+    #: Whether the sweep's index names the item's schedules file. False for a
+    #: file that reached the store past every hook and has not been reconciled
+    #: by a turn yet — the sweep will not read it until then.
+    indexed: bool
+    path: str = ".workflows/schedules.json"
+    rows: list[ScheduleRowOut]
+    problems: list[str]
 
 
 async def _staged_run_uploads(
@@ -102,8 +134,13 @@ def register_workflow_routes(
     workflow_orchestrator: WorkflowOrchestrator,
     workflow_executor: WorkflowExecutor,
     event_dispatcher: EventTriggerDispatcher,
+    schedule_policy: SchedulePolicy,
+    schedule_indexed: Callable[[str], bool],
 ) -> None:
-    """Mount the workflow profile + run routes onto ``app``."""
+    """Mount the workflow profile + run routes onto ``app``.
+
+    ``schedule_indexed(item_id)`` answers whether the sweep's index names this
+    item's own schedules file — a blocking read, called off the loop."""
 
     async def _item_entities_of(investigation_id: str):
         """A ``type_name -> current parsed records`` resolver over the item's entity store —
@@ -124,18 +161,17 @@ def register_workflow_routes(
 
     async def _workflow_manifest_or_404(slug: str, item_id: str, workflow_id: str):
         """Validate the item belongs to the slug AND carries the requested workflow —
-        a package workflow on its profile (manual §4) OR a WORKSPACE-authored
-        ``.workflows/<id>.json`` (§22 P4, shadowing same-id package). Returns
-        (investigation_id, profile, manifest)."""
-        from ..apps.profiles import load_profile_workflow
-        from ..workflow.workspace_store import load_workspace_workflow
+        one the item OFFERS, by the same rule every entrance consults
+        (`workflow.offered`): a package workflow on its profile (manual §4) or a
+        WORKSPACE-authored ``.workflows/<id>.json`` (§22 P4), the workspace one
+        shadowing a same-id package one. Returns (investigation_id, profile, manifest)."""
+        from ..workflow.offered import resolve_offered_workflow
 
         investigation_id = locator.require_access(slug, item_id, "read_meta")
         profile = locator.profile_of(investigation_id)
-        manifest = load_profile_workflow(slug, profile, workflow_id)
-        if manifest is None and workflow_id:  # fall through to a workspace-authored one
-            res = await load_workspace_workflow(files, investigation_id, workflow_id)
-            manifest = res[1] if res is not None else None
+        manifest = await resolve_offered_workflow(
+            files, investigation_id, slug=slug, profile=profile, workflow_id=workflow_id
+        )
         if manifest is None:
             raise HTTPException(
                 status_code=422,
@@ -154,6 +190,83 @@ def register_workflow_routes(
         investigation_id = locator.require_access(slug, item_id, "read_meta")
         metas = await workspace_workflow_metas(files, investigation_id)
         return [msgspec.to_builtins(m) for m in metas]
+
+    @app.get("/a/{slug}/items/{item_id}/schedules", response_model=SchedulesOut)
+    async def list_item_schedules(slug: str, item_id: str) -> SchedulesOut:
+        """The item's own `.workflows/schedules.json`, read the way the SWEEP reads
+        it — same parser, same cap, same next-run rule, same ledger, same index —
+        for the Workflows panel. Held to that by
+        `tests/api/test_schedules_route_parity.py`, which feeds one file to both
+        and asserts the rows marked `runnable` here are the rows the sweep fires.
+
+        Every row in the file, in file order, the refused ones included and each
+        carrying what was written: the panel rewrites the file minus one row to
+        cancel a schedule, and could not do that faithfully from a list that had
+        already dropped the rows the linter refuses. `runnable` is the verdict
+        (row parses, `run` is one the item has, file within the cap, sweep on,
+        file indexed) and the next-run fields are filled only behind it; `known`
+        and `problems` say which of those failed for a row, `enabled` /
+        `indexed` / the file-level `problems` say which failed for the file.
+
+        ONE window where this and the sweep read different bytes: the facade is
+        warm-first and the sweep reads the durable snapshot, so a change made
+        while the sandbox is warm (the panel's Remove, the tool's save) reaches
+        the sweep within one mirror interval (5 s by default) or at the end of
+        the turn that made it. The parity test does not cover that window;
+        `UserScheduleSweeper._one_file` carries the sweep's side of the same note.
+        """
+        from ..filestore.protocol import FileNotFound
+        from ..workflow.offered import offered_workflow_ids
+        from ..workflow.user_schedules import (
+            ITEM_SCHEDULES_PATH,
+            last_window_lookup,
+            schedule_views,
+            utc_now,
+        )
+
+        investigation_id = locator.require_access(slug, item_id, "read_meta")
+        try:
+            data = await files.read(investigation_id, ITEM_SCHEDULES_PATH)
+        except FileNotFound:
+            return SchedulesOut(
+                enabled=schedule_policy.sweep_enabled, indexed=False, rows=[], problems=[]
+            )
+        # The sweep's own decode (`user_schedule_sweep._one_file`): a stray byte
+        # costs its character, not the whole file — and never a 500 here while
+        # the sweep goes on running the rows.
+        raw = data.decode("utf-8", "replace")
+        profile = locator.profile_of(investigation_id)
+        offered = await offered_workflow_ids(files.ls, investigation_id, slug=slug, profile=profile)
+        # The sweep reads only the items its index names. A file that reached
+        # the store past every hook is invisible to it until the next turn's
+        # reconcile, and its rows must not be shown as if they will fire.
+        try:
+            indexed = await asyncio.to_thread(schedule_indexed, investigation_id)
+        except Exception:  # noqa: BLE001 — a listing, not a run
+            # An index the route cannot read is one the sweep cannot read
+            # either, so "not indexed" is what is true this moment; and a
+            # listing must not 500 over it while the file itself is fine.
+            logger.exception("schedules: could not read the index for %s", investigation_id)
+            indexed = False
+        # One hop off the loop: the ledger reads inside are blocking specstar I/O.
+        views, problems = await asyncio.to_thread(
+            schedule_views,
+            raw,
+            offered=offered,
+            now_utc=utc_now(),
+            last_window=last_window_lookup(
+                spec if schedule_policy.sweep_enabled else None, investigation_id
+            ),
+            max_rows=schedule_policy.max_rows,
+            enabled=schedule_policy.sweep_enabled,
+            indexed=indexed,
+        )
+        return SchedulesOut(
+            enabled=schedule_policy.sweep_enabled,
+            indexed=indexed,
+            rows=[ScheduleRowOut(**msgspec.to_builtins(v)) for v in views],
+            problems=problems,
+        )
 
     @app.get("/a/{slug}/items/{item_id}/workflow-templates")
     async def list_workflow_templates(slug: str, item_id: str) -> list[dict]:
@@ -197,6 +310,7 @@ def register_workflow_routes(
         from ..workflow.dsl import DslError, validate_def
         from ..workflow.shared import load_shared_workflow
         from ..workflow.workspace_store import (
+            RESERVED_WORKFLOW_ID,
             save_workspace_workflow,
             workspace_workflow_path,
         )
@@ -218,6 +332,13 @@ def register_workflow_routes(
                 status_code=422,
                 detail=f"template {name!r} can't run in profile {profile!r}: "
                 + "; ".join(problems),
+            )
+        if name == RESERVED_WORKFLOW_ID:
+            # Checked here for the sentence; `save_workspace_workflow` would
+            # refuse it anyway, as it refuses every writer.
+            raise HTTPException(
+                status_code=422,
+                detail=f"{name!r} is the name of the item's schedules file, not a workflow id",
             )
         path = workspace_workflow_path(name)
         if not overwrite and await files.exists(investigation_id, path):

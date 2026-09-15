@@ -34,6 +34,27 @@ def slugify_workflow_id(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
 
 
+#: The one filename that means "schedules" — an item's sits here beside its
+#: workflows, a page's in the page's own folder. Defined in this leaf module
+#: (beside `WORKSPACE_WORKFLOW_DIR`) so `user_schedules` and the index can both
+#: import it without a cycle; spelled once.
+SCHEDULES_FILE = "schedules.json"
+
+
+def is_workspace_workflow_path(path: str) -> bool:
+    """Is `path` a workflow file of the workspace — a FLAT `.workflows/<id>.json`?
+    Nested files are not, and neither is the item's `schedules.json`, which
+    lives in the same folder and would otherwise be offered as a workflow
+    named `schedules` (accepted by the gates, unrunnable by the orchestrator).
+    One predicate for the id listing and the manifest listing, so the two
+    cannot disagree about what counts."""
+    prefix = f"/{WORKSPACE_WORKFLOW_DIR}/"
+    if not path.startswith(prefix):
+        return False
+    rest = path[len(prefix) :]
+    return "/" not in rest and rest.endswith(".json") and rest != SCHEDULES_FILE
+
+
 def workspace_workflow_path(slug: str) -> str:
     return f"/{WORKSPACE_WORKFLOW_DIR}/{slug}.json"
 
@@ -59,7 +80,10 @@ async def load_workspace_workflow(
     manifest id forced to the addressing ``workflow_id`` — the filename is authoritative),
     or ``None`` when absent / malformed. The single read backing both the orchestrator's
     run resolution and the route's manifest 404 guard (#323 P4)."""
-    if not workflow_id:
+    if not workflow_id or workflow_id == RESERVED_WORKFLOW_ID:
+        # The schedules file is not a workflow, whatever body somebody wrote
+        # into it — refused HERE, in the one loader the orchestrator, the panel's
+        # resolver and the run route all share, so no reader can run it.
         return None
     try:
         d = parse_def(await files.read(workspace_id, workspace_workflow_path(workflow_id)))
@@ -68,12 +92,28 @@ async def load_workspace_workflow(
     return d, msgspec.structs.replace(build_manifest(d), id=workflow_id)
 
 
+#: The one workflow id no workspace may use: its file would BE the item's
+#: schedules file. The read side (`is_workspace_workflow_path`) already treats
+#: the name as reserved; a write side that still handed it out let
+#: `save_workflow("Schedules")` overwrite every schedule the item had, silently,
+#: with a workflow nothing could then run or list.
+RESERVED_WORKFLOW_ID = SCHEDULES_FILE[: -len(".json")]
+
+
+class ReservedWorkflowId(ValueError):
+    """`slug` names the schedules file, not a workflow."""
+
+
 async def save_workspace_workflow(
     files: WorkspaceFiles, workspace_id: str, slug: str, d: WorkflowDef
 ) -> str:
     """Write ``d`` to ``.workflows/<slug>.json`` (canonical msgspec JSON, ``id`` forced to
     ``slug`` so the filename is authoritative). Returns the workspace path. Re-saving the
-    same slug overwrites (refine freely)."""
+    same slug overwrites (refine freely). Raises `ReservedWorkflowId` for the one slug
+    whose file is the item's schedules — checked HERE, the write chokepoint, so every
+    caller is held to it and not only the one that remembered."""
+    if slug == RESERVED_WORKFLOW_ID:
+        raise ReservedWorkflowId(slug)
     path = workspace_workflow_path(slug)
     await files.write(workspace_id, path, msgspec.json.encode(msgspec.structs.replace(d, id=slug)))
     return path
@@ -92,8 +132,7 @@ async def workspace_workflow_metas(
     wanted = [
         path
         for path in sorted(await files.ls(workspace_id, prefix))
-        # only flat .workflows/<id>.json (no nested dirs)
-        if "/" not in path[len(prefix) :] and path.endswith(".json")
+        if is_workspace_workflow_path(path)
     ]
     # One operation, one resolution of where the workspace lives — reading them
     # a call at a time put a second sandbox round trip in front of every file.

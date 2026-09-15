@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Sequence
 from typing import cast
 
 import pytest
@@ -124,6 +125,16 @@ class _Locator:
 _UNSET = object()
 
 
+def _offers(ids: Sequence[str] | None):
+    """The resolver seam, as the awaitable the route expects (one shared resolver
+    answers this for every entrance, and the item's own workflows are files)."""
+
+    async def _resolve(_item: str) -> Sequence[str] | None:
+        return ids
+
+    return _resolve
+
+
 def build(
     *,
     allowed: list[str] | None | object = _UNSET,
@@ -162,7 +173,7 @@ def build(
         get_user_id=lambda: "default-user",
         orchestrator=orchestrator,
         turn_engine=turn_engine,
-        workflows_for=lambda _item: workflows or [],
+        workflows_for=_offers(workflows or []),
     )
     return TestClient(app), sb, reg, loc
 
