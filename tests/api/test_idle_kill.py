@@ -17,6 +17,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import timedelta
 
+import pytest
 from asgi_lifespan import LifespanManager
 from httpx import ASGITransport
 
@@ -141,6 +142,67 @@ async def test_idle_killer_reaps_session_past_threshold():
             if sandbox.kill_calls >= 1:
                 break
     assert sandbox.kill_calls == 1
+
+
+async def test_a_tick_inside_the_turns_window_does_not_orphan_the_sandbox(caplog, monkeypatch):
+    """The window the test above falls into since #804, four for four on CI.
+
+    A turn's session is created when its context is built (`turn_context`
+    fetches it, no handle yet); the sandbox is acquired by the engine's warm
+    as the turn starts (`_drive`), after the rest of the context build, the
+    message persist and the enqueue — 0.26 s under coverage here. A reaper
+    tick in between saw "no sandbox, timestamp old", took the "nothing to
+    reap" exit and dropped the session from the table. The turn still held
+    the object, put a handle on it, and from then on nothing listed that
+    sandbox: not this reaper, not `close_all`. P33 (#775) closed the other
+    half of this window, the acquire itself, with the session lock; this is
+    the half before the lock is taken.
+
+    Forced rather than timed: `registry.session` is held at its return — the
+    session is in the table with no handle and the turn does not yet have
+    it — until the reaper's own log says a tick dropped it (a run where none
+    landed fails here instead of passing vacuously); then the turn goes on
+    through the real chain: context build, enqueue, the engine's warm,
+    `ensure_handle`. Threshold 0 so every tick sees everything as idle.
+    """
+    from workspace_app.api.registry import InvestigationRegistry
+
+    app, sandbox, _, spec = _make_components(
+        idle_timeout=timedelta(seconds=0),
+        idle_check_interval=timedelta(seconds=0.05),
+    )
+    iid = register_rca_item(spec)
+    parked, go = asyncio.Event(), asyncio.Event()
+    fetch = InvestigationRegistry.session
+
+    async def held_at_return(self: InvestigationRegistry, inv_id: str):
+        session = await fetch(self, inv_id)
+        if inv_id == iid and not parked.is_set():
+            parked.set()
+            await go.wait()
+        return session
+
+    monkeypatch.setattr(InvestigationRegistry, "session", held_at_return)
+    caplog.set_level(logging.INFO, logger="workspace_app.api.registry")
+    async with _running_app(app) as client:
+        post = asyncio.create_task(
+            client.post(f"/a/rca/items/{iid}/messages", json={"content": "x"})
+        )
+        await asyncio.wait_for(parked.wait(), 10)
+        for _ in range(100):
+            if any("no sandbox to reap" in r.getMessage() for r in caplog.records):
+                break
+            await asyncio.sleep(0.05)
+        else:
+            pytest.fail("no reaper tick dropped the session inside the window — nothing exercised")
+        go.set()
+        assert (await post).status_code == 202
+        assert sandbox.create_calls == 1
+        for _ in range(100):
+            await asyncio.sleep(0.05)
+            if sandbox.kill_calls >= 1:
+                break
+    assert sandbox.kill_calls == 1, "the sandbox the turn built after the drop was never reaped"
 
 
 async def test_active_session_within_threshold_is_not_reaped():

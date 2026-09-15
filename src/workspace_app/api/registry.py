@@ -266,11 +266,45 @@ class InvestigationRegistry:
                 session.handle, session.tools = await self._acquire(
                     session.investigation_id, tools=tools, on_progress=on_progress
                 )
+                self._list(session)
             # Refresh the GLOBAL heartbeat on every wake/use (not just the first)
             # so another pod's idle reaper sees this item as live (#345).
             await self._bump(session.investigation_id)
             session.last_active = _utcnow()
         return session.handle
+
+    def _list(self, session: InvestigationSession) -> None:
+        """A handle is always reachable from `_sessions` — the rule that keeps
+        `kill_idle`'s drop of a handle-less session harmless.
+
+        A turn holds its session from the moment its context is built
+        (`turn_context` fetches it; no handle yet) to the warm the engine does
+        as the turn starts (`ChatTurnEngine._drive`, before the first event) —
+        the rest of the context build, the message persist and the enqueue
+        sit between the two. A reaper tick in between saw
+        "no sandbox, timestamp old", took the "nothing to reap" exit and dropped
+        the session from the table. The turn then acquired onto an object the
+        table no longer listed, and the sandbox was nobody's to reap: not the
+        reaper's, not `close_all`'s. P33 (#775) closed the other half of that
+        window — the acquire itself — with the session lock; this is the half
+        before the lock is taken, and it is closed HERE, where the handle is
+        made, rather than by every holder announcing itself (chat turn, workflow
+        turn, WUI tool call — one missed door and it is back).
+
+        Measured: since #804 put the cluster-sweep ask and the help-index jobs
+        inside the first turn, that window runs 0.26 s under coverage against
+        the idle-kill test's 0.1 s threshold, and the test reddened four for
+        four on CI while passing locally without coverage.
+
+        If the table already holds a DIFFERENT object for the item (someone
+        asked for the session between the drop and this acquire), that object
+        is what every later caller and the reaper see, so it learns the handle
+        too; the caller keeps the object it holds. One item is one sandbox on
+        every backend (`_acquire` converges on the backend's own identity), so
+        two objects agreeing about it is the whole of the reconciliation."""
+        listed = self._sessions.setdefault(session.investigation_id, session)
+        if listed is not session:
+            listed.handle, listed.tools = session.handle, session.tools
 
     async def would_cost(self, item: str) -> ResourceLimits:
         """What a NEW sandbox for `item` would really consume.
@@ -697,6 +731,13 @@ class InvestigationRegistry:
             # `test_idle_killer_reaps_session_past_threshold` in ~4% of runs,
             # always as `kill_calls == 0`. Production's threshold is 8 h, so
             # what it costs there is the orphan rather than the flake.
+            #
+            # This check covers the acquire only. The window BEFORE it — a turn
+            # between building its context and the engine's warm as it starts,
+            # same symptom — is closed by `ensure_handle` re-listing the session
+            # it wrote to (`_list`), so the drop below is harmless there. Kept
+            # because a drop-and-relist mid-acquire is churn this line avoids
+            # for free.
             if s.lock.locked():
                 continue
             try:
