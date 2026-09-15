@@ -1751,6 +1751,57 @@ async def test_a_session_being_acquired_right_now_is_not_idle():
     assert sandbox.kill_calls == 0
 
 
+async def test_a_handle_acquired_on_a_dropped_session_is_reachable_from_the_registry():
+    """The half of the window P33 did not close: before the lock is taken.
+
+    A turn holds its session from its context build to the engine's warm as
+    the turn starts; a reaper tick in between drops the handle-less session
+    from the table. The turn then acquires — onto an object the table no
+    longer lists — and the sandbox is nobody's to reap. The rule that keeps
+    the drop harmless lives where the handle is made: `ensure_handle` puts the
+    session it wrote to back in the table, so a handle is always reachable
+    from `_sessions`.
+    """
+    sandbox = _CountingSandbox()
+    registry = InvestigationRegistry(sandbox=sandbox)
+    held = await registry.session("ws-1")  # the turn's object
+    held.last_active = datetime.now(UTC) - timedelta(minutes=30)
+    assert await registry.kill_idle(threshold=timedelta(minutes=15)) == ["ws-1"]
+    assert "ws-1" not in registry._sessions  # the tick landed inside the window
+
+    handle = await registry.ensure_handle(held)  # the turn's first exec
+
+    assert registry._sessions.get("ws-1") is held, "the session the handle went to is unlisted"
+    held.last_active = datetime.now(UTC) - timedelta(minutes=30)
+    assert await registry.kill_idle(threshold=timedelta(minutes=15)) == ["ws-1"]
+    assert sandbox.kill_calls == 1 and handle.id not in sandbox._fs
+
+
+async def test_a_handle_acquired_on_a_dropped_session_lands_on_its_replacement_too():
+    """Between the drop and the acquire, someone else asked for the item's
+    session and got a fresh object — a file route, say. The table's object is
+    what every later caller and the reaper see, so the handle goes on it as
+    well; the turn keeps using the object it holds. One item, one sandbox
+    (`_acquire` converges on the backend's own identity), two objects that
+    agree about it."""
+    sandbox = _CountingSandbox()
+    registry = InvestigationRegistry(sandbox=sandbox)
+    held = await registry.session("ws-1")
+    held.last_active = datetime.now(UTC) - timedelta(minutes=30)
+    await registry.kill_idle(threshold=timedelta(minutes=15))
+    replacement = await registry.session("ws-1")
+    assert replacement is not held
+
+    handle = await registry.ensure_handle(held)
+
+    assert registry._sessions["ws-1"] is replacement
+    assert replacement.handle is handle, "the table's session does not know the sandbox"
+    assert held.handle is handle
+    replacement.last_active = datetime.now(UTC) - timedelta(minutes=30)
+    assert await registry.kill_idle(threshold=timedelta(minutes=15)) == ["ws-1"]
+    assert sandbox.kill_calls == 1
+
+
 async def test_a_handle_less_session_that_is_dropped_says_so(caplog):
     """The drop that left no trace.
 

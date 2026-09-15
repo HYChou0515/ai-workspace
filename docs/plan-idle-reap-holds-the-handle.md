@@ -10,7 +10,10 @@
 **縫在哪**(對著 log 讀出來的,`registry.py:684–747`、`turn_context.py:837`):
 
 1. 一個 turn 開始時 `turn_context` 先 `registry.session(item)` 建 session(`last_active` = 建立當下,
-   `handle = None`),接著組 context、等模型、直到第一個需要 sandbox 的 exec 才 `ensure_handle(session)`。
+   `handle = None`),接著組完 context、存訊息、enqueue,到 engine 開跑的預熱(`turns.py:1049`
+   `ensure_sandbox(prepare_env=False)`)才 `ensure_handle(session)`。(第一版寫「直到第一個 exec」——
+   看 log 順序才發現預熱在 turn started 之前;e2e 第一版把 runner 停在縫之後,整檔跑會過只是運氣,
+   單跑正向對照組就抓到了。)
 2. idle killer 的 tick 落在 1 和 exec 之間:看到「有 session、沒 handle、時間戳超過 threshold」,走
    `registry.py:743`「no sandbox to reap」分支,**把 session 從 `_sessions` 刪掉**。
 3. turn 手上還握著那個物件;`ensure_handle(session)` 只往物件上寫 handle,不回頭看 `_sessions`。
@@ -40,5 +43,14 @@ threshold 是 0.1 秒,tick 每次都落在縫裡。
 | phase | 內容 | 驗收 |
 |---|---|---|
 | P1 | 這份 plan | — |
-| P2 | **先紅**:(a) e2e 用 event 強制縫——runner 在 `ensure_sandbox` 之前卡住、測試直接 `kill_idle`、放行、斷言 turn 後 sandbox 被 reap(不靠時序);(b) registry 單元:session 被 drop 後 `ensure_handle` 回來,`_sessions[item]` 指得到 handle;(c) 登記簿已被別的物件取代的分支。**再綠**:`ensure_handle` 補不變量。突變(拿掉不變量)→ (a)(b)(c) 與既有 timing 測試(coverage 開)都紅 | 既有 timing 測試 coverage 開 5/5 綠;`ruff`/`ty`;registry.py 那段註解補上另一半 |
+| P2 | **先紅**:(a) e2e 強制縫——把 `registry.session()` 的回傳點門住(session 在登記簿、沒 handle、還沒交到 turn 手上),等 reaper 自己的 log 說它丟了 session(沒丟就 fail,不空跑),放行走真鏈(context、enqueue、engine 預熱、`ensure_handle`),斷言 turn 後 sandbox 被 reap;(b) registry 單元:session 被 drop 後 `ensure_handle` 回來,`_sessions[item]` 指得到 handle;(c) 登記簿已被別的物件取代的分支。**再綠**:`ensure_handle` 補不變量。突變(拿掉不變量)→ (a)(b)(c) 與既有 timing 測試(coverage 開)都紅 | 既有 timing 測試 coverage 開 5/5 綠;`ruff`/`ty`;registry.py 那段註解補上另一半 |
 | P3 | 推、draft PR、CI;推前自己三把鏡頭 | CI api-1 綠 |
+
+## P2 自審(推之前)
+
+- 抓到一句舊錯句留在 `kill_idle` 的註解(「to its first exec」),改成預熱。
+- 觀察到、**沒動**:`kill_idle` 的「locally idle but globally active → 只丟本 pod 的 session」分支(#345)丟的是
+  **有 handle** 的 session;之後 turn 再 `ensure_handle` 走快路徑(handle 已在)不會 re-list。那是 #345 的既定
+  行為(dir 歸另一顆 pod 管),不在這次範圍。
+- 驗證:兩個測試檔 85 綠;突變(拿掉 `_list` 呼叫)恰好 3 紅、e2e 紅在「turn 之後沒被 reap」不是正向對照組;
+  既有偵測器 coverage 開 5/5 綠(修前 3/3 紅);e2e 單跑 3/3、整檔 -n 4 綠;`ruff`/`ty` 綠。
