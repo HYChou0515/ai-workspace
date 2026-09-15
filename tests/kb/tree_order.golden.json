@@ -1,0 +1,60 @@
+{
+  "_comment": "plan-rag-context P2: the document-tree order, as data. The backend (kb/tree_order.py) walks neighbours in this order and the frontend file tree (web/src/pages/investigation/fileTree.ts) displays it; BOTH test suites assert every case here, so a change on one side reddens the other. Rule: at each path level directories sort before files; among siblings, maximal ASCII-digit runs compare by numeric value, everything else by Unicode code point after case-folding, with the raw string as the final tiebreak. Locale-independent by construction.",
+  "cases": [
+    {
+      "name": "digit runs compare by value, so 9 precedes 10",
+      "input": ["10.png", "9.png", "1.png", "2.png"],
+      "expected": ["1.png", "2.png", "9.png", "10.png"]
+    },
+    {
+      "name": "equal values tie-break on the raw string (code point)",
+      "input": ["1.pdf", "001.pdf", "01.pdf"],
+      "expected": ["001.pdf", "01.pdf", "1.pdf"]
+    },
+    {
+      "name": "case-insensitive, raw string breaks the tie",
+      "input": ["b.md", "a.md", "A.md", "B.md"],
+      "expected": ["A.md", "a.md", "B.md", "b.md"]
+    },
+    {
+      "name": "a directory sorts before a file at the same level, whatever the names",
+      "input": ["a.md", "b/x.md", "z.md", "c/y.md"],
+      "expected": ["b/x.md", "c/y.md", "a.md", "z.md"]
+    },
+    {
+      "name": "nested: directories first inside a folder too, then files naturally",
+      "input": ["a/2.md", "a/10.md", "a/b/1.md", "a/1.md", "a/c/0.md"],
+      "expected": ["a/b/1.md", "a/c/0.md", "a/1.md", "a/2.md", "a/10.md"]
+    },
+    {
+      "name": "CJK numerals are NOT numeric: code-point order (一 < 三 < 二)",
+      "input": ["第三章.pdf", "第二章.pdf", "第一章.pdf"],
+      "expected": ["第一章.pdf", "第三章.pdf", "第二章.pdf"]
+    },
+    {
+      "name": "full-width digits are NOT numeric either: only ASCII 0-9 count",
+      "input": ["９.png", "１０.png"],
+      "expected": ["１０.png", "９.png"]
+    },
+    {
+      "name": "a digit run sorts before a text run at the same position",
+      "input": ["a1.md", "1a.md"],
+      "expected": ["1a.md", "a1.md"]
+    },
+    {
+      "name": "runs alternate: fig9 < fig9a < fig10",
+      "input": ["fig10.png", "fig9a.png", "fig9.png"],
+      "expected": ["fig9.png", "fig9a.png", "fig10.png"]
+    },
+    {
+      "name": "the slide-screenshot case the user rule is written for",
+      "input": ["slide_10.png", "slide_2.png", "slide_1.png", "notes.md"],
+      "expected": ["notes.md", "slide_1.png", "slide_2.png", "slide_10.png"]
+    },
+    {
+      "name": "user rule: prefix with Arabic numerals to force an order",
+      "input": ["02_method.pdf", "10_appendix.pdf", "01_intro.pdf", "figures/fig1.png"],
+      "expected": ["figures/fig1.png", "01_intro.pdf", "02_method.pdf", "10_appendix.pdf"]
+    }
+  ]
+}

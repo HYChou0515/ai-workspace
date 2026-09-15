@@ -30,6 +30,31 @@ _LABELS: list[tuple[str, str]] = [
 ]
 
 
+def page_of(provenance: dict[str, Any]) -> int | None:
+    """The page-shaped unit a chunk sits on — a PDF's ``page`` or a deck's
+    ``slide`` (`pdf_pages_to_documents` stamps whichever `page_word` the parser
+    chose). One accessor so `read_page`, `kb_grep` and the text-layer lookup
+    agree; ``None`` when the chunk has neither."""
+    for key in ("page", "slide"):
+        value = provenance.get(key)
+        if isinstance(value, int):
+            return value
+    return None
+
+
+def pages_of(aggregated: dict[str, Any]) -> tuple[int, ...]:
+    """`page_of` for the AGGREGATED form a `RetrievedPassage` stores
+    (``{"page": [3, 4]}``): the page-shaped values as a tuple, ``()`` when there
+    are none. A dedup key over stored passages must read both sides through
+    this — comparing `page_of` (an int off a chunk) against the stored list
+    never matched, so every re-read of a page minted a new marker."""
+    for key in ("page", "slide"):
+        values = aggregated.get(key)
+        if isinstance(values, list) and values and all(isinstance(v, int) for v in values):
+            return tuple(values)
+    return ()
+
+
 def aggregate_provenance(provenances: Iterable[dict[str, Any]]) -> dict[str, Any]:
     """Union the per-chunk provenance dicts (already in seq order) into
     ``{key: [distinct values…]}``. Order-preserving + deduped, so a passage

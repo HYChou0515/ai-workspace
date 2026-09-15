@@ -464,6 +464,15 @@ class DocChunk(Struct):  # → resource "doc-chunk"
     # → merge → Citation so the LLM and the FE can say "p.3 §2.1", not an
     # opaque char span. Not embedded — see the breadcrumb fold in li_pipeline.
     provenance: dict[str, Any] = field(default_factory=dict)
+    # plan-rag-context P8: a #227 fan-out batch chunks its own units and knows
+    # only its own text, so it writes `start` relative to THAT and records the
+    # same number here; finalize, which rejoins the batches and so learns where
+    # each one lands, recomputes `start = unit_start + batch base` (and `end`
+    # from the unchanged length). Recomputed from this immutable value however
+    # many times finalize is re-driven — idempotent by construction, no crash
+    # window. `None` on every other path (single-job index, dry-run, cache
+    # copy) and on rows written before this field existed: nothing to rebase.
+    unit_start: int | None = None
     # P3.0: exactly one of `embedding` / `embedding_alt` is populated per
     # chunk — `embedder_id == 0` chunks use `embedding` (default text model),
     # `embedder_id != 0` chunks use `embedding_alt` (code-specialised model).
@@ -784,3 +793,18 @@ class RetrievedPassage(Struct, frozen=True):
     # (``{"page": [3, 4], "section": ["Ch.2 > 2.1"]}``) — distinct values in
     # seq order across the merged chunks. ``{}`` when no chunk had provenance.
     provenance: dict[str, Any] = field(default_factory=dict)
+    # plan-rag-context P2: the neighbouring context the reranker ranks and the
+    # agent reads — the hit widened to at least N chars each side in whole
+    # chunks, possibly reaching into the adjacent documents. ``""`` = not
+    # expanded (the default every non-expansion writer leaves). Deliberately a
+    # SEPARATE field: ``text`` / ``start`` / ``end`` stay the HIT, so the citation
+    # snippet, the highlight and every existing reader are untouched — context
+    # is for the model, not the user. ``context_start`` / ``context_end`` are the
+    # widened range WITHIN this document (what `Citation` records; the spill
+    # into neighbouring documents has no offset here) — the hit span itself
+    # when there was nothing to widen into; ``0 / 0`` when the feature is off
+    # or the passage never went through the walk (a legacy row without chunk
+    # ids, a parent `_augment_with_parents` pulled in after the cut).
+    context_text: str = ""
+    context_start: int = 0
+    context_end: int = 0

@@ -19,26 +19,39 @@ from __future__ import annotations
 
 import logging
 import posixpath
-from collections.abc import Iterable
+import re
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import cast
+from typing import Any, cast
 
 from specstar import QB, SpecStar
 from specstar.query import ConditionBuilder
 from specstar.types import ResourceIDNotFoundError
 from specstar.util.vector_distance import cosine_distance
 
-from ..config.schema import EnhancementSettings
+from ..config.schema import EnhancementSettings, RetrievalSettings
 from ..resources.kb import DocChunk, RetrievedPassage, SourceDoc
 from .bm25 import bm25_rank, tokenize
+from .context import ChunkSpan, expand_passages
 from .embedder import Embedder
 from .fusion import mmr, rrf_scores
+from .grep import (
+    MAX_CHUNKS,
+    MIN_ANCHOR_LEN,
+    GrepHit,
+    GrepResult,
+    LineIndex,
+    anchor_of,
+    occurrences,
+)
 from .image_embedder import ImageEmbedder
 from .ingest import normalize_text
 from .llm import ILlm, OnChunk
 from .merge import ScoredChunk, merge_passages
+from .provenance import page_of
 from .query import expand_queries, hypothetical_document
 from .rerank import rerank_passages
+from .tree_order import tree_sort_key
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +123,24 @@ class LocationFilter:
     page_from: int | None = None
     page_to: int | None = None
     sheet: str | None = None
+
+    def admits(self, provenance: dict[str, Any]) -> bool:
+        """Whether a chunk with this provenance lies inside the filter — the
+        Python-side twin of `conditions()` for rows already in hand (the context
+        walk reads chunk boundaries in one batch and must not widen into pages or
+        sheets the search was scoped out of). The document scope is not checked
+        here: the walk is confined to the document separately."""
+        lo, hi = self.page_from, self.page_to
+        if lo is not None or hi is not None:
+            page = provenance.get("page")
+            if not isinstance(page, int):
+                return False
+            if lo is not None and hi is not None:
+                if not lo <= page <= hi:
+                    return False
+            elif page != (lo if lo is not None else hi):
+                return False
+        return self.sheet is None or provenance.get("sheet") == self.sheet
 
     def is_empty(self) -> bool:
         return (
@@ -296,9 +327,15 @@ class _DocJoin:
         spec: SpecStar,
         chunks: Iterable[DocChunk],
         denied_doc_ids: frozenset[str] = frozenset(),
+        prefer_doc_ids: frozenset[str] | None = None,
     ) -> None:
         self._spec = spec
         self._denied = denied_doc_ids
+        # #518 × #104: a positive scope (a card's links, a folder) is enforced by
+        # CONTENT, so shared bytes can match through a holder outside the scope;
+        # attribution must then name the holder INSIDE it, or a folder-scoped
+        # search returns — and names — a document outside the folder.
+        self._prefer = prefer_doc_ids
         chunk_list = list(chunks)
         rm = spec.get_resource_manager(SourceDoc)
         self._canonical: dict[tuple[str, str], str] = {}
@@ -313,7 +350,7 @@ class _DocJoin:
             # an unrequested combination lands under its own key and is never looked
             # up (and identical content in two collections still resolves per
             # collection, never bleeding across).
-            best: dict[tuple[str, str], tuple[float, str]] = {}
+            best: dict[tuple[str, str], tuple[int, float, str]] = {}
             query = (
                 QB["collection_id"].in_(sorted({c for c, _ in pairs}))
                 & QB["file_id"].in_(sorted({f for _, f in pairs}))
@@ -329,7 +366,8 @@ class _DocJoin:
                 # exists, and its path, to someone barred from it.
                 if rid in self._denied:
                     continue
-                stamp = (r.info.created_time.timestamp(), rid)  # ty: ignore[unresolved-attribute]
+                in_scope = 0 if self._prefer is None or rid in self._prefer else 1
+                stamp = (in_scope, r.info.created_time.timestamp(), rid)  # ty: ignore[unresolved-attribute]
                 if key not in best or stamp < best[key]:
                     best[key] = stamp
                     self._canonical[key] = rid
@@ -404,6 +442,205 @@ class _DocJoin:
         return out
 
 
+class _ContextSeams:
+    """plan-rag-context P2: the three seams `expand_passages` needs, backed by
+    queries bound to the SAME scope as every retrieval arm. Context fetches
+    documents retrieval did NOT return, so this is a new arm: it goes through
+    the same resource manager (storage-layer access_scope) and applies the same
+    #308 `exclude` AND the same #518 `restrict` — a neighbour the speaker cannot
+    read, or one outside the search's positive scope, is never listed, never
+    read, never named.
+
+    Per-search caches: a document's chunk boundaries are read once (metadata
+    only — never the vectors); a collection's tree order is listed once and only
+    when a walk actually reaches a document edge (the common case, a hit in the
+    middle of a long document, never lists anything).
+    """
+
+    #: SourceDoc fields the walk needs — never the text or the blob.
+    _META = ["/collection_id", "/path", "/content/file_id", "/parent_doc_id"]
+
+    def __init__(
+        self,
+        spec: SpecStar,
+        join: _DocJoin,
+        texts: dict[str, str],
+        text_of: Callable[[str], str],
+        exclude: _Exclusion | None,
+        restrict: _Restriction | None,
+        location: LocationFilter | None,
+        overlay: Overlay | None,
+        passages: Iterable[RetrievedPassage],
+    ) -> None:
+        self._spec = spec
+        self._join = join
+        self._texts = texts  # the search's batch text cache — extended, not copied
+        self._base_text_of = text_of
+        self._exclude = exclude
+        # #518: a positive scope ("only inside these documents" — a card's links,
+        # or a folder). Context may not leave it: a walk that spilled outside
+        # would deliver, and NAME, documents the search was told to ignore.
+        within = frozenset(restrict.doc_ids) if restrict is not None else None
+        # #263: a location scope ("this document, pages 30-31") confines the walk
+        # to that document and, via `admits`, to chunks inside the range — the
+        # search was told to ignore everything else, so the context may not
+        # bring it back.
+        self._location = location
+        if location is not None and location.source_doc_id is not None:
+            doc_scope = frozenset({location.source_doc_id})
+            within = doc_scope if within is None else (within & doc_scope)
+        self._within = within
+        self._overlay = overlay
+        self._spans: dict[str, list[ChunkSpan]] = {}
+        self._order: dict[str, list[str]] = {}  # collection_id -> doc ids, tree order
+        self._meta: dict[str, tuple[str, str, str]] = {}  # doc -> (collection, path, file_id)
+        # The hit documents' metadata, then their chunk boundaries, each in ONE
+        # batched read — not a query per candidate (the `_DocJoin` rule).
+        hit_docs = {p.document_id for p in passages}
+        self._load_meta(hit_docs)
+        self._load_spans(hit_docs)
+
+    def _load_meta(self, doc_ids: Iterable[str]) -> None:
+        missing = sorted(set(doc_ids) - set(self._meta))
+        if not missing:
+            return
+        rm = self._spec.get_resource_manager(SourceDoc)
+        query = QB.resource_id().in_(missing).build()
+        for r in rm.list_resources(query, returns=["data", "info"], partial=self._META):
+            doc = cast(SourceDoc, r.data)
+            rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
+            self._meta[rid] = (doc.collection_id, doc.path, _content_file_id(doc))
+
+    def chunks_of(self, doc_id: str) -> list[ChunkSpan]:
+        if self._overlay is not None and doc_id == self._overlay.shadow_doc_id:
+            # #328: the shadowed doc's chunks are the in-memory virtual ones, under
+            # the ids the candidate set gave them.
+            spans = sorted(
+                (
+                    ChunkSpan(f"__overlay__{i}", doc_id, vc.seq, vc.start, vc.end)
+                    for i, vc in enumerate(self._overlay.virtual_chunks)
+                ),
+                key=lambda sp: sp.seq,
+            )
+            self._spans[doc_id] = spans
+            return spans
+        if doc_id not in self._spans:  # a neighbour outside the hit set
+            self._load_spans([doc_id])
+        return self._spans[doc_id]
+
+    def _load_spans(self, doc_ids: Iterable[str]) -> None:
+        """Chunk boundaries (seq / start / end — never the vector) for every
+        document in `doc_ids` not yet cached, in ONE query. Content-addressed
+        first (#104): a chunk is attributed to each requested document holding its
+        `(collection, file_id)`, falling back to its own `source_doc_id` for
+        legacy rows. The same #308 `exclude` every arm applies."""
+        wanted = sorted(set(doc_ids) - set(self._spans))
+        if not wanted:
+            return
+        self._load_meta(wanted)
+        for d in wanted:
+            self._spans[d] = []  # a document that is gone / chunkless reads as empty
+        by_content: dict[tuple[str, str], list[str]] = {}
+        collections: set[str] = set()
+        for d in wanted:
+            meta = self._meta.get(d)
+            if meta is None:
+                continue
+            collection_id, _path, file_id = meta
+            collections.add(collection_id)
+            # Every writer stamps a content hash; the guard is for a row that
+            # predates it.
+            if file_id:  # pragma: no branch
+                by_content.setdefault((collection_id, file_id), []).append(d)
+        if not collections:
+            return
+        by_doc = QB["source_doc_id"].in_(wanted)
+        fids = sorted({fid for _c, fid in by_content})
+        cond = (QB["source_file_id"].in_(fids) | by_doc) if fids else by_doc
+        cond = QB["collection_id"].in_(sorted(collections)) & cond
+        if self._exclude:
+            cond = cond & self._exclude.condition()
+        rm = self._spec.get_resource_manager(DocChunk)
+        fields = [
+            "/seq",
+            "/start",
+            "/end",
+            "/collection_id",
+            "/source_doc_id",
+            "/source_file_id",
+            "/provenance",
+        ]
+        for r in rm.list_resources(cond.build(), returns=["data", "info"], partial=fields):
+            ch = cast(DocChunk, r.data)
+            rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
+            owners = by_content.get((ch.collection_id, ch.source_file_id), [])
+            if not owners and ch.source_doc_id in self._spans:
+                owners = [ch.source_doc_id]
+            if self._location is not None and not self._location.admits(ch.provenance):
+                continue  # outside the page / sheet scope — not context either
+            for d in owners:
+                self._spans[d].append(ChunkSpan(rid, d, ch.seq, ch.start, ch.end))
+        for d in wanted:
+            self._spans[d].sort(key=lambda sp: sp.seq)
+
+    def text_of(self, doc_id: str) -> str:
+        # A neighbouring document is outside the search's batch: extend the batch
+        # cache through the same batched read, then serve it the usual way (which
+        # also keeps the overlay's virtual text and the legacy fallback in one
+        # place).
+        shadow = self._overlay is not None and doc_id == self._overlay.shadow_doc_id
+        if doc_id not in self._texts and not shadow:
+            self._texts.update(self._join.texts_for([doc_id]))
+        return self._base_text_of(doc_id)
+
+    def neighbours(self, doc_id: str) -> tuple[str | None, str | None]:
+        self._load_meta([doc_id])
+        meta = self._meta.get(doc_id)
+        if meta is None:
+            return (None, None)
+        order = self._tree_order(meta[0])
+        try:
+            i = order.index(doc_id)
+        except ValueError:  # not listed (e.g. a pre-index row) — no neighbours
+            return (None, None)
+        prev = order[i - 1] if i > 0 else None
+        nxt = order[i + 1] if i + 1 < len(order) else None
+        return (prev, nxt)
+
+    def _tree_order(self, collection_id: str) -> list[str]:
+        if collection_id in self._order:
+            return self._order[collection_id]
+        rm = self._spec.get_resource_manager(SourceDoc)
+        query = (QB["collection_id"] == collection_id).build()
+        denied = self._exclude.doc_ids_set if self._exclude else frozenset()
+        listed: list[tuple[str, str]] = []  # (path, doc_id)
+        for r in rm.list_resources(query, returns=["data", "info"], partial=self._META):
+            doc = cast(SourceDoc, r.data)
+            rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
+            self._meta[rid] = (doc.collection_id, doc.path, _content_file_id(doc))
+            # #513 P7 attachments are grouped under their parent in the FE tree, not
+            # placed in the path order — and a pre-v9 row has no `parent_doc_id`
+            # cell, so this is a Python-side test (missing = top-level), like the FE.
+            if doc.parent_doc_id or rid in denied:
+                continue
+            if self._within is not None and rid not in self._within:
+                continue
+            listed.append((doc.path, rid))
+        listed.sort(key=lambda t: tree_sort_key(t[0]))
+        order = [rid for _path, rid in listed]
+        self._order[collection_id] = order
+        return order
+
+    def label_of(self, doc_id: str) -> str:
+        """The boundary line's name for a neighbouring document: its PATH as
+        the file tree shows it — the same coordinate `kb_grep` prints and the
+        read tools take (P19). A basename is what `read_lines("notes.md")`
+        refuses as ambiguous the moment two folders hold a `notes.md`."""
+        meta = self._meta.get(doc_id)
+        path = meta[1] if meta is not None else self._join.path_of(doc_id)
+        return path if path else doc_id
+
+
 def _content_file_id(doc: SourceDoc) -> str:
     """A doc's content hash, or ``""`` when unset — the content key chunks join on."""
     fid = getattr(doc.content, "file_id", None)
@@ -434,6 +671,8 @@ class Retriever:
         quality_floor: int | None = None,
         sparse_corpus_cap: int | None = None,
         disclosure_floor: float = 0.6,
+        context_chars: int = RetrievalSettings.context_chars,
+        rerank_context_chars: int | None = RetrievalSettings.rerank_context_chars,
     ) -> None:
         self._spec = spec
         self._embedder = embedder
@@ -478,6 +717,12 @@ class Retriever:
         # A hyperparameter; tune per embedder. cosine distance ∈ [0, 2]; 0.6 ≈
         # cosine similarity ≥ 0.4.
         self._disclosure_floor = disclosure_floor
+        # plan-rag-context P2: at least this many chars of neighbouring context
+        # each side of a hit, in whole chunks, across documents in tree order.
+        # The default is the config default — ONE number, not two literals.
+        self._context_chars = context_chars
+        # P6: what the listwise reranker sees of that context per candidate.
+        self._rerank_context_chars = rerank_context_chars
 
     @property
     def top_k(self) -> int:
@@ -718,7 +963,10 @@ class Retriever:
         # Resolve every candidate's doc (id → path / quality) in two batched queries
         # instead of several point reads per candidate — see `_DocJoin`.
         join = _DocJoin(
-            self._spec, cand_chunks.values(), exclude.doc_ids_set if exclude else frozenset()
+            self._spec,
+            cand_chunks.values(),
+            exclude.doc_ids_set if exclude else frozenset(),
+            prefer_doc_ids=frozenset(restrict.doc_ids) if restrict is not None else None,
         )
 
         # #105: second-phase document-quality prior. Recall (RRF + MMR above) is
@@ -761,16 +1009,163 @@ class Retriever:
             return cached if cached is not None else self._canonical_text(doc_id)
 
         passages = merge_passages(scored, text_of=text_of)
+        # plan-rag-context P2: widen every merged candidate BEFORE rerank, so the
+        # reranker ranks what will actually be delivered. Ranking the bare
+        # fragment while delivering the expansion would rank a different object,
+        # and with a direction: the passages whose fragment lacks the answer but
+        # whose neighbours hold it are exactly the ones this exists to rescue.
+        passages = self._expand(passages, join, texts, text_of, exclude, restrict, loc, overlay)
         # Final LLM rerank over the merged passages — bool knob.
         if resolved.rerank:
             assert self._llm is not None
             step("\n↻ rerank\n")
             logger.debug("retriever: reranking %d merged passages via llm", len(passages))
-            passages = rerank_passages(self._llm, query, passages, on_progress=on_progress)
+            passages = rerank_passages(
+                self._llm,
+                query,
+                passages,
+                on_progress=on_progress,
+                context_cap=self._rerank_context_chars,
+            )
         logger.info("retriever: search complete, ranked=%d limit=%d", len(passages), limit)
         # #513 P9: pull in the parent of any attachment hit — AFTER the top_k cut,
         # so the parent context rides along without displacing a primary result.
         return self._augment_with_parents(passages[:limit], join)
+
+    def grep(
+        self,
+        query: str,
+        collection_ids: list[str],
+        *,
+        exclude_doc_ids: frozenset[str] = frozenset(),
+        restrict_to_doc_ids: frozenset[str] = frozenset(),
+        limit: int = 200,
+    ) -> GrepResult:
+        """plan-rag-context P3: every LINE in scope containing `query` (literal,
+        case-insensitive), in document-tree order — the Ctrl+F arm. It locates;
+        it does not rank, and its hits are not passages.
+
+        Same scope as every other arm: the #308 exclusion and the #518
+        restriction go into the store query, and attribution runs through
+        `_DocJoin` so a denied holder of shared content is never named.
+
+        The store is pre-narrowed on the query's longest token via the trigram
+        index (`icontains` — exact substring, case-insensitive, never the fuzzy
+        similarity BM25 uses, which would drop a long chunk holding a short
+        query). The exact match is then verified on the CANONICAL text — what
+        `read_lines` will show — with each chunk's span widened by the query's
+        length so a phrase straddling two chunks is still found once.
+        """
+        # One stripped query for the anchor AND the exact match: the anchor
+        # already ignored surrounding whitespace (`split()`), so a query with a
+        # stray trailing space passed the pre-filter and then failed the exact
+        # match — a silent "no lines match" for text plainly there.
+        query = query.strip()
+        if not query or not collection_ids or len(anchor_of(query)) < MIN_ANCHOR_LEN:
+            return GrepResult(hits=[], total=0)
+        # Literal + case-insensitive: the same rule `api.search.compile_query`
+        # applies for the wiki grep (a literal cannot fail to compile).
+        pattern = re.compile(re.escape(query), re.IGNORECASE)
+        exclude = self._exclusion(collection_ids, exclude_doc_ids)
+        restrict = self._restriction(restrict_to_doc_ids)
+        cond = QB["collection_id"].in_(collection_ids) & QB["text"].icontains(anchor_of(query))
+        if exclude:
+            cond = cond & exclude.condition()
+        if restrict is not None:
+            cond = cond & restrict.condition()
+        rm = self._spec.get_resource_manager(DocChunk)
+        fields = [
+            "/start",
+            "/end",
+            "/provenance",
+            "/collection_id",
+            "/source_doc_id",
+            "/source_file_id",
+        ]
+        # `MAX_CHUNKS + 1` so a full page is distinguishable from an overflow.
+        chunks: list[DocChunk] = [
+            cast(DocChunk, r.data)
+            for r in rm.list_resources(
+                cond.limit(MAX_CHUNKS + 1).build(), returns=["data", "info"], partial=fields
+            )
+        ]
+        truncated = len(chunks) > MAX_CHUNKS
+        chunks = chunks[:MAX_CHUNKS]
+        if not chunks:
+            return GrepResult(hits=[], total=0)
+        join = _DocJoin(
+            self._spec,
+            chunks,
+            exclude.doc_ids_set if exclude else frozenset(),
+            prefer_doc_ids=frozenset(restrict.doc_ids) if restrict is not None else None,
+        )
+        by_doc: dict[str, list[DocChunk]] = {}
+        for ch in chunks:
+            doc_id = join.doc_id_for(ch)
+            # A chunk whose every holder is denied never reaches here — the
+            # exclusion is in the store query — so the skip is for a row whose
+            # document vanished between the two reads.
+            if doc_id is not None and join.path_of(doc_id) is not None:  # pragma: no branch
+                by_doc.setdefault(doc_id, []).append(ch)
+        texts = join.texts_for(by_doc)
+        slack = len(query)
+        hits: list[GrepHit] = []
+        for doc_id, doc_chunks in by_doc.items():
+            text = texts.get(doc_id)
+            if text is None:
+                text = self._canonical_text(doc_id)
+            path = join.path_of(doc_id)
+            assert path is not None  # filtered above
+            # A line is reported once however many chunks overlap it; the page
+            # is the EARLIEST containing chunk's — by `start`, not by the order
+            # the store happened to return the rows (unspecified).
+            lines = LineIndex(text)
+            seen_lines: dict[int, int | None] = {}
+            for ch in sorted(doc_chunks, key=lambda c: (c.start, c.end)):
+                page = page_of(ch.provenance)
+                for off in occurrences(text, pattern, ch.start - slack, ch.end + slack):
+                    seen_lines.setdefault(lines.line_of(off), page)
+            for line_no, page in seen_lines.items():
+                line_text = lines.line_text(line_no)
+                hits.append(
+                    GrepHit(
+                        document_id=doc_id,
+                        path=path,
+                        filename=posixpath.basename(path),
+                        line=line_no,
+                        text=line_text,
+                        page=page,
+                    )
+                )
+        hits.sort(key=lambda h: (tree_sort_key(h.path), h.line))
+        return GrepResult(hits=hits[:limit], total=len(hits), truncated=truncated)
+
+    def _expand(
+        self,
+        passages: list[RetrievedPassage],
+        join: _DocJoin,
+        texts: dict[str, str],
+        text_of: Callable[[str], str],
+        exclude: _Exclusion | None,
+        restrict: _Restriction | None,
+        location: LocationFilter | None,
+        overlay: Overlay | None,
+    ) -> list[RetrievedPassage]:
+        """plan-rag-context P2: neighbouring context for every merged candidate —
+        see `kb.context`. `0` is off and returns the passages untouched."""
+        if self._context_chars <= 0 or not passages:
+            return passages
+        seams = _ContextSeams(
+            self._spec, join, texts, text_of, exclude, restrict, location, overlay, passages
+        )
+        return expand_passages(
+            passages,
+            min_chars=self._context_chars,
+            chunks_of=seams.chunks_of,
+            text_of=seams.text_of,
+            neighbours=seams.neighbours,
+            label_of=seams.label_of,
+        )
 
     def _augment_with_parents(
         self, passages: list[RetrievedPassage], join: _DocJoin
@@ -1154,7 +1549,16 @@ class Retriever:
         if not doc_ids:
             return None
         ordered = tuple(sorted(doc_ids))
-        fids = {fid for fid in (self._doc_file_id(d) for d in ordered) if fid}
+        # ONE batched read — a folder scope (plan-rag-context P3) hands in every
+        # document under the folder, and a point get per id was N round trips
+        # before the search even started (#518 only ever passed a card's few links).
+        rm = self._spec.get_resource_manager(SourceDoc)
+        query = QB.resource_id().in_(list(ordered)).build()
+        fids = {
+            fid
+            for r in rm.list_resources(query, returns=["data"], partial=["/content/file_id"])
+            if (fid := _content_file_id(cast(SourceDoc, r.data)))
+        }
         return _Restriction(doc_ids=ordered, file_ids=tuple(sorted(fids)))
 
     def _exclusion(self, collection_ids: list[str], doc_ids: frozenset[str]) -> _Exclusion | None:

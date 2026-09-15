@@ -82,6 +82,29 @@ class WikiSearchBudget:
 
 
 @dataclass
+class KbGrepBudget:
+    """Per-turn budget for how many times `kb_grep` may run (plan-rag-context P3).
+
+    The same shape as the two budgets above, its own type for the same reason —
+    a function cannot pass the wrong one. Default unlimited-but-counted: a grep
+    is deterministic and cheap (no LLM, no embedding; a trigram-narrowed store
+    read), so `max_turns` is the structural bound; `AskKbSpec` can still cap it,
+    and `0` withholds the tool for the turn like the others.
+    """
+
+    max_calls: int | None = None
+    used: int = 0
+
+    @property
+    def exhausted(self) -> bool:
+        return self.max_calls is not None and self.used >= self.max_calls
+
+    @property
+    def remaining(self) -> int | None:
+        return None if self.max_calls is None else max(0, self.max_calls - self.used)
+
+
+@dataclass
 class AgentToolContext:
     """Per-run context passed into agent tools.
 
@@ -343,6 +366,8 @@ class AgentToolContext:
     # reader (which never set it) keep grepping freely; the ask_knowledge_base
     # spec seeds `max_calls` when the card drafter wants wiki search capped.
     wiki_search_budget: WikiSearchBudget = field(default_factory=WikiSearchBudget)
+    # plan-rag-context P3: the exact-string search's own budget (see KbGrepBudget).
+    kb_grep_budget: KbGrepBudget = field(default_factory=KbGrepBudget)
     # Topic Hub tools (`resolve_collection`, `lookup_glossary`) query specstar
     # resources (Collection / ContextCard) directly. Set by the Topic Hub turn
     # builder; None for RCA/KB-flavour contexts.

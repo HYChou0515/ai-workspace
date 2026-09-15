@@ -284,6 +284,9 @@ def test_bundled_presets_include_qwen3_claude_openai_and_kb_default():
         "lookup_entity",
         "ask_wiki",
         "kb_search",
+        "kb_grep",
+        "read_page",
+        "read_lines",
         "request_wiki_update",
     ]
     assert "search_wiki" not in (presets["kb-default"].allowed_tools or [])

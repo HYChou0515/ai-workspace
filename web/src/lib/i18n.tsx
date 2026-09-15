@@ -197,6 +197,9 @@ export const messages = {
   "tool.delete_file": { "zh-TW": "刪除檔案", en: "Delete file" },
   "tool.ask_knowledge_base": { "zh-TW": "查詢知識庫", en: "Ask the knowledge base" },
   "tool.kb_search": { "zh-TW": "搜尋知識庫", en: "Search the knowledge base" },
+  "tool.kb_grep": { "zh-TW": "精確搜尋字串", en: "Find exact text" },
+  "tool.read_page": { "zh-TW": "看文件頁面", en: "Read a page" },
+  "tool.read_lines": { "zh-TW": "讀文件內文", en: "Read document lines" },
   "tool.search_wiki": { "zh-TW": "搜尋知識百科", en: "Search the wiki" },
   "tool.resolve_collection": { "zh-TW": "確認知識集", en: "Resolve collection" },
   "tool.lookup_glossary": { "zh-TW": "查詢詞彙", en: "Look up glossary" },
@@ -687,6 +690,15 @@ export const messages = {
   "kb.uploadFolder": { "zh-TW": "上傳資料夾", en: "Upload folder" },
   "kb.dropToUpload": { "zh-TW": "放開以上傳", en: "Drop to upload" },
   "kb.dropHint": { "zh-TW": "把檔案拖到這裡開始", en: "Drag files here to start" },
+  // plan-rag-context P2/P11: the document-tree order is a rule the KB agent's
+  // neighbouring-context walk follows, so people uploading must be able to
+  // steer it — one line, where the files are added and where they are seen.
+  // One line, as the plan promised — the full rule (folders first, natural
+  // sort, the walk follows it) is in the docs; here only what to DO about it.
+  "kb.orderRule": {
+    "zh-TW": "AI 讀前後文照這棵樹的順序。要控制順序，檔名前加數字：01_intro.pdf、02_method.pdf。",
+    en: "The assistant reads context in this tree's order. To control it, prefix names with numbers: 01_intro.pdf, 02_method.pdf.",
+  },
 
   // Investigation terminal (TerminalPane). #171 renamed sandbox → 執行環境 to
   // de-jargon it; that is reversed — the product calls this one thing 沙盒 /

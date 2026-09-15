@@ -444,7 +444,7 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # every backend. Real overrides are
     # written fresh at v8 by the doc-permission endpoint, never by migrate.
     spec.add_model(
-        Schema(SourceDoc, "v9")
+        Schema(SourceDoc, "v10")
         .step(None, _reindex_only, to="v3", source_type=SourceDoc)
         .step("v2", _reindex_only, to="v3", source_type=SourceDoc)
         .step("v3", _backfill_token_count, to="v4", source_type=SourceDoc)
@@ -457,7 +457,17 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
         # plain field written at ingest, not computed by migrate); pre-#513 rows
         # decode to "" (= top-level) and become countable in the new index after
         # `POST /source-doc/migrate/execute`.
-        .step("v8", _reindex_only, to="v9", source_type=SourceDoc),
+        .step("v8", _reindex_only, to="v9", source_type=SourceDoc)
+        # plan-rag-context P3: the folder scope resolves "documents under this
+        # folder" with `path.starts_with(...)` — the `path` index #263 added on
+        # 2026-06-27 but never put on the migrations.md ledger. A row indexed
+        # before it has no `path` cell and answers no path predicate, so a folder
+        # scope would SKIP it as if it did not exist (a filtered index that missed
+        # its backfill loses rows, not accuracy). Identity step so
+        # `POST /source-doc/migrate/execute` re-extracts every row; rerunning it is
+        # free (§10). The P2 context walk reads `path` from row DATA (a
+        # `collection_id` listing + projection), so it does not depend on this.
+        .step("v9", _reindex_only, to="v10", source_type=SourceDoc),
         indexed_fields=[
             "collection_id",
             IndexableField("content.size", int, index_key="content_size"),

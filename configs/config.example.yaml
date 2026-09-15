@@ -714,6 +714,30 @@
 #                                           #   ignores this cap (it still searches every chunk
 #                                           #   via the vector index), so a capped-out chunk can
 #                                           #   still be retrieved. null (default) = uncapped.
+#     context_chars: 2000                   # neighbouring context (plan-rag-context P2): each
+#                                           #   hit is widened to AT LEAST this many chars
+#                                           #   before AND after it, in whole chunks, continuing
+#                                           #   into the adjacent documents (document-tree
+#                                           #   order, same collection) when the document runs
+#                                           #   out. The widened text is what rerank ranks and
+#                                           #   the agent reads; the citation still points at
+#                                           #   the hit. Unconditional on purpose: the text next
+#                                           #   to a match is worded differently, so vector
+#                                           #   search cannot reach it and the model cannot know
+#                                           #   it is missing. 0 = off (null is refused at
+#                                           #   load: there is no 'uncapped' here). Default
+#                                           #   2000 (~1.4 English chunks / ~13 Chinese chunks
+#                                           #   per side on the production splitter; the budget
+#                                           #   is chars so both get about the same text). The
+#                                           #   rerank listing grows accordingly (see docs).
+#     rerank_context_chars: 4000            # how much of that context the LISTWISE reranker
+#                                           #   sees per candidate (chars, centred on the hit).
+#                                           #   All ~20 candidates share ONE prompt; unbounded
+#                                           #   it grows ~4x (English) / ~27x (Chinese) and a
+#                                           #   reranker with a smaller window truncates from
+#                                           #   the FRONT - the question - and returns noise
+#                                           #   silently. null = uncapped (a 1M-window model);
+#                                           #   0 = the bare hit.
 #                                           #   Measure with a #535 eval run before lowering.
 # # Resolution: LLM tool args > caller (context) > default; clamped to max.
 # # Bundled = light (`expand=1, hyde=0, rerank=on`); operators raise expand/hyde
@@ -911,11 +935,14 @@
 #     claude-opus:           { model: claude-opus-4-7,        prompt: pkg:.../rca/prompts/system.md }
 #     openai-mini:           { model: openai/gpt-4o-mini,     prompt: pkg:.../rca/prompts/system.md }
 #     kb-default:            { model: ollama_chat/qwen3:14b,  prompt: pkg:.../kb/prompts/system.md,
-#                              allowed_tools: [kb_search, lookup_glossary] }
+#                              allowed_tools: [kb_search, kb_grep, read_page, read_lines, lookup_glossary] }
 #     kb-claude:             { model: claude-opus-4-7,        prompt: pkg:.../kb/prompts/system.md,
-#                              allowed_tools: [kb_search, lookup_glossary] }
+#                              allowed_tools: [kb_search, kb_grep, read_page, read_lines, lookup_glossary] }
 #     kb-openai:             { model: openai/gpt-4o-mini,     prompt: pkg:.../kb/prompts/system.md,
-#                              allowed_tools: [kb_search, lookup_glossary] }
+#                              allowed_tools: [kb_search, kb_grep, read_page, read_lines, lookup_glossary] }
+#     # The kb prompt describes kb_grep / read_page / read_lines (plan-rag-context
+#     # P3/P4); a custom kb preset that pins `allowed_tools` must list them too,
+#     # or the model is told about tools it cannot call (see migrations.md).
 #     infer-modules-default: { model: ollama_chat/qwen3:14b,  prompt: pkg:.../kb/prompts/infer_modules.md,
 #                              allowed_tools: [kb_search] }
 #     kb-retrieval:          { model: ollama_chat/qwen3:14b }   # LLM-only — no prompt/tools

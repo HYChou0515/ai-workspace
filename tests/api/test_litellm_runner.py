@@ -410,6 +410,31 @@ def test_map_event_tool_output_image_is_a_concise_note_not_base64():
     assert "QUJDQUJD" not in out.output
 
 
+def test_map_event_tool_output_list_of_parts_keeps_the_text_and_notes_the_image():
+    """plan-rag-context P4: `read_page` answers a LIST — the page's text layer plus
+    the page image. The ToolEnd (FE event + persisted tool message) carries the
+    text and a concise note per image; never the base64 (the first version fell to
+    `str(list)`, which embedded the whole data URL)."""
+    from agents import ToolOutputImage, ToolOutputText
+
+    ev = _StreamEvent(
+        type="run_item_stream_event",
+        name="tool_output",
+        item=_Item(
+            raw_item=_RawToolOutput(call_id="c1"),
+            output=[
+                ToolOutputText(text="[1] deck.pdf — page 2 of 3\n\nthe text layer"),
+                ToolOutputImage(image_url="data:image/png;base64,QUJDQUJDQUJDQUJD"),
+            ],
+        ),
+    )
+    out = _map_event(ev)
+    assert isinstance(out, ToolEnd)
+    assert "the text layer" in out.output
+    assert "image" in out.output.lower()
+    assert "QUJDQUJD" not in out.output and "base64" not in out.output
+
+
 def test_map_event_tool_output_with_dict_raw_item_keeps_call_id():
     """LiteLLM's tool-output raw_item is a FunctionCallOutput dict — the
     call_id must still be extracted (else the FE tool stays 'running')."""
@@ -1483,3 +1508,14 @@ async def test_the_non_streaming_turn_says_it_has_nowhere_to_report():
     assert ctx.on_exec_output is None, (
         "a sink that discards claims a listener this turn does not have"
     )
+
+
+def test_tool_output_text_stringifies_a_part_it_does_not_know():
+    from agents import ToolOutputImage, ToolOutputText
+
+    from workspace_app.api.litellm_runner import _tool_output_text
+
+    # The list branch is taken only when an image is among the parts; a
+    # foreign part beside it is stringified rather than dropped.
+    img = ToolOutputImage(image_url="data:image/png;base64,QUJD")
+    assert _tool_output_text([ToolOutputText(text="a"), 42, img]).split("\n")[:2] == ["a", "42"]

@@ -11,7 +11,7 @@ no VLM — but the machinery is parser-agnostic.
 from __future__ import annotations
 
 from specstar import QB, SpecStar
-from specstar.types import TaskStatus
+from specstar.types import MergePatch, TaskStatus
 
 from workspace_app.kb.embedder import HashEmbedder
 from workspace_app.kb.index_coordinator import IndexCoordinator
@@ -422,3 +422,453 @@ async def test_fanout_transient_error_is_redelivered_by_the_broker():
     await coord.aclose()
 
     assert emb.calls > 2  # each batch was re-delivered (more calls than batches)
+
+
+async def test_a_process_job_replayed_after_finalize_is_a_noop():
+    """plan-rag-context P12 (round 4): at-least-once delivery can replay a batch
+    AFTER finalize. P8 made a batch's chunk write provisional (batch-relative
+    offsets, rebased at finalize), so a replay rewrote its chunks batch-relative
+    and staged a stale text row — with the run `done`, nothing would ever rebase
+    them again. The run says the work is done: the replay writes nothing."""
+    from workspace_app.kb.index_jobs import IndexJobPayload
+
+    spec = make_spec(default_user="u")
+    cid = spec.get_resource_manager(Collection).create(Collection(name="c")).resource_id
+    ingestor, coord = _build(spec, csv_batch=2)
+    doc_id = _store_csv(ingestor, cid, rows=5)
+    coord.enqueue(doc_id, cid)
+    await coord.aclose()
+    doc = spec.get_resource_manager(SourceDoc).get(doc_id).data
+    assert isinstance(doc, SourceDoc) and doc.text is not None
+    before = sorted((c.seq, c.start, c.end) for c in _chunks(spec, doc_id))
+    assert all(
+        doc.text[s:e] == c.text
+        for c in _chunks(spec, doc_id)
+        for (_, s, e) in [(c.seq, c.start, c.end)]
+    )
+    coord._handle_process(
+        IndexJobPayload(
+            doc_id=doc_id,
+            collection_id=cid,
+            kind="process",
+            unit_start=2,
+            unit_end=4,
+            batch_index=1,
+        ),
+        "u",
+    )
+    assert sorted((c.seq, c.start, c.end) for c in _chunks(spec, doc_id)) == before
+    staged = spec.get_resource_manager(IndexUnitText).list_resources(
+        (QB["doc_id"] == doc_id).build()
+    )
+    assert list(staged) == []
+
+
+async def test_a_batch_replayed_while_finalize_runs_writes_nothing():
+    """plan-rag-context P15→P17 (rounds 5–7): the P12 guard is check-then-act.
+    A duplicate delivery that passed it (run still `running`) and whose chunk
+    write lands AFTER finalize rebased the batch — its embedding outlived the
+    other batches and the finalize — used to put that batch back to
+    batch-relative offsets. The rows are create-only now: the duplicate's
+    writes are refused row by row, finalize stays the only writer of offsets."""
+    from workspace_app.kb.index_jobs import IndexJobPayload
+
+    spec = make_spec(default_user="u")
+    cid = spec.get_resource_manager(Collection).create(Collection(name="c")).resource_id
+    ingestor, coord = _build(spec, csv_batch=2)
+    doc_id = _store_csv(ingestor, cid, rows=5)  # 3 batches: (0,2) (2,4) (4,5)
+
+    def job(kind: str, b: int = 0, s: int = 0, e: int = 0) -> IndexJobPayload:
+        return IndexJobPayload(
+            doc_id=doc_id, collection_id=cid, kind=kind, unit_start=s, unit_end=e, batch_index=b
+        )
+
+    coord._handle_split(job("split"), "u", 0, 0)
+    coord._handle_process(job("process", 0, 0, 2), "u")
+    coord._handle_process(job("process", 1, 2, 4), "u")
+    coord._handle_process(job("process", 2, 4, 5), "u")  # claims finalize (queued)
+    # Delivery B of batch 2: the guard passes (still running); finalize runs
+    # inside B's index_units window, so B's chunk write lands after the rebase.
+    orig = ingestor.index_units
+    fired = 0
+
+    def interposed(*a, **kw):
+        nonlocal fired
+        fired += 1
+        if fired == 1:
+            coord._handle_finalize(job("finalize"), "u")
+        return orig(*a, **kw)
+
+    ingestor.index_units = interposed
+    try:
+        coord._handle_process(job("process", 2, 4, 5), "u")
+    finally:
+        ingestor.index_units = orig
+    assert fired == 1
+    doc = spec.get_resource_manager(SourceDoc).get(doc_id).data
+    assert isinstance(doc, SourceDoc) and doc.status == "ready" and doc.text is not None
+    chunks = _chunks(spec, doc_id)
+    assert len(chunks) == 5
+    assert all(doc.text[c.start : c.end] == c.text for c in chunks)
+    staged = spec.get_resource_manager(IndexUnitText).list_resources(
+        (QB["doc_id"] == doc_id).build()
+    )
+    assert list(staged) == []
+    run = spec.get_resource_manager(IndexRun).get(doc_id).data
+    assert isinstance(run, IndexRun) and run.status == "done"
+
+
+async def test_a_staged_row_left_by_an_earlier_run_never_reaches_the_next_text():
+    # P15: the split step clears staging, so a row a late replay left behind
+    # cannot be rejoined into a later run's `SourceDoc.text`.
+    spec = make_spec(default_user="u")
+    cid = spec.get_resource_manager(Collection).create(Collection(name="c")).resource_id
+    ingestor, coord = _build(spec, csv_batch=2)
+    doc_id = _store_csv(ingestor, cid, rows=5)
+    coord._stage_text(doc_id, 7, "STALE TEXT FROM A PREVIOUS RUN")
+    coord.enqueue(doc_id, cid)
+    await coord.aclose()
+    doc = spec.get_resource_manager(SourceDoc).get(doc_id).data
+    assert isinstance(doc, SourceDoc) and doc.text is not None
+    assert "STALE" not in doc.text
+
+
+def _fanout_to_the_last_batch(spec, coord, ingestor, cid, doc_id):
+    """Split + the three batches by hand (the finalize job is claimed, not run)."""
+    from workspace_app.kb.index_jobs import IndexJobPayload
+
+    def job(kind: str, b: int = 0, s: int = 0, e: int = 0) -> IndexJobPayload:
+        return IndexJobPayload(
+            doc_id=doc_id, collection_id=cid, kind=kind, unit_start=s, unit_end=e, batch_index=b
+        )
+
+    coord._handle_split(job("split"), "u", 0, 0)
+    coord._handle_process(job("process", 0, 0, 2), "u")
+    coord._handle_process(job("process", 1, 2, 4), "u")
+    coord._handle_process(job("process", 2, 4, 5), "u")
+    return job
+
+
+def _assert_canonical_everywhere(spec, ingestor, doc_id) -> None:
+    from workspace_app.kb.index_cache import IndexCacheStore
+
+    doc = spec.get_resource_manager(SourceDoc).get(doc_id).data
+    assert isinstance(doc, SourceDoc) and doc.status == "ready" and doc.text is not None
+    chunks = _chunks(spec, doc_id)
+    assert len(chunks) == 5
+    bad = [(c.seq, c.start, c.end, c.text) for c in chunks if doc.text[c.start : c.end] != c.text]
+    assert not bad, bad
+    cached = IndexCacheStore(spec).get(ingestor.cache_key(doc_id))
+    assert cached is not None
+    bad = [(c.seq, c.start, c.end) for c in cached.chunks if doc.text[c.start : c.end] != c.text]
+    assert not bad, ("the #390 cache snapshot", bad)
+    staged = spec.get_resource_manager(IndexUnitText).list_resources(
+        (QB["doc_id"] == doc_id).build()
+    )
+    assert list(staged) == []
+    run = spec.get_resource_manager(IndexRun).get(doc_id).data
+    assert isinstance(run, IndexRun) and run.status == "done"
+
+
+def test_a_duplicate_whose_write_lands_after_the_rebase_changes_no_row():
+    """Round 6's forced interleaving, kept as the pin for P17's rule: the
+    duplicate's chunk write lands AFTER finalize's rebase while finalize is
+    still in flight. Create-only rows mean the write is refused and the
+    rebased rows stand; finalize completes with canonical rows everywhere."""
+    import threading
+
+    spec = make_spec(default_user="u")
+    cid = spec.get_resource_manager(Collection).create(Collection(name="c")).resource_id
+    ingestor, coord = _build(spec, csv_batch=2)
+    doc_id = _store_csv(ingestor, cid, rows=5)
+    job = _fanout_to_the_last_batch(spec, coord, ingestor, cid, doc_id)
+
+    rebased = threading.Event()  # finalize's real rebase is done
+    dup_done = threading.Event()  # the duplicate's tail ran
+    orig_rebase = coord._rebase_fanout_offsets
+    orig_index_units = ingestor.index_units
+    in_finalize = threading.local()
+
+    def rebase(doc, bases, requester):
+        orig_rebase(doc, bases, requester)
+        if getattr(in_finalize, "yes", False) and not rebased.is_set():
+            rebased.set()
+            assert dup_done.wait(10), "the duplicate never finished"
+
+    def index_units(*a, **kw):
+        assert rebased.wait(10), "finalize never rebased"
+        return orig_index_units(*a, **kw)  # the write lands after the rebase
+
+    coord._rebase_fanout_offsets = rebase
+    ingestor.index_units = index_units
+    errors: list[BaseException] = []
+
+    def finalize():
+        in_finalize.yes = True
+        try:
+            coord._handle_finalize(job("finalize"), "u")
+        except BaseException as e:  # noqa: BLE001
+            errors.append(e)
+            rebased.set()
+
+    def duplicate():
+        try:
+            coord._handle_process(job("process", 2, 4, 5), "u")
+        except BaseException as e:  # noqa: BLE001
+            errors.append(e)
+        finally:
+            dup_done.set()
+
+    tf, td = threading.Thread(target=finalize), threading.Thread(target=duplicate)
+    tf.start()
+    td.start()
+    td.join(20)
+    tf.join(20)
+    assert not errors, errors
+    _assert_canonical_everywhere(spec, ingestor, doc_id)
+
+
+def test_a_duplicate_landing_between_the_rebase_and_the_cache_snapshot_changes_no_row():
+    """Rounds 6–7: with a duplicate that could overwrite, the #390 snapshot
+    caught its batch-relative rows (and, once the duplicate re-snapshotted,
+    two blind puts raced). Create-only rows: the duplicate's write is refused,
+    the snapshot finalize takes is canonical, and nobody else puts."""
+    import threading
+
+    spec = make_spec(default_user="u")
+    cid = spec.get_resource_manager(Collection).create(Collection(name="c")).resource_id
+    ingestor, coord = _build(spec, csv_batch=2)
+    doc_id = _store_csv(ingestor, cid, rows=5)
+    job = _fanout_to_the_last_batch(spec, coord, ingestor, cid, doc_id)
+
+    # The interleaving: finalize rebases → the duplicate's write lands (and is
+    # refused) → finalize snapshots the cache → the duplicate finishes.
+    rebased = threading.Event()
+    written = threading.Event()
+    orig_write_cache = ingestor.write_cache
+    orig_index_units = ingestor.index_units
+    orig_rebase = coord._rebase_fanout_offsets
+    in_finalize = threading.local()
+    calls: list[str] = []
+
+    def rebase(doc, bases, requester):
+        orig_rebase(doc, bases, requester)
+        calls.append("rebase:finalize" if getattr(in_finalize, "yes", False) else "rebase:dup")
+        rebased.set()
+
+    def index_units(*a, **kw):
+        assert rebased.wait(10), "finalize never rebased"
+        out = orig_index_units(*a, **kw)
+        written.set()
+        return out
+
+    def write_cache(doc):
+        assert written.wait(10), "the duplicate never wrote"
+        orig_write_cache(doc)
+        calls.append("cache:finalize" if getattr(in_finalize, "yes", False) else "cache:dup")
+
+    ingestor.write_cache = write_cache
+    ingestor.index_units = index_units
+    coord._rebase_fanout_offsets = rebase
+    errors: list[BaseException] = []
+
+    def finalize():
+        in_finalize.yes = True
+        try:
+            coord._handle_finalize(job("finalize"), "u")
+        except BaseException as e:  # noqa: BLE001
+            errors.append(e)
+            rebased.set()
+
+    def duplicate():
+        try:
+            coord._handle_process(job("process", 2, 4, 5), "u")
+        except BaseException as e:  # noqa: BLE001
+            errors.append(e)
+            written.set()
+
+    td, tf = threading.Thread(target=duplicate), threading.Thread(target=finalize)
+    td.start()
+    tf.start()
+    tf.join(20)
+    td.join(20)
+    assert not errors, errors
+    assert calls == ["rebase:finalize", "cache:finalize"]  # the duplicate touched nothing
+    _assert_canonical_everywhere(spec, ingestor, doc_id)
+
+
+def test_fanout_rows_are_create_only_so_a_second_writer_changes_nothing():
+    """P17's primitive, directly: `index_units` for a batch whose rows exist
+    refuses every row (specstar's create-only), and a batch with SOME rows
+    missing (a job redelivered after a crash mid-write) fills only the gaps."""
+    spec = make_spec(default_user="u")
+    cid = spec.get_resource_manager(Collection).create(Collection(name="c")).resource_id
+    ingestor, _coord = _build(spec, csv_batch=2)
+    doc_id = _store_csv(ingestor, cid, rows=5)
+    from workspace_app.kb.ingest import chunk_id
+
+    ingestor.index_units(doc_id, (2, 4), seq_base=1_000_000)
+    rm = spec.get_resource_manager(DocChunk)
+    first = rm.get(chunk_id(doc_id, 1_000_000)).data
+    assert isinstance(first, DocChunk)
+    # Someone (finalize) moved the row; a second delivery must not move it back.
+    rm.patch(chunk_id(doc_id, 1_000_000), MergePatch({"start": 40, "end": 48}))
+    ingestor.index_units(doc_id, (2, 4), seq_base=1_000_000)
+    again = rm.get(chunk_id(doc_id, 1_000_000)).data
+    assert isinstance(again, DocChunk) and (again.start, again.end) == (40, 48)
+    # A crashed job that wrote only the first row: the redelivery fills the second.
+    rm.permanently_delete(chunk_id(doc_id, 1_000_001))
+    ingestor.index_units(doc_id, (2, 4), seq_base=1_000_000)
+    rows = sorted(c.seq for c in _chunks(spec, doc_id) if c.seq >= 1_000_000)
+    assert rows == [1_000_000, 1_000_001]
+    kept = rm.get(chunk_id(doc_id, 1_000_000)).data
+    assert isinstance(kept, DocChunk) and (kept.start, kept.end) == (40, 48)
+
+
+async def test_a_redelivery_of_a_batch_that_crashed_before_claiming_still_claims():
+    """Round 8: the last batch's delivery crashed between `mark_done` and
+    `claim_finalize`. Its redelivery finds the batch already done and — before
+    P18 — returned without claiming, leaving the run to the stuck sweep's
+    five-minute clock. The gate is a CAS no-op when already claimed, so the
+    redelivery just tries it."""
+    from workspace_app.kb.index_jobs import IndexJobPayload
+
+    spec = make_spec(default_user="u")
+    cid = spec.get_resource_manager(Collection).create(Collection(name="c")).resource_id
+    ingestor, coord = _build(spec, csv_batch=2)
+    doc_id = _store_csv(ingestor, cid, rows=5)
+
+    def job(kind: str, b: int = 0, s: int = 0, e: int = 0) -> IndexJobPayload:
+        return IndexJobPayload(
+            doc_id=doc_id, collection_id=cid, kind=kind, unit_start=s, unit_end=e, batch_index=b
+        )
+
+    coord._handle_split(job("split"), "u", 0, 0)
+    coord._handle_process(job("process", 0, 0, 2), "u")
+    coord._handle_process(job("process", 1, 2, 4), "u")
+    # Batch 2's first delivery: rows written, text staged, marked done — then
+    # the pod died before `claim_finalize`.
+    text = ingestor.index_units(doc_id, (4, 5), seq_base=2 * 1_000_000)
+    coord._stage_text(doc_id, 2, text)
+    coord._runs.mark_done(doc_id, 2, batch_units=1)
+    run = spec.get_resource_manager(IndexRun).get(doc_id).data
+    assert isinstance(run, IndexRun) and not run.finalized
+    # The redelivery: nothing to write or stage, but the claim is still open.
+    coord._handle_process(job("process", 2, 4, 5), "u")
+    run = spec.get_resource_manager(IndexRun).get(doc_id).data
+    assert isinstance(run, IndexRun) and run.finalized
+    await coord.aclose()  # drains the finalize job it enqueued
+    doc = spec.get_resource_manager(SourceDoc).get(doc_id).data
+    assert isinstance(doc, SourceDoc) and doc.status == "ready" and doc.text is not None
+    assert all(doc.text[c.start : c.end] == c.text for c in _chunks(spec, doc_id))
+
+
+def test_a_duplicate_reading_the_run_between_clear_and_finish_stages_nothing():
+    """Round 9: the done-membership check in `_handle_process` is what keeps a
+    late duplicate from re-staging a row into a run finalize has already
+    cleared — and a status check in its place passed every test. The exact
+    window: finalize cleared staging but has not yet called `finish` (run still
+    `running`); the duplicate's post-write re-read lands there."""
+    import threading
+
+    spec = make_spec(default_user="u")
+    cid = spec.get_resource_manager(Collection).create(Collection(name="c")).resource_id
+    ingestor, coord = _build(spec, csv_batch=2)
+    doc_id = _store_csv(ingestor, cid, rows=5)
+    job = _fanout_to_the_last_batch(spec, coord, ingestor, cid, doc_id)
+
+    cleared = threading.Event()  # finalize: staging cleared, finish not yet called
+    dup_read = threading.Event()  # duplicate: its post-write run re-read is done
+    written = threading.Event()
+    orig_clear = coord._clear_staged_text
+    orig_get = coord._runs.get
+    orig_index_units = ingestor.index_units
+    in_dup = threading.local()
+
+    def clear(doc):
+        orig_clear(doc)
+        cleared.set()
+        assert dup_read.wait(10), "the duplicate never re-read the run"
+
+    def index_units(*a, **kw):
+        out = orig_index_units(*a, **kw)
+        written.set()
+        return out
+
+    def get(doc):
+        if getattr(in_dup, "yes", False) and written.is_set() and not dup_read.is_set():
+            assert cleared.wait(10), "finalize never cleared staging"
+            run = orig_get(doc)
+            dup_read.set()
+            return run
+        return orig_get(doc)
+
+    coord._clear_staged_text = clear
+    coord._runs.get = get  # type: ignore[method-assign]
+    ingestor.index_units = index_units
+    errors: list[BaseException] = []
+
+    def finalize():
+        try:
+            coord._handle_finalize(job("finalize"), "u")
+        except BaseException as e:  # noqa: BLE001
+            errors.append(e)
+            cleared.set()
+
+    def duplicate():
+        in_dup.yes = True
+        try:
+            coord._handle_process(job("process", 2, 4, 5), "u")
+        except BaseException as e:  # noqa: BLE001
+            errors.append(e)
+        finally:
+            dup_read.set()
+
+    td, tf = threading.Thread(target=duplicate), threading.Thread(target=finalize)
+    td.start()
+    tf.start()
+    td.join(20)
+    tf.join(20)
+    assert not errors, errors
+    _assert_canonical_everywhere(spec, ingestor, doc_id)  # includes: no staged row left
+
+
+def test_batch_bases_skip_a_batch_that_staged_no_text():
+    from workspace_app.kb.index_coordinator import _batch_bases, _join_staged
+
+    rows = [
+        IndexUnitText(doc_id="d", batch_index=0, text="aaaa"),
+        IndexUnitText(doc_id="d", batch_index=1, text=""),  # failed: nothing staged
+        IndexUnitText(doc_id="d", batch_index=2, text="cc"),
+    ]
+    assert _batch_bases(rows) == {0: 0, 2: 6}
+    assert _join_staged(rows) == "aaaa\n\ncc"
+
+
+def test_a_batch_whose_run_vanished_while_it_worked_stages_nothing():
+    # The doc (and its run, by cascade) deleted while the batch was embedding:
+    # nothing to stage or count.
+    from workspace_app.kb.index_jobs import IndexJobPayload
+
+    spec = make_spec(default_user="u")
+    cid = spec.get_resource_manager(Collection).create(Collection(name="c")).resource_id
+    ingestor, coord = _build(spec, csv_batch=2)
+    doc_id = _store_csv(ingestor, cid, rows=5)
+    payload = IndexJobPayload(
+        doc_id=doc_id, collection_id=cid, kind="process", unit_start=0, unit_end=2, batch_index=0
+    )
+    coord._handle_split(IndexJobPayload(doc_id=doc_id, collection_id=cid, kind="split"), "u", 0, 0)
+    orig_get = coord._runs.get
+    calls = 0
+
+    def get(doc):
+        nonlocal calls
+        calls += 1
+        return orig_get(doc) if calls == 1 else None  # gone by the post-write read
+
+    coord._runs.get = get  # type: ignore[method-assign]
+    coord._handle_process(payload, "u")
+    staged = spec.get_resource_manager(IndexUnitText).list_resources(
+        (QB["doc_id"] == doc_id).build()
+    )
+    assert list(staged) == []

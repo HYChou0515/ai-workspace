@@ -568,6 +568,25 @@ class RetrievalSettings:
     # index), so a capped-out chunk can still be retrieved. null (default) =
     # uncapped. Tune against a #535 eval run before lowering it.
     sparse_corpus_cap: int | None = None
+    # plan-rag-context P2: neighbouring context. Each retrieved passage is
+    # widened to at least this many characters BEFORE the hit and at least this
+    # many AFTER it, taken in whole chunks, continuing into the adjacent
+    # documents (document-tree order, same collection) when the document runs
+    # out. The widened text is what the reranker ranks and the agent reads; the
+    # citation still points at the hit. Why unconditional: the text next to a
+    # match is written in different vocabulary, so vector search cannot reach
+    # it by construction, and the model cannot know it is missing. `0` = off.
+    # Set by judgment (not eval-gated); 2000 ≈ 1.4 English / 13 Chinese chunks per
+    # side on the production SentenceSplitter — the budget is chars, so both get
+    # about the same amount of text.
+    context_chars: int = 2000
+    # plan-rag-context P6: how much of that context the LISTWISE reranker sees
+    # per candidate (chars, centred on the hit). All ~20 candidates go into ONE
+    # prompt, so `context_chars` alone grows it ~4× (English) / ~27× (Chinese);
+    # a reranker whose window is smaller truncates from the front — the
+    # question — and its reply's numbers become noise applied silently. `null`
+    # = uncapped (a 1M-window reranker); `0` = the bare hit; default 4000.
+    rerank_context_chars: int | None = 4000
 
 
 @dataclass(frozen=True)
@@ -1001,6 +1020,9 @@ _BUNDLED_PRESETS: dict[str, dict[str, Any]] = {
             "lookup_entity",
             "ask_wiki",
             "kb_search",
+            "kb_grep",
+            "read_page",
+            "read_lines",
             "request_wiki_update",
         ],
     },
@@ -1030,6 +1052,9 @@ _BUNDLED_PRESETS: dict[str, dict[str, Any]] = {
             "lookup_entity",
             "ask_wiki",
             "kb_search",
+            "kb_grep",
+            "read_page",
+            "read_lines",
             "request_wiki_update",
         ],
     },
@@ -1051,6 +1076,9 @@ _BUNDLED_PRESETS: dict[str, dict[str, Any]] = {
             "lookup_entity",
             "ask_wiki",
             "kb_search",
+            "kb_grep",
+            "read_page",
+            "read_lines",
             "request_wiki_update",
         ],
     },

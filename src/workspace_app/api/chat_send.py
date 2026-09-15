@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING
 import magic
 from fastapi import HTTPException
 
-from ..agent.context import KbSearchBudget, WikiSearchBudget
+from ..agent.context import KbGrepBudget, KbSearchBudget, WikiSearchBudget
 from ..config.schema import OffHoursSettings
 from ..filestore.protocol import FileNotFound
 from ..kb.collections import (
@@ -893,6 +893,9 @@ class ChatSendService:
                         ceiling=self._kb_max_searches_ceiling,
                     )
                 )
+                # plan-rag-context P3: the exact-search twin, one per turn, shared the
+                # same way; unlimited but counted (no per-message pick in this phase).
+                grep_budget = KbGrepBudget()
 
                 async def _run_subagent_with_depth(
                     purpose: str,
@@ -918,6 +921,7 @@ class ChatSendService:
                         colls = collection_ids
                         bud = kb_budget
                         wiki_bud = wiki_budget
+                        grep_bud = grep_budget
                     elif purpose == "infer_modules":
                         enh, reff = (
                             self._infer_modules_enhancements,
@@ -926,8 +930,10 @@ class ChatSendService:
                         colls = infer_coll_ids
                         bud = None
                         wiki_bud = None
+                        grep_bud = None
                     else:  # pragma: no cover
                         enh, reff, colls, bud, wiki_bud = None, None, None, None, None
+                        grep_bud = None
                     return await self._subagent_bridge.run(
                         purpose,
                         payload,
@@ -938,6 +944,7 @@ class ChatSendService:
                         collection_ids=colls,
                         budget=bud,
                         wiki_budget=wiki_bud,
+                        grep_budget=grep_bud,
                         # Permission-disclosure: forward the parent turn's withheld
                         # accumulator so the KB sub-agent's disclosed sources bubble up.
                         withheld_sink=withheld_sink,

@@ -11,12 +11,25 @@ from workspace_app.agent.ask_kb import AskKbSpec, build_ask_kb_context, make_ask
 
 
 def test_default_spec_grants_both_sources_and_the_glossary():
-    assert AskKbSpec().allowed_tools() == ["kb_search", "ask_wiki", "lookup_glossary"]
+    assert AskKbSpec().allowed_tools() == [
+        "kb_search",
+        "kb_grep",
+        "read_page",
+        "read_lines",
+        "ask_wiki",
+        "lookup_glossary",
+    ]
 
 
 def test_wiki_max_zero_omits_the_wiki_tool():
     # 0 = off ⇒ not granted at all (there's no wiki_mode enum).
-    assert AskKbSpec(wiki_search_max=0).allowed_tools() == ["kb_search", "lookup_glossary"]
+    assert AskKbSpec(wiki_search_max=0).allowed_tools() == [
+        "kb_search",
+        "kb_grep",
+        "read_page",
+        "read_lines",
+        "lookup_glossary",
+    ]
 
 
 def test_kb_max_zero_omits_document_search():
@@ -24,15 +37,30 @@ def test_kb_max_zero_omits_document_search():
     used to be granted unconditionally, so a caller could switch the wiki off but
     never the documents — "consult the wiki, not the documents" was unexpressible
     however the budgets were set."""
+    # the exact search is a document tool: off with the documents
     assert AskKbSpec(kb_search_max=0).allowed_tools() == ["ask_wiki", "lookup_glossary"]
 
 
 def test_both_sources_off_leaves_only_the_free_lookup():
     assert AskKbSpec(kb_search_max=0, wiki_search_max=0).allowed_tools() == ["lookup_glossary"]
+    # plan-rag-context P3: the exact search also has its OWN switch.
+    assert AskKbSpec(kb_grep_max=0).allowed_tools() == [
+        "kb_search",
+        "read_page",
+        "read_lines",
+        "ask_wiki",
+        "lookup_glossary",
+    ]
 
 
 def test_glossary_false_omits_lookup_glossary():
-    assert AskKbSpec(glossary=False).allowed_tools() == ["kb_search", "ask_wiki"]
+    assert AskKbSpec(glossary=False).allowed_tools() == [
+        "kb_search",
+        "kb_grep",
+        "read_page",
+        "read_lines",
+        "ask_wiki",
+    ]
 
 
 def test_build_stamps_budgets_from_spec():

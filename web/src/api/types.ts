@@ -108,6 +108,14 @@ export type MessageCitation = {
   snippet: string;
   /** #254 — aggregated source location ({ page: [3, 4], section: ["Ch.2 > 2.1"] }). */
   provenance?: Provenance;
+  /**
+   * plan-rag-context P2 — how far the neighbouring context the model read
+   * reached within this document (offsets into the canonical text; 0/0 = not
+   * expanded). `start`/`end`/`snippet` stay the hit: the card and the
+   * highlight show the matched span, not the context.
+   */
+  context_start?: number;
+  context_end?: number;
 };
 
 /** #254 — a passage's structural location, aggregated across its merged

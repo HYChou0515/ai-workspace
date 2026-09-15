@@ -74,7 +74,7 @@ uv run python -m workspace_app            # API + SPA 一起跑在 127.0.0.1:800
 |---|---|
 | **全部換成 OpenAI / Claude** | `agents.presets.*.model` 改模型字串 + `agents.presets.*.llm.api_key: ${OPENAI_API_KEY}`（範例 2） |
 | **只加一個調過 prompt 的模型到 picker** | 新增一個 `agents.presets.<name>` + 加進 `agents.workspace_chat[]`（範例 1） |
-| **KB 聊天換模型** | 加 `agents.kb_chat[]` 條目；接非 `kb-default` 的 preset **必須**補 `allowed_tools: [kb_search]`（範例 3/4） |
+| **KB 聊天換模型** | 加 `agents.kb_chat[]` 條目；接非 `kb-default` 的 preset **必須**補 `allowed_tools: [kb_search, kb_grep, read_page, read_lines]`（範例 3/4；kb prompt 會描述這四個工具，少列的就是「說了卻不能用」） |
 | **選了 VLM 當主 agent，要牠自己直接看圖** | `agents.presets.<name>.vision: true`（[§7](#vlm-主-agent-直接讀圖vision)） |
 | **檔案要持久化（重啟不掉）** | `filestore.kind: specstar` + `filestore.pg_dsn: ${SPECSTAR_PG_DSN}` + `disk_root` |
 | **上多 pod（k8s）** | `sandbox.kind: http` + `sandbox.http.base_url` ＋ 共享 filestore ＋ 共享 MQ backend（見 [§5 階梯 C](#c-多-podk8s)） |
@@ -467,6 +467,8 @@ kb:
     quality_weight: 0.10        # #105 文件品質先驗強度（很小是刻意的）；0=關
     quality_floor: null         # #105 絕對門檻：分數低於此的文件直接剔除；null=只降權不剔除
     sparse_corpus_cap: null     # 關鍵字（BM25）一次最多撈回幾個 chunk；null=不封頂（見下）
+    context_chars: 2000         # 命中前後各至少帶多少字元的前後文（整塊取、可跨檔）；0=關（見下）
+    rerank_context_chars: 4000  # rerank 每個候選最多看到多少前後文（以命中為中心）；null=不設上限、0=只看命中
   max_searches_per_turn: 3      # 每則 KB 回覆的 kb_search 次數上限（#195）；null=不限
   max_searches_ceiling: 10      # FE per-message 次數 picker 的上限（#334）
   vlm_llm:   { preset: kb-vlm } # 圖片/PDF 視覺頁；null=圖片上傳存 0 chunk 直到設好再重索引
@@ -506,6 +508,41 @@ kb:
 > `quality_weight` / `quality_floor` 在此版之前**設了不會生效**（loader 接受該 key 但建構時被丟掉）。
 > 現已修正 —— 若你的 `config.yaml` 早就寫了這兩個值，升級後它們會**開始真的作用**，
 > `quality_floor` 尤其會開始剔除低分文件。
+
+### `context_chars` —— 命中處的前後文（plan-rag-context P2）
+
+向量檢索找到的是「**用字跟問題最像**」的那一塊；真正需要的補充（參數表、定義、下一段）往往用字不同，
+所以**永遠排不上來**——這是結構性的，不是調參能解的。而模型讀到的那一塊本身通順，它**不知道自己
+少了東西**，也就不會主動去查。所以前後文是**無條件補**的，不等模型開口。
+
+每個命中會往**前**至少補 `context_chars` 個字元、往**後**也至少補 `context_chars` 個字元，
+以**整塊 chunk** 為單位（不切半句）。這份文件補完了，就接到**文件樹上的下一份／上一份**（同一個
+collection 內、樹的順序 = 你在文件樹看到的順序，資料夾在前、檔名自然排序），檔案交界處會標一行路徑（和 `kb_grep`、`read_lines` 用的是同一個座標），
+模型看得出跨了檔。補進來的文字是 **rerank 排序和模型閱讀**的對象；引用 `[n]` 仍然指向命中的那一段，
+引用卡片的摘錄和文件頁的 highlight 不會變成一大坨。
+
+| 設定 | 效果 |
+| --- | --- |
+| `2000`（預設） | production 管線下英文約多帶 1.4 塊（一塊 ≈1,452 字元）、中文約 13 塊（一塊 ≈154 字）——預算是字元,兩邊拿到的文字量差不多,這正是用字元當單位的用意 |
+| `0` | 關掉：不補前後文、rerank 只看命中（只有一處不同於舊版——同一份內容被多個 collection 持有時，命名以搜尋範圍內的持有者為準，這是 P5 的修正、不受此 knob 影響） |
+| `null` / 負數 | **拒絕載入**（開機即報錯、點名這個鍵）——這裡沒有「不設上限」，關掉請用 `0` |
+| 更大 | 模型讀到的段落更寬；rerank 那邊由 `rerank_context_chars` 另外封頂（見下），不會跟著等比例長 |
+
+**`rerank_context_chars`**：rerank 是 listwise——約 20 個候選塞進**同一個** prompt。沒有上限時，預設的
+`context_chars=2000` 會讓那個 prompt 從英文約 2.9 萬字元長到 11 萬（4×）、中文從 3 千長到 8.4 萬（**27×**）；
+rerank 模型的窗口不夠時會**從前面截斷、問題被截掉**、排序變雜訊且不報錯。所以每個候選送給 rerank 的前後文
+以命中為中心封頂在 `rerank_context_chars`（預設 4000）：模型仍然是在排「會交付的東西」的核心，但 prompt 大小有界。
+確定 rerank 模型有 1M 窗口的部署可以設 `null`；`0` 回到只看命中（此版之前的行為）。
+
+**權限**：前後文會讀到「檢索沒選中」的文件，所以它套用**跟檢索一模一樣**的範圍——集合層／單文件的
+權限、`#308` 的個人排除、`#518` 的正向限定（卡片連結、P3 的資料夾）。讀不到的鄰居會被**跳過、
+繼續往下找**，不會被讀到、也不會被點名。
+
+**要讓兩份檔案在檢索時互為前後文**：放同一個資料夾、檔名前面加阿拉伯數字編號（`01_…`、`02_…`）。
+這是唯一保證的順序手段；中文數字和全形數字不算數字。
+
+**部署**：走訪是列出整個 collection 再從每一列的資料讀 `path` 排序，**不**依賴 `path` 索引，
+所以不需要 migrate；只有在一次搜尋真的走到某份文件的邊界時才會列一次，並在該次搜尋內快取。
 
 ---
 

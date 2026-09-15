@@ -3,7 +3,7 @@ from collections.abc import AsyncIterator, Iterator, Sequence
 
 from workspace_app.agent.ask_kb import AskKbSpec
 from workspace_app.agent.context import AgentToolContext, WikiSearchBudget
-from workspace_app.api import create_app
+from workspace_app.api import ScriptedAgentRunner, create_app
 from workspace_app.api.events import (
     AgentEvent,
     AgentMetrics,
@@ -698,7 +698,13 @@ async def test_answer_question_applies_ask_kb_spec_tools_and_wiki_budget():
     )
 
     assert runner.ctx is not None and runner.ctx.agent_config is not None
-    assert runner.ctx.agent_config.allowed_tools == ["kb_search", "lookup_glossary"]
+    assert runner.ctx.agent_config.allowed_tools == [
+        "kb_search",
+        "kb_grep",
+        "read_page",
+        "read_lines",
+        "lookup_glossary",
+    ]
     assert runner.ctx.wiki_search_budget.max_calls == 2
 
 
@@ -1264,3 +1270,33 @@ async def test_fold_image_returns_the_decoded_bytes_for_query_by_image():
 
     assert "a described chip" in folded  # caption still folded into the text query
     assert image_bytes == _PNG  # and the raw bytes come back for the image arm
+
+
+def test_create_app_forwards_the_context_knobs_to_the_retriever():
+    """plan-rag-context: `kb_context_chars` / `kb_rerank_context_chars` reach the
+    one Retriever the app builds. The P7 bug lived at exactly this kind of door
+    (the worker's) and no test touched either; review round 3 made create_app
+    always pass the default and 112 tests stayed green."""
+    app = create_app(
+        spec=make_spec(),
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=ScriptedAgentRunner([]),
+        kb_embedder=HashEmbedder(dim=EMBED_DIM),
+        kb_chunker=FixedTokenChunker(max_tokens=3, overlap_tokens=1),
+        kb_context_chars=7,
+        kb_rerank_context_chars=0,
+    )
+    r = app.state.kb_retriever
+    assert (r._context_chars, r._rerank_context_chars) == (7, 0)
+    # Omitted → the dataclass defaults, not None / not "default".
+    app = create_app(
+        spec=make_spec(),
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=ScriptedAgentRunner([]),
+        kb_embedder=HashEmbedder(dim=EMBED_DIM),
+        kb_chunker=FixedTokenChunker(max_tokens=3, overlap_tokens=1),
+    )
+    r = app.state.kb_retriever
+    assert (r._context_chars, r._rerank_context_chars) == (2000, 4000)

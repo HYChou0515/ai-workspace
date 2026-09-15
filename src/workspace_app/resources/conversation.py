@@ -102,6 +102,17 @@ class Citation(Struct):
     # (``{"page": [3, 4], "section": ["Ch.2 > 2.1"]}``) so the FE can render a
     # "p.3 §2.1" chip on the reference card. ``{}`` when the source had none.
     provenance: dict[str, Any] = field(default_factory=dict)
+    # plan-rag-context P2: how far the neighbouring context reached WITHIN this
+    # document when the model read the passage — offsets, not text, so "what
+    # did the model actually see" (#748) is reconstructible at near-zero storage
+    # and with the same staleness the existing `start` / `end` already have
+    # (a re-index moves offsets). The hit span itself when there was nothing to
+    # widen into; `0 / 0` when the feature is off or the passage never went
+    # through the walk (a parent pulled in after the cut). The spill into adjacent
+    # documents has no offset here. `snippet` / `start` / `end` stay
+    # the HIT: the reference card shows the matched sentence, not the context.
+    context_start: int = 0
+    context_end: int = 0
 
 
 class WithheldSource(Struct):

@@ -83,6 +83,7 @@ function EmptyUploadCta({
     >
       <Icon name="upload" size={28} color="var(--text-paper-d2)" />
       <div style={{ fontSize: pxToRem(14) }}>{t("kb.dropHint")}</div>
+      <p className="kb-ide__order-rule">{t("kb.orderRule")}</p>
       <button
         type="button"
         className="kb-btn kb-btn--primary"
@@ -340,6 +341,7 @@ export function KbDocIde({
   // #402: draggable tree width, persisted + clamped. Shared key with the wiki
   // IDE so the two KB trees remember one width. `treeStart` snapshots the width
   // at drag start; ResizeDivider reports the signed delta from there.
+  const t = useT();
   const [treeW, setTreeW] = usePersistentNumber("kb:ide:treeWidth", 260, 160, 560);
   const treeStart = useRef(treeW);
   if (docsQuery.isPending) {
@@ -381,6 +383,7 @@ export function KbDocIde({
                       </>
                     )}
                   />
+                  <p className="kb-ide__order-rule">{t("kb.orderRule")}</p>
                 </div>
                 <ResizeDivider
                   orientation="vertical"

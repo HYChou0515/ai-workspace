@@ -617,6 +617,8 @@ def test_operator_can_set_retrieval_scalar_knobs(tmp_path: Path):
                 quality_weight: 0.42
                 quality_floor: 33
                 sparse_corpus_cap: 750
+                context_chars: 0
+                rerank_context_chars: null
         """),
         encoding="utf-8",
     )
@@ -624,8 +626,40 @@ def test_operator_can_set_retrieval_scalar_knobs(tmp_path: Path):
     assert r.quality_weight == 0.42
     assert r.quality_floor == 33
     assert r.sparse_corpus_cap == 750
+    assert r.context_chars == 0  # the off switch must actually reach the retriever
+    assert r.rerank_context_chars is None  # null = uncapped must survive the loader
     # untouched knobs keep their bundled defaults
     assert r.enhancements.expand.default == 1
+
+
+@pytest.mark.parametrize(
+    ("yaml_value", "key"),
+    [
+        ("null", "context_chars"),  # 0 is the off switch; there is no "unlimited"
+        ("-1", "context_chars"),
+        ("true", "context_chars"),
+        ("-1", "rerank_context_chars"),
+        ("2.5", "rerank_context_chars"),
+    ],
+)
+def test_context_knobs_reject_what_the_retriever_cannot_take(
+    tmp_path: Path, yaml_value: str, key: str
+):
+    """`context_chars: null` used to load fine and crash the WORKER's retriever on
+    its first search (`None <= 0`) — the API door mapped None to the default, the
+    worker door forwarded it verbatim. The rule lives where the value is made:
+    the loader refuses it, naming the key and what 0 means."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        dedent(f"""
+            kb:
+              retrieval:
+                {key}: {yaml_value}
+        """),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match=rf"kb\.retrieval\.{key} must be"):
+        load(config_path=cfg, env={})
 
 
 def test_retrieval_scalar_knobs_keep_defaults_when_unset(tmp_path: Path):
@@ -646,6 +680,8 @@ def test_retrieval_scalar_knobs_keep_defaults_when_unset(tmp_path: Path):
     assert r.quality_weight == 0.10
     assert r.quality_floor is None
     assert r.sparse_corpus_cap is None
+    assert r.context_chars == 2000
+    assert r.rerank_context_chars == 4000
 
 
 def test_unknown_enhancement_key_raises_with_path(tmp_path: Path):

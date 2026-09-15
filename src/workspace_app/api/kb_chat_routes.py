@@ -40,7 +40,7 @@ if TYPE_CHECKING:
     from specstar.resource_manager.core import ResourceManager
 
 from ..agent.ask_kb import AskKbSpec
-from ..agent.context import AgentToolContext, KbSearchBudget, WikiSearchBudget
+from ..agent.context import AgentToolContext, KbGrepBudget, KbSearchBudget, WikiSearchBudget
 from ..agent.search_scope import allowance_note, tools_within_budget
 from ..kb.chat_permission import effective_permission
 from ..kb.citations import parse_citations
@@ -101,6 +101,7 @@ async def answer_question(
     max_searches: int | None = None,
     budget: KbSearchBudget | None = None,
     wiki_budget: WikiSearchBudget | None = None,
+    grep_budget: KbGrepBudget | None = None,
     ask_kb_spec: AskKbSpec | None = None,
     exclude_doc_ids: frozenset[str] = frozenset(),
     discoverable_collection_ids: list[str] | None = None,
@@ -159,6 +160,9 @@ async def answer_question(
     turn_wiki_budget = wiki_budget or WikiSearchBudget(
         max_calls=ask_kb_spec.wiki_search_max if ask_kb_spec is not None else None
     )
+    turn_grep_budget = grep_budget or KbGrepBudget(
+        max_calls=ask_kb_spec.kb_grep_max if ask_kb_spec is not None else None
+    )
     # #537: a source whose allowance is 0 is OFF, which means its tool is not
     # granted — not granted-and-then-refused. A refusing tool costs a round-trip
     # to learn what the prompt already knew, and its "answer now" reply reads as
@@ -173,11 +177,12 @@ async def answer_question(
         kb=kb_budget,
         wiki=turn_wiki_budget,
         has_wiki=consultant is not None,
+        grep=turn_grep_budget,
     )
     agent_config = msgspec.structs.replace(
         agent_config,
         allowed_tools=tools_within_budget(
-            agent_config.allowed_tools, kb=kb_budget, wiki=turn_wiki_budget
+            agent_config.allowed_tools, kb=kb_budget, wiki=turn_wiki_budget, grep=turn_grep_budget
         ),
     )
     ctx = AgentToolContext(
@@ -206,6 +211,7 @@ async def answer_question(
         reasoning_effort=reasoning_effort,
         kb_search_budget=kb_budget,
         wiki_search_budget=turn_wiki_budget,
+        kb_grep_budget=turn_grep_budget,
         # #308: the caller (the ask_knowledge_base bridge) resolves which docs the
         # ORIGINAL speaker's per-doc override blocks, so this sub-agent's retriever
         # can't surface a doc the speaker can't read — even though the KB ctx itself
@@ -867,6 +873,9 @@ def register_kb_chat_routes(
                 ceiling=max_searches_ceiling,
             )
         )
+        # plan-rag-context P3: the exact search has no per-message pick and no
+        # operator cap in this phase — unlimited but counted; `max_turns` bounds it.
+        turn_grep_budget = KbGrepBudget()
         turn_consultant = (
             wiki_consultant_factory(list(_effective)) if wiki_consultant_factory else None
         )
@@ -875,11 +884,15 @@ def register_kb_chat_routes(
             kb=turn_kb_budget,
             wiki=turn_wiki_budget,
             has_wiki=turn_consultant is not None,
+            grep=turn_grep_budget,
         )
         agent_config = msgspec.structs.replace(
             agent_config,
             allowed_tools=tools_within_budget(
-                agent_config.allowed_tools, kb=turn_kb_budget, wiki=turn_wiki_budget
+                agent_config.allowed_tools,
+                kb=turn_kb_budget,
+                wiki=turn_wiki_budget,
+                grep=turn_grep_budget,
             ),
         )
         _disc = partition_collection_disclosure(
@@ -977,6 +990,7 @@ def register_kb_chat_routes(
             # one, the operator default.
             kb_search_budget=turn_kb_budget,
             wiki_search_budget=turn_wiki_budget,
+            kb_grep_budget=turn_grep_budget,
         )
 
         def persist(produced: list[TurnMessage]) -> None:

@@ -647,3 +647,109 @@ async def test_kb_search_without_glossary_cards_appends_nothing(
 
     assert "[1]" in out
     assert "glossary" not in out.lower()
+
+
+async def test_kb_search_shows_the_agent_the_neighbouring_context_but_registers_the_hit(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # plan-rag-context P2: the line the agent reads carries the widened context
+    # (here: into the next file, boundary named); the registered passage — what
+    # a later [n] cites — is still the hit, so the citation snippet stays exact.
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    ing.ingest(collection_id=cid, user="u", filename="01.md", data=b"a1 a2 a3")
+    ing.ingest(collection_id=cid, user="u", filename="02.md", data=b"b1 b2 b3")
+    ctx = RunContextWrapper(
+        AgentToolContext(
+            retriever=Retriever(spec, embedder=embedder, candidates=1, top_k=1, context_chars=2),
+            collection_ids=[cid],
+        )
+    )
+
+    out = kb_search_impl(ctx, "a1 a2 a3")
+
+    assert "── 02.md ──" in out and "b1 b2 b3" in out
+    [p] = ctx.context.kb_passages
+    assert p.text == "a1 a2 a3"
+    assert p.context_text.endswith("b1 b2 b3")
+
+
+def _two_folders(spec, chunker, embedder):
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    ing.ingest(collection_id=cid, user="u", filename="2024/report.md", data=b"widget yield fell")
+    ing.ingest(collection_id=cid, user="u", filename="2025/report.md", data=b"widget yield rose")
+    return cid
+
+
+async def test_kb_search_folder_limits_the_search_and_the_context_to_that_folder(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # plan-rag-context P3: `folder` is a positive scope — search AND the
+    # neighbouring-context walk stay inside it (the 2025 file is the tree
+    # neighbour and must not be pulled in as context either).
+    cid = _two_folders(spec, chunker, embedder)
+    ctx = RunContextWrapper(
+        AgentToolContext(
+            spec=spec,
+            retriever=Retriever(spec, embedder=embedder, context_chars=50),
+            collection_ids=[cid],
+        )
+    )
+    out = kb_search_impl(ctx, "widget yield", folder="2024")
+    assert "widget yield fell" in out
+    assert "rose" not in out
+    assert [p.document_id for p in ctx.context.kb_passages] == [
+        encode_doc_id(cid, "2024/report.md")
+    ]
+
+
+async def test_kb_search_folder_with_nothing_under_it_says_so_instead_of_searching_everything(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    cid = _two_folders(spec, chunker, embedder)
+    ctx = RunContextWrapper(
+        AgentToolContext(
+            spec=spec, retriever=Retriever(spec, embedder=embedder), collection_ids=[cid]
+        )
+    )
+    out = kb_search_impl(ctx, "widget yield", folder="2023")
+    assert "No documents under folder '2023'" in out
+    assert ctx.context.kb_passages == []
+
+
+async def test_kb_search_card_anchor_outside_the_folder_widens_to_the_folder_not_past_it(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # A card matched by the query links ONLY a document outside the folder.
+    # Anchor ∩ folder is empty; the widen pass must widen to the folder — an
+    # empty restriction reaching the retriever means UNSCOPED, and the 2025
+    # document would come back from a search the user scoped to 2024. Review
+    # round 3 deleted this guard and every kb_search test stayed green.
+    cid = _two_folders(spec, chunker, embedder)
+    _linked_card(spec, cid, ["widget"], [encode_doc_id(cid, "2025/report.md")])
+    ctx = RunContextWrapper(
+        AgentToolContext(
+            spec=spec, retriever=Retriever(spec, embedder=embedder), collection_ids=[cid]
+        )
+    )
+    out = kb_search_impl(ctx, "widget yield", folder="2024")
+    assert "widget yield fell" in out
+    assert "rose" not in out
+    assert [p.document_id for p in ctx.context.kb_passages] == [
+        encode_doc_id(cid, "2024/report.md")
+    ]
+
+
+async def test_kb_search_document_outside_the_folder_is_refused(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    cid = _two_folders(spec, chunker, embedder)
+    ctx = RunContextWrapper(
+        AgentToolContext(
+            spec=spec, retriever=Retriever(spec, embedder=embedder), collection_ids=[cid]
+        )
+    )
+    out = kb_search_impl(ctx, "widget yield", document="2025/report.md", folder="2024")
+    assert "not under folder '2024'" in out
+    assert ctx.context.kb_passages == []

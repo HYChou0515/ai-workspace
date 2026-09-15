@@ -17,7 +17,7 @@ from specstar import QB, SpecStar
 
 from ..agent.ask_kb import AskKbSpec
 from ..agent.config_catalog import AgentConfigCatalog
-from ..agent.context import KbSearchBudget, WikiSearchBudget
+from ..agent.context import KbGrepBudget, KbSearchBudget, WikiSearchBudget
 from ..kb.cited import record_citations
 from ..kb.collections import (
     all_discoverable_collection_ids,
@@ -94,6 +94,7 @@ class SubagentBridge:
         collection_ids: list[str] | None = None,
         budget: KbSearchBudget | None = None,
         wiki_budget: WikiSearchBudget | None = None,
+        grep_budget: KbGrepBudget | None = None,
         ask_kb_spec: AskKbSpec | None = None,
         withheld_sink: list[str] | None = None,
         excluded_collection_ids: list[str] | None = None,
@@ -255,6 +256,7 @@ class SubagentBridge:
             # its AskKbSpec (the sub-agent's authoritative tool set + prompt) and its
             # wiki-search cap through here; both None ⇒ the interactive path unchanged.
             wiki_budget=wiki_budget,
+            grep_budget=grep_budget,
             tool_output_max_chars=self._tool_output_max_chars,
             exec_output_max_chars=self._exec_output_max_chars,
             ask_kb_spec=ask_kb_spec,

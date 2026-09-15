@@ -94,6 +94,35 @@ async def test_a_structured_image_output_is_never_truncated():
     assert await _run_cap(tool, [image]) == [image]
 
 
+async def test_a_text_plus_image_list_passes_whole_when_its_text_is_within_the_cap():
+    """plan-rag-context P4: `read_page` answers `[ToolOutputText, ToolOutputImage]`.
+    The cap governs TEXT in the context window; the image part is not text, so
+    the list must reach the model intact — the first version `str()`-ed the
+    whole list (base64 and all) into a repr that blew the cap, and the vision
+    model got a truncated repr string instead of the page."""
+    from agents import ToolOutputText
+
+    [tool] = build_tools(["read_page"])
+    text = ToolOutputText(text="[1] deck.pdf — page 2 of 3\n\nthe text layer")
+    image = ToolOutputImage(image_url="data:image/png;base64," + "A" * 300_000)
+    out = await _run_cap(tool, [text, image])
+    assert out == [text, image]
+
+
+async def test_a_text_plus_image_list_is_capped_on_its_text_alone():
+    """Only the text parts count; when THEY exceed the cap the output degrades to
+    capped text and says the image was dropped (a page whose text layer alone
+    is over the budget — the rare case, but not a silent one)."""
+    from agents import ToolOutputText
+
+    [tool] = build_tools(["read_page"])
+    text = ToolOutputText(text="X" * 100_000)
+    image = ToolOutputImage(image_url="data:image/png;base64,QUJD")
+    out = await _run_cap(tool, [text, image], cap=1000)
+    assert isinstance(out, str) and len(out) < 1500
+    assert "image" in out.lower() and "QUJD" not in out
+
+
 def test_the_tail_survives_when_the_text_is_a_single_long_line():
     """head+tail is the whole point (#44): the punchline — a count, an error, a
     summary — sits at the end. A one-line body with a trailing newline used to

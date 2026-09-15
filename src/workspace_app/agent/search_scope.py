@@ -27,11 +27,15 @@ search the documents for this" instead of silently answering worse.
 
 from __future__ import annotations
 
-from .context import KbSearchBudget, WikiSearchBudget
+from .context import KbGrepBudget, KbSearchBudget, WikiSearchBudget
 
 # The budgeted search tools, and the budget each one spends.
 KB_SEARCH_TOOL = "kb_search"
 WIKI_TOOL = "ask_wiki"
+# plan-rag-context P3: the exact-string arm. Same budget contract as the other two.
+GREP_TOOL = "kb_grep"
+# plan-rag-context P4: the read tools are document tools too — off with the documents.
+READ_TOOLS = ("read_page", "read_lines")
 
 
 def tools_within_budget(
@@ -39,6 +43,7 @@ def tools_within_budget(
     *,
     kb: KbSearchBudget,
     wiki: WikiSearchBudget,
+    grep: KbGrepBudget | None = None,
 ) -> list[str] | None:
     """`allowed` minus the search tools whose budget is `0` for this turn.
 
@@ -48,11 +53,14 @@ def tools_within_budget(
     """
     if allowed is None:
         return None
-    off = {
-        tool
-        for tool, budget in ((KB_SEARCH_TOOL, kb.max_calls), (WIKI_TOOL, wiki.max_calls))
-        if budget == 0
-    }
+    caps = [(KB_SEARCH_TOOL, kb.max_calls), (WIKI_TOOL, wiki.max_calls)]
+    off = {tool for tool, budget in caps if budget == 0}
+    # plan-rag-context P3: the exact search is a DOCUMENT tool — off with the
+    # documents (the per-source switch), or on its own cap.
+    if kb.max_calls == 0 or (grep is not None and grep.max_calls == 0):
+        off.add(GREP_TOOL)
+    if kb.max_calls == 0:
+        off.update(READ_TOOLS)
     return [t for t in allowed if t not in off]
 
 
@@ -74,6 +82,8 @@ def describe_budgets(
     wiki: WikiSearchBudget,
     glossary: bool,
     has_wiki: bool,
+    grep: KbGrepBudget | None = None,
+    reads: bool = False,
 ) -> str:
     """The per-turn allowance block appended to the KB agent's prompt.
 
@@ -91,6 +101,23 @@ def describe_budgets(
     else:
         lines.append("- **The wiki**: none of the collections in scope keeps one.")
     lines.append(_allowance("Document search", kb.max_calls))
+    if grep is not None:
+        # plan-rag-context P3: the exact search is a document tool — off with the
+        # documents (the per-source switch), or on its own cap. Named either way
+        # (#480): an allowance the agent cannot see is one it cannot ask for.
+        grep_cap = 0 if kb.max_calls == 0 else grep.max_calls
+        lines.append(_allowance("Exact text search (kb_grep)", grep_cap))
+    if reads:
+        # plan-rag-context P4: the read tools are document tools with no cap of
+        # their own — withheld with the documents, otherwise free. Named for the
+        # same reason as kb_grep: when the documents are off, the prompt's
+        # sections 5–6 still describe them, so the agent must be told they are
+        # gone too.
+        lines.append(
+            _allowance(
+                "Reading a document (read_lines, read_page)", 0 if kb.max_calls == 0 else None
+            )
+        )
     lines += [
         "",
         "Spend the cheap ones first and stop as soon as you can answer — an "
@@ -105,6 +132,7 @@ def allowance_note(
     kb: KbSearchBudget,
     wiki: WikiSearchBudget,
     has_wiki: bool,
+    grep: KbGrepBudget | None = None,
 ) -> str:
     """The prompt block for a turn, or `""` when this agent has no search tools.
 
@@ -122,4 +150,6 @@ def allowance_note(
         wiki=wiki,
         glossary="lookup_glossary" in allowed,
         has_wiki=has_wiki and WIKI_TOOL in allowed,
+        grep=grep if GREP_TOOL in allowed else None,
+        reads=any(t in allowed for t in READ_TOOLS),
     )

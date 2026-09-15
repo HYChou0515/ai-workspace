@@ -10,9 +10,12 @@ adapter, and Ingestor maps the resulting LI `BaseNode`s back to our
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any
 
+from llama_index.core.bridge.pydantic import PrivateAttr
 from llama_index.core.ingestion import IngestionPipeline
 from llama_index.core.node_parser import (
     CodeSplitter,
@@ -20,11 +23,181 @@ from llama_index.core.node_parser import (
     MarkdownNodeParser,
     SentenceSplitter,
 )
-from llama_index.core.schema import BaseNode, TextNode, TransformComponent
+from llama_index.core.node_parser.node_utils import build_nodes_from_splits
+from llama_index.core.node_parser.text.sentence import _Split
+from llama_index.core.schema import (
+    BaseNode,
+    Document,
+    MetadataMode,
+    NodeRelationship,
+    TextNode,
+    TransformComponent,
+)
 
 from .code_lang import code_language_for, symbol_path
 from .embedder import Embedder
 from .markdown_table import find_markdown_tables, row_as_col_value
+
+
+@dataclass
+class _OffsetSplit(_Split):
+    """A `SentenceSplitter` split that knows where it sits in the text."""
+
+    offset: int = 0
+
+
+class OffsetSentenceSplitter(SentenceSplitter):
+    """LlamaIndex's `SentenceSplitter`, whose nodes carry the TRUE char span of
+    each chunk (plan-rag-context P14).
+
+    The stock splitter stamps `start_char_idx` with `text.find(chunk)` — the
+    first occurrence — and no search over the text can recover the position:
+    a search floor has to approximate an overlap the splitter computes as a
+    token sum over whole splits, and any char bound is either inert (CJK: a
+    256-token chunk can sit under a 192-char bound) or a period too loose
+    (an English sentence one word longer than the one it was tuned on), with
+    the error compounding per chunk. The splitter knows where it cut. This subclass
+    carries the offset of every split through `_split` (its own recursive
+    splitter, with each split located in ITS parent — exact, since the split
+    functions return the text's pieces in order) and reconstructs each chunk's
+    span from the run of splits `_merge` joined it from: a chunk is a run of
+    consecutive splits, and the run carried into the next chunk as overlap is
+    the maximal tail whose token sizes sum to at most `chunk_overlap` — the
+    rule `_merge` applies. The span of a chunk the phrase fallback rewrote
+    (it drops consecutive punctuation) is therefore the run's extent, which
+    covers the dropped characters. `_merge` itself is not copied; if an
+    upgrade changes how chunks are formed, `_spans_of_runs` raises rather
+    than stamping plausible-looking offsets (the ingest marks the document
+    `error`).
+
+    Per-call state (the raw, unstripped chunks the base class hands to
+    `_postprocess_chunks`, the spans) lives in a thread-local: the pipeline is
+    shared by concurrent ingests. A pydantic private attribute, not a plain
+    `__dict__` entry: the base component's `__getstate__` strips unpicklable
+    `__dict__` keys from the LIVE instance on copy / pickle, and `to_json()`
+    would choke on it."""
+
+    _p14: threading.local = PrivateAttr(default_factory=threading.local)
+
+    def _split(self, text: str, chunk_size: int) -> list[_Split]:  # type: ignore[override]
+        return self._split_at(text, chunk_size, 0)
+
+    def _split_at(self, text: str, chunk_size: int, base: int) -> list[_Split]:
+        token_size = self._token_size(text)
+        if token_size <= chunk_size:
+            return [_OffsetSplit(text, True, token_size, base)]
+        pieces, is_sentence = self._get_splits_by_fns(text)
+        out: list[_Split] = []
+        cursor = 0
+        for piece in pieces:
+            # The split functions return the text's pieces in order — contiguous
+            # (separators kept, sentence spans) or with dropped punctuation
+            # between them (the phrase regex) — so the first occurrence at or
+            # after the previous piece's end is the piece.
+            pos = text.find(piece, cursor)
+            if pos < 0:  # pragma: no cover — a split function that rewrites text
+                raise RuntimeError("LlamaIndex split function returned text not in its input")
+            cursor = pos + len(piece)
+            size = self._token_size(piece)
+            if size <= chunk_size:
+                out.append(_OffsetSplit(piece, is_sentence, size, base + pos))
+            else:
+                out.extend(self._split_at(piece, chunk_size, base + pos))
+        return out
+
+    def _postprocess_chunks(self, chunks: list[str]) -> list[str]:
+        self._p14.raw = list(chunks)  # the unstripped runs, before blanks are dropped
+        return super()._postprocess_chunks(chunks)
+
+    def _split_text(self, text: str, chunk_size: int) -> list[str]:
+        if text == "":
+            self._p14.spans = [(0, 0)]
+            return [text]
+        splits = self._split(text, chunk_size)
+        chunks = self._merge(list(splits), chunk_size)  # `_merge` pops its list
+        self._p14.spans = _spans_of_runs(splits, self._p14.raw, chunk_overlap=self.chunk_overlap)
+        if len(self._p14.spans) != len(chunks):  # pragma: no cover — guarded in _spans_of_runs
+            raise RuntimeError("LlamaIndex changed how chunks are post-processed")
+        return chunks
+
+    def _parse_nodes(  # type: ignore[override]
+        self, nodes: Sequence[BaseNode], show_progress: bool = False, **kwargs: Any
+    ) -> list[BaseNode]:
+        # The base class's loop, plus the span each chunk was cut at — remembered
+        # by node id, because `NodeParser._postprocess_parsed_nodes` runs AFTER
+        # this and stamps `parent_doc.text.find(chunk)` (the first occurrence)
+        # over whatever the node carries; the override below puts ours back.
+        all_nodes: list[BaseNode] = []
+        spans_by_id: dict[str, tuple[int, int]] = {}
+        for node in nodes:
+            metadata_str = self._get_metadata_str(node)
+            chunks = self.split_text_metadata_aware(
+                node.get_content(metadata_mode=MetadataMode.NONE), metadata_str=metadata_str
+            )
+            spans = list(self._p14.spans)
+            built = build_nodes_from_splits(chunks, node, id_func=self.id_func)
+            for n, (start, end) in zip(built, spans, strict=True):
+                n.start_char_idx, n.end_char_idx = start, end
+                spans_by_id[n.node_id] = (start, end)
+            all_nodes.extend(built)
+        self._p14.spans_by_id = spans_by_id
+        return all_nodes
+
+    def _postprocess_parsed_nodes(  # type: ignore[override]
+        self, nodes: list[BaseNode], parent_doc_map: dict[str, Document]
+    ) -> list[BaseNode]:
+        out = super()._postprocess_parsed_nodes(nodes, parent_doc_map)
+        spans_by_id: dict[str, tuple[int, int]] = getattr(self._p14, "spans_by_id", {})
+        for n in out:
+            # Every node here was built by `_parse_nodes` above and has a span.
+            n.start_char_idx, n.end_char_idx = spans_by_id[n.node_id]
+        return out
+
+
+def _spans_of_runs(
+    splits: Sequence[_Split], raw_chunks: Sequence[str], *, chunk_overlap: int
+) -> list[tuple[int, int]]:
+    """The char span of every non-blank chunk, from the runs of consecutive
+    splits `_merge` joined them from (see `OffsetSentenceSplitter`). Raises
+    when a chunk is not such a run — a changed LlamaIndex, loudly."""
+    spans: list[tuple[int, int]] = []
+    a = 0
+    for raw in raw_chunks:
+        b, length = a, 0
+        while length < len(raw) and b < len(splits):
+            length += len(splits[b].text)
+            b += 1
+        if length != len(raw) or "".join(sp.text for sp in splits[a:b]) != raw:
+            raise RuntimeError("LlamaIndex changed how chunks are merged; spans cannot be trusted")
+        if raw.strip():
+            spans.append(_run_span(splits[a:b]))
+        # The overlap carried into the next chunk: the maximal tail of this run
+        # whose token sizes fit in `chunk_overlap` — `_merge`'s rule.
+        n, tokens = 0, 0
+        for sp in reversed(splits[a:b]):
+            if tokens + sp.token_size > chunk_overlap:
+                break
+            tokens += sp.token_size
+            n += 1
+        a = b - n
+    return spans
+
+
+def _run_span(run: Sequence[_Split]) -> tuple[int, int]:
+    """The extent of a run of splits with the chunk's own leading / trailing
+    whitespace stripped — walked split by split, so a gap the phrase fallback
+    dropped between two splits never enters the arithmetic."""
+    head = 0
+    while head < len(run) and not run[head].text.strip():
+        head += 1
+    tail = len(run) - 1
+    while tail >= head and not run[tail].text.strip():
+        tail -= 1
+    first, last = run[head], run[tail]
+    assert isinstance(first, _OffsetSplit) and isinstance(last, _OffsetSplit)
+    start = first.offset + (len(first.text) - len(first.text.lstrip()))
+    end = last.offset + len(last.text.rstrip())
+    return start, end
 
 
 class DispatchSplitter(TransformComponent):
@@ -43,7 +216,7 @@ class DispatchSplitter(TransformComponent):
     """
 
     # Default sub-splitters; overridable per instance for tests/tuning.
-    sentence_splitter: SentenceSplitter
+    sentence_splitter: OffsetSentenceSplitter
     markdown_parser: MarkdownNodeParser
     # Issue #39 P7: JSON-aware splitter — one node per top-level array
     # element, leaf lines rendered as "key path value" so the embedding
@@ -66,7 +239,7 @@ class DispatchSplitter(TransformComponent):
         table_max_rows: int = 10,
     ) -> None:
         super().__init__(
-            sentence_splitter=SentenceSplitter(
+            sentence_splitter=OffsetSentenceSplitter(
                 chunk_size=sentence_max_tokens,
                 chunk_overlap=sentence_overlap,
             ),
@@ -88,13 +261,27 @@ class DispatchSplitter(TransformComponent):
             content_format = str(node.metadata.get("content_format", "")).lower()
             code_lang = code_language_for(filename)
             if content_format == "markdown" or mime == "text/markdown" or filename.endswith(".md"):
-                out.extend(self._split_markdown(node))
+                pieces = self._split_markdown(node)
             elif mime == "application/json" or filename.endswith((".json", ".jsonl")):
-                out.extend(self.json_parser.get_nodes_from_documents([node]))
+                # JSON nodes are `key path value` renderings, not slices — there
+                # is nothing to locate; they keep the parser's (absent) span.
+                pieces = self.json_parser.get_nodes_from_documents([node])
             elif code_lang is not None:
-                out.extend(self._split_code(node, code_lang))
+                pieces = self._split_code(node, code_lang)
             else:
-                out.extend(self.sentence_splitter.get_nodes_from_documents([node]))
+                # `OffsetSentenceSplitter`: every piece already carries its
+                # true span (P14) — no locating.
+                pieces = self.sentence_splitter.get_nodes_from_documents([node])
+            # plan-rag-context P8: every chunk knows which Document it came from
+            # — `Ingestor._build_chunks` turns a Document-relative span into an
+            # offset into the canonical text (one Document per PDF page / slide /
+            # CSV row, joined with "\n\n"). The sub-splitters set this for their
+            # own output; the nodes this class builds itself (`_table_node`, the
+            # P6 prose windows re-split from a scratch TextNode) did not.
+            source = node.as_related_node_info()  # once: it re-hashes the whole text
+            for n in pieces:
+                n.relationships[NodeRelationship.SOURCE] = source
+            out.extend(pieces)
         for n in out:
             _fold_section(n)
         return out
@@ -105,7 +292,13 @@ class DispatchSplitter(TransformComponent):
         and (issue #116) row-explode any large Markdown table within a section
         into `col: value` row chunks."""
         out: list[BaseNode] = []
-        for n in self.markdown_parser.get_nodes_from_documents([node]):
+        sections = self.markdown_parser.get_nodes_from_documents([node])
+        # The section spans are the base every table / window span below adds
+        # to, so they must be positions (P8), not first occurrences: sections
+        # are disjoint and in order, so each sits at its first occurrence
+        # after the previous one's end.
+        _place_after(node.get_content(), sections)
+        for n in sections:
             assert isinstance(n, TextNode)  # MarkdownNodeParser only emits TextNodes
             breadcrumb = _heading_breadcrumb(n)
             content = n.get_content()
@@ -114,13 +307,61 @@ class DispatchSplitter(TransformComponent):
             # so absolute offsets stay correct) before scanning for tables.
             body, body_offset = _strip_leading_heading(content, n)
             tables = find_markdown_tables(body)
-            if not tables:
-                if breadcrumb:
-                    n.text = f"{breadcrumb}\n\n{content}"
-                out.append(n)
-                continue
             base = (n.start_char_idx or 0) + body_offset
-            out.extend(self._emit_table_segments(body, base, tables, breadcrumb))
+            if not tables:
+                # plan-rag-context P6: a section larger than the sentence window
+                # is windowed (see `_prose_nodes`); one that fits stays the
+                # section parser's own node, byte-identical to before.
+                windows = self._prose_nodes(body, base, breadcrumb)
+                if windows is None:
+                    if breadcrumb:
+                        n.text = f"{breadcrumb}\n\n{content}"
+                    out.append(n)
+                    continue
+                pieces = windows
+            else:
+                pieces = self._emit_table_segments(body, base, tables, breadcrumb)
+            # P9: a node built FROM a section (a window, a table, a row, the
+            # prose beside a table) stands in for it, so it carries the
+            # section's metadata — the page / outline section the parser knew
+            # (`DocChunk.provenance`) and the `section` the #254 fold reads. The
+            # bare TextNodes `_table_node` makes had none, so every dense page's
+            # VLM description (always windowed) lost its page on the way out.
+            for piece in pieces:
+                piece.metadata = dict(n.metadata)
+            out.extend(pieces)
+        return out
+
+    def _prose_nodes(self, body: str, base: int, breadcrumb: str) -> list[BaseNode] | None:
+        """plan-rag-context P6: window a Markdown prose region that is larger
+        than the sentence splitter's chunk, or return ``None`` when it fits.
+
+        `MarkdownNodeParser` splits on headings only, with no size cap — a
+        heading-less `.md` of 50,000 chars was ONE chunk and ONE vector, its
+        meaning averaged into a point (measured through this pipeline), and
+        every VLM description is Markdown too. Each window's span is
+        `base + the splitter's own span for the piece` (`OffsetSentenceSplitter`,
+        P14) into the canonical text that citations and the context walk
+        index — exact for a verbatim piece, and for one the splitter's phrase
+        fallback rewrote (it drops consecutive punctuation, so `exec(...)`
+        comes back as `exec(.)` — 4.6% of Markdown prose windows on real docs,
+        0.9% of all sentence-split chunks) the run of
+        splits it was merged from, which covers the dropped characters. Every
+        window carries the breadcrumb like every other Markdown chunk. A
+        region that fits returns ``None`` so the caller keeps the section
+        parser's own node: the common case stays byte-identical (the #390
+        index cache keys on the chunk set)."""
+        pieces = self.sentence_splitter.get_nodes_from_documents([TextNode(text=body)])
+        if len(pieces) <= 1:
+            return None
+        out: list[BaseNode] = []
+        for piece in pieces:
+            assert isinstance(piece, TextNode)  # SentenceSplitter only emits TextNodes
+            assert piece.start_char_idx is not None and piece.end_char_idx is not None
+            rel_start, rel_end = piece.start_char_idx, piece.end_char_idx
+            out.append(
+                _table_node(breadcrumb, piece.get_content(), base + rel_start, base + rel_end)
+            )
         return out
 
     def _emit_table_segments(
@@ -136,7 +377,7 @@ class DispatchSplitter(TransformComponent):
         for t in tables:
             prose = body[cursor : t.start]
             if prose.strip():
-                out.append(_table_node(breadcrumb, prose.strip(), base + cursor, base + t.start))
+                out.extend(self._prose_segment(prose, base + cursor, breadcrumb))
             span_start, span_end = base + t.start, base + t.end
             if len(t.rows) <= self.table_max_rows:
                 out.append(_table_node(breadcrumb, body[t.start : t.end], span_start, span_end))
@@ -153,8 +394,17 @@ class DispatchSplitter(TransformComponent):
             cursor = t.end
         tail = body[cursor:]
         if tail.strip():
-            out.append(_table_node(breadcrumb, tail.strip(), base + cursor, base + len(body)))
+            out.extend(self._prose_segment(tail, base + cursor, breadcrumb))
         return out
+
+    def _prose_segment(self, prose: str, base: int, breadcrumb: str) -> list[BaseNode]:
+        """A prose region between / around tables: one node when it fits (as
+        before), windowed when it does not (P6 — the same rule as a whole
+        section, so a long run of prose next to a table is not one chunk either)."""
+        windows = self._prose_nodes(prose, base, breadcrumb)
+        if windows is not None:
+            return windows
+        return [_table_node(breadcrumb, prose.strip(), base, base + len(prose))]
 
     def _split_code(self, node: BaseNode, language: str) -> list[BaseNode]:
         """Run LI's tree-sitter `CodeSplitter` for `language` (instantiated on
@@ -177,6 +427,11 @@ class DispatchSplitter(TransformComponent):
             self.code_splitters[language] = splitter
         chunks = splitter.get_nodes_from_documents([node])
         source = node.get_content()
+        # P8/P14: before the fold below hides the verbatim text. This
+        # `CodeSplitter` chunks by `max_chars` only — contiguous, no overlap
+        # (`chunk_lines_overlap` is declared and never read in this version) —
+        # so each chunk sits at its first occurrence after the previous end.
+        _place_after(source, chunks)
         # `_split_code` is only reached for a filename that `code_language_for`
         # matched, so `path` is always a non-empty code filename.
         path = str(node.metadata.get("filename", "")).strip()
@@ -186,6 +441,22 @@ class DispatchSplitter(TransformComponent):
             crumb = f"{path} > {' > '.join(symbols)}" if symbols else path
             n.text = f"{crumb}\n\n{n.get_content()}"
         return chunks
+
+
+def _place_after(text: str, nodes: Sequence[BaseNode]) -> None:
+    """Stamp each node's span with its first occurrence at or after the
+    previous node's end — exact for a splitter whose chunks are disjoint and
+    in order (Markdown sections, this `CodeSplitter`). A node whose content is
+    not in ``text`` (a byte-sliced fragment) keeps the span it carries."""
+    cursor = 0
+    for n in nodes:
+        assert isinstance(n, TextNode)  # both callers' splitters emit TextNodes only
+        content = n.get_content()
+        pos = text.find(content, cursor) if content else -1
+        if pos >= 0:
+            n.start_char_idx, n.end_char_idx = pos, pos + len(content)
+        if n.end_char_idx is not None:
+            cursor = max(cursor, n.end_char_idx)
 
 
 def _fold_section(node: BaseNode) -> None:
@@ -283,12 +554,21 @@ def build_doc_pipeline(*, embedder: Embedder) -> IngestionPipeline:
     """The production doc-ingest pipeline: dispatch-split → embed. The
     Ingestor feeds `Document` objects (carrying mime + filename metadata)
     into `pipeline.run`, then maps the resulting embedded nodes back to
-    `DocChunk` storage."""
+    `DocChunk` storage.
+
+    LlamaIndex's per-pipeline transformation cache is OFF (P8): on a hit it
+    hands back the nodes computed for an EARLIER run's Documents — same text,
+    different objects — so their SOURCE relationship named Documents this run
+    never passed in, and `_build_chunks` could not map a chunk back to the
+    Document it came from (the #328 dry-run re-parses the same bytes and hit
+    this every time). Dedup of identical content is ours to do, and is: the
+    #390 index cache."""
     return IngestionPipeline(
         transformations=[
             DispatchSplitter(),
             EmbedderAdapter(embedder),
         ],
+        disable_cache=True,
     )
 
 

@@ -89,8 +89,10 @@ def outline_sections(reader: pypdf.PdfReader) -> dict[int, str]:
     return sections
 
 
-def _render_page_png(data: bytes, page_index: int) -> bytes:
-    """Rasterise one PDF page to PNG bytes via pypdfium2."""
+def render_page_png(data: bytes, page_index: int) -> bytes:
+    """Rasterise one PDF page (0-based) to PNG bytes via pypdfium2. Used at
+    ingest for the VLM pass and by `read_page` (plan-rag-context P4) to show the
+    agent the page as it actually looks."""
     import pypdfium2 as pdfium
 
     pdf = pdfium.PdfDocument(data)
@@ -100,6 +102,18 @@ def _render_page_png(data: bytes, page_index: int) -> bytes:
         buf = io.BytesIO()
         pil.save(buf, format="PNG")
         return buf.getvalue()
+    finally:
+        pdf.close()
+
+
+def page_count(data: bytes) -> int:
+    """How many pages a PDF has — the bound `read_page` reports on an
+    out-of-range request."""
+    import pypdfium2 as pdfium
+
+    pdf = pdfium.PdfDocument(data)
+    try:
+        return len(pdf)
     finally:
         pdf.close()
 
@@ -151,7 +165,7 @@ def pdf_pages_to_documents(
         if visual and describer is not None:
             if on_progress is not None:
                 on_progress(f"{parser_label}: {page_word} {i + 1}/{total} → VLM")
-            png = _render_page_png(data, i)
+            png = render_page_png(data, i)
             vlm_md = describer.describe(
                 png, "image/png", context=f"{page_word} {i + 1} of {filename}", guidance=guidance
             )

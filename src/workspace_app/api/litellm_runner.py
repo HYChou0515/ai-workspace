@@ -29,6 +29,7 @@ from agents import (
     RunConfig,
     Runner,
     ToolOutputImage,
+    ToolOutputText,
 )
 from agents import MaxTurnsExceeded as _AgentsMaxTurnsExceeded
 from agents.agent import StopAtTools
@@ -976,11 +977,7 @@ def _map_event(event: Any) -> AgentEvent | None:
         # must NOT stringify it — a `str(ToolOutputImage)` repr embeds the whole
         # base64 data URL, which would bloat the SSE stream and, worse, replay as
         # a giant text blob into the next turn's context. Surface a concise note.
-        out_text = (
-            "[image read directly by the vision model]"
-            if isinstance(raw_out, ToolOutputImage)
-            else str(raw_out)
-        )
+        out_text = _tool_output_text(raw_out)
         return ToolEnd(
             call_id=_call_id(item.raw_item),
             output=out_text,
@@ -989,6 +986,31 @@ def _map_event(event: Any) -> AgentEvent | None:
     # the incremental token deltas (raw_response_event) in _run_once instead,
     # so dropping it here avoids emitting the reply twice.
     return None
+
+
+_IMAGE_NOTE = "[image read directly by the vision model]"
+
+
+def _tool_output_text(raw_out: object) -> str:
+    """The text our event / persistence layer records for a tool's output. A
+    `ToolOutputImage` is a concise note, never its base64 (see the comment at
+    the call site); a LIST of parts — `read_page`'s `[text layer, page image]`
+    (plan-rag-context P4) — is its text parts plus one note per image, so the
+    SSE stream and the next turn's replayed context carry the words and not
+    the data URL. Anything else is `str()`-ed as before."""
+    if isinstance(raw_out, ToolOutputImage):
+        return _IMAGE_NOTE
+    if isinstance(raw_out, list | tuple) and any(isinstance(i, ToolOutputImage) for i in raw_out):
+        parts: list[str] = []
+        for i in raw_out:
+            if isinstance(i, ToolOutputImage):
+                parts.append(_IMAGE_NOTE)
+            elif isinstance(i, ToolOutputText):
+                parts.append(i.text)
+            else:
+                parts.append(str(i))
+        return "\n".join(parts)
+    return str(raw_out)
 
 
 def _emit_llm_trace(

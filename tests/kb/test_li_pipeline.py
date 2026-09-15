@@ -1072,3 +1072,112 @@ def test_parser_preview_persists_on_sourcedoc(spec: SpecStar, embedder: HashEmbe
     assert restored.preview is not None and restored.preview.data == b"%PDF-converted"
     # Original upload untouched.
     assert restored.content.data == b"\x00deck"
+
+
+def test_an_oversized_markdown_section_is_windowed_with_verbatim_spans(
+    spec: SpecStar, embedder: HashEmbedder
+):
+    """plan-rag-context P6: `MarkdownNodeParser` splits on headings only, with no
+    size cap — a heading-less `.md` of 50k chars was ONE chunk, one vector
+    (measured through this pipeline), and every VLM description is Markdown
+    too. A section larger than the sentence splitter's window is now windowed
+    by it; each piece's span is a verbatim slice of the canonical text (what
+    citations and the context walk index into) and carries the breadcrumb."""
+    cid = _new_collection(spec)
+    ingestor = Ingestor(spec, pipeline=build_doc_pipeline(embedder=embedder), embedder=embedder)
+    paragraphs = "\n\n".join(f"Paragraph {i}. " + "word " * 120 for i in range(6))
+    data = f"# Notes\n\n{paragraphs}\n".encode()
+    [doc_id] = ingestor.ingest(collection_id=cid, user="alice", filename="notes.md", data=data)
+    text = data.decode()
+
+    chunks = sorted(_chunks_of(spec, doc_id), key=lambda c: c.seq)
+    assert len(chunks) >= 3, "a 3,700-char section must not stay one chunk"
+    for c in chunks:
+        assert c.end - c.start <= 1500  # windowed, not the whole section
+        assert "Notes" in c.text  # the breadcrumb still rides on every piece
+        assert text[c.start : c.end].strip() in c.text  # the span is verbatim
+
+
+def test_a_small_markdown_section_is_byte_identical_to_before(
+    spec: SpecStar, embedder: HashEmbedder
+):
+    # The windowing must not change a section that already fits: same single
+    # chunk, same span — the #390 index cache keys on the chunk set.
+    cid = _new_collection(spec)
+    ingestor = Ingestor(spec, pipeline=build_doc_pipeline(embedder=embedder), embedder=embedder)
+    data = b"# T\n\nshort body here.\n"
+    [doc_id] = ingestor.ingest(collection_id=cid, user="alice", filename="t.md", data=data)
+    [c] = _chunks_of(spec, doc_id)
+    assert (c.start, c.end) == (2, 21)  # what the section parser gives today
+
+
+# ── plan-rag-context P8: offsets are positions ────────────────────────────
+
+
+def test_windows_of_a_long_markdown_section_are_positional():
+    # A section that repeats a paragraph: with first-occurrence offsets every
+    # window sat inside the first repetition. Spans advance, and each is a slice
+    # of the section — or, for a piece the splitter rewrote, at least covers it.
+    from llama_index.core.schema import Document, TextNode
+
+    from workspace_app.kb.li_pipeline import DispatchSplitter
+
+    para = "Repeated paragraph text goes here and it keeps going for a while. "
+    body = "# T\n\n" + para * 30 + "Unique sentence with exec(...) inside it. " + para * 30
+    doc = Document(text=body, metadata={"filename": "r.md", "mime": "text/markdown"})
+    nodes = DispatchSplitter()([doc])
+    assert len(nodes) > 3
+    starts = [n.start_char_idx for n in nodes]
+    assert starts == sorted(starts) and len(set(starts)) == len(starts)
+    for n in nodes:
+        assert isinstance(n, TextNode)
+        piece = n.get_content().split("\n\n", 1)[1]  # after the "T" breadcrumb
+        sliced = body[n.start_char_idx : n.end_char_idx]
+        assert sliced.startswith(piece[:8]) and sliced.endswith(piece[-8:])
+
+
+def test_long_prose_beside_a_table_is_windowed_too():
+    # P6's "one rule": a prose region between / around tables that is larger
+    # than the sentence window is split like a whole section would be — not
+    # left as one oversized chunk because a table happened to sit next to it.
+    from workspace_app.kb.li_pipeline import DispatchSplitter
+
+    prose = " ".join(f"Sentence {i} of the long discussion before the table." for i in range(120))
+    text = (
+        "## Results\n\n"
+        + prose
+        + "\n\n| week | yield |\n| --- | --- |\n| W1 | 92% |\n| W2 | 95% |\n| W3 | 90% |\n"
+    )
+    nodes = DispatchSplitter(table_max_rows=2)([_md_image_doc(text)])
+    prose_nodes = [
+        n for n in nodes if "Sentence 0 of" in n.get_content() or "Sentence 119" in n.get_content()
+    ]
+    assert len(prose_nodes) >= 2  # head and tail of the prose live in different windows
+    assert all(
+        n.start_char_idx is not None and text[n.start_char_idx :].startswith("Sentence")
+        for n in prose_nodes
+    )
+
+
+def test_repeated_markdown_sections_and_code_are_positioned_not_first_occurrence():
+    # Round 4: the relocate calls in `_split_markdown` and `_split_code` had no
+    # test of their own — deleting either left every test green.
+    from llama_index.core.schema import Document
+
+    from workspace_app.kb.li_pipeline import DispatchSplitter
+
+    md = "# Intro\n\nsame words here.\n\n# Intro\n\nsame words here.\n\n# Other\n\nlast."
+    nodes = DispatchSplitter()(
+        [Document(text=md, metadata={"filename": "r.md", "mime": "text/markdown"})]
+    )
+    starts = [n.start_char_idx for n in nodes]
+    assert starts == sorted(starts) and len(set(starts)) == len(nodes) == 3
+    # (the section parser's content starts at the heading TEXT, not the marker)
+    assert md[nodes[2].start_char_idx :].startswith("Other")
+    py = "def f(x):\n    return x + 1\n\n" * 400
+    nodes = DispatchSplitter()(
+        [Document(text=py, metadata={"filename": "r.py", "mime": "text/x-python"})]
+    )
+    starts = [n.start_char_idx for n in nodes]
+    assert len(nodes) > 3 and starts == sorted(starts) and len(set(starts)) == len(nodes)
+    assert starts[-1] > len(py) // 2  # positions, not a crowd at the top

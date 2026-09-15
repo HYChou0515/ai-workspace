@@ -50,6 +50,12 @@ async def test_read_file_caps_lines_with_a_notice_and_supports_offset_limit():
     await write_file_impl(ctx, "/small.txt", "a\nb")
     assert await read_file_impl(ctx, "/small.txt") == "a\nb"
 
+    # a limit below 1 is refused up front (the same rule as the KB read tool):
+    # `lines[0:-1]` is not empty, so -1 used to read n-1 lines with a notice
+    for limit in (0, -1):
+        out = await read_file_impl(ctx, "/big.txt", limit=limit)
+        assert out == f"nothing to read: limit must be at least 1 (got {limit})."
+
 
 async def test_read_file_caps_total_chars_even_on_one_long_line():
     files = WorkspaceFiles(MemoryFileStore())

@@ -11,7 +11,7 @@ import io
 import logging
 import tarfile
 import zipfile
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 from urllib.parse import urlsplit
 
@@ -25,7 +25,7 @@ import xxhash
 from llama_index.core.ingestion import IngestionPipeline
 from llama_index.core.schema import Document
 from specstar import QB, SpecStar
-from specstar.types import Binary, ResourceIDNotFoundError
+from specstar.types import Binary, DuplicateResourceError, ResourceIDNotFoundError
 
 from ..resources.kb import CachedChunk, Collection, DocChunk, IndexCache, SourceDoc
 from .chunker import Chunker
@@ -60,9 +60,10 @@ logger = logging.getLogger(__name__)
 
 def chunk_id(doc_id: str, seq: int) -> str:
     """Deterministic ``DocChunk`` id for the fan-out path (#227): keyed on
-    ``(doc_id, seq)`` so a redelivered process job overwrites its slice in place
-    instead of minting duplicate chunk rows. ``seq`` is globally unique per doc
-    (each fan-out batch numbers from ``batch_index * stride``)."""
+    ``(doc_id, seq)`` so a redelivered process job addresses the SAME rows —
+    which, since P17, it creates only if absent (the first writer wins; a
+    duplicate writes nothing). ``seq`` is globally unique per doc (each
+    fan-out batch numbers from ``batch_index * stride``)."""
     return f"{doc_id}.c{seq}"
 
 
@@ -72,6 +73,49 @@ def content_hash(data: bytes) -> str:
     ``_store_file``). It is the dedup / chunk-ownership key: a chunk records it as
     ``source_file_id`` so identical content across paths shares one chunk set."""
     return xxhash.xxh3_128_hexdigest(data)
+
+
+def _document_bases(docs: Sequence[Document]) -> dict[str, int]:
+    """plan-rag-context P8: where each Document's text starts in the canonical
+    join — ``"\n\n".join(d.text for d in docs).strip()`` — keyed by the
+    Document's id (what a split node's SOURCE relationship names). The join's
+    leading whitespace is stripped, so every base moves back by that much; a
+    Document that is entirely inside the stripped lead gets a negative base,
+    which `_build_chunks` clamps (such a Document yields no chunk anyway)."""
+    lead = 0
+    for d in docs:
+        kept = d.text.lstrip()
+        if kept:
+            lead += len(d.text) - len(kept)
+            break
+        lead += len(d.text) + 2
+    bases: dict[str, int] = {}
+    pos = 0
+    for d in docs:
+        bases[d.id_] = pos - lead
+        pos += len(d.text) + 2
+    return bases
+
+
+def rebase_offsets(
+    chunks: Sequence[DocChunk], base_of_batch: Callable[[int], int | None]
+) -> list[tuple[int, int, int]]:
+    """plan-rag-context P8, the #227 fan-out's second half: for every chunk that
+    carries a batch-relative ``unit_start``, the canonical ``(start, end)`` it
+    should have given its batch's base (looked up by ``seq``) — ``unit_start +
+    base`` and the same length — as ``(index, start, end)``. Pure; the
+    coordinator applies the ones that differ. A chunk whose batch has no base
+    (no staged text) is left alone."""
+    out: list[tuple[int, int, int]] = []
+    for i, c in enumerate(chunks):
+        if c.unit_start is None:
+            continue
+        base = base_of_batch(c.seq)
+        if base is None:
+            continue
+        start = c.unit_start + base
+        out.append((i, start, start + (c.end - c.start)))
+    return out
 
 
 def _doc_file_id(doc: SourceDoc) -> str:
@@ -1003,6 +1047,7 @@ class Ingestor:
             else None
         )
         seq_offset = 0
+        bases = _document_bases([d for _, docs in packets for d in docs])
         for parser_id, docs in packets:
             seq_offset += self._emit_packet(
                 collection_id,
@@ -1013,6 +1058,8 @@ class Ingestor:
                 use_alt=use_alt,
                 source_file_id=sfid,
                 image_vec=img_vec,
+                bases=bases,
+                text_len=len(full_text),
             )
         return _IndexOutput(full_text or None, preview)
 
@@ -1025,6 +1072,8 @@ class Ingestor:
         *,
         seq_base: int,
         use_alt: bool,
+        bases: Mapping[str, int],
+        text_len: int,
         source_file_id: str = "",
         deterministic: bool = False,
         image_vec: list[float] | None = None,
@@ -1032,9 +1081,13 @@ class Ingestor:
         """Split + embed one parser packet's Documents into ``DocChunk`` rows,
         numbering ``seq`` from ``seq_base``. Returns the node count so the caller
         can advance the offset. ``deterministic`` (#227) mints chunk ids from
-        ``(doc_id, seq)`` so a redelivered fan-out process job OVERWRITES its
-        slice instead of duplicating it; the single-job path keeps auto ids.
-        ``source_file_id`` (#104) stamps each chunk with its content hash."""
+        ``(doc_id, seq)`` and creates each row only if absent (P17: a
+        redelivered fan-out process job writes nothing where a row already
+        stands) — and records each chunk's batch-relative start
+        (`unit_start`) for finalize to rebase; the single-job path keeps auto
+        ids. ``source_file_id`` (#104) stamps each
+        chunk with its content hash. ``bases`` / ``text_len``: see
+        ``_build_chunks``."""
         chrm = self._spec.get_resource_manager(DocChunk)
         chunks = self._build_chunks(
             collection_id,
@@ -1045,10 +1098,32 @@ class Ingestor:
             use_alt=use_alt,
             source_file_id=source_file_id,
             image_vec=image_vec,
+            bases=bases,
+            text_len=text_len,
+            unit_relative=deterministic,
         )
         for chunk in chunks:
             if deterministic:
-                chrm.create_or_update(chunk_id(doc_id, chunk.seq), chunk)
+                # plan-rag-context P17: create-only. #227 made a redelivered
+                # batch OVERWRITE its slice, harmless while the rows it rewrote
+                # were identical; since P8 a batch's rows are provisional
+                # (batch-relative offsets, rebased at finalize), and a
+                # duplicate delivery that finished after the finalize put them
+                # back. Now the first writer wins each row and a duplicate
+                # writes nothing — it is never a concurrent writer against
+                # finalize — as far as specstar's create-only is first-wins
+                # (plan-rag-context Phase 18 records where it is not). A job
+                # redelivered after a crash mid-write completes the rows it is
+                # missing. `prepare_fanout` hard-deletes the previous run's
+                # rows, so a re-index starts from an empty slice.
+                try:
+                    chrm.create(
+                        chunk,
+                        resource_id=chunk_id(doc_id, chunk.seq),
+                        if_not_exists=True,  # ty: ignore[unknown-argument] — on the concrete manager, not the protocol
+                    )
+                except DuplicateResourceError:
+                    continue
             else:
                 chrm.create(chunk)
         return len(chunks)
@@ -1062,15 +1137,26 @@ class Ingestor:
         *,
         seq_base: int,
         use_alt: bool,
+        bases: Mapping[str, int],
+        text_len: int,
         source_file_id: str = "",
         image_vec: list[float] | None = None,
+        unit_relative: bool = False,
     ) -> list[DocChunk]:
         """Split + embed a parser packet's Documents into ``DocChunk`` objects,
         numbering ``seq`` from ``seq_base`` — but NOT persisted. The shared core
         of ``_emit_packet`` (which persists them) and the #328 dry-run re-parse
         (``dry_run_chunks``, which hands them to the retriever Overlay), so the
         preview ranks on chunks built by the exact same split + embed as the real
-        index (no drift)."""
+        index (no drift).
+
+        plan-rag-context P8 — ``start``/``end`` index the CANONICAL text. A
+        node's own span is relative to the Document it was split from, and a
+        page-shaped parser emits one Document per page (slide, CSV row, JSONL
+        line); ``bases`` (`_document_bases`) says where each Document starts in
+        the join, ``text_len`` bounds the result. ``unit_relative`` (a #227
+        fan-out batch) also records the batch-relative start as ``unit_start``
+        so finalize can rebase — see ``DocChunk.unit_start``."""
         assert self._pipeline is not None  # only the pipeline path builds chunks
         nodes = self._pipeline.run(documents=docs, show_progress=False)
         alt_vecs: list[list[float]] | None = None
@@ -1081,8 +1167,15 @@ class Ingestor:
             alt_vecs = self._code_embedder.embed_documents([n.get_content() for n in nodes])
         out: list[DocChunk] = []
         for i, n in enumerate(nodes):
-            start = n.start_char_idx if n.start_char_idx is not None else 0
-            end = n.end_char_idx if n.end_char_idx is not None else len(n.get_content())
+            source = n.source_node
+            assert source is not None and source.node_id in bases, (
+                "a chunk must know its Document — the splitter sets the SOURCE relationship"
+            )
+            base = bases[source.node_id]
+            rel_start = n.start_char_idx if n.start_char_idx is not None else 0
+            rel_end = n.end_char_idx if n.end_char_idx is not None else len(n.get_content())
+            start = min(max(0, base + rel_start), text_len)
+            end = min(max(start, base + rel_end), text_len)
             out.append(
                 DocChunk(
                     collection_id=collection_id,
@@ -1091,6 +1184,7 @@ class Ingestor:
                     seq=seq_base + i,
                     start=start,
                     end=end,
+                    unit_start=start if unit_relative else None,
                     text=n.get_content(),
                     embedding=None if use_alt else (n.embedding or None),
                     embedding_alt=alt_vecs[i] if (use_alt and alt_vecs is not None) else None,
@@ -1149,6 +1243,7 @@ class Ingestor:
                 ("", [Document(text=text, metadata={"filename": doc.path, "mime": mime})])
             )
         virtual_text = "\n\n".join(d.text for _, docs in packets for d in docs).strip()
+        bases = _document_bases([d for _, docs in packets for d in docs])
         chunks: list[DocChunk] = []
         seq_offset = 0
         for parser_id, docs in packets:
@@ -1160,6 +1255,8 @@ class Ingestor:
                 seq_base=seq_offset,
                 use_alt=use_alt,
                 source_file_id=_doc_file_id(doc),
+                bases=bases,
+                text_len=len(virtual_text),
             )
             chunks.extend(built)
             seq_offset += len(built)
@@ -1401,6 +1498,9 @@ class Ingestor:
             for d in docs:
                 d.metadata.setdefault("filename", doc.path)
                 d.metadata.setdefault("mime", mime)
+        # This batch's offsets index ITS OWN rejoined text (P8); where that text
+        # lands in the whole document is finalize's to add — `unit_start`.
+        text = "\n\n".join(d.text for d in docs).strip()
         self._emit_packet(
             doc.collection_id,
             doc_id,
@@ -1410,5 +1510,7 @@ class Ingestor:
             use_alt=use_alt,
             source_file_id=_doc_file_id(doc),
             deterministic=True,
+            bases=_document_bases(docs),
+            text_len=len(text),
         )
-        return "\n\n".join(d.text for d in docs).strip()
+        return text

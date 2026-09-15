@@ -136,3 +136,82 @@ def test_a_source_dropped_for_this_reply_is_still_disclosed():
 def test_no_wiki_in_scope_reads_differently_from_a_wiki_switched_off():
     text = _note(["kb_search", "ask_wiki"], wiki=3, has_wiki=False)
     assert "none of the collections in scope keeps one" in text
+
+
+def test_the_exact_search_follows_the_documents_switch_and_has_its_own():
+    # plan-rag-context P3: `kb_grep` is a document tool — off with the documents,
+    # or on its own cap; never conjured for an agent that lacks it.
+    from workspace_app.agent.context import KbGrepBudget
+
+    with_grep = [*ALL, "kb_grep", "read_page", "read_lines"]
+
+    def scope(kb, grep):
+        return tools_within_budget(
+            with_grep,
+            kb=KbSearchBudget(max_calls=kb),
+            wiki=WikiSearchBudget(max_calls=3),
+            grep=KbGrepBudget(max_calls=grep),
+        )
+
+    assert "kb_grep" in scope(kb=3, grep=None)
+    assert "kb_grep" not in scope(kb=0, grep=None)  # documents off takes it too
+    assert "read_page" not in scope(kb=0, grep=None) and "read_lines" not in scope(kb=0, grep=None)
+    assert "kb_grep" not in scope(kb=3, grep=0) and "kb_search" in scope(kb=3, grep=0)
+
+
+def test_the_allowance_names_the_exact_search_including_when_it_is_off():
+    # #480 again: an allowance the agent cannot see is one it cannot ask for.
+    from workspace_app.agent.context import KbGrepBudget
+
+    on = describe_budgets(
+        kb=KbSearchBudget(max_calls=3),
+        wiki=WikiSearchBudget(max_calls=3),
+        glossary=True,
+        has_wiki=True,
+        grep=KbGrepBudget(max_calls=None),
+    )
+    assert "Exact text search (kb_grep)" in on and "as often as you need" in on
+    off = describe_budgets(
+        kb=KbSearchBudget(max_calls=3),
+        wiki=WikiSearchBudget(max_calls=3),
+        glossary=True,
+        has_wiki=True,
+        grep=KbGrepBudget(max_calls=0),
+    )
+    assert "Exact text search (kb_grep)**: OFF" in off
+    # documents off ⇒ the exact search reads as off too, whatever its own cap
+    docs_off = describe_budgets(
+        kb=KbSearchBudget(max_calls=0),
+        wiki=WikiSearchBudget(max_calls=3),
+        glossary=True,
+        has_wiki=True,
+        grep=KbGrepBudget(max_calls=None),
+    )
+    assert "Exact text search (kb_grep)**: OFF" in docs_off
+    # The read tools go with the documents and are named the same way: the
+    # prompt still describes them, so "documents off" must say they are gone.
+    reads_off = allowance_note(
+        [*ALL, "kb_grep", "read_lines", "read_page"],
+        kb=KbSearchBudget(max_calls=0),
+        wiki=WikiSearchBudget(max_calls=3),
+        has_wiki=True,
+        grep=KbGrepBudget(max_calls=None),
+    )
+    assert "Reading a document (read_lines, read_page)**: OFF" in reads_off
+    reads_on = allowance_note(
+        [*ALL, "kb_grep", "read_lines", "read_page"],
+        kb=KbSearchBudget(max_calls=3),
+        wiki=WikiSearchBudget(max_calls=3),
+        has_wiki=True,
+        grep=KbGrepBudget(max_calls=None),
+    )
+    assert "Reading a document (read_lines, read_page)**: as often as you need" in reads_on
+    # an agent that never had kb_grep gets no line about it
+    none = allowance_note(
+        ALL,
+        kb=KbSearchBudget(max_calls=3),
+        wiki=WikiSearchBudget(max_calls=3),
+        has_wiki=True,
+        grep=KbGrepBudget(max_calls=0),
+    )
+    assert "kb_grep" not in none

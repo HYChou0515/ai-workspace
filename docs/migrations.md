@@ -126,13 +126,14 @@ REINDEX TABLE CONCURRENTLY cluster_member_meta;
 | `graph-entity` | v1 | `e21369fb`（2026-08-03） | 走訪要逐列解 blob，慢 | §9 |
 | `graph-entity-link` | v1 | `e21369fb`（2026-08-03） | 走訪要逐列解 blob，慢 | §9 |
 | `graph-relationship` | v1 | `e21369fb`（2026-08-03） | 走訪要逐列解 blob，慢 | §9 |
+| `source-doc` | v10 | plan-rag-context P3（2026-09-12）；`path` 索引本身是 `d1004107`（#263，2026-06-27）加的但當時沒上帳 | ⚠️ **「限定資料夾」搜尋看不到舊文件**：資料夾範圍用 `path.starts_with` 解析，`path` 索引之前寫入的列答不了它，就被當成不在那個資料夾（是**少列**不是排錯）。P2 的前後文走訪是列整個 collection 再從 row 資料讀 `path`，**不**受影響 | §5（本列） |
 | `notification` | — | 待填（WUI 第三輪） | **想要的行為,不用回填**：舊通知不帶 `outbound` 索引值,所以外送掃描永遠看不到它們——第一次接上寄信通道時,不會把平台歷史上所有通知都寄出去一遍 | §5.6 |
 
 一次盤點全部（**dry-run 不寫回，安全**，§3）：
 
 ```bash
 uv run python scripts/run_migrate.py --dry-run \
-  workspace-file doc-chunk cluster-member \
+  workspace-file doc-chunk cluster-member source-doc \
   graph-claim graph-mention graph-entity graph-entity-link graph-relationship
 ```
 
@@ -155,6 +156,9 @@ uv run python scripts/run_migrate.py --dry-run \
 
 | 選項 | 帶進來的 PR | 不設會怎樣 | 細節 |
 | --- | --- | --- | --- |
+| `agents.presets.<自訂 kb preset>.allowed_tools` | plan-rag-context P3/P4（2026-09-12） | **釘死 `allowed_tools` 的自訂 kb preset 要加 `kb_grep`、`read_page`、`read_lines`**：內建的 `kb-*` preset 已加，kb prompt（`kb/prompts/system.md`）無條件描述這三個工具，自訂 preset 少列的話模型會被告知能用卻呼叫不到——#537 修過的「授予了卻拒絕」同一類。`kb_search_max=0` 時三個會跟文件一起關（prompt 會說明） | configuration.md §7 KB 聊天換模型 |
+| `kb.retrieval.rerank_context_chars` | plan-rag-context P6（2026-09-14） | **新增上限，預設 4000**：rerank 每個候選最多看到 4000 字元的前後文（以命中為中心）。沒設時 `context_chars` 會讓 rerank prompt 長 4×／27×；設 `null` 才是不封頂、`0` 只看命中 | configuration.md §9 `rerank_context_chars` |
+| `kb.retrieval.context_chars` | plan-rag-context P2（2026-09-12） | ⚠️ **行為有變**：預設 `2000`——每個檢索命中前後各至少多帶 2000 字元的原文（整塊 chunk、可跨到文件樹上的鄰居檔案），rerank 的 prompt 隨之變長，agent 看到的段落變寬；引用 `[n]` 仍指命中處。設 `0` 關掉（唯一不同於舊版的是 P5 的持有者命名修正，見 configuration.md）；`null`／負數**拒絕載入**（P7：之前 `null` 會過 loader、worker 第一次檢索就炸）| configuration.md §9 `context_chars` |
 | `failover.rate_limit_budget_s` | #759（2026-09-03） | ⚠️ **行為有變**：agent 鏈碰到 429 從「快速燒完重試然後 giving up」變成「在原端點等它聲明的窗口」，等待秒數每次 agent run 共用一池，預設上限 2 小時；畫面會出現「請求過於頻繁，N 秒後自動重試」。設 `0` 回到一律切換的舊行為 | configuration.md §11 |
 | `agents.subagent_models` | #770（2026-09-03） | **完全不變**：`run_agent` 不長 `model` 參數，sub-agent 照舊跟 parent turn 同一顆模型（review 以逐位元比對驗證） | configuration.md §7 |
 | `history.max_tokens_window_ratio` | #767（2026-09-04） | ⚠️ **行為有變**：窗口解析多了一段「問 proxy 自己的 `/model/info`」。原本前四段全滅、上限只能是 `unknown` 的部署（自架模型掛在 litellm proxy 後面、用任意別名，最典型），`unknown` 的意思是**歷史從不裁切、自動壓縮從不執行**；現在若 proxy 只答得出 `max_tokens`，會用它 ×0.8 推出一個**標記為估計**的上限，於是裁切與壓縮開始運作。推導值裝不下已知開銷時一律拒收、退回 `unknown`（也就是舊行為）。⚠️ 這一格**沒有「設 0 回到舊行為」**——載入時要求 `0 < ratio <= 1`，`0` 會被擋下；要完全不走推導，就明確設 `history.context_limit`，讓第一段直接答得出來 | `configs/config.example.yaml` 的 `history:` 區塊 |
@@ -384,3 +388,57 @@ collection 開過的部署，這五張表是空的，跑起來不會有任何列
 寫在 [部署說明 §11 —— 上下文窗口與自動壓縮](deployment.md#上下文窗口與自動壓縮誰決定怎麼確認什麼時候才需要你出手)。
 
 規則本身只寫在那一邊 —— 兩份會漂移。
+
+## 不是資料遷移,升版後也**不用**跑:legacy 切段器的中文修正(plan-rag-context P1)
+
+`kb/chunker.py` 的 `FixedTokenChunker` 從「以空白隔開的一串算一個 token」改成「每個 CJK 字算一個
+token」(字元類共用 `kb/tokens.py:CJK_RANGES`)。舊規則下中文沒有空白,一整段就是一個 token,所以
+`max_tokens=256` 對中文等於 256 **段**:用這個切段器實測,一份 12,358 字的中文文件只切出 **1 個 chunk**。
+
+**但 production 不走這個切段器。** API 與 worker 都接 `kb_pipeline=get_doc_pipeline(...)`(LlamaIndex
+管線;`factories.py` 自己註明 legacy chunker 留給 tests + offline runs)。管線裡 PDF 文字層與純文字走
+`SentenceSplitter(256/32)`(tiktoken 為底),用**真入口**實測:中文散文 12,358 字 → **80 塊、平均 154 字**;
+中文 PDF 樣式 → 102 塊、平均 153;英文 50,038 字元 → 40 塊、平均 1,452。production 的中文切段本來就
+正常(甚至比英文細十倍),**這個修正對 production 的 chunk 零影響,不需要重新索引。**
+
+受影響的只有沒接 `kb_pipeline` 的 `create_app` 呼叫(測試、離線模式);那些環境的中文文件要重讀一次
+(`POST /api/kb/collections/<collection_id>/reindex`,#390 的 index cache 會先被丟掉)。
+
+## 不是資料遷移,但升版後要跑一次:整個 collection 重讀(plan-rag-context P6 + P8 + P9)
+
+三個 phase 都改了 chunk 的**衍生資料**,都要靠重新索引才會落到既有文件上。找不出哪些文件受影響的話,
+**每個 collection 重讀一次**(`POST /api/kb/collections/<collection_id>/reindex`;#390 的 index cache 會先被丟掉,
+不會複製回舊資料)。
+
+### P8:chunk 的 `start`/`end` 在多頁/多列文件和重複文字上是錯的
+
+管線路徑的 chunk 位移一直是「相對於它那一頁/那一列的 Document」,不是相對於整份 `SourceDoc.text`(PDF 每頁、
+PPTX 每張、CSV/XLSX 每列、JSONL 每行各是一個 Document,用 `\n\n` 接起來才是 canonical text);另外 LlamaIndex 用
+`text.find(piece)`(**第一次出現**)定位切片,重複段落多的文件裡後面的 chunk 全指回前面。master 上沒人拿位移去切原文,
+所以看不出來;這條分支的前後文、`kb_grep`、`read_page` 文字層都靠它,第 2 頁起全錯。P8 起新索引的位移是正確的位置;
+**既有的多頁/多列文件與重複文字的文件,在重讀前位移仍是舊的**——症狀是 `read_page(N≥2)` 顯示第 1 頁的文字、`kb_grep`
+找不到第 2 頁起的字、引用卡的前後文接錯段。受影響的是「有第 2 頁/第 2 列」的所有文件,實務上就是整個 collection。
+
+`DocChunk` 多了一個欄位 `unit_start: int | None`(#227 fan-out 用,其他路徑與舊列都是 `None`):msgspec 預設值,
+**不需要 migrate**。fan-out 的 chunk row 改為「不存在才建立」(P17):重複投遞的 batch 不再覆寫任何列。
+
+### P9:P6 切出來的視窗沒有 page/section
+
+P6 把長 Markdown 段落(含每一頁的 VLM 描述)切成多塊時,新的塊**沒帶** section 的 metadata,所以 `DocChunk.provenance`
+是空的:`read_page(N)` 找不到那頁的文字層、`kb_grep` 不顯示 `(p.N)`、引用卡沒頁碼、#254 的 section 前綴也沒折進去。
+P9 起視窗/表格/表格列都帶著 section 的 metadata;**P6 部署後、P9 部署前索引過的文件**要重讀才會補回頁碼。
+
+### P6:超長 Markdown 段落
+
+在真入口量到的 production 缺陷:管線對 **Markdown / VLM 輸出**走 `MarkdownNodeParser`,只按標題切、
+**沒有大小上限**——沒有標題的 `.md`(或任何一個超長的段落、VLM 對一頁的描述)**不論多長都是 1 塊、1 個向量**
+(實測 50,038 字元英文 → 1 塊;中文 12,358 字 → 1 塊)。跨語言,跟中文無關。
+
+P6 起,超過 sentence 窗口(256 token)的 Markdown 段落會再被 `SentenceSplitter` 切成多塊(每塊 span 仍是原文的逐字切片、
+帶標題 breadcrumb);**能放進一塊的段落逐位元不變**(#390 index cache 的 key 不受影響)。真入口實測:同一份無標題
+英文 `.md` 從 1 塊 → 35 塊(平均 1,630 字元)、中文 → 80 塊(平均 154 字)。
+
+升版只影響之後索引的文件,既有的超長段落仍是一塊,直到重新索引。要修的是**含長 Markdown 段落的文件**——典型是
+無標題的 `.md`、匯出的筆記、以及所有靠 VLM 描述的圖片 / 掃描頁。
+
+怎麼判斷還沒跑:文件頁上一份幾千字、沒有標題的 `.md` chunk 數是 1,就是舊切法。

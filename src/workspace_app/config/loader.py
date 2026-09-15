@@ -321,6 +321,7 @@ def _validate(merged: dict[str, Any], *, source: str) -> None:
     _check_preset_required_fields(merged, source=source)
     _check_retrieval_llm_reference(merged, source=source)
     _check_max_searches(merged, source=source)
+    _check_context_chars(merged, source=source)
     _check_host_managed_durable(merged, source=source)
     _check_window_ratio(merged, source=source)
 
@@ -418,6 +419,29 @@ def _check_max_searches(merged: dict[str, Any], *, source: str) -> None:
     ):
         raise ValueError(
             f"config {source}: kb.max_searches_ceiling must be a positive integer, got {ceiling!r}"
+        )
+
+
+def _check_context_chars(merged: dict[str, Any], *, source: str) -> None:
+    """plan-rag-context: `kb.retrieval.context_chars` is a non-negative integer —
+    `0` is the off switch, and there is no "unlimited", so `null` means nothing
+    here and is refused (the builder forwarded it verbatim and the worker's
+    retriever crashed on its first search: `None <= 0`). Its neighbour
+    `rerank_context_chars` IS `null`-able (uncapped), so only the sign and the
+    type are checked there."""
+    retrieval = merged.get("kb", {}).get("retrieval", {})
+    if "context_chars" in retrieval:
+        value = retrieval["context_chars"]
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ValueError(
+                f"config {source}: kb.retrieval.context_chars must be a non-negative "
+                f"integer (0 turns context off), got {value!r}"
+            )
+    cap = retrieval.get("rerank_context_chars")
+    if cap is not None and (not isinstance(cap, int) or isinstance(cap, bool) or cap < 0):
+        raise ValueError(
+            f"config {source}: kb.retrieval.rerank_context_chars must be null (uncapped) "
+            f"or a non-negative integer (0 = the bare hit), got {cap!r}"
         )
 
 
@@ -525,6 +549,10 @@ _TOP_SCHEMA: dict[str, Any] = {
             "quality_floor": set(),
             # The BM25 corpus ceiling — another scalar leaf (int or null).
             "sparse_corpus_cap": set(),
+            # plan-rag-context P2: neighbouring context per side — scalar int leaf.
+            "context_chars": set(),
+            # P6: the reranker's per-candidate context cap — scalar int|null leaf.
+            "rerank_context_chars": set(),
         },
         # #506: reconcile / cluster-sweeper thresholds (all scalar float leaves).
         "cluster": _dataclass_keys(ClusterSettings),
@@ -1016,7 +1044,15 @@ def _build_retrieval(d: dict[str, Any]) -> RetrievalSettings:
     dataclass the single source of the defaults (no value duplicated here)."""
     e = d["enhancements"]
     scalars = {
-        key: d[key] for key in ("quality_weight", "quality_floor", "sparse_corpus_cap") if key in d
+        key: d[key]
+        for key in (
+            "quality_weight",
+            "quality_floor",
+            "sparse_corpus_cap",
+            "context_chars",
+            "rerank_context_chars",
+        )
+        if key in d
     }
     return RetrievalSettings(
         enhancements=EnhancementSettings(

@@ -53,6 +53,23 @@ the one to use when you need something the wiki can't give you: an exact figure,
 a specific step or setting, a date, the verbatim wording, or anything you must
 quote precisely. Also use it when the wiki turned out not to cover the topic.
 
+**5. `kb_grep` — where exactly does this STRING appear?**
+Ctrl+F over the documents: every line containing the exact text, with the file,
+line and page, in document order. Use it for a figure or table reference
+("Fig. 1"), a part number, an error code, a section number, a name — anything
+where the characters matter and a semantic search returns look-alikes. It
+locates; to cite, read the document at that line or page. Both `kb_search` and
+`kb_grep` accept `folder` to stay inside one folder of the file tree.
+
+**6. `read_lines` / `read_page` — show me the ORIGINAL.**
+`read_lines(document, offset, limit)` reads a document's text by line — the
+original, not the pre-cut chunks — for when a result told you where something
+is and you need more of the surrounding text. `read_page(document, page)` shows
+you ONE page as it actually looks (the image plus its text layer): a figure, a
+chart, a table's layout, a slide, a screenshot. PDFs and decks have pages;
+images are one page; text documents have lines only. What you read is what you
+cite from.
+
 ## Choosing between them
 
 Read the question and pick — do not run all three by reflex.
@@ -66,6 +83,10 @@ Read the question and pick — do not run all three by reflex.
   (A question about ONE named thing is not this, even when phrased broadly.)
 - A number, a threshold, a step, a specific document, "what does the spec say
   exactly" → the documents.
+- An exact string — "Fig. 1", a part number, an error code, a section number →
+  `kb_grep`, then `read_page` / `read_lines` where it points.
+- "Show me the figure", "what does the chart on page 12 say", a screenshot →
+  `read_page`.
 - Both kinds in one question → answer the conceptual part from the wiki and look
   up the specifics in the documents. That is one call each, not several.
 

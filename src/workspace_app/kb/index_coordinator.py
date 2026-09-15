@@ -26,13 +26,14 @@ import logging
 import math
 import time
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import msgspec
 from specstar import QB, Schema, SpecStar
 from specstar.events import OnSuccessPatch, do
 from specstar.message_queue import NoRetry
 from specstar.types import (
+    MergePatch,
     PreconditionFailedError,
     ResourceAction,
     ResourceIDNotFoundError,
@@ -43,6 +44,7 @@ from ..failover.retry import is_transient
 from ..resources import Collection, DocChunk, IndexRun, IndexUnitText, SourceDoc
 from .index_jobs import IndexJob, IndexJobPayload
 from .index_run import IndexRunStore
+from .ingest import rebase_offsets
 from .job_audit import preserve_job_creator
 from .tokens import count_tokens
 
@@ -62,6 +64,29 @@ _DRAIN_INTERVAL = 0.02  # aclose() poll cadence while waiting for the queue to d
 # independent process jobs never collide on `seq` (which is cosmetic ordering —
 # merge adjacency uses char offsets). Far above any realistic chunks-per-batch.
 _SEQ_STRIDE = 1_000_000
+
+
+def _batch_bases(rows: list[IndexUnitText]) -> dict[int, int]:
+    """Where each batch's text starts in `_join_staged(rows)` — batches with
+    text, in order, "\n\n" between; the ONE rule the two must agree on."""
+    bases: dict[int, int] = {}
+    pos = 0
+    for r in rows:
+        if not r.text:
+            continue
+        bases[r.batch_index] = pos
+        pos += len(r.text) + 2
+    return bases
+
+
+def _join_staged(rows: list[IndexUnitText]) -> str:
+    """The rejoined document text of a fan-out: every batch's staged text, in
+    batch order, "\n\n" between, stripped — the ONE rule `_rebase_fanout_offsets`
+    must agree with (each staged text is already stripped and non-empty when it
+    joins, so nothing is stripped off the front)."""
+    return "\n\n".join(r.text for r in rows if r.text).strip()
+
+
 # The verdict the stuck-doc sweep writes. Phrased as what happened + what to do,
 # because it lands in the user-facing failure list next to real parser errors.
 _INTERRUPTED = "processing was interrupted before it finished — re-read to try again"
@@ -524,6 +549,9 @@ class IndexCoordinator:
         batch = self._unit_batch_sizes.get(parser_id, self._default_unit_batch)
         nbatches = math.ceil(units / batch)
         self._ingestor.prepare_fanout(doc_id)  # clear chunks ONCE before fan-out
+        # P15: a replay that staged its text after the previous run's finalize
+        # cleared staging would otherwise be rejoined into THIS run's text.
+        self._clear_staged_text(doc_id)
         # #248: seed the run with the doc's unit count (PDF pages, CSV rows, …) so
         # the FE can show a real done/total progress bar.
         self._runs.start(doc_id, cid, total=nbatches, units_total=units)
@@ -622,6 +650,14 @@ class IndexCoordinator:
         updater = self._last_updater(doc_id)
         if updater is None:
             return  # doc deleted between split and run
+        run = self._runs.get(doc_id)
+        if run is None or run.status != "running":
+            # At-least-once delivery can replay a batch AFTER finalize. Its rows
+            # are create-only (P17), so it could not overwrite anything; what
+            # this saves is the parse + embed and a stale staging row for a
+            # finalize that will never run again. The run says the work is
+            # done: the replay has nothing to add.
+            return
         doc_rm = self._spec.get_resource_manager(SourceDoc)
         chunk_rm = self._spec.get_resource_manager(DocChunk)
         # #227 SEQ_STRIDE: each batch numbers its chunks from batch_index*stride so
@@ -640,6 +676,26 @@ class IndexCoordinator:
             if not is_transient(exc):
                 raise NoRetry(str(exc)) from exc  # permanent → dead-letter now
             raise  # transient → broker re-delivers this batch
+        # The chunk rows are create-only (`Ingestor._emit_packet`): a duplicate
+        # delivery that passed the guard wrote nothing where a row already
+        # stood, so finalize stays the only thing that moves offsets (as far
+        # as specstar's create-only is first-wins — plan-rag-context Phase 18
+        # records where it is not). What is left is bookkeeping, keyed on the
+        # run's `done` set rather than its status: a batch already counted was
+        # delivered by someone else and stages nothing (a stage after finalize
+        # cleared staging would only leave a row behind), while a job
+        # redelivered after a crash mid-write is not counted yet and stages.
+        run = self._runs.get(doc_id)
+        if run is None:
+            return
+        if payload.batch_index in run.done:
+            # Counted — but the delivery that counted it may have died between
+            # `mark_done` and the claim. The gate is a CAS no-op when already
+            # claimed, so try it rather than leave the document to the stuck
+            # sweep's interval.
+            if self._runs.claim_finalize(doc_id):
+                self._enqueue_finalize(doc_id, payload.collection_id, requester)
+            return
         self._stage_text(doc_id, payload.batch_index, text)
         # #248: this batch covered [unit_start, unit_end) — add its units so the
         # run's progress aggregate climbs as each batch finishes.
@@ -665,9 +721,11 @@ class IndexCoordinator:
             )
 
     def _handle_finalize(self, payload, requester: str) -> None:
-        """Exactly-once close-out of a fan-out: rejoin the staged batch text into
-        ``SourceDoc.text``, flip status (``error`` if any batch failed, else
-        ``ready``), clear staging, close the run, and run the wiki hook."""
+        """Close-out of a fan-out — intended exactly-once; the `running` guard
+        below is check-then-act (the plan's Out-of-scope list). Rejoin the
+        staged batch text into ``SourceDoc.text``, flip status (``error`` if
+        any batch failed, else ``ready``), clear staging, close the run, and
+        run the wiki hook."""
         doc_id = payload.doc_id
         run = self._runs.get(doc_id)
         if run is None:  # pragma: no cover — finalize implies a run exists
@@ -685,7 +743,16 @@ class IndexCoordinator:
         assert isinstance(doc, SourceDoc)
         status = "error" if run.failed else "ready"
         detail = "" if status == "ready" else f"{len(run.failed)} batch(es) failed to index"
-        text = self._joined_staged_text(doc_id)
+        staged = self._staged_rows(doc_id)
+        text = _join_staged(staged)
+        # P8: each batch wrote chunk offsets relative to its own text; now that
+        # the batches are rejoined, every chunk's offset into the WHOLE text is
+        # known. Before the text is published and before the #390 cache
+        # snapshots the chunks. Recomputed from `unit_start`, so a re-driven
+        # finalize lands on the same numbers (idempotent by construction) —
+        # and finalize is the only REWRITER of offsets (P17: a batch writes its
+        # rows once, create-only; nothing but this rebase moves them).
+        self._rebase_fanout_offsets(doc_id, _batch_bases(staged), requester)
         with doc_rm.using(user=updater):
             doc_rm.update(
                 doc_id,
@@ -866,12 +933,32 @@ class IndexCoordinator:
             IndexUnitText(doc_id=doc_id, batch_index=batch_index, text=text),
         )
 
-    def _joined_staged_text(self, doc_id: str) -> str:
+    def _staged_rows(self, doc_id: str) -> list[IndexUnitText]:
+        """Every batch's staged text, in batch order."""
         rm = self._spec.get_resource_manager(IndexUnitText)
         rows = [r.data for r in rm.list_resources((QB["doc_id"] == doc_id).build())]
         rows = [r for r in rows if isinstance(r, IndexUnitText)]
         rows.sort(key=lambda r: r.batch_index)
-        return "\n\n".join(r.text for r in rows if r.text).strip()
+        return rows
+
+    def _rebase_fanout_offsets(self, doc_id: str, bases: dict[int, int], requester: str) -> None:
+        """P8: shift every fan-out chunk's span by where its batch's text
+        starts in the rejoined document (`_batch_bases`). A chunk whose batch
+        has no base (a failed batch staged no text) is left where it is — the
+        doc is `error` anyway."""
+        chunk_rm = self._spec.get_resource_manager(DocChunk)
+        rows = chunk_rm.list_resources(
+            (QB["source_doc_id"] == doc_id).build(),
+            returns=["data", "info"],
+            partial=["/seq", "/start", "/end", "/unit_start"],
+        )
+        rows = list(rows)
+        chunks = [cast(DocChunk, r.data) for r in rows]
+        with chunk_rm.using(user=requester):
+            for i, start, end in rebase_offsets(chunks, lambda seq: bases.get(seq // _SEQ_STRIDE)):
+                if (start, end) != (chunks[i].start, chunks[i].end):
+                    rid = rows[i].info.resource_id  # ty: ignore[unresolved-attribute]
+                    chunk_rm.patch(rid, MergePatch({"start": start, "end": end}))
 
     def _clear_staged_text(self, doc_id: str) -> None:
         rm = self._spec.get_resource_manager(IndexUnitText)

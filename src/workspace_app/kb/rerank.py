@@ -16,21 +16,57 @@ _INT = re.compile(r"\d+")
 logger = logging.getLogger(__name__)
 
 
+def _seen_by_reranker(p: RetrievedPassage, cap: int | None) -> str:
+    """The text one candidate contributes to the listing: its context trimmed
+    to `cap` chars around the hit, the bare hit at ``0``, everything at ``None``."""
+    if not p.context_text or cap is None:
+        return p.context_text or p.text
+    if cap <= 0:
+        return p.text
+    ctx = p.context_text
+    if len(ctx) <= cap:
+        return ctx
+    at = ctx.find(p.text)
+    if at < 0:  # the hit is not a verbatim slice of the context — keep its head
+        return ctx[:cap]
+    # Centre the window on the hit; clamp to the ends.
+    lead = max(0, (cap - len(p.text)) // 2)
+    start = max(0, at - lead)
+    end = min(len(ctx), start + cap)
+    start = max(0, end - cap)
+    return ctx[start:end]
+
+
 def rerank_passages(
     llm: ILlm,
     query: str,
     passages: list[RetrievedPassage],
     *,
     on_progress: OnChunk | None = None,
+    context_cap: int | None = None,
 ) -> list[RetrievedPassage]:
     """Reorder `passages` by the model's relevance ranking. The model is shown
     the numbered passages and replies with the order (most relevant first);
     passages it omits keep their original order at the end. Streams the model's
-    work to `on_progress`."""
+    work to `on_progress`.
+
+    `context_cap` (plan-rag-context P6) bounds what each candidate contributes
+    to the one listwise prompt: the neighbouring context (P2) is trimmed to at
+    most that many chars, centred on the hit so the matched text is in the
+    window whenever it fits (a merged hit longer than the cap is itself cut to
+    the cap). `None` = uncapped; `0` = the bare hit. Without a bound the
+    prompt grows ~4× (English) / ~27× (Chinese) at the default context width,
+    and a reranker whose window is smaller truncates from the FRONT — the
+    question — and its reply's numbers are then noise applied silently."""
     if not passages:
         logger.debug("rerank: no passages to rerank")
         return passages
-    listing = "\n".join(f"[{i + 1}] {p.text}" for i, p in enumerate(passages))
+    # plan-rag-context P2: rank the neighbouring CONTEXT (what the agent will
+    # read), not the bare hit — a fragment that lacks the answer its neighbours
+    # hold is exactly the passage expansion exists to rescue.
+    listing = "\n".join(
+        f"[{i + 1}] {_seen_by_reranker(p, context_cap)}" for i, p in enumerate(passages)
+    )
     prompt = (
         "Rank the passages by how well they answer the question, most relevant "
         f"first. Reply with the passage numbers in order.\n\nQuestion: {query}\n\n{listing}"

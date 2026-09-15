@@ -98,9 +98,16 @@ def _rendered(output: Any) -> str | None:
     if (
         isinstance(output, list | tuple)
         and output
-        and all(isinstance(i, _STRUCTURED) for i in output)
+        and all(isinstance(i, (ToolOutputText, *_STRUCTURED)) for i in output)
     ):
-        return None
+        # A list of parts stays structured for the SDK. The cap governs TEXT in
+        # the context window, so only the text parts are measured; a list with
+        # no text part (read_image's `[image]`) has nothing to cap. plan-rag-context
+        # P4: `read_page` answers `[text layer, page image]` — `str()`-ing that
+        # list rendered the base64 into a repr that blew the cap, and the vision
+        # model received a truncated repr instead of the page.
+        texts = [i.text for i in output if isinstance(i, ToolOutputText)]
+        return "\n".join(texts) if texts else None
     return str(output)
 
 
@@ -115,14 +122,23 @@ def _cap_output(data: ToolOutputGuardrailData) -> ToolGuardrailFunctionOutput:
     # silent: no error, no card, the user never sees the file they were told
     # about. It is a handful of chars against a 200k budget.
     body, declaration = split_declaration(rendered)
+    # `reject_content` can only substitute a STRING, so a list of parts whose
+    # text alone is over the cap degrades to capped text and loses its
+    # structured parts — say so rather than let an image vanish silently.
+    dropped = isinstance(data.output, list | tuple) and any(
+        isinstance(i, _STRUCTURED) for i in data.output
+    )
+    hint = (
+        "this tool answered with more than the context can hold — ask it for a "
+        "narrower slice (a sub-path, a filter, a page) instead of the whole thing"
+    )
+    if dropped:
+        hint += "; the image part of this result was dropped with the overflow"
     return ToolGuardrailFunctionOutput.reject_content(
         truncate_middle(
             body,
             max(1, ctx.tool_output_max_chars - len(declaration)),
-            hint=(
-                "this tool answered with more than the context can hold — ask it for a "
-                "narrower slice (a sub-path, a filter, a page) instead of the whole thing"
-            ),
+            hint=hint,
         )
         + declaration,
         output_info={"tool": data.context.tool_name, "rendered_chars": len(rendered)},
