@@ -468,9 +468,9 @@ RCA 的 system prompt 是純 markdown，存在
   - 每個 JobType 各跑一個 **worker 進程**，block-consume 自己那一種:
 
     ```bash
-    python -m workspace_app.worker index      # 索引(chunk+embed,最吃資源)
-    python -m workspace_app.worker wiki        # wiki 維護
-    python -m workspace_app.worker card-gen    # context-card 生成
+    python -m workspace_app.worker index      # 索引(chunk+embed,最吃資源);#804 起開機的 help 文件索引也排在這
+    python -m workspace_app.worker wiki        # wiki 維護 / reflect / code_sync
+    python -m workspace_app.worker card-gen    # context-card 生成;#804 起待審核 inbox 的 cluster sweep 也排在這
     python -m workspace_app.worker sanity      # model-sanity battery
     python -m workspace_app.worker eval        # 檢索品質 eval
     python -m workspace_app.worker graph       # knowledge graph 抽取
@@ -482,6 +482,11 @@ RCA 的 system prompt 是純 markdown，存在
     `tests/deploy/test_worker_manifests.py` 會在兩邊對不上時失敗。**少一個
     Deployment 不會有任何錯誤**:那種工作照樣被接受、入列,然後沒有人做,
     對呼叫端而言和「佇列永遠不動」無法區分。
+
+    #804 之後 API 上**再也沒有**背景工作會自己做 chunk / embed / 全表讀——它只 enqueue。
+    所以 `run_consumers: false` 的部署**最少**要跑 `index` 與 `card-gen` 兩個 worker,
+    否則 help 文件停在 `indexing`、cluster sweep 永遠 pending(見 `migrations.md` §5.5 的
+    #804 三列)。
 
     一個 JobType 一個 Deployment ⇒ 各自掛 k8s HPA 獨立 autoscale，API 維持小。
     worker 收到 SIGTERM 會 drain 在途工作再退出（job 是 durable,硬殺也會被重投）。
