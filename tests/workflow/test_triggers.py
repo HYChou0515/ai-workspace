@@ -556,6 +556,18 @@ def test_raising_the_interval_does_not_lock_the_lease_forever(spec_instance: Spe
     assert lowered.claim() is True
 
 
+def test_a_sub_second_interval_still_advances_window_by_window(spec_instance: SpecStar):
+    """Tests (and a dev loop) tick every few milliseconds. The window start must
+    keep that resolution — truncating the interval to whole seconds would make
+    every window "0", so the lease is won once and then never again."""
+    register_trigger_store(spec_instance)
+    store = SpecstarTriggerStore(spec_instance)
+    t0 = 1_000_000.0
+    assert ScanLease(store, "t", interval_s=0.05, now=lambda: t0).claim() is True
+    assert ScanLease(store, "t", interval_s=0.05, now=lambda: t0 + 0.02).claim() is False
+    assert ScanLease(store, "t", interval_s=0.05, now=lambda: t0 + 0.05).claim() is True
+
+
 def test_specstar_store_claims_each_window_exactly_once(spec_instance: SpecStar):
     """The durable store elects a single winner per (trigger, window): the first claim of a
     window wins, a second claim of the SAME window loses (once-per-period across pods), and a

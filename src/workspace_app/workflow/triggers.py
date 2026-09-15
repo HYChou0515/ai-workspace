@@ -402,8 +402,9 @@ class ITriggerStore(abc.ABC):
         moved it forward, False when the ledger already holds this window or a later
         one. Unlike :meth:`try_claim` (which advances to ANY different window — right
         for catch-up firing), the comparison is inside the CAS, so a caller that read
-        a stale ledger cannot move it backwards. The window is an epoch-second start,
-        so its ordering does not depend on any interval. A #804 scan lease's claim."""
+        a stale ledger cannot move it backwards. The window is an epoch-millisecond
+        start, so its ordering does not depend on any interval. A #804 scan lease's
+        claim."""
 
     @abc.abstractmethod
     def release_claim(self, trigger_id: str, claimed: str, back_to: str) -> None:
@@ -614,7 +615,7 @@ class ScanLease:
     per-trigger claim stays: it is what keeps a window from firing twice across
     restarts, and this lease does not replace it.
 
-    The window is the window's START in epoch seconds, not ``now // interval``:
+    The window is the window's START in epoch milliseconds, not ``now // interval``:
     the ledger outlives a deploy, and a number whose meaning depends on the
     interval would make every window after an operator RAISES the interval
     smaller than the stored one — every pod refused, silently, for good. A
@@ -641,8 +642,12 @@ class ScanLease:
     def claim(self) -> bool:
         """True for the one pod that scans this window. Blocking specstar I/O —
         call it off the loop, like the store's other calls."""
-        start = int(self._now() // self._interval_s) * int(self._interval_s)
-        return self._store.try_advance(self._key, start)
+        # Epoch MILLISECONDS, so a sub-second interval (tests tick every 50 ms)
+        # keeps its resolution: whole-second arithmetic would make every such
+        # window "0", won once and never again.
+        interval_ms = max(1, int(round(self._interval_s * 1000)))
+        start_ms = (int(self._now() * 1000) // interval_ms) * interval_ms
+        return self._store.try_advance(self._key, start_ms)
 
 
 StartTrigger = Callable[["ScheduleTrigger", str], Awaitable[str | None]]

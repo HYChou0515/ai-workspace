@@ -66,7 +66,7 @@ pod-local 狀態** —— 還有四個，決定跟 #804 一起做完、不拆：
    兩邊都掃 —— lease 靜默消失；所以 `ScanLease.claim` 是**單調的**。review 第二輪（P9）再抓到
    兩條：(a) 單調守衛是 read-then-CAS，不在 CAS 裡；(b) **致命的**：window 存的是 `now // interval`，
    ledger 又活得比部署久，operator 一把 interval 調大，新 window 的數字全比存的小 ⇒ 所有 pod 永遠輸、
-   無聲、沒有 admin 路由能救。修法換機制：window 改存 **window 起點的 epoch 秒**（意義不隨 interval
+   無聲、沒有 admin 路由能救。修法換機制：window 改存 **window 起點的 epoch 毫秒**（毫秒是為了讓測試用的 50ms interval 也保有解析度）（意義不隨 interval
    變；調大最多遲一個新 interval、調小免費），比較搬進 store 的 CAS 迴圈（`ITriggerStore.try_advance`，
    forward-only），每次 claim 後 `prune_revisions(keep_last_n=1)` 把 ledger 的 revision 尾巴修掉
    （60s 一 tick 是每天 1440 個 revision/lease）。
