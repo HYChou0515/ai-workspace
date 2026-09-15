@@ -20,6 +20,7 @@ import { useState } from "react";
 
 import type { ItemEnvironment } from "../api/itemEnvironment";
 import { formatBytes } from "../lib/bytes";
+import { toSizeString } from "./ItemEnvironmentSize";
 import { useT } from "../lib/i18n";
 
 /** The owner's own ceiling and what they currently hold. `null` when this
@@ -51,6 +52,10 @@ export type ItemEnvironmentPanelProps = {
    *  panel is on screen — the modal's exits do not commit — so a refusal has
    *  somewhere to be read, which is what makes fire-and-forget saving honest. */
   saveFailed?: boolean;
+  /** Whether the last attempt to CLOSE the sandbox was refused. Separate from
+   *  `saveFailed` because they are different actions with different remedies,
+   *  and one flag would have made either message appear for either failure. */
+  closeFailed?: boolean;
 };
 
 function Meter({ used, limit }: { used: number; limit: number }) {
@@ -76,13 +81,18 @@ export function ItemEnvironmentPanel({
   onClose,
   onSave,
   saveFailed,
+  closeFailed,
 }: ItemEnvironmentPanelProps) {
   const t = useT();
   const [draft, setDraft] = useState<string>(
     env.statedCpuCores === null ? "" : String(env.statedCpuCores),
   );
   const [memoryDraft, setMemoryDraft] = useState<string>(
-    env.statedMemoryBytes === null ? "" : String(env.statedMemoryBytes),
+    // In the spelling the placeholder asks for and the save path sends —
+    // `toSizeString`, the same function `sizeToSave` uses. Seeded with the raw
+    // byte count, a stored setting read as an unexplained nine-digit number in
+    // a box captioned `512M`.
+    toSizeString(env.statedMemoryBytes) ?? "",
   );
 
   const stated = env.statedCpuCores;
@@ -125,6 +135,11 @@ export function ItemEnvironmentPanel({
             {t("itemenv.close")}
           </button>
           <p className="detail">{t("itemenv.close.hint")}</p>
+          {closeFailed ? (
+            <p data-testid="close-failed" className="detail" role="alert">
+              {t("itemenv.closeFailed")}
+            </p>
+          ) : null}
         </>
       ) : null}
 

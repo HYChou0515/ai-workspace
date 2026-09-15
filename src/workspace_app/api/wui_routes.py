@@ -502,6 +502,14 @@ def register_wui_routes(
             ensure_sandbox_via=lambda on_progress, tools: registry.ensure_handle(
                 session, tools=tools, on_progress=on_progress
             ),
+            # #797: and the way BACK, which this had been left out of. Without
+            # it `_exec_tool`'s `rebuild=True` falls through to the ordinary
+            # wake, and on `kind: local` the registry re-acquires only when the
+            # SESSION has no handle — so a WUI tool call after an idle reap got
+            # the same dead handle the retry exists to escape.
+            rebuild_sandbox_via=lambda tools: registry.ensure_handle(
+                session, tools=tools, force=True
+            ),
             # #775: the item's preparation lock too — this shares the item's ONE
             # environment with its turns exactly as it shares their sandbox.
             prepare_env_via=lambda handle, on_output: registry.prepare_project_env(

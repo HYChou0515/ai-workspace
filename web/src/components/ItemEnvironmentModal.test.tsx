@@ -36,6 +36,16 @@ const ENVIRONMENT = {
   memory_bound_by: null,
 };
 
+/** Memory ENFORCED and already set — the only shape in which the memory field
+ *  is drawn, which is why nothing caught what happens when both are edited. */
+const WITH_MEMORY = {
+  ...ENVIRONMENT,
+  stated_cpu_cores: null,
+  stated_memory_bytes: 536870912,
+  effective_memory_bytes: 536870912,
+  enforced_memory_bytes: 536870912,
+};
+
 const CAPPED = {
   limits: { count: 0, cpu: 4, memory_bytes: 0, disk_bytes: 0 },
   cpu_in_use: 2,
@@ -253,6 +263,72 @@ describe("ItemEnvironmentModal", () => {
     await userEvent.tab({ shift: true });
 
     expect(await screen.findByTestId("save-failed")).toBeTruthy();
+  });
+
+  it("keeps the cpu it just sent when the next edit goes out before the refetch", async () => {
+    // The route REPLACES both dimensions, so every save rebuilds the whole
+    // value — and it rebuilt it from `env.data`, which only moves when the
+    // invalidate-triggered refetch lands. Edit cpu, then memory before that
+    // round trip, and the second PUT carries the cpu the SERVER still has,
+    // silently undoing the first. Both requests return 200, so nothing on
+    // screen says a word.
+    const fetcher = route(CAPPED, WITH_MEMORY);
+    vi.stubGlobal("fetch", fetcher);
+    renderWithQuery(
+      <ItemEnvironmentModal slug="rca" itemId="i-1" canEdit onClose={() => {}} />,
+    );
+
+    await waitFor(() => expect(screen.getByTestId("cpu-input")).toBeTruthy());
+    await userEvent.type(screen.getByTestId("cpu-input"), "3");
+    await userEvent.tab();
+    await waitFor(() => expect(puts(fetcher).length).toBe(1));
+
+    const mem = screen.getByTestId("memory-input");
+    await userEvent.clear(mem);
+    await userEvent.type(mem, "1G");
+    await userEvent.tab();
+    await waitFor(() => expect(puts(fetcher).length).toBe(2));
+
+    const second = JSON.parse(puts(fetcher)[1]);
+    expect(second.memory).toBe("1G");
+    expect(second.cpu_cores).toBe(3);
+  });
+
+  it("says so when closing the sandbox failed, instead of looking like a dead button", async () => {
+    // `close.mutate()` had no error surface at all: a 5xx left the button
+    // looking broken — no message, no state change, and the panel still saying
+    // 執行中. `/my-resources` has had wording for exactly this the whole time.
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (init?.method === "DELETE") {
+        return new Response("boom", { status: 500 });
+      }
+      if (url.includes("/environment")) return json({ ...ENVIRONMENT, running: true });
+      if (url.includes("/me/resources")) return json(CAPPED);
+      return json({});
+    });
+    vi.stubGlobal("fetch", fetcher);
+    renderWithQuery(
+      <ItemEnvironmentModal slug="rca" itemId="i-1" canEdit onClose={() => {}} />,
+    );
+
+    await userEvent.click(await screen.findByTestId("close-environment"));
+
+    expect(await screen.findByTestId("close-failed")).toBeTruthy();
+  });
+
+  it("shows a stored memory size the way the field asks for it", async () => {
+    // The box's placeholder is `512M` and its stored value arrived as
+    // 536870912. `toSizeString` — the very function the save path uses to send
+    // it — was right there; the field showed the raw byte count instead, so a
+    // set value read as an unexplained nine-digit number.
+    vi.stubGlobal("fetch", route(CAPPED, WITH_MEMORY));
+    renderWithQuery(
+      <ItemEnvironmentModal slug="rca" itemId="i-1" canEdit onClose={() => {}} />,
+    );
+
+    const mem = await screen.findByTestId("memory-input");
+    expect((mem as HTMLInputElement).value).toBe("512M");
   });
 
   it("asks the item's route for the item, and the person's for the total", async () => {

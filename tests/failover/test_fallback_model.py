@@ -7,7 +7,7 @@ stream_response) so the failover policy is exercised without a network.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from typing import Any
 
 import httpx
@@ -95,7 +95,7 @@ class _MidFailModel(Model):
         raise RuntimeError("mid")
 
 
-def _model(reg, impls: dict[str, _FakeModel], **kw) -> FallbackModel:
+def _model(reg, impls: Mapping[str, Model], **kw) -> FallbackModel:
     return FallbackModel(list(kw.pop("endpoints")), reg, make_model=lambda e: impls[e.model], **kw)
 
 
@@ -118,6 +118,71 @@ def test_stream_switches_on_pre_first_error():
         assert out == ["a", "b"]
         assert switched == ["busy"]
         assert reg.is_cooling(("busy", "")) is True
+
+    asyncio.run(run())
+
+
+class _SlowFirstToken(Model):
+    """Answers, but not quickly — a real model chewing a large prefill. Nothing
+    is wrong with it; it simply needs longer than the switch signal allows."""
+
+    def __init__(self, delay: float, text: str = "ok") -> None:
+        self.delay = delay
+        self.text = text
+        self.starts = 0
+
+    async def get_response(self, *args, **kwargs):  # pragma: no cover — unused
+        raise NotImplementedError
+
+    async def stream_response(self, *args, **kwargs) -> AsyncIterator[Any]:
+        self.starts += 1
+        await asyncio.sleep(self.delay)
+        yield self.text
+
+
+def test_a_chain_whose_every_endpoint_timed_out_stops_treating_ttft_as_a_switch():
+    """`ttft_timeout_s` is a SWITCH signal — "this one is busy, try another" —
+    and `factories.py` already refuses to use it as a deadline on a
+    single-endpoint deploy for exactly the stated reason: "that 8s is a SWITCH
+    signal and there is nothing to switch to here, so it would only kill turns
+    for being slow."
+
+    On a chain there IS something to switch to, so the signal is right — until
+    every endpoint has answered it the same way. At that point the hypothesis it
+    encodes is refuted: the slowness is not endpoint-specific (a long prompt is
+    slow everywhere), and another switch only re-pays the same prefill. Worse,
+    it means a turn can spend its whole `total_deadline_s` on attempts NONE of
+    which was ever allowed to finish.
+
+    So the sweep after a clean TTFT sweep lets an attempt actually run, bounded
+    by what is left of the deadline. Note what this does not change: an endpoint
+    that is genuinely down fails on a transport error, not a timeout, and
+    switches away as fast as it always did."""
+
+    async def run():
+        reg = CooldownRegistry(clock=_Clock())
+        impls = {"a": _SlowFirstToken(0.06), "b": _SlowFirstToken(0.06)}
+        m = _model(
+            reg,
+            impls,
+            endpoints=[
+                # The head carries the chain-level budgets; `cooldown_s=0` so the
+                # re-sweep is not waiting on the parking this test is not about.
+                _ep(
+                    "a",
+                    ttft_s=0.01,
+                    cooldown_s=0.0,
+                    round_backoff_s=(0.0,),
+                    total_deadline_s=5.0,
+                ),
+                _ep("b", ttft_s=0.01, cooldown_s=0.0),
+            ],
+        )
+
+        assert await _collect(m.stream_response()) == ["ok"]
+        # Swept once at the switch signal, then allowed to finish — not switched
+        # at 0.01s forever until the deadline ran out.
+        assert impls["a"].starts + impls["b"].starts >= 3
 
     asyncio.run(run())
 
