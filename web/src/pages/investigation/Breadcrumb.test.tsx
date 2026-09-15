@@ -92,6 +92,28 @@ describe("<Breadcrumb /> under a folder the listing did not enter", () => {
     expect(screen.queryByText("Empty")).not.toBeInTheDocument();
   });
 
+  it("orders a lazy folder among the walked ones by the tree's rule, not the locale's", async () => {
+    // The tree draws siblings in natural order (`lib/treeOrder`): `9-notes`
+    // before `10-vendor`. The browser merges the lazy entry into the walked
+    // ones and re-sorts; a `localeCompare` there puts `10-vendor` first, so
+    // the crumb and the tree would disagree on where the same folder sits.
+    const user = userEvent.setup();
+    render(
+      <LazyFoldersContext.Provider value={["/10-vendor"]}>
+        <Breadcrumb
+          activeTab="/brief.md"
+          files={[...files, { path: "/9-notes/a.md", size: 0 }]}
+          onOpen={vi.fn()}
+        />
+      </LazyFoldersContext.Provider>,
+    );
+    await user.click(screen.getByRole("button", { name: "brief.md" })); // root-level browser
+    expect(await screen.findByText("10-vendor")).toBeInTheDocument();
+    const names = screen.getAllByRole("button").map((b) => b.textContent);
+    expect(names.indexOf("9-notes")).toBeLessThan(names.indexOf("10-vendor"));
+    expect(names.indexOf("10-vendor")).toBeLessThan(names.indexOf("data"));
+  });
+
   it("does not list a lazy folder twice when a file under it is in the preload", async () => {
     // Reachable through the M2 union: a legacy row under a folder primary's
     // budget cut → the folder is in `unwalked` AND has a file in `files`.

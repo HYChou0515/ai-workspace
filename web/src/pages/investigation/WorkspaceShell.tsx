@@ -70,6 +70,7 @@ import { useStickToBottom } from "../../hooks/useStickToBottom";
 import { useOnTurnEnd } from "../../hooks/useOnTurnEnd";
 import { useRefreshFiles } from "../../hooks/useRefreshFiles";
 import { emitRunAll } from "../../lib/editorEvents";
+import { compareNames } from "../../lib/treeOrder";
 import { FileView } from "../../renderers/FileView";
 import { CommandPalette } from "./CommandPalette";
 import { FileTree } from "./FileTree";
@@ -2491,9 +2492,11 @@ function DirBrowser({
     const extra = lazy
       .filter((u) => u.slice(0, u.lastIndexOf("/")) === parent && !seen.has(u.slice(1)))
       .map((u) => ({ name: u.slice(u.lastIndexOf("/") + 1), path: u.slice(1), isDir: true }));
-    // Folders first, one alphabet — the same order the tree draws them in.
+    // Folders first, in the tree's order (`lib/treeOrder`, the one rule the
+    // tree and the backend's document walk share) — `dirChildren` already
+    // sorted `own` by it; the merge with `extra` must not re-sort by another.
     const folders = [...own.filter((e) => e.isDir), ...extra].sort((a, b) =>
-      a.name.localeCompare(b.name),
+      compareNames(a.name, b.name),
     );
     return [...folders, ...own.filter((e) => !e.isDir)];
   }, [paths, dir, lazy, full]);
