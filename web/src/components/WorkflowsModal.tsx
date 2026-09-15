@@ -12,7 +12,6 @@ import { useWorkflowTemplates } from "../hooks/useWorkflowTemplates";
 import { useWorkspaceWorkflows } from "../hooks/useWorkspaceWorkflows";
 import { type MsgKey, useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
-import { sameShape } from "../lib/sameShape";
 import { Icon } from "./Icon";
 import { useDirtyClose } from "../hooks/useDirtyClose";
 import { useDialog } from "./Dialog";
@@ -110,6 +109,9 @@ export function WorkflowsModal({
         await fileService.writeFile(`${WORKFLOWS_DIR}/${f.name}`, await f.arrayBuffer());
       }
       await qc.invalidateQueries({ queryKey: qk.workspaceWorkflows(slug, itemId) });
+      // A `schedules.json` is a legitimate thing to import — it lands in the
+      // same folder — so the schedules section must not show the old rows.
+      await qc.invalidateQueries({ queryKey: qk.itemSchedules(slug, itemId) });
       await qc.invalidateQueries({ queryKey: qk.files(itemId) });
     } finally {
       setBusy(false);
@@ -147,7 +149,7 @@ export function WorkflowsModal({
         queryFn: () => schedulesApi.list(slug, itemId),
         staleTime: 0,
       });
-      const target = fresh.rows.find((r) => sameShape(r.raw, row.raw));
+      const target = fresh.rows.find((r) => sameJson(r.raw, row.raw));
       if (target) {
         const kept = fresh.rows.filter((r) => r !== target).map((r) => r.raw);
         await fileService.writeFile(SCHEDULES_PATH, JSON.stringify({ schedules: kept }, null, 2));
@@ -259,9 +261,21 @@ export function WorkflowsModal({
                 {t("schedules.disabled")}
               </p>
             )}
+            {!sched.indexed && (
+              <p
+                data-testid="schedules-unindexed"
+                role="status"
+                style={{ margin: 0, fontSize: pxToRem(11), color: "var(--err)" }}
+              >
+                {t("schedules.unindexed")}
+              </p>
+            )}
             {sched.problems.length > 0 && (
-              <p style={{ margin: 0, fontSize: pxToRem(11), color: "var(--err)" }}>
-                {t("schedules.fileProblem")} {sched.problems.join(" ")}
+              <p
+                data-testid="schedules-file-problems"
+                style={{ margin: 0, fontSize: pxToRem(11), color: "var(--err)" }}
+              >
+                {t("schedules.fileProblems")} {sched.problems.join(" ")}
               </p>
             )}
             {sched.rows.map((row) => {
@@ -294,7 +308,7 @@ export function WorkflowsModal({
                         <span data-testid={`schedule-unknown-${row.index}`} style={{ color: "var(--err)" }}>
                           {t("schedules.unknownWorkflow")}
                         </span>
-                      ) : row.due_now ? (
+                      ) : !row.runnable ? null : row.due_now ? (
                         t("schedules.nextSweep")
                       ) : (
                         t("schedules.next", { at: `${row.next_at} ${row.tz}` })
@@ -419,10 +433,14 @@ function describeSchedule(value: unknown, t: ReturnType<typeof useT>): string {
     value !== null && typeof value === "object" && !Array.isArray(value)
       ? (value as Record<string, unknown>)
       : {};
-  const at = typeof raw.at === "string" ? raw.at : "00:00";
+  // The parser's rule for every one of these is Python's `or`: a falsy value —
+  // absent, null, "", 0, false — is the default. Mirrored exactly, so the
+  // panel never shows "0 (UTC)" for a row the sweep runs daily at 00:00.
+  const at = typeof raw.at === "string" && raw.at ? raw.at : "00:00";
   const tz = typeof raw.tz === "string" && raw.tz ? raw.tz : "UTC";
+  const every = raw.every || "daily";
   let words: string;
-  switch (raw.every) {
+  switch (every) {
     case "minutes":
       words = t("schedules.every.minutes", { n: Number(raw.n) || 0 });
       break;
@@ -439,14 +457,45 @@ function describeSchedule(value: unknown, t: ReturnType<typeof useT>): string {
       words = t("schedules.every.monthly", { dom: Number(raw.dom) || 0, at });
       break;
     case "daily":
-    case undefined:
-      // The parser's own default: a row that names no period is daily.
       words = t("schedules.every.daily", { at });
       break;
     default:
-      words = String(raw.every);
+      words = String(every);
   }
   return `${words} (${tz})`;
+}
+
+/**
+ * Order-preserving JSON equality — the identity of a schedule row. NOT
+ * `sameShape`: that one compares arrays as sets (right for grant lists, whose
+ * order nobody arranges), and two rows that differ only in the order of an array
+ * inside `with` are two DIFFERENT schedules to the sweep (`trigger_id_for`
+ * fingerprints the payload as written), so Remove must tell them apart.
+ * Object key order is not identity (the file was parsed, not diffed as text).
+ */
+function sameJson(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return (
+      Array.isArray(a) &&
+      Array.isArray(b) &&
+      a.length === b.length &&
+      a.every((x, i) => sameJson(x, b[i]))
+    );
+  }
+  if (a !== null && b !== null && typeof a === "object" && typeof b === "object") {
+    const ka = Object.keys(a).sort();
+    const kb = Object.keys(b).sort();
+    return (
+      ka.length === kb.length &&
+      ka.every(
+        (k, i) =>
+          k === kb[i] &&
+          sameJson((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]),
+      )
+    );
+  }
+  return false;
 }
 
 /** What a refused row SAID it would run, for the line that shows it. */

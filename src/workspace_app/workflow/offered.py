@@ -33,7 +33,7 @@ Two shapes, because the callers ask two questions:
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 
 from ..apps.profiles import load_profile_workflow, profile_workflows
 from ..files import WorkspaceFiles
@@ -94,7 +94,20 @@ async def resolve_offered_workflow(
         return None
     if not workflow_id:
         return load_profile_workflow(slug, profile, "")
+    # `load_workspace_workflow` itself refuses the reserved id, so a workflow
+    # body written by hand to `.workflows/schedules.json` is no workflow here,
+    # in the orchestrator, or anywhere else that loads one.
     own = await load_workspace_workflow(files, item_id, workflow_id)
     if own is not None:
         return own[1]
     return load_profile_workflow(slug, profile, workflow_id)
+
+
+def no_such_workflow(workflow_id: str, offered: Collection[str]) -> str:
+    """The one sentence for "this item has no workflow by that id" — the page's
+    error panel, the agent's refusal and the sweep's log line all say it the
+    same way, and all name what the item DOES have, because "which one, and why
+    not" is all a reader can act on. No tool name: the page's reader is a person
+    pressing a button, not the agent."""
+    has = f" (it has: {', '.join(sorted(offered))})" if offered else " (it has none yet)"
+    return f"This item has no workflow named {workflow_id!r}{has}."

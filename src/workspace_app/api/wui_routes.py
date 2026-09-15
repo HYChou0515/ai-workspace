@@ -39,6 +39,7 @@ from ..agent.context import AgentToolContext
 from ..sandbox.protocol import ExecResult, Sandbox, SandboxSpec
 from ..tooling.external import ExternalTools
 from ..tooling.registry import PackageInfo, exec_package_command, find_allowed_command
+from ..workflow.offered import no_such_workflow
 from .locator import ItemLocator
 from .request_env import IRequestEnv
 from .turn_context import resolve_item_tools
@@ -400,12 +401,11 @@ def register_wui_routes(
             # Named, because this reaches a person through the page's own error
             # panel and "which one, and why not" is all they can act on. The
             # list is the ONE every entrance consults (`workflow.offered`: the
-            # profile's workflows plus the item's own `.workflows/`); the page's
-            # own declaration is disclosure enforced in the bridge.
-            raise HTTPException(
-                status_code=403,
-                detail=f"This app does not offer {body.workflow} to its pages.",
-            )
+            # profile's workflows plus the item's own `.workflows/`), so the
+            # true cause is "this item has no such workflow" — not the "app does
+            # not offer" the old wording said, which read as an authorisation an
+            # operator had to grant when saving the workflow is all it takes.
+            raise HTTPException(status_code=403, detail=no_such_workflow(body.workflow, allowed))
 
         # A REAL conversation, not a minted label. `chat_id` is looked up by
         # `workflow_exec.drive_turn`, and one that resolves to nothing falls back

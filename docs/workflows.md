@@ -883,8 +883,13 @@ reference.md 明文），而同一列跑過之後再存會說明天；sweep 沒�
 自己的說明（`every` 的字從 `EVERY` 產生，測試釘住不會漂移）。
 
 **人在 Workflows 面板看。** `GET /a/{slug}/items/{id}/schedules` 用 sweep 同一套解讀回每一列
-（含被拒絕的列，帶 `raw` 與 `problems`），前端只渲染：`run` 已不存在標紅、到期顯示「下一輪」、
-sweep 沒開顯示警告、「移除」把整份檔案少那一列寫回（其他列原樣保留，壞列也保留）。
+（含被拒絕的列，帶 `raw` 與 `problems`），每列一個 **`runnable`** 判決（列能解析 ∧ `run` 是這個
+item 有的 ∧ 整檔沒超上限 ∧ sweep 開著 ∧ 檔案已被索引），只有 runnable 的列才有「下次」——
+`tests/api/test_schedules_route_parity.py` 把同一份檔餵路由和 sweep，斷言兩邊一致。前端只渲染：
+`run` 已不存在標紅、到期顯示「下一輪」、sweep 沒開顯示警告、檔案還沒被索引（直接寫進 store、
+還沒有下一次 turn）顯示告示、「移除」把整份檔案少那一列寫回（其他列原樣保留，壞列也保留）。
+匯入 `schedules.json` 是合法的匯入。已知的一個窗口：façade 是熱優先、sweep 讀 durable 快照，
+sandbox 熱著時的改動要等一個 mirror 週期（預設 5 秒）或那個 turn 結束才到 sweep。
 
 **用 shell 寫出來的檔也會被看到**：turn 結束的對帳（`api/schedule_reconcile.py`）列一次
 workspace 把所有 `is_schedule_file` 的路徑登記進索引，`.workflows/schedules.json` 也在內。

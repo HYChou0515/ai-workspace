@@ -274,6 +274,17 @@ def _looks_like_time(at: object) -> bool:
     return 0 <= int(hh) <= 23 and 0 <= int(mm) <= 59
 
 
+def file_rows(raw: str) -> list[Any] | None:
+    """The `schedules` list of a file, or None when the file is not that shape
+    (not JSON, not an object, no list) — the one decode both readers share."""
+    try:
+        doc = json.loads(raw)
+        rows = doc["schedules"] if isinstance(doc, dict) else None
+    except Exception:
+        return None
+    return rows if isinstance(rows, list) else None
+
+
 def declared_count(raw: str) -> int | None:
     """How many schedules this file DECLARES, or None when it is not that shape.
 
@@ -292,14 +303,8 @@ def declared_count(raw: str) -> int | None:
     declares nothing" are different answers, and only one of them means the cap
     is satisfied.
     """
-    try:
-        doc = json.loads(raw)
-    except ValueError:
-        return None
-    if not isinstance(doc, dict):
-        return None
-    rows = doc.get("schedules")
-    return len(rows) if isinstance(rows, list) else None
+    rows = file_rows(raw)
+    return None if rows is None else len(rows)
 
 
 def over_cap(raw: str, max_rows: int) -> str | None:
@@ -315,6 +320,28 @@ def over_cap(raw: str, max_rows: int) -> str | None:
     )
 
 
+def parse_row(i: int, raw: Any) -> tuple[UserSchedule | None, list[str]]:
+    """ONE row: the parsed schedule, or the problems that refuse it — renumbered
+    to the row's real position so the message points at the line the author has
+    to fix rather than always at zero. The single reading the sweep and the
+    panel share, so they cannot disagree about a row."""
+    one = json.dumps({"schedules": [raw]})
+    bad = validate_user_schedules(one)
+    if bad:
+        return None, [p.replace("schedules[0]", f"schedules[{i}]") for p in bad]
+    try:
+        (row,) = parse_user_schedules(one)
+    except Exception as exc:
+        # BELT AND BRACES, and the belt is the linter above. A decode that
+        # raises here would take the file's GOOD rows with it — the opposite of
+        # `usable_rows`'s whole promise — and the author would see nothing,
+        # because the linter is the only thing that reaches them. Every known
+        # case is linted now; this keeps the next unknown one costing its own
+        # row only.
+        return None, [f"schedules[{i}]: could not be read ({exc})."]
+    return row, []
+
+
 def usable_rows(raw: str) -> tuple[list[UserSchedule], list[str]]:
     """The rows that can be run, and what is wrong with the rest.
 
@@ -324,34 +351,17 @@ def usable_rows(raw: str) -> tuple[list[UserSchedule], list[str]]:
     fat-fingers it, and the OTHER report they rely on stops arriving too, with
     nothing anywhere saying why.
     """
-    try:
-        doc = json.loads(raw)
-        rows = doc["schedules"] if isinstance(doc, dict) else None
-        if not isinstance(rows, list):
-            raise ValueError("no `schedules` list")
-    except Exception:
+    rows = file_rows(raw)
+    if rows is None:
         return [], validate_user_schedules(raw)
-
     good: list[UserSchedule] = []
     problems: list[str] = []
-    for i, row in enumerate(rows):
-        one = json.dumps({"schedules": [row]})
-        bad = validate_user_schedules(one)
-        if bad:
-            # Renumbered to this row's real position, so the message points at
-            # the line the author has to fix rather than always at zero.
-            problems.extend(p.replace("schedules[0]", f"schedules[{i}]") for p in bad)
-            continue
-        try:
-            good.extend(parse_user_schedules(one))
-        except Exception as exc:
-            # BELT AND BRACES, and the belt is the linter above. A decode that
-            # raises here escaped before `return good, problems` and took the
-            # file's GOOD rows with it — the opposite of this function's whole
-            # promise — and the author saw nothing, because the linter is the
-            # only thing that reaches them. Every known case is linted now; this
-            # keeps the next unknown one costing its own row only.
-            problems.append(f"schedules[{i}]: could not be read ({exc}).")
+    for i, raw_row in enumerate(rows):
+        row, bad = parse_row(i, raw_row)
+        if row is None:
+            problems.extend(bad)
+        else:
+            good.append(row)
     return good, problems
 
 
@@ -479,9 +489,8 @@ def next_run_at(row: UserSchedule, now_utc: datetime, last_window: str) -> str:
     return "" if when is None else f"{when:%Y-%m-%d %H:%M}"
 
 
-def describe_next_run(row: UserSchedule, now_utc: datetime, last_window: str) -> str:
-    """`next_run_at` as the sentence the agent relays."""
-    at = next_run_at(row, now_utc, last_window)
+def describe_next_run(row: UserSchedule, at: str) -> str:
+    """`next_run_at`'s answer as the sentence the agent relays."""
     if not at:
         return "on the next sweep (this period is already due and has not run yet)"
     return f"{at} {row.tz or 'UTC'}"
@@ -496,9 +505,11 @@ class ScheduleView(Struct):
     silently losing the others, and a person cannot fix a line they are not
     shown. `raw` is the row as written, for exactly that rewrite.
 
-    Two renderings of one fact, derived from the same value: `next_run` is the
-    English sentence the agent relays, `next_at` / `due_now` / `tz` are the
-    pieces a panel localises. Neither is computed twice.
+    `runnable` is THE verdict — will the sweep fire this row — and the next-run
+    fields are filled only when it is true: a "next" on a row the sweep will
+    skip is a report promised that never arrives. `next_run` is the English
+    sentence the agent relays; `next_at` / `due_now` / `tz` are the pieces a
+    panel localises, derived from the one `next_run_at` call.
     """
 
     index: int
@@ -509,6 +520,7 @@ class ScheduleView(Struct):
     problems: list[str]
     run: str = ""
     describe: str = ""
+    runnable: bool = False
     next_run: str = ""
     next_at: str = ""
     due_now: bool = False
@@ -523,56 +535,60 @@ def schedule_views(
     offered: Collection[str],
     now_utc: datetime,
     last_window: Callable[[UserSchedule], str],
+    max_rows: int | None = None,
+    enabled: bool = True,
+    indexed: bool = True,
 ) -> tuple[list[ScheduleView], list[str]]:
     """Every row of a schedules file, described the way the sweep reads it —
-    same parser, same next-run rule, same ledger (`last_window`) — plus the
-    file-level problems when the file itself cannot be read. ONE implementation
-    of "what does this row mean", used by the agent's `save_schedules` reply and
-    the panel's listing, so the two cannot disagree."""
-    try:
-        doc = json.loads(raw_text)
-        rows = doc["schedules"] if isinstance(doc, dict) else None
-        if not isinstance(rows, list):
-            raise ValueError("no `schedules` list")
-    except Exception:
+    same parser, same cap, same next-run rule, same ledger (`last_window`) —
+    plus the file-level problems. ONE implementation of "what will the sweep do
+    with this row", used by the agent's `save_schedules` reply and the panel's
+    listing, and held to the sweep by `tests/api/test_schedules_route_parity.py`.
+
+    A row is `runnable` only when EVERYTHING the sweep checks holds: the row
+    parses, its `run` is one the item offers, the file is within the cap
+    (`max_rows`, the sweep refuses the WHOLE file over it), the deployment runs
+    scheduled work at all (`enabled`), and the sweep knows the file exists
+    (`indexed` — it reads only what the index names). Each of those is a way a
+    row silently never fires, so each is said here rather than rounded away.
+    """
+    rows = file_rows(raw_text)
+    if rows is None:
         return [], validate_user_schedules(raw_text)
+
+    file_problems: list[str] = []
+    capped = over_cap(raw_text, max_rows) if max_rows is not None else None
+    if capped is not None:
+        file_problems.append(capped)
 
     views: list[ScheduleView] = []
     for i, raw in enumerate(rows):
-        one = json.dumps({"schedules": [raw]})
-        problems = [
-            p.replace("schedules[0]", f"schedules[{i}]") for p in validate_user_schedules(one)
-        ]
-        if problems:
+        row, problems = parse_row(i, raw)
+        if row is None:
             views.append(ScheduleView(index=i, raw=raw, problems=problems))
             continue
-        try:
-            (row,) = parse_user_schedules(one)
-        except Exception as exc:
-            views.append(
-                ScheduleView(
-                    index=i, raw=raw, problems=[f"schedules[{i}]: could not be read ({exc})."]
-                )
-            )
-            continue
-        last = last_window(row)
-        at = next_run_at(row, now_utc, last)
+        known = row.run in offered
+        runnable = known and capped is None and enabled and indexed
+        at = next_run_at(row, now_utc, last_window(row)) if runnable else ""
         views.append(
             ScheduleView(
                 index=i,
                 raw=raw,
+                # The cap is the FILE's problem (said once, above); each row's
+                # own record stays clean and its `runnable` carries the verdict.
                 problems=[],
                 run=row.run,
                 describe=describe_row(row),
-                next_run=describe_next_run(row, now_utc, last),
+                runnable=runnable,
+                next_run=describe_next_run(row, at) if runnable else "",
                 next_at=at,
-                due_now=not at,
+                due_now=runnable and not at,
                 tz=row.tz or "UTC",
-                known=row.run in offered,
+                known=known,
                 payload=row.payload,
             )
         )
-    return views, []
+    return views, file_problems
 
 
 def last_window_lookup(spec: Any, item_id: str) -> Callable[[UserSchedule], str]:

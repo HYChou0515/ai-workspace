@@ -87,5 +87,6 @@ Three things to get right, because each one is a report that quietly never arriv
   on the next sweep, not tomorrow; say so rather than promising tomorrow.
 
 When a schedule fires, nobody is signed in: there is no request and no personal token.
-Anything the run needs comes from the item's own environment. Each run opens its own
-conversation in this item; to stop a schedule, save the list without its row.
+Anything the run needs comes from the item's own environment. A schedule's runs share
+one conversation in this item (named after the workflow), reused on every fire; to stop a
+schedule, save the list without its row — deleting that conversation does not stop it.

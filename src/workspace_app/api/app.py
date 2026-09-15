@@ -65,7 +65,7 @@ from ..workflow.orchestrator import (
     WorkflowOrchestrator,
 )
 from ..workflow.user_schedule_sweep import DEFAULT_MAX_ROWS, UserScheduleSweeper
-from ..workflow.user_schedules import SchedulePolicy
+from ..workflow.user_schedules import ITEM_SCHEDULES_PATH, SchedulePolicy
 from . import perf_trace
 from .activity import ActivityLog
 from .agent_progress import progress_line
@@ -224,8 +224,9 @@ async def start_page_schedule(
     called the function. `create_app` still resolves the orchestrator at CALL
     time through a thin closure, which is where that deferral belongs.
 
-    It opens its OWN conversation, exactly as the interactive entrance does.
-    Without a `chat_id` the run keys on the item, `workflow_exec.drive_turn`
+    It runs in the schedule's OWN conversation — one per schedule, reused on
+    every fire (`chat_for_schedule`), where the interactive entrance mints one
+    per run. Without a `chat_id` the run keys on the item, `workflow_exec.drive_turn`
     looks that up, finds no conversation and falls back to the item's DEFAULT
     chat — so a scheduled page run would read the user's own chat history as
     its context and append its turns there, every night, on the entrance
@@ -2126,6 +2127,9 @@ def create_app(
         workflow_executor=workflow_executor,
         event_dispatcher=event_dispatcher,
         schedule_policy=schedule_policy,
+        # Whether the sweep will read the item's own schedules file at all — the
+        # same index the sweep iterates, asked the same way.
+        schedule_indexed=lambda item_id: ITEM_SCHEDULES_PATH in schedule_index.paths(item_id),
     )
 
     chat_send_svc = ChatSendService(

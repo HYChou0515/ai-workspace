@@ -66,6 +66,7 @@ def test_an_item_with_no_schedules_file_answers_an_empty_list() -> None:
     assert r.status_code == 200
     assert r.json() == {
         "enabled": True,
+        "indexed": False,
         "path": ".workflows/schedules.json",
         "rows": [],
         "problems": [],
@@ -127,8 +128,44 @@ def test_a_deployment_with_the_sweep_off_says_so() -> None:
         )
         r = client.get(f"{_base(item_id)}/schedules")
 
-    assert r.json()["enabled"] is False
-    assert r.json()["rows"][0]["run"] == "nightly"
+    body = r.json()
+    assert body["enabled"] is False
+    # The sweep never ticks on this deployment, so no row will fire — and a row
+    # with a "next" under a "switched off" notice is the contradiction the
+    # verdict exists to remove.
+    (row,) = body["rows"]
+    assert (row["run"], row["runnable"], row["next_run"], row["next_at"]) == (
+        "nightly",
+        False,
+        "",
+        "",
+    )
+
+
+def test_an_index_the_route_cannot_read_is_not_indexed_and_not_a_500(monkeypatch) -> None:
+    """A listing, not a run. An index the route cannot read is one the sweep
+    cannot read either, so "not indexed" is what is true at that moment."""
+    from workspace_app.api import schedule_index
+
+    client, _, item_id = _app()
+    with client:
+        _put(client, item_id, ".workflows/nightly.json", _NIGHTLY)
+        _put(
+            client,
+            item_id,
+            ".workflows/schedules.json",
+            json.dumps({"schedules": [{"every": "hourly", "run": "nightly"}]}),
+        )
+
+        def _down(self, item_id: str) -> list[str]:
+            raise RuntimeError("index down")
+
+        monkeypatch.setattr(schedule_index.ScheduleIndex, "paths", _down)
+        r = client.get(f"{_base(item_id)}/schedules")
+
+    assert r.status_code == 200, r.text
+    assert r.json()["indexed"] is False
+    assert r.json()["rows"][0]["runnable"] is False
 
 
 def test_a_file_over_the_deployments_cap_is_reported_as_the_sweep_treats_it() -> None:

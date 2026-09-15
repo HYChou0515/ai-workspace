@@ -634,8 +634,8 @@ export const messages = {
   // operator's word, never shown here.
   "schedules.heading": { "zh-TW": "定時執行", en: "Scheduled runs" },
   "schedules.intro": {
-    "zh-TW": "這些工作流程會照時間自動執行，每次執行都會開一個新對話。",
-    en: "These workflows run on their own at the times below; each run opens a new conversation.",
+    "zh-TW": "這些工作流程會照時間自動執行；同一條排程的每次執行都寫進同一個對話。",
+    en: "These workflows run on their own at the times below; a schedule's runs share one conversation.",
   },
   "schedules.every.minutes": { "zh-TW": "每 {n} 分鐘", en: "Every {n} minutes" },
   "schedules.every.hourly": { "zh-TW": "每小時", en: "Hourly" },
@@ -673,9 +673,13 @@ export const messages = {
     "zh-TW": "這個系統沒有開啟定時執行，以下的排程不會自動執行。請聯絡管理員。",
     en: "Scheduled runs are switched off on this system; the schedules below will not run on their own. Ask an administrator.",
   },
-  "schedules.fileProblem": {
-    "zh-TW": "排程檔讀不出來：",
-    en: "The schedules file could not be read:",
+  "schedules.fileProblems": {
+    "zh-TW": "排程檔有問題：",
+    en: "Problems with the schedules file:",
+  },
+  "schedules.unindexed": {
+    "zh-TW": "這份排程檔還沒被登記，下一次對話之後才會開始自動執行。",
+    en: "This schedules file is not registered yet; it starts running on its own after the next conversation turn.",
   },
   // #520: shipped starter templates. Copy speaks in outcomes ("copy one to edit"),
   // never in internals like `.workflows/` or tool ceilings.

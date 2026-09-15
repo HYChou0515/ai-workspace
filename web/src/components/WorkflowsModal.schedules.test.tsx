@@ -53,11 +53,19 @@ const NIGHTLY = {
   due_now: false,
   tz: "Asia/Taipei",
   known: true,
+  runnable: true,
   payload: {},
 };
 
 function schedules(over: Partial<ItemSchedules> = {}): ItemSchedules {
-  return { enabled: true, path: ".workflows/schedules.json", rows: [NIGHTLY], problems: [], ...over };
+  return {
+    enabled: true,
+    indexed: true,
+    path: ".workflows/schedules.json",
+    rows: [NIGHTLY],
+    problems: [],
+    ...over,
+  };
 }
 
 function fakeService() {
@@ -107,7 +115,7 @@ describe("WorkflowsModal — schedules", () => {
   it("flags a row whose workflow no longer exists — the sweep skips it in silence", async () => {
     listMock.mockResolvedValue([]);
     schedulesMock.mockResolvedValue(
-      schedules({ rows: [{ ...NIGHTLY, run: "vanished", known: false }] }),
+      schedules({ rows: [{ ...NIGHTLY, run: "vanished", known: false, runnable: false, next_run: "", next_at: "" }] }),
     );
     render(fakeService().svc);
 
@@ -139,7 +147,7 @@ describe("WorkflowsModal — schedules", () => {
   it("says a due row runs on the next sweep rather than inventing a time", async () => {
     listMock.mockResolvedValue([]);
     schedulesMock.mockResolvedValue(
-      schedules({ rows: [{ ...NIGHTLY, next_at: "", due_now: true }] }),
+      schedules({ rows: [{ ...NIGHTLY, next_at: "", due_now: true, next_run: "on the next sweep (this period is already due and has not run yet)" }] }),
     );
     render(fakeService().svc);
 
@@ -242,6 +250,106 @@ describe("WorkflowsModal — schedules", () => {
 
     await waitFor(() => expect(writes).toHaveLength(1));
     expect(JSON.parse(writes[0].body)).toEqual({ schedules: [5] });
+  });
+
+  it("over the cap: the file says why, each row keeps its name and gets no next time", async () => {
+    // The backend's verdict is `runnable`; the panel never invents a "next"
+    // for a row the sweep will skip. The cap is the FILE's problem, said once —
+    // a well-formed row is not "written wrong" and keeps its workflow's title.
+    listMock.mockResolvedValue([{ id: "nightly", title: "Nightly report", phases: [{ id: "a" }] }]);
+    const cap = "declares 3 schedules, over the limit of 2 — none will run until it is reduced";
+    const held = { ...NIGHTLY, runnable: false, next_run: "", next_at: "", due_now: false };
+    schedulesMock.mockResolvedValue(
+      schedules({ rows: [held, { ...held, index: 1 }, { ...held, index: 2 }], problems: [cap] }),
+    );
+    render(fakeService().svc);
+
+    const row = await screen.findByTestId("schedule-row-0");
+    expect(row).toHaveTextContent("Nightly report");
+    expect(row).not.toHaveTextContent("下次");
+    expect(row).not.toHaveTextContent("寫得不對");
+    // Said once, under a label that says "problems", not "could not be read".
+    expect(screen.getByTestId("schedules-file-problems")).toHaveTextContent("over the limit of 2");
+    expect(screen.getByTestId("schedules-file-problems")).not.toHaveTextContent("讀不出來");
+    expect(screen.getAllByText(/over the limit of 2/)).toHaveLength(1);
+  });
+
+  it("a period left unset in any of the ways the parser accepts reads as daily", async () => {
+    // The parser's rule is `row.get("every") or "daily"`: absent, null, "", 0
+    // and false all run daily at 00:00 — the panel says the same, never "0".
+    listMock.mockResolvedValue([]);
+    schedulesMock.mockResolvedValue(
+      schedules({
+        rows: [
+          { ...NIGHTLY, index: 0, raw: { every: 0, run: "nightly" } },
+          { ...NIGHTLY, index: 1, raw: { every: false, at: "", run: "nightly" } },
+        ],
+      }),
+    );
+    render(fakeService().svc);
+
+    expect(await screen.findByTestId("schedule-row-0")).toHaveTextContent(/^每天 00:00 \(UTC\)/);
+    expect(screen.getByTestId("schedule-row-1")).toHaveTextContent(/^每天 00:00 \(UTC\)/);
+    expect(screen.getByTestId("schedule-row-1")).not.toHaveTextContent("false");
+  });
+
+  it("importing a file refreshes the schedules too — a schedules.json is a legitimate import", async () => {
+    listMock.mockResolvedValue([]);
+    schedulesMock.mockResolvedValue(schedules());
+    const { svc } = fakeService();
+    render(svc);
+    await screen.findByTestId("schedule-row-0");
+    const before = schedulesMock.mock.calls.length;
+
+    const input = screen.getByTestId("workflows-import-input") as HTMLInputElement;
+    const file = new File(['{"schedules": []}'], "schedules.json", { type: "application/json" });
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() => expect(schedulesMock.mock.calls.length).toBeGreaterThan(before));
+  });
+
+  it("says when the sweep has not been told about the file yet", async () => {
+    listMock.mockResolvedValue([]);
+    schedulesMock.mockResolvedValue(
+      schedules({ indexed: false, rows: [{ ...NIGHTLY, runnable: false, next_run: "", next_at: "" }] }),
+    );
+    render(fakeService().svc);
+
+    expect(await screen.findByTestId("schedules-unindexed")).toBeInTheDocument();
+    expect(screen.getByTestId("schedule-row-0")).not.toHaveTextContent("下次");
+  });
+
+  it("a row whose `every` is null reads as daily, as the parser reads it", async () => {
+    listMock.mockResolvedValue([]);
+    schedulesMock.mockResolvedValue(
+      schedules({ rows: [{ ...NIGHTLY, raw: { every: null, at: "09:00", run: "nightly" } }] }),
+    );
+    render(fakeService().svc);
+
+    const row = await screen.findByTestId("schedule-row-0");
+    expect(row).toHaveTextContent("每天 09:00");
+    expect(row).not.toHaveTextContent("null");
+  });
+
+  it("removing tells apart two rows that differ only in the order of a list", async () => {
+    // `with: {ids: [1, 2]}` and `with: {ids: [2, 1]}` are two schedules to the
+    // sweep (the trigger key fingerprints the payload as written). A set-wise
+    // comparison would call them one and remove the first when the second was
+    // clicked.
+    listMock.mockResolvedValue([]);
+    const a = { ...NIGHTLY, index: 0, raw: { every: "hourly", run: "nightly", with: { ids: [1, 2] } } };
+    const b = { ...NIGHTLY, index: 1, raw: { every: "hourly", run: "nightly", with: { ids: [2, 1] } } };
+    schedulesMock.mockResolvedValue(schedules({ rows: [a, b] }));
+    const { svc, writes } = fakeService();
+    render(svc);
+
+    fireEvent.click(await screen.findByTestId("schedule-remove-1"));
+    fireEvent.click(await screen.findByRole("button", { name: "移除" }));
+
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(JSON.parse(writes[0].body)).toEqual({
+      schedules: [{ every: "hourly", run: "nightly", with: { ids: [1, 2] } }],
+    });
   });
 
   it("removing asks once, and a cancel writes nothing", async () => {

@@ -29,12 +29,20 @@ export type ScheduleRow = {
   /** Whether `run` names a workflow this item offers — a deleted one is skipped
    * by the sweep with a log line nobody reads. */
   known: boolean;
+  /** THE verdict: will the sweep fire this row. False for a refused row, an
+   * unknown workflow, a file over the cap, a deployment with the sweep off, or
+   * a file the sweep's index does not name yet. The next-run fields are filled
+   * only when this is true. */
+  runnable: boolean;
   payload: Record<string, unknown>;
 };
 
 export type ItemSchedules = {
   /** Whether this deployment runs scheduled work at all. */
   enabled: boolean;
+  /** Whether the sweep's index names this file. A file that reached the store
+   * past every hook is invisible to the sweep until the next turn's reconcile. */
+  indexed: boolean;
   path: string;
   rows: ScheduleRow[];
   /** File-level problems (the file itself could not be read). */

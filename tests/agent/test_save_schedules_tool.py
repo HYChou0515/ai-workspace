@@ -191,6 +191,10 @@ async def test_a_deployment_with_the_sweep_off_saves_but_says_so_loudly(clock) -
 
     assert await ctx.context.files.exists(ctx.context.investigation_id, SCHEDULES)
     assert "WARNING" in out and "trigger_check_interval_sec" in out
+    # And the row itself says so — a "next run" on a deployment where nothing
+    # runs is the sentence the agent would relay.
+    assert "will not run" in out
+    assert "next run" not in out
 
 
 async def test_an_empty_list_cancels_everything(clock) -> None:

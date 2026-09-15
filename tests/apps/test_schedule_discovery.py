@@ -55,6 +55,10 @@ def test_the_tools_description_is_derived_from_the_validators_periods(monkeypatc
     a hand-written copy right up until the day it drifted."""
     for period in user_schedules.EVERY:
         assert f"`{period}`" in (save_schedules_impl.__doc__ or "")
+    # What the model is shown IS the builder's output — a hand-written literal
+    # that happened to list today's five periods would pass the loop above and
+    # drift the day EVERY changes.
+    assert save_schedules_impl.__doc__ == _save_schedules_doc()
 
     monkeypatch.setattr(user_schedules, "EVERY", (*user_schedules.EVERY, "fortnightly"))
     assert "`fortnightly`" in _save_schedules_doc()

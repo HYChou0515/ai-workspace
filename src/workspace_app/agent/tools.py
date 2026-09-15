@@ -2261,7 +2261,7 @@ async def save_schedules_impl(ctx: RunContextWrapper[AgentToolContext], schedule
     for verb in TOOL_VERBS["save_schedules"]:
         if (denied := authorize_tool(ctx.context, verb)) is not None:
             return denied
-    from ..workflow.offered import offered_workflow_ids
+    from ..workflow.offered import no_such_workflow, offered_workflow_ids
     from ..workflow.user_schedules import (
         ITEM_SCHEDULES_PATH,
         last_window_lookup,
@@ -2300,9 +2300,8 @@ async def save_schedules_impl(ctx: RunContextWrapper[AgentToolContext], schedule
     unknown = sorted({row.run for row in rows if row.run not in offered})
     if unknown:
         return (
-            "error: this item has no workflow called "
-            + ", ".join(repr(u) for u in unknown)
-            + (f" — it offers {', '.join(offered)}." if offered else " — it offers none yet.")
+            "error: "
+            + " ".join(no_such_workflow(u, offered) for u in unknown)
             + " Save the workflow first with save_workflow, then the schedules."
         )
 
@@ -2319,12 +2318,22 @@ async def save_schedules_impl(ctx: RunContextWrapper[AgentToolContext], schedule
     # loop as one hop: the ledger reads inside are blocking specstar I/O.
     last = last_window_lookup(ctx.context.spec if policy.sweep_enabled else None, inv)
     views, _ = await asyncio.to_thread(
-        schedule_views, schedules_json, offered=offered, now_utc=utc_now(), last_window=last
+        schedule_views,
+        schedules_json,
+        offered=offered,
+        now_utc=utc_now(),
+        last_window=last,
+        max_rows=policy.max_rows,
+        enabled=policy.sweep_enabled,
     )
     lines = [
         f"- {v.run}: {v.describe}"
         + (f" with {json.dumps(v.payload, sort_keys=True)}" if v.payload else "")
-        + f" — next run {v.next_run}"
+        + (
+            f" — next run {v.next_run}"
+            if v.runnable
+            else " — will not run (scheduled work is switched off on this deployment)"
+        )
         for v in views
     ]
     noun = "schedule" if len(rows) == 1 else "schedules"
@@ -2332,8 +2341,8 @@ async def save_schedules_impl(ctx: RunContextWrapper[AgentToolContext], schedule
         f"saved {len(rows)} {noun} to {rel_path(ITEM_SCHEDULES_PATH)} — the whole file, so "
         "these are the only rows now:",
         *lines,
-        "Each run opens its own conversation in this item. To change or cancel one, save the "
-        "full list again without it.",
+        "A schedule's runs share one conversation in this item (named after the workflow). "
+        "To change or cancel one, save the full list again without it.",
     ]
     if not policy.sweep_enabled:
         out.append(

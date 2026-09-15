@@ -52,7 +52,7 @@ item 的候選清單是**空集合**;`hourly-test-mail` 是 AI 用 `save_workflo
 - **時間語彙、檢查器、租約、上限**:`workflow/user_schedules.py`(`EVERY`、
   `validate_user_schedules`、`usable_rows`、`trigger_id_for`)、`_TriggerWindow` CAS 租約、
   `server.max_page_schedules`。全部共用,不新增第二套時間語法。
-- 以誰的身分跑:item 的 owner,自己的 run 對話(`_start_page_schedule`)。同頁面。
+- 以誰的身分跑:item 的 owner;**一條排程重用同一個對話**(`chat_for_schedule` 以 trigger id 取得或建立,每次開火都寫進去)。同頁面。
 
 ### 前提(deploy 旋鈕)
 
@@ -149,8 +149,8 @@ workflow 那邊已有排程機制 `triggers.json`,但它**住在 repo 裡**
 
 ## 第一輪 review(2026-09-14,P1–P5 之後,四條,全部成立 → P6)
 
-判準照 plan-wui.md:看「幾條源自上輪修法」。這一輪 4 條裡 **3 條是 P1/P4 引進的**,全在沒有測試
-看著的地方:
+判準照 plan-wui.md:看「幾條源自上輪修法」。這一輪 4 條裡 **4 條都是 P1/P4 引進的**(表格「誰造成的」
+欄:P1、P1、P4、P4;之前寫成 3 條是算錯),全在沒有測試看著的地方:
 
 | 找到什麼 | 誰造成的 | 修法 |
 |---|---|---|
@@ -167,10 +167,51 @@ token;工具由 11 條單元測試走真函式覆蓋,`sample-scenarios/author-wo
 ## 第二輪 review(2026-09-14,P6 之後,三條,全部成立 → P7)
 
 3 條裡 **1 條源自上輪修法**(P6 在讀端保留了 `schedules` 這個名字,寫端沒擋),其餘兩條是 P4 的縫。
-沒有換機制,只加守衛,所以不再開第三輪(判準:換機制才再一輪)。
+~~沒有換機制,只加守衛,所以不再開第三輪~~ **這句講太滿**:第三條改了 BE→FE 契約(`raw` 從 dict 變任意 JSON
+值),第二條把 sweep 的上限分支換成共用函式;user 一句「還需要一輪嗎」之後開了第三輪,見下。
 
 | 找到什麼 | 誰造成的 | 修法 |
 |---|---|---|
 | `save_workflow("Schedules")` slug 成 `schedules`,寫進 `.workflows/schedules.json` 把整份排程蓋掉,而那個 workflow 又跑不動也列不出 | P6 | `RESERVED_WORKFLOW_ID` 在寫入咽喉點 `save_workspace_workflow` 拒絕(每個呼叫者都受約束),工具先攔並指向 `save_schedules` |
 | 列表路由沒套 sweep 的整檔上限:超過 `max_page_schedules` 時 sweep 一列都不跑,面板卻每列給「下次」 | P4 | `over_cap(raw, max_rows)` 一句話,sweep 的 log 和路由的 file-level `problems` 共用 |
 | 非物件的列被換成 `{"_": 5}` 寫回 | P4 | `raw` 保留原 JSON 值(`Any` / `unknown`),前端描述時才降級,重寫時原樣寫回 |
+
+## 第三輪 review(2026-09-15,P7 之後,三把鏡頭平行:回歸 / 真實性 / 符合度)
+
+user:「還需要一輪嗎?」——需要;而且 user 接著說「我沒辦法接受 review 超過 3 輪還需要……施工品質太差」。
+這輪的發現形狀相同:**寫下去的當下就能自己抓到**(宣稱沒有測試支撐、docstring 說的路徑不是測試走的路徑、
+守衛零覆蓋、判準數字算錯)。P8 的施工規則因此改成:每條修法先有走宣稱路徑的紅測試;「A 和 B 一樣」只能用
+parity 測試支撐(sweep 是 oracle);每句面向人的話逐句對程式碼;推前跑 coverage 與自己的三把鏡頭。
+
+| 找到什麼 | 鏡頭 | 誰造成的 | 修法(P8) |
+|---|---|---|---|
+| 路由和 sweep 讀法**不一樣**四處:未索引的檔路由列成會跑;非 UTF-8 路由 500、sweep 用 replace;超上限每列仍給「下次」(**這條是 P7 自己宣稱修了卻只加了檔案層級句子的殘留**);`every: null` 前端畫 "null" | 真實性、回歸 | P4/P6/**P7** | **parity 測試**(`test_schedules_route_parity.py`):同一份檔餵路由與 `sweeper.tick()`,斷言「路由 `runnable` 的列 = sweep 開火的列」,8 種輸入 + 未索引;後端 `schedule_views` 算出 `runnable`(無問題 ∧ 認得 ∧ 未超上限 ∧ sweep 開 ∧ 已索引),只有 runnable 才有「下次」;路由 `decode("utf-8","replace")`、回 `indexed`;`usable_rows`/`schedule_views`/`declared_count` 共用 `file_rows`+`parse_row`(之前是兩份逐列解析) |
+| 「每次執行開新對話」——假的,一條排程重用同一個對話 | 真實性 | P2/P3/P4 | 工具回覆、skill、i18n、plan 改成事實;PR 留言在 push 時更正(commit 改不到 PR) |
+| `raise ReservedWorkflowId` 零覆蓋;範本路由碰到會 500;`resolve_offered_workflow` 沒套保留名判準 | 回歸、符合度 | P6/P7 | 直接打咽喉點的測試;範本路由 422;resolver 套 `is_workspace_workflow_path` |
+| Remove 用 `sameShape`(陣列當集合)認列,只差陣列順序的兩條排程會刪錯 | 回歸 | P6 | 改成保序的 `sameJson`;測試:兩列 `with.ids` 順序相反,按第二列只刪第二列(突變回集合語意會紅) |
+| P5 釘住測試沒走 exec 路徑、docstring 卻說涵蓋 | 符合度 | P5 | 兩條測試、各說各釘的東西:**直接寫進 store**(無 sandbox,只有對帳能索引;量過:對帳改 no-op 就紅)和**寫進熱 sandbox**(這種部署 mirror 的 `on_write` hook 先索引,釘的是那扇門不是機制);斷言都在 `TestClient` 裡面——第一版斷言在外面,被 shutdown 的 writeback 滿足,對 reconcile 任何突變都不紅 |
+| `wui_routes` 的 "This app does not offer … to its pages" 就是起因裡的誤診句;`wui/reference.md` 兩句 `run` 規則是 P1 前的 | 符合度 | P1 | 改成「This item has no workflow named X(it has: …)」;reference.md 兩句改成 P1 後的規則 |
+| plan「4 條中 3 條源自 P1/P4」算錯(4/4);「P7 只加守衛」講太滿;P3 commit 說情境「用真模型釘住」但沒跑過;PR body 說 7 個 commit(8) | 真實性 | 我的宣稱 | plan 已更正;PR body 在 push 時更正 |
+| 面板 Run 在 master 是 profile 優先、P1 改 workspace 優先,未列進 behaviour changes | 真實性 | P1 | PR body 在 push 時補列 |
+| 匯入 `schedules.json` 後排程區 30 秒內是舊的 | 回歸 | P4 | 匯入後一併 invalidate |
+
+## P8 自審(推之前,三把鏡頭審 8b1298cd 的 diff)
+
+新規則「推前先自己審」抓到 **15 條**(去重),全部修進 P8 才推。判準「幾條源自上輪修法」:15 條裡
+**15 條都是 P8 自己的**——這輪的 review 找到的是我這輪寫的東西,不是舊債。最重的三條:
+
+- **釘住測試的斷言在 `TestClient` 外面**,被 shutdown 的 writeback 滿足,對 reconcile 的任何突變都不紅——
+  和 P5 同一個形狀,發生在宣稱要改掉這個形狀的那一輪。修法:斷言搬進 `with`、逾時就紅;拆成兩條各釘一扇門。
+- **parity 的 "all good" 案例 5 次紅 1 次**:同一 tick 開兩個 workflow,第一個喚醒 sandbox,第二個的 manifest
+  被 façade 導到還沒 restore 完的 sandbox(master 既有的 `_warm` 不看 `.ready`,memory 標「未修」)。
+  修法:tick 前先 `/exec` 喚醒;重跑 10 次 10 綠。
+- **`runnable` 的 `enabled` 門沒有測試守**(突變掉它 37 條全綠):補路由、工具、views 三條(突變後三條紅)。
+
+其餘:超上限句子塞進每列 problems 讓面板把合法列標成「寫得不對」(改回檔案層級一句);索引讀不到路由 500
+(改「未索引」+ log);`load_workspace_workflow` 本身拒絕保留名(orchestrator 那扇門也蓋到);
+`no_such_workflow` 一句話供頁面 403、工具拒絕、sweep log 三處共用(頁面那句不再出現工具名);
+`every`/`at` 的 falsy 值對齊 Python 的 `or`;匯入後 invalidate 補測試;`app.py` 的「opens its OWN
+conversation」docstring;§22.11 補 `runnable`/未索引告示/5 秒窗口;第三輪表格三處歸因與完成式更正。
+
+**live check(短的)**:見 PR 留言——面板一列有「下次」;直接寫進 store 的檔出現「還沒登記」告示;送一個 turn
+後告示消失。開火那條鏈沒再動,不重跑。

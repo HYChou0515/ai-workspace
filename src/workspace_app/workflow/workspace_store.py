@@ -80,7 +80,10 @@ async def load_workspace_workflow(
     manifest id forced to the addressing ``workflow_id`` — the filename is authoritative),
     or ``None`` when absent / malformed. The single read backing both the orchestrator's
     run resolution and the route's manifest 404 guard (#323 P4)."""
-    if not workflow_id:
+    if not workflow_id or workflow_id == RESERVED_WORKFLOW_ID:
+        # The schedules file is not a workflow, whatever body somebody wrote
+        # into it — refused HERE, in the one loader the orchestrator, the panel's
+        # resolver and the run route all share, so no reader can run it.
         return None
     try:
         d = parse_def(await files.read(workspace_id, workspace_workflow_path(workflow_id)))

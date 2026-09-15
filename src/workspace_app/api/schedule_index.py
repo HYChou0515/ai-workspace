@@ -42,11 +42,12 @@ from specstar.types import (
 )
 
 from ..sync.ignore import DEFAULT_IGNORES, should_ignore
-from ..workflow.user_schedules import SCHEDULES_FILE
+
+# The one filename that means "schedules" — a page's inside its own folder, an
+# item's beside its workflows. Spelled once, beside the folder name it pairs with.
+from ..workflow.workspace_store import SCHEDULES_FILE
 
 logger = logging.getLogger(__name__)
-
-#: The file a page writes its schedules into, inside its own folder.
 
 
 class _ScheduleIndex(Struct):

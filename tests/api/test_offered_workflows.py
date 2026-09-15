@@ -80,6 +80,26 @@ def test_a_page_can_start_a_workflow_the_item_authored() -> None:
     assert resp.status_code == 200, resp.text
 
 
+def test_a_page_asking_for_a_workflow_the_item_lacks_is_told_what_it_has() -> None:
+    """The sentence a person reads in the page's error panel. It used to say
+    "This app does not offer X to its pages" — an authorisation nobody could
+    grant. The true cause is that this ITEM has no such workflow, and what it
+    does have is the only thing the reader can act on. No tool name: the reader
+    is pressing a button, not driving the agent."""
+    client, _, item_id = _app()
+    with client:
+        put = client.put(f"{_base(item_id)}/files/.workflows/nightly.json", content=_NIGHTLY)
+        assert put.status_code == 204
+
+        resp = client.post(f"{_base(item_id)}/wui/run", json={"workflow": "nigthly"})
+
+    assert resp.status_code == 403
+    detail = resp.json()["detail"]
+    assert "This item has no workflow named 'nigthly'" in detail
+    assert "(it has: nightly)" in detail
+    assert "save_workflow" not in detail
+
+
 def test_a_schedule_can_name_a_workflow_the_item_authored() -> None:
     """The other refused entrance. A `schedules.json` row whose `run` was a
     workspace workflow was skipped every tick with a log line saying the app

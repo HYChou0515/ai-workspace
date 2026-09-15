@@ -32,6 +32,7 @@ from specstar import SpecStar
 
 from ..api.schedule_index import ScheduleIndex
 from ..filestore.protocol import FileNotFound
+from .offered import no_such_workflow
 from .orchestrator import ActiveRunExists
 from .triggers import SpecstarTriggerStore, fire_window, is_due
 from .user_schedules import in_zone, over_cap, trigger_id_for, usable_rows, utc_now
@@ -384,12 +385,10 @@ class UserScheduleSweeper:
                     item_id,
                     f"{path}#{row.run}",
                     logging.WARNING,
-                    "user schedules: %s %s wants %r, which this app does not offer "
-                    "(it offers %s) — that row will not run",
+                    "user schedules: %s %s: %s — that row will not run",
                     item_id,
                     path,
-                    row.run,
-                    ", ".join(sorted(offered)) or "nothing",
+                    no_such_workflow(row.run, offered),
                 )
                 still_bad.add(row.run)
                 continue

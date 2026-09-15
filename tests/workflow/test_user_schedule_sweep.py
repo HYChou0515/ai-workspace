@@ -1314,7 +1314,7 @@ def test_a_row_naming_a_workflow_the_app_does_not_offer_complains_once(caplog):
         for _ in range(3):
             asyncio.run(sweeper.tick())
 
-    said = [r for r in caplog.records if "does not offer" in r.getMessage()]
+    said = [r for r in caplog.records if "has no workflow named" in r.getMessage()]
     assert len(said) == 2, (
         f"two bad rows over three ticks produced {len(said)} lines — the complaint "
         "repeats every tick, per row, for as long as the page stays as it is"
@@ -1585,7 +1585,7 @@ def test_a_row_fixed_and_broken_again_complains_again(caplog):
     )
 
     def _lines() -> int:
-        return len([r for r in caplog.records if "does not offer" in r.getMessage()])
+        return len([r for r in caplog.records if "has no workflow named" in r.getMessage()])
 
     with caplog.at_level(logging.WARNING):
         asyncio.run(sweeper.tick())
