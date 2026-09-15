@@ -34,7 +34,7 @@ from ..api.schedule_index import ScheduleIndex
 from ..filestore.protocol import FileNotFound
 from .offered import no_such_workflow
 from .orchestrator import ActiveRunExists
-from .triggers import SpecstarTriggerStore, fire_window, is_due
+from .triggers import ScanLease, SpecstarTriggerStore, fire_window, is_due
 from .user_schedules import in_zone, over_cap, trigger_id_for, usable_rows, utc_now
 
 logger = logging.getLogger(__name__)
@@ -145,8 +145,12 @@ class UserScheduleSweeper:
         now: Callable[[], datetime] = utc_now,
         max_rows: int = DEFAULT_MAX_ROWS,
         confirm_timeout_s: float = DEFAULT_CONFIRM_TIMEOUT_S,
+        lease: ScanLease | None = None,
     ) -> None:
         self._index = index
+        #: #804: None ⇒ every caller scans (a single process, or a test that is
+        #: not about pods). The API passes one so that N pods cost one scan.
+        self._lease = lease
         self._read = read
         #: Consulted ONLY to confirm a deletion. `read` is the durable snapshot,
         #: which is what keeps the ordinary tick from waking a reaped sandbox —
@@ -174,6 +178,8 @@ class UserScheduleSweeper:
     async def tick(self) -> int:
         """Fire everything due. Returns how many runs were launched."""
         fired = 0
+        if self._lease is not None and not await asyncio.to_thread(self._lease.claim):
+            return fired  # another pod is scanning this window
         # Every store call in this sweep — here and in `_one_file` — is BLOCKING
         # specstar I/O; on Postgres, a network round trip each. The sweep this
         # one is modelled on offloads all of them,

@@ -8,7 +8,7 @@
 
 這個子系統負責「把長時間、可批次、可平行的後台工作從同步請求路徑搬走」這件事:
 
-- **四種 JobType**:`index`（切塊 + 嵌入）、`wiki`（LLM wiki 維護;code collection 的 code-wiki 也沿用這個 JobType,不另開,見下）、`card-gen`（context-card 生成）、`sanity`（model-sanity battery）。
+- **四種 JobType**:`index`（切塊 + 嵌入）、`wiki`（LLM wiki 維護;code collection 的 code-wiki 也沿用這個 JobType,不另開,見下）、`card-gen`（context-card 生成;#804 起也消化 `cluster_sweep`——待審核 inbox 的分群維護,API 只 enqueue）、`sanity`（model-sanity battery）。
 - **單一組裝點**:`coordinators.build_coordinators` 建出 `CoordinatorBundle`,把 `index → wiki → quality` 串起來。這個組裝是 FastAPI-free 的,**同時**被 API 的 `create_app` 與獨立 worker `python -m workspace_app.worker` 使用,避免兩處 drift。
 - **兩種消費拓樸**:all-in-one（API 進程內 `start_consuming`)與 pod-split（API 純 producer + 各 worker pod 各 block-consume 一個 JobType,各掛 k8s HPA）。
 - **大 index 工作的 fan-out / join**:一個大索引工作切成 N 個小 process job,靠 `IndexRun` 的 CAS 集合 join,而不是調高 broker ack timeout（#227）。

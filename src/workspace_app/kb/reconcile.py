@@ -246,6 +246,7 @@ class Reconciler:
         cluster_tau: float = 0.9,
         suppress_tau: float = 0.92,
         update_tau: float = 0.8,
+        merge_tau: float = 0.95,
         wiki_text: Callable[[str], str] | None = None,
     ) -> None:
         self._spec = spec
@@ -253,7 +254,25 @@ class Reconciler:
         self._cluster_tau = cluster_tau
         self._suppress_tau = suppress_tau
         self._update_tau = update_tau
+        self._merge_tau = merge_tau
         self._wiki_text = wiki_text
+
+    def sweep(self, collection_id: str, *, limit: int = 200) -> SweepReport:
+        """#506 P8: the periodic maintenance pass for ONE collection — backfill its
+        un-projected pending proposals / open questions (:func:`backfill_collection`)
+        then fold its race-split clusters (:func:`merge_near_clusters`), so the grouped
+        inbox converges without a reindex. Both passes are idempotent, so a repeat
+        is a no-op. Runs where the finalize-time reconcile runs — on the card-gen
+        worker, as a job — never on the API pod: it reads every member of the
+        collection and embeds each new candidate, and doing that on N API pods'
+        timers with zero traffic is what grew the API heap until it OOMed."""
+        backfilled = backfill_collection(
+            self._spec, self._embedder, collection_id, cluster_tau=self._cluster_tau, limit=limit
+        )
+        merged = merge_near_clusters(
+            self._spec, collection_id, merge_tau=self._merge_tau, limit=limit
+        )
+        return SweepReport(backfilled=backfilled, merged=merged)
 
     def reconcile_proposals(
         self,
@@ -507,8 +526,12 @@ def backfill_collection(
     remainder is picked up next tick. Returns the number of members newly projected."""
     rm = spec.get_resource_manager(ClusterMember)
     seen: set[str] = set()
-    for r in rm.list_resources((QB["collection_id"] == collection_id).build()):
-        seen.add(r.info.resource_id)  # ty: ignore[unresolved-attribute]
+    # Ids only, off the search meta: this set decides what is already projected,
+    # and a member's payload is an embedding — loading every vector to build it
+    # cost ~85 KiB per member (measured: 5000 members ≈ 420 MiB) for nothing,
+    # and `returns=["info"]` would still be one store read per row.
+    for r in rm.list_resources((QB["collection_id"] == collection_id).build(), returns=["meta"]):
+        seen.add(r.meta.resource_id)  # ty: ignore[unresolved-attribute]
     n = 0
     # #511 P2: proposals live in first-class CardProposal rows now (not the nested
     # CardGenRun.proposals), so read the collection's ACTIVE proposals from there.
@@ -665,39 +688,9 @@ def merge_near_clusters(
 
 @dataclass(frozen=True)
 class SweepReport:
-    """What one :func:`sweep_clusters` pass did across the whole store — how many
-    orphan candidates were backfilled into members and how many race-split clusters
-    were folded. Summed over every collection; a converged store reports ``(0, 0)``."""
+    """What one :meth:`Reconciler.sweep` of a collection did — how many orphan
+    candidates were backfilled into members and how many race-split clusters were
+    folded. A converged collection reports ``(0, 0)``."""
 
     backfilled: int = 0
     merged: int = 0
-
-
-def sweep_clusters(
-    spec: SpecStar,
-    embedder: Embedder,
-    *,
-    cluster_tau: float,
-    merge_tau: float,
-    limit: int = 200,
-) -> SweepReport:
-    """#506 P8: the periodic maintenance pass — for EVERY collection, backfill its
-    un-projected pending proposals / open questions (:func:`backfill_collection`) then
-    fold its race-split clusters (:func:`merge_near_clusters`), so the grouped inbox
-    converges without a reindex. Per-collection errors are swallowed so one bad
-    collection never stalls the sweep (a cascaded-away collection, a transient embed
-    failure); both passes are idempotent, so the API sweeper can run it on a timer.
-    Returns the store-wide totals."""
-    rm = spec.get_resource_manager(Collection)
-    backfilled = 0
-    merged = 0
-    for r in rm.list_resources(QB.all()):  # ty: ignore[invalid-argument-type]
-        cid = r.info.resource_id  # ty: ignore[unresolved-attribute]
-        try:
-            backfilled += backfill_collection(
-                spec, embedder, cid, cluster_tau=cluster_tau, limit=limit
-            )
-            merged += merge_near_clusters(spec, cid, merge_tau=merge_tau, limit=limit)
-        except Exception:  # noqa: BLE001 — one bad collection must not stall the sweep
-            continue
-    return SweepReport(backfilled=backfilled, merged=merged)

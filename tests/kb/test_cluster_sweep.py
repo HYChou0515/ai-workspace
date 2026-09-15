@@ -18,7 +18,7 @@ from workspace_app.kb.card_gen_run import CardGenRunStore
 from workspace_app.kb.card_proposal import CardProposalStore
 from workspace_app.kb.doc_questions import add_description_question, open_or_merge_term_question
 from workspace_app.kb.embedder import HashEmbedder
-from workspace_app.kb.reconcile import backfill_collection, merge_near_clusters, sweep_clusters
+from workspace_app.kb.reconcile import backfill_collection, merge_near_clusters
 from workspace_app.resources import Collection, make_spec
 from workspace_app.resources.kb import EMBED_DIM, ClusterMember
 
@@ -141,44 +141,6 @@ def test_merge_leaves_distant_clusters_apart() -> None:
     assert {m.cluster_key for m in _members(spec, cid)} == {"alpha", "beta"}
 
 
-def test_sweep_backfills_and_merges_across_every_collection() -> None:
-    """One sweep runs backfill + merge over EVERY collection — a pending proposal in
-    each is projected, and a race-split pair is folded — so the periodic API sweeper
-    heals the whole store in one tick."""
-    spec = make_spec(default_user="u")
-    c1 = _collection(spec, "c1")
-    c2 = _collection(spec, "c2")
-    _done_run(spec, c1, [ProposedCard(id="0", keys=["A"], title="A")])
-    _done_run(spec, c2, [ProposedCard(id="0", keys=["B"], title="B")])
-    # c2 additionally carries a race-split pair that merge should fold.
-    _member(spec, c2, "z1", cluster_key="zeta", vec=_onehot(0))
-    _member(spec, c2, "z2", cluster_key="zeta", vec=_onehot(0))
-    _member(spec, c2, "x1", cluster_key="alpha", vec=_onehot(0))
-    emb = HashEmbedder(dim=EMBED_DIM)
-
-    report = sweep_clusters(spec, emb, cluster_tau=0.9, merge_tau=0.99)
-
-    assert report.backfilled == 2  # one pending proposal per collection
-    assert report.merged == 1  # "alpha" folded into "zeta" in c2
-    assert [m.kind for m in _members(spec, c1) if m.kind == "proposal"]
-    assert "zeta" in {m.cluster_key for m in _members(spec, c2)}
-    assert "alpha" not in {m.cluster_key for m in _members(spec, c2)}
-
-
-def test_sweep_is_idempotent() -> None:
-    """A converged store sweeps to a zero report."""
-    spec = make_spec(default_user="u")
-    cid = _collection(spec)
-    _done_run(spec, cid, [ProposedCard(id="0", keys=["A"], title="A")])
-    emb = HashEmbedder(dim=EMBED_DIM)
-
-    sweep_clusters(spec, emb, cluster_tau=0.9, merge_tau=0.99)
-    again = sweep_clusters(spec, emb, cluster_tau=0.9, merge_tau=0.99)
-
-    assert again.backfilled == 0
-    assert again.merged == 0
-
-
 def test_backfill_is_batched_by_limit() -> None:
     """One pass projects at most `limit` members; the rest are picked up next pass."""
     spec = make_spec(default_user="u")
@@ -211,38 +173,6 @@ def test_merge_is_batched_by_limit() -> None:
     assert merge_near_clusters(spec, cid, merge_tau=0.99, limit=1) == 1  # one pair this pass
     assert merge_near_clusters(spec, cid, merge_tau=0.99, limit=1) == 1  # the other next pass
     assert {m.cluster_key for m in _members(spec, cid)} == {"alpha", "gamma"}
-
-
-def test_sweep_continues_past_a_failing_collection() -> None:
-    """A per-collection error (here a transient embed failure) is swallowed so the
-    sweep still heals every other collection."""
-
-    class _BoomEmb:
-        dim = EMBED_DIM
-        identity = "boom"
-
-        def __init__(self) -> None:
-            self._h = HashEmbedder(dim=EMBED_DIM)
-
-        def embed_documents(self, texts: list[str]) -> list[list[float]]:
-            if any("BOOM" in t for t in texts):
-                raise RuntimeError("embed exploded")
-            return self._h.embed_documents(texts)
-
-        def embed_query(self, text: str) -> list[float]:
-            return self._h.embed_query(text)
-
-    spec = make_spec(default_user="u")
-    bad = _collection(spec, "bad")
-    good = _collection(spec, "good")
-    _done_run(spec, bad, [ProposedCard(id="0", keys=["BOOM"], title="BOOM")])
-    _done_run(spec, good, [ProposedCard(id="0", keys=["OK"], title="OK")])
-
-    report = sweep_clusters(spec, _BoomEmb(), cluster_tau=0.9, merge_tau=0.99)
-
-    assert report.backfilled == 1  # only the good collection
-    assert [m for m in _members(spec, good) if m.kind == "proposal"]
-    assert [m for m in _members(spec, bad) if m.kind == "proposal"] == []
 
 
 def test_backfill_skips_inactive_proposals_and_non_term_questions() -> None:

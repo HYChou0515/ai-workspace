@@ -30,6 +30,7 @@ import { useItemCanWrite } from "../../hooks/useItemCanWrite";
 import { useUsers } from "../../hooks/useUsers";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { TextRenderer } from "../TextRenderer";
+import { wuiFolder } from "../wui/paths";
 import { WuiView } from "../wui/WuiView";
 import { YamlTree } from "../YamlTree";
 import { EntityRecordModal } from "./EntityRecordModal";
@@ -116,9 +117,42 @@ export function AiYamlRenderer({ path }: { path: string }) {
     // its number means something different under a different entity type.
     setOpenRecord(null);
   }
+  // The WUI this instance is drawing RIGHT NOW (null when it draws anything
+  // else), so a switch to a SIBLING view file in the same folder — or this
+  // file's own buffer being re-read (`useRefreshFiles` reloads every clean
+  // buffer at the end of an agent turn) — does not unmount the pane while the
+  // buffer is fetched. The pane is keyed by folder and keeps a running build,
+  // its log, the hold and every Deploy verdict across a sibling switch — but
+  // only if it stays mounted, and the "Loading …" below unmounted it on every
+  // cold switch (found in a real browser: the build was aborted by the pane's
+  // own unmount cleanup, the verdict gone, nothing said). Set — and CLEARED —
+  // during render, the same way `statePath` is, so it never lags a paint.
+  // Cleared, because "the last WUI this instance ever drew" kept a pane's
+  // memory across a board in another folder, and a cold board file in the
+  // WUI's folder then mounted a FRESH pane for the old page while it loaded:
+  // an on-open build started and aborted for opening a board.
+  // (Compared by path and text, not by `spec`: that is parsed afresh every
+  // render, and a state set from a value that is new every render never
+  // settles.)
+  const [lastWui, setLastWui] = useState<{ path: string; text: string; spec: NonNullable<typeof spec> } | null>(
+    null,
+  );
+  const editing = isEditing(path);
+  const keepsPane =
+    !editing && entry.status === "loading" && lastWui !== null && wuiFolder(path) === wuiFolder(lastWui.path);
+  const drawsWui = !editing && entry.status === "ready" && spec?.view === VIEW_KIND.wui;
+  if (drawsWui && (lastWui === null || lastWui.path !== path || lastWui.text !== entry.text)) {
+    setLastWui({ path, text: entry.text, spec });
+  } else if (!drawsWui && !keepsPane && lastWui !== null) {
+    setLastWui(null);
+  }
 
-  if (isEditing(path)) return <TextRenderer path={path} />;
+  if (editing) return <TextRenderer path={path} />;
   if (entry.status === "loading") {
+    // A sibling of the WUI on screen (or the same file re-read): keep that
+    // pane up until this file's spec is known. If it turns out not to be a
+    // WUI, the pane unmounts then.
+    if (keepsPane) return <WuiView path={lastWui.path} spec={lastWui.spec} />;
     return <div style={{ color: "var(--text-paper-d)" }}>Loading {path}…</div>;
   }
   if (entry.status === "error") {

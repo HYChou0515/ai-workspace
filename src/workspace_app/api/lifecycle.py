@@ -27,7 +27,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from fastapi import FastAPI
-from specstar import SpecStar
+from specstar import QB, SpecStar
 
 from ..config.schema import OffHoursSettings
 from ..filestore.blob_gc import register_gc_lease, run_blob_gc
@@ -62,14 +62,15 @@ INDEX_STUCK_AFTER_S = 3600.0
 # wiki collection is due (the actual cadence is once-a-day per collection, gated on
 # last_reflected_at; this is just the poll granularity, like the code-sync sweeper).
 _WIKI_REFLECT_CHECK_INTERVAL_S = 300.0
-# #506 P8: how often the API folds the review-inbox cluster store — backfills any
-# candidate that has no ClusterMember yet, then merges race-split clusters — so the
-# grouped 待審核 inbox converges without a reindex. A slow cadence: pure catch-up
-# maintenance off any request path, and idempotent + deterministic so it is safe to
-# run unguarded on every pod. The taus are the join / fold cosine thresholds.
+# #506 P8: how often the API ASKS for each collection's review-inbox cluster fold —
+# backfill any candidate that has no ClusterMember yet, then merge race-split
+# clusters — so the grouped 待審核 inbox converges without a reindex. Asking is all
+# it does: the fold itself is a card-gen job (`Reconciler.sweep`, on the card-gen
+# worker). It used to run here, on every pod, and that is what grew the API heap
+# until the pod OOMed — a full ClusterMember read per collection plus an embedding
+# call per candidate, N pods deep, with zero traffic. The join / fold thresholds
+# live with the reconciler now (`kb.cluster.*` → build_coordinators), not here.
 _CLUSTER_SWEEP_INTERVAL_S = 900.0
-_CLUSTER_SWEEP_TAU = 0.9  # join a candidate to a cluster at >= this cosine similarity
-_CLUSTER_MERGE_TAU = 0.95  # fold two clusters whose centroids are >= this similarity
 
 logger = logging.getLogger(__name__)
 
@@ -105,8 +106,6 @@ def build_lifespan(
     notification_delivery_interval: timedelta = _NOTIFY_DELIVERY_INTERVAL,
     offhours: OffHoursSettings | None = None,
     cluster_sweep_seconds: float = _CLUSTER_SWEEP_INTERVAL_S,
-    cluster_tau: float = _CLUSTER_SWEEP_TAU,
-    cluster_merge_tau: float = _CLUSTER_MERGE_TAU,
     prewarm_tools: Callable[[], Awaitable[dict[str, str]]],
     warn_resources: Callable[[], Awaitable[list[str]]] | None = None,
 ) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
@@ -237,28 +236,49 @@ def build_lifespan(
             return
 
     async def cluster_sweeper(app: FastAPI) -> None:
-        """#506 P8: periodically fold the review-inbox cluster store — backfill any
-        pending proposal / open question that has no ClusterMember yet (a run
-        finalized before P6, or by a build with no embedder), then merge race-split
-        clusters — so the grouped 待審核 inbox converges without a reindex. Both passes
-        are idempotent + deterministic, so it runs unguarded on every pod (a duplicate
-        write is a no-op). Tick-first (then sleep) so a fresh pod catches the store up
-        at startup; off the loop (blocking specstar I/O + an occasional embed of a
-        never-projected candidate). Errors are swallowed so one bad tick never wedges
-        the loop. The KB embedder — built after the FastAPI app — is read off
-        ``app.state.kb_embedder`` post-construction, symmetric with the coordinators."""
-        from ..kb.reconcile import sweep_clusters
+        """#506 P8: periodically ask for every collection's review-inbox cluster fold
+        — backfill any pending proposal / open question that has no ClusterMember yet
+        (a run finalized before P6, or by a build with no embedder), then merge
+        race-split clusters — so the grouped 待審核 inbox converges without a reindex.
+        A pure producer, like ``reflect_sweeper``: each window ONE pod (the
+        ``ScanLease`` below) enqueues one ``cluster_sweep`` card-gen job per live
+        collection and the card-gen worker does the fold; the coordinator's own
+        coalescing (``enqueue_cluster_sweep``) covers an ask that overlaps a sweep
+        still queued or running. Tick-first (then sleep) so a fresh deploy catches
+        the store up at startup; off the loop (blocking specstar I/O).
+        Per-collection resilient — one bad enqueue must not cost the rest their
+        tick — and the whole tick is guarded so it never wedges the loop. The
+        coordinator — built after the FastAPI app — is read off
+        ``app.state.card_gen_coordinator`` post-construction, like the others."""
+        from ..resources import Collection
+        from ..workflow.triggers import ScanLease, SpecstarTriggerStore
+
+        # One asker per window across the fleet. Coalescing on the coordinator
+        # only collapses asks that land while a sweep is still queued/running —
+        # milliseconds on a converged collection — and pods tick on their own
+        # boot-relative clocks, so without this every pod's tick would land its
+        # own job: N sweeps per collection per interval on the worker, and N
+        # durable job rows. Same lease the scheduled-work sweeps take.
+        lease = ScanLease(
+            SpecstarTriggerStore(spec), "cluster-sweep", interval_s=cluster_sweep_seconds
+        )
+
+        def enqueue_all() -> None:
+            if not lease.claim():
+                return  # another pod asked this window
+            coordinator = app.state.card_gen_coordinator
+            rm = spec.get_resource_manager(Collection)
+            # `list_resources` happily returns soft-deleted rows; a deleted
+            # collection would otherwise be asked about every window, forever.
+            live = (QB.is_deleted() == False).build()  # noqa: E712
+            for r in rm.list_resources(live):
+                with contextlib.suppress(Exception):
+                    coordinator.enqueue_cluster_sweep(r.info.resource_id)  # ty: ignore[unresolved-attribute]
 
         try:
             while True:
                 with contextlib.suppress(Exception):
-                    await asyncio.to_thread(
-                        sweep_clusters,
-                        spec,
-                        app.state.kb_embedder,
-                        cluster_tau=cluster_tau,
-                        merge_tau=cluster_merge_tau,
-                    )
+                    await asyncio.to_thread(enqueue_all)
                 await asyncio.sleep(cluster_sweep_seconds)
         except asyncio.CancelledError:
             return
@@ -351,6 +371,7 @@ def build_lifespan(
         ``app.state.workflow_orchestrator``, symmetric with ``index_sweeper``."""
         from ..workflow.triggers import (
             OrchestratorOrphanOps,
+            ScanLease,
             SpecstarTriggerStore,
             TriggerSweeper,
             build_trigger_start,
@@ -359,14 +380,18 @@ def build_lifespan(
 
         assert trigger_check_interval is not None  # gated by caller
         orchestrator = app.state.workflow_orchestrator
+        store = SpecstarTriggerStore(spec)
         sweeper = TriggerSweeper(
             load=discover_schedule_triggers,
-            store=SpecstarTriggerStore(spec),
+            store=store,
             start=build_trigger_start(orchestrator.start),
             now_utc=_utcnow,
             # #429 P8: chase orphaned triggered runs (a pod died mid-run) — resume from the
             # journal, then abandon to a discoverable terminal once the resume budget is spent.
             orphan=OrchestratorOrphanOps(orchestrator),
+            # #804: one pod per window re-reads the profiles' triggers.json and walks
+            # the ledger; the rest skip the tick. A window is one tick.
+            lease=ScanLease(store, "triggers", interval_s=trigger_check_interval.total_seconds()),
         )
         try:
             while True:
@@ -490,12 +515,15 @@ def build_lifespan(
             with boot_step("start archive-import consumer"):
                 app.state.import_coordinator.start_consuming()
         # #230: seed the platform Help collection from packaged content (repo =
-        # source of truth; identical bytes are a no-op). Ingestion needs the
-        # embedder, so it runs here (off the loop) and is best-effort — a dead
-        # embedder leaves the collection readable-but-unindexed, never blocking
-        # boot. The id is stashed for the /help route. #281 will later feed
-        # source-code-derived wiki into this same collection. The ingestor is
-        # read off app.state (built after the FastAPI app, like the coordinators).
+        # source of truth; identical bytes are a no-op). The STORE runs here (off
+        # the loop, best-effort — a dead backend leaves the collection
+        # readable-but-unindexed, never blocking boot); a doc that changed is
+        # handed to the index queue, not chunked + embedded on this pod (#804 —
+        # every booting pod used to run its own embedding pass; the upload route
+        # never did). The id is stashed for the /help route. #281 will later feed
+        # source-code-derived wiki into this same collection. The ingestor and
+        # the index coordinator are read off app.state (built after the FastAPI
+        # app, like the other coordinators).
         from ..kb.help_collection import HELP_SYSTEM_USER, seed_help_collection_best_effort
 
         with boot_step("seed help collection"):
@@ -504,6 +532,7 @@ def build_lifespan(
                 spec,
                 app.state.ingestor,
                 user=HELP_SYSTEM_USER,
+                index=app.state.index_coordinator.enqueue,
             )
         # (#345's activity-heartbeat model is registered in `create_app`, right
         # after `spec.apply` — it must exist whether or not a lifespan ran, since
@@ -535,6 +564,14 @@ def build_lifespan(
         register_conversation_todos(spec)
         register_conversation_goal(spec)
         register_work_calendar(spec)  # #615 P1
+        # #429 P7 / #804: the shared window-ledger model — the per-trigger claims AND
+        # every scan lease (triggers, page schedules, the cluster-sweep ask) live on
+        # it. Registered post-apply so its CRUD routes are never emitted (same
+        # reason as the blob-GC lease), unconditionally, because the cluster-sweep
+        # ask below takes a lease on it whether or not scheduled work is on.
+        from ..workflow.triggers import register_trigger_store
+
+        register_trigger_store(spec)
         bg = [asyncio.create_task(idle_killer()), asyncio.create_task(mirror_sweeper(app))]
         if perf_trace.enabled():
             # Only ever sleeps, so any delay it observes beyond its own sleep is
@@ -582,12 +619,7 @@ def build_lifespan(
             bg.append(asyncio.create_task(notification_delivery_sweeper()))
 
         if trigger_check_interval is not None:
-            # #429 P7: register the shared window-ledger model (post-apply, so its CRUD
-            # routes are never emitted — same reason as the blob-GC lease above), then run
-            # the schedule-trigger poll loop.
-            from ..workflow.triggers import register_trigger_store
-
-            register_trigger_store(spec)
+            # #429 P7: the schedule-trigger poll loop (its ledger is registered above).
             bg.append(asyncio.create_task(trigger_sweeper(app)))
             logger.debug("lifespan: schedule-trigger sweeper enabled")
         try:
@@ -609,23 +641,30 @@ def build_lifespan(
                 with contextlib.suppress(BaseException):
                     await engine.aclose()
             logger.debug("lifespan: draining coordinators + kernels")
-            # Drain in-flight wiki maintenance before exit (bounded). Pending
-            # jobs are durable — they survive to be picked up after restart.
-            with contextlib.suppress(BaseException):
-                await app.state.wiki_coordinator.aclose()
-            with contextlib.suppress(BaseException):
-                await app.state.index_coordinator.aclose()
-            if app.state.sanity_coordinator is not None:
+            # Drain in-flight jobs before exit (bounded) — ONLY on a pod that
+            # consumes. `aclose()` starts a consumer on a coordinator that never
+            # consumed "so it still flushes"; on a pure producer (#312,
+            # `run_consumers=False`) that would run every pending job on this
+            # pod as it exits — the sweeps and index jobs it enqueued precisely
+            # so a worker would do them (#804) — on every rollout, holding the
+            # pod past its grace period. A pure producer has nothing in flight;
+            # pending jobs are durable and the workers pick them up.
+            if run_consumers:
                 with contextlib.suppress(BaseException):
-                    await app.state.sanity_coordinator.aclose()
-            if app.state.eval_coordinator is not None:
+                    await app.state.wiki_coordinator.aclose()
                 with contextlib.suppress(BaseException):
-                    await app.state.eval_coordinator.aclose()
-            if app.state.graph_coordinator is not None:
+                    await app.state.index_coordinator.aclose()
+                if app.state.sanity_coordinator is not None:
+                    with contextlib.suppress(BaseException):
+                        await app.state.sanity_coordinator.aclose()
+                if app.state.eval_coordinator is not None:
+                    with contextlib.suppress(BaseException):
+                        await app.state.eval_coordinator.aclose()
+                if app.state.graph_coordinator is not None:
+                    with contextlib.suppress(BaseException):
+                        await app.state.graph_coordinator.aclose()
                 with contextlib.suppress(BaseException):
-                    await app.state.graph_coordinator.aclose()
-            with contextlib.suppress(BaseException):
-                await app.state.card_gen_coordinator.aclose()
+                    await app.state.card_gen_coordinator.aclose()
             await kernels.shutdown_all()
             await registry.close_all()
             logger.info("lifespan: shutdown complete")
