@@ -15,6 +15,7 @@
 import type { AgentEvent, CellEvent } from "../events";
 import { decodeBytes } from "./encoding";
 import { API_PREFIX, apiFetch, HttpError, errorCode, errorInfo, httpErrorFrom } from "./http";
+import { encodePath } from "./refPath";
 import { parseSseStream } from "./sse";
 import type {
   ActivityEntry,
@@ -119,13 +120,6 @@ function toQuery(params?: SearchParams): string {
   }
   const s = sp.toString();
   return s ? `?${s}` : "";
-}
-
-function encodePath(path: string): string {
-  // Drop the leading slash before joining: workspace paths reach the FE in both
-  // dialects (a `shown_files` declaration normalises to absolute, a file tree row
-  // is relative) and `…/files/` + `/out/a.png` would otherwise emit `files//out`.
-  return path.replace(/^\/+/, "").split("/").map(encodeURIComponent).join("/");
 }
 
 /** Map FE SearchOptions → the BE _SearchBody field names. */
@@ -555,10 +549,31 @@ export const realApi: ApiClient = {
   async listDirs(slug: string, investigationId: string) {
     return (await this.getTree(slug, investigationId)).dirs;
   },
-  async getTree(slug: string, investigationId: string) {
-    return await json<{ files: FileInfo[]; dirs: string[] }>(
+  async fileExists(slug: string, investigationId: string, path: string) {
+    const q = new URLSearchParams({ path });
+    const body = await json<{ exists: boolean }>(
       await apiFetch(
-        `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/tree`,
+        `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/files/exists?${q}`,
+      ),
+    );
+    return body.exists;
+  },
+  async getTree(
+    slug: string,
+    investigationId: string,
+    opts?: { prefix?: string; depth?: number },
+  ) {
+    const q = new URLSearchParams();
+    if (opts?.prefix) q.set("prefix", opts.prefix);
+    if (opts?.depth !== undefined) q.set("depth", String(opts.depth));
+    // `URLSearchParams.size` is missing on Chrome < 113 / Safari < 17 /
+    // Firefox < 115; there `q.size ?` was always false and every expand
+    // fetched the whole preload as the folder's level.
+    const qs = q.toString();
+    const query = qs ? `?${qs}` : "";
+    return await json<{ files: FileInfo[]; dirs: string[]; unwalked: string[]; truncated: boolean }>(
+      await apiFetch(
+        `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/tree${query}`,
       ),
     );
   },

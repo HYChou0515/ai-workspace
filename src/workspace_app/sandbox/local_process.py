@@ -31,14 +31,13 @@ import signal
 import subprocess
 import tempfile
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from functools import cache
 from pathlib import Path
 
 from .protocol import (
     EnforcedLimits,
     ExecResult,
-    FileEntry,
     OutputSink,
     RunningSandbox,
     SandboxHandle,
@@ -46,6 +45,7 @@ from .protocol import (
     SandboxSpec,
     WalkResult,
 )
+from .walk import scandir_lister, walk_tree
 
 logger = logging.getLogger(__name__)
 
@@ -1300,29 +1300,25 @@ class LocalProcessSandbox:
         self._require(handle)
         return ("127.0.0.1", container_port)
 
-    async def walk(self, handle: SandboxHandle, root: str) -> WalkResult:
+    async def walk(
+        self,
+        handle: SandboxHandle,
+        root: str,
+        *,
+        depth: int | None = None,
+        prune: Sequence[str] = (),
+        max_entries: int | None = None,
+    ) -> WalkResult:
         cwd = self._workspace(handle)
-        base = self._resolve(cwd, root) if root.strip("/") else cwd
-        return await asyncio.to_thread(self._walk_sync, cwd, base)
-
-    @staticmethod
-    def _walk_sync(cwd: Path, base: Path) -> WalkResult:
-        entries: list[FileEntry] = []
-        dirs: list[str] = []
-        # The rglob already visits directories; it used to `continue` past them,
-        # which is why a folder holding no files could not be seen from outside.
-        for p in base.rglob("*"):
-            rel = p.relative_to(cwd).as_posix()
-            if p.is_dir():
-                dirs.append(f"/{rel}")
-                continue
-            if not p.is_file():
-                continue  # symlink / socket / fifo — never round-trips to the store
-            stat = p.stat()
-            # mtime(ns)+size — cheap, no read; ns granularity avoids same-second collisions.
-            version = f"{stat.st_mtime_ns}-{stat.st_size}"
-            entries.append(FileEntry(path=f"/{rel}", size=stat.st_size, version=version))
-        return WalkResult(files=entries, dirs=dirs)
+        rel = f"/{root.strip('/')}" if root.strip("/") else "/"
+        return await asyncio.to_thread(
+            walk_tree,
+            scandir_lister(cwd),
+            rel,
+            depth=depth,
+            prune=prune,
+            max_entries=max_entries,
+        )
 
     @staticmethod
     def _resolve(cwd: Path, remote_path: str) -> Path:

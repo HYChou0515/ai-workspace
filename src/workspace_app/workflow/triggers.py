@@ -26,6 +26,7 @@ import asyncio
 import calendar
 import contextlib
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -395,6 +396,17 @@ class ITriggerStore(abc.ABC):
         run slot (``run_id``/``attempts``) — a fresh window is a fresh run."""
 
     @abc.abstractmethod
+    def try_advance(self, trigger_id: str, window: int) -> bool:
+        """Atomically advance ``trigger_id``'s ledger to ``window`` IFF ``window`` is
+        strictly newer than what it holds. Returns True for the single caller that
+        moved it forward, False when the ledger already holds this window or a later
+        one. Unlike :meth:`try_claim` (which advances to ANY different window — right
+        for catch-up firing), the comparison is inside the CAS, so a caller that read
+        a stale ledger cannot move it backwards. The window is an epoch-millisecond
+        start, so its ordering does not depend on any interval. A #804 scan lease's
+        claim."""
+
+    @abc.abstractmethod
     def release_claim(self, trigger_id: str, claimed: str, back_to: str) -> None:
         """Give back a claim whose run never started, so the window can be tried again.
 
@@ -550,6 +562,90 @@ class SpecstarTriggerStore(ITriggerStore):
             f"trigger claim CAS exhausted retries for {trigger_id!r}"
         )
 
+    def try_advance(self, trigger_id: str, window: int) -> bool:
+        rm = self._spec.get_resource_manager(_TriggerWindow)
+        row = _TriggerWindow(trigger_id=trigger_id, last_window=str(window))
+        try:
+            rm.create(row, resource_id=trigger_id, if_not_exists=True)  # ty: ignore[unknown-argument]
+            return True
+        except DuplicateResourceError:
+            pass  # a ledger row already exists — CAS-advance it below
+        for _ in range(_MAX_CAS_RETRIES):
+            res = rm.get(trigger_id)
+            data = res.data
+            assert isinstance(data, _TriggerWindow)
+            if int(data.last_window) >= window:
+                return False  # this window, or a later one, is already claimed
+            try:
+                rm.modify(
+                    trigger_id,
+                    row,
+                    status=RevisionStatus.draft,
+                    expected_etag=res.info.etag,  # ty: ignore[unknown-argument]
+                )
+            except PreconditionFailedError:  # pragma: no cover - cross-pod CAS race
+                continue  # a peer moved it between our get and modify → re-read, re-compare
+            # A draft `modify` rewrites the row's one revision in place, so a lease
+            # row never grows a revision trail however often it is claimed.
+            return True
+        raise RuntimeError(  # pragma: no cover - only under pathological churn
+            f"scan lease CAS exhausted retries for {trigger_id!r}"
+        )
+
+
+class ScanLease:
+    """One pod per window gets to SCAN (#804); the others skip the tick entirely.
+
+    Every pod used to run the whole sweep — re-read every profile's triggers.json
+    (or every page's schedules.json), re-query every ledger row — so that ONE of
+    them could win each trigger's per-window claim. The per-trigger claim only
+    de-duplicates the firing; the scan itself was N pods deep, every tick, with
+    zero traffic. This is the same shape as the cluster sweep that grew the API
+    heap, one size smaller.
+
+    The lease is one more row on the same window ledger, keyed by ``key`` (so it
+    can never collide with a real trigger's ``slug:profile:id``) and windowed by
+    ``interval_s`` of wall-clock: the first pod to tick in a window claims it, the
+    rest see the claim and do nothing. A winner that dies mid-scan forfeits that
+    window only — the next window is a fresh election, so a schedule is at most
+    one interval late, which is what the interval already promised. The
+    per-trigger claim stays: it is what keeps a window from firing twice across
+    restarts, and this lease does not replace it.
+
+    The window is the window's START in epoch milliseconds, not ``now // interval``:
+    the ledger outlives a deploy, and a number whose meaning depends on the
+    interval would make every window after an operator RAISES the interval
+    smaller than the stored one — every pod refused, silently, for good. A
+    start time stays comparable across interval changes: a change costs at most
+    one window of the NEW interval before the lease is claimable again. The
+    claim is forward-only inside the store's CAS (``try_advance``),
+    so two pods whose clocks disagree cannot take turns moving it backwards and
+    both scan.
+    """
+
+    def __init__(
+        self,
+        store: ITriggerStore,
+        key: str,
+        *,
+        interval_s: float,
+        now: Callable[[], float] = time.time,
+    ) -> None:
+        self._store = store
+        self._key = f"__scan__:{key}"
+        self._interval_s = interval_s
+        self._now = now
+
+    def claim(self) -> bool:
+        """True for the one pod that scans this window. Blocking specstar I/O —
+        call it off the loop, like the store's other calls."""
+        # Epoch MILLISECONDS, so a sub-second interval (tests tick every 50 ms)
+        # keeps its resolution: whole-second arithmetic would make every such
+        # window "0", won once and never again.
+        interval_ms = max(1, int(round(self._interval_s * 1000)))
+        start_ms = (int(round(self._now() * 1000)) // interval_ms) * interval_ms
+        return self._store.try_advance(self._key, start_ms)
+
 
 StartTrigger = Callable[["ScheduleTrigger", str], Awaitable[str | None]]
 OrchestratorStart = Callable[..., Awaitable[str]]
@@ -677,6 +773,7 @@ class TriggerSweeper:
         orphan: IOrphanOps | None = None,
         grace_ms: int = _DEFAULT_ORPHAN_GRACE_MS,
         max_resume_attempts: int = _DEFAULT_MAX_RESUME_ATTEMPTS,
+        lease: ScanLease | None = None,
     ) -> None:
         self._load = load
         self._store = store
@@ -685,6 +782,9 @@ class TriggerSweeper:
         self._orphan = orphan
         self._grace_ms = grace_ms
         self._max_attempts = max_resume_attempts
+        # #804: None ⇒ every caller scans (a single process, or a test that is
+        # not about pods). The API passes one so that N pods cost one scan.
+        self._lease = lease
 
     def _local_now(self, tz: str) -> datetime:
         """``now`` in the schedule's zone as a naive datetime (the period math is naive-
@@ -692,6 +792,8 @@ class TriggerSweeper:
         return self._now_utc().astimezone(ZoneInfo(tz or "UTC")).replace(tzinfo=None)
 
     async def tick(self) -> None:
+        if self._lease is not None and not await asyncio.to_thread(self._lease.claim):
+            return  # another pod is scanning this window
         for t in self._load():
             if t.enabled:
                 await self._tick_one(t)

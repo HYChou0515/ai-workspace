@@ -161,6 +161,7 @@ def build_coordinators(
     cluster_tau: float = 0.9,
     suppress_tau: float = 0.92,
     update_tau: float = 0.8,
+    merge_tau: float = 0.95,
     wiki_maintainer_max_turns: int = 40,
     wiki_model: str = "",
     wiki_llm_base_url: str = "",
@@ -232,6 +233,7 @@ def build_coordinators(
             cluster_tau=cluster_tau,
             suppress_tau=suppress_tau,
             update_tau=update_tau,
+            merge_tau=merge_tau,
             wiki_text=lambda cid: collection_wiki_text(spec, cid),
         )
         if embedder is not None

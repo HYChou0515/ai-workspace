@@ -25,8 +25,11 @@ import logging
 import os
 import shutil
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
 
+from ..sandbox.protocol import WalkResult
+from ..sandbox.walk import scandir_lister, walk_tree
 from .protocol import FileExists, FileNotFound
 
 logger = logging.getLogger(__name__)
@@ -183,6 +186,50 @@ class NfsTreeFileStore:
             return []
         out = [self._rel_of(item_root, p) for p in item_root.rglob("*") if p.is_dir()]
         return [p for p in out if p.startswith(prefix)] if prefix else out
+
+    async def tree(
+        self,
+        workspace_id: str,
+        prefix: str = "/",
+        *,
+        depth: int | None = None,
+        prune: Sequence[str] = (),
+        max_entries: int | None = None,
+    ) -> WalkResult:
+        """The file tree's cold listing — directory by directory FROM `prefix`,
+        the same traversal the live sandbox runs (`sandbox.walk.walk_tree`).
+
+        `stat_all` / `listdir` walk the whole item and filter by prefix
+        afterwards, which is the right shape for the mirror (it wants
+        everything) and the wrong one for a tree: expanding one folder of a
+        reaped item walked every folder on NFS. Here "do not enter" actually
+        saves the round trips, so the derived directories and the entry budget
+        cost nothing to honour. A prefix that names nothing lists nothing."""
+        item_root = self._item_root(workspace_id)
+        rel = "/" + _norm(prefix).strip("/") if _norm(prefix).strip("/") else "/"
+        target = self._abs(workspace_id, rel)  # refuse a prefix that escapes lexically
+
+        def walk() -> WalkResult:
+            # …and one that escapes through a LINK. The walk never enters a
+            # symlinked folder on its own (`walk.py`), but `prefix` is
+            # user-supplied, and this tree lives on the API pod: an agent's
+            # `ln -s /etc outside` plus `?prefix=/outside` would have listed
+            # the pod's own filesystem. The lexical check cannot see a link;
+            # only the resolved path can. Outside ⇒ nothing here, like a
+            # prefix that names nothing.
+            inside = os.path.realpath(item_root)
+            resolved = os.path.realpath(target)
+            if resolved != inside and not resolved.startswith(inside + os.sep):
+                return WalkResult(files=[], dirs=[])
+            return walk_tree(
+                scandir_lister(item_root),
+                rel,
+                depth=depth,
+                prune=prune,
+                max_entries=max_entries,
+            )
+
+        return await asyncio.to_thread(walk)
 
     async def is_dir(self, workspace_id: str, path: str) -> bool:
         target = self._abs(workspace_id, path)

@@ -69,6 +69,7 @@ from ..workflow.discovery import load_run_callable
 from ..workflow.orchestrator import (
     WorkflowOrchestrator,
 )
+from ..workflow.triggers import ScanLease, SpecstarTriggerStore
 from ..workflow.user_schedule_sweep import DEFAULT_MAX_ROWS, UserScheduleSweeper
 from . import perf_trace
 from .activity import ActivityLog
@@ -1286,12 +1287,24 @@ def create_app(
             # deferred wiring `_start_page_schedule` explains above.
             workflows_for=lambda item_id: _workflows_for_item(item_id),
             max_rows=max_page_schedules,
+            # #804: one pod per window reads the pages' schedules.json; the rest
+            # skip the tick. Same ledger as the per-schedule claim, one more row.
+            # The interval is the same knob that paces the tick — a window is one
+            # tick — so a deploy with triggers off (None) builds no lease, and
+            # the sweeper is never started anyway (`lifecycle` gates both on it).
+            lease=(
+                ScanLease(
+                    SpecstarTriggerStore(spec),
+                    "user-schedules",
+                    interval_s=trigger_check_interval.total_seconds(),
+                )
+                if trigger_check_interval is not None
+                else None
+            ),
         ),
         notification_channel=notification_channel,
         offhours=goal_offhours,  # #615: the after-hours goal sweeper
         cluster_sweep_seconds=kb_cluster_sweep_seconds,
-        cluster_tau=kb_cluster_tau,
-        cluster_merge_tau=kb_cluster_merge_tau,
         # #674: warm every app's declared third-party bundles at boot.
         prewarm_tools=lambda: prewarm_external_tools(sandbox, _declared_external_tools()),
         # Asked of the BACKEND, on the serving loop — see `lifecycle` for why not
@@ -1535,10 +1548,6 @@ def create_app(
     # map" is not to. `app.state` is where this file already puts such handles.
     app.state.item_facts = _item_facts
     app.state.ingestor = ingestor
-    # #506 P8: the cluster sweeper (api/lifecycle.py) reads the KB text embedder off
-    # app.state for the same reason — it is built here, after the FastAPI app, so the
-    # already-constructed lifespan closures can't capture it directly.
-    app.state.kb_embedder = embedder
     # #312: the background job coordinators are built by the shared
     # `build_coordinators` composition root — the SAME one the standalone worker
     # entrypoint uses — so the API can run as a pure producer (its consumers
@@ -1570,6 +1579,7 @@ def create_app(
         cluster_tau=kb_cluster_tau,
         suppress_tau=kb_cluster_suppress_tau,
         update_tau=kb_cluster_update_tau,
+        merge_tau=kb_cluster_merge_tau,
         wiki_maintainer_max_turns=wiki_maintainer_max_turns,
         wiki_model=wiki_model,
         wiki_llm_base_url=wiki_llm_base_url,

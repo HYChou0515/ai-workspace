@@ -3,24 +3,40 @@ subprocess/uid/cgroup needed to exercise `app.py`'s routing + error mapping."""
 
 import hashlib
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from .protocol import (
     EnforcedLimits,
     ExecResult,
-    FileEntry,
     OutputSink,
     SandboxHandle,
     SandboxNotFound,
     SandboxSpec,
     WalkResult,
 )
+from .walk import flat_lister, walk_tree
+
+
+def _canon(path: str) -> str:
+    """The one spelling a path has in this store: `pyproject.toml` / `//x` /
+    `/a//b/` / `./x` → `/pyproject.toml` / `/x` / `/a/b` / `/x`; `""` and
+    `"/"` → `"/"`. The same rule `walk_tree` applies to its root, so a path
+    written one way and walked another meets itself.
+
+    Every op canonicalises at its boundary, so the store holds ONE entry per
+    file whatever spelling a caller used — a real filesystem resolves
+    `a.txt` and `/a.txt` to the same inode, and `walk` reports the canonical
+    form. A double that kept the raw string stored two files for one path,
+    let `delete` miss its twin, and registered a phantom directory for a
+    slash-less root file (`_parent("pyproject.toml")` had no `/` to split
+    on) that the mirror then `mkdir`-ed over the file it had just written."""
+    return "/" + "/".join(seg for seg in path.split("/") if seg and seg != ".")
 
 
 def _parent(path: str) -> str:
-    """The directory holding `path` ("" when it sits at the workspace root)."""
-    return path.rstrip("/").rsplit("/", 1)[0]
+    """The directory holding canonical `path` ("" when it sits at the root)."""
+    return path.rpartition("/")[0]
 
 
 def _version(data: bytes) -> str:
@@ -122,7 +138,8 @@ class MockSandbox:
             case ["echo", *args]:
                 text = " ".join(args)
                 return ExecResult(exit_code=0, stdout=(text + "\n").encode())
-            case ["cat", path]:
+            case ["cat", raw]:
+                path = _canon(raw)
                 if path not in fs:
                     return ExecResult(
                         exit_code=1,
@@ -141,38 +158,48 @@ class MockSandbox:
 
     async def upload(self, handle: SandboxHandle, data: bytes, remote_path: str) -> None:
         fs = self._require(handle)
-        fs[remote_path] = data
-        self._register_dirs(handle, _parent(remote_path))
+        path = _canon(remote_path)
+        fs[path] = data
+        self._register_dirs(handle, _parent(path))
 
     async def download(self, handle: SandboxHandle, remote_path: str) -> bytes:
         fs = self._require(handle)
-        if remote_path not in fs:
+        path = _canon(remote_path)
+        if path not in fs:
             raise FileNotFoundError(remote_path)
-        return fs[remote_path]
+        return fs[path]
 
-    async def walk(self, handle: SandboxHandle, root: str) -> WalkResult:
+    async def walk(
+        self,
+        handle: SandboxHandle,
+        root: str,
+        *,
+        depth: int | None = None,
+        prune: Sequence[str] = (),
+        max_entries: int | None = None,
+    ) -> WalkResult:
         fs = self._require(handle)
         dirs = self._dirs.setdefault(handle.id, set())
-        prefix = root if root.endswith("/") else root + "/"
-        if root in ("/", ""):
-            items = list(fs.items())
-            under = sorted(dirs)
-        else:
-            items = [(p, d) for p, d in fs.items() if p.startswith(prefix)]
-            under = sorted(p for p in dirs if p.startswith(prefix))
-        return WalkResult(
-            files=[FileEntry(path=p, size=len(d), version=_version(d)) for p, d in items],
-            dirs=under,
+        rel = f"/{root.strip('/')}" if root.strip("/") else "/"
+        # Same traversal as the real sandbox over a dict: the mock's job is to
+        # answer like the host, so the options are not re-implemented here.
+        return walk_tree(
+            flat_lister({p: (len(d), _version(d)) for p, d in fs.items()}, dirs),
+            rel,
+            depth=depth,
+            prune=prune,
+            max_entries=max_entries,
         )
 
     async def exists(self, handle: SandboxHandle, path: str) -> bool:
-        return path in self._require(handle)
+        return _canon(path) in self._require(handle)
 
     async def delete(self, handle: SandboxHandle, path: str) -> None:
         fs = self._require(handle)
-        if path not in fs:
+        key = _canon(path)
+        if key not in fs:
             raise FileNotFoundError(path)
-        del fs[path]
+        del fs[key]
 
     async def mkdir(self, handle: SandboxHandle, path: str) -> None:
         # Directories are tracked for real. This used to be a no-op, on the
@@ -180,13 +207,16 @@ class MockSandbox:
         # that made an EMPTY dir inexpressible here, so no test using this double
         # could observe the one case the real backends get asked about.
         self._require(handle)
-        self._register_dirs(handle, path.rstrip("/"))
+        self._register_dirs(handle, _canon(path))
 
     async def rmdir(self, handle: SandboxHandle, path: str) -> None:
         fs = self._require(handle)
         dirs = self._dirs.setdefault(handle.id, set())
-        base = path.rstrip("/")
-        prefix = base + "/"
+        base = _canon(path)
+        # `rmdir("/")` is the whole workspace — the real backend rmtrees it
+        # (reachable: `DELETE …/files/` with an empty path). A double that
+        # refused here would let a "root is protected" test pass falsely.
+        prefix = "/" if base == "/" else base + "/"
         victims = [p for p in fs if p == base or p.startswith(prefix)]
         gone = {p for p in dirs if p == base or p.startswith(prefix)}
         if not victims and not gone:
@@ -207,7 +237,7 @@ class MockSandbox:
     async def rename(self, handle: SandboxHandle, src: str, dst: str) -> None:
         fs = self._require(handle)
         dirs = self._dirs.setdefault(handle.id, set())
-        s, d = src.rstrip("/"), dst.rstrip("/")
+        s, d = _canon(src), _canon(dst)
         if s in fs:  # single file
             fs[d] = fs.pop(s)
             self._register_dirs(handle, _parent(d))

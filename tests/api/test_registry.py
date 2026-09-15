@@ -733,6 +733,27 @@ async def test_ensure_handle_restores_when_backend_not_id_addressable_345():
     assert sync.calls == [("restore", "ws-1")]
 
 
+async def test_the_cold_probe_asks_whether_the_dir_exists_not_for_its_contents():
+    """`_is_cold` decides "does this item's shared dir exist" — one bit. It
+    used to answer it with a full `walk`, i.e. by listing every file in the
+    workspace on NFS to learn that the folder is there: the same round trips
+    the file tree pays, spent on a yes/no. The probe is now the same one
+    `_alive` uses (`exists` on the root), and a walk here is a regression."""
+    walks = {"n": 0}
+
+    class _CountsWalks(MockSandbox):
+        async def walk(self, handle, root, **opts):  # type: ignore[override]
+            walks["n"] += 1
+            return await super().walk(handle, root, **opts)
+
+    sandbox = _CountsWalks()
+    registry = InvestigationRegistry(sandbox=sandbox)
+    assert await registry._is_cold("ws-never") is True  # noqa: SLF001
+    await sandbox.create(SandboxSpec(), sandbox_id="ws-live")
+    assert await registry._is_cold("ws-live") is False  # noqa: SLF001
+    assert walks["n"] == 0, "the cold probe walked the workspace"
+
+
 async def test_close_session_forgets_global_activity_345():
     sandbox = _CountingSandbox()
     activity = _FakeActivity()

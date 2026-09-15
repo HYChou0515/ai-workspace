@@ -18,7 +18,7 @@ import base64
 import json
 import logging
 import time
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -679,8 +679,23 @@ class HttpSandbox:
         resp = await self._io_request(handle, "GET", "/ready")
         return bool(resp.json()["ready"])
 
-    async def walk(self, handle: SandboxHandle, root: str) -> WalkResult:
-        resp = await self._io_request(handle, "GET", "/walk", params={"root": root})
+    async def walk(
+        self,
+        handle: SandboxHandle,
+        root: str,
+        *,
+        depth: int | None = None,
+        prune: Sequence[str] = (),
+        max_entries: int | None = None,
+    ) -> WalkResult:
+        params: dict[str, object] = {"root": root}
+        if depth is not None:
+            params["depth"] = depth
+        if prune:
+            params["prune"] = list(prune)
+        if max_entries is not None:
+            params["max_entries"] = max_entries
+        resp = await self._io_request(handle, "GET", "/walk", params=params)
         body = resp.json()
         return WalkResult(
             files=[
@@ -691,6 +706,9 @@ class HttpSandbox:
             # the file tree degrades to "empty folders are missing" — what it did
             # before — instead of failing. Nothing else reads this half.
             dirs=list(body.get("dirs") or []),
+            # Same shape for the two lazy-tree halves (host and app ship together).
+            unwalked=list(body.get("unwalked") or []),
+            truncated=bool(body.get("truncated", False)),
         )
 
     async def delete(self, handle: SandboxHandle, path: str) -> None:

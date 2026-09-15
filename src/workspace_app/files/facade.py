@@ -24,12 +24,15 @@ import logging
 import time
 from collections import defaultdict
 from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
 from ..filestore.protocol import FileExists, FileNotFound, FileStore
 from ..quota.disk_ledger import UserDiskFull
 from ..sandbox.protocol import Sandbox, SandboxBusy, SandboxHandle, SandboxNotFound
+from ..sandbox.walk import flat_lister, walk_tree
+from ..sync.ignore import TREE_MAX_ENTRIES, TREE_PRUNE
 
 
 class PersonDiskGate(Protocol):
@@ -193,14 +196,17 @@ def _split_level(entries: list[str], prefix: str) -> tuple[list[str], list[str]]
     return sorted(files), sorted(dirs)
 
 
-def _dirs_of(paths) -> list[str]:
-    """Every ancestor directory implied by a set of file paths, sorted."""
-    dirs: set[str] = set()
-    for path in paths:
-        parts = path.strip("/").split("/")
-        for i in range(1, len(parts)):
-            dirs.add("/" + "/".join(parts[:i]))
-    return sorted(dirs)
+@dataclass(frozen=True)
+class TreeListing:
+    """What one `tree()` call saw. `unwalked` is the subset of `dirs` the
+    listing did NOT enter — pruned (`TREE_PRUNE`), beyond `depth`, or past
+    `TREE_MAX_ENTRIES` — so the file tree draws them collapsed and fetches on
+    expand; `truncated` says the budget is what stopped it."""
+
+    files: list[tuple[str, int]]
+    dirs: list[str]
+    unwalked: list[str]
+    truncated: bool
 
 
 class WorkspaceFiles:
@@ -1137,9 +1143,17 @@ class WorkspaceFiles:
         return await self._fs.is_dir(workspace_id, path)
 
     async def tree(
-        self, workspace_id: str, prefix: str = ""
-    ) -> tuple[list[tuple[str, int]], list[str]]:
-        """Files (with sizes) and directories from ONE traversal.
+        self, workspace_id: str, prefix: str = "", *, depth: int | None = None
+    ) -> TreeListing:
+        """Files (with sizes) and directories from ONE traversal — one that
+        STOPS. Derived directories (`TREE_PRUNE`: `node_modules/`, `.venv/`,
+        `.git/`, …) are listed but never entered, and the whole listing is
+        bounded by `TREE_MAX_ENTRIES`; what was not entered is reported in
+        `unwalked` so the tree can draw it collapsed and ask again with
+        `depth=1` when the user expands it. A workspace with `node_modules/` had
+        twelve thousand entries at ~3 NFS round trips each, and the tree took
+        50 s — on open, and again on every turn end. Pruned is not hidden: the
+        folder is on the tree, the mirror and the quota still see it.
 
         `stat_all` and `listdir` each walked the whole workspace, and the file
         tree needs both, so drawing it stat-ed every file twice to answer two
@@ -1150,17 +1164,42 @@ class WorkspaceFiles:
         Directories come back from the traversal itself, not derived from the
         file paths: an EMPTY directory appears in no file path, so deriving them
         silently dropped every folder that held no files — the folder a user had
-        just created was never drawn. Only the durable branch still derives, and
-        it unions that with the store's own dir record."""
+        just created was never drawn. A durable store without its own `tree`
+        still derives, and unions that with the store's own dir record."""
         prefix = abs_path(prefix) if prefix else prefix
+        root = prefix or "/"
         warm = await self._warm(workspace_id)
         if warm is not None:
             sb, h = warm
-            walked = await sb.walk(h, prefix or "/")
-            return [(e.path, e.size) for e in walked.files], sorted(walked.dirs)
-        files = await self._stat_all_cold(workspace_id, prefix)
-        stored = await self._fs.listdir(workspace_id, prefix)
-        return files, sorted(set(stored) | set(_dirs_of(p for p, _ in files)))
+            walked = await sb.walk(
+                h, root, depth=depth, prune=TREE_PRUNE, max_entries=TREE_MAX_ENTRIES
+            )
+        else:
+            durable_tree = getattr(self._fs, "tree", None)
+            if durable_tree is not None:
+                # The NFS tree lists directory by directory from `prefix` — the
+                # only cold store where "do not enter" actually saves work.
+                walked = await durable_tree(
+                    workspace_id, root, depth=depth, prune=TREE_PRUNE, max_entries=TREE_MAX_ENTRIES
+                )
+            else:
+                # A store that can only hand back everything under `prefix`:
+                # same answer, shaped by the same traversal, no round trips saved.
+                files = await self._stat_all_cold(workspace_id, prefix)
+                stored = await self._fs.listdir(workspace_id, prefix)
+                walked = walk_tree(
+                    flat_lister({p: (size, "") for p, size in files}, stored),
+                    root,
+                    depth=depth,
+                    prune=TREE_PRUNE,
+                    max_entries=TREE_MAX_ENTRIES,
+                )
+        return TreeListing(
+            files=[(e.path, e.size) for e in walked.files],
+            dirs=sorted(walked.dirs),
+            unwalked=sorted(walked.unwalked),
+            truncated=walked.truncated,
+        )
 
     async def listdir(self, workspace_id: str, prefix: str = "") -> list[str]:
         prefix = abs_path(prefix) if prefix else prefix

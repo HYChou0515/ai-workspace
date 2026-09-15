@@ -199,3 +199,15 @@ def test_parse_find_output_splits_dirs_from_files_and_drops_other_types():
     walked = _parse_find_output(raw)
     assert [e.path for e in walked.files] == ["/sub/a.txt"]
     assert walked.dirs == ["/sub"]  # the find root itself ("") is dropped
+
+
+def test_parse_find_output_rebases_a_subfolder_walk_onto_workspace_paths():
+    """`%P` is relative to the find root; a walk of `/node_modules` must still
+    answer in workspace paths, or an expanded folder's entries would land at
+    the tree root. Nothing walked a subfolder before folders loaded on demand."""
+    from workspace_app.sandbox.docker import _parse_find_output
+
+    raw = b"d\t4096\t1.0\t\nd\t4096\t1.0\tlodash\nf\t5\t2.0\tlodash/index.js\n"
+    walked = _parse_find_output(raw, base="/node_modules")
+    assert [e.path for e in walked.files] == ["/node_modules/lodash/index.js"]
+    assert walked.dirs == ["/node_modules/lodash"]

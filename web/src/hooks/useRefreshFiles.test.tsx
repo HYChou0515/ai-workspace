@@ -29,9 +29,21 @@ describe("useRefreshFiles", () => {
       defaultOptions: { queries: { retry: false } },
     });
     // Pre-populate the caches so we can verify they were invalidated.
-    client.setQueryData(qk.files(id), { items: [], dirs: [] });
+    client.setQueryData(qk.files(id), { items: [], dirs: [], unwalked: [], truncated: false });
+    // A lazily-listed folder the user has open: it must go stale with the
+    // preload, or an agent write into it stays invisible until re-expanded.
+    client.setQueryData(qk.treeDir(id, "/node_modules"), {
+      items: [],
+      dirs: [],
+      unwalked: [],
+      truncated: false,
+    });
     client.setQueryData(qk.file(id, "/a.md"), { text: "old" });
     client.setQueryData(qk.file(id, "/b.md"), { text: "old-b" });
+    // A WUI folder's manifest — the one file the WUI pane acts on, and one the
+    // agent's tool writes (which reach the FE only through this chokepoint)
+    // scaffold or remove (docs/plan-wui-deploy.md, review round 8).
+    client.setQueryData(qk.wuiBuildable(id, "/sales"), { kind: "missing" });
     // Pre-populate the editor buffer for one path so reload should fire.
     const store = new FileBufferStore({
       readFile: vi.fn(async () => ({
@@ -63,8 +75,10 @@ describe("useRefreshFiles", () => {
     //    `qk.files` now — files and dirs come from one traversal, so there is no
     //    separate dirs key left to bust.
     expect(client.getQueryState(qk.files(id))?.isInvalidated).toBe(true);
+    expect(client.getQueryState(qk.treeDir(id, "/node_modules"))?.isInvalidated).toBe(true);
     expect(client.getQueryState(qk.file(id, "/a.md"))?.isInvalidated).toBe(true);
     expect(client.getQueryState(qk.file(id, "/b.md"))?.isInvalidated).toBe(true);
+    expect(client.getQueryState(qk.wuiBuildable(id, "/sales"))?.isInvalidated).toBe(true);
     // 3. Editor buffer was reloaded.
     expect(reloadSpy).toHaveBeenCalledWith("/a.md");
   });

@@ -591,12 +591,15 @@ class RetrievalSettings:
 
 @dataclass(frozen=True)
 class ClusterSettings:
-    """#506: thresholds for the card-gen reconcile + the background cluster sweeper
+    """#506: thresholds for the card-gen reconcile + the periodic cluster sweep
     (dedup / suppress duplicate proposals + questions). All τ are cosine SIMILARITY
     in [0, 1]; HIGHER = stricter (fewer merges / suppressions). Exact norm_key overlap
     is deterministic and ignores these. Conservative defaults (bias toward asking /
     keeping over wrongly dropping); an operator lowers them to dedup more aggressively.
-    `sweep_interval_seconds` paces the API-side backfill+merge sweeper."""
+    Every τ reaches the reconciler on the card-gen worker, where both the finalize-time
+    reconcile and the sweep run. `sweep_interval_seconds` paces how often the API
+    ASKS for each collection's sweep (a `cluster_sweep` card-gen job) — the API does
+    none of the sweep itself."""
 
     # Join a new candidate to an existing cluster when a member is within this sim.
     cluster_tau: float = 0.9
@@ -604,9 +607,10 @@ class ClusterSettings:
     suppress_tau: float = 0.92
     # At/above this (but below suppress) → suggest updating the near card instead.
     update_tau: float = 0.8
-    # The background sweeper folds two clusters whose centroids are within this sim.
+    # The sweep folds two clusters whose centroids are within this sim.
     merge_tau: float = 0.95
-    # How often the API sweeper backfills un-projected candidates + folds race-splits.
+    # How often the API enqueues each collection's sweep (backfill un-projected
+    # candidates + fold race-splits) for the card-gen worker.
     sweep_interval_seconds: float = 900.0
 
 

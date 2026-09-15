@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { api } from "../api";
 import { qk } from "../api/queryKeys";
-import type { FileInfo } from "../api/types";
+import type { TreeListing } from "../api/fileService";
 import { useWorkspaceSlug } from "./useWorkspaceSlug";
 
 /* --------------------------- files list ---------------------------- */
@@ -14,7 +14,7 @@ type FilesState =
   // what warms the sandbox on the backend).
   | { kind: "idle" }
   | { kind: "loading" }
-  | { kind: "ready"; items: FileInfo[]; dirs: string[]; refresh: () => void }
+  | ({ kind: "ready"; refresh: () => void } & TreeListing)
   | { kind: "error"; error: Error; refresh: () => void };
 
 export function useFiles(investigationId: string, opts?: { enabled?: boolean }): FilesState {
@@ -26,8 +26,8 @@ export function useFiles(investigationId: string, opts?: { enabled?: boolean }):
       // One request, one workspace traversal. These were two endpoints fetched
       // in parallel, and each walked the whole workspace to answer half of the
       // same question — expensive warm, where the walk crosses the network.
-      const { files, dirs } = await api.getTree(slug, investigationId);
-      return { items: files, dirs };
+      const { files, dirs, unwalked, truncated } = await api.getTree(slug, investigationId);
+      return { items: files, dirs, unwalked, truncated };
     },
     enabled,
   });
@@ -35,7 +35,7 @@ export function useFiles(investigationId: string, opts?: { enabled?: boolean }):
     void q.refetch();
   };
   if (q.isError) return { kind: "error", error: q.error, refresh };
-  if (q.data) return { kind: "ready", items: q.data.items, dirs: q.data.dirs, refresh };
+  if (q.data) return { kind: "ready", ...q.data, refresh };
   // With `enabled:false` a pending query never fetches (fetchStatus "idle"); only
   // an actually-in-flight fetch is `loading`. Otherwise we'd strand the page on
   // the loading gate forever.
