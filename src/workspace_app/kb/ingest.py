@@ -60,9 +60,10 @@ logger = logging.getLogger(__name__)
 
 def chunk_id(doc_id: str, seq: int) -> str:
     """Deterministic ``DocChunk`` id for the fan-out path (#227): keyed on
-    ``(doc_id, seq)`` so a redelivered process job overwrites its slice in place
-    instead of minting duplicate chunk rows. ``seq`` is globally unique per doc
-    (each fan-out batch numbers from ``batch_index * stride``)."""
+    ``(doc_id, seq)`` so a redelivered process job addresses the SAME rows —
+    which, since P17, it creates only if absent (the first writer wins; a
+    duplicate writes nothing). ``seq`` is globally unique per doc (each
+    fan-out batch numbers from ``batch_index * stride``)."""
     return f"{doc_id}.c{seq}"
 
 
@@ -1080,10 +1081,11 @@ class Ingestor:
         """Split + embed one parser packet's Documents into ``DocChunk`` rows,
         numbering ``seq`` from ``seq_base``. Returns the node count so the caller
         can advance the offset. ``deterministic`` (#227) mints chunk ids from
-        ``(doc_id, seq)`` so a redelivered fan-out process job OVERWRITES its
-        slice instead of duplicating it — and records each chunk's
-        batch-relative start (`unit_start`) for finalize to rebase; the
-        single-job path keeps auto ids. ``source_file_id`` (#104) stamps each
+        ``(doc_id, seq)`` and creates each row only if absent (P17: a
+        redelivered fan-out process job writes nothing where a row already
+        stands) — and records each chunk's batch-relative start
+        (`unit_start`) for finalize to rebase; the single-job path keeps auto
+        ids. ``source_file_id`` (#104) stamps each
         chunk with its content hash. ``bases`` / ``text_len``: see
         ``_build_chunks``."""
         chrm = self._spec.get_resource_manager(DocChunk)
@@ -1109,7 +1111,8 @@ class Ingestor:
                 # duplicate delivery that finished after the finalize put them
                 # back. Now the first writer wins each row and a duplicate
                 # writes nothing — it is never a concurrent writer against
-                # finalize (rounds 5–7 found three shapes of that race). A job
+                # finalize (rounds 5–7 found three shapes of that race) — as far as
+                # specstar's create-only is first-wins (plan Phase 18). A job
                 # redelivered after a crash mid-write completes the rows it is
                 # missing. `prepare_fanout` hard-deletes the previous run's
                 # rows, so a re-index starts from an empty slice.

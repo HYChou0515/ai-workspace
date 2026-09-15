@@ -255,7 +255,8 @@ def test_periodic_text_lands_on_the_cuts_not_one_period_apart(spec: SpecStar):
 def test_periodic_text_of_any_period_or_language_tiles_the_document(spec: SpecStar, para: str):
     # Round 5: P12's periodic test passed on a coincidence (16 tokens × 2 = the
     # 32-token overlap); one word more and the chunks drifted, compounding per
-    # chunk; Chinese was untouched (256 tokens ≈ 155 chars < the 192-char
+    # chunk; Chinese was untouched (a 256-token chunk of this sentence is 192
+    # chars, not above the 192-char
     # bound, so the rule degenerated to "next occurrence"). Offsets now come
     # from the splitter, so the shape of the text cannot matter.
     body = para * 250

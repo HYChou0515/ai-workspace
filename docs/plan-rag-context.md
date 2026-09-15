@@ -1,7 +1,9 @@
 # RAG context — neighbouring text, scoped search, reading the original
 
 Design of record. Resolved through `/grill-me`; this file is the canonical spec.
-Delivered as one branch, one commit per phase (`P1` … `P11`; see *Rollout*).
+Delivered as one branch, one phase per commit (`P1` … `P19`, Phase 2 in three; see
+*Rollout*). Phases 12, 15 and 16 record mechanisms that later phases replaced —
+each says so in its first line; the shipped state is Phases 14, 17 and 18.
 
 The whole thing rests on one slogan: **the chunk is a retrieval artifact, not
 the document.** Retrieval finds the spot; context is what makes the spot
@@ -118,7 +120,7 @@ language; raw chars would cut sentences.
 
 ### The knob
 
-- `KbSettings.retrieval.context_chars: int` (final name at implementation),
+- `kb.retrieval.context_chars: int` (`RetrievalSettings.context_chars`),
   next to `quality_weight` / `sparse_corpus_cap` — a retrieval-behaviour knob,
   operator-owned.
 - **Per side.** N before *and* N after, not N total.
@@ -226,9 +228,9 @@ reply's numbers are then noise that `rerank_passages` applies silently. The
 deployment's rerank model is stated to have a 1M-token window; that is taken
 on trust (prod config is not visible here, and #767 — the real window behind
 the proxy — is still open), and window size does not remove listwise
-position bias. This is flagged for the user to re-decide with the real
-numbers: keep as is, cap the per-passage context the reranker sees, or skip
-rerank (with a logged warning) past a size budget.
+position bias. This was put to the user with the real numbers after review
+round 1 and decided in Phase 6: cap the per-passage context the reranker
+sees (`rerank_context_chars`, default 4,000).
 
 After expansion, passages whose context ranges overlap are **left as they
 are** (corrected during implementation: the plan first said "merge again").
@@ -240,10 +242,10 @@ costs tokens; a widened citation costs trust.
 
 ### Data shape
 
-`RetrievedPassage` has 3 writers (`merge.py:64`, `retriever.py:812`,
-`tools.py:733`) and 4 readers of `.text` (`rerank.py:33`, `citations.py:50`,
-`tools.py:1036`, `tools.py:1037`). It is **not** a specstar model — a
-transient value object — so adding a field costs nothing durable.
+`RetrievedPassage` had 3 writers when this was written (`merge_passages`,
+`_augment_with_parents`, `read_source`; Phase 4 added a fourth,
+`_register_read`) and 4 readers of `.text`. It is **not** a specstar model —
+a transient value object — so adding a field costs nothing durable.
 
 - `text` / `start` / `end` **stay the hit span.** Unchanged for every existing
   reader; in particular `citations.py:50` keeps `snippet = p.text`, so the
@@ -298,7 +300,7 @@ different shapes (a few ranked passages vs. every location), so they are two
 tools, not one flag. Modelled on `search_wiki`, which is already the house
 Ctrl+F:
 
-- Returns `filename (p.N):line: matching line` — page shown when the document
+- Returns `path (p.N):line: matching line` — page shown when the document
   has pages, line always — in **document (tree) order, not ranked**. "Should
   keywords participate in ranking" dissolves: this does not rank.
 - Output capped at `exec_output_max_chars` with middle truncation; its own
@@ -440,7 +442,7 @@ span is `base + where the piece sits in the region`, with the breadcrumb
 folded in like every Markdown chunk. (The first version trusted the
 splitter's own offsets as "verbatim, relative — verified"; review round 3
 showed they are first occurrences, not positions, and that the splitter's
-phrase fallback rewrites ~5% of pieces — Phase 8 replaced that mechanism.) Applied to a whole section
+phrase fallback rewrites 4.6% of Markdown prose windows — Phase 14 replaced that mechanism.) Applied to a whole section
 AND to the prose regions between tables (one rule). A region that fits
 returns the section parser's own node, byte-identical to before, so the
 common case and the #390 cache keys are untouched. Measured through the
@@ -577,6 +579,12 @@ class: `read_lines` refuses a limit below 1 before the slice.
 
 ## Phase 12 — review round 4 on the offsets
 
+**Superseded by Phase 14.** The search-based locating this phase corrected was
+replaced outright when round 5 showed no text search can be exact; what
+survives of P12 is the process guard, the single worker Retriever, the boot
+hint, `read_file`'s limit rule and `as_related_node_info()` once per Document.
+The bullets below describe the mechanism as it stood at P12.
+
 Three lenses on P8–P11 (regression: 283 documents / 15,941 chunks, nothing
 right on P7 wrong on HEAD, correct spans 4,367 → 14,936, non-monotonic
 111 → 0, out-of-bounds 6 → 0; the three ingest paths agree on every input).
@@ -597,9 +605,9 @@ What they found in the new mechanism, fixed here:
   after the previous END minus the overlap — the search starts there, with
   the overlap in the splitter's own unit (tokens × a char bound for
   sentences, exactly the last N lines for code, 0 for Markdown sections).
-  That document now tiles at the splitter's cuts (chunk 17 at 17,462; the
-  walk goes ~2k back). What remains is the limit of locating by text: a
-  period shorter than the overlap bound can drift by one period.
+  That document tiled at the splitter's cuts (chunk 17 at 17,462; the walk
+  ~2k back) — on that sentence; round 5 showed the rule failed one word away
+  (Phase 14).
 - **A tail anchor with no minimum** under-covered 1 of 15,941 spans (a 3-char
   tail found early). The end is now the smallest region from the head that
   contains the piece as a subsequence — exact, and never shorter than the
@@ -616,13 +624,26 @@ What they found in the new mechanism, fixed here:
 - The worker builds ONE Retriever for the card drafter and the eval handler
   (two hand-copied kwargs blocks; the door test pinned one). The boot hint
   names the tools the kb prompt describes. `read_file` (workspace) gets the
-  same "limit below 1" rule as `read_lines`. The `_split_markdown` /
-  `_split_code` relocations and the `_ANCHOR_MIN` floor have tests.
+  same "limit below 1" rule as `read_lines`. (The relocation tests this
+  phase added went with the mechanism in Phase 14.)
 
 Known cost left as is: finalize patches every moved fan-out chunk one row at
 a time (a 5,000-row CSV: 4,500 patches, ~11 s in memory) — correct and
 idempotent; a bulk shape needs `patch_many` with per-row values, which
 specstar does not have. Logged below with the pre-existing findings.
+
+## Phase 13 — the order-rule line stays in view
+
+The P11 line sat inside the tree's scroll container (visible only after
+scrolling to the bottom of a long tree) and wrapped to five lines at 260 px.
+Now one line — what to DO; the full rule stays in the docs — pinned to the
+bottom of the scrolling pane the way the "Files" header is pinned to its
+top, with the pane's bottom padding moved onto it (a sticky child cannot
+leave the content box, so a padding band below it showed rows through).
+Verified in a real browser against the running app with a 60-document
+collection: at 1280 px and 400 px the line stays inside the pane at every
+scroll position, no row peeks under it, and the empty-collection CTA shows
+it at both widths.
 
 ## Phase 14 — the splitter reports where it cut
 
@@ -630,7 +651,8 @@ Round 5 (two lenses on P12) settled the question the rounds had been
 circling: **a chunk's position cannot be recovered by searching the text.**
 The search floor must approximate an overlap the splitter computes as a
 token sum over whole splits, and every char bound was wrong somewhere —
-inert on CJK (256 tokens ≈ 155 chars, so the P12 rule degenerated to "next
+inert on CJK (a 256-token chunk of the test's sentence is 192 chars, not
+above the 192-char bound, so the P12 rule degenerated to "next
 occurrence" and the P7 defect stood at larger magnitude: 66 of 67 chunks of a
 32-char Chinese sentence × 400 inside the first 2.2k of 12.8k chars), a
 period too loose on English one word longer than the test's sentence (the
@@ -649,7 +671,7 @@ located in ITS parent — exact, since the split functions return the text's
 pieces in order); `_merge` stays LlamaIndex's, and each chunk's span is
 reconstructed from the run of consecutive splits it was merged from, with
 the overlap rule `_merge` applies (the maximal tail whose token sizes fit in
-`chunk_overlap`). Exact for verbatim chunks; for the ~5% the phrase fallback
+`chunk_overlap`). Exact for verbatim chunks; for the ones the phrase fallback
 rewrote, the run's extent — which covers the dropped punctuation. The stock
 `_postprocess_parsed_nodes` (where LlamaIndex stamps the first-occurrence
 offsets, after `_parse_nodes`) is overridden to put the spans back. If an
@@ -669,6 +691,10 @@ code sits at the splitter's cuts. 3.5 MB ingests in 11.4 s (P12: 11.2 s),
 
 ## Phase 15 — a batch replayed during finalize rebases itself
 
+**Superseded by Phase 17.** The self-rebase and `IndexRun.batch_bases` this
+phase added are gone; the split-time clearing of staging survives. The text
+below describes the mechanism as it stood at P15.
+
 Round 5: the P12 guard on `_handle_process` is check-then-act. A duplicate
 delivery (#227's at-least-once broker) that passed the guard while the run
 was still running, and whose embedding outlived the other batches AND the
@@ -683,6 +709,10 @@ can reach a later one. Driven through the real handlers with `index_units`
 interposed so finalize runs inside the duplicate's window — red on P14.
 
 ## Phase 16 — review round 6
+
+**Bullets 1–3 superseded by Phase 17** (the re-snapshot, the own-row delete
+and the "bases first" pin went with the mechanism); the `PrivateAttr` change
+stands.
 
 Two lenses on P14/P15. **The span machinery came back clean**: the
 regression lens found P15's chunks identical to P13's in text and count over
@@ -732,8 +762,11 @@ if_not_exists=True)`, its documented first-wins primitive), so the first
 writer wins each row and a duplicate delivery writes nothing — it is never
 a writer against finalize at all. A job redelivered after a crash
 mid-write completes the rows it is missing; a batch the run already counts
-as done is delivered and stages nothing. Finalize is the only writer of
-offsets and the only one that touches staging (the split-time clear stays).
+as done is delivered, stages nothing, and (Phase 18) still tries the
+finalize claim. Finalize is the only rewriter of offsets and the only
+consumer of staging — batches write their rows once, finalize rejoins and
+clears them (the split-time clear stays). "Writes nothing" holds as far as
+the primitive is first-wins; Phase 18 records where it is not.
 `IndexRun.batch_bases`, the self-rebase, the re-snapshot and the row delete
 are gone. The round-6/7 interleavings are kept as tests with the new
 invariant (the duplicate changed no row; one rebase, one snapshot, both
@@ -790,6 +823,22 @@ it publishes `text=None`), and the missing run epoch.
 > third party `patch` the row, release — the patched row is overwritten.
 > Found while making a fan-out batch's rows create-only (ai-workspace
 > plan-rag-context P17).
+
+## Phase 19 — the plan catches up with the branch
+
+The final conformance pass confirmed every locked decision against the code
+by test and by mutation and found the drift in the prose: Phases 12, 15 and
+16 described mechanisms Phases 14 and 17 replaced, without saying so; Phase
+13 had no section; the header counted to 11; a few sentences were one
+decision behind (the rerank-cost re-decision, the knob's name, grep's
+`path`). Three code docstrings still described #227's overwrite. All
+corrected here. One behavioural consistency fix in the same spirit: the
+context walk's boundary line named a neighbouring document by basename
+while `kb_grep` prints — and the read tools take — the path, on this plan's
+own argument that two files can share a basename; it names the path now.
+Two silent additions acknowledged: `app.state.kb_retriever` (a test seam for
+the `create_app` door, like `app.state.ingestor`) and the frontend tool
+labels for the three new tools.
 
 ## Out of scope — and findings logged for separate work
 

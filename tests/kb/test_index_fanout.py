@@ -761,3 +761,73 @@ async def test_a_redelivery_of_a_batch_that_crashed_before_claiming_still_claims
     doc = spec.get_resource_manager(SourceDoc).get(doc_id).data
     assert isinstance(doc, SourceDoc) and doc.status == "ready" and doc.text is not None
     assert all(doc.text[c.start : c.end] == c.text for c in _chunks(spec, doc_id))
+
+
+def test_a_duplicate_reading_the_run_between_clear_and_finish_stages_nothing():
+    """Round 9: the done-membership check in `_handle_process` is what keeps a
+    late duplicate from re-staging a row into a run finalize has already
+    cleared — and a status check in its place passed every test. The exact
+    window: finalize cleared staging but has not yet called `finish` (run still
+    `running`); the duplicate's post-write re-read lands there."""
+    import threading
+
+    spec = make_spec(default_user="u")
+    cid = spec.get_resource_manager(Collection).create(Collection(name="c")).resource_id
+    ingestor, coord = _build(spec, csv_batch=2)
+    doc_id = _store_csv(ingestor, cid, rows=5)
+    job = _fanout_to_the_last_batch(spec, coord, ingestor, cid, doc_id)
+
+    cleared = threading.Event()  # finalize: staging cleared, finish not yet called
+    dup_read = threading.Event()  # duplicate: its post-write run re-read is done
+    written = threading.Event()
+    orig_clear = coord._clear_staged_text
+    orig_get = coord._runs.get
+    orig_index_units = ingestor.index_units
+    in_dup = threading.local()
+
+    def clear(doc):
+        orig_clear(doc)
+        cleared.set()
+        assert dup_read.wait(10), "the duplicate never re-read the run"
+
+    def index_units(*a, **kw):
+        out = orig_index_units(*a, **kw)
+        written.set()
+        return out
+
+    def get(doc):
+        if getattr(in_dup, "yes", False) and written.is_set() and not dup_read.is_set():
+            assert cleared.wait(10), "finalize never cleared staging"
+            run = orig_get(doc)
+            dup_read.set()
+            return run
+        return orig_get(doc)
+
+    coord._clear_staged_text = clear
+    coord._runs.get = get  # type: ignore[method-assign]
+    ingestor.index_units = index_units
+    errors: list[BaseException] = []
+
+    def finalize():
+        try:
+            coord._handle_finalize(job("finalize"), "u")
+        except BaseException as e:  # noqa: BLE001
+            errors.append(e)
+            cleared.set()
+
+    def duplicate():
+        in_dup.yes = True
+        try:
+            coord._handle_process(job("process", 2, 4, 5), "u")
+        except BaseException as e:  # noqa: BLE001
+            errors.append(e)
+        finally:
+            dup_read.set()
+
+    td, tf = threading.Thread(target=duplicate), threading.Thread(target=finalize)
+    td.start()
+    tf.start()
+    td.join(20)
+    tf.join(20)
+    assert not errors, errors
+    _assert_canonical_everywhere(spec, ingestor, doc_id)  # includes: no staged row left

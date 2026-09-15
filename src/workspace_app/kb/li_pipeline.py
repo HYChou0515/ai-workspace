@@ -54,7 +54,8 @@ class OffsetSentenceSplitter(SentenceSplitter):
     first occurrence — and three review rounds showed that no search over the
     text can recover the position: the floor has to approximate an overlap
     the splitter computes as a token sum over whole splits, and every char
-    bound was either inert (CJK: 256 tokens ≈ 155 chars) or a period too loose
+    bound was either inert (CJK: a 256-token chunk of the test's sentence is
+    192 chars, under the 192-char bound) or a period too loose
     (an English sentence one word longer than the test's), with the error
     compounding per chunk. The splitter knows where it cut. This subclass
     carries the offset of every split through `_split` (its own recursive
@@ -345,7 +346,8 @@ class DispatchSplitter(TransformComponent):
         P14) into the canonical text that citations and the context walk
         index — exact for a verbatim piece, and for one the splitter's phrase
         fallback rewrote (it drops consecutive punctuation, so `exec(...)`
-        comes back as `exec(.)` — 4.6% of windows on real docs) the run of
+        comes back as `exec(.)` — 4.6% of Markdown prose windows on real docs,
+        0.9% of all sentence-split chunks) the run of
         splits it was merged from, which covers the dropped characters. Every
         window carries the breadcrumb like every other Markdown chunk. A
         region that fits returns ``None`` so the caller keeps the section

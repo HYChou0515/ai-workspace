@@ -3,12 +3,14 @@
 Rounds 3–5 showed that locating a chunk's text in the document cannot be made
 exact: the search floor has to approximate an overlap the splitter computes as
 a token sum over whole splits, and every char bound was either inert (CJK,
-where 256 tokens are ~155 chars) or a period too loose (English sentences one
+where a 256-token chunk of the test's sentence is 192 chars, under the 192-char
+bound) or a period too loose (English sentences one
 word longer than the test's), with the error compounding per chunk. The
 splitter knows where it cut. `OffsetSentenceSplitter` carries the char offset
 of every split through LlamaIndex's own `_split`/`_merge` and reconstructs each
 chunk's span from the run of splits it was merged from — exact for verbatim
-chunks AND for the ~5% the phrase fallback rewrote (their span covers the
+chunks AND for the ones the phrase fallback rewrote — 4.6% of Markdown prose
+windows, 0.9% of all sentence-split chunks (their span covers the
 dropped punctuation)."""
 
 from __future__ import annotations
@@ -70,13 +72,24 @@ def test_same_chunks_as_the_stock_splitter_with_exact_spans(name: str):
             # the phrase fallback dropped consecutive punctuation: the span is the
             # run of splits, so it holds the piece as a subsequence with the same head
             assert region.startswith(piece[:8]) and _is_subsequence(piece, region), (name, s, e)
-        # the run of chunks tiles the text: each starts inside the previous one
-        # (overlap) or right after it, never before where the previous one started
-        assert prev_start <= s <= max(prev_end, s), (name, s, prev_start, prev_end)
+        # never before where the previous one started
+        assert prev_start <= s, (name, s, prev_start, prev_end)
         prev_start, prev_end = s, e
     if text.strip():
         assert nodes[0].start_char_idx == len(text) - len(text.lstrip())
         assert nodes[-1].end_char_idx == len(text.rstrip())
+        # …and the runs COVER the text: every character outside every span is
+        # whitespace or punctuation the phrase fallback drops between runs.
+        # This catches a gap of at least the overlap (a chunk missing, a run
+        # mis-sized); a drift smaller than the overlap hides inside it, and
+        # for that the guard is structural — `_spans_of_runs` raises unless
+        # the run's splits concatenate to the raw chunk exactly (round 9).
+        covered = bytearray(len(text))
+        for n in nodes:
+            for i in range(n.start_char_idx, n.end_char_idx):
+                covered[i] = 1
+        gaps = {text[i] for i in range(len(text)) if not covered[i]}
+        assert gaps <= set(" \t\n\r,.;。？！"), (name, sorted(gaps))
 
 
 def _is_subsequence(needle: str, hay: str) -> bool:
@@ -116,3 +129,23 @@ def test_a_changed_merge_fails_loudly_not_silently():
     assert _spans_of_runs(splits, ["ab cd"], chunk_overlap=32) == [(0, 5)]
     with pytest.raises(RuntimeError, match="LlamaIndex"):
         _spans_of_runs(splits, ["ab xx"], chunk_overlap=32)
+
+
+def test_the_per_call_state_survives_copy_and_serialisation():
+    # Round 6/9: the thread-local was a plain `__dict__` entry on the pydantic
+    # model — `to_json()` raised, and the base component's `__getstate__`
+    # stripped it from the LIVE instance on copy / pickle. A private attribute
+    # is invisible to both.
+    import copy
+    import pickle
+
+    text = " ".join(f"Sentence number {i} about item {i % 7}." for i in range(300))
+    sp = OffsetSentenceSplitter(chunk_size=256, chunk_overlap=32)
+    before = [n.start_char_idx for n in sp.get_nodes_from_documents([Document(text=text)])]
+    sp.to_json()  # must not raise
+    twin = copy.deepcopy(sp)
+    pickle.loads(pickle.dumps(sp))
+    # the original still works after being copied / pickled, and so does the copy
+    after = [n.start_char_idx for n in sp.get_nodes_from_documents([Document(text=text)])]
+    twins = [n.start_char_idx for n in twin.get_nodes_from_documents([Document(text=text)])]
+    assert after == before == twins

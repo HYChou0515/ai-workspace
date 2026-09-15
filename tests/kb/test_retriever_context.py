@@ -189,3 +189,23 @@ def test_a_document_scoped_search_never_walks_into_another_document(
         "a1 a2 a3", [cid], location=loc
     )
     assert p.context_text == "a1 a2 a3"
+
+
+def test_a_boundary_line_names_the_neighbour_by_path_not_basename(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # P19: the walk's boundary line is the coordinate the model hands to
+    # `read_lines` next. Two folders can hold a `notes.md`; a basename there is
+    # exactly what `read_lines("notes.md")` refuses as ambiguous, so the line
+    # names the path — the same coordinate `kb_grep` prints.
+    cid = _collection(
+        spec,
+        chunker,
+        embedder,
+        {"a/notes.md": "a1 a2 a3", "b/notes.md": "b1 b2 b3"},
+    )
+    [p] = Retriever(spec, embedder=embedder, candidates=1, top_k=1, context_chars=2).search(
+        "a1 a2 a3", [cid]
+    )
+    assert p.document_id == encode_doc_id(cid, "a/notes.md")
+    assert p.context_text == "a1 a2 a3\n\n── b/notes.md ──\n\nb1 b2 b3"

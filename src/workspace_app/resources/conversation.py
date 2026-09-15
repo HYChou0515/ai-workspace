@@ -107,7 +107,8 @@ class Citation(Struct):
     # did the model actually see" (#748) is reconstructible at near-zero storage
     # and with the same staleness the existing `start` / `end` already have
     # (a re-index moves offsets). The hit span itself when there was nothing to
-    # widen into; `0 / 0` only when the feature was off. The spill into adjacent
+    # widen into; `0 / 0` when the feature is off or the passage never went
+    # through the walk (a parent pulled in after the cut). The spill into adjacent
     # documents has no offset here. `snippet` / `start` / `end` stay
     # the HIT: the reference card shows the matched sentence, not the context.
     context_start: int = 0

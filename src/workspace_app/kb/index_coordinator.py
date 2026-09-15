@@ -652,12 +652,11 @@ class IndexCoordinator:
             return  # doc deleted between split and run
         run = self._runs.get(doc_id)
         if run is None or run.status != "running":
-            # At-least-once delivery can replay a batch AFTER finalize. Before P8
-            # that was a harmless identical overwrite; now a batch's write is
-            # provisional (batch-relative offsets, rebased at finalize), so a
-            # replay would put its chunks back to batch-relative and stage a
-            # stale text row with no finalize left to fix either. The run says
-            # the work is done: the replay has nothing to add.
+            # At-least-once delivery can replay a batch AFTER finalize. Its rows
+            # are create-only (P17), so it could not overwrite anything; what
+            # this saves is the parse + embed and a stale staging row for a
+            # finalize that will never run again. The run says the work is
+            # done: the replay has nothing to add.
             return
         doc_rm = self._spec.get_resource_manager(SourceDoc)
         chunk_rm = self._spec.get_resource_manager(DocChunk)
@@ -677,7 +676,8 @@ class IndexCoordinator:
             if not is_transient(exc):
                 raise NoRetry(str(exc)) from exc  # permanent → dead-letter now
             raise  # transient → broker re-delivers this batch
-        # P17: a duplicate delivery that passed the guard writes NO rows — the
+        # P17: a duplicate delivery that passed the guard writes no rows (as far
+        # as specstar's create-only holds — see the plan's Phase 18) — the
         # chunk rows are create-only (`Ingestor._emit_packet`), so the first
         # writer wins each one and finalize is the only thing that ever
         # touches offsets. A batch the run already counts as done was
@@ -720,9 +720,11 @@ class IndexCoordinator:
             )
 
     def _handle_finalize(self, payload, requester: str) -> None:
-        """Exactly-once close-out of a fan-out: rejoin the staged batch text into
-        ``SourceDoc.text``, flip status (``error`` if any batch failed, else
-        ``ready``), clear staging, close the run, and run the wiki hook."""
+        """Close-out of a fan-out — intended exactly-once; the `running` guard
+        below is check-then-act (the plan's Out-of-scope list). Rejoin the
+        staged batch text into ``SourceDoc.text``, flip status (``error`` if
+        any batch failed, else ``ready``), clear staging, close the run, and
+        run the wiki hook."""
         doc_id = payload.doc_id
         run = self._runs.get(doc_id)
         if run is None:  # pragma: no cover — finalize implies a run exists
@@ -747,7 +749,8 @@ class IndexCoordinator:
         # known. Before the text is published and before the #390 cache
         # snapshots the chunks. Recomputed from `unit_start`, so a re-driven
         # finalize lands on the same numbers (idempotent by construction) —
-        # and finalize is the ONLY writer of offsets (P17).
+        # and finalize is the only REWRITER of offsets (P17: a batch writes its
+        # rows once, create-only; nothing but this rebase moves them).
         self._rebase_fanout_offsets(doc_id, _batch_bases(staged), requester)
         with doc_rm.using(user=updater):
             doc_rm.update(

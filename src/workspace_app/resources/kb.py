@@ -802,8 +802,9 @@ class RetrievedPassage(Struct, frozen=True):
     # is for the model, not the user. ``context_start`` / ``context_end`` are the
     # widened range WITHIN this document (what `Citation` records; the spill
     # into neighbouring documents has no offset here) — the hit span itself
-    # when there was nothing to widen into, ``0 / 0`` only when the feature was
-    # off.
+    # when there was nothing to widen into; ``0 / 0`` when the feature is off
+    # or the passage never went through the walk (a legacy row without chunk
+    # ids, a parent `_augment_with_parents` pulled in after the cut).
     context_text: str = ""
     context_start: int = 0
     context_end: int = 0

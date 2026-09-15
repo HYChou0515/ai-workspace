@@ -630,9 +630,13 @@ class _ContextSeams:
         return order
 
     def label_of(self, doc_id: str) -> str:
+        """The boundary line's name for a neighbouring document: its PATH as
+        the file tree shows it — the same coordinate `kb_grep` prints and the
+        read tools take (P19). A basename is what `read_lines("notes.md")`
+        refuses as ambiguous the moment two folders hold a `notes.md`."""
         meta = self._meta.get(doc_id)
         path = meta[1] if meta is not None else self._join.path_of(doc_id)
-        return posixpath.basename(path) if path else doc_id
+        return path if path else doc_id
 
 
 def _content_file_id(doc: SourceDoc) -> str:
