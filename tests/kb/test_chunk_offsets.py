@@ -328,3 +328,17 @@ def test_repeated_code_is_positioned_at_the_splitter_cuts():
         truth.append((pos, pos + len(body)))
         cur = pos + len(body)
     assert [(n.start_char_idx, n.end_char_idx) for n in nodes] == truth
+
+
+def test_document_bases_account_for_a_stripped_whitespace_lead():
+    from llama_index.core.schema import Document
+
+    from workspace_app.kb.ingest import _document_bases
+
+    blank, real = Document(text="   "), Document(text="x")
+    # The join is "   \n\nx" and is stripped to "x": the blank Document sits
+    # entirely inside the stripped lead (a negative base, clamped by the caller),
+    # the real one starts at 0.
+    assert _document_bases([blank, real]) == {blank.id_: -5, real.id_: 0}
+    assert _document_bases([blank]) == {blank.id_: -5}
+    assert _document_bases([]) == {}

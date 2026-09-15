@@ -129,3 +129,9 @@ def test_resolve_folder_excludes_the_speakers_denied_documents(spec):
     # one that does not exist
     both = frozenset({encode_doc_id(cid, "hr/a.md"), encode_doc_id(cid, "hr/b.md")})
     assert resolve_folder(spec, [cid], "hr", exclude=both) == frozenset()
+
+
+def test_resolve_folder_of_the_root_is_no_scope(spec):
+    from workspace_app.kb.doc_resolve import resolve_folder
+
+    assert resolve_folder(spec, ["c"], "/") == frozenset()

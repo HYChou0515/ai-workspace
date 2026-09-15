@@ -831,3 +831,44 @@ def test_a_duplicate_reading_the_run_between_clear_and_finish_stages_nothing():
     tf.join(20)
     assert not errors, errors
     _assert_canonical_everywhere(spec, ingestor, doc_id)  # includes: no staged row left
+
+
+def test_batch_bases_skip_a_batch_that_staged_no_text():
+    from workspace_app.kb.index_coordinator import _batch_bases, _join_staged
+
+    rows = [
+        IndexUnitText(doc_id="d", batch_index=0, text="aaaa"),
+        IndexUnitText(doc_id="d", batch_index=1, text=""),  # failed: nothing staged
+        IndexUnitText(doc_id="d", batch_index=2, text="cc"),
+    ]
+    assert _batch_bases(rows) == {0: 0, 2: 6}
+    assert _join_staged(rows) == "aaaa\n\ncc"
+
+
+def test_a_batch_whose_run_vanished_while_it_worked_stages_nothing():
+    # The doc (and its run, by cascade) deleted while the batch was embedding:
+    # nothing to stage or count.
+    from workspace_app.kb.index_jobs import IndexJobPayload
+
+    spec = make_spec(default_user="u")
+    cid = spec.get_resource_manager(Collection).create(Collection(name="c")).resource_id
+    ingestor, coord = _build(spec, csv_batch=2)
+    doc_id = _store_csv(ingestor, cid, rows=5)
+    payload = IndexJobPayload(
+        doc_id=doc_id, collection_id=cid, kind="process", unit_start=0, unit_end=2, batch_index=0
+    )
+    coord._handle_split(IndexJobPayload(doc_id=doc_id, collection_id=cid, kind="split"), "u", 0, 0)
+    orig_get = coord._runs.get
+    calls = 0
+
+    def get(doc):
+        nonlocal calls
+        calls += 1
+        return orig_get(doc) if calls == 1 else None  # gone by the post-write read
+
+    coord._runs.get = get  # type: ignore[method-assign]
+    coord._handle_process(payload, "u")
+    staged = spec.get_resource_manager(IndexUnitText).list_resources(
+        (QB["doc_id"] == doc_id).build()
+    )
+    assert list(staged) == []

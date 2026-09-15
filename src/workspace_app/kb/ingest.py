@@ -1111,8 +1111,8 @@ class Ingestor:
                 # duplicate delivery that finished after the finalize put them
                 # back. Now the first writer wins each row and a duplicate
                 # writes nothing — it is never a concurrent writer against
-                # finalize (rounds 5–7 found three shapes of that race) — as far as
-                # specstar's create-only is first-wins (plan Phase 18). A job
+                # finalize — as far as specstar's create-only is first-wins
+                # (plan-rag-context Phase 18 records where it is not). A job
                 # redelivered after a crash mid-write completes the rows it is
                 # missing. `prepare_fanout` hard-deletes the previous run's
                 # rows, so a re-index starts from an empty slice.

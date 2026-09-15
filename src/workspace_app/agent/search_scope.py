@@ -112,7 +112,7 @@ def describe_budgets(
         # their own — withheld with the documents, otherwise free. Named for the
         # same reason as kb_grep: when the documents are off, the prompt's
         # sections 5–6 still describe them, so the agent must be told they are
-        # gone too (review round 3).
+        # gone too.
         lines.append(
             _allowance(
                 "Reading a document (read_lines, read_page)", 0 if kb.max_calls == 0 else None

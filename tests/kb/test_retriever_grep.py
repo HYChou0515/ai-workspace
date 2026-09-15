@@ -167,3 +167,28 @@ def test_grep_reports_the_page_of_the_earliest_containing_chunk(
     )
     [h] = Retriever(spec, embedder=embedder).grep("gamma", [cid]).hits
     assert h.page == 1
+
+
+def test_anchor_of_a_blank_query_is_the_query_itself():
+    from workspace_app.kb.grep import anchor_of
+
+    assert anchor_of("   ") == "   "
+
+
+def test_grep_falls_back_to_the_stored_bytes_for_a_row_without_extracted_text(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # A legacy SourceDoc row predating stored `text`: the batched read cannot
+    # serve it, so the verify step decodes the document's bytes instead.
+    import msgspec
+
+    from workspace_app.resources.kb import SourceDoc
+
+    cid = _collection(spec, chunker, embedder, {"old.md": "needle in a legacy row\n"})
+    rm = spec.get_resource_manager(SourceDoc)
+    rid = encode_doc_id(cid, "old.md")
+    doc = rm.get(rid).data
+    assert isinstance(doc, SourceDoc)
+    rm.update(rid, msgspec.structs.replace(doc, text=None))
+    r = Retriever(spec, embedder=embedder).grep("legacy row", [cid])
+    assert [(h.line, h.text) for h in r.hits] == [(1, "needle in a legacy row")]

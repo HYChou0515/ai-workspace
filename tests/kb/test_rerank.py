@@ -1,5 +1,7 @@
 from collections.abc import Iterator
 
+import msgspec
+
 from workspace_app.kb.llm import ILlm
 from workspace_app.kb.rerank import rerank_passages
 from workspace_app.resources.kb import RetrievedPassage
@@ -91,3 +93,12 @@ def test_rerank_trims_the_context_it_sees_around_the_hit():
     assert capped.count("B") <= 60 and capped.count("C") <= 60  # a window, not the whole thing
     assert prompt_for(0).count("B") == 0 and "alpha" in prompt_for(0)  # 0 = the bare hit
     assert prompt_for(None).count("B") == 3000  # None = uncapped
+
+
+def test_the_cap_keeps_the_head_when_the_hit_is_not_a_slice_of_its_context():
+    from workspace_app.kb.rerank import _seen_by_reranker
+
+    p = msgspec.structs.replace(
+        _p("d", "zzz"), context_text="some context that does not hold the hit verbatim"
+    )
+    assert _seen_by_reranker(p, 12) == "some context"

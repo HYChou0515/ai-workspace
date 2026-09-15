@@ -149,3 +149,27 @@ def test_the_per_call_state_survives_copy_and_serialisation():
     after = [n.start_char_idx for n in sp.get_nodes_from_documents([Document(text=text)])]
     twins = [n.start_char_idx for n in twin.get_nodes_from_documents([Document(text=text)])]
     assert after == before == twins
+
+
+def test_spans_of_runs_skip_a_blank_chunk_but_carry_its_overlap():
+    from workspace_app.kb.li_pipeline import _OffsetSplit, _spans_of_runs
+
+    splits = [
+        _OffsetSplit("x ", True, 1, 0),
+        _OffsetSplit("  ", True, 1, 2),
+        _OffsetSplit("y", True, 1, 4),
+    ]
+    # The middle raw chunk is whitespace only: no span for it, but the next
+    # chunk's run still starts where `_merge`'s overlap rule says.
+    assert _spans_of_runs(splits, ["x ", "  ", "y"], chunk_overlap=0) == [(0, 1), (4, 5)]
+
+
+def test_place_after_leaves_a_node_it_cannot_find_where_it_was():
+    from llama_index.core.schema import TextNode
+
+    from workspace_app.kb.li_pipeline import _place_after
+
+    found, empty = TextNode(text="beta"), TextNode(text="")
+    _place_after("alpha beta", [empty, found])
+    assert (empty.start_char_idx, empty.end_char_idx) == (None, None)
+    assert (found.start_char_idx, found.end_char_idx) == (6, 10)

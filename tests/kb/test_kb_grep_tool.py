@@ -188,3 +188,27 @@ async def test_kb_grep_says_the_search_stopped_early_when_the_chunk_cap_hit(
     cid = _kb(spec, chunker, embedder, {"many.md": body})
     out = kb_grep_impl(_ctx(spec, embedder, cid), "needle")
     assert "at least 1 matching lines (the search stopped early" in out
+
+
+async def test_kb_grep_refuses_when_the_cap_is_zero_and_when_the_query_is_blank(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    from workspace_app.agent.context import KbGrepBudget
+
+    cid = _kb(spec, chunker, embedder, {"a.md": "needle here\n"})
+    out = kb_grep_impl(
+        _ctx(spec, embedder, cid, kb_grep_budget=KbGrepBudget(max_calls=0)), "needle"
+    )
+    assert "No exact searches are allowed for this reply" in out
+    assert "error: `query` is empty" in kb_grep_impl(_ctx(spec, embedder, cid), "   ")
+
+
+async def test_kb_grep_says_it_shows_the_first_hits_when_there_are_more_than_it_lists(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # `Retriever.grep` lists at most 200 hits but counts them all; the head tells
+    # the agent both numbers so it narrows instead of assuming it saw everything.
+    body = "\n".join(f"needle on line {i}" for i in range(230))
+    cid = _kb(spec, chunker, embedder, {"many.md": body})
+    out = kb_grep_impl(_ctx(spec, embedder, cid, exec_output_max_chars=100_000), "needle")
+    assert "230 matching lines (showing the first 200 in document order" in out

@@ -263,3 +263,64 @@ async def test_read_page_bounds_its_text_part_so_the_image_survives_the_output_c
     assert isinstance(out[0], ToolOutputText) and isinstance(out[1], ToolOutputImage)
     assert len(out[0].text) <= 300 + 120 and "chars omitted" in out[0].text
     assert out[0].text.startswith("[1] deck.pdf — page 1 of 1")
+
+
+async def test_read_lines_on_a_document_whose_text_is_not_extracted_yet(spec: SpecStar):
+    # Stored but not indexed: `SourceDoc.text` is None until the index job runs.
+    from workspace_app.kb.ingest import Ingestor
+
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    emb = HashEmbedder(dim=EMBED_DIM)
+    ing = Ingestor(spec, pipeline=build_doc_pipeline(embedder=emb), embedder=emb)
+    ing.store(collection_id=cid, user="u", filename="later.md", data=b"not yet")
+    out = await read_lines_impl(_ctx(spec, emb, cid), "later.md")
+    assert "has no extracted text yet" in out
+
+
+async def test_read_page_on_a_missing_document_says_so(spec: SpecStar):
+    cid, emb = _kb(spec, {"deck.pdf": _blank_pdf(1)})
+    out = await read_page_impl(_ctx(spec, emb, cid), "nowhere.pdf", 1)
+    assert isinstance(out, str) and "No document matching 'nowhere.pdf'" in out
+
+
+async def test_read_tools_treat_a_document_deleted_mid_resolve_as_missing(
+    spec: SpecStar, monkeypatch
+):
+    # The name resolves, the row is gone by the time it is read (deleted between
+    # the two queries): the same answer as a name that never matched.
+    from workspace_app.kb import doc_resolve
+    from workspace_app.kb.doc_resolve import DocResolution
+
+    cid, emb = _kb(spec, {"notes.md": b"one\ntwo"})
+    real = doc_resolve.resolve_document
+
+    def gone(*a, **kw):
+        res = real(*a, **kw)
+        assert res.status == "ok" and res.doc_id is not None
+        return DocResolution(status="ok", doc_id=res.doc_id + "-gone", path=res.path)
+
+    monkeypatch.setattr(doc_resolve, "resolve_document", gone)
+    out = await read_lines_impl(_ctx(spec, emb, cid), "notes.md")
+    assert "No document matching 'notes.md'" in out
+
+
+def test_a_deck_with_a_preview_pdf_is_a_page_source():
+    from specstar.types import Binary
+
+    from workspace_app.kb.pages import page_source
+    from workspace_app.resources import SourceDoc
+
+    deck = SourceDoc(
+        collection_id="c",
+        path="talk.pptx",
+        content=Binary(data=b"not a pdf", content_type="application/vnd.ms-powerpoint"),
+        preview=Binary(data=_blank_pdf(3), content_type="application/pdf"),
+    )
+    src = page_source(deck)
+    assert src is not None and (src.kind, src.pages, src.mime) == ("pdf", 3, "application/pdf")
+    plain = SourceDoc(
+        collection_id="c",
+        path="notes.md",
+        content=Binary(data=b"x", content_type="text/markdown"),
+    )
+    assert page_source(plain) is None

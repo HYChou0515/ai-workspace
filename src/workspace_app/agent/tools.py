@@ -1547,7 +1547,7 @@ async def read_lines_impl(
     # registry (same shape as read_page's range error). A limit below 1 is
     # refused BEFORE the slice — `lines[0:-1]` is not empty, so judging by the
     # window let `-1` read n-1 lines with a truncation notice and a citation
-    # while `-5` was refused (review round 3).
+    # while `-5` was refused.
     if limit is not None and limit < 1:
         return f"nothing to read: limit must be at least 1 (got {limit})."
     window = _line_window(

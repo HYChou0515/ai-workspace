@@ -1508,3 +1508,14 @@ async def test_the_non_streaming_turn_says_it_has_nowhere_to_report():
     assert ctx.on_exec_output is None, (
         "a sink that discards claims a listener this turn does not have"
     )
+
+
+def test_tool_output_text_stringifies_a_part_it_does_not_know():
+    from agents import ToolOutputImage, ToolOutputText
+
+    from workspace_app.api.litellm_runner import _tool_output_text
+
+    # The list branch is taken only when an image is among the parts; a
+    # foreign part beside it is stringified rather than dropped.
+    img = ToolOutputImage(image_url="data:image/png;base64,QUJD")
+    assert _tool_output_text([ToolOutputText(text="a"), 42, img]).split("\n")[:2] == ["a", "42"]

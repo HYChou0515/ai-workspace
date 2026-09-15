@@ -51,13 +51,12 @@ class OffsetSentenceSplitter(SentenceSplitter):
     each chunk (plan-rag-context P14).
 
     The stock splitter stamps `start_char_idx` with `text.find(chunk)` — the
-    first occurrence — and three review rounds showed that no search over the
-    text can recover the position: the floor has to approximate an overlap
-    the splitter computes as a token sum over whole splits, and every char
-    bound was either inert (CJK: a 256-token chunk of the test's sentence is
-    192 chars, under the 192-char bound) or a period too loose
-    (an English sentence one word longer than the test's), with the error
-    compounding per chunk. The splitter knows where it cut. This subclass
+    first occurrence — and no search over the text can recover the position:
+    a search floor has to approximate an overlap the splitter computes as a
+    token sum over whole splits, and any char bound is either inert (CJK: a
+    256-token chunk can sit under a 192-char bound) or a period too loose
+    (an English sentence one word longer than the one it was tuned on), with
+    the error compounding per chunk. The splitter knows where it cut. This subclass
     carries the offset of every split through `_split` (its own recursive
     splitter, with each split located in ITS parent — exact, since the split
     functions return the text's pieces in order) and reconstructs each chunk's
@@ -74,9 +73,9 @@ class OffsetSentenceSplitter(SentenceSplitter):
     Per-call state (the raw, unstripped chunks the base class hands to
     `_postprocess_chunks`, the spans) lives in a thread-local: the pipeline is
     shared by concurrent ingests. A pydantic private attribute, not a plain
-    `__dict__` entry (round 6): the base component's `__getstate__` strips
-    unpicklable `__dict__` keys from the LIVE instance on copy / pickle, and
-    `to_json()` would choke on it."""
+    `__dict__` entry: the base component's `__getstate__` strips unpicklable
+    `__dict__` keys from the LIVE instance on copy / pickle, and `to_json()`
+    would choke on it."""
 
     _p14: threading.local = PrivateAttr(default_factory=threading.local)
 
@@ -150,9 +149,8 @@ class OffsetSentenceSplitter(SentenceSplitter):
         out = super()._postprocess_parsed_nodes(nodes, parent_doc_map)
         spans_by_id: dict[str, tuple[int, int]] = getattr(self._p14, "spans_by_id", {})
         for n in out:
-            span = spans_by_id.get(n.node_id)
-            if span is not None:
-                n.start_char_idx, n.end_char_idx = span
+            # Every node here was built by `_parse_nodes` above and has a span.
+            n.start_char_idx, n.end_char_idx = spans_by_id[n.node_id]
         return out
 
 
@@ -431,7 +429,7 @@ class DispatchSplitter(TransformComponent):
         source = node.get_content()
         # P8/P14: before the fold below hides the verbatim text. This
         # `CodeSplitter` chunks by `max_chars` only — contiguous, no overlap
-        # (`chunk_lines_overlap` is declared and never read, review round 5) —
+        # (`chunk_lines_overlap` is declared and never read in this version) —
         # so each chunk sits at its first occurrence after the previous end.
         _place_after(source, chunks)
         # `_split_code` is only reached for a filename that `code_language_for`
@@ -452,8 +450,7 @@ def _place_after(text: str, nodes: Sequence[BaseNode]) -> None:
     not in ``text`` (a byte-sliced fragment) keeps the span it carries."""
     cursor = 0
     for n in nodes:
-        if not isinstance(n, TextNode):
-            continue
+        assert isinstance(n, TextNode)  # both callers' splitters emit TextNodes only
         content = n.get_content()
         pos = text.find(content, cursor) if content else -1
         if pos >= 0:

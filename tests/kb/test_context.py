@@ -251,3 +251,45 @@ def test_hits_whose_contexts_do_not_touch_stay_separate():
         label_of=lambda d: d,
     )
     assert [(p.context_start, p.context_end) for p in out] == [(0, 30), (60, 90)]
+
+
+def test_a_passage_whose_chunks_are_unknown_is_left_untouched():
+    # A legacy row (chunk ids not in the document's span list) has no chunk
+    # boundaries to snap to: it comes back exactly as it went in.
+    hit = RetrievedPassage(
+        collection_id="c",
+        document_id="d1",
+        filename="d1.md",
+        start=8,
+        end=20,
+        source_chunk_ids=["legacy#9"],
+        text=_TEXT[8:20],
+        score=1.0,
+    )
+    [p] = _single_doc([hit], min_chars=100)
+    assert p is hit and p.context_text == "" and (p.context_start, p.context_end) == (0, 0)
+
+
+def test_a_neighbour_with_no_chunks_is_skipped_and_the_walk_goes_on():
+    # An empty neighbouring document (no chunks) is neither a wall nor a piece:
+    # the walk steps over it to the next document.
+    hit = RetrievedPassage(
+        collection_id="c",
+        document_id="a",
+        filename="a.md",
+        start=0,
+        end=10,
+        source_chunk_ids=["a#0"],
+        text="A" * 10,
+        score=1.0,
+    )
+    order = {"a": (None, "empty"), "empty": ("a", "c"), "c": ("empty", None)}
+    [p] = expand_passages(
+        [hit],
+        min_chars=5,
+        chunks_of=lambda d: [] if d == "empty" else _one_chunk_doc(d),
+        text_of=lambda d: "" if d == "empty" else d.upper() * 10,
+        neighbours=lambda d: order[d],
+        label_of=lambda d: d,
+    )
+    assert p.context_text == "A" * 10 + "\n\n── c ──\n\n" + "C" * 10

@@ -209,3 +209,23 @@ def test_a_boundary_line_names_the_neighbour_by_path_not_basename(
     )
     assert p.document_id == encode_doc_id(cid, "a/notes.md")
     assert p.context_text == "a1 a2 a3\n\n── b/notes.md ──\n\nb1 b2 b3"
+
+
+def test_the_seams_read_an_unknown_document_as_empty_and_edgeless(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    from workspace_app.kb.retriever import LocationFilter, _ContextSeams, _DocJoin
+
+    cid = _collection(spec, chunker, embedder, {"nine.md": _NINE})
+    doc_id = encode_doc_id(cid, "nine.md")
+    r = Retriever(spec, embedder=embedder)
+    seams = _ContextSeams(
+        spec, _DocJoin(spec, [], frozenset()), {}, r._canonical_text, None, None, None, None, []
+    )
+    assert seams.chunks_of("collection:x∕gone.md") == []
+    assert seams.neighbours("collection:x∕gone.md") == (None, None)
+    # asked twice, the second read is served from what the first loaded
+    first = seams.chunks_of(doc_id)
+    assert first and seams.chunks_of(doc_id) == first
+    # a page-scoped location filter admits nothing without a page to compare
+    assert LocationFilter(source_doc_id=doc_id, page_from=1, page_to=2).admits({}) is False

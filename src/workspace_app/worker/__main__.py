@@ -126,8 +126,7 @@ def _build_retriever(
 ) -> Retriever:
     """The worker's ONE Retriever, from the same knobs `create_app` reads — the
     card drafter and the eval handler share it (two hand-copied kwargs blocks
-    used to sit here; the P10 door test pinned one of them and review round 4
-    dropped the knobs from the other without anything reddening)."""
+    used to sit here, and a knob dropped from one of them reddened nothing)."""
     from specstar import SpecStar
 
     from .. import factories as f

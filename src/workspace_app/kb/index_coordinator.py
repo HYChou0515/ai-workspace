@@ -676,22 +676,23 @@ class IndexCoordinator:
             if not is_transient(exc):
                 raise NoRetry(str(exc)) from exc  # permanent → dead-letter now
             raise  # transient → broker re-delivers this batch
-        # P17: a duplicate delivery that passed the guard writes no rows (as far
-        # as specstar's create-only holds — see the plan's Phase 18) — the
-        # chunk rows are create-only (`Ingestor._emit_packet`), so the first
-        # writer wins each one and finalize is the only thing that ever
-        # touches offsets. A batch the run already counts as done was
-        # delivered by someone else: nothing left to stage or count (a stage
-        # after finalize cleared staging would only leave a row behind). A
-        # job redelivered after a crash mid-write is NOT done yet and stages.
+        # The chunk rows are create-only (`Ingestor._emit_packet`): a duplicate
+        # delivery that passed the guard wrote nothing where a row already
+        # stood, so finalize stays the only thing that moves offsets (as far
+        # as specstar's create-only is first-wins — plan-rag-context Phase 18
+        # records where it is not). What is left is bookkeeping, keyed on the
+        # run's `done` set rather than its status: a batch already counted was
+        # delivered by someone else and stages nothing (a stage after finalize
+        # cleared staging would only leave a row behind), while a job
+        # redelivered after a crash mid-write is not counted yet and stages.
         run = self._runs.get(doc_id)
         if run is None:
             return
         if payload.batch_index in run.done:
-            # Already counted — but the delivery that counted it may have
-            # crashed between `mark_done` and the claim (round 8): the gate is
-            # a CAS no-op when already claimed, so try it rather than leave the
-            # doc to the stuck sweep's five-minute clock.
+            # Counted — but the delivery that counted it may have died between
+            # `mark_done` and the claim. The gate is a CAS no-op when already
+            # claimed, so try it rather than leave the document to the stuck
+            # sweep's interval.
             if self._runs.claim_finalize(doc_id):
                 self._enqueue_finalize(doc_id, payload.collection_id, requester)
             return

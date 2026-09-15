@@ -548,7 +548,9 @@ class _ContextSeams:
                 continue
             collection_id, _path, file_id = meta
             collections.add(collection_id)
-            if file_id:
+            # Every writer stamps a content hash; the guard is for a row that
+            # predates it.
+            if file_id:  # pragma: no branch
                 by_content.setdefault((collection_id, file_id), []).append(d)
         if not collections:
             return
@@ -1100,7 +1102,10 @@ class Retriever:
         by_doc: dict[str, list[DocChunk]] = {}
         for ch in chunks:
             doc_id = join.doc_id_for(ch)
-            if doc_id is not None and join.path_of(doc_id) is not None:
+            # A chunk whose every holder is denied never reaches here — the
+            # exclusion is in the store query — so the skip is for a row whose
+            # document vanished between the two reads.
+            if doc_id is not None and join.path_of(doc_id) is not None:  # pragma: no branch
                 by_doc.setdefault(doc_id, []).append(ch)
         texts = join.texts_for(by_doc)
         slack = len(query)
