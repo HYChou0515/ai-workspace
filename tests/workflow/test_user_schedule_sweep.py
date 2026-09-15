@@ -30,7 +30,12 @@ from workspace_app.api.schedule_index import (
 )
 from workspace_app.resources import make_spec
 from workspace_app.workflow.orchestrator import ActiveRunExists
-from workspace_app.workflow.triggers import register_trigger_store, window_key
+from workspace_app.workflow.triggers import (
+    ScanLease,
+    SpecstarTriggerStore,
+    register_trigger_store,
+    window_key,
+)
 from workspace_app.workflow.user_schedule_sweep import (
     MAX_START_ATTEMPTS,
     UserScheduleSweeper,
@@ -252,6 +257,56 @@ def test_the_same_window_fires_once_however_often_the_sweep_runs():
         asyncio.run(_sweeper(spec, files, started, datetime(2026, 9, 5, 9, 30)).tick())
 
     assert len(started.runs) == 1
+
+
+def test_one_pod_per_window_reads_the_pages_schedules():
+    """#804: every pod used to read every page's schedules.json on every tick so
+    that one of them could win each schedule's claim — the claim de-duplicates
+    the firing, not the reading. With a scan lease, one pod per window reads at
+    all; the peer's tick touches no file. The next window elects again."""
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    started = _Started()
+    files = _Files(**{f"{ITEM}{PATH}": _file(NOON)})  # nothing due: only the SCANS are counted
+    listings: list[int] = []
+    reads: list[str] = []
+
+    class _CountedIndex(ScheduleIndex):
+        """The scan's first step is listing the index; a loser must not even do that."""
+
+        def items_with_paths(self) -> list[tuple[str, list[str]]]:
+            listings.append(1)
+            return super().items_with_paths()
+
+    async def counted_read(item_id: str, path: str) -> bytes:
+        reads.append(item_id)
+        return await files.read(item_id, path)
+
+    clock = {"t": 1_000_000.0}
+
+    def pod() -> UserScheduleSweeper:
+        return UserScheduleSweeper(
+            spec=spec,
+            index=_CountedIndex(spec),
+            read=counted_read,
+            read_live=counted_read,
+            start=started,
+            owner_of=lambda _item: "alice",
+            now=lambda: datetime(2026, 9, 5, 9, 30),
+            lease=ScanLease(
+                SpecstarTriggerStore(spec), "user-schedules", interval_s=60, now=lambda: clock["t"]
+            ),
+        )
+
+    asyncio.run(pod().tick())
+    asyncio.run(pod().tick())
+    assert len(listings) == 1  # one pod listed the index this window; the peer did not
+    assert reads == [ITEM]  # …nor read the page
+
+    clock["t"] += 60
+    asyncio.run(pod().tick())
+    assert len(listings) == 2  # a new window, a new scan
+    assert reads == [ITEM, ITEM]
 
 
 def test_the_next_day_is_a_new_window():

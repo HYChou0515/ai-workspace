@@ -204,15 +204,19 @@ class CardGenPayload(msgspec.Struct):
       - ``process``: digest ONE doc (``doc_index`` into the run's ordered doc set)
         and stage it, then win the finalize gate if it's the last;
       - ``finalize``: merge + classify the staged digests into the run's proposals
-        and raise the questions, exactly once.
+        and raise the questions, exactly once;
+      - ``cluster_sweep`` (#506 P8, no run): the collection's periodic cluster
+        maintenance — backfill un-projected candidates + fold race-split clusters
+        (:meth:`Reconciler.sweep`). Asked for by the API's timer, done here.
 
-    ``run_id`` is the :class:`CardGenRun` every step drives (its id is what
-    ``enqueue`` returns + the FE polls); ``collection_id`` is carried so the split
-    job's ``partition_key`` serialises a collection's runs across consumers."""
+    ``run_id`` is the :class:`CardGenRun` every run step drives (its id is what
+    ``enqueue`` returns + the FE polls; empty for a sweep); ``collection_id`` is
+    carried so the split job's ``partition_key`` serialises a collection's runs
+    across consumers."""
 
     collection_id: str
     doc_ids: list[str] = msgspec.field(default_factory=list)
-    kind: str = "split"  # split | process | finalize
+    kind: str = "split"  # split | process | finalize | cluster_sweep
     run_id: str = ""
     doc_index: int = -1  # process: which doc in the run's ordered doc set
 
