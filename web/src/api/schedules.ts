@@ -29,6 +29,10 @@ export type ScheduleRow = {
   /** Whether `run` names a workflow this item offers — a deleted one is skipped
    * by the sweep with a log line nobody reads. */
   known: boolean;
+  /** Why the workflow `run` names will not run although the item has it — its
+   * file does not parse. Not `problems` (the ROW is wrong) and not `!known`
+   * (no such workflow): the fix is to the workflow. */
+  run_problem: string;
   /** THE verdict: will the sweep fire this row. False for a refused row, an
    * unknown workflow, a file over the cap, a deployment with the sweep off, or
    * a file the sweep's index does not name yet. The next-run fields are filled

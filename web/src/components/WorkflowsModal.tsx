@@ -213,7 +213,7 @@ export function WorkflowsModal({
             list.map((w) => (
               <div
                 key={w.id}
-                data-testid="workflow-row"
+                data-testid={w.problem ? `workflow-broken-${w.id}` : "workflow-row"}
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -228,19 +228,27 @@ export function WorkflowsModal({
                     {w.title || w.id}
                   </div>
                   <div style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
-                    {t("workflows.steps", { n: w.phases.length })}
+                    {w.problem ? (
+                      <span style={{ color: "var(--err)" }}>
+                        {t("workflows.wontParse")} {w.problem}
+                      </span>
+                    ) : (
+                      t("workflows.steps", { n: w.phases.length })
+                    )}
                   </div>
                 </div>
-                <button
-                  type="button"
-                  data-testid={`workflow-run-${w.id}`}
-                  aria-label={`${t("workflows.run")} ${w.title || w.id}`}
-                  disabled={busy}
-                  onClick={() => void run(w.id)}
-                  style={pillBtn}
-                >
-                  <Icon name="play" size={12} /> {t("workflows.run")}
-                </button>
+                {!w.problem && (
+                  <button
+                    type="button"
+                    data-testid={`workflow-run-${w.id}`}
+                    aria-label={`${t("workflows.run")} ${w.title || w.id}`}
+                    disabled={busy}
+                    onClick={() => void run(w.id)}
+                    style={pillBtn}
+                  >
+                    <Icon name="play" size={12} /> {t("workflows.run")}
+                  </button>
+                )}
               </div>
             ))
           )}
@@ -313,6 +321,10 @@ export function WorkflowsModal({
                       ) : !row.known ? (
                         <span data-testid={`schedule-unknown-${row.index}`} style={{ color: "var(--err)" }}>
                           {t("schedules.unknownWorkflow")}
+                        </span>
+                      ) : row.run_problem ? (
+                        <span data-testid={`schedule-broken-${row.index}`} style={{ color: "var(--err)" }}>
+                          {t("schedules.brokenWorkflow")} {row.run_problem}
                         </span>
                       ) : !row.runnable ? null : row.due_now ? (
                         t("schedules.nextSweep")

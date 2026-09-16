@@ -71,6 +71,21 @@ describe("WorkflowsModal", () => {
     expect(await screen.findByTestId("workflows-empty")).toBeInTheDocument();
   });
 
+  it("lists a workflow that will not parse with its reason and no Run", async () => {
+    // Until this, a malformed file vanished from the panel in silence — the
+    // person could not see it, let alone fix it.
+    listMock.mockResolvedValue([
+      { id: "good", title: "Good", phases: [{ id: "a" }] },
+      { id: "broken", title: "broken", phases: [], problem: "steps[0]: `cache` is required — …" },
+    ]);
+    render(fakeService().svc);
+    const row = await screen.findByTestId("workflow-broken-broken");
+    expect(row).toHaveTextContent("broken");
+    expect(row).toHaveTextContent("`cache` is required");
+    expect(screen.queryByTestId("workflow-run-broken")).toBeNull();
+    expect(screen.getByTestId("workflow-run-good")).toBeInTheDocument();
+  });
+
   it("runs a workflow → startRun, then onRun + close", async () => {
     listMock.mockResolvedValue([{ id: "filer", title: "File uploads", phases: [{ id: "a" }] }]);
     startRunMock.mockResolvedValue({ run_id: "r1", item_id: "inv1", chat_id: "c9" });

@@ -17,6 +17,9 @@ export type WorkspaceWorkflow = {
   id: string;
   title: string;
   phases: WorkspacePhase[];
+  /** Why this file will not run — it does not parse. Listed rather than dropped,
+   * so a person can see it and fix it; such a row has no Run. */
+  problem?: string;
 };
 
 export const workspaceWorkflowsApi = {
