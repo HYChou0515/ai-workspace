@@ -12,6 +12,12 @@ So this seam exists to compose those per-request values, and the values it
 returns are NEVER written back anywhere. They live for exactly one turn: the one
 started by the request they were read from.
 
+A turn nobody pressed send for — a scheduled workflow node, a goal-driver
+continuation — has no request to read, and the same seam answers for it through
+``env_without_request`` (``docs/plan-headless-env.md``): the deploy decides
+whether such a turn runs on a service account, on a per-user credential, or on
+nothing. The platform learns no word for any of those; it only asks.
+
 The platform ships no implementation and knows no cookie name. Which cookie,
 which header, and what the values mean belong to the deploy's gateway, so the
 entire decision — including the whitelist — lives inside the impl a deploy names
@@ -70,3 +76,24 @@ class IRequestEnv(abc.ABC):
         the item's value.
         """
         ...
+
+    async def env_without_request(self, *, user_id: str, item_id: str) -> dict[str, str]:
+        """The variables a turn with NO request behind it should be given.
+
+        Asked for every turn nobody pressed send for: each agent node of a
+        workflow run (an item schedule's, an event trigger's, and a run a person
+        started by hand — every node of a run reads this one source, so a re-run
+        on the clock sees exactly what the first run saw), and a goal-driver
+        continuation of a chat. ``user_id`` is the user that turn was captured
+        as: the item's owner for an item schedule, the goal's setter for a goal
+        turn, the person who pressed run for a hand-started run. Whether that
+        maps to a per-user credential, one shared service account, or nothing
+        at all is this impl's policy; the platform stores none of it and merges
+        the answer under the item's ``env_vars`` exactly as ``env_for``'s.
+
+        The default is nothing — a deploy written against the original
+        interface keeps its request-less turns exactly as they were. Raising
+        fails that turn, as in ``env_for``, and for the same reason: a
+        scheduled run that quietly ran as nobody would report success.
+        """
+        return {}
