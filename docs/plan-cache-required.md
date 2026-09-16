@@ -90,3 +90,8 @@ user:「schedule 會因為 workflow 的 cache 而沒辦法做第二次」。重�
 
 **要不要再一輪**:P7 沒換機制——新增的是守衛(一個例外類別 + 三處 `if manifest is None`、一個 id→路徑判準、兩扇門各一句、
 一個 try/except、一個前端過濾),每條有先紅的測試、突變各紅一條。照規則不開;由 user 決定。
+
+## P6/P7 之後
+
+PR #810 head `fcde93d9`(P1–P7),CI run 35047620599 **11/11 綠**;ready for review。第三輪(三把鏡頭審 P2–P5)的發現全部
+修在 P7,每條先紅、突變各紅一條;P7 沒換機制,不開第四輪(由 user 決定)。合併等 user 點頭(`--merge`)。
