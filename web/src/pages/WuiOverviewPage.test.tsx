@@ -22,6 +22,7 @@ vi.mock("../api", () => ({
 }));
 
 import { makeQueryClient } from "../api/queryClient";
+import { exactTime, relativeTime } from "../api/types";
 import { DialogProvider } from "../components/Dialog";
 import { translate } from "../lib/i18n";
 import { currentWriteFailure, resetWriteFailures } from "../lib/writeFailures";
@@ -121,6 +122,41 @@ describe("WuiOverviewPage", () => {
       "href",
       "/a/rca/i-1",
     );
+  });
+
+  it("says when a page was Deployed the way the rest of the shell says when — relative, in a sentence built for it", async () => {
+    // Review round 2: the sentence template was written for an absolute date
+    // ("{who} 於 {when} Deploy") and P5 dropped `relativeTime` into it —
+    // "bob 於 just now Deploy". The template now takes the relative form, and
+    // the exact stamp sits in the title the way `GroupsPage` pairs them.
+    const at = Date.now() - 2 * 24 * 60 * 60 * 1000;
+    render(<WuiOverviewPage client={client([row({ deployed_at: at })])} />, { wrapper: Wrap });
+
+    const rca = await screen.findByRole("region", { name: "根因分析" });
+    const iso = new Date(at).toISOString();
+    const when = relativeTime(iso); // "2 d ago"
+    expect(within(rca).getByRole("listitem")).toHaveTextContent(
+      translate("zh-TW", "wui.row.by", { who: "bob", when }),
+    );
+    expect(within(rca).getByTitle(exactTime(iso))).toBeInTheDocument();
+  });
+
+  it("draws Remove and Try again as buttons, not as words", async () => {
+    // Review round 2: `data-size="sm"` styles nothing without `className="btn"`
+    // (base.css resets every button to bare text), so Remove had no border,
+    // no height, and `disabled` was invisible — and Try again rendered in the
+    // error sentence's red, reading as a word in the sentence.
+    const c = client(THREE, { list: vi.fn(async () => { throw new Error("boom"); }) });
+    render(<WuiOverviewPage client={c} />, { wrapper: Wrap });
+    const retry = within(await screen.findByRole("alert")).getByRole("button", {
+      name: word("wui.retry"),
+    });
+    expect(retry).toHaveClass("btn");
+    cleanup();
+
+    render(<WuiOverviewPage client={client()} />, { wrapper: Wrap });
+    const rca = await screen.findByRole("region", { name: "根因分析" });
+    expect(within(rca).getAllByRole("button", { name: REMOVE() })[0]).toHaveClass("btn");
   });
 
   it("draws Remove only where the server said this viewer may", async () => {

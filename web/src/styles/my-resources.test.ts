@@ -67,7 +67,7 @@ describe("my-resources: the live panel's layout", () => {
     expect(rule(".page ul > li")).toMatch(/display:\s*flex/);
   });
 
-  it.each([".page .live-list", ".page .disk-list"])(
+  it.each([".page .live-list", ".page .disk-list", ".page .wui-list"])(
     "declares %s's columns ONCE for the whole list, so the rows line up",
     (selector) => {
       // Declared on the ROW instead, every row sizes its own tracks: the spec
@@ -100,6 +100,24 @@ describe("my-resources: the live panel's layout", () => {
     expect(third).toMatch(new RegExp(`^(${LENGTH}|fit-content\\(${LENGTH}\\))$`));
   });
 
+  it("BOUNDS the overview's middle column, which is free text, so one long item title cannot zero every sibling's page title", () => {
+    // Review round 2 of PR #811: the `/wui` list copied the disk list's tracks —
+    // `minmax(0, 1fr) auto auto` — but its middle cell is an ITEM TITLE, not a
+    // byte count. With the tracks shared down the list (subgrid) an `auto`
+    // track sized itself to the longest item title in the group and the page
+    // title, the only shrinkable track, paid on every row: measured, one
+    // 45-character item title gave five sibling page titles 0px at 1280px.
+    // The cap is what stops that; the reflow test below cannot see it, and
+    // happy-dom lays nothing out.
+    const tracks = rule(".page .wui-list").match(/grid-template-columns:([^;]*);/)?.[1];
+    expect(tracks).toBeTruthy();
+    const second = tracks!.trim().split(/\s+(?![^(]*\))/)[1];
+    expect(second).toMatch(/^fit-content\(\d+(\.\d+)?(%|rem|px|ch|em)\)$/);
+    // …and what does not fit the cap WRAPS rather than running under Remove —
+    // the shell's `.detail` is nowrap, so the overview has to say otherwise.
+    expect(rule(".page .wui-list .detail")).toMatch(/white-space:\s*normal/);
+  });
+
   it("reflows the rows before the fixed columns eat the title", () => {
     // The columns reserve ~400px before the title gets any, and the title is
     // the only shrinkable track — measured in Chromium it reached width 0 at a
@@ -122,6 +140,13 @@ describe("my-resources: the live panel's layout", () => {
     // `[\s\S]*` the storage row lost its narrow tracks and rendered a 256px
     // 刪除 button on the first line, with the suite green.
     expect(block).toMatch(/\.page \.disk-list > li \{[^}]*grid-template-columns:/);
+    // Three lists now, not two: the overview (`/wui`) shipped with the shell
+    // and no reflow of its own, and this guard named the other two — the
+    // exact half-somebody-tested shape the comment above warns about. Its
+    // title measured 0px at 390px in a real browser (PR #811, review round 1).
+    expect(block).toMatch(/\.page \.wui-list[^{}]*\{[^}]*display:\s*flex/);
+    expect(block).toMatch(/\.page \.wui-list > li \{[^}]*grid-template-columns:/);
+    expect(block).toMatch(/\.page \.wui-list \.detail \{[^}]*grid-row:\s*2/);
     // …and the title must stop sharing a line with the App tag, which is what
     // gives it the width back.
     expect(block).toMatch(/\.page \.live-list \.app-tag \{[^}]*grid-row:\s*2/);

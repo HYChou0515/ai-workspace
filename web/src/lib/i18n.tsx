@@ -1150,7 +1150,10 @@ export const messages = {
     en: "A WUI is a folder in an item's workspace, run as a page; press Deploy in the page's toolbar and it appears here.",
   },
   "wui.empty.help": { "zh-TW": "看說明", en: "Read the help" },
-  "wui.row.by": { "zh-TW": "{who} 於 {when} Deploy", en: "deployed by {who} on {when}" },
+  // `{when}` is `relativeTime`'s form — "just now", "3 min ago", "2 d ago",
+  // "7 Aug" — so the sentence must read with all of them; "於 {when} Deploy" /
+  // "on {when}" did not ("於 just now Deploy", "on 2 d ago").
+  "wui.row.by": { "zh-TW": "{who} Deploy · {when}", en: "deployed by {who} · {when}" },
   "wui.remove": { "zh-TW": "移除", en: "Remove" },
   "wui.remove.title": { "zh-TW": "把「{title}」從 WUI 移除？", en: "Remove “{title}” from WUI?" },
   "wui.remove.body": {

@@ -398,10 +398,18 @@
  * gets the one-line flex row at every width, and measured at 390px that row
  * gave the title 0px and the document a horizontal scrollbar (review of PR
  * #811) — the same defect the note under "narrow viewports" records fixing
- * for the other two lists on 2026-09-05. */
+ * for the other two lists (commit 8ec13019, 2026-09-05). */
 .page .wui-list {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  /* title · item + who/when · Remove. The middle track is CAPPED, not `auto`:
+     its content is an item title — free text, unbounded — and with the tracks
+     shared down the list (subgrid) an `auto` track sized itself to the widest
+     item title in the group and the page title, the only shrinkable track,
+     paid for it on EVERY row: measured at 1280px, one 45-character item title
+     zeroed five sibling page titles (review round 2 of PR #811). `fit-content`
+     hands the slack back when the names are short and stops at the cap when
+     they are not; what does not fit the cap wraps (below). */
+  grid-template-columns: minmax(0, 1fr) fit-content(45%) auto;
   column-gap: var(--space-12);
 }
 
@@ -414,6 +422,11 @@
 
 .page .wui-list .detail {
   min-width: 0;
+  /* Wraps rather than the shell's nowrap: capped, a long item title that kept
+     nowrap ran under the Remove button; an ellipsis would hide who put the
+     page up. `anywhere` for a name with no break opportunity. */
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 /* A refusal reported inside its row, under the three columns. */

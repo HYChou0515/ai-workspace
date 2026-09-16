@@ -20,7 +20,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 
 import { qk } from "../api/queryKeys";
-import { relativeTime } from "../api/types";
+import { exactTime, relativeTime } from "../api/types";
 import { type DeployedWui, type WuiApi, wuiAddress, wuiApi } from "../api/wui";
 import { AppTag } from "../components/AppTag";
 import { useDialog } from "../components/Dialog";
@@ -42,7 +42,16 @@ export function WuiOverviewPage({ client = wuiApi }: { client?: WuiApi }) {
         <h1>WUI</h1>
         <p className="error" role="alert">
           {t("wui.error")}{" "}
-          <button type="button" data-size="sm" onClick={() => void refetch()}>
+          {/* `className="btn"`: base.css resets every button to bare text, so
+              without it `data-size` styles nothing and this read as a word in
+              the sentence, in the sentence's red. */}
+          <button
+            type="button"
+            className="btn"
+            data-variant="secondary"
+            data-size="sm"
+            onClick={() => void refetch()}
+          >
             {t("wui.retry")}
           </button>
         </p>
@@ -124,9 +133,11 @@ function PageRow({ page, client }: { page: DeployedWui; client: WuiApi }) {
         {/* The workspace has no deep link to a file, so this opens the item. */}
         <Link to={`/a/${page.slug}/${page.item_id}`}>{page.item_title || page.item_id}</Link>
         {" · "}
-        {/* Relative, like the rest of the shell (`relativeTime`); the exact
-            stamp is in the title for anyone who needs the date. */}
-        <span title={new Date(page.deployed_at).toISOString()}>
+        {/* Relative, like the rest of the shell, with the exact stamp in the
+            title — `relativeTime` / `exactTime` are the shell's own pair
+            (`GroupsPage`), and the sentence template is written for the
+            relative form ("2 d ago" / "just now" / "7 Aug"). */}
+        <span title={exactTime(new Date(page.deployed_at).toISOString())}>
           {t("wui.row.by", {
             who: page.deployed_by,
             when: relativeTime(new Date(page.deployed_at).toISOString()),
@@ -136,6 +147,8 @@ function PageRow({ page, client }: { page: DeployedWui; client: WuiApi }) {
       {page.can_remove ? (
         <button
           type="button"
+          className="btn"
+          data-variant="secondary"
           data-size="sm"
           aria-label={`${t("wui.remove")} ${page.title}`}
           disabled={remove.isPending}

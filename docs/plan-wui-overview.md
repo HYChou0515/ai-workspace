@@ -369,3 +369,54 @@ server's write — a Cancelled Deploy can still list the page (one read + one
 write wide, the same shape as aborting the build stream). Within the locator's
 5-second positive memo a page Deployed and then its item deleted stays listed
 for the rest of the window — every gate on the platform has it.
+
+## Review round 2 (2026-09-16 — verify the fixes; regression lens on the mechanism changes)
+
+Worst finding, again a real-browser one, and again the row: the wide
+`.wui-list` had copied the disk list's tracks — `minmax(0, 1fr) auto auto` —
+but its middle cell is an ITEM TITLE, free text and `nowrap`, and with the
+tracks shared down the list (subgrid) the `auto` track sized itself to the
+longest item title in the group. The page title, the only shrinkable track,
+paid on **every row**: one 45-character item title gave five sibling page
+titles 0px at 1280px (the pre-P5 flex row collapsed only its own row). Fixed
+in P6 by capping the track — `fit-content(45%)` — and letting the detail wrap
+(`white-space: normal; overflow-wrap: anywhere`) rather than run under Remove
+or ellipsise away who put the page up. Re-measured over the reviewer's sweep
+(item titles of 10–35 CJK / 20–70 latin characters, at 1280 / 760 / 700 /
+641px): the first row's page title stays ≥ 295px at every length and width
+(was 0 at 35 CJK / 70 latin), the detail cell stops at the cap and wraps,
+`scrollWidth == clientWidth` for the document and every row.
+
+Also in P6:
+
+- The row sentence was written for an absolute date and P5 dropped a relative
+  one into it — "bob 於 just now Deploy", "deployed by bob on 2 d ago". The
+  template now reads with every form `relativeTime` produces ("{who} Deploy ·
+  {when}" / "deployed by {who} · {when}"), and the tooltip is `exactTime`, the
+  shell's own pairing, not a raw ISO string. Pinned.
+- Remove and Try again carried `data-size="sm"` without `className="btn"`, so
+  base.css's reset left them bare text: no border, no height, `disabled`
+  invisible, and Try again in the error sentence's red. Both are `.btn` now;
+  the class is pinned (geometry is not — happy-dom lays nothing out).
+- The stylesheet guard (`my-resources.test.ts`) named two lists where there
+  are three: it now checks `.wui-list` declares its columns once, caps the
+  middle one, and reflows in the narrow block — so deleting the round-1 fix
+  reddens something, which it did not before.
+
+Ledger corrections from the same round: "29 existing tests went red" (P2's
+message and the PR body) is **28** — the P1 test file against the P2 component
+fails 28 of 113; and "`detailSentence` is the one spelling" was still one
+copy short after P5 — `api/health.ts`'s replay read — folded in P6 (with `||`,
+as that site treated an empty `detail`). Deferred out of this PR on the
+reviewer's advice: `DeployedPages.record` hand-rolls get → create / update
+where specstar's `create_or_update` does the same in one call (used in five
+`kb/` modules) — a mechanism swap, so it earns its own round, not a line in
+this one. Observed, not changed: `GET /wui` reads the item title through
+`locator.title_of` although the memoised access facts already hold it — a
+further halving of the per-item cost, not a defect.
+
+Verified and unchanged from round 1: every P5 fix reddens its test when
+deleted; the apply-effect change is additive on the `list` step (over every
+older verdict shape the effect behaves as before, a `list` verdict for A can
+only ever point A's frame, and `at < latest` still retires it first); the
+`moved()` and unmount pins hold.
