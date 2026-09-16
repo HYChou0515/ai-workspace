@@ -4,8 +4,9 @@
 `view: wui`。點那份 yaml，資料夾就以網頁的形式跑起來。
 
 沒有註冊表，也沒有部署流程——寫進檔案就會動，跟 `board.ai.yaml` 會變成看板是同一個機制。
-（工具列上的 **Deploy** 不是部署：它重建、確認頁面打得開，然後把這一頁本來就有的網址端出來
-——見下方「發布（Deploy）」。）
+（工具列上的 **Deploy** 不是讓頁面「動起來」的開關：頁面本來就會動、本來就有網址。Deploy
+做的是重建、確認頁面打得開、把網址端出來，**並且把這一頁列上全平台的 WUI 總覽**——
+見下方「發布（Deploy）」。）
 
 ```
 銷售儀表板/
@@ -171,15 +172,17 @@ Refresh **不會** build，它只是重讀資料夾。所以 AI 改完 `src/` �
 
 工具列最右邊有一顆 **Deploy**：
 
-- 按下去做三件事：**重讀** `package.json`（不信開頁時的快取——頁面可能是開著之後才被
-  加上 build 的）；有 build 就**先 rebuild**；最後**確認頁面真的打得開**（走的是跟讀者
-  開頁時同一條讀取路徑；讀者開頁時仍是他自己那一刻的讀取），三件都成才把網址端出來——
-  所以網址指到的一定是剛建好、而且**當下**打得開的成品，
-  不會是舊的 `dist/`，也不會是一個 `entry` 指錯地方的空頁。任一步失敗就不會出現
-  「Deployed」，而是一句說明是哪一步：build 壞了是「Deploy failed — see the build
-  output」壓在 build 輸出上面；打不開是「Deploy failed — the page does not open: …」
-  帶頁面自己的理由；`package.json` 讀不到是「could not check whether this page has a
-  build: …」。什麼都不端出來。
+- 按下去做四件事：**重讀** `package.json`（不信開頁時的快取——頁面可能是開著之後才被
+  加上 build 的）；有 build 就**先 rebuild**；**確認頁面真的打得開**（走的是跟讀者
+  開頁時同一條讀取路徑；讀者開頁時仍是他自己那一刻的讀取）；最後**把這一頁列上
+  WUI 總覽**（見下一節）——四件都成才把網址端出來，所以網址指到的一定是剛建好、
+  **當下**打得開、而且別人找得到的成品，不會是舊的 `dist/`，也不會是一個 `entry`
+  指錯地方的空頁。任一步失敗就不會出現「Deployed」，而是一句說明是哪一步：build 壞了是
+  「Deploy failed — see the build output」壓在 build 輸出上面；打不開是「Deploy failed —
+  the page does not open: …」帶頁面自己的理由；`package.json` 讀不到是「could not check
+  whether this page has a build: …」；總覽不收是「Deploy failed — the page could not be
+  listed in WUI: …」帶伺服器的理由（最常見的是沒有這個 item 的 `edit_content`——能改
+  item 內容的人才能把頁面上架）。什麼都不端出來。
 - 跑的期間**整個 pane 是 Deploy 的**：Refresh、Rebuild、Auto-rebuild 都按不下去（同一個
   資料夾裡不能有兩個 build 在寫 `dist/`），旁邊多一顆 **Cancel**——一個永遠不結束的
   build（卡住的 `pnpm run build`、被 gateway 吊著的串流）不會把 pane 鎖到關檔為止。
@@ -219,6 +222,29 @@ Refresh **不會** build，它只是重讀資料夾。所以 AI 改完 `src/` �
     Deploy 不會凍結任何東西——連結永遠指向資料夾**現在**的成品。要一個不會變的版本，
     把資料夾複製一份（`pages/report/` → `pages/report-v2/`）再改那份，舊連結不動。
     設計理由與被否決的路在 `docs/plan-wui-deploy.md`。
+
+### WUI 總覽：別人怎麼找到這一頁
+
+導覽列有一個入口叫 **WUI**（`/wui`），列出**所有 Deploy 過、而且你開得了的**頁面，
+按 app 分組、最新 Deploy 的在前。每一列是頁面的名字（點了在新分頁開讀者版）、它所在的
+item（點了進 item 的工作區）、誰在什麼時候 Deploy 的。這是頁面「被找到」的唯一地方：
+一頁做好了但沒按 Deploy，只有拿到連結的人知道它存在。
+
+- **只列 Deploy 過的。** 不是每個 `view: wui` 檔都會出現——平台不掃描 workspace 找頁面，
+  Deploy 那一下才是「這頁是給別人用的」的宣告。舊頁面要出現在總覽，到頁面上按一次 Deploy。
+- **名字取自 view 檔的 `title:`**（沒寫就用資料夾名），Deploy 當下由伺服器讀進去；改了
+  `title:` 之後再 Deploy 一次，總覽就跟著換。
+- **你看到的就是你開得了的。** 總覽按 item 的讀取權過濾，跟連結本身一樣不給任何人多的
+  權限；別人的私有 item 裡的頁面在你這裡不存在。item 被刪、或你被移出 item，那幾列就
+  自己消失。
+- **Remove** 只有能 Deploy 的人（有 `edit_content`）看得到，按了先確認一次：頁面和
+  資料夾都留著，只是不再列在總覽；要列回來再按一次 Deploy。
+- **資料夾被刪掉，那一列不會自己消失**——這是刻意的。這個平台上「檔案不存在」也是
+  sandbox 還原到一半時的回答，靠它自動下架會讓頁面在每次閒置回收後閃一下不見、還得再
+  Deploy 一次。死掉的列點進去是讀者版那句「This page has not been published yet — or it
+  is still being restored」，由有權限的人按 Remove 收掉。
+
+決策與被否決的替代方案（例如在寫入時索引每個 `view: wui` 檔）在 `docs/plan-wui-overview.md`。
 
 ## 頁面的邊界
 

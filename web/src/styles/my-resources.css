@@ -5,8 +5,12 @@
  * limit they were) and each row read as one run of text:
  * "quota demo A1 cores · 512 MB Close".
  *
+ * `.page` is the shell every cross-app platform page renders in — `/my-resources`
+ * and the `/wui` overview — so the rules under it (h1, sections, `ul > li` rows,
+ * `.detail`, `.empty`, `.hint`, `.app-tag`) are shared by both.
+ *
  * Its own file rather than base.css: base is the app-wide reset + shared
- * primitives, and these classes belong to one page. Same call as sheet.css /
+ * primitives, and these classes belong to two pages of one shape. Same call as sheet.css /
  * topic-hub.css. Imported from main.tsx alongside those.
  *
  * Tokens only — `no-undefined-tokens.test.ts` fails the build on a `var()` that
