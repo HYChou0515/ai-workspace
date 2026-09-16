@@ -1577,6 +1577,12 @@ def describe_dsl_grammar() -> str:
         lines.append(f"  - optional: {', '.join(opt) or '(none)'}")
     lines += [
         "",
+        f"`cache` (agent, sandbox) has no default: {CACHE_RULE}. On a schedule, a step with "
+        "`false` runs on every fire; a workflow whose steps are all `true` does its work once "
+        "and then skips every step on every later fire (the run says done, nothing is done) — "
+        "the steps that fetch, send or look at the clock are the ones to mark `false`; a "
+        "step downstream of one re-runs by itself when its input changed.",
+        "",
         f"capability `call` ∈ {list(CAPABILITIES)}.",
         f"deterministic `check` ∈ {list(_CHECKS)} (an agent may instead declare `outputs`).",
         f'`outputs` field types ∈ {list(_OUTPUT_TYPES)} (optionally {{"type":…, "enum":[…]}}).',

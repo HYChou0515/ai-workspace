@@ -26,11 +26,11 @@ user:「schedule 會因為 workflow 的 cache 而沒辦法做第二次」。重�
 |---|---|---|---|
 | 1 | 哪些步驟必填 | DSL 的 **`agent`、`sandbox`** 兩種(`dsl.py:144`、`:170`)——有 `cache` 欄位的只有它們;`gate`/`capability`/`map`/`switch` 沒有這個欄位 | capability 呼叫本身是 upsert、map/switch 是控制流 |
 | 2 | 錯誤訊息 | 缺 `cache` 的解析錯誤在 `parse_def`(唯一解碼點)改寫成教規則的一句:「`steps[N]` (agent/sandbox): `cache` is required — `false` for a step that reads the world or has a side effect (sends, fetches, looks at the clock; it runs every time), `true` for one that may be skipped while its inputs are unchanged.」其餘 msgspec 錯誤照舊 | 每扇門(`save_workflow`、載入、面板、範本複製)都經過 `parse_def`;訊息在這裡就一次到位 |
-| 3 | 「解析失敗」四處同一句 | `offered.py` 新增一個函式:列出 item 自己的 workflow 檔裡**解析或靜態驗證失敗**的 `{id: problem}`(用 `validate_workflow_json`)。四個消費者:面板列表路由(壞檔也列、帶 `problem`)、排程路由(`run` 指向壞檔 → 該列 problem + 不 runnable)、sweep(開火前跳過 + say-once WARNING,與 `no_such_workflow` 同形)、`save_schedules`(拒絕,回 problem) | 判準一個地方做;parity 測試(路由 vs sweep)才守得住 |
+| 3 | 「解析失敗」四處同一句 | 一個判準 `workspace_store.workflow_problem`:**只看 `parse_def` 會不會丟**——這是載入器自己的判準(`load_workspace_workflow` 回 None 的條件),靜態驗證(`validate_def`)不擋載入所以不算(第一版寫「解析或靜態驗證失敗」,施工時對齊載入器改掉)。`offered.unparsable_workflow(read, item, id)` 對單一 id 問、任何 reader 都行;`workspace_workflow_listing` 對整個資料夾問。四個消費者:面板列表路由(壞檔也列、帶 `problem`)、排程路由(`run` 指向壞檔 → 該列 problem + 不 runnable)、sweep(開火前跳過 + say-once WARNING,與 `no_such_workflow` 同形)、`save_schedules`(拒絕,回 problem) | 判準一個地方做;parity 測試(路由 vs sweep)才守得住 |
 | 4 | 面板列表回應形狀 | 不改形狀:壞檔以 `{id, title: id, phases: [], problem}` 列在同一個 list;前端型別加 `problem?: string`,畫成紅列、沒有 Run | 附加欄位,不破既有消費者 |
 | 5 | `run.py`(profile workflow 的 Python API)的 `cache=True` 預設 | **不動** | 工程師寫的;`authoring.py` 的 lint 已要求 sandbox 步驟表態 |
 | 6 | 既有檔怎麼辦 | repo 內全部補 `cache`(`sample-workflows/image-to-knowledge` 7 步、playground `dsl` profile 6 步、docs/skill/tests 的範例);線上 workspace 的檔改不到 → 部署後面板和排程列**寫出原因**,由 AI/人用 `save_workflow` 補;`docs/migrations.md` §5 記一筆 | 遷移不能是「我的 workflow 不見了」 |
-| 7 | 排程那節的教材 | §22.11、`author-workflow`「Running it on a clock」、`save_workflow` 描述:會碰外界或有副作用的步驟 `cache: false`;全部 `true` 的 workflow 排程第二次什麼都不做——這是作者的選擇,平台不再猜 | 規則和錯誤訊息用同一句話 |
+| 7 | 排程那節的教材 | §22.11、`author-workflow`「How to author」與「Running it on a clock」、附在 skill 後的機器產生 DSL 附錄(同一個 `CACHE_RULE` 常數;`save_workflow` 的描述本身不列欄位,指向 skill):會碰外界或有副作用的步驟 `cache: false`;全部 `true` 的 workflow 排程第二次什麼都不做——這是作者的選擇,平台不再猜 | 規則和錯誤訊息用同一句話 |
 
 ## Phases
 
@@ -44,3 +44,22 @@ user:「schedule 會因為 workflow 的 cache 而沒辦法做第二次」。重�
 | P6 | 推、draft PR、三把鏡頭 review 一輪(改了 schema 契約,算換機制)、CI | — |
 
 **不做**:run id 加鹽;`triggers.json` 那邊不用改碼——它跑的是 profile 的 `run.py`(規則 5)。
+
+## 施工紀錄
+
+- **P2**(`b3870891`):`AgentStep`/`SandboxStep` 的 `cache` 無預設;`parse_def` 把 msgspec 的「missing required
+  field `cache`」改寫成 `CACHE_RULE`(位置保留,連 map 裡的 `do[0]` 都帶到)。repo 內補 `cache`:2 個出貨 json
+  (3 步)、6 個 docs(11 個範例)、18 個測試檔(137 個字面值,`True`——它們原本依賴的值)。新測試 glob 出貨的
+  workflow.json 都解析得過。先紅的:缺 `cache` 的 agent/sandbox 各一條。
+- **P3**(`d8e66406`):`workspace_store.workflow_problem`(載入器的判準)+ `workspace_workflow_listing`(壞檔帶原因)
+  + `offered.unparsable_workflow`(單一 id、任何 reader)。四扇門:面板列表加 `problem` 欄位;`schedule_views(broken=)`
+  → `run_problem`(`known` 保持 true);sweep 在**到期、claim 之前**問(每次開火一次讀,不是每列每 tick——#804 的
+  「沒到期的 tick 只讀一次」測試守住了第一版放錯位置);`save_schedules` 拒絕並點名 `save_workflow`。八條先紅;
+  五個突變各紅在自己那扇門(面板 1、路由 2 含 parity、sweep 1、工具 1、views 3)。
+- **P4**(`392a955a`):前端 `workflow-broken-<id>`(原因、無 Run)、`schedule-broken-<index>`;兩條 vitest 先紅;typecheck 綠。
+- **P5**:機器產生的 DSL 附錄用同一個 `CACHE_RULE` 加一句(測試釘住 agent/sandbox 的 required 含 `cache`、句子在);
+  skill「How to author」與「Running it on a clock」各加一段;§9、§22.2、§22.11;migrations.md 一列;mkdocs `--strict` 本機綠。
+
+**9/14 live check 的三次開火為什麼成功**:#805 的 parity 測試 fixture 寫的 stamp workflow 是 `"cache": False`
+(`tests/api/test_schedules_route_parity.py:39`),live check 用的是同一個形狀——所以當時沒撞到。我當時沒把
+「第二次開火會做事」當成要驗的性質,是漏的。

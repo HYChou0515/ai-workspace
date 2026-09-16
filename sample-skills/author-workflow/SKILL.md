@@ -46,6 +46,14 @@ Two consequences you design around:
     sandbox step has no model in it at all.
 - **Side-effects go only through a `capability`.** A `sandbox` step is compute-only; filing
   into a collection, writing a card, or creating an entity is always a capability.
+- **Every `agent` and `sandbox` step says whether it may be skipped: `cache` is required.**
+  A finished step leaves a receipt (its inputs and result); the next run finds the receipt
+  and, if the inputs are unchanged, skips the step. That is right for a step whose inputs
+  are all in its arguments (`"cache": true` — a re-run redoes only what changed). It is
+  wrong for a step that reads the world or has a side effect — sends, fetches, looks at
+  the clock — which must run every time (`"cache": false`). A step downstream of one
+  re-runs by itself when its input changed. There is no default: an omitted `cache` is a
+  parse error that states this rule.
 
 ## How to author
 
@@ -76,7 +84,12 @@ without anyone pressing Run. Declare it with **`save_schedules`**: it writes thi
 `with`); it **validates before saving** and refuses a `run` this item does not have, so save
 the workflow first, then the schedule.
 
-Three things to get right, because each one is a report that quietly never arrives:
+Four things to get right, because each one is a report that quietly never arrives:
+
+- **The steps that do the work must be `"cache": false`.** A workflow whose steps are all
+  `true` does its work on the first fire and then skips every step on every later fire —
+  the run says done, nothing is done. Mark the steps that fetch, send or look at the clock
+  `false`; the rest follow when their input changes. Check this before saving the schedule.
 
 - **Name the zone** (`"tz": "Asia/Taipei"`) whenever the time is one the user chose. The
   default is UTC, not wherever the server is.

@@ -14,7 +14,13 @@ from pathlib import Path
 
 import pytest
 
-from workspace_app.workflow.dsl import AgentStep, DslError, parse_def
+from workspace_app.workflow.dsl import (
+    CACHE_RULE,
+    AgentStep,
+    DslError,
+    describe_dsl_grammar,
+    parse_def,
+)
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -56,6 +62,18 @@ def test_a_missing_field_that_is_not_cache_keeps_msgspecs_own_message() -> None:
         parse_def(_wf({"type": "agent", "phase": "p", "cache": True}))  # no prompt
     assert "prompt" in str(exc.value)
     assert "`cache` is required" not in str(exc.value)
+
+
+def test_the_authoring_reference_states_the_rule_the_parse_error_states() -> None:
+    """The `author-workflow` skill appends this reference at load time; the model
+    reads it before writing a step, and the parse error after — one sentence."""
+    ref = describe_dsl_grammar()
+    agent = ref[ref.index("**agent**") : ref.index("**sandbox**")]
+    sandbox = ref[ref.index("**sandbox**") : ref.index("**gate**")]
+    assert "required:" in agent and "cache" in agent.split("optional:")[0]
+    assert "required:" in sandbox and "cache" in sandbox.split("optional:")[0]
+    assert CACHE_RULE in ref
+    assert "every fire" in ref
 
 
 def test_every_shipped_workflow_json_parses() -> None:

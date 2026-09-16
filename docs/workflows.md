@@ -292,6 +292,8 @@ node 保證 exactly-once。
   **編輯上游會自動重跑受影響的下游** ——不用手動記帳。
 - **`cache=False`（永不快取）。** 一個 step 可以選擇永遠重跑（或者因為它的 inputs
   總是在變而自然永遠重跑，例如「抓最新的」）。它的下游也跟著重跑，正確無誤。
+  DSL（§22）裡這個欄位**必填**：一份排程跑的 workflow 若每步都 `true`，第二次開火每步都拿收據、
+  什麼都不做——所以作者得逐步表態，平台不替他猜。
 - **Determinism 講的是 *身分*，不是輸出。** step 的輸出可以完全 nondeterministic（LLM）。
   必須可重現的是那個 *step 身分集合* ——由 §3 的控制流慣例保證（迭代穩定集合、
   只在 inputs/artifact 上 branch）。
@@ -650,12 +652,18 @@ DSL 的界線是一條線：**流程圖的*形狀*必須事先靜態宣告**—�
 
 | type | 做什麼 |
 | --- | --- |
-| `agent` | LLM 一回合。三選一的產出:`out` 寫內容檔;`outputs` 宣告具名欄位（§22.4）;`produces` 宣告它自己寫出的檔案 glob（§22.4b）。必有 gate。 |
-| `sandbox` | 確定性指令，無 LLM。純計算、**無憑證**（可靠副作用只走 capability）。 |
+| `agent` | LLM 一回合。三選一的產出:`out` 寫內容檔;`outputs` 宣告具名欄位（§22.4）;`produces` 宣告它自己寫出的檔案 glob（§22.4b）。必有 gate。**`cache` 必填**（見下）。 |
+| `sandbox` | 確定性指令，無 LLM。純計算、**無憑證**（可靠副作用只走 capability）。**`cache` 必填**（見下）。 |
 | `gate` | 人工閘。`approve` 續、`reject` 終止；`revise` 帶回饋打回重做（§22.7）。 |
 | `capability` | 可靠且冪等的副作用：`ingest_to_collection` / `upsert_context_card` / `create_entity`。 |
 | `map` | 唯一的迴圈（§22.5）。`over` 展開集合、`do` 是元素內序列。一層到底，不准巢狀。 |
 | `switch` | 有界條件分支（§22.6）。`cases` 預先列舉，只走一條。 |
+
+**`cache` 沒有預設值**（plan-cache-required）：每個 `agent` / `sandbox` step 都要說它能不能被跳過。
+§9 的 journal 是**每個 workflow 一份**、不是每次 run 一份——step 做完留收據，下次輸入沒變就直接拿收據。
+輸入全在 arguments 裡的 step 設 `true`（重跑只重做有變的）；會碰外界或有副作用的——寄信、抓資料、看時間——
+設 `false`，每次都跑；它下游的 step 輸入變了會自己重跑。省略就是解析錯誤，錯誤訊息就是這條規則
+（`dsl.py` 的 `CACHE_RULE`，也附在 `author-workflow` skill 的機器產生附錄裡）。
 
 字面的大括號寫 `{{` / `}}`——prompt 要給模型看 JSON 範例時一定會用到（例如要它回 `{{"count": 3}}`）。單層 `{…}` 一律是查值，所以沒跳脫的 JSON 範例會被當成引用不存在的變數而被擋下。
 
@@ -881,6 +889,14 @@ interactive profile 的 item（候選是空集合）上，AI 用 `save_workflow`
 reference.md 明文），而同一列跑過之後再存會說明天；sweep 沒開的部署會**照存但大聲警告**。
 教它的地方在 `author-workflow` skill（每個 app 都授權）、`save_workflow` 的成功回覆句、以及工具
 自己的說明（`every` 的字從 `EVERY` 產生，測試釘住不會漂移）。
+
+**排程跑的 workflow，做事的 step 要 `cache: false`。** §9 的收據是每個 workflow 一份：每步都 `true`
+的 workflow 第一次開火做完事、之後每次開火每步都拿收據，run 顯示 `done`、什麼都沒做。這是作者的選擇，
+不是平台猜的（§22.2 `cache` 必填）；`author-workflow` skill 的「Running it on a clock」教這件事。
+**解析失敗的 workflow 四處說同一句話**（`workspace_store.workflow_problem`，載入器自己的判準）：
+Workflows 面板列出它和原因（沒有 Run）、排程列標「這個工作流程解析失敗」（`run_problem`，不是「找不到」——
+item 有這個檔）、sweep 在到期要開火前跳過並 say-once WARNING、`save_schedules` 拒絕並回原因。
+以前是面板靜默消失、sweep 每 tick 開火失敗又退回 window。
 
 **人在 Workflows 面板看。** `GET /a/{slug}/items/{id}/schedules` 用 sweep 同一套解讀回每一列
 （含被拒絕的列，帶 `raw` 與 `problems`），每列一個 **`runnable`** 判決（列能解析 ∧ `run` 是這個
