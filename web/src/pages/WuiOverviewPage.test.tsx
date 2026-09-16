@@ -4,6 +4,7 @@
  * viewer may open, grouped by app, newest first; Remove where they may.
  */
 import "@testing-library/jest-dom/vitest";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -20,7 +21,10 @@ vi.mock("../api", () => ({
   },
 }));
 
+import { makeQueryClient } from "../api/queryClient";
+import { DialogProvider } from "../components/Dialog";
 import { translate } from "../lib/i18n";
+import { currentWriteFailure, resetWriteFailures } from "../lib/writeFailures";
 import { QueryWrap } from "../test/queryWrapper";
 import { WuiOverviewPage } from "./WuiOverviewPage";
 
@@ -158,6 +162,57 @@ describe("WuiOverviewPage", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(c.remove).not.toHaveBeenCalled();
     expect(screen.getByText("Shipping board")).toBeInTheDocument();
+  });
+
+  it("says the listing could not be read, and reads it again on request", async () => {
+    // Review round 1: `isLoading || !data` rendered "載入中…" forever after a
+    // rejected list — no sentence, no retry, indistinguishable from a slow
+    // read. Compare `MyResourcesPage`, which still has that shape.
+    let fail = true;
+    const c = client(THREE, {
+      list: vi.fn(async () => {
+        if (fail) throw new Error("boom");
+        return THREE;
+      }),
+    });
+    render(<WuiOverviewPage client={c} />, { wrapper: Wrap });
+
+    const said = await screen.findByRole("alert");
+    expect(said).toHaveTextContent(word("wui.error"));
+    expect(screen.queryByText(word("wui.loading"))).toBeNull();
+    fail = false;
+    fireEvent.click(within(said).getByRole("button", { name: word("wui.retry") }));
+
+    expect(await screen.findByText("Shipping board")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("reports a failed Remove in its row only — not as the app-wide write-failure notice too", async () => {
+    // Under the REAL query client: its mutation cache routes every rejected
+    // mutation to the global notice unless the mutation says it renders its
+    // own — `LiveEnvironmentRow` opts out for exactly this reason, and the
+    // first version here copied the row without the opt-out (review round 1).
+    resetWriteFailures();
+    const c = client(THREE, { remove: vi.fn(async () => { throw new Error("remove boom"); }) });
+    render(
+      <MemoryRouter>
+        <QueryClientProvider client={makeQueryClient()}>
+          <DialogProvider>
+            <WuiOverviewPage client={c} />
+          </DialogProvider>
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+    const rca = await screen.findByRole("region", { name: "根因分析" });
+    fireEvent.click(within(rca).getAllByRole("button", { name: REMOVE() })[0]);
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: word("wui.remove") }));
+
+    const said = await within(rca).findByRole("alert");
+    expect(said).toHaveTextContent(word("wui.remove.failed"));
+    expect(currentWriteFailure()).toBeNull();
+    // The row stays, and so does its button — there is something to press again.
+    expect(within(rca).getAllByRole("button", { name: REMOVE() })[0]).toBeEnabled();
   });
 
   it("says what a WUI is when there is nothing to list, and where to read more", async () => {

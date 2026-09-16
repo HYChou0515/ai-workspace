@@ -2520,6 +2520,13 @@ describe("WuiView: Deploy", () => {
 
     expect(screen.queryByText(/✓ deployed/i)).toBeNull();
     expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull();
+    // And no row was written (PR #811 regression review): since the overview,
+    // the run's next act after the verify read is the POST, so this guard
+    // deleted no longer shows on screen — the SECOND `moved()` hides the
+    // verdict — but a cancelled Deploy would still list the page.
+    expect(
+      vi.mocked(fetch).mock.calls.filter(([url, init]) => isDeploy(url, init)),
+    ).toHaveLength(0);
   });
 
   it("is out of reach while a Rebuild runs — the same build, not a second one", async () => {
@@ -3075,6 +3082,94 @@ describe("WuiView: Deploy", () => {
 
       await screen.findByText(/deploy failed/i);
       expect(deployCalls()).toHaveLength(0);
+    });
+
+    it("invalidates the overview's listing once the row is written, so a visit within its stale window sees the page", async () => {
+      // Review round 1: the overview's query kept the app default staleTime
+      // (30 s) and nothing invalidated it after a Deploy — open /wui, Deploy a
+      // page, come back inside 30 s: "還沒有任何 WUI 被 Deploy". The write
+      // invalidates the read, the way every mutation in the app does.
+      vi.stubGlobal("fetch", vi.fn(withDeploy()));
+      const qc = makeTestQueryClient();
+      qc.setQueryData(qk.wuiOverview, []); // a visit to /wui a moment ago
+      render(pages(svc({ ...PLAIN }), qc)("/sales/page.ai.yaml"));
+      fireEvent.click(await screen.findByRole("button", { name: /^deploy$/i }));
+
+      await screen.findByRole("textbox", { name: /address/i });
+      expect(qc.getQueryState(qk.wuiOverview)?.isInvalidated).toBe(true);
+    });
+
+    it("shows the page it verified even when the listing refused — the read passed, the frame follows it", async () => {
+      // Review round 1: on a "list" failure the pane was left on the read from
+      // BEFORE the build, under a red line about the listing — a person read a
+      // stale frame as a broken page. The "open" branch stays put because its
+      // read failed; here the read succeeded, so the frame shows it.
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: unknown, init?: RequestInit) => {
+          if (isDeploy(url, init)) {
+            return new Response(JSON.stringify({ detail: "not authorized to edit_content" }), {
+              status: 403,
+              headers: { "content-type": "application/json" },
+            });
+          }
+          return new Response(sse({ type: "done", exit_code: 0 }), {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          });
+        }),
+      );
+      const files: Record<string, string> = {
+        ...BUILT,
+        "/sales/dist/index.html": "<html><body>v1</body></html>",
+      };
+      render(
+        <QueryWrap>
+          <WorkspaceSlugProvider value="rca">
+            <FileServiceProvider value={svc(files)}>
+              <WuiView
+                path="/sales/page.ai.yaml"
+                spec={{ view: "wui", entity: "", entry: "dist/index.html" } as ViewSpec}
+              />
+            </FileServiceProvider>
+          </WorkspaceSlugProvider>
+        </QueryWrap>,
+      );
+      await waitFor(() => expect(frame()?.srcdoc).toContain("v1"));
+      // The build rewrites dist/ under the running Deploy.
+      files["/sales/dist/index.html"] = "<html><body>v2</body></html>";
+      fireEvent.click(await screen.findByRole("button", { name: /^deploy$/i }));
+
+      const said = await screen.findByText(/deploy failed/i);
+      expect(said).toHaveTextContent(/could not be listed in WUI/i);
+      await waitFor(() => expect(frame()?.srcdoc).toContain("v2"));
+      expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull();
+    });
+
+    it("leaving the folder while the POST is in flight aborts it", async () => {
+      // Pinned because a mutation dropping the unmount abort survived every
+      // other test (conformance review): the request would have kept running
+      // for a pane nobody was looking at.
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          (url: unknown, init?: RequestInit) =>
+            new Promise<Response>((resolve, reject) => {
+              if (!isDeploy(url, init)) return resolve(undefined as unknown as Response);
+              init?.signal?.addEventListener("abort", () =>
+                reject(new DOMException("aborted", "AbortError")),
+              );
+            }),
+        ),
+      );
+      const view = renderIn(PLAIN);
+      fireEvent.click(await screen.findByRole("button", { name: /^deploy$/i }));
+      await waitFor(() => expect(deployCalls()).toHaveLength(1));
+
+      view.unmount();
+
+      const [, init] = deployCalls()[0];
+      expect(init?.signal?.aborted).toBe(true);
     });
 
     it("Cancel while the POST is in flight aborts it, and nothing settles", async () => {

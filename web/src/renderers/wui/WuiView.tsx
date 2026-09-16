@@ -374,10 +374,18 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
     if (deploy === undefined || deploy.state === "idle" || deploy.state === "working" || deploy.applied) return;
     const settle = (state: DeployState) => setDeploys((d) => ({ ...d, [path]: state }));
     if (deploy.at < latest) return settle({ path, at: latest, applied: true, state: "failed", step: "superseded" });
+    const verified =
+      queryClient.getQueryData(qk.wuiDoc(fs.scopeId, path, instance, deploy.at)) !== undefined;
     if (deploy.state === "done") {
-      if (queryClient.getQueryData(qk.wuiDoc(fs.scopeId, path, instance, deploy.at)) === undefined) {
-        return settle({ path, at: latest, applied: true, state: "failed", step: "changed" });
-      }
+      if (!verified) return settle({ path, at: latest, applied: true, state: "failed", step: "changed" });
+      setGeneration(deploy.at);
+    } else if (deploy.step === "list" && verified) {
+      // The page opened — the verify read passed — and only the LISTING was
+      // refused. So the frame follows the read, under the red line: left on
+      // the read from before the build, a person took a stale frame for a
+      // broken page. (The "open" branch stays put because its read failed.)
+      // When the read has since left the cache the sentence still stands and
+      // the frame stays; "changed" would hide the reason the Deploy failed.
       setGeneration(deploy.at);
     }
     settle({ ...deploy, applied: true });
@@ -943,6 +951,11 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
       listing.current = record;
       try {
         await wuiApi.deploy(slug, fs.scopeId, mine, record.signal);
+        // The write invalidates the read, as every mutation in the app does:
+        // the overview's listing keeps the default stale window, and a visit
+        // to /wui a moment before this Deploy would otherwise show the page
+        // missing for the rest of it.
+        void queryClient.invalidateQueries({ queryKey: qk.wuiOverview });
       } catch (err) {
         if (moved() || record.signal.aborted) return;
         setDeploy({

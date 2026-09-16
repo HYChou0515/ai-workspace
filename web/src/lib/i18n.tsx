@@ -1139,6 +1139,11 @@ export const messages = {
   // itself is a proper noun in every locale, so the heading and the nav entry
   // are not translated.
   "wui.loading": { "zh-TW": "載入中…", en: "Loading…" },
+  "wui.error": {
+    "zh-TW": "讀不到 WUI 清單。",
+    en: "The WUI listing could not be read.",
+  },
+  "wui.retry": { "zh-TW": "再試一次", en: "Try again" },
   "wui.empty": { "zh-TW": "還沒有任何 WUI 被 Deploy。", en: "No WUI has been deployed yet." },
   "wui.empty.what": {
     "zh-TW": "WUI 是 item 工作區裡的一個資料夾，被當成網頁跑起來；在頁面的工具列按 Deploy，它就會出現在這裡。",

@@ -126,7 +126,9 @@ def page_title(doc: Mapping[str, Any], path: str) -> str:
     parts = path.strip("/").split("/")
     if len(parts) > 1:
         return parts[-2]
-    return parts[-1].removesuffix(VIEW_SUFFIX)
+    # A file named exactly `.ai.yaml` has an empty stem, and an empty title is
+    # a row nobody can read or press: the file's own name then.
+    return parts[-1].removesuffix(VIEW_SUFFIX) or parts[-1]
 
 
 class DeployBody(BaseModel):
@@ -164,8 +166,10 @@ def register_wui_deploy_routes(
         The verb is `edit_content`: the people who may change what the item
         holds may put it up and take it down. A NEW gate — the Deploy of a page
         with no build touched no server route at all before this, so a reader
-        could press it and be handed the address. They still can (it is a
-        shortcut, not a grant); they can no longer put the page on the overview.
+        could press it and be handed the address. The address still WORKS for
+        them (`/w/` is gated on `read_content` — a shortcut, not a grant); the
+        pane no longer hands it over, because Deploy now ends here and theirs
+        is refused.
 
         The server reads the view file itself. The row is the server's claim
         that this is a WUI with this title, so the server checks it rather than
@@ -186,7 +190,10 @@ def register_wui_deploy_routes(
             raise HTTPException(status_code=400, detail=f"view file not found: {path}") from None
         try:
             loaded = yaml.safe_load(raw.decode("utf-8", errors="replace"))
-        except yaml.YAMLError as exc:
+        except (yaml.YAMLError, RecursionError) as exc:
+            # `RecursionError`: a document nested past the parser's depth
+            # (`view: [[[[…`) is not valid yaml from where this route stands,
+            # and a 500 would blame the platform for a file the caller wrote.
             raise HTTPException(
                 status_code=400, detail=f"view file is not valid yaml: {exc}"
             ) from None
@@ -236,23 +243,31 @@ def register_wui_deploy_routes(
     async def wui_overview() -> Overview:
         """Every Deployed page the viewer may open, newest Deploy first.
 
-        One access lookup per ITEM, not per row: `require_access` holds the
-        facts for its window, and an item with several pages asks once.
+        One access lookup and one title read per ITEM, not per row:
+        `require_access` holds the facts for its window, and an item with
+        several pages asks once.
         """
-        decided: dict[tuple[str, str], tuple[bool, bool]] = {}
+        decided: dict[tuple[str, str], tuple[bool, bool, str]] = {}
         out: list[DeployedPage] = []
         for row in pages.newest_first():
             key = (row.slug, row.item_id)
             if key not in decided:
                 readable = _may(row.slug, row.item_id, "read_content")
-                decided[key] = (readable, readable and _may(row.slug, row.item_id, "edit_content"))
-            readable, removable = decided[key]
+                decided[key] = (
+                    readable,
+                    readable and _may(row.slug, row.item_id, "edit_content"),
+                    # The title is a store read of its own, so it is memoised
+                    # with the decision — and only for an item that will be
+                    # shown, so a hidden item costs nothing but its refusal.
+                    (locator.title_of(row.item_id) or "") if readable else "",
+                )
+            readable, removable, item_title = decided[key]
             if not readable:
                 continue
             out.append(
                 DeployedPage(
                     **{f: getattr(row, f) for f in DeployedWui.__struct_fields__},
-                    item_title=locator.title_of(row.item_id) or "",
+                    item_title=item_title,
                     can_remove=removable,
                 )
             )

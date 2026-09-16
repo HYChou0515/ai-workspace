@@ -270,6 +270,7 @@ Open it yourself in your head, in this order:
 
 Then tell the user which file to open, in their words: "open **Lot tracker** in
 `lot-tracker/page.ai.yaml`" — and, when the page is for other people, that
-**Deploy** in its toolbar is what puts it on the platform's **WUI** overview
-where colleagues find it. You cannot press it; only a person with edit rights
-on the item can, and a page nobody Deployed is a page only its link can reach.
+**Deploy** in its toolbar is what puts it on the platform's **WUI** overview,
+where colleagues find it. Deploy is a person's press (someone who may edit the
+item), so say it in the same breath as the file name: a page nobody Deployed is
+one only its link can reach.

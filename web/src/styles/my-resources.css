@@ -391,6 +391,36 @@
   color: var(--text-paper-d);
 }
 
+/* The `/wui` overview's list: the page's title, who put it up and from where,
+ * Remove. The disk list's shape — a title that owns the slack, a detail, an
+ * action — and its own class rather than the bare `.page ul`, because the
+ * narrow-viewport reflow below is written per LIST CLASS: a list with no class
+ * gets the one-line flex row at every width, and measured at 390px that row
+ * gave the title 0px and the document a horizontal scrollbar (review of PR
+ * #811) — the same defect the note under "narrow viewports" records fixing
+ * for the other two lists on 2026-09-05. */
+.page .wui-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  column-gap: var(--space-12);
+}
+
+.page .wui-list > li {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: subgrid;
+  align-items: center;
+}
+
+.page .wui-list .detail {
+  min-width: 0;
+}
+
+/* A refusal reported inside its row, under the three columns. */
+.page .wui-list .error {
+  grid-column: 1 / -1;
+}
+
 /* ── narrow viewports ────────────────────────────────────────────────────
    The columns above reserve about 400px before the title gets any: 8px of dot,
    four 12px gaps, a 10rem App track, the spec, the button and the card's own
@@ -473,6 +503,38 @@
     grid-column: 2;
     grid-row: 2;
     min-width: 0;
+  }
+
+  /* The overview row: title and Remove stay on the first line, the item and
+     the who-and-when drop to a second — and that line WRAPS: "Line 3 stoppage ·
+     bob 於 2026/9/16 下午1:20:00 Deploy" is 355px of nowrap, wider than the
+     342px a phone leaves, so on its own line it still overflowed. */
+  .page .wui-list {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .page .wui-list > li {
+    grid-template-columns: minmax(0, 1fr) auto;
+    row-gap: var(--space-4);
+  }
+
+  .page .wui-list > li > a {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .page .wui-list > li > button {
+    grid-column: 2;
+    grid-row: 1;
+    justify-self: end;
+  }
+
+  .page .wui-list .detail {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    min-width: 0;
+    white-space: normal;
   }
 
   /* Three totals side by side in 342px is 114px each — narrower than

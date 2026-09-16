@@ -93,16 +93,63 @@ def test_a_page_without_a_title_is_named_after_its_folder():
     assert r.json()["title"] == "report"
 
 
-def test_a_page_at_the_workspace_root_has_no_folder_so_it_takes_the_files_name():
+@pytest.mark.parametrize(
+    ("path", "title"),
+    [
+        ("/status.ai.yaml", "status"),
+        # A file named exactly `.ai.yaml`: the stem is empty, and an empty title
+        # is a row nobody can read or press — the file's name is the fallback.
+        ("/.ai.yaml", ".ai.yaml"),
+    ],
+)
+def test_a_page_at_the_workspace_root_has_no_folder_so_it_takes_the_files_name(path, title):
     holder = {"id": "bob"}
     client, spec = _client_and_spec(holder)
     iid = _item(spec, by="bob")
-    _page(client, iid, path="/status.ai.yaml", body=b"view: wui\n")
+    _page(client, iid, path=path, body=b"view: wui\n")
 
-    r = client.post(_wp(iid, "/wui/deploy"), json={"path": "/status.ai.yaml"})
+    r = client.post(_wp(iid, "/wui/deploy"), json={"path": path})
 
     assert r.status_code == 200, r.text
-    assert r.json()["title"] == "status"
+    assert r.json()["title"] == title
+
+
+def test_the_row_names_the_person_who_pressed_deploy_not_the_owner():
+    # Every other Deploy in this file is the owner's, so `deployed_by` could be
+    # a constant and nothing would notice; an editor who is not the owner tells
+    # the caller from the owner.
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    iid = _item(
+        spec,
+        by="bob",
+        permission=Permission(
+            visibility="restricted",
+            read_meta=["user:alice"],
+            read_content=["user:alice"],
+            edit_content=["user:alice"],
+        ),
+    )
+    _page(client, iid)
+    holder["id"] = "alice"
+
+    r = client.post(_wp(iid, "/wui/deploy"), json={"path": PAGE})
+
+    assert r.status_code == 200, r.text
+    assert r.json()["deployed_by"] == "alice"
+    assert r.json()["can_remove"] is True
+
+
+def test_a_view_file_nested_past_the_parsers_depth_is_a_400_not_a_500():
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _page(client, iid, body=b"view: " + b"[" * 5000)
+
+    r = client.post(_wp(iid, "/wui/deploy"), json={"path": PAGE})
+
+    assert r.status_code == 400, r.text
+    assert "not valid yaml" in r.json()["detail"]
 
 
 def test_a_view_of_another_kind_is_refused_and_the_kind_is_named():

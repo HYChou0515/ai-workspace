@@ -20,6 +20,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 
 import { qk } from "../api/queryKeys";
+import { relativeTime } from "../api/types";
 import { type DeployedWui, type WuiApi, wuiAddress, wuiApi } from "../api/wui";
 import { AppTag } from "../components/AppTag";
 import { useDialog } from "../components/Dialog";
@@ -27,12 +28,28 @@ import { useT } from "../lib/i18n";
 
 export function WuiOverviewPage({ client = wuiApi }: { client?: WuiApi }) {
   const t = useT();
-  const { data, isLoading } = useQuery({
+  const { data, isPending, isError, refetch } = useQuery({
     queryKey: qk.wuiOverview,
     queryFn: () => client.list(),
   });
 
-  if (isLoading || !data) return <p>{t("wui.loading")}</p>;
+  // A read that failed is a sentence and a way to try again — not the loading
+  // line forever, which is what `isLoading || !data` rendered on a rejected
+  // list: indistinguishable from a slow one, with nothing to press.
+  if (isError) {
+    return (
+      <div className="page">
+        <h1>WUI</h1>
+        <p className="error" role="alert">
+          {t("wui.error")}{" "}
+          <button type="button" data-size="sm" onClick={() => void refetch()}>
+            {t("wui.retry")}
+          </button>
+        </p>
+      </div>
+    );
+  }
+  if (isPending || !data) return <p>{t("wui.loading")}</p>;
 
   // Group by app, in first-seen order — the rows arrive newest first, so an
   // app whose latest Deploy is the most recent heads the page. Within a group
@@ -65,7 +82,9 @@ export function WuiOverviewPage({ client = wuiApi }: { client?: WuiApi }) {
               <h2 id={`wui-app-${slug}`}>
                 <AppTag slug={slug} />
               </h2>
-              <ul>
+              {/* `wui-list`, not the bare `.page ul`: the narrow-viewport reflow
+                  in my-resources.css is written per list class. */}
+              <ul className="wui-list">
                 {rows.map((page) => (
                   <PageRow key={`${page.item_id}${page.path}`} page={page} client={client} />
                 ))}
@@ -89,6 +108,10 @@ function PageRow({ page, client }: { page: DeployedWui; client: WuiApi }) {
   const remove = useMutation({
     mutationFn: () => client.remove(page.slug, page.item_id, page.path),
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.wuiOverview }),
+    // The row renders its own failure below; without this the query client
+    // ALSO routes it to the app-wide write-failure notice, so one press raises
+    // two messages — and the page-level one names no page.
+    meta: { silentError: true },
   });
   return (
     <li>
@@ -101,7 +124,14 @@ function PageRow({ page, client }: { page: DeployedWui; client: WuiApi }) {
         {/* The workspace has no deep link to a file, so this opens the item. */}
         <Link to={`/a/${page.slug}/${page.item_id}`}>{page.item_title || page.item_id}</Link>
         {" · "}
-        {t("wui.row.by", { who: page.deployed_by, when: new Date(page.deployed_at).toLocaleString() })}
+        {/* Relative, like the rest of the shell (`relativeTime`); the exact
+            stamp is in the title for anyone who needs the date. */}
+        <span title={new Date(page.deployed_at).toISOString()}>
+          {t("wui.row.by", {
+            who: page.deployed_by,
+            when: relativeTime(new Date(page.deployed_at).toISOString()),
+          })}
+        </span>
       </span>
       {page.can_remove ? (
         <button

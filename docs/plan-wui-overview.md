@@ -59,7 +59,13 @@ class DeployedWui(Struct):
   (`reference_specstar_indexed_queries`), and "removed from the overview" must
   mean gone from the listing.
 
-### Routes (`api/wui_deploy.py` — the record, its store and its routes in one module, the `schedule_index.py` shape; `wui_routes.py` keeps build / tools / run)
+### Routes (`api/wui_deploy.py`)
+
+(Amended in P1, 2026-09-16: this section first said `api/wui_routes.py` and
+`/apps/{slug}/…`. The prefix was a factual error — every item route is
+`/a/{slug}/…` — and the module is a design choice: the record, its store and
+its routes in one module, the `schedule_index.py` shape, with `wui_routes.py`
+keeping build / tools / run. Noted here rather than rewritten in silence.)
 
 **`POST /a/{slug}/items/{item_id}/wui/deploy`** — body `{ "path": str }`.
 
@@ -128,8 +134,8 @@ try {
 
 - One `useQuery` (`qk.wuiOverview`) on `GET /wui`; Remove is a `useMutation`
   that invalidates it. Client module `web/src/api/wui.ts` in the
-  `myResources.ts` shape (`WuiApi` type + `wuiApi` object; the mock in
-  `mock.ts` answers the same contract).
+  `myResources.ts` shape (`WuiApi` type + `wuiApi` object; no mock — see
+  Phase 2).
 - Grouped by app: heading = app name + `AppIcon` + `appTagPalette` tag, the
   same three the Launcher and My resources use; apps come from `useApps()`, a
   row whose app is not in that list (a deregistered app) falls under its slug.
@@ -160,8 +166,9 @@ Superusers see all rows, as they may open all items.
 Deploy and Remove: `edit_content`. Recorded here because it is a NEW gate: the
 Deploy of a page with no build touched no server route at all before this
 plan, so a reader with `read_content` alone could press it and be handed the
-address. They still can be handed the address (it is a shortcut, not a grant);
-they can no longer put a page on the overview.
+address. The address still WORKS for them (`/w/` is gated on `read_content`,
+a shortcut and not a grant); the pane no longer hands it over, because Deploy
+now ends in the listing and theirs is refused.
 
 ## Deliberately not doing
 
@@ -185,8 +192,11 @@ they can no longer put a page on the overview.
 1. **Record + routes** — `DeployedWui`, `register_deployed_wui`, the three
    routes (`api/wui_deploy.py`), wired in `create_app` beside the quota routes;
    migrations note.
-2. **Deploy lists** — `wuiApi.deploy` / `remove` / `list` client (+ mock), the
+2. **Deploy lists** — `wuiApi.deploy` / `remove` / `list` client, the
    `runDeploy` step and its failure branch, the `list` step's sentence.
+   (No mock: the plan first promised one "in the `mock.ts` shape", but
+   `mock.ts` implements `ApiClient` only and `myResourcesApi`, the cited
+   precedent, has none either — the premise was wrong, withdrawn 2026-09-16.)
 3. **Overview page** — `WuiOverviewPage`, route, destination, empty state,
    Remove with confirm.
 4. **Docs** — `docs/wui.md` "發布（Deploy）" section: Deploy now lists the
@@ -226,7 +236,9 @@ Phase 2 (`WuiView.test.tsx`):
 - The verify read fails → the POST is **never** made (spy at zero).
 - Cancel during the POST → the request's signal is aborted; nothing settles.
 
-Phase 3 (`WuiOverviewPage.test.tsx`, `usePlatformDestinations.test.ts`):
+Phase 3 (`WuiOverviewPage.test.tsx`; the destination in `ChatListRail.test.tsx`,
+the existing test of the shared list — `usePlatformDestinations.test.ts` named
+here at first never existed):
 
 - Two apps, three rows → two group headings, rows under the right one, newest
   first within a group.
@@ -244,6 +256,12 @@ Phase 4: `mkdocs build --strict` stays green (`plan-*` is `not_in_nav`; the
 
 ## Verified ground truth (file pointers, origin/master `a4b890b7`)
 
+(Corrected 2026-09-16 by the conformance and veracity reviews: four of the
+numbers below were first read off the local `w/sadsadsa` checkout, which was
+two merges behind the base this heading names — `wui_routes.py` 257/391/160
+and `app.py` 1095 were that branch's lines. The facts held; the numbers did
+not. Pin the baseline before the audit, then read from it.)
+
 - Deploy today: `web/src/renderers/wui/WuiView.tsx:835` `runDeploy` — manifest
   read → `runBuild({ reload: false })` → verify via `wuiDocQuery` fetched fresh
   → `:934` `setDeploy({ path: mine, at: next, state: "done" })`. No server
@@ -253,9 +271,9 @@ Phase 4: `mkdocs build --strict` stays green (`plan-*` is `not_in_nav`; the
   `api/http.ts`, `encodePath` from `api/refPath.ts:53`).
 - The reader route: `web/src/App.tsx:46` `/w/:slug/:itemId/*` → `WuiPage`,
   outside `GlobalLayout`; `/my-resources` at `:68` inside it.
-- Build gate: `src/workspace_app/api/wui_routes.py:257` and `:391` —
+- Build gate: `src/workspace_app/api/wui_routes.py:269` and `:403` —
   `locator.require_access(slug, item_id, "execute")`. Registration:
-  `register_wui_routes` at `:160` (takes `locator`, `get_user_id`, …).
+  `register_wui_routes` at `:171` (takes `locator`, `get_user_id`, …).
 - Verbs: `src/workspace_app/perm/model.py:33` — `read_content`,
   `edit_content`, `execute`, … Grant lists per verb, no roles.
 - Access: `src/workspace_app/api/locator.py:216` `require_access(slug,
@@ -265,7 +283,7 @@ Phase 4: `mkdocs build --strict` stays green (`plan-*` is `not_in_nav`; the
   `locator.title_of(item_id)` at `:129`.
 - Bookkeeping-model precedent: `src/workspace_app/api/schedule_index.py` —
   `_ScheduleIndex` registered post-`spec.apply` via `register_schedule_index`
-  (`contextlib.suppress(ValueError)`), constructed in `app.py:1095`; the
+  (`contextlib.suppress(ValueError)`), constructed in `app.py:1109`; the
   ignored-dir rule `should_ignore(path, DEFAULT_IGNORES)` at `:100`.
 - Slash-free deterministic id: `src/workspace_app/filestore/specstar_impl.py:89`
   `_fid` (path `/` → U+2215).
@@ -283,7 +301,71 @@ Phase 4: `mkdocs build --strict` stays green (`plan-*` is `not_in_nav`; the
   `qk.myResources`, `useApps()` + `appTagPalette` + `AppIcon` for the app
   heading, `useDialog` for confirms, `useT` for strings.
 - The workspace has **no** file deep link: `git grep -n 'useSearchParams'
-  web/src/pages` matches only KB pages; `openFile.tsx` is a context, not a URL.
+  web/src/pages` matches the KB pages and `AppDashboard.tsx` (the app home's
+  own params, not a file); `openFile.tsx` is a context, not a URL.
 - Docs: `docs/wui.md:165` "### 發布（Deploy）：給別人一個網址"; `:7–9` the
   "Deploy 不是部署" parenthesis; `docs/migrations.md:114` §5 案例總表.
 - `mkdocs.yml:134` — `not_in_nav` covers `/plan-*.md`.
+
+## Review round 1 (2026-09-16 — defect / conformance / veracity / regression, in parallel)
+
+Worst finding: a **real-browser** one — the overview row at 390px gave the title
+0px and the document a horizontal scrollbar. The `.page` shell's narrow-viewport
+reflow is written per list class (`.live-list`, `.disk-list`), and a bare `ul`
+gets the one-line flex row at every width: the identical defect the CSS note
+records fixing for the other two lists on 2026-09-05, re-made by reusing the
+shell without its reflow. Fixed with a `.wui-list` class and its own reflow
+(title + Remove on line one, the who-and-when wrapping on line two); measured
+again in the same harness — 390px: title 290px (was 0), no horizontal scroll;
+560px: 460px.
+
+The rest, all fixed in P5:
+
+- `GET /wui` failing rendered "載入中…" forever (`isLoading || !data`): now a
+  sentence with a Try again (`isError` + `refetch`). `MyResourcesPage` has the
+  same shape and was left alone — a separate change.
+- A failed Remove raised two messages: the row's own alert AND the app-wide
+  write-failure notice, because the mutation lacked `meta: { silentError: true }`
+  — the very opt-out `LiveEnvironmentRow`, the pattern the page claims to copy,
+  carries. Pinned under the real `makeQueryClient`.
+- A page Deployed within the overview's 30-second stale window was missing on
+  the next visit: nothing invalidated `qk.wuiOverview` after the POST. The write
+  now invalidates the read.
+- After a "list" failure the frame stayed on the read from BEFORE the build,
+  under the red line — a stale frame read as a broken page. The apply effect
+  now points the pane at the verified read for a `list` failure too (the "open"
+  branch stays put because its read failed).
+- `RecursionError` from a view file nested past yaml's depth was a 500; now the
+  same 400 as any other unparsable file. A root file named exactly `.ai.yaml`
+  had an empty title; the file name is the fallback.
+- `deployed_by` was asserted only for the owner, so a constant would have
+  passed; an editor who is not the owner now Deploys in a test. The unmount
+  abort of the POST was implemented but unpinned; pinned.
+- Plan said "relative time like the rest of the shell", code said
+  `toLocaleString()`; now `relativeTime`, with the ISO stamp in the title.
+- "`detailSentence` is the one spelling" was false: `renderers/wui/run.ts` had
+  the same eight lines and `api/workflowTemplates.ts` its own `detail()`. Both
+  now call it. The P2 commit message overstates; this note is the correction.
+- `title_of` was one store read per ROW inside a loop whose docstring promised
+  one lookup per ITEM; memoised with the access decision.
+- Plan text: three P1 amendments were made in place (now annotated); the
+  `mock.ts` promise rested on a false premise (withdrawn); a test file name that
+  never existed; four ground-truth line numbers read off a stale checkout.
+- The skill's closing paragraph was phrased as a prohibition ("You cannot press
+  it"); the platform's prompt rule lists abilities positively. Rephrased.
+- The `moved()` guard between the verify read and the POST could be deleted with
+  every test green — the old "Cancel during the verify read lands no verdict"
+  test pinned it under the OLD flow, and under the new one a cancelled run
+  would still write the row before the second guard hid the verdict. That test
+  now also asserts no POST was made.
+- "They still can be handed the address" (the route docstring and this plan's
+  Permission section) was false for the pane: the address is drawn only on the
+  `done` panel, and a reader's Deploy now ends in the listing refusal. Reworded:
+  the address still WORKS for them (`/w/` is gated on `read_content`); the pane
+  no longer hands it over.
+
+Known and left: Cancel during the POST aborts the client's wait, not the
+server's write — a Cancelled Deploy can still list the page (one read + one
+write wide, the same shape as aborting the build stream). Within the locator's
+5-second positive memo a page Deployed and then its item deleted stays listed
+for the rest of the window — every gate on the platform has it.
