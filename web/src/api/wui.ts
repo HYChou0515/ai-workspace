@@ -1,0 +1,62 @@
+/**
+ * The WUI overview (`docs/plan-wui-overview.md`): the pages people Deployed.
+ *
+ * Deploy's last step writes a row (`deploy`); the overview page lists them
+ * (`list`); Remove takes one off (`remove`). The listing is the server's, and
+ * so is the filter — what comes back is exactly what this viewer could open by
+ * address, never more.
+ */
+
+import { apiFetch, detailSentence, HttpError, httpErrorFrom } from "./http";
+
+export type DeployedWui = {
+  slug: string;
+  item_id: string;
+  item_title: string;
+  path: string;
+  title: string;
+  deployed_by: string;
+  deployed_at: number;
+  /** Whether THIS viewer may Remove it — the server's `edit_content` answer,
+   * so the button is drawn only where a press would be accepted. */
+  can_remove: boolean;
+};
+
+export type WuiApi = {
+  /** List `path` (the view file, workspace-absolute) on the overview. Rejects
+   * with an `HttpError` carrying the server's sentence — a 403 is "not
+   * authorized to edit_content", a 400 names what the file turned out to be. */
+  deploy(slug: string, itemId: string, path: string, signal?: AbortSignal): Promise<DeployedWui>;
+  remove(slug: string, itemId: string, path: string): Promise<void>;
+  list(): Promise<DeployedWui[]>;
+};
+
+const itemBase = (slug: string, itemId: string) =>
+  `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}/wui/deploy`;
+
+export const wuiApi: WuiApi = {
+  async deploy(slug, itemId, path, signal) {
+    const resp = await apiFetch(itemBase(slug, itemId), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path }),
+      signal,
+    });
+    if (!resp.ok) {
+      const detail = await detailSentence(resp);
+      throw new HttpError(resp.status, detail ?? `The page could not be listed (${resp.status}).`);
+    }
+    return (await resp.json()) as DeployedWui;
+  },
+  async remove(slug, itemId, path) {
+    const resp = await apiFetch(`${itemBase(slug, itemId)}?path=${encodeURIComponent(path)}`, {
+      method: "DELETE",
+    });
+    if (!resp.ok) throw await httpErrorFrom(resp, `remove failed: ${resp.status}`);
+  },
+  async list() {
+    const resp = await apiFetch("/wui");
+    if (!resp.ok) throw await httpErrorFrom(resp, `WUI overview failed: ${resp.status}`);
+    return ((await resp.json()) as { pages: DeployedWui[] }).pages;
+  },
+};

@@ -29,6 +29,7 @@ import { useCurrentUserState } from "../../hooks/useCurrentUser";
 import { useOpenFile } from "../../hooks/openFile";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { API_BASE, HttpError } from "../../api/http";
+import { wuiApi } from "../../api/wui";
 import { encodePath } from "../../api/refPath";
 import { publishAgentDraft } from "../../lib/agentDraftBus";
 import { subscribeFileChanged } from "../../lib/fileChangedBus";
@@ -115,6 +116,7 @@ type DeployState =
       | { state: "failed"; step: "build" }
       | { state: "failed"; step: "manifest"; why: string }
       | { state: "failed"; step: "open"; why: string }
+      | { state: "failed"; step: "list"; why: string }
       | { state: "failed"; step: "superseded" }
       | { state: "failed"; step: "changed" }
       | { state: "failed"; step: "unknown" }
@@ -414,6 +416,12 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
    * this pane ACTING on a build; the server hears nothing until the request is
    * aborted. */
   const inFlight = useRef<AbortController | null>(null);
+  /** Deploy's record in flight (`POST …/wui/deploy`), so Cancel and leaving
+   * can stop it too. Its own ref, not `inFlight`: that one means "a build is
+   * streaming", and Cancel writes "Cancelled." into the build log on it — a
+   * line that, under a build that had already finished, would say the build
+   * was cancelled when only the listing was. */
+  const listing = useRef<AbortController | null>(null);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const openFile = useOpenFile();
   const { id: me, ready: meReady } = useCurrentUserState();
@@ -582,6 +590,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
   useEffect(
     () => () => {
       inFlight.current?.abort();
+      listing.current?.abort();
       autoBuiltFor.current = null;
       // Leaving the view is leaving the folder: a Deploy still in its
       // manifest re-read would otherwise wake with `moved()` false and START
@@ -764,6 +773,8 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
     const midBuild = inFlight.current !== null;
     inFlight.current?.abort();
     inFlight.current = null;
+    listing.current?.abort();
+    listing.current = null;
     epoch.current += 1;
     setBuilding(false);
     setFirstBuild(false);
@@ -924,6 +935,30 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
           why: err instanceof WuiEntryMissing ? err.message : "The page could not be opened.",
         });
         return;
+      }
+      if (moved()) return;
+      // The page opened. Now the overview: the row is written AFTER the
+      // verify and BEFORE the verdict, so "✓ Deployed" is never said about a
+      // page the overview does not list (docs/plan-wui-overview.md), and
+      // never about a page this pane's own read could not open. The request
+      // carries a signal the same way the build does — an abandoned promise
+      // is not a cancelled request (PR #773's lesson).
+      const record = new AbortController();
+      listing.current = record;
+      try {
+        await wuiApi.deploy(slug, fs.scopeId, mine, record.signal);
+      } catch (err) {
+        if (moved() || record.signal.aborted) return;
+        setDeploy({
+          path: mine,
+          at: next,
+          state: "failed",
+          step: "list",
+          why: err instanceof Error ? err.message : "The page could not be listed.",
+        });
+        return;
+      } finally {
+        if (listing.current === record) listing.current = null;
       }
       if (moved()) return;
       // Not `setGeneration(next)` here: whether the pane is on this page is a
@@ -1105,6 +1140,15 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
             // build log for a page that has no build.
             <div role="status" style={{ color: "var(--err)" }}>
               Deploy failed — the page does not open: {deployHere.why}
+            </div>
+          ) : deployHere.step === "list" ? (
+            // The page opened; the overview did not take it. The server's
+            // sentence says why (a 403 is "not authorized to edit_content"),
+            // and the address is NOT shown: the meaning of Deploy now includes
+            // the listing, and an address under "failed" would read as a
+            // success with a footnote.
+            <div role="status" style={{ color: "var(--err)" }}>
+              Deploy failed — the page could not be listed in WUI: {deployHere.why}
             </div>
           ) : deployHere.step === "superseded" ? (
             <div role="status" style={{ color: "var(--err)" }}>

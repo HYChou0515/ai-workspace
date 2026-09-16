@@ -112,6 +112,21 @@ export async function errorCode(resp: Response): Promise<string | undefined> {
 }
 
 /**
+ * The server's own sentence for a refusal — FastAPI's `detail` when it is a
+ * STRING — or nothing. `detail` is a string for our own refusals and an array
+ * for a validation failure; a caller that passed the array through printed
+ * "[object Object]" where the explanation should be, which is the one thing
+ * this helper exists to prevent. Never throws: no body, or a body that is not
+ * JSON, is "no sentence", and the caller has its own fallback.
+ */
+export async function detailSentence(resp: Response): Promise<string | undefined> {
+  return resp
+    .json()
+    .then((b: { detail?: unknown }) => (typeof b.detail === "string" ? b.detail : undefined))
+    .catch(() => undefined);
+}
+
+/**
  * The error code AND any other limits the same refusal named (`also`).
  *
  * A turn is gated on more than one rule and can be refused by several at once.
