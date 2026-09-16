@@ -20,7 +20,7 @@
       "phase": "classify",
       "do": [
         {
-          "type": "agent",
+          "type": "agent", "cache": true,
           "name": "plan",
           "prompt": "Read {file}. Choose a collection from {config.collections} and write a one-line digest. Reply with a JSON object holding keys collection, digest, and source (set source to {file}).",
           "phase": "classify",

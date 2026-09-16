@@ -102,7 +102,13 @@ def test_reference_to_unknown_capability_output_field_is_rejected() -> None:
                 "type_name": "issue",
                 "name": "bug",
             },
-            {"type": "agent", "prompt": "n={steps.bug.nope}", "phase": "p", "out": "o.md"},
+            {
+                "type": "agent",
+                "cache": True,
+                "prompt": "n={steps.bug.nope}",
+                "phase": "p",
+                "out": "o.md",
+            },
         ]
     )
     assert any("has no output field 'nope'" in e for e in errs)
@@ -117,7 +123,13 @@ def test_reference_to_unknown_capability_output_field_is_rejected() -> None:
                     "type_name": "issue",
                     "name": "bug",
                 },
-                {"type": "agent", "prompt": "n={steps.bug.number}", "phase": "p", "out": "o.md"},
+                {
+                    "type": "agent",
+                    "cache": True,
+                    "prompt": "n={steps.bug.number}",
+                    "phase": "p",
+                    "out": "o.md",
+                },
             ]
         )
         == []

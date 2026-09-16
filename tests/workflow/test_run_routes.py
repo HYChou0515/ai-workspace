@@ -766,7 +766,8 @@ def test_reject_steer_discards_the_plan():
 
 _WS_WORKFLOW = (
     '{"id":"myflow","title":"My Flow","phases":[{"id":"note"}],'
-    '"steps":[{"type":"agent","prompt":"write a note","phase":"note","out":"note.md"}]}'
+    '"steps":[{"type":"agent","cache":true,"prompt":"write a note","phase":"note",'
+    '"out":"note.md"}]}'
 )
 
 

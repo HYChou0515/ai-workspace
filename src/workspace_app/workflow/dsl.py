@@ -113,6 +113,14 @@ class AgentStep(Struct, tag="agent", forbid_unknown_fields=True):
 
     prompt: str
     phase: str
+    # REQUIRED, no default (plan-cache-required): whether the journal may hand back this
+    # step's last result while its inputs are unchanged (§9). `false` for a step that reads
+    # the world or has a side effect — sends, fetches, looks at the clock — so it runs every
+    # time; `true` for one whose inputs are all in its arguments. A default of `true` made a
+    # scheduled workflow run once and then skip every step on every later fire (`done`,
+    # nothing done), because nobody had been asked which steps look outside. The author
+    # takes the stance, step by step; `parse_def` states the rule when one is missing.
+    cache: bool
     out: str = ""
     # plan §2.3: the artifact format of a channel-P ``out`` — its default gate is
     # ``artifact_valid(out, kind)`` (structured kinds PARSE-validate; prose kinds check
@@ -139,9 +147,6 @@ class AgentStep(Struct, tag="agent", forbid_unknown_fields=True):
     # #429 P1: files this turn DEPENDS on. The engine folds their content fingerprint into
     # the input-hash so editing a declared source re-runs the step (interpolation allowed).
     reads: list[str] = field(default_factory=list)
-    # #429 P1 rule 3: opt out of the journal skip — always re-run (an honest 'always fresh'
-    # for a step whose inputs the author can't fingerprint).
-    cache: bool = True
     # The third output kind: this node's output is the FILES it wrote, named by a glob.
     # `outputs` and `out` both route the payload through the model's reply, which caps an
     # artifact at the model's output limit and makes handing 1000 records downstream a
@@ -157,6 +162,14 @@ class SandboxStep(Struct, tag="sandbox", forbid_unknown_fields=True):
 
     run: str
     phase: str
+    # REQUIRED, no default (plan-cache-required): whether the journal may hand back this
+    # step's last result while its inputs are unchanged (§9). `false` for a step that reads
+    # the world or has a side effect — sends, fetches, looks at the clock — so it runs every
+    # time; `true` for one whose inputs are all in its arguments. A default of `true` made a
+    # scheduled workflow run once and then skip every step on every later fire (`done`,
+    # nothing done), because nobody had been asked which steps look outside. The author
+    # takes the stance, step by step; `parse_def` states the rule when one is missing.
+    cache: bool
     check: dict[str, Any] | None = None
     name: str = ""
     # #428 §1/§2: like AgentStep — when set, the script prints a JSON object to stdout
@@ -166,8 +179,6 @@ class SandboxStep(Struct, tag="sandbox", forbid_unknown_fields=True):
     # into the input-hash so editing a declared file re-runs the step (a bare path in
     # ``run`` would skip on a content-only change). Interpolation allowed.
     reads: list[str] = field(default_factory=list)
-    # #429 P1 rule 3: opt out of the journal skip — always re-run.
-    cache: bool = True
     # Same third output kind as the agent node: the files this command WROTE, named by a
     # glob. Bulk output is precisely the work that should not pass through a model — a
     # thousand files is a loop — and this is the node with no LLM in it, so it is the one
@@ -282,14 +293,29 @@ class WorkflowDef(Struct, forbid_unknown_fields=True):
     hint: str = ""
 
 
+CACHE_RULE = (
+    "`cache` is required — `false` for a step that reads the world or has a side effect "
+    "(sends, fetches, looks at the clock; it runs every time), `true` for one that may be "
+    "skipped while its inputs are unchanged"
+)
+
+
 def parse_def(raw: bytes | str) -> WorkflowDef:
     """Decode ``workflow.json`` bytes into a ``WorkflowDef``. Raises ``DslError`` on
     malformed JSON, an unknown field, or a bad step ``type`` (msgspec gives a precise
-    location, which we surface verbatim)."""
+    location, which we surface verbatim) — except a step with no ``cache``, where the
+    message is the rule itself: the error is where an author learns it, and every door
+    (``save_workflow``, the panel, a template copy, the sweep) reads through here."""
     try:
         return msgspec.json.decode(raw.encode() if isinstance(raw, str) else raw, type=WorkflowDef)
     except msgspec.ValidationError as e:  # the more specific subclass first (bad field/tag)
-        raise DslError(str(e)) from e
+        msg = str(e)
+        if "missing required field `cache`" in msg:
+            # msgspec says "Object missing required field `cache` - at `$.steps[0]`";
+            # keep its location, replace its sentence.
+            _, _, where = msg.partition(" - at `$.")
+            msg = f"{where.rstrip('`')}: {CACHE_RULE}"
+        raise DslError(msg) from e
     except msgspec.DecodeError as e:  # genuine JSON syntax error
         raise DslError(f"not valid JSON: {e}") from e
 

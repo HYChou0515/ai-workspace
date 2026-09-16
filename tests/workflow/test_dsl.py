@@ -43,7 +43,7 @@ def _def(**over: Any) -> WorkflowDef:
     base: dict[str, Any] = {
         "id": "wf",
         "phases": [{"id": "p"}],
-        "steps": [{"type": "agent", "prompt": "hi", "phase": "p", "out": "o.md"}],
+        "steps": [{"type": "agent", "cache": True, "prompt": "hi", "phase": "p", "out": "o.md"}],
     }
     base.update(over)
     return parse_def(json.dumps(base))
@@ -57,7 +57,7 @@ def test_parse_def_full_roundtrip():
         b"""{"schema":1,"id":"x","title":"T","tag":"batch","hint":"drop files",
         "description":"d","config":{"collections":["a"]},
         "phases":[{"id":"p","title":"P"}],
-        "steps":[{"type":"sandbox","run":"echo hi","phase":"p"}]}"""
+        "steps":[{"type":"sandbox","cache":true,"run":"echo hi","phase":"p"}]}"""
     )
     assert d.id == "x" and d.title == "T" and d.schema_version == 1
     assert d.config == {"collections": ["a"]}
@@ -160,6 +160,7 @@ def test_validate_valid_def_is_empty():
             "do": [
                 {
                     "type": "agent",
+                    "cache": True,
                     "prompt": "read {f} from {config.collections}",
                     "phase": "p",
                     "out": "plan/{f}.json",
@@ -190,7 +191,7 @@ def test_validate_valid_def_is_empty():
 
 def test_validate_schema_version():
     d = parse_def(
-        '{"id":"x","schema":2,"phases":[{"id":"p"}],"steps":[{"type":"sandbox","run":"x","phase":"p"}]}'
+        '{"id":"x","schema":2,"phases":[{"id":"p"}],"steps":[{"type":"sandbox","cache":true,"run":"x","phase":"p"}]}'
     )
     assert any("schema version" in e for e in validate_def(d))
 
@@ -205,7 +206,8 @@ def test_validate_empty_id_no_steps_and_blank_phase():
 
 def test_validate_phase_not_declared():
     assert any(
-        "not declared" in e for e in _errs([{"type": "sandbox", "run": "x", "phase": "zzz"}])
+        "not declared" in e
+        for e in _errs([{"type": "sandbox", "cache": True, "run": "x", "phase": "zzz"}])
     )
 
 
@@ -256,7 +258,7 @@ def test_describe_workflow_boundaries_lists_ceiling_and_capabilities():
 
 
 def test_validate_agent_needs_prompt_output_and_nonneg_retries():
-    errs = _errs([{"type": "agent", "prompt": "", "phase": "p", "retries": -1}])
+    errs = _errs([{"type": "agent", "cache": True, "prompt": "", "phase": "p", "retries": -1}])
     assert any("needs a 'prompt'" in e for e in errs)
     assert any("must produce an output" in e for e in errs)  # §2.1: outputs XOR out
     assert any("retries cannot be negative" in e for e in errs)
@@ -269,6 +271,7 @@ def test_validate_agent_rejects_both_output_kinds():
         [
             {
                 "type": "agent",
+                "cache": True,
                 "prompt": "p",
                 "phase": "p",
                 "out": "r.md",
@@ -286,6 +289,7 @@ def test_validate_requires_only_on_prose_out():
         [
             {
                 "type": "agent",
+                "cache": True,
                 "prompt": "p",
                 "phase": "p",
                 "outputs": {"x": "str"},
@@ -301,6 +305,7 @@ def test_validate_requires_rejects_custom_check_and_bad_shape():
         [
             {
                 "type": "agent",
+                "cache": True,
                 "prompt": "p",
                 "phase": "p",
                 "out": "r.md",
@@ -321,6 +326,7 @@ def test_validate_agent_tool_ceiling():
         [
             {
                 "type": "agent",
+                "cache": True,
                 "prompt": "p",
                 "phase": "p",
                 "out": "o",
@@ -337,6 +343,7 @@ def test_validate_check_shapes():
         [
             {
                 "type": "sandbox",
+                "cache": True,
                 "run": "x",
                 "phase": "p",
                 "check": {"file_nonempty": {"path": "a"}, "choice_in": {}},
@@ -344,25 +351,52 @@ def test_validate_check_shapes():
         ]
     )
     assert any("exactly one" in e for e in bad_two)
-    unknown = _errs([{"type": "sandbox", "run": "x", "phase": "p", "check": {"weird": {}}}])
+    unknown = _errs(
+        [{"type": "sandbox", "cache": True, "run": "x", "phase": "p", "check": {"weird": {}}}]
+    )
     assert any("unknown check" in e for e in unknown)
     not_obj = _errs(
-        [{"type": "sandbox", "run": "x", "phase": "p", "check": {"file_nonempty": "a"}}]
+        [
+            {
+                "type": "sandbox",
+                "cache": True,
+                "run": "x",
+                "phase": "p",
+                "check": {"file_nonempty": "a"},
+            }
+        ]
     )
     assert any("needs an object" in e for e in not_obj)
     missing = _errs(
-        [{"type": "sandbox", "run": "x", "phase": "p", "check": {"choice_in": {"path": "a"}}}]
+        [
+            {
+                "type": "sandbox",
+                "cache": True,
+                "run": "x",
+                "phase": "p",
+                "check": {"choice_in": {"path": "a"}},
+            }
+        ]
     )
     assert any("missing 'key'" in e for e in missing)
     empty_args = _errs(
-        [{"type": "sandbox", "run": "x", "phase": "p", "check": {"file_nonempty": {}}}]
+        [
+            {
+                "type": "sandbox",
+                "cache": True,
+                "run": "x",
+                "phase": "p",
+                "check": {"file_nonempty": {}},
+            }
+        ]
     )
     assert any("missing 'path'" in e for e in empty_args)  # empty-dict args still validated
 
 
 def test_validate_sandbox_needs_run():
     assert any(
-        "non-empty 'run'" in e for e in _errs([{"type": "sandbox", "run": "", "phase": "p"}])
+        "non-empty 'run'" in e
+        for e in _errs([{"type": "sandbox", "cache": True, "run": "", "phase": "p"}])
     )
 
 
@@ -378,7 +412,7 @@ def test_stale_risk_warnings_are_conservative_and_low_noise():
         )
 
     # (rule 1) a sandbox command with a path-like token but no reads / no cache=false
-    r1 = _warns([{"type": "sandbox", "run": "python analyze.py", "phase": "p"}])
+    r1 = _warns([{"type": "sandbox", "cache": True, "run": "python analyze.py", "phase": "p"}])
     assert any("reads" in w for w in r1)
 
     # (rule 2) a sandbox step inside a map over a glob, no reads — the highest-risk shape
@@ -389,7 +423,7 @@ def test_stale_risk_warnings_are_conservative_and_low_noise():
                 "over": "logs/*.log",
                 "as": "f",
                 "phase": "p",
-                "do": [{"type": "sandbox", "run": "process", "phase": "p"}],
+                "do": [{"type": "sandbox", "cache": True, "run": "process", "phase": "p"}],
             }
         ]
     )
@@ -397,7 +431,17 @@ def test_stale_risk_warnings_are_conservative_and_low_noise():
 
     # took a stance → silent: declared reads
     assert (
-        _warns([{"type": "sandbox", "run": "python analyze.py", "phase": "p", "reads": ["x.py"]}])
+        _warns(
+            [
+                {
+                    "type": "sandbox",
+                    "cache": True,
+                    "run": "python analyze.py",
+                    "phase": "p",
+                    "reads": ["x.py"],
+                }
+            ]
+        )
         == []
     )
     # took a stance → silent: cache=false
@@ -406,22 +450,25 @@ def test_stale_risk_warnings_are_conservative_and_low_noise():
         == []
     )
     # no path-like token in the command → not flagged (no guessing)
-    assert _warns([{"type": "sandbox", "run": "echo hello", "phase": "p"}]) == []
+    assert _warns([{"type": "sandbox", "cache": True, "run": "echo hello", "phase": "p"}]) == []
 
 
 def test_validate_reads_path_shape():
     """`reads` entries are declared paths/globs — validate rejects an empty entry and a
     `..` traversal statically (#429 P1), so a malformed dependency is caught before run,
     not silently ignored."""
-    empty = _errs([{"type": "sandbox", "run": "x", "phase": "p", "reads": [""]}])
+    empty = _errs([{"type": "sandbox", "cache": True, "run": "x", "phase": "p", "reads": [""]}])
     assert any("reads" in e and "non-empty" in e for e in empty)
-    traversal = _errs([{"type": "sandbox", "run": "x", "phase": "p", "reads": ["../secrets"]}])
+    traversal = _errs(
+        [{"type": "sandbox", "cache": True, "run": "x", "phase": "p", "reads": ["../secrets"]}]
+    )
     assert any("reads" in e and ".." in e for e in traversal)
     # a well-formed reads (incl. interpolation + glob) is accepted
     ok = _errs(
         [
             {
                 "type": "agent",
+                "cache": True,
                 "prompt": "p",
                 "phase": "p",
                 "out": "o.md",
@@ -493,12 +540,14 @@ def test_validate_gate_must_be_top_level():
 
 
 def test_validate_interp_unknown_variable():
-    errs = _errs([{"type": "sandbox", "run": "echo {bogus}", "phase": "p"}])
+    errs = _errs([{"type": "sandbox", "cache": True, "run": "echo {bogus}", "phase": "p"}])
     assert any("unknown variable 'bogus'" in e for e in errs)
 
 
 def test_validate_interp_known_vars_pass():
-    errs = _errs([{"type": "sandbox", "run": "echo {config} {inputs}", "phase": "p"}])
+    errs = _errs(
+        [{"type": "sandbox", "cache": True, "run": "echo {config} {inputs}", "phase": "p"}]
+    )
     assert errs == []
 
 
@@ -544,6 +593,7 @@ async def test_run_produce_gate_commit_happy_path():
                         "do": [
                             {
                                 "type": "agent",
+                                "cache": True,
                                 "prompt": "Read {file} pick {config.collections}",
                                 "phase": "classify",
                                 "out": "plan/{file}.json",
@@ -607,6 +657,7 @@ async def test_run_requires_retries_until_the_structure_is_present():
                 "steps": [
                     {
                         "type": "agent",
+                        "cache": True,
                         "name": "draft",
                         "prompt": "write report",
                         "phase": "draft",
@@ -656,6 +707,7 @@ async def test_run_gate_summary_from_structured_outputs_reference():
                         "do": [
                             {
                                 "type": "agent",
+                                "cache": True,
                                 "name": "plan",
                                 "prompt": "classify {file}",
                                 "phase": "classify",
@@ -733,7 +785,13 @@ async def test_run_map_collects_failures():
                         "as": "f",
                         "phase": "p",
                         "do": [
-                            {"type": "agent", "prompt": "do {f}", "phase": "p", "out": "out/{f}.md"}
+                            {
+                                "type": "agent",
+                                "cache": True,
+                                "prompt": "do {f}",
+                                "phase": "p",
+                                "out": "out/{f}.md",
+                            }
                         ],
                     }
                 ],
@@ -781,6 +839,7 @@ async def test_run_sandbox_and_agent_step_and_upsert_and_collection_has():
                 "steps": [
                     {
                         "type": "sandbox",
+                        "cache": True,
                         "run": "build {config.collections}",
                         "phase": "p",
                         "name": "build",
@@ -788,6 +847,7 @@ async def test_run_sandbox_and_agent_step_and_upsert_and_collection_has():
                     },
                     {
                         "type": "agent",
+                        "cache": True,
                         "prompt": "write note",
                         "phase": "p",
                         "name": "note",
@@ -839,7 +899,13 @@ async def test_dsl_map_runs_each_element_on_its_own_turn_lane():
                         "as": "i",
                         "phase": "p",
                         "do": [
-                            {"type": "agent", "prompt": "p {i}", "phase": "p", "out": "n_{i}.md"}
+                            {
+                                "type": "agent",
+                                "cache": True,
+                                "prompt": "p {i}",
+                                "phase": "p",
+                                "out": "n_{i}.md",
+                            }
                         ],
                     }
                 ],
@@ -870,7 +936,13 @@ async def test_dsl_map_effective_concurrency_is_throttled_by_the_backend():
                             "phase": "p",
                             "concurrency": req,
                             "do": [
-                                {"type": "agent", "prompt": "{i}", "phase": "p", "out": "n_{i}.md"}
+                                {
+                                    "type": "agent",
+                                    "cache": True,
+                                    "prompt": "{i}",
+                                    "phase": "p",
+                                    "out": "n_{i}.md",
+                                }
                             ],
                         }
                     ],
@@ -933,7 +1005,13 @@ async def test_map_prunes_orphan_element_artifacts_when_the_set_shrinks():
                         "as": "f",
                         "phase": "p",
                         "do": [
-                            {"type": "sandbox", "run": "process {f}", "phase": "p", "name": "proc"}
+                            {
+                                "type": "sandbox",
+                                "cache": True,
+                                "run": "process {f}",
+                                "phase": "p",
+                                "name": "proc",
+                            }
                         ],
                     }
                 ],
@@ -984,6 +1062,7 @@ async def test_map_gc_prunes_orphans_of_switch_nested_steps():
                                     "go": [
                                         {
                                             "type": "sandbox",
+                                            "cache": True,
                                             "run": "x {f}",
                                             "phase": "p",
                                             "name": "proc",
@@ -1127,6 +1206,7 @@ async def test_dsl_sandbox_reads_folds_declared_content_into_hash():
                 "steps": [
                     {
                         "type": "sandbox",
+                        "cache": True,
                         "run": "analyze",
                         "phase": "p",
                         "reads": ["{config.dir}/*.log"],
@@ -1171,7 +1251,7 @@ async def test_run_gate_summary_reads_text_and_json():
 
 
 def test_agentstep_struct_defaults():
-    s = AgentStep(prompt="p", phase="p")
+    s = AgentStep(prompt="p", phase="p", cache=True)
     # `retries` is deliberately non-zero: a model that misses its node's shape is told
     # why and answers again. A default of 0 left `run_step`'s feedback path unreachable.
     assert s.out == "" and s.tools == [] and s.retries == 2 and s.check is None
@@ -1202,6 +1282,7 @@ async def test_run_steps_ref_resolves_named_agent_fields():
                 "steps": [
                     {
                         "type": "agent",
+                        "cache": True,
                         "name": "classify",
                         "phase": "p",
                         "outputs": {"kind": "str"},
@@ -1209,6 +1290,7 @@ async def test_run_steps_ref_resolves_named_agent_fields():
                     },
                     {
                         "type": "sandbox",
+                        "cache": True,
                         "name": "act",
                         "phase": "p",
                         "run": "handle {steps.classify.kind}",
@@ -1224,7 +1306,7 @@ async def test_run_steps_ref_resolves_named_agent_fields():
 
 def test_validate_steps_ref_unknown_step():
     errs = _errs(
-        [{"type": "sandbox", "run": "do {steps.nope.x}", "phase": "p"}],
+        [{"type": "sandbox", "cache": True, "run": "do {steps.nope.x}", "phase": "p"}],
     )
     assert any("unknown step 'nope'" in e for e in errs)
 
@@ -1234,12 +1316,13 @@ def test_validate_steps_ref_unknown_field():
         [
             {
                 "type": "agent",
+                "cache": True,
                 "name": "cls",
                 "phase": "p",
                 "outputs": {"kind": "str"},
                 "prompt": "c",
             },
-            {"type": "sandbox", "run": "do {steps.cls.bogus}", "phase": "p"},
+            {"type": "sandbox", "cache": True, "run": "do {steps.cls.bogus}", "phase": "p"},
         ]
     )
     assert any("step 'cls' has no output field 'bogus'" in e for e in errs)
@@ -1248,9 +1331,10 @@ def test_validate_steps_ref_unknown_field():
 def test_validate_steps_ref_forward_reference():
     errs = _errs(
         [
-            {"type": "sandbox", "run": "do {steps.later.x}", "phase": "p"},
+            {"type": "sandbox", "cache": True, "run": "do {steps.later.x}", "phase": "p"},
             {
                 "type": "agent",
+                "cache": True,
                 "name": "later",
                 "phase": "p",
                 "outputs": {"x": "str"},
@@ -1264,8 +1348,22 @@ def test_validate_steps_ref_forward_reference():
 def test_validate_duplicate_step_name():
     errs = _errs(
         [
-            {"type": "agent", "name": "dup", "phase": "p", "outputs": {"x": "str"}, "prompt": "a"},
-            {"type": "agent", "name": "dup", "phase": "p", "outputs": {"y": "str"}, "prompt": "b"},
+            {
+                "type": "agent",
+                "cache": True,
+                "name": "dup",
+                "phase": "p",
+                "outputs": {"x": "str"},
+                "prompt": "a",
+            },
+            {
+                "type": "agent",
+                "cache": True,
+                "name": "dup",
+                "phase": "p",
+                "outputs": {"y": "str"},
+                "prompt": "b",
+            },
         ]
     )
     assert any("duplicate step name 'dup'" in e for e in errs)
@@ -1276,19 +1374,20 @@ def test_validate_steps_ref_valid_passes():
         [
             {
                 "type": "agent",
+                "cache": True,
                 "name": "cls",
                 "phase": "p",
                 "outputs": {"kind": "str"},
                 "prompt": "c",
             },
-            {"type": "sandbox", "run": "do {steps.cls.kind}", "phase": "p"},
+            {"type": "sandbox", "cache": True, "run": "do {steps.cls.kind}", "phase": "p"},
         ]
     )
     assert errs == []
 
 
 def test_validate_steps_ref_bare_no_name():
-    errs = _errs([{"type": "sandbox", "run": "do {steps}", "phase": "p"}])
+    errs = _errs([{"type": "sandbox", "cache": True, "run": "do {steps}", "phase": "p"}])
     assert any("needs a step name" in e for e in errs)
 
 
@@ -1313,6 +1412,7 @@ async def test_run_sandbox_outputs_fields_referenceable():
                 "steps": [
                     {
                         "type": "sandbox",
+                        "cache": True,
                         "name": "measure",
                         "phase": "p",
                         "run": "measure",
@@ -1320,6 +1420,7 @@ async def test_run_sandbox_outputs_fields_referenceable():
                     },
                     {
                         "type": "sandbox",
+                        "cache": True,
                         "name": "report",
                         "phase": "p",
                         "run": "report {steps.measure.dropped}",
@@ -1349,6 +1450,7 @@ async def test_run_agent_outputs_non_json_fails_its_gate():
                 "steps": [
                     {
                         "type": "agent",
+                        "cache": True,
                         "name": "c",
                         "phase": "p",
                         "outputs": {"k": "str"},
@@ -1403,6 +1505,7 @@ async def test_run_map_inner_steps_ref_uses_element_key():
                         "do": [
                             {
                                 "type": "agent",
+                                "cache": True,
                                 "name": "cls",
                                 "phase": "p",
                                 "outputs": {"kind": "str"},
@@ -1410,6 +1513,7 @@ async def test_run_map_inner_steps_ref_uses_element_key():
                             },
                             {
                                 "type": "sandbox",
+                                "cache": True,
                                 "name": "act",
                                 "phase": "p",
                                 "run": "handle {f} as {steps.cls.kind}",
@@ -1448,6 +1552,7 @@ async def test_run_outputs_all_scalar_and_container_types_validate():
                 "steps": [
                     {
                         "type": "sandbox",
+                        "cache": True,
                         "name": "gen",
                         "phase": "p",
                         "run": "gen",
@@ -1460,7 +1565,13 @@ async def test_run_outputs_all_scalar_and_container_types_validate():
                             "o": "obj",
                         },
                     },
-                    {"type": "sandbox", "name": "use", "phase": "p", "run": "use {steps.gen.i}"},
+                    {
+                        "type": "sandbox",
+                        "cache": True,
+                        "name": "use",
+                        "phase": "p",
+                        "run": "use {steps.gen.i}",
+                    },
                 ],
             }
         )
@@ -1487,6 +1598,7 @@ async def test_run_agent_outputs_type_mismatch_retries_with_feedback():
                 "steps": [
                     {
                         "type": "agent",
+                        "cache": True,
                         "name": "rate",
                         "phase": "p",
                         "outputs": {"score": "float"},
@@ -1515,6 +1627,7 @@ async def test_run_agent_outputs_enum_violation_fails():
                 "steps": [
                     {
                         "type": "agent",
+                        "cache": True,
                         "name": "c",
                         "phase": "p",
                         "outputs": {"kind": {"type": "str", "enum": ["latency", "errors"]}},
@@ -1543,6 +1656,7 @@ async def test_run_agent_outputs_missing_field_fails():
                 "steps": [
                     {
                         "type": "agent",
+                        "cache": True,
                         "name": "c",
                         "phase": "p",
                         "outputs": {"kind": "str"},
@@ -1558,7 +1672,16 @@ async def test_run_agent_outputs_missing_field_fails():
 
 def test_validate_outputs_bad_type():
     errs = _errs(
-        [{"type": "agent", "name": "s", "phase": "p", "outputs": {"x": "weird"}, "prompt": "p"}]
+        [
+            {
+                "type": "agent",
+                "cache": True,
+                "name": "s",
+                "phase": "p",
+                "outputs": {"x": "weird"},
+                "prompt": "p",
+            }
+        ]
     )
     assert any("unknown output type 'weird'" in e for e in errs)
 
@@ -1568,6 +1691,7 @@ def test_validate_outputs_enum_only_on_scalars():
         [
             {
                 "type": "agent",
+                "cache": True,
                 "name": "s",
                 "phase": "p",
                 "outputs": {"x": {"type": "list", "enum": [1]}},
@@ -1579,7 +1703,18 @@ def test_validate_outputs_enum_only_on_scalars():
 
 
 def test_validate_outputs_bad_spec_shape():
-    errs = _errs([{"type": "agent", "name": "s", "phase": "p", "outputs": {"x": 5}, "prompt": "p"}])
+    errs = _errs(
+        [
+            {
+                "type": "agent",
+                "cache": True,
+                "name": "s",
+                "phase": "p",
+                "outputs": {"x": 5},
+                "prompt": "p",
+            }
+        ]
+    )
     assert any("output 'x'" in e for e in errs)
 
 
@@ -1609,6 +1744,7 @@ async def test_run_switch_routes_to_matching_case():
         [
             {
                 "type": "agent",
+                "cache": True,
                 "name": "cls",
                 "phase": "p",
                 "outputs": {"kind": {"type": "str", "enum": ["latency", "errors"]}},
@@ -1619,8 +1755,12 @@ async def test_run_switch_routes_to_matching_case():
                 "on": "{steps.cls.kind}",
                 "phase": "p",
                 "cases": {
-                    "latency": [{"type": "sandbox", "run": "handle-latency", "phase": "p"}],
-                    "errors": [{"type": "sandbox", "run": "handle-errors", "phase": "p"}],
+                    "latency": [
+                        {"type": "sandbox", "cache": True, "run": "handle-latency", "phase": "p"}
+                    ],
+                    "errors": [
+                        {"type": "sandbox", "cache": True, "run": "handle-errors", "phase": "p"}
+                    ],
                 },
             },
         ]
@@ -1645,8 +1785,8 @@ async def test_run_switch_falls_to_default():
                 "type": "switch",
                 "on": "{config.mode}",
                 "phase": "p",
-                "cases": {"a": [{"type": "sandbox", "run": "A", "phase": "p"}]},
-                "default": [{"type": "sandbox", "run": "DEF", "phase": "p"}],
+                "cases": {"a": [{"type": "sandbox", "cache": True, "run": "A", "phase": "p"}]},
+                "default": [{"type": "sandbox", "cache": True, "run": "DEF", "phase": "p"}],
             }
         ],
         config={"mode": "z"},
@@ -1664,7 +1804,7 @@ async def test_run_switch_unmatched_no_default_raises():
                 "type": "switch",
                 "on": "{config.mode}",
                 "phase": "p",
-                "cases": {"a": [{"type": "sandbox", "run": "A", "phase": "p"}]},
+                "cases": {"a": [{"type": "sandbox", "cache": True, "run": "A", "phase": "p"}]},
             }
         ],
         config={"mode": "z"},
@@ -1695,7 +1835,9 @@ async def test_run_switch_unmatched_in_map_is_element_failure():
                         "type": "switch",
                         "on": "{config.mode}",
                         "phase": "p",
-                        "cases": {"a": [{"type": "sandbox", "run": "A", "phase": "p"}]},
+                        "cases": {
+                            "a": [{"type": "sandbox", "cache": True, "run": "A", "phase": "p"}]
+                        },
                     }
                 ],
             }
@@ -1772,6 +1914,7 @@ def test_validate_switch_case_outside_enum():
         [
             {
                 "type": "agent",
+                "cache": True,
                 "name": "c",
                 "phase": "p",
                 "outputs": {"k": {"type": "str", "enum": ["a", "b"]}},
@@ -1794,6 +1937,7 @@ def test_validate_switch_missing_enum_value_no_default():
         [
             {
                 "type": "agent",
+                "cache": True,
                 "name": "c",
                 "phase": "p",
                 "outputs": {"k": {"type": "str", "enum": ["a", "b"]}},
@@ -1820,12 +1964,19 @@ async def test_run_switch_on_non_enum_step_field():
     wf = make_wf(store, drive_turn=drive_turn, run_sandbox=run_sandbox)
     d = _switch_def(
         [
-            {"type": "agent", "name": "c", "phase": "p", "outputs": {"kind": "str"}, "prompt": "c"},
+            {
+                "type": "agent",
+                "cache": True,
+                "name": "c",
+                "phase": "p",
+                "outputs": {"kind": "str"},
+                "prompt": "c",
+            },
             {
                 "type": "switch",
                 "on": "{steps.c.kind}",
                 "phase": "p",
-                "cases": {"x": [{"type": "sandbox", "run": "hit", "phase": "p"}]},
+                "cases": {"x": [{"type": "sandbox", "cache": True, "run": "hit", "phase": "p"}]},
                 "default": [],
             },
         ]
@@ -1838,7 +1989,14 @@ async def test_run_switch_on_non_enum_step_field():
 def test_validate_switch_on_unknown_step_field():
     errs = _errs(
         [
-            {"type": "agent", "name": "c", "phase": "p", "outputs": {"k": "str"}, "prompt": "c"},
+            {
+                "type": "agent",
+                "cache": True,
+                "name": "c",
+                "phase": "p",
+                "outputs": {"k": "str"},
+                "prompt": "c",
+            },
             {
                 "type": "switch",
                 "on": "{steps.c.nofield}",
@@ -1872,7 +2030,11 @@ async def test_run_nested_switch_allowed():
                             "type": "switch",
                             "on": "{config.b}",
                             "phase": "p",
-                            "cases": {"y": [{"type": "sandbox", "run": "deep", "phase": "p"}]},
+                            "cases": {
+                                "y": [
+                                    {"type": "sandbox", "cache": True, "run": "deep", "phase": "p"}
+                                ]
+                            },
                             "default": [],
                         }
                     ]
@@ -1889,7 +2051,7 @@ async def test_run_nested_switch_allowed():
 
 def test_validate_switch_depth_limit():
     # build a pathologically deep nested switch (> 32) and expect a defensive error
-    node: dict[str, Any] = {"type": "sandbox", "run": "x", "phase": "p"}
+    node: dict[str, Any] = {"type": "sandbox", "cache": True, "run": "x", "phase": "p"}
     for _ in range(40):
         node = {
             "type": "switch",
@@ -1928,7 +2090,7 @@ async def test_run_map_over_list_value_keeps_array_order():
                         "over": "{config.items}",
                         "as": "x",
                         "phase": "p",
-                        "do": [{"type": "sandbox", "run": "do {x}", "phase": "p"}],
+                        "do": [{"type": "sandbox", "cache": True, "run": "do {x}", "phase": "p"}],
                     }
                 ],
             }
@@ -1961,7 +2123,14 @@ async def test_run_map_over_list_of_objects_field_access():
                         "as": "x",
                         "key_by": "id",
                         "phase": "p",
-                        "do": [{"type": "sandbox", "run": "v={x.v} id={x.id}", "phase": "p"}],
+                        "do": [
+                            {
+                                "type": "sandbox",
+                                "cache": True,
+                                "run": "v={x.v} id={x.id}",
+                                "phase": "p",
+                            }
+                        ],
                     }
                 ],
             }
@@ -1993,7 +2162,7 @@ async def test_run_map_over_range():
                         "over": {"range": "{config.n}"},
                         "as": "i",
                         "phase": "p",
-                        "do": [{"type": "sandbox", "run": "n={i}", "phase": "p"}],
+                        "do": [{"type": "sandbox", "cache": True, "run": "n={i}", "phase": "p"}],
                     }
                 ],
             }
@@ -2020,7 +2189,7 @@ async def test_run_map_key_by_collision_errors():
                         "as": "e",
                         "key_by": "id",
                         "phase": "p",
-                        "do": [{"type": "sandbox", "run": "do", "phase": "p"}],
+                        "do": [{"type": "sandbox", "cache": True, "run": "do", "phase": "p"}],
                     }
                 ],
             }
@@ -2046,7 +2215,7 @@ async def test_run_map_over_range_non_integer_errors():
                         "over": {"range": "{config.n}"},
                         "as": "i",
                         "phase": "p",
-                        "do": [{"type": "sandbox", "run": "x", "phase": "p"}],
+                        "do": [{"type": "sandbox", "cache": True, "run": "x", "phase": "p"}],
                     }
                 ],
             }
@@ -2064,7 +2233,7 @@ def test_validate_map_over_range_checks_interp():
                 "over": {"range": "{bogus}"},
                 "as": "i",
                 "phase": "p",
-                "do": [{"type": "sandbox", "run": "x", "phase": "p"}],
+                "do": [{"type": "sandbox", "cache": True, "run": "x", "phase": "p"}],
             }
         ]
     )
@@ -2079,7 +2248,7 @@ def test_validate_map_over_range_bad_shape():
                 "over": {"nope": "1"},
                 "as": "i",
                 "phase": "p",
-                "do": [{"type": "sandbox", "run": "x", "phase": "p"}],
+                "do": [{"type": "sandbox", "cache": True, "run": "x", "phase": "p"}],
             }
         ]
     )
@@ -2102,7 +2271,7 @@ async def test_run_map_key_by_missing_field_errors():
                         "as": "e",
                         "key_by": "id",
                         "phase": "p",
-                        "do": [{"type": "sandbox", "run": "do", "phase": "p"}],
+                        "do": [{"type": "sandbox", "cache": True, "run": "do", "phase": "p"}],
                     }
                 ],
             }
@@ -2147,6 +2316,7 @@ async def test_run_fan_in_collects_named_map_outputs():
                         "do": [
                             {
                                 "type": "agent",
+                                "cache": True,
                                 "name": "one",
                                 "phase": "p",
                                 "outputs": {"collection": "str"},
@@ -2160,7 +2330,12 @@ async def test_run_fan_in_collects_named_map_outputs():
                         "as": "p",
                         "phase": "p",
                         "do": [
-                            {"type": "sandbox", "run": "file into {p.collection}", "phase": "p"}
+                            {
+                                "type": "sandbox",
+                                "cache": True,
+                                "run": "file into {p.collection}",
+                                "phase": "p",
+                            }
                         ],
                     },
                 ],
@@ -2184,6 +2359,7 @@ def test_validate_fan_in_multiple_outputs_needs_collect():
                 "do": [
                     {
                         "type": "agent",
+                        "cache": True,
                         "name": "a",
                         "phase": "p",
                         "outputs": {"x": "str"},
@@ -2191,6 +2367,7 @@ def test_validate_fan_in_multiple_outputs_needs_collect():
                     },
                     {
                         "type": "agent",
+                        "cache": True,
                         "name": "b",
                         "phase": "p",
                         "outputs": {"y": "str"},
@@ -2232,6 +2409,7 @@ async def test_run_fan_in_collect_selects_step():
                         "do": [
                             {
                                 "type": "agent",
+                                "cache": True,
                                 "name": "first",
                                 "phase": "p",
                                 "outputs": {"v": "str"},
@@ -2239,6 +2417,7 @@ async def test_run_fan_in_collect_selects_step():
                             },
                             {
                                 "type": "agent",
+                                "cache": True,
                                 "name": "second",
                                 "phase": "p",
                                 "outputs": {"v": "str"},
@@ -2251,7 +2430,9 @@ async def test_run_fan_in_collect_selects_step():
                         "over": "{steps.m.outputs}",
                         "as": "p",
                         "phase": "p",
-                        "do": [{"type": "sandbox", "run": "got {p.v}", "phase": "p"}],
+                        "do": [
+                            {"type": "sandbox", "cache": True, "run": "got {p.v}", "phase": "p"}
+                        ],
                     },
                 ],
             }
@@ -2275,6 +2456,7 @@ def test_validate_fan_in_map_referencing_inner_step_from_outside():
                 "do": [
                     {
                         "type": "agent",
+                        "cache": True,
                         "name": "inner",
                         "phase": "p",
                         "outputs": {"x": "str"},
@@ -2282,7 +2464,7 @@ def test_validate_fan_in_map_referencing_inner_step_from_outside():
                     }
                 ],
             },
-            {"type": "sandbox", "run": "do {steps.inner.x}", "phase": "p"},
+            {"type": "sandbox", "cache": True, "run": "do {steps.inner.x}", "phase": "p"},
         ]
     )
     assert any("unknown step 'inner'" in e for e in errs)
@@ -2300,6 +2482,7 @@ def test_validate_fan_in_map_bad_field():
                 "do": [
                     {
                         "type": "agent",
+                        "cache": True,
                         "name": "a",
                         "phase": "p",
                         "outputs": {"x": "str"},
@@ -2307,7 +2490,7 @@ def test_validate_fan_in_map_bad_field():
                     }
                 ],
             },
-            {"type": "sandbox", "run": "do {steps.m.bogus}", "phase": "p"},
+            {"type": "sandbox", "cache": True, "run": "do {steps.m.bogus}", "phase": "p"},
         ]
     )
     assert any("no output field 'bogus'" in e for e in errs)
@@ -2344,6 +2527,7 @@ async def test_run_fan_in_switch_skip_is_null():
                                     "on": [
                                         {
                                             "type": "agent",
+                                            "cache": True,
                                             "name": "prod",
                                             "phase": "p",
                                             "outputs": {"v": "str"},
@@ -2390,9 +2574,16 @@ async def test_run_fan_in_degrades_to_out_paths():
                         "as": "f",
                         "phase": "p",
                         "do": [
-                            {"type": "agent", "out": "log/note.md", "phase": "p", "prompt": "log"},
                             {
                                 "type": "agent",
+                                "cache": True,
+                                "out": "log/note.md",
+                                "phase": "p",
+                                "prompt": "log",
+                            },
+                            {
+                                "type": "agent",
+                                "cache": True,
                                 "name": "w",
                                 "out": "report/out.md",
                                 "phase": "p",
@@ -2433,6 +2624,7 @@ def _revise_def(*, revise_to: str = "draft", allow: Any = None, prompt: str | No
         "steps": [
             {
                 "type": "agent",
+                "cache": True,
                 "name": "draft",
                 "phase": "draft",
                 "out": "report.md",
@@ -2508,6 +2700,7 @@ async def test_run_step_ref_before_run_errors():
                 "steps": [
                     {
                         "type": "agent",
+                        "cache": True,
                         "name": "a",
                         "phase": "p",
                         "prompt": "hi",
@@ -2554,6 +2747,7 @@ def test_validate_revise_to_target_after_gate():
             },
             {
                 "type": "agent",
+                "cache": True,
                 "name": "later",
                 "phase": "p",
                 "prompt": "{steps.g.feedback}",
@@ -2572,6 +2766,7 @@ def test_validate_revise_gate_between_target_and_gate():
         "steps": [
             {
                 "type": "agent",
+                "cache": True,
                 "name": "draft",
                 "phase": "p",
                 "prompt": "{steps.g2.feedback}",
@@ -2603,7 +2798,14 @@ def test_validate_revise_gate_needs_name():
         "id": "wf",
         "phases": [{"id": "p"}],
         "steps": [
-            {"type": "agent", "name": "draft", "phase": "p", "prompt": "x", "out": "o.md"},
+            {
+                "type": "agent",
+                "cache": True,
+                "name": "draft",
+                "phase": "p",
+                "prompt": "x",
+                "out": "o.md",
+            },
             {
                 "type": "gate",
                 "phase": "p",
@@ -2729,6 +2931,7 @@ async def test_a_run_node_whose_environment_fails_cannot_pass_its_produces_gate(
                 "steps": [
                     {
                         "type": "sandbox",
+                        "cache": True,
                         "run": "python gen.py",
                         "phase": "p",
                         "name": "generate",

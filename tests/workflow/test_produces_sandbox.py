@@ -25,6 +25,7 @@ def _parse(*steps: dict) -> Any:
 
 _WRITE = {
     "type": "sandbox",
+    "cache": True,
     "name": "fetch",
     "phase": "p",
     "run": "python fetch.py",
@@ -47,7 +48,7 @@ def test_a_downstream_map_can_consume_a_sandbox_node_s_files():
         "over": "{steps.fetch.produces}",
         "as": "img",
         "phase": "p",
-        "do": [{"type": "sandbox", "run": "get {img.url}", "phase": "p"}],
+        "do": [{"type": "sandbox", "cache": True, "run": "get {img.url}", "phase": "p"}],
     }
     assert validate_def(_parse(_WRITE, m)) == []
 
@@ -81,7 +82,7 @@ async def test_a_script_hands_1000_files_to_a_map_with_no_model_involved():
             "over": "{steps.fetch.produces}",
             "as": "img",
             "phase": "p",
-            "do": [{"type": "sandbox", "run": "get {img.url}", "phase": "p"}],
+            "do": [{"type": "sandbox", "cache": True, "run": "get {img.url}", "phase": "p"}],
         },
     )
     assert validate_def(d) == []

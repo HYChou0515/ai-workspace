@@ -35,7 +35,7 @@ _NIGHTLY = json.dumps(
         "id": "ignored",
         "title": "Nightly",
         "phases": [{"id": "p"}],
-        "steps": [{"type": "agent", "prompt": "hi", "phase": "p", "out": "o.md"}],
+        "steps": [{"type": "agent", "cache": True, "prompt": "hi", "phase": "p", "out": "o.md"}],
     }
 )
 

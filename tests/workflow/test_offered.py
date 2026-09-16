@@ -20,7 +20,7 @@ _DEF = json.dumps(
         "id": "ignored",
         "title": "Mine",
         "phases": [{"id": "p"}],
-        "steps": [{"type": "agent", "prompt": "hi", "phase": "p", "out": "o.md"}],
+        "steps": [{"type": "agent", "cache": True, "prompt": "hi", "phase": "p", "out": "o.md"}],
     }
 ).encode()
 

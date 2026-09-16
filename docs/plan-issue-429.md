@@ -53,7 +53,7 @@ grill 前的三份 code 探勘改變了 #429 的樣貌,先記錄事實基礎:
 ### `reads` 欄位(新,碰引擎)
 
 ```jsonc
-{ "type":"sandbox", "run":"python analyze.py", "reads":["logs/*.log"] }
+{ "type":"sandbox","cache":true, "run":"python analyze.py", "reads":["logs/*.log"] }
 ```
 
 - 引擎看到 `reads` → **自動**算那些檔的內容指紋、摺進 `input_hash`。作者**不用**自己

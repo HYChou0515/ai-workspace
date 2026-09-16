@@ -678,7 +678,7 @@ DSL 的界線是一條線：**流程圖的*形狀*必須事先靜態宣告**—�
   `.outputs`，§22.5）。
 
 ```jsonc
-{ "type":"agent", "name":"classify", "phase":"classify",
+{ "type":"agent","cache":true, "name":"classify", "phase":"classify",
   "prompt":"判斷異常類型，輸出 JSON。",
   "outputs": { "type": {"type":"str","enum":["latency","errors","other"]} } }
 // 之後任何一步：  "on": "{steps.classify.type}"
@@ -707,7 +707,7 @@ implicit gate**——回覆不 parse 成物件、缺欄位、型別/enum 不符 
 迴圈)。它的**回覆完全不被 parse**,模型愛講什麼講什麼。
 
 ```jsonc
-{ "type": "agent", "name": "listing", "phase": "list",
+{ "type": "agent", "cache": true, "name": "listing", "phase": "list",
   "tools": ["exec"],
   "produces": "data/*.json",
   "prompt": "查最近上傳的 1000 張圖，每筆寫成 data/<id>.json（含 url），用腳本寫。" },
@@ -741,7 +741,7 @@ list，用 `{steps.<map>.outputs}` 引用（唯一步免寫、多步用 `collect
 artifact 路徑清單）。跳過的元素留 `null` 佔位，讓下游 `map over .outputs` 的位置對齊。
 
 ```jsonc
-{ "type":"agent", "name":"extract", "phase":"x", "prompt":"抽出所有待辦",
+{ "type":"agent","cache":true, "name":"extract", "phase":"x", "prompt":"抽出所有待辦",
   "outputs":{"items":"list"} },
 { "type":"map", "over":"{steps.extract.items}", "as":"t", "phase":"card",
   "do":[ {"type":"capability","call":"upsert_context_card","phase":"card",
@@ -759,7 +759,7 @@ artifact 路徑清單）。跳過的元素留 `null` 佔位，讓下游 `map ove
 選同一條**的隱藏前提。
 
 ```jsonc
-{ "type":"agent", "name":"classify", "phase":"c", "prompt":"判斷類型",
+{ "type":"agent","cache":true, "name":"classify", "phase":"c", "prompt":"判斷類型",
   "outputs":{"type":{"type":"str","enum":["latency","errors","other"]}} },
 { "type":"switch", "on":"{steps.classify.type}", "phase":"route",
   "cases":{ "latency":[ /* … */ ], "errors":[ /* … */ ], "other":[ /* … */ ] } }
@@ -776,7 +776,7 @@ artifact 路徑清單）。跳過的元素留 `null` 佔位，讓下游 `map ove
 向前引用**（target 跑在 gate 之前卻引用它的回饋），讓唯一的回邊在圖上顯式，而非魔法變數。
 
 ```jsonc
-{ "type":"agent", "name":"draft", "phase":"draft",
+{ "type":"agent","cache":true, "name":"draft", "phase":"draft",
   "prompt":"擬週報。修改意見：{steps.review.feedback}", "out":"report.md" },
 { "type":"gate", "name":"review", "phase":"review", "title":"審週報",
   "summary_from":"report.md", "allow":["approve","revise","reject"], "revise_to":"draft" }

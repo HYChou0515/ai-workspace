@@ -65,7 +65,13 @@ def test_referencing_an_unpublished_field_is_rejected() -> None:
     errs = _errs(
         [
             _ingest_step(name="ingest"),
-            {"type": "agent", "prompt": "{steps.ingest.nope}", "phase": "p", "out": "o.md"},
+            {
+                "type": "agent",
+                "cache": True,
+                "prompt": "{steps.ingest.nope}",
+                "phase": "p",
+                "out": "o.md",
+            },
         ]
     )
     assert any("no output field" in e for e in errs), errs
@@ -76,7 +82,13 @@ def test_referencing_an_unnamed_ingest_is_rejected() -> None:
     errs = _errs(
         [
             _ingest_step(),
-            {"type": "agent", "prompt": "{steps.ingest.doc_id}", "phase": "p", "out": "o.md"},
+            {
+                "type": "agent",
+                "cache": True,
+                "prompt": "{steps.ingest.doc_id}",
+                "phase": "p",
+                "out": "o.md",
+            },
         ]
     )
     assert any("unknown step" in e for e in errs), errs

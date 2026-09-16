@@ -27,6 +27,7 @@ def _def(prompt: str) -> Any:
                 "steps": [
                     {
                         "type": "agent",
+                        "cache": True,
                         "name": "s",
                         "phase": "p",
                         "outputs": {"count": "int"},

@@ -22,7 +22,7 @@ _VALID = json.dumps(
         "id": "ignored",
         "title": "T",
         "phases": [{"id": "p"}],
-        "steps": [{"type": "agent", "prompt": "hi", "phase": "p", "out": "o.md"}],
+        "steps": [{"type": "agent", "cache": True, "prompt": "hi", "phase": "p", "out": "o.md"}],
     }
 )
 
@@ -46,7 +46,7 @@ def test_validate_ok_parsefail_and_invalid():
         {
             "id": "x",
             "phases": [{"id": "p"}],
-            "steps": [{"type": "sandbox", "run": "x", "phase": "zz"}],
+            "steps": [{"type": "sandbox", "cache": True, "run": "x", "phase": "zz"}],
         }
     )
     d2, verrs = validate_workflow_json(bad)
@@ -59,7 +59,14 @@ def test_validate_tool_ceiling_clamps():
             "id": "x",
             "phases": [{"id": "p"}],
             "steps": [
-                {"type": "agent", "prompt": "p", "phase": "p", "out": "o", "tools": ["exec"]}
+                {
+                    "type": "agent",
+                    "cache": True,
+                    "prompt": "p",
+                    "phase": "p",
+                    "out": "o",
+                    "tools": ["exec"],
+                }
             ],
         }
     )

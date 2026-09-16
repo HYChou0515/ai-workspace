@@ -127,7 +127,7 @@ await agent_step(wf, ..., reads=["spec.md"])          # agent 也吃 reads
 await agent_write_step(wf, ..., reads=["src/**/*.py"])
 ```
 
-`workflow.json` 一樣:`{"type":"sandbox","run":"analyze","phase":"a","reads":["logs/*.log"]}`
+`workflow.json` 一樣:`{"type":"sandbox","cache":true,"run":"analyze","phase":"a","reads":["logs/*.log"]}`
 (entry 可 interpolate,如 `"{config.dir}/*.log"`)。
 
 **維護 cache 正確性的三條規則,依優先序**:
