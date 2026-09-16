@@ -910,9 +910,10 @@ class TurnContextBuilder:
         ``caller_env`` is what the deploy's seam answers for a turn with no
         request behind it (``docs/plan-headless-env.md``), resolved by the
         executor for the run's captured user. Every node of a run — whoever or
-        whatever started it — reads that one source, so a re-run on the clock
-        sees exactly what the first run saw; a person's own request never
-        reaches a workflow node.
+        whatever started it — reads that one source for that one user, so no
+        step carries a credential the next step lacks; a person's own request
+        never reaches a workflow node. (Which user a RE-RUN is attributed to is
+        the run's business, not this builder's — see the executor.)
 
         "Byte-for-byte what a workflow node saw before" stopped being true when
         `skills_reachable` joined the shared core: a workflow node's tool list now

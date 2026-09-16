@@ -109,6 +109,16 @@ class IRequestEnv(abc.ABC):
 - **`ITokenService`(LLM 那條憑證線)不動。** 兩條憑證線的表只改 `IRequestEnv` 那列。
 - **人按 `run` 起的 workflow 不拿他的 request env**(理由在上面)。如果將來有人要「這一次用我的
   身分跑」,那是一個新需求,不是本計畫漏掉。
+- **`user_id` 是記在誰名下,不是誰在場**(第一輪 review 補的)。`wui/run` 和 item 排程都以 **owner**
+  為 `captured_user`(`wui_routes.py:427`、`user_schedule_sweep.py:426`),而造成那個 turn 的可以是
+  任何持 `execute` / `edit_content` 的參與者;`owner` 又是 `write_meta` 能改的自由文字。「AI 以 owner
+  身分跑」是 #805 / WUI 計畫定下的既有授權模型(帳記在 owner 身上),本計畫加上去的是**外部憑證**
+  那一層——所以 per-user 政策只憑 `user_id` 就是把 owner 的憑證發給那些參與者。平台不做結構性阻擋
+  (那是改 run 的歸屬與計費),文件與 `IRequestEnv` 的 docstring 明講,範例改回共用 service account。
+  ⚠️ 要不要把 `wui/run` 改成記在按的人名下,是另一個決策,已回報。
+- **沒有 request ≠ 可以拿 service account**(第一輪 review 補的)。`send(request=None)` 只有在
+  `driven_by` 有值(平台自己起的 turn)時才問 `env_without_request`;忘了傳 request 的下一個呼叫者
+  掉到安全那邊——item 的 copy 而已,和 `call_lane` 的預設同一個方向。
 - **不做 TTL / refresh / 快取。** 每輪問一次,快取與否是 impl 的事——平台快取等於平台決定
   過期政策,而它不知道對面的 token 活多久。
 
@@ -201,3 +211,22 @@ class IRequestEnv(abc.ABC):
 - **`_resolve_request_env` 沒有拆成兩個函式。** 兩個方法共用同一個 try/except 與同一個 500,
   差別只在 `request is None`;拆開等於兩份規則。突變體「headless 那支放在 try 外面」會讓
   goal-driver 失敗測試紅(原始 `RuntimeError` 帶著 token 逃出來)。
+- **plan 漏列 `wui/run`,而且「人按 run 起的那條 = 按的人」只對 `POST …/run` 成立。** WUI 頁面按鈕
+  起的 run 記在 **owner** 名下(第一輪 review 兩把鏡頭各自抓到)。已補測試釘住這個事實、文件改寫成
+  「記在誰名下」那張表、`api/app.py:_owner_of_item` 與 `user_schedule_sweep.py` 那兩段「沒有個人
+  憑證可繼承」的舊註解一併更新。
+- **「重跑看到同一個東西」只對方法成立,不對 `user_id` 成立。** 一條 run 裡每一步同方法同身分,
+  #714 怕的「第一步有 cookie 第二步沒有」確實不存在;但人按 `POST …/run` 記在按的人名下、排程重跑記在
+  owner 名下、trigger 記在 acting user 名下,per-user 政策下三種觸發三種憑證。三處 docstring 與文件改成
+  這個說法;共用 service account 是讓重跑一致的條件,不是平台保證。
+- **「goal driver 失敗是安靜的、目標停止」只對白天那條成立。** 夜間 `start_offhours_round` 把失敗丟給
+  sweeper(`goal_offhours.py:_START_FAILURE_LIMIT`),同一晚三次後在 thread 寫「無法啟動」標記(固定字串)
+  並響鈴,目標保持 active。「另開 issue 加 thread 通知」只針對白天那條。
+- **驗收清單有三條沒有重跑:**「沒設接縫時逐位元相同」的差分探針、`os.environ` 實際派送探針、
+  「值不進 DB / SSE / log」的全面掃描。有的是:P2 的 ctx `user_env` 斷言接上 `tests/tooling/test_tool_env.py`
+  既有的派送測試(headless 值走同一個 `user_env` 欄位);P4 的 run record / thread 斷言只掃 impl 的錯誤文字;
+  workflow node 測試另加了「SA 值不在任何一張 specstar 表裡」的掃描。
+- **「run 一定變 `error`」是過度宣稱。** `wf.map` 會把 `StepFailed` 收成該元素的失敗,run 可以是
+  `done`;docstring 與文件改成「node 失敗;最上層整條 run error、map 裡收進 failures」。
+- **問的次數不是每個 node 一次。** `agent_step` 重試、`wf.map` 每個元素(同時數受 `turn_concurrency` 限制,預設 1)、steer 提案
+  各問一次;文件補上。goal driver 那條沒有 timeout 兜底,掛住會安靜停住且已扣的一輪不退;文件補上。

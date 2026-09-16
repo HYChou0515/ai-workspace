@@ -267,7 +267,7 @@ class ChatSendService:
         # gate above, so a refused turn never pays for a credential exchange it
         # is not going to use.
         caller_env = await self._resolve_request_env(
-            request, user_id=author, item_id=investigation_id
+            request, user_id=author, item_id=investigation_id, driven_by=driven_by
         )
         task = asyncio.create_task(
             self._send(
@@ -356,18 +356,30 @@ class ChatSendService:
             self._turn_engine.publish(engine_key, Compacting(replaced=len(span), done=True))
 
     async def _resolve_request_env(
-        self, request: Request | None, *, user_id: str, item_id: str
+        self,
+        request: Request | None,
+        *,
+        user_id: str,
+        item_id: str,
+        driven_by: str | None = None,
     ) -> dict[str, str]:
         """What the caller behind this send contributes to the turn's tool env.
 
         Empty whenever there is no seam. With one, a send that holds a request
-        asks the seam about that request; a send that holds none — the goal
-        driver (#615) re-enters this same method to continue a chat with nobody
-        watching — asks what a turn with no request behind it gets
-        (``docs/plan-headless-env.md``), for the user the turn is attributed to.
-        Nothing about the person who last pressed send is stored anywhere for
-        that turn to pick up, and it does not try: the deploy's impl decides
-        whether an unattended turn runs on a service account or on nothing.
+        asks the seam about that request; a send the PLATFORM started on its
+        own — the goal driver (#615) re-enters this same method to continue a
+        chat with nobody watching, and says so with ``driven_by`` — asks what a
+        turn with no request behind it gets (``docs/plan-headless-env.md``),
+        for the user the turn is attributed to. Nothing about the person who
+        last pressed send is stored anywhere for that turn to pick up, and it
+        does not try: the deploy's impl decides whether an unattended turn runs
+        on a service account or on nothing.
+
+        ``driven_by`` is the signal, not the mere absence of a request: what
+        this hands out is the more privileged of the two answers, so a caller
+        that merely omitted the request (the next route, a test helper) must
+        fall to the item's copy alone — the same side ``call_lane`` defaults
+        to for the quota, and for the same reason.
 
         A failing impl FAILS THE SEND, before the user's message is persisted —
         the same placement as the quota gate above, and for the same reason: a
@@ -380,6 +392,8 @@ class ChatSendService:
         reading. The server log keeps the traceback.
         """
         if self._request_env is None:
+            return {}
+        if request is None and not driven_by:
             return {}
         try:
             if request is None:

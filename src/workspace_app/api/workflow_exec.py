@@ -251,17 +251,23 @@ class WorkflowExecutor:
     async def _headless_env(self, captured_user: str, item_id: str) -> dict[str, str]:
         """What this node's tools get from the deploy's seam, given that no
         request is behind it: the seam's answer for ``captured_user`` — the item
-        owner for an item schedule, the trigger's acting user, the person who
-        pressed run. Every node of every run reads this one source, so the run
-        a person started by hand and its re-run on the clock see the same
-        thing; the person's own request is never consulted here.
+        owner for an item schedule and for a page-button run, the trigger's
+        declared acting user, the person who pressed ``POST …/run``. Every node
+        of ONE run reads this one source for that one user, so no step carries
+        a cookie the next step lacks — the difference #714 feared; the person's
+        own request is never consulted here. ACROSS runs the identity follows
+        the run's attribution (hand-started: the presser; its scheduled re-run:
+        the owner), so a per-user policy can answer a re-run differently from
+        the first run — a shared service account is what makes them identical.
 
         A failing impl fails the NODE — as `StepFailed`, the engine's own word
-        for "this step aborted", so the run ends in error rather than running
-        the node as nobody and reporting success — and fails it with FIXED
-        text. `driver.py` records `str(exc)` of whatever escapes a step as the
-        run's `result.error`, and the run record is read by everyone the item
-        is shared with; only the impl knows whether it built its message out
+        for "this step aborted", rather than running the node as nobody and
+        reporting success. At top level that ends the run in error; inside
+        `wf.map` the element is collected as a failure the author must surface
+        (`handle.py`, the same as every other `StepFailed`). Either way it
+        fails with FIXED text. `driver.py` records the text of whatever escapes
+        a step as the run's `result.error`, and the run record is read by
+        everyone the item is shared with; only the impl knows whether it built its message out
         of the very token it was exchanging (the chat send keeps the same rule
         for the same reason). The traceback goes to the server log."""
         if self._request_env is None:

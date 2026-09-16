@@ -82,14 +82,30 @@ class IRequestEnv(abc.ABC):
 
         Asked for every turn nobody pressed send for: each agent node of a
         workflow run (an item schedule's, an event trigger's, and a run a person
-        started by hand — every node of a run reads this one source, so a re-run
-        on the clock sees exactly what the first run saw), and a goal-driver
-        continuation of a chat. ``user_id`` is the user that turn was captured
-        as: the item's owner for an item schedule, the goal's setter for a goal
-        turn, the person who pressed run for a hand-started run. Whether that
-        maps to a per-user credential, one shared service account, or nothing
-        at all is this impl's policy; the platform stores none of it and merges
-        the answer under the item's ``env_vars`` exactly as ``env_for``'s.
+        started by hand — every node of one run reads this one source for one
+        user, so no step carries a credential the next step lacks), and a
+        goal-driver continuation of a chat. ``user_id`` is the user that turn was captured
+        as: the item's OWNER for an item schedule and for a run a WUI page
+        button starts (both run the schedule engine), the goal's setter for a
+        goal turn, the profile's declared ``acting_user`` for an event trigger,
+        the person who pressed run for ``POST …/run``. Whether that maps to a
+        per-user credential, one shared service account, or nothing at all is
+        this impl's policy; the platform stores none of it and merges the
+        answer under the item's ``env_vars`` exactly as ``env_for``'s. Note
+        that a hand-started run and its re-run on the clock are attributed to
+        DIFFERENT users (presser, then owner): a per-user policy answers them
+        differently, a shared service account answers them the same.
+
+        ``user_id`` is ATTRIBUTION, not presence or consent. The person who
+        CAUSED the turn is usually somebody else: any ``edit_content`` holder
+        can write the schedule row, any ``execute`` holder can press the page
+        button, any participant's entity write can fire the trigger, anyone
+        who may post in a goal chat steers its next round — and an item's
+        ``owner`` is a free-text field ``write_meta`` may change. A policy
+        that mints a per-user credential from ``user_id`` alone therefore
+        hands the owner's credential to every such participant; a shared
+        service account, or a per-user one gated on ``item_id`` and your own
+        rules, does not.
 
         The default is nothing — a deploy written against the original
         interface keeps its request-less turns exactly as they were. Raising

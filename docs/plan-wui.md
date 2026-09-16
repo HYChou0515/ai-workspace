@@ -485,7 +485,7 @@ cronjob。
 |---|---|---|---|
 | **你們的 DB / 工具** | item 的 `env_vars`(service account token,不過期) | ✅ | ✅ |
 | | `IRequestEnv.env_for`(個人 token,會過期) | ✅ | ❌ 沒有 cookie |
-| | `IRequestEnv.env_without_request`(排程用的身分,impl 決定——`plan-headless-env.md`) | ❌ 有人按就走 `env_for` | ✅ |
+| | `IRequestEnv.env_without_request`(排程用的身分,impl 決定——`plan-headless-env.md`) | ✅ 按 `run` / 頁面按鈕起的 run 也走這個(整條 workflow 都是);聊天與 `callTool` 走 `env_for` | ✅ |
 | **LLM** | `ITokenService`,背景用 `acting_user` | ✅ | ⚠️ 換不到個人 token → 用端點自己的 key |
 
 **「個人 token 在不在」本身就是「有沒有人在」的訊號**,工具或 WUI 自己判斷用哪一個。平台從頭到

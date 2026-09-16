@@ -379,9 +379,10 @@ class SsoCookieEnv(IRequestEnv):
         return {"MYCORP_SESSION": session} if session else {}
 
     async def env_without_request(self, *, user_id: str, item_id: str) -> dict[str, str]:
-        # 沒有人按送出的 turn(排程、goal driver、整條 workflow)。這裡回 service
-        # account;要 per-user 就看 user_id,不想給就回 {}(預設就是 {})。
-        return {"MYCORP_SA_TOKEN": await my_sa_broker.token_for(user_id)}
+        # 沒有人按送出的 turn(排程、goal driver、整條 workflow)。這裡回一個共用的
+        # service account;不想給就回 {}(預設就是 {})。⚠️ 不要只憑 user_id 發
+        # per-user 憑證——它是「記在誰名下」,不是「誰在場」,見下面的表。
+        return {"MYCORP_SA_TOKEN": await my_sa_broker.shared_token()}
 ```
 
 ```yaml
@@ -400,13 +401,36 @@ tool 端的讀法跟上面**一模一樣**(`os.environ`),它分不出值從哪�
   一次請求、一個人、結果只回給問的那個人,而且用完就沒了。
 - **沒有 request 的 turn 問 `env_without_request`**(`docs/plan-headless-env.md`):goal driver
   (#615)自己續的回合(`user_id` = 設目標的人)、以及 **workflow 的每一個 agent node**——item
-  排程(`user_id` = item owner)、event trigger(= trigger 的 acting user)、**還有人按 `run` 起的
-  那條**(= 按的人,但走的是這個方法,不是他的 request)。
+  排程(`user_id` = item owner)、WUI 頁面按鈕起的 `wui/run`(= **item owner**,它跟排程是同一個
+  引擎、同一個身分,**不是按的人**)、event trigger(= profile `triggers.json` 寫死的 acting user)、
+  **還有 `POST …/run` 那條**(= 按的人,但走的是這個方法,不是他的 request)。
+  - ⚠️ **`user_id` 是「這個 turn 記在誰名下」,不是「誰在場」、也不是「誰同意」。** 造成那個 turn
+    的通常是別人:
+
+    | 入口 | 誰能造成它 | `user_id` |
+    |---|---|---|
+    | item 排程 | 任何持 `edit_content` 的人寫 `schedules.json`(或 AI 的 `write_file`) | item owner |
+    | `wui/run` | 任何持 `execute` 的人按頁面的按鈕 | item owner |
+    | event trigger | 任何參與者寫一筆符合條件的 entity | profile 寫死的 acting user |
+    | goal driver | 任何能在那個 chat 發言的人,推動下一輪 | 設目標的人 |
+    | `POST …/run` | 按的人 | 按的人 |
+
+    而且 item 的 `owner` 是持 `write_meta` 就能改的自由文字。所以**只憑 `user_id` 發 per-user 憑證,
+    等於把 owner 的憑證發給上面每一種參與者——以及任何被 PATCH 進 `owner` 的名字**。範例回共用的
+    service account 就是這個原因;要 per-user,用 `item_id` 和你自己的政策把關,不要只看 `user_id`。
+    這個「AI 以 owner 身分跑」是既有的授權模型;這個接縫加上去的是外部憑證那一層。
   - 整條 workflow 一律走這個方法、不碰 request,理由和 #714 當初不接 workflow 是同一個:
     一條 run 會被排程和上傳事件重跑,重跑時人不在。當初的顧慮是「第一步有(人的 cookie)、
-    第二步沒有」在 UI 上看不出來;每一步、每一次重跑都讀同一個來源,那個差別就不存在了。
+    第二步沒有」在 UI 上看不出來;現在**一條 run 裡**每一步都是同一個方法、同一個 `user_id`,
+    那個差別不存在了。⚠️ **跨 run 不是**:`user_id` 跟著 run 記在誰名下——人按 `POST …/run` 是
+    按的人、排程重跑是 owner、trigger 是 acting user——per-user 政策下同一個 workflow 三種觸發
+    可以拿到三種憑證。共用 service account 才會讓重跑和第一次一樣;這是範例那樣寫的另一個理由。
   - 預設回 `{}`,只實作 `env_for` 的 impl 行為不變。回什麼是你的政策——全域 service account、
     per-user 的、或看 `item_id` 決定給不給——平台不認得 service account 這個詞,只負責去問。
+  - **問的次數是「每一次 agent turn 一次」,不是每個 node 一次**:`agent_step` 的 `retries`
+    每重試一次再問一次;`wf.map` 每個元素各問一次(同時幾個 = min(map 的 `concurrency`,
+    `turn_concurrency`),後者預設 1 = 序列,hosted pool 調高後才會**同時**打你的 broker);
+    steer 提案最多 3 次;cache 命中而跳過的 node 不問。impl 的 rate limit 要照這個量抓。
   - ⚠️ **同一個 chat 裡,人送出的那輪和 goal driver 續的那輪身分會不同**(一個 `env_for`、
     一個 `env_without_request`)。這是需求本身。但如果你想讓工具或 WUI 頁面靠「個人 token
     在不在」判斷有沒有人在,兩個方法就**不要回同一個變數名**——否則那個訊號就消失了。
@@ -423,10 +447,17 @@ tool 端的讀法跟上面**一模一樣**(`os.environ`),它分不出值從哪�
   (使用者的訊息也不會被寫下來),因為這裡走的是身分:安靜地當作沒有,會讓 turn 以匿名身分
   跑完並交出一個看起來正確的答案。想降級的話,自己 `except` 回 `{}`——只有 impl 知道少了
   那個值還有沒有意義。
-  - `env_without_request` 失敗:workflow 那個 node 以固定字串的 `StepFailed` 結束,整條 run
-    變 `error`(看得見,而且 run record / step reason / 事件流裡**都不會有你的例外文字**——
-    run record 是 item 的每個參與者都讀得到的東西);goal driver 那條走它既有的失敗處理,
-    進 log、目標不再推進。
+  - `env_without_request` 失敗:workflow 那個 node 以固定字串的 `StepFailed` 結束——在最上層
+    整條 run 變 `error`;在 `wf.map` 裡是那個元素被收進 `failures`,run 能不能算 `done` 由
+    workflow 作者決定(和其他 `StepFailed` 一樣)。無論哪種,run record / step reason / 事件流裡
+    **都不會有你的例外文字**(run record 是 item 的每個參與者都讀得到的東西)。goal driver 有兩條
+    入口,各走自己既有的失敗處理:白天的續跑(`_goal_followup`)把那一輪退回、進 log,目標保持
+    `active`,要有人再說話才會再被判斷;下班時段的續跑(`start_offhours_round`)把失敗交給
+    sweeper,同一晚第三次失敗就在 thread 寫一個「無法啟動」標記並響鈴(固定字串,不含你的
+    例外文字),目標保持 `active`、隔晚再試。
+  - ⚠️ **`env_without_request` 也要自己設上限。** 它跑的時候沒有人在看:workflow 那邊有
+    `step_timeout_s` 兜底;goal driver 那邊**沒有**——一個掛住的 impl 會讓目標鏈安靜地停住,
+    而且已扣的那一輪不會退(丟例外才會退)。
 - ⚠️ **延遲要你自己設上限,平台不會幫你設。** 平台不知道你的閘道等多久算合理,設一個數字只會
   誤殺「只是慢」的請求。但這段等待很危險:此時使用者的訊息**還沒被寫下來**,一旦拖過 ingress
   的讀取逾時,閘道回 **504**,而前端把 504 當成「閒置代理切斷了 POST、turn 還在跑」→ 繼續等
