@@ -59,9 +59,9 @@ class DeployedWui(Struct):
   (`reference_specstar_indexed_queries`), and "removed from the overview" must
   mean gone from the listing.
 
-### Routes (`api/wui_routes.py`, beside build)
+### Routes (`api/wui_deploy.py` — the record, its store and its routes in one module, the `schedule_index.py` shape; `wui_routes.py` keeps build / tools / run)
 
-**`POST /apps/{slug}/items/{item_id}/wui/deploy`** — body `{ "path": str }`.
+**`POST /a/{slug}/items/{item_id}/wui/deploy`** — body `{ "path": str }`.
 
 1. `locator.require_access(slug, item_id, "edit_content")`.
 2. Validate the path: workspace-absolute, `.ai.yaml`, not inside an ignored
@@ -76,7 +76,7 @@ class DeployedWui(Struct):
    listed — the row is the server's claim, so the server checks it.
 4. Upsert the row; return it.
 
-**`DELETE /apps/{slug}/items/{item_id}/wui/deploy?path=`** —
+**`DELETE /a/{slug}/items/{item_id}/wui/deploy?path=`** —
 `edit_content`; 204 whether or not a row existed (Remove pressed twice is not
 an error). Hard delete.
 
@@ -183,7 +183,8 @@ they can no longer put a page on the overview.
 ## Phases (one commit each)
 
 1. **Record + routes** — `DeployedWui`, `register_deployed_wui`, the three
-   routes, wired in `create_app` beside `register_wui_routes`; migrations note.
+   routes (`api/wui_deploy.py`), wired in `create_app` beside the quota routes;
+   migrations note.
 2. **Deploy lists** — `wuiApi.deploy` / `remove` / `list` client (+ mock), the
    `runDeploy` step and its failure branch, the `list` step's sentence.
 3. **Overview page** — `WuiOverviewPage`, route, destination, empty state,

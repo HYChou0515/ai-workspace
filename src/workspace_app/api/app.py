@@ -135,6 +135,7 @@ from .version_header import VersionHeaderMiddleware
 from .work_calendar_routes import register_work_calendar_routes
 from .workflow_exec import WorkflowExecutor
 from .workflow_routes import register_workflow_routes
+from .wui_deploy import DeployedPages, register_deployed_wui, register_wui_deploy_routes
 from .wui_routes import register_wui_routes
 
 logger = logging.getLogger(__name__)
@@ -1640,6 +1641,9 @@ def create_app(
     register_turn_activity(spec)
     register_disk_ledger(spec)
     register_user_quota(spec)
+    # The WUI overview's rows (`docs/plan-wui-overview.md`). Same timing, same
+    # reason: Deploy on a bare test client writes one.
+    register_deployed_wui(spec)
 
     # P2: ensure the "Investigations Knowledge" collection exists at boot so
     # the chat-promote path always has a target. Idempotent (re-uses a
@@ -2385,6 +2389,14 @@ def create_app(
         idle_window_ms=int(idle_timeout.total_seconds() * 1000),
         now_ms=lambda: int(datetime.now(UTC).timestamp() * 1000),
         superusers=superusers,
+    )
+
+    register_wui_deploy_routes(
+        api,
+        locator=locator,
+        files=files,
+        pages=DeployedPages(spec),
+        get_user_id=get_user_id,
     )
 
     register_file_routes(
