@@ -658,7 +658,7 @@ class TurnContextBuilder:
         facts: TurnFacts,
         subagent_defs: tuple[SubagentDef, ...] = (),
         skills_reachable: bool | None = None,
-        request_env: dict[str, str] | None = None,
+        caller_env: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """The fields identical across every RCA turn shape (interactive + workflow)."""
         # #624: capture whether history had to be cut, so the send path can say so
@@ -713,16 +713,16 @@ class TurnContextBuilder:
             # after it, so a user value placed there would be silently
             # overwritten for exactly the names that collide.
             #
-            # #714: whatever the request behind this turn contributed goes in
-            # FIRST, so the item's own panel wins a name collision. The two are
-            # different kinds of thing — the request's values belong to the one
-            # person who pressed send and are never stored, the item's are a
-            # shared copy every participant can read — and the decision was that
-            # the stored one overrides, unannounced, so a value can be pinned
-            # for testing. `request_env` is empty for every turn with no request
-            # behind it (a workflow step, the goal driver, a scheduled job),
-            # which is the whole of what those turns inherit: nothing.
-            user_env={**(request_env or {}), **facts.env_vars},
+            # #714: whatever the CALLER contributed goes in FIRST, so the item's
+            # own panel wins a name collision. The two are different kinds of
+            # thing — the caller's values are never stored (a person's send
+            # carries what their request said; a turn with no request behind it
+            # — a workflow node, the goal driver — carries what the deploy's
+            # seam answers for such a turn, `docs/plan-headless-env.md`), the
+            # item's are a shared copy every participant can read — and the
+            # decision was that the stored one overrides, unannounced, so a
+            # value can be pinned for testing.
+            user_env={**(caller_env or {}), **facts.env_vars},
             handle=session.handle,
             # Route lazy-create through the registry so session.handle is set
             # (so idle-kill/close_all can find it) and the restore-after-create
@@ -821,7 +821,7 @@ class TurnContextBuilder:
         call_lane: CallLane = "background",
         apply_skills: list[str] | None = None,
         conversation_id: str | None = None,
-        request_env: dict[str, str] | None = None,
+        caller_env: dict[str, str] | None = None,
     ) -> AgentToolContext:
         """The full RCA/workspace-chat turn context (`_send_into`).
 
@@ -830,10 +830,11 @@ class TurnContextBuilder:
         itself, and only the caller knows which it is. It defaults to the tighter
         lane so a new caller that forgets cannot spend a person's quota.
 
-        ``request_env`` (#714) likewise comes from the caller, and for the same
-        reason: only the send path holds the request these values were read from.
-        It defaults to none, so the goal driver re-entering this path with nobody
-        watching gets a turn carrying the item's env and nothing else."""
+        ``caller_env`` (#714) likewise comes from the caller, and for the same
+        reason: only the send path holds the request these values were read from
+        — or, for a turn with no request, knows which user it is attributed to
+        and can ask the seam what such a turn gets. It defaults to none, so a
+        caller that resolves nothing gets a turn carrying the item's env alone."""
         session = await self._registry.session(item_id)
         facts = self._locator.turn_facts(item_id)
         logger.debug("turn-context: build chat turn for %s", item_id)
@@ -849,7 +850,7 @@ class TurnContextBuilder:
                 skills_reachable=await self._skills_reachable(item_id, facts),
                 history_messages=history_messages,
                 external=external,
-                request_env=request_env,
+                caller_env=caller_env,
             ),
             # #pm: live record-type schema so the agent creates valid issues /
             # milestones up front (field names, status vocab, timeline date-range).
@@ -901,9 +902,17 @@ class TurnContextBuilder:
         run_subagent: RunSubagent,
         history_messages: list[Message],
         entity_write_origin: EntityOrigin | None = None,
+        caller_env: dict[str, str] | None = None,
     ) -> AgentToolContext:
         """The lean workflow agent-node turn context (`_wf_drive_turn`): the shared
         core only — every interactive extra stays at its ``AgentToolContext`` default.
+
+        ``caller_env`` is what the deploy's seam answers for a turn with no
+        request behind it (``docs/plan-headless-env.md``), resolved by the
+        executor for the run's captured user. Every node of a run — whoever or
+        whatever started it — reads that one source, so a re-run on the clock
+        sees exactly what the first run saw; a person's own request never
+        reaches a workflow node.
 
         "Byte-for-byte what a workflow node saw before" stopped being true when
         `skills_reachable` joined the shared core: a workflow node's tool list now
@@ -934,6 +943,7 @@ class TurnContextBuilder:
                 skills_reachable=await self._skills_reachable(item_id, facts),
                 history_messages=history_messages,
                 external=external,
+                caller_env=caller_env,
             ),
             entity_write_origin=entity_write_origin,
         )

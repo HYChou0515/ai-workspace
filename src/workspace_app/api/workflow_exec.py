@@ -47,6 +47,7 @@ if TYPE_CHECKING:
     from ..quota.admission import AdmissionGate
     from .locator import ItemLocator
     from .registry import InvestigationRegistry
+    from .request_env import IRequestEnv
     from .turn_context import TurnContextBuilder
     from .turns import ChatTurnEngine, TurnMessage
 
@@ -98,6 +99,7 @@ class WorkflowExecutor:
         turn_concurrency: int = 1,
         ask_llm: ILlm | None = None,
         admission: AdmissionGate | None = None,
+        request_env: IRequestEnv | None = None,
     ) -> None:
         self._spec = spec
         self._files = files
@@ -111,6 +113,10 @@ class WorkflowExecutor:
         self._run_subagent = run_subagent
         # Per-person cpu/memory admission, same gate an interactive turn passes.
         self._admission = admission
+        # The deploy's request→env seam (#714), asked here for what a turn with
+        # NO request behind it gets (`docs/plan-headless-env.md`). None ⇒ a
+        # node's tools see the item's env_vars alone, exactly as before.
+        self._request_env = request_env
         # #435 P6: the ILlm backing the create_entity cross-origin match (M1-AI, §decide-AI).
         # None ⇒ dedup stays journal-only (self-dedup); a wired model enables cross-match.
         self._ask_llm = ask_llm
@@ -202,6 +208,7 @@ class WorkflowExecutor:
             # #429 P10: an agent node's entity writes carry the run's trigger origin, so
             # they fire on_event workflows AND stay inside the recursion depth cap.
             entity_write_origin=entity_write_origin,
+            caller_env=await self._headless_env(captured_user, item_id),
         )
         # #624: this node had to leave part of the thread out. Say so in the
         # workflow chat — it is a real conversation the user can open, and a run
@@ -240,6 +247,17 @@ class WorkflowExecutor:
         if await self._turn_engine.cancel_epoch(chat_key) > baseline:
             raise asyncio.CancelledError
         return answer
+
+    async def _headless_env(self, captured_user: str, item_id: str) -> dict[str, str]:
+        """What this node's tools get from the deploy's seam, given that no
+        request is behind it: the seam's answer for ``captured_user`` — the item
+        owner for an item schedule, the trigger's acting user, the person who
+        pressed run. Every node of every run reads this one source, so the run
+        a person started by hand and its re-run on the clock see the same
+        thing; the person's own request is never consulted here."""
+        if self._request_env is None:
+            return {}
+        return await self._request_env.env_without_request(user_id=captured_user, item_id=item_id)
 
     def _notice_history_reduced(self, rid: str, acting_user: str, note: str) -> None:
         """Leave the #624 marker in the workflow chat.

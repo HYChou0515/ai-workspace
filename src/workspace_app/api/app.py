@@ -2064,6 +2064,9 @@ def create_app(
         # model — the same capable text model that answers questions decides whether two
         # entities are the same. Inert (journal-only self-dedup) if this is None.
         ask_llm=kb_answer_llm,
+        # #714 / plan-headless-env: the same seam the send path holds, asked
+        # here for what a node with no request behind it gets.
+        request_env=request_env,
     )
 
     workflow_credentials = CredentialBroker()
