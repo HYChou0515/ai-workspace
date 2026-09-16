@@ -2033,7 +2033,7 @@ def create_app(
     # the orchestrator overlays phase/step events on the same per-chat stream.
     from ..apps.profiles import load_profile_workflow
     from ..workflow.dsl import build_run
-    from ..workflow.offered import offered_workflow_ids
+    from ..workflow.offered import offered_workflow_ids, unparsable_workflow
     from ..workflow.workspace_store import load_workspace_workflow
 
     async def _load_workspace(item_id: str, workflow_id: str):
@@ -2343,6 +2343,10 @@ def create_app(
         orchestrator=_LateOrchestrator(lambda: workflow_orchestrator),
         turn_engine=turn_engine,
         workflows_for=_workflows_for_item,
+        # Same source rule as `workflows_for`: a page's request reads the facade.
+        workflow_problem_for=lambda item_id, workflow_id: unparsable_workflow(
+            files.read, item_id, workflow_id
+        ),
     )
 
     register_capability_routes(

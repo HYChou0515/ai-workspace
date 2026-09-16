@@ -39,7 +39,7 @@ from ..agent.context import AgentToolContext
 from ..sandbox.protocol import ExecResult, Sandbox, SandboxSpec
 from ..tooling.external import ExternalTools
 from ..tooling.registry import PackageInfo, exec_package_command, find_allowed_command
-from ..workflow.offered import no_such_workflow
+from ..workflow.offered import no_such_workflow, wont_parse
 from .locator import ItemLocator
 from .request_env import IRequestEnv
 from .turn_context import resolve_item_tools
@@ -163,6 +163,11 @@ async def _no_workflows(_item: str) -> Sequence[str]:
     return ()
 
 
+async def _no_problem(_item: str, _workflow_id: str) -> str | None:
+    """The default when nothing is wired: every offered workflow is taken to parse."""
+    return None
+
+
 def register_wui_routes(
     app: FastAPI | APIRouter,
     *,
@@ -177,6 +182,7 @@ def register_wui_routes(
     orchestrator: Any = None,
     turn_engine: Any = None,
     workflows_for: Callable[[str], Awaitable[Sequence[str]]] = _no_workflows,
+    workflow_problem_for: Callable[[str, str], Awaitable[str | None]] = _no_problem,
 ) -> None:
     """Mount the WUI tool-call route.
 
@@ -406,6 +412,13 @@ def register_wui_routes(
             # not offer" the old wording said, which read as an authorisation an
             # operator had to grant when saving the workflow is all it takes.
             raise HTTPException(status_code=403, detail=no_such_workflow(body.workflow, allowed))
+        # The item has it; will it run? A file that does not parse used to reach
+        # `orchestrator.start`, fail an assertion and come back as a 502 "could
+        # not be started" — the reason only in the log. Said here, the same
+        # sentence the Run route and the agent's refusal use.
+        problem = await workflow_problem_for(investigation_id, body.workflow)
+        if problem is not None:
+            raise HTTPException(status_code=422, detail=wont_parse(body.workflow, problem))
 
         # A REAL conversation, not a minted label. `chat_id` is looked up by
         # `workflow_exec.drive_turn`, and one that resolves to nothing falls back

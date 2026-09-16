@@ -2659,7 +2659,12 @@ async def save_schedules_impl(ctx: RunContextWrapper[AgentToolContext], schedule
     for verb in TOOL_VERBS["save_schedules"]:
         if (denied := authorize_tool(ctx.context, verb)) is not None:
             return denied
-    from ..workflow.offered import no_such_workflow, offered_workflow_ids, unparsable_workflow
+    from ..workflow.offered import (
+        no_such_workflow,
+        offered_workflow_ids,
+        unparsable_workflow,
+        wont_parse,
+    )
     from ..workflow.user_schedules import (
         ITEM_SCHEDULES_PATH,
         last_window_lookup,
@@ -2708,10 +2713,7 @@ async def save_schedules_impl(ctx: RunContextWrapper[AgentToolContext], schedule
     for run in sorted({row.run for row in rows}):
         problem = await unparsable_workflow(files.read, inv, run)
         if problem is not None:
-            return (
-                f"error: workflow {run!r} won't parse: {problem} "
-                "Fix it with save_workflow first, then save the schedules."
-            )
+            return f"error: {wont_parse(run, problem)} Then save the schedules."
 
     doc = json.loads(schedules_json)
     await files.write(

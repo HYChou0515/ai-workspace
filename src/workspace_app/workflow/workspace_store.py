@@ -66,18 +66,21 @@ def validate_workflow_json(
     runnable, or ``(None, [problems])`` when it won't parse / ``(def, [problems])`` when
     it parses but the DSL rules flag it (manual §22, Q8). ``tool_ceiling`` clamps an agent
     step's ``tools`` to the profile's allowed set (``None`` ⇒ skip that check)."""
-    problem = workflow_problem(raw)
-    if problem is not None:
-        return None, [f"workflow.json won't parse: {problem}"]
-    return parse_def(raw), validate_def(parse_def(raw), tool_ceiling=tool_ceiling)
+    try:
+        d = parse_def(raw)
+    except DslError as exc:  # the same test `workflow_problem` makes, parsed once
+        return None, [f"workflow.json won't parse: {exc}"]
+    return d, validate_def(d, tool_ceiling=tool_ceiling)
 
 
 def workflow_problem(raw: bytes | str) -> str | None:
     """Why this file will not run, or None. THE criterion — the loader's own
-    (`load_workspace_workflow` answers None exactly when `parse_def` raises) —
-    asked the same way by `save_workflow`, the panel's listing, the schedules
-    route, the sweep and `save_schedules`, so a file that fails it is named
-    with the same sentence at every door instead of vanishing at some."""
+    parse test (`load_workspace_workflow` answers None when `parse_def` raises;
+    it also answers None for an absent file and the reserved id, which are not
+    this question) — asked the same way by `save_workflow`, the panel's
+    listing, the schedules route, the sweep, `save_schedules` and the two Run
+    entrances, so a file that fails it is named with the same sentence at
+    every door instead of vanishing at some."""
     try:
         parse_def(raw)
     except DslError as exc:

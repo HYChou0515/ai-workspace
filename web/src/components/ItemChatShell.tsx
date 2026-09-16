@@ -124,7 +124,11 @@ export function ItemChatShell({
     const byId = new Map<string, WorkflowManifestDTO>();
     for (const w of profilesQ.data?.find((p) => p.name === profile)?.workflows ?? [])
       byId.set(w.id, w);
-    for (const w of wsWorkflowsQ.data ?? []) byId.set(w.id, { input_json: "", ...w });
+    // A file that will not parse is listed by the panel (with its reason, no
+    // Run) and not offered here: picking it reached the pre-flight and came
+    // back "no such workflow".
+    for (const w of wsWorkflowsQ.data ?? [])
+      if (!w.problem) byId.set(w.id, { input_json: "", ...w });
     return [...byId.values()];
   }, [profilesQ.data, wsWorkflowsQ.data, profile]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);

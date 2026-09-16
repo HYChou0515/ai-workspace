@@ -152,6 +152,21 @@ describe("ItemChatShell", () => {
     expect(await screen.findByText("Digest uploads into memory")).toBeInTheDocument();
   });
 
+  it("the New picker does not offer a workspace workflow that will not parse", async () => {
+    // The Workflows panel lists it with its reason and no Run; this second
+    // consumer of the same listing must not hand it out either — picking it
+    // reached the pre-flight and came back "no such workflow".
+    stubChatApi([summary({ chat_id: "conversation:c1", is_default: true })]);
+    vi.spyOn(workspaceWorkflowsApi, "list").mockResolvedValue([
+      { id: "good", title: "Good one", phases: [{ id: "a", title: "A" }] },
+      { id: "broken", title: "broken", phases: [], problem: "steps[0]: `cache` is required — …" },
+    ]);
+    render();
+    fireEvent.click(await screen.findByTestId("new-item-button"));
+    expect(await screen.findByTestId("new-item-workflow-good")).toBeInTheDocument();
+    expect(screen.queryByTestId("new-item-workflow-broken")).toBeNull();
+  });
+
   it("auto-opens a default free chat when the hub has none yet", async () => {
     const created = summary({ chat_id: "conversation:auto", is_default: true });
     // First load: empty hub. After createChat invalidates, the chat is listed.

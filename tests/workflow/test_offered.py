@@ -52,6 +52,21 @@ def test_a_workflow_file_that_wont_parse_says_why_and_a_good_or_absent_one_says_
     assert asyncio.run(unparsable_workflow(files.read, item, "not-there")) is None
 
 
+def test_unparsable_workflow_never_reads_outside_the_folder_or_the_schedules_file() -> None:
+    """The id comes from a schedule row — free text. Only a flat `<id>.json` in
+    the folder is a workflow file; anything else (a traversal, a nested path,
+    the reserved `schedules` id the loader refuses) is answered without a read."""
+    asked: list[str] = []
+
+    async def read(_item: str, path: str) -> bytes:
+        asked.append(path)
+        return b"{}"
+
+    for bad in ("../../../etc/passwd", "nested/deep", "schedules", "", "a/../b"):
+        assert asyncio.run(unparsable_workflow(read, "item-1", bad)) is None, bad
+    assert asked == []
+
+
 def test_an_item_offers_its_profiles_workflows_and_its_own() -> None:
     files, item = _files()
     asyncio.run(files.write(item, "/.workflows/nightly.json", _DEF))

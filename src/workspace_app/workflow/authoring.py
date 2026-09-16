@@ -42,7 +42,8 @@ def _check_dsl(dsl_path, where: str, *, strict: bool = False) -> list[Diagnostic
     or capability the platform doesn't know / an out-of-scope interpolation).
 
     ``strict`` (#429 P1, opt-in per project) escalates the advisory stale-cache nudges to
-    errors — making 'take a stance' (declare ``reads`` or set ``cache``) mandatory."""
+    errors — making 'take a stance' on staleness (declare ``reads``, or ``cache: false``)
+    mandatory; ``cache`` itself is a required field, refused by ``parse_def`` when missing."""
     try:
         d = parse_def(dsl_path.read_bytes())
     except DslError as exc:

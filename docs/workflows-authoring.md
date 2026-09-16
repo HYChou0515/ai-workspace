@@ -12,6 +12,14 @@
 > 可執行的 workflow;接著編輯它的 `run.py`;`python -m workspace_app.workflow check`
 > 會在你啟動 app 之前告訴你哪裡有問題。
 
+> **A workflow on a schedule trigger runs its journal, not its code, the second time.** The step
+> journal is per workflow (§9), so a `triggers.json` schedule that fires a `run.py` workflow with
+> the same inputs every window finds every `agent_step` / `sandbox_node` with `cache=True` (the
+> Python default) already done and skips it — `done`, nothing done. Pass `cache=False` to the
+> steps that read the world or have a side effect (send, fetch, look at the clock); a step
+> downstream of one re-runs by itself when its input changed. Nothing checks this for `run.py`
+> (the DSL's `cache` is required; the Python API keeps its default) — it is yours to remember.
+
 ## workflow 是什麼
 
 一個 workflow 就是**一個 `async def run(wf, inputs)`**（orchestration）加上 profile 的

@@ -221,6 +221,7 @@ A rejected `callTool` or `startRun` is a different thing again, and the message 
 | "did not declare X" | add it to `tools:` in the view file — yours to fix |
 | "does not offer X" | (a tool) this app does not grant it; an operator must add it |
 | "has no workflow named X" | (a workflow) this item has none by that id — the agent saves one with `save_workflow`, or the profile declares it |
+| "Workflow 'X' won't parse: …" | (a workflow) the item has the file and it does not parse — the reason follows; fix the file with `save_workflow` |
 | "X is unavailable: …" | the app grants it but it could not be resolved |
 
 Show the message as it arrives. Collapsing these into "it failed" sends the

@@ -410,16 +410,35 @@ class UserScheduleSweeper:
             if not is_due(schedule, now, last):
                 continue
             # The item HAS the file — will it run? Asked only for a row that is
-            # DUE (one durable read per fire, not per row per tick — #804 holds
-            # a tick with nothing due to the one read of the schedules file),
-            # and BEFORE the claim, so a window is never spent on a run that
-            # cannot start. Without this the row reached `orchestrator.start`,
-            # failed an assertion deep inside, handed its window back and tried
-            # again next tick for as long as the file stayed broken, with the
-            # reason in a log nobody reads. Same memo key as the "no such
-            # workflow" complaint: the subject is the ROW, and a complaint that
-            # changes is said again.
-            problem = await unparsable_workflow(self._read, item_id, row.run)
+            # DUE (a tick with nothing due costs only the one read of the
+            # schedules file — #804's test holds that) and BEFORE the claim, so
+            # a window is never spent on a run that cannot start. A broken row
+            # therefore stays due and is read once per tick until its file is
+            # fixed — then it fires on the first tick after (catch-up); the
+            # alternative, claiming the window for a run that cannot start,
+            # would hold the fix back to the next period. Without this the row
+            # reached `orchestrator.start`, failed an assertion deep inside and
+            # handed its window back — three times, then the window was burned
+            # with an ERROR — the reason only in a log nobody reads. Same memo
+            # key as the "no such workflow" complaint: the subject is the ROW,
+            # and a complaint that changes is said again.
+            try:
+                problem = await unparsable_workflow(self._read, item_id, row.run)
+            except Exception:  # noqa: BLE001 — one row's read must not cost the tick
+                # The schedules-file read three screens up survives a store
+                # error per item; a per-row read must not do worse.
+                logger.debug("user schedules: workflow read failed", exc_info=True)
+                self._say_once(
+                    item_id,
+                    f"{path}#{row.run}#read",
+                    logging.WARNING,
+                    "user schedules: %s %s: could not read workflow %r — that row is skipped "
+                    "this tick",
+                    item_id,
+                    path,
+                    row.run,
+                )
+                continue
             if problem is not None:
                 self._say_once(
                     item_id,

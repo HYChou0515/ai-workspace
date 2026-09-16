@@ -9,6 +9,7 @@ may be skipped while its inputs are unchanged, and the parse error is the rule.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -74,6 +75,45 @@ def test_the_authoring_reference_states_the_rule_the_parse_error_states() -> Non
     assert "required:" in sandbox and "cache" in sandbox.split("optional:")[0]
     assert CACHE_RULE in ref
     assert "every fire" in ref
+
+
+async def test_a_second_fire_skips_a_cached_step_and_runs_an_uncached_one(spec_instance) -> None:
+    """The reason the field is required, pinned: the step journal is per
+    workflow (§9), so two fires of the same workflow with the same inputs —
+    the shape of every schedule — execute a `cache: true` step ONCE and a
+    `cache: false` step twice. A scheduled workflow whose steps are all `true`
+    does its work on the first fire and reports `done` on every later one."""
+    from workspace_app.filestore.memory import MemoryFileStore
+    from workspace_app.workflow.engine import run_step
+    from workspace_app.workflow.run import RunStatus, WorkflowRun
+
+    from .test_orchestrator import _orch
+
+    ran = {"cached": 0, "fresh": 0}
+
+    async def cached(_fb):
+        ran["cached"] += 1
+        return {"n": ran["cached"]}
+
+    async def fresh(_fb):
+        ran["fresh"] += 1
+        return {"n": ran["fresh"]}
+
+    async def run(wf, inputs):
+        await run_step(wf, name="report", phase="p", args={"run": "date"}, execute=cached)
+        await run_step(wf, name="send", phase="p", args={"run": "mail"}, execute=fresh, cache=False)
+        return {"ok": True}
+
+    orch, _ = _orch(spec_instance, run, store=MemoryFileStore())
+    rm = spec_instance.get_resource_manager(WorkflowRun)
+    for _fire in range(2):
+        run_id = await orch.start(
+            slug="rca", item_id="i", profile="echo", captured_user="u", workflow_id="w", chat_id="c"
+        )
+        await asyncio.sleep(0)
+        assert rm.get(run_id).data.status is RunStatus.DONE
+
+    assert ran == {"cached": 1, "fresh": 2}
 
 
 def test_every_shipped_workflow_json_parses() -> None:

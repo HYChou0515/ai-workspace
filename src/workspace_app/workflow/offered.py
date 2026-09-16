@@ -40,6 +40,7 @@ from ..files import WorkspaceFiles
 from ..filestore.protocol import FileNotFound
 from .manifest import WorkflowManifest
 from .workspace_store import (
+    RESERVED_WORKFLOW_ID,
     WORKSPACE_WORKFLOW_DIR,
     is_workspace_workflow_path,
     load_workspace_workflow,
@@ -81,13 +82,33 @@ async def unparsable_workflow(read: ReadFile, item_id: str, workflow_id: str) ->
     """Why the item's own `.workflows/<workflow_id>.json` will not run, or None
     when it parses or there is no such file (a profile workflow, or nothing at
     all — `offered_workflow_ids` answers "does the item have it"; this answers
-    "will the one it has run"). The panel's schedule row, the sweep's log line
-    and `save_schedules`'s refusal all read through here."""
+    "will the one it has run"). The panel's schedule row, the sweep's log line,
+    `save_schedules`'s refusal and the two Run entrances all read through here.
+
+    `workflow_id` is free text from a schedule row or a request. Only a FLAT
+    `<id>.json` in the folder is a workflow file — a traversal, a nested path
+    or the reserved `schedules` id (which the loader refuses "so no reader can
+    run it") is answered here without a read: the NFS store raised out of the
+    route on `../../x` and a warm sandbox would have read the file it named."""
+    path = workspace_workflow_path(workflow_id)
+    if (
+        not workflow_id  # the loader's own refusals first …
+        or workflow_id == RESERVED_WORKFLOW_ID
+        or not is_workspace_workflow_path(path)  # … then "is this a workflow file at all"
+    ):
+        return None
     try:
-        raw = await read(item_id, workspace_workflow_path(workflow_id))
+        raw = await read(item_id, path)
     except (FileNotFound, FileNotFoundError):
         return None
     return workflow_problem(raw)
+
+
+def wont_parse(workflow_id: str, problem: str) -> str:
+    """The one sentence for "the item has this workflow and it will not run" —
+    the Run route, the page's error panel and the agent's refusal say it the
+    same way, with the fix, because the reader's next act is to edit the file."""
+    return f"Workflow {workflow_id!r} won't parse: {problem} Fix it with save_workflow first."
 
 
 async def offered_workflow_ids(

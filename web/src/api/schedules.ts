@@ -34,8 +34,9 @@ export type ScheduleRow = {
    * (no such workflow): the fix is to the workflow. */
   run_problem: string;
   /** THE verdict: will the sweep fire this row. False for a refused row, an
-   * unknown workflow, a file over the cap, a deployment with the sweep off, or
-   * a file the sweep's index does not name yet. The next-run fields are filled
+   * unknown workflow, a workflow whose file does not parse (`run_problem`), a
+   * file over the cap, a deployment with the sweep off, or a file the sweep's
+   * index does not name yet. The next-run fields are filled
    * only when this is true. */
   runnable: boolean;
   payload: Record<string, unknown>;

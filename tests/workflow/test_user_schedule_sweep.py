@@ -1020,6 +1020,39 @@ def test_a_row_naming_a_workflow_that_wont_parse_is_skipped_with_the_problem(cap
     assert len(said) == 1 and "'broken'" in said[0] and "`cache` is required" in said[0]
 
 
+def test_a_workflow_file_read_that_raises_costs_that_row_only(caplog):
+    """The schedules-file read three screens up survives a store error per item;
+    this read is per row and must not do worse: the row is skipped with a log
+    line, its neighbours still fire, the tick does not raise."""
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    started = _Started()
+    files = _Files(**{f"{ITEM}{PATH}": _file({**DAILY, "run": "boom"}, {**NOON, "at": "09:00"})})
+
+    async def read(item_id: str, path: str) -> bytes:
+        if path.endswith("/boom.json"):
+            raise RuntimeError("store hiccup")
+        return await files.read(item_id, path)
+
+    sweeper = UserScheduleSweeper(
+        spec=spec,
+        index=ScheduleIndex(spec),
+        read=read,
+        start=started,
+        owner_of=lambda _item: "alice",
+        now=lambda: datetime(2026, 9, 5, 9, 30),
+        workflows_for=_offers(["build-report", "boom"]),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="workspace_app.workflow.user_schedule_sweep"):
+        asyncio.run(sweeper.tick())
+
+    assert [r[1] for r in started.runs] == ["build-report"]
+    assert any(
+        "boom" in r.getMessage() and "could not read" in r.getMessage() for r in caplog.records
+    )
+
+
 def test_without_a_ceiling_every_row_still_runs():
     """The control. A deploy that wires no resolver must behave as it does now,
     not refuse everything — the same "unset means unrestricted" rule the tool
