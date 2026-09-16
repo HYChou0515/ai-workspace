@@ -266,8 +266,8 @@ class ChatSendService:
         # the time a tool is dispatched this POST has long returned. After the
         # gate above, so a refused turn never pays for a credential exchange it
         # is not going to use.
-        request_env = await self._resolve_request_env(
-            request, user_id=author, item_id=investigation_id
+        caller_env = await self._resolve_request_env(
+            request, user_id=author, item_id=investigation_id, driven_by=driven_by
         )
         task = asyncio.create_task(
             self._send(
@@ -279,7 +279,7 @@ class ChatSendService:
                 author=author,
                 lane=lane,
                 driven_by=driven_by,
-                request_env=request_env,
+                caller_env=caller_env,
             )
         )
         self._inflight.add(task)
@@ -356,15 +356,30 @@ class ChatSendService:
             self._turn_engine.publish(engine_key, Compacting(replaced=len(span), done=True))
 
     async def _resolve_request_env(
-        self, request: Request | None, *, user_id: str, item_id: str
+        self,
+        request: Request | None,
+        *,
+        user_id: str,
+        item_id: str,
+        driven_by: str | None = None,
     ) -> dict[str, str]:
-        """What the request behind this send contributes to the turn's tool env.
+        """What the caller behind this send contributes to the turn's tool env.
 
-        Empty whenever there is no seam or no request. The second case is not an
-        edge: the goal driver (#615) re-enters this same method to continue a
-        chat with nobody watching, and it holds no request — which is the whole
-        of what a turn without a person behind it inherits, since nothing about
-        the caller is stored anywhere for it to pick up.
+        Empty whenever there is no seam. With one, a send that holds a request
+        asks the seam about that request; a send the PLATFORM started on its
+        own — the goal driver (#615) re-enters this same method to continue a
+        chat with nobody watching, and says so with ``driven_by`` — asks what a
+        turn with no request behind it gets (``docs/plan-headless-env.md``),
+        for the user the turn is attributed to. Nothing about the person who
+        last pressed send is stored anywhere for that turn to pick up, and it
+        does not try: the deploy's impl decides whether an unattended turn runs
+        on a service account or on nothing.
+
+        ``driven_by`` is the signal, not the mere absence of a request: what
+        this hands out is the more privileged of the two answers, so a caller
+        that merely omitted the request (the next route, a test helper) must
+        fall to the item's copy alone — the same side ``call_lane`` defaults
+        to for the quota, and for the same reason.
 
         A failing impl FAILS THE SEND, before the user's message is persisted —
         the same placement as the quota gate above, and for the same reason: a
@@ -376,9 +391,13 @@ class ChatSendService:
         the impl knows whether it built that string out of the very cookie it was
         reading. The server log keeps the traceback.
         """
-        if self._request_env is None or request is None:
+        if self._request_env is None:
+            return {}
+        if request is None and not driven_by:
             return {}
         try:
+            if request is None:
+                return await self._request_env.env_without_request(user_id=user_id, item_id=item_id)
             return await self._request_env.env_for(request, user_id=user_id, item_id=item_id)
         except Exception:
             logger.exception("chat_send: request env source failed for item %s", item_id)
@@ -779,7 +798,7 @@ class ChatSendService:
         author: str,
         lane: CallLane = "background",
         driven_by: str | None = None,
-        request_env: dict[str, str] | None = None,
+        caller_env: dict[str, str] | None = None,
     ) -> None:
         """Append the user message to conversation ``rid``, build the RCA turn ctx
         from ITS history, and enqueue the turn on ``engine_key`` (item_id for the
@@ -981,9 +1000,10 @@ class ChatSendService:
                     # disable gate (their bodies are already preloaded into the prompt).
                     apply_skills=body.apply_skills or [],
                     # #714: what the POST's own cookies/headers contributed, resolved
-                    # back when the request was still open. The item's env_vars are
-                    # merged on top of these.
-                    request_env=request_env,
+                    # back when the request was still open — or, for a goal-driven
+                    # turn with no request, what the seam gives such a turn. The
+                    # item's env_vars are merged on top of these.
+                    caller_env=caller_env,
                     # #613: this thread's Conversation id — the update_todos tool's row key.
                     conversation_id=rid,
                 )

@@ -117,7 +117,7 @@ async def _chat_turn(builder: TurnContextBuilder, item_id: str, **kw) -> AgentTo
 async def test_request_values_reach_the_turn_alongside_the_items_own():
     builder, item_id = _app_with_item({"FROM_ITEM": "i"})
 
-    ctx = await _chat_turn(builder, item_id, request_env={"FROM_REQUEST": "r"})
+    ctx = await _chat_turn(builder, item_id, caller_env={"FROM_REQUEST": "r"})
 
     assert ctx.user_env == {"FROM_REQUEST": "r", "FROM_ITEM": "i"}
 
@@ -127,14 +127,15 @@ async def test_the_items_value_wins_a_name_collision():
     with no notice — so an operator can pin a value for testing."""
     builder, item_id = _app_with_item({"TOKEN": "from-item"})
 
-    ctx = await _chat_turn(builder, item_id, request_env={"TOKEN": "from-request"})
+    ctx = await _chat_turn(builder, item_id, caller_env={"TOKEN": "from-request"})
 
     assert ctx.user_env == {"TOKEN": "from-item"}
 
 
-async def test_a_turn_with_no_request_behind_it_sees_the_item_alone():
-    """Every background re-entry (the goal driver, a workflow step, a scheduled
-    job) lands here: nothing is stored, so there is nothing to inherit."""
+async def test_a_turn_whose_caller_resolved_nothing_sees_the_item_alone():
+    """The builder invents nothing: with no caller env handed in, the turn
+    carries the item's copy and that is all. What a request-less caller CAN
+    hand in is decided upstream (`test_headless_env.py`), never here."""
     builder, item_id = _app_with_item({"FROM_ITEM": "i"})
 
     ctx = await _chat_turn(builder, item_id)
@@ -142,17 +143,24 @@ async def test_a_turn_with_no_request_behind_it_sees_the_item_alone():
     assert ctx.user_env == {"FROM_ITEM": "i"}
 
 
-async def test_a_workflow_turn_never_carries_request_values():
-    """#714: workflow is not wired at all — it re-runs on a schedule and on
-    uploads, so "the first step has them, the rest do not" would be a difference
-    nothing in the UI could show."""
-    builder, item_id = _app_with_item({"FROM_ITEM": "i"})
+async def test_a_workflow_turn_carries_what_its_executor_resolved_under_the_item():
+    """#714 kept workflow off the REQUEST: a run re-runs on a schedule and on
+    uploads, and "the first step had the person's cookie, the rest did not"
+    would be a difference nothing in the UI could show. `plan-headless-env`
+    keeps that and gives every node one source instead — what the executor
+    resolves for the run's captured user — merged under the item's copy the
+    same way a chat turn's is."""
+    builder, item_id = _app_with_item({"TOKEN": "from-item", "FROM_ITEM": "i"})
 
     ctx = await builder.build_workflow_turn(
-        item_id, agent_config=None, run_subagent=_dummy_subagent, history_messages=[]
+        item_id,
+        agent_config=None,
+        run_subagent=_dummy_subagent,
+        history_messages=[],
+        caller_env={"TOKEN": "from-seam", "SA": "x"},
     )
 
-    assert ctx.user_env == {"FROM_ITEM": "i"}
+    assert ctx.user_env == {"TOKEN": "from-item", "FROM_ITEM": "i", "SA": "x"}
 
 
 # ─── the send path: whose request, and what a failure does ─────────────────
@@ -278,11 +286,14 @@ def test_the_chat_scoped_send_carries_the_request_too():
     assert [env["SSO"] for env in runner.envs] == ["abc"]
 
 
-async def test_a_send_with_no_request_behind_it_gets_nothing_even_with_a_seam():
+async def test_a_send_with_no_request_behind_it_replays_nobodys_cookie():
     """The goal driver (#615) continues a chat by re-entering this very method
     with nobody watching and no request in hand. It is the same `send` the
-    routes call, so it is worth pinning that a configured seam does not somehow
-    produce values for it out of a stored copy — there is none."""
+    routes call, so it is worth pinning that a seam which answers only for
+    requests (`CookieEnv` leaves `env_without_request` at its default) gives
+    that turn nothing — the last person's cookie is not stored and replayed.
+    What such a turn CAN carry is the seam's own answer for a request-less
+    turn: `test_headless_env.py`."""
     client, runner, item_id, spec = _send_app(CookieEnv())
     service = cast(FastAPI, client.app).state.chat_send  # what the sweeper holds
     rid, conv = _default_chat(spec, item_id)

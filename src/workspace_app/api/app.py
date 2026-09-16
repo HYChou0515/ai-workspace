@@ -1210,11 +1210,17 @@ def create_app(
         """The identity a page's scheduled run acts as.
 
         The item's OWNER, not whoever last edited the schedules file: a
-        scheduled run has no request, so there is no personal credential to
-        inherit, and the item is already the boundary its tools authenticate
-        with. Empty when the item has no owner on record — `orchestrator.start`
-        refuses that rather than falling back to a system identity, which is the
-        behaviour we want and not one to paper over here.
+        scheduled run has no request, so nobody's cookie is on it to inherit,
+        and the item is already the boundary its tools authenticate with. What
+        such a run's tools DO get is the deploy's answer for a request-less
+        turn (`IRequestEnv.env_without_request`, `docs/plan-headless-env.md`),
+        asked for this owner — so this is the identity a credential may be
+        minted for, and anyone with `edit_content` can put a row in the file
+        that causes it. That is why the docs tell an impl that `user_id` here
+        is attribution, not presence or consent. Empty when the item has no
+        owner on record — `orchestrator.start` refuses that rather than falling
+        back to a system identity, which is the behaviour we want and not one
+        to paper over here.
         """
         return _owner_of(item_id) or ""
 
@@ -2064,6 +2070,9 @@ def create_app(
         # model — the same capable text model that answers questions decides whether two
         # entities are the same. Inert (journal-only self-dedup) if this is None.
         ask_llm=kb_answer_llm,
+        # #714 / plan-headless-env: the same seam the send path holds, asked
+        # here for what a node with no request behind it gets.
+        request_env=request_env,
     )
 
     workflow_credentials = CredentialBroker()

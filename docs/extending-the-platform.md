@@ -377,6 +377,12 @@ class SsoCookieEnv(IRequestEnv):
     async def env_for(self, request: Request, *, user_id: str, item_id: str) -> dict[str, str]:
         session = request.cookies.get("SSO_SESSION")
         return {"MYCORP_SESSION": session} if session else {}
+
+    async def env_without_request(self, *, user_id: str, item_id: str) -> dict[str, str]:
+        # 沒有人按送出的 turn(排程、goal driver、整條 workflow)。這裡回一個共用的
+        # service account;不想給就回 {}(預設就是 {})。⚠️ 不要只憑 user_id 發
+        # per-user 憑證——它是「記在誰名下」,不是「誰在場」,見下面的表。
+        return {"MYCORP_SA_TOKEN": await my_sa_broker.shared_token()}
 ```
 
 ```yaml
@@ -391,16 +397,52 @@ tool 端的讀法跟上面**一模一樣**(`os.environ`),它分不出值從哪�
 - **不落地。** 值只活在觸發它的那一輪 turn,不寫進 item、不寫進任何儲存。
 - **item 的設定蓋過它。** 同名時 `env_vars` 那格贏,而且沒有提示(要拿服務帳號的值壓過去做
   測試時就靠這個)。
-- **只有聊天送出、以及 WUI 頁面的 `callTool` 有。** 兩者的共同點是:一次請求、一個人、
-  結果只回給問的那個人,而且用完就沒了。
-  - workflow 整條沒有:它會續跑、會被排程和上傳事件重跑,「第一步有、第二步沒有」是 UI 上
-    看不出來的差別。goal driver(#615)自己續的那些回合同樣沒有——沒有請求就沒有身分,
-    而且沒有任何存下來的東西可以繼承。
-  - **WUI 的 rebuild 刻意沒有。** build 產出的 `dist/` 會落到永久儲存、並且被組進**每一個**
+- **有 request 的入口問 `env_for`:聊天送出、WUI 頁面的 `callTool`。** 兩者的共同點是:
+  一次請求、一個人、結果只回給問的那個人,而且用完就沒了。
+- **沒有 request 的 turn 問 `env_without_request`**(`docs/plan-headless-env.md`):goal driver
+  (#615)自己續的回合(`user_id` = 設目標的人)、以及 **workflow 的每一個 agent node**——item
+  排程(`user_id` = item owner)、WUI 頁面按鈕起的 `wui/run`(= **item owner**,它跟排程是同一個
+  引擎、同一個身分,**不是按的人**)、event trigger(= profile `triggers.json` 寫死的 acting user)、
+  **還有 `POST …/run` 那條**(= 按的人,但走的是這個方法,不是他的 request)。
+  - ⚠️ **`user_id` 是「這個 turn 記在誰名下」,不是「誰在場」、也不是「誰同意」。** 造成那個 turn
+    的通常是別人:
+
+    | 入口 | 誰能造成它 | `user_id` |
+    |---|---|---|
+    | item 排程 | 任何持 `edit_content` 的人寫 `schedules.json`(或 AI 的 `write_file`) | item owner |
+    | `wui/run` | 任何持 `execute` 的人按頁面的按鈕 | item owner |
+    | event trigger | 任何持 `read_content`+`edit_content` 的參與者寫一筆符合條件的 entity | profile 寫死的 acting user |
+    | profile 層級的 schedule trigger(`triggers.json` 的 `type: schedule`) | 沒有人——部署宣告的時鐘 | profile 寫死的 acting user |
+    | goal driver | 任何能在那個 chat 發言的人,推動下一輪 | 設目標的人 |
+    | `POST …/run` | 按的人 | 按的人 |
+
+    而且 item 的 `owner` 是持 `write_meta` 就能改的自由文字。所以**只憑 `user_id` 發 per-user 憑證,
+    等於把 owner 的憑證發給上面每一種參與者——以及任何被 PATCH 進 `owner` 的名字**。範例回共用的
+    service account 就是這個原因;要 per-user,用 `item_id` 和你自己的政策把關,不要只看 `user_id`。
+    這個「AI 以 owner 身分跑」是既有的授權模型;這個接縫加上去的是外部憑證那一層。
+  - 整條 workflow 一律走這個方法、不碰 request,理由和 #714 當初不接 workflow 是同一個:
+    一條 run 會被排程和上傳事件重跑,重跑時人不在。當初的顧慮是「第一步有(人的 cookie)、
+    第二步沒有」在 UI 上看不出來;現在**一條 run 裡**每一步都是同一個方法、同一個 `user_id`,
+    那個差別不存在了。⚠️ **跨 run 不是**:`user_id` 跟著 run 記在誰名下——人按 `POST …/run` 是
+    按的人、排程重跑是 owner、trigger 是 acting user——per-user 政策下同一個 workflow 三種觸發
+    可以拿到三種憑證。共用 service account 才會讓重跑和第一次一樣;這是範例那樣寫的另一個理由。
+  - 預設回 `{}`,只實作 `env_for` 的 impl 行為不變。回什麼是你的政策——全域 service account、
+    per-user 的、或看 `item_id` 決定給不給——平台不認得 service account 這個詞,只負責去問。
+  - **問的次數是「每一次 agent turn 一次」,不是每個 node 一次**:`agent_step` 的 `retries`
+    每重試一次再問一次;`wf.map` 每個元素各問一次(同時幾個 = min(map 的 `concurrency`,
+    `turn_concurrency`),後者是 `WorkflowExecutor` 的建構參數、預設 1 = 序列,而且 `create_app`
+    目前沒有接它、也沒有 config 欄位——所以今天實際上永遠序列,要**同時**打你的 broker 是一個
+    程式碼改動,不是設定);
+    steer 提案最多 3 次;cache 命中而跳過的 node 不問。impl 的 rate limit 要照這個量抓。
+  - ⚠️ **同一個 chat 裡,人送出的那輪和 goal driver 續的那輪身分會不同**(一個 `env_for`、
+    一個 `env_without_request`)。這是需求本身。但如果你想讓工具或 WUI 頁面靠「個人 token
+    在不在」判斷有沒有人在,兩個方法就**不要回同一個變數名**——否則那個訊號就消失了。
+  - **WUI 的 rebuild 刻意沒有——兩個方法都沒有。** build 產出的 `dist/` 會落到永久儲存、並且被組進**每一個**
     看這個 item 的人拿到的文件裡;而 bundler 的工作就是把環境變數烤進產出物(Vite 的
     `loadEnv` 會把 `VITE_` 開頭的名字從 `process.env` 撈進 bundle)。per-request 的憑證
-    進到那裡,就等於寫進別人下載得到的檔案——正好違反上面第一條「不落地」。build 需要的
-    registry 憑證放 item 的 `env_vars`:那是所有能看這個頁面的人本來就有權拿到的東西。
+    進到那裡,就等於寫進別人下載得到的檔案——正好違反上面第一條「不落地」;service account
+    的憑證進到那裡也一樣是憑證進到共享成品。build 需要的 registry 憑證放 item 的
+    `env_vars`:那是所有能看這個頁面的人本來就有權拿到的東西。
   - **注意呼叫次數。** `callTool` 是頁面按一下就一次,不是一輪 turn 一次。impl 自己的
     rate limit 和延遲預算要照這個量抓。
 - **`async def`,而且失敗就整輪不跑。** 需要拿 cookie 去外部換 token 是這個接縫存在的理由,
@@ -408,6 +450,21 @@ tool 端的讀法跟上面**一模一樣**(`os.environ`),它分不出值從哪�
   (使用者的訊息也不會被寫下來),因為這裡走的是身分:安靜地當作沒有,會讓 turn 以匿名身分
   跑完並交出一個看起來正確的答案。想降級的話,自己 `except` 回 `{}`——只有 impl 知道少了
   那個值還有沒有意義。
+  - `env_without_request` 失敗:workflow 那個 node 以固定字串的 `StepFailed` 結束——在最上層
+    整條 run 變 `error`;在 `wf.map` 裡是那個元素被收進 `failures`,run 能不能算 `done` 由
+    workflow 作者決定(和其他 `StepFailed` 一樣)。無論哪種,run record / step reason / 事件流裡
+    **都不會有你的例外文字**(run record 是 item 的每個參與者都讀得到的東西)。goal driver 有兩條
+    入口,各走自己既有的失敗處理:
+    - **每一輪結束後的續跑**(`_goal_followup`,不分時段——夜間第 2 輪起也是它)把那一輪退回、
+      進 log,然後停:目標保持 `active`,thread 沒有任何標記。沒開下班續跑的目標要等有人再說話;
+      開了的目標由 sweeper 在**下一個**下班時段重新啟動——所以續跑失敗的那一晚是**安靜地**結束。
+    - **每個下班時段的第一次啟動**(`start_offhours_round`,sweeper 一晚只呼叫一次)把失敗交回
+      sweeper,同一晚第三次啟動失敗就在 thread 寫一個「無法啟動」標記並響鈴(內容是那個例外的
+      `str()`——對這個失敗是固定的 `HTTPException: 500: {'error': 'request_env_failed'}`,不含你的
+      例外文字),目標保持 `active`、隔晚再試。
+  - ⚠️ **`env_without_request` 也要自己設上限。** 它跑的時候沒有人在看:workflow 那邊有
+    `step_timeout_s` 兜底;goal driver 那邊**沒有**——一個掛住的 impl 會讓目標鏈安靜地停住,
+    而且已扣的那一輪不會退(丟例外才會退)。
 - ⚠️ **延遲要你自己設上限,平台不會幫你設。** 平台不知道你的閘道等多久算合理,設一個數字只會
   誤殺「只是慢」的請求。但這段等待很危險:此時使用者的訊息**還沒被寫下來**,一旦拖過 ingress
   的讀取逾時,閘道回 **504**,而前端把 504 當成「閒置代理切斷了 POST、turn 還在跑」→ 繼續等

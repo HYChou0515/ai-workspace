@@ -463,9 +463,13 @@ class UserScheduleSweeper:
                     item_id=item_id,
                     workflow_id=row.run,
                     # The item's owner, not whoever last edited the file: a
-                    # scheduled run has no request, so there is no personal
-                    # credential to inherit, and the item is already the
-                    # boundary everything else here is scoped to.
+                    # scheduled run has no request, so nobody's cookie is on it
+                    # to inherit, and the item is already the boundary
+                    # everything else here is scoped to. The run's tools DO get
+                    # the deploy's request-less answer (`env_without_request`)
+                    # for this owner — an identity the file's editor did not
+                    # need to hold. `api/app.py:_owner_of_item` says why that is
+                    # the impl's policy to bound.
                     acting_user=owner,
                     payload=row.payload,
                     # The SAME id the window ledger claims on, so the chat this

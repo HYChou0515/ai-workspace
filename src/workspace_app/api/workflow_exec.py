@@ -47,6 +47,7 @@ if TYPE_CHECKING:
     from ..quota.admission import AdmissionGate
     from .locator import ItemLocator
     from .registry import InvestigationRegistry
+    from .request_env import IRequestEnv
     from .turn_context import TurnContextBuilder
     from .turns import ChatTurnEngine, TurnMessage
 
@@ -98,6 +99,7 @@ class WorkflowExecutor:
         turn_concurrency: int = 1,
         ask_llm: ILlm | None = None,
         admission: AdmissionGate | None = None,
+        request_env: IRequestEnv | None = None,
     ) -> None:
         self._spec = spec
         self._files = files
@@ -111,6 +113,10 @@ class WorkflowExecutor:
         self._run_subagent = run_subagent
         # Per-person cpu/memory admission, same gate an interactive turn passes.
         self._admission = admission
+        # The deploy's request→env seam (#714), asked here for what a turn with
+        # NO request behind it gets (`docs/plan-headless-env.md`). None ⇒ a
+        # node's tools see the item's env_vars alone, exactly as before.
+        self._request_env = request_env
         # #435 P6: the ILlm backing the create_entity cross-origin match (M1-AI, §decide-AI).
         # None ⇒ dedup stays journal-only (self-dedup); a wired model enables cross-match.
         self._ask_llm = ask_llm
@@ -202,6 +208,7 @@ class WorkflowExecutor:
             # #429 P10: an agent node's entity writes carry the run's trigger origin, so
             # they fire on_event workflows AND stay inside the recursion depth cap.
             entity_write_origin=entity_write_origin,
+            caller_env=await self._headless_env(captured_user, item_id),
         )
         # #624: this node had to leave part of the thread out. Say so in the
         # workflow chat — it is a real conversation the user can open, and a run
@@ -240,6 +247,42 @@ class WorkflowExecutor:
         if await self._turn_engine.cancel_epoch(chat_key) > baseline:
             raise asyncio.CancelledError
         return answer
+
+    async def _headless_env(self, captured_user: str, item_id: str) -> dict[str, str]:
+        """What this node's tools get from the deploy's seam, given that no
+        request is behind it: the seam's answer for ``captured_user`` — the item
+        owner for an item schedule and for a page-button run, the trigger's
+        declared acting user, the person who pressed ``POST …/run``. Every node
+        of ONE run reads this one source for that one user, so no step carries
+        a cookie the next step lacks — the difference #714 feared; the person's
+        own request is never consulted here. ACROSS runs the identity follows
+        the run's attribution (hand-started: the presser; its scheduled re-run:
+        the owner), so a per-user policy can answer a re-run differently from
+        the first run — a shared service account is what makes them identical.
+
+        A failing impl fails the NODE — as `StepFailed`, the engine's own word
+        for "this step aborted", rather than running the node as nobody and
+        reporting success. At top level that ends the run in error; inside
+        `wf.map` the element is collected as a failure the author must surface
+        (`handle.py`, the same as every other `StepFailed`). Either way it
+        fails with FIXED text. `driver.py` records the text of whatever escapes
+        a step as the run's `result.error`, and the run record is read by
+        everyone the item is shared with; only the impl knows whether it built its message out
+        of the very token it was exchanging (the chat send keeps the same rule
+        for the same reason). The traceback goes to the server log."""
+        if self._request_env is None:
+            return {}
+        try:
+            return await self._request_env.env_without_request(
+                user_id=captured_user, item_id=item_id
+            )
+        except Exception as exc:
+            logger.exception(
+                "workflow_exec: request env source failed for item %s (user %s)",
+                item_id,
+                captured_user,
+            )
+            raise StepFailed("the deployment's environment source failed for this turn") from exc
 
     def _notice_history_reduced(self, rid: str, acting_user: str, note: str) -> None:
         """Leave the #624 marker in the workflow chat.

@@ -484,11 +484,14 @@ cronjob。
 | 打什麼 | 從哪來 | 有人按 | 排程跑 |
 |---|---|---|---|
 | **你們的 DB / 工具** | item 的 `env_vars`(service account token,不過期) | ✅ | ✅ |
-| | `IRequestEnv`(個人 token,會過期) | ✅ | ❌ 沒有 cookie |
+| | `IRequestEnv.env_for`(個人 token,會過期) | ✅ | ❌ 沒有 cookie |
+| | `IRequestEnv.env_without_request`(排程用的身分,impl 決定——`plan-headless-env.md`) | ✅ 按 `run` / 頁面按鈕起的 run 也走這個(整條 workflow 都是);聊天與 `callTool` 走 `env_for` | ✅ |
 | **LLM** | `ITokenService`,背景用 `acting_user` | ✅ | ⚠️ 換不到個人 token → 用端點自己的 key |
 
 **「個人 token 在不在」本身就是「有沒有人在」的訊號**,工具或 WUI 自己判斷用哪一個。平台從頭到
-尾不需要學會 service account 這個詞——**平台給一般化的機制,應用決定政策。**
+尾不需要學會 service account 這個詞——**平台給一般化的機制,應用決定政策。**(`plan-headless-env`
+之後排程那格也是這個原則:平台只多問一個方法,回什麼是 impl 的事;⚠️ 想保留「個人 token 在不在」
+這個訊號,impl 就不要讓兩個方法回同一個變數名。)
 
 ⚠️ **要寫進 skill:AI 不能假設個人 token 一定在。** 排程跑的時候它就是不在,而一個寫成「一定用
 個人 token」的頁面,互動時好好的、排到半夜就掛——「測的時候都對、上線才錯」的典型。
