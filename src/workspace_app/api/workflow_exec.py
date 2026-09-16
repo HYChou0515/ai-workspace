@@ -254,10 +254,29 @@ class WorkflowExecutor:
         owner for an item schedule, the trigger's acting user, the person who
         pressed run. Every node of every run reads this one source, so the run
         a person started by hand and its re-run on the clock see the same
-        thing; the person's own request is never consulted here."""
+        thing; the person's own request is never consulted here.
+
+        A failing impl fails the NODE — as `StepFailed`, the engine's own word
+        for "this step aborted", so the run ends in error rather than running
+        the node as nobody and reporting success — and fails it with FIXED
+        text. `driver.py` records `str(exc)` of whatever escapes a step as the
+        run's `result.error`, and the run record is read by everyone the item
+        is shared with; only the impl knows whether it built its message out
+        of the very token it was exchanging (the chat send keeps the same rule
+        for the same reason). The traceback goes to the server log."""
         if self._request_env is None:
             return {}
-        return await self._request_env.env_without_request(user_id=captured_user, item_id=item_id)
+        try:
+            return await self._request_env.env_without_request(
+                user_id=captured_user, item_id=item_id
+            )
+        except Exception as exc:
+            logger.exception(
+                "workflow_exec: request env source failed for item %s (user %s)",
+                item_id,
+                captured_user,
+            )
+            raise StepFailed("the deployment's environment source failed for this turn") from exc
 
     def _notice_history_reduced(self, rid: str, acting_user: str, note: str) -> None:
         """Leave the #624 marker in the workflow chat.

@@ -18,8 +18,9 @@ import time
 from typing import cast
 from unittest import mock
 
+import pytest
 from agents import RunContextWrapper
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from specstar import SpecStar
 
 import workspace_app.api.app as app_mod
@@ -241,6 +242,80 @@ def test_a_run_a_person_starts_by_hand_runs_on_the_headless_source_not_their_req
 
     assert runner.envs == [{"SA_TOKEN": "sa-for-hua"}]
     assert seam.asked_for == [("hua", item_id)]
+
+
+# ─── a failing impl: the turn does not run, and its words stay server-side ───
+
+
+class LeakyBrokenEnv(ServiceAccountEnv):
+    """An impl that does the thing the docs warn against: puts the value it
+    was handling into the exception. The platform cannot stop it doing that;
+    it can stop the message travelling anywhere a participant reads."""
+
+    async def env_without_request(self, *, user_id: str, item_id: str) -> dict[str, str]:
+        raise RuntimeError("exchange failed for token=hunter2")
+
+
+def test_a_run_whose_headless_source_fails_ends_in_error_without_the_impls_words(caplog):
+    """`driver.py` records `str(exc)` of whatever escapes a step as the run's
+    `result.error`, and a run record is read by everyone the item is shared
+    with. So the executor must not let the impl's exception escape as itself:
+    the run fails — visibly, as a run that ended in error, not a node that
+    quietly ran as nobody — with fixed text, and the traceback goes to the
+    server log alone."""
+    seam = LeakyBrokenEnv()
+    _executor, item_id, spec, runner, client = _executor_app(seam, user="hua")
+
+    with client:
+        base = f"/a/playground/items/{item_id}"
+        client.put(f"{base}/files/uploads/input.json", content='{"n": 1}')
+        run_id = client.post(f"{base}/run").json()["run_id"]
+        assert _poll_until_terminal(client, item_id, run_id) == "error"
+        run = client.get(f"{base}/runs/{run_id}").json()
+
+    assert runner.envs == []  # no node ran
+    assert "hunter2" not in str(run)  # `result.error` and every step's `reason`
+    assert "hunter2" not in _every_message(spec)
+    assert "hunter2" in caplog.text  # the operator still gets the traceback
+
+
+async def test_a_goal_driven_send_whose_source_fails_is_refused_with_fixed_text():
+    """The same refusal a person's send gets (#714): nothing persisted, the
+    turn does not run, the impl's words stay in the server log. The goal
+    driver catches this where it catches every other follow-up failure and
+    logs it — the goal stops, which is the safe direction for "identity
+    unknown" — and this pins that what it catches carries no token."""
+    seam = LeakyBrokenEnv()
+    client, runner, item_id, spec = _send_app(seam, user="admin")
+    service = cast(FastAPI, client.app).state.chat_send
+    rid, conv = _default_chat(spec, item_id)
+
+    with client, pytest.raises(HTTPException) as caught:
+        await service.send(
+            item_id,
+            rid,
+            conv,
+            item_id,
+            _MessageBody(content="driven"),
+            author="goal-setter",
+            driven_by="goal-driver",
+        )
+
+    assert caught.value.status_code == 500
+    assert caught.value.detail == {"error": "request_env_failed"}
+    assert runner.envs == []
+    assert _every_message(spec) == ""
+    assert "hunter2" not in repr(caught.value)
+
+
+def _every_message(spec: SpecStar) -> str:
+    rm = spec.get_resource_manager(Conversation)
+    out = []
+    for r in rm.list_resources():
+        data = r.data
+        assert isinstance(data, Conversation)
+        out.extend(m.content for m in data.messages)
+    return "\n".join(out)
 
 
 # ─── the injection boundary is the same one #673 drew ────────────────────────
