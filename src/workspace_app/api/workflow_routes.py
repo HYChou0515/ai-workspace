@@ -69,6 +69,7 @@ class ScheduleRowOut(BaseModel):
     due_now: bool = False
     tz: str = "UTC"
     known: bool = False
+    run_problem: str = ""
     payload: dict[str, Any] = {}
 
 
@@ -183,13 +184,21 @@ def register_workflow_routes(
     async def list_item_workflows(slug: str, item_id: str) -> list[dict]:
         """#323 P4 (manual §22): the workflows a user co-created in THIS item's
         ``.workflows/`` (id + title + phase skeleton), for the Workflows panel + the Run
-        picker. Each manifest as builtins (matching ``/profiles``); malformed defs are
-        skipped (``save_workflow`` is the loud guard)."""
-        from ..workflow.workspace_store import workspace_workflow_metas
+        picker. Each manifest as builtins (matching ``/profiles``). A file that will
+        not parse is listed too — ``{id, title: id, phases: [], problem}`` — so a
+        person sees it and the reason, instead of a workflow that silently vanished
+        (a hand edit, or a file written before a field became required)."""
+        from ..workflow.workspace_store import workspace_workflow_listing
 
         investigation_id = locator.require_access(slug, item_id, "read_meta")
-        metas = await workspace_workflow_metas(files, investigation_id)
-        return [msgspec.to_builtins(m) for m in metas]
+        metas, broken = await workspace_workflow_listing(files, investigation_id)
+        return [
+            *(msgspec.to_builtins(m) for m in metas),
+            *(
+                {"id": wid, "title": wid, "phases": [], "problem": problem}
+                for wid, problem in broken.items()
+            ),
+        ]
 
     @app.get("/a/{slug}/items/{item_id}/schedules", response_model=SchedulesOut)
     async def list_item_schedules(slug: str, item_id: str) -> SchedulesOut:
@@ -216,11 +225,12 @@ def register_workflow_routes(
         `UserScheduleSweeper._one_file` carries the sweep's side of the same note.
         """
         from ..filestore.protocol import FileNotFound
-        from ..workflow.offered import offered_workflow_ids
+        from ..workflow.offered import offered_workflow_ids, unparsable_workflow
         from ..workflow.user_schedules import (
             ITEM_SCHEDULES_PATH,
             last_window_lookup,
             schedule_views,
+            usable_rows,
             utc_now,
         )
 
@@ -237,6 +247,14 @@ def register_workflow_routes(
         raw = data.decode("utf-8", "replace")
         profile = locator.profile_of(investigation_id)
         offered = await offered_workflow_ids(files.ls, investigation_id, slug=slug, profile=profile)
+        # Which of the workflows the rows name will not run because their own
+        # file does not parse — asked per distinct `run`, the sweep's own check
+        # (`unparsable_workflow`), through the facade like every other read here.
+        broken: dict[str, str] = {}
+        for run in {row.run for row in usable_rows(raw)[0]}:
+            problem = await unparsable_workflow(files.read, investigation_id, run)
+            if problem is not None:
+                broken[run] = problem
         # The sweep reads only the items its index names. A file that reached
         # the store past every hook is invisible to it until the next turn's
         # reconcile, and its rows must not be shown as if they will fire.
@@ -260,6 +278,7 @@ def register_workflow_routes(
             max_rows=schedule_policy.max_rows,
             enabled=schedule_policy.sweep_enabled,
             indexed=indexed,
+            broken=broken,
         )
         return SchedulesOut(
             enabled=schedule_policy.sweep_enabled,

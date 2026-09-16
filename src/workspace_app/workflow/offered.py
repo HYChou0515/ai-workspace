@@ -37,11 +37,14 @@ from collections.abc import Awaitable, Callable, Collection
 
 from ..apps.profiles import load_profile_workflow, profile_workflows
 from ..files import WorkspaceFiles
+from ..filestore.protocol import FileNotFound
 from .manifest import WorkflowManifest
 from .workspace_store import (
     WORKSPACE_WORKFLOW_DIR,
     is_workspace_workflow_path,
     load_workspace_workflow,
+    workflow_problem,
+    workspace_workflow_path,
 )
 
 #: `ls(workspace_id, prefix) -> paths`. The SOURCE is the caller's choice and
@@ -66,6 +69,25 @@ async def workspace_workflow_ids(ls: ListFiles, item_id: str) -> list[str]:
         for path in await ls(item_id, prefix)
         if is_workspace_workflow_path(path)
     )
+
+
+#: `read(workspace_id, path) -> bytes`, raising `FileNotFound` when absent. The
+#: same source rule as `ListFiles`: the sweep passes the durable store, a request
+#: the facade.
+ReadFile = Callable[[str, str], Awaitable[bytes]]
+
+
+async def unparsable_workflow(read: ReadFile, item_id: str, workflow_id: str) -> str | None:
+    """Why the item's own `.workflows/<workflow_id>.json` will not run, or None
+    when it parses or there is no such file (a profile workflow, or nothing at
+    all — `offered_workflow_ids` answers "does the item have it"; this answers
+    "will the one it has run"). The panel's schedule row, the sweep's log line
+    and `save_schedules`'s refusal all read through here."""
+    try:
+        raw = await read(item_id, workspace_workflow_path(workflow_id))
+    except (FileNotFound, FileNotFoundError):
+        return None
+    return workflow_problem(raw)
 
 
 async def offered_workflow_ids(

@@ -13,6 +13,7 @@ from workspace_app.workflow.workspace_store import (
     save_workspace_workflow,
     slugify_workflow_id,
     validate_workflow_json,
+    workspace_workflow_listing,
     workspace_workflow_metas,
     workspace_workflow_path,
 )
@@ -27,8 +28,28 @@ _VALID = json.dumps(
 )
 
 
+# A workflow file that will not parse: an agent step with no `cache` (required).
+_BROKEN = b'{"id":"x","phases":[{"id":"p"}],"steps":[{"type":"agent","prompt":"hi","phase":"p"}]}'
+
+
 def _files() -> tuple[WorkspaceFiles, str]:
     return WorkspaceFiles(MemoryFileStore()), "ws"
+
+
+async def test_the_listing_names_the_files_that_wont_parse_beside_the_ones_that_do() -> None:
+    """A malformed file used to vanish from the panel in silence ("save_workflow
+    is the loud guard" — but a file edited by hand, or one written before a
+    field became required, never went through it). It is listed with its
+    problem now; `workspace_workflow_metas` still answers only the good ones."""
+    files, ws = _files()
+    await files.write(ws, "/.workflows/good.json", _VALID.encode())
+    await files.write(ws, "/.workflows/broken.json", _BROKEN)
+
+    metas, broken = await workspace_workflow_listing(files, ws)
+
+    assert [m.id for m in metas] == ["good"]
+    assert list(broken) == ["broken"] and "`cache` is required" in broken["broken"]
+    assert [m.id for m in await workspace_workflow_metas(files, ws)] == ["good"]
 
 
 def test_slugify_and_path():

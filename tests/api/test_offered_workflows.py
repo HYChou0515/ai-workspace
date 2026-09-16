@@ -40,6 +40,10 @@ _NIGHTLY = json.dumps(
 )
 
 
+# A workflow file that will not parse: an agent step with no `cache` (required).
+_BROKEN = b'{"id":"x","phases":[{"id":"p"}],"steps":[{"type":"agent","prompt":"hi","phase":"p"}]}'
+
+
 def _app() -> tuple[TestClient, FastAPI, str]:
     """A playground item on its `default` profile — which declares NO workflow,
     the shape every ordinary chat item has."""
@@ -65,6 +69,19 @@ def _app() -> tuple[TestClient, FastAPI, str]:
 
 def _base(item_id: str) -> str:
     return f"/api/a/playground/items/{item_id}"
+
+
+def test_the_panel_lists_a_workflow_that_wont_parse_with_its_problem() -> None:
+    client, _app_, item_id = _app()
+    with client:
+        r = client.put(f"{_base(item_id)}/files/.workflows/broken.json", content=_BROKEN)
+        assert r.status_code == 204
+        listed = client.get(f"{_base(item_id)}/workflows")
+    assert listed.status_code == 200, listed.text
+    rows = {w["id"]: w for w in listed.json()}
+    assert "broken" in rows, "a file that will not parse vanished from the listing"
+    assert "`cache` is required" in rows["broken"]["problem"]
+    assert rows["broken"]["phases"] == []
 
 
 def test_a_page_can_start_a_workflow_the_item_authored() -> None:

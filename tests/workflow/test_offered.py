@@ -13,7 +13,11 @@ import json
 
 from workspace_app.files import WorkspaceFiles
 from workspace_app.filestore.memory import MemoryFileStore
-from workspace_app.workflow.offered import offered_workflow_ids, resolve_offered_workflow
+from workspace_app.workflow.offered import (
+    offered_workflow_ids,
+    resolve_offered_workflow,
+    unparsable_workflow,
+)
 
 _DEF = json.dumps(
     {
@@ -25,8 +29,27 @@ _DEF = json.dumps(
 ).encode()
 
 
+# A workflow file that will not parse: an agent step with no `cache` (required).
+_BROKEN = b'{"id":"x","phases":[{"id":"p"}],"steps":[{"type":"agent","prompt":"hi","phase":"p"}]}'
+
+
 def _files() -> tuple[WorkspaceFiles, str]:
     return WorkspaceFiles(MemoryFileStore()), "item-1"
+
+
+def test_a_workflow_file_that_wont_parse_says_why_and_a_good_or_absent_one_says_nothing() -> None:
+    """ONE criterion for "this file will not run" — the loader's own (`parse_def`
+    raises) — asked the same way by the panel listing, the schedules route, the
+    sweep and `save_schedules`, so all four say the same sentence."""
+    files, item = _files()
+    asyncio.run(files.write(item, "/.workflows/good.json", _DEF))
+    asyncio.run(files.write(item, "/.workflows/broken.json", _BROKEN))
+
+    problem = asyncio.run(unparsable_workflow(files.read, item, "broken"))
+
+    assert problem is not None and "`cache` is required" in problem
+    assert asyncio.run(unparsable_workflow(files.read, item, "good")) is None
+    assert asyncio.run(unparsable_workflow(files.read, item, "not-there")) is None
 
 
 def test_an_item_offers_its_profiles_workflows_and_its_own() -> None:

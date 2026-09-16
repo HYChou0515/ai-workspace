@@ -37,6 +37,10 @@ _WORKFLOW = json.dumps(
 SCHEDULES = "/.workflows/schedules.json"
 
 
+# A workflow file that will not parse: an agent step with no `cache` (required).
+_BROKEN = b'{"id":"x","phases":[{"id":"p"}],"steps":[{"type":"agent","prompt":"hi","phase":"p"}]}'
+
+
 @pytest.fixture
 def clock(monkeypatch):
     """Pin the tool's clock: Tuesday 2026-09-15, 08:00 in Taipei (00:00 UTC)."""
@@ -178,6 +182,23 @@ async def test_a_row_that_already_fired_this_period_says_the_next_one(clock) -> 
     out = await save_schedules_impl(ctx, raw)
 
     assert "next run 2026-09-16 09:00 Asia/Taipei" in out
+
+
+async def test_a_run_naming_a_workflow_that_wont_parse_is_refused_with_the_problem(clock) -> None:
+    """The item has the file, so it is not "no such workflow" — and a schedule
+    saved on it would fire nothing, forever, with the reason in a log the
+    author never reads. Refused with the parse problem, the same sentence the
+    panel shows."""
+    ctx = _ctx()
+    await ctx.context.files.write(ctx.context.investigation_id, "/.workflows/broken.json", _BROKEN)
+
+    out = await save_schedules_impl(ctx, _rows({"every": "hourly", "run": "broken"}))
+
+    assert out.startswith("error:"), out
+    assert "'broken'" in out and "won't parse" in out and "`cache` is required" in out
+    assert "save_workflow" in out
+    inv = ctx.context.investigation_id
+    assert not await ctx.context.files.exists(inv, "/.workflows/schedules.json")
 
 
 async def test_a_deployment_with_the_sweep_off_saves_but_says_so_loudly(clock) -> None:

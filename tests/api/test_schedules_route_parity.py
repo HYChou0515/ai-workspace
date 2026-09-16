@@ -29,6 +29,10 @@ from workspace_app.sandbox.mock import MockSandbox
 WORKFLOWS = ["w0", "w1", "w2"]
 
 
+# A workflow file that will not parse: an agent step with no `cache` (required).
+_BROKEN = b'{"id":"x","phases":[{"id":"p"}],"steps":[{"type":"agent","prompt":"hi","phase":"p"}]}'
+
+
 def _workflow(title: str) -> str:
     return json.dumps(
         {
@@ -149,6 +153,29 @@ def test_the_route_marks_runnable_exactly_the_rows_the_sweep_fires(
     # will not fire must not carry one.
     for row in body["rows"]:
         assert bool(row["next_run"]) == row["runnable"], (name, row)
+
+
+def test_a_row_naming_a_workflow_that_wont_parse_is_not_runnable_and_not_fired() -> None:
+    """Same oracle, one more input: the workflow file exists and will not parse.
+    The sweep fires nothing; the route must not show the row as if it would."""
+    client, app, _, item_id = _app()
+    with client:
+        r = client.put(f"{_base(item_id)}/files/.workflows/w0.json", content=_BROKEN)
+        assert r.status_code == 204
+        r = client.put(
+            f"{_base(item_id)}/files/.workflows/schedules.json",
+            content=_rows({"every": "hourly", "run": "w0"}),
+        )
+        assert r.status_code == 204
+
+        body = client.get(f"{_base(item_id)}/schedules").json()
+        assert client.portal is not None
+        client.portal.call(app.state.user_schedule_sweeper.tick)
+        runs = client.get(f"{_base(item_id)}/runs").json()
+
+    assert runs == []
+    assert body["rows"][0]["runnable"] is False
+    assert "`cache` is required" in body["rows"][0]["run_problem"]
 
 
 def test_a_file_the_sweep_has_not_been_told_about_is_not_runnable() -> None:

@@ -32,7 +32,7 @@ from specstar import SpecStar
 
 from ..api.schedule_index import ScheduleIndex
 from ..filestore.protocol import FileNotFound
-from .offered import no_such_workflow
+from .offered import no_such_workflow, unparsable_workflow
 from .orchestrator import ActiveRunExists
 from .triggers import ScanLease, SpecstarTriggerStore, fire_window, is_due
 from .user_schedules import in_zone, over_cap, trigger_id_for, usable_rows, utc_now
@@ -408,6 +408,30 @@ class UserScheduleSweeper:
             now = in_zone(now_utc, row.tz)
             last = await asyncio.to_thread(self._store.last_window, trigger_id)
             if not is_due(schedule, now, last):
+                continue
+            # The item HAS the file — will it run? Asked only for a row that is
+            # DUE (one durable read per fire, not per row per tick — #804 holds
+            # a tick with nothing due to the one read of the schedules file),
+            # and BEFORE the claim, so a window is never spent on a run that
+            # cannot start. Without this the row reached `orchestrator.start`,
+            # failed an assertion deep inside, handed its window back and tried
+            # again next tick for as long as the file stayed broken, with the
+            # reason in a log nobody reads. Same memo key as the "no such
+            # workflow" complaint: the subject is the ROW, and a complaint that
+            # changes is said again.
+            problem = await unparsable_workflow(self._read, item_id, row.run)
+            if problem is not None:
+                self._say_once(
+                    item_id,
+                    f"{path}#{row.run}",
+                    logging.WARNING,
+                    "user schedules: %s %s: workflow %r won't parse: %s That row will not run.",
+                    item_id,
+                    path,
+                    row.run,
+                    problem,
+                )
+                still_bad.add(row.run)
                 continue
             window = fire_window(schedule, now)
             # CLAIM BEFORE FIRING. Two pods sweep the same item at the same

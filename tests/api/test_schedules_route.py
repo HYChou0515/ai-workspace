@@ -33,6 +33,10 @@ _NIGHTLY = json.dumps(
 )
 
 
+# A workflow file that will not parse: an agent step with no `cache` (required).
+_BROKEN = b'{"id":"x","phases":[{"id":"p"}],"steps":[{"type":"agent","prompt":"hi","phase":"p"}]}'
+
+
 def _app(*, sweep: bool = True) -> tuple[TestClient, FastAPI, str]:
     spec = make_spec()
     runner = ScriptedAgentRunner([MessageDelta(text="ack"), RunDone()])
@@ -114,6 +118,22 @@ def test_the_rows_come_back_the_way_the_sweep_reads_them() -> None:
     # Every row carries what was written, so the panel can rewrite the file
     # minus one row without losing the others — the bad ones included.
     assert [row["raw"]["every"] for row in body["rows"]] == ["daily", "hourly", "day"]
+
+
+def test_a_row_naming_a_workflow_that_wont_parse_carries_the_problem() -> None:
+    client, _app_, item_id = _app()
+    with client:
+        r = client.put(f"{_base(item_id)}/files/.workflows/broken.json", content=_BROKEN)
+        assert r.status_code == 204
+        r = client.put(
+            f"{_base(item_id)}/files/.workflows/schedules.json",
+            content=json.dumps({"schedules": [{"every": "hourly", "run": "broken"}]}),
+        )
+        assert r.status_code == 204
+        body = client.get(f"{_base(item_id)}/schedules").json()
+    row = body["rows"][0]
+    assert row["known"] is True and row["runnable"] is False
+    assert "`cache` is required" in row["run_problem"]
 
 
 def test_a_deployment_with_the_sweep_off_says_so() -> None:

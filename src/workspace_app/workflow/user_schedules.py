@@ -29,7 +29,7 @@ import functools
 import hashlib
 import json
 import logging
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Mapping
 from datetime import UTC, datetime
 from typing import Any, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
@@ -526,6 +526,12 @@ class ScheduleView(Struct):
     due_now: bool = False
     tz: str = "UTC"
     known: bool = False
+    """Whether `run` names a workflow the item HAS (a profile's or its own file)."""
+    run_problem: str = ""
+    """Why the workflow `run` names will not run although the item has it — its
+    file will not parse. Distinct from `problems` (the ROW is wrong) and from
+    `known` (there is no such workflow): the fix is to the workflow, and a person
+    told "no such workflow" would hunt for a typo in the schedule instead."""
     payload: dict[str, Any] = {}
 
 
@@ -538,6 +544,7 @@ def schedule_views(
     max_rows: int | None = None,
     enabled: bool = True,
     indexed: bool = True,
+    broken: Mapping[str, str] | None = None,
 ) -> tuple[list[ScheduleView], list[str]]:
     """Every row of a schedules file, described the way the sweep reads it —
     same parser, same cap, same next-run rule, same ledger (`last_window`) —
@@ -548,9 +555,12 @@ def schedule_views(
     A row is `runnable` only when EVERYTHING the sweep checks holds: the row
     parses, its `run` is one the item offers, the file is within the cap
     (`max_rows`, the sweep refuses the WHOLE file over it), the deployment runs
-    scheduled work at all (`enabled`), and the sweep knows the file exists
-    (`indexed` — it reads only what the index names). Each of those is a way a
-    row silently never fires, so each is said here rather than rounded away.
+    scheduled work at all (`enabled`), the sweep knows the file exists
+    (`indexed` — it reads only what the index names), and the workflow's own
+    file parses (`broken`: `{workflow_id: problem}` for the ones that do not —
+    `offered.unparsable_workflow`'s answer, the sweep's own check). Each of
+    those is a way a row silently never fires, so each is said here rather
+    than rounded away.
     """
     rows = file_rows(raw_text)
     if rows is None:
@@ -568,7 +578,8 @@ def schedule_views(
             views.append(ScheduleView(index=i, raw=raw, problems=problems))
             continue
         known = row.run in offered
-        runnable = known and capped is None and enabled and indexed
+        run_problem = (broken or {}).get(row.run, "")
+        runnable = known and not run_problem and capped is None and enabled and indexed
         at = next_run_at(row, now_utc, last_window(row)) if runnable else ""
         views.append(
             ScheduleView(
@@ -585,6 +596,7 @@ def schedule_views(
                 due_now=runnable and not at,
                 tz=row.tz or "UTC",
                 known=known,
+                run_problem=run_problem,
                 payload=row.payload,
             )
         )
