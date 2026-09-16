@@ -18,16 +18,19 @@ import time
 from typing import cast
 from unittest import mock
 
+from agents import RunContextWrapper
 from fastapi import FastAPI, Request
 from specstar import SpecStar
 
 import workspace_app.api.app as app_mod
+from workspace_app.agent import AgentToolContext, exec_impl
 from workspace_app.api import ScriptedAgentRunner, create_app
 from workspace_app.api.events import RunDone
 from workspace_app.api.request_env import IRequestEnv
 from workspace_app.api.schemas import _MessageBody
 from workspace_app.api.workflow_exec import WorkflowExecutor
 from workspace_app.apps.playground.model import PlaygroundItem
+from workspace_app.files import WorkspaceFiles
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.resources import Conversation, make_spec
 from workspace_app.sandbox.mock import MockSandbox
@@ -238,3 +241,28 @@ def test_a_run_a_person_starts_by_hand_runs_on_the_headless_source_not_their_req
 
     assert runner.envs == [{"SA_TOKEN": "sa-for-hua"}]
     assert seam.asked_for == [("hua", item_id)]
+
+
+# ─── the injection boundary is the same one #673 drew ────────────────────────
+
+
+async def test_the_agents_own_exec_hands_the_sandbox_no_env_headless_or_otherwise():
+    """#673: the item's variables reach the TOOLS, named per dispatch, and the
+    agent's own `exec` — a shell, running as the same uid — gets none of them.
+    The headless answer rides the same `user_env` field, so it stops at the
+    same line: a scheduled node's shell does not become the place a service
+    account leaks."""
+    sandbox = MockSandbox()
+    ctx = RunContextWrapper(
+        AgentToolContext(
+            investigation_id="inv-1",
+            sandbox=sandbox,
+            filestore=MemoryFileStore(),
+            files=WorkspaceFiles(MemoryFileStore()),
+            user_env={"SA_TOKEN": "from-service-account"},
+        )
+    )
+
+    await exec_impl(ctx, ["env"])
+
+    assert sandbox.exec_envs == [{}]

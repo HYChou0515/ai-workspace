@@ -651,12 +651,22 @@ class _Env:
         self.value = value or {}
         self.boom = boom
         self.asked: list[tuple[str, str]] = []
+        self.asked_headless: list[tuple[str, str]] = []
 
     async def env_for(self, request, *, user_id: str, item_id: str) -> dict[str, str]:
         self.asked.append((user_id, item_id))
         if self.boom:
             raise RuntimeError("the token exchange refused")
         return dict(self.value)
+
+    async def env_without_request(self, *, user_id: str, item_id: str) -> dict[str, str]:
+        # The seam's other half (`plan-headless-env`): what a turn with no
+        # request behind it gets. Recorded separately, because "the build
+        # never asks the seam" has to hold for BOTH methods — a build does not
+        # stop writing `dist/` for every viewer just because nobody's cookie is
+        # on the request.
+        self.asked_headless.append((user_id, item_id))
+        return {"SA_TOKEN": "from-service-account"}
 
 
 def test_the_build_never_sees_the_requests_environment():
@@ -672,7 +682,12 @@ def test_the_build_never_sees_the_requests_environment():
 
     So the seam is not even ASKED. Asking and discarding would still pay the
     latency and still hit the impl's rate limit on every page open, and the
-    next person to read the code would have to work out which it was."""
+    next person to read the code would have to work out which it was.
+
+    Neither half of it: the answer for a turn with no request behind it
+    (`env_without_request`, a service account on most deploys) is credential
+    all the same, and `dist/` is shared all the same. What the build needs
+    goes in the item's `env_vars` — the copy every viewer already may read."""
     sandbox = _BuildSandbox([b"ok\n"])
     env = _Env({"NPM_TOKEN": "from-request", "VITE_API_KEY": "s3cret"})
     client, _, _, _ = build(sandbox=sandbox, request_env=env)
@@ -680,8 +695,10 @@ def test_the_build_never_sees_the_requests_environment():
     client.post(BUILD_URL, json={"folder": "/page"})
 
     assert env.asked == []
+    assert env.asked_headless == []
     assert "NPM_TOKEN" not in sandbox.envs[0]
     assert "VITE_API_KEY" not in sandbox.envs[0]
+    assert "SA_TOKEN" not in sandbox.envs[0]
 
 
 def test_a_failing_env_source_does_not_stop_a_build():
