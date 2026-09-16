@@ -28,9 +28,8 @@ import { Switch } from "../../components/Switch";
 import { useCurrentUserState } from "../../hooks/useCurrentUser";
 import { useOpenFile } from "../../hooks/openFile";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
-import { API_BASE, HttpError } from "../../api/http";
-import { wuiApi } from "../../api/wui";
-import { encodePath } from "../../api/refPath";
+import { HttpError } from "../../api/http";
+import { wuiAddress, wuiApi } from "../../api/wui";
 import { publishAgentDraft } from "../../lib/agentDraftBus";
 import { subscribeFileChanged } from "../../lib/fileChangedBus";
 import { pxToRem } from "../../lib/pxToRem";
@@ -794,13 +793,10 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
     setReports([]);
   };
 
-  // The page's own address — what WuiPage answers at `/w/:slug/:itemId/*`
-  // (App.tsx). Under the DEPLOY BASE (`API_BASE`, "" or "/my-svc/rca"): the
-  // router mounts there, and a link that started at the origin left the SPA
-  // on every sub-path deploy. Slug and item id encoded the way `itemCallTool`
-  // encodes them; the path segment by segment, so a folder with a space or a
-  // CJK name still round-trips through the router's decoding.
-  const address = `${window.location.origin}${API_BASE}/w/${encodeURIComponent(slug)}/${encodeURIComponent(fs.scopeId)}/${encodePath(path)}`;
+  // The page's own address — `wuiAddress` is the one spelling (the overview's
+  // rows use it too); the origin goes in front because this one is COPIED,
+  // and a copied link has to work from outside the SPA.
+  const address = `${window.location.origin}${wuiAddress(slug, fs.scopeId, path)}`;
 
   const copyAddress = async () => {
     try {

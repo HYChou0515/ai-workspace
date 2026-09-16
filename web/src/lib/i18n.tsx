@@ -1135,6 +1135,25 @@ export const messages = {
     en: "Currently using {bytes} — all of it comes back when deleted.",
   },
   "resources.disk.delete.zip": { "zh-TW": "下載 zip 備份", en: "Download a zip backup" },
+  // `/wui` — the overview of Deployed pages (docs/plan-wui-overview.md). "WUI"
+  // itself is a proper noun in every locale, so the heading and the nav entry
+  // are not translated.
+  "wui.loading": { "zh-TW": "載入中…", en: "Loading…" },
+  "wui.empty": { "zh-TW": "還沒有任何 WUI 被 Deploy。", en: "No WUI has been deployed yet." },
+  "wui.empty.what": {
+    "zh-TW": "WUI 是 item 工作區裡的一個資料夾，被當成網頁跑起來；在頁面的工具列按 Deploy，它就會出現在這裡。",
+    en: "A WUI is a folder in an item's workspace, run as a page; press Deploy in the page's toolbar and it appears here.",
+  },
+  "wui.empty.help": { "zh-TW": "看說明", en: "Read the help" },
+  "wui.row.by": { "zh-TW": "{who} 於 {when} Deploy", en: "deployed by {who} on {when}" },
+  "wui.remove": { "zh-TW": "移除", en: "Remove" },
+  "wui.remove.title": { "zh-TW": "把「{title}」從 WUI 移除？", en: "Remove “{title}” from WUI?" },
+  "wui.remove.body": {
+    "zh-TW": "頁面和它的資料夾都會留著，只是不再列在這裡。要再列回來，到頁面上再按一次 Deploy。",
+    en: "The page and its folder stay; only this listing goes. To list it again, press Deploy on the page.",
+  },
+  "wui.remove.cancel": { "zh-TW": "取消", en: "Cancel" },
+  "wui.remove.failed": { "zh-TW": "移除失敗，再試一次。", en: "Could not remove it — try again." },
   "review.subtitle": {
     "zh-TW": "跨所有知識庫的待審核項目：自動生成的卡片提案與待釐清的問題。只顯示你有權查看的項目。",
     en: "Everything awaiting review across your knowledge bases — auto-generated card proposals and open questions. Only items you're allowed to see are shown.",

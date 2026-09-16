@@ -7,7 +7,23 @@
  * address, never more.
  */
 
-import { apiFetch, detailSentence, HttpError, httpErrorFrom } from "./http";
+import { API_BASE, apiFetch, detailSentence, HttpError, httpErrorFrom } from "./http";
+import { encodePath } from "./refPath";
+
+/**
+ * A page's own address, origin-relative — what `WuiPage` answers at
+ * `/w/:slug/:itemId/*` (`App.tsx`). Under the DEPLOY BASE (`API_BASE`, "" or
+ * "/my-svc/rca"): the router mounts there, and a link that started at the
+ * origin left the SPA on every sub-path deploy. Slug and item id encoded the
+ * way `itemCallTool` encodes them; the path segment by segment, so a folder
+ * with a space or a CJK name still round-trips through the router's decoding.
+ *
+ * ONE spelling: the pane's Deploy panel and the overview's rows both link
+ * here, and two copies would be two addresses the moment one changed.
+ */
+export function wuiAddress(slug: string, itemId: string, path: string): string {
+  return `${API_BASE}/w/${encodeURIComponent(slug)}/${encodeURIComponent(itemId)}/${encodePath(path)}`;
+}
 
 export type DeployedWui = {
   slug: string;

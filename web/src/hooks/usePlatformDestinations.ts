@@ -49,6 +49,10 @@ export function usePlatformDestinations(): PlatformDestination[] {
     { to: "/review", label: t("review.title"), icon: "check" },
     { to: "/diagnostics", label: "Diagnostics", icon: "sparkle" },
     { to: "/my-resources", label: t("resources.title"), icon: "layers" },
+    // The overview of Deployed pages (docs/plan-wui-overview.md). Unconditional:
+    // an entrance that appears only once somebody has a page is the confusing
+    // kind, and the empty state says what a WUI is. "WUI" is a proper noun.
+    { to: "/wui", label: "WUI", icon: "external" },
     ...(showGroups
       ? ([{ to: "/groups", label: "Groups", icon: "users" }] satisfies PlatformDestination[])
       : []),
