@@ -110,7 +110,7 @@ class IRequestEnv(abc.ABC):
 - **人按 `run` 起的 workflow 不拿他的 request env**(理由在上面)。如果將來有人要「這一次用我的
   身分跑」,那是一個新需求,不是本計畫漏掉。
 - **`user_id` 是記在誰名下,不是誰在場**(第一輪 review 補的)。`wui/run` 和 item 排程都以 **owner**
-  為 `captured_user`(`wui_routes.py:427`、`user_schedule_sweep.py:426`),而造成那個 turn 的可以是
+  為 `captured_user`(`wui_routes.py:427`、`user_schedule_sweep.py:430`),而造成那個 turn 的可以是
   任何持 `execute` / `edit_content` 的參與者;`owner` 又是 `write_meta` 能改的自由文字。「AI 以 owner
   身分跑」是 #805 / WUI 計畫定下的既有授權模型(帳記在 owner 身上),本計畫加上去的是**外部憑證**
   那一層——所以 per-user 政策只憑 `user_id` 就是把 owner 的憑證發給那些參與者。平台不做結構性阻擋
@@ -219,9 +219,14 @@ class IRequestEnv(abc.ABC):
   #714 怕的「第一步有 cookie 第二步沒有」確實不存在;但人按 `POST …/run` 記在按的人名下、排程重跑記在
   owner 名下、trigger 記在 acting user 名下,per-user 政策下三種觸發三種憑證。三處 docstring 與文件改成
   這個說法;共用 service account 是讓重跑一致的條件,不是平台保證。
-- **「goal driver 失敗是安靜的、目標停止」只對白天那條成立。** 夜間 `start_offhours_round` 把失敗丟給
-  sweeper(`goal_offhours.py:_START_FAILURE_LIMIT`),同一晚三次後在 thread 寫「無法啟動」標記(固定字串)
-  並響鈴,目標保持 active。「另開 issue 加 thread 通知」只針對白天那條。
+- **「goal driver 失敗是安靜的、目標停止」只對「每輪結束後的續跑」成立,而且我第一次改寫時把兩條入口
+  標成「白天 / 夜間」也是錯的。** `_goal_followup` 是不分時段的續跑(夜間第 2 輪起也走它),失敗就退回那一輪、
+  進 log、停;`start_offhours_round` 是 sweeper 每晚**第一次**啟動,失敗交回 sweeper 計數
+  (`goal_offhours.py:_START_FAILURE_LIMIT`),同一晚三次後在 thread 寫「無法啟動」標記並響鈴,目標保持
+  active。所以續跑失敗的那一晚安靜結束、隔晚 sweeper 再啟動;沒開下班續跑的目標要等人再說話。
+  「另開 issue 加 thread 通知」針對的是續跑那條。(第二輪 review 抓到。)
+- **突變體的數字要在**現在的**樹上跑。** 第一版 PR body 寫「executor 傳 None 兩條紅、整行拿掉三條」,
+  那是 P2/P4 當下的數字;P6 加了 `wui/run` 測試之後兩種突變都是四條紅。已改成當下跑出來的數字。
 - **驗收清單有三條沒有重跑:**「沒設接縫時逐位元相同」的差分探針、`os.environ` 實際派送探針、
   「值不進 DB / SSE / log」的全面掃描。有的是:P2 的 ctx `user_env` 斷言接上 `tests/tooling/test_tool_env.py`
   既有的派送測試(headless 值走同一個 `user_env` 欄位);P4 的 run record / thread 斷言只掃 impl 的錯誤文字;

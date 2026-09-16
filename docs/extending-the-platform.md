@@ -411,7 +411,8 @@ tool 端的讀法跟上面**一模一樣**(`os.environ`),它分不出值從哪�
     |---|---|---|
     | item 排程 | 任何持 `edit_content` 的人寫 `schedules.json`(或 AI 的 `write_file`) | item owner |
     | `wui/run` | 任何持 `execute` 的人按頁面的按鈕 | item owner |
-    | event trigger | 任何參與者寫一筆符合條件的 entity | profile 寫死的 acting user |
+    | event trigger | 任何持 `read_content`+`edit_content` 的參與者寫一筆符合條件的 entity | profile 寫死的 acting user |
+    | profile 層級的 schedule trigger(`triggers.json` 的 `type: schedule`) | 沒有人——部署宣告的時鐘 | profile 寫死的 acting user |
     | goal driver | 任何能在那個 chat 發言的人,推動下一輪 | 設目標的人 |
     | `POST …/run` | 按的人 | 按的人 |
 
@@ -429,7 +430,9 @@ tool 端的讀法跟上面**一模一樣**(`os.environ`),它分不出值從哪�
     per-user 的、或看 `item_id` 決定給不給——平台不認得 service account 這個詞,只負責去問。
   - **問的次數是「每一次 agent turn 一次」,不是每個 node 一次**:`agent_step` 的 `retries`
     每重試一次再問一次;`wf.map` 每個元素各問一次(同時幾個 = min(map 的 `concurrency`,
-    `turn_concurrency`),後者預設 1 = 序列,hosted pool 調高後才會**同時**打你的 broker);
+    `turn_concurrency`),後者是 `WorkflowExecutor` 的建構參數、預設 1 = 序列,而且 `create_app`
+    目前沒有接它、也沒有 config 欄位——所以今天實際上永遠序列,要**同時**打你的 broker 是一個
+    程式碼改動,不是設定);
     steer 提案最多 3 次;cache 命中而跳過的 node 不問。impl 的 rate limit 要照這個量抓。
   - ⚠️ **同一個 chat 裡,人送出的那輪和 goal driver 續的那輪身分會不同**(一個 `env_for`、
     一個 `env_without_request`)。這是需求本身。但如果你想讓工具或 WUI 頁面靠「個人 token
@@ -451,10 +454,14 @@ tool 端的讀法跟上面**一模一樣**(`os.environ`),它分不出值從哪�
     整條 run 變 `error`;在 `wf.map` 裡是那個元素被收進 `failures`,run 能不能算 `done` 由
     workflow 作者決定(和其他 `StepFailed` 一樣)。無論哪種,run record / step reason / 事件流裡
     **都不會有你的例外文字**(run record 是 item 的每個參與者都讀得到的東西)。goal driver 有兩條
-    入口,各走自己既有的失敗處理:白天的續跑(`_goal_followup`)把那一輪退回、進 log,目標保持
-    `active`,要有人再說話才會再被判斷;下班時段的續跑(`start_offhours_round`)把失敗交給
-    sweeper,同一晚第三次失敗就在 thread 寫一個「無法啟動」標記並響鈴(固定字串,不含你的
-    例外文字),目標保持 `active`、隔晚再試。
+    入口,各走自己既有的失敗處理:
+    - **每一輪結束後的續跑**(`_goal_followup`,不分時段——夜間第 2 輪起也是它)把那一輪退回、
+      進 log,然後停:目標保持 `active`,thread 沒有任何標記。沒開下班續跑的目標要等有人再說話;
+      開了的目標由 sweeper 在**下一個**下班時段重新啟動——所以續跑失敗的那一晚是**安靜地**結束。
+    - **每個下班時段的第一次啟動**(`start_offhours_round`,sweeper 一晚只呼叫一次)把失敗交回
+      sweeper,同一晚第三次啟動失敗就在 thread 寫一個「無法啟動」標記並響鈴(內容是那個例外的
+      `str()`——對這個失敗是固定的 `HTTPException: 500: {'error': 'request_env_failed'}`,不含你的
+      例外文字),目標保持 `active`、隔晚再試。
   - ⚠️ **`env_without_request` 也要自己設上限。** 它跑的時候沒有人在看:workflow 那邊有
     `step_timeout_s` 兜底;goal driver 那邊**沒有**——一個掛住的 impl 會讓目標鏈安靜地停住,
     而且已扣的那一輪不會退(丟例外才會退)。

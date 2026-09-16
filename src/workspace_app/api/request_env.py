@@ -99,8 +99,8 @@ class IRequestEnv(abc.ABC):
         ``user_id`` is ATTRIBUTION, not presence or consent. The person who
         CAUSED the turn is usually somebody else: any ``edit_content`` holder
         can write the schedule row, any ``execute`` holder can press the page
-        button, any participant's entity write can fire the trigger, anyone
-        who may post in a goal chat steers its next round — and an item's
+        button, any participant who may edit entities can fire the trigger,
+        anyone who may post in a goal chat steers its next round — and an item's
         ``owner`` is a free-text field ``write_meta`` may change. A policy
         that mints a per-user credential from ``user_id`` alone therefore
         hands the owner's credential to every such participant; a shared
