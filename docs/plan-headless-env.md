@@ -1,6 +1,6 @@
 # Plan：沒有人按送出的 turn 也拿得到環境變數（service account 走 `IRequestEnv` 接縫）
 
-> **狀態:計畫,待點頭。未實作。**
+> **狀態:已實作(PR #809),P1–P5 全數完成。** 實作時的偏差見文末〈實作偏差〉。
 
 接續 #714(從 request 組 env)與 #788(build 不注入)。這份計畫補的是 #714 當初**刻意留下**的
 一個洞:**沒有 request 的 turn 什麼都拿不到**。
@@ -187,3 +187,17 @@ class IRequestEnv(abc.ABC):
 - goal driver 失敗的 thread 通知(另開 issue)。
 - `ITokenService` 那條線。
 - TTL / refresh / 快取。
+
+## 實作偏差(寫回計畫,因為它會再被踩一次)
+
+- **「builtin `exec` 沒有 env」的既有測試(#673)不存在。** P3 寫「保持既有測試」是寫在查證之前;
+  `tests/tooling/test_tool_env.py` 只證明 package tool 拿得到、`SANDBOX_USER_ENV_KEYS` 有沒有列出,
+  沒有一條斷言 `exec_impl` 交給 sandbox 的 env 是空的。P3 補了那條(`tests/api/test_headless_env.py`),
+  突變體「`exec` 把 `user_env` 轉交給 sandbox」會讓它紅。
+- **run 沒有 `/events` 路由。** P4 的驗收寫「run 的事件流也不含」;參與者讀得到的是 run record
+  (`GET …/runs/{run_id}`,含 `result.error` 與每個 step 的 `reason`)和 SSE stream。測試斷言
+  run record;stream 的 `StepFailed` 事件 `reason` 與 step record 是同一個字串(`engine.py:134`),
+  由 record 的斷言一併覆蓋。
+- **`_resolve_request_env` 沒有拆成兩個函式。** 兩個方法共用同一個 try/except 與同一個 500,
+  差別只在 `request is None`;拆開等於兩份規則。突變體「headless 那支放在 try 外面」會讓
+  goal-driver 失敗測試紅(原始 `RuntimeError` 帶著 token 逃出來)。

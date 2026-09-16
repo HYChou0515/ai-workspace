@@ -14,7 +14,9 @@ word for "service account": what comes back is the impl's policy.
 
 from __future__ import annotations
 
+import re
 import time
+from pathlib import Path
 from typing import cast
 from unittest import mock
 
@@ -316,6 +318,39 @@ def _every_message(spec: SpecStar) -> str:
         assert isinstance(data, Conversation)
         out.extend(m.content for m in data.messages)
     return "\n".join(out)
+
+
+# ─── the docs' example is the thing a deploy pastes ─────────────────────────
+
+_DOCS = Path(__file__).resolve().parents[2] / "docs" / "extending-the-platform.md"
+
+
+async def test_the_documented_impl_is_a_real_implementation_of_both_halves():
+    """The `SsoCookieEnv` block is the first thing a deploy author copies. If
+    its headless method were mis-named or mis-signed, the failure would land on
+    them — at the first scheduled run, at night. Compiling the doc's own text
+    and calling both methods moves that failure here. The one external call
+    (the deploy's token broker) is stood in for; the class is the doc's."""
+    body = _DOCS.read_text(encoding="utf-8")
+    start = body.index("### 隨「按下送出的那個人」而變的變數(#714)")
+    block = re.search(r"```python\n(.*?)```", body[start:], re.DOTALL)
+    assert block, "the #714 section lost its python example"
+
+    class _Broker:
+        async def token_for(self, user_id: str) -> str:
+            return f"sa-{user_id}"
+
+    ns: dict = {"my_sa_broker": _Broker()}
+    exec(compile(block.group(1), "<docs>", "exec"), ns)  # noqa: S102 — the doc IS the input
+    cls = ns["SsoCookieEnv"]
+    assert issubclass(cls, IRequestEnv)
+    seam = cls()
+
+    scope = {"type": "http", "headers": [(b"cookie", b"SSO_SESSION=abc")]}
+    assert await seam.env_for(Request(scope), user_id="u", item_id="i") == {"MYCORP_SESSION": "abc"}
+    assert await seam.env_without_request(user_id="owner", item_id="i") == {
+        "MYCORP_SA_TOKEN": "sa-owner"
+    }
 
 
 # ─── the injection boundary is the same one #673 drew ────────────────────────
