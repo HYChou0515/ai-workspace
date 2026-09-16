@@ -40,6 +40,21 @@ function rule(selector: string): string {
   return m[1];
 }
 
+/** `rule`, but only over the sheet BEFORE the narrow-viewport media block —
+ * for a selector that has a wide rule AND a narrow one, `rule` answers with
+ * whichever comes first, and once the wide one is gone that is the narrow one:
+ * a guard about the wide layout then reads the reflow's declarations and
+ * passes. */
+function wideRule(selector: string): string {
+  const cut = css.indexOf("@media (max-width: 640px)");
+  if (cut < 0) throw new Error("no narrow-viewport block to stop at");
+  const wide = css.slice(0, cut);
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const m = wide.match(new RegExp(`(?:^|})\\s*${escaped}\\s*{([^}]*)}`));
+  if (!m) throw new Error(`no wide rule for ${selector}`);
+  return m[1];
+}
+
 describe("my-resources: the live panel's layout", () => {
   it("lays the three totals out as columns, not as a stack of full-width bars", () => {
     // Three 712px accent bars stacked in the same column as the rows beneath
@@ -113,9 +128,22 @@ describe("my-resources: the live panel's layout", () => {
     expect(tracks).toBeTruthy();
     const second = tracks!.trim().split(/\s+(?![^(]*\))/)[1];
     expect(second).toMatch(/^fit-content\(\d+(\.\d+)?(%|rem|px|ch|em)\)$/);
+    // The cap alone bounds nothing: a grid track's automatic MINIMUM is the
+    // cell's min-content, and for nowrap text that is the whole item title —
+    // so the cell has to be allowed to shrink (`min-width: 0`) and to wrap.
+    // Read from the WIDE half of the sheet: `rule()` returns the first match
+    // in the file, and with the wide rule deleted it found the narrow block's
+    // `.page .wui-list .detail` (which also says `white-space: normal`) and
+    // passed on somebody else's declarations — round 3 of PR #811 showed the
+    // round-2 defect fully back with this suite green.
+    const detail = wideRule(".page .wui-list .detail");
+    expect(detail).toMatch(/min-width:\s*0/);
     // …and what does not fit the cap WRAPS rather than running under Remove —
-    // the shell's `.detail` is nowrap, so the overview has to say otherwise.
-    expect(rule(".page .wui-list .detail")).toMatch(/white-space:\s*normal/);
+    // the shell's `.detail` is nowrap, so the overview has to say otherwise;
+    // `anywhere`, or a 60-letter token with no break opportunity runs under
+    // Remove and scrolls the document (measured, round 3).
+    expect(detail).toMatch(/white-space:\s*normal/);
+    expect(detail).toMatch(/overflow-wrap:\s*anywhere/);
   });
 
   it("reflows the rows before the fixed columns eat the title", () => {

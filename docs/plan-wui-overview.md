@@ -383,9 +383,14 @@ in P6 by capping the track — `fit-content(45%)` — and letting the detail wra
 (`white-space: normal; overflow-wrap: anywhere`) rather than run under Remove
 or ellipsise away who put the page up. Re-measured over the reviewer's sweep
 (item titles of 10–35 CJK / 20–70 latin characters, at 1280 / 760 / 700 /
-641px): the first row's page title stays ≥ 295px at every length and width
-(was 0 at 35 CJK / 70 latin), the detail cell stops at the cap and wraps,
-`scrollWidth == clientWidth` for the document and every row.
+641px): the first row's page title no longer depends on its sibling — the
+same width whether the sibling's item title is 10 or 35 CJK characters:
+322px at ≥ 760 (the `.page` max-width, so 1280 and 760 are one case),
+289 at 700, 256 at 641 (was 23 / 0 / 0 at 35 CJK); the detail cell stops at
+the cap and wraps, `scrollWidth == clientWidth` for the document and every
+row. (The P6 message said "≥ 295px at every length and width": 295 was the
+700px figure; the property that matters is the independence, and it holds
+at 641 too — round 3 corrected the number.)
 
 Also in P6:
 
@@ -420,3 +425,28 @@ deleted; the apply-effect change is additive on the `list` step (over every
 older verdict shape the effect behaves as before, a `list` verdict for A can
 only ever point A's frame, and `at < latest` still retires it first); the
 `moved()` and unmount pins hold.
+
+## Review round 3 (2026-09-16 — one question: does the replaced track model hold?)
+
+Measured in Chromium, new model against the old one on the same harness, at
+1280 / 760 / 700 / 641 and 390, over item titles of 10–35 CJK and 20–70 latin
+characters plus a 60-letter token with no break opportunity: the first row's
+page title is the same whatever the sibling holds (322 / 289 / 256px; the old
+model gave 23 / 0 / 0 at 35 CJK), no document or row overflows, nothing runs
+under Remove (the gap to the button is exactly the column gap), the token
+breaks inside the cap, and the P5 narrow reflow is untouched at 390 and at the
+640 boundary. A wrapped detail still reads as one row (title and Remove sit on
+the vertical middle). **The layout question is closed.**
+
+What the round found instead was the GUARD: two one-rule deletions each
+brought a measured defect back with the stylesheet suite green — deleting the
+wide `.page .wui-list .detail` rule (round 2's defect returns in full: 0px at
+700, the document scrolls), and deleting only `overflow-wrap: anywhere` (the
+token runs under Remove). The first passed because the test's `rule()` helper
+returns the FIRST match in the file, and with the wide rule gone that is the
+narrow block's rule of the same name, which also says `white-space: normal`;
+the second because nothing asserted `overflow-wrap`. P7: a `wideRule()` that
+reads only the sheet before the media block, pinning `min-width: 0`,
+`white-space: normal` and `overflow-wrap: anywhere` there — shown red under
+both deletions, then green. A test change and a two-sentence correction, so
+no further round: the mechanism did not move.
