@@ -2659,7 +2659,12 @@ async def save_schedules_impl(ctx: RunContextWrapper[AgentToolContext], schedule
     for verb in TOOL_VERBS["save_schedules"]:
         if (denied := authorize_tool(ctx.context, verb)) is not None:
             return denied
-    from ..workflow.offered import no_such_workflow, offered_workflow_ids
+    from ..workflow.offered import (
+        no_such_workflow,
+        offered_workflow_ids,
+        unparsable_workflow,
+        wont_parse,
+    )
     from ..workflow.user_schedules import (
         ITEM_SCHEDULES_PATH,
         last_window_lookup,
@@ -2702,6 +2707,13 @@ async def save_schedules_impl(ctx: RunContextWrapper[AgentToolContext], schedule
             + " ".join(no_such_workflow(u, offered) for u in unknown)
             + " Save the workflow first with save_workflow, then the schedules."
         )
+    # The item has the file; will it run? A schedule on a workflow that does
+    # not parse fires nothing, forever, with the reason in a log the author
+    # never reads — refused here with that reason, the sentence the panel shows.
+    for run in sorted({row.run for row in rows}):
+        problem = await unparsable_workflow(files.read, inv, run)
+        if problem is not None:
+            return f"error: {wont_parse(run, problem)} Then save the schedules."
 
     doc = json.loads(schedules_json)
     await files.write(

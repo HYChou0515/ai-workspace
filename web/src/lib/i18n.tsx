@@ -661,6 +661,14 @@ export const messages = {
     "zh-TW": "找不到這個工作流程，這一條不會執行",
     en: "No such workflow in this workspace — this one will not run",
   },
+  "schedules.brokenWorkflow": {
+    "zh-TW": "這個工作流程解析失敗，這一條不會執行：",
+    en: "This workflow will not parse, so this row will not run:",
+  },
+  "workflows.wontParse": {
+    "zh-TW": "解析失敗，無法執行：",
+    en: "Will not parse, so it cannot run:",
+  },
   "schedules.invalidRow": {
     "zh-TW": "這一條寫得不對，不會執行：",
     en: "This row is not valid and will not run:",

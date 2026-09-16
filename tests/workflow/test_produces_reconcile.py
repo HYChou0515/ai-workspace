@@ -44,7 +44,9 @@ def _app() -> tuple[Any, str]:
 _PROSE = {
     "id": "flow",
     "phases": [{"id": "p"}],
-    "steps": [{"type": "agent", "phase": "p", "prompt": "write it", "out": "note.md"}],
+    "steps": [
+        {"type": "agent", "cache": True, "phase": "p", "prompt": "write it", "out": "note.md"}
+    ],
 }
 
 _PRODUCES = {
@@ -53,6 +55,7 @@ _PRODUCES = {
     "steps": [
         {
             "type": "agent",
+            "cache": True,
             "name": "fetch",
             "phase": "p",
             "tools": ["exec"],

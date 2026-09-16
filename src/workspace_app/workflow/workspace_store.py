@@ -68,9 +68,24 @@ def validate_workflow_json(
     step's ``tools`` to the profile's allowed set (``None`` ⇒ skip that check)."""
     try:
         d = parse_def(raw)
-    except DslError as exc:
+    except DslError as exc:  # the same test `workflow_problem` makes, parsed once
         return None, [f"workflow.json won't parse: {exc}"]
     return d, validate_def(d, tool_ceiling=tool_ceiling)
+
+
+def workflow_problem(raw: bytes | str) -> str | None:
+    """Why this file will not run, or None. THE criterion — the loader's own
+    parse test (`load_workspace_workflow` answers None when `parse_def` raises;
+    it also answers None for an absent file and the reserved id, which are not
+    this question) — asked the same way by `save_workflow`, the panel's
+    listing, the schedules route, the sweep, `save_schedules` and the two Run
+    entrances, so a file that fails it is named with the same sentence at
+    every door instead of vanishing at some."""
+    try:
+        parse_def(raw)
+    except DslError as exc:
+        return str(exc)
+    return None
 
 
 async def load_workspace_workflow(
@@ -123,9 +138,22 @@ async def workspace_workflow_metas(
     files: WorkspaceFiles, workspace_id: str
 ) -> list[WorkflowManifest]:
     """The manifest (id + title + phases) of every well-formed workflow under the
-    workspace's ``.workflows/`` dir, sorted by id, the filename winning as the id. A
-    malformed one is skipped (not surfaced here — ``save_workflow`` is the loud guard),
-    so one bad hand-edit can't break the whole list. Empty when there's none."""
+    workspace's ``.workflows/`` dir, sorted by id, the filename winning as the id —
+    the runnable half of `workspace_workflow_listing`."""
+    metas, _ = await workspace_workflow_listing(files, workspace_id)
+    return metas
+
+
+async def workspace_workflow_listing(
+    files: WorkspaceFiles, workspace_id: str
+) -> tuple[list[WorkflowManifest], dict[str, str]]:
+    """Every workflow file under the workspace's ``.workflows/`` dir, sorted by id,
+    the filename winning as the id: the well-formed ones as manifests, and the ones
+    that will not parse as ``{id: problem}``. The second half used to be dropped
+    here ("``save_workflow`` is the loud guard") — but a file edited by hand, or
+    written before a field became required, never went through that guard, and a
+    workflow that vanishes from the panel in silence is one a person cannot fix.
+    One bad file still cannot break the rest of the list."""
     from ..files.facade import read_all_existing
 
     prefix = f"/{WORKSPACE_WORKFLOW_DIR}/"
@@ -141,10 +169,12 @@ async def workspace_workflow_metas(
     # guard used to.
     blobs = await read_all_existing(files, workspace_id, wanted)
     out: list[WorkflowManifest] = []
+    broken: dict[str, str] = {}
     for path, blob in blobs.items():
-        try:
-            d = parse_def(blob)
-        except (DslError, FileNotFound):
+        workflow_id = path[len(prefix) : -len(".json")]
+        problem = workflow_problem(blob)
+        if problem is not None:
+            broken[workflow_id] = problem
             continue
-        out.append(msgspec.structs.replace(build_manifest(d), id=path[len(prefix) : -len(".json")]))
-    return out
+        out.append(msgspec.structs.replace(build_manifest(parse_def(blob)), id=workflow_id))
+    return out, broken

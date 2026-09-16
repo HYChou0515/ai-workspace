@@ -176,7 +176,7 @@ def test_dsl_stale_cache_risk_is_a_warning_not_an_error(tmp_path):
         {
             "id": "w",
             "phases": [{"id": "p"}],
-            "steps": [{"type": "sandbox", "run": "python analyze.py", "phase": "p"}],
+            "steps": [{"type": "sandbox", "cache": True, "run": "python analyze.py", "phase": "p"}],
         },
     )
     diags = check_profile_dir(tmp_path, "app/w")
@@ -194,7 +194,7 @@ def test_dsl_strict_mode_escalates_stale_risk_to_error(tmp_path):
         {
             "id": "w",
             "phases": [{"id": "p"}],
-            "steps": [{"type": "sandbox", "run": "python analyze.py", "phase": "p"}],
+            "steps": [{"type": "sandbox", "cache": True, "run": "python analyze.py", "phase": "p"}],
         },
     )
     assert _levels(check_profile_dir(tmp_path, "app/w")) == ["warning"]  # default
@@ -212,6 +212,7 @@ def test_dsl_step_that_declared_reads_is_clean(tmp_path):
             "steps": [
                 {
                     "type": "sandbox",
+                    "cache": True,
                     "run": "python analyze.py",
                     "phase": "p",
                     "reads": ["analyze.py"],
@@ -256,7 +257,9 @@ _CLEAN_DSL = json.dumps(
     {
         "id": "filer",
         "phases": [{"id": "note"}],
-        "steps": [{"type": "agent", "prompt": "hi", "phase": "note", "out": "note.md"}],
+        "steps": [
+            {"type": "agent", "cache": True, "prompt": "hi", "phase": "note", "out": "note.md"}
+        ],
     }
 )
 
@@ -285,7 +288,7 @@ def test_invalid_dsl_reports_validation_errors(tmp_path):
         {
             "id": "filer",
             "phases": [{"id": "note"}],
-            "steps": [{"type": "sandbox", "run": "x", "phase": "undeclared"}],
+            "steps": [{"type": "sandbox", "cache": True, "run": "x", "phase": "undeclared"}],
         }
     )
     _write_dsl_profile(

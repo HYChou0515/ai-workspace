@@ -32,6 +32,7 @@ from ..workflow.orchestrator import (
     NotAwaitingDecision,
     NotAwaitingSteer,
     WorkflowOrchestrator,
+    WorkflowUnavailable,
 )
 from ..workflow.preflight import can_run as _preflight_can_run
 from ..workflow.run import WorkflowRun
@@ -69,6 +70,7 @@ class ScheduleRowOut(BaseModel):
     due_now: bool = False
     tz: str = "UTC"
     known: bool = False
+    run_problem: str = ""
     payload: dict[str, Any] = {}
 
 
@@ -165,7 +167,7 @@ def register_workflow_routes(
         (`workflow.offered`): a package workflow on its profile (manual §4) or a
         WORKSPACE-authored ``.workflows/<id>.json`` (§22 P4), the workspace one
         shadowing a same-id package one. Returns (investigation_id, profile, manifest)."""
-        from ..workflow.offered import resolve_offered_workflow
+        from ..workflow.offered import resolve_offered_workflow, unparsable_workflow, wont_parse
 
         investigation_id = locator.require_access(slug, item_id, "read_meta")
         profile = locator.profile_of(investigation_id)
@@ -173,6 +175,11 @@ def register_workflow_routes(
             files, investigation_id, slug=slug, profile=profile, workflow_id=workflow_id
         )
         if manifest is None:
+            # The item may HAVE the file and it will not parse — a different
+            # answer from "no such workflow", and the one a person can act on.
+            problem = await unparsable_workflow(files.read, investigation_id, workflow_id)
+            if problem is not None:
+                raise HTTPException(status_code=422, detail=wont_parse(workflow_id, problem))
             raise HTTPException(
                 status_code=422,
                 detail=f"profile {profile!r} of app {slug!r} has no workflow {workflow_id!r}",
@@ -183,13 +190,21 @@ def register_workflow_routes(
     async def list_item_workflows(slug: str, item_id: str) -> list[dict]:
         """#323 P4 (manual §22): the workflows a user co-created in THIS item's
         ``.workflows/`` (id + title + phase skeleton), for the Workflows panel + the Run
-        picker. Each manifest as builtins (matching ``/profiles``); malformed defs are
-        skipped (``save_workflow`` is the loud guard)."""
-        from ..workflow.workspace_store import workspace_workflow_metas
+        picker. Each manifest as builtins (matching ``/profiles``). A file that will
+        not parse is listed too — ``{id, title: id, phases: [], problem}`` — so a
+        person sees it and the reason, instead of a workflow that silently vanished
+        (a hand edit, or a file written before a field became required)."""
+        from ..workflow.workspace_store import workspace_workflow_listing
 
         investigation_id = locator.require_access(slug, item_id, "read_meta")
-        metas = await workspace_workflow_metas(files, investigation_id)
-        return [msgspec.to_builtins(m) for m in metas]
+        metas, broken = await workspace_workflow_listing(files, investigation_id)
+        return [
+            *(msgspec.to_builtins(m) for m in metas),
+            *(
+                {"id": wid, "title": wid, "phases": [], "problem": problem}
+                for wid, problem in broken.items()
+            ),
+        ]
 
     @app.get("/a/{slug}/items/{item_id}/schedules", response_model=SchedulesOut)
     async def list_item_schedules(slug: str, item_id: str) -> SchedulesOut:
@@ -216,11 +231,12 @@ def register_workflow_routes(
         `UserScheduleSweeper._one_file` carries the sweep's side of the same note.
         """
         from ..filestore.protocol import FileNotFound
-        from ..workflow.offered import offered_workflow_ids
+        from ..workflow.offered import offered_workflow_ids, unparsable_workflow
         from ..workflow.user_schedules import (
             ITEM_SCHEDULES_PATH,
             last_window_lookup,
             schedule_views,
+            usable_rows,
             utc_now,
         )
 
@@ -237,6 +253,14 @@ def register_workflow_routes(
         raw = data.decode("utf-8", "replace")
         profile = locator.profile_of(investigation_id)
         offered = await offered_workflow_ids(files.ls, investigation_id, slug=slug, profile=profile)
+        # Which of the workflows the rows name will not run because their own
+        # file does not parse — asked per distinct `run`, the sweep's own check
+        # (`unparsable_workflow`), through the facade like every other read here.
+        broken: dict[str, str] = {}
+        for run in {row.run for row in usable_rows(raw)[0]} & set(offered):
+            problem = await unparsable_workflow(files.read, investigation_id, run)
+            if problem is not None:
+                broken[run] = problem
         # The sweep reads only the items its index names. A file that reached
         # the store past every hook is invisible to it until the next turn's
         # reconcile, and its rows must not be shown as if they will fire.
@@ -260,6 +284,7 @@ def register_workflow_routes(
             max_rows=schedule_policy.max_rows,
             enabled=schedule_policy.sweep_enabled,
             indexed=indexed,
+            broken=broken,
         )
         return SchedulesOut(
             enabled=schedule_policy.sweep_enabled,
@@ -630,6 +655,9 @@ def register_workflow_routes(
                 "workflow_routes: decision for run %s not awaiting a gate: %s", run_id, exc
             )
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except WorkflowUnavailable as exc:
+            logger.warning("workflow_routes: decision for run %s refused: %s", run_id, exc)
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         logger.info(
             "workflow_routes: decision %r recorded for run %s on item %s",
             body.choice,
@@ -663,6 +691,9 @@ def register_workflow_routes(
         except ResourceIDNotFoundError as exc:
             logger.warning("workflow_routes: steer for unknown run %s: %s", run_id, exc)
             raise HTTPException(status_code=404, detail=f"unknown run: {run_id!r}") from exc
+        except WorkflowUnavailable as exc:
+            logger.warning("workflow_routes: steer for run %s refused: %s", run_id, exc)
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         logger.info(
             "workflow_routes: steer requested for run %s on item %s", run_id, investigation_id
         )
@@ -693,6 +724,9 @@ def register_workflow_routes(
         except ResourceIDNotFoundError as exc:
             logger.warning("workflow_routes: steer confirm for unknown run %s: %s", run_id, exc)
             raise HTTPException(status_code=404, detail=f"unknown run: {run_id!r}") from exc
+        except WorkflowUnavailable as exc:
+            logger.warning("workflow_routes: steer confirm for run %s refused: %s", run_id, exc)
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except NotAwaitingSteer as exc:
             logger.warning(
                 "workflow_routes: steer confirm for run %s not awaiting: %s", run_id, exc

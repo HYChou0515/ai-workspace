@@ -17,7 +17,9 @@ _VALID = json.dumps(
     {
         "id": "x",
         "phases": [{"id": "note"}],
-        "steps": [{"type": "agent", "prompt": "hi", "phase": "note", "out": "note.md"}],
+        "steps": [
+            {"type": "agent", "cache": True, "prompt": "hi", "phase": "note", "out": "note.md"}
+        ],
     }
 )
 
@@ -41,7 +43,7 @@ async def test_invalid_workflow_returns_problems_and_is_not_saved():
         {
             "id": "x",
             "phases": [{"id": "note"}],
-            "steps": [{"type": "sandbox", "run": "x", "phase": "zz"}],
+            "steps": [{"type": "sandbox", "cache": True, "run": "x", "phase": "zz"}],
         }
     )
     out = await save_workflow_impl(ctx, "flow", bad)
@@ -72,7 +74,14 @@ async def test_tool_ceiling_clamps_agent_tools():
             "id": "x",
             "phases": [{"id": "note"}],
             "steps": [
-                {"type": "agent", "prompt": "p", "phase": "note", "out": "o", "tools": ["exec"]}
+                {
+                    "type": "agent",
+                    "cache": True,
+                    "prompt": "p",
+                    "phase": "note",
+                    "out": "o",
+                    "tools": ["exec"],
+                }
             ],
         }
     )

@@ -32,7 +32,7 @@ from specstar import SpecStar
 
 from ..api.schedule_index import ScheduleIndex
 from ..filestore.protocol import FileNotFound
-from .offered import no_such_workflow
+from .offered import no_such_workflow, unparsable_workflow
 from .orchestrator import ActiveRunExists
 from .triggers import ScanLease, SpecstarTriggerStore, fire_window, is_due
 from .user_schedules import in_zone, over_cap, trigger_id_for, usable_rows, utc_now
@@ -408,6 +408,49 @@ class UserScheduleSweeper:
             now = in_zone(now_utc, row.tz)
             last = await asyncio.to_thread(self._store.last_window, trigger_id)
             if not is_due(schedule, now, last):
+                continue
+            # The item HAS the file — will it run? Asked only for a row that is
+            # DUE (a tick with nothing due costs only the one read of the
+            # schedules file — #804's test holds that) and BEFORE the claim, so
+            # a window is never spent on a run that cannot start. A broken row
+            # therefore stays due and is read once per tick until its file is
+            # fixed — then it fires on the first tick after (catch-up); the
+            # alternative, claiming the window for a run that cannot start,
+            # would hold the fix back to the next period. Without this the row
+            # reached `orchestrator.start`, failed an assertion deep inside and
+            # handed its window back — three times, then the window was burned
+            # with an ERROR — the reason only in a log nobody reads. Same memo
+            # key as the "no such workflow" complaint: the subject is the ROW,
+            # and a complaint that changes is said again.
+            try:
+                problem = await unparsable_workflow(self._read, item_id, row.run)
+            except Exception:  # noqa: BLE001 — one row's read must not cost the tick
+                # The schedules-file read three screens up survives a store
+                # error per item; a per-row read must not do worse.
+                logger.debug("user schedules: workflow read failed", exc_info=True)
+                self._say_once(
+                    item_id,
+                    f"{path}#{row.run}#read",
+                    logging.WARNING,
+                    "user schedules: %s %s: could not read workflow %r — that row is skipped "
+                    "this tick",
+                    item_id,
+                    path,
+                    row.run,
+                )
+                continue
+            if problem is not None:
+                self._say_once(
+                    item_id,
+                    f"{path}#{row.run}",
+                    logging.WARNING,
+                    "user schedules: %s %s: workflow %r won't parse: %s That row will not run.",
+                    item_id,
+                    path,
+                    row.run,
+                    problem,
+                )
+                still_bad.add(row.run)
                 continue
             window = fire_window(schedule, now)
             # CLAIM BEFORE FIRING. Two pods sweep the same item at the same

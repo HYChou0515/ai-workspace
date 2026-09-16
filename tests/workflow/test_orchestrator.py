@@ -23,6 +23,7 @@ from workspace_app.workflow.orchestrator import (
     NotAwaitingDecision,
     NotAwaitingSteer,
     WorkflowOrchestrator,
+    WorkflowUnavailable,
 )
 from workspace_app.workflow.run import RunStatus, WorkflowRun
 
@@ -606,6 +607,47 @@ async def test_cancel_unknown_run_is_a_noop(spec_instance: SpecStar):
 
     orch, _ = _orch(spec_instance, _run)
     assert await orch.cancel("does-not-exist", "i") is False
+
+
+async def test_a_decision_on_a_run_whose_workflow_no_longer_loads_is_refused_before_writing(
+    spec_instance: SpecStar,
+):
+    """A run paused at a gate across a deploy that made `cache` required: its
+    workspace file no longer parses, so the manifest resolves to None. `decide`
+    used to build the handle anyway, write the decision artifact, and only then
+    hit `assert manifest is not None` — a 500 with the decision half-recorded.
+    Refused up front now, with a message a person can act on; the run stays
+    paused and nothing is written."""
+
+    async def run(wf, inputs):
+        d = await human_gate(wf, phase="review", title="ok?", allow=["approve", "reject"])
+        return {"status": d.choice}
+
+    manifests: list = [MANIFEST]
+    store = MemoryFileStore()
+    orch = WorkflowOrchestrator(
+        spec=spec_instance,
+        store=store,
+        load_run=lambda _s, _p, _w="": run,
+        load_manifest=lambda _s, _p, _w="": manifests[0],
+        wire_handle=lambda *_a: None,
+        now=_clock(),
+    )
+    run_id = await orch.start(slug="rca", item_id="iW", profile="echo", captured_user="u")
+    await asyncio.sleep(0)
+    before = spec_instance.get_resource_manager(WorkflowRun).get(run_id).data
+    assert before.status is RunStatus.AWAITING_HUMAN
+    manifests[0] = None  # the deploy landed; the file no longer parses
+
+    with pytest.raises(WorkflowUnavailable) as exc:
+        await orch.decide(slug="rca", item_id="iW", profile="echo", run_id=run_id, choice="approve")
+
+    assert "save_workflow" in str(exc.value)
+    after = spec_instance.get_resource_manager(WorkflowRun).get(run_id).data
+    assert after.status is RunStatus.AWAITING_HUMAN and after.pending_decision is not None
+    assert not await store.exists("iW", "/.workflow/_default/step_review/main.json"), (
+        "the decision was recorded although the run cannot resume"
+    )
 
 
 async def test_human_gate_suspends_then_decision_resumes(spec_instance: SpecStar):

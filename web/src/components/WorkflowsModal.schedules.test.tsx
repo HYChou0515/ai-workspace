@@ -54,6 +54,7 @@ const NIGHTLY = {
   due_now: false,
   tz: "Asia/Taipei",
   known: true,
+  run_problem: "",
   runnable: true,
   payload: {},
 };
@@ -412,6 +413,29 @@ describe("WorkflowsModal — schedules", () => {
 
     expect(await screen.findByTestId("schedule-row-0")).toHaveTextContent(/^每天 00:00 \(UTC\)/);
     expect(screen.getByTestId("schedule-row-1")).toHaveTextContent(/^每天 00:00 \(UTC\)/);
+  });
+
+  it("says when the workflow a row names will not parse — the row is fine, the workflow is not", async () => {
+    listMock.mockResolvedValue([]);
+    schedulesMock.mockResolvedValue(
+      schedules({
+        rows: [
+          {
+            ...NIGHTLY,
+            runnable: false,
+            next_run: "",
+            next_at: "",
+            run_problem: "steps[0]: `cache` is required — …",
+          },
+        ],
+      }),
+    );
+    render(fakeService().svc);
+
+    const note = await screen.findByTestId("schedule-broken-0");
+    expect(note).toHaveTextContent("`cache` is required");
+    expect(screen.getByTestId("schedule-row-0")).not.toHaveTextContent("下次");
+    expect(screen.queryByTestId("schedule-unknown-0")).toBeNull();
   });
 
   it("removing asks once, and a cancel writes nothing", async () => {

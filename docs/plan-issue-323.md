@@ -43,7 +43,7 @@ holds the turn engine / sandbox lifecycle / capability credential, manual §1).
   "config": { "collections": ["logs", "specs"] },
   "steps": [
     { "type": "map", "over": "uploads/*", "as": "file", "phase": "classify", "do": [
-      { "type": "agent",
+      { "type": "agent", "cache": true,
         "prompt": "Read {file}. Pick a collection from {config.collections}; write a digest. Output JSON {collection, digest, source}.",
         "out": "plan/{file}.json",
         "tools": ["read_file", "ask_knowledge_base"],

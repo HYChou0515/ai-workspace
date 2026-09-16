@@ -35,9 +35,13 @@ _NIGHTLY = json.dumps(
         "id": "ignored",
         "title": "Nightly",
         "phases": [{"id": "p"}],
-        "steps": [{"type": "agent", "prompt": "hi", "phase": "p", "out": "o.md"}],
+        "steps": [{"type": "agent", "cache": True, "prompt": "hi", "phase": "p", "out": "o.md"}],
     }
 )
+
+
+# A workflow file that will not parse: an agent step with no `cache` (required).
+_BROKEN = b'{"id":"x","phases":[{"id":"p"}],"steps":[{"type":"agent","prompt":"hi","phase":"p"}]}'
 
 
 def _app() -> tuple[TestClient, FastAPI, str]:
@@ -65,6 +69,55 @@ def _app() -> tuple[TestClient, FastAPI, str]:
 
 def _base(item_id: str) -> str:
     return f"/api/a/playground/items/{item_id}"
+
+
+def test_the_panel_lists_a_workflow_that_wont_parse_with_its_problem() -> None:
+    client, _app_, item_id = _app()
+    with client:
+        r = client.put(f"{_base(item_id)}/files/.workflows/broken.json", content=_BROKEN)
+        assert r.status_code == 204
+        listed = client.get(f"{_base(item_id)}/workflows")
+    assert listed.status_code == 200, listed.text
+    rows = {w["id"]: w for w in listed.json()}
+    assert "broken" in rows, "a file that will not parse vanished from the listing"
+    assert "`cache` is required" in rows["broken"]["problem"]
+    assert rows["broken"]["phases"] == []
+
+
+def test_the_run_entrances_say_a_workflow_wont_parse_rather_than_no_such_workflow() -> None:
+    """The item HAS the file. Run (and its pre-flight) answered "has no workflow"
+    and the page's startRun answered 502 with an AssertionError in the log — the
+    fourth and fifth doors the parse problem has to be said at, in the same words."""
+    client, _app_, item_id = _app()
+    with client:
+        put = client.put(f"{_base(item_id)}/files/.workflows/broken.json", content=_BROKEN)
+        assert put.status_code == 204
+
+        run = client.post(f"{_base(item_id)}/run", params={"workflow_id": "broken"})
+        preview = client.get(f"{_base(item_id)}/runs/preview", params={"workflow_id": "broken"})
+        page = client.post(f"{_base(item_id)}/wui/run", json={"workflow": "broken"})
+
+    for resp in (run, preview, page):
+        assert resp.status_code == 422, (resp.status_code, resp.text)
+        assert "'broken'" in resp.json()["detail"] and "won't parse" in resp.json()["detail"]
+        assert "`cache` is required" in resp.json()["detail"]
+
+
+def test_a_schedule_row_whose_run_is_not_a_workflow_id_is_unknown_and_reads_nothing() -> None:
+    """`run` is free text from a file; before the `offered` gate it must never
+    become a path. On the NFS store a traversal raised out of the route (500),
+    and a warm sandbox would have read the file it named."""
+    client, _app_, item_id = _app()
+    with client:
+        r = client.put(
+            f"{_base(item_id)}/files/.workflows/schedules.json",
+            content=json.dumps({"schedules": [{"every": "hourly", "run": "../../../etc/passwd"}]}),
+        )
+        assert r.status_code == 204
+        body = client.get(f"{_base(item_id)}/schedules")
+    assert body.status_code == 200, body.text
+    row = body.json()["rows"][0]
+    assert row["known"] is False and row["run_problem"] == ""
 
 
 def test_a_page_can_start_a_workflow_the_item_authored() -> None:

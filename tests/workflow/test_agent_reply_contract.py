@@ -74,6 +74,7 @@ _WF = json.dumps(
         "steps": [
             {
                 "type": "agent",
+                "cache": True,
                 "name": "plan",
                 "phase": "p",
                 "outputs": {"job_count": "int", "job_id": "str"},
@@ -81,6 +82,7 @@ _WF = json.dumps(
             },
             {
                 "type": "agent",
+                "cache": True,
                 "phase": "p",
                 "prompt": "id={steps.plan.job_id} n={steps.plan.job_count}",
                 "out": "note.md",

@@ -12,6 +12,14 @@
 > 可執行的 workflow;接著編輯它的 `run.py`;`python -m workspace_app.workflow check`
 > 會在你啟動 app 之前告訴你哪裡有問題。
 
+> **A workflow on a schedule trigger runs its journal, not its code, the second time.** The step
+> journal is per workflow (§9), so a `triggers.json` schedule that fires a `run.py` workflow with
+> the same inputs every window finds every `agent_step` / `sandbox_node` with `cache=True` (the
+> Python default) already done and skips it — `done`, nothing done. Pass `cache=False` to the
+> steps that read the world or have a side effect (send, fetch, look at the clock); a step
+> downstream of one re-runs by itself when its input changed. Nothing checks this for `run.py`
+> (the DSL's `cache` is required; the Python API keeps its default) — it is yours to remember.
+
 ## workflow 是什麼
 
 一個 workflow 就是**一個 `async def run(wf, inputs)`**（orchestration）加上 profile 的
@@ -127,7 +135,7 @@ await agent_step(wf, ..., reads=["spec.md"])          # agent 也吃 reads
 await agent_write_step(wf, ..., reads=["src/**/*.py"])
 ```
 
-`workflow.json` 一樣:`{"type":"sandbox","run":"analyze","phase":"a","reads":["logs/*.log"]}`
+`workflow.json` 一樣:`{"type":"sandbox","cache":true,"run":"analyze","phase":"a","reads":["logs/*.log"]}`
 (entry 可 interpolate,如 `"{config.dir}/*.log"`)。
 
 **維護 cache 正確性的三條規則,依優先序**:

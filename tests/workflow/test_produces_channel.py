@@ -32,6 +32,7 @@ def _parse(*steps: dict) -> Any:
 
 _FETCH = {
     "type": "agent",
+    "cache": True,
     "name": "fetch",
     "phase": "p",
     "tools": ["exec"],
@@ -62,13 +63,13 @@ def test_a_downstream_reference_to_produces_validates():
         "over": "{steps.fetch.produces}",
         "as": "img",
         "phase": "p",
-        "do": [{"type": "sandbox", "run": "get {img.url}", "phase": "p"}],
+        "do": [{"type": "sandbox", "cache": True, "run": "get {img.url}", "phase": "p"}],
     }
     assert validate_def(_parse(_FETCH, m)) == []
 
 
 def test_a_typo_on_the_produces_reference_is_caught():
-    bad = {"type": "sandbox", "run": "get {steps.fetch.nope}", "phase": "p"}
+    bad = {"type": "sandbox", "cache": True, "run": "get {steps.fetch.nope}", "phase": "p"}
     errs = validate_def(_parse(_FETCH, bad))
     assert errs and "no output field 'nope'" in errs[0]
 
@@ -108,7 +109,7 @@ async def test_the_node_hands_its_files_to_a_map_without_the_model_retyping_them
             "over": "{steps.fetch.produces}",
             "as": "img",
             "phase": "p",
-            "do": [{"type": "sandbox", "run": "get {img.url}", "phase": "p"}],
+            "do": [{"type": "sandbox", "cache": True, "run": "get {img.url}", "phase": "p"}],
         },
     )
     assert validate_def(d) == []

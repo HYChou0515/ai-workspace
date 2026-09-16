@@ -22,7 +22,7 @@
       "phase": "read",
       "do": [
         {
-          "type": "agent",
+          "type": "agent", "cache": true,
           "name": "note",
           "phase": "read",
           "tools": ["read_image"],
@@ -32,7 +32,7 @@
           "retries": 2
         },
         {
-          "type": "agent",
+          "type": "agent", "cache": true,
           "name": "index",
           "phase": "read",
           "reads": ["notes/{image}.md"],

@@ -13,20 +13,58 @@ import json
 
 from workspace_app.files import WorkspaceFiles
 from workspace_app.filestore.memory import MemoryFileStore
-from workspace_app.workflow.offered import offered_workflow_ids, resolve_offered_workflow
+from workspace_app.workflow.offered import (
+    offered_workflow_ids,
+    resolve_offered_workflow,
+    unparsable_workflow,
+)
 
 _DEF = json.dumps(
     {
         "id": "ignored",
         "title": "Mine",
         "phases": [{"id": "p"}],
-        "steps": [{"type": "agent", "prompt": "hi", "phase": "p", "out": "o.md"}],
+        "steps": [{"type": "agent", "cache": True, "prompt": "hi", "phase": "p", "out": "o.md"}],
     }
 ).encode()
 
 
+# A workflow file that will not parse: an agent step with no `cache` (required).
+_BROKEN = b'{"id":"x","phases":[{"id":"p"}],"steps":[{"type":"agent","prompt":"hi","phase":"p"}]}'
+
+
 def _files() -> tuple[WorkspaceFiles, str]:
     return WorkspaceFiles(MemoryFileStore()), "item-1"
+
+
+def test_a_workflow_file_that_wont_parse_says_why_and_a_good_or_absent_one_says_nothing() -> None:
+    """ONE criterion for "this file will not run" — the loader's own (`parse_def`
+    raises) — asked the same way by the panel listing, the schedules route, the
+    sweep and `save_schedules`, so all four say the same sentence."""
+    files, item = _files()
+    asyncio.run(files.write(item, "/.workflows/good.json", _DEF))
+    asyncio.run(files.write(item, "/.workflows/broken.json", _BROKEN))
+
+    problem = asyncio.run(unparsable_workflow(files.read, item, "broken"))
+
+    assert problem is not None and "`cache` is required" in problem
+    assert asyncio.run(unparsable_workflow(files.read, item, "good")) is None
+    assert asyncio.run(unparsable_workflow(files.read, item, "not-there")) is None
+
+
+def test_unparsable_workflow_never_reads_outside_the_folder_or_the_schedules_file() -> None:
+    """The id comes from a schedule row — free text. Only a flat `<id>.json` in
+    the folder is a workflow file; anything else (a traversal, a nested path,
+    the reserved `schedules` id the loader refuses) is answered without a read."""
+    asked: list[str] = []
+
+    async def read(_item: str, path: str) -> bytes:
+        asked.append(path)
+        return b"{}"
+
+    for bad in ("../../../etc/passwd", "nested/deep", "schedules", "", "a/../b"):
+        assert asyncio.run(unparsable_workflow(read, "item-1", bad)) is None, bad
+    assert asked == []
 
 
 def test_an_item_offers_its_profiles_workflows_and_its_own() -> None:

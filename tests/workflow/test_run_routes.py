@@ -766,7 +766,8 @@ def test_reject_steer_discards_the_plan():
 
 _WS_WORKFLOW = (
     '{"id":"myflow","title":"My Flow","phases":[{"id":"note"}],'
-    '"steps":[{"type":"agent","prompt":"write a note","phase":"note","out":"note.md"}]}'
+    '"steps":[{"type":"agent","cache":true,"prompt":"write a note","phase":"note",'
+    '"out":"note.md"}]}'
 )
 
 
@@ -779,11 +780,15 @@ def test_item_workflows_endpoint_lists_workspace_workflows():
     app, _spec, item_id = _app()
     with TestClient(app) as client:
         _put_ws_workflow(client, item_id, "myflow", _WS_WORKFLOW)
-        _put_ws_workflow(client, item_id, "broken", "{not json")  # malformed → skipped
+        # malformed → listed with its problem and no phases (it used to be
+        # skipped in silence, so a person could not see it, let alone fix it)
+        _put_ws_workflow(client, item_id, "broken", "{not json")
         out = client.get(f"{_base(item_id)}/workflows").json()
-    assert [w["id"] for w in out] == ["myflow"]
+    assert [w["id"] for w in out] == ["myflow", "broken"]
     assert out[0]["title"] == "My Flow"
     assert [p["id"] for p in out[0]["phases"]] == ["note"]
+    assert "problem" not in out[0]
+    assert out[1]["phases"] == [] and "not valid JSON" in out[1]["problem"]
 
 
 def test_preview_resolves_a_workspace_workflow():

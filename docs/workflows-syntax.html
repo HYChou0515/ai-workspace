@@ -232,6 +232,7 @@
     <table class="ref">
       <tr><td class="ty">agent</td><td>LLM 一回合。三選一的產出：<code class="i">out</code> 寫內容檔；<code class="i">outputs</code> 宣告具名欄位；<code class="i">produces</code> 宣告它自己寫出的檔案 glob（回覆不被 parse，適合大量資料）。</td><td class="st"><span class="tg now">現行</span></td></tr>
       <tr><td class="ty">sandbox</td><td>確定性指令，無 LLM。純計算、無憑證（可靠副作用走 capability）。</td><td class="st"><span class="tg now">現行</span></td></tr>
+      <tr><td class="ty">cache</td><td><b>agent / sandbox 必填，沒有預設。</b>step 做完留收據，下次輸入沒變就拿收據跳過（journal 每個 workflow 一份）。輸入全在 arguments 裡的設 <code class="i">true</code>；會碰外界或有副作用的——寄信、抓資料、看時間——設 <code class="i">false</code>，每次都跑，下游輸入變了會自己重跑。省略＝解析錯誤，錯誤訊息就是這條規則。排程跑的 workflow 若每步都 <code class="i">true</code>，第二次開火什麼都不做。</td><td class="st"><span class="tg now">現行</span></td></tr>
       <tr><td class="ty">gate</td><td>人工閘。approve 續、reject 終止；<code class="i">revise</code> 帶 user 回饋 <code class="i">{steps.&lt;gate&gt;.feedback}</code> 打回某步重做。</td><td class="st"><span class="tg now">現行</span></td></tr>
       <tr><td class="ty">capability</td><td>可靠且冪等的副作用：<code class="i">ingest_to_collection</code> / <code class="i">upsert_context_card</code>。</td><td class="st"><span class="tg now">現行</span></td></tr>
       <tr><td class="ty">map</td><td>唯一迴圈。<code class="i">over</code> glob；<code class="i">over</code> 清單 / range。<code class="i">do</code> 是元素內序列。</td><td class="st"><span class="tg now">現行</span></td></tr>
@@ -266,7 +267,7 @@
       </figure>
       <div class="code">
         <div class="clbl">workflow.json</div>
-<pre>{ "type":"agent", "name":"classify", "phase":"classify",
+<pre>{ "type":"agent","cache":true, "name":"classify", "phase":"classify",
   "prompt":"判斷異常類型，輸出 JSON。",
   <span class="d">"outputs":{ "type":{"type":"str","enum":["latency","errors","other"]} }</span> }
 
@@ -346,7 +347,7 @@
         <div class="clbl">workflow.json</div>
 <pre>{ "type":"map", "name":"tr", "over":"src/**/*.md",
   "as":"f", "phase":"translate",
-  "do":[ {"type":"agent","phase":"translate",
+  "do":[ {"type":"agent","cache":true,"phase":"translate",
           "prompt":"翻 {f}","out":"out/{f}.en.md"} ] }</pre>
       </div>
     </div>
@@ -377,8 +378,8 @@
         <div class="clbl">workflow.json</div>
 <pre>{ "type":"map", "over":"docs/*.txt", "as":"d", "phase":"proc",
   "do":[
-    {"type":"sandbox","phase":"proc","run":"python clean.py {d}"},
-    {"type":"agent","phase":"proc","prompt":"摘要 {d}","out":"sum/{d}.md"},
+    {"type":"sandbox","cache":true,"phase":"proc","run":"python clean.py {d}"},
+    {"type":"agent","cache":true,"phase":"proc","prompt":"摘要 {d}","out":"sum/{d}.md"},
     {"type":"capability","call":"upsert_context_card","phase":"proc",
      "collection":"kb","keys":["{d}"],"title":"{d}","body":"..."}
   ] }</pre>
@@ -417,7 +418,7 @@
       <p class="eg">AI 抽出所有待辦，每項各開一張卡。</p>
       <div class="code">
         <div class="clbl">workflow.json</div>
-<pre>{ "type":"agent", "name":"extract", "phase":"extract",
+<pre>{ "type":"agent","cache":true, "name":"extract", "phase":"extract",
   "prompt":"抽出所有待辦", <span class="d">"outputs":{"items":"list"}</span> },
 
 { "type":"map", "over":<span class="d">"{steps.extract.items}"</span>, "as":"t", "phase":"card",
@@ -459,7 +460,7 @@
         <div class="clbl">workflow.json</div>
 <pre>{ "type":"map", "over":<span class="d">{"range":"{inputs.n}"}</span>,
   "as":"i", "phase":"gen",
-  "do":[ {"type":"agent","phase":"gen",
+  "do":[ {"type":"agent","cache":true,"phase":"gen",
           "prompt":"產生第 {i} 個變體","out":"v/{i}.md"} ] }</pre>
       </div>
     </div>
@@ -492,7 +493,7 @@
       </figure>
       <div class="code">
         <div class="clbl">workflow.json</div>
-<pre>{ "type":"sandbox", "phase":"collect",
+<pre>{ "type":"sandbox","cache":true, "phase":"collect",
   "run":"python index.py --files <span class="d">{steps.tr.outputs}</span>" }</pre>
         <p class="note"><b>另一種收法</b>：也可以 <span style="font-family:var(--mono)">glob "out/*"</span> 收回，只是要自己記得檔落在哪；<span style="font-family:var(--mono)">.outputs</span> 讓引擎替你記住每個元素的身份。</p>
       </div>
@@ -562,8 +563,8 @@
         <div class="clbl">workflow.json</div>
 <pre>{ <span class="d">"type":"switch"</span>, "on":"{inputs.kind}", "phase":"route",
   "cases":{
-    "md": [ {"type":"agent","phase":"route","prompt":"...","out":"o.md"} ],
-    "csv":[ {"type":"sandbox","phase":"route","run":"python csv.py"} ]
+    "md": [ {"type":"agent","cache":true,"phase":"route","prompt":"...","out":"o.md"} ],
+    "csv":[ {"type":"sandbox","cache":true,"phase":"route","run":"python csv.py"} ]
   }, "default":[] }</pre>
       </div>
     </div>
@@ -593,12 +594,12 @@
       <p class="eg">throughput 掉超過 10% 才進調查。</p>
       <div class="code">
         <div class="clbl">workflow.json</div>
-<pre>{ "type":"sandbox", "name":"measure", "phase":"measure",
+<pre>{ "type":"sandbox","cache":true, "name":"measure", "phase":"measure",
   "run":"python measure.py", <span class="d">"outputs":{"dropped":"bool"}</span> },
 
 { <span class="d">"type":"switch"</span>, "on":"<span class="d">{steps.measure.dropped}</span>", "phase":"route",
   "cases":{ "true":[ {"type":"gate","phase":"route","title":"要深入？"},
-                     {"type":"agent","phase":"route","prompt":"分析原因","out":"rca.md"} ] },
+                     {"type":"agent","cache":true,"phase":"route","prompt":"分析原因","out":"rca.md"} ] },
   "default":[] }</pre>
       </div>
     </div>
@@ -629,7 +630,7 @@
       <p class="eg">異常 latency 走 A、errors 走 B。</p>
       <div class="code">
         <div class="clbl">workflow.json</div>
-<pre>{ "type":"agent", "name":"classify", "phase":"classify",
+<pre>{ "type":"agent","cache":true, "name":"classify", "phase":"classify",
   "prompt":"判斷異常類型",
   <span class="d">"outputs":{"type":{"type":"str","enum":["latency","errors","other"]}}</span> },
 
@@ -663,7 +664,7 @@
       <p class="eg">審週報 →「第三段太細，精簡」→ 帶著這句重生成 → 再審。</p>
       <div class="code">
         <div class="clbl">workflow.json</div>
-<pre>{ "type":"agent", "name":"draft", "phase":"draft",
+<pre>{ "type":"agent","cache":true, "name":"draft", "phase":"draft",
   "prompt":"擬週報。<span class="d">修改意見：{steps.review.feedback}</span>",
   "out":"report.md" },
 
@@ -762,7 +763,7 @@
       </figure>
       <div class="code">
         <div class="clbl">workflow.json</div>
-<pre>{ "type":"agent", "phase":"draft", "prompt":"產生摘要",
+<pre>{ "type":"agent","cache":true, "phase":"draft", "prompt":"產生摘要",
   "out":"sum.md",
   "check":{"file_nonempty":{"path":"sum.md"}},
   "retries": 2 }</pre>

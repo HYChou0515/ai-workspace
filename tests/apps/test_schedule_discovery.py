@@ -84,7 +84,9 @@ async def test_saving_a_workflow_points_at_the_clock() -> None:
             "id": "x",
             "title": "T",
             "phases": [{"id": "p"}],
-            "steps": [{"type": "agent", "prompt": "hi", "phase": "p", "out": "o.md"}],
+            "steps": [
+                {"type": "agent", "cache": True, "prompt": "hi", "phase": "p", "out": "o.md"}
+            ],
         }
     )
 

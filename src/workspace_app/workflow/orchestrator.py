@@ -88,6 +88,23 @@ class NotAwaitingDecision(Exception):
     """A decision was posted to a run that is not paused at a gate (§10)."""
 
 
+class WorkflowUnavailable(Exception):
+    """A paused run was asked to continue, but the workflow it belongs to can no
+    longer be loaded — its workspace file does not parse (a deploy that made a
+    field required; a hand edit) or is gone. Raised BEFORE anything is written:
+    `decide` used to record the decision and then fail an assertion, leaving a
+    half-recorded gate and a 500."""
+
+    def __init__(self, run_id: str, workflow_id: str) -> None:
+        self.run_id = run_id
+        self.workflow_id = workflow_id
+        super().__init__(
+            f"run {run_id}: workflow {workflow_id or '(profile default)'!r} can no longer be "
+            "loaded — its file does not parse or is gone. Fix it with save_workflow, then "
+            "try again."
+        )
+
+
 class NotAwaitingSteer(Exception):
     """A steer confirm was posted to a run with no steer plan pending (#288, §10)."""
 
@@ -712,6 +729,8 @@ class WorkflowOrchestrator:
         phase = data.pending_decision.phase
         key = data.chat_id or item_id
         manifest = await self._resolve_manifest(slug, profile, data.workflow_id, item_id)
+        if manifest is None:
+            raise WorkflowUnavailable(run_id, data.workflow_id)
         wf = self._build_handle(
             run_id,
             item_id,
@@ -722,7 +741,6 @@ class WorkflowOrchestrator:
             self.load_upload_dir(slug, profile),
         )
         await record_decision(wf, phase=phase, choice=choice, input=input, decided_by=decided_by)
-        assert manifest is not None
         self._patch(run_id, status=RunStatus.RUNNING, pending_decision=None)
         logger.info("decide: run %s gate %s -> %s, resuming", run_id, phase, choice)
         self._spawn(
@@ -778,6 +796,8 @@ class WorkflowOrchestrator:
     ) -> None:
         key = data.chat_id or item_id
         manifest = await self._resolve_manifest(slug, profile, data.workflow_id, item_id)
+        if manifest is None:
+            raise WorkflowUnavailable(run_id, data.workflow_id)
         wf = self._build_handle(
             run_id,
             item_id,
@@ -839,6 +859,8 @@ class WorkflowOrchestrator:
             self._patch(run_id, status=restored, pending_steer=None)
             logger.info("confirm_steer: run %s steer rejected", run_id)
             return
+        if manifest is None:
+            raise WorkflowUnavailable(run_id, data.workflow_id)
         wf = self._build_handle(
             run_id,
             item_id,
@@ -849,7 +871,6 @@ class WorkflowOrchestrator:
             self.load_upload_dir(slug, profile),
         )
         await apply_steer(wf, data.pending_steer, decided_by=decided_by)
-        assert manifest is not None
         self._patch(run_id, status=RunStatus.RUNNING, pending_steer=None, pending_decision=None)
         logger.info("confirm_steer: run %s steer approved, resuming", run_id)
         self._spawn(

@@ -91,7 +91,7 @@ step 可宣告 `outputs`：欄位名 → 型別 ∈ `str|int|float|bool|list|obj
 schema；`enum` 只用於純量）。
 
 ```json
-{ "type":"agent", "name":"classify", "phase":"classify",
+{ "type":"agent","cache":true, "name":"classify", "phase":"classify",
   "prompt":"…reply JSON {type, score}",
   "outputs": { "type": {"type":"str","enum":["latency","errors","other"]},
                "score": "float" } }
@@ -247,7 +247,7 @@ case，case 內各步靠自己的 journal skip。**這只在 `on` 跨 replay 穩
 ### 6.1 語法
 
 ```json
-{ "type":"agent", "name":"draft", "phase":"draft",
+{ "type":"agent","cache":true, "name":"draft", "phase":"draft",
   "prompt":"擬週報。若有修改意見：{steps.review.feedback}", "out":"report.md",
   "outputs": { … } },
 { "type":"gate", "name":"review", "phase":"review", "title":"審週報",

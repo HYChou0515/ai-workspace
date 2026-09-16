@@ -50,6 +50,10 @@ DAILY = {"every": "daily", "at": "09:00", "run": "build-report", "with": {"line"
 NOON = {"every": "daily", "at": "12:00", "run": "build-report"}
 
 
+# A workflow file that will not parse: an agent step with no `cache` (required).
+_BROKEN = b'{"id":"x","phases":[{"id":"p"}],"steps":[{"type":"agent","prompt":"hi","phase":"p"}]}'
+
+
 class _Files:
     """The item's files, as a double. Raises for what is not there — the shape
     the real read has, because "gone" is the case the sweep must handle."""
@@ -981,6 +985,71 @@ def test_a_row_naming_a_workflow_this_app_does_not_offer_is_named_and_skipped():
 
     assert [r[1] for r in started.runs] == ["build-report"], (
         "the unknown workflow was started, or it took the good row down with it"
+    )
+
+
+def test_a_row_naming_a_workflow_that_wont_parse_is_skipped_with_the_problem(caplog):
+    """The file is there (the item offers it), and the run would fail an
+    assertion deep inside `orchestrator.start`, hand the window back and try
+    again next tick — forever, with nothing a person can see. Skipped HERE
+    instead, with the parse problem in the log, and the good row still fires."""
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    started = _Started()
+    files = _Files(
+        **{
+            f"{ITEM}{PATH}": _file({**DAILY, "run": "broken"}, {**NOON, "at": "09:00"}),
+            f"{ITEM}/.workflows/broken.json": _BROKEN.decode(),
+        }
+    )
+    sweeper = UserScheduleSweeper(
+        spec=spec,
+        index=ScheduleIndex(spec),
+        read=files.read,
+        start=started,
+        owner_of=lambda _item: "alice",
+        now=lambda: datetime(2026, 9, 5, 9, 30),
+        workflows_for=_offers(["build-report", "broken"]),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="workspace_app.workflow.user_schedule_sweep"):
+        asyncio.run(sweeper.tick())
+
+    assert [r[1] for r in started.runs] == ["build-report"]
+    said = [r.getMessage() for r in caplog.records if "won't parse" in r.getMessage()]
+    assert len(said) == 1 and "'broken'" in said[0] and "`cache` is required" in said[0]
+
+
+def test_a_workflow_file_read_that_raises_costs_that_row_only(caplog):
+    """The schedules-file read three screens up survives a store error per item;
+    this read is per row and must not do worse: the row is skipped with a log
+    line, its neighbours still fire, the tick does not raise."""
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    started = _Started()
+    files = _Files(**{f"{ITEM}{PATH}": _file({**DAILY, "run": "boom"}, {**NOON, "at": "09:00"})})
+
+    async def read(item_id: str, path: str) -> bytes:
+        if path.endswith("/boom.json"):
+            raise RuntimeError("store hiccup")
+        return await files.read(item_id, path)
+
+    sweeper = UserScheduleSweeper(
+        spec=spec,
+        index=ScheduleIndex(spec),
+        read=read,
+        start=started,
+        owner_of=lambda _item: "alice",
+        now=lambda: datetime(2026, 9, 5, 9, 30),
+        workflows_for=_offers(["build-report", "boom"]),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="workspace_app.workflow.user_schedule_sweep"):
+        asyncio.run(sweeper.tick())
+
+    assert [r[1] for r in started.runs] == ["build-report"]
+    assert any(
+        "boom" in r.getMessage() and "could not read" in r.getMessage() for r in caplog.records
     )
 
 

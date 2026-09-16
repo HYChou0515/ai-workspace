@@ -117,6 +117,26 @@ def test_over_the_cap_a_well_formed_row_keeps_its_own_record_clean() -> None:
     assert problems and "over the limit of 2" in problems[0]
 
 
+def test_a_row_naming_a_workflow_that_wont_parse_is_known_but_not_runnable() -> None:
+    """The item HAS the file (so not "no such workflow"), and it will not run:
+    the row carries the file's problem, so a person can fix the workflow rather
+    than hunt for a typo in the schedule."""
+    raw = json.dumps({"schedules": [{"every": "hourly", "run": "x"}]})
+
+    views, _ = schedule_views(
+        raw,
+        offered=["x"],
+        now_utc=NOW,
+        last_window=lambda _r: "",
+        broken={"x": "steps[0]: `cache` is required"},
+    )
+
+    assert views[0].known is True
+    assert views[0].runnable is False and views[0].next_run == ""
+    assert "`cache` is required" in views[0].run_problem
+    assert views[0].problems == []  # the ROW is fine; the workflow is not
+
+
 def test_a_deployment_with_the_sweep_off_makes_no_row_runnable() -> None:
     raw = json.dumps({"schedules": [{"every": "hourly", "run": "x"}]})
 
