@@ -169,18 +169,31 @@ def test_the_blob_gc_worker_is_built_from_the_apis_composition():
     assert "blob-gc" in API_REGISTRY_JOBTYPES
 
 
-def test_the_blob_gc_worker_registers_every_model_the_api_does(tmp_path, monkeypatch):
-    """Entered through the worker's real door (`build_coordinator`, what `main`
-    calls) against an oracle composed the way the API's tests compose it. The
-    oracle must contain the model whose absence was the danger, or a green run
-    proves only that two incomplete registries agree. Reddens when blob-gc is
-    routed through `build_bundle` (which has no filestore, no sandbox layer, no
-    routes) — the state #804 P4 refused to ship."""
+def test_the_blob_gc_worker_holds_every_model_the_apis_ask_names(tmp_path, monkeypatch):
+    """Both real doors: the API that ASKS (an app whose lifespan ran — that is
+    where `_ScheduleIndex`, `_TriggerWindow`, the address store and the stretch
+    claims used to be registered — and whose sweeper produced the actual
+    `BlobGcJob`) and the worker that RUNS (`build_coordinator`, what `main`
+    calls), fed that job's own `registry` claim. An oracle that never entered
+    the lifespan was green over a worker that would refuse every pass in a
+    pod-split deploy. The oracle must contain the model whose absence was the
+    first danger, or a green run proves only that two incomplete registries
+    agree. Reddens when blob-gc is routed through `build_bundle` (no filestore,
+    no sandbox layer, no routes) — the state #804 P4 refused to ship."""
+    import asyncio
+    from datetime import timedelta
+
+    from specstar import QB
+
     from workspace_app.api import create_app
     from workspace_app.config.loader import load
+    from workspace_app.config.schema import OffHoursSettings
     from workspace_app.factories import get_filestore, get_spec
+    from workspace_app.filestore.blob_gc import BlobGcJob
     from workspace_app.sandbox.mock import MockSandbox
     from workspace_app.worker.__main__ import build_coordinator
+
+    from .api._client import TestClient
 
     cfg = tmp_path / "config.yaml"
     cfg.write_text("filestore:\n  kind: specstar\n", encoding="utf-8")
@@ -190,18 +203,43 @@ def test_the_blob_gc_worker_registers_every_model_the_api_does(tmp_path, monkeyp
     monkeypatch.setattr("workspace_app.__main__.PACKAGES", {})
 
     oracle = get_spec(settings)
-    create_app(
+    app = create_app(
         spec=oracle,
         sandbox=MockSandbox(),
         filestore=get_filestore(settings, oracle),
         runner=ScriptedAgentRunner([]),
+        run_consumers=False,  # a pure producer: the ask is a row, not a pass
+        gc_interval=timedelta(seconds=0.05),
+        goal_offhours=OffHoursSettings(window="22:00-06:00"),  # the conditional one
     )
-    coordinator = build_coordinator(settings, "blob-gc", config_dir=None)
+    rm = oracle.get_resource_manager(BlobGcJob)
 
+    def _ask():
+        return [r.data for r in rm.list_resources(QB.all().build())]
+
+    async def _until_asked():
+        for _ in range(60):
+            if _ask():
+                return True
+            await asyncio.sleep(0.05)
+        return bool(_ask())
+
+    before_lifespan = set(oracle.resource_managers)
+    with TestClient(app):
+        assert asyncio.run(_until_asked()), "the API's sweeper never asked"
+        (job,) = _ask()
     api_models = set(oracle.resource_managers)
+    # The lifespan registers nothing: a model it added would be one the worker
+    # (which never enters one) lacks — the state the first version of this
+    # test was green over.
+    assert api_models == before_lifespan
     assert "workspace-file" in api_models
+    assert set(job.payload.registry) == api_models  # the ask names what the API holds
+
+    coordinator = build_coordinator(settings, "blob-gc", config_dir=None)
     worker_models = set(coordinator._spec.resource_managers)  # ty: ignore[unresolved-attribute]
     assert api_models <= worker_models, (
         f"the blob-gc worker cannot see {sorted(api_models - worker_models)}: a pass on "
         "it would quarantine, then delete, every blob those models reference"
     )
+    coordinator._check_registry(job.payload.registry)  # ty: ignore[unresolved-attribute]

@@ -604,3 +604,25 @@ async def test_deleting_an_item_takes_its_schedule_index_row():
         "the deleted item is still listed by the schedule index, so every sweep "
         "on every pod keeps reading a row for an item that no longer exists"
     )
+
+
+def test_deleting_an_item_that_never_declared_a_schedule_succeeds_when_the_index_is_registered():
+    """The schedule-index purge tolerated only "this deploy never registered
+    the model" (KeyError) — and every test here built its app without entering
+    the lifespan, which is where the model used to be registered, so the purge
+    was never exercised against a registered model. A deploy that DID run the
+    lifespan (every real one) answered every delete of an item with no
+    schedule row — the common case — with a 500 "failed partway". Register the
+    model the way the app does and delete such an item."""
+    from workspace_app.api.schedule_index import register_schedule_index
+
+    app, spec, _ = _build()
+    register_schedule_index(spec)
+    client = TestClient(app)
+    item_id = _create_item(client)
+
+    resp = client.delete(f"/a/rca/items/{item_id}")
+
+    assert resp.status_code == 204, resp.text
+    with pytest.raises(ResourceIDNotFoundError):
+        spec.get_resource_manager(RcaInvestigation).get(item_id)

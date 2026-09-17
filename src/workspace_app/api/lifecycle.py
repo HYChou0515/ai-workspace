@@ -36,8 +36,6 @@ from ..workflow.user_schedule_sweep import UserScheduleSweeper
 from . import perf_trace
 from .notification_delivery import INotificationChannel, deliver_pending
 from .registry import InvestigationRegistry
-from .sandbox_address import register_sandbox_address
-from .schedule_index import register_schedule_index
 
 if TYPE_CHECKING:
     from ..monitor import IMonitor
@@ -337,9 +335,10 @@ def build_lifespan(
         ``cluster_sweeper``: each window ONE pod (the ``ScanLease`` below) asks
         the ``BlobGcCoordinator`` for one pass, and whoever consumes the
         ``blob-gc`` JobType runs it — a worker pod, or this process when
-        ``run_consumers`` is on. The pass itself rescans every revision of every
-        blob-capable model into memory; run on this pod's timer it was the
-        #804 class of OOM again (the pod's last line: ``blob-gc: won lease``).
+        ``run_consumers`` is on. The pass itself materialises every
+        ``ResourceMeta`` of every blob-capable model (vectors included) and
+        streams every revision; run on this pod's timer it was the #804 class
+        of OOM again (the pod's last line: ``blob-gc: won lease``).
         ``gc_interval`` gates this caller (None ⇒ no task); the grace periods
         live on the coordinator. Off the loop (blocking specstar I/O)."""
         from ..workflow.triggers import ScanLease, SpecstarTriggerStore
@@ -537,44 +536,14 @@ def build_lifespan(
                 user=HELP_SYSTEM_USER,
                 index=app.state.index_coordinator.enqueue,
             )
-        # (#345's activity-heartbeat model is registered in `create_app`, right
-        # after `spec.apply` — it must exist whether or not a lifespan ran, since
-        # it is now also the per-person resource ledger.)
-        # #366: register the shared per-item sandbox-address model (only when the
-        # registry uses it — the HTTP sandbox-host backend). Same post-apply
-        # timing so its CRUD routes are never emitted.
-        if registry.address is not None:
-            register_sandbox_address(spec)
-            logger.debug("lifespan: registered sandbox-address model")
-        # #WUI P14: which items have page-declared schedules. Same post-apply
-        # timing and the same reason — this is platform bookkeeping, not
-        # something any authenticated caller may PUT.
-        register_schedule_index(spec)
-        # #429 P9: the event-trigger processing high-water model (idempotent + the D2d
-        # discoverable-lag ledger). Registered post-apply so its CRUD routes are never emitted,
-        # like the coordination models above. Event dispatch is in-request (not swept), so this
-        # is wired whenever the app runs — it just no-ops when no event triggers are declared.
-        from ..workflow.event_dispatch import register_event_watermark
-
-        register_event_watermark(spec)
-        # #613: the per-conversation todo checklist the update_todos tool overwrites.
-        # Same post-apply timing so specstar never emits bare CRUD routes for it —
-        # FE reads/writes go through dedicated, permission-gated endpoints (P2).
-        from ..resources.conversation_goal import register_conversation_goal
-        from ..resources.conversation_todos import register_conversation_todos
-        from ..resources.work_calendar import register_work_calendar
-
-        register_conversation_todos(spec)
-        register_conversation_goal(spec)
-        register_work_calendar(spec)  # #615 P1
-        # #429 P7 / #804: the shared window-ledger model — the per-trigger claims AND
-        # every scan lease (triggers, page schedules, the cluster-sweep ask) live on
-        # it. Registered post-apply so its CRUD routes are never emitted (same
-        # reason as the blob-GC lease), unconditionally, because the cluster-sweep
-        # ask below takes a lease on it whether or not scheduled work is on.
-        from ..workflow.triggers import register_trigger_store
-
-        register_trigger_store(spec)
+        # The lifespan registers NO model. Every post-apply coordination model
+        # (#345's activity heartbeat, #366's sandbox-address store, #WUI P14's
+        # schedule index, #429's window ledger + event watermark, #613's todos
+        # and goal, #615's calendar and stretch claims) is registered in
+        # `create_app`, right after `spec.apply`: the blob-gc worker composes
+        # `create_app` and never enters a lifespan, and its registry must equal
+        # the asking API's — `tests/test_worker.py` pins that entering the
+        # lifespan changes nothing.
         bg = [asyncio.create_task(idle_killer()), asyncio.create_task(mirror_sweeper(app))]
         if perf_trace.enabled():
             # Only ever sleeps, so any delay it observes beyond its own sleep is
@@ -599,11 +568,6 @@ def build_lifespan(
             bg.append(asyncio.create_task(blob_gc_sweeper(app)))
             logger.debug("lifespan: blob-GC sweeper enabled")
         if offhours is not None and offhours.window:
-            # #615: the model the stretch claim lives in, registered post-apply
-            # like the blob-GC lease so its CRUD routes are never emitted.
-            from .goal_offhours import register_stretch_claims
-
-            register_stretch_claims(spec)
             bg.append(asyncio.create_task(goal_offhours_sweeper(app)))
             logger.debug("lifespan: goal off-hours sweeper enabled")
         if user_schedule_sweeper is not None and trigger_check_interval is not None:

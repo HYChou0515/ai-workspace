@@ -308,15 +308,18 @@ async def test_lifespan_registers_address_model_for_http_sandbox():
         assert spec.get_resource_manager(_SandboxAddress) is not None
 
 
-async def test_lifespan_skips_address_model_for_mock_sandbox_366():
-    # A non-http backend does not wire the address store, so its model stays
-    # unregistered (no needless table for a backend that already converges).
-    import pytest
-
+def test_the_address_model_is_registered_whatever_the_sandbox_backend():
+    """This used to assert the opposite — a non-http backend left the address
+    model unregistered, "no needless table". The blob-gc worker composes
+    `create_app` and never enters a lifespan, and the API's ask names every
+    model the API holds, so a registry that depends on which features are on
+    is one more way for asker and runner to diverge (`_check_registry` would
+    refuse every pass). Registered unconditionally, at `create_app` time — a
+    registered but unused coordination model costs nothing."""
     from workspace_app.api.sandbox_address import _SandboxAddress
 
     spec = make_spec(default_user="u")
-    app = create_app(
+    create_app(
         spec=spec,
         sandbox=MockSandbox(),
         filestore=SpecstarFileStore(spec),
@@ -324,9 +327,7 @@ async def test_lifespan_skips_address_model_for_mock_sandbox_366():
         idle_timeout=timedelta(seconds=60),
         idle_check_interval=timedelta(seconds=60),
     )
-    async with _running_app(app):
-        with pytest.raises(Exception):  # noqa: B017,PT011 — unregistered ⇒ lookup fails
-            spec.get_resource_manager(_SandboxAddress)
+    assert spec.get_resource_manager(_SandboxAddress) is not None  # no lifespan needed
 
 
 async def test_default_idle_timeout_matches_rca_pivot():

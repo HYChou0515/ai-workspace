@@ -819,13 +819,19 @@ def register_item_routes(
             """
             from .schedule_index import _ScheduleIndex
 
-            # Only "this deploy never registered the model" is tolerable, the
-            # same line the satellite purge draws sixty lines above: a failure
-            # from inside the delete is a real one and has to surface. It was
+            # The same two lines the satellite purge draws below: "this deploy
+            # never registered the model" (KeyError) and "this item has no row"
+            # (not found / already gone) are both fine; any other failure from
+            # inside the delete is real and has to surface. It was
             # `suppress(Exception)` at both levels — the one step in this
-            # cascade that could fail completely silently.
+            # cascade that could fail completely silently — and then only the
+            # KeyError, which answered every delete of an item that never
+            # declared a schedule (the common case) with a 500 once the model
+            # was registered; the tests never registered it.
             with contextlib.suppress(KeyError):
-                spec_.get_resource_manager(_ScheduleIndex).permanently_delete(item_id_)
+                rm = spec_.get_resource_manager(_ScheduleIndex)
+                with contextlib.suppress(ResourceIDNotFoundError, ResourceIsDeletedError):
+                    rm.permanently_delete(item_id_)
 
         def _sweep_rows(conv_ids: list[str], run_ids: list[str]) -> None:
             """Conversations (soft-deleted ones included — the cascade must not

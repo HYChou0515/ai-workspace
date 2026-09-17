@@ -69,7 +69,7 @@ from ..workflow.discovery import load_run_callable
 from ..workflow.orchestrator import (
     WorkflowOrchestrator,
 )
-from ..workflow.triggers import ScanLease, SpecstarTriggerStore
+from ..workflow.triggers import ScanLease, SpecstarTriggerStore, register_trigger_store
 from ..workflow.user_schedule_sweep import DEFAULT_MAX_ROWS, UserScheduleSweeper
 from ..workflow.user_schedules import ITEM_SCHEDULES_PATH, SchedulePolicy
 from . import perf_trace
@@ -89,6 +89,7 @@ from .env_provider_routes import register_env_provider_routes
 from .event_bus import IEventBus
 from .events import AgentEvent
 from .file_routes import register_file_routes
+from .goal_offhours import register_stretch_claims
 from .health_routes import (
     register_health_routes,
     register_replay_routes,
@@ -113,10 +114,11 @@ from .request_env import IRequestEnv
 from .review_inbox_routes import register_review_inbox_routes
 from .runner import AgentRunner
 from .sandbox_activity import IActivityStore, SpecstarActivityStore, register_sandbox_activity
-from .sandbox_address import IAddressStore, SpecstarAddressStore
+from .sandbox_address import IAddressStore, SpecstarAddressStore, register_sandbox_address
 from .schedule_index import (
     ScheduleIndex,
     is_schedule_file,
+    register_schedule_index,
 )
 from .schedule_reconcile import reconcile_item_schedules
 from .spa import SpaStaticFiles
@@ -1644,6 +1646,17 @@ def create_app(
     register_turn_activity(spec)
     register_disk_ledger(spec)
     register_user_quota(spec)
+    # These four used to be registered by the lifespan — two of them only when
+    # their feature was on. The blob-gc worker composes THIS function and never
+    # enters a lifespan, and the API's ask names every model the API holds, so
+    # a model registered only in the lifespan made the worker refuse every pass
+    # in a pod-split deploy. Registered here, unconditionally: a registered but
+    # unused coordination model costs nothing, and a registry that depends on
+    # which features are on is one more way for asker and runner to diverge.
+    register_sandbox_address(spec)  # #366 (HTTP sandbox-host address store)
+    register_schedule_index(spec)  # #WUI P14 (page-declared schedules)
+    register_trigger_store(spec)  # #429 P7 / #804 (the shared window ledger)
+    register_stretch_claims(spec)  # #615 (off-hours stretch claims)
 
     # P2: ensure the "Investigations Knowledge" collection exists at boot so
     # the chat-promote path always has a target. Idempotent (re-uses a
@@ -2135,7 +2148,8 @@ def create_app(
     # #613: the per-conversation todo checklist — same post-apply registration (no
     # bare CRUD routes; the gated /todos chat routes are the only wire surface),
     # and same in-request rationale: the routes must not depend on the lifespan
-    # having run first. Idempotent, so the lifespan's call is belt-and-suspenders.
+    # having run first. The lifespan used to register these again as
+    # belt-and-suspenders; it registers nothing now (see `build_lifespan`).
     from ..resources.conversation_goal import register_conversation_goal
     from ..resources.conversation_todos import register_conversation_todos
     from ..resources.work_calendar import register_work_calendar
