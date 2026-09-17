@@ -40,15 +40,18 @@ function rule(selector: string): string {
   return m[1];
 }
 
-/** `rule`, but only over the sheet BEFORE the narrow-viewport media block —
- * for a selector that has a wide rule AND a narrow one, `rule` answers with
- * whichever comes first, and once the wide one is gone that is the narrow one:
- * a guard about the wide layout then reads the reflow's declarations and
- * passes. */
+/** `rule`, but over the sheet with every `@media` block removed — for a
+ * selector that has a wide rule AND a narrow one, `rule` answers with whichever
+ * comes first, and once the wide one is gone that is the narrow one: a guard
+ * about the wide layout then reads the reflow's declarations and passes.
+ *
+ * Every media block, wherever it sits, rather than "the sheet before the
+ * narrow one": wide rules live on both sides of it (the admin rules follow it),
+ * and the breakpoint is not this test's to know (the header says a re-tune
+ * must be free; the `reflows` guard already matches `\d+px`). Blocks end at
+ * the first `}` on its own line, the same convention that guard uses. */
 function wideRule(selector: string): string {
-  const cut = css.indexOf("@media (max-width: 640px)");
-  if (cut < 0) throw new Error("no narrow-viewport block to stop at");
-  const wide = css.slice(0, cut);
+  const wide = css.replace(/@media[^{]*\{[\s\S]*?\n\}/g, "");
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const m = wide.match(new RegExp(`(?:^|})\\s*${escaped}\\s*{([^}]*)}`));
   if (!m) throw new Error(`no wide rule for ${selector}`);
@@ -91,11 +94,14 @@ describe("my-resources: the live panel's layout", () => {
       // column to a different x on each row. The tags visibly failed to line
       // up in a column whose whole point is being scannable — and every DOM
       // test stayed green, because the tag renders either way.
-      const list = rule(selector);
+      // `wideRule`, so a deleted wide rule cannot be answered for by the
+      // narrow block's rule of the same name (it happens to say something
+      // else today; that is luck, not a guard).
+      const list = wideRule(selector);
       expect(list).toMatch(/display:\s*grid/);
       expect(list).toMatch(/grid-template-columns:/);
       // …and the row defers to it rather than re-declaring its own.
-      expect(rule(`${selector} > li`)).toMatch(/grid-template-columns:\s*subgrid/);
+      expect(wideRule(`${selector} > li`)).toMatch(/grid-template-columns:\s*subgrid/);
     },
   );
 
@@ -107,7 +113,7 @@ describe("my-resources: the live panel's layout", () => {
     // `minmax(0, 1fr)` — the only shrinkable track — paid for it (193px of
     // title at a 641px viewport). `fit-content(10rem)` keeps the cap and hands
     // the slack back, and still gives every row one shared track.
-    const tracks = rule(".page .live-list").match(/grid-template-columns:([^;]*);/)?.[1];
+    const tracks = wideRule(".page .live-list").match(/grid-template-columns:([^;]*);/)?.[1];
     expect(tracks).toBeTruthy();
     // dot · title · App · spec · action.
     const third = tracks!.trim().split(/\s+(?![^(]*\))/)[2];
@@ -121,10 +127,11 @@ describe("my-resources: the live panel's layout", () => {
     // byte count. With the tracks shared down the list (subgrid) an `auto`
     // track sized itself to the longest item title in the group and the page
     // title, the only shrinkable track, paid on every row: measured, one
-    // 45-character item title gave five sibling page titles 0px at 1280px.
+    // 43-character item title gave all five page titles in its group 0px at
+    // 1280px.
     // The cap is what stops that; the reflow test below cannot see it, and
     // happy-dom lays nothing out.
-    const tracks = rule(".page .wui-list").match(/grid-template-columns:([^;]*);/)?.[1];
+    const tracks = wideRule(".page .wui-list").match(/grid-template-columns:([^;]*);/)?.[1];
     expect(tracks).toBeTruthy();
     const second = tracks!.trim().split(/\s+(?![^(]*\))/)[1];
     expect(second).toMatch(/^fit-content\(\d+(\.\d+)?(%|rem|px|ch|em)\)$/);

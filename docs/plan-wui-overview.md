@@ -377,16 +377,17 @@ Worst finding, again a real-browser one, and again the row: the wide
 but its middle cell is an ITEM TITLE, free text and `nowrap`, and with the
 tracks shared down the list (subgrid) the `auto` track sized itself to the
 longest item title in the group. The page title, the only shrinkable track,
-paid on **every row**: one 45-character item title gave five sibling page
-titles 0px at 1280px (the pre-P5 flex row collapsed only its own row). Fixed
+paid on **every row**: one 43-character item title gave all five page titles
+in its group 0px at 1280px (the pre-P5 flex row collapsed only its own row). Fixed
 in P6 by capping the track — `fit-content(45%)` — and letting the detail wrap
 (`white-space: normal; overflow-wrap: anywhere`) rather than run under Remove
 or ellipsise away who put the page up. Re-measured over the reviewer's sweep
 (item titles of 10–35 CJK / 20–70 latin characters, at 1280 / 760 / 700 /
-641px): the first row's page title no longer depends on its sibling — the
-same width whether the sibling's item title is 10 or 35 CJK characters:
-322px at ≥ 760 (the `.page` max-width, so 1280 and 760 are one case),
-289 at 700, 256 at 641 (was 23 / 0 / 0 at 35 CJK); the detail cell stops at
+641px): a long sibling can no longer take the first row's page title — it
+is at least 322px at ≥ 760 (the `.page` max-width, so 1280 and 760 are one
+case), 289 at 700, 256 at 641, and exactly that once the sibling's item
+title exceeds the cap (a shorter one hands the slack back: 346 / 290 / 256
+for a 10-character title); the old model gave 23 / 0 / 0 at 35 CJK; the detail cell stops at
 the cap and wraps, `scrollWidth == clientWidth` for the document and every
 row. (The P6 message said "≥ 295px at every length and width": 295 was the
 700px figure; the property that matters is the independence, and it holds
@@ -398,7 +399,8 @@ Also in P6:
   one into it — "bob 於 just now Deploy", "deployed by bob on 2 d ago". The
   template now reads with every form `relativeTime` produces ("{who} Deploy ·
   {when}" / "deployed by {who} · {when}"), and the tooltip is `exactTime`, the
-  shell's own pairing, not a raw ISO string. Pinned.
+  shell's own pairing, not a raw ISO string. Pinned — the relative form and
+  the tooltip; the template's SHAPE only from round 4 (below).
 - Remove and Try again carried `data-size="sm"` without `className="btn"`, so
   base.css's reset left them bare text: no border, no height, `disabled`
   invisible, and Try again in the error sentence's red. Both are `.btn` now;
@@ -431,8 +433,9 @@ only ever point A's frame, and `at < latest` still retires it first); the
 Measured in Chromium, new model against the old one on the same harness, at
 1280 / 760 / 700 / 641 and 390, over item titles of 10–35 CJK and 20–70 latin
 characters plus a 60-letter token with no break opportunity: the first row's
-page title is the same whatever the sibling holds (322 / 289 / 256px; the old
-model gave 23 / 0 / 0 at 35 CJK), no document or row overflows, nothing runs
+page title is bounded below whatever the sibling holds (≥ 322 / 289 / 256px,
+equal to that once the sibling is past the cap; the old model gave 23 / 0 / 0
+at 35 CJK), no document or row overflows, nothing runs
 under Remove (the gap to the button is exactly the column gap), the token
 breaks inside the cap, and the P5 narrow reflow is untouched at 390 and at the
 640 boundary. A wrapped detail still reads as one row (title and Remove sit on
@@ -450,3 +453,42 @@ reads only the sheet before the media block, pinning `min-width: 0`,
 `white-space: normal` and `overflow-wrap: anywhere` there — shown red under
 both deletions, then green. A test change and a two-sentence correction, so
 no further round: the mechanism did not move.
+
+## Review round 4 (2026-09-17 — verify P6's other fixes and P7; veracity of the final ledger)
+
+Product code from P6 measured correct in Chromium in both themes (the buttons
+are byte-identical to My resources' Close; `disabled` is visible; the sentence
+reads in every `relativeTime` form in both locales); `replayFetch` over 13
+bodies matches the old inline read in 10 and improves the other three (a
+non-string `detail` used to become "[object Object]"); every P6/P7 number in
+the ledger reproduced. Zero code defects. What the round found was guards and
+words, fixed in P8:
+
+- "Pinned." over-claimed: the sentence test derived its expectation from the
+  template it tests (`translate(...)` of the same key), so reverting the
+  template to "{who} 於 {when} Deploy" left the suite green. The test now
+  asserts the sentence literally, with the relative form last. Reddens.
+- The button test pinned `.btn` but not `data-variant="secondary"` — and the
+  variant is what carries the colour; without it Try again is the error
+  sentence's red again with `.btn` present. Both attributes pinned. Reddens.
+- `wideRule()` hard-coded the 640px breakpoint the file header says must be
+  free to retune, and "before the first media block" is not this sheet's shape
+  (the admin rules follow it): a retune threw "no narrow-viewport block", a
+  legal move of the wide rule threw "no wide rule". It now strips every
+  `@media` block and searches the rest; the "declares columns once" guards read
+  through it too, so a deleted wide rule is no longer answered for by the
+  narrow one that happens to say something else. A retune and a move stay
+  green; the two round-3 deletions still redden.
+- `replayFetch` had been replaced with zero coverage (`health.test.ts` did not
+  exist; the dialog's test never reaches it). Six cases now: the server's
+  sentence with its status, and the generic message for an empty detail, a
+  validation array, no detail, a non-JSON body, no body.
+- Words: "the same whatever the sibling holds" is a lower bound, not a
+  constant (a short sibling hands the slack back — 346px at 10 CJK); "45
+  characters" was 43; "five sibling page titles" was the whole group of five;
+  a narrow-block comment still quoted the pre-P6 sentence. All corrected.
+
+Deferred, restated for the PR body: `DeployedPages.record` → specstar
+`create_or_update`; `MyResourcesPage`'s own `isLoading || !data` loading state;
+`GET /wui` reading the item title through `locator.title_of` although the
+memoised access facts already hold it.

@@ -405,8 +405,9 @@
      its content is an item title — free text, unbounded — and with the tracks
      shared down the list (subgrid) an `auto` track sized itself to the widest
      item title in the group and the page title, the only shrinkable track,
-     paid for it on EVERY row: measured at 1280px, one 45-character item title
-     zeroed five sibling page titles (review round 2 of PR #811). `fit-content`
+     paid for it on EVERY row: measured at 1280px, one 43-character item title
+     zeroed all five page titles in its group, its own and four siblings'
+     (review round 2 of PR #811). `fit-content`
      hands the slack back when the names are short and stops at the cap when
      they are not; what does not fit the cap wraps (below). */
   grid-template-columns: minmax(0, 1fr) fit-content(45%) auto;
@@ -519,9 +520,10 @@
   }
 
   /* The overview row: title and Remove stay on the first line, the item and
-     the who-and-when drop to a second — and that line WRAPS: "Line 3 stoppage ·
-     bob 於 2026/9/16 下午1:20:00 Deploy" is 355px of nowrap, wider than the
-     342px a phone leaves, so on its own line it still overflowed. */
+     the who-and-when drop to a second — and that line WRAPS: the item title is
+     free text, and one a few words long ("第三產線停機事件根因分析與矯正 ·
+     alice Deploy · 2 d ago") is wider than the 342px a phone leaves, so on its
+     own line as nowrap it still overflowed. */
   .page .wui-list {
     display: flex;
     flex-direction: column;

@@ -135,9 +135,12 @@ describe("WuiOverviewPage", () => {
     const rca = await screen.findByRole("region", { name: "根因分析" });
     const iso = new Date(at).toISOString();
     const when = relativeTime(iso); // "2 d ago"
-    expect(within(rca).getByRole("listitem")).toHaveTextContent(
-      translate("zh-TW", "wui.row.by", { who: "bob", when }),
-    );
+    // The sentence LITERALLY, not `translate(...)` of the same template: an
+    // expectation derived from the thing under test pins nothing — round 4
+    // reverted the template to "{who} 於 {when} Deploy" and the derived form
+    // stayed green. The relative form has to come LAST, where "on 2 d ago"
+    // / "於 just now Deploy" cannot be made to read.
+    expect(within(rca).getByRole("listitem")).toHaveTextContent(`bob Deploy · ${when}`);
     expect(within(rca).getByTitle(exactTime(iso))).toBeInTheDocument();
   });
 
@@ -151,12 +154,18 @@ describe("WuiOverviewPage", () => {
     const retry = within(await screen.findByRole("alert")).getByRole("button", {
       name: word("wui.retry"),
     });
+    // Both halves: `.btn` alone has no colour of its own (it inherits — here,
+    // the error sentence's red) and a transparent border; the variant is
+    // what draws it. Round 4 dropped `data-variant` and the suite stayed green.
     expect(retry).toHaveClass("btn");
+    expect(retry).toHaveAttribute("data-variant", "secondary");
     cleanup();
 
     render(<WuiOverviewPage client={client()} />, { wrapper: Wrap });
     const rca = await screen.findByRole("region", { name: "根因分析" });
-    expect(within(rca).getAllByRole("button", { name: REMOVE() })[0]).toHaveClass("btn");
+    const remove = within(rca).getAllByRole("button", { name: REMOVE() })[0];
+    expect(remove).toHaveClass("btn");
+    expect(remove).toHaveAttribute("data-variant", "secondary");
   });
 
   it("draws Remove only where the server said this viewer may", async () => {
