@@ -92,6 +92,11 @@ def build_bundle(
         wiki_model=wiki_model or "",
         wiki_llm_base_url=wiki_base or "",
         wiki_llm_api_key=wiki_key or "",
+        # #245: the same grace periods the API hands its coordinator, so the one
+        # `BlobGcCoordinator` a slim worker builds (never consumed there — blob-gc
+        # is composed from `build_app`) cannot disagree with settings.
+        gc_t1=settings.filestore.gc_t1,
+        gc_t2=settings.filestore.gc_t2,
     )
     # #506 worker parity: build_coordinators wires the OPEN-loop one-shot drafter;
     # swap in the AGENTIC (closed-loop) one exactly like create_app, so a split-

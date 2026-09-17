@@ -7,12 +7,14 @@ and permanently deletes quarantined blobs past ``t2``. It's explicit + user
 scheduled — the library never runs it on a background thread.
 
 That rescan is `collect_all_referenced_file_ids`: for every model whose type
-can hold a ``Binary``, ``list(dump_meta(None))`` + ``dump_resources_bulk`` over
-every resource — every stored revision of every record, in memory at once.
-``WorkspaceFile`` alone is one record per file of every workspace there is (a
-draft rewrite, so one revision each, but every file). Run on an API pod's
-timer that was the #804 class of failure again: the pod's last line was
-``blob-gc: won lease``.
+can hold a ``Binary``, ``list(self.storage.dump_meta(None))`` materialises
+EVERY ``ResourceMeta`` of the model at once — ``indexed_data`` included, which
+on a ``DocChunk`` / ``ClusterMember`` row not yet rewritten lean carries the
+embedding vector — then streams each resource's revisions one at a time (the
+bulk pre-fetch, ``dump_resources_bulk``, exists only for the S3 store; disk and
+Postgres return ``None`` and take the per-resource path, several queries each
+on Postgres). Run on an API pod's timer that was the #804 class of failure
+again: the pod's last line was ``blob-gc: won lease``.
 
 So the reconcile is a **job**. The API's ``blob_gc_sweeper`` is a pure producer
 (one ``ScanLease`` window ⇒ one :meth:`enqueue_reconcile`), and this coordinator
@@ -79,8 +81,9 @@ class BlobGcJob(Job[BlobGcPayload]):
 
 
 class RegistryMismatch(RuntimeError):
-    """The runner does not register every model the asker does — running the
-    pass here would delete the missing models' blobs after ``t2``."""
+    """The row is not one this runner may act on: it does not register every
+    model the asker does (running the pass here would delete the missing
+    models' blobs after ``t2``), or the row is off the one partition."""
 
 
 def _utcnow() -> dt.datetime:
@@ -156,8 +159,22 @@ class BlobGcCoordinator:
         # every window would otherwise leave one FAILED row per window for as
         # long as the failure lasts.
         self._prune_finished()
+        self._check_partition(job.data.partition_key)
         self._check_registry(payload.registry)
         self._reconcile()
+
+    def _check_partition(self, partition_key: str | None) -> None:
+        """Only :data:`_PARTITION` serialises passes; the model's auto-CRUD
+        route can create a row under any key (or none), and two keys are two
+        passes that may overlap. Refused like a claimless row."""
+        if partition_key != _PARTITION:
+            logger.error(
+                "blob-gc: refusing the pass — the row is on partition %r, not %r; only the "
+                "sweeper's ask serialises passes",
+                partition_key,
+                _PARTITION,
+            )
+            raise RegistryMismatch(f"partition {partition_key!r}")
 
     def _check_registry(self, claimed: list[str]) -> None:
         """Refuse the pass unless this process registers every model the asker
@@ -196,28 +213,35 @@ class BlobGcCoordinator:
         )
         if self._monitor is None:
             return
-        self._monitor.record(
-            {
-                "kind": "blob_gc",
-                "t": int(time.time() * 1000),  # wall-clock, for the summary's time window
-                "mode": stats.mode,
-                "quarantined": stats.quarantined,
-                "restored": stats.restored,
-                "deleted": stats.deleted,
-                "live": stats.live,
-                "scan_complete": stats.scan_complete,
-                "elapsed_ms": int((time.monotonic() - started) * 1000),
-            }
-        )
-        if self._filestore is None:
-            return
-        # #407: on the same durable-maintenance cadence, snapshot the
-        # WorkspaceFile cardinality (total rows / distinct workspaces / largest
-        # workspace) so the ws_census trend shows whether the per-file model
-        # grows unbounded — the archive-vs-keep signal. The handler runs on the
-        # queue's consumer thread, which owns no event loop.
-        census = asyncio.run(self._filestore.census())  # ty: ignore[unresolved-attribute]
-        self._monitor.record({"kind": "ws_census", "t": int(time.time() * 1000), **census})
+        # Telemetry runs AFTER the pass — after its deletes. A failure here must
+        # not fail the job: the row would read FAILED for work that is done and
+        # the next window would run the whole pass again. Logged, and on.
+        try:
+            self._monitor.record(
+                {
+                    "kind": "blob_gc",
+                    "t": int(time.time() * 1000),  # wall-clock, for the summary's time window
+                    "mode": stats.mode,
+                    "quarantined": stats.quarantined,
+                    "restored": stats.restored,
+                    "deleted": stats.deleted,
+                    "live": stats.live,
+                    "scan_complete": stats.scan_complete,
+                    "elapsed_ms": int((time.monotonic() - started) * 1000),
+                }
+            )
+            if self._filestore is None:
+                return
+            # #407: on the same durable-maintenance cadence, snapshot the
+            # WorkspaceFile cardinality (total rows / distinct workspaces /
+            # largest workspace) so the ws_census trend shows whether the
+            # per-file model grows unbounded — the archive-vs-keep signal. The
+            # handler runs on the queue's consumer thread, which owns no event
+            # loop.
+            census = asyncio.run(self._filestore.census())  # ty: ignore[unresolved-attribute]
+            self._monitor.record({"kind": "ws_census", "t": int(time.time() * 1000), **census})
+        except Exception:
+            logger.exception("blob-gc: the pass completed; recording its telemetry failed")
 
     # ── consumption machinery (mirrors graph / sanity / index / eval) ─
     @property

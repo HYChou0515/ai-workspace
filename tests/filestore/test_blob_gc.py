@@ -2,10 +2,10 @@
 window and a worker runs it. specstar's `SpecStar.gc` is the engine; this
 coordinator queues it, coalesces asks, records the telemetry, bounds its rows.
 
-The reconcile itself (`collect_all_referenced_file_ids`) loads every stored
-revision of every blob-capable model into memory at once — the whole-table read
-that killed an API pod right after `blob-gc: won lease`. Hence a job, not a
-sweep."""
+The reconcile itself (`collect_all_referenced_file_ids`) materialises every
+ResourceMeta of every blob-capable model at once and streams every revision —
+the whole-table read that killed an API pod right after `blob-gc: won lease`.
+Hence a job, not a sweep."""
 
 import datetime as dt
 
@@ -120,8 +120,17 @@ async def test_reconcile_reclaims_a_deleted_files_blob_but_keeps_referenced(tmp_
     clock["now"] += dt.timedelta(days=2)
     c.enqueue_reconcile()
     await _drain(c)
-    deleted = [e["deleted"] for e in mon.recent() if e.get("kind") == "blob_gc"]
-    assert deleted == [0, 1]  # exactly the orphaned /gone blob, on the second pass
+    passes = [e for e in mon.recent() if e.get("kind") == "blob_gc"]
+    # pass 1: the orphan is quarantined; pass 2: it is deleted. Pass 2 also
+    # quarantines ONE more blob — pass 1's own job log (`__job_log__/…`, which
+    # the queue puts under an explicit key and nothing references through a
+    # Binary field, so to the reconcile it is an orphan the moment the pass
+    # that wrote it is over; every job model's logs are reclaimed this way).
+    # The live set is the one referenced blob both times; both scans complete.
+    assert [(e["quarantined"], e["deleted"]) for e in passes] == [(1, 0), (1, 1)]
+    assert [e["live"] for e in passes] == [1, 1]
+    assert [e["restored"] for e in passes] == [0, 0]
+    assert all(e["scan_complete"] for e in passes)
     assert await store.read("ws", "/keep") == b"k" * 100  # referenced blob survived
 
 
@@ -174,7 +183,8 @@ async def test_start_consuming_is_idempotent_and_aclose_stops_it():
 @pytest.mark.parametrize("bad", ["", "nope"])
 def test_an_unknown_job_kind_is_ignored(bad):
     """Defensive: a payload kind this build doesn't know (an older/newer pod's
-    row) is logged and dropped, not crashed on."""
+    row) is logged and skipped, not crashed on; the row completes and the next
+    pass prunes it."""
     spec = make_spec()
     c = BlobGcCoordinator(spec, t1="1h", t2="24h")
 
@@ -252,3 +262,50 @@ async def test_a_runner_holding_every_claimed_model_runs_the_pass(monkeypatch):
     ran = await _consume_claiming(spec, sorted(spec.resource_managers), monkeypatch)
     assert ran == 1
     assert [r.data.status for r in _rows(spec, _DONE)] == [TaskStatus.COMPLETED]
+
+
+async def test_a_row_off_the_one_partition_is_refused(monkeypatch):
+    """The auto-CRUD route can create a row with any `partition_key`, and only
+    the one partition serialises passes — a second key would let two passes
+    overlap. A row that is not on it is refused like a claimless one."""
+    spec = make_spec()
+    c = BlobGcCoordinator(spec, t1="1h", t2="24h")
+    calls = {"n": 0}
+
+    def _counting(*a, **k):
+        calls["n"] += 1
+        raise AssertionError("must not run")
+
+    monkeypatch.setattr(spec, "gc", _counting)
+    spec.get_resource_manager(BlobGcJob).create(
+        BlobGcJob(
+            payload=BlobGcPayload(kind="reconcile", registry=sorted(spec.resource_managers)),
+            partition_key="anything-else",
+            max_retries=0,
+        )
+    )
+    await _drain(c)
+    assert calls["n"] == 0
+    assert [r.data.status for r in _rows(spec, _DONE)] == [TaskStatus.FAILED]
+
+
+async def test_a_telemetry_failure_after_the_pass_does_not_fail_the_pass():
+    """`monitor.record` and the census run AFTER `spec.gc` — after the deletes.
+    A failure there must not mark the row FAILED (the next window would re-run
+    a pass whose work is done) — logged, and the pass still completes with
+    its own `blob_gc` event recorded."""
+
+    class _BrokenCensus(SpecstarFileStore):
+        async def census(self) -> dict[str, int]:
+            raise RuntimeError("census down")
+
+    spec = make_spec()
+    store = _BrokenCensus(spec)
+    mon = InMemoryMonitor()
+    c = BlobGcCoordinator(spec, t1="1h", t2="24h", monitor=mon, filestore=store)
+    c.enqueue_reconcile()
+    await _drain(c)
+    assert [r.data.status for r in _rows(spec, _DONE)] == [TaskStatus.COMPLETED]
+    kinds = [e.get("kind") for e in mon.recent()]
+    assert kinds.count("blob_gc") == 1
+    assert "ws_census" not in kinds

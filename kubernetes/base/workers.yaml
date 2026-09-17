@@ -386,12 +386,26 @@ spec:
 # reference — the runner refuses such a pass (the job reads FAILED, the log
 # names the missing models), and equal registries are what makes it run.
 #
-# Memory is the sizing that matters: the pass loads every revision of every
-# blob-capable model into RAM at once (that is what killed the API pod that used
-# to run it — its last line was `blob-gc: won lease`). An OOM here is the same
-# fact on a pod no request depends on: raise the limit. (A shorter window does
-# not help — the pass reads every revision there is, not those since the last
-# pass; the real relief is a streaming reconcile upstream in specstar.)
+# Because it boots the API's composition, this pod needs what the API pod
+# needs AT BOOT — the same configmap, and the same mounts and privileges the
+# construction step touches: `discover_packages` reads the prebuilt tools dir
+# (WORKSPACE_TOOLS_DIR / the image's bundles — an absent dir fails loud);
+# `LocalProcessSandbox` mkdirs SANDBOX_ROOT (hence `scratch` below, so it does
+# not land on the container layer); `sandbox.isolation.enabled: true` needs the
+# CAP_SETUID/SETGID + cgroup grant `deployment.yaml` documents, on this pod too;
+# an `nfs_tree` durable store needs `/mnt/workspaces` here for the ws_census
+# figure to be real (an absent tree reads as zeros). Mirror whatever the
+# overlay adds to `rca-app` for those. It serves nothing and starts none of the
+# sweepers; the #219 inline→Binary migration it runs at boot is idempotent.
+#
+# Memory is the sizing that matters: for each blob-capable model the pass
+# holds EVERY ResourceMeta at once — indexed_data included, so a doc-chunk /
+# cluster-member table whose rows still carry their embedding vector is the
+# figure — and streams the revisions one resource at a time. That is what
+# killed the API pod that used to run it (its last line: `blob-gc: won lease`).
+# An OOM here is the same fact on a pod no request depends on: raise the limit,
+# or rewrite those rows lean (`migrate/execute`, docs/migrations.md §6). A
+# shorter window does not help — every pass reads every meta there is.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -417,6 +431,10 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
+            # The API's scratch volume (SANDBOX_ROOT): the sandbox layer this
+            # composition builds mkdirs it at boot. Never written to by a pass.
+            - name: scratch
+              mountPath: /scratch
           resources:
             requests:
               cpu: "100m"
@@ -428,3 +446,6 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: rca-data
+        - name: scratch
+          persistentVolumeClaim:
+            claimName: rca-scratch
