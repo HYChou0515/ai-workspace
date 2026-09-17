@@ -20,6 +20,11 @@
      degrades. */
   flex: 1 1 160px;
   min-width: 0;
+  /* And no wider than the title needs. Growing past that only moved "+ New"
+     and the launcher to the far edge of the bar, an empty container between
+     them and the switcher — with the launcher's left-anchored menu then
+     opening off the right of the viewport. Seen in the demo recording. */
+  max-width: max-content;
 }
 .chat-switcher__trigger {
   display: inline-flex;
