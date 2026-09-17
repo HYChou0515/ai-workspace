@@ -203,3 +203,28 @@
 - 「空間已滿」那句警告的獨立一列只有單元測試，沒在瀏覽器看過（本機配額沒滿）。
 - `New chat`／`Export` 兩顆的文字是 hardcode 英文、沒進 i18n——本來就這樣，沒動。
 - harness 與截圖在 session 的暫存目錄，不在 repo 裡。
+
+---
+
+## 第一輪 review（三把鏡頭平行）之後
+
+### 修掉的（`6da4640b`）
+
+| 鏡頭 | 發現 | 修法 |
+|---|---|---|
+| 回歸 | **chat switcher 在 390–480px 被擠成 22px、標題 0px、點不到**——`.chat-switcher` 是 basis 0，launcher 的 132px 全被它吸收，#456 同一種病 | `flex: 1 1 160px`；實測 390 時 230px 寬、標題 190px、點得到 |
+| 回歸 | **`⋯` 操作完鍵盤焦點掉到 `<body>`**——選項先 unmount 再開 modal，`ModalShell` 記到的是 body | 動作前、Escape 時把焦點放回 `⋯`（`WorkflowLaunchMenu` 有同一個洞，沒動） |
+| 回歸 | **launch-here dialog 換 chat 後還在，確認會在另一個 chat 起 run**——以前住在 per-chat panel 靠 `key` 保證 | pick 時記住 chat，active 移開就關掉 dialog |
+| 符合度 | **「空間已滿」讓 usage 格膨脹到 393px**，`·` 和 context 被推到 250px 的洞後面（真 app 重現：top 744/753/753） | 警告改成 row 的直接子元素，`data-status-line`：整列、最後、無點；修後 744/744/744 |
+| 符合度 | **寬不變、內容變時 header 不重量**（error 行出現、切語系、按鈕條件翻轉） | header 高度也當觸發；「折了」改成看**任何一個**子元素掉到標題下面——第一版只看 group，正好漏掉觸發它的那個案例（error 行自己折下去、group 還在第一列）。實測 700px 注入 260px 內容：修前 icons 94px，修後 menu 62px |
+| 真實性／符合度 | `⋯` 選單只點過一項；`compacting…` 沒釘；`More` 是 hardcode 英文 | 七項全走一遍、釘住、進 i18n |
+
+### 三句寫錯的（commit 已推，不改歷史，在這裡更正）
+
+1. **P3「對 parent 跑會紅在 `settings, settings, settings`」——不對。** 對 parent 跑先紅在
+   `new-chat-button` 找不到（testid 是同一個 commit 加的）。`settings×3` 那個紅是在工作樹裡
+   先加 testid、還沒換 icon 時看到的；有看到過，但不是「對 parent」。
+2. **P2「launcher 掉到第二列／少一列」——不對。** flex 折的是 DOM 順序上第一個放不下的，
+   在 launcher 後面的 collections 按鈕；而且折了就是兩列，跟原本一樣多，只有寬到不用折才少一列。
+3. **P4「之前 62／94／123」——數字對，來歷沒寫。** 三個「之前」是把降階判斷寫死成 false 的
+   build 量的（第三列是 `health-dot`，reviewer 的複製品沒放它才算成兩列）。
