@@ -1293,7 +1293,6 @@ def create_app(
         spec=spec,
         kernels=kernels,
         health_service=health_service,
-        filestore=filestore,
         monitor=monitor,
         run_consumers=run_consumers,
         idle_timeout=idle_timeout,
@@ -1304,8 +1303,6 @@ def create_app(
         code_daily_sync=code_daily_sync,
         wiki_reflect_daily=wiki_reflect_daily,
         gc_interval=gc_interval,
-        gc_t1=gc_t1,
-        gc_t2=gc_t2,
         trigger_check_interval=trigger_check_interval,
         # #WUI P15: fires the schedules pages declared. Built here so it shares
         # the one `spec`, the one index and the item-owner lookup the rest of the
@@ -1593,6 +1590,13 @@ def create_app(
         wiki_model=wiki_model,
         wiki_llm_base_url=wiki_llm_base_url,
         wiki_llm_api_key=wiki_llm_api_key,
+        # #245: the blob-GC job's grace periods + the sinks its telemetry lands
+        # in when THIS process consumes it (all-in-one); a pure producer only
+        # asks (lifecycle `blob_gc_sweeper`, gated by `gc_interval`).
+        gc_t1=gc_t1,
+        gc_t2=gc_t2,
+        monitor=monitor,
+        filestore=filestore,
     )
 
     # #208: the first real backend hit — specstar materialises every model's
@@ -1658,6 +1662,8 @@ def create_app(
     # #715: the archive-import consumer. On app.state because the lifespan's
     # consumer gate reaches every coordinator through it.
     app.state.import_coordinator = coordinators.kb_import
+    # #245: the blob-GC reconcile consumer; the sweeper's ask goes through it.
+    app.state.blob_gc_coordinator = coordinators.blob_gc
     register_card_gen_routes(api, card_gen_coordinator)
     # #377: the global "待釐清" inbox — answer/discard the clarification questions
     # the digest raised. A term answer becomes a context card (the card-drafter LLM
