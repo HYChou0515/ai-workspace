@@ -9,8 +9,11 @@ scheduled — the library never runs it on a background thread.
 That rescan is `collect_all_referenced_file_ids`: for every model whose type
 can hold a ``Binary``, ``list(self.storage.dump_meta(None))`` materialises
 EVERY ``ResourceMeta`` of the model at once — ``indexed_data`` included, which
-on a ``DocChunk`` / ``ClusterMember`` row not yet rewritten lean carries the
-embedding vector — then streams each resource's revisions one at a time (the
+on ``DocChunk`` / ``ClusterMember`` is every row's embedding vectors: the
+Postgres meta store's ``values()`` decodes the ``data`` BYTEA, the full
+``ResourceMeta``, and the 0.12.1 vector strip (``docs/migrations.md`` §6)
+touches only the JSONB column, so ``migrate/execute`` does not shrink this
+figure — then streams each resource's revisions one at a time (the
 bulk pre-fetch, ``dump_resources_bulk``, exists only for the S3 store; disk and
 Postgres return ``None`` and take the per-resource path, several queries each
 on Postgres). Run on an API pod's timer that was the #804 class of failure

@@ -286,9 +286,9 @@ async def test_lifespan_registers_activity_model_for_local_sandbox(tmp_path):
 
 async def test_lifespan_registers_address_model_for_http_sandbox():
     # #366: an HttpSandbox mints per-pod uuid handles that don't converge across
-    # pods, so the lifespan wires the shared per-item address store + registers
-    # its model (the `registry.address is not None` boot branch). Local/mock apps
-    # skip it — they already converge via the item-keyed shared dir.
+    # pods, so the app wires the shared per-item address store (local/mock apps
+    # get no STORE — they already converge via the item-keyed shared dir); the
+    # MODEL is registered by `create_app` on every backend (see the next test).
     from workspace_app.api.sandbox_address import _SandboxAddress
     from workspace_app.sandbox.http_client import HttpSandbox
 

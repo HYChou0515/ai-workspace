@@ -170,48 +170,60 @@ def test_the_blob_gc_worker_is_built_from_the_apis_composition():
 
 
 def test_the_blob_gc_worker_holds_every_model_the_apis_ask_names(tmp_path, monkeypatch):
-    """Both real doors: the API that ASKS (an app whose lifespan ran — that is
-    where `_ScheduleIndex`, `_TriggerWindow`, the address store and the stretch
-    claims used to be registered — and whose sweeper produced the actual
-    `BlobGcJob`) and the worker that RUNS (`build_coordinator`, what `main`
-    calls), fed that job's own `registry` claim. An oracle that never entered
-    the lifespan was green over a worker that would refuse every pass in a
-    pod-split deploy. The oracle must contain the model whose absence was the
-    first danger, or a green run proves only that two incomplete registries
-    agree. Reddens when blob-gc is routed through `build_bundle` (no filestore,
-    no sandbox layer, no routes) — the state #804 P4 refused to ship."""
+    """The production shape, both sides through their real doors: the API that
+    ASKS is `workspace_app.__main__.build_app` with its lifespan run under
+    `TestClient` as a pure producer, so its sweeper writes the actual
+    `BlobGcJob`; the worker that RUNS is `worker.build_coordinator` (what
+    `main` calls). The two registries must be EQUAL and the row's own
+    `registry` claim must pass the worker's `_check_registry`.
+
+    The first version's oracle was a bare `create_app` that never entered the
+    lifespan — green over a worker that refused every pass in a pod-split
+    deploy, because four models were registered only inside the lifespan
+    (`_ScheduleIndex`, `_TriggerWindow`, and, when on, `_SandboxAddress` /
+    `_GoalStretch`). Two incomplete registries agreeing. Hence: the oracle is
+    the asker, the lifespan must add nothing, and off-hours is on so the
+    once-conditional registration is exercised. Reddens when blob-gc is routed
+    through `build_bundle` (no filestore, no sandbox layer, no routes) — the
+    state #804 P4 refused to ship."""
     import asyncio
-    from datetime import timedelta
+    from textwrap import dedent
 
     from specstar import QB
 
-    from workspace_app.api import create_app
+    from workspace_app.__main__ import build_app
     from workspace_app.config.loader import load
-    from workspace_app.config.schema import OffHoursSettings
-    from workspace_app.factories import get_filestore, get_spec
     from workspace_app.filestore.blob_gc import BlobGcJob
-    from workspace_app.sandbox.mock import MockSandbox
     from workspace_app.worker.__main__ import build_coordinator
 
     from .api._client import TestClient
 
     cfg = tmp_path / "config.yaml"
-    cfg.write_text("filestore:\n  kind: specstar\n", encoding="utf-8")
+    cfg.write_text(
+        dedent(f"""
+            server:
+              run_consumers: false      # a pure producer: the ask is a row, not a pass
+            filestore:
+              kind: specstar
+              gc_interval_sec: 0.05
+            sandbox:
+              root: {tmp_path / "sandbox"}   # the local sandbox mkdirs its root at boot
+            goal:
+              offhours:
+                window: "22:00-06:00"   # the once-conditional registration
+            kb:
+              embedder:
+                model: ""               # keep boot off the network
+        """),
+        encoding="utf-8",
+    )
     settings = load(config_path=cfg, env={})
     # Tool packages are prebuilt bundles the API refuses to boot without; the
     # explicit opt-out (an empty PACKAGES) is the documented way to run without.
     monkeypatch.setattr("workspace_app.__main__.PACKAGES", {})
 
-    oracle = get_spec(settings)
-    app = create_app(
-        spec=oracle,
-        sandbox=MockSandbox(),
-        filestore=get_filestore(settings, oracle),
-        runner=ScriptedAgentRunner([]),
-        run_consumers=False,  # a pure producer: the ask is a row, not a pass
-        gc_interval=timedelta(seconds=0.05),
-        goal_offhours=OffHoursSettings(window="22:00-06:00"),  # the conditional one
-    )
+    app = build_app(settings, config_dir=None)
+    oracle = app.state.blob_gc_coordinator._spec  # the asker's own registry
     rm = oracle.get_resource_manager(BlobGcJob)
 
     def _ask():
@@ -229,17 +241,18 @@ def test_the_blob_gc_worker_holds_every_model_the_apis_ask_names(tmp_path, monke
         assert asyncio.run(_until_asked()), "the API's sweeper never asked"
         (job,) = _ask()
     api_models = set(oracle.resource_managers)
-    # The lifespan registers nothing: a model it added would be one the worker
+    # The lifespan adds nothing: a model it added would be one the worker
     # (which never enters one) lacks — the state the first version of this
     # test was green over.
     assert api_models == before_lifespan
-    assert "workspace-file" in api_models
+    assert {"workspace-file", "-goalstretch", "-scheduleindex", "-triggerwindow"} <= api_models
     assert set(job.payload.registry) == api_models  # the ask names what the API holds
 
     coordinator = build_coordinator(settings, "blob-gc", config_dir=None)
     worker_models = set(coordinator._spec.resource_managers)  # ty: ignore[unresolved-attribute]
-    assert api_models <= worker_models, (
-        f"the blob-gc worker cannot see {sorted(api_models - worker_models)}: a pass on "
-        "it would quarantine, then delete, every blob those models reference"
+    assert worker_models == api_models, (
+        f"asker-runner {sorted(api_models - worker_models)}, runner-asker "
+        f"{sorted(worker_models - api_models)}: a pass on the runner would quarantine, then "
+        "delete, every blob the models it lacks reference"
     )
     coordinator._check_registry(job.payload.registry)  # ty: ignore[unresolved-attribute]

@@ -536,7 +536,9 @@ def build_lifespan(
                 user=HELP_SYSTEM_USER,
                 index=app.state.index_coordinator.enqueue,
             )
-        # The lifespan registers NO model. Every post-apply coordination model
+        # The lifespan ADDS no model (the off-hours sweeper's constructors still
+        # call two idempotent `register_*`, no-ops by then). Every post-apply
+        # coordination model
         # (#345's activity heartbeat, #366's sandbox-address store, #WUI P14's
         # schedule index, #429's window ledger + event watermark, #613's todos
         # and goal, #615's calendar and stretch claims) is registered in

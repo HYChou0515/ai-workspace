@@ -121,13 +121,15 @@ async def test_reconcile_reclaims_a_deleted_files_blob_but_keeps_referenced(tmp_
     c.enqueue_reconcile()
     await _drain(c)
     passes = [e for e in mon.recent() if e.get("kind") == "blob_gc"]
-    # pass 1: the orphan is quarantined; pass 2: it is deleted. Pass 2 also
-    # quarantines ONE more blob — pass 1's own job log (`__job_log__/…`, which
-    # the queue puts under an explicit key and nothing references through a
-    # Binary field, so to the reconcile it is an orphan the moment the pass
-    # that wrote it is over; every job model's logs are reclaimed this way).
+    # pass 1: the orphan is quarantined; pass 2: it is deleted. Pass 2's own
+    # `quarantined` is deliberately not pinned: on the pinned specstar it is 1
+    # — pass 1's job log (`__job_log__/…`), which the queue puts under an
+    # explicit key and the reconcile lists as an orphan although `gc`'s
+    # docstring says keyed blobs are not tracked. That is upstream's
+    # contradiction to settle, not a number to write into a spec.
     # The live set is the one referenced blob both times; both scans complete.
-    assert [(e["quarantined"], e["deleted"]) for e in passes] == [(1, 0), (1, 1)]
+    assert [e["deleted"] for e in passes] == [0, 1]
+    assert passes[0]["quarantined"] == 1
     assert [e["live"] for e in passes] == [1, 1]
     assert [e["restored"] for e in passes] == [0, 0]
     assert all(e["scan_complete"] for e in passes)
@@ -181,17 +183,25 @@ async def test_start_consuming_is_idempotent_and_aclose_stops_it():
 
 
 @pytest.mark.parametrize("bad", ["", "nope"])
-def test_an_unknown_job_kind_is_ignored(bad):
+async def test_an_unknown_job_kind_is_ignored(bad, monkeypatch):
     """Defensive: a payload kind this build doesn't know (an older/newer pod's
-    row) is logged and skipped, not crashed on; the row completes and the next
-    pass prunes it."""
+    row) is logged and skipped, not crashed on — the row completes without a
+    pass, and the next pass prunes it."""
     spec = make_spec()
     c = BlobGcCoordinator(spec, t1="1h", t2="24h")
-
-    class _Job:
-        data = BlobGcJob(payload=BlobGcPayload(kind=bad))
-
-    c._handle(_Job())  # no raise
+    monkeypatch.setattr(
+        spec, "gc", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no pass"))
+    )
+    spec.get_resource_manager(BlobGcJob).create(
+        BlobGcJob(payload=BlobGcPayload(kind=bad), partition_key="blob-gc", max_retries=0)
+    )
+    await _drain(c)
+    assert [r.data.status for r in _rows(spec, _DONE)] == [TaskStatus.COMPLETED]
+    monkeypatch.undo()
+    c.enqueue_reconcile()
+    await _drain(c)
+    (only,) = _rows(spec, _DONE)
+    assert only.data.payload.kind == "reconcile"  # the unknown-kind row was pruned
 
 
 # ── the registry claim: the asker names its models, the runner must hold them ──

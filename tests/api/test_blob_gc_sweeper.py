@@ -106,6 +106,8 @@ def test_all_in_one_runs_the_reconcile_in_process_and_emits_both_signals() -> No
         assert asyncio.run(
             _until(lambda: {"blob_gc", "ws_census"} <= {e.get("kind") for e in mon.recent()})
         )
+    # The sweeper's own row passed every guard (partition, registry) and ran.
+    assert TaskStatus.COMPLETED in {j.status for j in _jobs(spec)}
     census = next(e for e in mon.recent() if e.get("kind") == "ws_census")
     assert census["total_workspacefile_rows"] == 0  # nothing written this run
     assert "t" in census  # a timestamp for the trend axis

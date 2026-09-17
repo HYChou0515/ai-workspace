@@ -819,18 +819,20 @@ def register_item_routes(
             """
             from .schedule_index import _ScheduleIndex
 
-            # The same two lines the satellite purge draws below: "this deploy
-            # never registered the model" (KeyError) and "this item has no row"
-            # (not found / already gone) are both fine; any other failure from
-            # inside the delete is real and has to surface. It was
-            # `suppress(Exception)` at both levels — the one step in this
-            # cascade that could fail completely silently — and then only the
-            # KeyError, which answered every delete of an item that never
-            # declared a schedule (the common case) with a 500 once the model
-            # was registered; the tests never registered it.
+            # Two things are fine: "this deploy never registered the model"
+            # (KeyError — every deploy registers it now, kept for a spec composed
+            # elsewhere) and "this item has no row" (it never declared a
+            # schedule — the common case; `permanently_delete` removes a
+            # soft-deleted row without raising, so not-found is the only
+            # absence). Any other failure from inside the delete is real and
+            # has to surface. It was `suppress(Exception)` at both levels — the
+            # one step in this cascade that could fail completely silently —
+            # and then only the KeyError, which answered every delete of an
+            # item with no row with a 500; the one test that registered the
+            # model also gave the item a row.
             with contextlib.suppress(KeyError):
                 rm = spec_.get_resource_manager(_ScheduleIndex)
-                with contextlib.suppress(ResourceIDNotFoundError, ResourceIsDeletedError):
+                with contextlib.suppress(ResourceIDNotFoundError):
                     rm.permanently_delete(item_id_)
 
         def _sweep_rows(conv_ids: list[str], run_ids: list[str]) -> None:
@@ -839,9 +841,10 @@ def register_item_routes(
             rows (goal / todos / off-hours stretch key on `resource_id ==
             conversation_id`, #613/#615 — an orphaned ACTIVE off-hours goal
             makes the sweeper claim-crash-release every tick, forever), and the
-            workflow runs. Permanent, so blobs die too. Satellite models are
-            registered conditionally (a deploy without the goal feature lacks
-            some), hence the KeyError tolerance."""
+            workflow runs. Permanent, so blobs die too. Every satellite model is
+            registered by `create_app` now (they used to be conditional on the
+            goal feature); the KeyError tolerance stays for a spec composed
+            elsewhere."""
             conv_rm = spec.get_resource_manager(Conversation)
             run_rm = spec.get_resource_manager(WorkflowRun)
             satellite_rms = []
