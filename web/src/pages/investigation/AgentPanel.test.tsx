@@ -1177,3 +1177,105 @@ describe("send and stop are two buttons", () => {
     expect((agent.send as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe("next");
   });
 });
+
+describe("the status strip above the composer is one row", () => {
+  // Three things used to stack above the textarea — storage used, tokens used,
+  // and the compact link — each on its own line, costing the message area a
+  // row apiece. They share one row now, and the link is named after the
+  // command it IS: `/compact`, not a request to summarise something.
+  it("names the compact link after the command", () => {
+    renderPanel();
+    expect(screen.getByTestId("compact-chat")).toHaveTextContent(/^compact$/);
+  });
+
+  it("puts storage, tokens and compact in the same row", async () => {
+    vi.spyOn(api, "getWorkspaceUsage").mockResolvedValue({
+      used: 5 * 1024 * 1024 * 1024,
+      quota: 20 * 1024 * 1024 * 1024,
+    });
+    vi.spyOn(api, "getChatContext").mockResolvedValue({
+      used: 6800,
+      limit: 32000,
+      measured: true,
+    });
+    renderPanel();
+    const row = await screen.findByTestId("composer-status");
+    await waitFor(() => {
+      expect(within(row).getByTestId("workspace-usage")).toBeInTheDocument();
+      expect(within(row).getByTestId("chat-context")).toBeInTheDocument();
+    });
+    expect(within(row).getByTestId("compact-chat")).toBeInTheDocument();
+  });
+
+  it("puts the storage-full warning on the row as its own line, not inside the gauge", async () => {
+    // Inside the gauge cell it made the cell as wide as the warning and pushed
+    // the other cells past a 250px hole — the row's own one-line rule broken
+    // by the one state nobody had looked at.
+    vi.spyOn(api, "getWorkspaceUsage").mockResolvedValue({ used: 1000, quota: 1000 });
+    renderPanel();
+    const row = await screen.findByTestId("composer-status");
+    const warning = await within(row).findByTestId("workspace-usage-full");
+    expect(warning.parentElement).toBe(row);
+    expect(warning).toHaveAttribute("data-status-line");
+    expect(within(row).getByTestId("workspace-usage")).not.toContainElement(warning);
+  });
+
+  it("says compacting… while the compact call is in flight", async () => {
+    type Compacted = Awaited<ReturnType<typeof api.compactChat>>;
+    let settle!: (v: Compacted) => void;
+    vi.spyOn(api, "compactChat").mockImplementation(
+      () => new Promise<Compacted>((r) => (settle = r)),
+    );
+    renderPanel();
+    fireEvent.click(screen.getByTestId("compact-chat"));
+    await waitFor(() => expect(screen.getByTestId("compact-chat")).toHaveTextContent(/^compacting…$/));
+    await act(async () => {
+      settle({ compacted: true, reason: "compacted" });
+    });
+  });
+});
+
+describe("the header's seven buttons can be told apart", () => {
+  // Three of them drew the same gear — Tools, the environment, and its
+  // variables — so at a glance they were one button three times. That is a
+  // problem today and a blocker for an icon-only row tomorrow: an icon-only
+  // toolbar of identical glyphs is worse than the wrapping it replaces.
+  it("gives every header button its own icon", () => {
+    renderWithQuery(
+      <MemoryRouter>
+        <DialogProvider>
+          <AgentPanel
+            investigationId="it1"
+            chatId="chat-1"
+            agent={stubAgent()}
+            picker={[]}
+            suggestions={[]}
+            attachedPreset=""
+            onAttachPreset={() => {}}
+            uploadDir="uploads"
+            onNewChat={() => {}}
+            onSaveToolPrefs={() => {}}
+            environment={{ canResize: false }}
+            envVars={{}}
+            onSaveEnvVars={() => {}}
+          />
+        </DialogProvider>
+      </MemoryRouter>,
+    );
+    const ids = [
+      "new-chat-button",
+      "tools-button",
+      "item-environment-button",
+      "env-button",
+      "skills-button",
+      "workflows-button",
+      "export-button",
+    ];
+    const icons = ids.map((id) => {
+      const svg = screen.getByTestId(id).querySelector("svg[data-icon]");
+      return svg?.getAttribute("data-icon") ?? `(${id}: no icon)`;
+    });
+    const dupes = icons.filter((n, i) => icons.indexOf(n) !== i);
+    expect(dupes, `icons: ${icons.join(", ")}`).toEqual([]);
+  });
+});

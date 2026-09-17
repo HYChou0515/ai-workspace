@@ -1267,6 +1267,14 @@ export const messages = {
   "kb.wiki.rebuild.confirm.go": { "zh-TW": "重建", en: "Rebuild" },
   "kb.wiki.rebuild.confirm.cancel": { "zh-TW": "取消", en: "Cancel" },
 
+  // The compact link above the composer IS `/compact` (same call), so it is
+  // named after the command in both locales. "整理成摘要" read as a request
+  // to summarise something, which is not what it does to the person pressing it.
+  "chat.compact": { "zh-TW": "compact", en: "compact" },
+  "chat.compact.pending": { "zh-TW": "compacting…", en: "compacting…" },
+  // The header's "⋯" when its actions no longer fit beside the title.
+  "chat.more": { "zh-TW": "更多", en: "More" },
+
   // #245: workspace storage usage bar + over-quota upload error.
   "workspace.usage": {
     "zh-TW": "已使用 {used} / {quota}",

@@ -23,6 +23,7 @@ import { EnvVarsModal } from "../../components/EnvVarsModal";
 import { ItemEnvironmentModal } from "../../components/ItemEnvironmentModal";
 import { ToolsPickerModal } from "../../components/ToolsPickerModal";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
+import { HeaderActions, type HeaderTier, useHeaderTier } from "./HeaderActions";
 import { UsageBar } from "./UsageBar";
 import { ContextBar } from "../../components/ContextBar";
 import { parseComposerCommand } from "../../components/composerCommand";
@@ -83,23 +84,6 @@ const chatColumn: React.CSSProperties = {
   maxWidth: CHAT_COLUMN_MAX_W,
   marginLeft: "auto",
   marginRight: "auto",
-};
-
-/** The header action buttons (New chat / Tools / Skills / Workflows / Export).
- * `flexShrink: 0` + `whiteSpace: nowrap` keep each button intact so the wrapping
- * header drops a whole button to the next row instead of shrinking it and
- * letting its label wrap character-by-character at the narrow default width (#456). */
-const hdrBtn: React.CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 4,
-  color: "var(--text-paper-d)",
-  fontSize: pxToRem(11),
-  background: "transparent",
-  border: "none",
-  cursor: "pointer",
-  flexShrink: 0,
-  whiteSpace: "nowrap",
 };
 
 /** How many image thumbnails the composer will draw. Attaching a folder hands it
@@ -984,32 +968,39 @@ export function AgentPanel({
           data-testid="composer-column"
           style={{ ...chatColumn, display: "flex", flexDirection: "column", gap: 6 }}
         >
-        {/* #245: persistent storage usage gauge so the user sees they're filling up. */}
-        <UsageBar slug={slug} itemId={investigationId} />
-        {/* #739: and how full the CONTEXT window is — the other ceiling a
-            long session runs into, and the one that used to arrive as a
-            surprise rather than as a gauge. */}
-        {chatId && <ContextBar slug={slug} itemId={investigationId} chatId={chatId} />}
-        {chatId && (
-          <button
-            type="button"
-            data-testid="compact-chat"
-            onClick={() => compact.mutate()}
-            disabled={compact.isPending || log.streaming}
-            style={{
-              alignSelf: "flex-start",
-              background: "none",
-              border: "none",
-              padding: 0,
-              cursor: compact.isPending ? "default" : "pointer",
-              fontSize: pxToRem(11),
-              color: "var(--text-paper-d)",
-              textDecoration: "underline",
-            }}
-          >
-            {compact.isPending ? "整理中…" : "整理成摘要"}
-          </button>
-        )}
+        {/* One row for the three things a person glances at, not three: storage
+            used (#245), how full the context window is (#739), and the compact
+            link. Each on its own line cost the message area a row apiece, and
+            the chat column is the one that can least afford it. Cells that have
+            nothing to say render nothing, and the row shortens; `.composer-status`
+            draws the `·` between whichever cells are present. */}
+        <div data-testid="composer-status" className="composer-status">
+          <UsageBar slug={slug} itemId={investigationId} />
+          {chatId && <ContextBar slug={slug} itemId={investigationId} chatId={chatId} />}
+          {chatId && (
+            <button
+              type="button"
+              data-testid="compact-chat"
+              onClick={() => compact.mutate()}
+              disabled={compact.isPending || log.streaming}
+              style={{
+                background: "none",
+                border: "none",
+                padding: 0,
+                cursor: compact.isPending ? "default" : "pointer",
+                font: "inherit",
+                color: "inherit",
+              }}
+            >
+              {/* The underline is on the label, not the button: the row draws its
+                  `·` separator as the button's ::before, and a decoration on the
+                  button would run under the dot too. */}
+              <span style={{ textDecoration: "underline" }}>
+                {compact.isPending ? t("chat.compact.pending") : t("chat.compact")}
+              </span>
+            </button>
+          )}
+        </div>
         {progress && (
           <div data-testid="attach-progress" style={{ display: "flex", flexDirection: "column", gap: 2 }}>
             <div
@@ -1442,6 +1433,7 @@ export function AgentHeader({
   environment,
   appliedSkills = [],
   onToggleApplySkill,
+  tier: tierProp,
 }: {
   streaming: boolean;
   investigationId: string;
@@ -1482,6 +1474,9 @@ export function AgentHeader({
   environment?: { canResize: boolean };
   /** #380: skills queued (composer-owned) to apply this turn — lit in the panel. */
   appliedSkills?: string[];
+  /** Which shape the action buttons take. Injected in tests; otherwise measured
+   * from the header's own layout — see `useHeaderTier`. */
+  tier?: HeaderTier;
   /** #380: toggle a skill in this turn's apply set (composer state lives in AgentPanel). */
   onToggleApplySkill?: (name: string) => void;
 }) {
@@ -1496,8 +1491,24 @@ export function AgentHeader({
     () => investigationFileService(slug, investigationId),
     [slug, investigationId],
   );
+  // What can change the header's content width at a fixed column width: the
+  // labels (they change with the locale), which actions are present, and the
+  // export error line. The hook forgets its width record when this changes.
+  const contentKey = [
+    onNewChat ? "new" : "",
+    onSaveToolPrefs ? t("tools.button") : "",
+    environment ? t("itemenv.button") : "",
+    onSaveEnvVars ? t("env.button") : "",
+    t("skills.button"),
+    t("workflows.button"),
+    chatId ? "export" : "",
+    exportError ? "err" : "",
+  ].join("|");
+  const { tier, headerRef, identityRef } = useHeaderTier(tierProp, contentKey);
   return (
     <header
+      ref={headerRef}
+      data-tier={tier}
       style={{
         padding: "12px 14px",
         borderBottom: "1px solid var(--paper-3)",
@@ -1505,7 +1516,9 @@ export function AgentHeader({
         alignItems: "center",
         gap: 10,
         // At the narrow default panel width the action buttons drop to a second
-        // row instead of overlapping the title (#456).
+        // row instead of overlapping the title (#456) — and `useHeaderTier`
+        // watches for exactly that drop, stepping the buttons down to icons,
+        // then to one menu, so the row is given back.
         flexWrap: "wrap",
       }}
     >
@@ -1561,6 +1574,7 @@ export function AgentHeader({
       )}
       {appIcon ? <AppIcon icon={appIcon} slug={slug} color={appColor} size={20} /> : null}
       <div
+        ref={identityRef}
         data-testid="agent-header-identity"
         // `flex: 1` (basis 0%) let this block collapse to ~21px while the action
         // buttons kept their intrinsic width, so the title read "R…" at EVERY
@@ -1599,113 +1613,99 @@ export function AgentHeader({
           {streaming ? "Replying…" : "Your turn — type a message"}
         </div>
       </div>
-      {onNewChat && (
-        // #200: the low-key escape hatch. A wedged chat (interrupt crash, repetition,
-        // step limit, model error) is never a dead end — start a fresh one and the
-        // old chat stays reachable via the switcher that appears once a second exists.
-        <button
-          type="button"
-          onClick={onNewChat}
-          title="Start a fresh chat"
-          aria-label="New chat"
-          style={hdrBtn}
-        >
-          <Icon name="plus" size={13} /> New chat
-        </button>
-      )}
-      {onSaveToolPrefs && (
-        <button
-          type="button"
-          // #322: open the per-item tool picker — choose (tri-state) which App tools
-          // the assistant can use in this workspace. Only shown when the parent can
-          // persist the override.
-          data-testid="tools-button"
-          onClick={() => setShowTools(true)}
-          title={t("tools.button.tip")}
-          aria-label={t("tools.button")}
-          style={hdrBtn}
-        >
-          <Icon name="settings" size={13} /> {t("tools.button")}
-        </button>
-      )}
-      {environment && (
-        <button
-          type="button"
-          // The item's sandbox: is it running, what is it costing,
-          // how big may it be. Beside the variables button because both are
-          // per-item configuration of the same sandbox — but gated on the App
-          // HAVING one, not on who may edit the item.
-          data-testid="item-environment-button"
-          onClick={() => setShowItemEnv(true)}
-          title={t("itemenv.tip")}
-          aria-label={t("itemenv.tip")}
-          style={hdrBtn}
-        >
-          <Icon name="settings" size={13} /> {t("itemenv.button")}
-        </button>
-      )}
-      {onSaveEnvVars && (
-        <button
-          type="button"
+      {/* The seven actions, drawn per tier. Their conditions are unchanged:
+          New chat only when the shell hands us the escape hatch (#200), Tools /
+          Env only when the parent can persist onto an item, the sandbox only
+          when the App has one, Export only when there is a chat to name. */}
+      <HeaderActions
+        tier={tier}
+        actions={[
+          // #200: the low-key escape hatch. A wedged chat (interrupt crash,
+          // repetition, step limit, model error) is never a dead end — start a
+          // fresh one and the old chat stays reachable via the switcher.
+          onNewChat && {
+            id: "new-chat",
+            testid: "new-chat-button",
+            icon: "plus",
+            label: "New chat",
+            tip: "Start a fresh chat",
+            onClick: onNewChat,
+          },
+          // #322: the per-item tool picker — choose (tri-state) which App tools
+          // the assistant can use here. Only when the parent can persist it.
+          onSaveToolPrefs && {
+            id: "tools",
+            testid: "tools-button",
+            icon: "settings",
+            label: t("tools.button"),
+            tip: t("tools.button.tip"),
+            onClick: () => setShowTools(true),
+          },
+          // The item's sandbox: is it running, what is it costing, how big may
+          // it be. Gated on the App HAVING one, not on who may edit the item. A
+          // terminal, not a gear: three of the seven drew the same gear once.
+          environment && {
+            id: "environment",
+            testid: "item-environment-button",
+            aria: t("itemenv.tip"),
+            icon: "term",
+            label: t("itemenv.button"),
+            tip: t("itemenv.tip"),
+            onClick: () => setShowItemEnv(true),
+          },
           // The item's environment variables, for the tools this workspace runs.
-          // Shown only when the parent can persist onto an item, like Tools.
-          data-testid="env-button"
-          onClick={() => setShowEnv(true)}
-          title={t("env.title")}
-          aria-label={t("env.title")}
-          style={hdrBtn}
-        >
-          <Icon name="settings" size={13} /> {t("env.button")}
-        </button>
-      )}
-      <button
-        type="button"
-        // #298: open the Skills panel — see / download / import the skills the user
-        // co-created here (the IDE tree hides the `.skill/` dot-folder).
-        data-testid="skills-button"
-        onClick={() => setShowSkills(true)}
-        title={t("skills.tip")}
-        aria-label={t("skills.button")}
-        style={hdrBtn}
-      >
-        <Icon name="sparkle" size={13} /> {t("skills.button")}
-      </button>
-      <button
-        type="button"
-        // #323: open the Workflows panel — run / download / import the workflows the
-        // user co-created here (the IDE tree hides the `.workflows/` dot-folder).
-        data-testid="workflows-button"
-        onClick={() => setShowWorkflows(true)}
-        title={t("workflows.tip")}
-        aria-label={t("workflows.button")}
-        style={hdrBtn}
-      >
-        <Icon name="workflow" size={13} /> {t("workflows.button")}
-      </button>
-      {/* Only where there is a chat to name. Without one the button could only
-          ask the server to pick, and it used to pick the item's first — so the
-          absent case is drawn as absent, the way #739's gauge is. */}
-      {chatId && (
-        <button
-          type="button"
-          // Downloads the `.chat.json` round-trip format (issue #39): re-uploadable
-          // to a KB collection, where the BE runs the same insight extraction the
-          // promote path does. Goes through the app-scoped route (#95) and validates
-          // the response, so a misroute surfaces an error instead of silently saving
-          // the SPA shell as `export-chat.html` (#100). Format details live in code.
-          onClick={() => {
-            setExportError(null);
-            downloadChatExport(slug, investigationId, chatId).catch((e) =>
-              setExportError(e instanceof Error ? e.message : "匯出失敗"),
-            );
-          }}
-          title="Export this conversation"
-          aria-label="Export conversation"
-          style={hdrBtn}
-        >
-          <Icon name="download" size={13} /> Export
-        </button>
-      )}
+          // A tag — a named value — rather than the gear Tools wears.
+          onSaveEnvVars && {
+            id: "env",
+            testid: "env-button",
+            aria: t("env.title"),
+            icon: "tag",
+            label: t("env.button"),
+            tip: t("env.title"),
+            onClick: () => setShowEnv(true),
+          },
+          // #298: the Skills panel — see / download / import the skills the user
+          // co-created here (the IDE tree hides the `.skill/` dot-folder).
+          {
+            id: "skills",
+            testid: "skills-button",
+            icon: "sparkle",
+            label: t("skills.button"),
+            tip: t("skills.tip"),
+            onClick: () => setShowSkills(true),
+          },
+          // #323: the Workflows panel — run / download / import the workflows the
+          // user co-created here (the IDE tree hides `.workflows/`).
+          {
+            id: "workflows",
+            testid: "workflows-button",
+            icon: "workflow",
+            label: t("workflows.button"),
+            tip: t("workflows.tip"),
+            onClick: () => setShowWorkflows(true),
+          },
+          // Only where there is a chat to name. Without one the button could
+          // only ask the server to pick, and it used to pick the item's first —
+          // so the absent case is drawn as absent, the way #739's gauge is.
+          // Downloads the `.chat.json` round-trip format (#39) through the
+          // app-scoped route (#95), validating the response so a misroute
+          // surfaces an error instead of saving the SPA shell (#100).
+          !!chatId && {
+            id: "export",
+            testid: "export-button",
+            aria: "Export conversation",
+            icon: "download",
+            label: "Export",
+            tip: "Export this conversation",
+            onClick: () => {
+              setExportError(null);
+              downloadChatExport(slug, investigationId, chatId).catch((e) =>
+                setExportError(e instanceof Error ? e.message : "匯出失敗"),
+              );
+            },
+          },
+        ]}
+      />
       {exportError && (
         <span role="alert" style={{ fontSize: pxToRem(11), color: "var(--err)" }}>
           {exportError}
