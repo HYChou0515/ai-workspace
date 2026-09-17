@@ -226,16 +226,28 @@ export function ItemChatShell({
       activeRun.data?.status === "running" ||
       activeRun.data?.status === "awaiting_human");
   const canLaunchHere = active != null && !runActive && workflows.length > 0;
-  const [pendingLaunchHere, setPendingLaunchHere] = useState<string | null>(null);
+  // The chat is captured when the workflow is PICKED, not read when the dialog
+  // is confirmed. The dialog used to live in the per-chat panel, keyed by chat,
+  // so switching chats unmounted it; in the shell it would have survived a
+  // switch and started the run in whichever chat was active by then. Pinning
+  // the chat here, and dropping the dialog when the active chat moves away from
+  // it (below), gives back what the key used to guarantee.
+  const [pendingLaunchHere, setPendingLaunchHere] = useState<{
+    workflowId: string;
+    chatId: string;
+  } | null>(null);
+  useEffect(() => {
+    if (pendingLaunchHere && pendingLaunchHere.chatId !== activeChatId) setPendingLaunchHere(null);
+  }, [activeChatId, pendingLaunchHere]);
   const launchHere = async () => {
-    if (pendingLaunchHere == null || active == null) return;
-    const workflowId = pendingLaunchHere;
+    if (pendingLaunchHere == null) return;
+    const { workflowId, chatId } = pendingLaunchHere;
     setPendingLaunchHere(null);
-    await workflowApi.startRun(slug, itemId, workflowId, active.chat_id);
+    await workflowApi.startRun(slug, itemId, workflowId, chatId);
     // The chat's run_id now points at the new run — refetch the list + thread so
     // the progress bar / run polling pick it up in place.
     void qc.invalidateQueries({ queryKey: qk.itemChats(slug, itemId) });
-    void qc.invalidateQueries({ queryKey: qk.itemChat(slug, itemId, active.chat_id) });
+    void qc.invalidateQueries({ queryKey: qk.itemChat(slug, itemId, chatId) });
   };
 
   // #200: the switcher leans single-chat — hidden until a second chat exists,
@@ -264,6 +276,12 @@ export function ItemChatShell({
             // this line the bar is 379px of content at a 390px viewport, and
             // an unwrapped row cut the collections button off at the edge.
             // Measured: without wrap, scrollWidth 379 vs clientWidth 350.
+            //
+            // Wrapping alone was not enough: `.chat-switcher` had a zero flex
+            // basis, so it absorbed the launcher's width instead of forcing a
+            // wrap — at 390px the switcher was 22px wide with no title, the
+            // #456 disease the header identity block already had. It has a
+            // real basis now (`topic-hub.css`), so the row breaks first.
             flexWrap: "wrap",
             gap: 8,
             alignItems: "center",
@@ -281,8 +299,11 @@ export function ItemChatShell({
             />
           )}
           <NewItemPicker workflows={workflows} onFreeChat={onFreeChat} onWorkflow={onWorkflow} />
-          {canLaunchHere && (
-            <WorkflowLaunchMenu workflows={workflows} onPick={setPendingLaunchHere} />
+          {canLaunchHere && active && (
+            <WorkflowLaunchMenu
+              workflows={workflows}
+              onPick={(workflowId) => setPendingLaunchHere({ workflowId, chatId: active.chat_id })}
+            />
           )}
           <div style={{ flex: 1 }} />
           {showCollections && (
@@ -316,7 +337,7 @@ export function ItemChatShell({
         <WorkflowLaunchDialog
           slug={slug}
           itemId={itemId}
-          workflowId={pendingLaunchHere}
+          workflowId={pendingLaunchHere.workflowId}
           onConfirm={launchHere}
           onClose={() => setPendingLaunchHere(null)}
         />

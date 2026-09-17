@@ -1206,6 +1206,33 @@ describe("the status strip above the composer is one row", () => {
     });
     expect(within(row).getByTestId("compact-chat")).toBeInTheDocument();
   });
+
+  it("puts the storage-full warning on the row as its own line, not inside the gauge", async () => {
+    // Inside the gauge cell it made the cell as wide as the warning and pushed
+    // the other cells past a 250px hole — the row's own one-line rule broken
+    // by the one state nobody had looked at.
+    vi.spyOn(api, "getWorkspaceUsage").mockResolvedValue({ used: 1000, quota: 1000 });
+    renderPanel();
+    const row = await screen.findByTestId("composer-status");
+    const warning = await within(row).findByTestId("workspace-usage-full");
+    expect(warning.parentElement).toBe(row);
+    expect(warning).toHaveAttribute("data-status-line");
+    expect(within(row).getByTestId("workspace-usage")).not.toContainElement(warning);
+  });
+
+  it("says compacting… while the compact call is in flight", async () => {
+    type Compacted = Awaited<ReturnType<typeof api.compactChat>>;
+    let settle!: (v: Compacted) => void;
+    vi.spyOn(api, "compactChat").mockImplementation(
+      () => new Promise<Compacted>((r) => (settle = r)),
+    );
+    renderPanel();
+    fireEvent.click(screen.getByTestId("compact-chat"));
+    await waitFor(() => expect(screen.getByTestId("compact-chat")).toHaveTextContent(/^compacting…$/));
+    await act(async () => {
+      settle({ compacted: true, reason: "compacted" });
+    });
+  });
 });
 
 describe("the header's seven buttons can be told apart", () => {

@@ -421,6 +421,16 @@ select {
   display: inline-flex;
   align-items: center;
 }
+/* A cell that is a whole line by itself — the "storage full" warning. Last,
+   full width, and without the dot: it is not one more item in the list, it is
+   a line under it. */
+.composer-status > [data-status-line] {
+  flex-basis: 100%;
+  order: 99;
+}
+.composer-status > [data-status-line]::before {
+  content: none;
+}
 
 /* The chat header's "⋯" — the tier the action buttons step down to when even
    their icons do not fit beside the title. Same mechanics and look as the

@@ -1272,6 +1272,8 @@ export const messages = {
   // to summarise something, which is not what it does to the person pressing it.
   "chat.compact": { "zh-TW": "compact", en: "compact" },
   "chat.compact.pending": { "zh-TW": "compacting…", en: "compacting…" },
+  // The header's "⋯" when its actions no longer fit beside the title.
+  "chat.more": { "zh-TW": "更多", en: "More" },
 
   // #245: workspace storage usage bar + over-quota upload error.
   "workspace.usage": {

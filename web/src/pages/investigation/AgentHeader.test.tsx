@@ -297,3 +297,94 @@ describe("the header's actions step down as the column narrows", () => {
     expect(screen.queryByTestId("header-more-menu")).toBeNull();
   });
 });
+
+describe("the ⋯ menu keeps a keyboard user's place", () => {
+  // Picking an item unmounted the menu in the same commit that opened the
+  // modal, so the modal captured <body> as the element to restore focus to,
+  // and closing it left focus nowhere. The trigger is focused before the
+  // action runs, and again when the menu is dismissed.
+  function renderMenu() {
+    renderWithQuery(
+      <MemoryRouter>
+        <AgentHeader
+          streaming={false}
+          investigationId="topic-hub:1"
+          chatId="chat-1"
+          slug="topic-hub"
+          onSaveToolPrefs={() => {}}
+          tier="menu"
+        />
+      </MemoryRouter>,
+    );
+  }
+  afterEach(cleanup);
+
+  it("returns focus to the trigger when an item is picked", () => {
+    renderMenu();
+    const more = screen.getByTestId("header-more-button");
+    more.focus();
+    fireEvent.click(more);
+    const item = screen.getByTestId("header-more-skills");
+    item.focus();
+    fireEvent.click(item);
+    expect(screen.queryByTestId("header-more-menu")).toBeNull();
+    // The modal is open and holds focus. Closing it must put focus back on the
+    // trigger — which only happens if the trigger was focused BEFORE the modal
+    // captured its restore target.
+    expect(document.querySelector('[aria-modal="true"], [role="dialog"]')).not.toBeNull();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(document.activeElement).toBe(more);
+  });
+
+  it("returns focus to the trigger on Escape", () => {
+    renderMenu();
+    const more = screen.getByTestId("header-more-button");
+    fireEvent.click(more);
+    screen.getByTestId("header-more-skills").focus();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByTestId("header-more-menu")).toBeNull();
+    expect(document.activeElement).toBe(more);
+  });
+
+  it("every item reaches its action", () => {
+    // Not just one: each of the seven, through the menu, does what its button did.
+    const onNewChat = vi.fn();
+    cleanup();
+    renderWithQuery(
+      <MemoryRouter>
+        <AgentHeader
+          streaming={false}
+          investigationId="topic-hub:1"
+          chatId="chat-1"
+          slug="topic-hub"
+          onNewChat={onNewChat}
+          onSaveToolPrefs={() => {}}
+          environment={{ canResize: false }}
+          envVars={{}}
+          onSaveEnvVars={() => {}}
+          tier="menu"
+        />
+      </MemoryRouter>,
+    );
+    const open = () => fireEvent.click(screen.getByTestId("header-more-button"));
+    open();
+    fireEvent.click(screen.getByTestId("header-more-new-chat"));
+    expect(onNewChat).toHaveBeenCalledTimes(1);
+    for (const [id, opens] of [
+      ["tools", "tools-picker"],
+      ["environment", "item-environment"],
+      ["env", "env-vars"],
+      ["skills", "skills"],
+      ["workflows", "workflows"],
+    ] as const) {
+      open();
+      fireEvent.click(screen.getByTestId(`header-more-${id}`));
+      const dialog = document.querySelector('[aria-modal="true"], [role="dialog"]');
+      expect(dialog, `${id} should open a modal (${opens})`).not.toBeNull();
+      fireEvent.keyDown(document, { key: "Escape" });
+    }
+    open();
+    fireEvent.click(screen.getByTestId("header-more-export"));
+    expect(downloadChatExport).toHaveBeenCalledWith("topic-hub", "topic-hub:1", "chat-1");
+  });
+});

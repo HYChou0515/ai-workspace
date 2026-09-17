@@ -29,41 +29,49 @@ export function UsageBar({ slug, itemId }: { slug: string; itemId: string }) {
   // Caption first, then a short bar beside it — one text-height, so the gauge
   // can sit in a row with its neighbours instead of costing the composer a line
   // for the bar and another for the number.
+  //
+  // The "full" warning is a SIBLING of the gauge, not a child. Inside the cell
+  // it made the cell's max-content width the warning's width (393px), and the
+  // row laid the other cells out after a hole that wide — measured, in the
+  // real app with the quota stubbed full. As a direct child of the row with
+  // `data-status-line` it takes a whole line of its own, last.
   return (
-    <div
-      data-testid="workspace-usage"
-      style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "2px 6px" }}
-    >
-      <span style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
-        {t("workspace.usage", {
-          used: formatBytes(data.used),
-          quota: formatBytes(data.quota),
-        })}
-      </span>
-      <div
-        aria-hidden
-        style={{
-          width: GAUGE_W,
-          height: 4,
-          background: "var(--paper-3)",
-          borderRadius: 2,
-          overflow: "hidden",
-        }}
-      >
+    <>
+      <div data-testid="workspace-usage" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <span style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
+          {t("workspace.usage", {
+            used: formatBytes(data.used),
+            quota: formatBytes(data.quota),
+          })}
+        </span>
         <div
+          aria-hidden
           style={{
-            width: `${pct}%`,
-            height: "100%",
-            background: full ? "var(--warn)" : "var(--accent)",
+            width: GAUGE_W,
+            height: 4,
+            background: "var(--paper-3)",
+            borderRadius: 2,
+            overflow: "hidden",
           }}
-        />
+        >
+          <div
+            style={{
+              width: `${pct}%`,
+              height: "100%",
+              background: full ? "var(--warn)" : "var(--accent)",
+            }}
+          />
+        </div>
       </div>
       {full && (
-        // A whole line of its own: it is rare, and it is a warning.
-        <span style={{ flexBasis: "100%", fontSize: pxToRem(11), color: "var(--warn)" }}>
+        <span
+          data-testid="workspace-usage-full"
+          data-status-line
+          style={{ fontSize: pxToRem(11), color: "var(--warn)" }}
+        >
           {t("workspace.usage.full")}
         </span>
       )}
-    </div>
+    </>
   );
 }

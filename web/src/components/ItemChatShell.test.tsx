@@ -626,4 +626,38 @@ describe("run-in-this-chat lives in the bar", () => {
       expect(start).toHaveBeenCalledWith("topic-hub", "it", "memory", "conversation:c1"),
     );
   });
+  it("closes the launch dialog when the active chat changes, and never starts in the other chat", async () => {
+    // The dialog used to live in the per-chat panel under `key={chat_id}`, so a
+    // switch unmounted it and nothing could launch. In the shell it survived
+    // the switch, and confirming started the run in whichever chat was active
+    // BY THEN. The chat is captured at pick time and the dialog leaves with it.
+    stubChatApi([
+      summary({ chat_id: "conversation:c1", is_default: true, title: "A" }),
+      summary({ chat_id: "conversation:c2", is_default: false, title: "B" }),
+    ]);
+    vi.spyOn(workflowApi, "previewRun").mockResolvedValue({
+      workflow_id: "memory",
+      title: "Digest uploads into memory",
+      description: "",
+      phases: [{ id: "digest", title: "Digest" }],
+      summary: "",
+      checks: [],
+      can_run: true,
+      has_preflight: true,
+    });
+    const start = vi
+      .spyOn(workflowApi, "startRun")
+      .mockResolvedValue({ run_id: "r9", item_id: "it", chat_id: "conversation:c1" });
+    render();
+    fireEvent.click(await screen.findByTestId("launch-in-chat-button"));
+    fireEvent.click(await screen.findByTestId("launch-in-chat-workflow-memory"));
+    await screen.findByTestId("wf-launch-dialog");
+
+    // switch to B underneath the dialog
+    fireEvent.click(screen.getByTestId("chat-switcher-trigger"));
+    fireEvent.click(await screen.findByTestId("chat-switcher-item-conversation:c2"));
+
+    await waitFor(() => expect(screen.queryByTestId("wf-launch-dialog")).toBeNull());
+    expect(start).not.toHaveBeenCalled();
+  });
 });

@@ -11,7 +11,13 @@
  * badge on workflow chats, plus a footer that opens the manage modal. */
 .chat-switcher {
   position: relative;
-  flex: 1;
+  /* A REAL basis, not 0. With `flex: 1` (basis 0%) this block "fit" at every
+     width and simply shrank — at 390px, to 22px with no title — while the bar
+     never had to wrap. A basis makes the buttons after it drop to the next line
+     before the control that says which chat you are in is crushed. Same fix,
+     same reason, as the header identity block (#456). Shrink stays on so a
+     genuinely tiny bar still degrades. */
+  flex: 1 1 160px;
   min-width: 0;
 }
 .chat-switcher__trigger {
