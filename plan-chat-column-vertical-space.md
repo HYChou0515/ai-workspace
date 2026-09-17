@@ -228,3 +228,39 @@
    在 launcher 後面的 collections 按鈕；而且折了就是兩列，跟原本一樣多，只有寬到不用折才少一列。
 3. **P4「之前 62／94／123」——數字對，來歷沒寫。** 三個「之前」是把降階判斷寫死成 false 的
    build 量的（第三列是 `health-dot`，reviewer 的複製品沒放它才算成兩列）。
+
+---
+
+## 第二輪 review（回歸＋真實性）之後
+
+第一輪的修法裡只有一個換掉的機制（「折了」的判斷改看所有子元素、加高度觸發），所以第二輪只看那批修法。
+
+### 修掉的（`72c2154b`）
+
+| 鏡頭 | 發現 | 修法 |
+|---|---|---|
+| 回歸 | **內容造成的折行讓 header 永遠停在低一階**：error 行出現時把 `failedAt.icons` 記成 698，之後寬度不變就永遠回不去；修前那個狀態是暫時兩列、error 消失自己恢復 | hook 收一個 `contentKey`（標籤、有哪些按鈕、error 有無），內容變了就忘掉寬度紀錄、往上試一次；單一事件不會震盪。實測 700px：Export 失敗→`menu` 62px；再成功→回 `icons` |
+| 回歸 | **bar 的 spacer 元素折行後仍吃一個 gap**，在 280px 欄底線把 en 從兩列推成三列 | collections 改 `margin-left: auto`，不用 spacer。實測 en host 316–340 從 109px 降到 75px |
+| 真實性 | `HeaderActions.tsx` 檔頭那句「differ by a third」**又回來了**——突變探針用了舊備份還原，把 amend 過的修正蓋掉，而註解被蓋掉沒有任何東西會紅 | 改回實測 500/521px；記憶補一條 |
+| 真實性 | `actionsRef` 宣告、回傳、掛上，但自從折行判斷改看 `header.children` 就沒人讀 | 刪掉 |
+| 真實性 | `topic-hub.css` 註解說「bar 從沒折過」，390 其實折過，是 switcher 從沒**逼**它折 | 改字 |
+| 真實性 | 「whenever the menu goes away」——點外面不會把焦點拉回來（那是對的） | 改字 |
+
+### 沒修、照實記的取捨：switcher 的 basis 是用列數換的
+
+第一輪給 `.chat-switcher` 一個 160px basis，讓它在 390–480 不再被擠成 22px。代價（reviewer 逐 px 量的，master 對照＝bar 一列 39 ＋ launcher 一列 36 ＝ **75px 恆定**）：
+
+| bar host 寬 | 現在 zh | 現在 en | master |
+|---|---|---|---|
+| < 259 | 4 列 147px | 4 列 147px | 75（但 switcher 22px） |
+| 259–286 | 3 列 111px | 3 列 | 75（同上） |
+| 287–~315 | 2 列 75px | **3 列 109px** | 75 |
+| ~316–548 | 2 列 75px | 2 列 75px（spacer 修掉後） | 75 |
+| 549–618 | **1 列 39px** | 2 列 | 75 |
+| ≥ 619 | 1 列 39px | 1 列 39px | 75 |
+
+也就是：**工作區預設 380px 欄（host ~324）是平手，280px 底線在 en 比 master 高 34px**；只有寬到 549（zh）／619（en）才真的少一列。master 在那些窄寬度下 switcher 本來就是 22px 點不到，所以這是「拿高度換回一個能用的控制項」，不是新壞。en 三列帶的兇手是 launcher 標籤「Run in this chat」169px——那是 i18n 文案，不在這裡動。
+
+### 探針備份的教訓
+
+`HeaderActions.bak` 是第一次探針時取的；P4 amend 之後又用它還原了一次，把 amend 蓋掉。**每次探針重新取備份，還原後看 `git diff --stat` 不是看 `grep 突變字串 = 0`。**
