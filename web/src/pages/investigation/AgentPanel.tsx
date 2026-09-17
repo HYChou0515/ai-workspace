@@ -1006,10 +1006,14 @@ export function AgentPanel({
                 cursor: compact.isPending ? "default" : "pointer",
                 font: "inherit",
                 color: "inherit",
-                textDecoration: "underline",
               }}
             >
-              {compact.isPending ? t("chat.compact.pending") : t("chat.compact")}
+              {/* The underline is on the label, not the button: the row draws its
+                  `·` separator as the button's ::before, and a decoration on the
+                  button would run under the dot too. */}
+              <span style={{ textDecoration: "underline" }}>
+                {compact.isPending ? t("chat.compact.pending") : t("chat.compact")}
+              </span>
             </button>
           )}
         </div>
@@ -1608,6 +1612,7 @@ export function AgentHeader({
         // old chat stays reachable via the switcher that appears once a second exists.
         <button
           type="button"
+          data-testid="new-chat-button"
           onClick={onNewChat}
           title="Start a fresh chat"
           aria-label="New chat"
@@ -1644,7 +1649,10 @@ export function AgentHeader({
           aria-label={t("itemenv.tip")}
           style={hdrBtn}
         >
-          <Icon name="settings" size={13} /> {t("itemenv.button")}
+          {/* A terminal, not a gear: this is where commands run. Three of the
+              seven header buttons drew the same gear, which at a glance was one
+              button three times. */}
+          <Icon name="term" size={13} /> {t("itemenv.button")}
         </button>
       )}
       {onSaveEnvVars && (
@@ -1658,7 +1666,8 @@ export function AgentHeader({
           aria-label={t("env.title")}
           style={hdrBtn}
         >
-          <Icon name="settings" size={13} /> {t("env.button")}
+          {/* A tag — a named value — rather than the gear Tools already wears. */}
+          <Icon name="tag" size={13} /> {t("env.button")}
         </button>
       )}
       <button
@@ -1702,6 +1711,7 @@ export function AgentHeader({
               setExportError(e instanceof Error ? e.message : "匯出失敗"),
             );
           }}
+          data-testid="export-button"
           title="Export this conversation"
           aria-label="Export conversation"
           style={hdrBtn}

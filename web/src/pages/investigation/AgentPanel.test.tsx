@@ -1207,3 +1207,48 @@ describe("the status strip above the composer is one row", () => {
     expect(within(row).getByTestId("compact-chat")).toBeInTheDocument();
   });
 });
+
+describe("the header's seven buttons can be told apart", () => {
+  // Three of them drew the same gear — Tools, the environment, and its
+  // variables — so at a glance they were one button three times. That is a
+  // problem today and a blocker for an icon-only row tomorrow: an icon-only
+  // toolbar of identical glyphs is worse than the wrapping it replaces.
+  it("gives every header button its own icon", () => {
+    renderWithQuery(
+      <MemoryRouter>
+        <DialogProvider>
+          <AgentPanel
+            investigationId="it1"
+            chatId="chat-1"
+            agent={stubAgent()}
+            picker={[]}
+            suggestions={[]}
+            attachedPreset=""
+            onAttachPreset={() => {}}
+            uploadDir="uploads"
+            onNewChat={() => {}}
+            onSaveToolPrefs={() => {}}
+            environment={{ canResize: false }}
+            envVars={{}}
+            onSaveEnvVars={() => {}}
+          />
+        </DialogProvider>
+      </MemoryRouter>,
+    );
+    const ids = [
+      "new-chat-button",
+      "tools-button",
+      "item-environment-button",
+      "env-button",
+      "skills-button",
+      "workflows-button",
+      "export-button",
+    ];
+    const icons = ids.map((id) => {
+      const svg = screen.getByTestId(id).querySelector("svg[data-icon]");
+      return svg?.getAttribute("data-icon") ?? `(${id}: no icon)`;
+    });
+    const dupes = icons.filter((n, i) => icons.indexOf(n) !== i);
+    expect(dupes, `icons: ${icons.join(", ")}`).toEqual([]);
+  });
+});
