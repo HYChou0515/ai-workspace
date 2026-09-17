@@ -475,6 +475,7 @@ RCA 的 system prompt 是純 markdown，存在
     python -m workspace_app.worker eval        # 檢索品質 eval
     python -m workspace_app.worker graph       # knowledge graph 抽取
     python -m workspace_app.worker kb-import   # 知識庫封存包匯入(#715)
+    python -m workspace_app.worker blob-gc     # 孤兒 blob 回收(#245);每 gc_interval 一趟,API 只負責「請人做」
     ```
 
     這份清單是 `workspace_app.worker._JOBTYPE_ATTR` 的完整內容,而
@@ -486,15 +487,25 @@ RCA 的 system prompt 是純 markdown，存在
     #804 之後 API 上**再也沒有**背景工作會自己做 chunk / embed / 全表讀——它只 enqueue。
     所以 `run_consumers: false` 的部署**最少**要跑 `index` 與 `card-gen` 兩個 worker,
     否則 help 文件停在 `indexing`、cluster sweep 永遠 pending(見 `migrations.md` §5.5 的
-    #804 三列)。
+    #804 三列)。沒跑 `blob-gc` worker 則孤兒 blob 永遠不回收(只長不消,不掉資料)。
+
+    **`blob-gc` worker 和其他 worker 不同:它開機時組的是 API 自己那整套**
+    (`workspace_app.__main__.build_app`,只組不 serve),不是精簡的 worker bundle。
+    specstar 的 reconcile 只從**已註冊的 model** 算 live blob 集合,而有 `dict[str, Any]`
+    欄位的 model 也會被掃——那幾乎是整個平台、散在 `create_app` 各處註冊;拿部分註冊表去跑,
+    缺的那些 model 引用的 blob 會先被隔離、`gc_t2` 後被刪。所以這個 worker 用同一個 image、
+    同一份 config、同一套組裝,registry 由建構保證相同;每一次「請人做」還會帶上 API 那邊的
+    model 清單,runner 少任何一個就**拒跑**(job 讀作 FAILED、log 點名少了誰)——寧可 GC 停,
+    不靜默掉資料。記憶體要照「一次載入所有 blob-capable model 的所有 revision」來給
+    (這正是它以前在 API pod 上 OOM 的原因,`workers.yaml` 的註解有寫)。
 
     一個 JobType 一個 Deployment ⇒ 各自掛 k8s HPA 獨立 autoscale，API 維持小。
     worker 收到 SIGTERM 會 drain 在途工作再退出（job 是 durable,硬殺也會被重投）。
   - **前提:共享後端**。in-memory 預設會讓每個 pod 各自一份 queue，worker 抓不到
     API 入列的 job — 真正切 pod 必須讓所有進程指向同一個 **Postgres** specstar
     後端（必要時 `message_queue.kind: rabbitmq`）。
-  - 非 queue 的背景 sweeper（sandbox 閒置回收 / 鏡像 / 索引卡住回收 / blob-GC /
-    code 同步 / **下班時間 goal 續跑（#615）**）**一律留在 API**，不受
+  - 非 queue 的背景 sweeper（sandbox 閒置回收 / 鏡像 / 索引卡住回收 / blob-GC 的
+    **請人做** / code 同步 / **下班時間 goal 續跑（#615）**）**一律留在 API**，不受
     `run_consumers` 影響。下班 sweeper 特別留在 API 是因為它要起的是一個
     **turn** —— turn 需要 turn engine、sandbox 與 `ChatSendService`，那整套只
     存在於 API 進程；worker 沒有。多 pod 靠 specstar CAS 認領選出唯一一個 pod

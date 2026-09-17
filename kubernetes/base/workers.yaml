@@ -375,3 +375,55 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: rca-data
+---
+# ── blob-GC reconcile (#245; one pass per `filestore.gc_interval_sec` window) ──
+# Fixed 1 replica, no HPA: the API's sweeper asks ONCE per window behind a
+# ScanLease and the coordinator coalesces overlapping asks, so one consumer is
+# the whole load. This worker boots the API's OWN composition (`build_app`,
+# never served) rather than the slim worker bundle: specstar's reconcile builds
+# the live blob set from the REGISTERED models, and a consumer holding fewer
+# than the API would quarantine, then delete, every blob the missing models
+# reference — the runner refuses such a pass (the job reads FAILED, the log
+# names the missing models), and equal registries are what makes it run.
+#
+# Memory is the sizing that matters: the pass loads every revision of every
+# blob-capable model into RAM at once (that is what killed the API pod that used
+# to run it — its last line was `blob-gc: won lease`). An OOM here is the same
+# fact on a pod no request depends on: raise the limit, or shorten the window
+# so fewer revisions accumulate between passes.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rca-worker-blob-gc
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rca-worker-blob-gc
+  template:
+    metadata:
+      labels:
+        app: rca-worker-blob-gc
+    spec:
+      terminationGracePeriodSeconds: 120 # let a pass in flight finish its deletes
+      containers:
+        - name: worker
+          image: rca-app:latest
+          command: ["python", "-m", "workspace_app.worker", "blob-gc"]
+          envFrom:
+            - configMapRef:
+                name: rca-config
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "2Gi"
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: rca-data
