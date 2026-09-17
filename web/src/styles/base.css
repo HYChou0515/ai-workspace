@@ -397,3 +397,31 @@ select {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+
+/* The status strip above the chat composer: storage used, context used, and
+   the compact link, in ONE row. Cells that have nothing to show render nothing,
+   so the separator is drawn by the row rather than by the cells — a `·` before
+   every cell but the first, whichever those turn out to be. Wraps rather than
+   overflows on a narrow column. */
+.composer-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 2px;
+  font-size: var(--text-xs); /* 11px at the default root, scales with the text-size setting */
+  color: var(--text-paper-d);
+}
+.composer-status > * + *::before {
+  content: "·";
+  margin-right: 8px;
+  color: var(--text-paper-d);
+  /* inline-block, so the compact link's underline does not run under the dot
+     that precedes it — text-decoration propagates to inline pseudo-elements. */
+  display: inline-block;
+  text-decoration: none;
+}
+.composer-status > button {
+  display: inline-flex;
+  align-items: center;
+}

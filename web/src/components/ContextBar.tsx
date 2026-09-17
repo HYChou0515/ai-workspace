@@ -19,6 +19,7 @@ import { qk } from "../api/queryKeys";
 import type { ChatContextUsage } from "../api/types";
 import { formatTokens } from "../lib/tokens";
 import { pxToRem } from "../lib/pxToRem";
+import { GAUGE_W } from "../pages/investigation/UsageBar";
 
 export function ContextBar({
   slug,
@@ -42,15 +43,31 @@ export function ContextBar({
     data.limit && data.limit > 0
       ? Math.min(100, Math.round((data.used / data.limit) * 100))
       : null;
+  // Caption first, then a short bar beside it — the same shape as `UsageBar`,
+  // so the two sit in one row above the composer instead of stacking.
   return (
     <div
       data-testid="chat-context"
-      style={{ display: "flex", flexDirection: "column", gap: 2 }}
+      style={{ display: "flex", alignItems: "center", gap: 6 }}
     >
+      <span style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
+        {/* `~` when nobody measured it. The figure is anchored on the count
+            the provider itself reported; until a turn has run since the last
+            change, it is our own estimate — and an estimate shown exactly like
+            a measurement is the #624 disease with the numerator instead of the
+            denominator. */}
+        {`${data.measured ? "" : "~"}${
+          pct === null
+            ? formatTokens(data.used)
+            : `${formatTokens(data.used)} / ${formatTokens(data.limit as number)}`
+        }`}
+      </span>
       {pct !== null && (
         <div
+          aria-hidden
           style={{
-            height: 3,
+            width: GAUGE_W,
+            height: 4,
             background: "var(--paper-3)",
             borderRadius: 2,
             overflow: "hidden",
@@ -66,18 +83,6 @@ export function ContextBar({
           />
         </div>
       )}
-      <span style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
-        {/* `~` when nobody measured it. The figure is anchored on the count
-            the provider itself reported; until a turn has run since the last
-            change, it is our own estimate — and an estimate shown exactly like
-            a measurement is the #624 disease with the numerator instead of the
-            denominator. */}
-        {`${data.measured ? "" : "~"}${
-          pct === null
-            ? formatTokens(data.used)
-            : `${formatTokens(data.used)} / ${formatTokens(data.limit as number)}`
-        }`}
-      </span>
     </div>
   );
 }

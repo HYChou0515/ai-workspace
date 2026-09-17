@@ -1177,3 +1177,33 @@ describe("send and stop are two buttons", () => {
     expect((agent.send as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe("next");
   });
 });
+
+describe("the status strip above the composer is one row", () => {
+  // Three things used to stack above the textarea — storage used, tokens used,
+  // and the compact link — each on its own line, costing the message area a
+  // row apiece. They share one row now, and the link is named after the
+  // command it IS: `/compact`, not a request to summarise something.
+  it("names the compact link after the command", () => {
+    renderPanel();
+    expect(screen.getByTestId("compact-chat")).toHaveTextContent(/^compact$/);
+  });
+
+  it("puts storage, tokens and compact in the same row", async () => {
+    vi.spyOn(api, "getWorkspaceUsage").mockResolvedValue({
+      used: 5 * 1024 * 1024 * 1024,
+      quota: 20 * 1024 * 1024 * 1024,
+    });
+    vi.spyOn(api, "getChatContext").mockResolvedValue({
+      used: 6800,
+      limit: 32000,
+      measured: true,
+    });
+    renderPanel();
+    const row = await screen.findByTestId("composer-status");
+    await waitFor(() => {
+      expect(within(row).getByTestId("workspace-usage")).toBeInTheDocument();
+      expect(within(row).getByTestId("chat-context")).toBeInTheDocument();
+    });
+    expect(within(row).getByTestId("compact-chat")).toBeInTheDocument();
+  });
+});

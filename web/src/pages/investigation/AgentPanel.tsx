@@ -984,32 +984,35 @@ export function AgentPanel({
           data-testid="composer-column"
           style={{ ...chatColumn, display: "flex", flexDirection: "column", gap: 6 }}
         >
-        {/* #245: persistent storage usage gauge so the user sees they're filling up. */}
-        <UsageBar slug={slug} itemId={investigationId} />
-        {/* #739: and how full the CONTEXT window is — the other ceiling a
-            long session runs into, and the one that used to arrive as a
-            surprise rather than as a gauge. */}
-        {chatId && <ContextBar slug={slug} itemId={investigationId} chatId={chatId} />}
-        {chatId && (
-          <button
-            type="button"
-            data-testid="compact-chat"
-            onClick={() => compact.mutate()}
-            disabled={compact.isPending || log.streaming}
-            style={{
-              alignSelf: "flex-start",
-              background: "none",
-              border: "none",
-              padding: 0,
-              cursor: compact.isPending ? "default" : "pointer",
-              fontSize: pxToRem(11),
-              color: "var(--text-paper-d)",
-              textDecoration: "underline",
-            }}
-          >
-            {compact.isPending ? "整理中…" : "整理成摘要"}
-          </button>
-        )}
+        {/* One row for the three things a person glances at, not three: storage
+            used (#245), how full the context window is (#739), and the compact
+            link. Each on its own line cost the message area a row apiece, and
+            the chat column is the one that can least afford it. Cells that have
+            nothing to say render nothing, and the row shortens; `.composer-status`
+            draws the `·` between whichever cells are present. */}
+        <div data-testid="composer-status" className="composer-status">
+          <UsageBar slug={slug} itemId={investigationId} />
+          {chatId && <ContextBar slug={slug} itemId={investigationId} chatId={chatId} />}
+          {chatId && (
+            <button
+              type="button"
+              data-testid="compact-chat"
+              onClick={() => compact.mutate()}
+              disabled={compact.isPending || log.streaming}
+              style={{
+                background: "none",
+                border: "none",
+                padding: 0,
+                cursor: compact.isPending ? "default" : "pointer",
+                font: "inherit",
+                color: "inherit",
+                textDecoration: "underline",
+              }}
+            >
+              {compact.isPending ? t("chat.compact.pending") : t("chat.compact")}
+            </button>
+          )}
+        </div>
         {progress && (
           <div data-testid="attach-progress" style={{ display: "flex", flexDirection: "column", gap: 2 }}>
             <div
