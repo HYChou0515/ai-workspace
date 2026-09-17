@@ -497,7 +497,8 @@ RCA 的 system prompt 是純 markdown，存在
     缺的那些 model 引用的 blob 會先被隔離、`gc_t2` 後被刪。所以這個 worker 用同一個 image、
     同一份 config、同一套組裝,registry 由建構保證相同;每一次「請人做」還會帶上 API 那邊的
     model 清單,runner 少任何一個就**拒跑**(job 讀作 FAILED、log 點名少了誰)——寧可 GC 停,
-    不靜默掉資料。記憶體要照「一次載入所有 blob-capable model 的所有 revision」來給
+    不靜默掉資料。記憶體要照「一次持有單一 model 的**全部 ResourceMeta**(含 `indexed_data`,
+    doc-chunk / cluster-member 還沒 rewrite lean 的列帶著向量)」來給,revision 是逐筆串流
     (這正是它以前在 API pod 上 OOM 的原因,`workers.yaml` 的註解有寫)。
 
     一個 JobType 一個 Deployment ⇒ 各自掛 k8s HPA 獨立 autoscale，API 維持小。

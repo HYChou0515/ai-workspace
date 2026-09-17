@@ -317,9 +317,10 @@ def build_coordinators(
             message_queue_factory=message_queue_factory,
         )
         logger.info("coordinators: metric-extraction (graph) coordinator wired")
-    # #245: the blob-GC reconcile is a job because its live-set rescan loads every
-    # revision of every blob-capable model into memory — it OOMed the API pod
-    # that ran it in-process. The API only asks (lifecycle `blob_gc_sweeper`).
+    # #245: the blob-GC reconcile is a job because its live-set rescan holds every
+    # ResourceMeta of every blob-capable model at once and streams every revision
+    # — it OOMed the API pod that ran it in-process. The API only asks (lifecycle
+    # `blob_gc_sweeper`).
     blob_gc = BlobGcCoordinator(
         spec,
         t1=gc_t1,

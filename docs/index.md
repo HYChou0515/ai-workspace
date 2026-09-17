@@ -178,7 +178,7 @@ sequenceDiagram
   本機/測試/單 pod）;設 `false` 時 API 變**純 producer**（只 enqueue,不 consume）。
 - 一個 worker pod 用 `python -m workspace_app.worker <jobtype>` block-consume **單一**
   JobType,各自掛 k8s HPA。
-- 非佇列的 sweeper（idle-killer / mirror / blob-gc / code-sync）**永遠**留在 API,不受
+- 非佇列的 sweeper（idle-killer / mirror / code-sync / blob-gc 的 ask）**永遠**留在 API,不受
   旗標影響。
 
 部署拓樸見 [部署 §11](deployment.md)。

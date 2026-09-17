@@ -310,12 +310,14 @@
 #   # rejected with 507. Default ~20 GiB. Orphaned blobs are reclaimed by the GC
 #   # sweeper (gc_* below) so the count stays honest.
 #   workspace_quota: 21474836480
-#   # #245: blob-GC sweeper (reclaims deleted files' orphaned blobs via specstar's
-#   # ref-count GC). gc_interval_sec = how often a sweep runs (0 = off); a CAS
-#   # lease means only one pod runs the full reconcile per window. gc_t1 protects
+#   # #245: blob GC (reclaims deleted files' orphaned blobs via specstar's
+#   # ref-count GC). gc_interval_sec = how often the API ASKS for a reconcile
+#   # pass (0 = never; one pod per window). The pass is a `blob-gc` JOB: with
+#   # server.run_consumers false it needs the `blob-gc` worker
+#   # (`python -m workspace_app.worker blob-gc`), which boots the API's whole
+#   # composition so it holds every model the reconcile scans. gc_t1 protects
 #   # freshly-written blobs from quarantine; gc_t2 is the reversible dwell in
-#   # quarantine before permanent delete. Run on the main app (all blob-referencing
-#   # models registered there) — not a slim pod with a partial model set.
+#   # quarantine before permanent delete.
 #   gc_interval_sec: 3600
 #   gc_t1: 1h
 #   gc_t2: 24h

@@ -37,8 +37,9 @@ _JOBTYPE_ATTR = {
     # #715: archive imports — a worker pod drains the document writes so a large
     # archive never runs inside an HTTP request.
     "kb-import": "kb_import",
-    # #245: the blob-GC reconcile — its live-set rescan loads every revision of
-    # every blob-capable model into memory, which OOMed the API pod that ran it.
+    # #245: the blob-GC reconcile — its live-set rescan materialises every
+    # ResourceMeta of every blob-capable model and streams every revision,
+    # which OOMed the API pod that ran it.
     "blob-gc": "blob_gc",
 }
 

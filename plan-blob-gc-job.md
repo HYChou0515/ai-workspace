@@ -13,14 +13,20 @@ by calling `collect_all_referenced_file_ids()` on every registered model; for a
 model whose type can hold a `Binary` that is
 
 ```
-metas_list = list(self.storage.dump_meta(None))          # every resource
-bulk = self.storage.dump_resources_bulk(resource_ids=…)  # every stored revision of every one, in memory at once
+metas_list = list(self.storage.dump_meta(None))          # EVERY ResourceMeta of the model, at once
+bulk = self.storage.dump_resources_bulk(resource_ids=…)  # None on disk/Postgres (S3 only) ⇒
+for meta in metas_list:                                   #   revisions streamed one resource at a time
+    for _info, data_io in self.storage.dump_resource(meta.resource_id): …
 ```
 
-`WorkspaceFile` alone is one record per file of every workspace there is (a
-draft rewrite, so one revision each — but every file). That is the same class
-as the #804 `cluster_sweeper` OOM — a whole-table read of something that grows
-with content, on an API pod's timer.
+`ResourceMeta` carries `indexed_data`, so a `DocChunk` / `ClusterMember` table
+whose rows were never rewritten lean holds every embedding vector in that list
+at once; `WorkspaceFile` is one meta per file of every workspace (a draft
+rewrite — one revision each). That is the same class as the #804
+`cluster_sweeper` OOM — a whole-table read of something that grows with
+content, on an API pod's timer. (The first draft of this plan said "every
+revision in memory at once"; the veracity pass showed the bulk path is
+S3-only.)
 
 The decision (2026-09-17): **put it in a coordinator, like every other heavy
 sweep.** The API becomes a pure producer; a worker runs the reconcile.
@@ -81,8 +87,21 @@ plain worker bundle lacks.
   runner that lacks any of them (or gets a claimless hand-made row) refuses the
   pass — `RegistryMismatch`, the job reads FAILED, the log names what is
   missing. A partial-registry consumer is a visible GC outage, never a silent
-  loss of blobs. The parity test enters through `build_coordinator` against a
-  `create_app` oracle that must contain `workspace-file`.
+  loss of blobs. **Second deviation (review round 1, all four lenses):**
+  "equal by construction" was false — four coordination models
+  (`_SandboxAddress`, `_ScheduleIndex`, `_TriggerWindow`, `_GoalStretch`) were
+  registered only inside the **lifespan**, which the worker never enters, so
+  in a pod-split deploy the worker refused every pass. The first parity test
+  was green because its oracle never entered the lifespan either. Now: the
+  lifespan registers **no** model (those four, and the four it duplicated as
+  belt-and-suspenders, live in `create_app` post-apply, unconditionally — a
+  registry that depends on which features are on is one more way for asker
+  and runner to diverge), and the parity test enters the API's lifespan, lets
+  its sweeper produce the real `BlobGcJob`, asserts the lifespan added nothing,
+  and feeds that row's `registry` to the worker's `_check_registry`. The
+  runner also refuses a row off the one partition (the auto-CRUD route can
+  create one under any key), and telemetry after the pass can no longer fail
+  a pass whose deletes are done.
 - **P4 — deploy + docs.** `workers.yaml` gains `rca-worker-blob-gc` (one
   replica, no HPA — one reconcile per window is the whole load; memory sized
   for "every revision of every blob-capable model at once", and a shorter
@@ -95,24 +114,29 @@ plain worker bundle lacks.
 - With `run_consumers=False`, `SpecStar.gc` is never called in the API process;
   a `BlobGcJob` row is what the tick produces, behind the `__scan__:blob-gc`
   window lease.
-- The blob-gc worker's spec registers every model the API's does, entered
-  through `worker.build_coordinator`.
-- A runner missing a claimed model refuses; a claimless row is refused; a runner
-  holding every claimed model runs.
+- The blob-gc worker's spec registers every model the API's ask names — the
+  ask produced by an API whose lifespan RAN — entered through
+  `worker.build_coordinator`; and the lifespan registers nothing.
+- A runner missing a claimed model refuses; a claimless row is refused; a row
+  off the one partition is refused; a runner holding every claimed model runs.
+- A telemetry/census failure after the pass leaves the row COMPLETED.
 - `python -m workspace_app.worker blob-gc` resolves to the coordinator
   (the exhaustive jobtype test) and has a Deployment (the derived manifest test).
 
 ## 執行結果
 
-Branch `blob-gc-job`, five commits P1–P4 + a wording fix.
+Branch `blob-gc-job`: P1–P4, two docs commits, then the review-round-1 fix
+commits (count them with the log, `c7cbecde..HEAD`).
 
 | claim | how it was checked |
 |---|---|
 | pure producer never runs `gc` in-process | `test_a_pure_producer_asks_for_the_reconcile_and_runs_none_of_it` spies `spec.gc`; row PENDING, 0 calls |
 | one asker per window | `test_a_pod_that_loses_the_window_lease_asks_for_nothing` pre-claims a window an hour ahead |
-| worker registry ⊇ API registry | `test_the_blob_gc_worker_registers_every_model_the_api_does`; **mutation**: `API_REGISTRY_JOBTYPES = frozenset()` reddens it naming 11 models (`-eventwatermark -sandboxactivity -turnactivity -userquota -workspacedirs -workspacedisk conversation-goal conversation-todos turn-epoch work-calendar workspace-file`); restored from a backup taken in the same command |
-| refusal on a partial registry | `test_a_runner_missing_a_claimed_model_refuses_the_pass` (FAILED, `gc` 0 calls, log names `workspace-file`) + claimless + holding-all |
-| reclaim still works end to end through the queue | `test_reconcile_reclaims_a_deleted_files_blob_but_keeps_referenced` (disk blob store, `now` seam, `deleted == [0, 1]`) |
+| worker registry ⊇ the live API's ask; the lifespan adds no model | `test_the_blob_gc_worker_holds_every_model_the_apis_ask_names` (API under `TestClient`, `run_consumers=False`, off-hours on; the row's `registry` fed to the worker's `_check_registry`). Reddened on the pre-fix code naming `-goalstretch -scheduleindex -triggerwindow`. **Mutation** (first version): `API_REGISTRY_JOBTYPES = frozenset()` reddens it naming 11 models (`-eventwatermark -sandboxactivity -turnactivity -userquota -workspacedirs -workspacedisk conversation-goal conversation-todos turn-epoch work-calendar workspace-file`; 9 of them bear a collector) |
+| refusal on a partial registry / claimless / off-partition | `test_a_runner_missing_a_claimed_model_refuses_the_pass` (FAILED, `gc` 0 calls, log names `workspace-file`) + claimless + off-partition + holding-all |
+| telemetry after the pass cannot fail it | `test_a_telemetry_failure_after_the_pass_does_not_fail_the_pass` (census raises → COMPLETED, `blob_gc` event still recorded) |
+| reclaim still works end to end through the queue | `test_reconcile_reclaims_a_deleted_files_blob_but_keeps_referenced` (disk blob store, `now` seam; `(quarantined, deleted) == [(1, 0), (1, 1)]` — pass 2's extra quarantine is pass 1's own job-log blob, which the queue puts under an explicit key; `live == [1, 1]`) |
+| the delete cascade tolerates an item with no schedule row | `test_deleting_an_item_that_never_declared_a_schedule_succeeds_when_the_index_is_registered` — a pre-existing 500 (48f09a55, 2026-09-09) the registration move exposed: the tests never registered the model |
 | rows bounded, even when every pass fails | two prune tests (COMPLETED and FAILED paths) |
 | every JobType has a Deployment | `tests/deploy/test_worker_manifests.py` (derived; it reddened first) |
 
@@ -120,7 +144,20 @@ Sentences found false on the pre-push veracity pass and corrected before push:
 "only the four models with a `Binary` field" (see the table above); "every
 version the mirror ever wrote" (`_put_record` is a draft `modify` — one revision
 per file); "shorten the window so fewer revisions accumulate" (a pass reads every
-revision there is).
+meta there is).
+
+Review round 1 (conformance / veracity / regression / defect, in parallel, own
+worktrees). Worst finding per lens: all four found the lifespan-only
+registrations (the pod-split worker refuses every pass — severity: the feature
+does not work where it is deployed). Veracity also found "every revision in
+memory at once" false (the bulk path is S3-only; what is held at once is every
+`ResourceMeta`, `indexed_data` included). Regression: the ws_census trend now
+depends on a pass running (documented); the auto-CRUD route (#723 class, new
+instance) — partition check added, on-demand runs remain #723's scope. Defect:
+telemetry after the deletes could fail the row; `rca-worker-blob-gc` carried
+none of what `build_app` touches at boot (scratch mount added, the rest named
+in the Deployment comment). Every fix here replaced or added a mechanism
+(registration site, partition guard, try/except), so a second round runs.
 
 Gates: `ruff check` / `ruff format --check` / `ty check` clean; targeted tests
 (`tests/filestore/test_blob_gc.py`, `tests/api/test_blob_gc_sweeper.py`,

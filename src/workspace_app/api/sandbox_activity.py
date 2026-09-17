@@ -15,7 +15,7 @@ from being reclaimed, and the recycle steps are idempotent + non-destructive
 (``mirror`` writes the durable snapshot BEFORE the ``rmtree``, blobs are
 content-addressed, ``rmtree``/``forget`` are idempotent), so a rare double
 recycle by two pods archives the same bytes and removes the same dir — never a
-data loss. The model self-registers (like the #245 blob-GC lease) so the
+data loss. The model self-registers (like the other coordination rows) so the
 memory-default app doesn't emit its CRUD routes.
 """
 
