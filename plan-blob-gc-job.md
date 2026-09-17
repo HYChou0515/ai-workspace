@@ -20,8 +20,10 @@ for meta in metas_list:                                   #   revisions streamed
 ```
 
 `ResourceMeta` carries `indexed_data`, so a `DocChunk` / `ClusterMember` table
-whose rows were never rewritten lean holds every embedding vector in that list
-at once; `WorkspaceFile` is one meta per file of every workspace (a draft
+holds every row's embedding vectors in that list at once — the Postgres meta
+store decodes the full-meta BYTEA, and the §6 vector strip thins only the JSONB
+column, so `migrate/execute` does not reduce it (round 2 corrected "rows not
+yet rewritten lean"); `WorkspaceFile` is one meta per file of every workspace (a draft
 rewrite — one revision each). That is the same class as the #804
 `cluster_sweeper` OOM — a whole-table read of something that grows with
 content, on an API pod's timer. (The first draft of this plan said "every
@@ -132,11 +134,11 @@ commits (count them with the log, `c7cbecde..HEAD`).
 |---|---|
 | pure producer never runs `gc` in-process | `test_a_pure_producer_asks_for_the_reconcile_and_runs_none_of_it` spies `spec.gc`; row PENDING, 0 calls |
 | one asker per window | `test_a_pod_that_loses_the_window_lease_asks_for_nothing` pre-claims a window an hour ahead |
-| worker registry ⊇ the live API's ask; the lifespan adds no model | `test_the_blob_gc_worker_holds_every_model_the_apis_ask_names` (API under `TestClient`, `run_consumers=False`, off-hours on; the row's `registry` fed to the worker's `_check_registry`). Reddened on the pre-fix code naming `-goalstretch -scheduleindex -triggerwindow`. **Mutation** (first version): `API_REGISTRY_JOBTYPES = frozenset()` reddens it naming 11 models (`-eventwatermark -sandboxactivity -turnactivity -userquota -workspacedirs -workspacedisk conversation-goal conversation-todos turn-epoch work-calendar workspace-file`; 9 of them bear a collector) |
+| worker registry == the live API's ask; the lifespan adds no model | `test_the_blob_gc_worker_holds_every_model_the_apis_ask_names` (round 2: BOTH sides are `build_app` — the API under `TestClient` as a pure producer, off-hours on, `sandbox.root` under `tmp_path` so nothing lands in `/tmp`; the registries asserted EQUAL and the row's `registry` fed to the worker's `_check_registry`). Reddened on the pre-fix code naming `-goalstretch -scheduleindex -triggerwindow`. **Mutation**: `API_REGISTRY_JOBTYPES = frozenset()` reddened the first version naming 11 models (`-eventwatermark -sandboxactivity -turnactivity -userquota -workspacedirs -workspacedisk conversation-goal conversation-todos turn-epoch work-calendar workspace-file`; 9 of them bear a collector) and reddens the current one naming 15 (those plus `-goalstretch -sandboxaddress -scheduleindex -triggerwindow`) |
 | refusal on a partial registry / claimless / off-partition | `test_a_runner_missing_a_claimed_model_refuses_the_pass` (FAILED, `gc` 0 calls, log names `workspace-file`) + claimless + off-partition + holding-all |
 | telemetry after the pass cannot fail it | `test_a_telemetry_failure_after_the_pass_does_not_fail_the_pass` (census raises → COMPLETED, `blob_gc` event still recorded) |
-| reclaim still works end to end through the queue | `test_reconcile_reclaims_a_deleted_files_blob_but_keeps_referenced` (disk blob store, `now` seam; `(quarantined, deleted) == [(1, 0), (1, 1)]` — pass 2's extra quarantine is pass 1's own job-log blob, which the queue puts under an explicit key; `live == [1, 1]`) |
-| the delete cascade tolerates an item with no schedule row | `test_deleting_an_item_that_never_declared_a_schedule_succeeds_when_the_index_is_registered` — a pre-existing 500 (48f09a55, 2026-09-09) the registration move exposed: the tests never registered the model |
+| reclaim still works end to end through the queue | `test_reconcile_reclaims_a_deleted_files_blob_but_keeps_referenced` (disk blob store, `now` seam; `deleted == [0, 1]`, pass 1 `quarantined == 1`, `live == [1, 1]`; pass 2's `quarantined` is deliberately NOT pinned — on the pinned specstar it is 1, pass 1's own job-log blob, which the queue puts under an explicit key and the reconcile treats as an orphan although its `gc` docstring says keyed blobs are not tracked; an upstream contradiction, not a spec) |
+| the delete cascade tolerates an item with no schedule row | `test_deleting_an_item_that_never_declared_a_schedule_succeeds_when_the_index_is_registered` — a pre-existing 500 (48f09a55, 2026-09-09) the registration move exposed: the one test that registered the model also gave the item a row, so a registered model with no row was never exercised |
 | rows bounded, even when every pass fails | two prune tests (COMPLETED and FAILED paths) |
 | every JobType has a Deployment | `tests/deploy/test_worker_manifests.py` (derived; it reddened first) |
 
@@ -157,7 +159,28 @@ instance) — partition check added, on-demand runs remain #723's scope. Defect:
 telemetry after the deletes could fail the row; `rca-worker-blob-gc` carried
 none of what `build_app` touches at boot (scratch mount added, the rest named
 in the Deployment comment). Every fix here replaced or added a mechanism
-(registration site, partition guard, try/except), so a second round runs.
+(registration site, partition guard, try/except), so a second round ran.
+
+Review round 2 (regression / defect / veracity, on the round-1 fixes). Worst
+per lens — regression: nothing dropped by the replacements; the reconcile
+reclaims specstar's job-log blobs (keyed, unreferenced; a pass that completes
+now deletes them after t1+t2 — documented in the ledger row, not pinned by the
+test: an upstream contradiction between `gc`'s docstring and `iter_active`).
+Veracity: "rows not yet rewritten lean carry the vector" was false — on
+Postgres every DocChunk/ClusterMember meta the pass holds carries its vectors
+(the meta store decodes the full-meta BYTEA; the §6 strip thins the JSONB
+column only), so the "rewrite them lean" remedy was withdrawn from
+`workers.yaml`; "the tests never registered the model" was false (one did,
+with a row present); the collector table's last row over-promised (a repeated
+nested type earns a no-op collector); "two tables" is two models × three
+tables; stale "four coordinators / five sweepers" counts in three subsystem
+docs. Code changes this round: the unreachable `ResourceIsDeletedError` left
+the schedule-index purge's suppress; the unknown-kind test now observes the
+row completing and being pruned; the all-in-one sweeper test asserts the
+sweeper's own row COMPLETED. Defect: nothing survived — a two-process probe (API `build_app` +
+lifespan as producer, worker `build_coordinator`, one shared disk backend) over five
+settings variants gave an empty two-way registry diff and a COMPLETED row each time; the
+parity test now IS that shape (both sides `build_app`, `==`). No mechanism replaced.
 
 Gates: `ruff check` / `ruff format --check` / `ty check` clean; targeted tests
 (`tests/filestore/test_blob_gc.py`, `tests/api/test_blob_gc_sweeper.py`,

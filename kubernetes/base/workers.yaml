@@ -399,13 +399,14 @@ spec:
 # sweepers; the #219 inline→Binary migration it runs at boot is idempotent.
 #
 # Memory is the sizing that matters: for each blob-capable model the pass
-# holds EVERY ResourceMeta at once — indexed_data included, so a doc-chunk /
-# cluster-member table whose rows still carry their embedding vector is the
-# figure — and streams the revisions one resource at a time. That is what
-# killed the API pod that used to run it (its last line: `blob-gc: won lease`).
-# An OOM here is the same fact on a pod no request depends on: raise the limit,
-# or rewrite those rows lean (`migrate/execute`, docs/migrations.md §6). A
-# shorter window does not help — every pass reads every meta there is.
+# holds EVERY ResourceMeta at once — indexed_data included, which on doc-chunk
+# / cluster-member is every row's embedding vectors (the Postgres meta store
+# decodes the full-meta BYTEA; the §6 vector strip only thins the JSONB column,
+# so `migrate/execute` does not reduce this) — and streams the revisions one
+# resource at a time. That is what killed the API pod that used to run it (its
+# last line: `blob-gc: won lease`). An OOM here is the same fact on a pod no
+# request depends on: raise the limit. A shorter window does not help — every
+# pass reads every meta there is.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

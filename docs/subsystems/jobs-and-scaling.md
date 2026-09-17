@@ -27,8 +27,8 @@
 | `src/workspace_app/worker/__init__.py` | worker 的純單元測試 seam。`_JOBTYPE_ATTR` 把 CLI token 映到 bundle 屬性;`select_coordinator` 取對應 coordinator,未知或未接線即 fail-loud `ValueError`;`consume_until_stopped` = `start_consuming` → `stop_event.wait()` → `finally asyncio.run(coordinator.aclose())` 排空。 |
 | `src/workspace_app/worker/__main__.py` | `python -m workspace_app.worker <jobtype>` 的 settings 驅動 composition root + CLI glue（coverage 排除）。`build_bundle` 用 `factories` 建 embedder/ingestor/runner/catalog/queue,呼叫 `build_coordinators`（無 HTTP app/sandbox/filestore/tool packages）;`main` 載 config、`install_llm_logging`、建 spec、`select_coordinator`、綁 SIGTERM/SIGINT → `threading.Event`、`consume_until_stopped`。 |
 | `src/workspace_app/api/app.py` | API composition root（#54 拆分後精簡)。`create_app` 呼叫同一個 `build_coordinators`,掛 `app.state`、`index_coordinator.install_reindex_on_edit()`（僅 API 側）,並把 lifespan 委派給 `build_lifespan(...)`;本身不再定義 lifespan / sweeper / route handler。 |
-| `src/workspace_app/api/lifecycle.py` | `build_lifespan` 工廠(#54 從 app.py 抽出)。回傳 FastAPI lifespan:在 `run_consumers`（預設 True）為真時才 `start_consuming` 四個 coordinator;非佇列 sweeper(`idle_killer` / `mirror_sweeper` / `index_sweeper` / `code_sync_sweeper` / `blob_gc_sweeper`,#54 後已無前導底線)永遠 `create_task`、不受 gate——但 `blob_gc_sweeper` 只 ask（enqueue 一個 `BlobGcJob`），reconcile 本身是 `blob-gc` worker 的工作。 |
-| `kubernetes/base/workers.yaml` | 四個 worker Deployment（`rca-worker-{index,wiki,card-gen,sanity}`),`command=python -m workspace_app.worker <jobtype>`,共用 `rca-config` configmap 與同一 image。index/wiki/card-gen 各掛 HPA;sanity 固定 1 replica 無 HPA。`terminationGracePeriodSeconds: 60` 讓 worker 排空。 |
+| `src/workspace_app/api/lifecycle.py` | `build_lifespan` 工廠(#54 從 app.py 抽出)。回傳 FastAPI lifespan:在 `run_consumers`（預設 True）為真時才對每個 coordinator（wiki/index/sanity/eval/graph/card_gen/import/blob_gc）`start_consuming`;非佇列 sweeper(`idle_killer` / `mirror_sweeper` / `index_sweeper` / `code_sync_sweeper` / `blob_gc_sweeper`,#54 後已無前導底線)永遠 `create_task`、不受 gate——但 `blob_gc_sweeper` 只 ask（enqueue 一個 `BlobGcJob`），reconcile 本身是 `blob-gc` worker 的工作。 |
+| `kubernetes/base/workers.yaml` | 每個 JobType 一個 worker Deployment（`rca-worker-{index,wiki,card-gen,kb-import,sanity,eval,graph,blob-gc}`),`command=python -m workspace_app.worker <jobtype>`,共用 `rca-config` configmap 與同一 image。index/wiki/card-gen 各掛 HPA;sanity 固定 1 replica 無 HPA。`terminationGracePeriodSeconds: 60` 讓 worker 排空。 |
 | `kubernetes/README.md` | 部署文件 §Job workers (#312):`deployment.yaml`(`rca-app`) `RUN_CONSUMERS=false` 當純 producer;split 需要 SHARED backend;all-in-one 替代方案。 |
 
 ## 介面與接縫
@@ -98,7 +98,7 @@ flowchart TB
     新 coordinator 必須加進 `build_coordinators` + `CoordinatorBundle` + `_JOBTYPE_ATTR` 三處,否則 worker 拿不到、API/worker 構造會 drift(CLAUDE.md「Job runner ⊥ API (#312)」鐵則)。
 
 !!! note "run_consumers 只 gate 佇列消費者"
-    `run_consumers` 只 gate 四個佇列消費者的 `start_consuming`。非佇列 sweeper(`idle_killer` / `mirror_sweeper` / `index_sweeper` / `code_sync_sweeper` / `blob_gc_sweeper`,#54 後都住在 `api/lifecycle.py` 的 `build_lifespan`)**永遠**在 API 上 `create_task`、不受 gate 影響——它們是 per-pod 的 sandbox reap / mirror / code-sync / stuck-run 救援,或純 producer（cluster sweep、blob GC 的 ask）——真正的工作（含 blob GC 的 reconcile）是 worker 接走的佇列工作。
+    `run_consumers` 只 gate 佇列消費者（每個 coordinator，`blob_gc` 在內）的 `start_consuming`。非佇列 sweeper(`idle_killer` / `mirror_sweeper` / `index_sweeper` / `code_sync_sweeper` / `blob_gc_sweeper`,#54 後都住在 `api/lifecycle.py` 的 `build_lifespan`)**永遠**在 API 上 `create_task`、不受 gate 影響——它們是 per-pod 的 sandbox reap / mirror / code-sync / stuck-run 救援,或純 producer（cluster sweep、blob GC 的 ask）——真正的工作（含 blob GC 的 reconcile）是 worker 接走的佇列工作。
 
 !!! note "一個 worker = 一個 JobType = 一個 Deployment = 一個 HPA"
     `_JOBTYPE_ATTR` 的 `'card-gen'` 保留連字號(user-facing 名),bundle 屬性是底線 `card_gen`。`select_coordinator` 對未知 jobtype 或未接線的 coordinator(sanity 無 LLM factory → `None`)fail-loud `raise ValueError`,絕不靜默 idle 在沒人餵的佇列上。

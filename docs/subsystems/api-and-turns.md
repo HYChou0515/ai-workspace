@@ -50,7 +50,7 @@ HTTP / SSE 邊界：對外暴露 FastAPI 的 REST 表面（Apps/items、KB colle
 | `src/workspace_app/api/file_routes.py` | `register_file_routes`：workspace 檔案 / exec / search / replace / download + **notebook cell 端點**（`execute_cell` / interrupt / restart，第二條 SSE 的驅動點）。`KernelService` 本身仍在 `app.py` 建構。 |
 | `src/workspace_app/api/workflow_routes.py` | `register_workflow_routes`（run / runs / preview / stream 路由），由 `workflow_exec.py:WorkflowExecutor` 背書（`drive_turn` / run_sandbox / ingest / convert / upsert_card / release / notify_failure）。 |
 | `src/workspace_app/api/capability_routes.py` | `register_capability_routes`：item capability + export。 |
-| `src/workspace_app/api/lifecycle.py` | `build_lifespan(...)`：FastAPI lifespan；`run_consumers` gate 下的四個 `start_consuming()`（wiki/index/sanity/card_gen）＋五個非佇列 sweeper（`idle_killer` / `mirror_sweeper` / `index_sweeper` #227 / `blob_gc_sweeper` #245（只 ask，reconcile 是 `blob-gc` job）/ `code_sync_sweeper`，皆為巢狀函式、無前綴底線）。 |
+| `src/workspace_app/api/lifecycle.py` | `build_lifespan(...)`：FastAPI lifespan；`run_consumers` gate 下每個 coordinator 的 `start_consuming()`（wiki/index/sanity/eval/graph/card_gen/import/blob_gc）＋一串非佇列 sweeper（`idle_killer` / `mirror_sweeper` / `index_sweeper` #227 / `blob_gc_sweeper` #245（只 ask，reconcile 是 `blob-gc` job）/ `code_sync_sweeper`，皆為巢狀函式、無前綴底線）。 |
 
 ## 介面與接縫
 
