@@ -1491,7 +1491,20 @@ export function AgentHeader({
     () => investigationFileService(slug, investigationId),
     [slug, investigationId],
   );
-  const { tier, headerRef, identityRef, actionsRef } = useHeaderTier(tierProp);
+  // What can change the header's content width at a fixed column width: the
+  // labels (they change with the locale), which actions are present, and the
+  // export error line. The hook forgets its width record when this changes.
+  const contentKey = [
+    onNewChat ? "new" : "",
+    onSaveToolPrefs ? t("tools.button") : "",
+    environment ? t("itemenv.button") : "",
+    onSaveEnvVars ? t("env.button") : "",
+    t("skills.button"),
+    t("workflows.button"),
+    chatId ? "export" : "",
+    exportError ? "err" : "",
+  ].join("|");
+  const { tier, headerRef, identityRef } = useHeaderTier(tierProp, contentKey);
   return (
     <header
       ref={headerRef}
@@ -1606,7 +1619,6 @@ export function AgentHeader({
           when the App has one, Export only when there is a chat to name. */}
       <HeaderActions
         tier={tier}
-        groupRef={actionsRef}
         actions={[
           // #200: the low-key escape hatch. A wedged chat (interrupt crash,
           // repetition, step limit, model error) is never a dead end — start a

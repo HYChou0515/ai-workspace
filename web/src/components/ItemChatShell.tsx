@@ -305,9 +305,15 @@ export function ItemChatShell({
               onPick={(workflowId) => setPendingLaunchHere({ workflowId, chatId: active.chat_id })}
             />
           )}
-          <div style={{ flex: 1 }} />
           {showCollections && (
-            <CollectionsButton count={collectionCount} onClick={() => setPickerOpen(true)} />
+            // `margin-left: auto`, not a spacer element. A spacer is an item:
+            // on a wrapped line it still costs a `gap`, and at the workspace's
+            // 280px column that gap was what tipped the bar from two rows to
+            // three (en). The margin right-aligns the button on whatever line
+            // it lands on and costs nothing when it wraps.
+            <span style={{ marginLeft: "auto" }}>
+              <CollectionsButton count={collectionCount} onClick={() => setPickerOpen(true)} />
+            </span>
           )}
         </div>
       )}

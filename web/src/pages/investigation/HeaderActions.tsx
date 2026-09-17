@@ -9,13 +9,14 @@
  * afford it.
  *
  * WHICH tier applies is not a width threshold. The header watches its own
- * layout: after each render it asks whether the action group has dropped below
- * the title's row (`useHeaderTier`), and steps down one tier if it has. That
- * is the layout engine's own answer to "does it fit", so it holds for the
- * column's width rather than the window's — a narrow chat column in a wide
- * window is the ordinary case — and for either locale's labels, which differ
- * by a third in width. A threshold constant measured in one of them would have
- * been wrong in the other.
+ * layout: after each render it asks whether anything has dropped below the
+ * title's row (`useHeaderTier`), and steps down one tier if so. That is the
+ * layout engine's own answer to "does it fit", so it holds for the column's
+ * width rather than the window's — a narrow chat column in a wide window is
+ * the ordinary case: with the workspace view open at 1280px the column is
+ * 369px. It also holds for whatever the labels happen to be: the labelled row
+ * is 500px in zh-TW and 521px in en (measured), and a threshold constant
+ * would need re-measuring on every label or button change.
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
@@ -77,10 +78,10 @@ const GROW_MARGIN = 24;
  * Decide the tier by watching the header wrap.
  *
  * Returns the refs the header must attach: `headerRef` (its width and height
- * trigger a re-check), `identityRef` (the title block), `actionsRef` (the
- * button group). "Wrapped" means some sibling's top has reached the title
- * block's bottom — with `align-items: center` nothing is top-aligned with the
- * title on one row, so the comparison is against the bottom, not the top.
+ * trigger a re-check) and `identityRef` (the title block). "Wrapped" means
+ * some sibling's top has reached the title block's bottom — with
+ * `align-items: center` nothing is top-aligned with the title on one row, so
+ * the comparison is against the bottom, not the top.
  *
  * Steps DOWN one tier per wrapped render, recording the header width at which
  * the tier failed; steps UP only once the header is `GROW_MARGIN` wider than
@@ -89,15 +90,16 @@ const GROW_MARGIN = 24;
  * height change of the header — a wrap caused by the content, not the width,
  * shows up only as height.
  *
- * Known one-way gap: content SHRINKING at a fixed width (a button's condition
- * turning false) does not step up, because stepping up is gated on width. The
- * header is then one tier lower than it could be until the next resize —
- * conservative, and it never wraps.
+ * Stepping up is gated on width — except that a change in `contentKey`
+ * forgets the width record, so content that shrinks (an error line clearing,
+ * labels getting shorter) is given one chance to climb. Anything the caller
+ * leaves out of the key stays conservative: one tier lower than it could be
+ * until the column is `GROW_MARGIN` wider than where that tier last failed.
  *
  * `forced` is the test seam: each tier's shape is pinned with it, and this
  * measuring is asserted in a real browser, where layout exists.
  */
-export function useHeaderTier(forced?: HeaderTier) {
+export function useHeaderTier(forced?: HeaderTier, contentKey = "") {
   const [observe, headerW] = useContainerWidth<HTMLElement>();
   // The header's height, too. A wrap is a height change, and a wrap can arrive
   // with the width unchanged: a locale switch that lengthens the labels, an
@@ -120,9 +122,24 @@ export function useHeaderTier(forced?: HeaderTier) {
     [observe],
   );
   const identityRef = useRef<HTMLDivElement | null>(null);
-  const actionsRef = useRef<HTMLDivElement | null>(null);
   const [measured, setMeasured] = useState<HeaderTier>("labels");
   const failedAt = useRef<Partial<Record<HeaderTier, number>>>({});
+
+  // The failure record is about a WIDTH: "labels did not fit at 698px". When
+  // the content changes — an error line comes or goes, the labels change with
+  // the locale, an action appears — that record is about a header that no
+  // longer exists, so it is forgotten and the tier above is tried once more.
+  // Once: a content change is one event, so this cannot oscillate; if the
+  // tier above still wraps, the step-down below records a fresh width.
+  //
+  // Without this, an error line that wrapped the header at 700px wrote
+  // `failedAt.icons = 698`, and the header sat at "⋯" after the error was gone,
+  // for the rest of the mount, unless the column grew past 722.
+  const lastContentKey = useRef(contentKey);
+  if (lastContentKey.current !== contentKey) {
+    lastContentKey.current = contentKey;
+    failedAt.current = {};
+  }
 
   useLayoutEffect(() => {
     if (forced) return;
@@ -156,26 +173,24 @@ export function useHeaderTier(forced?: HeaderTier) {
       const at = failedAt.current[prev];
       if (at === undefined || headerW > at + GROW_MARGIN) setMeasured(prev);
     }
-    // `headerH` is a trigger, not an input: the decision reads the boxes.
-  }, [forced, headerW, headerH, measured]);
+    // `headerH` and `contentKey` are triggers, not inputs: the decision reads
+    // the boxes.
+  }, [forced, headerW, headerH, measured, contentKey]);
 
-  return { tier: forced ?? measured, headerRef, identityRef, actionsRef };
+  return { tier: forced ?? measured, headerRef, identityRef };
 }
 
 export function HeaderActions({
   tier,
   actions,
-  groupRef,
 }: {
   tier: HeaderTier;
   /** Falsy entries are actions whose condition did not hold; they are skipped. */
   actions: (HeaderAction | false | null | undefined)[];
-  groupRef: React.MutableRefObject<HTMLDivElement | null>;
 }) {
   const items = actions.filter((a): a is HeaderAction => !!a);
   return (
     <div
-      ref={groupRef}
       data-testid="agent-header-actions"
       style={{ display: "flex", alignItems: "center", gap: tier === "icons" ? 4 : 10, flexShrink: 0 }}
     >
@@ -214,8 +229,9 @@ function HeaderMoreMenu({ items }: { items: HeaderAction[] }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
 
-  // Focus goes back to the trigger whenever the menu goes away — on Escape, and
-  // BEFORE an item's action runs. Picking an item unmounts the menu in the same
+  // Focus goes back to the trigger on Escape, and BEFORE an item's action runs
+  // (a click outside leaves focus where the click went, as it should). Picking
+  // an item unmounts the menu in the same
   // commit that opens the item's modal, so without this the modal captured
   // <body> as the element to restore focus to, and closing it left a keyboard
   // user nowhere. The trigger is the one element that is still there.
