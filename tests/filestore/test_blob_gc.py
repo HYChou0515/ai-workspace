@@ -2,9 +2,10 @@
 window and a worker runs it. specstar's `SpecStar.gc` is the engine; this
 coordinator queues it, coalesces asks, records the telemetry, bounds its rows.
 
-The reconcile itself (`collect_all_referenced_file_ids`) loads every revision
-of every `Binary`-bearing model into memory — the whole-table read that killed
-an API pod right after `blob-gc: won lease`. Hence a job, not a sweep."""
+The reconcile itself (`collect_all_referenced_file_ids`) loads every stored
+revision of every blob-capable model into memory at once — the whole-table read
+that killed an API pod right after `blob-gc: won lease`. Hence a job, not a
+sweep."""
 
 import datetime as dt
 
@@ -186,8 +187,9 @@ def test_an_unknown_job_kind_is_ignored(bad):
 # ── the registry claim: the asker names its models, the runner must hold them ──
 #
 # specstar's reconcile builds the live set from the REGISTERED models only, and
-# a model with a `dict[str, Any]` field gets a runtime blob collector too — so
-# "which models" is most of the platform, registered all over `create_app`. A
+# any `list` / `dict` / union / `Optional` field gets a runtime blob collector
+# (only an all-scalar struct is skipped) — so "which models" is nearly every
+# model, registered all over `create_app`. A
 # consumer holding fewer would read every blob the missing models reference as
 # an orphan: quarantined after t1, deleted after t2, silently (#804 P4). The ask
 # carries the asker's registry; a runner that lacks any of it refuses, loudly.

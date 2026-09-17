@@ -155,8 +155,9 @@ def test_build_bundle_forwards_the_context_knobs_to_the_eval_retriever(tmp_path)
 # ── blob-gc: the one worker that must hold the API's WHOLE registry ──────────
 #
 # specstar's blob reconcile builds its live set from the REGISTERED models, and
-# a model with a `dict[str, Any]` field gets a runtime blob collector too — so
-# the scanned set is most of the platform, registered all over `create_app`
+# any `list` / `dict` / union / `Optional` field gets a runtime blob collector
+# (only an all-scalar struct is skipped) — so the scanned set is nearly every
+# model, registered all over `create_app`
 # (`workspace-file` by the filestore, `-sandboxactivity` by the sandbox layer,
 # `conversation-todos` by a route module, …). A consumer holding fewer would
 # read every blob the missing models reference as an orphan and delete it after

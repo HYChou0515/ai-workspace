@@ -318,7 +318,7 @@ def build_coordinators(
         )
         logger.info("coordinators: metric-extraction (graph) coordinator wired")
     # #245: the blob-GC reconcile is a job because its live-set rescan loads every
-    # revision of every Binary-bearing model into memory — it OOMed the API pod
+    # revision of every blob-capable model into memory — it OOMed the API pod
     # that ran it in-process. The API only asks (lifecycle `blob_gc_sweeper`).
     blob_gc = BlobGcCoordinator(
         spec,

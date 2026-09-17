@@ -8,9 +8,10 @@ scheduled — the library never runs it on a background thread.
 
 That rescan is `collect_all_referenced_file_ids`: for every model whose type
 can hold a ``Binary``, ``list(dump_meta(None))`` + ``dump_resources_bulk`` over
-every resource — every REVISION, in memory. ``WorkspaceFile`` alone is every
-file of every workspace, every version the mirror ever wrote. Run on an API
-pod's timer that was the #804 class of failure again: the pod's last line was
+every resource — every stored revision of every record, in memory at once.
+``WorkspaceFile`` alone is one record per file of every workspace there is (a
+draft rewrite, so one revision each, but every file). Run on an API pod's
+timer that was the #804 class of failure again: the pod's last line was
 ``blob-gc: won lease``.
 
 So the reconcile is a **job**. The API's ``blob_gc_sweeper`` is a pure producer
@@ -22,10 +23,10 @@ The live set is built from the REGISTERED models only, so the consuming process
 must register every model the asking one does, or the missing models' blobs
 read as orphans and are deleted after ``t2``. "Can hold a Binary" is decided by
 specstar's ``BinaryProcessor``, and it is wider than a declared ``Binary``
-field: a ``dict[str, Any]`` / untyped ``list`` / multi-arm union field gets a
-runtime collector too, so the scanned set is most of the platform, registered
-all over ``create_app`` — not a list a second composition root could keep in
-step by hand (#804 P4). Two guards, neither a sentence: the ``blob-gc`` worker
+field: any ``list`` / ``dict`` / union / ``Optional`` field gets a runtime
+collector whatever its value type (only an all-scalar struct is skipped), so
+the scanned set is nearly every model, registered all over ``create_app`` —
+not a list a second composition root could keep in step by hand (#804 P4). Two guards, neither a sentence: the ``blob-gc`` worker
 consumes from the API's own composition (``workspace_app.__main__.build_app``,
 never served) so the registries are equal by construction, and every ask
 carries the asker's registry so a runner that lacks any of it REFUSES the pass

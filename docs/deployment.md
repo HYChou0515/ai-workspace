@@ -491,8 +491,9 @@ RCA 的 system prompt 是純 markdown，存在
 
     **`blob-gc` worker 和其他 worker 不同:它開機時組的是 API 自己那整套**
     (`workspace_app.__main__.build_app`,只組不 serve),不是精簡的 worker bundle。
-    specstar 的 reconcile 只從**已註冊的 model** 算 live blob 集合,而有 `dict[str, Any]`
-    欄位的 model 也會被掃——那幾乎是整個平台、散在 `create_app` 各處註冊;拿部分註冊表去跑,
+    specstar 的 reconcile 只從**已註冊的 model** 算 live blob 集合,而任何有 `list` / `dict` /
+    union / `Optional` 欄位的 model 都會被掃(只有全純量的 struct 跳過)——那幾乎是每一個
+    model、散在 `create_app` 各處註冊;拿部分註冊表去跑,
     缺的那些 model 引用的 blob 會先被隔離、`gc_t2` 後被刪。所以這個 worker 用同一個 image、
     同一份 config、同一套組裝,registry 由建構保證相同;每一次「請人做」還會帶上 API 那邊的
     model 清單,runner 少任何一個就**拒跑**(job 讀作 FAILED、log 點名少了誰)——寧可 GC 停,

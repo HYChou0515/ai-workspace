@@ -338,7 +338,7 @@ def build_lifespan(
         the ``BlobGcCoordinator`` for one pass, and whoever consumes the
         ``blob-gc`` JobType runs it — a worker pod, or this process when
         ``run_consumers`` is on. The pass itself rescans every revision of every
-        Binary-bearing model into memory; run on this pod's timer it was the
+        blob-capable model into memory; run on this pod's timer it was the
         #804 class of OOM again (the pod's last line: ``blob-gc: won lease``).
         ``gc_interval`` gates this caller (None ⇒ no task); the grace periods
         live on the coordinator. Off the loop (blocking specstar I/O)."""

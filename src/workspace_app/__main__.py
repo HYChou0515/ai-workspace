@@ -97,9 +97,9 @@ def build_app(settings: Settings, *, config_dir: Path | None) -> FastAPI:
     wired, nothing served. ``main`` serves what this returns; the ``blob-gc``
     worker (`workspace_app.worker`) consumes from it WITHOUT serving, because
     specstar's blob reconcile builds its live set from the REGISTERED models
-    and only this composition registers all of them — a model with a
-    ``dict[str, Any]`` field gets a runtime blob collector too, so the set is
-    not "the four with a Binary field" but most of the platform, and a
+    and only this composition registers all of them — any ``list`` / ``dict``
+    / union / ``Optional`` field gets a runtime blob collector, so the set is
+    not "the four with a Binary field" but nearly every model, and a
     consumer holding a partial registry would quarantine, then delete, every
     blob the missing models reference (#804 P4). Same image, same config, same
     registry, by construction — the Django management-command / Celery-worker

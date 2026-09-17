@@ -389,8 +389,9 @@ spec:
 # Memory is the sizing that matters: the pass loads every revision of every
 # blob-capable model into RAM at once (that is what killed the API pod that used
 # to run it — its last line was `blob-gc: won lease`). An OOM here is the same
-# fact on a pod no request depends on: raise the limit, or shorten the window
-# so fewer revisions accumulate between passes.
+# fact on a pod no request depends on: raise the limit. (A shorter window does
+# not help — the pass reads every revision there is, not those since the last
+# pass; the real relief is a streaming reconcile upstream in specstar.)
 apiVersion: apps/v1
 kind: Deployment
 metadata:
