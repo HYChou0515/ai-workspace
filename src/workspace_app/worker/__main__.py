@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 
 from ..config.schema import Settings
 from ..coordinators import CoordinatorBundle, build_coordinators, build_ingestor
-from . import _JOBTYPE_ATTR, consume_until_stopped, select_coordinator
+from . import _JOBTYPE_ATTR, API_REGISTRY_JOBTYPES, consume_until_stopped, select_coordinator
 
 if TYPE_CHECKING:
     from ..kb.embedder import Embedder
@@ -168,9 +168,26 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
+def build_coordinator(settings: Settings, jobtype: str, *, config_dir: Path | None) -> object:
+    """The coordinator this worker consumes, from the composition its JobType
+    needs. Most JobTypes come from the FastAPI-free ``build_bundle``; one in
+    ``API_REGISTRY_JOBTYPES`` (blob-gc) must hold the API's WHOLE model
+    registry, so it comes from the API's own composition — ``build_app``,
+    built and never served — and the registries are equal by construction."""
+    if jobtype in API_REGISTRY_JOBTYPES:
+        from ..__main__ import build_app
+
+        app = build_app(settings, config_dir=config_dir)
+        return select_coordinator(app.state.coordinators, jobtype)
+    from ..factories import get_spec
+
+    get_user_id = lambda: settings.server.default_user  # noqa: E731
+    spec = get_spec(settings, get_user_id=get_user_id)
+    return select_coordinator(build_bundle(settings, spec, config_dir=config_dir), jobtype)
+
+
 def main(argv: list[str] | None = None) -> None:
     from ..config.loader import load_with_provenance
-    from ..factories import get_spec
     from ..observability.setup import install_llm_logging
 
     args = _parse_args(argv)
@@ -179,10 +196,7 @@ def main(argv: list[str] | None = None) -> None:
     # Faithful LLM call log (default-on; WORKSPACE_LLM_LOG=0 to silence) so a
     # wiki/card-gen worker's LLM calls are as observable as the API's.
     install_llm_logging(settings)
-    get_user_id = lambda: settings.server.default_user  # noqa: E731
-    spec = get_spec(settings, get_user_id=get_user_id)
-    bundle = build_bundle(settings, spec, config_dir=config_dir)
-    coordinator = select_coordinator(bundle, args.jobtype)
+    coordinator = build_coordinator(settings, args.jobtype, config_dir=config_dir)
     logger.info(
         "worker: booted jobtype=%s coordinator=%s", args.jobtype, type(coordinator).__name__
     )

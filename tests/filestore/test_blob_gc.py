@@ -12,7 +12,7 @@ import pytest
 from specstar import QB, BackendBinding, BackendConfig, ConnectionProfile
 from specstar.types import TaskStatus
 
-from workspace_app.filestore.blob_gc import BlobGcCoordinator, BlobGcJob
+from workspace_app.filestore.blob_gc import BlobGcCoordinator, BlobGcJob, BlobGcPayload
 from workspace_app.filestore.specstar_impl import SpecstarFileStore
 from workspace_app.monitor import InMemoryMonitor
 from workspace_app.resources import make_spec
@@ -176,9 +176,77 @@ def test_an_unknown_job_kind_is_ignored(bad):
     row) is logged and dropped, not crashed on."""
     spec = make_spec()
     c = BlobGcCoordinator(spec, t1="1h", t2="24h")
-    from workspace_app.filestore.blob_gc import BlobGcPayload
 
     class _Job:
         data = BlobGcJob(payload=BlobGcPayload(kind=bad))
 
     c._handle(_Job())  # no raise
+
+
+# ── the registry claim: the asker names its models, the runner must hold them ──
+#
+# specstar's reconcile builds the live set from the REGISTERED models only, and
+# a model with a `dict[str, Any]` field gets a runtime blob collector too — so
+# "which models" is most of the platform, registered all over `create_app`. A
+# consumer holding fewer would read every blob the missing models reference as
+# an orphan: quarantined after t1, deleted after t2, silently (#804 P4). The ask
+# carries the asker's registry; a runner that lacks any of it refuses, loudly.
+
+
+def test_the_ask_carries_the_askers_registered_models():
+    spec = make_spec()
+    SpecstarFileStore(spec)  # registers workspace-file, the model #804 P4 feared losing
+    c = BlobGcCoordinator(spec, t1="1h", t2="24h")
+    c.enqueue_reconcile()
+    (row,) = _rows(spec, _ACTIVE)
+    assert row.data.payload.registry == sorted(spec.resource_managers)
+    assert "workspace-file" in row.data.payload.registry
+
+
+async def _consume_claiming(spec, registry: list[str], monkeypatch) -> int:
+    """Run one pass whose ask claims ``registry``; return how often `gc` ran."""
+    c = BlobGcCoordinator(spec, t1="1h", t2="24h")
+    calls = {"n": 0}
+    real = spec.gc
+
+    def _counting(*a, **k):
+        calls["n"] += 1
+        return real(*a, **k)
+
+    monkeypatch.setattr(spec, "gc", _counting)
+    spec.get_resource_manager(BlobGcJob).create(
+        BlobGcJob(
+            payload=BlobGcPayload(kind="reconcile", registry=registry),
+            partition_key="blob-gc",
+            max_retries=0,
+        )
+    )
+    await _drain(c)
+    return calls["n"]
+
+
+async def test_a_runner_missing_a_claimed_model_refuses_the_pass(monkeypatch, caplog):
+    spec = make_spec()  # no filestore ⇒ no workspace-file here
+    claimed = sorted(spec.resource_managers) + ["workspace-file"]
+    with caplog.at_level("ERROR", logger="workspace_app.filestore.blob_gc"):
+        ran = await _consume_claiming(spec, claimed, monkeypatch)
+    assert ran == 0
+    assert [r.data.status for r in _rows(spec, _DONE)] == [TaskStatus.FAILED]
+    assert "workspace-file" in caplog.text  # the refusal names what is missing
+
+
+async def test_a_row_with_no_registry_claim_is_refused_too(monkeypatch):
+    """A hand-made row (the auto route) carries no claim; running it would put
+    the invariant on whoever happens to consume. Refuse — the sweeper's ask is
+    the way in."""
+    spec = make_spec()
+    ran = await _consume_claiming(spec, [], monkeypatch)
+    assert ran == 0
+    assert [r.data.status for r in _rows(spec, _DONE)] == [TaskStatus.FAILED]
+
+
+async def test_a_runner_holding_every_claimed_model_runs_the_pass(monkeypatch):
+    spec = make_spec()
+    ran = await _consume_claiming(spec, sorted(spec.resource_managers), monkeypatch)
+    assert ran == 1
+    assert [r.data.status for r in _rows(spec, _DONE)] == [TaskStatus.COMPLETED]

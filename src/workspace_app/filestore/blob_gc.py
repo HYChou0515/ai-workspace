@@ -6,11 +6,12 @@ quarantines newly-orphaned blobs (``t1`` grace), restores any still referenced,
 and permanently deletes quarantined blobs past ``t2``. It's explicit + user
 scheduled — the library never runs it on a background thread.
 
-That rescan is `collect_all_referenced_file_ids`: for every model with a
-``Binary`` field, ``list(dump_meta(None))`` + ``dump_resources_bulk`` over every
-resource — every REVISION of every ``WorkspaceFile`` / ``SourceDoc`` /
-``WikiPage`` / ``IndexCache``, in memory. Run on an API pod's timer that was the
-#804 class of failure again: the pod's last line was ``blob-gc: won lease``.
+That rescan is `collect_all_referenced_file_ids`: for every model whose type
+can hold a ``Binary``, ``list(dump_meta(None))`` + ``dump_resources_bulk`` over
+every resource — every REVISION, in memory. ``WorkspaceFile`` alone is every
+file of every workspace, every version the mirror ever wrote. Run on an API
+pod's timer that was the #804 class of failure again: the pod's last line was
+``blob-gc: won lease``.
 
 So the reconcile is a **job**. The API's ``blob_gc_sweeper`` is a pure producer
 (one ``ScanLease`` window ⇒ one :meth:`enqueue_reconcile`), and this coordinator
@@ -18,12 +19,18 @@ runs it wherever the ``blob-gc`` JobType is consumed: a worker pod, or the API
 itself in the all-in-one deploy (``run_consumers=True``).
 
 The live set is built from the REGISTERED models only, so the consuming process
-must register every ``Binary``-bearing model or their blobs read as orphans and
-are deleted after ``t2``. specstar skips models without ``Binary`` fields
-outright (``collect_all_referenced_file_ids`` returns ``(set(), True)``), so
-that is the four above — three from ``make_spec`` and ``WorkspaceFile`` from
-``SpecstarFileStore.__init__``. ``tests/test_worker.py`` pins that the worker's
-spec registers every one the API's does.
+must register every model the asking one does, or the missing models' blobs
+read as orphans and are deleted after ``t2``. "Can hold a Binary" is decided by
+specstar's ``BinaryProcessor``, and it is wider than a declared ``Binary``
+field: a ``dict[str, Any]`` / untyped ``list`` / multi-arm union field gets a
+runtime collector too, so the scanned set is most of the platform, registered
+all over ``create_app`` — not a list a second composition root could keep in
+step by hand (#804 P4). Two guards, neither a sentence: the ``blob-gc`` worker
+consumes from the API's own composition (``workspace_app.__main__.build_app``,
+never served) so the registries are equal by construction, and every ask
+carries the asker's registry so a runner that lacks any of it REFUSES the pass
+(:meth:`BlobGcCoordinator._check_registry`) — a visible GC outage instead of a
+silent loss.
 """
 
 from __future__ import annotations
@@ -56,11 +63,22 @@ _PARTITION = "blob-gc"
 
 class BlobGcPayload(msgspec.Struct):
     kind: str = "reconcile"
+    # The asker's registered model names (sorted). The runner refuses the pass
+    # unless it registers every one of them: the live set comes from the
+    # runner's registry, so a model the asker has and the runner lacks is a
+    # model whose blobs would be quarantined, then deleted — silently. Empty
+    # (a hand-made row) is refused too; the sweeper's ask is the way in.
+    registry: list[str] = []
 
 
 class BlobGcJob(Job[BlobGcPayload]):
     """A queued blob-GC pass. ``partition_key`` is fixed (:data:`_PARTITION`)
     so passes serialise fleet-wide."""
+
+
+class RegistryMismatch(RuntimeError):
+    """The runner does not register every model the asker does — running the
+    pass here would delete the missing models' blobs after ``t2``."""
 
 
 def _utcnow() -> dt.datetime:
@@ -117,7 +135,11 @@ class BlobGcCoordinator:
             return
         self._job_rm.create(
             BlobGcJob(
-                payload=BlobGcPayload(kind="reconcile"), partition_key=_PARTITION, max_retries=0
+                payload=BlobGcPayload(
+                    kind="reconcile", registry=sorted(self._spec.resource_managers)
+                ),
+                partition_key=_PARTITION,
+                max_retries=0,
             )
         )
 
@@ -132,7 +154,23 @@ class BlobGcCoordinator:
         # every window would otherwise leave one FAILED row per window for as
         # long as the failure lasts.
         self._prune_finished()
+        self._check_registry(payload.registry)
         self._reconcile()
+
+    def _check_registry(self, claimed: list[str]) -> None:
+        """Refuse the pass unless this process registers every model the asker
+        did (see :class:`BlobGcPayload`). Raising fails the job — the queue
+        logs it and the row reads FAILED — so a partial-registry consumer is a
+        visible outage of the GC, never a silent loss of blobs."""
+        missing = sorted(set(claimed) - set(self._spec.resource_managers))
+        if not claimed or missing:
+            why = f"missing {missing}" if claimed else "the ask carries no registry claim"
+            logger.error(
+                "blob-gc: refusing the pass — this process does not hold the asker's "
+                "model registry (%s); running it here would delete those models' blobs",
+                why,
+            )
+            raise RegistryMismatch(why)
 
     def _prune_finished(self) -> None:
         """Hard-delete the earlier finished rows. A pass is asked for on a timer,

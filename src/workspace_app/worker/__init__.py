@@ -37,7 +37,19 @@ _JOBTYPE_ATTR = {
     # #715: archive imports — a worker pod drains the document writes so a large
     # archive never runs inside an HTTP request.
     "kb-import": "kb_import",
+    # #245: the blob-GC reconcile — its live-set rescan loads every revision of
+    # every blob-capable model into memory, which OOMed the API pod that ran it.
+    "blob-gc": "blob_gc",
 }
+
+# JobTypes whose consumer must hold the API's WHOLE model registry, so the
+# worker builds them from the API's own composition (`workspace_app.__main__
+# .build_app`, never served) instead of `build_bundle`. The blob-GC reconcile
+# computes the live blob set from the REGISTERED models only; a consumer with a
+# partial registry would quarantine, then delete, every blob the missing models
+# reference (#804 P4). `BlobGcCoordinator._check_registry` refuses such a pass
+# at run time; this is what makes the check pass by construction.
+API_REGISTRY_JOBTYPES = frozenset({"blob-gc"})
 
 
 def select_coordinator(bundle: CoordinatorBundle, jobtype: str) -> object:

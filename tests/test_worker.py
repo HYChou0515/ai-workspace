@@ -20,6 +20,7 @@ from workspace_app.coordinators import build_coordinators
 from workspace_app.resources import Collection, SourceDoc, make_spec
 from workspace_app.worker import (
     _JOBTYPE_ATTR,
+    API_REGISTRY_JOBTYPES,
     consume_until_stopped,
     select_coordinator,
 )
@@ -79,6 +80,7 @@ def test_select_coordinator_maps_each_jobtype_to_its_coordinator():
         "eval": bundle.eval,
         "graph": bundle.graph,
         "kb-import": bundle.kb_import,
+        "blob-gc": bundle.blob_gc,
     }
     assert set(expected) == set(_JOBTYPE_ATTR), (
         "a jobtype was added or renamed without a case here — a worker pod can be "
@@ -148,3 +150,57 @@ def test_build_bundle_forwards_the_context_knobs_to_the_eval_retriever(tmp_path)
     assert bundle.eval is not None
     r = bundle.eval._retriever
     assert r is not None and (r._context_chars, r._rerank_context_chars) == (7, 0)
+
+
+# ── blob-gc: the one worker that must hold the API's WHOLE registry ──────────
+#
+# specstar's blob reconcile builds its live set from the REGISTERED models, and
+# a model with a `dict[str, Any]` field gets a runtime blob collector too — so
+# the scanned set is most of the platform, registered all over `create_app`
+# (`workspace-file` by the filestore, `-sandboxactivity` by the sandbox layer,
+# `conversation-todos` by a route module, …). A consumer holding fewer would
+# read every blob the missing models reference as an orphan and delete it after
+# t2 (#804 P4). So the blob-gc worker consumes from the API's own composition.
+
+
+def test_the_blob_gc_worker_is_built_from_the_apis_composition():
+    assert set(_JOBTYPE_ATTR) >= API_REGISTRY_JOBTYPES
+    assert "blob-gc" in API_REGISTRY_JOBTYPES
+
+
+def test_the_blob_gc_worker_registers_every_model_the_api_does(tmp_path, monkeypatch):
+    """Entered through the worker's real door (`build_coordinator`, what `main`
+    calls) against an oracle composed the way the API's tests compose it. The
+    oracle must contain the model whose absence was the danger, or a green run
+    proves only that two incomplete registries agree. Reddens when blob-gc is
+    routed through `build_bundle` (which has no filestore, no sandbox layer, no
+    routes) — the state #804 P4 refused to ship."""
+    from workspace_app.api import create_app
+    from workspace_app.config.loader import load
+    from workspace_app.factories import get_filestore, get_spec
+    from workspace_app.sandbox.mock import MockSandbox
+    from workspace_app.worker.__main__ import build_coordinator
+
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("filestore:\n  kind: specstar\n", encoding="utf-8")
+    settings = load(config_path=cfg, env={})
+    # Tool packages are prebuilt bundles the API refuses to boot without; the
+    # explicit opt-out (an empty PACKAGES) is the documented way to run without.
+    monkeypatch.setattr("workspace_app.__main__.PACKAGES", {})
+
+    oracle = get_spec(settings)
+    create_app(
+        spec=oracle,
+        sandbox=MockSandbox(),
+        filestore=get_filestore(settings, oracle),
+        runner=ScriptedAgentRunner([]),
+    )
+    coordinator = build_coordinator(settings, "blob-gc", config_dir=None)
+
+    api_models = set(oracle.resource_managers)
+    assert "workspace-file" in api_models
+    worker_models = set(coordinator._spec.resource_managers)  # ty: ignore[unresolved-attribute]
+    assert api_models <= worker_models, (
+        f"the blob-gc worker cannot see {sorted(api_models - worker_models)}: a pass on "
+        "it would quarantine, then delete, every blob those models reference"
+    )

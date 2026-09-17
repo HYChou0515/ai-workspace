@@ -1664,6 +1664,9 @@ def create_app(
     app.state.import_coordinator = coordinators.kb_import
     # #245: the blob-GC reconcile consumer; the sweeper's ask goes through it.
     app.state.blob_gc_coordinator = coordinators.blob_gc
+    # The whole bundle, for a worker that consumes from THIS composition
+    # (`worker.build_coordinator` → `select_coordinator`, the same jobtype map).
+    app.state.coordinators = coordinators
     register_card_gen_routes(api, card_gen_coordinator)
     # #377: the global "待釐清" inbox — answer/discard the clarification questions
     # the digest raised. A term answer becomes a context card (the card-drafter LLM
