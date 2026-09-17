@@ -125,16 +125,19 @@ export function useHeaderTier(forced?: HeaderTier, contentKey = "") {
   const [measured, setMeasured] = useState<HeaderTier>("labels");
   const failedAt = useRef<Partial<Record<HeaderTier, number>>>({});
 
-  // The failure record is about a WIDTH: "labels did not fit at 698px". When
+  // The failure record is about a WIDTH: "labels did not fit at this width". When
   // the content changes — an error line comes or goes, the labels change with
   // the locale, an action appears — that record is about a header that no
   // longer exists, so it is forgotten and the tier above is tried once more.
   // Once: a content change is one event, so this cannot oscillate; if the
   // tier above still wraps, the step-down below records a fresh width.
   //
-  // Without this, an error line that wrapped the header at 700px wrote
-  // `failedAt.icons = 698`, and the header sat at "⋯" after the error was gone,
-  // for the rest of the mount, unless the column grew past 722.
+  // Without this, an error line that wrapped the header wrote the width it had
+  // THEN into the record, and the header sat at "⋯" after the error was gone,
+  // for the rest of the mount, unless the column grew `GROW_MARGIN` past it.
+  // (The widths in this record are whatever `useContainerWidth` reports —
+  // content-box after its first observer callback — and record and gate read
+  // the same stream, so the unit does not matter to the comparison.)
   const lastContentKey = useRef(contentKey);
   if (lastContentKey.current !== contentKey) {
     lastContentKey.current = contentKey;

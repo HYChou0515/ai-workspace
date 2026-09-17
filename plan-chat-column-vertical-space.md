@@ -264,3 +264,28 @@
 ### 探針備份的教訓
 
 `HeaderActions.bak` 是第一次探針時取的；P4 amend 之後又用它還原了一次，把 amend 蓋掉。**每次探針重新取備份，還原後看 `git diff --stat` 不是看 `grep 突變字串 = 0`。**
+
+---
+
+## 第三輪（最後一輪）：FINISHED
+
+只看第二輪的兩個修法。兩個機制都成立——`contentKey` 忘記錄再爬一次：換語系 2 次額外 render、
+反向 1 次、error 消失 3 次，都有界、不震盪，StrictMode 下結論相同、key 不會每次 render 亂變；
+`margin-left: auto` 在每一列都把 collections 推到右緣（舊的 spacer 折行後還會讓它靠左）。
+
+一句文字不精確（不買下一輪，但改了）：commit 裡的「`failedAt.icons = 698`」——`useContainerWidth`
+從 observer 回報的是 content-box，實際記到的是 ≈670；註解改成不引數字、寫明單位。
+
+**已知、未修的小事**：掛載當下第一次降階記到的是 border-box（observer 第一次回呼之前），之後
+的比較用 content-box，所以那一筆紀錄要多 ~28px 才會爬回去。只影響掛載時的第一筆，任何
+`contentKey` 變動都會重新記正確的。
+
+### 三輪的形狀
+
+| 輪 | 最嚴重 | 類型 |
+|---|---|---|
+| 1 | switcher 被擠成 22px 點不到 | 我的修法造成的回歸 |
+| 2 | 內容折行讓 header 永遠停在低一階 | 我第一輪修法造成的回歸 |
+| 3 | 一個數字的單位 | 文字 |
+
+符合 CLAUDE.md 的三輪預算，第三輪只剩文字。
