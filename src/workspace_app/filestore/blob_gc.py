@@ -26,10 +26,11 @@ specstar's ``BinaryProcessor``, and it is wider than a declared ``Binary``
 field: any ``list`` / ``dict`` / union / ``Optional`` field gets a runtime
 collector whatever its value type (only an all-scalar struct is skipped), so
 the scanned set is nearly every model, registered all over ``create_app`` —
-not a list a second composition root could keep in step by hand (#804 P4). Two guards, neither a sentence: the ``blob-gc`` worker
-consumes from the API's own composition (``workspace_app.__main__.build_app``,
-never served) so the registries are equal by construction, and every ask
-carries the asker's registry so a runner that lacks any of it REFUSES the pass
+not a list a second composition root could keep in step by hand (#804 P4).
+Two guards, neither a sentence: the ``blob-gc`` worker consumes from the API's
+own composition (``workspace_app.__main__.build_app``, never served) so the
+registries are equal by construction, and every ask carries the asker's
+registry so a runner that lacks any of it REFUSES the pass
 (:meth:`BlobGcCoordinator._check_registry`) — a visible GC outage instead of a
 silent loss.
 """
