@@ -416,12 +416,48 @@ select {
   content: "·";
   margin-right: 8px;
   color: var(--text-paper-d);
-  /* inline-block, so the compact link's underline does not run under the dot
-     that precedes it — text-decoration propagates to inline pseudo-elements. */
-  display: inline-block;
-  text-decoration: none;
 }
 .composer-status > button {
   display: inline-flex;
   align-items: center;
+}
+
+/* The chat header's "⋯" — the tier the action buttons step down to when even
+   their icons do not fit beside the title. Same mechanics and look as the
+   workflow launcher's menu; its own class because it is its own component. */
+.hdr-more {
+  position: relative;
+  display: inline-block;
+}
+.hdr-more__menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
+  min-width: 180px;
+  max-width: 90vw;
+  z-index: var(--z-popover);
+  background: var(--white);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+  padding: 4px;
+}
+.hdr-more__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  padding: 7px 8px;
+  border: none;
+  border-radius: var(--radius-btn);
+  background: transparent;
+  color: var(--text-paper);
+  font-size: var(--text-body-sm);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.hdr-more__item:hover {
+  background: var(--paper-2);
 }

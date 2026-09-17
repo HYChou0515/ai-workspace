@@ -230,3 +230,70 @@ describe("AgentHeader identity block keeps a readable width (#fe-responsive)", (
     expect(screen.getByText("Root Cause Analysis")).toHaveAttribute("title", "Root Cause Analysis");
   });
 });
+
+describe("the header's actions step down as the column narrows", () => {
+  // Wide: icon + label. Narrower: the label goes into the tooltip and the icon
+  // stands alone. Narrower still: one "⋯" with the same seven behind it. Which
+  // tier applies is decided by the header watching its OWN layout wrap — a
+  // narrow chat column in a wide window is the common case, and a viewport
+  // rule cannot see it. `tier` is the seam that pins each tier's shape here;
+  // the measuring itself is asserted in a real browser.
+  const ALL = [
+    "new-chat-button",
+    "tools-button",
+    "item-environment-button",
+    "env-button",
+    "skills-button",
+    "workflows-button",
+    "export-button",
+  ];
+  function renderTier(tier: "labels" | "icons" | "menu", onNewChat = vi.fn()) {
+    renderWithQuery(
+      <MemoryRouter>
+        <AgentHeader
+          streaming={false}
+          investigationId="topic-hub:1"
+          chatId="chat-1"
+          slug="topic-hub"
+          onNewChat={onNewChat}
+          onSaveToolPrefs={() => {}}
+          environment={{ canResize: false }}
+          envVars={{}}
+          onSaveEnvVars={() => {}}
+          tier={tier}
+        />
+      </MemoryRouter>,
+    );
+    return onNewChat;
+  }
+  afterEach(cleanup);
+
+  it("wide: every action shows its label", () => {
+    renderTier("labels");
+    for (const id of ALL) expect(screen.getByTestId(id).textContent?.trim()).not.toBe("");
+    expect(screen.queryByTestId("header-more-button")).toBeNull();
+  });
+
+  it("narrow: every action is still there, as an icon that names itself", () => {
+    renderTier("icons");
+    for (const id of ALL) {
+      const btn = screen.getByTestId(id);
+      expect(btn.textContent?.trim()).toBe("");
+      expect(btn.getAttribute("aria-label")).toBeTruthy();
+      expect(btn.querySelector("svg[data-icon]")?.getAttribute("width")).toBe("16");
+    }
+    expect(screen.queryByTestId("header-more-button")).toBeNull();
+  });
+
+  it("narrower: one more-button, and the same seven behind it, still wired", () => {
+    const onNewChat = renderTier("menu");
+    for (const id of ALL) expect(screen.queryByTestId(id)).toBeNull();
+    fireEvent.click(screen.getByTestId("header-more-button"));
+    const menu = screen.getByTestId("header-more-menu");
+    expect(menu.querySelectorAll("[role='menuitem']")).toHaveLength(ALL.length);
+    fireEvent.click(screen.getByTestId("header-more-new-chat"));
+    expect(onNewChat).toHaveBeenCalledTimes(1);
+    // picking closes it
+    expect(screen.queryByTestId("header-more-menu")).toBeNull();
+  });
+});
