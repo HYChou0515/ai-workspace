@@ -380,3 +380,84 @@ async def test_no_sweeper_when_the_interval_is_none():
         await asyncio.sleep(0.3)
     assert _thread(spec, rid) == [("user", "hi")]  # nobody took it
     assert len(_claims(client).list_open()) == 1
+
+
+# ── P4: the handover a draining pod makes ────────────────────────────────────
+
+
+def test_a_pods_shutdown_hands_over_the_turn_it_could_not_finish(tmp_path):
+    """SIGTERM path, end to end in one process: pod A is answering when its
+    shutdown arrives; the turn does not finish inside the budget, so A lets go
+    of the claim and cancels its copy WITHOUT persisting a partial reply or a
+    cancel marker (that is Stop's meaning, not a rollout's); pod B's sweeper
+    takes the claim and the thread ends with B's answer — clean, one answer,
+    no "interrupted" between.
+
+    Synchronous, and every call to A goes through its TestClient portal: the
+    turn's tasks must live on the loop the lifespan shutdown drains, or the
+    drain awaits tasks of another loop and never returns."""
+    import threading
+    import time
+    from datetime import timedelta
+
+    spec_a = make_spec(default_user="u", backend=_shared_backend(tmp_path))
+    spec_b = make_spec(default_user="u", backend=_shared_backend(tmp_path))
+    runner_a = _Runner("A's answer")
+    a = TestClient(
+        create_app(
+            spec=spec_a,
+            sandbox=MockSandbox(),
+            filestore=MemoryFileStore(),
+            runner=runner_a,
+            run_consumers=False,
+            turn_reclaim_interval=None,
+            shutdown_budget=timedelta(seconds=0.3),
+        )
+    )
+    runner_b = _Runner("B's answer")
+    b = TestClient(
+        create_app(
+            spec=spec_b,
+            sandbox=MockSandbox(),
+            filestore=MemoryFileStore(),
+            runner=runner_b,
+            run_consumers=False,
+            turn_reclaim_interval=timedelta(seconds=0.1),
+        )
+    )
+    item_id, rid = _item_with_chat(spec_a)
+    conv = spec_a.get_resource_manager(Conversation).get(rid).data
+    assert isinstance(conv, Conversation)
+    started = threading.Event()
+    original = runner_a.run
+
+    async def slow(prompt, ctx):  # noqa: ANN001, ANN202
+        started.set()
+        await asyncio.sleep(30)  # longer than any budget here
+        async for ev in original(prompt, ctx):
+            yield ev
+
+    runner_a.run = slow  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
+
+    async def send_on_a() -> None:
+        await _service(a).send(item_id, rid, conv, item_id, _MessageBody(content="hi"), author="al")
+
+    with a:
+        assert a.portal is not None
+        a.portal.start_task_soon(send_on_a)
+        assert started.wait(5), "A's turn never started"
+        (row,) = _claims(a).list_open()
+        assert not row.claim.released
+    # Leaving the `with` ran A's lifespan shutdown on A's loop: the drain, the
+    # release, the cancel.
+    (row,) = _claims(a).list_open()
+    assert row.claim.released, "A did not let go of the turn it could not finish"
+    assert _thread(spec_a, rid) == [("user", "hi")]  # no partial, no marker
+    with b:
+        for _ in range(100):
+            if _thread(spec_b, rid)[-1][0] == "assistant":
+                break
+            time.sleep(0.05)
+    assert runner_b.runs == 1
+    assert _thread(spec_b, rid) == [("user", "hi"), ("assistant", "B's answer")]
+    assert _claims(b).list_open() == []

@@ -1374,7 +1374,12 @@ class ChatTurnEngine:
 
         return StreamingResponse(gen(), media_type="text/event-stream")
 
-    async def aclose(self, timeout: float = 10.0) -> None:
+    async def aclose(
+        self,
+        timeout: float = 10.0,
+        *,
+        handover: Callable[[str], Awaitable[None]] | None = None,
+    ) -> None:
         """Give in-flight turns a bounded chance to finish and persist.
 
         Shutdown cancelled the registered background tasks and tore down
@@ -1387,7 +1392,15 @@ class ChatTurnEngine:
         period, because the alternative is SIGKILL, where nothing gets to run its
         teardown at all. Whatever is still running when the deadline passes is
         cancelled — which each turn already handles by persisting its partial
-        result — and given a short moment to do so."""
+        result — and given a short moment to do so.
+
+        plan-graceful-shutdown P4: with `handover`, what did not finish is let
+        go of FIRST — `handover(key)` for every session still running or
+        holding queued turns (the lifespan wires it to release the turn
+        claims) — and only then cancelled. A released claim is no longer this
+        pod's (`chat_send` checks before persisting), so the cancel writes no
+        partial reply and no "interrupted" marker: a peer re-runs the recipe
+        and the thread reads question, answer. Stop's marker is Stop's."""
         live = [
             t
             for t in (
@@ -1397,13 +1410,36 @@ class ChatTurnEngine:
             )
             if t is not None and not t.done()
         ]
+        stragglers: list[asyncio.Task[Any]] = []
         if live:
             logger.info("turns: draining %d in-flight turn(s) (<=%.1fs)", len(live), timeout)
-            with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(asyncio.gather(*live, return_exceptions=True), timeout)
+            # `asyncio.wait`, NOT `wait_for(gather(...))`: a timed-out `wait_for`
+            # cancels the gather, and a cancelled gather cancels its children —
+            # so the turns were being cancelled by the deadline itself, through
+            # Stop's persist path, before the code below ever saw a straggler.
+            # `wait` leaves the pending ones running for this method to decide.
+            _done, pending = await asyncio.wait(live, timeout=timeout)
+            stragglers = list(pending)
         # Past the deadline: cancel, then let each turn's teardown persist what it
-        # has (that path is the same one Stop uses).
-        stragglers = [t for t in live if not t.done()]
+        # has (that path is the same one Stop uses) — unless it is being handed
+        # over, in which case the release below makes that teardown persist
+        # nothing (see the docstring).
+        if handover is not None and stragglers:
+            unfinished = [
+                key
+                for key, session in (*self._ws_sessions.items(), *self._sessions.items())
+                if (session.current_turn is not None and not session.current_turn.done())
+                or (isinstance(session, _WorkspaceSession) and not session.queue.empty())
+            ]
+            for key in unfinished:
+                try:
+                    await handover(key)
+                except Exception:  # noqa: BLE001 — a failed release leaves the old behaviour
+                    logger.exception("turns: could not hand over %s; it persists as cancelled", key)
+            if unfinished:
+                logger.info(
+                    "turns: handed over %d conversation(s): %s", len(unfinished), unfinished
+                )
         for task in stragglers:
             task.cancel()
         if stragglers:

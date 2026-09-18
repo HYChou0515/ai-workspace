@@ -166,9 +166,9 @@ def test_the_lifespan_drains_turns_for_the_shutdown_budget() -> None:
         for engine in app.state.turn_engines:
             real = engine.aclose
 
-            async def spy(timeout: float = 10.0, *, _real=real) -> None:
+            async def spy(timeout: float = 10.0, *, _real=real, **kw) -> None:  # noqa: ANN003
                 seen.append(timeout)
-                await _real(timeout=timeout)
+                await _real(timeout=timeout, **kw)
 
             engine.aclose = spy  # type: ignore[method-assign]
     assert seen and all(t == 7.0 for t in seen)

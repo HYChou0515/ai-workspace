@@ -646,10 +646,19 @@ def build_lifespan(
             # otherwise leave with the process, silently and with no terminal
             # event. Bounded, so a wedged turn can't hold the pod past its grace
             # period (SIGKILL is strictly worse: nothing runs its teardown).
+            # plan-graceful-shutdown P4: a turn the budget did not allow to
+            # finish is handed over — its claim released, so a peer's reclaim
+            # sweeper (or this pod, restarted) re-runs it; see `aclose`.
+            claims = getattr(app.state, "turn_claims", None)
+
+            async def _handover(key: str) -> None:
+                if claims is not None:
+                    await asyncio.to_thread(claims.release, key)
+
             for engine in getattr(app.state, "turn_engines", ()):
                 logger.debug("lifespan: draining in-flight turns")
                 with contextlib.suppress(BaseException):
-                    await engine.aclose(timeout=shutdown_budget.total_seconds())
+                    await engine.aclose(timeout=shutdown_budget.total_seconds(), handover=_handover)
             logger.debug("lifespan: draining coordinators + kernels")
             t_coord = time.monotonic()
             # Drain in-flight jobs before exit (bounded) — ONLY on a pod that
