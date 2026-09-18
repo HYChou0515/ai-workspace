@@ -205,31 +205,39 @@ async def workspace_skill_metas(files: WorkspaceFiles, workspace_id: str) -> lis
     bad hand-edit can't break the whole index. Empty when there's no ``.skill/``."""
     prefix = f"/{WORKSPACE_SKILL_DIR}/"
     paths = await files.ls(workspace_id, prefix)
-    from ..files.facade import read_all
+    from ..files.facade import read_all_existing
+    from ..filestore.protocol import FileNotFound
 
-    # Which folders are copies falls straight out of the listing we already
-    # have; what each is a copy OF is one batch read of the manifests, beside
-    # the batch read of the SKILL.md files below.
-    manifests = sorted(p for p in paths if p.endswith(f"/{ORIGIN_FILE}"))
-    copies: dict[str, SkillSource | Literal[""]] = {}
-    for path, raw in zip(manifests, await read_all(files, workspace_id, manifests), strict=True):
-        dir_name = path[len(prefix) : -len(f"/{ORIGIN_FILE}")]
-        try:
-            copies[dir_name] = msgspec.json.decode(raw, type=SkillOrigin).source
-        except msgspec.DecodeError:  # not JSON, or not this shape — still a copy
-            copies[dir_name] = ""
     wanted = [
         path
         for path in sorted(paths)
         if path[len(prefix) :].count("/") == 1 and path.endswith("/SKILL.md")
     ]
+    manifests = sorted(p for p in paths if p.endswith(f"/{ORIGIN_FILE}"))
     # The index is rendered every turn, so reading each SKILL.md with its own
-    # call put a sandbox round trip per skill in front of every message.
-    # STRICT, matching the per-file loop this replaced (a bare `read`, so a skill
-    # that vanished mid-listing raised out of here). A performance fix is not the
-    # place to start tolerating a race nobody agreed to tolerate.
+    # call put a sandbox round trip per skill in front of every message — and
+    # the manifests ride in the SAME batch (a second batch resolved the
+    # workspace once more, on every message of every item holding a copy).
+    # One batch, two tolerances: a SKILL.md is read STRICTLY, matching the
+    # per-file loop this replaced (a bare `read`, so a skill that vanished
+    # mid-listing raised out of here — a performance fix is not the place to
+    # start tolerating a race nobody agreed to tolerate); a manifest that is
+    # gone by read time simply makes its folder not a copy, which is what the
+    # listing said before it ever read them.
+    got = await read_all_existing(files, workspace_id, [*wanted, *manifests])
+    copies: dict[str, SkillSource | Literal[""]] = {}
+    for path in manifests:
+        if (raw := got.get(path)) is None:
+            continue
+        dir_name = path[len(prefix) : -len(f"/{ORIGIN_FILE}")]
+        try:
+            copies[dir_name] = msgspec.json.decode(raw, type=SkillOrigin).source
+        except msgspec.DecodeError:  # not JSON, or not this shape — still a copy
+            copies[dir_name] = ""
     out: list[SkillMeta] = []
-    for path, raw in zip(wanted, await read_all(files, workspace_id, wanted), strict=True):
+    for path in wanted:
+        if (raw := got.get(path)) is None:
+            raise FileNotFound(path)
         dir_name = path[len(prefix) : -len("/SKILL.md")]
         meta = _workspace_skill_meta(raw, dir_name)
         if meta is not None:

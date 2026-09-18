@@ -240,3 +240,32 @@ async def test_a_package_copy_still_answers_as_the_package(monkeypatch, tmp_path
         assert (metas[0].is_copy, metas[0].copy_of) == (True, ""), manifest
         states = _by_name(effective_item_skills("_template", "default", {}, metas))
         assert states["author-workflow"].source == "shared"
+
+
+async def test_a_manifest_gone_between_the_listing_and_the_read_is_simply_not_a_copy(
+    monkeypatch,
+):
+    """Round 3: the listing never READ `.origin` before P18; batching the reads
+    strictly put the whole index at the mercy of one manifest deleted between
+    `ls` and the read (the publish reply itself tells people to `delete_file`
+    it). `read_all_existing` exists for exactly that race: gone means not a
+    copy, and the rest of the index still renders."""
+    from workspace_app.apps.skills import workspace_skill_metas
+
+    files = await _files_with(alpha=b"a", beta=b"b")
+    await files.write("inv", "/.skill/alpha/.origin", b'{"source":"shared","files":{}}')
+    real_ls = files.ls
+
+    async def ls_then_delete(workspace_id: str, prefix: str = "") -> list[str]:
+        paths = await real_ls(workspace_id, prefix)
+        await files.delete(workspace_id, "/.skill/alpha/.origin")
+        return paths
+
+    monkeypatch.setattr(files, "ls", ls_then_delete)
+
+    metas = await workspace_skill_metas(files, "inv")
+
+    assert [(m.name, m.is_copy, m.copy_of) for m in metas] == [
+        ("alpha", False, ""),
+        ("beta", False, ""),
+    ]

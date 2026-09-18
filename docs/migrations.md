@@ -642,10 +642,11 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
   列只在新版本寫完後才指過去，舊版本的命名空間在那之後才清——中途失敗留下的是沒人指的孤兒 blob，不是指向空的列。
 - `SkillOrigin`（副本的 `.origin` manifest）多了 `entry` 欄位，預設 `""`；既有的 package skill 副本照舊解碼，不用動。
   ⚠️ **回滾**（`回滾前`）：`source: "hub"` 的 `.origin` 有**兩種**來源——從 skill hub **裝過**的副本，以及
-  **發布過**的那個資料夾（`publish_skill` 發完會把發布方自己的 `.skill/<name>/.origin` 改寫成指向剛發的條目，
-  讓面板不會對它自己提「有新版」）——舊碼的 enum 都不認得。漏做的症狀：**回滾後那個 item 的 `GET …/skills`
-  與 Refresh 會 500**。package skill 的副本不受影響。要回滾就先把那些 `.skill/<name>/.origin` 刪掉
-  （副本本身照常可用，只是不再知道上游；發布方的資料夾則變回一般 workspace skill）。
+  **發布過**的那個資料夾（發布方自己寫的、或本來就是 hub 副本的 `.skill/<name>/`：`publish_skill` 發完會把它的
+  `.origin` 改寫成指向剛發的條目，讓面板不會對它自己提「有新版」；本來是 package skill 副本的資料夾**不改**，
+  發布不動它在這個 item 裡的來源與預設開關）——舊碼的 enum 都不認得。漏做的症狀：**回滾後那個 item 的
+  `GET …/skills` 與 Refresh 會 500**。package skill 的副本不受影響。要回滾就先把那些 `.skill/<name>/.origin`
+  刪掉（副本本身照常可用，只是不再知道上游；發布方的資料夾則變回一般 workspace skill）。
 
 **行為**（⚠️ 不動設定行為就變）
 

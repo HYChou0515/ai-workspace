@@ -118,13 +118,44 @@ def test_prose_punctuation_around_a_reference_is_not_part_of_the_file_name(body:
     """Review round 2: round 1 stripped the full stop and nothing else, so
     `**references/g.md**` was refused for not shipping `references/g.md**`.
     Whatever prose wraps a path, the file the body names is the one the
-    folder ships — decided by asking the folder, not by a list of
-    punctuation kept alike by hand."""
+    folder ships — the folder decides that; a punctuation class only shapes
+    the name in the sentence when nothing shipped matches."""
     raw = _md(body=body + "\n")
     shipped = {"SKILL.md": raw, "references/g.md": b"ok"}
     assert validate_skill_payload("triage-reflow", shipped) == []
     problems = validate_skill_payload("triage-reflow", {"SKILL.md": raw})
     assert len(problems) == 1 and "`references/g.md`" in problems[0], problems
+
+
+@pytest.mark.parametrize(
+    ("body", "shipped", "named"),
+    [
+        ("See references/日本.md.", (), "references/日本.md"),
+        ("See references/résumé.", (), "references/résumé"),
+        ("See references/日本", (), "references/日本"),
+        ("See references/a日本 now.", ("references/a",), "references/a日本"),
+        ("See references/g.md-extra.md.", ("references/g.md",), "references/g.md-extra.md"),
+        ("See references/data_ now.", ("references/data_",), None),
+    ],
+)
+def test_a_mention_outside_ascii_is_named_whole(
+    body: str, shipped: tuple[str, ...], named: str | None
+) -> None:
+    """Round 3: the word class was ASCII-only, so `references/日本` was
+    reported as `references` and `references/a日本` resolved to a shipped
+    `references/a`. Word characters are Unicode's, the folder is asked
+    first, and the sentence names the file the body names. The
+    `references/g.md-extra.md` row pins the word-character check itself: a
+    shipped file is only the one a mention names when nothing but punctuation
+    follows it (round 3 found that check unpinned — without it the refusal
+    vanished)."""
+    raw = _md(body=body + "\n")
+    payload = {"SKILL.md": raw, **{rel: b"x" for rel in shipped}}
+    problems = validate_skill_payload("triage-reflow", payload)
+    if named is None:
+        assert problems == []
+    else:
+        assert len(problems) == 1 and f"`{named}`" in problems[0], problems
 
 
 @pytest.mark.parametrize("name", ["a/b", ".", ".."])
@@ -137,7 +168,9 @@ def test_a_name_that_is_not_one_folder_is_refused_by_name(name: str) -> None:
     root, so an entry so named would install outside its folder."""
     raw = f"---\nname: {name}\ndescription: d\n---\n\nbody\n".encode()
     problems = validate_skill_payload(name, {"SKILL.md": raw})
-    assert len(problems) == 1 and f"`{name}`" in problems[0] and "/" in problems[0], problems
+    assert len(problems) == 1 and f"`{name}`" in problems[0], problems
+    # The reason is the one that applies (round 3: `.` was told "no `/`").
+    assert ("no `/`" in problems[0]) == ("/" in name), problems
 
 
 @pytest.mark.parametrize("folder", ["a/b", "../x", "", ".dotted", "with space", "ok-name"])

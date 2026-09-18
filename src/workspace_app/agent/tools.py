@@ -2456,11 +2456,9 @@ async def publish_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str
     # byte of it is read (review round 2 — the check used to come after the
     # whole folder was in memory). `.origin` is the copy's, not the skill's.
     folder = f"/{WORKSPACE_SKILL_DIR}/{name}/"
-    sizes = {
-        path: size
-        for path, size in await files.stat_all(inv, folder)
-        if path != folder + ORIGIN_FILE
-    }
+    manifest_path = folder + ORIGIN_FILE
+    sizes = dict(await files.stat_all(inv, folder))
+    manifest_size = sizes.pop(manifest_path, 0)
     if (too_big := skill_size_problem(sizes)) is not None:
         return f"error: not published — {too_big}"
     payload = await workspace_skill_payload(files, inv, name)
@@ -2503,15 +2501,30 @@ async def publish_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str
                 "or remove its `.origin` file to publish it as a new version of your own."
             )
 
-    # The folder's manifest is rewritten after the publish (below); its bytes
-    # are the one write this tool makes into the workspace, so the room for
-    # them is checked BEFORE the reviewer is spent and the entry goes live —
-    # a `WorkspaceFull` raised at the end reported "workspace full" over a
-    # publish that had happened (review round 2). The manifest's size does not
-    # depend on which id it names (`mint_entry_id` mints them all one length).
-    manifest_path = f"/{WORKSPACE_SKILL_DIR}/{name}/{ORIGIN_FILE}"
-    probe = origin_for("hub", payload, entry=existed or mint_entry_id())
-    await files.ensure_room_for(inv, len(msgspec.json.encode(probe)))
+    # After the publish the folder's manifest is rewritten to the entry it
+    # just became (below) — but only where that changes nothing about what the
+    # folder IS in this item: the publisher's own work (no manifest yet) or a
+    # hub copy (a fork must track the fork, not the root). A PACKAGE copy keeps
+    # its package manifest: publishing changes what the hub holds, never this
+    # folder's source or default-on (review round 3 — rewriting it flipped a
+    # materialized default-off skill on, the #589 invariant from the other
+    # side).
+    tracks_entry = origin is None or origin.source == "hub"
+    if tracks_entry:
+        # That rewrite is the one write this tool makes into the workspace, so
+        # its room is checked BEFORE the reviewer is spent and the entry goes
+        # live — a `WorkspaceFull` raised at the end reported "workspace full"
+        # over a publish that had happened (review round 2). Checked as the
+        # facade's own rule would at write time: by GROWTH over the manifest
+        # already there (a re-publish replaces one of the same length, which
+        # passes on a full workspace), asking rather than charging
+        # (`record=False` — nothing is written yet). The size does not depend
+        # on which id the manifest names (`mint_entry_id` mints them all one
+        # length).
+        probe = origin_for("hub", payload, entry=existed or mint_entry_id())
+        growth = len(msgspec.json.encode(probe)) - manifest_size
+        for refusal in await files.room_refusals(inv, growth, record=False):
+            raise refusal
 
     # The review is the gate (Q9): a review that did not happen is not a pass.
     try:
@@ -2540,20 +2553,18 @@ async def publish_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str
     # published fork tracks the fork rather than the root it was installed
     # from. From here on the folder is a copy of its own entry — a re-publish
     # from another item shows up as an update, and Refresh brings it.
-    manifest = msgspec.json.encode(origin_for("hub", payload, entry=entry_id))
-    try:
-        await files.write(inv, manifest_path, manifest)
-    except WorkspaceFull:
-        # The room was there when this started and is gone now (something
-        # else wrote during the review). The entry IS live; say so, and what
-        # was not written — "workspace full" alone would read as "not
-        # published".
-        return (
-            f"published skill '{name}' to the skill hub (entry {entry_id}) — but the workspace "
-            f"is full, so its manifest `{rel_path(manifest_path)}` could not be written: this "
-            "folder does not yet know it is a copy of that entry. Free some space (delete_file) "
-            "and publish it again to write the manifest."
-        )
+    manifest_unwritten = False
+    if tracks_entry:
+        manifest = msgspec.json.encode(origin_for("hub", payload, entry=entry_id))
+        try:
+            await files.write(inv, manifest_path, manifest)
+        except WorkspaceFull:
+            # The room was there when this started and is gone now (something
+            # else wrote during the review). The entry IS live, so the reply
+            # below is still the reply — with the reviewer's notes, which are
+            # the review — plus what was not written: "workspace full" alone
+            # would read as "not published".
+            manifest_unwritten = True
     how = (
         "updated your earlier version"
         if existed is not None
@@ -2573,6 +2584,13 @@ async def publish_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str
     if tools:
         lines.append(
             f"It mentions these tools: {', '.join(tools)} — an App without them cannot follow it."
+        )
+    if manifest_unwritten:
+        lines.append(
+            f"BUT the workspace is full, so its manifest `{rel_path(manifest_path)}` could not "
+            "be written: this folder does not yet know it is a copy of that entry. Free some "
+            "space (delete_file) and publish it again to write it — that runs the review again "
+            "and stores the same files as a new version."
         )
     # Read back, not assumed: a re-publish keeps the entry's permission, so
     # one the owner had unpublished stays private — saying "public" there

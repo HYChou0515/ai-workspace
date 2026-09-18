@@ -1,6 +1,6 @@
 # Skill Hub — 讓 skill 在人與人之間流動,不經過運營方的 git
 
-**狀態:** grill 十題全部問過並定案(2026-09-18),已點頭,P1–P12 施工完成、第一輪四把鏡頭 review 的修正在 P13–P17、第二輪的在 P18(PR #818);施工中改掉的形狀已回寫在各段。**未做**:P11 的 `skill_eval --control` 實跑——夾具已補到能跑(三個 hub tool 的替身),但本機沒有跑得動的模型,對照組數字要部署方拿自己的模型跑。
+**狀態:** grill 十題全部問過並定案(2026-09-18),已點頭,P1–P12 施工完成、第一輪四把鏡頭 review 的修正在 P13–P17、第二輪的在 P18、第三輪(回歸 + 真實性,只審 P18)的在 P19(PR #818);施工中改掉的形狀已回寫在各段。**未做**:P11 的 `skill_eval --control` 實跑——夾具已補到能跑(三個 hub tool 的替身),但本機沒有跑得動的模型,對照組數字要部署方拿自己的模型跑。
 
 > 第一版計劃把八個我自己決定的東西寫成「grill 收斂」,只有一題真的問過。這一版每一條
 > 決定都是問了、答了才寫上去的;我建議但你改掉的,寫的是你的答案。
@@ -95,8 +95,9 @@ payload 的每個檔案存成 blob(走既有 FileStore,一個 skill hub 命名�
      `.` / `..` 另外擋,因為真磁碟上 `.skill/../SKILL.md` 是 workspace 根)+ **hub 自己的**三條——
      `description` 不能空(loader 其實會列出沒 description 的 skill,但那正是「被列出卻永遠不觸發」的
      debug loop,所以 hub 刻意比 loader 嚴;parity 測試把這條分歧釘成有意的)、body ≤ `SKILL_BODY_CAP`、
-     `references/` 存在性(內文提到的路徑問資料夾:`**references/g.md**` 指的是有出貨的
-     `references/g.md`,不是靠一張標點清單)、`scripts/*.py` 能 `ast.parse`
+     `references/` 存在性(內文提到的路徑**問資料夾**:`**references/g.md**` 指的是有出貨的
+     `references/g.md`,只要路徑後面接的不是文字;沒對上任何出貨檔時才剝掉尾端標點來拼錯誤訊息裡的名字)、
+     `scripts/*.py` 能 `ast.parse`
    - **掃 tool**:body 裡的已註冊 tool 名,整字或 code span。註冊表是 `agent/tools.py` 的 `_IMPLS`
      (完整;本 PR 前 41 個,加上這三個後 44)——**不是** `TOOL_VERBS`,那張表只有 22 個,`read_skill` / `ask_user` / `kb_search`
      都不在裡面。掃描函式是純的,註冊表由呼叫端注入

@@ -127,18 +127,23 @@ class SkillHubEntry(Struct):  # → resource "skill-hub-entry"
 #: backtick or bracket, a comma, a quote); what it may still carry — a full
 #: stop, `**`, `?` — is settled by `_file_named`.
 _REFERENCE_MENTION = re.compile(r"references/[^\s`)\]>,;:'\"]+")
-_WORD_CHAR = re.compile(r"[A-Za-z0-9]")
-_TRAILING_PUNCTUATION = re.compile(r"[^A-Za-z0-9]+$")
+#: A word character in any script (`\w` is Unicode-aware; round 3 found the
+#: ASCII class naming `references/日本` as `references`). The underscore is
+#: punctuation here — markdown's italic marker — so `_references/g.md_` reads
+#: as the path it wraps.
+_WORD_CHAR = re.compile(r"[^\W_]")
+_TRAILING_PUNCTUATION = re.compile(r"[\W_]+$")
 
 
 def _file_named(mention: str, shipped: Collection[str]) -> str:
     """The file a mention in prose names: the shipped file it begins with, when
-    what follows is punctuation only (`**references/g.md**`, `references/g.md?`,
-    `references/g.md.`), else the mention shorn of that trailing punctuation.
-
-    Decided by asking the folder, not by a list of characters: round 1 stripped
-    the full stop and nothing else, and `**references/g.md**` was refused for
-    not shipping `references/g.md**`."""
+    what follows holds no word character (`**references/g.md**`,
+    `references/g.md?`, `references/g.md.`) — the folder decides, so a shipped
+    name may end in any character at all. A mention that matches no shipped
+    file is shorn of trailing punctuation for the sentence that names it
+    (round 1 stripped the full stop and nothing else, and `**references/g.md**`
+    was refused for not shipping `references/g.md**`); the one name that
+    sentence gets wrong is an unshipped file ending in `_`."""
     for rel in sorted(shipped, key=lambda r: len(r), reverse=True):
         if mention.startswith(rel) and not _WORD_CHAR.search(mention[len(rel) :]):
             return rel
@@ -154,11 +159,13 @@ def skill_name_problem(name: str) -> str | None:
     index entry that could not exist (review round 2). Pinned by a parity
     table with the loader as oracle; `.dotted` and `with space` are listed
     there, so they pass here."""
-    if not name or "/" in name or name in (".", ".."):
+    if "/" in name:
         return (
             f"`{name}` cannot be a skill name — a name is one folder under `.skill/` "
             "(no `/`), which is what the loader lists and `read_skill` loads"
         )
+    if name in ("", ".", ".."):
+        return f"`{name}` cannot be a skill name — it names no folder of its own under `.skill/`"
     return None
 
 

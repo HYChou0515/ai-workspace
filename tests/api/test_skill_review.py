@@ -226,6 +226,34 @@ async def test_notes_that_are_present_but_not_strings_are_kept_whatever_the_verd
     assert review.verdict == "notes" and "hardcoded" in review.notes[0]
 
 
+@pytest.mark.parametrize(
+    ("said", "verdict"),
+    [
+        # Round 3: `""` is the wrong SHAPE (the schema asks for a list), so it is
+        # a slip like a bare string — the prose beside it is the review. P18
+        # had read it as "notes: none" and dropped the prose.
+        ('{"verdict":"notes","notes":""}\n\nStep 3 names a path that is not shipped.', "notes"),
+        ('{"verdict":"ok","notes":false}', "notes"),
+        ('{"verdict":"ok","notes":[]}', "ok"),
+        ('{"verdict":"notes","notes":[]}', "ok"),
+        ('{"verdict":"notes","notes":["", "  "]}', "ok"),
+        ('{"verdict":"ok"}', "ok"),
+        ('{"verdict":"notes"} the description never says when', "notes"),
+    ],
+)
+def test_the_notes_verdict_table(said: str, verdict: str) -> None:
+    """The (notes, verdict) table `parse_review` documents, one row per cell
+    that a reviewer could plausibly produce: a LIST decides by its strings,
+    anything else that is present is a slip, absent notes defer to the verdict."""
+    from workspace_app.api.skill_review import parse_review
+
+    review = parse_review(said, model="m")
+
+    assert review.verdict == verdict, review
+    if verdict == "notes":
+        assert review.notes == [said.strip()] or review.notes, review
+
+
 async def test_when_a_reply_holds_a_draft_and_a_final_object_the_final_wins():
     """A reasoning model that writes `Draft: {…ok…} Final: {…notes…}` in the
     answer channel: the LAST review-shaped object is the answer."""

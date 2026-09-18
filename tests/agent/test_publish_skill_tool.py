@@ -21,7 +21,11 @@ from workspace_app.agent.tools import publish_skill_impl
 from workspace_app.api.skill_review import SkillReviewUnavailable
 from workspace_app.apps.skill_hub import SkillHubReview, SkillHubStore, register_skill_hub
 from workspace_app.apps.skill_payload import ORIGIN_FILE, SkillOrigin
-from workspace_app.apps.skills import WORKSPACE_SKILL_DIR, install_hub_skill
+from workspace_app.apps.skills import (
+    WORKSPACE_SKILL_DIR,
+    install_hub_skill,
+    workspace_skill_origin,
+)
 from workspace_app.files import WorkspaceFiles
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.perm import Permission
@@ -499,14 +503,21 @@ async def test_a_publish_that_cannot_write_its_manifest_is_refused_before_anythi
     went live for everyone while the reply said "workspace full". The room is
     checked first — and the reviewer is not spent on a publish that cannot
     finish."""
+    from workspace_app.apps.skill_hub import mint_entry_id
+    from workspace_app.apps.skill_payload import origin_for
     from workspace_app.files.facade import WorkspaceFull
 
     hub, reviewer = _hub(), _Reviewer()
     md = _md("s")
+    # Room for every byte of the manifest but one — so the check has to size
+    # the manifest EXACTLY (round 3: a probe naming a shorter id than the one
+    # `publish` mints under-counted by 32 bytes, passed here, and the write
+    # then failed after the reviewer was spent).
+    manifest = msgspec.json.encode(origin_for("hub", {"SKILL.md": md}, entry=mint_entry_id()))
     ctx = RunContextWrapper(
         AgentToolContext(
             investigation_id="inv-1",
-            files=WorkspaceFiles(MemoryFileStore(), quota=len(md)),
+            files=WorkspaceFiles(MemoryFileStore(), quota=len(md) + len(manifest) - 1),
             app_slug="rca",
             template_profile="default",
             acting_user="alice",
@@ -515,7 +526,7 @@ async def test_a_publish_that_cannot_write_its_manifest_is_refused_before_anythi
             on_exec_output=lambda _b: None,
         )
     )
-    await _put(ctx, "s", {"SKILL.md": md})  # fills the workspace exactly
+    await _put(ctx, "s", {"SKILL.md": md})
 
     with pytest.raises(WorkspaceFull):
         await publish_skill_impl(ctx, "s")
@@ -535,6 +546,9 @@ async def test_when_the_workspace_fills_during_the_review_the_reply_says_what_wa
     files = WorkspaceFiles(MemoryFileStore(), quota=len(md) + 400)
 
     class _FillsTheWorkspace(_Reviewer):
+        def __init__(self) -> None:
+            super().__init__(SkillHubReview(verdict="notes", notes=["say when"], model="m"))
+
         async def __call__(self, parent_ctx, folder, payload, emit):  # noqa: ANN001, ANN202
             await files.write("inv-1", "/big.bin", b"x" * 400)
             return await super().__call__(parent_ctx, folder, payload, emit)
@@ -560,6 +574,39 @@ async def test_when_the_workspace_fills_during_the_review_the_reply_says_what_wa
     assert "published skill 's'" in out and entry in out
     assert ".origin" in out and "full" in out
     assert not await files.exists("inv-1", "/.skill/s/.origin")
+    # The reviewer's notes are still in the reply (round 3: the residue
+    # returned before they were added), and the way out says its cost.
+    assert "one note" in out or "1 note" in out, out
+    assert "runs the review again" in out, out
+
+
+async def test_a_copy_exactly_at_the_cap_publishes_because_its_manifest_is_not_the_skill():
+    """The `.origin` beside a copy is the copy's, not the skill's (it is left
+    out of the payload), so it is left out of the size too — a hub copy whose
+    files sit exactly at the cap re-publishes. Round 3 found this exclusion
+    unpinned: counting the manifest refused it by 200-odd bytes."""
+    from workspace_app.apps.skill_hub import SKILL_HUB_MAX_BYTES
+
+    hub = _hub()
+    md = _md("s")
+    at_cap = {"SKILL.md": md, "assets/big.bin": b"x" * (SKILL_HUB_MAX_BYTES - len(md))}
+    entry = await hub.publish(
+        owner="alice",
+        name="s",
+        description="d",
+        source_item="inv-0",
+        source_app="rca",
+        source_profile="default",
+        payload=at_cap,
+        referenced_tools=[],
+        review=OK,
+    )
+    ctx = _ctx(hub, _Reviewer())
+    await install_hub_skill(_files(ctx), "inv-1", hub, entry)
+
+    out = await publish_skill_impl(ctx, "s")
+
+    assert out.startswith("published skill"), out
 
 
 async def test_a_folder_over_the_cap_is_refused_from_its_sizes_without_reading_it():
@@ -599,6 +646,106 @@ async def test_a_folder_over_the_cap_is_refused_from_its_sizes_without_reading_i
 
     assert out.startswith("error:") and "MiB" in out
     assert store.reads == 0
+
+
+@pytest.mark.parametrize("origin_kind", ["none", "package", "hub"])
+async def test_publishing_leaves_the_folders_source_and_default_on_unchanged(origin_kind: str):
+    """Round 3 (regression lens): publishing rewrote the publisher's own
+    `.origin` to `source: "hub"`, and the P18 rule "a hub copy is a workspace
+    skill" then flipped a materialized DEFAULT-OFF package copy to
+    default-on the moment it was published — the #589 invariant broken from
+    the other side (round 2 found the mirror: a workspace-authored skill
+    turning into a package copy). The table: whatever the folder was before
+    the publish — the publisher's own work, a package copy, a hub copy — it is
+    the same after, in source and in default-on. The manifest is rewritten
+    only where that holds (no manifest, or a hub one); a package copy keeps
+    its package manifest, because publishing changes what the hub holds,
+    never what this folder is."""
+    from workspace_app.apps.skills import effective_item_skills, workspace_skill_metas
+
+    hub = _hub()
+    name = "author-workflow"  # declared by `_template`, default-OFF in its `default` profile
+    alices = await hub.publish(
+        owner="alice",
+        name=name,
+        description="d",
+        source_item="inv-alice",
+        source_app="rca",
+        source_profile="default",
+        payload={"SKILL.md": _md(name, "alice's\n")},
+        referenced_tools=[],
+        review=OK,
+    )
+    ctx = _ctx(hub, _Reviewer(), user="bob")
+    files = _files(ctx)
+    if origin_kind == "hub":
+        await install_hub_skill(files, "inv-1", hub, alices)
+    await _put(ctx, name, {"SKILL.md": _md(name, "bob's take\n")})
+    if origin_kind == "package":
+        await _put(ctx, name, {ORIGIN_FILE: b'{"source":"shared","files":{}}'})
+
+    async def state() -> tuple[str, bool]:
+        metas = await workspace_skill_metas(files, "inv-1")
+        (row,) = [
+            r for r in effective_item_skills("_template", "default", {}, metas) if r.name == name
+        ]
+        return row.source, row.default_on
+
+    before = await state()
+    assert (
+        before
+        == {"none": ("workspace", True), "package": ("shared", False), "hub": ("workspace", True)}[
+            origin_kind
+        ]
+    )
+
+    out = await publish_skill_impl(ctx, name)
+
+    assert out.startswith("published skill"), out
+    assert await state() == before
+    origin = await workspace_skill_origin(files, "inv-1", name)
+    assert origin is not None
+    if origin_kind == "package":
+        assert origin.source == "shared" and origin.entry == ""
+    else:
+        assert origin.source == "hub" and origin.entry == hub.find("bob", name)
+
+
+async def test_a_republish_on_a_full_workspace_is_allowed_because_its_manifest_write_is_same_size():
+    """Round 3 (regression lens): the room check charged the whole manifest as
+    new bytes, but on a re-publish the manifest write REPLACES one of the same
+    length (the digests are fixed-width), and the workspace rule is growth —
+    "shrinks, same-size replaces and deletes always pass" — so the old
+    write-time gate let it through on a full workspace and the pre-check
+    refused it before the reviewer ran. The pre-check asks the facade's own
+    rule (`room_refusals`) with the growth, not the size."""
+    hub = _hub()
+    md = _md("s", "v1\n")
+    store = MemoryFileStore()
+    files = WorkspaceFiles(store)
+    ctx = RunContextWrapper(
+        AgentToolContext(
+            investigation_id="inv-1",
+            files=files,
+            app_slug="rca",
+            template_profile="default",
+            acting_user="alice",
+            skill_hub=hub,
+            review_skill_via=_Reviewer(),
+            on_exec_output=lambda _b: None,
+        )
+    )
+    await _put(ctx, "s", {"SKILL.md": md})
+    assert (await publish_skill_impl(ctx, "s")).startswith("published skill")
+    used = await files.workspace_usage("inv-1")
+    await _put(ctx, "s", {"SKILL.md": _md("s", "v2\n")})  # same length: still exactly full
+
+    full = WorkspaceFiles(store, quota=used)
+    ctx.context.files = full
+    out = await publish_skill_impl(ctx, "s")
+
+    assert "updated your earlier version" in out, out
+    assert (await hub.payload_of(hub.find("alice", "s") or ""))["SKILL.md"] == _md("s", "v2\n")
 
 
 # ── refusals that name what to do ────────────────────────────────────────────
