@@ -20,6 +20,7 @@ from specstar.types import ResourceIsDeletedError
 
 from ..agent.config_catalog import AgentConfigCatalog
 from ..agent.context import AgentToolContext
+from ..apps.skill_hub import SkillHubReview, SkillHubStore, register_skill_hub
 from ..apps.subagents import SubagentDef
 from ..config.schema import (
     EnhancementSettings,
@@ -121,6 +122,7 @@ from .schedule_index import (
     register_schedule_index,
 )
 from .schedule_reconcile import reconcile_item_schedules
+from .skill_review import review_skill
 from .spa import SpaStaticFiles
 from .subagent_bridge import SubagentBridge
 from .subagent_run import run_agent_task
@@ -1643,6 +1645,10 @@ def create_app(
     # wired for one backend; now that it is also the per-person ledger, a
     # sandbox wake on a bare test client would hit an unregistered model.
     register_sandbox_activity(spec)
+    # Skill hub entries (docs/plan-skill-hub.md): post-apply like the two
+    # sandbox stores, so no CRUD route can PUT an entry around the review.
+    register_skill_hub(spec)
+    skill_hub = SkillHubStore(spec, filestore)
     register_turn_activity(spec)
     register_disk_ledger(spec)
     register_user_quota(spec)
@@ -1926,6 +1932,24 @@ def create_app(
 
         return await run_agent_task(runner, parent_ctx, defn, prompt, model=model, on_event=relay)
 
+    async def _review_skill(
+        parent_ctx: AgentToolContext,
+        folder: str,
+        payload: Mapping[str, bytes],
+        emit: OutputSink | None = None,
+    ) -> SkillHubReview:
+        """The skill hub's AI review (plan P3), run as a sub-agent of the
+        publishing turn on the same runner — same relay into the tool card as
+        `_delegate`, so the person sees the review happening."""
+
+        def relay(ev: AgentEvent) -> None:
+            if emit is None:
+                return
+            if line := progress_line(ev):
+                emit(line.encode())
+
+        return await review_skill(runner, parent_ctx, folder, payload, on_event=relay)
+
     # #506: close the card-gen loop — swap the coordinator's fallback (open-loop)
     # drafter for the AGENTIC one when card drafting is enabled. #506/#577 follow-up:
     # the agentic drafter consults ONLY the glossary of existing cards before drafting
@@ -2027,6 +2051,8 @@ def create_app(
         # #397: lets the request_wiki_update tool submit a user's wiki correction.
         wiki_coordinator=wiki_coordinator,
         run_agent=_delegate,
+        skill_hub=skill_hub,
+        review_skill=_review_skill,
         # plan-subagent-model-choice: the operator's curated run_agent engines
         # (production: `resolve_subagent_models(settings)`), stamped onto every
         # turn ctx so `_agent_kwargs` can shape the tool's schema.

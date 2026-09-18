@@ -160,6 +160,17 @@ def validate_skill_payload(folder: str, payload: Mapping[str, bytes]) -> list[st
     return problems
 
 
+def skill_description(skill_md: str) -> str:
+    """The frontmatter ``description`` of a SKILL.md — the line the entry lists
+    under. For a SKILL.md that passed :func:`validate_skill_payload` this is
+    non-empty; on one that did not, it is whatever is there (possibly "")."""
+    try:
+        front, _body = _parse_frontmatter(skill_md.encode())
+    except SkillError:
+        return ""
+    return str(front.get("description", "")).strip()
+
+
 def referenced_tools(skill_md: str, known: Collection[str]) -> list[str]:
     """The registered tool names the BODY mentions, sorted and unique.
 

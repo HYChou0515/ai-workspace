@@ -157,6 +157,38 @@ async def load_workspace_skill(files: WorkspaceFiles, workspace_id: str, name: s
     return _enforce_cap(name, body)
 
 
+async def workspace_skill_payload(
+    files: WorkspaceFiles, workspace_id: str, name: str
+) -> dict[str, bytes]:
+    """Every file under the workspace's ``.skill/<name>/``, keyed the way
+    :func:`skill_payload` keys a package skill — the shape the skill hub stores
+    and ``materialize_skill`` writes. ``.origin`` is left out: it says where THIS
+    copy came from, which is the copy's business, not the skill's. Empty when
+    there is no such folder."""
+    prefix = f"/{WORKSPACE_SKILL_DIR}/{name}/"
+    paths = sorted(p for p in await files.ls(workspace_id, prefix) if p != prefix + ORIGIN_FILE)
+    from ..files.facade import read_all
+
+    return {
+        path[len(prefix) :]: raw
+        for path, raw in zip(paths, await read_all(files, workspace_id, paths), strict=True)
+    }
+
+
+async def workspace_skill_origin(
+    files: WorkspaceFiles, workspace_id: str, name: str
+) -> SkillOrigin | None:
+    """The copy's ``.origin`` manifest, or ``None`` when the folder is not a
+    copy (or does not exist)."""
+    from ..filestore.protocol import FileNotFound
+
+    try:
+        raw = await files.read(workspace_id, f"/{WORKSPACE_SKILL_DIR}/{name}/{ORIGIN_FILE}")
+    except FileNotFound:
+        return None
+    return msgspec.json.decode(raw, type=SkillOrigin)
+
+
 async def workspace_skill_metas(files: WorkspaceFiles, workspace_id: str) -> list[SkillMeta]:
     """``(name, description)`` for every well-formed skill under the workspace's
     ``.skill/`` dir, sorted by name. Unparseable / name-mismatched / nameless

@@ -2395,6 +2395,114 @@ async def save_skill_impl(
     )
 
 
+async def publish_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -> str:
+    """Publish one of THIS workspace's skills (a `.skill/<name>/` folder) to the
+    skill hub, where every user of the platform can find it and install it into
+    their own items. Use it when the user asks to share, publish or upload a
+    skill — and only after they have said which one.
+
+    `name` is the folder name under `.skill/` (the same name `read_skill` loads).
+    Before anything is published the folder is checked for the traps that make a
+    skill silently useless (frontmatter name ≠ folder, no description, a body
+    over the cap, a `references/` file the body names but does not ship, a script
+    that does not parse) — those come back as an `error:` naming each one, and
+    nothing is published until they are fixed. A well-formed skill is then read by an AI
+    reviewer whose notes are returned to you: relay them to the user verbatim,
+    they are suggestions, not blockers — the skill IS published either way.
+
+    Publishing the same name again replaces your earlier version. A folder
+    installed from someone else's skill hub entry publishes as a fork of theirs.
+    The entry is public by default. Returns a confirmation or an `error:` note."""
+    for verb in TOOL_VERBS["publish_skill"]:
+        if (denied := authorize_tool(ctx.context, verb)) is not None:
+            return denied
+    from ..api.skill_review import SkillReviewUnavailable
+    from ..apps.skill_hub import referenced_tools, skill_description, validate_skill_payload
+    from ..apps.skills import (
+        workspace_skill_metas,
+        workspace_skill_origin,
+        workspace_skill_payload,
+    )
+
+    c = ctx.context
+    files, inv = c.files, c.investigation_id
+    if files is None or inv is None:
+        return "error: publish_skill needs a workspace (none on this turn)"
+    hub, review_via = c.skill_hub, c.review_skill_via
+    if hub is None or review_via is None or c.app_slug is None:
+        return "error: publish_skill is only available in an App workspace turn"
+    if not c.acting_user:
+        return "error: publish_skill needs a signed-in user to own the entry (none on this turn)"
+
+    payload = await workspace_skill_payload(files, inv, name)
+    if not payload:
+        have = ", ".join(m.name for m in await workspace_skill_metas(files, inv)) or "(none)"
+        return f"error: no skill folder .skill/{name}/ in this workspace. Skills here: {have}"
+    # Structure first, and ALL of it: each of these installs as nothing, with no
+    # error anywhere, so the publisher hears the whole list now rather than one
+    # item per round trip. No model is spent on a skill that cannot load.
+    if problems := validate_skill_payload(name, payload):
+        return "error: not published — fix these first:\n" + "\n".join(f"- {p}" for p in problems)
+    skill_md = payload["SKILL.md"].decode("utf-8")
+    tools = referenced_tools(skill_md, _IMPLS)
+
+    # Lineage from `.origin` (plan: fork / revision / root). A copy of someone
+    # else's entry is a fork of it; a copy of the publisher's own is a new
+    # revision of theirs (`publish` resolves that by name); a copy whose
+    # upstream cannot be found is a root — Q10: what cannot be found is gone.
+    forked_from, forked_owner = "", ""
+    origin = await workspace_skill_origin(files, inv, name)
+    if origin is not None and origin.source == "hub" and origin.entry:
+        upstream = hub.get(origin.entry)
+        if upstream is not None and upstream.owner != c.acting_user:
+            forked_from, forked_owner = origin.entry, upstream.owner
+
+    # The review is the gate (Q9): a review that did not happen is not a pass.
+    try:
+        review = await review_via(c, name, payload, c.on_exec_output)
+    except SkillReviewUnavailable as e:
+        return (
+            f"error: not published — the review service could not review it ({e}). "
+            "Nothing was written; ask the user to try again later."
+        )
+
+    existed = hub.find(c.acting_user, name) is not None
+    entry_id = await hub.publish(
+        owner=c.acting_user,
+        name=name,
+        description=skill_description(skill_md),
+        source_item=inv,
+        source_app=c.app_slug,
+        source_profile=c.template_profile or "",
+        payload=payload,
+        referenced_tools=tools,
+        review=review,
+        forked_from=forked_from,
+    )
+    how = (
+        "updated your earlier version"
+        if existed
+        else f"a fork of {forked_owner}'s '{name}'"
+        if forked_from
+        else "new"
+    )
+    lines = [f"published skill '{name}' to the skill hub ({how}; entry {entry_id})."]
+    if review.notes:
+        lines.append(
+            f"The reviewer ({review.model or 'AI'}) left {len(review.notes)} note(s) — "
+            "relay them to the user as suggestions:"
+        )
+        lines += [f"- {n}" for n in review.notes]
+    else:
+        lines.append(f"The reviewer ({review.model or 'AI'}) had nothing to flag.")
+    if tools:
+        lines.append(
+            f"It mentions these tools: {', '.join(tools)} — an App without them cannot follow it."
+        )
+    lines.append("It is public by default.")
+    return "\n".join(lines)
+
+
 async def save_subagent_impl(
     ctx: RunContextWrapper[AgentToolContext],
     name: str,
@@ -3347,6 +3455,10 @@ _IMPLS = {
     # `agent.tools` like any other (the workspace apps that ship the
     # `author-skill` meta-skill grant it). Deterministic SKILL.md write.
     "save_skill": save_skill_impl,
+    # `publish_skill` (docs/plan-skill-hub.md) — the skill hub's write door:
+    # validates, scans, reviews, THEN stores. Opt-in per App like `save_skill`;
+    # refuses on a turn with no hub / reviewer wired.
+    "publish_skill": publish_skill_impl,
     # `save_subagent` (#738) — same shape again: an opt-in tool that owns the
     # AGENT.md write, so a sub-agent the agent authors is always one it can call.
     "save_subagent": save_subagent_impl,

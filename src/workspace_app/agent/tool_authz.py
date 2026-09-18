@@ -210,6 +210,13 @@ TOOL_VERBS: dict[str, tuple[Verb, ...]] = {
     # was one. Same verb as the workflow it schedules.
     "save_schedules": ("edit_content",),
     "save_skill": ("edit_content",),
+    # `publish_skill` READS `.skill/<name>/` and writes it to the skill hub, so by
+    # "what it does to the item" it is a read. It takes `save_skill`'s verb
+    # instead (plan-skill-hub): what it produces is a standing instruction every
+    # user of the platform can load, and a collaborator who may only READ an
+    # item taking its owner's skill public under their own name is the case the
+    # stricter verb closes on the honest path.
+    "publish_skill": ("edit_content",),
     # `search_wiki`'s `scopes` fall back to the ITEM id when a turn has no
     # collections, so it greps the workspace and returns `path:line: text`.
     "search_wiki": ("read_content",),
