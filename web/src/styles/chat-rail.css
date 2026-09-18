@@ -122,10 +122,6 @@
   color: var(--text-paper-d);
 }
 .chat-rail__menu-item {
-  /* Glyph + label on one line — the same row the global switcher draws. */
-  display: flex;
-  align-items: center;
-  gap: var(--space-8);
   padding: var(--space-4) var(--space-8);
   border-radius: var(--radius-card);
   color: var(--text-paper);
@@ -134,6 +130,14 @@
 }
 .chat-rail__menu-item:hover {
   background: var(--paper-2);
+}
+/* Glyph + label on one line — the same row the global switcher draws. Scoped
+ * to the ☰ menu: the ⋯ row menu shares the item class but has no glyph, and
+ * its centred buttons stay as they were. */
+.chat-rail__menu > .chat-rail__menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
 }
 .chat-rail__menu-sep {
   height: 1px;
