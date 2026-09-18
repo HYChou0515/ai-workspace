@@ -1,6 +1,6 @@
 # Plan：把一段對話紀錄做成影片（script 版先行，job / worker 版後接）
 
-> **狀態:計畫。P1–P5(script 版)本 PR 做;P6–P8(前端按鈕 + job + worker pod)列出形狀、本 PR 不做。**
+> **狀態:P1–P5(script 版)已實作(PR #817),使用說明在 [chat-video.md](chat-video.md);P6–P8(前端按鈕 + job + worker pod)列出形狀、未做。** 實作時的偏差見文末〈實作偏差〉。
 
 ## 需求（user 原話的整理）
 
@@ -105,3 +105,19 @@ src/workspace_app/chat_video/
 - `uv run python -m workspace_app.chat_video sample.chat.json -o out.gif --width 1920 --height 1080` 一條指令出檔;`ffprobe` 讀到的尺寸 = 指定尺寸。
 - user 那一輪的 frame:輸入框整個在畫面內、光圈、游標、字正在打;拉遠後氣泡在對話串裡。
 - 沒裝 extra 時 `import workspace_app.chat_video.timeline` 不炸;`ruff` / `ty` / targeted 測試綠;`mkdocs --strict` 綠。
+
+## 實作偏差(寫回計畫,因為它會再被踩一次)
+
+- **估算漏了播放器的固定停頓和每個字的瀏覽器開銷。** 第一版 timeline 只算「每字 × 毫秒」,實錄 29 秒對估算 13 秒。
+  修法:所有固定停頓做成一份 `PACING` 表(Python 定義、嵌進頁面、JS 只讀它,測試釘住 JS 沒有自己的數字),
+  再加一個量出來的 `CHAR_OVERHEAD_MS = 5`(timer 觸發 + DOM 插入 + 重繪)——它**不隨 `speed` 或壓縮縮小**,
+  所以壓縮比只算在「要求的延遲」上,並有 0.05 的地板。修完 19.7 秒對 20.3 秒。
+- **1080p 不是把 720p 的頁面放在大框裡。** plan 沒想到尺寸變大時版面要跟著放大;加了 `scale`
+  (0 = 自動,`max(1, min(w/1280, h/720))`),用 CSS `zoom`。**`zoom` 會改 `translate` 的座標系**:
+  鏡頭的平移要除以 scale,第一次 1080p 錄出來輸入框在左上角、左邊被切。
+- **防注入測試第一版只被 `>` 的 escape 撐住。** 突變體「不 escape `<`」全綠——因為 `</script\u003e` 關不掉 script。
+  測試改成斷言規則本身(嵌入的 JSON 不含任何 `<` / `>`),突變體才紅。
+- **模板不能塞在 Python 字串裡**(E501 整片紅),改成 package data `player.html` 用 `importlib.resources` 讀。
+- **reasoning 後 `content` 為空的訊息會多一個空的 answer step**;改成只有思考時不吐 answer。
+- 沒做「`--zoom 1` 時 JS 不推進」的測試(那要真瀏覽器);JS 的 `if (!(k > 1)) return` 是那條規則,親眼看過 `--zoom 1` 的錄影。
+
