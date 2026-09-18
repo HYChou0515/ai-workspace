@@ -873,7 +873,7 @@ v1 出貨 `image-to-knowledge`：VLM 讀圖 → 把圖說的話存成可搜尋�
 `<page>/schedules.json`（plan-wui.md 第三輪）的**第二個宣告點**，不是第二套機制：同一個
 sweep、同一個 validator（`workflow/user_schedules.py`）、同一個 `_TriggerWindow` 租約、同一個
 `server.max_page_schedules` 上限、同一顆 `server.trigger_check_interval_sec` 開關（**預設 0 =
-完全不掃，且沒有訊息**——migrations.md §5.5）。時間語彙（`every` / `at` / `dow` / `dom` /
+完全不掃，且沒有訊息**——[migrations.md#pr-788](migrations.md#pr-788)）。時間語彙（`every` / `at` / `dow` / `dom` /
 `tz` / `n`）與頁面版完全相同，見 `sample-skills/wui/reference.md`。
 
 **三個入口看同一份清單。** 排程的 `run`、頁面的 `startRun`、Workflows 面板的 Run，能啟動的
