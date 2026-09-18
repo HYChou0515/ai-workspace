@@ -41,9 +41,10 @@ uv run python -m workspace_app.chat_video my.chat.json -o demo.gif
 | `--stream-speed` | 22 | 串流:每個字幾毫秒 |
 | `--tool-pause` | 1200 | 工具卡片轉圈多久 |
 | `--speed` | 1.0 | 整體倍速;`2` = 快一倍 |
-| `--max-seconds` | 90 | 影片上限。超過的話**所有延遲等比壓縮**,不丟訊息、不截尾。軟上限:瀏覽器每個字的固定開銷壓不掉,幾萬字的對話還是會超過(指令會印出實際會播多久) |
+| `--max-seconds` | 90 | 影片上限。超過的話**所有延遲等比壓縮**,不丟訊息、不截尾。軟上限:瀏覽器每個字的固定開銷壓不掉、壓縮也只壓到 5%,幾萬字的對話還是會超過(指令會印出實際會播多久) |
 | `--tool-output-chars` | 600 | 工具輸出**和參數**超過就截斷加 `…`(`write_file` 的整個檔案內容不會撐爆卡片) |
-| `--max-asset-bytes` | 4000000 | 內嵌的圖超過這個大小就改成檔案卡 |
+| `--max-asset-bytes` | 4000000 | 一張圖超過這個大小就改成檔案卡(而且根本不讀進來) |
+| `--max-assets-total-bytes` | 24000000 | 整頁內嵌圖片的總預算;同一張圖不論秀幾次只嵌一次;超出預算的(依出現順序)變檔案卡 |
 
 常用組合:
 
@@ -61,8 +62,8 @@ uv run python -m workspace_app.chat_video my.chat.json --html preview.html && xd
 uv run python -m workspace_app.chat_video my.chat.json --files ./my-workspace -o demo.mp4
 ```
 
-指令會印出「會播多久」(`will play 39.1s`;有壓縮時連原本要多久一起印)。實錄比它長約 3–6%(範例:預設速度
-39.1 s 估 → 41.2 s 實錄、`--speed 1.5` 19.7 → 20.2);很短的片子比例更高(4.5 → 5.1 s);被壓縮的片子反而略短
+指令會印出「會播多久」(`will play 39.1s`;有壓縮時連原本要多久一起印)。實錄比它長約 3–6%(附的範例:預設速度
+39.1 s 估 → 41.2 s 實錄、`--speed 1.5` 27.1 → 28.1);很短的片子比例更高(4.5 → 5.1 s);被壓縮的片子反而略短
 (`--max-seconds 10`:10.0 估 → 8.8 s 實錄)。每個字的瀏覽器開銷是一個常數近似(`CHAR_OVERHEAD_MS`),故意往多估。
 
 錯的輸入(壞 JSON、少 `title`、第 N 則不是物件、`content` 不是字串)是一句話 + exit 2——和 KB 上傳同一個驗證器;
@@ -97,9 +98,11 @@ uv run python -m workspace_app.chat_video my.chat.json --files ./my-workspace -o
 3. **回答裡的 `![](plots/a.png)`**:workspace 路徑就渲染成圖。
 
 `image/*` 內嵌成 260px 縮圖(隨 `--scale` 放大),其他 mime 是檔案卡(檔名 + 大小)。**bytes 不在 JSON 裡**——
-要用 `--files DIR` 指到 workspace 資料夾(路徑 `/plots/a.png` ⇒ `DIR/plots/a.png`)。沒給、或檔案不在,
-那張圖就變成檔案卡,指令會在 stderr 說哪一個;不會炸。`DIR` 之外的路徑(`/../…`)一律不讀。
-外部 URL 的 `![](https://…)` **不會被抓**——頁面不碰網路——只剩 alt 文字。
+要用 `--files DIR` 指到 workspace 資料夾(路徑 `/plots/a.png` ⇒ `DIR/plots/a.png`)。沒給、或檔案不在:
+工具宣告的那種變成檔案卡、回答裡 `![](…)` 的那種只剩 alt 文字;指令會在 stderr 說哪一個路徑沒畫;不會炸。
+`DIR` 之外的路徑(`/../…`、指到外面的 symlink)一律不讀。外部 URL 的 `![](https://…)` **不會被抓**——頁面不碰網路——
+只剩 alt 文字(聊天視窗會抓,這是影片自己的規則)。中文檔名、含空白的路徑(寫成 `<plots/my chart.png>`)、
+`![x][ref]` 參照式都認得——timeline 要讀哪些檔和頁面畫哪些圖是同一次 markdown 解析。
 
 一份完整的範例(含 `show_file` 和一張圖):[`docs/examples/chat-video-sample/`](examples/chat-video-sample/chat.json)——
 

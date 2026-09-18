@@ -93,8 +93,8 @@ def record(html: str, options: VideoOptions, workdir: Path, *, expected_ms: int 
             except TimeoutError as exc:
                 raise RecordingTimedOut(
                     f"the page did not finish within {deadline_ms / 1000:.0f}s "
-                    f"(expected {expected_ms / 1000:.0f}s); the browser may be starved, "
-                    "or lower --max-seconds"
+                    f"(expected {expected_ms / 1000:.0f}s): the browser may be starved, or "
+                    "the transcript is too long to play in that time — cut it down"
                 ) from exc
             page.wait_for_timeout(300)  # let the last frame land before the file closes
             video = page.video

@@ -83,9 +83,24 @@ def test_files_dir_supplies_exactly_the_referenced_paths_and_never_outside_it(tm
     secret = tmp_path / "secret.txt"
     secret.write_bytes(b"hunter2")
 
-    assets = load_assets(ws, ["/plots/a.png", "/missing.png", "/../secret.txt"])
+    assets = load_assets(
+        ws,
+        ["/plots/a.png", "/missing.png", "/../secret.txt", "/nul\0byte.png", "/" + "x" * 5000],
+        max_bytes=10,
+    )
 
     assert assets == {"/plots/a.png": b"PNG-A"}
+
+
+def test_files_dir_does_not_read_what_the_page_would_not_inline(tmp_path):
+    """The size check happens BEFORE the read: a 300 MB file named in a
+    declaration used to be read whole and then become a card."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "big.png").write_bytes(b"x" * 100)
+
+    assert load_assets(ws, ["/big.png"], max_bytes=99) == {}
+    assert load_assets(ws, ["/big.png"], max_bytes=100) == {"/big.png": b"x" * 100}
 
 
 def test_html_mode_inlines_a_shown_image_from_files_dir(tmp_path):
@@ -225,4 +240,4 @@ def test_a_squeezed_transcript_is_told_so_and_a_missing_file_is_noted(
     out, err = capsys.readouterr()
     assert code == 0
     assert "squeezed from" in out and "will play 5" in out
-    assert "/gone.png shown as a card (pass --files DIR)" in err
+    assert "/gone.png will not be drawn (pass --files DIR)" in err

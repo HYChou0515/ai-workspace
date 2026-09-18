@@ -34,6 +34,12 @@ def _page(messages: list[dict], assets: dict[str, bytes] | None = None, **opts: 
     )
 
 
+def _assets(page: str) -> dict:
+    m = re.search(r"^const ASSETS = (\{.*?\});", page, re.MULTILINE)
+    assert m, "the page lost its asset table"
+    return json.loads(m.group(1))
+
+
 def _embedded(page: str) -> dict:
     """The timeline the page's script will play, decoded the way the browser
     decodes it — so an assertion on a step sees what the player sees."""
@@ -152,9 +158,10 @@ def test_an_image_the_renderer_was_handed_is_inlined_as_a_data_uri():
     declared image as a 260px thumbnail; so does the player."""
     page = _page([_shown("/plots/a.png", "image/png")], assets={"/plots/a.png": _PNG})
 
-    step = _embedded(page)["steps"][0]
-    assert step["files"][0]["src"].startswith("data:image/png;base64,")
-    assert "iVBORw0KGgo" in step["files"][0]["src"]  # the PNG signature, base64
+    assets = _assets(page)
+    assert assets["/plots/a.png"].startswith("data:image/png;base64,")
+    assert "iVBORw0KGgo" in assets["/plots/a.png"]  # the PNG signature, base64
+    assert _embedded(page)["steps"][0]["files"][0]["path"] == "/plots/a.png"
 
 
 def test_a_file_with_no_bytes_or_no_image_mime_or_too_big_is_a_card_not_a_picture():
@@ -172,8 +179,8 @@ def test_a_file_with_no_bytes_or_no_image_mime_or_too_big_is_a_card_not_a_pictur
         max_asset_bytes=len(big) - 1,
     )
 
+    assert _assets(page) == {}  # nothing inlined: no bytes / not an image / too big
     files = [s["files"][0] for s in _embedded(page)["steps"]]
-    assert [f.get("src") for f in files] == [None, None, None]
     assert files[1]["size"] == 88 and files[1]["path"] == "/notes.md"
 
 
@@ -189,7 +196,8 @@ def test_an_image_in_an_answer_resolves_the_same_way_and_a_url_never_loads():
 
     html = _embedded(page)["steps"][0]["html"]
     assert html.count("<img") == 1
-    assert 'src="data:image/png;base64,' in html
+    assert 'data-asset="/plots/a.png"' in html and "data:" not in html  # drawn from ASSETS
+    assert "/plots/a.png" in _assets(page)
     assert "https://x/y.png" not in html and "ext" in html  # the URL image is its alt text
     assert "/z.png" not in html and "gone" in html
 
@@ -210,6 +218,7 @@ def test_tool_args_are_cut_like_the_output_so_a_write_file_is_not_a_wall():
 
     step = _embedded(page)["steps"][0]
     assert step["args_text"].endswith("…") and len(step["args_text"]) <= 81
+    assert "args" not in step  # the full dict does not ride along in the page
     script = page[page.index("<script>") :]
     assert "JSON.stringify(s.args" not in script  # the page draws the cut text, not the dict
 
@@ -219,6 +228,18 @@ def test_a_stopped_reply_shows_its_label():
 
     assert _embedded(page)["steps"][0]["stopped"] == "repetition"
     assert "s.stopped" in page[page.index("<script>") :]
+
+
+def test_a_riff_that_is_not_webp_is_not_an_image():
+    """`RIFF` starts WAV and AVI too; only `RIFF….WEBP` is a picture."""
+    wav = b"RIFF" + bytes(4) + b"WAVE" + bytes(8)
+    webp = b"RIFF" + bytes(4) + b"WEBP" + bytes(8)
+    page = _page(
+        [{"role": "assistant", "author": "AI", "content": "![w](/a.wav) ![p](/b.webp)"}],
+        assets={"/a.wav": wav, "/b.webp": webp},
+    )
+
+    assert list(_assets(page)) == ["/b.webp"]
 
 
 def test_an_answer_image_whose_bytes_are_not_a_picture_draws_nothing():
@@ -232,3 +253,27 @@ def test_an_answer_image_whose_bytes_are_not_a_picture_draws_nothing():
 
     html = _embedded(page)["steps"][0]["html"]
     assert "<img" not in html and "onload" not in html
+
+
+def test_a_file_shown_many_times_is_inlined_once():
+    """20 `show_file` turns of one 4 MB chart made a 107 MB page, and one
+    answer embedding it 50 times a 267 MB one: every reference carried its
+    own copy. The page holds each file once, in a table the steps and the
+    answers point into."""
+    twenty = [_shown("/big.png", "image/png") for _ in range(20)]
+    answer = {"role": "assistant", "author": "AI", "content": "![](big.png) " * 50}
+    page = _page([*twenty, answer], assets={"/big.png": _PNG})
+
+    assert page.count("iVBORw0KGgo") == 1
+    assert list(_assets(page)) == ["/big.png"]
+
+
+def test_the_total_of_inlined_bytes_is_capped_in_reading_order():
+    """Twenty different 4 MB images would still be an 80 MB page. There is a
+    budget for the page as a whole; files past it are cards, the earlier
+    ones are pictures — the reader saw the first ones."""
+    steps = [_shown(f"/{i}.png", "image/png") for i in range(4)]
+    assets = {f"/{i}.png": _PNG + bytes(100) for i in range(4)}  # ~170 B each
+    page = _page(steps, assets=assets, max_assets_total_bytes=len(_PNG + bytes(100)) * 2)
+
+    assert list(_assets(page)) == ["/0.png", "/1.png"]

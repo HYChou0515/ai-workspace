@@ -30,7 +30,6 @@ def test_it_records_the_rendered_page_once_and_encodes_each_format(monkeypatch, 
     def fake_record(html: str, options: VideoOptions, workdir: Path, *, expected_ms: int) -> Path:
         seen["html"] = html
         seen["expected_ms"] = expected_ms
-        assert (workdir / "player.html").exists() or True  # the page is the record's to write
         seen["workdir"] = workdir
         out = workdir / "recording.webm"
         out.write_bytes(b"WEBM")
@@ -56,8 +55,9 @@ def test_it_records_the_rendered_page_once_and_encodes_each_format(monkeypatch, 
     # The assets reached the page: the answer's `![](/chart.png)` is a data URI.
     assert "data:image/png;base64," in str(seen["html"])
     # The deadline is set from what will PLAY, not from what was asked: a
-    # squeezed transcript's deadline used to be its unsqueezed estimate — a
-    # 40-message chat capped at 1 s got a 31-minute deadline.
+    # squeezed transcript's deadline used to be its unsqueezed estimate — 40
+    # messages of 500 characters capped at 1 s got a 24-minute deadline for
+    # a 2.4-minute playback (computed with `build_timeline`); now 4 minutes.
     expected = seen["expected_ms"]
     assert isinstance(expected, int) and expected > 0
     assert (

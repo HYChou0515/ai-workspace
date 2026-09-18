@@ -309,6 +309,34 @@ def test_the_timeline_names_every_workspace_path_it_will_want_bytes_for():
     assert tl.referenced_paths() == ["/plots/a.png", "/plots/b.png"]
 
 
+def test_a_declaration_is_parsed_exactly_as_the_fe_parses_it():
+    """`shownFiles.ts` `JSON.parse`s everything after the marker; junk before
+    the brace fails the whole declaration there, so it must here. A size that
+    is not a finite number (`NaN`/`Infinity`, which Python's json accepts and
+    the browser's does not) skips the entry rather than crashing."""
+    junk = (
+        "body\n[shown-files]junk"
+        + '{"shown_files":[{"path":"/a.png","mime":"image/png","size":1}]}'
+    )
+    nan = (
+        'body\n[shown-files]{"shown_files":[{"path":"/a.png","mime":"image/png","size":NaN},'
+        '{"path":"/b.png","mime":"image/png","size":2.9}]}'
+    )
+    steps = build_timeline(
+        title="t",
+        messages=[
+            {"role": "tool", "tool_name": "x", "content": junk},
+            {"role": "tool", "tool_name": "x", "content": nan},
+        ],
+        options=VideoOptions(),
+    ).steps
+
+    assert isinstance(steps[0], ToolStep) and steps[0].files == []
+    assert isinstance(steps[1], ToolStep) and [(f.path, f.size) for f in steps[1].files] == [
+        ("/b.png", 2)
+    ]
+
+
 def test_a_declaration_that_is_not_valid_json_or_not_the_shape_declares_nothing():
     """A hand-edited marker line that does not parse, or parses to the wrong
     shape, is treated as no declaration — the body is still shown, nothing

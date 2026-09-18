@@ -114,7 +114,6 @@ def _fake_playwright(monkeypatch, launch_error_text: str | None = None):
         def wait_for_function(self, _expr, timeout):
             if timeout < 1:
                 raise TimeoutError(f"Timeout {timeout}ms exceeded")
-            self.video._p.write_bytes(b"WEBM")
 
         def wait_for_timeout(self, _ms):
             pass
@@ -122,12 +121,18 @@ def _fake_playwright(monkeypatch, launch_error_text: str | None = None):
     class _Context:
         def __init__(self, video_dir):
             self._dir = video_dir
+            self._page = None
 
         def new_page(self):
-            return _Page(self._dir)
+            self._page = _Page(self._dir)
+            return self._page
 
         def close(self):
-            pass
+            # As in the real API: the webm exists only once the context is
+            # closed. A `record()` that moved the file before closing would
+            # pass a fake that wrote it earlier and fail live.
+            assert self._page is not None
+            self._page.video._p.write_bytes(b"WEBM")
 
     class _Browser:
         def new_context(self, *, viewport, record_video_dir, record_video_size):

@@ -47,18 +47,25 @@ class VideoOptions(msgspec.Struct, frozen=True):
     max_seconds: int = 90
     """Ceiling on the animation as ASKED FOR: a transcript that would run
     longer has every delay compressed uniformly to fit — a 200-message chat
-    must not become a twenty-minute job on a worker. Soft by one term: the
+    must not become a twenty-minute job on a worker. Soft, by two terms: the
     browser's own per-character cost is not a delay and does not compress,
-    so a very long transcript still runs over (``Timeline.overhead_ms`` is
-    that term; ``playback_ms`` the honest total)."""
+    and the compression bottoms out at 5% so the player still moves — so a
+    very long transcript runs over either way, and ``Timeline.playback_ms``
+    is the honest total."""
 
     # ── what is shown ──────────────────────────────────────────────────
     tool_output_chars: int = 600
-    """A tool's output beyond this is cut with an ellipsis."""
+    """A tool's output — and its arguments — beyond this are cut with an
+    ellipsis."""
     max_asset_bytes: int = 4_000_000
     """An image a tool showed is inlined into the page up to this size;
-    bigger ones become a file card. The page carries its pictures (it fetches
-    nothing), and a 40 MB page is a slow, memory-hungry recording."""
+    bigger ones become a file card."""
+    max_assets_total_bytes: int = 24_000_000
+    """The page's whole budget for inlined images, spent in reading order;
+    past it, files are cards. Each file is inlined once however often it is
+    shown, so this bounds the page (it carries its pictures — it fetches
+    nothing) rather than the transcript: a 100 MB page is a slow,
+    memory-hungry recording."""
     fmt: tuple[Format, ...] = ("gif",)
 
     def __post_init__(self) -> None:
@@ -73,14 +80,17 @@ class VideoOptions(msgspec.Struct, frozen=True):
             (self.chat_width >= 200, "chat_width must be at least 200"),
             (self.scale >= 0, "scale must be 0 (automatic) or positive"),
             (self.zoom >= 1, "zoom must be at least 1 (1 = no push-in)"),
-            (self.zoom_ms >= 0, "zoom_ms must not be negative"),
-            (self.type_ms >= 0, "type_ms must not be negative"),
-            (self.stream_ms >= 0, "stream_ms must not be negative"),
-            (self.tool_pause_ms >= 0, "tool_pause_ms must not be negative"),
+            # Upper bounds on every millisecond knob: a timer over 2^31-1 ms
+            # overflows in the browser and fires at once.
+            (0 <= self.zoom_ms <= 60_000, "zoom_ms must be 0..60000"),
+            (0 <= self.type_ms <= 10_000, "type_ms must be 0..10000"),
+            (0 <= self.stream_ms <= 10_000, "stream_ms must be 0..10000"),
+            (0 <= self.tool_pause_ms <= 60_000, "tool_pause_ms must be 0..60000"),
             (self.speed > 0, "speed must be positive"),
-            (self.max_seconds >= 1, "max_seconds must be at least 1"),
+            (1 <= self.max_seconds <= 3600, "max_seconds must be 1..3600"),
             (self.tool_output_chars >= 1, "tool_output_chars must be at least 1"),
             (self.max_asset_bytes >= 0, "max_asset_bytes must not be negative"),
+            (self.max_assets_total_bytes >= 0, "max_assets_total_bytes must not be negative"),
             (bool(self.fmt), "fmt must name at least one format"),
             (all(f in FORMATS for f in self.fmt), f"fmt must be among {', '.join(FORMATS)}"),
         )

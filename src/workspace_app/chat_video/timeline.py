@@ -11,12 +11,13 @@ is ever opened.
 from __future__ import annotations
 
 import json
-import re
+import math
 from typing import Any
 
 import msgspec
 
-from ..agent.shown_files import SHOWN_FILES_KEY, split_declaration
+from ..agent.shown_files import SHOWN_FILES_KEY, SHOWN_FILES_MARKER, split_declaration
+from . import markdown as md
 from .options import VideoOptions
 
 
@@ -105,8 +106,9 @@ PACING: dict[str, int] = {
 
 # What a headless browser spends per character on top of the asked delay —
 # firing the timer, inserting the node, painting the frame. Measured, not
-# chosen: the shipped sample (485 characters the player inserts) ran 3 s over
-# an estimate that ignored it, at `speed=1.5`. It is an approximation: the
+# chosen: the sample as first shipped (485 characters the player inserts;
+# today's sample plays 593) ran 3 s over an estimate that ignored it, at
+# `speed=1.5`. It is an approximation: the
 # measured cost is ~6.5 ms/char at speed 1 and falls as the asked delays
 # shrink (~4 ms at speed 2, ~2 ms under a hard squeeze — timers coalesce),
 # so a squeezed recording lands a few percent UNDER its `playback_ms`, never
@@ -121,34 +123,20 @@ def _cut(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit] + "…"
 
 
-# `![alt](src)` — the src only; a title after the src is ignored, as it is
-# by the renderer, which decides what to draw.
-_MD_IMAGE = re.compile(r"!\[[^\]]*\]\(\s*<?([^\s)>]+)>?(?:\s+\"[^\"]*\")?\s*\)")
-_URL = re.compile(r"^(?:[a-z][a-z0-9+.-]*:|#|//)", re.IGNORECASE)
-
-
-def _is_url(ref: str) -> bool:
-    """The FE's `workspaceUrl` rule: a scheme, a fragment or `//` is not a
-    workspace path."""
-    return bool(_URL.match(ref))
-
-
-def _abs(path: str) -> str:
-    return path if path.startswith("/") else "/" + path
-
-
 def shown_files_in(result: str) -> tuple[str, list[ShownFile]]:
     """``(body, files)`` — the tool result without its declaration line, and
-    the files it declared. The FE's parse (`renderers/shownFiles.ts`): the
-    JSON's ``shown_files`` list; an entry needs a non-empty ``path`` and
-    ``mime`` and a numeric ``size``, ``caption`` is optional, a malformed
-    entry is skipped and the rest kept."""
+    the files it declared. The FE's parse (`renderers/shownFiles.ts`):
+    ``JSON.parse`` of everything after the marker — junk before the brace
+    fails the whole declaration — then the ``shown_files`` list; an entry
+    needs a non-empty ``path`` and ``mime`` and a finite numeric ``size``
+    (rounded down here), ``caption`` is optional, a malformed entry is
+    skipped and the rest kept."""
     body, declaration = split_declaration(result)
     if not declaration:
         return result, []
     try:
-        parsed = json.loads(declaration[declaration.index("{") :])
-    except (ValueError, IndexError):
+        parsed = json.loads(declaration[len(SHOWN_FILES_MARKER) :])
+    except ValueError:
         return body, []
     raw = parsed.get(SHOWN_FILES_KEY) if isinstance(parsed, dict) else None
     files: list[ShownFile] = []
@@ -158,12 +146,12 @@ def shown_files_in(result: str) -> tuple[str, list[ShownFile]]:
         path, mime, size = entry.get("path"), entry.get("mime"), entry.get("size")
         if not (isinstance(path, str) and path and isinstance(mime, str) and mime):
             continue
-        if not isinstance(size, int | float) or isinstance(size, bool):
+        if not isinstance(size, int | float) or isinstance(size, bool) or not math.isfinite(size):
             continue
         caption = entry.get("caption")
         files.append(
             ShownFile(
-                path=_abs(path),
+                path=md.abs_path(path),
                 mime=mime,
                 size=int(size),
                 caption=caption if isinstance(caption, str) else "",
@@ -186,18 +174,20 @@ class Timeline(msgspec.Struct):
     def referenced_paths(self) -> list[str]:
         """Every workspace path the page will want bytes for, absolute, in
         order, once: files tools declared, and ``![](path)`` images in
-        answers. Not a URL — the page fetches nothing — and not a link. This
-        is the list a job prefetches before the render goes to a thread."""
+        answers — the latter through the same markdown parse the page draws
+        with (``markdown.image_paths``), so this list and the pictures drawn
+        cannot disagree. Not a URL (the page fetches nothing), not a link.
+        This is the list a job prefetches before the render goes to a
+        thread."""
         seen: list[str] = []
         for step in self.steps:
             if isinstance(step, ToolStep):
                 paths = [f.path for f in step.files]
             elif isinstance(step, StreamStep) and not step.reasoning:
-                paths = [p for p in _MD_IMAGE.findall(step.text) if not _is_url(p)]
+                paths = md.image_paths(step.text)
             else:
                 continue
             for p in paths:
-                p = _abs(p)
                 if p not in seen:
                     seen.append(p)
         return seen
@@ -220,8 +210,9 @@ class Timeline(msgspec.Struct):
         """How long the recording will run: the asked delays after the
         squeeze, plus the overhead. The number a person is told and the one
         the recorder's deadline is set from. Equals ``estimated_ms`` when
-        nothing was squeezed, ``max_seconds`` (in ms) when it landed on the
-        ceiling, and more than that only when the overhead alone is over it."""
+        nothing was squeezed and ``max_seconds`` (in ms, ±1 of rounding)
+        when it landed on the ceiling; it is over the ceiling when the
+        overhead alone is, or when the squeeze hit its 5% floor."""
         asked = self.estimated_ms - self.overhead_ms
         return round(asked * self.time_scale) + self.overhead_ms
 
@@ -240,7 +231,9 @@ def build_timeline(
         # Squeeze only what can be squeezed. If the overhead alone is over the
         # ceiling the floor keeps the player moving at all; the recording will
         # simply run long — `playback_ms` says by how much, and the recorder's
-        # deadline is set from that number, not from the ceiling.
+        # deadline is set from that number, not from the ceiling. The floor
+        # itself is the other way past the ceiling: 5% of a huge ask is still
+        # more than `max_seconds`.
         scale = max(0.05, (ceiling - overhead) / asked)
     return Timeline(
         title=title,

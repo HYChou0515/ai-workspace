@@ -143,6 +143,23 @@ src/workspace_app/chat_video/
     否定;`test_service` 的 scratch 斷言查錯路徑(永遠綠);plan 的 `-> bytes`(實際 `dict[fmt, bytes]`)、
     `estimated_seconds()`(實際 `estimated_ms`)、`docs/demo-chat-video.md`(實際 `chat-video.md`)、「可摺」(沒做)、
     「照 `ms` 播」(script 不讀 `ms`)。全部改掉或記在這裡。
+- **第二輪 review(只看 P6+P7 的 diff)抓到的,P8 修掉:**
+  - **HIGH:`referenced_paths()` 用自寫 regex 找 `![](path)`,播放器用 markdown-it 正規化過的 href 找 assets——16 個輸入
+    9 個不一致**,中文檔名的圖被讀進來但永遠不畫、也不報。這就是 CLAUDE.md 那條「A 讀檔要和 B 一樣 = parity test 以 B 為
+    oracle,不是手寫兩份」。修法:抽 `markdown.py`,兩邊都走 markdown-it 的 token stream + `unquote`;`test_markdown_parity.py`
+    14 個 case 以「頁面畫的 = timeline 要的」為 oracle,把 regex 放回去 6 個紅。
+  - 圖片每個引用處各嵌一份 data URI:20 次 `show_file` 同一張 4 MB 圖 = 107 MB 頁面。改成頁面一張 `ASSETS` 表、每檔一次,
+    加 `max_assets_total_bytes`(24 MB,依出現順序花);CLI 讀檔前先看大小。
+  - 「沒給 bytes 就變檔案卡」只對宣告的檔案成立,`![]()` 是剩 alt 文字——文件與 CLI 的 note 改對,原本的測試釘的是錯句。
+  - 「上限只軟在一項」是錯的:壓縮的 5% 地板是第二項。三處句子改掉;deadline 逾時的建議句也改(降 `--max-seconds` 在那個
+    regime 沒用)。
+  - `_image` docstring 把「URL 不抓」寫成前端的規則——前端會抓,不抓是影片自己的。
+  - 數字:文件的 `--speed 1.5` 19.7→20.2 是舊範例(現在的範例是 27.1→28.1);`CHAR_OVERHEAD_MS` 註解 485 字是舊範例
+    (現在 593);「40 則 × 500 字、1 s 上限 = 31 分鐘 deadline」算出來是 23.9 分鐘(現在 4.0)。
+  - `load_assets`:NUL 字元 / 5000 字路徑 / 沒權限 → traceback;`size: NaN/Infinity` → traceback;junk 在 `{` 前面比前端寬鬆;
+    RIFF 一律當 webp(WAV 也是 RIFF);ms 類 option 沒上限(2³¹ 溢位變立即逾時);假 playwright 的 `video.path()` 在
+    `context.close()` 前就存在(真的不會);`test_service` 又多一個 `or True` 空斷言;`del d["args"]` 沒有守衛。全部修。
+  - 沒修、記下:三樣工具都缺時要三次來回才問完(每次一句話,沒有白錄);`chat_width > width` 由 CSS `min()` 兜住。
 - **plan 漏了「顯示工具」**(user 問「show file 能夠顯示嗎」才補)。前端把檔案放到人面前有三條路——`show_file`
   (沒有卡片,檔案即畫面)、任何工具結果尾端的 `[shown-files]` 宣告、回答裡的 `![](路徑)`——bytes 都不在 export 裡。
   加了 `assets: Mapping[path, bytes]` 接縫(CLI `--files DIR` 讀;未來 job 用 `Timeline.referenced_paths()` 先撈再進

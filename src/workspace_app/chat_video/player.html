@@ -88,6 +88,7 @@
 const TIMELINE = /*TIMELINE*/;
 const OPTIONS = /*OPTIONS*/;
 const PACING = /*PACING*/;   // the same table the estimate was built from
+const ASSETS = /*ASSETS*/;   // path → data: URI, each inlined picture ONCE
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 // Every delay goes through here: `speed` from the options, then the squeeze
 // that keeps the whole thing under `max_seconds`.
@@ -161,6 +162,7 @@ async function stepStream(s) {
   const a = el('div', 'answer raw'); bubble.appendChild(a);
   await typeInto(a, s.text, OPTIONS.stream_ms);
   a.classList.remove('raw'); a.innerHTML = s.html;   // rendered here in Python, HTML disabled
+  for (const img of a.querySelectorAll('img[data-asset]')) img.src = ASSETS[img.dataset.asset] || '';
   if (s.stopped) bubble.appendChild(el('div', 'stopped', '已中止:' + s.stopped));
   await sleep(t(PACING.after_answer_ms));
 }
@@ -173,8 +175,9 @@ const fmtBytes = n => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(
 function shownFiles(files) {
   const box = el('div', 'shown-files');
   for (const f of files) {
-    if (f.src) {
-      const img = el('img'); img.src = f.src; img.alt = f.caption || f.path; box.appendChild(img);
+    const src = ASSETS[f.path];
+    if (src) {
+      const img = el('img'); img.src = src; img.alt = f.caption || f.path; box.appendChild(img);
     } else {
       const card = el('div', 'file-card'); card.appendChild(el('div', 'icon', '▤'));
       const meta = el('div'); meta.appendChild(el('div', 'name', f.path.split('/').pop()));

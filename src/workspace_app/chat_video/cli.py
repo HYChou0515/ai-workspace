@@ -37,20 +37,29 @@ class Args(argparse.Namespace):
     options: VideoOptions
 
 
-def load_assets(files_dir: Path, paths: list[str]) -> dict[str, bytes]:
+def load_assets(files_dir: Path, paths: list[str], *, max_bytes: int) -> dict[str, bytes]:
     """The referenced workspace files, read from ``files_dir`` — the
     workspace as a folder on disk (a downloaded copy, or the item's own
-    directory). Only ``paths`` are read, a missing one is left out (the page
-    draws a card for it), and one that resolves outside ``files_dir`` is
-    refused: the transcript is hand-edited, and ``/../etc/passwd`` in a
-    shown-files line must not read the host."""
+    directory). Only ``paths`` are read, and only when they fit
+    ``max_bytes`` (checked before the read: a 300 MB file the page would
+    never inline is not pulled into memory first). A missing, unreadable or
+    oversized one is left out — the page draws a card, or the alt text — and
+    one that resolves outside ``files_dir`` is refused: the transcript is
+    hand-edited, and ``/../etc/passwd`` in a shown-files line must not read
+    the host. A path the OS itself rejects (a NUL byte, a 5,000-character
+    name) is left out the same way, not a traceback."""
     root = files_dir.resolve()
     out: dict[str, bytes] = {}
     for path in paths:
-        candidate = (root / path.lstrip("/")).resolve()
-        if not candidate.is_relative_to(root) or not candidate.is_file():
+        try:
+            candidate = (root / path.lstrip("/")).resolve()
+            if not candidate.is_relative_to(root) or not candidate.is_file():
+                continue
+            if candidate.stat().st_size > max_bytes:
+                continue
+            out[path] = candidate.read_bytes()
+        except (OSError, ValueError):
             continue
-        out[path] = candidate.read_bytes()
     return out
 
 
@@ -112,6 +121,12 @@ def parse_args(argv: list[str]) -> Args:
         default=d.max_asset_bytes,
         help="an image bigger than this is a file card, not inlined",
     )
+    p.add_argument(
+        "--max-assets-total-bytes",
+        type=int,
+        default=d.max_assets_total_bytes,
+        help="the page's whole budget for inlined images, spent in reading order",
+    )
 
     ns = p.parse_args(argv, namespace=Args())
     ns.out = ns.out or ns.source.with_suffix(".gif")
@@ -132,7 +147,7 @@ def _options(ns: Args, fmt: tuple[str, ...]) -> VideoOptions:
         zoom=ns.zoom, zoom_ms=ns.zoom_ms,
         type_ms=ns.type_speed, stream_ms=ns.stream_speed, tool_pause_ms=ns.tool_pause,
         speed=ns.speed, max_seconds=ns.max_seconds, tool_output_chars=ns.tool_output_chars,
-        max_asset_bytes=ns.max_asset_bytes,
+        max_asset_bytes=ns.max_asset_bytes, max_assets_total_bytes=ns.max_assets_total_bytes,
         fmt=fmt,
     )  # fmt: skip
 
@@ -151,10 +166,16 @@ def main(argv: list[str] | None = None) -> int:
     if timeline.time_scale < 1:
         plays += f" (squeezed from {timeline.estimated_ms / 1000:.1f}s to fit --max-seconds)"
     wanted = timeline.referenced_paths()
-    assets = load_assets(ns.files, wanted) if ns.files is not None else {}
+    assets = (
+        load_assets(ns.files, wanted, max_bytes=ns.options.max_asset_bytes)
+        if ns.files is not None
+        else {}
+    )
     for missing in (p for p in wanted if p not in assets):
-        where = f"not found under {ns.files}" if ns.files is not None else "pass --files DIR"
-        print(f"note: {missing} shown as a card ({where})", file=sys.stderr)
+        where = f"not under {ns.files}, or too big" if ns.files is not None else "pass --files DIR"
+        # A declared file becomes a card; an answer's `![]()` becomes its alt
+        # text. Either way the picture is not there, which is what matters.
+        print(f"note: {missing} will not be drawn ({where})", file=sys.stderr)
     if ns.html is not None:
         ns.html.write_text(
             render_player_html(timeline, ns.options, assets=assets), encoding="utf-8"

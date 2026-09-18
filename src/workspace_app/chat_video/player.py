@@ -30,66 +30,75 @@ from importlib import resources
 from typing import Any
 
 import msgspec
-from markdown_it import MarkdownIt
 from markdown_it.renderer import RendererHTML
 from markdown_it.token import Token
 from markdown_it.utils import EnvType, OptionsDict
 
+from . import markdown as md
 from .options import VideoOptions
-from .timeline import PACING, ShownFile, StreamStep, Timeline, ToolStep, _abs, _cut, _is_url
+from .timeline import PACING, StreamStep, Timeline, ToolStep, _cut
 
 Assets = Mapping[str, bytes]
-
-_md = (
-    MarkdownIt("commonmark", {"html": False, "linkify": False})
-    .enable("table")
-    # A link would put a URL in `href`; the page must not reach for anything,
-    # so it stays as the text it was written as. An image is kept: its src
-    # goes through `_image` below, which draws it only from `assets`.
-    .disable(["link", "autolink"])
-)
+_NO_ASSETS: Assets = {}
 
 
 def _image(
     self: RendererHTML, tokens: list[Token], idx: int, options: OptionsDict, env: EnvType
 ) -> str:
-    """The FE's rule for `![alt](src)` in an answer (`AgentEntryView`'s `img`):
-    a workspace path resolves to the picture, a URL is not fetched, and a path
-    that does not resolve draws nothing. Here "resolves" means the caller
-    handed us the bytes and they fit the cap; otherwise the alt text stands
-    in, so the sentence around it still reads."""
+    """`![alt](src)` in an answer. The FE (`AgentEntryView`'s `img`) resolves a
+    workspace path against the item's file route and draws it, and draws a
+    URL too. This page's own rule is stricter, because it fetches nothing:
+    a workspace path is drawn when the caller handed over its bytes (the
+    picture then comes from the page's ASSETS table), a URL is never loaded,
+    and a path nobody handed bytes for is its alt text — so the sentence
+    around it still reads."""
     token = tokens[idx]
-    src = str(token.attrGet("src") or "")
     alt = self.renderInlineAsText(token.children or [], options, env)
-    assets: Assets = env.get("assets", {})
-    cap: int = env.get("max_asset_bytes", 0)
-    uri = None if _is_url(src) else _data_uri(_abs(src), "", assets, cap)
-    if uri is None:
-        return _md.utils.escapeHtml(alt)
-    return f'<img class="shown" src="{uri}" alt="{_md.utils.escapeHtml(alt)}">'
+    path = md.image_path(token)
+    inlined: Mapping[str, str] = env.get("inlined", {})
+    if path is None or path not in inlined:
+        return md.escape_html(alt)
+    return f'<img class="shown" data-asset="{md.escape_html(path)}" alt="{md.escape_html(alt)}">'
 
 
-_md.add_render_rule("image", _image)
+md.add_image_rule(_image)
 
 
-_NO_ASSETS: Assets = {}
+_NO_INLINED: Mapping[str, str] = {}
 
 
-def render_markdown(text: str, *, assets: Assets = _NO_ASSETS, max_asset_bytes: int = 0) -> str:
-    return _md.render(text, {"assets": assets, "max_asset_bytes": max_asset_bytes})
+def render_markdown(text: str, *, inlined: Mapping[str, str] = _NO_INLINED) -> str:
+    """``inlined`` maps a workspace path to the ``data:`` URI the page holds
+    for it; an image whose path is not in it is drawn as its alt text."""
+    return md.render(text, {"inlined": inlined})
 
 
-def _data_uri(path: str, mime: str, assets: Assets, cap: int) -> str | None:
-    """The picture as a ``data:`` URI, or ``None`` when it is not one we will
-    inline: no bytes handed over, not an image, or over the cap. ``mime``
-    empty means "sniff from the bytes" — an answer's ``![]()`` declares none."""
-    data = assets.get(path)
-    if data is None or len(data) > cap:
-        return None
-    mime = mime or _sniff_image(data)
-    if not mime.startswith("image/"):
-        return None
-    return f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"
+def inline_assets(
+    paths: list[tuple[str, str]], assets: Assets, options: VideoOptions
+) -> dict[str, str]:
+    """The page's ASSETS table: path → ``data:`` URI, for the images we will
+    inline, each ONCE however many times it is shown. Twenty `show_file`s of
+    one chart used to carry twenty copies (a 107 MB page).
+
+    A file is inlined when the caller handed over its bytes, they are a
+    picture (declared mime when there is one, else sniffed), it fits
+    ``max_asset_bytes``, and the page's total budget
+    (``max_assets_total_bytes``) is not yet spent — in reading order, so the
+    pictures a viewer sees first are the ones kept."""
+    out: dict[str, str] = {}
+    budget = options.max_assets_total_bytes
+    for path, mime in paths:
+        if path in out:
+            continue
+        data = assets.get(path)
+        if data is None or len(data) > options.max_asset_bytes or len(data) > budget:
+            continue
+        mime = mime or _sniff_image(data)
+        if not mime.startswith("image/"):
+            continue
+        out[path] = f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"
+        budget -= len(data)
+    return out
 
 
 _SIGNATURES = (
@@ -97,16 +106,20 @@ _SIGNATURES = (
     (b"\xff\xd8\xff", "image/jpeg"),
     (b"GIF87a", "image/gif"),
     (b"GIF89a", "image/gif"),
-    (b"RIFF", "image/webp"),
 )
 
 
 def _sniff_image(data: bytes) -> str:
-    """The handful of image types a browser draws, by signature — an SVG is
-    text and can carry script, so it is deliberately not one of them."""
+    """The handful of image types a browser draws, by signature, for an
+    answer's ``![]()`` which declares no mime. `RIFF` alone is also WAV and
+    AVI; WebP is `RIFF….WEBP`. Sniffing never yields SVG — an SVG is text —
+    but a DECLARED ``image/svg+xml`` is inlined like the FE does, and inside
+    an ``<img>`` an SVG runs no script and fetches nothing."""
     for magic, mime in _SIGNATURES:
         if data.startswith(magic):
             return mime
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
     return ""
 
 
@@ -122,18 +135,15 @@ def _embed_json(value: Any) -> str:
 
 
 def _steps_for_js(
-    timeline: Timeline, options: VideoOptions, assets: Assets
+    timeline: Timeline, options: VideoOptions, inlined: Mapping[str, str]
 ) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for step in timeline.steps:
         d = msgspec.to_builtins(step)
         assert isinstance(d, dict)
         if isinstance(step, StreamStep) and not step.reasoning:
-            d["html"] = render_markdown(
-                step.text, assets=assets, max_asset_bytes=options.max_asset_bytes
-            )
+            d["html"] = render_markdown(step.text, inlined=inlined)
         if isinstance(step, ToolStep):
-            d["files"] = [_file_for_js(f, assets, options.max_asset_bytes) for f in step.files]
             # The call's arguments, cut like its output: `write_file`'s
             # `content` is the whole file, and uncut it made a 4,000 px card.
             args = json.dumps(step.args, ensure_ascii=False, indent=2) if step.args else ""
@@ -141,17 +151,6 @@ def _steps_for_js(
             del d["args"]
         out.append(d)
     return out
-
-
-def _file_for_js(file: ShownFile, assets: Assets, cap: int) -> dict[str, Any]:
-    """A declared file as the page draws it: the picture inline when it is one
-    we were handed (`src`), else the card with its name and size."""
-    d = msgspec.to_builtins(file)
-    assert isinstance(d, dict)
-    uri = _data_uri(file.path, file.mime, assets, cap)
-    if uri is not None:
-        d["src"] = uri
-    return d
 
 
 def _template() -> str:
@@ -173,9 +172,10 @@ def _css_number(value: float) -> str:
 def render_player_html(
     timeline: Timeline, options: VideoOptions, *, assets: Assets = _NO_ASSETS
 ) -> str:
+    inlined = inline_assets(_wanted(timeline), assets, options)
     payload = {
         "title": timeline.title,
-        "steps": _steps_for_js(timeline, options, assets),
+        "steps": _steps_for_js(timeline, options, inlined),
         "time_scale": timeline.time_scale,
     }
     return (
@@ -187,4 +187,17 @@ def render_player_html(
         .replace("/*TIMELINE*/", _embed_json(payload))
         .replace("/*OPTIONS*/", _embed_json(msgspec.to_builtins(options)))
         .replace("/*PACING*/", _embed_json(PACING))
+        .replace("/*ASSETS*/", _embed_json(inlined))
     )
+
+
+def _wanted(timeline: Timeline) -> list[tuple[str, str]]:
+    """Every path the page may draw, in reading order, with the declared mime
+    where there is one — the same walk as ``Timeline.referenced_paths``."""
+    out: list[tuple[str, str]] = []
+    for step in timeline.steps:
+        if isinstance(step, ToolStep):
+            out.extend((f.path, f.mime) for f in step.files)
+        elif isinstance(step, StreamStep) and not step.reasoning:
+            out.extend((p, "") for p in md.image_paths(step.text))
+    return out
