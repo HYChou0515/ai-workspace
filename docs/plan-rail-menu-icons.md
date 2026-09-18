@@ -111,6 +111,8 @@ a false sentence, and the file is the one both menus are told to read.
 - **P4** Review round 1: both `NavGlyph` forms in one box + `color || undefined`;
   every box property and stroke colour pinned in `NavGlyph.test.tsx`; a
   per-row glyph case in `GlobalNav.test.tsx`.
+- **P5** Review round 2 (tests only): both per-row cases assert the 22px box
+  on every row and the FORM (22px App glyph / 16px destination glyph).
 
 ## Test plan (red first, targeted only)
 
@@ -217,8 +219,11 @@ Worst finding: **MEDIUM** (a claimed pin that pinned nothing). Nothing HIGH.
   manifests + hook order).
 - **Regression**: none. Switcher HTML byte-identical to master for named /
   file / emoji / unknown icons and destinations; `.chat-rail__menu-item`'s only
-  other consumer (⋯ buttons) is out of the child combinator's reach; existing
-  suites 67/67 → 68/68; menuitem accessible names unchanged for all icon forms.
+  other consumer (⋯ buttons) is out of the child combinator's reach; the six
+  suites `ChatListRail` / `GlobalNav` / `AppIcon` / `Icon` /
+  `chat-rail-responsive` / `layering` 67/67 on master → 68/68 on the branch
+  (+1 = the rail's icon case); menuitem accessible names unchanged for all
+  icon forms.
 - **Defect**: nothing reaching a user for a shipped App. LOW: the `app` form
   was unboxed, so an emoji / empty icon / empty colour App sat out of column
   (measured 42px row, label at 67.6 / 16 vs 38, invisible stroke).
@@ -228,8 +233,39 @@ undefined`), every box property pinned, a per-row glyph case for the switcher.
 Mutation pins re-run after P4 — each of the six that passed before now
 reddens: drop `flexShrink` 5, drop `inline-flex`+centring 5, drop the muted
 colour 1, delete the switcher's App glyph 1, delete `FixedLink`'s glyph 1,
-unbox the `app` form 6. Real Chromium: six glyph forms on the rail's CSS all
+skip the `app` branch outright 6 (round 2 corrected the label: the faithful
+"unbox the `app` form, keep the colour fallback" reddens **4** — the emoji,
+named, file and empty-icon box cases — which is the honest figure for the box). Real Chromium: six glyph forms on the rail's CSS all
 30px / box 22×22 / label x=38; the built switcher's ten rows all 36px, glyph
 centre offset 0.0, label x=44 — the added box changes nothing visible for a
 shipped App. Rail live check re-run unchanged (11/11 at 1280 and 390, 30px).
+
+## Review round 2 (2026-09-19 — verify P4 only: regression + veracity)
+
+Worst finding: **LOW** (a guard that let the wrong form through). No code
+defect.
+
+- **Regression on P4** (master vs branch, six icon forms — named, file,
+  emoji, unknown key, empty icon + empty colour, named + empty colour): the
+  switcher's link HTML is byte-identical once the one added wrapper box is
+  stripped and `stroke=""` → `currentColor` on the colourless row; the
+  destination box gains `line-height: 1` (contains only a 16px svg — no
+  effect). `AppIcon`'s other consumers (`AppTag`, `AppDashboard`, `Launcher`,
+  `AgentPanel`) and their tests byte-identical; accessible names unchanged for
+  all six forms in both menus; `line-height: 1` does not reach the label (a
+  sibling text node). Nine suites 165/165 → 173/173, +8 = the branch's tests.
+- **Veracity on P4**: (a)–(e) reproduce exactly; (g) `lineHeight` 1 and (h)
+  `color || undefined` are each pinned by one case. Two labels corrected
+  above ("unbox" → 4; the 67/68 suite set named). **LOW, unguarded**: an App
+  row hardcoded to `<NavGlyph icon="flame" />` (the 16px destination form)
+  passed both per-row cases — they asked for `[data-icon]`, not the form —
+  and an emoji / empty-icon App row was invisible to `[data-icon], img`.
+
+**P5** (`8869b07f`, tests only): every row's first child must be the 22px
+box; `apps[0]`'s glyph must be 22px and `destinations[0]`'s 16px. Six
+mutations each redden exactly their own case (1 failed / 43 passed): App row
+→ destination form in the switcher / in the rail; App glyph deleted in both;
+`FixedLink`'s / the rail's destination glyph deleted.
+
+Stop: a test-only fix pinned by its mutations, no mechanism replaced.
 
