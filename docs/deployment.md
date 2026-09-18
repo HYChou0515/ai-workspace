@@ -486,8 +486,8 @@ RCA 的 system prompt 是純 markdown，存在
 
     #804 之後 API 上**再也沒有**背景工作會自己做 chunk / embed / 全表讀——它只 enqueue。
     所以 `run_consumers: false` 的部署**最少**要跑 `index` 與 `card-gen` 兩個 worker,
-    否則 help 文件停在 `indexing`、cluster sweep 永遠 pending(見 `migrations.md` §5.5 的
-    #804 三列)。沒跑 `blob-gc` worker 則孤兒 blob 永遠不回收(只長不消,不掉資料)。
+    否則 help 文件停在 `indexing`、cluster sweep 永遠 pending(見
+    [migrations.md#pr-804](migrations.md#pr-804))。沒跑 `blob-gc` worker 則孤兒 blob 永遠不回收(只長不消,不掉資料)。
 
     **`blob-gc` worker 和其他 worker 不同:它開機時組的是 API 自己那整套**
     (`workspace_app.__main__.build_app`,只組不 serve),不是精簡的 worker bundle。
@@ -518,93 +518,11 @@ RCA 的 system prompt 是純 markdown，存在
   - k8s 範例見 [`kubernetes/base/workers.yaml`](https://github.com/HYChou0515/ai-workspace/blob/master/kubernetes/base/workers.yaml)
     與 [`kubernetes/README.md`](https://github.com/HYChou0515/ai-workspace/blob/master/kubernetes/README.md)（每 JobType 一個
     Deployment + CPU HPA，sanity 固定 1 replica；不使用 KEDA）。
-- **索引回填（#263，升級後一次性）**：本版替 `DocChunk` 加了 `provenance`
-  位置索引（page / sheet / …，供「分析某檔第 N 頁」這類定位過濾），並替
-  `SourceDoc` 加了 `path` 索引（檔名→文件解析），兩個 model 都升到 schema
-  `v3`。specstar 在**寫入時**才抽取 `indexed_data`，不會自動回填舊資料，所以
-  升級後**既有的 chunk / 文件查不到這些位置過濾**，直到 operator 跑一次遷移
-  （它從已存的 `provenance` / `path` **重抽索引、不重新 parse 也不重算
-  embedding**）：
-
-  ```bash
-  curl -X POST http://<host>/api/doc-chunk/migrate/execute
-  curl -X POST http://<host>/api/source-doc/migrate/execute
-  ```
-
-  升 v3（而非沿用 v2）是因為生產資料多為 `None`、少數已是 `v2`；只在 v2 上加
-  索引不會重抽那些已 v2 的列，跳 v3 才會讓**全部**列重抽。新寫入的列已直接帶
-  索引，不需處理。
-- **索引回填（`text` 三連字索引，升級後一次性）**：檢索不再整包載入整個
-  collection，關鍵字（BM25）那半段改由 `DocChunk.text` 上的 pg_trgm 索引先縮小
-  候選集，`DocChunk` 因此升到 schema `v6`。同樣地 specstar 只在**寫入時**抽取
-  `indexed_data`，所以升級後**既有 chunk 的關鍵字檢索會查不到**（語意/向量檢索
-  不受影響，新上傳的檔案立即正常），直到 operator 跑一次遷移 —— 它只從已存的
-  `text` **重抽索引，不重新 parse 也不重算 embedding**：
-
-  ```bash
-  uv run python scripts/run_migrate.py --dry-run doc-chunk   # 先確認沒有 failed
-  uv run python scripts/run_migrate.py doc-chunk             # 正式重寫
-  ```
-
-  pg_trgm 擴充與該 GIN 由 specstar 開機時自動確保存在，不需手動建。細節與
-  回填前後的行為對照見 [資料遷移](migrations.md) §7。
-- **索引回填（知識圖譜 reconcile，升級後一次性，不擋部署）**：每週的詞彙 pass
-  以前要整張表撈回來才讀得到 mention 的 `surface` / `kind` / `occurrences`，
-  以及 relationship 的 `predicate`、entity 的 `canonical_name`、link 的
-  `proposed_from`。這六個欄位現在都建了索引，pass 因此只掃 metadata、完全不碰
-  blob；四個 model 分別升到 `GraphMention v2`、`GraphEntity / GraphEntityLink /
-  GraphRelationship v1`。
-
-  ```bash
-  uv run python scripts/run_migrate.py --dry-run graph-mention
-  uv run python scripts/run_migrate.py graph-mention
-  uv run python scripts/run_migrate.py graph-entity
-  uv run python scripts/run_migrate.py graph-entity-link
-  uv run python scripts/run_migrate.py graph-relationship
-  ```
-
-  **跟上面兩條不一樣的是:這次不跑也不會有錯的結果。** 讀取端發現某列的索引
-  沒帶這些欄位時,會退回去讀它的 blob——因為把「沒有這個索引格」當成「名字是
-  空字串」,會讓舊列被拿去當實體的顯示名稱,那是安靜的錯而不是大聲的失敗。
-  所以遷移只是把那條退路關掉、換回全速,**部署順序不需要跟它對齊**。
-- **索引回填(知識圖譜的比對鍵,升級後一次性,⚠️ 這一條會影響結果)**:`GraphClaim`
-  升到 `v3`,它的 step **不是重抽索引,而是依當前規則重算比對鍵**
-  (`norm_subject` / `norm_attribute` / `norm_period` / `norm_unit`)。
-
-  ```bash
-  uv run python scripts/run_migrate.py --dry-run graph-claim
-  uv run python scripts/run_migrate.py graph-claim
-  ```
-
-  **上一條那句「不跑也不會有錯的結果」不適用於這一條。** 沒回填的列還帶著舊規則算出來
-  的鍵,依現行規則本該視為同一件事的兩列可能還是兩件。好消息是每一列都記著產生它的
-  schema 版本,所以「哪些還停在舊規則上」查得出來,不是猜的。細節見
-  [資料遷移](migrations.md) §9。
-- **索引回填(`workspace-file` 的 `path`,升級後一次性,🚨 不做的話 rollout 會停住)**:
-  `WorkspaceFile` 升到 `v3`,把 `path` 加進索引讓 `ls(prefix=…)` 能下推。**這一條和上面
-  每一條都不同 —— 它不是「變慢」或「少給答案」,而是會擋住部署。** 沒回填的列答不出
-  `path` 述詞,檔案樹和每一份 entity 列表都會在資料完好的情況下讀成**空的**;所以
-  `/api/readyz` 在回填完成前一律回 **503**,而 k8s 的 readinessProbe 就指著它 ——
-  **新 pod 永遠不會 ready,rollout 停在那裡**(liveness 故意走靜態路由,讓那些 pod 活著
-  給你用)。
-
-  ⚠️ **回填不能打 Service。** Service 只導流量給 ready 的 pod,而卡住的時候 ready 的
-  全是**舊 pod**;migrate 只會把每列帶到「該 pod 認得的最新版」= `v2`,而 `v2` 沒有
-  `path`。打在 Service 上會**回報一整排成功、什麼都沒改**。要直接連一個新 pod:
-
-  ```bash
-  kubectl get pods -l app=rca-app                      # 找一個新的、還沒 ready 的
-  kubectl port-forward pod/<新 pod 名稱> 8000:8000      # 不經過 Service,不 ready 也連得到
-
-  uv run python scripts/run_migrate.py --dry-run --base-url http://localhost:8000 workspace-file
-  uv run python scripts/run_migrate.py           --base-url http://localhost:8000 workspace-file
-
-  curl -i http://localhost:8000/api/readyz             # 200 "ok" = 好了,新 pod 會自己 ready
-  ```
-
-  順序是**先 rollout、再回填**:新 pod 起來但不 ready 是預期的,舊 pod 繼續服務,沒有
-  中斷。全新安裝不受影響(沒有舊列時 `readyz` 一開始就是綠的)。完整說明見
-  [資料遷移](migrations.md) §8。
+- **升級時要跑什麼、改什麼**：一律看 [升級手冊](migrations.md)——它按 master 合併順序列出每一個
+  需要運營方動手的 PR（資料回填、拿掉／搬家的設定 key、預設就變的行為、k8s 側要加的東西），
+  從你線上的 commit 往下做到底。這裡不再重複那份清單（兩份會各自漂）。其中唯一會**擋住 rollout**
+  的是 `workspace-file` 的 `path` 回填：新 pod 在做完前 `/api/readyz` 一律 503，而且回填必須
+  port-forward 打新 pod、不能打 Service——步驟在 [migrations.md#pr-668](migrations.md#pr-668)。
 
 ### 上下文窗口與自動壓縮:誰決定、怎麼確認、什麼時候才需要你出手
 
