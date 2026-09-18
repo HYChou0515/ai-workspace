@@ -67,7 +67,7 @@ def _walk(node: Any, prefix: PurePosixPath, out: dict[str, bytes]) -> None:
             out[here.as_posix()] = child.read_bytes()
 
 
-SkillSource = Literal["shared", "profile"]
+SkillSource = Literal["shared", "profile", "hub"]
 
 
 class SkillOrigin(Struct):
@@ -87,12 +87,22 @@ class SkillOrigin(Struct):
 
     source: SkillSource
     files: dict[str, str]
+    #: The skill hub entry this copy came from — its stable resource id, so an
+    #: owner transfer or a rename upstream cannot break the link. Empty for the
+    #: shared and profile sources, which are addressed by name. Defaulted, because
+    #: `.origin` files written before this field existed must keep decoding:
+    #: turning every materialized skill into "update available" over a schema
+    #: change would be the exact silent failure the manifest exists to prevent.
+    entry: str = ""
 
 
-def origin_for(source: SkillSource, payload: Mapping[str, bytes]) -> SkillOrigin:
+def origin_for(
+    source: SkillSource, payload: Mapping[str, bytes], *, entry: str = ""
+) -> SkillOrigin:
     """The manifest for a payload. Digests the bytes we actually ship — not the
     source directory — so an excluded artefact can never move the answer."""
     return SkillOrigin(
         source=source,
         files={rel: hashlib.sha256(data).hexdigest() for rel, data in payload.items()},
+        entry=entry,
     )
