@@ -16,7 +16,13 @@ import pytest
 
 from workspace_app.agent.shown_files import declare_shown_files
 from workspace_app.chat_video.options import VideoOptions
-from workspace_app.chat_video.player import render_player_html
+from workspace_app.chat_video.player import (
+    NOT_AN_IMAGE,
+    NOT_HANDED,
+    Verdict,
+    decide_assets,
+    render_player_html,
+)
 from workspace_app.chat_video.timeline import PACING, build_timeline
 
 # The smallest valid PNG (1x1, transparent) — a real image, so the mime the
@@ -347,6 +353,51 @@ def test_one_path_many_references_a_declared_image_mime_wins_whatever_the_order(
     assert _assets(page)["/plots/chart.svg"].startswith(f"data:{mime};base64,")
 
 
+# What a path's bytes are × what a tool declared it as → the table's verdict.
+# The bytes decide whenever they can be sniffed (png / jpeg / gif / webp);
+# the declaration is consulted only where sniffing cannot tell (SVG is text).
+# Round 5: "declared wins" sent PNG bytes out as data:image/svg+xml, which
+# Chromium decodes by mime alone → a broken picture, no note. The chat draws
+# it (the file route serves by extension and Chromium sniffs rasters).
+_BYTES_X_DECLARED = {
+    "png bytes, nothing declared": (_PNG, "", Verdict(mime="image/png")),
+    "png bytes, declared png": (_PNG, "image/png", Verdict(mime="image/png")),
+    "png bytes, declared svg (the round-5 row)": (_PNG, "image/svg+xml", Verdict(mime="image/png")),
+    "png bytes, declared jpeg": (_PNG, "image/jpeg", Verdict(mime="image/png")),
+    "svg bytes, declared svg": (_SVG, "image/svg+xml", Verdict(mime="image/svg+xml")),
+    "svg bytes, nothing declared": (_SVG, "", Verdict(why=NOT_AN_IMAGE)),
+    "text bytes, nothing declared": (b"a,b\n", "", Verdict(why=NOT_AN_IMAGE)),
+    # A declared image whose bytes cannot be sniffed is trusted, as the chat
+    # trusts the extension: text served as image/png is broken in both.
+    "text bytes, declared png": (b"hello", "image/png", Verdict(mime="image/png")),
+    # A 0-byte file is not a picture anywhere; "never a broken <img>".
+    "empty bytes, declared png": (b"", "image/png", Verdict(why=NOT_AN_IMAGE)),
+    "empty bytes, nothing declared": (b"", "", Verdict(why=NOT_AN_IMAGE)),
+    # A comma ends a data: URL's header; a declared mime carrying one would
+    # break the picture silently. Parameters after `;` are fine.
+    "svg bytes, declared mime with a comma": (_SVG, "image/svg+xml,x", Verdict(why=NOT_AN_IMAGE)),
+    "svg bytes, declared mime with parameters": (
+        _SVG,
+        "image/svg+xml; charset=utf-8",
+        Verdict(mime="image/svg+xml; charset=utf-8"),
+    ),
+    "no bytes, declared png": (None, "image/png", Verdict(why=NOT_HANDED)),
+}
+
+
+@pytest.mark.parametrize("case", _BYTES_X_DECLARED)
+def test_the_bytes_decide_and_the_declaration_only_where_they_cannot(case):
+    data, declared, expected = _BYTES_X_DECLARED[case]
+    # Both orders of reference: an answer's ![]() (mime "") and, when there
+    # is one, the declaration — the verdict is the path's, not the first
+    # reference's.
+    refs = [("/x", "")] + ([("/x", declared)] if declared else [])
+    assets = {"/x": data} if data is not None else {}
+
+    assert decide_assets(refs, assets, VideoOptions()) == {"/x": expected}
+    assert decide_assets(refs[::-1], assets, VideoOptions()) == {"/x": expected}
+
+
 def test_a_declared_non_image_is_a_card_even_when_the_path_is_in_the_table():
     """`isInlineImage` is the chat's rule: a declaration draws the picture
     iff ITS mime is `image/*`. The same path shown as `image/png` and again
@@ -394,6 +445,19 @@ def test_a_real_chromium_draws_a_declaration_by_its_own_mime(tmp_path):
             browser.close()
 
     assert (imgs, cards) == (2, 2)
+
+
+def test_tool_arguments_nested_too_deep_to_print_are_said_so_not_a_traceback():
+    """`json.dumps(indent=2)` recurses; a hand-edited `tool_args` 1,500 deep
+    loads fine (the decoder allows it) and then the page's render raised
+    where the export file's own depth is caught (round 5, the third door of
+    that class)."""
+    deep: list = []
+    for _ in range(1_500):
+        deep = [deep]
+    page = _page([{"role": "tool", "tool_name": "x", "tool_args": {"v": deep}, "content": "ok"}])
+
+    assert _embedded(page)["steps"][0]["args_text"] == "(arguments nested too deep to show)"
 
 
 def test_the_same_file_under_three_spellings_is_one_entry():

@@ -69,11 +69,22 @@ def _timeline(text: str, options: VideoOptions):
     )
 
 
+def _named(tl) -> list[str]:
+    """Every path the timeline wants, once each, in order — `wanted_files`
+    rather than `referenced_paths`, which drops a path that climbs above the
+    root from the prefetch list while the page still names it."""
+    out: list[str] = []
+    for path, _mime in tl.wanted_files():
+        if path not in out:
+            out.append(path)
+    return out
+
+
 @pytest.mark.parametrize("case", EXPECTED)
 def test_the_timeline_names_what_the_input_refers_to(case: str):
     text, wanted = EXPECTED[case]
 
-    assert _timeline(text, VideoOptions()).referenced_paths() == wanted
+    assert _named(_timeline(text, VideoOptions())) == wanted
 
 
 @pytest.mark.parametrize("case", EXPECTED)
@@ -81,7 +92,7 @@ def test_the_page_draws_exactly_the_set_the_timeline_named(case: str):
     text, _ = EXPECTED[case]
     options = VideoOptions()
     tl = _timeline(text, options)
-    named = tl.referenced_paths()
+    named = _named(tl)
 
     page = render_player_html(tl, options, assets={p: _PNG for p in named})
     drawn = re.findall(r'<img class="shown" data-asset="([^"]*)"', _step_html(page))

@@ -1,6 +1,6 @@
 # Plan：把一段對話紀錄做成影片（script 版先行，job / worker 版後接）
 
-> **狀態:P1–P5(script 版)已實作(PR #817),使用說明在 [chat-video.md](chat-video.md);P6–P8(前端按鈕 + job + worker pod)列出形狀、未做。** 實作時的偏差見文末〈實作偏差〉。
+> **狀態:script 版已實作(PR #817,P1–P11:P1–P5 主體、P6 顯示工具、P7–P11 五輪 review 的修正),使用說明在 [chat-video.md](chat-video.md);P12–P14(job + route + 前端按鈕)列出形狀、未做。** 正文寫的是**現在的**做法;當初計畫和實作的差異在文末〈實作偏差〉。
 
 ## 需求（user 原話的整理）
 
@@ -22,19 +22,22 @@
 
 ```
 src/workspace_app/chat_video/
-  options.py    VideoOptions (msgspec.Struct)   ← CLI 旗標 = 未來 job payload 的欄位 = 未來前端表單的欄位
-  timeline.py   build_timeline(title, messages, options) -> Timeline   純函式,零重依賴,可算「預估秒數」
-  player.py     render_player_html(timeline, options) -> str           自帶 CSS/JS 的單頁,無 CDN(worker pod 可能離線)
-  render.py     record(html, options, workdir) -> webm; encode(webm, fmt) -> bytes   Playwright + ffmpeg,lazy import
-  service.py    render_chat_video(title, messages, options, *, workdir) -> bytes    ← 未來 job handler 呼叫的就是它
-  __main__.py   python -m workspace_app.chat_video export.chat.json -o demo.gif [--width …]
+  options.py    VideoOptions (msgspec.Struct,__post_init__ 驗證)  ← CLI 旗標 = 未來 job payload 的欄位 = 未來前端表單的欄位
+  timeline.py   build_timeline(title, messages, options) -> Timeline   純函式,零重依賴;預估秒數、壓縮比;
+                Timeline.wanted_files() / referenced_paths()(job 要先撈哪些檔)
+  markdown.py   一次 markdown-it 解析,timeline(要讀哪些圖)和 player(畫哪些圖)共用;abs_path = 路徑的唯一拼法
+  player.py     render_player_html(timeline, options, *, assets) -> str   自帶 CSS/JS 的單頁(player.html),無 CDN;
+                decide_assets = 每條路徑畫不畫、為什麼;inline_assets = ASSETS 表(每檔一份 data URI)
+  render.py     record(html, options, workdir, *, expected_ms) -> webm; encode(webm, fmt, out)   Playwright + ffmpeg,lazy import
+  service.py    render_chat_video(*, title, messages, options, workdir, assets=None) -> dict[fmt, bytes]   ← 未來 job handler 用 to_thread 呼叫的就是它
+  cli.py / __main__.py   python -m workspace_app.chat_video export.chat.json --files DIR -o demo.gif [--width …]
 ```
 
 - **輸入是 `build_chat_export` 的形狀**(`{title, messages[]}`,`messages` 是 `Message` 的 `to_builtins`)。手改的 JSON 和「按鈕對著一段活的 chat」走**同一個**入口:未來的 route 只是把 `conv.messages` `to_builtins` 後丟給同一個函式,不另定格式。
 - **重依賴走 extra**:`playwright` + ffmpeg 只在 `render.py` 裡 lazy import,放 `[project.optional-dependencies] chat-video`;API pod 的 image 不裝也能 import 這個 package(`timeline` / `player` 純 Python,CI 測得到);worker pod 的 image 才裝 extra + Chromium + CJK 字型。
 - **同步函式**:`render_chat_video` 是 blocking(Playwright sync API + subprocess ffmpeg),未來 job handler 用 `asyncio.to_thread` 包——和 `Ingestor.index` 同一個慣例。
 - **有上界**:`options.max_seconds`(預設 90)——timeline 先算預估秒數,超過就把所有延遲等比壓縮;一段 200 則的對話不會變成 20 分鐘的影片,worker 也不會被一個 job 卡死。Playwright 有 `timeout`,ffmpeg 有 `timeout`。
-- **markdown**:`markdown-it-py`(rich 已帶進來,明列成直接依賴,同 `cryptography` 的前例);只開 commonmark 子集(標題 / 粗體 / 清單 / 行內碼 / 程式碼區塊),HTML 關掉(`html=False`),內容全部 escape——JSON 是手改的,不能讓它注入 script 進錄影頁。
+- **markdown**:`markdown-it-py`(rich 已帶進來,明列成直接依賴,同 `cryptography` 的前例);commonmark + 表格,HTML 關掉(`html=False`),連結 / autolink 關掉(URL 留成文字),圖片只從 `--files` 給的 bytes 畫、URL 永遠不抓;內容全部 escape——JSON 是手改的,不能讓它注入 script 進錄影頁。timeline 要讀哪些圖和頁面畫哪些圖是**同一次**解析(`markdown.py`),parity 測試守著。
 - **輸出**:`fmt` ∈ `gif` / `mp4` / `webm`,可多選;GIF 走調色盤 + fps 上限;MP4 是 h264 yuv420p(投影片吃得下)。
 
 ## 每個 role 怎麼演
@@ -43,7 +46,7 @@ src/workspace_app/chat_video/
 |---|---|
 | `user` | 鏡頭推進輸入框 → focus 光圈 + 游標 → 逐字打(標點停頓稍長)→ Enter → 氣泡進對話串 → 拉遠 |
 | `assistant` | 有 `reasoning` 先展開「思考」區塊逐字串流(灰、可摺),再逐字串流正文(markdown);`stopped_reason` 有值就加一個小標 |
-| `tool` | 工具卡片:`tool_name` + `tool_args`(JSON 縮排,截斷)→ 轉圈「執行中」停 `tool_pause_ms` → 展開 `content`(截到 `tool_output_chars`) |
+| `tool` | 工具卡片:`tool_name` + `tool_args`(JSON 縮排,截到 `tool_output_chars`)→ 轉圈「執行中」停 `tool_pause_ms` → 展開 `content`(截到 `tool_output_chars`);結果尾端的 `[shown-files]` 宣告 → 卡片下接縮圖(宣告 `image/*` 且 bytes 在 ASSETS 表)或檔案卡;`show_file` 沒有卡片、檔案即畫面 |
 | `error` | 紅色錯誤氣泡,`error_kind` 當小標 |
 | `system` / `mention` / 其他 | 一行灰色置中提示 |
 
@@ -65,7 +68,7 @@ src/workspace_app/chat_video/
 - **Playwright 釘 `1.49.x`** 是為了這台 Debian 11;image base 換掉後可以放寬,寫在 pyproject 註解。
 - **worker image 要有 CJK 字型**(`fonts-noto-cjk`)不然中文是豆腐;這是 k8s 側的事(`reference_sandbox_host_ships_with_api`:prod 自維護 image),plan 點名、本 PR 不動 Dockerfile。
 - **多個 `author` 只顯示名字**,不做多人打字。
-- **不做**:主題切換(先深色)、頭像、附件圖片、citation 渲染。
+- **不做**:主題切換(先深色)、頭像、user 訊息的附件、citation 渲染。(工具秀出的檔案與回答裡的 `![](path)` **有做**——P6,見〈實作偏差〉。)
 
 ## Phases(本 PR:P1–P5)
 
@@ -80,7 +83,7 @@ src/workspace_app/chat_video/
 - 測試:`<script>` 出現在訊息裡不會變成標籤;CJK 與 emoji 原樣;`--width/--height` 進到 CSS 變數;`--zoom 1` 時 JS 不推進;產出的 HTML 不含 `http://` / `https://`(無 CDN)。
 
 ### Phase 3 — `record` / `encode` / `render_chat_video`
-- `render.py`:Playwright sync,viewport = 尺寸,`record_video_size` = 尺寸,等 `done` 或逾時(`max_seconds × 1.5 + 30`);ffmpeg 轉 gif / mp4 / webm(subprocess,有 timeout,失敗把 stderr 尾巴丟進例外)。
+- `render.py`:Playwright sync,viewport = 尺寸,`record_video_size` = 尺寸,等 `done` 或逾時(原計畫 `max_seconds × 1.5 + 30`;實作是**壓縮後的播放時長** × 1.5 + 30 s,見第一輪);ffmpeg 轉 gif / mp4 / webm(subprocess,有 timeout,失敗把 stderr 尾巴丟進例外)。
 - `service.py`:串三層,回 `dict[fmt, bytes]`;`workdir` 用完清掉。
 - 測試:Playwright / ffmpeg 不在時的錯誤訊息是一句人話(不是 ImportError traceback);`encode` 用一支 1 秒的合成 webm 走 gif + mp4(標 `integration`,CI 不跑)。
 
@@ -90,14 +93,14 @@ src/workspace_app/chat_video/
 - 測試:argparse → `VideoOptions` 的對應(含 `-o x.mp4` ⇒ fmt mp4)。
 
 ### Phase 5 — 文件 + 親眼驗收
-- `docs/demo-chat-video.md`:安裝(`uv sync --extra chat-video` + `playwright install chromium`)、指令、旗標、JSON 手改的注意事項(`role` / `tool_name` / `tool_args`)、Debian 11 的版本釘。
-- 用一份**真的** export(含 reasoning + tool + error)錄 1280×720 與 1080×1080 各一段,抽 frame 看,GIF 傳給 user。
+- `docs/chat-video.md`(原計畫叫 `demo-chat-video.md`):安裝(`uv sync --extra chat-video` + `playwright install chromium`)、指令、旗標、JSON 手改的注意事項(`role` / `tool_name` / `tool_args`)、Debian 11 的版本釘。
+- 用一份**真的** export(含 reasoning + tool + error)錄 1280×720 與 1920×1080 各一段(原計畫寫 1080×1080;正方形只留在文件的範例指令),抽 frame 看,GIF 傳給 user。
 
-## 之後的形狀(P6–P8,本 PR 不做,寫下來讓接的人不用重想)
+## 之後的形狀(P12–P14,本 PR 不做,寫下來讓接的人不用重想;原本編成 P6–P8,和後來的 commit 編號撞了,照 flat 規則改)
 
-- **P6 job**:`ChatVideoPayload(item_id, chat_id, options: VideoOptions, user)`、`ChatVideoJob(Job[ChatVideoPayload])`、`ChatVideoRun`(status / progress / `video: Binary` / `error`)。`ChatVideoCoordinator`(同 `ImportCoordinator` 的形狀):`enqueue()` 由 route 呼叫;`_handle()` 讀 conversation → `to_builtins` → `build_timeline` → 對 `referenced_paths()` 逐一 `await files.read(item_id, path)` 組成 `assets` → `await asyncio.to_thread(render_chat_video, …, assets=assets)` → 存 Binary。`worker/__init__.py` 的 `_JOBTYPE_ATTR` 加 `"chat-video"`;`build_coordinators` 加進 bundle。
-- **P7 route + 權限**:`POST /a/{slug}/items/{item_id}/chats/{chat_id}/video`(gate `read_chat`,同 export)回 run id;`GET …/video/{run_id}` 回狀態 / 下載。配額:一個 chat 同時只跑一個(partition_key = chat_id)。
-- **P8 前端**:chat header 一顆「產生影片」按鈕 → 尺寸 / 格式的小表單(欄位 = `VideoOptions`)→ 進度 → 下載。
+- **P12 job**:`ChatVideoPayload(item_id, chat_id, options: VideoOptions, user)`、`ChatVideoJob(Job[ChatVideoPayload])`、`ChatVideoRun`(status / progress / `video: Binary` / `error`)。`ChatVideoCoordinator`(同 `ImportCoordinator` 的形狀):`enqueue()` 由 route 呼叫;`_handle()` 讀 conversation → `to_builtins` → `build_timeline` → 對 `referenced_paths()` 逐一 `await files.read(item_id, path)` 組成 `assets`(`referenced_paths` 已不列爬出根的 `..` 路徑;façade 的 `abs_path` 不 jail `..`,所以 handler 讀之前仍要像 `cli.load_assets` 那樣拒絕解析到 workspace 外的路徑——第五輪點名)→ `await asyncio.to_thread(render_chat_video, …, assets=assets)` → 存 Binary。`worker/__init__.py` 的 `_JOBTYPE_ATTR` 加 `"chat-video"`;`build_coordinators` 加進 bundle。
+- **P13 route + 權限**:`POST /a/{slug}/items/{item_id}/chats/{chat_id}/video`(gate `read_chat`,同 export)回 run id;`GET …/video/{run_id}` 回狀態 / 下載。配額:一個 chat 同時只跑一個(partition_key = chat_id)。
+- **P14 前端**:chat header 一顆「產生影片」按鈕 → 尺寸 / 格式的小表單(欄位 = `VideoOptions`)→ 進度 → 下載。
 - **部署**:worker image 加 `chat-video` extra + `playwright install --with-deps chromium` + `fonts-noto-cjk`;`kubernetes/base/workers.yaml` 加 `chat-video` 一顆(prod 自維護,PR 要點名)。
 
 ## 驗收(P1–P5)
@@ -209,6 +212,26 @@ src/workspace_app/chat_video/
     `inline_assets` 才編碼。
   - 沒修、記下:宣告路徑 `.` 或 `///` 折成 `/`,卡片檔名是空字串(手改才會有);`NaN`/`Infinity` 字面量 FE 整段宣告作廢、
     播放器只跳過那一筆(第二輪就決定的)。
+- **第五輪 review(單一問題:P10 的表有沒有漏列)抓到的,P11 修掉——最嚴重的一條又是 P10 自己的:**
+  - **P10 的規則本身錯了**:「宣告的 mime 蓋過 bytes」——回答先 `![](x.png)`、後來 `show_file` 宣告 `image/svg+xml` 但 bytes 是
+    PNG,P10 產出 `data:image/svg+xml;base64,<PNG>`;Chromium 對 raster 會 sniff、對 SVG 只認 mime → 破圖兩處、判定是「圖」所以沒
+    note;P9 會畫(reviewer 用真 Chromium 量的)。改成 **bytes 先 sniff,認不出才用宣告**(SVG 就是認不出的那種)。這次的表是
+    「bytes(png / svg 文字 / 一般文字 / 空 / 沒有)× 宣告(無 / png / svg / jpeg 不符 / 逗號 / 帶參數)」13 列直接對 `decide_assets`
+    的 verdict,兩個引用順序都比;砍掉 sniff-first 恰好紅 png×svg、png×jpeg 兩列。
+  - 同一張表的兩列:0 byte 的宣告圖是 `data:image/png;base64,` 破圖沒 note(聊天視窗也是破圖,但頁面說「never a broken
+    <img>」)→ 「不是圖」;宣告 mime 含 `,` 會截斷 data URL 的 header → 「不是圖」(`;` 帶參數照畫)。
+  - 同類的第三扇門:`tool_args` 巢狀 1,500 層——檔案能 load(C 解碼器允許),`json.dumps(indent=2)` 走純 Python 編碼器就
+    `RecursionError`。接住,卡片寫「(arguments nested too deep to show)」。
+  - `referenced_paths()`(job 要預撈的清單)原本含爬出根的 `..` 路徑;façade 的 `abs_path` 不 jail,未來 job 會讀到 workspace
+    外。清單不列它們(仍在 `wanted_files`,所以 note 照說「not under DIR」);P12 的 handler 仍要自己 jail(上面寫進去了)。
+  - 文字:`size` 巨大整數那條的註解與 docstring 寫成 `1e400`,但浮點寫法 `1e400` 在 Python 是 `inf`、仍被丟(FE 留 `Infinity`
+    畫卡片)——改成說「400 位數的整數」並把 `1e400` 記進差異;JS 那條規則的單元測試是原文守衛,行為只有 integration
+    (真 Chromium)守著,CI 不跑 integration——docstring 有寫明,記下。
+  - 沒修、記下(不在這個 PR):聊天視窗自己對中文 / 含空白檔名的 `![]()` 是破圖——`workspaceUrl` 把 react-markdown 已
+    percent-encode 的 `src` 直接交給 `encodePath`,每段再 `encodeURIComponent` 一次(double-encode),後端找不到檔;播放器畫得出
+    是因為 `markdown.py` 有 `unquote`。`docs/chat-video.md` 那句「都認得」說的是播放器。FE 的 bug,另開票。
+  - 測試 `tests/chat_video` 156 → 171 條(`--collect-only` 數的):player +13 列 +1、timeline +1;五個修法各一個突變體,每個恰好紅在
+    自己的列;對照組紅 37。
   - 測試 `tests/chat_video` 125 → 156 條(`--collect-only` 數的;3 條 integration):`test_markdown.py` 17 列、parity +4
     (2 列 × 2 方向)、player +6(4 列 parametrize + 1 + 1 integration)、timeline +1、CLI +3;`tests/kb/test_chat_export.py` +1。
     七個修法各一個突變體,每個恰好紅在自己的測試(`abs_path` 那個紅 8 條含 CLI 端到端);對照組(`wanted_files` 空)紅 36。

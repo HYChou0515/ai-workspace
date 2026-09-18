@@ -50,19 +50,24 @@ def abs_path(path: str) -> str:
     the CLI's jail refuses it; folding it to `/secret.png` drew a picture
     the chat did not (round 4)."""
     raw = "/" + path.lstrip("/")
-    # Walk the segments and refuse to normalise the moment the depth goes
-    # below the root. (Normalising under a sentinel directory and checking
-    # the prefix collides when the path re-enters a name equal to the
-    # sentinel: `/../w` under `/w` is `/w`.)
+    return raw if escapes_root(raw) else posixpath.normpath(raw)
+
+
+def escapes_root(path: str) -> bool:
+    """Whether ``path`` climbs above the workspace root through ``..``.
+    Walks the segments and answers the moment the depth goes below zero.
+    (Normalising under a sentinel directory and checking the prefix
+    collides when the path re-enters a name equal to the sentinel: `/../w`
+    under `/w` is `/w`.)"""
     depth = 0
-    for segment in raw.split("/"):
+    for segment in path.split("/"):
         if segment == "..":
             depth -= 1
             if depth < 0:
-                return raw
+                return True
         elif segment and segment != ".":
             depth += 1
-    return posixpath.normpath(raw)
+    return False
 
 
 def image_path(token: Token) -> str | None:

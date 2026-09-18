@@ -319,10 +319,44 @@ def test_the_timeline_names_every_workspace_path_it_will_want_bytes_for():
     assert tl.wanted_files() == [("/plots/a.png", "image/png"), ("/plots/b.png", "")]
 
 
+def test_the_prefetch_list_never_climbs_above_the_root():
+    """`referenced_paths()` is what a job reads through the item's file
+    facade, which does not jail `..` — so a path that climbs above the root
+    is not on it. It stays in `wanted_files()`, so the page's verdict (and
+    the CLI's note) still names it as not handed over."""
+    tl = build_timeline(
+        title="t",
+        messages=[
+            {
+                "role": "assistant",
+                "author": "AI",
+                "content": "![a](../secret.png) ![b](plots/a.png)",
+            },
+            {
+                "role": "tool",
+                "tool_name": "show_file",
+                "content": declare_shown_files(
+                    "", [{"path": "/../s.png", "mime": "image/png", "size": 1}]
+                ),
+            },
+        ],
+        options=VideoOptions(),
+    )
+
+    assert tl.wanted_files() == [
+        ("/../secret.png", ""),
+        ("/plots/a.png", ""),
+        ("/../s.png", "image/png"),
+    ]
+    assert tl.referenced_paths() == ["/plots/a.png"]
+
+
 def test_a_size_too_big_for_a_float_is_kept_not_a_traceback():
-    """`size: 1e400` written as an integer: the browser's `JSON.parse` gives
-    `Infinity` (a number, so the FE keeps the entry); Python's json gives an
-    int that `math.isfinite` cannot even convert — `OverflowError`. Kept."""
+    """A `size` written as a 400-digit integer: the browser's `JSON.parse`
+    gives `Infinity` (a number, so the FE keeps the entry); Python's json
+    gives an int that `math.isfinite` cannot even convert — `OverflowError`.
+    Kept. (The float spelling `1e400` is `inf` in Python and is dropped —
+    a recorded difference, like the bare `NaN` / `Infinity` literals.)"""
     steps = build_timeline(
         title="t",
         messages=[

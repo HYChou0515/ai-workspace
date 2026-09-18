@@ -194,12 +194,14 @@ class Timeline(msgspec.Struct):
         return out
 
     def referenced_paths(self) -> list[str]:
-        """The paths of ``wanted_files``, once each — the list a job
-        prefetches before the render goes to a thread, and the CLI reads
-        from ``--files``."""
+        """The paths of ``wanted_files``, once each, minus any that climbs
+        above the root — the list a job prefetches through the item's file
+        facade (which does not jail ``..``) and the CLI reads from
+        ``--files``. The climbing one stays in ``wanted_files``, so the page's
+        verdict — and the CLI's note — still says it was not handed over."""
         seen: list[str] = []
         for path, _mime in self.wanted_files():
-            if path not in seen:
+            if path not in seen and not md.escapes_root(path):
                 seen.append(path)
         return seen
 

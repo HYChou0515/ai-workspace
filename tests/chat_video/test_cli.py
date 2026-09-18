@@ -117,6 +117,7 @@ def test_the_note_names_every_path_the_page_will_not_draw_whatever_the_reason(
     (ws / "plots" / "b.png").write_bytes(png)
     (ws / "plots" / "chart.svg").write_bytes(b"<svg/>")
     (ws / "plots" / "t.csv").write_bytes(b"a,b\n")
+    (ws / "plots" / "empty.png").write_bytes(b"")
     src = _source(
         tmp_path,
         {
@@ -136,7 +137,11 @@ def test_the_note_names_every_path_the_page_will_not_draw_whatever_the_reason(
                     "role": "tool",
                     "tool_name": "show_file",
                     "content": declare_shown_files(
-                        "", [{"path": "/plots/t.csv", "mime": "text/csv", "size": 4}]
+                        "",
+                        [
+                            {"path": "/plots/t.csv", "mime": "text/csv", "size": 4},
+                            {"path": "/plots/empty.png", "mime": "image/png", "size": 0},
+                        ],
                     ),
                 },
             ],
@@ -163,6 +168,7 @@ def test_the_note_names_every_path_the_page_will_not_draw_whatever_the_reason(
     assert "/plots/chart.svg will not be drawn (not an image the page draws)" in err
     assert f"/plots/missing.png will not be drawn (not under {ws}, or too big)" in err
     assert "t.csv" not in err
+    assert "/plots/empty.png will not be drawn (not an image the page draws)" in err
 
 
 def test_a_dot_dot_above_the_workspace_is_not_folded_onto_a_file_that_exists(tmp_path, capsys):

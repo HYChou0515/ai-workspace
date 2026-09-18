@@ -95,13 +95,17 @@ def decide_assets(
     the CLI's note relays (deciding from "what was read" alone left an SVG
     chart read, undrawn and unmentioned).
 
-    The verdict is a property of the PATH, from all of its references — a
-    tool that declared it ``image/*`` settles the mime whether the
-    declaration comes before or after an answer's ``![]()`` of the same
-    path (whose bytes are only sniffed, and SVG does not sniff); the first
-    reference's verdict must not stick to the path (round 4). A path is a
-    picture when its bytes were handed over, they are an image (declared,
-    else sniffed), they fit ``max_asset_bytes`` and what is left of the
+    The verdict is a property of the PATH, from all of its references, so
+    the first reference's verdict does not stick to it (round 4). The
+    BYTES decide the mime whenever they can be sniffed (png / jpeg / gif /
+    webp); a tool's ``image/*`` declaration is consulted only where
+    sniffing cannot tell (SVG is text) — whether that declaration comes
+    before or after an answer's ``![]()`` of the same path. Round 5: the
+    other way round sent PNG bytes out as ``data:image/svg+xml``, which
+    Chromium decodes by mime alone — a broken picture, and no note. A path
+    is a picture when its bytes were handed over and are not empty, the
+    mime is ``image/*`` without a ``,`` (a comma ends a ``data:`` URL's
+    header), and they fit ``max_asset_bytes`` and what is left of the
     page's total budget (``max_assets_total_bytes``, raw bytes; base64 makes
     the page a third larger). First-fit: a file that does not fit the
     remainder is refused, and a later, smaller one that fits is still a
@@ -119,8 +123,8 @@ def decide_assets(
         if data is None:
             out[path] = Verdict(why=NOT_HANDED)
             continue
-        mime = declared.get(path) or _sniff_image(data)
-        if not mime.startswith("image/"):
+        mime = _sniff_image(data) or declared.get(path, "")
+        if not data or not mime.startswith("image/") or "," in mime:
             out[path] = Verdict(why=NOT_AN_IMAGE)
             continue
         if len(data) > options.max_asset_bytes or len(data) > budget:
@@ -195,7 +199,10 @@ def _steps_for_js(
         if isinstance(step, ToolStep):
             # The call's arguments, cut like its output: `write_file`'s
             # `content` is the whole file, and uncut it made a 4,000 px card.
-            args = json.dumps(step.args, ensure_ascii=False, indent=2) if step.args else ""
+            try:
+                args = json.dumps(step.args, ensure_ascii=False, indent=2) if step.args else ""
+            except RecursionError:  # a hand-edited value nested past the encoder
+                args = "(arguments nested too deep to show)"
             d["args_text"] = _cut(args, options.tool_output_chars)
             del d["args"]
         out.append(d)
