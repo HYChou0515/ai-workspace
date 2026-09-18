@@ -190,3 +190,71 @@ async def test_read_image_survives_the_wrap_the_runner_puts_on_every_tool():
     out = await wrapped.on_invoke_tool(ctx, json.dumps({"path": "defect.png"}))
 
     assert isinstance(out, ToolOutputImage)  # the pixels, not an error string
+
+
+# ── the loop stays free while the VLM answers ────────────────────────────────
+#
+# `VlmDescriber.answer` / `.describe` are synchronous streaming calls. Called
+# directly from this `async def`, they held the event loop for the whole VLM
+# round-trip — on a slow VLM and a big screenshot, longer than the liveness
+# probe's patience, and kubelet killed the pod. A watcher that only sleeps is
+# the witness: any delay beyond its own sleep is time the loop could not run.
+
+
+class SlowVlm(FakeVlm):
+    """Blocks the calling thread between chunks, like a real HTTP stream."""
+
+    def __init__(self, chunks: list[tuple[str, bool]], *, block_s: float) -> None:
+        super().__init__(chunks)
+        self._block_s = block_s
+
+    def stream(self, prompt: str, *, images: Sequence[tuple[bytes, str]]):
+        import time
+
+        for chunk in super().stream(prompt, images=images):
+            time.sleep(self._block_s)
+            yield chunk
+
+
+async def _max_loop_lag_while(coro, *, poll_s: float = 0.02) -> tuple[object, float]:
+    """Run `coro`; meanwhile a sleeper measures the worst gap the loop failed
+    to wake it on time. Returns (result, worst_lag_seconds)."""
+    import asyncio
+    import time
+
+    worst = 0.0
+    stop = False
+
+    async def watch() -> None:
+        nonlocal worst
+        while not stop:
+            t0 = time.monotonic()
+            await asyncio.sleep(poll_s)
+            worst = max(worst, time.monotonic() - t0 - poll_s)
+
+    watcher = asyncio.create_task(watch())
+    # Let the watcher reach its first sleep BEFORE the coroutine starts: a
+    # coroutine that never suspends (the memory filestore's read acquires an
+    # uncontended lock) would otherwise run to completion in this very loop
+    # iteration, and the watcher would measure the silence after it.
+    await asyncio.sleep(poll_s)
+    try:
+        result = await coro
+    finally:
+        stop = True
+        await watcher
+    return result, worst
+
+
+async def test_read_image_does_not_hold_the_event_loop_while_the_vlm_answers():
+    vlm = SlowVlm([("a", False), ("b", False), ("c", False)], block_s=0.15)
+    seen: list[bytes] = []
+    ctx, files = await _ctx_with(vlm, on_exec_output=seen.append)
+    await files.write("inv-1", "/s.png", _PNG)
+
+    out, worst_lag = await _max_loop_lag_while(read_image_impl(ctx, "/s.png", question="q"))
+
+    assert out == "abc"
+    assert seen == [b"a", b"b", b"c"]  # the chunks still arrive, in order
+    # Three 150 ms blocks: on the loop that is ≥ 450 ms of lag; off it, a few ms.
+    assert worst_lag < 0.1, f"the loop was blocked for {worst_lag * 1000:.0f} ms"

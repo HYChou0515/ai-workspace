@@ -581,6 +581,52 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
 
 - `GET /api/wui` 回 `{"pages": []}`（新部署）或已列的頁面；任一頁按 Deploy 後出現在裡面。
 - `/wui` 開得出來、卡片模式預設；沒有 `edit_content` 的人看不到「下架」。
+### 2026-09-18 · bc5c8cce · #815 SIGTERM 真的 graceful；app 聊天的 turn 換 pod 接手 {#pr-815}
+
+**行為**（⚠️ 不動設定行為就變）
+
+- 以前 uvicorn 在 SIGTERM 後**無限等**所有連線結束才跑 lifespan shutdown，而聊天／monitor 的 SSE 永不結束：
+  只要收到信號時有人開著串流（rollout 幾乎一定有），turn drain 與 sandbox 拆除就跑不到、pod 在
+  `terminationGracePeriodSeconds`（k8s 預設 30 秒）到期被 SIGKILL（本機探針 + uvicorn 原始碼推得；線上 log 沒看過）。
+  現在 SIGTERM 當下 `/api/readyz` 回 503、所有 SSE 送 EOF（前端重連到活的 pod）、lifespan 在**一個 deadline**
+  （`server.shutdown_budget_sec`，預設 20）內 drain：跑完的 turn 存檔；**app 聊天**跑不完的（在跑、排隊、還在準備
+  的都算）先放掉認領再 cancel，**不存** partial、**不寫**「interrupted」，由別的 pod 乾淨重跑；**KB 聊天沒有認領**，
+  超過預算的照舊 cancel、存 partial、寫標記。
+- **app 聊天的 turn 換 pod 接手**：`ChatSendService` 每次 send 在存下問題的同時開一列耐久認領（新 model `turn-claim`，
+  post-apply 註冊、無 CRUD 路由、**不需回填**；帶完整 send 配方，**不含**從 request 組出來的 env——重跑問
+  `env_without_request`，`user_id` 是提問的人）。fleet 裡一顆 pod（`ScanLease`）每 `server.turn_reclaim_interval_sec`
+  （預設 5 秒）掃孤兒認領，以對話為單位、整把拿或整把不拿：原 pod 放手的立刻接；心跳過期（30 秒）**且**那把 key 上
+  沒有任何認領在 30 秒內剛開或剛被接（剛開、剛接的心跳還沒落地，不算孤兒）的整把接下、推一次 `TurnEpoch`、
+  照順序重跑；重跑上限 2 次，再孤兒就寫一則 error 結尾（使用者看得到、可以重送）。兩個沒解、只明說的縫：
+  兩顆 pod 的 tick 都先列表再各自 take、又在心跳過期兩側各讀一次，仍可能分著拿（一邊重跑被當 interrupted）；
+  specstar 的 CAS 是 check-then-set，同一毫秒兩個 take 都會「贏」（後寫的擁有，另一份 `is_mine` 為 False）。
+  認領就是帳本（回覆存進去才刪、不看對話尾巴猜）；代價：pod 恰好死在「回覆已存、認領還沒刪」那一毫秒時會多一個答案。
+  升版當下在跑的 turn 沒有認領列，那一批仍是舊行為（pod 死就停在問題上）。
+- shutdown 的 sandbox 拆除改用 `kill_idle` 的規則：先 write-back，整個 fleet 閒置超過 idle 門檻的才 kill，否則只丟掉
+  本 pod 的 session（sandbox 是共用的，無條件 kill 會砍掉 peer 剛接手的那個）。`kind: local` 單機重啟後最近用過的
+  item dir 會留在 scratch 上（跟以前 crash 一樣），碰到才被 idle reap。
+- `read_image` / `read_page` / 畫圖審圖 / doc-question 回答的同步 LLM 呼叫從 event loop 搬到 thread——這是 liveness
+  probe 失敗被殺的元凶。boot 失敗的 exit code 回到 3（`Server.run` 取代 `uvicorn.run` 後曾變 0）。
+
+**設定**
+
+- `server.shutdown_budget_sec`（新；預設 20；也是 uvicorn 的 `timeout_graceful_shutdown`）、
+  `server.turn_reclaim_interval_sec`（新；預設 5；`0` = 關）。都有預設，不設即生效。`run_consumers: false` 不影響
+  （sweeper 產出的是 turn，只有 API pod 能跑，留在 API）。
+
+**k8s · CI 側**
+
+- **rollout 前（跟新映像同一次 apply）**：`rca-app` 加 `terminationGracePeriodSeconds: 90`（≥ uvicorn 等待 ≤ budget + lifespan drain ≤ budget + 每個還有
+  turn 的 engine 各 4 秒 + `preStop` 5 秒 + 拆除；預設值 20 + 28 + 5 = 53 秒進拆除）與
+  `lifecycle.preStop.exec: sleep 5`（pod 刪除時 k8s 同時拿掉 endpoint 與送 SIGTERM，sleep 讓移除先傳開）。
+  漏加的症狀：跟以前一樣——rollout 時 30 秒到期 SIGKILL，在跑的 turn 沒交接、對話停在問題上。
+  範例見 `kubernetes/base/deployment.yaml`。
+
+**確認做完**
+
+- **rollout 後**：看任一 API pod 的結束 log（`kubectl logs <api-pod> --previous | grep -E 'drain: begun|shutdown complete'`）：`drain: begun` → `lifespan: shutdown complete` 在 budget 內出現（這些是 INFO
+  行，app 沒設 root logger 時只有 WARNING 以上會印——本機可用 `scripts/check_sigterm_drain.sh` 驗，它自己包了
+  `basicConfig`）。另外 `terminationGracePeriodSeconds` 已生效：`kubectl get pod <api-pod> -o jsonpath='{.spec.terminationGracePeriodSeconds}'` 回 `90`。
 
 ---
 

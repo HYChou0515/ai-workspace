@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import logging
 import time
+import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from importlib.metadata import PackageNotFoundError
@@ -83,6 +84,7 @@ from .chat_send import ChatSendService
 from .compaction import AgentCompactor
 from .context_card_routes import register_context_card_actions, register_context_card_routes
 from .doc_question_routes import register_doc_question_routes
+from .drain import Drain
 from .entity_broadcast import build_entity_write_sink
 from .entity_routes import register_entity_routes
 from .env_provider import IEnvProvider
@@ -133,8 +135,10 @@ from .turn_activity import (
     SpecstarTurnActivityStore,
     register_turn_activity,
 )
+from .turn_claims import SpecstarTurnClaimStore, register_turn_claims
 from .turn_context import TurnContextBuilder, resolve_item_tools
 from .turn_gate import TurnRefused, quota_body
+from .turn_reclaim import RECLAIM_TICK_S
 from .turns import ChatTurnEngine
 from .version_header import VersionHeaderMiddleware
 from .work_calendar_routes import register_work_calendar_routes
@@ -509,6 +513,15 @@ def create_app(
     per_user_resources: PerUserResources | None = None,
     # #245: blob-GC sweeper. `gc_interval` None ⇒ off; `gc_t1`/`gc_t2` are the
     # fresh-blob grace and quarantine dwell passed to `SpecStar.gc(reconcile)`.
+    # plan-graceful-shutdown P2: how long a SIGTERM'd pod gives its in-flight
+    # turns before cancelling them (the lifespan drain), and how long uvicorn
+    # waits for connections before it cancels them (`__main__` hands the same
+    # number to `timeout_graceful_shutdown`). ONE number: the worst case is
+    # 2 × this plus teardown, and the k8s grace period must exceed that.
+    shutdown_budget: timedelta = timedelta(seconds=20),
+    # plan-graceful-shutdown P3: how often this pod looks for turns whose pod
+    # is gone and re-runs them. None ⇒ off.
+    turn_reclaim_interval: timedelta | None = timedelta(seconds=RECLAIM_TICK_S),
     gc_interval: timedelta | None = timedelta(hours=1),
     gc_t1: str = "1h",
     gc_t2: str = "24h",
@@ -683,6 +696,11 @@ def create_app(
     # lands in the same sink as the agent/LLM traces. The trace-processor is
     # registered a few lines down once the app-level wiring is complete.
     monitor = monitor if monitor is not None else InMemoryMonitor()
+    # plan-graceful-shutdown P2: the pod's shutdown, begun at SIGTERM by
+    # `DrainingServer` (`__main__`). Built here so `readyz` and every stream
+    # source can reach it; the engines register their closers below.
+    drain = Drain()
+    drain.on_begin(monitor.close_streams)
 
     # #538: the mirror sweep already walks every warm sandbox every few seconds,
     # so it hands the sizes it saw to the quota — that is what keeps the walk off
@@ -1309,6 +1327,8 @@ def create_app(
         code_daily_sync=code_daily_sync,
         wiki_reflect_daily=wiki_reflect_daily,
         gc_interval=gc_interval,
+        shutdown_budget=shutdown_budget,
+        turn_reclaim_interval=turn_reclaim_interval,
         trigger_check_interval=trigger_check_interval,
         # #WUI P15: fires the schedules pages declared. Built here so it shares
         # the one `spec`, the one index and the item-owner lookup the rest of the
@@ -1339,6 +1359,7 @@ def create_app(
         openapi_url="/api/openapi.json",
         swagger_ui_oauth2_redirect_url="/api/docs/oauth2-redirect",
     )
+    app.state.drain = drain  # `DrainingServer` (`__main__`) begins it at SIGTERM
 
     # #700: only mounted when a deployment actually names origins, so the default
     # deployment carries no CORS layer and its responses are byte-identical to
@@ -1497,6 +1518,12 @@ def create_app(
         Deliberately NOT the diagnostics registry above — that is an
         operator-facing report; this answers one question, cheaply (two
         aggregates, no rows materialised), on every probe interval."""
+        # plan-graceful-shutdown P2: a pod that received SIGTERM is not ready,
+        # from the first moment. The truthful answer rather than what stops
+        # traffic: uvicorn closes the listener within 0.1 s of the signal, and
+        # on a deletion k8s has already pulled the pod from the endpoints.
+        if drain.draining:
+            return Response(status_code=503, content="draining", media_type="text/plain")
         probe = getattr(filestore, "prefix_index_ready", None)
         if probe is not None and not await probe():
             return Response(
@@ -1665,6 +1692,7 @@ def create_app(
     register_schedule_index(spec)  # #WUI P14 (page-declared schedules)
     register_trigger_store(spec)  # #429 P7 / #804 (the shared window ledger)
     register_stretch_claims(spec)  # #615 (off-hours stretch claims)
+    register_turn_claims(spec)  # plan-graceful-shutdown P3 (a turn's durable claim)
     # The WUI overview's rows (`docs/plan-wui-overview.md`). Same timing as
     # everything above, and both reasons apply: Deploy on a bare test client
     # writes one, and the blob-gc worker must hold every model the API does.
@@ -1794,12 +1822,24 @@ def create_app(
     # engines share one store: the question ("is anyone working on this chat?")
     # is the same on either surface, and two stores would be two answers.
     turn_activity: ITurnActivityStore = SpecstarTurnActivityStore(spec)
+    # plan-graceful-shutdown P3: THIS pod's identity, shared by the engines'
+    # event-bus tagging and the turn claims' `owner`, so "who is running this
+    # turn" and "whose events are these" name the same pod.
+    pod_id = uuid.uuid4().hex
+    turn_claims = SpecstarTurnClaimStore(spec, pod_id=pod_id)
+    # For the reclaim tick (`turn_reclaim.ReclaimTick.of`): what it judges by
+    # and re-runs through, off `app.state` like every other lifespan sweeper.
+    app.state.spec = spec
+    app.state.turn_claims = turn_claims
+    app.state.turn_activity = turn_activity
+    app.state.turn_control = turn_control
     turn_engine = ChatTurnEngine(
         runner,
         turn_control=turn_control,
         poll_interval=turn_cancel_poll_seconds,
         replay_buffer_events=turn_replay_buffer_events,
         event_bus=event_bus,
+        pod_id=pod_id,
         turn_activity=turn_activity,
     )
     # The sweeper feeds the durable per-person ledger with what the mirror just
@@ -1886,6 +1926,10 @@ def create_app(
     # Drained on shutdown (see build_lifespan): an in-flight turn gets a bounded
     # chance to finish and persist instead of leaving with the process.
     app.state.turn_engines = (turn_engine, kb_turn_engine)
+    # And their live streams end the moment the drain begins, so uvicorn's wait
+    # for open connections ends and that drain actually gets to run.
+    drain.on_begin(turn_engine.close_all_streams)
+    drain.on_begin(kb_turn_engine.close_all_streams)
 
     # Cached fallback configs per sub-agent purpose, used when the
     # catalog the caller supplied didn't wire that purpose (legacy
@@ -2267,6 +2311,10 @@ def create_app(
         # #714: the deploy's request→env impl. None (the default) ⇒ no seam, and
         # a turn's tools see the item's env_vars alone, exactly as before.
         request_env=request_env,
+        # plan-graceful-shutdown P3: every app-chat send (not the KB chat's, which
+        # builds its turn in its route) opens a durable claim a peer
+        # can re-run the turn from.
+        turn_claims=turn_claims,
     )
 
     # #615: the sweeper task (built in the lifespan, before this point) reaches

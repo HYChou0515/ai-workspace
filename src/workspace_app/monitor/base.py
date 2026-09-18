@@ -16,6 +16,8 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 MonitorEvent = dict[str, Any]
+# Pushed onto every subscriber's queue by `close_streams`: the response ends.
+_CLOSE_STREAM: Any = object()
 
 
 class IMonitor(abc.ABC):
@@ -59,11 +61,20 @@ class IMonitor(abc.ABC):
         finally:
             self._subs.discard(q)
 
+    def close_streams(self) -> None:
+        """End every live `/monitor/stream` response (the pod is draining). An
+        open stream is an open connection, and uvicorn waits for open
+        connections before it lets the lifespan shut down."""
+        for q in list(self._subs):
+            q.put_nowait(_CLOSE_STREAM)
+
     async def sse(self, *, group_id: str | None = None) -> AsyncIterator[str]:
         """Server-sent-events of live telemetry — `data: <json>\\n\\n` per event,
         filtered to `group_id` when given. Backs the /monitor/stream endpoint."""
         async with self.subscribe() as q:
             while True:
                 event = await q.get()
+                if event is _CLOSE_STREAM:
+                    return  # the pod is draining — end the response
                 if group_id is None or event.get("group_id") == group_id:
                     yield f"data: {json.dumps(event)}\n\n"

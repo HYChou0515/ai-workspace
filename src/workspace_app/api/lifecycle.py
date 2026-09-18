@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import UTC, datetime, timedelta
@@ -36,6 +37,7 @@ from ..workflow.user_schedule_sweep import UserScheduleSweeper
 from . import perf_trace
 from .notification_delivery import INotificationChannel, deliver_pending
 from .registry import InvestigationRegistry
+from .turn_reclaim import RECLAIM_TICK_S
 
 if TYPE_CHECKING:
     from ..monitor import IMonitor
@@ -92,12 +94,16 @@ def build_lifespan(
     code_daily_sync: str | None = None,
     wiki_reflect_daily: str | None = None,
     gc_interval: timedelta | None,
+    shutdown_budget: timedelta = timedelta(seconds=20),
     trigger_check_interval: timedelta | None = None,
     user_schedule_sweeper: UserScheduleSweeper | None = None,
     notification_channel: INotificationChannel | None = None,
     notification_delivery_interval: timedelta = _NOTIFY_DELIVERY_INTERVAL,
     offhours: OffHoursSettings | None = None,
     cluster_sweep_seconds: float = _CLUSTER_SWEEP_INTERVAL_S,
+    # plan-graceful-shutdown P3: how often a pod looks for turns whose pod is
+    # gone. None ⇒ no sweeper (a single-pod deploy has no peer to take over).
+    turn_reclaim_interval: timedelta | None = timedelta(seconds=RECLAIM_TICK_S),
     prewarm_tools: Callable[[], Awaitable[dict[str, str]]],
     warn_resources: Callable[[], Awaitable[list[str]]] | None = None,
 ) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
@@ -224,6 +230,41 @@ def build_lifespan(
                 except Exception:
                     logger.exception("goal offhours sweep failed; continuing")
                 await asyncio.sleep(offhours.poll_seconds)
+        except asyncio.CancelledError:
+            return
+
+    async def turn_reclaim_sweeper(app: FastAPI) -> None:
+        """plan-graceful-shutdown P3: take over the turns of a pod that is gone.
+
+        Lease-taking like a #804 producer — each window ONE pod lists the open
+        turn claims (bounded by turns in flight, not by content) — but the
+        work it produces is a turn, run on its own engine: not a pure
+        producer, the third stated exception in CLAUDE.md beside the goal and
+        notification sweepers, because a turn can only run on an API pod.
+        Per-claim
+        resilient inside the tick; the whole tick guarded so it never wedges
+        the loop. Tick-first, so a pod that boots after a rollout picks up
+        what the old pods let go of without waiting a window."""
+        from ..workflow.triggers import ScanLease, SpecstarTriggerStore
+        from .turn_reclaim import ReclaimTick
+
+        assert turn_reclaim_interval is not None
+        interval_s = turn_reclaim_interval.total_seconds()
+        lease = ScanLease(SpecstarTriggerStore(spec), "turn-reclaim", interval_s=interval_s)
+        tick = ReclaimTick.of(app)
+
+        async def once() -> None:
+            if not await asyncio.to_thread(lease.claim):
+                return  # another pod looked this window
+            taken = await tick.run()
+            if taken:
+                logger.info("turn-reclaim: took over %d turn(s): %s", len(taken), taken)
+
+        try:
+            while True:
+                with contextlib.suppress(Exception):
+                    await once()
+                await asyncio.sleep(interval_s)
         except asyncio.CancelledError:
             return
 
@@ -554,6 +595,9 @@ def build_lifespan(
             bg.append(perf_trace.start_loop_watchdog())
         bg.append(asyncio.create_task(index_sweeper(app)))  # #227 fan-out stuck-run recovery
         bg.append(asyncio.create_task(cluster_sweeper(app)))  # #506 P8 review-inbox cluster fold
+        if turn_reclaim_interval is not None:
+            bg.append(asyncio.create_task(turn_reclaim_sweeper(app)))  # plan-graceful-shutdown P3
+            logger.debug("lifespan: turn-reclaim sweeper enabled")
         # NOTE: the full capability round is deliberately NOT scheduled here
         # — boot stays connectivity-only (see the health step above); operators
         # trigger the heavy round on demand via the FE / POST /health/checks/run.
@@ -604,11 +648,32 @@ def build_lifespan(
             # otherwise leave with the process, silently and with no terminal
             # event. Bounded, so a wedged turn can't hold the pod past its grace
             # period (SIGKILL is strictly worse: nothing runs its teardown).
+            # plan-graceful-shutdown P4: a turn the budget did not allow to
+            # finish is handed over — its claim released, so a peer's reclaim
+            # sweeper (or this pod, restarted) re-runs it; see `aclose`.
+            claims = getattr(app.state, "turn_claims", None)
+
+            async def _handover(keys: list[str]) -> None:
+                if claims is not None:
+                    await asyncio.to_thread(claims.release, keys)
+
+            # ONE deadline for the whole drain — the engines in turn, then (all-
+            # in-one only) the coordinators — so the drain is over inside
+            # `shutdown_budget` + up to two grace periods PER engine with turns
+            # past it (`_DRAIN_GRACE_S`; two engines ⇒ + 8 s), whatever is in
+            # flight; the teardown below (kernels, the sandboxes' write-back)
+            # is not bounded. A budget PER step made the bound a multiple
+            # nobody had added up (round 1: the second engine got a fresh 20 s,
+            # the coordinators a third).
+            deadline = time.monotonic() + shutdown_budget.total_seconds()
             for engine in getattr(app.state, "turn_engines", ()):
                 logger.debug("lifespan: draining in-flight turns")
                 with contextlib.suppress(BaseException):
-                    await engine.aclose()
+                    await engine.aclose(
+                        timeout=max(0.0, deadline - time.monotonic()), handover=_handover
+                    )
             logger.debug("lifespan: draining coordinators + kernels")
+            t_coord = time.monotonic()
             # Drain in-flight jobs before exit (bounded) — ONLY on a pod that
             # consumes. `aclose()` starts a consumer on a coordinator that never
             # consumed "so it still flushes"; on a pure producer (#312,
@@ -618,25 +683,48 @@ def build_lifespan(
             # pod past its grace period. A pure producer has nothing in flight;
             # pending jobs are durable and the workers pick them up.
             if run_consumers:
-                with contextlib.suppress(BaseException):
-                    await app.state.wiki_coordinator.aclose()
-                with contextlib.suppress(BaseException):
-                    await app.state.index_coordinator.aclose()
-                if app.state.sanity_coordinator is not None:
-                    with contextlib.suppress(BaseException):
-                        await app.state.sanity_coordinator.aclose()
-                if app.state.eval_coordinator is not None:
-                    with contextlib.suppress(BaseException):
-                        await app.state.eval_coordinator.aclose()
-                if app.state.graph_coordinator is not None:
-                    with contextlib.suppress(BaseException):
-                        await app.state.graph_coordinator.aclose()
-                with contextlib.suppress(BaseException):
-                    await app.state.card_gen_coordinator.aclose()
-                with contextlib.suppress(BaseException):
-                    await app.state.blob_gc_coordinator.aclose()
+                # The same deadline as the turns above: a queue that cannot
+                # empty in time (an index job on a big PDF; the boot's own
+                # Help-doc jobs took 16 s on a fresh local boot) is left to
+                # specstar's stale-job recovery — that is what a durable queue
+                # is for — instead of holding the pod past its grace period.
+                for name in (
+                    "wiki_coordinator",
+                    "index_coordinator",
+                    "sanity_coordinator",
+                    "eval_coordinator",
+                    "graph_coordinator",
+                    "card_gen_coordinator",
+                    "blob_gc_coordinator",
+                ):
+                    coordinator = getattr(app.state, name, None)
+                    if coordinator is None:
+                        continue
+                    t_one = time.monotonic()
+                    left = deadline - t_one
+                    if left <= 0:
+                        logger.warning("lifespan: shutdown budget spent before %s drained", name)
+                        continue
+                    try:
+                        await asyncio.wait_for(coordinator.aclose(), timeout=left)
+                    except TimeoutError:
+                        logger.warning("lifespan: %s did not drain within the budget", name)
+                    except BaseException:  # noqa: BLE001 — one failing drain must not stop the rest
+                        logger.exception("lifespan: %s failed to drain", name)
+                    logger.debug("lifespan: %s drained in %.1fs", name, time.monotonic() - t_one)
+            # Narrated with timings: a shutdown that overruns the grace period is
+            # a SIGKILL nobody can explain afterwards, so each step says what it
+            # cost (the boot narrates the same way, `boot_step`).
+            logger.debug("lifespan: coordinators drained in %.1fs", time.monotonic() - t_coord)
+            t0 = time.monotonic()
             await kernels.shutdown_all()
-            await registry.close_all()
-            logger.info("lifespan: shutdown complete")
+            t1 = time.monotonic()
+            # `kill_idle`'s rule (globally idle ⇒ kill, else write back and
+            # drop): the sandboxes are the fleet's, not this pod's.
+            await registry.close_all(idle_after=idle_timeout)
+            t2 = time.monotonic()
+            logger.info(
+                "lifespan: shutdown complete (kernels %.1fs, sandboxes %.1fs)", t1 - t0, t2 - t1
+            )
 
     return lifespan

@@ -13,6 +13,7 @@ Card / page writes are credited to the request user (the spec's ``default_user``
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -101,7 +102,11 @@ def register_doc_question_routes(
     async def answer_doc_question(qid: str, body: AnswerBody) -> AnswerOut:
         q = _get(qid)
         if q.kind == "term":
-            ref = land_term_answer(spec, qid, answer=body.answer, formatter=formatter)
+            # The formatter is an LLM call when `card_drafter_llm` is wired —
+            # synchronous, so off the loop (plan-graceful-shutdown P1's class).
+            ref = await asyncio.to_thread(
+                land_term_answer, spec, qid, answer=body.answer, formatter=formatter
+            )
         else:
             ref = await land_description_answer(
                 spec, qid, answer=body.answer, wiki_store=wiki_store

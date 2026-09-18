@@ -215,15 +215,22 @@ async def test_active_session_within_threshold_is_not_reaped():
         await client.post(f"/a/rca/items/{iid}/messages", json={"content": "x"})
         # Sweep happens but nothing's idle yet.
         await asyncio.sleep(0.2)
-    # Lifespan-shutdown's close_all will count as a kill — so we only
-    # check that the count is 1 (from shutdown), not >1 (which would
-    # indicate the idle-kill loop fired before shutdown).
-    assert sandbox.kill_calls == 1
+    # Neither the sweep nor the lifespan's `close_all` kills a sandbox the
+    # fleet was using inside the threshold (same rule, plan-graceful-shutdown
+    # round 1): a kill here would be the idle-kill loop firing early.
+    assert sandbox.kill_calls == 0
 
 
-async def test_shutdown_close_all_kills_alive_sessions():
+async def test_shutdown_lets_go_of_alive_sessions_without_killing_them():
     """When the app's lifespan exits, the idle-killer is cancelled and
-    registry.close_all() releases anything still in-flight."""
+    `registry.close_all()` lets go of anything still in flight — written
+    back and dropped from this pod, NOT killed: the sandbox is the fleet's
+    (#345 shared dir, #366 shared address), a peer may be mid-turn in it
+    (the turn this pod just handed over, for one), and `kill_idle`'s rule
+    applies — only a sandbox no pod has touched past the idle threshold is
+    torn down. Before plan-graceful-shutdown P2 this path did not run in a
+    rollout with a stream open; its unconditional kill was found the first
+    time it could."""
     app, sandbox, _, spec = _make_components(
         idle_timeout=timedelta(seconds=60),
         idle_check_interval=timedelta(seconds=60),
@@ -235,8 +242,23 @@ async def test_shutdown_close_all_kills_alive_sessions():
         await client.post(f"/a/rca/items/{iid_b}/messages", json={"content": "b"})
         assert sandbox.create_calls == 2
         assert sandbox.kill_calls == 0  # nothing reaped yet
-    # Lifespan exit happens here.
-    assert sandbox.kill_calls == 2
+    # Lifespan exit happens here: both were used seconds ago, both kept.
+    assert sandbox.kill_calls == 0
+
+
+async def test_shutdown_kills_only_what_the_fleet_left_idle():
+    """The other half of the rule: a session whose sandbox nobody has touched
+    past the threshold IS torn down at shutdown, as the sweep would have."""
+    app, sandbox, _, spec = _make_components(
+        idle_timeout=timedelta(seconds=0.3),
+        idle_check_interval=timedelta(seconds=60),  # the sweep never fires
+    )
+    iid = register_rca_item(spec)
+    async with _running_app(app) as client:
+        await client.post(f"/a/rca/items/{iid}/messages", json={"content": "a"})
+        assert sandbox.create_calls == 1
+        await asyncio.sleep(0.5)  # past the threshold, with no sweep to reap it
+    assert sandbox.kill_calls == 1
 
 
 async def test_mirror_sweeper_persists_warm_sandbox_to_snapshot():
