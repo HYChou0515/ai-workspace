@@ -2503,6 +2503,76 @@ async def publish_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str
     return "\n".join(lines)
 
 
+async def install_skill_impl(ctx: RunContextWrapper[AgentToolContext], entry_id: str) -> str:
+    """Install a skill from the skill hub into THIS workspace, as `.skill/<name>/`,
+    so it is loadable with `read_skill` from the next turn on. Use it after the
+    user has picked an entry (by id, from `search_skill_hub` or the skill hub
+    page) and said to install it.
+
+    The copy keeps a note of where it came from, so the Skills panel can offer
+    an update when the publisher re-publishes, and Refresh brings it. A skill
+    written for another App may name tools this App does not have — the reply
+    says which, and the choice is the user's: it is installed either way.
+
+    Refuses, without touching anything, when this workspace already has a
+    `.skill/<name>/` folder of that name (remove or rename it first), and when
+    there is no such entry. Returns a confirmation or an `error:` note."""
+    for verb in TOOL_VERBS["install_skill"]:
+        if (denied := authorize_tool(ctx.context, verb)) is not None:
+            return denied
+    from ..apps.manifest import load_app_manifest
+    from ..apps.skills import (
+        install_hub_skill,
+        workspace_skill_origin,
+        workspace_skill_payload,
+    )
+
+    c = ctx.context
+    files, inv = c.files, c.investigation_id
+    if files is None or inv is None:
+        return "error: install_skill needs a workspace (none on this turn)"
+    hub = c.skill_hub
+    if hub is None or c.app_slug is None:
+        return "error: install_skill is only available in an App workspace turn"
+    # Q10: an entry this person may not read IS one that does not exist, and
+    # the two are worded identically so a refusal never says "exists, not for
+    # you".
+    state, entry = hub.state_for(entry_id, c.acting_user)
+    if entry is None:
+        return f"error: no skill hub entry {entry_id!r} — check the id, or search again."
+    name = entry.name
+    if await workspace_skill_payload(files, inv, name):
+        # Never overwrite: the folder may be the user's own skill, or an earlier
+        # install they have since edited. Say WHOSE copy it is when it is one,
+        # so "already have it" and "name clash" read differently.
+        origin = await workspace_skill_origin(files, inv, name)
+        whose = ""
+        if origin is not None and origin.source == "hub" and origin.entry:
+            _st, theirs = hub.state_for(origin.entry, c.acting_user)
+            if theirs is not None:
+                whose = f"{theirs.owner}'s "
+        return (
+            f"error: this workspace already has {whose}'.skill/{name}/' — remove or rename "
+            "that folder first, then install again."
+        )
+    await install_hub_skill(files, inv, hub, entry_id)
+    lines = [
+        f"installed skill '{name}' (by {entry.owner}, written in the {entry.source_app} App) "
+        f"into .skill/{name}/. It is in the skill index from the next turn on; load it any "
+        f"time with read_skill('{name}')."
+    ]
+    ceiling = set(load_app_manifest(c.app_slug).agent.tools)
+    if missing := [t for t in entry.referenced_tools if t not in ceiling]:
+        lines.append(
+            f"Note: it mentions {', '.join(missing)}, which this App does not have — parts of "
+            "it may not be followable here. Tell the user."
+        )
+    if entry.review.notes:
+        lines.append("The publish-time review noted:")
+        lines += [f"- {n}" for n in entry.review.notes]
+    return "\n".join(lines)
+
+
 async def save_subagent_impl(
     ctx: RunContextWrapper[AgentToolContext],
     name: str,
@@ -3459,6 +3529,9 @@ _IMPLS = {
     # validates, scans, reviews, THEN stores. Opt-in per App like `save_skill`;
     # refuses on a turn with no hub / reviewer wired.
     "publish_skill": publish_skill_impl,
+    # `install_skill` — the skill hub's read door into a workspace: a copy with
+    # an `.origin`, same shape `read_skill` materializes. Opt-in per App.
+    "install_skill": install_skill_impl,
     # `save_subagent` (#738) — same shape again: an opt-in tool that owns the
     # AGENT.md write, so a sub-agent the agent authors is always one it can call.
     "save_subagent": save_subagent_impl,

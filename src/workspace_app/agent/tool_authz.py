@@ -217,6 +217,9 @@ TOOL_VERBS: dict[str, tuple[Verb, ...]] = {
     # item taking its owner's skill public under their own name is the case the
     # stricter verb closes on the honest path.
     "publish_skill": ("edit_content",),
+    # `install_skill` writes `.skill/<name>/` into the item — the same standing
+    # instruction `save_skill` writes, arriving from the skill hub instead.
+    "install_skill": ("edit_content",),
     # `search_wiki`'s `scopes` fall back to the ITEM id when a turn has no
     # collections, so it greps the workspace and returns `path:line: text`.
     "search_wiki": ("read_content",),

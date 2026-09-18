@@ -15,7 +15,7 @@ import os
 import tempfile
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse, StreamingResponse
@@ -58,6 +58,9 @@ from .schemas import (
 from .search import InvalidQuery, compile_query, path_selected, search_text
 from .turn_gate import quota_body
 from .turns import ChatTurnEngine
+
+if TYPE_CHECKING:
+    from ..apps.skill_hub import SkillHubStore
 
 _READONLY_DIR = ".readonly"
 
@@ -252,8 +255,14 @@ def register_file_routes(
     activity: ActivityLog,
     max_file_size: int,
     admission: AdmissionGate | None = None,
+    skill_hub: SkillHubStore | None = None,
 ) -> None:
-    """Mount the workspace file / notebook / shell routes onto ``app``."""
+    """Mount the workspace file / notebook / shell routes onto ``app``.
+
+    ``skill_hub`` is what a copy installed from the skill hub resolves its
+    upstream against (the Skills panel's update / state facts, and Refresh).
+    A deploy without one still lists package copies; a hub copy on such a
+    deploy is a wiring error the resolver raises on, not a quiet "deleted"."""
 
     @app.post("/a/{slug}/items/{item_id}/skills/{name}/refresh")
     async def refresh_item_skill(
@@ -273,7 +282,16 @@ def register_file_routes(
 
         investigation_id = locator.require_access(slug, item_id, "edit_content")
         profile = locator.profile_of(investigation_id)
-        result = await refresh_skill(files, investigation_id, slug, profile, name, force=body.force)
+        result = await refresh_skill(
+            files,
+            investigation_id,
+            slug,
+            profile,
+            name,
+            force=body.force,
+            hub=skill_hub,
+            viewer=get_user_id(),
+        )
         return _SkillRefreshResult(
             updated=result.updated, skipped=result.skipped, removed=result.removed
         )
@@ -288,7 +306,7 @@ def register_file_routes(
         index uses, so the picker can't drift from what the agent sees."""
         from ..apps.skills import (
             effective_item_skills,
-            skill_update_available,
+            skill_upstream,
             workspace_skill_metas,
         )
 
@@ -297,14 +315,16 @@ def register_file_routes(
         prefs = locator.skill_prefs_of(investigation_id)
         ws_metas = await workspace_skill_metas(files, investigation_id)
         states = effective_item_skills(slug, profile, prefs, ws_metas)
-        # Only a copy can have an update, so only copies are checked — this reads
-        # the package on every panel open and is deliberately kept off the turn's
-        # hot path.
-        updatable = {
-            s.name
+        # Only a copy has an upstream, so only copies are resolved — this reads
+        # the package (or the hub) on every panel open and is deliberately kept
+        # off the turn's hot path.
+        viewer = get_user_id()
+        upstreams = {
+            s.name: await skill_upstream(
+                files, investigation_id, slug, profile, s.name, hub=skill_hub, viewer=viewer
+            )
             for s in states
             if s.is_copy
-            and await skill_update_available(files, investigation_id, slug, profile, s.name)
         }
         return _ItemSkills(
             skills=[
@@ -314,7 +334,9 @@ def register_file_routes(
                     source=s.source,
                     default_on=s.default_on,
                     is_copy=s.is_copy,
-                    update_available=s.name in updatable,
+                    update_available=(up := upstreams.get(s.name)) is not None
+                    and up.update_available,
+                    upstream=up.state if up is not None else None,
                     pref=_skill_pref_state(prefs.get(s.name)),
                     effective=s.effective,
                 )

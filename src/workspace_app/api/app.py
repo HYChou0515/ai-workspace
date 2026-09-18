@@ -1805,6 +1805,9 @@ def create_app(
     # Exposed for introspection / tests of the #43 broadcast stream (the shared
     # per-investigation pub/sub lives on the engine).
     app.state.turn_engine = turn_engine
+    # Skill hub (docs/plan-skill-hub.md): the one store the tools, the panel and
+    # the hub routes share — exposed so a test can publish through the app's own.
+    app.state.skill_hub = skill_hub
     # KB chat runs through a wiki-aware runner that routes each turn across
     # chunk-RAG / wiki / both (#50 P5). It's a pure pass-through to `runner`
     # unless the query opts into the wiki AND a collection has use_wiki, so the
@@ -2448,6 +2451,7 @@ def create_app(
         activity=activity,
         max_file_size=max_file_size,
         admission=admission,
+        skill_hub=skill_hub,
     )
 
     # #419: file-first entity CRUD. Opt-in — an item with no `.entity/` schema

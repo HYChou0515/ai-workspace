@@ -16,6 +16,7 @@ from workspace_app.agent.tools import (
     exec_impl,
     exists_impl,
     infer_modules_impl,
+    install_skill_impl,
     link_entity_impl,
     list_files_impl,
     make_deck_impl,
@@ -126,6 +127,7 @@ _CALLS = {
     "save_schedules": lambda c: save_schedules_impl(c, "{}"),
     "save_skill": lambda c: save_skill_impl(c, "sk", "Does things", "body"),
     "publish_skill": lambda c: publish_skill_impl(c, "sk"),
+    "install_skill": lambda c: install_skill_impl(c, "entry"),
     "search_wiki": lambda c: search_wiki_impl(c, "anything"),
 }
 
@@ -660,6 +662,7 @@ _EXPECTED_VERBS: dict[str, tuple[str, ...]] = {
     "save_subagent": ("edit_content",),
     "save_skill": ("edit_content",),
     "publish_skill": ("edit_content",),
+    "install_skill": ("edit_content",),
     "save_workflow": ("edit_content",),
     "save_schedules": ("edit_content",),
     "edit_file": ("read_content", "edit_content"),

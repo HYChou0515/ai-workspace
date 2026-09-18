@@ -32,7 +32,8 @@ from msgspec import Struct, field
 from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError, ResourceIsDeletedError
 
-from ..perm import Permission
+from ..perm import Actor, Permission, authorize
+from ..resources.groups import groups_of
 from .skill_payload import SkillOrigin, origin_for
 from .skills import SKILL_BODY_CAP, SkillError, _parse_frontmatter
 
@@ -40,6 +41,12 @@ if TYPE_CHECKING:
     from collections.abc import Collection, Mapping
 
     from ..filestore.protocol import FileStore
+
+#: What an entry is to one viewer. `live`: readable. `unpublished`: exists but
+#: this viewer may not read it (the owner made it private / restricted them out
+#: — Q5). `deleted`: soft-deleted or never existed — from outside there is no
+#: difference (Q10).
+UpstreamState = Literal["live", "unpublished", "deleted"]
 
 #: The FileStore namespace an entry's files live under. A synthetic workspace id
 #: per entry, so `purge` on the entry takes exactly its files and nothing else.
@@ -222,6 +229,24 @@ class SkillHubStore:
             return None
         assert isinstance(data, SkillHubEntry)
         return data
+
+    def can_read(self, entry: SkillHubEntry, viewer: str) -> bool:
+        """Whether `viewer` may read the entry's content — the same `authorize`
+        every other resource uses, with `entry.owner` (not `created_by`) as
+        the owner because ownership is transferable here."""
+        actor = Actor.human(viewer, groups=groups_of(self._spec, viewer))
+        return authorize(actor, "read_content", entry.permission, created_by=entry.owner)
+
+    def state_for(self, entry_id: str, viewer: str) -> tuple[UpstreamState, SkillHubEntry | None]:
+        """The entry as `viewer` may know it: `("live", entry)`, or one of the
+        two absent states with `None` — the caller shows a STATE for a copy
+        whose upstream went away rather than raising into a listing."""
+        entry = self.get(entry_id)
+        if entry is None:
+            return "deleted", None
+        if not self.can_read(entry, viewer):
+            return "unpublished", None
+        return "live", entry
 
     def find(self, owner: str, name: str) -> str | None:
         """The entry id for an identity, or ``None``. Scoped by both indexed

@@ -16,9 +16,10 @@ import pytest
 
 import workspace_app.apps.skills as skills_mod
 from workspace_app.apps.skills import (
+    install_hub_skill,
     refresh_skill,
     resolve_skill_body,
-    skill_update_available,
+    skill_upstream,
 )
 from workspace_app.files import WorkspaceFiles
 from workspace_app.filestore.memory import MemoryFileStore
@@ -233,10 +234,12 @@ async def test_reports_whether_upstream_has_moved_since_the_copy_was_made(isolat
     files, inv = WorkspaceFiles(MemoryFileStore()), "inv-1"
     await resolve_skill_body(files, inv, "rca", "local-lab", "triage")
 
-    assert await skill_update_available(files, inv, "rca", "local-lab", "triage") is False
+    up = await skill_upstream(files, inv, "rca", "local-lab", "triage")
+    assert up is not None and up.update_available is False
 
     (sd / "scripts" / "x.py").write_text("v2\n")
-    assert await skill_update_available(files, inv, "rca", "local-lab", "triage") is True
+    up = await skill_upstream(files, inv, "rca", "local-lab", "triage")
+    assert up is not None and up.update_available is True
 
 
 # Editing a file here is not an upstream change. Offering "update" for it would
@@ -247,7 +250,8 @@ async def test_a_local_edit_is_not_an_upstream_update(isolated_apps: Path):
     await resolve_skill_body(files, inv, "rca", "local-lab", "triage")
     await files.write(inv, "/.skill/triage/scripts/x.py", b"the AI improved this\n")
 
-    assert await skill_update_available(files, inv, "rca", "local-lab", "triage") is False
+    up = await skill_upstream(files, inv, "rca", "local-lab", "triage")
+    assert up is not None and up.update_available is False
 
 
 # The shape this feature was actually asked for: a real binary asset — a .pptx
@@ -285,7 +289,7 @@ async def test_a_hand_written_skill_has_nothing_to_refresh(isolated_apps: Path):
     md = b"---\nname: mine\ndescription: d\n---\n\nmine"
     await files.write(inv, "/.skill/mine/SKILL.md", md)
 
-    assert await skill_update_available(files, inv, "rca", "local-lab", "mine") is False
+    assert await skill_upstream(files, inv, "rca", "local-lab", "mine") is None
     nothing = await refresh_skill(files, inv, "rca", "local-lab", "mine")
     assert (nothing.updated, nothing.skipped, nothing.removed) == ([], [], [])
 
@@ -302,7 +306,9 @@ async def test_a_copy_outlives_the_skill_being_retired_upstream(isolated_apps: P
         child.unlink() if child.is_file() else child.rmdir()
     sd.rmdir()
 
-    assert await skill_update_available(files, inv, "rca", "local-lab", "triage") is False
+    upstream = await skill_upstream(files, inv, "rca", "local-lab", "triage")
+    assert upstream is not None
+    assert (upstream.state, upstream.update_available) == ("deleted", False)
     assert (await refresh_skill(files, inv, "rca", "local-lab", "triage")).updated == []
     assert await files.read(inv, "/.skill/triage/scripts/x.py") == b"v1\n"
 
@@ -340,3 +346,178 @@ async def test_a_shared_skill_is_found_even_when_the_profile_ships_others(
     await resolve_skill_body(files, inv, "rca", "local-lab", "shared-one")
 
     assert await files.read(inv, "/.skill/shared-one/scripts/z.py") == b"z\n"
+
+
+# ── the skill hub as a third upstream (plan P5) ──────────────────────────────
+#
+# A copy installed from the skill hub has an upstream that can do two things a
+# package skill cannot: be taken down (the owner made it private) and be
+# deleted. Both are reported as a STATE next to `update_available`, never by
+# raising — the Skills panel lists every copy, and one dead upstream must not
+# take the panel down with it.
+
+
+def _hub():
+    from workspace_app.apps.skill_hub import SkillHubStore, register_skill_hub
+    from workspace_app.resources import make_spec
+
+    spec = make_spec(default_user="system")
+    register_skill_hub(spec)
+    return spec, SkillHubStore(spec, MemoryFileStore())
+
+
+async def _published(hub, body: str = "v1\n") -> str:
+    from workspace_app.apps.skill_hub import SkillHubReview
+
+    return await hub.publish(
+        owner="alice",
+        name="triage",
+        description="d",
+        source_item="inv-alice",
+        source_app="rca",
+        source_profile="default",
+        payload={
+            "SKILL.md": b"---\nname: triage\ndescription: d\n---\n\nrun scripts/x.py",
+            "scripts/x.py": body.encode(),
+        },
+        referenced_tools=[],
+        review=SkillHubReview(verdict="ok"),
+    )
+
+
+async def test_a_hub_copy_records_its_entry_and_reads_as_live_with_nothing_to_update():
+    import msgspec
+
+    from workspace_app.apps.skill_payload import SkillOrigin, origin_for
+
+    _spec, hub = _hub()
+    entry = await _published(hub)
+    files, inv = WorkspaceFiles(MemoryFileStore()), "inv-1"
+
+    await install_hub_skill(files, inv, hub, entry)
+
+    origin = msgspec.json.decode(await files.read(inv, "/.skill/triage/.origin"), type=SkillOrigin)
+    assert origin == origin_for("hub", await hub.payload_of(entry), entry=entry)
+    assert await files.read(inv, "/.skill/triage/scripts/x.py") == b"v1\n"
+    upstream = await skill_upstream(files, inv, "rca", "local-lab", "triage", hub=hub, viewer="bob")
+    assert upstream is not None
+    assert (upstream.state, upstream.update_available) == ("live", False)
+
+
+async def test_the_owner_republishing_is_an_update_and_refresh_brings_it():
+    _spec, hub = _hub()
+    entry = await _published(hub)
+    files, inv = WorkspaceFiles(MemoryFileStore()), "inv-1"
+    await install_hub_skill(files, inv, hub, entry)
+
+    assert await _published(hub, body="v2\n") == entry
+    upstream = await skill_upstream(files, inv, "rca", "local-lab", "triage", hub=hub, viewer="bob")
+    assert upstream is not None and upstream.update_available is True
+
+    done = await refresh_skill(files, inv, "rca", "local-lab", "triage", hub=hub, viewer="bob")
+    assert done.updated == ["scripts/x.py"]
+    assert await files.read(inv, "/.skill/triage/scripts/x.py") == b"v2\n"
+    # The rewritten manifest still knows its entry: a refresh that forgot it
+    # would turn the copy into an orphan that reads as `deleted` from then on.
+    after = await skill_upstream(files, inv, "rca", "local-lab", "triage", hub=hub, viewer="bob")
+    assert after is not None and (after.state, after.update_available) == ("live", False)
+
+
+async def test_a_hub_copy_edited_here_is_not_an_upstream_update():
+    _spec, hub = _hub()
+    entry = await _published(hub)
+    files, inv = WorkspaceFiles(MemoryFileStore()), "inv-1"
+    await install_hub_skill(files, inv, hub, entry)
+    await files.write(inv, "/.skill/triage/scripts/x.py", b"the AI improved this\n")
+
+    upstream = await skill_upstream(files, inv, "rca", "local-lab", "triage", hub=hub, viewer="bob")
+    assert upstream is not None and upstream.update_available is False
+
+
+async def test_an_unpublished_upstream_is_reported_not_raised_and_refresh_leaves_the_copy():
+    """Q5: unpublish = private. The copy holder is told the state; nothing is
+    pulled from an entry they may no longer read, and nothing here is touched."""
+    import msgspec
+
+    from workspace_app.apps.skill_hub import SkillHubEntry
+    from workspace_app.perm import Permission
+
+    spec, hub = _hub()
+    entry = await _published(hub)
+    files, inv = WorkspaceFiles(MemoryFileStore()), "inv-1"
+    await install_hub_skill(files, inv, hub, entry)
+    rm = spec.get_resource_manager(SkillHubEntry)
+    rm.update(
+        entry,
+        msgspec.structs.replace(rm.get(entry).data, permission=Permission(visibility="private")),
+    )
+
+    upstream = await skill_upstream(files, inv, "rca", "local-lab", "triage", hub=hub, viewer="bob")
+    assert upstream is not None
+    assert (upstream.state, upstream.update_available) == ("unpublished", False)
+    nothing = await refresh_skill(files, inv, "rca", "local-lab", "triage", hub=hub, viewer="bob")
+    assert (nothing.updated, nothing.skipped, nothing.removed) == ([], [], [])
+    assert await files.read(inv, "/.skill/triage/scripts/x.py") == b"v1\n"
+
+    # …while for its owner it is still live: private hides it from others, not from her.
+    mine = await skill_upstream(files, inv, "rca", "local-lab", "triage", hub=hub, viewer="alice")
+    assert mine is not None and mine.state == "live"
+
+
+async def test_a_deleted_upstream_is_reported_not_raised():
+    from workspace_app.apps.skill_hub import SkillHubEntry
+
+    spec, hub = _hub()
+    entry = await _published(hub)
+    files, inv = WorkspaceFiles(MemoryFileStore()), "inv-1"
+    await install_hub_skill(files, inv, hub, entry)
+    spec.get_resource_manager(SkillHubEntry).delete(entry)
+
+    upstream = await skill_upstream(files, inv, "rca", "local-lab", "triage", hub=hub, viewer="bob")
+    assert upstream is not None
+    assert (upstream.state, upstream.update_available) == ("deleted", False)
+    assert await files.read(inv, "/.skill/triage/scripts/x.py") == b"v1\n"
+
+
+async def test_a_hub_copy_with_no_hub_wired_is_a_wiring_error_not_a_quiet_state():
+    """A deploy that installs from the hub always has the hub; a caller that
+    forgot to pass it would otherwise read every hub copy as `deleted`."""
+    _spec, hub = _hub()
+    entry = await _published(hub)
+    files, inv = WorkspaceFiles(MemoryFileStore()), "inv-1"
+    await install_hub_skill(files, inv, hub, entry)
+
+    with pytest.raises(ValueError, match="skill hub"):
+        await skill_upstream(files, inv, "rca", "local-lab", "triage")
+
+
+async def test_install_writes_the_manifest_last():
+    """Until `.origin` exists the copy is not a copy. A blob store that dies
+    mid-install leaves files but no manifest, so the folder reads as a
+    hand-written skill (no upstream, nothing to refresh) — never as a copy
+    claiming shipped bytes that were never written."""
+    from workspace_app.filestore.protocol import FileNotFound
+
+    class _DiesOnSecondWrite(MemoryFileStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.writes = 0
+
+        async def write(self, workspace_id: str, path: str, data: bytes) -> None:
+            self.writes += 1
+            if self.writes == 2:
+                raise OSError("disk gone")
+            await super().write(workspace_id, path, data)
+
+    _spec, hub = _hub()
+    entry = await _published(hub)
+    files, inv = WorkspaceFiles(_DiesOnSecondWrite()), "inv-1"
+
+    with pytest.raises(OSError):
+        await install_hub_skill(files, inv, hub, entry)
+
+    with pytest.raises(FileNotFound):
+        await files.read(inv, "/.skill/triage/.origin")
+    assert (
+        await skill_upstream(files, inv, "rca", "local-lab", "triage", hub=hub, viewer="bob")
+    ) is None

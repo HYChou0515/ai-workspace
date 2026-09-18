@@ -134,7 +134,7 @@ payload 的每個檔案存成 blob(走既有 FileStore,一個 skill hub 命名�
 - 可見範圍:既有的權限編輯 UI
 
 **不變量(測試釘住):** 任何指向 skill hub 條目的東西,在條目下架或刪除之後**不能炸,只能顯示狀態**。
-這是 `skill_update_available` 要加的分支,今天它假設上游永遠在。
+施工時的形狀:`skill_update_available -> bool` 換成 `skill_upstream -> SkillUpstream(state, update_available)`,底下是 `resolve_upstream`——一個「副本的上游現在是什麼」的解析器,package skill 照舊按名字找、skill hub 副本按 `.origin.entry` 找,`state` 三態 `live / unpublished / deleted`(對這個 viewer 而言;unpublished = 條目還在但他讀不到);只有 `live` 會有 `update_available`。`refresh_skill` 走同一個解析器,非 live 就什麼都不動。面板列出時傳 `upstream` 欄位(P10 畫)。沒接 skill hub 卻遇到 hub 副本 → `ValueError`(接線錯誤要大聲,不能默默讀成 deleted)。
 
 ### Fork(沒有按鈕)
 
@@ -170,7 +170,7 @@ payload 的每個檔案存成 blob(走既有 FileStore,一個 skill hub 命名�
 ## 能重用的
 
 - `materialize_skill` — 裝;加一種 `"hub"` 來源
-- `skill_update_available` — 有新版;加「下架 / 刪除」兩個狀態
+- `skill_update_available` — 有新版;加「下架 / 刪除」兩個狀態(→ 改名 `skill_upstream`,見上)
 - `skill_payload` / `origin_for` — payload 與 hash;條目的 hash **就是**它算的
 - `_workspace_skill_meta` — 結構驗證
 - `Permission` + 既有權限編輯 UI — 可見範圍、下架
@@ -189,7 +189,7 @@ payload 的每個檔案存成 blob(走既有 FileStore,一個 skill hub 命名�
 | **P2** | 結構驗證 + tool 掃描 | 每條規則各一個會紅的輸入;掃描對 `` `exec` `` 與整字都命中、對子字串不命中;通過的 payload 用 `materialize_skill` 裝進去後 `workspace_skill_metas` 真的列出它(真入口) |
 | **P3** | AI 審:`review_skill(runner, parent_ctx, folder, payload) -> SkillHubReview`,turn 的 sub-agent(走 `drive_subagent`),`ScriptedAgentRunner` 測 | 模型連不上 / 回空 → 例外(不是「未審」);429 走 runner 自己的等待(用 `test_litellm_runner` 同款的 scripted-engine 夾具打真 `LitellmAgentRunner`);prompt 有上界(每檔 20k、總 100k,SKILL.md 不切) |
 | **P4** | `publish_skill` tool + 授權 + fork 偵測 + source_item 記錄 | 從真 tool 入口打:結構壞 → 拒絕訊息說是哪條坑;`.origin` 指向別人 → `forked_from` 有值;指向自己 → revision;AI 有意見 → 發布成功且回話含意見 |
-| **P5** | `install_skill` tool;`_skill_source("hub")`;`skill_update_available` 三態 | 裝完下一 turn 的 index 有它(真入口);同名已存在 → 拒絕不蓋;上游重發 → True;上游下架 / 刪除 → 顯示狀態、不炸 |
+| **P5** | `install_skill` tool;`resolve_upstream`(hub 副本按 entry id 找,取代對 `_skill_source` 加分支——它是同步、按名字、走 Traversable 的);`skill_update_available` → `skill_upstream` 三態 | 裝完下一 turn 的 index 有它(真入口);同名已存在 → 拒絕不蓋、說是誰的;上游重發 → True;上游下架 / 刪除 → 顯示狀態、不炸(tool、apps 層、`GET /skills` 路由三層都釘) |
 | **P6** | `search_skill_hub` tool + 列表/詳情 route(根+fork 巢狀、我的、tool 差集) | 依 description 命中;根列表不含 fork;差集對目標 app 算對;private 的不出現在別人的結果 |
 | **P7** | 管理 route:下架/上架、刪除、轉移、可見範圍;owner 限定 | 非 owner 403;下架後 `install_skill` 拒絕;刪除後 `.origin` 解析為「已刪除」;轉移後 entry id 不變、副本不斷 |
 | **P8** | 「修改」route:四分支解析 | 四個分支各一測;`closing_states` 從 app.json 讀不 hardcode |
