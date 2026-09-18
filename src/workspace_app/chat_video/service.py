@@ -16,7 +16,7 @@ from typing import Any
 
 from .options import Format, VideoOptions
 from .player import render_player_html
-from .render import encode, ensure_tools, record
+from .render import StopCheck, encode, ensure_tools, record
 from .timeline import build_timeline
 
 
@@ -27,6 +27,7 @@ def render_chat_video(
     options: VideoOptions,
     workdir: Path,
     assets: Mapping[str, bytes] | None = None,
+    should_stop: StopCheck | None = None,
 ) -> dict[Format, bytes]:
     """Render ``messages`` (the ``build_chat_export`` shape) to every format
     in ``options.fmt``. ``workdir`` is scratch: whatever is left there — the
@@ -38,17 +39,22 @@ def render_chat_video(
     ``[shown-files]``, an answer's ``![](path)``), by absolute path. The
     caller reads them — the CLI from ``--files``, a job from the item's
     files, for the paths ``Timeline.referenced_paths`` names — because this
-    function runs in a thread with no store of its own."""
+    function runs in a thread with no store of its own. ``should_stop`` is
+    asked throughout the recording (between slices) and the encodes (each
+    second); True abandons the render with :class:`render.Cancelled` — the
+    worker answers it from the progress file, whose deletion is the cancel."""
     ensure_tools(options)  # before a recording that would be thrown away
     timeline = build_timeline(title=title, messages=messages, options=options)
     html = render_player_html(timeline, options, assets=assets or {})
     scratch = workdir / "chat-video"
     scratch.mkdir(parents=True, exist_ok=True)
     try:
-        recording = record(html, options, scratch, expected_ms=timeline.playback_ms)
+        recording = record(
+            html, options, scratch, expected_ms=timeline.playback_ms, should_stop=should_stop
+        )
         out: dict[Format, bytes] = {}
         for fmt in options.fmt:
-            path = encode(recording, fmt, scratch / f"out.{fmt}")
+            path = encode(recording, fmt, scratch / f"out.{fmt}", should_stop=should_stop)
             out[fmt] = path.read_bytes()
         return out
     finally:

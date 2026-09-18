@@ -179,10 +179,15 @@ web/src/…                              ExportMenu + ExportDialog(格式 / 範�
 - `options.py` `check_limits(options, *, max_pixels, max_seconds)`(不依賴 config 模組,收整數):等於過、超過 `ValueError` 一句話點名上限與數字
   (`1921×1080 is 2,074,680 pixels; at most 2,073,600 (1920×1080)`);`max_output_bytes` 在 worker 寫檔前才能查,P5。
 
-### P4 — 進度檔 + 取消旗標
-- `chat_video/progress.py`:`Progress` struct、`write(files, item, path, progress)` / `read` / `delete`;`is_alive(progress, now, stale_after)`。
-- `render.py`:`record(…, should_stop)` 切片等待(2 s)+ `encode(…, should_stop)` Popen 輪詢 + kill;`service.render_chat_video(…, should_stop)`。
-- 測試:假 playwright 在第 N 片翻旗標 → 瀏覽器被關、丟 `Cancelled`;假 ffmpeg(sleep 的 subprocess)被 kill;心跳寫入序列。
+### P4 — 進度檔 + 取消旗標 ✅
+- `chat_video/progress.py` 只做純的部分:`Progress` struct(msgspec,縮排 JSON 給人看)、`loads` 壞檔 → `ValueError`、
+  `is_alive(progress, now, stale_after_seconds)`(running 且心跳在期限內;`failed` 不算持有)、`paths_for(output)` 給 source / progress 兩個檔名;
+  讀寫走 `WorkspaceFiles` 是 P5 coordinator 的事。
+- `render.py`:`Cancelled`、`StopCheck`;`record(…, should_stop)` 每 `RECORD_SLICE_MS`(2 s)切片等 `done`、切片之間問旗標 → 關瀏覽器、丟 `Cancelled`;
+  `encode(…, should_stop)` 改 `Popen` + 每秒 `wait(1)`:stop → kill、超時 → kill + 一句話、非零 → stderr 尾巴;任何拒絕都把半寫的輸出刪掉。
+  `service.render_chat_video(…, should_stop)` 直傳給兩者。
+- 測試:假 playwright 記每次 `timeout`(釘住切片長度)與 close 次數;假 `Popen` 一開始就寫半成品(釘住清理);8 個突變體各紅自己的測試
+  (兩個第一版沒抓到:「不切片」和「留半寫檔」——替身看不到那個性質,補上才紅)。套件 100%。
 
 ### P5 — coordinator + worker
 - `chat_video/jobs.py`:`ChatVideoPayload(item_id, source_path, output_path, progress_path, options)`、`ChatVideoJob(Job[ChatVideoPayload])`、`ChatVideoCoordinator(spec, *, files, limits, message_queue_factory, superusers, permission_of)`:

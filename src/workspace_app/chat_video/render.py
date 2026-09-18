@@ -16,11 +16,16 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import time
+from collections.abc import Callable
 from pathlib import Path
 
 from .options import VideoOptions
 
 Format = str
+StopCheck = Callable[[], bool]
+"""Asked between slices of the recording and each second of an encode; True
+means abandon the render — the worker answers it from the progress file."""
 
 
 class RendererUnavailable(RuntimeError):
@@ -32,6 +37,16 @@ class RecordingTimedOut(RuntimeError):
     """The page did not mark itself done before the deadline. No webm comes
     out of it — the deadline is the last resort, and it fails the job by
     name rather than handing back a video cut at an arbitrary frame."""
+
+
+class Cancelled(RuntimeError):
+    """``should_stop`` answered True: the browser was closed or ffmpeg killed
+    at once, whatever it had produced is discarded, and no file is written."""
+
+
+# A recording is waited for in slices this long, with ``should_stop`` asked
+# between them — a cancel reaches a 3-minute recording within one slice.
+RECORD_SLICE_MS = 2_000
 
 
 def ensure_tools(options: VideoOptions) -> None:
@@ -47,11 +62,20 @@ def ensure_tools(options: VideoOptions) -> None:
 _ENCODE_TIMEOUT_S = 300
 
 
-def record(html: str, options: VideoOptions, workdir: Path, *, expected_ms: int = 0) -> Path:
+def record(
+    html: str,
+    options: VideoOptions,
+    workdir: Path,
+    *,
+    expected_ms: int = 0,
+    should_stop: StopCheck | None = None,
+) -> Path:
     """Play ``html`` in a headless Chromium sized to the frame and return the
     ``.webm`` it recorded. The page marks ``document.body.dataset.done`` when
     its script is finished; the deadline (``expected_ms`` × 1.5 + 30 s of
-    slack) fails it instead, as :class:`RecordingTimedOut`."""
+    slack) fails it instead, as :class:`RecordingTimedOut`. The wait is in
+    ``RECORD_SLICE_MS`` slices with ``should_stop`` asked between them: a
+    True closes the browser then and there and raises :class:`Cancelled`."""
     try:
         from playwright.sync_api import Error, TimeoutError, ViewportSize, sync_playwright
     except ModuleNotFoundError as exc:
@@ -88,14 +112,24 @@ def record(html: str, options: VideoOptions, workdir: Path, *, expected_ms: int 
             )
             page = context.new_page()
             page.goto(page_file.as_uri())
-            try:
-                page.wait_for_function("document.body.dataset.done === '1'", timeout=deadline_ms)
-            except TimeoutError as exc:
-                raise RecordingTimedOut(
-                    f"the page did not finish within {deadline_ms / 1000:.0f}s "
-                    f"(expected {expected_ms / 1000:.0f}s): the browser may be starved, or "
-                    "the transcript is too long to play in that time — cut it down"
-                ) from exc
+            started = time.monotonic()
+            while True:
+                left_ms = deadline_ms - int((time.monotonic() - started) * 1000)
+                if left_ms <= 0:
+                    raise RecordingTimedOut(
+                        f"the page did not finish within {deadline_ms / 1000:.0f}s "
+                        f"(expected {expected_ms / 1000:.0f}s): the browser may be starved, or "
+                        "the transcript is too long to play in that time — cut it down"
+                    )
+                try:
+                    page.wait_for_function(
+                        "document.body.dataset.done === '1'",
+                        timeout=min(RECORD_SLICE_MS, left_ms),
+                    )
+                    break
+                except TimeoutError:
+                    if should_stop is not None and should_stop():
+                        raise Cancelled("the recording was cancelled") from None
             page.wait_for_timeout(300)  # let the last frame land before the file closes
             video = page.video
             assert video is not None  # recording was requested on the context
@@ -108,7 +142,7 @@ def record(html: str, options: VideoOptions, workdir: Path, *, expected_ms: int 
     return out
 
 
-def encode(src: Path, fmt: Format, out: Path) -> Path:
+def encode(src: Path, fmt: Format, out: Path, *, should_stop: StopCheck | None = None) -> Path:
     """Re-encode the recording. ``gif`` builds a palette first (the difference
     between a GIF with banding and one without); ``mp4`` is H.264 yuv420p so
     slide decks accept it; ``webm`` is a straight copy.
@@ -148,17 +182,40 @@ def encode(src: Path, fmt: Format, out: Path) -> Path:
         raise ValueError(f"unknown format {fmt!r} (gif, mp4 or webm)")
     try:
         for args in passes:
-            subprocess.run(
-                args, check=True, capture_output=True, text=True, timeout=_ENCODE_TIMEOUT_S
-            )
-    except subprocess.CalledProcessError as exc:
-        tail = (exc.stderr or "").strip().splitlines()[-3:]
-        raise RuntimeError(f"ffmpeg failed encoding {fmt}: " + " | ".join(tail)) from exc
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(
-            f"ffmpeg did not finish encoding {fmt} within {_ENCODE_TIMEOUT_S}s"
-        ) from exc
+            _run_ffmpeg(args, fmt, should_stop)
+    except BaseException:
+        out.unlink(missing_ok=True)  # nothing half-written survives a refusal
+        raise
     finally:
         if fmt == "gif":
             out.with_name(out.name + ".palette.png").unlink(missing_ok=True)
     return out
+
+
+def _run_ffmpeg(args: list[str], fmt: Format, should_stop: StopCheck | None) -> None:
+    """One ffmpeg pass, polled every second so a stop reaches it: ``should_stop``
+    True kills it and raises :class:`Cancelled`; the pass overrunning
+    ``_ENCODE_TIMEOUT_S`` kills it and is a sentence naming the limit; a
+    non-zero exit carries ffmpeg's last words."""
+    proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    waited = 0
+    while True:
+        try:
+            code = proc.wait(timeout=1)
+            break
+        except subprocess.TimeoutExpired:
+            waited += 1
+            if should_stop is not None and should_stop():
+                proc.kill()
+                proc.communicate()
+                raise Cancelled("the encode was cancelled") from None
+            if waited >= _ENCODE_TIMEOUT_S:
+                proc.kill()
+                proc.communicate()
+                raise RuntimeError(
+                    f"ffmpeg did not finish encoding {fmt} within {_ENCODE_TIMEOUT_S}s"
+                ) from None
+    _, stderr = proc.communicate()
+    if code:
+        tail = (stderr or "").strip().splitlines()[-3:]
+        raise RuntimeError(f"ffmpeg failed encoding {fmt}: " + " | ".join(tail))

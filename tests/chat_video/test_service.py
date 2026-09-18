@@ -26,18 +26,26 @@ _MESSAGES = [
 
 def test_it_records_the_rendered_page_once_and_encodes_each_format(monkeypatch, tmp_path):
     seen: dict[str, object] = {}
+    encode_stops: list[object] = []
 
-    def fake_record(html: str, options: VideoOptions, workdir: Path, *, expected_ms: int) -> Path:
+    def fake_record(
+        html: str, options: VideoOptions, workdir: Path, *, expected_ms: int, should_stop
+    ) -> Path:
         seen["html"] = html
         seen["expected_ms"] = expected_ms
         seen["workdir"] = workdir
+        seen["record_stop"] = should_stop
         out = workdir / "recording.webm"
         out.write_bytes(b"WEBM")
         return out
 
-    def fake_encode(src: Path, fmt: str, out: Path) -> Path:
+    def fake_encode(src: Path, fmt: str, out: Path, *, should_stop) -> Path:
+        encode_stops.append(should_stop)
         out.write_bytes(f"{fmt}:".encode() + src.read_bytes())
         return out
+
+    def stop() -> bool:
+        return False
 
     monkeypatch.setattr(service, "record", fake_record)
     monkeypatch.setattr(service, "encode", fake_encode)
@@ -52,9 +60,12 @@ def test_it_records_the_rendered_page_once_and_encodes_each_format(monkeypatch, 
         options=VideoOptions(fmt=("gif", "mp4")),
         workdir=tmp_path,
         assets={"/chart.png": b"\x89PNG\r\n\x1a\n" + b"\0" * 8},
+        should_stop=stop,
     )
 
     assert result == {"gif": b"gif:WEBM", "mp4": b"mp4:WEBM"}
+    # The cancel reaches both long phases: the same callable, unchanged.
+    assert seen["record_stop"] is stop and encode_stops == [stop, stop]
     assert "hello" in str(seen["html"]) and "const TIMELINE" in str(seen["html"])
     # The assets reached the page: the answer's `![](/chart.png)` is a data URI.
     assert "data:image/png;base64," in str(seen["html"])
