@@ -1658,8 +1658,9 @@ def create_app(
     register_schedule_index(spec)  # #WUI P14 (page-declared schedules)
     register_trigger_store(spec)  # #429 P7 / #804 (the shared window ledger)
     register_stretch_claims(spec)  # #615 (off-hours stretch claims)
-    # The WUI overview's rows (`docs/plan-wui-overview.md`). Same timing, same
-    # reason: Deploy on a bare test client writes one.
+    # The WUI overview's rows (`docs/plan-wui-overview.md`). Same timing as
+    # everything above, and both reasons apply: Deploy on a bare test client
+    # writes one, and the blob-gc worker must hold every model the API does.
     register_deployed_wui(spec)
 
     # P2: ensure the "Investigations Knowledge" collection exists at boot so
