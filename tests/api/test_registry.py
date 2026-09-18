@@ -506,6 +506,29 @@ async def test_close_all_writes_back_what_it_keeps_and_forgets_what_it_kills():
     assert "ws-1" in activity.ms and "ws-2" not in activity.ms
 
 
+async def test_close_all_reports_a_failed_forget_as_what_it_is(caplog):
+    """The heartbeat `forget` after a successful kill is best-effort; a
+    refusal must not be logged as "left item behind (teardown failed)" — the
+    sandbox IS gone (round 3)."""
+    import logging
+
+    class _ForgetRefused(_FakeActivity):
+        async def forget(self, item_id: str) -> None:
+            raise RuntimeError("store refused")
+
+    sandbox = _CountingSandbox()
+    activity = _ForgetRefused()
+    registry = InvestigationRegistry(sandbox=sandbox, activity=activity)
+    s1 = await registry.session("ws-1")
+    await registry.ensure_handle(s1)
+    activity.ms["ws-1"] = 0  # idle: killed
+    with caplog.at_level(logging.WARNING):
+        await registry.close_all(idle_after=timedelta(hours=8))
+    assert sandbox.kill_calls == 1
+    assert "left item" not in caplog.text
+    assert "forget" in caplog.text
+
+
 async def test_close_all_keeps_a_sandbox_the_fleet_is_still_using():
     """Shutdown applies `kill_idle`'s rule, not a rule of its own: a pod's
     session is pod-local, the sandbox behind it is not (#345 shared dir,

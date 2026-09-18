@@ -653,17 +653,18 @@ def build_lifespan(
             # sweeper (or this pod, restarted) re-runs it; see `aclose`.
             claims = getattr(app.state, "turn_claims", None)
 
-            async def _handover(keys: list[str], not_after: float) -> None:
+            async def _handover(keys: list[str]) -> None:
                 if claims is not None:
-                    await asyncio.to_thread(claims.release, keys, not_after=not_after)
+                    await asyncio.to_thread(claims.release, keys)
 
             # ONE deadline for the whole drain — the engines in turn, then (all-
-            # in-one only) the coordinators — so the pod is out inside
+            # in-one only) the coordinators — so the drain is over inside
             # `shutdown_budget` + up to two grace periods PER engine with turns
             # past it (`_DRAIN_GRACE_S`; two engines ⇒ + 8 s), whatever is in
-            # flight. A budget PER step made the bound a multiple nobody had
-            # added up (round 1: the second engine got a fresh 20 s, the
-            # coordinators a third).
+            # flight; the teardown below (kernels, the sandboxes' write-back)
+            # is not bounded. A budget PER step made the bound a multiple
+            # nobody had added up (round 1: the second engine got a fresh 20 s,
+            # the coordinators a third).
             deadline = time.monotonic() + shutdown_budget.total_seconds()
             for engine in getattr(app.state, "turn_engines", ()):
                 logger.debug("lifespan: draining in-flight turns")

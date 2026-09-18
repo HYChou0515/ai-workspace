@@ -970,22 +970,29 @@ class ChatSendService:
                 user_id=claim.author, item_id=claim.investigation_id
             )
 
-        await self._start_turn(
-            claim.investigation_id,
-            claim.rid,
-            conv,
-            claim.key,
-            body,
-            claim.author,
-            lane=cast(CallLane, claim.lane),
-            driven_by=claim.driven_by,
-            caller_env=None,
-            created=claim.created_at,
-            claim=row.id,
-            announce=False,
-            await_reply=False,
-            resolve_env=headless_env,
-        )
+        try:
+            await self._start_turn(
+                claim.investigation_id,
+                claim.rid,
+                conv,
+                claim.key,
+                body,
+                claim.author,
+                lane=cast(CallLane, claim.lane),
+                driven_by=claim.driven_by,
+                caller_env=None,
+                created=claim.created_at,
+                claim=row.id,
+                announce=False,
+                await_reply=False,
+                resolve_env=headless_env,
+            )
+        except Exception:  # noqa: BLE001 — the thread has its ending; nobody is waiting for the throw
+            # `_start_turn` re-raises a DRIVEN turn's preparation failure so
+            # the goal driver learns of it. A re-run has no driver: the error
+            # ending is written, the claim finished, and letting the raise
+            # escape cost the tick the other claims it had taken on this key.
+            logger.exception("chat_send: re-run of %s failed to prepare", row.id)
 
     async def abandon(self, row: ClaimRow) -> None:
         """Give up on a claim taken over `RECLAIM_MAX_RERUNS` times: finish it
@@ -995,12 +1002,19 @@ class ChatSendService:
         failure = RunError(message=_GIVE_UP_MESSAGE.format(attempts=attempts))
         # A `finish` the store refused leaves the row for the next tick, which
         # gives up on it again (one more attempt on the count): the ending is
-        # written once, not once per tick.
+        # written once, not once per tick — looked for anywhere after the
+        # claimed message, since the person may have written since. Per
+        # CONVERSATION, in effect: a standing give-up ending after this
+        # question covers it too, so two spent claims on one thread get one
+        # ending between them (the thread reads Q1, Q2, "could not finish").
         with contextlib.suppress(Exception):
             conv = self._conv_rm.get(row.claim.rid).data
-            if isinstance(conv, Conversation) and conv.messages:
-                last = conv.messages[-1]
-                if last.role == "error" and last.content.startswith(_GIVE_UP_PREFIX):
+            if isinstance(conv, Conversation):
+                before = _history_before(
+                    conv.messages, row.claim.created_at, str(row.claim.body.get("content", ""))
+                )
+                after = conv.messages[len(before) + 1 :]
+                if any(m.role == "error" and m.content.startswith(_GIVE_UP_PREFIX) for m in after):
                     self._finish_claim(row.id)
                     return
         self._end_with_failure(row.claim.rid, row.claim.key, row.id, failure)
@@ -1012,7 +1026,18 @@ class ChatSendService:
         message persisted (the FE reads "a reply is on its way" off a thread
         that ends on the question, and waits), the claim finished (a peer
         re-running this would answer a question the person has already been
-        told failed), and the viewers told on the stream."""
+        told failed), and the viewers told on the stream.
+
+        Only while the claim is still this pod's — the same question `persist`
+        asks. A send handed over while still preparing keeps preparing on the
+        dying pod and can still raise; recording that here ended the thread
+        with this pod's exception and deleted the PEER's claim, so the peer's
+        answer found nothing to finish and was dropped (round 3)."""
+        if not self._claim_is_mine(claim):
+            logger.info(
+                "chat_send: turn on %s was taken over; not recording this failure", engine_key
+            )
+            return
         with contextlib.suppress(Exception):
             fresh = self._conv_rm.get(rid).data
             if isinstance(fresh, Conversation):

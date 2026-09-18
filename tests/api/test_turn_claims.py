@@ -65,7 +65,7 @@ def test_release_marks_every_open_claim_of_mine_on_the_keys():
     store.open(_claim(created_at=2))
     store.open(_claim(key="item-2", created_at=3))
     store.open(_claim(key="item-3", created_at=4))
-    store.release(["item-1", "item-3"])  # one round trip for the whole drain
+    store.release(["item-1", "item-3"])  # one listing for the whole drain
     by_key = {(r.claim.key, r.claim.created_at): r.claim.released for r in store.list_open()}
     assert by_key == {
         ("item-1", 1): True,
@@ -110,23 +110,6 @@ def test_release_does_not_overwrite_a_claim_a_peer_took_meanwhile():
     assert row.claim.owner == "pod-b" and not row.claim.released
 
 
-def test_a_release_past_its_deadline_writes_nothing():
-    """A drain bounds its handover; a store that answers late must not land
-    the release AFTER the cancelled copy persisted its partial as this
-    pod's — a peer would then re-run a question that already has an ending
-    (round 2). `not_after` is checked before every write."""
-    import time
-
-    spec = make_spec(default_user="u")
-    store = _store(spec)
-    store.open(_claim())
-    listed = store.list_open()
-    store.list_open = lambda: (time.sleep(0.2), listed)[1]  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
-    store.release(["item-1"], not_after=time.monotonic() + 0.05)
-    (row,) = SpecstarTurnClaimStore(spec, pod_id="pod-a").list_open()
-    assert not row.claim.released
-
-
 def test_two_opens_in_the_same_millisecond_are_two_claims():
     """Two sends on one key inside one millisecond are two questions, each
     owed an answer. A row keyed by (key, created_at) alone merged them: the
@@ -151,7 +134,7 @@ def test_take_counts_the_reruns():
     (row,) = b.list_open()
     assert row.claim.reruns == 0
     taken = b.take(row)
-    assert taken.claim.reruns == 1
+    assert taken.claim.reruns == 1 and taken.claim.taken_at_ms > 0  # when: the reclaimer's window
     assert a.take(taken).claim.reruns == 2
 
 

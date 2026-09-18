@@ -108,9 +108,9 @@ After #813 the API pods stop OOMing. Three things showed up in their place:
 - **P3 — a turn survives its pod (the app chat's; see the non-goal).** The turn's durable claim: `_TurnActivity`
   gains `owner` (pod id) and `message_id` (the accepted message being
   answered); the driving pod writes it when the turn starts and heartbeats as
-  today. A reclaim sweeper on every API pod (a lease-taking producer in the
-  #804 sense — it lists only rows whose heartbeat is stale, a table the size
-  of "turns in flight"): CAS-claims the row with its own pod id, **advances the
+  today. A reclaim sweeper on every API pod (lease-taking like a #804 producer
+  but running the turn itself — the third stated exception; it lists only
+  rows whose heartbeat is stale, a table the size of "turns in flight"): CAS-claims the row with its own pod id, **advances the
   `TurnEpoch`** (so a pod that was merely stalled, not dead, cancels its copy —
   no double run), and re-enqueues the persisted message through
   `ChatSendService.send(..., driven_by=RECLAIM)` on its own engine; the new
@@ -151,10 +151,13 @@ After #813 the API pods stop OOMing. Three things showed up in their place:
   `reasoning_effort`, `enhancements`, the search caps and `disclosure` would
   otherwise be lost and the re-run would answer a different question. NOT on
   it: the request-composed env (#714) — see round 1. (3) Reclaim rule, per
-  KEY (one conversation's queue): some claim `released` (a SIGTERM handover)
-  ⇒ take those now; else the key's heartbeat fresh ⇒ leave every claim on it;
-  else (stale — the owner died or stalled) ⇒ take every claim on the key,
-  advance the epoch ONCE before any re-run, re-run in the order asked. The
+  KEY (one conversation's queue): its `released` claims (a SIGTERM handover)
+  are taken now; its other claims are left while the key's heartbeat is fresh
+  or the oldest of them is younger than the stale window (no row yet is not a
+  dead owner — round 3), and taken once it is stale (the owner died or
+  stalled), on the same tick as the released ones (round 2); the epoch is
+  advanced ONCE, before any re-run, when an unreleased claim was taken or
+  given up on; re-runs go in the order asked. The
   claim is the ledger and the ONLY evidence of "owed": the first version also
   read the thread ("stale but the thread moved on ⇒ delete the claim") and
   round 1 found that rule dropping an owed claim in every ordinary shape — a
@@ -231,13 +234,13 @@ Branch `graceful-shutdown` off master `2ccfff9f`: P1–P4 as four commits, then 
 | the coordinator drain shares the budget | `test_the_coordinator_drain_is_bounded_by_the_same_budget`: a coordinator that never drains, budget 0.5 s, shutdown < 3 s (was 30 s) |
 | a send opens a claim, the reply finishes it | `tests/api/test_turn_reclaim.py::test_a_send_opens_a_claim_and_the_reply_finishes_it` (the runner reads the store from inside the turn) |
 | a peer re-runs the stored question without appending it | `…::test_rerun_answers_the_stored_question_without_appending_it` |
-| the reclaim decision, per key: released → now (epoch untouched); fresh heartbeat → leave; stale → take every claim on the key (released ones too), epoch once before any re-run — also on a give-up — re-run in order; a key is taken whole or left whole (a lost CAS ends the tick's work on it; a transient take error skips one claim); a claim owed whatever follows it in the thread; `RECLAIM_MAX_RERUNS` → one error ending, by whoever takes the spent claim, idempotent across ticks; a row finished between listing and taking is the turn ending | `tests/api/test_turn_reclaim.py`, the `# ── the reclaim decision` block: 15 tests through `ReclaimTick.of(app)` (the two-pod one is listed below) |
+| the reclaim decision, per key: released → now (epoch untouched); fresh heartbeat → leave; stale → take every claim on the key (released ones too), epoch once before any re-run — also on a give-up — re-run in order; a key is taken whole or left whole (a lost CAS ends the tick's work on it; a transient take error skips one claim); a claim owed whatever follows it in the thread; `RECLAIM_MAX_RERUNS` → one error ending, by whoever takes the spent claim, idempotent across ticks; a row finished between listing and taking is the turn ending | `tests/api/test_turn_reclaim.py`, the `# ── the reclaim decision` block: 18 tests through `ReclaimTick.of(app)` (the two-pod one is listed below) |
 | two pods, one store: A stalls, B takes and answers, A's epoch-cancelled copy writes NOTHING and broadcasts no cancel | `…::test_two_pods_on_one_store_a_stalled_owner_is_taken_over_and_writes_nothing` — the first version reddened with `('error', 'The previous response was interrupted.')` AFTER B's answer (`is_mine` before persist is the fix); round 1's mutation (publish the cancel before persist decides) reddens it on `RunCancelled` |
 | the lifespan sweeper does it on its own, behind the lease | `…::test_the_lifespan_sweeper_takes_over_a_released_turn_without_being_asked` (B's interval 0.1 s) + `…::test_no_sweeper_when_the_interval_is_none` |
 | a draining pod hands over what it could not finish, without a partial or a marker | `…::test_a_pods_shutdown_hands_over_the_turn_it_could_not_finish` — A's shutdown through its own portal (budget 0.3 s), A's thread untouched, claim `released`, B's answer alone |
 | the drain waits for a queued turn that starts DURING it while budget remains, and hands it over when it runs out | `…::test_a_pods_shutdown_waits_for_a_turn_that_started_during_the_drain` / `…::test_a_pods_shutdown_hands_over_the_queued_turn_that_started_during_the_drain` — the POSTs detach at once (`send_await_timeout=0.05`): with them still waiting, their preparation heartbeat sat in the first snapshot and waited the queued turn out by accident, so the snapshot-only mutation stayed green until that was fixed |
 | the claim beats during preparation and while a re-run resolves its env; a re-run returns once queued; a re-run's history stops at the claimed message; a re-run gets the headless env, not a stored cookie | `…::test_a_claim_beats_while_its_turn_is_still_being_prepared`, `…::test_a_rerun_beats_while_resolving_the_headless_env`, `…::test_rerun_returns_once_the_turn_is_queued_not_answered`, `…::test_a_rerun_takes_its_history_from_before_the_claimed_question`, `…::test_a_rerun_runs_on_the_headless_env_not_on_a_stored_cookie` (`"caller_env" not in TurnClaim.__struct_fields__`) |
-| `release` is one round trip for the whole drain, skips a peer's claim, is a CAS on what it listed and writes nothing past its deadline; two opens in one ms are two claims; `take` counts the re-runs | `tests/api/test_turn_claims.py` (11) |
+| `release` is one listing for the whole drain (a write per claim released), skips a peer's claim, is a CAS on what it listed; two opens in one ms are two claims; `take` counts the re-runs | `tests/api/test_turn_claims.py` (11) |
 | shutdown keeps a sandbox the fleet is using (`kill_idle`'s rule), writes back what it keeps, forgets what it kills | `tests/api/test_registry.py::test_close_all_keeps_a_sandbox_the_fleet_is_still_using`, `…::test_close_all_writes_back_what_it_keeps_and_forgets_what_it_kills` |
 | a send still preparing at the deadline is handed over, declined, persists nothing, broadcasts nothing | `…::test_a_send_still_preparing_at_the_deadline_is_handed_over_and_declined` |
 | `answer_doc_question` keeps the loop free; `serve` exits 3 on a boot that never started; every engine drains against ONE deadline | `tests/api/test_doc_question_routes.py::test_answering_a_term_question_keeps_the_loop_free` (304 ms of lag on the unfixed code), `tests/test_main_serve.py`, `tests/api/test_drain.py::test_the_lifespan_drains_turns_against_one_deadline` |
@@ -304,7 +307,8 @@ stops traffic on a deletion; the FE behaviour above; the bound arithmetic
 built; the 判準 as probed.
 
 Mutation probes (file copy, restore; a throwaway script outside the tree):
-15 mutations, each reddening exactly the test that pins it — the
+15 mutations in round 1, 15 in round 2 (13 after the deadline's two went with
+it) and 9 in round 3, each reddening exactly the test that pins it — the
 drain-snapshot one only after the P4 tests were made to detach their POSTs
 (see the table). Not among the 15, and claimed as pinned anyway: `rerun`
 returning once queued — round 2 caught the sentence and the pin is
@@ -347,9 +351,8 @@ Round 1's replacements, read as new code:
   the claim again. The resolver now runs inside the preparation window,
   under its beat (`_start_turn(resolve_env=…)`).
 - The bounded handover could time out while its thread's release was still
-  in flight: the cancel then persisted the partial as this pod's, and the
-  late release had a peer re-run the question (Q, partial, "interrupted", A).
-  `release(keys, not_after=…)` writes nothing past the drain's deadline.
+  in flight; round 2 added a deadline to the release for a scenario round 3
+  then showed cannot occur (see Round 3) — removed again.
 - `release` is a CAS on the etag it listed (a peer's `take` in between is
   not overwritten); `close_all` forgets the heartbeat of what it kills, as
   `kill_idle` does; the declined-turn path publishes its cancel only if the
@@ -366,7 +369,9 @@ captured SIGTERM under the default handler and the process dies at once, the
 thread with it; the KB exclusion on the three sentences that still said
 "every send" / "a turn survives its pod"; the `registry.close_all`
 docstring's false "single-process deploy has no heartbeat store"
-(`create_app` always wires one); the re-run named as an asker in
+(`create_app` always wires one); "never ran before P2" in `registry.py`,
+`test_registry.py`, `test_idle_kill.py` and the Round 1 section reworded to
+"did not run in a rollout with a stream open"; the re-run named as an asker in
 `IRequestEnv.env_without_request`, `_resolve_request_env` and
 `docs/plan-headless-env.md` (the contract text had said only `driven_by`
 callers may ask); "pure producer" for the reclaim sweeper corrected to the
@@ -387,8 +392,69 @@ and a follow-up on the pod the user reconnected to) can overwrite each other
 — before #815 that needed two users or failed sticky routing, now one user
 and one rollout can produce it.
 
+## Round 3 (four lenses on `7031392c`) — the last of the budget
+
+Fixes small enough not to buy another round (a guard, a catch, a scan, a
+log line — each with a test that reddens on `7031392c` and a mutation that
+reddens exactly it):
+
+- `_end_with_failure` recorded a failure without asking `is_mine`: a send
+  handed over while preparing keeps preparing on the dying pod, and when
+  that raised (a sandbox gone under it) the pod ended the thread with its own
+  exception and deleted the PEER's claim — the peer's answer then found
+  nothing to finish and was dropped. The failure path now asks the same
+  question `persist` does.
+- A goal-driven claim's re-run failure re-raised out of `rerun` (the first
+  run re-raises so the driver learns of it) and aborted the tick's key loop
+  after taking the other claims. `rerun` catches it: the ending is written,
+  nobody is waiting for the throw.
+- `abandon`'s idempotence looked only at the LAST message; a person writing
+  between ticks got one more give-up ending per tick while `finish` was
+  refused. It now looks at everything after the claimed message.
+- `close_all` logged a refused `forget` as "left item behind (teardown
+  failed)" though the sandbox was gone; its own line now.
+- A claim with no heartbeat row yet read as stale: between `open` and the
+  first beat a tick (the pod's own, or a peer's) took the claim over and the
+  turn ran twice — `test_headless_env` in the targeted set reproduced it (one
+  failure in 483). The same gap sits between a peer's `take` and ITS first
+  beat: a tick listing in it took the claim back from the peer, and the
+  peer's later take of the next claim had both ticks advancing the epoch —
+  the split "taken whole or left whole" was meant to rule out. One rule for
+  both: `take` stamps `taken_at_ms`, and a key is stale only when its
+  heartbeat is silent AND no claim on it was opened or taken within the
+  stale window (`ReclaimTick.now_ms` is the clock it is judged by).
+- `release(keys, not_after=…)` from round 2 is gone. Round 3 enumerated what
+  a late release can meet: a copy that persisted has FINISHED its claim (the
+  row is deleted; the write is a no-op), a copy whose persist failed or a
+  queued turn never started is thereby handed to a peer (wanted), a claim a
+  peer took fails the CAS. The scenario the deadline was built for
+  ("partial persisted as mine, then the late release has a peer re-run it")
+  cannot occur — `persist` deletes the claim right after the marker — and
+  the deadline's only real effect was to make a queued claim on a slow store
+  wait the 30 s stale window instead of a tick. A guard that guards nothing
+  goes, with its two tests.
+
+Pins round 3 found idle, fixed: the "transient take error skips the claim"
+test raised on the key's LAST claim, where `continue` and `break` look alike
+— it raises on the first now; the preparing-send test now observes, at the
+handover, the deadline it was given (within `_DRAIN_GRACE_S` of now) and the
+token still unmarked (marked before the release, the worker would decline
+with the claim still this pod's). The three inline `open(…, owner="pod-a")`
+that `open` was silently re-stamping go through a pod-a store like
+`_open_orphan`.
+
+Stated in the reclaimer's docstring rather than solved (Low, rare): two
+overlapping ticks that read the heartbeat on either side of its expiry
+compute different candidate lists and can still split a key (one re-run
+cancelled as "interrupted"); `take`'s CAS is specstar's check-then-set, so
+two takes inside one millisecond both "win" (the last writer owns, the other
+copy's `is_mine` is False). And a default executor saturated by VLM threads
+can keep the handover's release from starting inside its 2 s, in which case
+the drain falls back to the pre-P4 behaviour (partials persisted, a warning
+in the log).
+
 Gates: `ruff check` / `ruff format --check` / `ty check` clean; `mkdocs build
---strict` exit 0; targeted set (the 23 test files touching the changed seams —
+--strict` exit 0; targeted set (the 24 test files touching the changed seams —
 turns, claims, reclaim, drain, registry, idle kill, cross-pod cancel, stop,
 send detach, messages, request env, KB chat queue, event bus, presence, item
-resources, the runner, doc questions, serve) green — count in the PR body.
+resources, the runner, doc questions, serve) green: 484 passed in 261 s on the final tree (the PR body names the files).

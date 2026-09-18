@@ -1409,7 +1409,7 @@ class ChatTurnEngine:
         self,
         timeout: float = 10.0,
         *,
-        handover: Callable[[list[str], float], Awaitable[None]] | None = None,
+        handover: Callable[[list[str]], Awaitable[None]] | None = None,
     ) -> None:
         """Give in-flight turns a bounded chance to finish and persist.
 
@@ -1426,12 +1426,11 @@ class ChatTurnEngine:
         result — and given a short moment to do so.
 
         plan-graceful-shutdown P4: with `handover`, what did not finish is let
-        go of FIRST — one `handover(keys, not_after)` for every conversation
-        still running a turn, holding queued ones or preparing one (the
-        lifespan wires it to release the turn claims; `not_after` is the
-        `time.monotonic()` moment this method stops waiting for it and
-        cancels, past which the release must write nothing) — and only then
-        cancelled. A released claim is no longer
+        go of FIRST — one `handover(keys)` for every conversation still
+        running a turn, holding queued ones or preparing one (the lifespan
+        wires it to release the turn claims; waited for up to
+        `_DRAIN_GRACE_S`, and a release that lands later is harmless — see
+        `ITurnClaimStore.release`) — and only then cancelled. A released claim is no longer
         this pod's (`chat_send` checks before persisting), so the cancel writes
         no partial reply and no "interrupted" marker: a peer re-runs the recipe
         and the thread reads question, answer. Stop's marker is Stop's.
@@ -1472,8 +1471,9 @@ class ChatTurnEngine:
         # without a handover that teardown persists the partial, as Stop's does.
         # Three shapes: a turn running, turns queued, and a send still
         # PREPARING its turn (its claim is open, its turn does not exist yet —
-        # `pending_turns`; only the workspace session has those, the KB
-        # engine's `_TurnSession` has neither queue nor preparation).
+        # `pending_turns`; a workspace session's — the KB chat enqueues on its
+        # own engine's workspace sessions too, but never through `preparing()`,
+        # and the `_TurnSession` shape has neither queue nor preparation).
         unfinished = [
             key
             for key, session in (*self._ws_sessions.items(), *self._sessions.items())
@@ -1485,8 +1485,7 @@ class ChatTurnEngine:
         ]
         if handover is not None and unfinished:
             try:
-                not_after = time.monotonic() + _DRAIN_GRACE_S
-                await asyncio.wait_for(handover(unfinished, not_after), _DRAIN_GRACE_S)
+                await asyncio.wait_for(handover(unfinished), _DRAIN_GRACE_S)
             except Exception:  # noqa: BLE001 — a failed release leaves the old behaviour
                 logger.exception(
                     "turns: could not hand over %s; they persist as cancelled", unfinished

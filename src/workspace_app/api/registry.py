@@ -860,7 +860,16 @@ class InvestigationRegistry:
                 with contextlib.suppress(SandboxNotFound):
                     await self.sandbox.kill(s.handle)
                 if self.activity is not None:
-                    await self.activity.forget(inv_id)  # as `kill_idle` does
+                    # As `kill_idle` does. Best-effort: the sandbox IS gone by
+                    # now, so a refusal here is not a teardown failure.
+                    try:
+                        await self.activity.forget(inv_id)
+                    except Exception:  # noqa: BLE001 — the row ages out on its own
+                        logger.warning(
+                            "registry: close_all could not forget the heartbeat of item %s",
+                            inv_id,
+                            exc_info=True,
+                        )
             except Exception:  # noqa: BLE001 — one bad item must not strand the rest
                 logger.warning(
                     "registry: close_all left item %s behind (teardown failed)",

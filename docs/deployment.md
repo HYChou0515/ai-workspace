@@ -534,7 +534,9 @@ RCA 的 system prompt 是純 markdown，存在
   4. lifespan 的 turn drain：在跑的 turn 有同一個 budget 跑完並存檔（含 budget 內才輪到
      的排隊 turn）。超過預算的 **app 聊天** turn 走 P4：先放掉認領再 cancel，**不存** partial、
      **不寫**「interrupted」標記（那是按 Stop 的意思），由別的 pod 乾淨重跑；**KB 聊天**
-     沒有認領（見下一條），超過預算的照舊 cancel、存 partial、寫標記。`run_consumers: true`
+     沒有認領（見下一條），在跑的超過預算照舊 cancel、存 partial、寫標記；排隊中的隨 worker 一起
+     丟掉、什麼都不存；還在 route 裡組 turn 的那一段不受 drain 管，會在 drain 之後才排進去、跟著
+     process 一起死（問題留在對話上，這兩種都跟 #815 之前一樣）。`run_consumers: true`
      的單機部署，job queue 的 drain 用**同一個 deadline**（本機開機的 help 文件 index 就要
      16 秒），沒排完的交給 specstar 的 stale-job recovery。
   5. kernels 拆除；sandbox session **放掉**——規則跟 `kill_idle` 一樣：先 write-back，
@@ -579,7 +581,11 @@ RCA 的 system prompt 是純 markdown，存在
   **已知限制**：(1) 使用者在某則訊息還在**準備**時按 Stop、pod 又在它輪到前 drain 掉，
   那則會被 peer 重跑（Stop 只記在記憶體的 token 上）；(2) 回覆存檔是 get→append→update、
   沒有 CAS，同一對話兩顆 pod 同時存（接手的 peer 和使用者重連後追問的那台）可能互相覆蓋——
-  #815 之前要兩個人或 sticky routing 失效才會，現在一個人一次 rollout 就可能。
+  #815 之前要兩個人或 sticky routing 失效才會，現在一個人一次 rollout 就可能；(3) 兩顆 pod 的
+  tick 恰好在心跳過期的兩側各讀一次，候選名單不同，同一把 key 仍可能被分著拿（一邊的重跑被當
+  「interrupted」砍掉）——要 released 的認領閒置快 30 秒又剛好兩個 tick 重疊；(4) 交接時的
+  release 跑在 thread pool 上，pool 被 VLM 串流佔滿到 2 秒內排不到就放棄交接，退回 P4 之前的
+  行為（partial 存檔、log 有 warning）。
   使用者看到的（讀前端程式碼推的，沒在瀏覽器親眼看）：連線中斷的提示、原 pod 串到一半的
   partial 留在畫面上、peer 的回答接在**同一顆泡泡**後面長、turn 結束後整顆換成存檔的乾淨版本；
   事件要跨 pod 送到觀看者，需要有設 RabbitMQ 的 event bus，記憶體版只有同 pod 的觀看者看得到

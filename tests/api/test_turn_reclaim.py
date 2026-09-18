@@ -279,7 +279,7 @@ async def test_two_stale_claims_on_one_key_are_taken_together_in_order():
     with client:
         item_id, rid = _open_orphan(client, spec)
         _append(spec, rid, "user", "the second question", 2_000)
-        _claims(client).open(
+        SpecstarTurnClaimStore(spec, pod_id="pod-a").open(
             TurnClaim(
                 key=item_id,
                 created_at=2_000,
@@ -287,7 +287,6 @@ async def test_two_stale_claims_on_one_key_are_taken_together_in_order():
                 rid=rid,
                 author="alice",
                 body={"content": "the second question"},
-                owner="pod-a",
             )
         )
         await activity.bump(item_id)
@@ -524,7 +523,7 @@ async def test_a_key_a_peer_is_taking_is_left_whole():
     with client:
         item_id, rid = _open_orphan(client, spec)
         _append(spec, rid, "user", "the second question", 2_000)
-        _claims(client).open(
+        SpecstarTurnClaimStore(spec, pod_id="pod-a").open(
             TurnClaim(
                 key=item_id,
                 created_at=2_000,
@@ -532,7 +531,6 @@ async def test_a_key_a_peer_is_taking_is_left_whole():
                 rid=rid,
                 author="alice",
                 body={"content": "the second question"},
-                owner="pod-a",
             )
         )
         await activity.bump(item_id)
@@ -554,11 +552,10 @@ async def test_a_key_a_peer_is_taking_is_left_whole():
         after = await control.current(item_id)
     assert taken == [] and runner.runs == 0
     assert after == before  # the peer's advance is the only one this key gets
-    # Q2 untouched (still as `open` left it, this store's own id, no rerun):
-    # the peer's to take on its pass.
+    # Q2 untouched (still pod A's, no rerun): the peer's to take on its pass.
     rows = {r.claim.created_at: r.claim for r in _claims(client).list_open()}
     assert rows[1_000].owner == "peer"
-    assert rows[2_000].owner == _claims(client).pod_id and rows[2_000].reruns == 0  # opened here
+    assert rows[2_000].owner == "pod-a" and rows[2_000].reruns == 0
 
 
 async def test_a_take_that_raises_skips_that_claim_and_still_runs_the_rest(caplog):
@@ -577,7 +574,7 @@ async def test_a_take_that_raises_skips_that_claim_and_still_runs_the_rest(caplo
         item_id, rid = _open_orphan(client, spec)
         _append(spec, rid, "user", "the second question", 2_000)
         store = _claims(client)
-        store.open(
+        SpecstarTurnClaimStore(spec, pod_id="pod-a").open(
             TurnClaim(
                 key=item_id,
                 created_at=2_000,
@@ -585,7 +582,6 @@ async def test_a_take_that_raises_skips_that_claim_and_still_runs_the_rest(caplo
                 rid=rid,
                 author="alice",
                 body={"content": "the second question"},
-                owner="pod-a",
             )
         )
         await activity.bump(item_id)
@@ -597,7 +593,9 @@ async def test_a_take_that_raises_skips_that_claim_and_still_runs_the_rest(caplo
                 return getattr(store, name)
 
             def take(self, row):  # noqa: ANN001, ANN202
-                if row.claim.created_at == 2_000:
+                # On the FIRST claim of the key — an error on the last one would
+                # not tell `continue` from `break` (round 3 found the pin idle).
+                if row.claim.created_at == 1_000:
                     raise RuntimeError("store hiccup")
                 return store.take(row)
 
@@ -611,9 +609,9 @@ async def test_a_take_that_raises_skips_that_claim_and_still_runs_the_rest(caplo
         after = await control.current(item_id)
     assert taken == [item_id] and runner.runs == 1
     assert after == before + 1
-    assert "hi" in runner.prompts[0]
+    assert "the second question" in runner.prompts[0]  # the one after the hiccup ran
     (left,) = store.list_open()
-    assert left.claim.created_at == 2_000 and left.claim.reruns == 0  # next tick's
+    assert left.claim.created_at == 1_000 and left.claim.reruns == 0  # next tick's
 
 
 async def test_only_the_tick_that_takes_a_spent_claim_writes_its_ending():
@@ -688,10 +686,18 @@ async def test_a_send_still_preparing_at_the_deadline_is_handed_over_and_decline
                 break
             await asyncio.sleep(0.02)
 
-        async def handover(keys: list[str], not_after: float) -> None:
-            await asyncio.to_thread(store.release, keys, not_after=not_after)
+        seen_at_handover: dict[str, object] = {}
+
+        async def handover(keys: list[str]) -> None:
+            # Observed AT the handover: the token still unmarked — marked
+            # before the release, the worker would decline with the claim
+            # still this pod's and persist the cancel marker as ours.
+            session = engine._ws_sessions[item_id]
+            seen_at_handover["marked"] = [w.cancelled for w in session.pending_turns]
+            await asyncio.to_thread(store.release, keys)
 
         await engine.aclose(timeout=0.3, handover=handover)
+        assert seen_at_handover["marked"] == [False]
         (row,) = store.list_open()
         assert row.claim.released, "the preparing send was not handed over"
         gate.set()  # the preparation finishes on the drained engine
@@ -826,6 +832,8 @@ async def test_an_abandon_whose_finish_fails_writes_one_ending_not_one_per_tick(
     already end on it."""
     import dataclasses
 
+    from workspace_app.api.timeutil import now_ms
+
     spec = make_spec(default_user="u")
     activity = SpecstarTurnActivityStore(spec, now_ms=lambda: 0)
     client, runner = _pod(spec)
@@ -850,8 +858,12 @@ async def test_an_abandon_whose_finish_fails_writes_one_ending_not_one_per_tick(
         # row stays.
         tick.chat_send._turn_claims = _FinishRefused()  # type: ignore[assignment]  # ty: ignore[invalid-assignment]
         await tick.run()
-        await tick.run()
-        await tick.run()
+        # The later ticks read a minute on: a claim taken within the window is
+        # being worked and would be left alone anyway (the age rule); the pin
+        # here is the ending's idempotence once the window has passed.
+        later = dataclasses.replace(tick, now_ms=lambda: now_ms() + 60_000)
+        await later.run()
+        await later.run()
         tick.chat_send._turn_claims = store  # type: ignore[assignment]
     assert runner.runs == 0
     endings = [m for m in _thread(spec, rid) if m[0] == "error"]
@@ -910,6 +922,218 @@ async def test_a_stale_key_takes_its_released_and_unreleased_claims_together():
         ("assistant", "answer"),
         ("assistant", "answer"),
     ]
+
+
+async def test_a_handed_over_sends_late_preparation_failure_writes_nothing():
+    """The drain hands a preparing send over and marks its token, but the
+    preparation itself keeps running on the dying pod and can still RAISE
+    (a sandbox gone under it, a compaction call cut off). That failure is no
+    longer this pod's to record: the claim is the peer's now. Round 3 found
+    the failure path ending the thread with the pod's own exception and
+    finishing the PEER's claim — the peer's answer then found no claim and
+    was dropped."""
+    spec = make_spec(default_user="u")
+    client, runner = _pod(spec)
+    item_id, rid = _item_with_chat(spec)
+    conv = spec.get_resource_manager(Conversation).get(rid).data
+    assert isinstance(conv, Conversation)
+    with client:
+        svc = _service(client)
+        store = _claims(client)
+        engine = cast(FastAPI, client.app).state.turn_engines[0]
+        gate = asyncio.Event()
+
+        async def compact_that_dies(*a, **kw):  # noqa: ANN002, ANN003, ANN202
+            await gate.wait()
+            raise RuntimeError("sandbox gone under the preparation")
+
+        svc.compact = compact_that_dies
+        send = asyncio.create_task(
+            svc.send(item_id, rid, conv, item_id, _MessageBody(content="hi"), author="alice")
+        )
+        for _ in range(100):
+            if store.list_open():
+                break
+            await asyncio.sleep(0.02)
+
+        async def handover(keys: list[str]) -> None:
+            await asyncio.to_thread(store.release, keys)
+
+        await engine.aclose(timeout=0.3, handover=handover)
+        peer = SpecstarTurnClaimStore(spec, pod_id="peer")
+        (row,) = peer.list_open()
+        assert row.claim.released
+        peer.take(row)  # the peer's tick got it
+        gate.set()  # …and now the dying pod's preparation blows up
+        await asyncio.wait_for(send, 5)
+    assert runner.runs == 0
+    assert _thread(spec, rid) == [("user", "hi")]  # no error ending from this pod
+    (row,) = _claims(client).list_open()
+    assert row.claim.owner == "peer"  # the peer's claim survived
+
+
+async def test_a_driven_claims_failed_rerun_does_not_cost_the_keys_other_claims():
+    """A goal-driven turn's preparation failure is re-raised on the first
+    run so the driver learns of it; on a re-run there is no driver waiting —
+    the thread has its error ending — and the raise must not escape the
+    tick, or the other claims it took on that key are never re-run (round 3:
+    the user's own question, taken, un-run, waiting to go stale)."""
+
+    class _Down(IRequestEnv):
+        async def env_for(self, request, *, user_id: str, item_id: str) -> dict[str, str]:  # noqa: ANN001
+            return {}
+
+        async def env_without_request(self, *, user_id: str, item_id: str) -> dict[str, str]:
+            raise RuntimeError("credential service down")
+
+    spec = make_spec(default_user="u")
+    activity = SpecstarTurnActivityStore(spec, now_ms=lambda: 0)
+    runner = _Runner("answer")
+    client = TestClient(
+        create_app(
+            spec=spec,
+            sandbox=MockSandbox(),
+            filestore=MemoryFileStore(),
+            runner=runner,
+            run_consumers=False,
+            turn_reclaim_interval=None,
+            request_env=_Down(),
+        )
+    )
+    with client:
+        item_id, rid = _item_with_chat(spec)
+        _append(spec, rid, "user", "[goal] continue", 1_000)
+        _append(spec, rid, "user", "the user's own question", 2_000)
+        pod_a = SpecstarTurnClaimStore(spec, pod_id="pod-a")
+        for created, text, driven in (
+            (1_000, "[goal] continue", "goal"),
+            (2_000, "the user's own question", None),
+        ):
+            pod_a.open(
+                TurnClaim(
+                    key=item_id,
+                    created_at=created,
+                    investigation_id=item_id,
+                    rid=rid,
+                    author="alice",
+                    body={"content": text},
+                    driven_by=driven,
+                )
+            )
+        await activity.bump(item_id)
+        taken = await ReclaimTick.of(cast(FastAPI, client.app)).run()
+        await _settle(_claims(client))
+    assert taken == [item_id]
+    # Both re-runs fail the same way (the seam is down for both); what matters
+    # is that the SECOND was attempted at all and nothing is left owed.
+    assert _claims(client).list_open() == []
+    endings = [m for m in _thread(spec, rid) if m[0] == "error"]
+    assert len(endings) == 2 and runner.runs == 0
+
+
+async def test_an_abandon_does_not_repeat_its_ending_after_the_thread_moved_on():
+    """`finish` refused, the person sends another message, the next tick
+    gives the spent claim up again: its ending is already in the thread
+    (after the claimed question), so nothing is appended — the check looks
+    past the claimed message, not only at the last one (round 3)."""
+    import dataclasses
+
+    from workspace_app.api.timeutil import now_ms
+
+    spec = make_spec(default_user="u")
+    activity = SpecstarTurnActivityStore(spec, now_ms=lambda: 0)
+    client, runner = _pod(spec)
+    with client:
+        item_id, rid = _open_orphan(client, spec, reruns=RECLAIM_MAX_RERUNS)
+        await activity.bump(item_id)
+        store = _claims(client)
+
+        class _FinishRefused:
+            def __getattr__(self, name):  # noqa: ANN001, ANN204
+                return getattr(store, name)
+
+            def finish(self, cid: str) -> None:
+                raise RuntimeError("store refused")
+
+        tick = dataclasses.replace(
+            ReclaimTick.of(cast(FastAPI, client.app)),
+            claims=_FinishRefused(),  # type: ignore[arg-type]
+        )
+        tick.chat_send._turn_claims = _FinishRefused()  # type: ignore[assignment]  # ty: ignore[invalid-assignment]
+        await tick.run()
+        _append(spec, rid, "user", "and another question", 5_000)
+        later = dataclasses.replace(tick, now_ms=lambda: now_ms() + 60_000)  # past the window
+        await later.run()
+        tick.chat_send._turn_claims = store  # type: ignore[assignment]
+    assert runner.runs == 0
+    endings = [m for m in _thread(spec, rid) if m[0] == "error"]
+    assert len(endings) == 1, _thread(spec, rid)
+
+
+async def test_a_claim_younger_than_the_stale_window_is_not_an_orphan():
+    """Between `open` and the first heartbeat there is no row for the key at
+    all, and "no row" reads as stale. A tick landing in those milliseconds
+    (round 3 found `test_headless_env` doing exactly that: the pod took over
+    its OWN claim and the turn ran twice) is not looking at a dead owner —
+    it is looking at a turn that has not had time to beat. A claim is an
+    orphan only when its key has been silent for the stale window AND the
+    claim itself is at least that old."""
+    from workspace_app.api.timeutil import now_ms
+
+    spec = make_spec(default_user="u")
+    client, runner = _pod(spec)
+    with client:
+        item_id, rid = _item_with_chat(spec)
+        _append(spec, rid, "user", "hi", now_ms())
+        SpecstarTurnClaimStore(spec, pod_id="pod-a").open(
+            TurnClaim(
+                key=item_id,
+                created_at=now_ms(),
+                investigation_id=item_id,
+                rid=rid,
+                author="alice",
+                body={"content": "hi"},
+            )
+        )
+        # No heartbeat row at all — the shape of the first milliseconds.
+        taken = await ReclaimTick.of(cast(FastAPI, client.app)).run()
+    assert taken == [] and runner.runs == 0
+    (row,) = _claims(client).list_open()
+    assert row.claim.owner == "pod-a"
+
+
+async def test_a_key_a_peer_took_moments_ago_is_left_whole_even_when_listed_after_the_take():
+    """The other way a key can be split: this tick LISTS after the peer's
+    first take and before the peer's first beat (the key still reads
+    silent), so its `take` of that claim would succeed — stealing it from
+    the peer — and the peer's later take of the next claim would then have
+    both ticks advancing the epoch (round 3). A claim taken within the stale
+    window marks the key as being worked; the tick leaves the whole key."""
+    spec = make_spec(default_user="u")
+    client, runner = _pod(spec)
+    with client:
+        item_id, rid = _open_orphan(client, spec)
+        _append(spec, rid, "user", "the second question", 2_000)
+        SpecstarTurnClaimStore(spec, pod_id="pod-a").open(
+            TurnClaim(
+                key=item_id,
+                created_at=2_000,
+                investigation_id=item_id,
+                rid=rid,
+                author="alice",
+                body={"content": "the second question"},
+            )
+        )
+        peer = SpecstarTurnClaimStore(spec, pod_id="peer")
+        first = min(peer.list_open(), key=lambda r: r.claim.created_at)
+        peer.take(first)  # the peer's tick got Q1 before we listed; its beat is not down yet
+        control = cast(FastAPI, client.app).state.turn_control
+        before = await control.current(item_id)
+        taken = await ReclaimTick.of(cast(FastAPI, client.app)).run()
+        after = await control.current(item_id)
+    assert taken == [] and runner.runs == 0 and after == before
+    owners = {r.claim.created_at: r.claim.owner for r in _claims(client).list_open()}
+    assert owners == {1_000: "peer", 2_000: "pod-a"}
 
 
 async def test_taking_a_claim_advances_the_epoch_so_a_stalled_owner_stops():
@@ -998,7 +1222,11 @@ async def test_two_pods_on_one_store_a_stalled_owner_is_taken_over_and_writes_no
             await asyncio.sleep(0.02)
         # B's clock is a minute ahead: A's beats, real as they are, read stale.
         ahead = SpecstarTurnActivityStore(spec_b, now_ms=lambda: now_ms() + 60_000)
-        tick = dataclasses.replace(ReclaimTick.of(cast(FastAPI, b.app)), activity=ahead)
+        tick = dataclasses.replace(
+            ReclaimTick.of(cast(FastAPI, b.app)),
+            activity=ahead,
+            now_ms=lambda: now_ms() + 60_000,  # the claim reads a minute old too
+        )
         taken = await tick.run()
         await _settle(_claims(b))
         # A's watcher polls the shared epoch every 0.5 s (#349), so within a

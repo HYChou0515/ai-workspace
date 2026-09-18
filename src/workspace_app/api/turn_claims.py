@@ -27,7 +27,6 @@ from __future__ import annotations
 import abc
 import contextlib
 import logging
-import time
 import uuid
 from collections.abc import Collection
 from dataclasses import dataclass
@@ -41,6 +40,8 @@ from specstar.types import (
     ResourceIsDeletedError,
     RevisionStatus,
 )
+
+from .timeutil import now_ms
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,7 @@ class TurnClaim(Struct):
     owner: str = ""  # pod id of whoever is running (or last ran) this turn
     released: bool = False  # the owner let go on purpose (a SIGTERM handover)
     reruns: int = 0  # times a peer has taken it over (the reclaimer's bound)
+    taken_at_ms: int = 0  # when a peer last took it (0: never); see the reclaimer
 
 
 def claim_id(key: str, created_at: int) -> str:
@@ -95,14 +97,17 @@ class ITurnClaimStore(abc.ABC):
         """The turn persisted its reply: the claim is done. Idempotent."""
 
     @abc.abstractmethod
-    def release(self, keys: Collection[str], *, not_after: float | None = None) -> None:
+    def release(self, keys: Collection[str]) -> None:
         """Let go of every open claim THIS pod holds on `keys` — a handover,
-        not an end. One round trip for the whole list: a drain calls it once.
-        A claim a peer already took on one of those keys is the peer's.
-        `not_after` (a `time.monotonic()` deadline): write nothing past it —
-        the drain that asked has moved on to cancelling, and a release that
-        lands after the cancelled copy persisted its partial as this pod's
-        would have a peer re-run a question that already has an ending."""
+        not an end. One listing for the whole list (plus a write per claim
+        released): a drain calls it once.
+        A claim a peer already took on one of those keys is the peer's. A
+        release that lands LATE — after the drain stopped waiting for it and
+        cancelled — is harmless in every case (round 3 enumerated them): a
+        copy that persisted has finished its claim (the row is gone, the
+        write is a no-op); one whose persist failed, or a queued turn never
+        started, is thereby handed to a peer, which is what was wanted; one
+        a peer took meanwhile fails the CAS. So there is no deadline on it."""
 
     @abc.abstractmethod
     def list_open(self) -> list[ClaimRow]:
@@ -150,15 +155,12 @@ class SpecstarTurnClaimStore(ITurnClaimStore):
         with contextlib.suppress(ResourceIDNotFoundError, ResourceIsDeletedError):
             self._rm().permanently_delete(cid)
 
-    def release(self, keys: Collection[str], *, not_after: float | None = None) -> None:
+    def release(self, keys: Collection[str]) -> None:
         wanted = set(keys)
         for row in self.list_open():
             claim = row.claim
             if claim.key not in wanted or claim.released or claim.owner != self._pod_id:
                 continue
-            if not_after is not None and time.monotonic() > not_after:
-                logger.warning("turn-claims: release of %s missed the drain's deadline", row.id)
-                return
             # A CAS on the etag the listing read: a peer's `take` that landed
             # in between must not be written over with this pod as owner
             # (the taker would then drop its answer as "not mine").
@@ -188,7 +190,13 @@ class SpecstarTurnClaimStore(ITurnClaimStore):
 
     def take(self, row: ClaimRow) -> ClaimRow:
         rm = self._rm()
-        taken = replace(row.claim, owner=self._pod_id, released=False, reruns=row.claim.reruns + 1)
+        taken = replace(
+            row.claim,
+            owner=self._pod_id,
+            released=False,
+            reruns=row.claim.reruns + 1,
+            taken_at_ms=now_ms(),
+        )
         info = rm.modify(
             row.id,
             taken,

@@ -1515,8 +1515,9 @@ def create_app(
         operator-facing report; this answers one question, cheaply (two
         aggregates, no rows materialised), on every probe interval."""
         # plan-graceful-shutdown P2: a pod that received SIGTERM is not ready,
-        # from the first moment — k8s stops routing to it while the streams it
-        # ended reconnect elsewhere.
+        # from the first moment. The truthful answer rather than what stops
+        # traffic: uvicorn closes the listener within 0.1 s of the signal, and
+        # on a deletion k8s has already pulled the pod from the endpoints.
         if drain.draining:
             return Response(status_code=503, content="draining", media_type="text/plain")
         probe = getattr(filestore, "prefix_index_ready", None)

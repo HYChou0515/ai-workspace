@@ -15,7 +15,13 @@ The decision, per key (one conversation's queue):
   drain, P4) and has already cancelled its copy: take it, now.
 - the other claims on the key, while its heartbeat is fresh (`_TurnActivity`,
   30 s): someone is driving this conversation; leave them.
-- the other claims once the heartbeat is stale — the owner died, or merely
+- the other claims once the heartbeat is stale AND none of them was opened
+  or taken within the stale window — between `open` (or a peer's `take`) and
+  the first beat there is no fresh row for the key, and that reads as stale;
+  a tick in those milliseconds is looking at a turn that has not had time to
+  beat, not at a dead owner (round 3: a pod took over its own claim and ran
+  the turn twice; a tick listing just after a peer's take took the claim
+  from the peer). Then the owner died, or merely
   STALLED (loop wedged, not dead): take them too, advance the shared cancel
   epoch ONCE and BEFORE any re-run, so a stalled owner's copy cancels itself
   when it comes back (#349's watcher) and this pod's own re-runs, which stamp
@@ -32,6 +38,13 @@ between two takers, both advanced the epoch and whichever landed second
 cancelled the other's legitimate re-run through Stop's path — partial,
 "interrupted", claim finished, question lost. A claim past its re-run bound
 is likewise given up on by whoever TAKES it, so the thread gets one ending.
+Two things this rests on, stated rather than solved: both ticks must read the
+same heartbeat state (a heartbeat expiring between their two reads gives them
+different candidate lists, and a split is again possible — one re-run
+cancelled as "interrupted"; needs a released claim to sit untaken for most
+of a stale window AND overlapping ticks), and `take`'s CAS is specstar's
+check-then-set, not a locked compare — two takes inside the same millisecond
+both "win" and the last writer owns (the other copy's `is_mine` is False).
 
 The claim is the ledger and the ONLY evidence: it is finished when the reply
 persists and not before. Nothing about the thread's shape says whether a
@@ -55,6 +68,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -63,6 +77,9 @@ from specstar.types import (
     ResourceIDNotFoundError,
     ResourceIsDeletedError,
 )
+
+from .timeutil import now_ms as _now_ms
+from .turn_activity import TURN_STALE_AFTER_MS
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -89,6 +106,7 @@ class ReclaimTick:
     activity: ITurnActivityStore
     control: ITurnControl
     chat_send: ChatSendService
+    now_ms: Callable[[], int] = _now_ms  # the clock the claims' age is judged by
 
     @classmethod
     def of(cls, app: FastAPI) -> ReclaimTick:
@@ -123,7 +141,13 @@ class ReclaimTick:
 
     async def _take_key(self, key: str, group: list[ClaimRow]) -> bool:
         others = [row for row in group if not row.claim.released]
-        stale = bool(others) and not await self.activity.alive(key)
+        # Opened or taken within the window: someone is about to beat on this
+        # key; the heartbeat row just has not landed yet.
+        quiet = bool(others) and all(
+            max(row.claim.created_at, row.claim.taken_at_ms) <= self.now_ms() - TURN_STALE_AFTER_MS
+            for row in others
+        )
+        stale = quiet and not await self.activity.alive(key)
         candidates = [row for row in group if row.claim.released or stale]
         if not candidates:
             return False
