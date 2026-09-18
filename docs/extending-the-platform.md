@@ -569,10 +569,11 @@ system prompt build 時**靜態**列入 index(`apps/catalog.py`),workspace skill
 機制,所以 index、`read_skill`、Refresh、「有新版」全部照舊;多出來的是上游可以**下架**
 （owner 改成 private）或**刪除**（soft），副本那一列會顯示狀態而不是壞掉。
 
-- **發布前的檢查**（`apps/skill_hub.py`）:結構性的**擋**——frontmatter `name` ≠ 資料夾、沒
-  `description`（loader 其實容忍,hub 刻意比它嚴:沒 description 的 skill 被列出卻永遠不觸發）、
-  body 超過 `SKILL_BODY_CAP`、body 提到的 `references/…` 沒隨附、`scripts/*.py` parse 不過——
-  每一條都是「裝了等於沒裝、而且不報錯」的坑。過了才掃 body 裡**已註冊的 tool 名**
+- **發布前的檢查**（`apps/skill_hub.py`）:先用 `stat_all` 量資料夾大小,超過 `SKILL_HUB_MAX_BYTES`
+  （20 MiB）就擋、一個 byte 都不讀;然後才讀進來做結構性的**擋**——名字不是 `.skill/` 底下一層資料夾
+  （`a/b` 這種 loader 永遠列不到）、frontmatter `name` ≠ 資料夾、沒 `description`（loader 其實容忍,
+  hub 刻意比它嚴:沒 description 的 skill 被列出卻永遠不觸發）、body 超過 `SKILL_BODY_CAP`、body 提到的
+  `references/…` 沒隨附、`scripts/*.py` parse 不過——每一條都是「裝了等於沒裝、而且不報錯」的坑。過了才掃 body 裡**已註冊的 tool 名**
   （`agent/tools.py` 的 `_IMPLS`,整字或 code span）,記在條目上;裝的時候對目標 App 的 ceiling
   算差集,**告知不擋**。
 - **AI 審**只掛意見、從不擋（D4）:審查者是發布那個 turn 的 sub-agent（`api/skill_review.py`）,

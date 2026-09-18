@@ -432,3 +432,20 @@ def test_matches_query_is_the_rule_both_the_page_and_the_tool_use() -> None:
     assert matches_query(e, "  REFLOW ") is True
     assert matches_query(e, "solder") is True
     assert matches_query(e, "deck") is False
+
+
+async def test_the_store_refuses_a_name_or_a_size_the_publisher_would_have_been_refused_for(
+    store: SkillHubStore,
+) -> None:
+    """The tool refuses these with a sentence before the review; the store is
+    where the row is MADE, so it refuses them too — a future caller that skips
+    the validator (a route, a script) cannot mint an entry no loader lists or
+    one over the cap."""
+    from workspace_app.apps.skill_hub import SKILL_HUB_MAX_BYTES
+
+    with pytest.raises(ValueError, match="a/b"):
+        await _named(store, "alice", "a/b")
+    assert store.find("alice", "a/b") is None
+    with pytest.raises(ValueError, match="MiB"):
+        await _publish(store, payload={"SKILL.md": b"x" * (SKILL_HUB_MAX_BYTES + 1)})
+    assert store.find("alice", "triage-reflow") is None

@@ -13,6 +13,7 @@ one pointing at a package skill or an entry that no longer exists, is a root.
 from __future__ import annotations
 
 import msgspec
+import pytest
 from agents import RunContextWrapper
 
 from workspace_app.agent.context import AgentToolContext
@@ -452,6 +453,152 @@ async def test_someone_elses_skill_under_a_name_i_already_publish_is_refused_not
     assert out.startswith("error:") and "alice" in out and "triage" in out
     assert (await hub.payload_of(bobs))["SKILL.md"] == _md("triage", "bob's own\n")
     assert hub.forks_of(alices) == []
+
+
+async def test_republishing_ones_own_fork_from_a_fresh_copy_of_the_root_is_a_revision_of_the_fork():
+    """The F6 refusal's one exception, pinned (review round 2 found it
+    unpinned): bob already publishes `triage` AS A FORK of alice's; he
+    installs alice's root again elsewhere and publishes — that is a new
+    revision of his fork, lineage kept, not a clash."""
+    hub = _hub()
+    alices = await hub.publish(
+        owner="alice",
+        name="triage",
+        description="d",
+        source_item="inv-alice",
+        source_app="rca",
+        source_profile="default",
+        payload={"SKILL.md": _md("triage", "alice v1\n")},
+        referenced_tools=[],
+        review=OK,
+    )
+    first = _ctx(hub, _Reviewer(), user="bob", item="inv-bob-1")
+    await install_hub_skill(_files(first), "inv-bob-1", hub, alices)
+    await _put(first, "triage", {"SKILL.md": _md("triage", "bob's take\n")})
+    await publish_skill_impl(first, "triage")
+    bobs = hub.find("bob", "triage")
+    assert bobs is not None
+    fork = hub.get(bobs)
+    assert fork is not None and fork.forked_from == alices
+    second = _ctx(hub, _Reviewer(), user="bob", item="inv-bob-2")
+    await install_hub_skill(_files(second), "inv-bob-2", hub, alices)
+    await _put(second, "triage", {"SKILL.md": _md("triage", "bob's take v2\n")})
+
+    out = await publish_skill_impl(second, "triage")
+
+    assert "error" not in out and "updated your earlier version" in out
+    assert hub.find("bob", "triage") == bobs
+    entry = hub.get(bobs)
+    assert entry is not None and entry.forked_from == alices
+    assert (await hub.payload_of(bobs))["SKILL.md"] == _md("triage", "bob's take v2\n")
+
+
+async def test_a_publish_that_cannot_write_its_manifest_is_refused_before_anything_is_published():
+    """Review round 2 (regression lens): the `.origin` rewrite came AFTER the
+    hub write, so on a workspace with less room than that manifest the entry
+    went live for everyone while the reply said "workspace full". The room is
+    checked first — and the reviewer is not spent on a publish that cannot
+    finish."""
+    from workspace_app.files.facade import WorkspaceFull
+
+    hub, reviewer = _hub(), _Reviewer()
+    md = _md("s")
+    ctx = RunContextWrapper(
+        AgentToolContext(
+            investigation_id="inv-1",
+            files=WorkspaceFiles(MemoryFileStore(), quota=len(md)),
+            app_slug="rca",
+            template_profile="default",
+            acting_user="alice",
+            skill_hub=hub,
+            review_skill_via=reviewer,
+            on_exec_output=lambda _b: None,
+        )
+    )
+    await _put(ctx, "s", {"SKILL.md": md})  # fills the workspace exactly
+
+    with pytest.raises(WorkspaceFull):
+        await publish_skill_impl(ctx, "s")
+
+    assert hub.find("alice", "s") is None
+    assert reviewer.calls == []
+
+
+async def test_when_the_workspace_fills_during_the_review_the_reply_says_what_was_published():
+    """The residue the up-front check cannot close: the room is there when the
+    publish starts and gone by the time the manifest is written (something
+    else wrote meanwhile — here, the reviewer double does). The entry IS live
+    at that point, so the reply says so and names what could not be written,
+    instead of "workspace full" over a publish that happened."""
+    hub = _hub()
+    md = _md("s")
+    files = WorkspaceFiles(MemoryFileStore(), quota=len(md) + 400)
+
+    class _FillsTheWorkspace(_Reviewer):
+        async def __call__(self, parent_ctx, folder, payload, emit):  # noqa: ANN001, ANN202
+            await files.write("inv-1", "/big.bin", b"x" * 400)
+            return await super().__call__(parent_ctx, folder, payload, emit)
+
+    ctx = RunContextWrapper(
+        AgentToolContext(
+            investigation_id="inv-1",
+            files=files,
+            app_slug="rca",
+            template_profile="default",
+            acting_user="alice",
+            skill_hub=hub,
+            review_skill_via=_FillsTheWorkspace(),
+            on_exec_output=lambda _b: None,
+        )
+    )
+    await _put(ctx, "s", {"SKILL.md": md})
+
+    out = await publish_skill_impl(ctx, "s")
+
+    entry = hub.find("alice", "s")
+    assert entry is not None
+    assert "published skill 's'" in out and entry in out
+    assert ".origin" in out and "full" in out
+    assert not await files.exists("inv-1", "/.skill/s/.origin")
+
+
+async def test_a_folder_over_the_cap_is_refused_from_its_sizes_without_reading_it():
+    """Review round 2: the 20 MiB cap was checked after the whole folder was
+    already in memory. The sizes are cheap metadata (`stat_all`); the bytes
+    are read only for a folder that fits."""
+    from workspace_app.apps.skill_hub import SKILL_HUB_MAX_BYTES
+
+    class _CountsReads(MemoryFileStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.reads = 0
+
+        async def read(self, workspace_id: str, path: str) -> bytes:
+            self.reads += 1
+            return await super().read(workspace_id, path)
+
+    hub = _hub()
+    store = _CountsReads()
+    ctx = RunContextWrapper(
+        AgentToolContext(
+            investigation_id="inv-1",
+            files=WorkspaceFiles(store),
+            app_slug="rca",
+            template_profile="default",
+            acting_user="alice",
+            skill_hub=hub,
+            review_skill_via=_Reviewer(),
+            on_exec_output=lambda _b: None,
+        )
+    )
+    huge = {"SKILL.md": _md("s"), "assets/huge.bin": b"x" * (SKILL_HUB_MAX_BYTES + 1)}
+    await _put(ctx, "s", huge)
+    store.reads = 0
+
+    out = await publish_skill_impl(ctx, "s")
+
+    assert out.startswith("error:") and "MiB" in out
+    assert store.reads == 0
 
 
 # ── refusals that name what to do ────────────────────────────────────────────

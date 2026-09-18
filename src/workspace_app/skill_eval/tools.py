@@ -111,19 +111,23 @@ def schemas() -> list[dict]:
             {"name": s, "description": s, "body": s},
             ["name", "description", "body"],
         ),
+        # The parameter names are the REAL tools' (pinned against `_IMPLS`):
+        # the `author-workflow` guidance under test tells the model to call
+        # `save_workflow(id, workflow_json)`, and a double that took
+        # `(name, body)` answered that call with a KeyError (review round 2).
         fn(
             "save_workflow",
             "Validate and save a workspace workflow (`workflow.json`) under "
-            "`.workflows/<slug>/`. `body` is the JSON text.",
-            {"name": s, "body": s},
-            ["name", "body"],
+            "`.workflows/<id>/`. `workflow_json` is the JSON text.",
+            {"id": s, "workflow_json": s},
+            ["id", "workflow_json"],
         ),
         fn(
             "save_schedules",
             "Validate and save the item's `.workflows/schedules.json` — which of the "
-            "item's workflows run on a clock. `body` is the JSON text.",
-            {"body": s},
-            ["body"],
+            "item's workflows run on a clock. `schedules_json` is the JSON text.",
+            {"schedules_json": s},
+            ["schedules_json"],
         ),
         fn(
             "search_skill_hub",
@@ -197,14 +201,14 @@ def run(name: str, args: dict, work: Path, events: list[Event]) -> str:
             f"Load it any time with read_skill('{slug}')."
         )
     if name == "save_workflow":
-        target = work / ".workflows" / args["name"] / "workflow.json"
+        target = work / ".workflows" / args["id"] / "workflow.json"
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(args["body"])
-        return f"saved workflow '{args['name']}' to .workflows/{args['name']}/workflow.json"
+        target.write_text(args["workflow_json"])
+        return f"saved workflow '{args['id']}' to .workflows/{args['id']}/workflow.json"
     if name == "save_schedules":
         target = work / ".workflows" / "schedules.json"
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(args["body"])
+        target.write_text(args["schedules_json"])
         return "saved .workflows/schedules.json"
     if name == "search_skill_hub":
         # A fixed listing: the scoring asks whether the model SEARCHED, never

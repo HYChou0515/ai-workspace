@@ -153,12 +153,22 @@ def parse_review(answer: str, *, model: str) -> SkillHubReview:
         if isinstance(raw, list)
         else []
     )
-    # The object says there ARE notes but none came through as strings — a
-    # list of dicts, one bare string, or prose beside `{"verdict":"notes"}`.
-    # A format slip must not read as a clean bill: the whole reply is the
-    # note, as it is when no object was found at all. An explicit EMPTY list
-    # is not a slip — it is "notes: none", and the notes decide.
-    if not notes and obj.get("verdict") == "notes" and raw != []:
+    # When no note came through as a string, the (notes, verdict) table is:
+    #   notes GIVEN and not empty (a list of dicts, one bare string) → a
+    #     format slip, whatever the verdict says — round 1 gated this on
+    #     `verdict == "notes"`, and `{"verdict":"ok","notes":[{…}]}` read as
+    #     a clean bill with the notes dropped (review round 2);
+    #   notes ABSENT and `verdict: notes` → the notes are the prose beside the
+    #     object, another slip;
+    #   notes given and EMPTY (`[]`, `""`, blank strings) → "notes: none",
+    #     whatever the verdict says: the notes decide.
+    # A slip must not read as a clean bill: the whole reply is the note, as it
+    # is when no object was found at all.
+    given = raw is not None
+    empty = raw == "" or (
+        isinstance(raw, list) and all(isinstance(n, str) and not n.strip() for n in raw)
+    )
+    if not notes and ((given and not empty) or (not given and obj.get("verdict") == "notes")):
         notes = [answer.strip()]
     return SkillHubReview(verdict="notes" if notes else "ok", notes=notes, model=model)
 

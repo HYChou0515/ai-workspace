@@ -214,7 +214,10 @@ def register_skill_hub_routes(
         App's ceiling — what the install告知 shows before the person decides."""
         viewer = get_user_id()
         entry = _readable(entry_id, viewer)
-        payload = await hub.payload_of(entry_id)
+        # One read: the file names are on the row (`origin.files`, the same
+        # map an installed copy carries). Reading the folder to list it cost
+        # up to the cap per page view (review round 2).
+        skill_md = await hub.skill_md_of(entry_id)
         lineage: SkillHubLineage | None = None
         if entry.forked_from:
             state, root = hub.state_for(entry.forked_from, viewer)
@@ -241,8 +244,8 @@ def register_skill_hub_routes(
             ),
             forked_from=lineage,
             forks=_visible_forks(entry_id, viewer),
-            files=sorted(payload),
-            skill_md=payload.get("SKILL.md", b"").decode("utf-8", errors="replace"),
+            files=sorted(entry.origin.files),
+            skill_md=skill_md.decode("utf-8", errors="replace"),
             is_owner=is_owner,
             visibility=entry.permission.visibility,
             permission=PermissionBody(**msgspec.to_builtins(entry.permission))

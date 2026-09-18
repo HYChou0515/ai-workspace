@@ -125,6 +125,9 @@ def test_every_tool_the_runner_can_dispatch_has_a_schema(tmp_path):
             "body": "b",
             "query": "q",
             "entry_id": "e",
+            "id": "i",
+            "workflow_json": "{}",
+            "schedules_json": "[]",
         }
         assert not run(name, every_arg, tmp_path, []).startswith("unknown tool")
 
@@ -186,10 +189,45 @@ def test_the_standing_instruction_doubles_write_where_the_real_tools_do(tmp_path
         .read_text()
         .startswith("---\nname: smt-reflow\n")
     )
-    run("save_workflow", {"name": "nightly", "body": "{}"}, tmp_path, events)
+    run("save_workflow", {"id": "nightly", "workflow_json": "{}"}, tmp_path, events)
     assert (tmp_path / ".workflows" / "nightly" / "workflow.json").read_text() == "{}"
-    run("save_schedules", {"body": "[]"}, tmp_path, events)
+    run("save_schedules", {"schedules_json": "[]"}, tmp_path, events)
     assert (tmp_path / ".workflows" / "schedules.json").read_text() == "[]"
     assert "id 0123456789abcdef" in run("search_skill_hub", {"query": "reflow"}, tmp_path, events)
     assert "installed skill" in run("install_skill", {"entry_id": "x"}, tmp_path, events)
     assert "published skill 'mine'" in run("publish_skill", {"name": "mine"}, tmp_path, events)
+
+
+def test_the_standing_instruction_doubles_take_the_real_tools_parameters():
+    """Review round 2: the `save_workflow` double took `(name, body)` while the
+    real tool — and the `author-workflow` guidance under test — takes
+    `(id, workflow_json)`, so a model following the guidance got a KeyError
+    from the harness. Derived from the real impls' signatures, not listed by
+    hand: every required parameter of a double is a parameter of the real
+    tool, and every non-default parameter of the real tool is required by the
+    double. (`read_file` / `list_files` / `ask_user` predate this PR and
+    deliberately simplify — `ask_user` takes one question, not a list — so
+    they are outside this pin; the six standing-instruction tools are in.)"""
+    import inspect
+
+    from workspace_app.agent.tools import _IMPLS
+    from workspace_app.skill_eval.tools import schemas
+
+    pinned = {
+        "save_skill",
+        "save_workflow",
+        "save_schedules",
+        "search_skill_hub",
+        "install_skill",
+        "publish_skill",
+    }
+    for schema in schemas():
+        name = schema["function"]["name"]
+        if name not in pinned:
+            continue
+        real = inspect.signature(_IMPLS[name]).parameters
+        real_params = [p for p in real if p != "ctx"]
+        real_required = [p for p in real_params if real[p].default is inspect.Parameter.empty]
+        double = schema["function"]["parameters"]
+        assert set(double["properties"]) <= set(real_params), (name, double["properties"])
+        assert sorted(double["required"]) == sorted(real_required), (name, double["required"])

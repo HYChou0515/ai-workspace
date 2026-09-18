@@ -214,6 +214,18 @@ async def test_a_reply_that_says_notes_but_carries_none_as_strings_keeps_its_wor
         )
 
 
+async def test_notes_that_are_present_but_not_strings_are_kept_whatever_the_verdict_says():
+    """Round 2's mirror of the round-1 slip: `{"verdict":"ok","notes":[{…}]}`
+    read as a clean bill with the notes dropped. Notes that are THERE and not
+    strings are notes; the verdict never overrules them."""
+    from workspace_app.api.skill_review import parse_review
+
+    said = '{"verdict":"ok","notes":[{"file":"SKILL.md","note":"hardcoded"}]}'
+    review = parse_review(said, model="m")
+
+    assert review.verdict == "notes" and "hardcoded" in review.notes[0]
+
+
 async def test_when_a_reply_holds_a_draft_and_a_final_object_the_final_wins():
     """A reasoning model that writes `Draft: {…ok…} Final: {…notes…}` in the
     answer channel: the LAST review-shaped object is the answer."""

@@ -1,6 +1,6 @@
 # Skill Hub — 讓 skill 在人與人之間流動,不經過運營方的 git
 
-**狀態:** grill 十題全部問過並定案(2026-09-18),已點頭,P1–P12 施工完成、第一輪四把鏡頭 review 的修正在 P13–P17(PR #818);施工中改掉的形狀已回寫在各段。**未做**:P11 的 `skill_eval --control` 實跑——夾具已補到能跑(三個 hub tool 的替身),但本機沒有跑得動的模型,對照組數字要部署方拿自己的模型跑。
+**狀態:** grill 十題全部問過並定案(2026-09-18),已點頭,P1–P12 施工完成、第一輪四把鏡頭 review 的修正在 P13–P17、第二輪的在 P18(PR #818);施工中改掉的形狀已回寫在各段。**未做**:P11 的 `skill_eval --control` 實跑——夾具已補到能跑(三個 hub tool 的替身),但本機沒有跑得動的模型,對照組數字要部署方拿自己的模型跑。
 
 > 第一版計劃把八個我自己決定的東西寫成「grill 收斂」,只有一題真的問過。這一版每一條
 > 決定都是問了、答了才寫上去的;我建議但你改掉的,寫的是你的答案。
@@ -85,13 +85,20 @@ payload 的每個檔案存成 blob(走既有 FileStore,一個 skill hub 命名�
 1. 人在對話說「把 `.skill/foo` 發布到 skill hub」,或按 `SkillsModal` 裡 workspace skill 那一列的
    「發布到 skill hub」(按鈕只是把那句話送進對話,和「Apply」載入下一輪同一種接法)
 2. agent 呼叫 `publish_skill(name)`:
+   - **先量大小再讀**:`stat_all` 拿 `.skill/<name>/` 每個檔的大小(不讀內容),總和超過
+     `SKILL_HUB_MAX_BYTES`(20 MiB)就擋——第二輪 review 前這一條是讀完整個資料夾才算的。
+     同一條規則在 `SkillHubStore.publish` 再守一次(列在那裡生出來,任何呼叫者都過不了);
+     validator 本身不再算大小
    - 從 façade 讀 `.skill/<name>/` 成 payload
-   - **結構驗**(擋):loader 本身的兩條(frontmatter 能解析、`name` = 資料夾名)+ **hub 自己的**三條——
+   - **結構驗**(擋):loader 本身的三條(frontmatter 能解析、`name` = 資料夾名、名字是 `.skill/` 底下
+     **一層**資料夾——`a/b` 裝進去 loader 永遠列不到,規則用 loader 當 oracle 的 parity 表釘住;
+     `.` / `..` 另外擋,因為真磁碟上 `.skill/../SKILL.md` 是 workspace 根)+ **hub 自己的**三條——
      `description` 不能空(loader 其實會列出沒 description 的 skill,但那正是「被列出卻永遠不觸發」的
      debug loop,所以 hub 刻意比 loader 嚴;parity 測試把這條分歧釘成有意的)、body ≤ `SKILL_BODY_CAP`、
-     `references/` 存在性、`scripts/*.py` 能 `ast.parse`
+     `references/` 存在性(內文提到的路徑問資料夾:`**references/g.md**` 指的是有出貨的
+     `references/g.md`,不是靠一張標點清單)、`scripts/*.py` 能 `ast.parse`
    - **掃 tool**:body 裡的已註冊 tool 名,整字或 code span。註冊表是 `agent/tools.py` 的 `_IMPLS`
-     (完整;本 PR 前 41 個,加上這三個後 44)——**不是** `TOOL_VERBS`,那張表只有 20 個,`read_skill` / `ask_user` / `kb_search`
+     (完整;本 PR 前 41 個,加上這三個後 44)——**不是** `TOOL_VERBS`,那張表只有 22 個,`read_skill` / `ask_user` / `kb_search`
      都不在裡面。掃描函式是純的,註冊表由呼叫端注入
    - **AI 審**(放行掛意見):審查者是**發布那個 turn 的 sub-agent**(`api/skill_review.py`
      的 `review_skill(runner, parent_ctx, folder, payload)`,底下是 `run_agent_task` 同一條

@@ -581,3 +581,31 @@ async def test_install_checks_the_room_once_up_front_and_writes_nothing_when_it_
         await install_hub_skill(files, inv, hub, entry)
 
     assert await files.ls(inv, "/.skill/") == []
+
+
+async def test_install_counts_the_manifest_in_its_room_check_so_a_refusal_writes_nothing():
+    """Review round 2, the class swept: `install_hub_skill` checked room for the
+    files and then wrote `.origin` on top — a workspace with room for the files
+    and not the manifest wrote the whole folder and raised on the manifest,
+    leaving exactly the half-folder the up-front check exists to prevent
+    (no `.origin` → read as a hand-written skill → blocks the next install).
+    The manifest is part of the operation; its bytes are in the check."""
+    import msgspec
+
+    from workspace_app.apps.skill_payload import origin_for
+    from workspace_app.files import WorkspaceFull
+
+    _spec, hub = _hub()
+    entry = await _published(hub)
+    payload = await hub.payload_of(entry)
+    manifest = msgspec.json.encode(origin_for("hub", payload, entry=entry))
+    need = sum(len(b) for b in payload.values()) + len(manifest)
+
+    short = WorkspaceFiles(MemoryFileStore(), quota=need - 1)
+    with pytest.raises(WorkspaceFull):
+        await install_hub_skill(short, "inv", hub, entry)
+    assert await short.ls("inv", "/") == []
+
+    exact = WorkspaceFiles(MemoryFileStore(), quota=need)
+    assert await install_hub_skill(exact, "inv", hub, entry) == "triage"
+    assert await exact.exists("inv", "/.skill/triage/.origin")

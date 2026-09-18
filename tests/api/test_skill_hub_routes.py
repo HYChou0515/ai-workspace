@@ -14,6 +14,7 @@ you may not read is 404, the same 404 as one that never existed).
 from __future__ import annotations
 
 import msgspec
+import pytest
 
 from workspace_app.apps.skill_hub import SkillHubEntry, SkillHubReview, SkillHubStore
 from workspace_app.perm import Permission
@@ -345,3 +346,37 @@ async def test_install_into_an_item_needs_edit_content_on_that_item(harness: Har
     res = harness.client.post(f"/a/rca/items/{editor}/skills/install", json={"entry_id": entry})
     assert res.status_code == 200, res.text
     assert await harness.filestore.exists(editor, "/.skill/triage/SKILL.md")
+
+
+async def test_the_detail_reads_the_skill_md_and_lists_the_rest_from_the_row(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+):
+    """Review round 2: the detail read every blob (up to 20 MiB) to list file
+    names and show one file. The names are on the row; one read for SKILL.md."""
+    hub = _hub(harness)
+    entry = await hub.publish(
+        owner="alice",
+        name="triage",
+        description="d",
+        source_item="i",
+        source_app="rca",
+        source_profile="default",
+        payload={"SKILL.md": _md("triage"), "assets/big.bin": b"x" * 200_000},
+        referenced_tools=[],
+        review=SkillHubReview(verdict="ok"),
+    )
+    reads: list[str] = []
+    blobs = hub._blobs  # noqa: SLF001 — counting the store's reads
+    real_read = blobs.read
+
+    async def counting(ws: str, path: str) -> bytes:
+        reads.append(path)
+        return await real_read(ws, path)
+
+    monkeypatch.setattr(blobs, "read", counting)
+
+    d = harness.client.get(f"/skill-hub/entries/{entry}").json()
+
+    assert d["files"] == ["SKILL.md", "assets/big.bin"]
+    assert d["skill_md"].startswith("---\nname: triage")
+    assert reads == ["/SKILL.md"]

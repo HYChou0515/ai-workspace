@@ -16,6 +16,7 @@ import pytest
 from workspace_app.apps.skill_hub import (
     SKILL_HUB_MAX_BYTES,
     referenced_tools,
+    skill_size_problem,
     validate_skill_payload,
 )
 from workspace_app.apps.skills import (
@@ -98,6 +99,64 @@ def test_a_reference_at_the_end_of_a_sentence_is_the_file_not_the_file_plus_a_do
     assert len(problems) == 1 and "`references/glossary.md`" in problems[0]
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        "Read **references/g.md** first.",
+        "Read *references/g.md* first.",
+        "Read _references/g.md_ first.",
+        "Did you read references/g.md? Then continue.",
+        "Read references/g.md!",
+        "Read references/g.md/ and go on.",
+        "See references/g.md... later.",
+        "(references/g.md)",
+        "[the glossary](references/g.md)",
+        "`references/g.md`",
+    ],
+)
+def test_prose_punctuation_around_a_reference_is_not_part_of_the_file_name(body: str) -> None:
+    """Review round 2: round 1 stripped the full stop and nothing else, so
+    `**references/g.md**` was refused for not shipping `references/g.md**`.
+    Whatever prose wraps a path, the file the body names is the one the
+    folder ships — decided by asking the folder, not by a list of
+    punctuation kept alike by hand."""
+    raw = _md(body=body + "\n")
+    shipped = {"SKILL.md": raw, "references/g.md": b"ok"}
+    assert validate_skill_payload("triage-reflow", shipped) == []
+    problems = validate_skill_payload("triage-reflow", {"SKILL.md": raw})
+    assert len(problems) == 1 and "`references/g.md`" in problems[0], problems
+
+
+@pytest.mark.parametrize("name", ["a/b", ".", ".."])
+def test_a_name_that_is_not_one_folder_is_refused_by_name(name: str) -> None:
+    """Review round 2: `name: a/b` published and installed as `.skill/a/b/`,
+    which `workspace_skill_metas` (one level deep) never lists — the reply
+    then promised an index entry that could not exist. `.` and `..` are
+    refused for a reason the memory-backed loader below cannot see: on a real
+    disk `.skill/./` IS `.skill/` and `.skill/../SKILL.md` is the workspace
+    root, so an entry so named would install outside its folder."""
+    raw = f"---\nname: {name}\ndescription: d\n---\n\nbody\n".encode()
+    problems = validate_skill_payload(name, {"SKILL.md": raw})
+    assert len(problems) == 1 and f"`{name}`" in problems[0] and "/" in problems[0], problems
+
+
+@pytest.mark.parametrize("folder", ["a/b", "../x", "", ".dotted", "with space", "ok-name"])
+async def test_the_validator_agrees_with_the_loader_about_names(folder: str) -> None:
+    """PARITY over the folder name, the loader as oracle (the table above
+    varies the payload with the name fixed; this varies the name). The
+    validator's name rule is not a list of characters somebody thought
+    unwise — it is exactly "would the loader list this folder": a name with a
+    `/` is two levels deep and never listed; `.dotted` and `with space` are
+    listed, so they pass. (`.` / `..` are the one exception, above.)"""
+    raw = f"---\nname: {folder}\ndescription: d\n---\n\nbody\n".encode()
+    loader_says_yes = await _loader_lists(folder, {"SKILL.md": raw})
+    validator_says_yes = validate_skill_payload(folder, {"SKILL.md": raw}) == []
+    assert loader_says_yes == validator_says_yes, (
+        f"{folder!r}: loader lists it = {loader_says_yes}, validator passes it = "
+        f"{validator_says_yes}"
+    )
+
+
 def test_a_script_that_does_not_parse_is_a_problem() -> None:
     """`scripts/*.py` run through `exec` in the workspace. One that cannot even
     parse fails on first use — cheap to catch here, expensive to find later."""
@@ -111,16 +170,17 @@ def test_a_script_that_does_not_parse_is_a_problem() -> None:
     assert "scripts/bad.py" in problems[0] and "scripts/ok.py" not in problems[0]
 
 
-def test_a_folder_over_the_size_cap_is_a_problem() -> None:
-    """Review round 1: an entry's files are read whole into memory on publish
-    and stored in the durable store outside any user quota, and every
-    installer's workspace pays for them. One bound, stated in the refusal."""
-    payload = {"SKILL.md": _md(), "assets/huge.bin": b"x" * (SKILL_HUB_MAX_BYTES + 1)}
-    problems = validate_skill_payload("triage-reflow", payload)
-    assert len(problems) == 1 and "MiB" in problems[0]
+def test_the_size_cap_is_stated_from_sizes_alone() -> None:
+    """Review round 1 set the cap (an entry's files are read whole into memory
+    on publish, stored outside any user quota, and every installer's workspace
+    pays for them); round 2 moved the check BEFORE the read, so it is a rule
+    over sizes, not bytes. One bound, stated in the refusal."""
+    over = {"SKILL.md": len(_md()), "assets/huge.bin": SKILL_HUB_MAX_BYTES + 1}
+    problem = skill_size_problem(over)
+    assert problem is not None and "MiB" in problem
 
-    fits = {"SKILL.md": _md(), "assets/big.bin": b"x" * (SKILL_HUB_MAX_BYTES - len(_md()))}
-    assert validate_skill_payload("triage-reflow", fits) == []
+    fits = {"SKILL.md": len(_md()), "assets/big.bin": SKILL_HUB_MAX_BYTES - len(_md())}
+    assert skill_size_problem(fits) is None
 
 
 def test_every_problem_is_reported_not_just_the_first() -> None:

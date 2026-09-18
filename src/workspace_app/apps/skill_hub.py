@@ -122,10 +122,57 @@ class SkillHubEntry(Struct):  # → resource "skill-hub-entry"
 
 # ── what publishing checks ───────────────────────────────────────────────────
 
-#: A `references/...` path the body names. Stops at whitespace or the markdown
-#: punctuation that ends a path in prose — the closing backtick, a bracket, a
-#: comma or a full stop.
+#: A `references/...` path the body names. Stops at whitespace and at the
+#: punctuation a path can never contain in a link or a code span (the closing
+#: backtick or bracket, a comma, a quote); what it may still carry — a full
+#: stop, `**`, `?` — is settled by `_file_named`.
 _REFERENCE_MENTION = re.compile(r"references/[^\s`)\]>,;:'\"]+")
+_WORD_CHAR = re.compile(r"[A-Za-z0-9]")
+_TRAILING_PUNCTUATION = re.compile(r"[^A-Za-z0-9]+$")
+
+
+def _file_named(mention: str, shipped: Collection[str]) -> str:
+    """The file a mention in prose names: the shipped file it begins with, when
+    what follows is punctuation only (`**references/g.md**`, `references/g.md?`,
+    `references/g.md.`), else the mention shorn of that trailing punctuation.
+
+    Decided by asking the folder, not by a list of characters: round 1 stripped
+    the full stop and nothing else, and `**references/g.md**` was refused for
+    not shipping `references/g.md**`."""
+    for rel in sorted(shipped, key=lambda r: len(r), reverse=True):
+        if mention.startswith(rel) and not _WORD_CHAR.search(mention[len(rel) :]):
+            return rel
+    return _TRAILING_PUNCTUATION.sub("", mention)
+
+
+def skill_name_problem(name: str) -> str | None:
+    """Why ``name`` cannot be a skill hub entry's name, or ``None``.
+
+    The rule is exactly "would the workspace loader list this folder": a name
+    with a `/` installs as `.skill/a/b/`, two levels deep, which
+    `workspace_skill_metas` never lists — so the install reply promised an
+    index entry that could not exist (review round 2). Pinned by a parity
+    table with the loader as oracle; `.dotted` and `with space` are listed
+    there, so they pass here."""
+    if not name or "/" in name or name in (".", ".."):
+        return (
+            f"`{name}` cannot be a skill name — a name is one folder under `.skill/` "
+            "(no `/`), which is what the loader lists and `read_skill` loads"
+        )
+    return None
+
+
+def skill_size_problem(sizes: Mapping[str, int]) -> str | None:
+    """The cap, stated from sizes alone (a `stat`, never a read): an entry's
+    files are read whole into memory on publish, stored in the durable store
+    outside any user quota, and every installer's workspace pays for them."""
+    total = sum(sizes.values())
+    if total > SKILL_HUB_MAX_BYTES:
+        return (
+            f"the folder is {total / 2**20:.1f} MiB, over the {SKILL_HUB_MAX_BYTES // 2**20} MiB "
+            "cap for one skill hub entry — drop or shrink the large files"
+        )
+    return None
 
 
 def validate_skill_payload(folder: str, payload: Mapping[str, bytes]) -> list[str]:
@@ -149,6 +196,8 @@ def validate_skill_payload(folder: str, payload: Mapping[str, bytes]) -> list[st
     except SkillError as exc:
         return [f"SKILL.md frontmatter does not parse: {exc}"]
 
+    if (bad_name := skill_name_problem(folder)) is not None:
+        problems.append(bad_name)
     name = str(front.get("name", "")).strip()
     if name != folder:
         problems.append(
@@ -165,16 +214,11 @@ def validate_skill_payload(folder: str, payload: Mapping[str, bytes]) -> list[st
             f"body is {len(body)} characters; the loader refuses anything over {SKILL_BODY_CAP}"
         )
 
-    total = sum(len(data) for data in payload.values())
-    if total > SKILL_HUB_MAX_BYTES:
-        problems.append(
-            f"the folder is {total / 2**20:.1f} MiB, over the {SKILL_HUB_MAX_BYTES // 2**20} MiB "
-            "cap for one skill hub entry — drop or shrink the large files"
-        )
-    # A mention at the end of a sentence carries its full stop into the match
-    # (the class excludes the other punctuation but a dot is a path character);
-    # a file name never ends in one, so trailing dots are the sentence's.
-    for mention in sorted({m.rstrip(".") for m in _REFERENCE_MENTION.findall(body)}):
+    # The size cap is not here: it is a rule over sizes, checked by the
+    # publisher BEFORE the folder is read (`skill_size_problem`) and guaranteed
+    # by `SkillHubStore.publish`, where the entry is made.
+    named = {_file_named(m, payload) for m in _REFERENCE_MENTION.findall(body)}
+    for mention in sorted(named):
         if mention not in payload:
             problems.append(
                 f"the body names `{mention}` but the folder does not ship it — an agent "
@@ -290,6 +334,13 @@ def register_skill_hub(spec: SpecStar) -> None:
         spec.add_model(SkillHubEntry, indexed_fields=["owner", "name", "forked_from"])
 
 
+def mint_entry_id() -> str:
+    """A new entry's id. One function so the id's LENGTH is one fact: the
+    publisher sizes the folder's `.origin` before the entry exists (a room
+    check), and the manifest it sizes must be as long as the one it writes."""
+    return uuid.uuid4().hex
+
+
 class SkillHubStore:
     """Reads and writes hub entries and their files. No policy here — who may
     publish, transfer or unpublish is the caller's question, checked against
@@ -377,6 +428,14 @@ class SkillHubStore:
     def _namespace(entry_id: str, entry: SkillHubEntry | None) -> str:
         return (entry.blobs if entry is not None and entry.blobs else "") or _BLOB_PREFIX + entry_id
 
+    async def skill_md_of(self, entry_id: str) -> bytes:
+        """The entry's ``SKILL.md`` alone — what a page that shows the skill
+        and LISTS the other files needs (the names are on the row,
+        ``origin.files``). Reading the whole folder for that cost up to the
+        cap per page view (review round 2)."""
+        ws = self._namespace(entry_id, self.get(entry_id))
+        return await self._blobs.read(ws, "/SKILL.md")
+
     async def payload_of(self, entry_id: str) -> dict[str, bytes]:
         """Every file the entry ships, keyed like :func:`skill_payload` keys
         them — the shape ``materialize_skill`` writes into a workspace. Reads
@@ -446,12 +505,20 @@ class SkillHubStore:
         namespace no row points at, never a row pointing at nothing; those
         orphans are the accepted residue.
         """
+        # The publisher was refused with a sentence for these before the review
+        # ran; the row is made HERE, so here they are guaranteed for any caller.
+        for problem in (
+            skill_name_problem(name),
+            skill_size_problem({rel: len(data) for rel, data in payload.items()}),
+        ):
+            if problem is not None:
+                raise ValueError(problem)
         existing = self.find(owner, name)
         # A NEW entry's id is minted here, not by `create`, so the files can be
         # written under it before the row exists. Asking `create` for the id
         # first would put the row before the files, and a crash in between
         # would leave a row pointing at nothing: the one shape this rules out.
-        entry_id = existing if existing is not None else uuid.uuid4().hex
+        entry_id = existing if existing is not None else mint_entry_id()
         current = self.get(entry_id) if existing is not None else None
 
         # Replace, not merge — and in a FRESH namespace: a file the new version

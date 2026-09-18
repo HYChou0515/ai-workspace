@@ -25,7 +25,7 @@ from collections.abc import Mapping, Sequence
 from functools import cache
 from importlib import resources
 from importlib.resources.abc import Traversable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import msgspec
 
@@ -63,11 +63,19 @@ class SkillMeta(msgspec.Struct, frozen=True):
 
     name: str
     description: str
-    #: #589 — this workspace folder is a COPY of a baked-in skill (it carries an
-    #: `.origin` manifest), not a skill written here. It still lives in the
-    #: workspace and is still editable; it simply must not be mistaken for the
-    #: user's own work when deciding source and default-on.
+    #: #589 — this workspace folder is a COPY (it carries an `.origin`
+    #: manifest), not a skill written here. It still lives in the workspace and
+    #: is still editable; it simply must not be mistaken for the user's own
+    #: work when deciding source and default-on.
     is_copy: bool = False
+    #: What the manifest says the copy came from — `shared` / `profile` for a
+    #: materialized package skill, `hub` for one installed from the skill hub,
+    #: `""` for a manifest that does not decode (an older or hand-written
+    #: `.origin`: still a copy, of unknown source). A hub copy that happens to
+    #: share a package skill's name is NOT that package's copy — its files came
+    #: from the hub, so `effective_item_skills` keeps it a workspace skill
+    #: (review round 2 of plan-skill-hub).
+    copy_of: SkillSource | Literal[""] = ""
 
 
 @cache
@@ -197,15 +205,19 @@ async def workspace_skill_metas(files: WorkspaceFiles, workspace_id: str) -> lis
     bad hand-edit can't break the whole index. Empty when there's no ``.skill/``."""
     prefix = f"/{WORKSPACE_SKILL_DIR}/"
     paths = await files.ls(workspace_id, prefix)
-    # Which folders are copies falls straight out of the listing we already have,
-    # so knowing it costs no extra read.
-    copies = {
-        p[len(prefix) :].removesuffix(f"/{ORIGIN_FILE}")
-        for p in paths
-        if p.endswith(f"/{ORIGIN_FILE}")
-    }
     from ..files.facade import read_all
 
+    # Which folders are copies falls straight out of the listing we already
+    # have; what each is a copy OF is one batch read of the manifests, beside
+    # the batch read of the SKILL.md files below.
+    manifests = sorted(p for p in paths if p.endswith(f"/{ORIGIN_FILE}"))
+    copies: dict[str, SkillSource | Literal[""]] = {}
+    for path, raw in zip(manifests, await read_all(files, workspace_id, manifests), strict=True):
+        dir_name = path[len(prefix) : -len(f"/{ORIGIN_FILE}")]
+        try:
+            copies[dir_name] = msgspec.json.decode(raw, type=SkillOrigin).source
+        except msgspec.DecodeError:  # not JSON, or not this shape — still a copy
+            copies[dir_name] = ""
     wanted = [
         path
         for path in sorted(paths)
@@ -221,7 +233,11 @@ async def workspace_skill_metas(files: WorkspaceFiles, workspace_id: str) -> lis
         dir_name = path[len(prefix) : -len("/SKILL.md")]
         meta = _workspace_skill_meta(raw, dir_name)
         if meta is not None:
-            out.append(msgspec.structs.replace(meta, is_copy=dir_name in copies))
+            out.append(
+                msgspec.structs.replace(
+                    meta, is_copy=dir_name in copies, copy_of=copies.get(dir_name, "")
+                )
+            )
     return out
 
 
@@ -341,12 +357,15 @@ def effective_item_skills(
         rows[m.name] = (m, "profile", True)
     for m in workspace_metas:
         prior = rows.get(m.name)
-        if m.is_copy and prior is not None:
+        if m.is_copy and m.copy_of != "hub" and prior is not None:
             # A copy of a baked-in skill answers as the skill it copied. Its
             # DESCRIPTION comes from the copy — that is the text actually read
             # this turn, and the AI may have edited it — but its source and
             # default-on stay the package's, so using a default-off skill once
-            # cannot quietly turn it on for good.
+            # cannot quietly turn it on for good. A copy installed from the
+            # skill hub is not that, whatever its name: its files never came
+            # from the package, so it is a workspace skill like any other
+            # (and the panel offers Publish on it, as on any workspace skill).
             rows[m.name] = (m, prior[1], prior[2])
         else:
             rows[m.name] = (m, "workspace", True)
@@ -635,18 +654,20 @@ async def install_hub_skill(
     assert entry is not None  # the caller checked `state_for` first
     payload = await hub.payload_of(entry_id)
     root = f"/{WORKSPACE_SKILL_DIR}/{entry.name}"
+    manifest = msgspec.json.encode(origin_for("hub", payload, entry=entry_id))
     # The whole folder is one operation (#538): checked once up front, so a
     # workspace with room for the first file and not the rest refuses cleanly
     # instead of leaving half a folder with no `.origin` — which would then
     # read as a hand-written skill of that name and block the next install.
-    await files.ensure_room_for(workspace_id, sum(len(data) for data in payload.values()))
+    # The manifest's bytes are part of that check: a check that counted the
+    # files and not the `.origin` written after them left exactly that half
+    # folder (review round 2).
+    await files.ensure_room_for(
+        workspace_id, sum(len(data) for data in payload.values()) + len(manifest)
+    )
     for rel, data in payload.items():
         await files.write(workspace_id, f"{root}/{rel}", data)
-    await files.write(
-        workspace_id,
-        f"{root}/{ORIGIN_FILE}",
-        msgspec.json.encode(origin_for("hub", payload, entry=entry_id)),
-    )
+    await files.write(workspace_id, f"{root}/{ORIGIN_FILE}", manifest)
     return entry.name
 
 

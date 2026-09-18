@@ -632,9 +632,7 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
 
 ### 2026-09-18 · #818 skill hub：使用者之間分享 skill，不經過 dev 的版本庫（`skill-hub-entry`） {#pr-818}
 
-**設定** — 不動。沒有新旋鈕。（429 的等待走 turn 既有的規則：preset 有 `fallbacks` 時是
-`failover.rate_limit_budget_s`，preset 可覆寫、預設 7200 秒；單一 endpoint 時是 runner 自己迴圈的 120 秒——
-`LitellmAgentRunner` 的 `rate_limit_budget_s`，`get_runner` 目前**沒有**從設定帶入。）
+**設定** — 不動。沒有新旋鈕。
 
 **資料**
 
@@ -643,9 +641,11 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
   沒有任何列。檔案是 FileStore 裡 `skill-hub:<entry id>:<version>` 命名空間下的 blob，一個發布版本一個命名空間；
   列只在新版本寫完後才指過去，舊版本的命名空間在那之後才清——中途失敗留下的是沒人指的孤兒 blob，不是指向空的列。
 - `SkillOrigin`（副本的 `.origin` manifest）多了 `entry` 欄位，預設 `""`；既有的 package skill 副本照舊解碼，不用動。
-  ⚠️ **回滾**（`回滾前`）：從 skill hub 裝過的副本，`.origin` 寫的是 `source: "hub"`，舊碼的 enum 不認得它——
-  漏做的症狀：**回滾後那個 item 的 `GET …/skills` 與 Refresh 會 500**。package skill 的副本不受影響。要回滾就先把
-  那些 `.skill/<name>/.origin` 刪掉（副本本身照常可用，只是不再知道上游）。
+  ⚠️ **回滾**（`回滾前`）：`source: "hub"` 的 `.origin` 有**兩種**來源——從 skill hub **裝過**的副本，以及
+  **發布過**的那個資料夾（`publish_skill` 發完會把發布方自己的 `.skill/<name>/.origin` 改寫成指向剛發的條目，
+  讓面板不會對它自己提「有新版」）——舊碼的 enum 都不認得。漏做的症狀：**回滾後那個 item 的 `GET …/skills`
+  與 Refresh 會 500**。package skill 的副本不受影響。要回滾就先把那些 `.skill/<name>/.origin` 刪掉
+  （副本本身照常可用，只是不再知道上游；發布方的資料夾則變回一般 workspace skill）。
 
 **行為**（⚠️ 不動設定行為就變）
 
@@ -660,7 +660,10 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
   副本讀 `live`（上游從 package 移除時 `deleted`，`update_available` 照舊 `false`）。舊 API pod 沒帶這欄時前端
   照今天的行為。
 - AI 審查走發布那個 turn 的 runner，**等不到就不上架**（tool 回錯誤、對話窗看到「審查服務無法連線」），沒有
-  「未審」狀態。一個條目上限 20 MiB（`SKILL_HUB_MAX_BYTES`）。
+  「未審」狀態。429 的等待走 turn 既有的規則：preset 有 `fallbacks` 時是 `failover.rate_limit_budget_s`
+  （preset 可覆寫、預設 7200 秒）；單一 endpoint 時是 runner 自己迴圈的 120 秒（`LitellmAgentRunner` 的
+  `rate_limit_budget_s`，`get_runner` 目前**沒有**從設定帶入）——發布那個 turn 可能因此等很久，這是刻意的。
+  一個條目上限 20 MiB（`SKILL_HUB_MAX_BYTES`），發布前先量大小、超過就不讀。
 - 前端多了 `/skill-hub` 與 `/skill-hub/:id` 兩頁、導覽多一個入口「Skill hub」。
 
 **k8s · CI 側** — 不動。`sandbox-host/`、`kubernetes/` 沒改。

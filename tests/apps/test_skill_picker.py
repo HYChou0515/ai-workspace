@@ -186,3 +186,57 @@ async def test_a_copy_is_reported_as_a_local_copy_alongside_its_source():
 
     assert states["author-workflow"].is_copy is True
     assert states["author-skill"].is_copy is False
+
+
+# ── a copy installed from the skill hub (plan-skill-hub, review round 2) ─────
+
+
+async def test_a_hub_copy_named_like_a_shared_skill_stays_a_workspace_skill():
+    """`effective_item_skills` treats any copy with a package sibling as that
+    package's copy — right for a materialized `author-workflow`, wrong for a
+    skill somebody published to the hub under that name and this item then
+    installed: its files came from the hub, its source is the workspace, and
+    the panel's Publish button (offered on `source: workspace`) must stay.
+    The manifest says which; the meta now carries it."""
+    import msgspec
+
+    from workspace_app.apps.skill_payload import SkillOrigin
+    from workspace_app.apps.skills import workspace_skill_metas
+
+    files = await _files_with(**{"author-workflow": b"from the hub"})
+    await files.write(
+        "inv",
+        "/.skill/author-workflow/.origin",
+        msgspec.json.encode(SkillOrigin(source="hub", files={"SKILL.md": "x"}, entry="e-1")),
+    )
+
+    metas = await workspace_skill_metas(files, "inv")
+    states = _by_name(effective_item_skills("_template", "default", {}, metas))
+
+    assert metas[0].is_copy is True and metas[0].copy_of == "hub"
+    assert states["author-workflow"].source == "workspace"
+    assert states["author-workflow"].is_copy is True
+
+
+async def test_a_package_copy_still_answers_as_the_package(monkeypatch, tmp_path):
+    """The other half, unchanged: a materialized shared skill's copy keeps the
+    package's source and default. And a manifest that does not decode (an
+    older or hand-written `.origin` — the wrong shape, or not JSON at all) is
+    still a copy of UNKNOWN source, which keeps today's package rule rather
+    than inventing a hub; before P18 the listing never read the manifest, so
+    a garbage one must not start breaking the index now."""
+    from workspace_app.apps.skills import workspace_skill_metas
+
+    files = await _files_with(**{"author-workflow": b"purpose only"})
+    await files.write("inv", "/.skill/author-workflow/.origin", b'{"source":"shared","files":{}}')
+    metas = await workspace_skill_metas(files, "inv")
+    assert metas[0].copy_of == "shared"
+    states = _by_name(effective_item_skills("_template", "default", {}, metas))
+    assert states["author-workflow"].source == "shared"
+
+    for manifest in (b"{}", b"not json at all"):
+        await files.write("inv", "/.skill/author-workflow/.origin", manifest)
+        metas = await workspace_skill_metas(files, "inv")
+        assert (metas[0].is_copy, metas[0].copy_of) == (True, ""), manifest
+        states = _by_name(effective_item_skills("_template", "default", {}, metas))
+        assert states["author-workflow"].source == "shared"
