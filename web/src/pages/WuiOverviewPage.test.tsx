@@ -35,6 +35,7 @@ import { DialogProvider } from "../components/Dialog";
 import { BreadcrumbProvider, useBreadcrumbTrail } from "../hooks/breadcrumbs";
 import { translate } from "../lib/i18n";
 import { favouriteKey, readFavourites, toggleFavourite } from "../lib/wuiFavourites";
+import { readWuiView, writeWuiView } from "../lib/wuiView";
 import { currentWriteFailure, resetWriteFailures } from "../lib/writeFailures";
 import { QueryWrap } from "../test/queryWrapper";
 import { WuiOverviewPage } from "./WuiOverviewPage";
@@ -84,6 +85,11 @@ afterEach(cleanup);
 beforeEach(() => {
   localStorage.clear();
   me = { id: "alice", ready: true };
+  // The tests below this block were written for the table (P1–P17) and
+  // stay the table's: cards are the default (the cards amendment), so each
+  // run opts back into the table first. The cards suite at the end clears
+  // this again.
+  writeWuiView("table");
 });
 
 /** The product's own words. No `LocaleProvider` is mounted here, so `useT`
@@ -437,6 +443,125 @@ describe("WuiOverviewPage", () => {
       await waitFor(() => expect(screen.queryByRole("link", { name: "Shipping board" })).toBeNull());
       expect(c.remove).toHaveBeenCalledTimes(1);
       expect(favGroup()).toBeNull();
+    });
+  });
+
+  describe("cards (the cards amendment)", () => {
+    const CARDS = () => translate("zh-TW", "wui.view.cards");
+    const TABLE = () => translate("zh-TW", "wui.view.table");
+    beforeEach(() => localStorage.clear());
+
+    it("draws cards by default, in a wide shell, and no table", async () => {
+      const { container } = render(<WuiOverviewPage client={client()} />, { wrapper: Wrap });
+      const rca = await screen.findByRole("region", { name: "根因分析" });
+
+      expect(rca.querySelector("ul.wui-cards")).not.toBeNull();
+      expect(container.querySelector(".wui-list")).toBeNull();
+      // Three cards fit only at the Launcher's width: the shell widens.
+      expect(container.querySelector(".page")).toHaveClass("page--wide");
+      // The toggle says which is on, LITERALLY (round 4's lesson).
+      const cards = screen.getByRole("button", { name: "卡片" });
+      const table = screen.getByRole("button", { name: "表格" });
+      expect(cards).toHaveAttribute("aria-pressed", "true");
+      expect(table).toHaveAttribute("aria-pressed", "false");
+      expect(readWuiView()).toBe("cards");
+    });
+
+    it("switches to the table and back, and the choice survives a remount", async () => {
+      const { container, unmount } = render(<WuiOverviewPage client={client()} />, { wrapper: Wrap });
+      await screen.findByRole("region", { name: "根因分析" });
+
+      fireEvent.click(screen.getByRole("button", { name: TABLE() }));
+
+      expect(container.querySelector(".wui-list")).not.toBeNull();
+      expect(container.querySelector(".wui-cards")).toBeNull();
+      expect(container.querySelector(".page")).not.toHaveClass("page--wide");
+      expect(screen.getByRole("button", { name: TABLE() })).toHaveAttribute("aria-pressed", "true");
+      expect(readWuiView()).toBe("table");
+      unmount();
+
+      const again = render(<WuiOverviewPage client={client()} />, { wrapper: Wrap });
+      await screen.findByRole("region", { name: "根因分析" });
+      expect(again.container.querySelector(".wui-list")).not.toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: CARDS() }));
+      expect(again.container.querySelector(".wui-cards")).not.toBeNull();
+      expect(readWuiView()).toBe("cards");
+    });
+
+    it("has no toggle when there is nothing to list", async () => {
+      render(<WuiOverviewPage client={client([])} />, { wrapper: Wrap });
+      await screen.findByText(word("wui.empty"));
+      expect(screen.queryByRole("button", { name: CARDS() })).toBeNull();
+      expect(screen.queryByRole("button", { name: TABLE() })).toBeNull();
+    });
+
+    it("makes the whole card the page's link, with the star and Remove OUTSIDE it", async () => {
+      render(
+        <WuiOverviewPage
+          client={client([row({ path: "/報表/出貨 看板/page.ai.yaml", title: "出貨看板" })])}
+        />,
+        { wrapper: Wrap },
+      );
+      const rca = await screen.findByRole("region", { name: "根因分析" });
+
+      const card = rca.querySelector("li.wui-card")!;
+      const link = within(card as HTMLElement).getByRole("link", { name: "出貨看板" });
+      // The same address the table row and the pane spell, in a new tab.
+      expect(link).toHaveAttribute(
+        "href",
+        "/w/rca/i-1/%E5%A0%B1%E8%A1%A8/%E5%87%BA%E8%B2%A8%20%E7%9C%8B%E6%9D%BF/page.ai.yaml",
+      );
+      expect(link).toHaveAttribute("target", "_blank");
+      // The link is STRETCHED over the card by the sheet (`::after`), so the
+      // buttons must not be its descendants — a button inside a link is not
+      // HTML, and a press on it would open the page.
+      const star = within(card as HTMLElement).getByRole("button", { name: "把「出貨看板」加入我的最愛" });
+      const remove = within(card as HTMLElement).getByRole("button", { name: REMOVE() });
+      expect(link.contains(star)).toBe(false);
+      expect(link.contains(remove)).toBe(false);
+      // Everything the table row says, the card says: the mark, the item, who
+      // and when.
+      expect(within(card as HTMLElement).getByTestId("page-mark")).toHaveTextContent("出");
+      expect(card).toHaveTextContent("Line 3 stoppage");
+      expect(card).toHaveTextContent("bob");
+      // The item link the table row has, the card has too — reachable above
+      // the stretched link, and not inside the title's link.
+      const item = within(card as HTMLElement).getByRole("link", { name: "Line 3 stoppage" });
+      expect(item).toHaveAttribute("href", "/a/rca/i-1");
+      expect(link.contains(item)).toBe(false);
+    });
+
+    it("stars from a card flip both copies, and the favourites group is a card grid too", async () => {
+      render(<WuiOverviewPage client={client()} />, { wrapper: Wrap });
+      await screen.findByRole("region", { name: "根因分析" });
+
+      fireEvent.click(screen.getByRole("button", { name: translate("zh-TW", "wui.star", { title: "Burn-down" }) }));
+
+      const fav = screen.getByRole("region", { name: word("wui.favourites") });
+      expect(fav.querySelector("ul.wui-cards")).not.toBeNull();
+      const unstars = screen.getAllByRole("button", {
+        name: translate("zh-TW", "wui.unstar", { title: "Burn-down" }),
+      });
+      expect(unstars).toHaveLength(2);
+      for (const b of unstars) expect(b).toHaveAttribute("aria-pressed", "true");
+    });
+
+    it("removes from a card the way the table row does — asked once, one DELETE", async () => {
+      const c = client();
+      render(<WuiOverviewPage client={c} />, { wrapper: Wrap });
+      const rca = await screen.findByRole("region", { name: "根因分析" });
+
+      fireEvent.click(within(rca).getAllByRole("button", { name: REMOVE() })[0]);
+      const dialog = await screen.findByRole("dialog");
+      expect(dialog).toHaveTextContent("Shipping board");
+      fireEvent.click(within(dialog).getByRole("button", { name: word("wui.remove") }));
+
+      await waitFor(() =>
+        expect(c.remove).toHaveBeenCalledWith("rca", "i-1", "/pages/report/page.ai.yaml"),
+      );
+      expect(c.remove).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(screen.queryByRole("link", { name: "Shipping board" })).toBeNull());
     });
   });
 

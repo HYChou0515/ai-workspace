@@ -28,6 +28,28 @@
   margin: 0 0 var(--space-32);
 }
 
+/* The WUI overview in cards mode (the cards amendment): the Launcher's
+   width, so three `minmax(320px, 1fr)` cards fit where the 760px shell holds
+   two. The table keeps the shell. */
+.page.page--wide {
+  max-width: 1080px;
+}
+
+/* A heading with a control beside it (the cards / table toggle). The h1 keeps
+   the shell's bottom margin; the row aligns the control to its baseline. */
+.page > .page-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-16);
+  flex-wrap: wrap;
+}
+
+.page > .page-head > h1 {
+  font-size: var(--text-display-md);
+  margin: 0 0 var(--space-32);
+}
+
 .page > section + section {
   margin-top: var(--space-32);
 }
@@ -431,6 +453,116 @@
   display: grid;
   grid-template-columns: subgrid;
   align-items: center;
+}
+
+/* ── cards ────────────────────────────────────────────────────────────────
+   The overview's default view (the cards amendment): `AppCard`'s shape from
+   the Launcher — a white card, a 4px stripe on top in the App's colour, the
+   mark on the left, a bold title, one muted line. The grid is the Launcher's
+   too. No subgrid and no tracks: a card is one flex row and its own box, so
+   nothing a sibling holds can reach it. */
+.page .wui-cards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: var(--space-16);
+  /* Each card its own height: the default `stretch` made every card in a
+     row as tall as its tallest sibling (measured: a two-word title in a
+     328px card beside a seven-line one), and a card's height is nobody
+     else's business. */
+  align-items: start;
+}
+
+.page .wui-card {
+  /* `relative` is what the stretched link and the actions position against. */
+  position: relative;
+  display: block;
+  padding: 0;
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+  background: var(--white);
+  overflow: hidden;
+  min-width: 0;
+}
+
+.page .wui-card:hover {
+  background: var(--app-tint, var(--paper-2));
+}
+
+.page .wui-card > .stripe {
+  display: block;
+  height: 4px;
+  background: var(--app-color, var(--paper-3));
+}
+
+.page .wui-card > .wui-card-body {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  padding: var(--space-16) var(--space-16) var(--space-8);
+}
+
+.page .wui-card .wui-card-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* THE WHOLE CARD IS THE LINK: the title's anchor is stretched over the card
+   by its `::after`, so a press anywhere on the card opens the page — the
+   Launcher's card is a link the same way. The anchor itself stays text-sized
+   (the title wraps inside its column); the overlay is what reaches the edges. */
+.page .wui-card .wui-card-text > a {
+  font-weight: 700;
+  font-size: var(--text-body-lg);
+  color: inherit;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.page .wui-card .wui-card-text > a::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+
+.page .wui-card .wui-card-text > .detail {
+  font-size: var(--text-small);
+  color: var(--text-paper-d);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* Above the stretched link, so the item link inside stays reachable — a
+   press on the item name opens the item, not the page. */
+.page .wui-card .wui-card-text > .detail > a {
+  position: relative;
+  z-index: 1;
+}
+
+/* The star and Remove: a footer row, right-aligned, ABOVE the stretched
+   link — a press on them must not open the page, and they must not be inside
+   the anchor (a button in a link is not HTML). A footer rather than a
+   top-right overlay: overlaying reserved 96px of the body's width for the
+   card's whole height, and at three columns that left the title 153px —
+   two lines for "Shipping board" (measured). */
+.page .wui-card > .actions {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-4);
+  padding: 0 var(--space-8) var(--space-8);
+}
+
+.page .wui-card > .error {
+  display: block;
+  padding: 0 var(--space-16) var(--space-12);
+  position: relative;
+  z-index: 1;
 }
 
 /* ── the row's mark ──────────────────────────────────────────────────────

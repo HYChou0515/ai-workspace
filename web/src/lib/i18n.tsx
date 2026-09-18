@@ -1168,6 +1168,10 @@ export const messages = {
   "wui.favourites": { "zh-TW": "我的最愛", en: "Favourites" },
   "wui.star": { "zh-TW": "把「{title}」加入我的最愛", en: "Add “{title}” to favourites" },
   "wui.unstar": { "zh-TW": "把「{title}」從我的最愛移除", en: "Remove “{title}” from favourites" },
+  // The overview's two views (the cards amendment); cards is the default.
+  "wui.view.label": { "zh-TW": "顯示方式", en: "View" },
+  "wui.view.cards": { "zh-TW": "卡片", en: "Cards" },
+  "wui.view.table": { "zh-TW": "表格", en: "Table" },
   "review.subtitle": {
     "zh-TW": "跨所有知識庫的待審核項目：自動生成的卡片提案與待釐清的問題。只顯示你有權查看的項目。",
     en: "Everything awaiting review across your knowledge bases — auto-generated card proposals and open questions. Only items you're allowed to see are shown.",

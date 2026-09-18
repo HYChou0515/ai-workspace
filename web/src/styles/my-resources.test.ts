@@ -170,6 +170,25 @@ describe("my-resources: the live panel's layout", () => {
     expect(detail).toMatch(/overflow-wrap:\s*anywhere/);
   });
 
+  it("lays the overview's cards out as a grid, and makes the whole card the link with the actions above it", () => {
+    // The cards amendment: `AppCard`'s grid, copied. `auto-fill` + `minmax`,
+    // or the cards never wrap.
+    expect(wideRule(".page .wui-cards")).toMatch(/grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(/);
+    // The title's anchor is stretched over the card: without `inset: 0` on
+    // its `::after` only the words are pressable and the card reads as a
+    // link it is not. `position: relative` on the card is what the overlay
+    // positions against — without it the overlay covers the PAGE.
+    expect(wideRule(".page .wui-card")).toMatch(/position:\s*relative/);
+    expect(wideRule(".page .wui-card .wui-card-text > a::after")).toMatch(/inset:\s*0/);
+    expect(wideRule(".page .wui-card .wui-card-text > a::after")).toMatch(/position:\s*absolute/);
+    // The actions sit ABOVE the overlay, or a press on the star opens the
+    // page instead of starring it. Same for the item link in the detail.
+    expect(wideRule(".page .wui-card > .actions")).toMatch(/z-index:\s*[1-9]/);
+    expect(wideRule(".page .wui-card .wui-card-text > .detail > a")).toMatch(/z-index:\s*[1-9]/);
+    // Cards mode widens the shell (three cards at the Launcher's width).
+    expect(wideRule(".page.page--wide")).toMatch(/max-width:\s*1080px/);
+  });
+
   it("reflows the rows before the fixed columns eat the title", () => {
     // The columns reserve ~400px before the title gets any, and the title is
     // the only shrinkable track — measured in Chromium it reached width 0 at a
