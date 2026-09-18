@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 from datetime import timedelta
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import uvicorn
 
@@ -64,6 +65,11 @@ from workspace_app.quota.limits import resolve_discovered_apps
 from workspace_app.tooling.packages import PACKAGES, PREBUILT_DIR
 from workspace_app.tooling.registry import discover_packages
 
+if TYPE_CHECKING:
+    from fastapi import FastAPI
+
+    from workspace_app.config.schema import Settings
+
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """CLI surface — currently just `--config / -c` to point at a
@@ -86,33 +92,18 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
-def main() -> None:
-    import os
-    import sys
-
-    args = _parse_args()
-    settings, provenance = load_with_provenance(config_path=args.config)
-    # Tell the operator which config file (if any) was applied — useful
-    # when a setting "isn't taking effect" and it's actually the wrong
-    # file getting read.
-    cfg_env = os.environ.get("WORKSPACE_APP_CONFIG")
-    cfg_default = Path("./config.yaml")
-    if args.config:
-        config_dir = args.config.parent
-        print(f"  config: {args.config}  (--config)")
-    elif cfg_env:
-        config_dir = Path(cfg_env).parent
-        print(f"  config: {cfg_env}  (WORKSPACE_APP_CONFIG)")
-    elif cfg_default.is_file():
-        config_dir = cfg_default.parent
-        print(f"  config: {cfg_default}")
-    else:
-        config_dir = None
-        print("  config: (none; bundled defaults)")
-    # Observability: print the resolved config (provenance-annotated, secrets
-    # masked) and write the full real-value copy next to config.yaml (0600).
-    # Best-effort — never blocks boot.
-    emit_config_dump(settings, provenance, config_dir=config_dir, stream=sys.stdout)
+def build_app(settings: Settings, *, config_dir: Path | None) -> FastAPI:
+    """The API's composition root: every model registered, every service
+    wired, nothing served. ``main`` serves what this returns; the ``blob-gc``
+    worker (`workspace_app.worker`) consumes from it WITHOUT serving, because
+    specstar's blob reconcile builds its live set from the REGISTERED models
+    and only this composition registers all of them — any ``list`` / ``dict``
+    / union / ``Optional`` field gets a runtime blob collector, so the set is
+    not "the four with a Binary field" but nearly every model, and a
+    consumer holding a partial registry would quarantine, then delete, every
+    blob the missing models reference (#804 P4). Same image, same config, same
+    registry, by construction — the Django management-command / Celery-worker
+    shape rather than a second composition root kept in step by hand."""
     # Resource limits: resolve every App's ceilings ONCE, here. It doubles as
     # the config check — an app.json above `resources.per_app.max` raises, and it
     # has to raise HERE, because a ceiling that silently trimmed would leave the
@@ -126,16 +117,6 @@ def main() -> None:
     # non-default user (#41). Default = the configured single tenant; a real
     # deploy overrides this with a cookie/JWT reader.
     get_user_id = lambda: settings.server.default_user  # noqa: E731
-    # Observability feature B: register the faithful LLM call logger into
-    # litellm.callbacks before any LLM call. Best-effort; default-on with the
-    # WORKSPACE_LLM_LOG=0 off-switch.
-    if install_llm_logging(settings) is not None:
-        print(
-            f"  llm log: ON → {settings.observability.llm_log.dir}/ "
-            f"(set WORKSPACE_LLM_LOG=0 to silence)"
-        )
-    else:
-        print("  llm log: off (set WORKSPACE_LLM_LOG=1 or observability.llm_log.enabled: true)")
     # #208: from here to a live server is a string of blocking steps that used
     # to print nothing — any one stalling looked identical (silence after the
     # config dump). Each is now narrated (→ enter / ✓ done / ✗ failed) so a hang
@@ -411,6 +392,47 @@ def main() -> None:
     if packages:
         names = ", ".join(f"{p.name}({','.join(c.name for c in p.commands)})" for p in packages)
         print(f"  provisioned tool packages (tool-demo template): {names}")
+    return app
+
+
+def main() -> None:
+    import os
+    import sys
+
+    args = _parse_args()
+    settings, provenance = load_with_provenance(config_path=args.config)
+    # Tell the operator which config file (if any) was applied — useful
+    # when a setting "isn't taking effect" and it's actually the wrong
+    # file getting read.
+    cfg_env = os.environ.get("WORKSPACE_APP_CONFIG")
+    cfg_default = Path("./config.yaml")
+    if args.config:
+        config_dir = args.config.parent
+        print(f"  config: {args.config}  (--config)")
+    elif cfg_env:
+        config_dir = Path(cfg_env).parent
+        print(f"  config: {cfg_env}  (WORKSPACE_APP_CONFIG)")
+    elif cfg_default.is_file():
+        config_dir = cfg_default.parent
+        print(f"  config: {cfg_default}")
+    else:
+        config_dir = None
+        print("  config: (none; bundled defaults)")
+    # Observability: print the resolved config (provenance-annotated, secrets
+    # masked) and write the full real-value copy next to config.yaml (0600).
+    # Best-effort — never blocks boot.
+    emit_config_dump(settings, provenance, config_dir=config_dir, stream=sys.stdout)
+    # Observability feature B: register the faithful LLM call logger into
+    # litellm.callbacks before any LLM call. Best-effort; default-on with the
+    # WORKSPACE_LLM_LOG=0 off-switch.
+    if install_llm_logging(settings) is not None:
+        print(
+            f"  llm log: ON → {settings.observability.llm_log.dir}/ "
+            f"(set WORKSPACE_LLM_LOG=0 to silence)"
+        )
+    else:
+        print("  llm log: off (set WORKSPACE_LLM_LOG=1 or observability.llm_log.enabled: true)")
+    app = build_app(settings, config_dir=config_dir)
     with boot_step("start HTTP server (uvicorn)"):
         uvicorn.run(app, host=settings.server.host, port=settings.server.port)
 

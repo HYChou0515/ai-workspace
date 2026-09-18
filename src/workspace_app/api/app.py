@@ -69,7 +69,7 @@ from ..workflow.discovery import load_run_callable
 from ..workflow.orchestrator import (
     WorkflowOrchestrator,
 )
-from ..workflow.triggers import ScanLease, SpecstarTriggerStore
+from ..workflow.triggers import ScanLease, SpecstarTriggerStore, register_trigger_store
 from ..workflow.user_schedule_sweep import DEFAULT_MAX_ROWS, UserScheduleSweeper
 from ..workflow.user_schedules import ITEM_SCHEDULES_PATH, SchedulePolicy
 from . import perf_trace
@@ -89,6 +89,7 @@ from .env_provider_routes import register_env_provider_routes
 from .event_bus import IEventBus
 from .events import AgentEvent
 from .file_routes import register_file_routes
+from .goal_offhours import register_stretch_claims
 from .health_routes import (
     register_health_routes,
     register_replay_routes,
@@ -113,10 +114,11 @@ from .request_env import IRequestEnv
 from .review_inbox_routes import register_review_inbox_routes
 from .runner import AgentRunner
 from .sandbox_activity import IActivityStore, SpecstarActivityStore, register_sandbox_activity
-from .sandbox_address import IAddressStore, SpecstarAddressStore
+from .sandbox_address import IAddressStore, SpecstarAddressStore, register_sandbox_address
 from .schedule_index import (
     ScheduleIndex,
     is_schedule_file,
+    register_schedule_index,
 )
 from .schedule_reconcile import reconcile_item_schedules
 from .spa import SpaStaticFiles
@@ -1293,7 +1295,6 @@ def create_app(
         spec=spec,
         kernels=kernels,
         health_service=health_service,
-        filestore=filestore,
         monitor=monitor,
         run_consumers=run_consumers,
         idle_timeout=idle_timeout,
@@ -1304,8 +1305,6 @@ def create_app(
         code_daily_sync=code_daily_sync,
         wiki_reflect_daily=wiki_reflect_daily,
         gc_interval=gc_interval,
-        gc_t1=gc_t1,
-        gc_t2=gc_t2,
         trigger_check_interval=trigger_check_interval,
         # #WUI P15: fires the schedules pages declared. Built here so it shares
         # the one `spec`, the one index and the item-owner lookup the rest of the
@@ -1593,6 +1592,13 @@ def create_app(
         wiki_model=wiki_model,
         wiki_llm_base_url=wiki_llm_base_url,
         wiki_llm_api_key=wiki_llm_api_key,
+        # #245: the blob-GC job's grace periods + the sinks its telemetry lands
+        # in when THIS process consumes it (all-in-one); a pure producer only
+        # asks (lifecycle `blob_gc_sweeper`, gated by `gc_interval`).
+        gc_t1=gc_t1,
+        gc_t2=gc_t2,
+        monitor=monitor,
+        filestore=filestore,
     )
 
     # #208: the first real backend hit — specstar materialises every model's
@@ -1640,6 +1646,17 @@ def create_app(
     register_turn_activity(spec)
     register_disk_ledger(spec)
     register_user_quota(spec)
+    # These four used to be registered by the lifespan — two of them only when
+    # their feature was on. The blob-gc worker composes THIS function and never
+    # enters a lifespan, and the API's ask names every model the API holds, so
+    # a model registered only in the lifespan made the worker refuse every pass
+    # in a pod-split deploy. Registered here, unconditionally: a registered but
+    # unused coordination model costs nothing, and a registry that depends on
+    # which features are on is one more way for asker and runner to diverge.
+    register_sandbox_address(spec)  # #366 (HTTP sandbox-host address store)
+    register_schedule_index(spec)  # #WUI P14 (page-declared schedules)
+    register_trigger_store(spec)  # #429 P7 / #804 (the shared window ledger)
+    register_stretch_claims(spec)  # #615 (off-hours stretch claims)
 
     # P2: ensure the "Investigations Knowledge" collection exists at boot so
     # the chat-promote path always has a target. Idempotent (re-uses a
@@ -1658,6 +1675,11 @@ def create_app(
     # #715: the archive-import consumer. On app.state because the lifespan's
     # consumer gate reaches every coordinator through it.
     app.state.import_coordinator = coordinators.kb_import
+    # #245: the blob-GC reconcile consumer; the sweeper's ask goes through it.
+    app.state.blob_gc_coordinator = coordinators.blob_gc
+    # The whole bundle, for a worker that consumes from THIS composition
+    # (`worker.build_coordinator` → `select_coordinator`, the same jobtype map).
+    app.state.coordinators = coordinators
     register_card_gen_routes(api, card_gen_coordinator)
     # #377: the global "待釐清" inbox — answer/discard the clarification questions
     # the digest raised. A term answer becomes a context card (the card-drafter LLM
@@ -2126,7 +2148,8 @@ def create_app(
     # #613: the per-conversation todo checklist — same post-apply registration (no
     # bare CRUD routes; the gated /todos chat routes are the only wire surface),
     # and same in-request rationale: the routes must not depend on the lifespan
-    # having run first. Idempotent, so the lifespan's call is belt-and-suspenders.
+    # having run first. The lifespan used to register these again as
+    # belt-and-suspenders; it registers nothing now (see `build_lifespan`).
     from ..resources.conversation_goal import register_conversation_goal
     from ..resources.conversation_todos import register_conversation_todos
     from ..resources.work_calendar import register_work_calendar

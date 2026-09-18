@@ -132,9 +132,7 @@ async def test_deleting_an_item_takes_each_conversations_satellite_rows_too():
     from workspace_app.resources.conversation_todos import ConversationTodos
 
     app, spec, _fs = _build()
-    register_stretch_claims(
-        spec
-    )  # conditional in prod (off-hours wiring) — mirror a deploy that has it
+    register_stretch_claims(spec)  # idempotent: `create_app` registers it on every deploy now
     client = TestClient(app)
     item_id = _create_item(client)
     conv_rm = spec.get_resource_manager(Conversation)
@@ -604,3 +602,22 @@ async def test_deleting_an_item_takes_its_schedule_index_row():
         "the deleted item is still listed by the schedule index, so every sweep "
         "on every pod keeps reading a row for an item that no longer exists"
     )
+
+
+def test_deleting_an_item_that_never_declared_a_schedule_succeeds_when_the_index_is_registered():
+    """The schedule-index purge tolerated only "this deploy never registered
+    the model" (KeyError). The one test that registered the model (above) also
+    gave the item a schedule row, so a registered model with NO row — an item
+    that never declared a schedule, the common case — was never exercised; a
+    deploy that ran the lifespan (every real one, where the model used to be
+    registered) answered that delete with a 500 "failed partway". `create_app`
+    registers the model on every deploy now; delete such an item."""
+    app, spec, _ = _build()
+    client = TestClient(app)
+    item_id = _create_item(client)
+
+    resp = client.delete(f"/a/rca/items/{item_id}")
+
+    assert resp.status_code == 204, resp.text
+    with pytest.raises(ResourceIDNotFoundError):
+        spec.get_resource_manager(RcaInvestigation).get(item_id)

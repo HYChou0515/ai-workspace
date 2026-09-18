@@ -69,7 +69,7 @@
 | 決策 | 理由 | 否決的替代方案 | 出處 |
 |---|---|---|---|
 | Job runner ⊥ API：coordinator 由 FastAPI-free 的 `coordinators.build_coordinators` 統一建構（#312）| 同一份組裝給 `create_app` 與獨立 `python -m workspace_app.worker <jobtype>` 共用；API 經 `server.run_consumers` gate 可變純 producer，各 JobType 獨立 pod 化掛自己的 k8s HPA | 把 coordinator inline 在 `create_app`（worker 無法共用、無法各自擴展）；用 KEDA | #312；`CLAUDE.md`；[subsystems/jobs-and-scaling.md](subsystems/jobs-and-scaling.md)；user memory `project_issue_312_job_runner_split` |
-| 非佇列 sweeper（idle_killer/mirror/index/blob_gc/code_sync）永遠留在 API、不 gate | 它們是 per-pod sandbox 回收與本地維護，無共享 backend 概念 | 把 sweeper 也丟進 worker pod（語意不符）| #312；`CLAUDE.md` |
+| 非佇列 sweeper（idle_killer/mirror/index/code_sync，以及 blob_gc 的 ask）永遠留在 API、不 gate | 它們是 per-pod sandbox 回收與本地維護，或只 enqueue 的純 producer；重的工作（cluster sweep、blob GC reconcile）是 worker 的 job | 把 sweeper 也丟進 worker pod（語意不符）；在 API 上跑 reconcile（OOM，#804 同類）| #312、#804、plan-blob-gc-job；`CLAUDE.md` |
 | 大 index/sanity job fan-out 成小 per-unit job + CAS join（#227）| RabbitMQ 對長時間 consumer-ack 會 406 timeout；切小單元 + CAS join 才不超時（`partition_key` 在 RabbitMQ 被忽略，需顯式 join）| 單一大 job 長跑（consumer-ack timeout）| #227；[plan-issue-227.md](plan-issue-227.md)；user memory `project_issue_227_index_fanout` |
 | code-wiki fan-out 沿用既有 wiki JobType（`code_split`/`code_card`/`code_finalize` 三 op）+ `CodeWikiBuildRun` etag-CAS join，不新增 JobType | 共用同一 queue/pod；CAS join（仿 #227 `IndexRun`）保證 finalize 恰好一次 winner | 為 code-wiki 另開 JobType（多一條 queue/pod 維護）| #281；`kb/wiki/jobs.py:WikiJobPayload`、`kb/wiki/code_wiki_run.py:CodeWikiBuildRunStore` |
 

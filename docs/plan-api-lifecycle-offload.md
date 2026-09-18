@@ -1,5 +1,7 @@
 # Plan — 把 API lifecycle 裡「不是 pod-local 的工作」搬離 API pod（PR #804）
 
+> **2026-09-17 更新**：下面「blob GC 留在 API（決定 0）」已被推翻——它在 prod 把 API pod 殺了（死前最後一行 `blob-gc: won lease`）。現在是 `blob-gc` JobType + 自己的 worker,而 worker 用 API 自己那整套組裝（`__main__.build_app`,只組不 serve）來解決「registry 不完整會刪 blob」的問題;見 repo 根目錄的 `plan-blob-gc-job.md` 與 `migrations.md` §5.5。
+
 ## 背景
 
 2026-09-14 prod 每顆 API pod 零流量也長：1.5G 開機 → 4G/12min，60–90 分一次 OOM，每顆 pod 一條

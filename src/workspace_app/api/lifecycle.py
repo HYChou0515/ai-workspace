@@ -20,7 +20,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import UTC, datetime, timedelta
@@ -30,7 +29,6 @@ from fastapi import FastAPI
 from specstar import QB, SpecStar
 
 from ..config.schema import OffHoursSettings
-from ..filestore.blob_gc import register_gc_lease, run_blob_gc
 from ..health.service import HealthService
 from ..kernels import KernelService
 from ..observability.boot import boot_step
@@ -38,11 +36,8 @@ from ..workflow.user_schedule_sweep import UserScheduleSweeper
 from . import perf_trace
 from .notification_delivery import INotificationChannel, deliver_pending
 from .registry import InvestigationRegistry
-from .sandbox_address import register_sandbox_address
-from .schedule_index import register_schedule_index
 
 if TYPE_CHECKING:
-    from ..filestore.protocol import FileStore
     from ..monitor import IMonitor
 
 #: How often pending notifications are offered to the deploy's outbound channel.
@@ -87,7 +82,6 @@ def build_lifespan(
     spec: SpecStar,
     kernels: KernelService,
     health_service: HealthService,
-    filestore: FileStore,
     monitor: IMonitor,
     run_consumers: bool,
     idle_timeout: timedelta,
@@ -98,8 +92,6 @@ def build_lifespan(
     code_daily_sync: str | None = None,
     wiki_reflect_daily: str | None = None,
     gc_interval: timedelta | None,
-    gc_t1: str,
-    gc_t2: str,
     trigger_check_interval: timedelta | None = None,
     user_schedule_sweeper: UserScheduleSweeper | None = None,
     notification_channel: INotificationChannel | None = None,
@@ -337,27 +329,34 @@ def build_lifespan(
         except asyncio.CancelledError:
             return
 
-    async def blob_gc_sweeper() -> None:
-        """#245: periodically reclaim orphaned blobs (deleted files' content) via
-        specstar's ref-count GC, so the per-workspace quota stays honest. A CAS
-        lease means only ONE pod runs the full (deleting) reconcile per window;
-        the others no-op. Run off the loop — reconcile does blocking specstar I/O.
-        ``gc_interval`` gates this caller (None ⇒ no task)."""
+    async def blob_gc_sweeper(app: FastAPI) -> None:
+        """#245: periodically ask for the orphaned-blob reconcile (deleted files'
+        content), so the per-workspace quota stays honest. A pure producer, like
+        ``cluster_sweeper``: each window ONE pod (the ``ScanLease`` below) asks
+        the ``BlobGcCoordinator`` for one pass, and whoever consumes the
+        ``blob-gc`` JobType runs it — a worker pod, or this process when
+        ``run_consumers`` is on. The pass itself materialises every
+        ``ResourceMeta`` of every blob-capable model (vectors included) and
+        streams every revision; run on this pod's timer it was the #804 class
+        of OOM again (the pod's last line: ``blob-gc: won lease``).
+        ``gc_interval`` gates this caller (None ⇒ no task); the grace periods
+        live on the coordinator. Off the loop (blocking specstar I/O)."""
+        from ..workflow.triggers import ScanLease, SpecstarTriggerStore
+
         assert gc_interval is not None
-        ttl_ms = int(gc_interval.total_seconds() * 1000)
+        interval_s = gc_interval.total_seconds()
+        lease = ScanLease(SpecstarTriggerStore(spec), "blob-gc", interval_s=interval_s)
+
+        def ask() -> None:
+            if not lease.claim():
+                return  # another pod asked this window
+            app.state.blob_gc_coordinator.enqueue_reconcile()
+
         try:
             while True:
-                await asyncio.sleep(gc_interval.total_seconds())
+                await asyncio.sleep(interval_s)
                 with contextlib.suppress(Exception):
-                    await asyncio.to_thread(
-                        run_blob_gc, spec, t1=gc_t1, t2=gc_t2, ttl_ms=ttl_ms, monitor=monitor
-                    )
-                    # #407: on the same durable-maintenance cadence, snapshot the
-                    # WorkspaceFile cardinality (total rows / distinct workspaces /
-                    # largest workspace) so the ws_census trend shows whether the
-                    # per-file model grows unbounded — the archive-vs-keep signal.
-                    census = await filestore.census()  # ty: ignore[unresolved-attribute]
-                    monitor.record({"kind": "ws_census", "t": int(time.time() * 1000), **census})
+                    await asyncio.to_thread(ask)
         except asyncio.CancelledError:
             return
 
@@ -514,6 +513,9 @@ def build_lifespan(
             # simply never moves.
             with boot_step("start archive-import consumer"):
                 app.state.import_coordinator.start_consuming()
+            # #245: blob-GC consumer — the all-in-one pod runs its own reconcile.
+            with boot_step("start blob-GC consumer"):
+                app.state.blob_gc_coordinator.start_consuming()
         # #230: seed the platform Help collection from packaged content (repo =
         # source of truth; identical bytes are a no-op). The STORE runs here (off
         # the loop, best-effort — a dead backend leaves the collection
@@ -534,44 +536,16 @@ def build_lifespan(
                 user=HELP_SYSTEM_USER,
                 index=app.state.index_coordinator.enqueue,
             )
-        # (#345's activity-heartbeat model is registered in `create_app`, right
-        # after `spec.apply` — it must exist whether or not a lifespan ran, since
-        # it is now also the per-person resource ledger.)
-        # #366: register the shared per-item sandbox-address model (only when the
-        # registry uses it — the HTTP sandbox-host backend). Same post-apply
-        # timing so its CRUD routes are never emitted.
-        if registry.address is not None:
-            register_sandbox_address(spec)
-            logger.debug("lifespan: registered sandbox-address model")
-        # #WUI P14: which items have page-declared schedules. Same post-apply
-        # timing and the same reason — this is platform bookkeeping, not
-        # something any authenticated caller may PUT.
-        register_schedule_index(spec)
-        # #429 P9: the event-trigger processing high-water model (idempotent + the D2d
-        # discoverable-lag ledger). Registered post-apply so its CRUD routes are never emitted,
-        # like the coordination models above. Event dispatch is in-request (not swept), so this
-        # is wired whenever the app runs — it just no-ops when no event triggers are declared.
-        from ..workflow.event_dispatch import register_event_watermark
-
-        register_event_watermark(spec)
-        # #613: the per-conversation todo checklist the update_todos tool overwrites.
-        # Same post-apply timing so specstar never emits bare CRUD routes for it —
-        # FE reads/writes go through dedicated, permission-gated endpoints (P2).
-        from ..resources.conversation_goal import register_conversation_goal
-        from ..resources.conversation_todos import register_conversation_todos
-        from ..resources.work_calendar import register_work_calendar
-
-        register_conversation_todos(spec)
-        register_conversation_goal(spec)
-        register_work_calendar(spec)  # #615 P1
-        # #429 P7 / #804: the shared window-ledger model — the per-trigger claims AND
-        # every scan lease (triggers, page schedules, the cluster-sweep ask) live on
-        # it. Registered post-apply so its CRUD routes are never emitted (same
-        # reason as the blob-GC lease), unconditionally, because the cluster-sweep
-        # ask below takes a lease on it whether or not scheduled work is on.
-        from ..workflow.triggers import register_trigger_store
-
-        register_trigger_store(spec)
+        # The lifespan ADDS no model (the off-hours sweeper's constructors still
+        # call two idempotent `register_*`, no-ops by then). Every post-apply
+        # coordination model
+        # (#345's activity heartbeat, #366's sandbox-address store, #WUI P14's
+        # schedule index, #429's window ledger + event watermark, #613's todos
+        # and goal, #615's calendar and stretch claims) is registered in
+        # `create_app`, right after `spec.apply`: the blob-gc worker composes
+        # `create_app` and never enters a lifespan, and its registry must equal
+        # the asking API's — `tests/test_worker.py` pins that entering the
+        # lifespan changes nothing.
         bg = [asyncio.create_task(idle_killer()), asyncio.create_task(mirror_sweeper(app))]
         if perf_trace.enabled():
             # Only ever sleeps, so any delay it observes beyond its own sleep is
@@ -592,16 +566,10 @@ def build_lifespan(
             bg.append(asyncio.create_task(reflect_sweeper(app)))
             logger.debug("lifespan: wiki-reflect sweeper enabled")
         if gc_interval is not None:
-            # #245: seed the CAS lease, then run the orphan-blob GC on a schedule.
-            register_gc_lease(spec)
-            bg.append(asyncio.create_task(blob_gc_sweeper()))
+            # #245: ask for the orphan-blob reconcile on a schedule.
+            bg.append(asyncio.create_task(blob_gc_sweeper(app)))
             logger.debug("lifespan: blob-GC sweeper enabled")
         if offhours is not None and offhours.window:
-            # #615: the model the stretch claim lives in, registered post-apply
-            # like the blob-GC lease so its CRUD routes are never emitted.
-            from .goal_offhours import register_stretch_claims
-
-            register_stretch_claims(spec)
             bg.append(asyncio.create_task(goal_offhours_sweeper(app)))
             logger.debug("lifespan: goal off-hours sweeper enabled")
         if user_schedule_sweeper is not None and trigger_check_interval is not None:
@@ -665,6 +633,8 @@ def build_lifespan(
                         await app.state.graph_coordinator.aclose()
                 with contextlib.suppress(BaseException):
                     await app.state.card_gen_coordinator.aclose()
+                with contextlib.suppress(BaseException):
+                    await app.state.blob_gc_coordinator.aclose()
             await kernels.shutdown_all()
             await registry.close_all()
             logger.info("lifespan: shutdown complete")

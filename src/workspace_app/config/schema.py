@@ -287,11 +287,13 @@ class FilestoreSettings:
     # (the sandbox mirror is intentionally not gated — never lose agent work).
     # Default ~20 GiB (generous; normal use never hits it). 0 ⇒ no quota.
     workspace_quota: int = 20 * 1024 * 1024 * 1024
-    # #245: blob-GC sweeper — reclaims orphaned blobs (deleted files' content) so
-    # the quota stays honest. `gc_interval_sec` is how often a sweep runs (a CAS
-    # lease means only one pod runs the full reconcile per window); 0 ⇒ sweeper
-    # off. `gc_t1` protects freshly-written blobs from quarantine; `gc_t2` is the
-    # reversible dwell in quarantine before a blob is permanently deleted.
+    # #245: blob GC — reclaims orphaned blobs (deleted files' content) so the
+    # quota stays honest. `gc_interval_sec` is how often the API ASKS for a
+    # reconcile pass (one pod per window, on the shared window ledger); the pass
+    # itself is a `blob-gc` job — run by the `blob-gc` worker, or in-process when
+    # `server.run_consumers` is on. 0 ⇒ never asked. `gc_t1` protects
+    # freshly-written blobs from quarantine; `gc_t2` is the reversible dwell in
+    # quarantine before a blob is permanently deleted.
     gc_interval_sec: float = 3600.0
     gc_t1: str = "1h"
     gc_t2: str = "24h"

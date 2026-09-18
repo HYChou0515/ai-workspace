@@ -375,3 +375,78 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: rca-data
+---
+# ── blob-GC reconcile (#245; one pass per `filestore.gc_interval_sec` window) ──
+# Fixed 1 replica, no HPA: the API's sweeper asks ONCE per window behind a
+# ScanLease and the coordinator coalesces overlapping asks, so one consumer is
+# the whole load. This worker boots the API's OWN composition (`build_app`,
+# never served) rather than the slim worker bundle: specstar's reconcile builds
+# the live blob set from the REGISTERED models, and a consumer holding fewer
+# than the API would quarantine, then delete, every blob the missing models
+# reference — the runner refuses such a pass (the job reads FAILED, the log
+# names the missing models), and equal registries are what makes it run.
+#
+# Because it boots the API's composition, this pod needs what the API pod
+# needs AT BOOT — the same configmap, and the same mounts and privileges the
+# construction step touches: `discover_packages` reads the prebuilt tools dir
+# (WORKSPACE_TOOLS_DIR / the image's bundles — an absent dir fails loud);
+# `LocalProcessSandbox` mkdirs SANDBOX_ROOT (hence `scratch` below, so it does
+# not land on the container layer); `sandbox.isolation.enabled: true` needs the
+# CAP_SETUID/SETGID + cgroup grant `deployment.yaml` documents, on this pod too;
+# an `nfs_tree` durable store needs `/mnt/workspaces` here for the ws_census
+# figure to be real (an absent tree reads as zeros). Mirror whatever the
+# overlay adds to `rca-app` for those. It serves nothing and starts none of the
+# sweepers; the #219 inline→Binary migration it runs at boot is idempotent.
+#
+# Memory is the sizing that matters: for each blob-capable model the pass
+# holds EVERY ResourceMeta at once — indexed_data included, which on doc-chunk
+# / cluster-member is every row's embedding vectors (the Postgres meta store
+# decodes the full-meta BYTEA; the §6 vector strip only thins the JSONB column,
+# so `migrate/execute` does not reduce this) — and streams the revisions one
+# resource at a time. That is what killed the API pod that used to run it (its
+# last line: `blob-gc: won lease`). An OOM here is the same fact on a pod no
+# request depends on: raise the limit. A shorter window does not help — every
+# pass reads every meta there is.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rca-worker-blob-gc
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rca-worker-blob-gc
+  template:
+    metadata:
+      labels:
+        app: rca-worker-blob-gc
+    spec:
+      terminationGracePeriodSeconds: 120 # let a pass in flight finish its deletes
+      containers:
+        - name: worker
+          image: rca-app:latest
+          command: ["python", "-m", "workspace_app.worker", "blob-gc"]
+          envFrom:
+            - configMapRef:
+                name: rca-config
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            # The API's scratch volume (SANDBOX_ROOT): the sandbox layer this
+            # composition builds mkdirs it at boot. Never written to by a pass.
+            - name: scratch
+              mountPath: /scratch
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "2Gi"
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: rca-data
+        - name: scratch
+          persistentVolumeClaim:
+            claimName: rca-scratch
