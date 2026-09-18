@@ -595,8 +595,11 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
 - **app 聊天的 turn 換 pod 接手**：`ChatSendService` 每次 send 在存下問題的同時開一列耐久認領（新 model `turn-claim`，
   post-apply 註冊、無 CRUD 路由、**不需回填**；帶完整 send 配方，**不含**從 request 組出來的 env——重跑問
   `env_without_request`，`user_id` 是提問的人）。fleet 裡一顆 pod（`ScanLease`）每 `server.turn_reclaim_interval_sec`
-  （預設 5 秒）掃孤兒認領，以對話為單位、整把拿或整把不拿：原 pod 放手的立刻接；心跳過期（30 秒）的整把接下、
-  推一次 `TurnEpoch`、照順序重跑；重跑上限 2 次，再孤兒就寫一則 error 結尾（使用者看得到、可以重送）。
+  （預設 5 秒）掃孤兒認領，以對話為單位、整把拿或整把不拿：原 pod 放手的立刻接；心跳過期（30 秒）**且**那把 key 上
+  沒有任何認領在 30 秒內剛開或剛被接（剛開、剛接的心跳還沒落地，不算孤兒）的整把接下、推一次 `TurnEpoch`、
+  照順序重跑；重跑上限 2 次，再孤兒就寫一則 error 結尾（使用者看得到、可以重送）。兩個沒解、只明說的縫：
+  兩顆 pod 的 tick 都先列表再各自 take、又在心跳過期兩側各讀一次，仍可能分著拿（一邊重跑被當 interrupted）；
+  specstar 的 CAS 是 check-then-set，同一毫秒兩個 take 都會「贏」（後寫的擁有，另一份 `is_mine` 為 False）。
   認領就是帳本（回覆存進去才刪、不看對話尾巴猜）；代價：pod 恰好死在「回覆已存、認領還沒刪」那一毫秒時會多一個答案。
   升版當下在跑的 turn 沒有認領列，那一批仍是舊行為（pod 死就停在問題上）。
 - shutdown 的 sandbox 拆除改用 `kill_idle` 的規則：先 write-back，整個 fleet 閒置超過 idle 門檻的才 kill，否則只丟掉

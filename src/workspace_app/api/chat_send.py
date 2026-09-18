@@ -148,6 +148,18 @@ _GIVE_UP_PREFIX = "The assistant could not finish this reply"
 _GIVE_UP_MESSAGE = _GIVE_UP_PREFIX + " after {attempts} attempts. Please send your message again."
 
 
+def _messages_after(messages: list[Message], created_at: int, content: str) -> list[Message]:
+    """What follows the user message a claim is for. Positional after the
+    message when it is found; when it is gone (undone), everything stamped
+    later than the claim — a positional slice past a filtered prefix skipped
+    the standing give-up ending itself (round 4)."""
+    for i in range(len(messages) - 1, -1, -1):
+        m = messages[i]
+        if m.role == "user" and m.created_at == created_at and m.content == content:
+            return messages[i + 1 :]
+    return [m for m in messages if m.created_at is not None and m.created_at > created_at]
+
+
 def _history_before(messages: list[Message], created_at: int, content: str) -> list[Message]:
     """The thread up to, not including, the user message a turn answers.
 
@@ -943,8 +955,14 @@ class ChatSendService:
         Returns once the turn is QUEUED, not answered: the reclaim tick runs
         every claim it took in turn, and a tick that waited on each reply (a
         real turn outlives `send_await_timeout`) would start the Nth orphan N
-        detach-timeouts late. The request env is what a turn with no request
-        behind it gets (`env_without_request`), as for a goal-driven round —
+        detach-timeouts late. Its preparation runs as its OWN task, held like
+        a send's (`_inflight`): the sweeper that calls this is a background
+        task the lifespan cancels before the engine drains, and a re-run that
+        lived inside it died with it — token discarded, nothing for the drain
+        to hand over, the claim left this pod's (round 4). Held here, the
+        drain finds its token and releases the claim like any preparing send.
+        The request env is what a turn with no request behind it gets
+        (`env_without_request`), as for a goal-driven round —
         the caller's own cookie was composed for one turn and is not stored.
         A failure before the turn exists ends the thread the way a failed
         preparation does; the claim is finished, not re-taken every tick."""
@@ -970,8 +988,8 @@ class ChatSendService:
                 user_id=claim.author, item_id=claim.investigation_id
             )
 
-        try:
-            await self._start_turn(
+        task = asyncio.create_task(
+            self._start_turn(
                 claim.investigation_id,
                 claim.rid,
                 conv,
@@ -987,7 +1005,14 @@ class ChatSendService:
                 await_reply=False,
                 resolve_env=headless_env,
             )
-        except Exception:  # noqa: BLE001 — the thread has its ending; nobody is waiting for the throw
+        )
+        self._inflight.add(task)
+        task.add_done_callback(self._inflight.discard)
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            raise  # the caller's cancel; the re-run itself goes on
+        except Exception:  # noqa: BLE001 — the thread has its ending; nobody awaits the throw
             # `_start_turn` re-raises a DRIVEN turn's preparation failure so
             # the goal driver learns of it. A re-run has no driver: the error
             # ending is written, the claim finished, and letting the raise
@@ -1010,10 +1035,9 @@ class ChatSendService:
         with contextlib.suppress(Exception):
             conv = self._conv_rm.get(row.claim.rid).data
             if isinstance(conv, Conversation):
-                before = _history_before(
+                after = _messages_after(
                     conv.messages, row.claim.created_at, str(row.claim.body.get("content", ""))
                 )
-                after = conv.messages[len(before) + 1 :]
                 if any(m.role == "error" and m.content.startswith(_GIVE_UP_PREFIX) for m in after):
                     self._finish_claim(row.id)
                     return
@@ -1021,7 +1045,7 @@ class ChatSendService:
 
     def _end_with_failure(
         self, rid: str, engine_key: str, claim: str | None, failure: RunError
-    ) -> None:
+    ) -> bool:
         """The thread's ending for a turn that will not run: the error
         message persisted (the FE reads "a reply is on its way" off a thread
         that ends on the question, and waits), the claim finished (a peer
@@ -1032,12 +1056,14 @@ class ChatSendService:
         asks. A send handed over while still preparing keeps preparing on the
         dying pod and can still raise; recording that here ended the thread
         with this pod's exception and deleted the PEER's claim, so the peer's
-        answer found nothing to finish and was dropped (round 3)."""
+        answer found nothing to finish and was dropped (round 3). Returns
+        whether the failure was recorded: the caller decides what a driver
+        is told by that (round 4)."""
         if not self._claim_is_mine(claim):
             logger.info(
                 "chat_send: turn on %s was taken over; not recording this failure", engine_key
             )
-            return
+            return False
         with contextlib.suppress(Exception):
             fresh = self._conv_rm.get(rid).data
             if isinstance(fresh, Conversation):
@@ -1052,6 +1078,7 @@ class ChatSendService:
                 self._conv_rm.update(rid, fresh)
         self._finish_claim(claim)
         self._turn_engine.publish(engine_key, failure)
+        return True
 
     async def _start_turn(
         self,
@@ -1459,8 +1486,8 @@ class ChatSendService:
             # differently depending on where it was caught, and `str(exc)` alone
             # drops the type — `str(KeyError("slug"))` reaches the thread as
             # literally `'slug'`.
-            self._end_with_failure(rid, engine_key, claim, _terminal_error(exc))
-            if driven_by:
+            recorded = self._end_with_failure(rid, engine_key, claim, _terminal_error(exc))
+            if driven_by and recorded:
                 # …but a driver is not an HTTP caller and has no status to read.
                 # `OffHoursGoalSweeper.tick` releases its per-STRETCH claim on
                 # this exception so a later tick can retry — "must not cost that
@@ -1473,5 +1500,9 @@ class ChatSendService:
                 # So each caller gets what it can act on. The request gets 202,
                 # because the message is in the thread and the failure is on the
                 # stream. The driver gets the throw, because a return value it
-                # cannot tell from success is no answer at all.
+                # cannot tell from success is no answer at all — unless the
+                # failure was NOT ours to record: a claim handed over to a peer
+                # (`recorded` False) is a round that WILL start there, and a
+                # throw would have the driver refund a round the peer then runs
+                # (round 4). Then the driver gets what a started round gets.
                 raise

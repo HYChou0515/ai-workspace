@@ -39,12 +39,14 @@ cancelled the other's legitimate re-run through Stop's path — partial,
 "interrupted", claim finished, question lost. A claim past its re-run bound
 is likewise given up on by whoever TAKES it, so the thread gets one ending.
 Two things this rests on, stated rather than solved: both ticks must read the
-same heartbeat state (a heartbeat expiring between their two reads gives them
-different candidate lists, and a split is again possible — one re-run
-cancelled as "interrupted"; needs a released claim to sit untaken for most
-of a stale window AND overlapping ticks), and `take`'s CAS is specstar's
-check-then-set, not a locked compare — two takes inside the same millisecond
-both "win" and the last writer owns (the other copy's `is_mine` is False).
+same heartbeat state — two ticks that both LIST before either takes and read
+the heartbeat on either side of its expiry get different candidate lists, and
+when the unreleased claim sorts before the released one they split the key
+(one re-run cancelled as "interrupted"; `taken_at_ms` protects a tick that
+lists AFTER a peer's take, not two that listed first) — and `take`'s CAS is
+specstar's check-then-set, not a locked compare — two takes inside the same
+millisecond both "win" and the last writer owns (the other copy's `is_mine`
+is False).
 
 The claim is the ledger and the ONLY evidence: it is finished when the reply
 persists and not before. Nothing about the thread's shape says whether a

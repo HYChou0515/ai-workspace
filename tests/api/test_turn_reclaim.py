@@ -10,6 +10,7 @@ so the thread ends with the answer instead of the question.
 from __future__ import annotations
 
 import asyncio
+import threading
 from collections.abc import AsyncIterator
 from typing import cast
 
@@ -22,7 +23,7 @@ from workspace_app.api.events import AgentEvent, MessageDelta, RunDone
 from workspace_app.api.request_env import IRequestEnv
 from workspace_app.api.schemas import _MessageBody
 from workspace_app.api.turn_activity import SpecstarTurnActivityStore
-from workspace_app.api.turn_claims import SpecstarTurnClaimStore, TurnClaim
+from workspace_app.api.turn_claims import SpecstarTurnClaimStore, TurnClaim, register_turn_claims
 from workspace_app.api.turn_reclaim import RECLAIM_MAX_RERUNS, ReclaimTick
 from workspace_app.apps.playground.model import PlaygroundItem
 from workspace_app.filestore.memory import MemoryFileStore
@@ -199,6 +200,19 @@ def _append(spec: SpecStar, rid: str, role: str, content: str, created_at: int) 
 async def _settle(store, budget_s: float = 5.0) -> None:
     for _ in range(int(budget_s / 0.05)):
         if not store.list_open():
+            return
+        await asyncio.sleep(0.05)
+
+
+async def _settle_engine(client: TestClient, budget_s: float = 5.0) -> None:
+    """Wait for the engine's live turns to end BEFORE leaving the client's
+    `with`: a turn started on this loop that is still live when the client's
+    lifespan drains on ITS loop is waited on for ever. A test asserting that
+    the tick took nothing must still settle — under a mutation that DOES take,
+    this is what turns a hang into a red test."""
+    engine = cast(FastAPI, client.app).state.turn_engines[0]
+    for _ in range(int(budget_s / 0.05)):
+        if not engine._live_turns():
             return
         await asyncio.sleep(0.05)
 
@@ -550,6 +564,7 @@ async def test_a_key_a_peer_is_taking_is_left_whole():
         )
         taken = await tick.run()
         after = await control.current(item_id)
+        await _settle_engine(client)  # a structural exit, see the helper
     assert taken == [] and runner.runs == 0
     assert after == before  # the peer's advance is the only one this key gets
     # Q2 untouched (still pod A's, no rerun): the peer's to take on its pass.
@@ -972,6 +987,65 @@ async def test_a_handed_over_sends_late_preparation_failure_writes_nothing():
     assert row.claim.owner == "peer"  # the peer's claim survived
 
 
+async def test_a_handed_over_driven_sends_late_failure_is_not_reported_to_its_driver():
+    """The failure path, cell by cell: {still mine, handed over} × {driven,
+    not}. The one cell that was wrong (round 4): a goal-driven send handed
+    over while preparing, whose preparation then raises on the dying pod —
+    nothing is recorded (not mine), but the raise still reached the goal
+    driver, which reads a raise as "this round did not start" and refunds
+    it. The round WILL start, on the peer that takes the released claim; the
+    driver must not be told otherwise."""
+    from workspace_app.resources.conversation_goal import GOAL_DRIVER
+
+    spec = make_spec(default_user="u")
+    client, runner = _pod(spec)
+    item_id, rid = _item_with_chat(spec)
+    conv = spec.get_resource_manager(Conversation).get(rid).data
+    assert isinstance(conv, Conversation)
+    with client:
+        svc = _service(client)
+        store = _claims(client)
+        engine = cast(FastAPI, client.app).state.turn_engines[0]
+        gate = asyncio.Event()
+
+        async def compact_that_dies(*a, **kw):  # noqa: ANN002, ANN003, ANN202
+            await gate.wait()
+            raise RuntimeError("sandbox gone under the preparation")
+
+        svc.compact = compact_that_dies
+        send = asyncio.create_task(
+            svc.send(
+                item_id,
+                rid,
+                conv,
+                item_id,
+                _MessageBody(content="[goal] go on"),
+                author="alice",
+                driven_by=GOAL_DRIVER,
+            )
+        )
+        for _ in range(100):
+            if store.list_open():
+                break
+            await asyncio.sleep(0.02)
+
+        async def handover(keys: list[str]) -> None:
+            await asyncio.to_thread(store.release, keys)
+
+        await engine.aclose(timeout=0.3, handover=handover)
+        gate.set()
+        raised: BaseException | None = None
+        try:
+            await asyncio.wait_for(send, 5)
+        except Exception as exc:  # noqa: BLE001 — the verdict is below
+            raised = exc
+    assert raised is None, f"the driver was told the round did not start: {raised!r}"
+    assert runner.runs == 0
+    assert _thread(spec, rid) == [("user", "[goal] go on")]
+    (row,) = _claims(client).list_open()
+    assert row.claim.released and row.claim.driven_by == GOAL_DRIVER
+
+
 async def test_a_driven_claims_failed_rerun_does_not_cost_the_keys_other_claims():
     """A goal-driven turn's preparation failure is re-raised on the first
     run so the driver learns of it; on a re-run there is no driver waiting —
@@ -1097,6 +1171,7 @@ async def test_a_claim_younger_than_the_stale_window_is_not_an_orphan():
         )
         # No heartbeat row at all — the shape of the first milliseconds.
         taken = await ReclaimTick.of(cast(FastAPI, client.app)).run()
+        await _settle_engine(client)  # a structural exit, see the helper
     assert taken == [] and runner.runs == 0
     (row,) = _claims(client).list_open()
     assert row.claim.owner == "pod-a"
@@ -1131,9 +1206,55 @@ async def test_a_key_a_peer_took_moments_ago_is_left_whole_even_when_listed_afte
         before = await control.current(item_id)
         taken = await ReclaimTick.of(cast(FastAPI, client.app)).run()
         after = await control.current(item_id)
+        await _settle_engine(client)  # a structural exit, see the helper
     assert taken == [] and runner.runs == 0 and after == before
     owners = {r.claim.created_at: r.claim.owner for r in _claims(client).list_open()}
     assert owners == {1_000: "peer", 2_000: "pod-a"}
+
+
+async def test_an_abandon_finds_its_standing_ending_when_the_claimed_message_was_undone():
+    """The give-up ending is looked for after the claimed message; when that
+    message is gone (undone) the search falls back to everything stamped
+    later than the claim — a positional slice there skipped the ending
+    itself and wrote a second one per tick (round 4)."""
+    import dataclasses
+
+    from workspace_app.api.timeutil import now_ms
+
+    spec = make_spec(default_user="u")
+    activity = SpecstarTurnActivityStore(spec, now_ms=lambda: 0)
+    client, runner = _pod(spec)
+    with client:
+        item_id, rid = _open_orphan(client, spec, reruns=RECLAIM_MAX_RERUNS)
+        # The claimed question (created_at 1_000) is undone: only an older one remains.
+        conv_rm = spec.get_resource_manager(Conversation)
+        conv = conv_rm.get(rid).data
+        assert isinstance(conv, Conversation)
+        conv.messages = [m for m in conv.messages if m.created_at != 1_000]
+        conv_rm.update(rid, conv)
+        _append(spec, rid, "user", "the older question", 500)
+        await activity.bump(item_id)
+        store = _claims(client)
+
+        class _FinishRefused:
+            def __getattr__(self, name):  # noqa: ANN001, ANN204
+                return getattr(store, name)
+
+            def finish(self, cid: str) -> None:
+                raise RuntimeError("store refused")
+
+        tick = dataclasses.replace(
+            ReclaimTick.of(cast(FastAPI, client.app)),
+            claims=_FinishRefused(),  # type: ignore[arg-type]
+        )
+        tick.chat_send._turn_claims = _FinishRefused()  # type: ignore[assignment]  # ty: ignore[invalid-assignment]
+        await tick.run()
+        later = dataclasses.replace(tick, now_ms=lambda: now_ms() + 60_000)
+        await later.run()
+        tick.chat_send._turn_claims = store  # type: ignore[assignment]
+    assert runner.runs == 0
+    endings = [m for m in _thread(spec, rid) if m[0] == "error"]
+    assert len(endings) == 1, _thread(spec, rid)
 
 
 async def test_taking_a_claim_advances_the_epoch_so_a_stalled_owner_stops():
@@ -1406,6 +1527,71 @@ def test_a_pods_shutdown_hands_over_the_queued_turn_that_started_during_the_drai
     assert _thread(spec, rid) == [("user", "q1"), ("user", "q2"), ("assistant", "answer")]
     (row,) = _claims(a).list_open()
     assert row.claim.released and row.claim.body["content"] == "q2"
+
+
+def test_a_re_run_still_preparing_when_its_pod_drains_is_handed_over_too(tmp_path):
+    """Table B, the cell the sweeper adds: a re-run the SWEEPER started is
+    in `preparing()` when the pod drains. The lifespan cancels the sweeper
+    (a background task) before the engine drain, and a re-run that lived
+    inside the sweeper's task went with it — token discarded, so the drain
+    saw nothing to hand over and the claim stayed this pod's (round 4: the
+    peer waited the stale window and burnt a rerun count). The re-run is
+    its own task now, held like a send's, so the drain finds its token and
+    releases the claim."""
+    from datetime import timedelta
+
+    class _SlowSeam(IRequestEnv):
+        def __init__(self) -> None:
+            self.reached = threading.Event()
+
+        async def env_for(self, request, *, user_id: str, item_id: str) -> dict[str, str]:  # noqa: ANN001
+            return {}
+
+        async def env_without_request(self, *, user_id: str, item_id: str) -> dict[str, str]:
+            self.reached.set()
+            await asyncio.sleep(30)  # the re-run's preparation, longer than any budget here
+            return {}
+
+    spec_a = make_spec(default_user="u", backend=_shared_backend(tmp_path))
+    spec_b = make_spec(default_user="u", backend=_shared_backend(tmp_path))
+    item_id, rid = _item_with_chat(spec_a)
+    _append(spec_a, rid, "user", "hi", 1_000)
+    register_turn_claims(spec_a)  # no app on A's spec in this test; the model is what B reads
+    pod_a = SpecstarTurnClaimStore(spec_a, pod_id="pod-a")
+    pod_a.open(
+        TurnClaim(
+            key=item_id,
+            created_at=1_000,
+            investigation_id=item_id,
+            rid=rid,
+            author="alice",
+            body={"content": "hi"},
+        )
+    )
+    pod_a.release([item_id])  # A let go; B's sweeper will take it
+    seam = _SlowSeam()
+    runner_b = _Runner("B's answer")
+    b = TestClient(
+        create_app(
+            spec=spec_b,
+            sandbox=MockSandbox(),
+            filestore=MemoryFileStore(),
+            runner=runner_b,
+            run_consumers=False,
+            turn_reclaim_interval=timedelta(seconds=0.1),
+            shutdown_budget=timedelta(seconds=0.3),
+            request_env=seam,
+        )
+    )
+    with b:
+        assert seam.reached.wait(5), "B's sweeper never started the re-run"
+        (row,) = SpecstarTurnClaimStore(spec_b, pod_id="x").list_open()
+        assert not row.claim.released  # B holds it, mid-preparation
+    # B's lifespan shutdown ran: the sweeper cancelled, then the drain.
+    (row,) = SpecstarTurnClaimStore(spec_b, pod_id="x").list_open()
+    assert row.claim.released, "the preparing re-run was not handed over"
+    assert runner_b.runs == 0
+    assert _thread(spec_b, rid) == [("user", "hi")]
 
 
 def test_a_pods_shutdown_hands_over_the_turn_it_could_not_finish(tmp_path):

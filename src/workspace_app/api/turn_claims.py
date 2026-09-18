@@ -36,6 +36,7 @@ from msgspec import Struct
 from msgspec.structs import replace
 from specstar import SpecStar
 from specstar.types import (
+    PreconditionFailedError,
     ResourceIDNotFoundError,
     ResourceIsDeletedError,
     RevisionStatus,
@@ -100,14 +101,22 @@ class ITurnClaimStore(abc.ABC):
     def release(self, keys: Collection[str]) -> None:
         """Let go of every open claim THIS pod holds on `keys` — a handover,
         not an end. One listing for the whole list (plus a write per claim
-        released): a drain calls it once.
+        released): a drain calls it once per engine with unfinished work.
         A claim a peer already took on one of those keys is the peer's. A
         release that lands LATE — after the drain stopped waiting for it and
-        cancelled — is harmless in every case (round 3 enumerated them): a
-        copy that persisted has finished its claim (the row is gone, the
-        write is a no-op); one whose persist failed, or a queued turn never
-        started, is thereby handed to a peer, which is what was wanted; one
-        a peer took meanwhile fails the CAS. So there is no deadline on it."""
+        cancelled — loses or duplicates no answer (round 3 enumerated the end
+        states, round 4 the interleavings): a copy that persisted has
+        finished its claim (the row is gone, the write is a no-op); one whose
+        persist failed, or a queued turn never started, is thereby handed to
+        a peer, which is what was wanted; one a peer took meanwhile fails the
+        CAS. Two windows, both inside the cost the reclaimer already accepts:
+        a release landing between a copy's `is_mine` read and its `finish`,
+        with a peer's tick inside those few ms, costs that peer one wasted
+        re-run (the copy's own reply stands); and a copy whose reply persisted
+        but whose `finish` was REFUSED keeps its row, so a late release hands
+        it to a peer now rather than after the stale window — the duplicate
+        answer that shape produces either way. So there is no deadline on
+        it."""
 
     @abc.abstractmethod
     def list_open(self) -> list[ClaimRow]:
@@ -164,13 +173,17 @@ class SpecstarTurnClaimStore(ITurnClaimStore):
             # A CAS on the etag the listing read: a peer's `take` that landed
             # in between must not be written over with this pod as owner
             # (the taker would then drop its answer as "not mine").
-            with contextlib.suppress(Exception):
+            try:
                 self._rm().modify(
                     row.id,
                     replace(claim, released=True),
                     status=RevisionStatus.draft,
                     expected_etag=row.etag,
                 )
+            except PreconditionFailedError:
+                continue  # a peer took it meanwhile: theirs
+            except Exception:  # noqa: BLE001 — a handover that fails leaves the old behaviour, said so
+                logger.warning("turn-claims: could not release %s", row.id, exc_info=True)
 
     def list_open(self) -> list[ClaimRow]:
         out: list[ClaimRow] = []
