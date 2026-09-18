@@ -210,6 +210,46 @@ export function ItemChatShell({
 
   const active = chats.find((c) => c.chat_id === activeChatId) ?? null;
 
+  // #343: launch a workflow IN this chat (takeover), offered when the active chat
+  // has no ACTIVE run — a free chat, or one whose previous run is terminal. It is
+  // offered in the bar, on the same line as "+ New", rather than on a row of its
+  // own beneath it: that row cost the message area a line for a control the bar
+  // had room for. The two stay two controls — "+ New" runs a workflow in a NEW
+  // chat, this runs one in THIS chat — they only share the line.
+  //
+  // `useRun` is the same query the panel polls for its gate and progress, so
+  // reading it here is a cache hit, not a second request.
+  const activeRun = useRun(slug, itemId, active?.run_id ?? undefined);
+  const runActive =
+    !!active?.run_id &&
+    (activeRun.data?.status === "pending" ||
+      activeRun.data?.status === "running" ||
+      activeRun.data?.status === "awaiting_human");
+  const canLaunchHere = active != null && !runActive && workflows.length > 0;
+  // The chat is captured when the workflow is PICKED, not read when the dialog
+  // is confirmed. The dialog used to live in the per-chat panel, keyed by chat,
+  // so switching chats unmounted it; in the shell it would have survived a
+  // switch and started the run in whichever chat was active by then. Pinning
+  // the chat here, and dropping the dialog when the active chat moves away from
+  // it (below), gives back what the key used to guarantee.
+  const [pendingLaunchHere, setPendingLaunchHere] = useState<{
+    workflowId: string;
+    chatId: string;
+  } | null>(null);
+  useEffect(() => {
+    if (pendingLaunchHere && pendingLaunchHere.chatId !== activeChatId) setPendingLaunchHere(null);
+  }, [activeChatId, pendingLaunchHere]);
+  const launchHere = async () => {
+    if (pendingLaunchHere == null) return;
+    const { workflowId, chatId } = pendingLaunchHere;
+    setPendingLaunchHere(null);
+    await workflowApi.startRun(slug, itemId, workflowId, chatId);
+    // The chat's run_id now points at the new run — refetch the list + thread so
+    // the progress bar / run polling pick it up in place.
+    void qc.invalidateQueries({ queryKey: qk.itemChats(slug, itemId) });
+    void qc.invalidateQueries({ queryKey: qk.itemChat(slug, itemId, chatId) });
+  };
+
   // #200: the switcher leans single-chat — hidden until a second chat exists,
   // unless the App opts into an always-visible switcher (Topic Hub). The bar as a
   // whole renders only when it would carry something: the switcher, the workflow
@@ -232,6 +272,17 @@ export function ItemChatShell({
           data-testid="item-chat-shell__bar"
           style={{
             display: "flex",
+            // Wrap rather than clip. With the run-in-this-chat launcher on
+            // this line the bar is 379px of content at a 390px viewport, and
+            // an unwrapped row cut the collections button off at the edge.
+            // Measured: without wrap, scrollWidth 379 vs clientWidth 350.
+            //
+            // Wrapping alone was not enough: `.chat-switcher` had a zero flex
+            // basis, so it absorbed the launcher's width instead of forcing a
+            // wrap — at 390px the switcher was 22px wide with no title, the
+            // #456 disease the header identity block already had. It has a
+            // real basis now (`topic-hub.css`), so the row breaks first.
+            flexWrap: "wrap",
             gap: 8,
             alignItems: "center",
             flex: "0 0 auto",
@@ -248,9 +299,21 @@ export function ItemChatShell({
             />
           )}
           <NewItemPicker workflows={workflows} onFreeChat={onFreeChat} onWorkflow={onWorkflow} />
-          <div style={{ flex: 1 }} />
+          {canLaunchHere && active && (
+            <WorkflowLaunchMenu
+              workflows={workflows}
+              onPick={(workflowId) => setPendingLaunchHere({ workflowId, chatId: active.chat_id })}
+            />
+          )}
           {showCollections && (
-            <CollectionsButton count={collectionCount} onClick={() => setPickerOpen(true)} />
+            // `margin-left: auto`, not a spacer element. A spacer is an item:
+            // on a wrapped line it still costs a `gap`, and at the workspace's
+            // 280px column that gap was what tipped the bar from two rows to
+            // three (en). The margin right-aligns the button on whatever line
+            // it lands on and costs nothing when it wraps.
+            <span style={{ marginLeft: "auto" }}>
+              <CollectionsButton count={collectionCount} onClick={() => setPickerOpen(true)} />
+            </span>
           )}
         </div>
       )}
@@ -274,6 +337,15 @@ export function ItemChatShell({
           workflowId={pendingWorkflow}
           onConfirm={confirmWorkflow}
           onClose={() => setPendingWorkflow(null)}
+        />
+      )}
+      {pendingLaunchHere != null && (
+        <WorkflowLaunchDialog
+          slug={slug}
+          itemId={itemId}
+          workflowId={pendingLaunchHere.workflowId}
+          onConfirm={launchHere}
+          onClose={() => setPendingLaunchHere(null)}
         />
       )}
       {launchFailed && (
@@ -395,28 +467,9 @@ function ItemChatPanel({
   // panel (run.data is undefined, the panel renders nothing).
   const declared = workflows.find((w) => w.id === run.data?.workflow_id)?.phases ?? [];
 
-  // #343: launch a workflow IN this chat (takeover), offered when the chat has no
-  // ACTIVE run — a free chat, or one whose previous run is terminal (relaunch in the
-  // same thread). The run reuses this chat, so its agent nodes inherit the prepared
-  // history; the returned chat_id is this same chat.
-  const qc = useQueryClient();
-  const [pendingLaunch, setPendingLaunch] = useState<string | null>(null);
-  const runActive =
-    !!chat.run_id &&
-    (run.data?.status === "pending" ||
-      run.data?.status === "running" ||
-      run.data?.status === "awaiting_human");
-  const canLaunch = !runActive && workflows.length > 0;
-  const launchHere = async () => {
-    if (pendingLaunch == null) return;
-    const workflowId = pendingLaunch;
-    setPendingLaunch(null);
-    await workflowApi.startRun(slug, itemId, workflowId, chat.chat_id);
-    // The chat's run_id now points at the new run — refetch the list + thread so the
-    // progress bar / run polling pick it up in place.
-    void qc.invalidateQueries({ queryKey: qk.itemChats(slug, itemId) });
-    void qc.invalidateQueries({ queryKey: qk.itemChat(slug, itemId, chat.chat_id) });
-  };
+  // #343's run-in-this-chat launcher used to be drawn here, on a row of its own
+  // above the feed. It lives in the shell's bar now (`canLaunchHere`), on the
+  // same line as "+ New" — the row here cost the message area a line.
 
   return (
     <div
@@ -424,24 +477,6 @@ function ItemChatPanel({
       data-testid="item-chat-panel"
       style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}
     >
-      {canLaunch && (
-        <div
-          className="item-chat-panel__launch"
-          data-testid="item-chat-panel__launch"
-          style={{ flex: "0 0 auto", padding: "4px 8px" }}
-        >
-          <WorkflowLaunchMenu workflows={workflows} onPick={setPendingLaunch} />
-        </div>
-      )}
-      {pendingLaunch != null && (
-        <WorkflowLaunchDialog
-          slug={slug}
-          itemId={itemId}
-          workflowId={pendingLaunch}
-          onConfirm={launchHere}
-          onClose={() => setPendingLaunch(null)}
-        />
-      )}
       {/* #331: the run's progress (collapsible bar → #283 detail) sits above the
           decision/steer cards and the feed (I1 甲) — the structural overview the
           retired WorkflowRunPanel used to give, restored for the multi-chat shell. */}

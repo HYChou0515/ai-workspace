@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 
 import msgspec
 
+from .filestore.blob_gc import BlobGcCoordinator
 from .kb.card_drafter import LlmCardDrafter, NullCardDrafter
 from .kb.card_gen_coordinator import CardGenCoordinator
 from .kb.chunker import FixedTokenChunker
@@ -38,8 +39,10 @@ if TYPE_CHECKING:
 
     from .agent.config_catalog import AgentConfigCatalog
     from .api.runner import AgentRunner
+    from .filestore.protocol import FileStore
     from .kb.embedder import Embedder
     from .kb.llm import ILlm
+    from .monitor import IMonitor
     from .resources import AgentConfig
 
 # The (model, reasoning_level) -> ILlm seam the sanity battery drives. Same
@@ -68,6 +71,9 @@ class CoordinatorBundle:
     # #715: archive imports. Always built — it needs no LLM, only the ingestor and
     # the index queue it hands each restored document to.
     kb_import: ImportCoordinator
+    # #245: the blob-GC reconcile. Always built — no LLM; the API's sweeper asks
+    # for it once per window and whoever consumes `blob-gc` runs it.
+    blob_gc: BlobGcCoordinator
 
 
 def build_ingestor(
@@ -166,6 +172,13 @@ def build_coordinators(
     wiki_model: str = "",
     wiki_llm_base_url: str = "",
     wiki_llm_api_key: str = "",
+    # #245: blob-GC grace periods (filestore.gc_t1 / gc_t2) and the telemetry
+    # sinks — the reconcile's `blob_gc` event and the `ws_census` snapshot the
+    # consuming process records (the API's sweeper used to; now the job does).
+    gc_t1: str = "1h",
+    gc_t2: str = "24h",
+    monitor: IMonitor | None = None,
+    filestore: FileStore | None = None,
 ) -> CoordinatorBundle:
     """Construct the background job coordinators and wire the index→wiki→quality
     chain. The returned coordinators are *not* yet consuming — the caller (API
@@ -304,12 +317,25 @@ def build_coordinators(
             message_queue_factory=message_queue_factory,
         )
         logger.info("coordinators: metric-extraction (graph) coordinator wired")
-    logger.info("coordinators: built wiki/index/card_gen/kb_import coordinators")
+    # #245: the blob-GC reconcile is a job because its live-set rescan holds every
+    # ResourceMeta of every blob-capable model at once and streams every revision
+    # — it OOMed the API pod that ran it in-process. The API only asks (lifecycle
+    # `blob_gc_sweeper`).
+    blob_gc = BlobGcCoordinator(
+        spec,
+        t1=gc_t1,
+        t2=gc_t2,
+        monitor=monitor,
+        filestore=filestore,
+        message_queue_factory=message_queue_factory,
+    )
+    logger.info("coordinators: built wiki/index/card_gen/kb_import/blob_gc coordinators")
     return CoordinatorBundle(
         wiki=wiki,
         index=index,
         card_gen=card_gen,
         kb_import=kb_import,
+        blob_gc=blob_gc,
         quality=quality,
         sanity=sanity,
         eval=eval_coordinator,

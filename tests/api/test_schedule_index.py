@@ -581,8 +581,9 @@ def test_a_page_saving_its_schedules_through_the_file_route_is_indexed(
     docstring named that route from the first commit — and every test in it went
     through `files.write` instead, which is why the miss survived.
     """
-    # Inside the lifespan: the index model is registered there (post-`spec.apply`,
-    # so specstar never emits bare CRUD routes for platform bookkeeping), and a
+    # Inside the lifespan: the index model is registered by `create_app`
+    # (post-`spec.apply`, so specstar never emits bare CRUD routes for platform
+    # bookkeeping), but the sweepers only run under a started lifespan, and a
     # client that never starts it would measure a world that does not ship.
     with harness.client:
         r = harness.client.put(

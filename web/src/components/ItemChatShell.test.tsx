@@ -565,3 +565,99 @@ describe("ItemChatShell", () => {
     expect(screen.queryByTestId("wf-progress")).toBeNull();
   });
 });
+
+describe("run-in-this-chat lives in the bar", () => {
+  // The launcher used to sit on a row of its own beneath the bar — one more
+  // row taken from the message area for a control the bar had room for. It is
+  // in the bar now, after "+ New": the two are different asks (a new chat vs.
+  // this one) and stay two controls, but they share the line.
+  it("offers it in the bar, not on a row of its own", async () => {
+    stubChatApi([summary({ chat_id: "conversation:c1", is_default: true })]);
+    render();
+    const btn = await screen.findByTestId("launch-in-chat-button");
+    expect(btn.closest('[data-testid="item-chat-shell__bar"]')).not.toBeNull();
+    expect(screen.queryByTestId("item-chat-panel__launch")).toBeNull();
+  });
+
+  it("does not offer it while the active chat's run is still going", async () => {
+    // The rule the launcher always had, now checked where it is drawn.
+    stubChatApi([summary({ chat_id: "conversation:wf1", run_id: "r1", is_default: false, title: "Run" })]);
+    vi.spyOn(workflowApi, "getRun").mockResolvedValue({
+      run_id: "r1",
+      item_id: "it",
+      captured_user: "u",
+      status: "running",
+      current_phase: "digest",
+      phases: [],
+      steps: [],
+      failures: [],
+      started: 1,
+      ended: null,
+      result: null,
+      pending_decision: null,
+    } as WorkflowRunDTO);
+    render();
+    await screen.findByTestId("item-chat-shell__bar");
+    await waitFor(() => expect(workflowApi.getRun).toHaveBeenCalled());
+    expect(screen.queryByTestId("launch-in-chat-button")).toBeNull();
+  });
+
+  it("starts the run in THIS chat after the pre-flight dialog", async () => {
+    stubChatApi([summary({ chat_id: "conversation:c1", is_default: true })]);
+    vi.spyOn(workflowApi, "previewRun").mockResolvedValue({
+      workflow_id: "memory",
+      title: "Digest uploads into memory",
+      description: "",
+      phases: [{ id: "digest", title: "Digest" }],
+      summary: "",
+      checks: [],
+      can_run: true,
+      has_preflight: true,
+    });
+    const start = vi
+      .spyOn(workflowApi, "startRun")
+      .mockResolvedValue({ run_id: "r9", item_id: "it", chat_id: "conversation:c1" });
+    render();
+    fireEvent.click(await screen.findByTestId("launch-in-chat-button"));
+    fireEvent.click(await screen.findByTestId("launch-in-chat-workflow-memory"));
+    await screen.findByTestId("wf-launch-dialog");
+    fireEvent.click(await screen.findByTestId("wf-launch-run"));
+    await waitFor(() =>
+      expect(start).toHaveBeenCalledWith("topic-hub", "it", "memory", "conversation:c1"),
+    );
+  });
+  it("closes the launch dialog when the active chat changes, and never starts in the other chat", async () => {
+    // The dialog used to live in the per-chat panel under `key={chat_id}`, so a
+    // switch unmounted it and nothing could launch. In the shell it survived
+    // the switch, and confirming started the run in whichever chat was active
+    // BY THEN. The chat is captured at pick time and the dialog leaves with it.
+    stubChatApi([
+      summary({ chat_id: "conversation:c1", is_default: true, title: "A" }),
+      summary({ chat_id: "conversation:c2", is_default: false, title: "B" }),
+    ]);
+    vi.spyOn(workflowApi, "previewRun").mockResolvedValue({
+      workflow_id: "memory",
+      title: "Digest uploads into memory",
+      description: "",
+      phases: [{ id: "digest", title: "Digest" }],
+      summary: "",
+      checks: [],
+      can_run: true,
+      has_preflight: true,
+    });
+    const start = vi
+      .spyOn(workflowApi, "startRun")
+      .mockResolvedValue({ run_id: "r9", item_id: "it", chat_id: "conversation:c1" });
+    render();
+    fireEvent.click(await screen.findByTestId("launch-in-chat-button"));
+    fireEvent.click(await screen.findByTestId("launch-in-chat-workflow-memory"));
+    await screen.findByTestId("wf-launch-dialog");
+
+    // switch to B underneath the dialog
+    fireEvent.click(screen.getByTestId("chat-switcher-trigger"));
+    fireEvent.click(await screen.findByTestId("chat-switcher-item-conversation:c2"));
+
+    await waitFor(() => expect(screen.queryByTestId("wf-launch-dialog")).toBeNull());
+    expect(start).not.toHaveBeenCalled();
+  });
+});

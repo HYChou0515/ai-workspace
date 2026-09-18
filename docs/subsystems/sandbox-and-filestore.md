@@ -35,7 +35,7 @@
 | `src/workspace_app/filestore/protocol.py` | `FileStore` Protocol — 持久的 per-workspace 虛擬根。方法：`write`/`write_from_path`/`read`/`read_to_file`/`ls`/`exists`/`delete`/`mkdir`/`rmdir`/`is_dir`/`listdir`。一等公民的誠實目錄（無 `.keep` hack）；`dir_ancestors` helper；`FileNotFound`/`FileExists` 例外。`workspace_usage`/`file_size` 標為選用的 duck-typed 能力，非核心。 |
 | `src/workspace_app/filestore/specstar_impl.py` | `SpecstarFileStore` — 生產級 FileStore（#219）：每個檔是一個 `WorkspaceFile` specstar resource，內容是 `Binary` blob（位元組 offload 到 blob store），所以一次寫入是 O(一個檔)。目錄住在小的 per-workspace `_WorkspaceDirs` record。slash-free id 由 `_fid`/`_wsid` 產（U+2215 + percent-encode）。`content.size` 索引成 `content_size` 供 #245 usage `Sum` 聚合；`path` 也索引（#667/#668），`ls(prefix=…)` 靠它把 prefix 下推成 DB 述詞——這也是就緒閘門 `prefix_index_ready()` 存在的原因（見下方 note）；冪等自註冊 model。 |
 | `src/workspace_app/filestore/memory.py` | `MemoryFileStore` — 無 specstar 的記憶體內預設，`__main__` 用它免得漏出 ~19 條 `/-workspacefiles/*` CRUD 路由；重啟即清空。複製誠實目錄 + usage 語意供 dev/test。 |
-| `src/workspace_app/filestore/blob_gc.py` | Blob GC 排程（#245/#370）：包 specstar v0.11.10 的 `SpecStar.gc(mode="reconcile")`。一列的 `_GcLease` CAS lease（`register_gc_lease`/`try_claim_gc`/`run_blob_gc`）讓每個 window 只有一個 pod 跑會刪東西的 reconcile，其餘 no-op。 |
+| `src/workspace_app/filestore/blob_gc.py` | Blob GC 是 job（#245/#370）：`BlobGcCoordinator` 包 specstar 的 `SpecStar.gc(mode="reconcile")` 成 `BlobGcJob`。API 的 `blob_gc_sweeper` 每個 window（`ScanLease`）`enqueue_reconcile()` 一次；跑 pass 的是消費 `blob-gc` JobType 的那個 process（worker，或 `run_consumers` 開著的 API 自己）。每次 ask 帶上 asker 的 model 清單，runner 少任何一個就拒跑（`_check_registry`）。 |
 | `src/workspace_app/filestore/migrate.py` | 一次性遷移（#219）：把舊的 inline-bytes `_WorkspaceFiles` record 改寫成 per-file `WorkspaceFile` Binary + `_WorkspaceDirs`；冪等。每次部署在新 store 服務前跑一次。 |
 
 ## 介面與接縫
@@ -67,7 +67,7 @@ flowchart LR
   SB --- M[MockSandbox]
   FS --- SP[SpecstarFileStore<br/>WorkspaceFile Binary blobs]
   FS --- ME[MemoryFileStore]
-  SP --- GC[blob_gc: CAS lease → reconcile]
+  SP --- GC[blob_gc: ScanLease → BlobGcJob → reconcile]
 ```
 
 **冷啟動。** 一個 item 的檔案只活在 FileStore 快照裡。純讀/寫/`ls`/`mkdir` 直接打快照、永不喚醒 sandbox（`peek_handle` 回 `None`）。
@@ -78,7 +78,7 @@ flowchart LR
 
 **Mirror（節流 sweep / turn-end / refresh / idle-kill / close）。** `SandboxSync.mirror` walk 活 sandbox，對每個非 ignore 且 `version` 與上次不同的 `FileEntry`，走 `Sandbox.download_to_file` → staging temp → `FileStore.write_from_path`；任何先前看過、現在 sandbox 已沒有的 path 從快照刪掉。在 `SpecstarFileStore` 下每次寫入落成一個 `WorkspaceFile` Binary（位元組 chunk 進 blob store）。idle-kill/close 做最後一次 mirror 後 `Sandbox.kill`，把真實來源翻回快照。死的 HTTP pod 浮現為 `SandboxNotFound`，下一次 exec 就 cold-restore。
 
-**Blob GC（獨立）。** `blob_gc.run_blob_gc` 週期性 CAS 搶 lease 並跑 specstar 的 reconcile，隔離+刪掉沒有任何活 `WorkspaceFile`/KB record 引用的 blob。
+**Blob GC（獨立）。** API 的 `blob_gc_sweeper` 每個 window 拿 `ScanLease` 後 `BlobGcCoordinator.enqueue_reconcile()`；消費 `blob-gc` job 的 process 跑 specstar 的 reconcile，隔離+刪掉沒有任何活 `WorkspaceFile`/KB record 引用的 blob。
 
 ## 關鍵不變式與眉角
 
@@ -113,7 +113,7 @@ flowchart LR
     `_fid`/`_wsid` 把 `workspace_id` percent-encode、把 path 的 `/` 換成 U+2215。**永不手刻或解析這些 id。**
 
 !!! warning "blob_gc.reconcile 會刪除且是全掃描"
-    每個 window 只准一個 pod 透過 `_GcLease` CAS lease 跑它；且**只能在所有引用 blob 的 model 都註冊的 spec 上跑**（完整 live set），絕不能在 model 不齊的瘦 pod 上跑——否則會算出不完整的 live set 而誤刪被引用的 blob。
+    每個 window 只有一顆 pod 會 ask（`ScanLease`），coordinator 對在途的 ask coalesce、單一 partition 序列化；且**只能在註冊了 asker 全部 model 的 process 上跑**（完整 live set），否則會算出不完整的 live set 而誤刪被引用的 blob——所以 ask 帶 model 清單、runner 少一個就拒跑，而 `blob-gc` worker 用 API 自己的組裝（`__main__.build_app`）開機。
 
 !!! note "content_size 聚合對未遷移列會少算"
     寫在索引之前的列其 `content_size` sum 成 `None`→0，直到操作員跑 `migrate/execute`；別把 0 當未遷移 workspace 的權威用量。
@@ -138,7 +138,7 @@ flowchart LR
 | `HttpSandbox` 把 `(pod_url, remote_id)` 編進不透明 handle 直連擁有的 pod；死 pod 映成 `SandboxNotFound` | app 端維持完全 stateless/HPA-safe，無共享路由 store；host-pod 死亡看起來就像冷 sandbox，registry 直接從快照重建 | `docs/plan-http-sandbox.md`（Routing, Error model） |
 | `DockerSandbox` 棄用，改用 `sandbox.kind: http`（cgroup 下的 `IsolatedProcessSandbox`） | Docker-per-sandbox 早於 warm-host-pod 模型，且其 image 與 python-stack 工具 bundle 不同步 | `src/workspace_app/sandbox/docker.py` 模組 docstring（#252） |
 | 誠實目錄（真 mkdir/rmdir、空目錄持久）、無 `.keep` sentinel、刪檔留父目錄 | 檔案樹語意必須挺過 round-trip，空資料夾是合法狀態；rmdir 是唯一的子樹移除器 | `src/workspace_app/filestore/protocol.py` 目錄註解 + plan-sandbox-sot.md Q4/Q6 |
-| Blob GC 鎖在一列 CAS lease 後，且只在完整 model 的 spec 上跑 | reconcile 是會刪除的全掃描——每個 pod 都跑會 N× 工作量並 race 刪除，而 model 不齊的 pod 會算出不完整 live set 而誤刪被引用的 blob | `src/workspace_app/filestore/blob_gc.py` 模組 docstring（#245/#370） |
+| Blob GC 是 job：API 每個 window ask 一次，runner 要持有 asker 全部 model | reconcile 是會刪除的全掃描（一次持有單一 model 全部 ResourceMeta）——在 API pod 上跑把 pod OOM 掉；每個 pod 都跑會 N× 工作量並 race 刪除；model 不齊的 process 會算出不完整 live set 而誤刪被引用的 blob | `src/workspace_app/filestore/blob_gc.py` 模組 docstring（#245/#370） |
 
 ## 與其他子系統的關係
 
@@ -147,7 +147,7 @@ flowchart LR
 - **[工具套件與 Sandbox Host](tooling-and-sandbox-host.md)** — `HttpSandbox` 是 in-process 客戶端；host pod、`IsolatedProcessSandbox`、setpriv/cgroup 隔離、`/.tools` python-stack provisioning 與線上契約（[sandbox-host.md](../sandbox-host.md)、[sandbox-host-wire.md](../sandbox-host-wire.md)）都住那裡。`_exec_argv` 是連接兩者的 override 接縫。
 - **[資料層（specstar）](data-layer.md)** — `SpecstarFileStore` 存 `WorkspaceFile`/`_WorkspaceDirs` resource + Binary blob；`blob_gc` 驅動 `SpecStar.gc`；兩者冪等自註冊 model。與 KB（`SourceDoc`）和 wiki（`WikiPage`）共用同一 blob store。
 - **[啟動與組裝根](boot-and-config.md)** — `factories.get_sandbox` / config `SandboxSettings` 選後端（`local`/`http`/`docker`/`mock`）注入 `create_app`；`SandboxSpec.image`/`env`/`exposed_ports` 從 config 流入；`cpu_cores`/`memory_bytes`/`pids_max` 則由 `quota.limits.resolve_discovered_apps` 從 app.json 的 `resources` ◇ `resources.per_app` ◇ `sandbox.isolation.*` 解析後，經 `create_app(app_resources=…)` 流入。
-- **[背景工作與擴展](jobs-and-scaling.md)** — mirror sweep（`mirror_warm`）、idle-kill 與 `blob_gc.run_blob_gc` 的排程器住那裡（本 pass 未讀其呼叫點）。
+- **[背景工作與擴展](jobs-and-scaling.md)** — mirror sweep（`mirror_warm`）、idle-kill 與 blob GC 的 ask（`blob_gc_sweeper`）住那裡。
 - **[知識庫:攝取與索引](kb-ingest-index.md)** — `content_size` 索引 + `Schema(v2).step(None,...)` backfill 鏡像 `SourceDoc` 模式；操作員跑 `POST /{model}/migrate/execute` 為舊列重萃 `indexed_data`。
 
 ## 原始碼錨點
@@ -162,6 +162,6 @@ flowchart LR
 - `src/workspace_app/sandbox/local_process.py` — `_JAIL_BOOTSTRAP`、`_jail_argv`、`_userns_supported`、`exec`（`_pump`/`_watchdog`/`_terminate` 雙逾時）、`_exec_argv`、`_kill_process_group`。
 - `src/workspace_app/sandbox/http_client.py` — `_encode_handle`/`_decode_handle`、`exec`（NDJSON）、`_request` → `SandboxNotFound` 映射。
 - `src/workspace_app/filestore/specstar_impl.py` — `WorkspaceFile`、`_WorkspaceDirs`、`_fid`/`_wsid`、`_write_from_path_sync`（blob chunking，`_CHUNK=8MB`）、`_workspace_usage_sync`（Sum/content_size）、`_rmdir_sync`。
-- `src/workspace_app/filestore/blob_gc.py` — `_GcLease`、`try_claim_gc`（CAS `expected_etag`）、`run_blob_gc`。
+- `src/workspace_app/filestore/blob_gc.py` — `BlobGcJob`、`BlobGcCoordinator`（`enqueue_reconcile` / `_check_registry` / `_reconcile`）。
 - `src/workspace_app/filestore/migrate.py` — `migrate_inline_to_binary`、legacy `_WorkspaceFiles`。
 - `docs/plan-sandbox-sot.md`（sandbox-as-SoT 重設計）、`docs/plan-http-sandbox.md`（#60 線上/隔離/路由）。

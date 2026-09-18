@@ -419,7 +419,7 @@ class ITriggerStore(abc.ABC):
     """The durable state a scheduled trigger needs across pods (#429 P7): the last window
     it fired for, and an atomic per-``(trigger_id, window)`` claim that elects a single pod
     to fire it. The specstar-backed impl makes ``try_claim`` a CAS create (only the first
-    caller across all pods wins), the same shape as the blob-GC lease / sandbox address."""
+    caller across all pods wins), the same shape as the sandbox address / activity rows."""
 
     @abc.abstractmethod
     def last_window(self, trigger_id: str) -> str:

@@ -179,7 +179,7 @@ server:
   `{root}/{item_id}/root` 這個固定路徑讓每個 replica 解析到同一份活檔（#345）；指到本機路徑就會資料分裂。
 - **worker pod**：`run_consumers: false` 後，各 JobType 各跑一個 worker（各自 k8s HPA 擴縮）：
   ```bash
-  python -m workspace_app.worker index      # 也可 wiki / card-gen / sanity
+  python -m workspace_app.worker index      # 也可 wiki / card-gen / kb-import / sanity / eval / graph / blob-gc
   ```
   參考 `kubernetes/base/workers.yaml`。**前提是佇列後端要共享**（`simple` 騎共享 specstar，或 `rabbitmq`）。
 - sandbox-host 是**獨立專案/映像**，用 `SANDBOX_HOST_*` 環境變數設定，不吃這份 config——見

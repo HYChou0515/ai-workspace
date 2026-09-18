@@ -1,139 +1,276 @@
-"""Blob GC scheduling (#245).
+"""Blob GC as a job (#245; a coordinator since the `won lease` OOM).
 
-specstar v0.11.10 ships the ref-count blob GC (`SpecStar.gc`, issue #370): its
+specstar ships the ref-count blob GC (`SpecStar.gc`, issue #370): its
 ``reconcile`` pass rescans every model's revisions for the live ``file_id`` set,
 quarantines newly-orphaned blobs (``t1`` grace), restores any still referenced,
 and permanently deletes quarantined blobs past ``t2``. It's explicit + user
 scheduled — the library never runs it on a background thread.
 
-This module schedules it. ``reconcile`` is a full scan that *deletes*, so running
-it on every pod would N× the scan and race the deletes. A one-row **CAS lease**
-lets exactly one pod run it per window; the others no-op. The lease is registered
-by this module (not ``make_spec``) so the memory-default app doesn't emit its
-CRUD routes — same reason ``SpecstarFileStore`` self-registers its models.
+That rescan is `collect_all_referenced_file_ids`: for every model whose type
+can hold a ``Binary``, ``list(self.storage.dump_meta(None))`` materialises
+EVERY ``ResourceMeta`` of the model at once — ``indexed_data`` included, which
+on ``DocChunk`` / ``ClusterMember`` is every row's embedding vectors: the
+Postgres meta store's ``values()`` decodes the ``data`` BYTEA, the full
+``ResourceMeta``, and the 0.12.1 vector strip (``docs/migrations.md`` §6)
+touches only the JSONB column, so ``migrate/execute`` does not shrink this
+figure — then streams each resource's revisions one at a time (the
+bulk pre-fetch, ``dump_resources_bulk``, exists only for the S3 store; disk and
+Postgres return ``None`` and take the per-resource path, several queries each
+on Postgres). Run on an API pod's timer that was the #804 class of failure
+again: the pod's last line was ``blob-gc: won lease``.
 
-GC must run where **all** blob-referencing models are registered (the main app
-spec: KB models via ``make_spec`` + ``WorkspaceFile`` via ``SpecstarFileStore``),
-so the live set is complete; a slim pod with a partial model set must not run it.
+So the reconcile is a **job**. The API's ``blob_gc_sweeper`` is a pure producer
+(one ``ScanLease`` window ⇒ one :meth:`enqueue_reconcile`), and this coordinator
+runs it wherever the ``blob-gc`` JobType is consumed: a worker pod, or the API
+itself in the all-in-one deploy (``run_consumers=True``).
+
+The live set is built from the REGISTERED models only, so the consuming process
+must register every model the asking one does, or the missing models' blobs
+read as orphans and are deleted after ``t2``. "Can hold a Binary" is decided by
+specstar's ``BinaryProcessor``, and it is wider than a declared ``Binary``
+field: any ``list`` / ``dict`` / union / ``Optional`` field gets a runtime
+collector whatever its value type (only an all-scalar struct is skipped), so
+the scanned set is nearly every model, registered all over ``create_app`` —
+not a list a second composition root could keep in step by hand (#804 P4).
+Two guards, neither a sentence: the ``blob-gc`` worker consumes from the API's
+own composition (``workspace_app.__main__.build_app``, never served) so the
+registries are equal by construction, and every ask carries the asker's
+registry so a runner that lacks any of it REFUSES the pass
+(:meth:`BlobGcCoordinator._check_registry`) — a visible GC outage instead of a
+silent loss.
 """
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import datetime as dt
 import logging
 import time
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from msgspec import Struct
-from specstar import SpecStar
-from specstar.types import (
-    DuplicateResourceError,
-    PreconditionFailedError,
-    ResourceIDNotFoundError,
-    RevisionStatus,
-)
+import msgspec
+from specstar import QB, Schema, SpecStar
+from specstar.types import Job, TaskStatus
 
 if TYPE_CHECKING:
     from ..monitor import IMonitor
-
-_LEASE_ID = "blob-gc"
+    from .protocol import FileStore
 
 logger = logging.getLogger(__name__)
 
-
-class _GcLease(Struct):
-    """One-row CAS lease guarding the blob-GC sweep. ``lease_until_ms`` is when
-    the current holder's claim expires (epoch ms); a pod claims by CAS-bumping
-    it past ``now``."""
-
-    name: str
-    lease_until_ms: int = 0
+_ACTIVE = [TaskStatus.PENDING, TaskStatus.PROCESSING]
+_DONE = [TaskStatus.COMPLETED, TaskStatus.FAILED]
+_DRAIN_INTERVAL = 0.02
+# ONE partition: two reconciles must never overlap — each quarantines and
+# deletes against its own view of the live set.
+_PARTITION = "blob-gc"
 
 
-def register_gc_lease(spec: SpecStar) -> None:
-    """Idempotently register the lease model and seed its single row. Safe to
-    call on every pod / multiple instances (suppresses the duplicate)."""
-    with contextlib.suppress(ValueError):
-        spec.add_model(_GcLease)
-    rm = spec.get_resource_manager(_GcLease)
-    with contextlib.suppress(DuplicateResourceError):
-        rm.create(_GcLease(name=_LEASE_ID), resource_id=_LEASE_ID, status=RevisionStatus.draft)
+class BlobGcPayload(msgspec.Struct):
+    kind: str = "reconcile"
+    # The asker's registered model names (sorted). The runner refuses the pass
+    # unless it registers every one of them: the live set comes from the
+    # runner's registry, so a model the asker has and the runner lacks is a
+    # model whose blobs would be quarantined, then deleted — silently. Empty
+    # (a hand-made row) is refused too; the sweeper's ask is the way in.
+    registry: list[str] = []
 
 
-def try_claim_gc(spec: SpecStar, *, now_ms: int, ttl_ms: int) -> bool:
-    """Claim the GC lease for ``ttl_ms`` from ``now_ms``. Returns True for the
-    one pod that wins; False if a live (unexpired) lease is held or a concurrent
-    pod won the CAS. The lease row is seeded by `register_gc_lease`."""
-    rm = spec.get_resource_manager(_GcLease)
-    try:
-        res = rm.get(_LEASE_ID)
-    except ResourceIDNotFoundError:  # pragma: no cover - register_gc_lease seeds it
-        return False
-    lease = res.data
-    assert isinstance(lease, _GcLease)
-    if lease.lease_until_ms > now_ms:
-        logger.debug(
-            "blob-gc: lease held until %d ms (now %d ms), skip", lease.lease_until_ms, now_ms
+class BlobGcJob(Job[BlobGcPayload]):
+    """A queued blob-GC pass. ``partition_key`` is fixed (:data:`_PARTITION`)
+    so passes serialise fleet-wide."""
+
+
+class RegistryMismatch(RuntimeError):
+    """The row is not one this runner may act on: it does not register every
+    model the asker does (running the pass here would delete the missing
+    models' blobs after ``t2``), or the row is off the one partition."""
+
+
+def _utcnow() -> dt.datetime:
+    return dt.datetime.now(dt.UTC)
+
+
+class BlobGcCoordinator:
+    """Queue + run the blob-GC reconcile. ``t1`` / ``t2`` are the grace periods
+    (`filestore.gc_t1` / `gc_t2`); ``monitor`` receives the #407 ``blob_gc``
+    GcStats event and, when a ``filestore`` is wired, the ``ws_census``
+    WorkspaceFile snapshot on the same cadence; ``now`` is the clock seam
+    (deterministic tests + scheduling)."""
+
+    def __init__(
+        self,
+        spec: SpecStar,
+        *,
+        t1: str,
+        t2: str,
+        monitor: IMonitor | None = None,
+        filestore: FileStore | None = None,
+        message_queue_factory: object | None = None,
+        now: Callable[[], dt.datetime] = _utcnow,
+    ) -> None:
+        self._spec = spec
+        self._t1 = t1
+        self._t2 = t2
+        self._monitor = monitor
+        self._filestore = filestore
+        self._now = now
+        if message_queue_factory is None:
+            from specstar.message_queue import SimpleMessageQueueFactory
+
+            message_queue_factory = SimpleMessageQueueFactory()
+        spec.add_model(
+            Schema(BlobGcJob, "v1"),
+            job_handler=self._handle,
+            indexed_fields=["status", "partition_key"],
+            message_queue_factory=message_queue_factory,  # ty: ignore[invalid-argument-type]
         )
-        return False
-    try:
-        rm.modify(
-            _LEASE_ID,
-            _GcLease(name=_LEASE_ID, lease_until_ms=now_ms + ttl_ms),
-            status=RevisionStatus.draft,
-            expected_etag=res.info.etag,  # ty: ignore[unknown-argument]
+        self._job_rm = spec.get_resource_manager(BlobGcJob)
+        self._consuming = False
+
+    # ── producer (the API's sweeper tick) ────────────────────────────
+    def enqueue_reconcile(self) -> None:
+        """Ask for one reconcile pass. Synchronous (a pure specstar enqueue) so
+        the API's timer thread can call it directly. Coalesces onto a pass
+        already queued/running (the fleet-wide "one asker per window" is the
+        API's ``ScanLease``; this covers an ask that overlaps a pass in flight).
+        No retry budget: the next window asks again, which is the cadence the
+        in-process sweep this replaced retried at — the queue's default (3)
+        would run a failing reconcile four times back to back on the worker."""
+        if self._job_rm.count_resources(QB["status"].in_(_ACTIVE).build()) > 0:
+            return
+        self._job_rm.create(
+            BlobGcJob(
+                payload=BlobGcPayload(
+                    kind="reconcile", registry=sorted(self._spec.resource_managers)
+                ),
+                partition_key=_PARTITION,
+                max_retries=0,
+            )
         )
-        logger.info("blob-gc: won lease at now=%d ms, ttl=%d ms", now_ms, ttl_ms)
-        return True
-    except PreconditionFailedError:
-        logger.debug("blob-gc: lost lease CAS race, another pod is holder")
-        return False
 
+    # ── consume ──────────────────────────────────────────────────────
+    def _handle(self, job) -> None:  # job: Resource[BlobGcJob]
+        payload = job.data.payload
+        assert isinstance(payload, BlobGcPayload)
+        if payload.kind != "reconcile":
+            logger.warning("blob-gc: unknown job kind %r", payload.kind)
+            return
+        # Prune BEFORE the pass, whatever the pass does: a reconcile that fails
+        # every window would otherwise leave one FAILED row per window for as
+        # long as the failure lasts.
+        self._prune_finished()
+        self._check_partition(job.data.partition_key)
+        self._check_registry(payload.registry)
+        self._reconcile()
 
-def run_blob_gc(
-    spec: SpecStar,
-    *,
-    t1: str,
-    t2: str,
-    ttl_ms: int,
-    now: dt.datetime | None = None,
-    monitor: IMonitor | None = None,
-):
-    """Run one ``reconcile`` pass IFF this pod wins the lease, else a no-op
-    (returns None). Returns specstar's ``GcStats`` on a run. ``now`` is
-    injectable for deterministic tests + scheduling.
+    def _check_partition(self, partition_key: str | None) -> None:
+        """Only :data:`_PARTITION` serialises passes; the model's auto-CRUD
+        route can create a row under any key (or none), and two keys are two
+        passes that may overlap. Refused like a claimless row."""
+        if partition_key != _PARTITION:
+            logger.error(
+                "blob-gc: refusing the pass — the row is on partition %r, not %r; only the "
+                "sweeper's ask serialises passes",
+                partition_key,
+                _PARTITION,
+            )
+            raise RegistryMismatch(f"partition {partition_key!r}")
 
-    #407: when a ``monitor`` is wired, the pod that actually runs the reconcile
-    emits one ``blob_gc`` telemetry event (GcStats + wall-clock) — the global
-    GC-cost / blob-cardinality signal. A pod that loses the lease records
-    nothing (it did no work)."""
-    if now is None:
-        now = dt.datetime.now(dt.UTC)
-    now_ms = int(now.timestamp() * 1000)
-    if not try_claim_gc(spec, now_ms=now_ms, ttl_ms=ttl_ms):
-        return None
-    started = time.monotonic()
-    stats = spec.gc(mode="reconcile", t1=t1, t2=t2, now=now)
-    logger.info(
-        "blob-gc: reconcile complete quarantined=%d restored=%d deleted=%d live=%d",
-        stats.quarantined,
-        stats.restored,
-        stats.deleted,
-        stats.live,
-    )
-    if monitor is not None:
-        monitor.record(
-            {
-                "kind": "blob_gc",
-                "t": int(time.time() * 1000),  # wall-clock, for the summary's time window
-                "mode": stats.mode,
-                "quarantined": stats.quarantined,
-                "restored": stats.restored,
-                "deleted": stats.deleted,
-                "live": stats.live,
-                "scan_complete": stats.scan_complete,
-                "elapsed_ms": int((time.monotonic() - started) * 1000),
-            }
+    def _check_registry(self, claimed: list[str]) -> None:
+        """Refuse the pass unless this process registers every model the asker
+        did (see :class:`BlobGcPayload`). Raising fails the job — the queue
+        logs it and the row reads FAILED — so a partial-registry consumer is a
+        visible outage of the GC, never a silent loss of blobs."""
+        missing = sorted(set(claimed) - set(self._spec.resource_managers))
+        if not claimed or missing:
+            why = f"missing {missing}" if claimed else "the ask carries no registry claim"
+            logger.error(
+                "blob-gc: refusing the pass — this process does not hold the asker's "
+                "model registry (%s); running it here would delete those models' blobs",
+                why,
+            )
+            raise RegistryMismatch(why)
+
+    def _prune_finished(self) -> None:
+        """Hard-delete the earlier finished rows. A pass is asked for on a timer,
+        forever, and every ask is a durable job row; nothing else reclaims job
+        rows. The running job is PROCESSING (never matched here), so at most one
+        finished row — COMPLETED or FAILED — survives between windows. Best
+        effort: housekeeping must not fail the pass."""
+        for r in self._job_rm.list_resources(QB["status"].in_(_DONE).build()):
+            with contextlib.suppress(Exception):
+                self._job_rm.permanently_delete(r.info.resource_id)  # ty: ignore[unresolved-attribute]
+
+    def _reconcile(self) -> None:
+        started = time.monotonic()
+        stats = self._spec.gc(mode="reconcile", t1=self._t1, t2=self._t2, now=self._now())
+        logger.info(
+            "blob-gc: reconcile complete quarantined=%d restored=%d deleted=%d live=%d",
+            stats.quarantined,
+            stats.restored,
+            stats.deleted,
+            stats.live,
         )
-    return stats
+        if self._monitor is None:
+            return
+        # Telemetry runs AFTER the pass — after its deletes. A failure here must
+        # not fail the job: the row would read FAILED for work that is done and
+        # the next window would run the whole pass again. Logged, and on.
+        try:
+            self._monitor.record(
+                {
+                    "kind": "blob_gc",
+                    "t": int(time.time() * 1000),  # wall-clock, for the summary's time window
+                    "mode": stats.mode,
+                    "quarantined": stats.quarantined,
+                    "restored": stats.restored,
+                    "deleted": stats.deleted,
+                    "live": stats.live,
+                    "scan_complete": stats.scan_complete,
+                    "elapsed_ms": int((time.monotonic() - started) * 1000),
+                }
+            )
+            if self._filestore is None:
+                return
+            # #407: on the same durable-maintenance cadence, snapshot the
+            # WorkspaceFile cardinality (total rows / distinct workspaces /
+            # largest workspace) so the ws_census trend shows whether the
+            # per-file model grows unbounded — the archive-vs-keep signal. The
+            # handler runs on the queue's consumer thread, which owns no event
+            # loop.
+            census = asyncio.run(self._filestore.census())  # ty: ignore[unresolved-attribute]
+            self._monitor.record({"kind": "ws_census", "t": int(time.time() * 1000), **census})
+        except Exception:
+            logger.exception("blob-gc: the pass completed; recording its telemetry failed")
+
+    # ── consumption machinery (mirrors graph / sanity / index / eval) ─
+    @property
+    def consuming(self) -> bool:
+        return self._consuming
+
+    def _ensure_consuming(self) -> None:
+        if not self._consuming:
+            self._consuming = True
+            self._job_rm.start_consume(block=False)
+
+    def start_consuming(self) -> None:
+        self._ensure_consuming()
+
+    def _active_count(self) -> int:
+        return self._job_rm.count_resources(QB["status"].in_(_ACTIVE).build())
+
+    def _stop_consuming(self) -> None:
+        with contextlib.suppress(RuntimeError):
+            self._job_rm.message_queue.stop_consuming()  # ty: ignore[unresolved-attribute]
+        self._consuming = False
+
+    async def aclose(self) -> None:
+        if self._active_count() == 0 and not self._consuming:
+            return
+        self._ensure_consuming()
+        while self._active_count() != 0:
+            await asyncio.sleep(_DRAIN_INTERVAL)
+        self._stop_consuming()
