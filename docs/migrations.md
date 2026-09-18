@@ -581,7 +581,7 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
 
 - `GET /api/wui` 回 `{"pages": []}`（新部署）或已列的頁面；任一頁按 Deploy 後出現在裡面。
 - `/wui` 開得出來、卡片模式預設；沒有 `edit_content` 的人看不到「下架」。
-### 2026-09-18 · #815 SIGTERM 真的 graceful；app 聊天的 turn 換 pod 接手 {#pr-815}
+### 2026-09-18 · bc5c8cce · #815 SIGTERM 真的 graceful；app 聊天的 turn 換 pod 接手 {#pr-815}
 
 **行為**（⚠️ 不動設定行為就變）
 
@@ -616,7 +616,7 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
 
 **k8s · CI 側**
 
-- `rca-app` 加 `terminationGracePeriodSeconds: 90`（≥ uvicorn 等待 ≤ budget + lifespan drain ≤ budget + 每個還有
+- **rollout 前（跟新映像同一次 apply）**：`rca-app` 加 `terminationGracePeriodSeconds: 90`（≥ uvicorn 等待 ≤ budget + lifespan drain ≤ budget + 每個還有
   turn 的 engine 各 4 秒 + `preStop` 5 秒 + 拆除；預設值 20 + 28 + 5 = 53 秒進拆除）與
   `lifecycle.preStop.exec: sleep 5`（pod 刪除時 k8s 同時拿掉 endpoint 與送 SIGTERM，sleep 讓移除先傳開）。
   漏加的症狀：跟以前一樣——rollout 時 30 秒到期 SIGKILL，在跑的 turn 沒交接、對話停在問題上。
@@ -624,7 +624,7 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
 
 **確認做完**
 
-- rollout 後看任一 API pod 的結束 log：`drain: begun` → `lifespan: shutdown complete` 在 budget 內出現（這些是 INFO
+- **rollout 後**：看任一 API pod 的結束 log（`kubectl logs <api-pod> --previous | grep -E 'drain: begun|shutdown complete'`）：`drain: begun` → `lifespan: shutdown complete` 在 budget 內出現（這些是 INFO
   行，app 沒設 root logger 時只有 WARNING 以上會印——本機可用 `scripts/check_sigterm_drain.sh` 驗，它自己包了
   `basicConfig`）。另外 `terminationGracePeriodSeconds` 已生效：`kubectl get pod <api-pod> -o jsonpath='{.spec.terminationGracePeriodSeconds}'` 回 `90`。
 
