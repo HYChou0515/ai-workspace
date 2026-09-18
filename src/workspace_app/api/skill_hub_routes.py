@@ -24,6 +24,7 @@ import msgspec
 from fastapi import APIRouter, FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from specstar import SpecStar
 
 from ..apps.skill_hub import (
     SkillHubEntry,
@@ -32,7 +33,7 @@ from ..apps.skill_hub import (
     missing_tools_for,
     nest_forks,
 )
-from ..apps.skills import install_hub_skill, skill_folder_in_the_way
+from ..apps.skills import install_hub_skill, skill_folder_in_the_way, workspace_skill_payload
 from ..files import WorkspaceFiles
 from ..files.zip_download import (
     DownloadPrepared,
@@ -42,6 +43,9 @@ from ..files.zip_download import (
     stream_prepared_zip,
     write_zip_members,
 )
+from ..perm import Actor, authorize
+from ..resources.groups import groups_of
+from .item_authz import load_access_facts
 from .locator import ItemLocator
 from .permission_body import PermissionBody, PermissionOut, build_permission
 
@@ -121,6 +125,21 @@ class SkillTransferred(BaseModel):
     owner: str
 
 
+class SkillEditTarget(BaseModel):
+    """Where the owner goes to edit an entry (plan P8's four-branch table).
+    `open`: go to `item_id` (its `.skill/<name>/` was put back first when it
+    had gone missing). `new_item`: the source item cannot take the edit —
+    `reason` says why (`no_access` / `deleted` / `closed`) — so the page offers
+    a new `app`/`profile` item to install into; re-publishing from there moves
+    `source_item`."""
+
+    action: Literal["open", "new_item"]
+    app: str
+    profile: str
+    item_id: str = ""
+    reason: Literal["", "no_access", "deleted", "closed"] = ""
+
+
 class SkillInstallRequest(BaseModel):
     entry_id: str
 
@@ -137,8 +156,10 @@ def register_skill_hub_routes(
     files: WorkspaceFiles,
     locator: ItemLocator,
     get_user_id: Callable[[], str],
+    spec: SpecStar,
 ) -> None:
-    """Mount the skill hub read routes + the item install route onto ``app``."""
+    """Mount the skill hub routes (reads, owner management, the edit resolver)
+    + the item install route onto ``app``."""
 
     def _card(entry_id: str, entry: SkillHubEntry, viewer: str) -> SkillHubCard:
         return SkillHubCard(
@@ -335,6 +356,42 @@ def register_skill_hub_routes(
             )
         hub.transfer(entry_id, new_owner)
         return SkillTransferred(id=entry_id, owner=new_owner)
+
+    @app.post("/skill-hub/entries/{entry_id}/edit")
+    async def edit_skill_hub_entry(entry_id: str) -> SkillEditTarget:
+        """「修改」: resolve the entry's source item into one of the table's
+        branches (module docstring of the test file). A POST because the
+        second branch WRITES — the folder goes back into the item before it
+        opens. "Closed" is the App's own `lifecycle.closing_states`, read from
+        its manifest here, never a status name this module knows."""
+        from ..apps.manifest import load_app_manifest
+
+        viewer = get_user_id()
+        entry = _owned(entry_id, viewer)
+        target = SkillEditTarget(
+            action="new_item", app=entry.source_app, profile=entry.source_profile
+        )
+        facts = load_access_facts(spec, entry.source_item, include_deleted=True)
+        if facts is None or facts.is_deleted:
+            return target.model_copy(update={"reason": "deleted"})
+        actor = Actor.human(viewer, groups=groups_of(spec, viewer))
+        perm = facts.item.permission
+        # Editing a skill writes to the item: read access alone is not enough.
+        if not (
+            authorize(actor, "read_meta", perm, created_by=facts.created_by)
+            and authorize(actor, "edit_content", perm, created_by=facts.created_by)
+        ):
+            return target.model_copy(update={"reason": "no_access"})
+        lifecycle = load_app_manifest(facts.slug).lifecycle
+        if lifecycle is not None:
+            status = getattr(facts.item, lifecycle.status_field, None)
+            if status is not None and str(status) in lifecycle.closing_states:
+                return target.model_copy(update={"reason": "closed"})
+        if not await workspace_skill_payload(files, entry.source_item, entry.name):
+            # The folder went missing after publishing: the entry holds the
+            # latest published version, so it goes back in as a copy.
+            await install_hub_skill(files, entry.source_item, hub, entry_id)
+        return target.model_copy(update={"action": "open", "item_id": entry.source_item})
 
     @app.post("/a/{slug}/items/{item_id}/skills/install")
     async def install_skill_into_item(
