@@ -93,8 +93,13 @@ payload 的每個檔案存成 blob(走既有 FileStore,一個 skill hub 命名�
    - **掃 tool**:body 裡的已註冊 tool 名,整字或 code span。註冊表是 `agent/tools.py` 的 `_IMPLS`
      (41 個,完整)——**不是** `TOOL_VERBS`,那張表只有 20 個,`read_skill` / `ask_user` / `kb_search`
      都不在裡面。掃描函式是純的,註冊表由呼叫端注入
-   - **AI 審**(放行掛意見):走 `AppCatalog.resolve` → 帶 failover 的 runner,**和 turn 同一條路**,
-     429 由它等;連不上 → tool 以錯誤結束,對話窗看到「發布失敗:審查服務無法連線」
+   - **AI 審**(放行掛意見):審查者是**發布那個 turn 的 sub-agent**(`api/skill_review.py`
+     的 `review_skill(runner, parent_ctx, folder, payload)`,底下是 `run_agent_task` 同一條
+     `drive_subagent`),吃 turn 自己的 `AgentConfig`(`AppCatalog.resolve` 解出來的那份),
+     所以模型、端點、failover 鏈、429 等待全是 turn 的,**沒有第二套 LLM 接線**。
+     審查者無 tool、無歷史;回 `{"verdict","notes"}`,**verdict 由 notes 導出**(模型自填的不信),
+     純文字回覆整段當一則 note(它審過了,只是格式不對;丟掉等於把格式失誤當放行)。
+     連不上 / 回空 → `SkillReviewUnavailable`,tool 以錯誤結束,對話窗看到「發布失敗:審查服務無法連線」
    - 讀 `.origin`:指向 skill hub 上**別人的**條目 → 這是 fork,`forked_from` = 那個 id;
      指向自己的 → 覆蓋成新 revision;沒有 `.origin` 或指向 shared/profile → 新條目
    - 存 `SkillHubEntry`,`owner` = 現在的 user,`source_item` = 現在的 item,`visibility` = public
@@ -182,7 +187,7 @@ payload 的每個檔案存成 blob(走既有 FileStore,一個 skill hub 命名�
 |---|---|---|
 | **P1** | `SkillHubEntry` model + `apps/skill_hub.py` 存/取;`SkillSource` 加 `"hub"`;`SkillOrigin` 加 entry id | CRUD;同 owner 同 name 再存 = 新 revision;`origin` 等於 `origin_for("hub", payload)`(parity,`origin_for` 當 oracle) |
 | **P2** | 結構驗證 + tool 掃描 | 每條規則各一個會紅的輸入;掃描對 `` `exec` `` 與整字都命中、對子字串不命中;通過的 payload 用 `materialize_skill` 裝進去後 `workspace_skill_metas` 真的列出它(真入口) |
-| **P3** | AI 審:`review_skill(payload) -> SkillHubReview`,走 `AppCatalog.resolve`,`ScriptedAgentRunner` 測 | 模型連不上 → 例外(不是「未審」);429 走 failover 的等待(用既有測試夾具) |
+| **P3** | AI 審:`review_skill(runner, parent_ctx, folder, payload) -> SkillHubReview`,turn 的 sub-agent(走 `drive_subagent`),`ScriptedAgentRunner` 測 | 模型連不上 / 回空 → 例外(不是「未審」);429 走 runner 自己的等待(用 `test_litellm_runner` 同款的 scripted-engine 夾具打真 `LitellmAgentRunner`);prompt 有上界(每檔 20k、總 100k,SKILL.md 不切) |
 | **P4** | `publish_skill` tool + 授權 + fork 偵測 + source_item 記錄 | 從真 tool 入口打:結構壞 → 拒絕訊息說是哪條坑;`.origin` 指向別人 → `forked_from` 有值;指向自己 → revision;AI 有意見 → 發布成功且回話含意見 |
 | **P5** | `install_skill` tool;`_skill_source("hub")`;`skill_update_available` 三態 | 裝完下一 turn 的 index 有它(真入口);同名已存在 → 拒絕不蓋;上游重發 → True;上游下架 / 刪除 → 顯示狀態、不炸 |
 | **P6** | `search_skill_hub` tool + 列表/詳情 route(根+fork 巢狀、我的、tool 差集) | 依 description 命中;根列表不含 fork;差集對目標 app 算對;private 的不出現在別人的結果 |
