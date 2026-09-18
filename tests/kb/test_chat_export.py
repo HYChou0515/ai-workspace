@@ -48,6 +48,8 @@ def test_build_then_parse_round_trips():
     ("raw", "match"),
     [
         (b"{not json", "invalid JSON"),
+        # RecursionError in the decoder, not JSONDecodeError
+        pytest.param(b"[" * 100_000, "invalid JSON", id="nested-too-deep"),
         (b'["just", "a", "list"]', "expected an object"),
         (b'{"messages": [{"role": "user", "content": "x"}]}', "title"),
         (b'{"title": "t"}', "messages"),

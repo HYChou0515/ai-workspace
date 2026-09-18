@@ -48,7 +48,7 @@ def load_assets(files_dir: Path, paths: list[str], *, max_bytes: int) -> dict[st
     hand-edited, and ``/../etc/passwd`` in a shown-files line must not read
     the host. A path the OS itself rejects (a NUL byte, a 5,000-character
     name) is left out the same way, not a traceback."""
-    root = files_dir.resolve()
+    root = files_dir.resolve()  # the caller checked this resolves (main)
     out: dict[str, bytes] = {}
     for path in paths:
         try:
@@ -61,6 +61,17 @@ def load_assets(files_dir: Path, paths: list[str], *, max_bytes: int) -> dict[st
         except (OSError, ValueError, RuntimeError):  # RuntimeError: a symlink loop, on 3.12
             continue
     return out
+
+
+def _is_dir(path: Path) -> bool:
+    """Whether ``--files`` names a folder that can be opened. A symlink
+    loop is a ``RuntimeError`` from ``resolve`` (on 3.12), a missing folder
+    an ``OSError``; either is the operator's typo — one line, exit 2, not a
+    traceback."""
+    try:
+        return path.resolve(strict=True).is_dir()
+    except (OSError, RuntimeError):
+        return False
 
 
 def parse_args(argv: list[str]) -> Args:
@@ -119,13 +130,13 @@ def parse_args(argv: list[str]) -> Args:
         "--max-asset-bytes",
         type=int,
         default=d.max_asset_bytes,
-        help="an image bigger than this is a file card, not inlined",
+        help="an image bigger than this is not inlined (a file card, or the alt text)",
     )
     p.add_argument(
         "--max-assets-total-bytes",
         type=int,
         default=d.max_assets_total_bytes,
-        help="the page's whole budget for inlined images, spent in reading order",
+        help="the page's whole budget for inlined images, first-fit in reading order",
     )
 
     ns = p.parse_args(argv, namespace=Args())
@@ -161,6 +172,9 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         print(f"{ns.source}: {exc}", file=sys.stderr)
         return 2
+    if ns.files is not None and not _is_dir(ns.files):
+        print(f"--files {ns.files}: not a folder that can be opened", file=sys.stderr)
+        return 2
     timeline = build_timeline(title=title, messages=messages, options=ns.options)
     plays = f"will play {timeline.playback_ms / 1000:.1f}s"
     if timeline.time_scale < 1:
@@ -173,8 +187,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     # The page's own verdict per path, not "what was read": a file can be
     # read and still not drawn (not an image, over the budget). A declared
-    # file then becomes a card; an answer's `![]()` becomes its alt text.
-    for path, (_uri, why) in decide_assets(timeline.wanted_files(), assets, ns.options).items():
+    # image then becomes a card; an answer's `![]()` becomes its alt text.
+    # (A declared non-image is a card by design and is not in the list.)
+    for path, verdict in decide_assets(timeline.wanted_files(), assets, ns.options).items():
+        why = verdict.why
         if not why:
             continue
         if why == NOT_HANDED:

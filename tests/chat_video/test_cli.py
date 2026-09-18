@@ -116,6 +116,7 @@ def test_the_note_names_every_path_the_page_will_not_draw_whatever_the_reason(
     (ws / "plots" / "a.png").write_bytes(png)
     (ws / "plots" / "b.png").write_bytes(png)
     (ws / "plots" / "chart.svg").write_bytes(b"<svg/>")
+    (ws / "plots" / "t.csv").write_bytes(b"a,b\n")
     src = _source(
         tmp_path,
         {
@@ -128,7 +129,16 @@ def test_the_note_names_every_path_the_page_will_not_draw_whatever_the_reason(
                         "![a](plots/a.png) ![b](plots/b.png) "
                         "![s](plots/chart.svg) ![m](plots/missing.png)"
                     ),
-                }
+                },
+                # A declared non-image is a card by the chat's own rule — it IS
+                # drawn, as a card — so it is not in the note (round 4).
+                {
+                    "role": "tool",
+                    "tool_name": "show_file",
+                    "content": declare_shown_files(
+                        "", [{"path": "/plots/t.csv", "mime": "text/csv", "size": 4}]
+                    ),
+                },
             ],
         },
     )
@@ -152,6 +162,66 @@ def test_the_note_names_every_path_the_page_will_not_draw_whatever_the_reason(
     assert "/plots/b.png will not be drawn (over the page's image budget)" in err
     assert "/plots/chart.svg will not be drawn (not an image the page draws)" in err
     assert f"/plots/missing.png will not be drawn (not under {ws}, or too big)" in err
+    assert "t.csv" not in err
+
+
+def test_a_dot_dot_above_the_workspace_is_not_folded_onto_a_file_that_exists(tmp_path, capsys):
+    """`![](../secret.png)` when `DIR/secret.png` exists: the chat's URL for
+    it resolves above `/files/` and draws nothing, so the video must not
+    draw `DIR/secret.png` either. Round 4: `normpath` folded it inside and
+    the picture appeared."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "secret.png").write_bytes(
+        bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489")
+    )
+    src = _source(
+        tmp_path,
+        {
+            "title": "t",
+            "messages": [
+                {"role": "assistant", "author": "AI", "content": "![s](../secret.png)"},
+                {
+                    "role": "tool",
+                    "tool_name": "show_file",
+                    "content": declare_shown_files(
+                        "", [{"path": "/../secret.png", "mime": "image/png", "size": 33}]
+                    ),
+                },
+            ],
+        },
+    )
+    out = tmp_path / "p.html"
+
+    assert main([str(src), "--html", str(out), "--files", str(ws)]) == 0
+
+    assert "iVBORw0KGgo" not in out.read_text()
+    assert (
+        f"/../secret.png will not be drawn (not under {ws}, or too big)" in capsys.readouterr().err
+    )
+
+
+def test_an_export_nested_too_deep_is_one_sentence_and_exit_2(tmp_path, capsys):
+    """Round 3 caught the DECLARATION nested 100k deep; the export file
+    itself was the same traceback (`parse_chat_export` caught only
+    `JSONDecodeError`). Same class, same sentence."""
+    code = main([str(_source(tmp_path, "[" * 100_000)), "--html", str(tmp_path / "p.html")])
+
+    assert code == 2
+    assert "invalid JSON" in capsys.readouterr().err
+
+
+def test_a_files_dir_that_cannot_be_resolved_is_one_sentence_and_exit_2(tmp_path, capsys):
+    """`--files` pointing at a symlink loop: `Path.resolve()` raised before
+    the per-path guard existed to catch it. An operator's typo, one line."""
+    loop = tmp_path / "loop"
+    loop.symlink_to(loop)
+    src = _source(tmp_path, {"title": "t", "messages": [{"role": "user", "content": "x"}]})
+
+    code = main([str(src), "--html", str(tmp_path / "p.html"), "--files", str(loop)])
+
+    assert code == 2
+    assert "--files" in capsys.readouterr().err
 
 
 def test_files_dir_does_not_read_what_the_page_would_not_inline(tmp_path):

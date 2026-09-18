@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 import re
 
+import pytest
+
 from workspace_app.agent.shown_files import declare_shown_files
 from workspace_app.chat_video.options import VideoOptions
 from workspace_app.chat_video.player import render_player_html
@@ -295,6 +297,103 @@ def test_the_budget_is_first_fit_a_big_file_is_skipped_and_a_later_small_one_kep
     )
 
     assert list(_assets(page)) == ["/a.png", "/c.png"]
+
+
+_SVG = b'<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>'
+
+
+@pytest.mark.parametrize(
+    ("messages", "mime"),
+    [
+        # An answer names the chart first (nothing declared, and SVG does not
+        # sniff); a later `show_file` declares it `image/svg+xml`. Round 4:
+        # the first reference's "not an image" verdict stuck to the path.
+        (
+            [
+                {"role": "assistant", "author": "AI", "content": "![c](plots/chart.svg)"},
+                _shown("/plots/chart.svg", "image/svg+xml"),
+            ],
+            "image/svg+xml",
+        ),
+        # …and the other order.
+        (
+            [
+                _shown("/plots/chart.svg", "image/svg+xml"),
+                {"role": "assistant", "author": "AI", "content": "![c](plots/chart.svg)"},
+            ],
+            "image/svg+xml",
+        ),
+        # Shown once as a placeholder, regenerated, shown again as a picture.
+        (
+            [
+                _shown("/plots/chart.svg", "application/x-empty"),
+                _shown("/plots/chart.svg", "image/svg+xml"),
+            ],
+            "image/svg+xml",
+        ),
+        # Two image declarations: the first image mime is the table's.
+        (
+            [_shown("/plots/chart.svg", "image/svg+xml"), _shown("/plots/chart.svg", "image/png")],
+            "image/svg+xml",
+        ),
+    ],
+    ids=["answer first", "declaration first", "placeholder then picture", "two image mimes"],
+)
+def test_one_path_many_references_a_declared_image_mime_wins_whatever_the_order(messages, mime):
+    """The table is per PATH; its mime comes from every reference of that
+    path, not from whichever came first."""
+    page = _page(messages, assets={"/plots/chart.svg": _SVG})
+
+    assert _assets(page)["/plots/chart.svg"].startswith(f"data:{mime};base64,")
+
+
+def test_a_declared_non_image_is_a_card_even_when_the_path_is_in_the_table():
+    """`isInlineImage` is the chat's rule: a declaration draws the picture
+    iff ITS mime is `image/*`. The same path shown as `image/png` and again
+    as `text/csv` is a picture then a card — the table alone does not decide.
+    (The JS half — the card — is the integration test below; this pins that
+    the page carries what the JS needs: the declared mime on every file.)"""
+    page = _page(
+        [_shown("/c.png", "image/png"), _shown("/c.png", "text/csv")],
+        assets={"/c.png": _PNG},
+    )
+
+    steps = _embedded(page)["steps"]
+    assert [f["mime"] for f in steps[0]["files"]] == ["image/png"]
+    assert [f["mime"] for f in steps[1]["files"]] == ["text/csv"]
+    assert list(_assets(page)) == ["/c.png"]
+    assert "f.mime.startsWith('image/') && ASSETS[f.path]" in page
+
+
+@pytest.mark.integration
+def test_a_real_chromium_draws_a_declaration_by_its_own_mime(tmp_path):
+    """The JS rule, in a browser: `image/png` then `text/csv` for one path
+    whose bytes are a PNG → one thumbnail, one card; `application/x-empty`
+    then `image/png` for another → one card, one thumbnail."""
+    from playwright.sync_api import sync_playwright
+
+    page_html = _page(
+        [
+            _shown("/c.png", "image/png"),
+            _shown("/c.png", "text/csv"),
+            _shown("/d.png", "application/x-empty"),
+            _shown("/d.png", "image/png"),
+        ],
+        assets={"/c.png": _PNG, "/d.png": _PNG},
+        speed=100, zoom_ms=0, type_ms=0, stream_ms=0, tool_pause_ms=0,
+    )  # fmt: skip
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch()
+        try:
+            page = browser.new_page()
+            page.set_content(page_html)
+            page.wait_for_function("document.body.dataset.done === '1'", timeout=30_000)
+            imgs = page.locator(".shown-files img").count()
+            cards = page.locator(".shown-files .file-card").count()
+        finally:
+            browser.close()
+
+    assert (imgs, cards) == (2, 2)
 
 
 def test_the_same_file_under_three_spellings_is_one_entry():

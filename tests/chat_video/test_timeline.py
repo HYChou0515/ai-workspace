@@ -9,6 +9,8 @@ so it is what CI tests; the recorder downstream only plays what this says.
 
 from __future__ import annotations
 
+import json
+
 from workspace_app.agent.shown_files import declare_shown_files
 from workspace_app.chat_video.options import VideoOptions
 from workspace_app.chat_video.timeline import (
@@ -284,9 +286,12 @@ def test_show_file_is_its_files_and_nothing_else():
 
 
 def test_the_timeline_names_every_workspace_path_it_will_want_bytes_for():
-    """Declared files and `![](path)` images in answers — but not an image at
-    a URL (the page fetches nothing) and not a link. This is the list a job
-    prefetches before handing the render to a thread."""
+    """Declared IMAGES and `![](path)` images in answers — but not a declared
+    non-image (a CSV is a card by the chat's own rule, `isInlineImage`, and a
+    card needs no bytes: reading them was a wasted read and, in round 4, a
+    false "will not be drawn"), not an image at a URL (the page fetches
+    nothing) and not a link. This is the list a job prefetches before
+    handing the render to a thread."""
     tl = build_timeline(
         title="t",
         messages=[
@@ -294,7 +299,11 @@ def test_the_timeline_names_every_workspace_path_it_will_want_bytes_for():
                 "role": "tool",
                 "tool_name": "show_file",
                 "content": declare_shown_files(
-                    "", [{"path": "/plots/a.png", "mime": "image/png", "size": 1}]
+                    "",
+                    [
+                        {"path": "/plots/a.png", "mime": "image/png", "size": 1},
+                        {"path": "/data/t.csv", "mime": "text/csv", "size": 9},
+                    ],
                 ),
             },
             {
@@ -307,6 +316,29 @@ def test_the_timeline_names_every_workspace_path_it_will_want_bytes_for():
     )
 
     assert tl.referenced_paths() == ["/plots/a.png", "/plots/b.png"]
+    assert tl.wanted_files() == [("/plots/a.png", "image/png"), ("/plots/b.png", "")]
+
+
+def test_a_size_too_big_for_a_float_is_kept_not_a_traceback():
+    """`size: 1e400` written as an integer: the browser's `JSON.parse` gives
+    `Infinity` (a number, so the FE keeps the entry); Python's json gives an
+    int that `math.isfinite` cannot even convert — `OverflowError`. Kept."""
+    steps = build_timeline(
+        title="t",
+        messages=[
+            {
+                "role": "tool",
+                "tool_name": "show_file",
+                "content": "body\n[shown-files]"
+                + json.dumps(
+                    {"shown_files": [{"path": "/a.png", "mime": "image/png", "size": 10**400}]}
+                ),
+            }
+        ],
+        options=VideoOptions(),
+    ).steps
+
+    assert isinstance(steps[0], ToolStep) and steps[0].files[0].size == 10**400
 
 
 def test_a_declaration_is_parsed_as_the_fe_parses_it():

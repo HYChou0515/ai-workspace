@@ -169,13 +169,15 @@ async function stepStream(s) {
 
 const fmtBytes = n => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`;
 
-// The files a tool declared, drawn as the chat draws them: an inlined image
-// as a thumbnail, anything else (no bytes, not an image, over the cap) as a
+// The files a tool declared, drawn as the chat draws them: a declaration
+// whose OWN mime is image/* (isInlineImage) and whose bytes are in the
+// table as a thumbnail, anything else (declared non-image, no bytes, over
+// the cap) as a
 // card naming the file — never a broken <img>.
 function shownFiles(files) {
   const box = el('div', 'shown-files');
   for (const f of files) {
-    const src = ASSETS[f.path];
+    const src = f.mime.startsWith('image/') && ASSETS[f.path];
     if (src) {
       const img = el('img'); img.src = src; img.alt = f.caption || f.path; box.appendChild(img);
     } else {

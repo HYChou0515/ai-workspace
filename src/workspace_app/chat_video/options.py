@@ -90,9 +90,10 @@ class VideoOptions(msgspec.Struct, frozen=True):
             (0 <= self.stream_ms <= 10_000, "stream_ms must be 0..10000"),
             (0 <= self.tool_pause_ms <= 60_000, "tool_pause_ms must be 0..60000"),
             # Every delay is divided by speed, so it needs a floor: at 0.001
-            # a 40 s transcript asks for 11 hours, and the ceiling's 5% floor
-            # still leaves 33 minutes. Ten times slower is as slow as anyone
-            # means; a hundred times faster is a slideshow.
+            # the shipped sample (36 s of asked delays) asks for ten hours,
+            # and the ceiling's 5% floor still leaves half an hour. Ten times
+            # slower is as slow as anyone means; a hundred times faster is a
+            # slideshow.
             (0.1 <= self.speed <= 100, "speed must be 0.1..100"),
             (1 <= self.max_seconds <= 3600, "max_seconds must be 1..3600"),
             (self.tool_output_chars >= 1, "tool_output_chars must be at least 1"),

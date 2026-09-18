@@ -43,8 +43,26 @@ def is_url(ref: str) -> bool:
 def abs_path(path: str) -> str:
     """The one spelling of a workspace path: absolute and normalised, so
     `plots/a.png`, `./plots/a.png` and `plots//a.png` are one key — one
-    read, one table entry, one copy of the bytes."""
-    return posixpath.normpath("/" + path.lstrip("/"))
+    read, one table entry, one copy of the bytes.
+
+    A `..` that climbs above the root is kept as written. The chat's own
+    URL for `../secret.png` resolves above `/files/` and draws nothing, and
+    the CLI's jail refuses it; folding it to `/secret.png` drew a picture
+    the chat did not (round 4)."""
+    raw = "/" + path.lstrip("/")
+    # Walk the segments and refuse to normalise the moment the depth goes
+    # below the root. (Normalising under a sentinel directory and checking
+    # the prefix collides when the path re-enters a name equal to the
+    # sentinel: `/../w` under `/w` is `/w`.)
+    depth = 0
+    for segment in raw.split("/"):
+        if segment == "..":
+            depth -= 1
+            if depth < 0:
+                return raw
+        elif segment and segment != ".":
+            depth += 1
+    return posixpath.normpath(raw)
 
 
 def image_path(token: Token) -> str | None:

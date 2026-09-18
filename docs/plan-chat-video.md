@@ -160,7 +160,8 @@ src/workspace_app/chat_video/
     RIFF 一律當 webp(WAV 也是 RIFF);ms 類 option 沒上限(2³¹ 溢位變立即逾時);假 playwright 的 `video.path()` 在
     `context.close()` 前就存在(真的不會);`test_service` 又多一個 `or True` 空斷言;`del d["args"]` 沒有守衛。全部修。
   - 沒修、記下:三樣工具都缺時要三次來回才問完(每次一句話,沒有白錄);`chat_width > width` 由 CSS `min()` 兜住。
-- **第三輪 review(只看 P8 的 diff)抓到的,P9 修掉——沒有 HIGH,全是小修,沒換機制:**
+- **第三輪 review(只看 P8 的 diff)抓到的,P9 修掉——沒有 HIGH。我把 P9 叫成「小修不換機制」就停手,錯:它換了三個機制
+  (note 的來源、一次 walk、路徑的 key),依規則要再一輪(第四輪,下面)。**
   - 一個真缺陷:`![![y](q.png)](p.png)`(圖的 alt 裡再放一張圖)——markdown-it 會把 alt 也解析成 token,timeline 的
     walk 走進去把 `q.png` 列進要讀的清單,但頁面把 alt 壓平成文字、永遠不畫它。就是第二輪那一類(讀了不畫)剩下的一個
     形狀。修法:走到 image token 就 `continue`,不進 alt。parity case 加 4 個(18 個),砍掉 `continue` 恰好紅那兩條。
@@ -180,6 +181,37 @@ src/workspace_app/chat_video/
   - 測試 95 → 125 條(含 2 條 integration;`pytest --collect-only` 數的):parity 14 → 36(18 個 case × 兩個方向)、
     options +4、player +2、CLI +2、timeline 同數(一條改名加深)。每個修法一個突變體,十個都恰好紅在對應的測試;
     對照組(砍掉 tool files 的 walk)紅 5。
+- **第四輪 review(只看 P9 的 diff,三把鏡頭)抓到的,P10 修掉——最嚴重的一條(符合度鏡頭判 HIGH、回歸鏡頭判 MED)是 P9 自己的回歸。這輪之後 user 說「review 太多次是
+  bad smell,要改 fix methodology」:第三輪 9 條有 7 條是 P8 修法的殘缺、第四輪的 HIGH 是 P9 修法的——每輪都在修被回報的
+  那個實例,下一輪抓同一類的下一個形狀。P10 改成先把機制的輸入空間列成表再修:**
+  - **P9 回歸:`decide_assets` 讓第一個引用的判定黏在路徑上。** 回答先寫 `![](plots/chart.svg)`(沒宣告、SVG sniff
+    不出 → 「不是圖」),下一輪 `show_file` 宣告 `image/svg+xml`——P9 兩處都變卡片、note 還說「不是圖」;P8 會畫。
+    表:「一條路徑 × N 個引用(回答 `![]()` / 宣告 image/* / 宣告非圖)× 一份 bytes」→ 每個引用畫什麼、note 說什麼。
+    判定是**路徑**的性質:先掃所有引用取宣告的 image mime,再判一次;順序無關。四列 parametrize(回答先 / 宣告先 /
+    佔位後圖 / 兩個 image mime),砍掉前置掃描恰好紅「回答先」那列。
+  - 同一張表的兩列 reviewer 各點到一半:宣告 `text/csv` 的檔**本來就是卡片**(FE 的 `isInlineImage` 只看宣告的 mime),
+    P6 起 `wanted_files` 把它列進要讀的檔(白讀),P9 再對它印假的「will not be drawn」;反過來,同一路徑先宣告 `image/png`
+    再宣告 `text/csv`,FE 是圖 + 卡片、播放器(P8、P9 都)兩張圖。修法:`wanted_files` 只列 `image/*` 宣告與回答的 `![]()`;
+    `player.html` 的 `shownFiles` 依宣告自己的 mime 決定畫圖或卡片——真 Chromium 的 integration 測試數 DOM(2 圖 2 卡)。
+  - `normpath` 把 `/../secret.png` 折回 `DIR/secret.png` 並畫出來;FE 的 URL 會解析到 `/files/` 之上、破圖不畫。改成爬出根
+    的 `..` 保留原字(jail 拒、note 說「not under DIR」),其餘照常正規化;`abs_path` 的 17 列拼法表在 `test_markdown.py`。
+    推前自審抓到第一版(在 sentinel 目錄 `/w` 下正規化再看前綴)的碰撞:`/../w` 正規化成 `/w` 等於 sentinel 本身——先加
+    兩列(紅),再改成逐段數深度、低於根就保留原字。
+  - 修實例沒修類,兩個:export **檔案本身** 10 萬層 `[` 仍 traceback(第三輪只修了宣告;`parse_chat_export` 只接
+    `JSONDecodeError`,KB 上傳同一個入口)→ 接 `RecursionError` 成同一句「invalid JSON」;`--files` 本身指到 symlink loop
+    仍 traceback(`files_dir.resolve()` 在 try 外)→ 一句話 exit 2。
+  - `size: 10**400`:瀏覽器是 `Infinity`(number,FE 留著畫卡片),Python 是 `math.isfinite` 轉不成 float 的 int →
+    `OverflowError`。int 一律留。
+  - 文字:`--help` 兩句還是舊的(「spent in reading order」「is a file card」);parity docstring「each for one direction」
+    ——`EXPECTED` 是 list 相等,兩個方向都守,頁面那條不多餘的真正理由是「手寫的表可能自己錯」;`speed` 註解的 11 h /
+    33 min 是零 overhead 的理想值(範例算出來 10.0 h / 30.2 min);commit message「join the eighteen」(是 14 + 4,plan
+    寫對了,commit 不改);note 的判定為了三句理由把 24 MB base64 編了一次、頁面再編一次 → `decide_assets` 只回判定,
+    `inline_assets` 才編碼。
+  - 沒修、記下:宣告路徑 `.` 或 `///` 折成 `/`,卡片檔名是空字串(手改才會有);`NaN`/`Infinity` 字面量 FE 整段宣告作廢、
+    播放器只跳過那一筆(第二輪就決定的)。
+  - 測試 `tests/chat_video` 125 → 156 條(`--collect-only` 數的;3 條 integration):`test_markdown.py` 17 列、parity +4
+    (2 列 × 2 方向)、player +6(4 列 parametrize + 1 + 1 integration)、timeline +1、CLI +3;`tests/kb/test_chat_export.py` +1。
+    七個修法各一個突變體,每個恰好紅在自己的測試(`abs_path` 那個紅 8 條含 CLI 端到端);對照組(`wanted_files` 空)紅 36。
 - **plan 漏了「顯示工具」**(user 問「show file 能夠顯示嗎」才補)。前端把檔案放到人面前有三條路——`show_file`
   (沒有卡片,檔案即畫面)、任何工具結果尾端的 `[shown-files]` 宣告、回答裡的 `![](路徑)`——bytes 都不在 export 裡。
   加了 `assets: Mapping[path, bytes]` 接縫(CLI `--files DIR` 讀;未來 job 用 `Timeline.referenced_paths()` 先撈再進

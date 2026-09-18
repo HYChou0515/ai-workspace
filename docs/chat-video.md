@@ -101,7 +101,10 @@ uv run python -m workspace_app.chat_video my.chat.json --files ./my-workspace -o
 要用 `--files DIR` 指到 workspace 資料夾(路徑 `/plots/a.png` ⇒ `DIR/plots/a.png`)。沒給、或檔案不在:
 工具宣告的那種變成檔案卡、回答裡 `![](…)` 的那種只剩 alt 文字;指令會在 stderr 逐一說哪個路徑沒畫、為什麼
 (不在 DIR 底下或太大 / 不是圖 / 超出總預算);不會炸。`plots/a.png`、`./plots/a.png`、`plots//a.png` 是同一個檔。
-`DIR` 之外的路徑(`/../…`、指到外面的 symlink)一律不讀。外部 URL 的 `![](https://…)` **不會被抓**——頁面不碰網路——
+`DIR` 之外的路徑(`/../…`、指到外面的 symlink)一律不讀——`../secret.png` 不會被折成 `DIR/secret.png`(聊天視窗對它也是
+破圖)。宣告的 mime 不是 `image/*` 的檔(CSV、PDF)照聊天視窗的規則就是檔案卡:不讀、不列在 note 裡;同一個路徑被回答的
+`![]()` 和某次宣告都提到,只要有一次宣告是 `image/*` 就以它為準(SVG 靠宣告,bytes 認不出)。外部 URL 的 `![](https://…)`
+**不會被抓**——頁面不碰網路——
 只剩 alt 文字(聊天視窗會抓,這是影片自己的規則)。中文檔名、含空白的路徑(寫成 `<plots/my chart.png>`)、
 `![x][ref]` 參照式都認得——timeline 要讀哪些檔和頁面畫哪些圖是同一次 markdown 解析。
 

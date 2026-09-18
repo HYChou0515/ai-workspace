@@ -146,7 +146,11 @@ def shown_files_in(result: str) -> tuple[str, list[ShownFile]]:
         path, mime, size = entry.get("path"), entry.get("mime"), entry.get("size")
         if not (isinstance(path, str) and path and isinstance(mime, str) and mime):
             continue
-        if not isinstance(size, int | float) or isinstance(size, bool) or not math.isfinite(size):
+        # `size: 1e400` written as an integer is `Infinity` to the browser (a
+        # number, kept); to Python an int `math.isfinite` cannot convert.
+        if isinstance(size, bool) or not (
+            isinstance(size, int) or (isinstance(size, float) and math.isfinite(size))
+        ):
             continue
         caption = entry.get("caption")
         files.append(
@@ -172,17 +176,19 @@ class Timeline(msgspec.Struct):
     steps: list[Step]
 
     def wanted_files(self) -> list[tuple[str, str]]:
-        """Every workspace file the page may draw, in reading order, with the
-        declared mime where a tool declared one (``""`` for an answer's
-        ``![]()``, whose bytes are sniffed). Files tools declared, and images
-        in answers through the same markdown parse the page draws with
-        (``markdown.image_paths``). Not a URL (the page fetches nothing), not
-        a link. The ONE walk: ``referenced_paths`` and the page's asset table
-        are both views of it."""
+        """Every reference the page would draw as a PICTURE given the bytes,
+        in reading order: a tool's declaration whose mime is ``image/*``
+        (the chat's own rule, ``isInlineImage`` — a declared CSV is a card
+        by that rule, drawn without bytes, so it is not wanted and its bytes
+        are never read), and an answer's ``![](path)`` (mime ``""``: the
+        bytes are sniffed), through the same markdown parse the page draws
+        with (``markdown.image_paths``). Not a URL (the page fetches
+        nothing), not a link. The ONE walk: ``referenced_paths`` and the
+        page's asset table are both views of it."""
         out: list[tuple[str, str]] = []
         for step in self.steps:
             if isinstance(step, ToolStep):
-                out.extend((f.path, f.mime) for f in step.files)
+                out.extend((f.path, f.mime) for f in step.files if f.mime.startswith("image/"))
             elif isinstance(step, StreamStep) and not step.reasoning:
                 out.extend((p, "") for p in md.image_paths(step.text))
         return out

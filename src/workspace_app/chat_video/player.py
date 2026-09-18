@@ -80,49 +80,74 @@ NOT_HANDED, NOT_AN_IMAGE, OVER_BUDGET = (
 )
 
 
-def inline_assets(
-    paths: list[tuple[str, str]], assets: Assets, options: VideoOptions
-) -> dict[str, str]:
-    """The page's ASSETS table: path → ``data:`` URI, for the images we will
-    inline, each path ONCE however many times it is shown. Twenty
-    `show_file`s of one chart used to carry twenty copies (a 107 MB page).
+class Verdict(msgspec.Struct, frozen=True):
+    """One path's fate on the page: ``mime`` when it will be a picture,
+    else ``why`` (one of the three sentences above)."""
 
-    A file is inlined when the caller handed over its bytes, they are a
-    picture (declared mime when there is one, else sniffed), it fits
-    ``max_asset_bytes``, and it fits what is left of the page's total budget
-    (``max_assets_total_bytes``, counted in raw bytes; base64 makes the page
-    a third larger). First-fit in reading order: a file that does not fit
-    the remainder is a card, and a later, smaller one that does fit is
-    still a picture."""
-    return {path: uri for path, (uri, _why) in decide_assets(paths, assets, options).items() if uri}
+    mime: str = ""
+    why: str = ""
 
 
 def decide_assets(
     paths: list[tuple[str, str]], assets: Assets, options: VideoOptions
-) -> dict[str, tuple[str, str]]:
-    """Per distinct path: ``(data URI, "")`` when it will be drawn, else
-    ``("", why)`` — the page's own decision, which is what the CLI's note
-    reports. Reporting from "what was read" alone missed an SVG chart that
-    was read, not drawn, and not mentioned."""
-    out: dict[str, tuple[str, str]] = {}
-    budget = options.max_assets_total_bytes
+) -> dict[str, Verdict]:
+    """Per distinct path, in reading order: the page's own decision, which
+    the CLI's note relays (deciding from "what was read" alone left an SVG
+    chart read, undrawn and unmentioned).
+
+    The verdict is a property of the PATH, from all of its references — a
+    tool that declared it ``image/*`` settles the mime whether the
+    declaration comes before or after an answer's ``![]()`` of the same
+    path (whose bytes are only sniffed, and SVG does not sniff); the first
+    reference's verdict must not stick to the path (round 4). A path is a
+    picture when its bytes were handed over, they are an image (declared,
+    else sniffed), they fit ``max_asset_bytes`` and what is left of the
+    page's total budget (``max_assets_total_bytes``, raw bytes; base64 makes
+    the page a third larger). First-fit: a file that does not fit the
+    remainder is refused, and a later, smaller one that fits is still a
+    picture."""
+    declared: dict[str, str] = {}
     for path, mime in paths:
+        if mime.startswith("image/"):
+            declared.setdefault(path, mime)
+    out: dict[str, Verdict] = {}
+    budget = options.max_assets_total_bytes
+    for path, _mime in paths:
         if path in out:
             continue
         data = assets.get(path)
         if data is None:
-            out[path] = ("", NOT_HANDED)
+            out[path] = Verdict(why=NOT_HANDED)
             continue
-        mime = mime or _sniff_image(data)
+        mime = declared.get(path) or _sniff_image(data)
         if not mime.startswith("image/"):
-            out[path] = ("", NOT_AN_IMAGE)
+            out[path] = Verdict(why=NOT_AN_IMAGE)
             continue
         if len(data) > options.max_asset_bytes or len(data) > budget:
-            out[path] = ("", OVER_BUDGET)
+            out[path] = Verdict(why=OVER_BUDGET)
             continue
-        out[path] = (f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}", "")
+        out[path] = Verdict(mime=mime)
         budget -= len(data)
     return out
+
+
+def inline_assets(
+    paths: list[tuple[str, str]], assets: Assets, options: VideoOptions
+) -> dict[str, str]:
+    """The page's ASSETS table: path → ``data:`` URI for every path
+    ``decide_assets`` made a picture, each path ONCE however many times it
+    is shown (twenty `show_file`s of one chart used to carry twenty copies,
+    a 107 MB page). Whether a given reference then DRAWS it is the
+    reference's business: an answer's ``![]()`` does; a tool's declaration
+    does iff its own mime is ``image/*`` — the chat's ``isInlineImage`` — so
+    one path shown as ``image/png`` and again as ``text/csv`` is a picture,
+    then a card (`player.html`, ``shownFiles``)."""
+    verdicts = decide_assets(paths, assets, options)
+    return {
+        path: f"data:{v.mime};base64,{base64.b64encode(assets[path]).decode('ascii')}"
+        for path, v in verdicts.items()
+        if v.mime
+    }
 
 
 _SIGNATURES = (
