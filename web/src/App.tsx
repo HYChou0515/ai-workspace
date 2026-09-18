@@ -9,6 +9,7 @@ import { AppWorkspace } from "./pages/AppWorkspace";
 import { DiagnosticsPage } from "./pages/DiagnosticsPage";
 import { GroupsPage } from "./pages/GroupsPage";
 import { MyResourcesPage } from "./pages/MyResourcesPage";
+import { WuiOverviewPage } from "./pages/WuiOverviewPage";
 import { WorkCalendarPage } from "./pages/WorkCalendarPage";
 import { HelpPage } from "./pages/HelpPage";
 import { KbDocPage } from "./pages/kb/KbDocPage";
@@ -66,6 +67,10 @@ export function AppRoutes() {
             than evict, so this is where a refused person goes to free
             something up — without it, being at your limit is a dead end. */}
         <Route path="/my-resources" element={<MyResourcesPage />} />
+        {/* Every Deployed WUI the viewer may open (docs/plan-wui-overview.md).
+            Inside the shell: it is a place to find pages; the pages themselves
+            open at `/w/` outside it. */}
+        <Route path="/wui" element={<WuiOverviewPage />} />
         {/* #481: the global 審核 inbox — every pending-review item (card proposals +
             clarification questions) across every readable collection, in one
             filterable table. Absorbs the old (invisible) /clarifications page. */}

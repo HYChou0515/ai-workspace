@@ -29,6 +29,9 @@ const RUNTIME_ASSIGNED = new Set([
   "--app-tint",
   "--app-ink",
   "--app-ink-dark",
+  // The App's own colour, published inline per WUI card for its stripe
+  // (`pages/WuiOverviewPage.tsx` `PageCard`); falls back to a neutral token.
+  "--app-color",
   // set inline per-surface (see kb.css / FileTree) rather than in tokens.css
   "--filetree-header-bg",
   // fit-to-width scale for marp slides, set on the deck host from JS (MarpDeck)

@@ -97,7 +97,7 @@ describe("ChatListRail", () => {
       .getAllByRole("menuitem")
       .map((el) => el.getAttribute("href"));
     expect(hrefs).toEqual(
-      expect.arrayContaining(["/kb", "/review", "/diagnostics", "/my-resources", "/help"]),
+      expect.arrayContaining(["/kb", "/review", "/diagnostics", "/my-resources", "/wui", "/help"]),
     );
   });
 

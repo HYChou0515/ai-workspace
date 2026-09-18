@@ -552,6 +552,35 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
   （2026-09-09 的 48f09a55 起）；現在不會。另外四個協調 model 改在 `create_app` 無條件註冊——Postgres 上多兩個
   永遠空的 model（各三張表），無害。
 
+### 2026-09-18 · #811 WUI 總覽：`/wui` 列出 Deploy 過的頁面（`deployed-wui`） {#pr-811}
+
+**設定** — 不動。沒有新旋鈕。
+
+**資料**
+
+- 新 specstar model **`deployed-wui`**（`api/wui_deploy.py`，post-`spec.apply` 註冊、沒有 auto-CRUD 路由）。
+  **不用回填**：新表，上線時沒有任何列；一列只在有人按 Deploy 時寫入。**在這之前 Deploy 過的頁面不會
+  出現在總覽，要到頁面上再按一次 Deploy**——這是設計（plan-wui-overview：Deploy 是「上架」的唯一一扇門，
+  平台不掃 workspace 找 `view: wui`），不是遺漏。`icon` / `color` 兩個欄位（同一 PR 後半加的）都有預設值
+  `""`，加欄位之前的列讀出來就是「沒有」、總覽畫預設圓圈和 App 的顏色；要用就在 view 檔加 `icon:` /
+  `color:` 再 Deploy 一次。
+- 我的最愛、卡片/表格的選擇都在瀏覽器的 `localStorage`（`rca.wuiFavourites`、`rca.wuiView`），
+  不上伺服器：沒東西要遷、沒東西跨裝置。
+- `GET /wui` 每一列多帶 `item_owner`（和 `item_title` 同一次讀取），前端靠它畫 owner 和「我的」篩選。
+
+**行為**（⚠️ 不動設定行為就變）
+
+- 工具列的 **Deploy** 多做第四步：build、確認頁面打得開之後，把這一頁**列上總覽**，四步都成才端出網址；
+  上架失敗（最常見是沒有這個 item 的 `edit_content`）Deploy 就整個算失敗，不會端出網址。
+- 導覽多一個入口 **WUI**（`/wui`），人人可見；列表按 item 的 `read_content` 過濾，**下架**只給有
+  `edit_content` 的人。
+
+**k8s · CI 側** — 不動。`sandbox-host/`、`kubernetes/` 沒改。
+
+**確認做完**
+
+- `GET /api/wui` 回 `{"pages": []}`（新部署）或已列的頁面；任一頁按 Deploy 後出現在裡面。
+- `/wui` 開得出來、卡片模式預設；沒有 `edit_content` 的人看不到「下架」。
 ### 2026-09-18 · #815 SIGTERM 真的 graceful；app 聊天的 turn 換 pod 接手 {#pr-815}
 
 **行為**（⚠️ 不動設定行為就變）

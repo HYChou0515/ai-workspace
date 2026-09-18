@@ -141,6 +141,7 @@ from .version_header import VersionHeaderMiddleware
 from .work_calendar_routes import register_work_calendar_routes
 from .workflow_exec import WorkflowExecutor
 from .workflow_routes import register_workflow_routes
+from .wui_deploy import DeployedPages, register_deployed_wui, register_wui_deploy_routes
 from .wui_routes import register_wui_routes
 
 logger = logging.getLogger(__name__)
@@ -1685,6 +1686,10 @@ def create_app(
     register_trigger_store(spec)  # #429 P7 / #804 (the shared window ledger)
     register_stretch_claims(spec)  # #615 (off-hours stretch claims)
     register_turn_claims(spec)  # plan-graceful-shutdown P3 (a turn's durable claim)
+    # The WUI overview's rows (`docs/plan-wui-overview.md`). Same timing as
+    # everything above, and both reasons apply: Deploy on a bare test client
+    # writes one, and the blob-gc worker must hold every model the API does.
+    register_deployed_wui(spec)
 
     # P2: ensure the "Investigations Knowledge" collection exists at boot so
     # the chat-promote path always has a target. Idempotent (re-uses a
@@ -2456,6 +2461,14 @@ def create_app(
         idle_window_ms=int(idle_timeout.total_seconds() * 1000),
         now_ms=lambda: int(datetime.now(UTC).timestamp() * 1000),
         superusers=superusers,
+    )
+
+    register_wui_deploy_routes(
+        api,
+        locator=locator,
+        files=files,
+        pages=DeployedPages(spec),
+        get_user_id=get_user_id,
     )
 
     register_file_routes(

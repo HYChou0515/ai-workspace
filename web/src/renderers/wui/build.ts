@@ -9,7 +9,7 @@
  * someone is iterating, so the output is the feature and a spinner is not.
  */
 
-import { apiFetch, HttpError } from "../../api/http";
+import { apiFetch, detailSentence, HttpError } from "../../api/http";
 import { parseSseStream } from "../../api/sse";
 
 export type BuildEvent =
@@ -39,13 +39,8 @@ export function itemBuild(slug: string, itemId: string): RunBuild {
     if (!resp.ok || !resp.body) {
       // The server's own sentence where there is one — it names what was wrong
       // with the request, and it reaches a person through the same log the
-      // build's output uses. `detail` is a string for our refusals and an array
-      // for a validation failure; passing the array through would print
-      // "[object Object]" where the explanation should be.
-      const detail = await resp
-        .json()
-        .then((b: { detail?: unknown }) => (typeof b.detail === "string" ? b.detail : undefined))
-        .catch(() => undefined);
+      // build's output uses.
+      const detail = await detailSentence(resp);
       // `HttpError`, not a bare `Error`: the STATUS decides what the pane does
       // next. A 403 — a viewer who may read the item but not run things in it —
       // is permanent for that person, so rebuilding on open is switched off

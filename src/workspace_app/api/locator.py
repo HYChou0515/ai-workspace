@@ -133,6 +133,14 @@ class ItemLocator:
         found = find_work_item(self._spec, item_id)
         return found[1].title if found is not None else None
 
+    def title_owner_of(self, item_id: str) -> tuple[str, str] | None:
+        """An item's title AND owner from ONE lookup — the WUI overview names
+        both on every row, and it already pays one `find_work_item` per item
+        for the title; a second accessor would double that. ``None`` when the
+        id maps to no registered App's item."""
+        found = find_work_item(self._spec, item_id)
+        return (found[1].title, found[1].owner) if found is not None else None
+
     def profile_of(self, item_id: str) -> str:
         """The App profile an item was created from — drives the §A skill index
         (the runner exposes `read_skill` when the profile ships skills).
