@@ -79,7 +79,7 @@ NOT_HANDED, OVER_BUDGET = ("no bytes were handed over", "over the page's image b
 
 class Verdict(msgspec.Struct, frozen=True):
     """One path's fate on the page: ``mime`` when it will be a picture,
-    else ``why`` (one of the three sentences above)."""
+    else ``why`` (one of the two sentences above)."""
 
     mime: str = ""
     why: str = ""

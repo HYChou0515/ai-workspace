@@ -415,6 +415,25 @@ def test_the_types_the_table_relies_on_are_the_route_s():
     assert media_type_for("/blob", b"\xff\xfe\x00\x01") == "application/octet-stream"
 
 
+def test_the_page_calls_the_route_s_rule_not_a_copy_of_it(monkeypatch):
+    """The oracle of the table above is `media_type_for` itself, which a
+    verbatim copy of its five lines would satisfy — round 9 ran that copy
+    and 227 tests stayed green. This pins that the page CALLS the shared
+    function, as `test_read_file_serves_the_shared_media_type_rule` pins
+    the route."""
+    monkeypatch.setattr("workspace_app.chat_video.player.media_type_for", lambda p, d: "x/pinned")
+
+    inlined = inline_assets([("/x.png", "")], {"/x.png": _PNG}, VideoOptions())
+
+    assert inlined["/x.png"].startswith("data:x/pinned;base64,")
+
+
+def _route_header(path: str, data: bytes) -> str:
+    from starlette.responses import Response
+
+    return Response(content=data, media_type=media_type_for(path, data)).headers["content-type"]
+
+
 def test_a_file_nobody_handed_over_is_not_a_picture():
     assert decide_assets([("/x.png", "")], {}, VideoOptions()) == {
         "/x.png": Verdict(why=NOT_HANDED)
@@ -444,7 +463,9 @@ def test_a_real_chromium_agrees_between_the_chat_s_delivery_and_the_page_s(tmp_p
                 self.send_error(404)
                 return
             self.send_response(200)
-            self.send_header("Content-Type", media_type_for(self.path, data))
+            # The header the route ACTUALLY sends: Starlette adds a charset
+            # to text/* — the same object the route builds.
+            self.send_header("Content-Type", _route_header(self.path, data))
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)

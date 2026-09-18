@@ -1,6 +1,6 @@
 # Plan：把一段對話紀錄做成影片（script 版先行，job / worker 版後接）
 
-> **狀態:script 版已實作(PR #817,P1–P15:P1–P5 主體、P6 顯示工具、P7–P15 八輪 review 的修正),使用說明在 [chat-video.md](chat-video.md);P16–P18(job + route + 前端按鈕)列出形狀、未做。** 正文寫的是**現在的**做法;當初計畫和實作的差異在文末〈實作偏差〉。
+> **狀態:script 版已實作(PR #817,P1–P16:P1–P5 主體、P6 顯示工具、P7–P16 九輪 review 的修正),使用說明在 [chat-video.md](chat-video.md);P16–P18(job + route + 前端按鈕)列出形狀、未做。** 正文寫的是**現在的**做法;當初計畫和實作的差異在文末〈實作偏差〉。
 
 ## 需求（user 原話的整理）
 
@@ -289,6 +289,22 @@ src/workspace_app/chat_video/
     octet-stream——但 Chromium 對 raster 兩邊都畫,只有 SVG 依賴 `.svg`(Python 內建表有)。P16 的 handler 仍要 jail `..`(上面寫了)。
   - 測試 `tests/chat_video` 523 → 227 條(`--collect-only` 數的:−30×12 −2 −1 −1 +13×5 +3);`tests/api/test_messages.py` +1;四個突變體
     (播放器手抄規則 / 路由手抄規則 / 頁面不拒 `..` / 不看預算)各紅自己的測試;對照組(全當 image/png)紅 52。
+- **第九輪 review(單一問題:「路由的型別 + Chromium 決定」的 parity 有沒有破口)——沒有 HIGH、沒有機制回歸,P16 只補測試與文字:**
+  - reviewer 用 105 種 bytes × 兩種投遞(本機 HTTP 帶 Starlette 真正送出的 header、頁面的 data URI)在同一個 Chromium 上比 `naturalWidth`:
+    **0 分歧**;830 組(檔名 × bytes)比路由的舊五行 vs `media_type_for`:0 分歧;126 種路徑拼法比路由與播放器的正規化:113 種一致,
+    13 種不一致——全是**聊天視窗自己的 double-encode bug**(第七輪記過的那條,這次用真 uvicorn 驗證了:react-markdown 給的 `src` 已
+    percent-encode,`encodePath` 再編一次,後端找的是字面 `%E5%9C%96.png`;Starlette 的 `TestClient` 會解碼兩次所以**驗不到**,要走
+    uvicorn)。從真入口跑 12 個檔的 workspace:P15 對聊天視窗的標準 11/12、P14 10/12(且 P14 遇到 Shift_JIS 會整段死掉)。
+  - **我 P15 的 commit 有一句假的**:「播放器手抄規則的突變體會紅」——我跑的是「另一條規則」(`guess_type or octet-stream`),逐字抄那五行
+    227 條全綠,因為表的 oracle 就是那個函式。補一個和路由同形的 monkeypatch 釘子(`test_the_page_calls_the_route_s_rule_not_a_copy_of_it`),
+    逐字抄本現在恰好只紅這一條。
+  - 記下(設計的後果,不改):不看 bytes 就分不出非圖片,`![](report.pdf)` 會把 PDF 的 bytes 帶進頁面(破圖,聊天視窗也是)並佔圖片預算——
+    要 ≥20 MB 的非圖片排在圖前面才會擠掉一張真圖;任何用型別跳過的規則都會把「PNG 存成 .txt」(聊天視窗畫得出)變成卡片。
+  - 文字:`Verdict` docstring「三句」剩兩句;parity 測試的 HTTP 端原本送 `media_type_for` 的原字串,Starlette 對 text/* 會加 charset——改成
+    送路由真正建出的 header。
+  - 記下(不在這個 PR):影片用 Playwright 附的 Chromium 錄,聊天視窗在 user 自己的瀏覽器——AVIF / HEIC / 多位元編碼的 SVG 隨版本與
+    引擎不同;prod nginx 對 `%25…` 的路徑會不會先解碼一次,我看不到設定。
+
 - **plan 漏了「顯示工具」**(user 問「show file 能夠顯示嗎」才補)。前端把檔案放到人面前有三條路——`show_file`
   (沒有卡片,檔案即畫面)、任何工具結果尾端的 `[shown-files]` 宣告、回答裡的 `![](路徑)`——bytes 都不在 export 裡。
   加了 `assets: Mapping[path, bytes]` 接縫(CLI `--files DIR` 讀;未來 job 用 `Timeline.referenced_paths()` 先撈再進
