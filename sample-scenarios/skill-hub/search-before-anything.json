@@ -1,0 +1,14 @@
+{
+  "name": "search-before-anything",
+  "note": "The user asks whether something exists. That is a search — not a publish, not an install of a guessed id.",
+  "prompt": "Is there already a skill for triaging reflow defects that I could use here?",
+  "expect": {
+    "must_call": [
+      "search_skill_hub"
+    ],
+    "must_not_call": [
+      "install_skill",
+      "publish_skill"
+    ]
+  }
+}

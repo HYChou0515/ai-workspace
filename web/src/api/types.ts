@@ -390,6 +390,10 @@ export type ItemSkillState = {
    * control appears on THIS, not merely on being a copy: a button whose only
    * honest outcome is "nothing changed" reads as broken. */
   update_available?: boolean;
+  /** Skill hub — what this copy's upstream is to the signed-in viewer: `live`,
+   * `unpublished` (the owner took it private) or `deleted`. `null` for a folder
+   * that is not a copy. Only `live` can carry an update. */
+  upstream?: "live" | "unpublished" | "deleted" | null;
   pref: ToolPref;
   effective: boolean;
 };

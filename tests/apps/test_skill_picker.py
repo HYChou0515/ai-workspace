@@ -8,6 +8,8 @@ exercised end to end against production loaders — no synthetic package.
 
 from __future__ import annotations
 
+import pytest
+
 from workspace_app.apps.skills import (
     SkillMeta,
     build_applied_skills_block,
@@ -186,3 +188,109 @@ async def test_a_copy_is_reported_as_a_local_copy_alongside_its_source():
 
     assert states["author-workflow"].is_copy is True
     assert states["author-skill"].is_copy is False
+
+
+# ── a copy installed from the skill hub (plan-skill-hub, review round 2) ─────
+
+
+async def test_a_hub_copy_named_like_a_shared_skill_stays_a_workspace_skill():
+    """`effective_item_skills` treats any copy with a package sibling as that
+    package's copy — right for a materialized `author-workflow`, wrong for a
+    skill somebody published to the hub under that name and this item then
+    installed: its files came from the hub, its source is the workspace, and
+    the panel's Publish button (offered on `source: workspace`) must stay.
+    The manifest says which; the meta now carries it."""
+    import msgspec
+
+    from workspace_app.apps.skill_payload import SkillOrigin
+    from workspace_app.apps.skills import workspace_skill_metas
+
+    files = await _files_with(**{"author-workflow": b"from the hub"})
+    await files.write(
+        "inv",
+        "/.skill/author-workflow/.origin",
+        msgspec.json.encode(SkillOrigin(source="hub", files={"SKILL.md": "x"}, entry="e-1")),
+    )
+
+    metas = await workspace_skill_metas(files, "inv")
+    states = _by_name(effective_item_skills("_template", "default", {}, metas))
+
+    assert metas[0].is_copy is True and metas[0].copy_of == "hub"
+    assert states["author-workflow"].source == "workspace"
+    assert states["author-workflow"].is_copy is True
+
+
+async def test_a_package_copy_still_answers_as_the_package(monkeypatch, tmp_path):
+    """The other half, unchanged: a materialized shared skill's copy keeps the
+    package's source and default. And a manifest that does not decode (an
+    older or hand-written `.origin` — the wrong shape, or not JSON at all) is
+    still a copy of UNKNOWN source, which keeps today's package rule rather
+    than inventing a hub; before P18 the listing never read the manifest, so
+    a garbage one must not start breaking the index now."""
+    from workspace_app.apps.skills import workspace_skill_metas
+
+    files = await _files_with(**{"author-workflow": b"purpose only"})
+    await files.write("inv", "/.skill/author-workflow/.origin", b'{"source":"shared","files":{}}')
+    metas = await workspace_skill_metas(files, "inv")
+    assert metas[0].copy_of == "shared"
+    states = _by_name(effective_item_skills("_template", "default", {}, metas))
+    assert states["author-workflow"].source == "shared"
+
+    for manifest in (b"{}", b"not json at all"):
+        await files.write("inv", "/.skill/author-workflow/.origin", manifest)
+        metas = await workspace_skill_metas(files, "inv")
+        assert (metas[0].is_copy, metas[0].copy_of) == (True, ""), manifest
+        states = _by_name(effective_item_skills("_template", "default", {}, metas))
+        assert states["author-workflow"].source == "shared"
+
+
+async def test_a_manifest_gone_between_the_listing_and_the_read_is_simply_not_a_copy(
+    monkeypatch,
+):
+    """Round 3: the listing never READ `.origin` before P18; batching the reads
+    strictly put the whole index at the mercy of one manifest deleted between
+    `ls` and the read (the publish reply itself tells people to `delete_file`
+    it). `read_all_existing` exists for exactly that race: gone means not a
+    copy, and the rest of the index still renders."""
+    from workspace_app.apps.skills import workspace_skill_metas
+
+    files = await _files_with(alpha=b"a", beta=b"b")
+    await files.write("inv", "/.skill/alpha/.origin", b'{"source":"shared","files":{}}')
+    real_ls = files.ls
+
+    async def ls_then_delete(workspace_id: str, prefix: str = "") -> list[str]:
+        paths = await real_ls(workspace_id, prefix)
+        await files.delete(workspace_id, "/.skill/alpha/.origin")
+        return paths
+
+    monkeypatch.setattr(files, "ls", ls_then_delete)
+
+    metas = await workspace_skill_metas(files, "inv")
+
+    assert [(m.name, m.is_copy, m.copy_of) for m in metas] == [
+        ("alpha", False, ""),
+        ("beta", False, ""),
+    ]
+
+
+async def test_a_skill_md_gone_between_the_listing_and_the_read_still_raises(monkeypatch):
+    """The other half of the one-batch read, pinned (round 4 found the strict
+    `raise` a hand-written line no test held): a manifest that vanished makes
+    its folder not a copy, but a SKILL.md that vanished is what it always was
+    — a `FileNotFound` out of the index, the tolerance the per-file loop
+    never had and this batch was told not to invent."""
+    from workspace_app.apps.skills import workspace_skill_metas
+    from workspace_app.filestore.protocol import FileNotFound
+
+    files = await _files_with(alpha=b"a", beta=b"b")
+    real_ls = files.ls
+
+    async def ls_then_delete(workspace_id: str, prefix: str = "") -> list[str]:
+        paths = await real_ls(workspace_id, prefix)
+        await files.delete(workspace_id, "/.skill/alpha/SKILL.md")
+        return paths
+
+    monkeypatch.setattr(files, "ls", ls_then_delete)
+
+    with pytest.raises(FileNotFound):
+        await workspace_skill_metas(files, "inv")

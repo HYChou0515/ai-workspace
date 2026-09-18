@@ -53,6 +53,9 @@ export function usePlatformDestinations(): PlatformDestination[] {
     // an entrance that appears only once somebody has a page is the confusing
     // kind, and the empty state says what a WUI is. "WUI" is a proper noun.
     { to: "/wui", label: "WUI", icon: "external" },
+    // The skill hub (docs/plan-skill-hub.md). Unconditional for the same
+    // reason: the empty state says what it is. "Skill hub" is the proper noun.
+    { to: "/skill-hub", label: "Skill hub", icon: "sparkle" },
     ...(showGroups
       ? ([{ to: "/groups", label: "Groups", icon: "users" }] satisfies PlatformDestination[])
       : []),

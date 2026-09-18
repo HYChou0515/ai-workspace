@@ -25,7 +25,7 @@ from collections.abc import Mapping, Sequence
 from functools import cache
 from importlib import resources
 from importlib.resources.abc import Traversable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import msgspec
 
@@ -34,6 +34,7 @@ from .skill_payload import ORIGIN_FILE, SkillOrigin, SkillSource, origin_for, sk
 
 if TYPE_CHECKING:
     from ..files import WorkspaceFiles
+    from .skill_hub import SkillHubStore, UpstreamState
 
 logger = logging.getLogger(__name__)
 
@@ -62,11 +63,19 @@ class SkillMeta(msgspec.Struct, frozen=True):
 
     name: str
     description: str
-    #: #589 — this workspace folder is a COPY of a baked-in skill (it carries an
-    #: `.origin` manifest), not a skill written here. It still lives in the
-    #: workspace and is still editable; it simply must not be mistaken for the
-    #: user's own work when deciding source and default-on.
+    #: #589 — this workspace folder is a COPY (it carries an `.origin`
+    #: manifest), not a skill written here. It still lives in the workspace and
+    #: is still editable; it simply must not be mistaken for the user's own
+    #: work when deciding source and default-on.
     is_copy: bool = False
+    #: What the manifest says the copy came from — `shared` / `profile` for a
+    #: materialized package skill, `hub` for one installed from the skill hub,
+    #: `""` for a manifest that does not decode (an older or hand-written
+    #: `.origin`: still a copy, of unknown source). A hub copy that happens to
+    #: share a package skill's name is NOT that package's copy — its files came
+    #: from the hub, so `effective_item_skills` keeps it a workspace skill
+    #: (review round 2 of plan-skill-hub).
+    copy_of: SkillSource | Literal[""] = ""
 
 
 @cache
@@ -157,6 +166,38 @@ async def load_workspace_skill(files: WorkspaceFiles, workspace_id: str, name: s
     return _enforce_cap(name, body)
 
 
+async def workspace_skill_payload(
+    files: WorkspaceFiles, workspace_id: str, name: str
+) -> dict[str, bytes]:
+    """Every file under the workspace's ``.skill/<name>/``, keyed the way
+    :func:`skill_payload` keys a package skill — the shape the skill hub stores
+    and ``materialize_skill`` writes. ``.origin`` is left out: it says where THIS
+    copy came from, which is the copy's business, not the skill's. Empty when
+    there is no such folder."""
+    prefix = f"/{WORKSPACE_SKILL_DIR}/{name}/"
+    paths = sorted(p for p in await files.ls(workspace_id, prefix) if p != prefix + ORIGIN_FILE)
+    from ..files.facade import read_all
+
+    return {
+        path[len(prefix) :]: raw
+        for path, raw in zip(paths, await read_all(files, workspace_id, paths), strict=True)
+    }
+
+
+async def workspace_skill_origin(
+    files: WorkspaceFiles, workspace_id: str, name: str
+) -> SkillOrigin | None:
+    """The copy's ``.origin`` manifest, or ``None`` when the folder is not a
+    copy (or does not exist)."""
+    from ..filestore.protocol import FileNotFound
+
+    try:
+        raw = await files.read(workspace_id, f"/{WORKSPACE_SKILL_DIR}/{name}/{ORIGIN_FILE}")
+    except FileNotFound:
+        return None
+    return msgspec.json.decode(raw, type=SkillOrigin)
+
+
 async def workspace_skill_metas(files: WorkspaceFiles, workspace_id: str) -> list[SkillMeta]:
     """``(name, description)`` for every well-formed skill under the workspace's
     ``.skill/`` dir, sorted by name. Unparseable / name-mismatched / nameless
@@ -164,31 +205,47 @@ async def workspace_skill_metas(files: WorkspaceFiles, workspace_id: str) -> lis
     bad hand-edit can't break the whole index. Empty when there's no ``.skill/``."""
     prefix = f"/{WORKSPACE_SKILL_DIR}/"
     paths = await files.ls(workspace_id, prefix)
-    # Which folders are copies falls straight out of the listing we already have,
-    # so knowing it costs no extra read.
-    copies = {
-        p[len(prefix) :].removesuffix(f"/{ORIGIN_FILE}")
-        for p in paths
-        if p.endswith(f"/{ORIGIN_FILE}")
-    }
-    from ..files.facade import read_all
+    from ..files.facade import read_all_existing
+    from ..filestore.protocol import FileNotFound
 
     wanted = [
         path
         for path in sorted(paths)
         if path[len(prefix) :].count("/") == 1 and path.endswith("/SKILL.md")
     ]
+    manifests = sorted(p for p in paths if p.endswith(f"/{ORIGIN_FILE}"))
     # The index is rendered every turn, so reading each SKILL.md with its own
-    # call put a sandbox round trip per skill in front of every message.
-    # STRICT, matching the per-file loop this replaced (a bare `read`, so a skill
-    # that vanished mid-listing raised out of here). A performance fix is not the
-    # place to start tolerating a race nobody agreed to tolerate.
+    # call put a sandbox round trip per skill in front of every message — and
+    # the manifests ride in the SAME batch (a second batch resolved the
+    # workspace once more, on every message of every item holding a copy).
+    # One batch, two tolerances: a SKILL.md is read STRICTLY, matching the
+    # per-file loop this replaced (a bare `read`, so a skill that vanished
+    # mid-listing raised out of here — a performance fix is not the place to
+    # start tolerating a race nobody agreed to tolerate); a manifest that is
+    # gone by read time simply makes its folder not a copy, which is what the
+    # listing said before it ever read them.
+    got = await read_all_existing(files, workspace_id, [*wanted, *manifests])
+    copies: dict[str, SkillSource | Literal[""]] = {}
+    for path in manifests:
+        if (raw := got.get(path)) is None:
+            continue
+        dir_name = path[len(prefix) : -len(f"/{ORIGIN_FILE}")]
+        try:
+            copies[dir_name] = msgspec.json.decode(raw, type=SkillOrigin).source
+        except msgspec.DecodeError:  # not JSON, or not this shape — still a copy
+            copies[dir_name] = ""
     out: list[SkillMeta] = []
-    for path, raw in zip(wanted, await read_all(files, workspace_id, wanted), strict=True):
+    for path in wanted:
+        if (raw := got.get(path)) is None:
+            raise FileNotFound(path)
         dir_name = path[len(prefix) : -len("/SKILL.md")]
         meta = _workspace_skill_meta(raw, dir_name)
         if meta is not None:
-            out.append(msgspec.structs.replace(meta, is_copy=dir_name in copies))
+            out.append(
+                msgspec.structs.replace(
+                    meta, is_copy=dir_name in copies, copy_of=copies.get(dir_name, "")
+                )
+            )
     return out
 
 
@@ -308,12 +365,15 @@ def effective_item_skills(
         rows[m.name] = (m, "profile", True)
     for m in workspace_metas:
         prior = rows.get(m.name)
-        if m.is_copy and prior is not None:
+        if m.is_copy and m.copy_of != "hub" and prior is not None:
             # A copy of a baked-in skill answers as the skill it copied. Its
             # DESCRIPTION comes from the copy — that is the text actually read
             # this turn, and the AI may have edited it — but its source and
             # default-on stay the package's, so using a default-off skill once
-            # cannot quietly turn it on for good.
+            # cannot quietly turn it on for good. A copy installed from the
+            # skill hub is not that, whatever its name: its files never came
+            # from the package, so it is a workspace skill like any other
+            # (and the panel offers Publish on it, as on any workspace skill).
             rows[m.name] = (m, prior[1], prior[2])
         else:
             rows[m.name] = (m, "workspace", True)
@@ -456,32 +516,167 @@ async def materialize_skill(
     )
 
 
-async def skill_update_available(
+class Upstream(msgspec.Struct, frozen=True):
+    """What a copy's ``.origin`` points at, resolved NOW for one viewer.
+
+    ``origin`` is the copy's own manifest (the one read to get here — read
+    once, carried, so callers do not read it again). ``files`` is what upstream
+    ships today as ``{rel: sha256}`` — for a hub entry straight off its row,
+    which is why "has an update" costs no blob reads. ``payload`` is the bytes,
+    loaded only when asked (``with_payload``): only Refresh needs them. Both are
+    empty unless ``state`` is ``live``."""
+
+    source: SkillSource
+    state: UpstreamState
+    origin: SkillOrigin
+    files: dict[str, str]
+    payload: dict[str, bytes]
+    entry: str = ""
+
+
+async def resolve_upstream(
     files: WorkspaceFiles,
     workspace_id: str,
     app_slug: str | None,
     profile: str | None,
     name: str,
-) -> bool:
-    """Whether the package now ships something this copy does not have.
+    *,
+    hub: SkillHubStore | None = None,
+    viewer: str = "",
+    with_payload: bool = False,
+) -> Upstream | None:
+    """The copy's upstream, or ``None`` when ``.skill/<name>/`` is not a copy.
 
-    Compares what was SHIPPED (recorded in `.origin`) against what the package
-    ships now — deliberately not against the files on disk here. An edit made in
-    this workspace is not an upstream change, and offering "update" for it would
-    invite the user to press a button whose only honest outcome is "skipped".
+    Three sources, one answer shape. A package skill (``shared`` / ``profile``)
+    is found by NAME and is ``live`` or, once retired from the package,
+    ``deleted``. A skill hub copy is found by the ENTRY ID its manifest recorded
+    and can also be ``unpublished`` — the owner took it private and this viewer
+    is no longer on the list (plan Q5). The hub is required for a hub copy: a
+    caller without one would otherwise read every hub copy as ``deleted``, so
+    that is a wiring error, raised, not a state.
     """
-    from ..filestore.protocol import FileNotFound
-
-    try:
-        raw = await files.read(workspace_id, f"/{WORKSPACE_SKILL_DIR}/{name}/{ORIGIN_FILE}")
-    except FileNotFound:
-        return False
-    origin = msgspec.json.decode(raw, type=SkillOrigin)
+    origin = await workspace_skill_origin(files, workspace_id, name)
+    if origin is None:
+        return None
+    if origin.source == "hub":
+        if hub is None:
+            raise ValueError(
+                f"{name!r} was installed from the skill hub, but no skill hub was given"
+            )
+        state, entry = hub.state_for(origin.entry, viewer)
+        if entry is None:
+            return Upstream(source="hub", state=state, origin=origin, files={}, payload={})
+        payload = await hub.payload_of(origin.entry) if with_payload else {}
+        return Upstream(
+            source="hub",
+            state="live",
+            origin=origin,
+            files=dict(entry.origin.files),
+            payload=payload,
+            entry=origin.entry,
+        )
     found = _skill_source(app_slug, profile, name)
     if found is None:
-        return False
-    _source, src_dir = found
-    return origin.files != origin_for(_source, skill_payload(src_dir)).files
+        return Upstream(source=origin.source, state="deleted", origin=origin, files={}, payload={})
+    source, src_dir = found
+    payload = skill_payload(src_dir)
+    return Upstream(
+        source=source,
+        state="live",
+        origin=origin,
+        files=origin_for(source, payload).files,
+        payload=payload if with_payload else {},
+    )
+
+
+class SkillUpstream(msgspec.Struct, frozen=True):
+    """The Skills panel's two facts about a copy's upstream."""
+
+    state: UpstreamState
+    update_available: bool
+
+
+async def skill_upstream(
+    files: WorkspaceFiles,
+    workspace_id: str,
+    app_slug: str | None,
+    profile: str | None,
+    name: str,
+    *,
+    hub: SkillHubStore | None = None,
+    viewer: str = "",
+) -> SkillUpstream | None:
+    """The copy's upstream state and whether it now ships something this copy
+    does not have; ``None`` for a folder that is not a copy.
+
+    "Has an update" compares what was SHIPPED (recorded in ``.origin``) against
+    what upstream ships now — deliberately not against the files on disk here.
+    An edit made in this workspace is not an upstream change, and offering
+    "update" for it would invite the user to press a button whose only honest
+    outcome is "skipped". Only a ``live`` upstream can have one.
+    """
+    up = await resolve_upstream(
+        files, workspace_id, app_slug, profile, name, hub=hub, viewer=viewer
+    )
+    if up is None:
+        return None
+    if up.state != "live":
+        return SkillUpstream(state=up.state, update_available=False)
+    return SkillUpstream(state="live", update_available=up.origin.files != up.files)
+
+
+async def skill_folder_in_the_way(
+    files: WorkspaceFiles, workspace_id: str, hub: SkillHubStore, name: str, viewer: str
+) -> str | None:
+    """The refusal an install gets when ``.skill/<name>/`` already exists —
+    one sentence, shared by the tool and the route so the two doors refuse
+    alike — or ``None`` when the name is free. Never overwrite: the folder may
+    be the user's own skill, or an earlier install they have since edited. It
+    says WHOSE copy it is when it is one, so "already have it" and "name
+    clash" read differently (plan install step 4)."""
+    if not await workspace_skill_payload(files, workspace_id, name):
+        return None
+    origin = await workspace_skill_origin(files, workspace_id, name)
+    whose = ""
+    if origin is not None and origin.source == "hub" and origin.entry:
+        _state, theirs = hub.state_for(origin.entry, viewer)
+        if theirs is not None:
+            whose = f"{theirs.owner}'s "
+    return (
+        f"this workspace already has {whose}'.skill/{name}/' — remove or rename that folder "
+        "first, then install again"
+    )
+
+
+async def install_hub_skill(
+    files: WorkspaceFiles, workspace_id: str, hub: SkillHubStore, entry_id: str
+) -> str:
+    """Copy a skill hub entry into the workspace as ``.skill/<name>/`` and return
+    the name. The hub-sourced twin of :func:`materialize_skill`: files first,
+    ``.origin`` LAST (until it exists the copy is incomplete, and a manifest
+    that outlived a half-written copy would claim shipped bytes for files that
+    were never written). The caller has already decided the entry may be
+    installed and that nothing sits at that name — this only writes.
+    """
+    entry = hub.get(entry_id)
+    assert entry is not None  # the caller checked `state_for` first
+    payload = await hub.payload_of(entry_id)
+    root = f"/{WORKSPACE_SKILL_DIR}/{entry.name}"
+    manifest = msgspec.json.encode(origin_for("hub", payload, entry=entry_id))
+    # The whole folder is one operation (#538): checked once up front, so a
+    # workspace with room for the first file and not the rest refuses cleanly
+    # instead of leaving half a folder with no `.origin` — which would then
+    # read as a hand-written skill of that name and block the next install.
+    # The manifest's bytes are part of that check: a check that counted the
+    # files and not the `.origin` written after them left exactly that half
+    # folder (review round 2).
+    await files.ensure_room_for(
+        workspace_id, sum(len(data) for data in payload.values()) + len(manifest)
+    )
+    for rel, data in payload.items():
+        await files.write(workspace_id, f"{root}/{rel}", data)
+    await files.write(workspace_id, f"{root}/{ORIGIN_FILE}", manifest)
+    return entry.name
 
 
 class SkillRefresh(msgspec.Struct, frozen=True):
@@ -501,6 +696,8 @@ async def refresh_skill(
     name: str,
     *,
     force: bool = False,
+    hub: SkillHubStore | None = None,
+    viewer: str = "",
 ) -> SkillRefresh:
     """Bring a copied skill up to the version the package now ships.
 
@@ -517,16 +714,14 @@ async def refresh_skill(
     from ..filestore.protocol import FileNotFound
 
     root = f"/{WORKSPACE_SKILL_DIR}/{name}"
-    try:
-        raw = await files.read(workspace_id, f"{root}/{ORIGIN_FILE}")
-    except FileNotFound:
+    up = await resolve_upstream(
+        files, workspace_id, app_slug, profile, name, hub=hub, viewer=viewer, with_payload=True
+    )
+    # Not a copy, or an upstream that is gone / closed to this viewer: nothing
+    # to bring, and nothing here is touched — the copy is the workspace's own.
+    if up is None or up.state != "live":
         return SkillRefresh(updated=[], skipped=[], removed=[])
-    origin = msgspec.json.decode(raw, type=SkillOrigin)
-    found = _skill_source(app_slug, profile, name)
-    if found is None:
-        return SkillRefresh(updated=[], skipped=[], removed=[])
-    source, src_dir = found
-    payload = skill_payload(src_dir)
+    origin, source, payload = up.origin, up.source, up.payload
 
     async def _unchanged(rel: str) -> bool:
         """Whether the workspace copy still holds the bytes we shipped. Only ever
@@ -565,7 +760,9 @@ async def refresh_skill(
         await files.delete(workspace_id, f"{root}/{rel}")
         removed.append(rel)
     await files.write(
-        workspace_id, f"{root}/{ORIGIN_FILE}", msgspec.json.encode(origin_for(source, payload))
+        workspace_id,
+        f"{root}/{ORIGIN_FILE}",
+        msgspec.json.encode(origin_for(source, payload, entry=up.entry)),
     )
     return SkillRefresh(updated=sorted(updated), skipped=sorted(skipped), removed=sorted(removed))
 

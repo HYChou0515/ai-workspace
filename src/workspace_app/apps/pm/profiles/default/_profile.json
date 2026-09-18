@@ -1,5 +1,5 @@
 {
-  "skills": ["author-skill", "author-workflow"],
+  "skills": ["author-skill", "author-workflow", "skill-hub"],
   "suggestions": [
     { "label": "New issue", "prompt": "Create an issue for " },
     { "label": "Overdue", "prompt": "List the overdue issues." },
