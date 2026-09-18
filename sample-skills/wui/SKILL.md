@@ -198,10 +198,13 @@ A read-only page has no `data.json` — it reads what the item already holds.
 ```yaml
 view: wui
 title: Lot tracker
+# icon: logo.png         # a file in this folder, or an emoji ("📦"), or a platform icon name ("kanban")
 # tools: [lot-status]   # only if the page calls one — see reference.md
 ```
 
 `title` is what the pane is called. `entry` overrides `index.html` if you must.
+`icon` is optional: it marks the page on the WUI overview once it is Deployed;
+without one the overview draws a circle with the title's first letter.
 
 ## The rules that are enforced (not advice)
 
