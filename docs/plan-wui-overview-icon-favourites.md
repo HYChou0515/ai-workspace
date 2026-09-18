@@ -297,3 +297,85 @@ an emoji mark, and a filled star.
   Remove buttons for one row is by design (both work, one press suffices);
   two `aria-pressed` stars for one page must flip together — they read one
   state, so they do, and a test pins it.
+
+## Amendment (2026-09-18, after the P15 demo): cards, with the table kept
+
+> 他應該要像是卡片的排列 … 希望有卡片和表格兩種顯示方式 卡片 default
+
+The overview gets **two views**: **cards** (the default) and **table** (the
+list P1–P17 built, unchanged). One toggle beside the heading; the choice is
+remembered in the browser.
+
+### Decisions
+
+| Question | Decision | Rejected |
+|---|---|---|
+| Which cards? | **`AppCard`'s** (`pages/Launcher.tsx:30`): a white card, a 4px stripe on top in the App's colour, a 54px mark on the left, a bold title, one muted line under it, `repeat(auto-fill, minmax(320px, 1fr))` with a 16px gap (`:201`). Copied, not designed. | A new card shape. |
+| Is the whole card the link? | **Yes**, like `AppCard` — the title `<a>` is stretched over the card (`::after { inset: 0 }`); the star and Remove sit above it (`position: relative; z-index: 1`), so they press without opening the page and the HTML stays valid (no button inside a link). The author did not answer this one; the recommended answer is taken and can be flipped. | Title-only link (most of the card dead to a press). |
+| What is on a card? | Stripe · `PageMark` at 54px · title · `item_title · deployed by · when` (the table row's `.detail` sentence) · star and Remove top-right. Nothing the table does not show. | A description (pages have none), a preview. |
+| The toggle? | Two `aria-pressed` buttons, **`LanguageToggle`'s shape** (`components/LanguageToggle.tsx:15`), labelled `wui.view.cards` / `wui.view.table` (卡片 / 表格; Cards / Table), in a row with the `<h1>`. Hidden when there is nothing to list. | A dropdown; icons only. |
+| Remembered where? | `localStorage` `rca.wuiView` = `"cards" \| "table"`, per browser — a convenience like `rca.wuiAutoBuild`, not an identity like the favourites, so not per user. Missing / garbage → cards. | Per user; on the server. |
+| Page width? | Cards mode widens the `.page` shell to **1080px** (the Launcher's) via a `page--wide` modifier so three cards fit; table mode keeps 760. | Two columns inside 760 (a gallery that never gets past two). |
+| The groups? | Unchanged: favourites first, then one section per App, each section a card grid in cards mode and the list in table mode. | Flattening into one grid. |
+
+### Shape
+
+- `lib/wuiView.ts` (new): `readWuiView()` / `writeWuiView(v)` / `useWuiView()` —
+  the `wuiAutoBuild.ts` shape (try/catch both ways, derived state).
+- `WuiOverviewPage`: `const [view, setView] = useWuiView()`; the header row
+  `<div className="page-head"><h1/>{toggle}</div>`; each section renders
+  `view === "cards" ? <ul className="wui-cards">…<PageCard/>…</ul> :
+  <ul className="wui-list">…<PageRow/>…</ul>`. `PageCard` and `PageRow` share
+  the Remove mutation, the confirm, the star — lifted into one `usePageActions`
+  hook so the two views cannot drift (the parity is structural, not two
+  copies kept alike by hand).
+- `styles/my-resources.css`: `.page.page--wide`, `.page .page-head`,
+  `.page .wui-cards` (the grid), `.page .wui-card` (the card: relative,
+  white, border, radius-card, overflow hidden), `.wui-card > .stripe`
+  (the App's own colour, published as `--app-color` beside the three
+  `AppTag` properties), `.wui-card > a::after` (the stretched link),
+  `.wui-card .actions` (absolute top-right, `z-index: 1`), hover =
+  `--app-tint` fill. No subgrid, no tracks — a card is one flex row.
+- `i18n`: `wui.view.cards`, `wui.view.table`, `wui.view.label` (顯示方式 /
+  View).
+
+### Tests (red first)
+
+- `wuiView.test.ts`: default cards; garbage → cards; write-through; the hook
+  re-renders.
+- `WuiOverviewPage.test.tsx`: cards by default (`.wui-cards` present, no
+  `.wui-list`); the toggle flips to the table and back and the choice
+  survives a remount; a card's title link carries the page address and
+  `target="_blank"`; the star and Remove are NOT descendants of the `<a>`;
+  Remove from a card removes (one DELETE); a star on a card flips both
+  copies (favourites + App group); the toggle is absent on the empty state;
+  the `.page` root carries `page--wide` in cards mode only.
+- `my-resources.test.ts`: `.wui-cards` declares `repeat(auto-fill,
+  minmax(…))`; `.wui-card > a::after` has `inset: 0` (or the four sides);
+  `.wui-card .actions` has `z-index`; `.page--wide` raises `max-width`.
+  Mutations: drop the `::after` rule → red; drop the actions' `z-index` →
+  red.
+- Measured in Chromium (the P13 harness, a cards variant): 1280 → three
+  columns, 760 → two, 390 → one; a 60-character title wraps inside its card;
+  `document.scrollWidth == clientWidth` at every width.
+
+### Phases
+
+18. This amendment.
+19. `wuiView` + the toggle + `PageCard` + the styles + the guards; measured.
+20. `docs/wui.md` (the two views, the default, where the choice lives);
+    the demo re-recorded in cards mode with one switch to the table.
+
+### Ground truth (branch @ 8cb12f89)
+
+- `pages/Launcher.tsx:26` `softOf` (the hover fill), `:30–73` `AppCard`,
+  `:198–203` the grid.
+- `components/LanguageToggle.tsx:15–39` the two-button toggle (inline
+  styles, `aria-pressed`, `--accent-soft` / `--accent-h` when on).
+- `pages/WuiOverviewPage.tsx:34` the page, `:98` the `<h1>`, `:108–124` the
+  favourites section, `:125–150` the App sections (both `<ul
+  className="wui-list">`), `:162` `PageRow`.
+- `styles/my-resources.css:20–24` `.page` (max-width 760), `:26–29` `> h1`,
+  `:402` `.wui-list`, `:442` `.page-mark`, `:503` the narrow block.
+- `lib/wuiAutoBuild.ts` the localStorage shape to copy.
+
