@@ -1,0 +1,65 @@
+"""`render_chat_video` — the one entry point the CLI calls today and a job
+handler will call tomorrow (P3).
+
+The doubles stand in for the browser and ffmpeg only; the timeline and the
+page are real, so what reaches `record` is the page this transcript renders
+to, and what `encode` is asked for is the option's format list.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from workspace_app.chat_video import service
+from workspace_app.chat_video.options import VideoOptions
+from workspace_app.chat_video.service import render_chat_video
+
+_MESSAGES = [
+    {"role": "user", "content": "hi", "author": "u"},
+    {"role": "assistant", "content": "hello", "author": "AI"},
+]
+
+
+def test_it_records_the_rendered_page_once_and_encodes_each_format(monkeypatch, tmp_path):
+    seen: dict[str, object] = {}
+
+    def fake_record(html: str, options: VideoOptions, workdir: Path, *, expected_ms: int) -> Path:
+        seen["html"] = html
+        seen["expected_ms"] = expected_ms
+        seen["workdir"] = workdir
+        out = workdir / "recording.webm"
+        out.write_bytes(b"WEBM")
+        return out
+
+    def fake_encode(src: Path, fmt: str, out: Path) -> Path:
+        out.write_bytes(f"{fmt}:".encode() + src.read_bytes())
+        return out
+
+    monkeypatch.setattr(service, "record", fake_record)
+    monkeypatch.setattr(service, "encode", fake_encode)
+
+    result = render_chat_video(
+        title="t", messages=_MESSAGES, options=VideoOptions(fmt=("gif", "mp4")), workdir=tmp_path
+    )
+
+    assert result == {"gif": b"gif:WEBM", "mp4": b"mp4:WEBM"}
+    assert "hello" in str(seen["html"]) and "const TIMELINE" in str(seen["html"])
+    expected = seen["expected_ms"]
+    assert isinstance(expected, int) and expected > 0
+    assert not (tmp_path / "recording.webm").exists()  # the scratch is gone
+
+
+def test_the_scratch_dir_is_removed_even_when_the_browser_fails(monkeypatch, tmp_path):
+    def failing_record(*_a, **_k) -> Path:
+        raise RuntimeError("browser died")
+
+    monkeypatch.setattr(service, "record", failing_record)
+
+    try:
+        render_chat_video(title="t", messages=_MESSAGES, options=VideoOptions(), workdir=tmp_path)
+    except RuntimeError:
+        pass
+    else:  # pragma: no cover - the failure must propagate
+        raise AssertionError("the browser's failure was swallowed")
+
+    assert not any(tmp_path.iterdir())

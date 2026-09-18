@@ -16,6 +16,9 @@ dependencies = [
     "litellm>=1.85.1",
     "llama-index-core>=0.10,<0.11",
     "llama-index-readers-file>=0.1.33",
+    # Renders an assistant answer for the chat-video player. Already here by
+    # way of rich (litellm); declared now because we import it.
+    "markdown-it-py>=3",
     "openai-agents>=0.17.3",
     "openpyxl>=3.1.5",
     "pypdfium2>=5.9.0",
@@ -41,6 +44,16 @@ process-sandbox = [
 # the broker; the in-memory default needs nothing.
 rabbitmq = [
     "aio-pika>=9.4.0",
+]
+# Rendering a chat transcript to video (`workspace_app.chat_video`,
+# docs/plan-chat-video.md): a headless Chromium records the player page. Only
+# the pod that renders needs it — the timeline and the page import without it.
+# After `uv sync --extra chat-video`, run `playwright install chromium` once;
+# ffmpeg comes from the OS. Pinned to 1.49: newer wheels refuse Debian 11
+# (`playwright install` says "does not support … on debian11-x64"), which is
+# what the dev boxes run — raise it when the image base moves.
+chat-video = [
+    "playwright>=1.49,<1.50",
 ]
 
 [build-system]
