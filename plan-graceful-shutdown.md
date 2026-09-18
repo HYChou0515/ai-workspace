@@ -430,6 +430,7 @@ Inputs: `R` = the key's released claims, `U` = the unreleased ones;
 | a send still preparing (token registered, no turn yet) | its beat keeps it live, to the deadline | yes; the token marked AFTER the release | the worker declines the turn when it enqueues; nothing persisted | no cancel | `test_a_send_still_preparing_at_the_deadline_is_handed_over_and_declined` |
 | … and that preparation then FAILS on the dying pod | — | (already) | nothing (`_end_with_failure` asks `is_mine`) | no `RunError` | `test_a_handed_over_sends_late_preparation_failure_writes_nothing` |
 | … and it was a DRIVEN send (a goal follow-up) that fails after the handover | — | (already) | nothing; and the driver is NOT told "this round did not start" — the round starts on the peer (round 4: the throw had the driver refund a round the peer then ran) | no `RunError` | `test_a_handed_over_driven_sends_late_failure_is_not_reported_to_its_driver` |
+| a claim the tick TOOK but had not yet started re-running when the sweeper was cancelled (the ms between `take` / `advance` and the first `rerun`) | — | no: no token exists yet for the drain to see | nothing (nothing ran) — the claim stays this pod's until the stale window; once ONE re-run on the key is preparing, the handover's `release(keys)` covers the other taken claims on that key too | — | stated (round 5); a ms window, not pinned |
 | a RE-RUN the sweeper started, still preparing when the pod drains | its beat keeps it live | yes — the re-run is its own held task (`_inflight`), so it survives the sweeper's cancel and its token is there for the drain (round 4: inside the sweeper's task it died with it, token gone, claim left this pod's for the stale window) | nothing | no cancel | `test_a_re_run_still_preparing_when_its_pod_drains_is_handed_over_too` |
 | no handover wired (a caller without a claim store) | yes | — | the partial + "interrupted", as Stop does | cancel | the pre-existing `aclose` tests (`test_turn_resilience.py`) |
 | the handover's release runs late (past the 2 s grace) | — | the thread finishes on its own | no answer lost or duplicated: a copy that persisted has FINISHED its claim (the late write is a no-op on a deleted row); one whose persist failed, or a queued turn never started, is thereby handed over; a claim a peer took fails the CAS. The one window — the release landing between a copy's `is_mine` read and its `finish` (a few ms: one `conv_rm.update`), with a peer's tick inside it — costs that peer one wasted re-run; the copy's own reply stands | — | by enumeration (round 3) and interleaving (round 4, measured 0.3–6 ms) |
@@ -500,6 +501,25 @@ fix.
   (without the take, `is_mine` says the claim is not ours and no ending is
   written), not by the spent-claim test round 2 named — `is_mine` masks it
   there.
+
+## Round 5 (one question, regression lens on `806bab2d..d1fb5f21`)
+
+P9 replaced three mechanisms; the round asked only whether any input the
+OLD ones handled is handled worse. None is: `rerun` as a held task
+sequences a key's re-runs at the same point (once enqueued), survives the
+sweeper's cancel and is drained like a preparing send; `_messages_after`
+equals the old slice in every cell where the claimed message is present and
+fixes the four cells where it is absent (a 32-cell parity probe, and the
+same 16 cells through the real tick with the old file swapped in: 4
+failed); the driven throw's six cells (claim none/mine/taken × driven or
+not) are unchanged except the one round 4 fixed. Two things stated rather
+than built: the table-B row above (a claim taken but not yet re-running
+when the sweeper is cancelled — a ms window), and a cosmetic log line —
+when the sweeper is cancelled inside the `shield` and the held re-run
+raises later, CPython's `shield` leaves the inner exception unretrieved
+("Task exception was never retrieved" at GC); the failure itself was
+already logged inside `_start_turn`, and `send`'s shield has had the same
+property since it was written.
 
 ## Round 3 (four lenses on `7031392c`) — the last of the budget
 
