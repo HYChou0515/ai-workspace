@@ -111,6 +111,8 @@ def _workspace_path(raw: str) -> str:
     * ``move_file`` / ``copy_file`` — BOTH sides of each
     * ``list_files`` / ``list_tree`` / ``prepare_files_download`` — via
       ``_workspace_prefix``, which keeps ``""`` meaning "whole workspace"
+    * ``deploy_wui`` / ``undeploy_wui`` (``api/wui_deploy.py``) — the body
+      path and the ``path`` query parameter
 
     Known NOT to pass through here, deliberately or otherwise:
     ``/notebooks/{notebook_path:path}`` (a kernel session key, never a store

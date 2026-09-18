@@ -40,6 +40,24 @@ function rule(selector: string): string {
   return m[1];
 }
 
+/** `rule`, but over the sheet with every `@media` block removed — for a
+ * selector that has a wide rule AND a narrow one, `rule` answers with whichever
+ * comes first, and once the wide one is gone that is the narrow one: a guard
+ * about the wide layout then reads the reflow's declarations and passes.
+ *
+ * Every media block, wherever it sits, rather than "the sheet before the
+ * narrow one": wide rules live on both sides of it (the admin rules follow it),
+ * and the breakpoint is not this test's to know (the header says a re-tune
+ * must be free; the `reflows` guard already matches `\d+px`). Blocks end at
+ * the first `}` on its own line, the same convention that guard uses. */
+function wideRule(selector: string): string {
+  const wide = css.replace(/@media[^{]*\{[\s\S]*?\n\}/g, "");
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const m = wide.match(new RegExp(`(?:^|})\\s*${escaped}\\s*{([^}]*)}`));
+  if (!m) throw new Error(`no wide rule for ${selector}`);
+  return m[1];
+}
+
 describe("my-resources: the live panel's layout", () => {
   it("lays the three totals out as columns, not as a stack of full-width bars", () => {
     // Three 712px accent bars stacked in the same column as the rows beneath
@@ -67,7 +85,7 @@ describe("my-resources: the live panel's layout", () => {
     expect(rule(".page ul > li")).toMatch(/display:\s*flex/);
   });
 
-  it.each([".page .live-list", ".page .disk-list"])(
+  it.each([".page .live-list", ".page .disk-list", ".page .wui-list"])(
     "declares %s's columns ONCE for the whole list, so the rows line up",
     (selector) => {
       // Declared on the ROW instead, every row sizes its own tracks: the spec
@@ -76,11 +94,14 @@ describe("my-resources: the live panel's layout", () => {
       // column to a different x on each row. The tags visibly failed to line
       // up in a column whose whole point is being scannable — and every DOM
       // test stayed green, because the tag renders either way.
-      const list = rule(selector);
+      // `wideRule`, so a deleted wide rule cannot be answered for by the
+      // narrow block's rule of the same name (it happens to say something
+      // else today; that is luck, not a guard).
+      const list = wideRule(selector);
       expect(list).toMatch(/display:\s*grid/);
       expect(list).toMatch(/grid-template-columns:/);
       // …and the row defers to it rather than re-declaring its own.
-      expect(rule(`${selector} > li`)).toMatch(/grid-template-columns:\s*subgrid/);
+      expect(wideRule(`${selector} > li`)).toMatch(/grid-template-columns:\s*subgrid/);
     },
   );
 
@@ -92,12 +113,138 @@ describe("my-resources: the live panel's layout", () => {
     // `minmax(0, 1fr)` — the only shrinkable track — paid for it (193px of
     // title at a 641px viewport). `fit-content(10rem)` keeps the cap and hands
     // the slack back, and still gives every row one shared track.
-    const tracks = rule(".page .live-list").match(/grid-template-columns:([^;]*);/)?.[1];
+    const tracks = wideRule(".page .live-list").match(/grid-template-columns:([^;]*);/)?.[1];
     expect(tracks).toBeTruthy();
     // dot · title · App · spec · action.
     const third = tracks!.trim().split(/\s+(?![^(]*\))/)[2];
     const LENGTH = String.raw`\d+(\.\d+)?(rem|px|ch|em)`;
     expect(third).toMatch(new RegExp(`^(${LENGTH}|fit-content\\(${LENGTH}\\))$`));
+  });
+
+  it("BOUNDS the overview's middle column, which is free text, so one long item title cannot zero every sibling's page title", () => {
+    // Review round 2 of PR #811: the `/wui` list copied the disk list's tracks —
+    // `minmax(0, 1fr) auto auto` — but its middle cell is an ITEM TITLE, not a
+    // byte count. With the tracks shared down the list (subgrid) an `auto`
+    // track sized itself to the longest item title in the group and the page
+    // title, the only shrinkable track, paid on every row: measured, one
+    // 43-character item title gave all five page titles in its group 0px at
+    // 1280px.
+    // The cap is what stops that; the reflow test below cannot see it, and
+    // happy-dom lays nothing out.
+    const tracks = wideRule(".page .wui-list").match(/grid-template-columns:([^;]*);/)?.[1];
+    expect(tracks).toBeTruthy();
+    const cols = tracks!.trim().split(/\s+(?![^(]*\))/);
+    // mark · title · item + who/when · star · Remove (P13 put the mark first,
+    // P14 the star before Remove). The free-text track is the THIRD; a test
+    // that read "the second" after the mark arrived would have pinned the
+    // title's `1fr` and called it a cap.
+    expect(cols).toHaveLength(5);
+    expect(cols.slice(3)).toEqual(["auto", "auto"]);
+    expect(cols[2]).toMatch(/^fit-content\(\d+(\.\d+)?(%|rem|px|ch|em)\)$/);
+    // The mark's track is `auto` and that is safe ONLY because the mark is a
+    // fixed-size box — `PageMark` sets width and height inline, and its test
+    // pins them. Nothing free-text may ever sit in an `auto` track here.
+    expect(cols[0]).toBe("auto");
+    // The circle clips what it holds (a file icon is `cover`ed, not stretched)
+    // and never shrinks to make room — it is the one thing on the row with a
+    // size of its own.
+    const markRule = wideRule(".page .page-mark");
+    expect(markRule).toMatch(/border-radius:\s*50%/);
+    expect(markRule).toMatch(/overflow:\s*hidden/);
+    expect(markRule).toMatch(/flex-shrink:\s*0/);
+    // The cap alone bounds nothing: a grid track's automatic MINIMUM is the
+    // cell's min-content, and for nowrap text that is the whole item title —
+    // so the cell has to be allowed to shrink (`min-width: 0`) and to wrap.
+    // Read from the WIDE half of the sheet: `rule()` returns the first match
+    // in the file, and with the wide rule deleted it found the narrow block's
+    // `.page .wui-list .detail` (which also says `white-space: normal`) and
+    // passed on somebody else's declarations — round 3 of PR #811 showed the
+    // round-2 defect fully back with this suite green.
+    const detail = wideRule(".page .wui-list .detail");
+    expect(detail).toMatch(/min-width:\s*0/);
+    // …and what does not fit the cap is CUT with an ellipsis (P20, the
+    // author's 「不要硬要顯示全部」 — reversing P6's wrap; the whole sentence
+    // is in the cell's `title`). Still bounded: `overflow: hidden` and
+    // `min-width: 0` are what keep a 60-letter token from running under
+    // 下架 and scrolling the document (measured, round 3).
+    expect(detail).toMatch(/white-space:\s*nowrap/);
+    expect(detail).toMatch(/overflow:\s*hidden/);
+    expect(detail).toMatch(/text-overflow:\s*ellipsis/);
+  });
+
+  it("lays the overview's cards out as a grid, and makes the whole card the link with the actions above it", () => {
+    // The cards amendment: `AppCard`'s grid, copied. `auto-fill` + `minmax`,
+    // or the cards never wrap.
+    expect(wideRule(".page .wui-cards")).toMatch(/grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(/);
+    // The title's anchor is stretched over the card: without `inset: 0` on
+    // its `::after` only the words are pressable and the card reads as a
+    // link it is not. `position: relative` on the card is what the overlay
+    // positions against — without it the overlay covers the PAGE.
+    expect(wideRule(".page .wui-card")).toMatch(/position:\s*relative/);
+    expect(wideRule(".page .wui-card .wui-card-text > a::after")).toMatch(/inset:\s*0/);
+    expect(wideRule(".page .wui-card .wui-card-text > a::after")).toMatch(/position:\s*absolute/);
+    // The actions sit ABOVE the overlay, or a press on the star opens the
+    // page instead of starring it. Same for the item link in the detail.
+    expect(wideRule(".page .wui-card > .wui-card-foot")).toMatch(/z-index:\s*[1-9]/);
+    expect(wideRule(".page .wui-card .wui-card-text > .detail > a")).toMatch(/z-index:\s*[1-9]/);
+    // Cards mode widens the shell (three cards at the Launcher's width).
+    expect(wideRule(".page.page--wide")).toMatch(/max-width:\s*1080px/);
+    // The star is the top-right corner, above the stretched link like the
+    // footer actions are.
+    expect(wideRule(".page .wui-card > .star")).toMatch(/position:\s*absolute/);
+    expect(wideRule(".page .wui-card > .star")).toMatch(/z-index:\s*[1-9]/);
+    // The body leaves the corner free, or the title runs under the star.
+    expect(wideRule(".page .wui-card > .wui-card-body")).toMatch(/padding-right:\s*\d+px|padding:[^;]*\b(4[4-9]|[5-9]\d)px/);
+  });
+
+  it("makes every card in a row the same height, with the footer at the bottom", () => {
+    // The author, on the P20 cards: 「應該要一樣高 比較整齊」. P19 had set
+    // `align-items: start` because a stretched card beside a seven-line
+    // title was 328px of nothing; P20's clamp bounds a card at two title
+    // lines + one detail line, so stretching is safe again. The card is a
+    // flex column with its body growing, or the footer floats mid-card.
+    const grid = wideRule(".page .wui-cards");
+    expect(grid).not.toMatch(/align-items:\s*start/);
+    const card = wideRule(".page .wui-card");
+    expect(card).toMatch(/display:\s*flex/);
+    expect(card).toMatch(/flex-direction:\s*column/);
+    // Said out loud, because the shell's `.page ul > li` is a CENTRED flex
+    // row: the first cut of this column inherited `align-items: center` and
+    // the stripe went 0px wide while the body was clipped on both sides
+    // (measured on the real page). Both are the shell's to override.
+    expect(card).toMatch(/align-items:\s*stretch/);
+    expect(card).toMatch(/gap:\s*0/);
+    const body = wideRule(".page .wui-card > .wui-card-body");
+    expect(body).toMatch(/flex:\s*1/);
+    expect(body).toMatch(/min-width:\s*0/);
+  });
+
+  it("fills a pressed star in EVERY view, not only the table", () => {
+    // P14 scoped the fill to `.wui-list`; the cards (P19) drew every starred
+    // page hollow — measured on the P20 harness, a pressed star with no fill.
+    const rule = wideRule('.page [aria-pressed="true"] [data-icon="star"] path');
+    expect(rule).toMatch(/fill:\s*currentColor/);
+    expect(css).not.toMatch(/\.wui-list \[aria-pressed="true"\] \[data-icon="star"\]/);
+  });
+
+  it("cuts a long title and a long detail instead of showing them whole", () => {
+    // The author, on the cards: 「當 title 太長或是描述太長 不要硬要顯示全部」.
+    // The card title is clamped to two lines, its detail and the table's
+    // detail to one with an ellipsis; the full text is in a `title`. On the
+    // table this REVERSES P6's `white-space: normal` (an ellipsis was
+    // thought to hide who put the page up) — the author's call.
+    const cardTitle = wideRule(".page .wui-card .wui-card-text > a");
+    expect(cardTitle).toMatch(/-webkit-line-clamp:\s*2/);
+    expect(cardTitle).toMatch(/display:\s*-webkit-box/);
+    expect(cardTitle).toMatch(/overflow:\s*hidden/);
+    for (const sel of [".page .wui-card .wui-card-text > .detail", ".page .wui-list .detail"]) {
+      const r = wideRule(sel);
+      expect(r).toMatch(/white-space:\s*nowrap/);
+      expect(r).toMatch(/overflow:\s*hidden/);
+      expect(r).toMatch(/text-overflow:\s*ellipsis/);
+      // The ellipsis needs the box to be allowed to shrink (`reference_flex_kills_text_overflow`).
+      expect(r).toMatch(/min-width:\s*0/);
+    }
   });
 
   it("reflows the rows before the fixed columns eat the title", () => {
@@ -122,6 +269,23 @@ describe("my-resources: the live panel's layout", () => {
     // `[\s\S]*` the storage row lost its narrow tracks and rendered a 256px
     // 刪除 button on the first line, with the suite green.
     expect(block).toMatch(/\.page \.disk-list > li \{[^}]*grid-template-columns:/);
+    // Three lists now, not two: the overview (`/wui`) shipped with the shell
+    // and no reflow of its own, and this guard named the other two — the
+    // exact half-somebody-tested shape the comment above warns about. Its
+    // title measured 0px at 390px in a real browser (PR #811, review round 1).
+    expect(block).toMatch(/\.page \.wui-list[^{}]*\{[^}]*display:\s*flex/);
+    expect(block).toMatch(/\.page \.wui-list > li \{[^}]*grid-template-columns:/);
+    expect(block).toMatch(/\.page \.wui-list \.detail \{[^}]*grid-row:\s*2/);
+    // …and under the TITLE, not under the mark: the mark keeps column 1, so a
+    // detail that spanned from column 1 would start under the circle and read
+    // as a third thing on the row rather than the title's second line.
+    expect(block).toMatch(/\.page \.wui-list \.detail \{[^}]*grid-column:\s*2 \/ -1/);
+    expect(block).toMatch(/\.page \.wui-list > li > \.page-mark \{[^}]*grid-column:\s*1/);
+    // The star keeps column 3 and Remove column 4 by the one attribute that
+    // tells them apart, so a reader's row (no Remove) still puts its star
+    // where every other row's is.
+    expect(block).toMatch(/\.page \.wui-list > li > button\[aria-pressed\] \{[^}]*grid-column:\s*3/);
+    expect(block).toMatch(/\.page \.wui-list > li > button:not\(\[aria-pressed\]\) \{[^}]*grid-column:\s*4/);
     // …and the title must stop sharing a line with the App tag, which is what
     // gives it the width back.
     expect(block).toMatch(/\.page \.live-list \.app-tag \{[^}]*grid-row:\s*2/);

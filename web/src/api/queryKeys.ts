@@ -64,6 +64,9 @@ export const qk = {
   // that one holds a `FileContent`, and two shapes under one key is a cache
   // that hands a consumer the other one's answer.
   wuiBuildable: (id: string, folder: string) => ["wuiBuildable", id, folder] as const,
+  // The `/wui` overview: every Deployed page the viewer may open. One key for
+  // the whole listing — it is per viewer, and Remove invalidates all of it.
+  wuiOverview: ["wuiOverview"] as const,
   activity: ["activity"] as const,
   conversation: (id: string) => ["conversation", id] as const,
 

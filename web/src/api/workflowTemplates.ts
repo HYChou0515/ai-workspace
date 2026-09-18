@@ -8,7 +8,7 @@
  * nothing to sync back.
  */
 
-import { apiFetch } from "./http";
+import { apiFetch, detailSentence } from "./http";
 import type { WorkspacePhase } from "./workspaceWorkflows";
 
 const enc = encodeURIComponent;
@@ -32,13 +32,9 @@ export type WorkflowTemplate = {
  * so replacing must be a deliberate second step. */
 export class TemplateConflictError extends Error {}
 
+/** The server's sentence, else `fallback` — `detailSentence` with a default. */
 async function detail(resp: Response, fallback: string): Promise<string> {
-  try {
-    const body = await resp.json();
-    return typeof body?.detail === "string" ? body.detail : fallback;
-  } catch {
-    return fallback;
-  }
+  return (await detailSentence(resp)) ?? fallback;
 }
 
 export const workflowTemplatesApi = {

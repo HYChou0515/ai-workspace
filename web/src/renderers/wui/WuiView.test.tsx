@@ -1372,6 +1372,34 @@ describe("WuiView: Deploy", () => {
   const buildCalls = () =>
     vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes("/wui/build"));
 
+  /** The overview's record (`POST …/wui/deploy`), answered 200. Since the
+   * overview (docs/plan-wui-overview.md) Deploy's last step writes this row
+   * and says "✓ Deployed" only once it is written — so every fetch stub in
+   * this block routes that POST here, whatever else it serves. */
+  const DEPLOYED = {
+    slug: "rca",
+    item_id: "item1",
+    item_title: "Item one",
+    path: "/sales/page.ai.yaml",
+    title: "Sales",
+    deployed_by: "u",
+    deployed_at: 1,
+    can_remove: true,
+  };
+  const isDeploy = (url: unknown, init?: RequestInit) =>
+    String(url).includes("/wui/deploy") && init?.method === "POST";
+  const deployOk = () =>
+    new Response(JSON.stringify(DEPLOYED), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  /** A fetch stub that answers the record and hands everything else to
+   * `inner` (or to nobody — the `vi.fn()` stubs of a page with no build). */
+  const withDeploy =
+    (inner?: (url: unknown, init?: RequestInit) => Promise<Response> | Response) =>
+    async (url: unknown, init?: RequestInit) =>
+      isDeploy(url, init) ? deployOk() : inner?.(url, init);
+
   // The manual path: rebuilding on open is on by default, and a test about the
   // button has to say it is not testing the automatic one.
   beforeEach(() => setWuiAutoBuild(autoBuildScope("item1", "/sales"), false));
@@ -1449,7 +1477,7 @@ describe("WuiView: Deploy", () => {
      * entry nobody built) showed "✓ Deployed" over B's address: a link that
      * lands on "not published yet".
      */
-    vi.stubGlobal("fetch", vi.fn());
+    vi.stubGlobal("fetch", vi.fn(withDeploy()));
     const files = { ...PLAIN };
     const page = pages(svc(files), makeTestQueryClient()); // one client across the rerender
     const view = render(page("/sales/a.ai.yaml"));
@@ -1471,7 +1499,7 @@ describe("WuiView: Deploy", () => {
      * because nothing had told the pane to look again. One read now, through
      * the pane's query: what Deploy verified is what the pane shows.
      */
-    vi.stubGlobal("fetch", vi.fn());
+    vi.stubGlobal("fetch", vi.fn(withDeploy()));
     const files: Record<string, string> = {};
     const { fs } = renderInFs(files);
     expect(await screen.findByRole("status")).toHaveTextContent("index.html");
@@ -1515,7 +1543,7 @@ describe("WuiView: Deploy", () => {
      * without reading the folder at all. Every instance keys its documents by
      * its own nonce, so no instance can ever hit another's.
      */
-    vi.stubGlobal("fetch", vi.fn());
+    vi.stubGlobal("fetch", vi.fn(withDeploy()));
     setWuiAutoBuild(autoBuildScope("item1", "/b"), false);
     const client = makeTestQueryClient();
     const files: Record<string, string> = {
@@ -1548,7 +1576,7 @@ describe("WuiView: Deploy", () => {
      * `autoBuiltFor` all carried over, and the new item's rebuild-on-open was
      * silently skipped.
      */
-    vi.stubGlobal("fetch", vi.fn());
+    vi.stubGlobal("fetch", vi.fn(withDeploy()));
     const client = makeTestQueryClient();
     const files = { ...PLAIN };
     const pageIn = (scopeId: string) => {
@@ -1621,7 +1649,7 @@ describe("WuiView: Deploy", () => {
      * tab reload. The pane's knowledge of the manifest now follows the file
      * (the `fileChangedBus` effect), and a fresh "not there" is what it says.
      */
-    vi.stubGlobal("fetch", vi.fn());
+    vi.stubGlobal("fetch", vi.fn(withDeploy()));
     const files: Record<string, string> = { ...BUILT };
     renderInFs(files);
     await screen.findByRole("button", { name: /^rebuild$/i });
@@ -1645,7 +1673,7 @@ describe("WuiView: Deploy", () => {
      * "✓ Deployed" without reading the folder it had just rebuilt. Each run
      * verifies under a number of its own, and reads fresh.
      */
-    vi.stubGlobal("fetch", vi.fn());
+    vi.stubGlobal("fetch", vi.fn(withDeploy()));
     let hold: () => void = () => {};
     const gate = new Promise<void>((r) => (hold = r));
     let indexReads = 0;
@@ -1681,7 +1709,7 @@ describe("WuiView: Deploy", () => {
      * said; nobody opened the page again.
      */
     setWuiAutoBuild(autoBuildScope("item1", "/sales"), true);
-    vi.stubGlobal("fetch", vi.fn());
+    vi.stubGlobal("fetch", vi.fn(withDeploy()));
     const files: Record<string, string> = { ...PLAIN };
     renderInFs(files);
     await waitFor(() => expect(frame()).toBeInTheDocument());
@@ -1718,7 +1746,7 @@ describe("WuiView: Deploy", () => {
   it("takes Rebuild away when the manifest is renamed out of the way", async () => {
     // Review round 9: a move publishes its DESTINATION, so an exact match on
     // the manifest's path missed a `package.json` renamed to `.bak`.
-    vi.stubGlobal("fetch", vi.fn());
+    vi.stubGlobal("fetch", vi.fn(withDeploy()));
     const files: Record<string, string> = { ...BUILT };
     renderInFs(files);
     await screen.findByRole("button", { name: /^rebuild$/i });
@@ -1808,10 +1836,10 @@ describe("WuiView: Deploy", () => {
     files["/sales/dist/index.html"] = "<html><body>v2</body></html>";
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response(sse({ type: "done", exit_code: 0 }), {
+      vi.fn(withDeploy(async () => new Response(sse({ type: "done", exit_code: 0 }), {
         status: 200,
         headers: { "content-type": "text/event-stream" },
-      })),
+      }))),
     );
     fireEvent.click(screen.getByRole("button", { name: /^rebuild$/i }));
     await screen.findByText(/Build finished/);
@@ -1948,7 +1976,7 @@ describe("WuiView: Deploy", () => {
      * through the three-outcome reader: absent is "no build", a failed read
      * is a failed Deploy.
      */
-    vi.stubGlobal("fetch", vi.fn());
+    vi.stubGlobal("fetch", vi.fn(withDeploy()));
     let manifestReads = 0;
     renderInFs({ ...BUILT }, async (path, real) => {
       if (path === "/sales/package.json" && ++manifestReads > 1) throw new TypeError("Failed to fetch");
@@ -1972,7 +2000,7 @@ describe("WuiView: Deploy", () => {
      * "the page does not open" stayed above a page that, after the agent
      * wrote `index.html` and Refresh read it, opened fine.
      */
-    vi.stubGlobal("fetch", vi.fn());
+    vi.stubGlobal("fetch", vi.fn(withDeploy()));
     const files: Record<string, string> = { "/sales/README.md": "nothing" };
     renderInFs(files);
     fireEvent.click(await screen.findByRole("button", { name: /^deploy$/i }));
@@ -2031,7 +2059,7 @@ describe("WuiView: Deploy", () => {
      * a fact about one read, so it is shown only while that read is what the
      * pane shows.
      */
-    vi.stubGlobal("fetch", vi.fn());
+    vi.stubGlobal("fetch", vi.fn(withDeploy()));
     const files: Record<string, string> = { ...PLAIN };
     renderInFs(files);
     fireEvent.click(await screen.findByRole("button", { name: /^deploy$/i }));
@@ -2080,7 +2108,7 @@ describe("WuiView: Deploy", () => {
      * "the page does not open". The verdict is about the read Deploy made;
      * the pane is not touched by a failure.
      */
-    vi.stubGlobal("fetch", vi.fn());
+    vi.stubGlobal("fetch", vi.fn(withDeploy()));
     const { fs } = renderInFs({ "/sales/README.md": "nothing to open here" });
     await screen.findByRole("status");
     const reads = () => vi.mocked(fs.readFile).mock.calls.filter(([p]) => p === "/sales/index.html").length;
@@ -2102,7 +2130,7 @@ describe("WuiView: Deploy", () => {
     const releases: Array<() => void> = [];
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (url: unknown) => {
+      vi.fn(withDeploy(async (url: unknown) => {
         const gate = new Promise<void>((r) => {
           if (String(url).includes("/wui/build")) releases.push(r);
         });
@@ -2118,7 +2146,7 @@ describe("WuiView: Deploy", () => {
           }),
           { status: 200, headers: { "content-type": "text/event-stream" } },
         );
-      }),
+      })),
     );
     return { release: (n: number) => releases[n]() };
   }
@@ -2132,7 +2160,7 @@ describe("WuiView: Deploy", () => {
      * verdict was dropped as stale: a Deploy that ended with nothing on
      * screen, and a page that stayed on the pre-edit read.
      */
-    vi.stubGlobal("fetch", vi.fn());
+    vi.stubGlobal("fetch", vi.fn(withDeploy()));
     const files: Record<string, string> = { ...PLAIN };
     renderInFs(files);
     fireEvent.click(await screen.findByRole("button", { name: /^deploy$/i }));
@@ -2230,7 +2258,7 @@ describe("WuiView: Deploy", () => {
      * self-write filter, so a page autosaving its data file re-read
      * `package.json` on every keystroke.
      */
-    vi.stubGlobal("fetch", vi.fn());
+    vi.stubGlobal("fetch", vi.fn(withDeploy()));
     const { fs } = renderInFs({ ...BUILT });
     await waitFor(() => expect(frame()).toBeInTheDocument());
     await screen.findByRole("button", { name: /^rebuild$/i });
@@ -2265,7 +2293,7 @@ describe("WuiView: Deploy", () => {
      * pane had left, and `verdictFor` never matched it: B's Deploy ended
      * with nothing on screen. A failure is stamped when it is shown.
      */
-    vi.stubGlobal("fetch", vi.fn());
+    vi.stubGlobal("fetch", vi.fn(withDeploy()));
     const client = makeTestQueryClient();
     const files: Record<string, string> = { "/sales/a.html": "<html><body>a</body></html>" }; // no b.html
     const fs = svc(files);
@@ -2358,7 +2386,7 @@ describe("WuiView: Deploy", () => {
      * `package.json` on every keystroke) — and with it a page editing its
      * own build script stopped changing what Rebuild does.
      */
-    vi.stubGlobal("fetch", vi.fn());
+    vi.stubGlobal("fetch", vi.fn(withDeploy()));
     const { fs } = renderInFs({ ...BUILT });
     await waitFor(() => expect(frame()).toBeInTheDocument());
     await screen.findByRole("button", { name: /^rebuild$/i });
@@ -2472,7 +2500,7 @@ describe("WuiView: Deploy", () => {
   it("a Cancel during the verify read lands no verdict", async () => {
     // Review round 11 (veracity lens): the `moved()` check after the verify
     // read could be deleted without a test failing.
-    vi.stubGlobal("fetch", vi.fn());
+    vi.stubGlobal("fetch", vi.fn(withDeploy()));
     let hold: () => void = () => {};
     const gate = new Promise<void>((r) => (hold = r));
     let indexReads = 0;
@@ -2492,6 +2520,13 @@ describe("WuiView: Deploy", () => {
 
     expect(screen.queryByText(/✓ deployed/i)).toBeNull();
     expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull();
+    // And no row was written (PR #811 regression review): since the overview,
+    // the run's next act after the verify read is the POST, so this guard
+    // deleted no longer shows on screen — the SECOND `moved()` hides the
+    // verdict — but a cancelled Deploy would still list the page.
+    expect(
+      vi.mocked(fetch).mock.calls.filter(([url, init]) => isDeploy(url, init)),
+    ).toHaveLength(0);
   });
 
   it("is out of reach while a Rebuild runs — the same build, not a second one", async () => {
@@ -2513,7 +2548,7 @@ describe("WuiView: Deploy", () => {
     // Review round 11 (veracity lens): round 10 moved `role="status"` onto
     // the sentence and nothing pinned it — a live region wrapping the
     // address field, Copy and Open reads them out as text.
-    vi.stubGlobal("fetch", vi.fn());
+    vi.stubGlobal("fetch", vi.fn(withDeploy()));
     renderIn({ ...PLAIN });
     fireEvent.click(await screen.findByRole("button", { name: /^deploy$/i }));
     await screen.findByRole("textbox", { name: /address/i });
@@ -2529,7 +2564,7 @@ describe("WuiView: Deploy", () => {
     // Review round 11 (veracity lens): "retires in silence" was a comment.
     // Whoever pressed Refresh on this page saw the verdict go; a red
     // "Deploy stopped" on every Refresh after a success would be noise.
-    vi.stubGlobal("fetch", vi.fn());
+    vi.stubGlobal("fetch", vi.fn(withDeploy()));
     renderIn({ ...PLAIN });
     fireEvent.click(await screen.findByRole("button", { name: /^deploy$/i }));
     await screen.findByRole("textbox", { name: /address/i });
@@ -2545,7 +2580,7 @@ describe("WuiView: Deploy", () => {
   it("names an unexpected throw and releases the pane, rather than a button stuck on Deploying…", async () => {
     // Review round 11 (veracity lens): the outer catch could be replaced by
     // a rethrow without a test failing.
-    vi.stubGlobal("fetch", vi.fn());
+    vi.stubGlobal("fetch", vi.fn(withDeploy()));
     const client = makeTestQueryClient();
     const spy = vi.spyOn(client, "fetchQuery").mockRejectedValueOnce(new Error("boom"));
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -2566,7 +2601,7 @@ describe("WuiView: Deploy", () => {
     // Review round 11 (veracity lens): only the sibling's negative was
     // pinned; the positive case — no flash of the old red error between a
     // Deploy's start and its verdict — was a comment.
-    vi.stubGlobal("fetch", vi.fn());
+    vi.stubGlobal("fetch", vi.fn(withDeploy()));
     let answer: () => void = () => {};
     const gate = new Promise<void>((r) => (answer = r));
     let manifestReads = 0;
@@ -2589,7 +2624,7 @@ describe("WuiView: Deploy", () => {
   it("addresses a page in a nested folder segment by segment", async () => {
     // The plan's test list asked for a nested folder; every other address
     // here is one level deep.
-    vi.stubGlobal("fetch", vi.fn());
+    vi.stubGlobal("fetch", vi.fn(withDeploy()));
     setWuiAutoBuild(autoBuildScope("item1", "/sales/q3/reports"), false);
     render(pages(svc({ "/sales/q3/reports/index.html": "<html><body>q3</body></html>" }), makeTestQueryClient())("/sales/q3/reports/page.ai.yaml"));
     fireEvent.click(await screen.findByRole("button", { name: /^deploy$/i }));
@@ -2680,7 +2715,7 @@ describe("WuiView: Deploy", () => {
      */
     let answer: () => void = () => {};
     const gate = new Promise<void>((r) => (answer = r));
-    vi.stubGlobal("fetch", vi.fn());
+    vi.stubGlobal("fetch", vi.fn(withDeploy()));
     let manifestReads = 0;
     renderInFs({ ...PLAIN }, async (path, real) => {
       if (path.endsWith("package.json") && ++manifestReads > 1) await gate;
@@ -2702,7 +2737,7 @@ describe("WuiView: Deploy", () => {
      * permanently disabled with no word why and its address would have read
      * `…/w//…`. Like `callTool`, it exists only where the slug does.
      */
-    vi.stubGlobal("fetch", vi.fn());
+    vi.stubGlobal("fetch", vi.fn(withDeploy()));
     renderWui(PLAIN); // no WorkspaceSlugProvider
     await waitFor(() => expect(frame()).toBeInTheDocument());
 
@@ -2711,7 +2746,7 @@ describe("WuiView: Deploy", () => {
   });
 
   it("hands over the page's address at once when there is nothing to build", async () => {
-    vi.stubGlobal("fetch", vi.fn());
+    vi.stubGlobal("fetch", vi.fn(withDeploy()));
     renderIn(PLAIN);
 
     const deploy = await screen.findByRole("button", { name: /^deploy$/i });
@@ -2733,7 +2768,7 @@ describe("WuiView: Deploy", () => {
     const gate = new Promise<void>((r) => (release = r));
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => {
+      vi.fn(withDeploy(async () => {
         const encode = new TextEncoder();
         return new Response(
           new ReadableStream<Uint8Array>({
@@ -2746,7 +2781,7 @@ describe("WuiView: Deploy", () => {
           }),
           { status: 200, headers: { "content-type": "text/event-stream" } },
         );
-      }),
+      })),
     );
     return { release };
   }
@@ -2785,10 +2820,10 @@ describe("WuiView: Deploy", () => {
      */
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response(sse({ type: "output", text: "> vite build" }), {
+      vi.fn(withDeploy(async () => new Response(sse({ type: "output", text: "> vite build" }), {
         status: 200,
         headers: { "content-type": "text/event-stream" },
-      })),
+      }))),
     );
     renderIn(BUILT);
     await screen.findByRole("button", { name: /^rebuild$/i });
@@ -2824,7 +2859,7 @@ describe("WuiView: Deploy", () => {
   });
 
   it("copies the address, and says so when it could not", async () => {
-    vi.stubGlobal("fetch", vi.fn());
+    vi.stubGlobal("fetch", vi.fn(withDeploy()));
     const writeText = vi.fn(async () => {});
     // On the real Navigator, not a spread copy of it: spreading an instance
     // drops every prototype getter (`userAgent`, `language`, `onLine`), and a
@@ -2855,7 +2890,7 @@ describe("WuiView: Deploy", () => {
      * separator, and the router on the other end (`/w/:slug/:itemId/*`)
      * decodes each segment back; `WuiPage.test.tsx` holds that half.
      */
-    vi.stubGlobal("fetch", vi.fn());
+    vi.stubGlobal("fetch", vi.fn(withDeploy()));
     render(
       <QueryWrap>
         <WorkspaceSlugProvider value="rca">
@@ -2881,7 +2916,7 @@ describe("WuiView: Deploy", () => {
      * above the red "no index.html to open" error — and the reader following
      * it saw "not published yet". Deployed has to mean the link works.
      */
-    vi.stubGlobal("fetch", vi.fn());
+    vi.stubGlobal("fetch", vi.fn(withDeploy()));
     renderIn({ "/sales/README.md": "nothing to open here" });
     const deploy = await screen.findByRole("button", { name: /^deploy$/i });
     fireEvent.click(deploy);
@@ -2898,10 +2933,10 @@ describe("WuiView: Deploy", () => {
     // `dist/`, or a view file without `entry: dist/index.html`).
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response(sse({ type: "done", exit_code: 0 }), {
+      vi.fn(withDeploy(async () => new Response(sse({ type: "done", exit_code: 0 }), {
         status: 200,
         headers: { "content-type": "text/event-stream" },
-      })),
+      }))),
     );
     render(
       <QueryWrap>
@@ -2976,5 +3011,193 @@ describe("WuiView: Deploy", () => {
     expect(buildCalls()).toHaveLength(1);
     release();
     expect(await screen.findByRole("textbox", { name: /address/i })).toHaveValue(ADDRESS);
+  });
+
+  describe("lists the page on the WUI overview (docs/plan-wui-overview.md)", () => {
+    /**
+     * Deploy's last step: after the verify read, POST the page to
+     * `/wui/deploy`, and say "✓ Deployed" only once the row is written. A
+     * page that says Deployed and is not on the overview would be the silent
+     * failure the overview exists to remove.
+     */
+    const deployCalls = () =>
+      vi.mocked(fetch).mock.calls.filter(([url, init]) => isDeploy(url, init));
+
+    it("POSTs the page before it says Deployed — the row, then the verdict", async () => {
+      let release: () => void = () => {};
+      const gate = new Promise<void>((r) => (release = r));
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: unknown, init?: RequestInit) => {
+          if (!isDeploy(url, init)) return undefined;
+          await gate;
+          return deployOk();
+        }),
+      );
+      renderIn(PLAIN);
+      fireEvent.click(await screen.findByRole("button", { name: /^deploy$/i }));
+
+      await waitFor(() => expect(deployCalls()).toHaveLength(1));
+      // The verify read has passed and the POST is in flight: no verdict yet.
+      expect(screen.queryByText(/✓ deployed/i)).toBeNull();
+      expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull();
+      expect(screen.getByRole("button", { name: /deploying…/i })).toBeDisabled();
+      const [url, init] = deployCalls()[0];
+      expect(String(url)).toBe("/api/a/rca/items/item1/wui/deploy");
+      expect(JSON.parse(String(init?.body))).toEqual({ path: "/sales/page.ai.yaml" });
+
+      release();
+      expect(await screen.findByRole("textbox", { name: /address/i })).toHaveValue(ADDRESS);
+      expect(screen.getByText(/✓ deployed/i)).toBeInTheDocument();
+    });
+
+    it("is a failed Deploy when the page could not be listed, in the server's words", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: unknown, init?: RequestInit) =>
+          isDeploy(url, init)
+            ? new Response(JSON.stringify({ detail: "not authorized to edit_content" }), {
+                status: 403,
+                headers: { "content-type": "application/json" },
+              })
+            : undefined,
+        ),
+      );
+      renderIn(PLAIN);
+      fireEvent.click(await screen.findByRole("button", { name: /^deploy$/i }));
+
+      const said = await screen.findByText(/deploy failed/i);
+      expect(said).toHaveTextContent(/could not be listed in WUI/i);
+      expect(said).toHaveTextContent(/not authorized to edit_content/);
+      expect(screen.queryByText(/✓ deployed/i)).toBeNull();
+      expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull();
+      // Positive control for the sentence: the same page with the POST
+      // answering 200 does say Deployed (the test above).
+    });
+
+    it("never POSTs a page its own read could not open", async () => {
+      vi.stubGlobal("fetch", vi.fn(withDeploy()));
+      renderIn({ "/sales/README.md": "nothing to open here" });
+      fireEvent.click(await screen.findByRole("button", { name: /^deploy$/i }));
+
+      await screen.findByText(/deploy failed/i);
+      expect(deployCalls()).toHaveLength(0);
+    });
+
+    it("invalidates the overview's listing once the row is written, so a visit within its stale window sees the page", async () => {
+      // Review round 1: the overview's query kept the app default staleTime
+      // (30 s) and nothing invalidated it after a Deploy — open /wui, Deploy a
+      // page, come back inside 30 s: "還沒有任何 WUI 被 Deploy". The write
+      // invalidates the read, the way every mutation in the app does.
+      vi.stubGlobal("fetch", vi.fn(withDeploy()));
+      const qc = makeTestQueryClient();
+      qc.setQueryData(qk.wuiOverview, []); // a visit to /wui a moment ago
+      render(pages(svc({ ...PLAIN }), qc)("/sales/page.ai.yaml"));
+      fireEvent.click(await screen.findByRole("button", { name: /^deploy$/i }));
+
+      await screen.findByRole("textbox", { name: /address/i });
+      expect(qc.getQueryState(qk.wuiOverview)?.isInvalidated).toBe(true);
+    });
+
+    it("shows the page it verified even when the listing refused — the read passed, the frame follows it", async () => {
+      // Review round 1: on a "list" failure the pane was left on the read from
+      // BEFORE the build, under a red line about the listing — a person read a
+      // stale frame as a broken page. The "open" branch stays put because its
+      // read failed; here the read succeeded, so the frame shows it.
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: unknown, init?: RequestInit) => {
+          if (isDeploy(url, init)) {
+            return new Response(JSON.stringify({ detail: "not authorized to edit_content" }), {
+              status: 403,
+              headers: { "content-type": "application/json" },
+            });
+          }
+          return new Response(sse({ type: "done", exit_code: 0 }), {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          });
+        }),
+      );
+      const files: Record<string, string> = {
+        ...BUILT,
+        "/sales/dist/index.html": "<html><body>v1</body></html>",
+      };
+      render(
+        <QueryWrap>
+          <WorkspaceSlugProvider value="rca">
+            <FileServiceProvider value={svc(files)}>
+              <WuiView
+                path="/sales/page.ai.yaml"
+                spec={{ view: "wui", entity: "", entry: "dist/index.html" } as ViewSpec}
+              />
+            </FileServiceProvider>
+          </WorkspaceSlugProvider>
+        </QueryWrap>,
+      );
+      await waitFor(() => expect(frame()?.srcdoc).toContain("v1"));
+      // The build rewrites dist/ under the running Deploy.
+      files["/sales/dist/index.html"] = "<html><body>v2</body></html>";
+      fireEvent.click(await screen.findByRole("button", { name: /^deploy$/i }));
+
+      const said = await screen.findByText(/deploy failed/i);
+      expect(said).toHaveTextContent(/could not be listed in WUI/i);
+      await waitFor(() => expect(frame()?.srcdoc).toContain("v2"));
+      expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull();
+    });
+
+    it("leaving the folder while the POST is in flight aborts it", async () => {
+      // Pinned because a mutation dropping the unmount abort survived every
+      // other test (conformance review): the request would have kept running
+      // for a pane nobody was looking at.
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          (url: unknown, init?: RequestInit) =>
+            new Promise<Response>((resolve, reject) => {
+              if (!isDeploy(url, init)) return resolve(undefined as unknown as Response);
+              init?.signal?.addEventListener("abort", () =>
+                reject(new DOMException("aborted", "AbortError")),
+              );
+            }),
+        ),
+      );
+      const view = renderIn(PLAIN);
+      fireEvent.click(await screen.findByRole("button", { name: /^deploy$/i }));
+      await waitFor(() => expect(deployCalls()).toHaveLength(1));
+
+      view.unmount();
+
+      const [, init] = deployCalls()[0];
+      expect(init?.signal?.aborted).toBe(true);
+    });
+
+    it("Cancel while the POST is in flight aborts it, and nothing settles", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          (url: unknown, init?: RequestInit) =>
+            new Promise<Response>((resolve, reject) => {
+              if (!isDeploy(url, init)) return resolve(undefined as unknown as Response);
+              // A request that is never answered — until its signal fires.
+              init?.signal?.addEventListener("abort", () =>
+                reject(new DOMException("aborted", "AbortError")),
+              );
+            }),
+        ),
+      );
+      renderIn(PLAIN);
+      fireEvent.click(await screen.findByRole("button", { name: /^deploy$/i }));
+      await waitFor(() => expect(deployCalls()).toHaveLength(1));
+
+      fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+
+      const [, init] = deployCalls()[0];
+      expect(init?.signal?.aborted).toBe(true);
+      // Released: Deploy is pressable again, and no verdict of either kind.
+      expect(await screen.findByRole("button", { name: /^deploy$/i })).toBeEnabled();
+      expect(screen.queryByText(/✓ deployed/i)).toBeNull();
+      expect(screen.queryByText(/deploy failed/i)).toBeNull();
+    });
   });
 });

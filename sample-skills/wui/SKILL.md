@@ -198,10 +198,14 @@ A read-only page has no `data.json` — it reads what the item already holds.
 ```yaml
 view: wui
 title: Lot tracker
+# icon: logo.png         # a file in this folder, or an emoji ("📦"), or a platform icon name ("kanban")
+# color: "#0EA5A4"        # the card's colour on the WUI overview; the App's colour without it
 # tools: [lot-status]   # only if the page calls one — see reference.md
 ```
 
 `title` is what the pane is called. `entry` overrides `index.html` if you must.
+`icon` is optional: it marks the page on the WUI overview once it is Deployed;
+without one the overview draws a circle with the title's first letter.
 
 ## The rules that are enforced (not advice)
 
@@ -269,4 +273,8 @@ Open it yourself in your head, in this order:
    its shape? And does the page survive a non-zero exit and a non-JSON reply?
 
 Then tell the user which file to open, in their words: "open **Lot tracker** in
-`lot-tracker/page.ai.yaml`".
+`lot-tracker/page.ai.yaml`" — and, when the page is for other people, that
+**Deploy** in its toolbar is what puts it on the platform's **WUI** overview,
+where colleagues find it. Deploy is a person's press (someone who may edit the
+item), so say it in the same breath as the file name: a page nobody Deployed is
+one only its link can reach.
