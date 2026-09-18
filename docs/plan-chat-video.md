@@ -95,7 +95,7 @@ src/workspace_app/chat_video/
 
 ## 之後的形狀(P6–P8,本 PR 不做,寫下來讓接的人不用重想)
 
-- **P6 job**:`ChatVideoPayload(item_id, chat_id, options: VideoOptions, user)`、`ChatVideoJob(Job[ChatVideoPayload])`、`ChatVideoRun`(status / progress / `video: Binary` / `error`)。`ChatVideoCoordinator`(同 `ImportCoordinator` 的形狀):`enqueue()` 由 route 呼叫;`_handle()` 讀 conversation → `to_builtins` → `await asyncio.to_thread(render_chat_video, …)` → 存 Binary。`worker/__init__.py` 的 `_JOBTYPE_ATTR` 加 `"chat-video"`;`build_coordinators` 加進 bundle。
+- **P6 job**:`ChatVideoPayload(item_id, chat_id, options: VideoOptions, user)`、`ChatVideoJob(Job[ChatVideoPayload])`、`ChatVideoRun`(status / progress / `video: Binary` / `error`)。`ChatVideoCoordinator`(同 `ImportCoordinator` 的形狀):`enqueue()` 由 route 呼叫;`_handle()` 讀 conversation → `to_builtins` → `build_timeline` → 對 `referenced_paths()` 逐一 `await files.read(item_id, path)` 組成 `assets` → `await asyncio.to_thread(render_chat_video, …, assets=assets)` → 存 Binary。`worker/__init__.py` 的 `_JOBTYPE_ATTR` 加 `"chat-video"`;`build_coordinators` 加進 bundle。
 - **P7 route + 權限**:`POST /a/{slug}/items/{item_id}/chats/{chat_id}/video`(gate `read_chat`,同 export)回 run id;`GET …/video/{run_id}` 回狀態 / 下載。配額:一個 chat 同時只跑一個(partition_key = chat_id)。
 - **P8 前端**:chat header 一顆「產生影片」按鈕 → 尺寸 / 格式的小表單(欄位 = `VideoOptions`)→ 進度 → 下載。
 - **部署**:worker image 加 `chat-video` extra + `playwright install --with-deps chromium` + `fonts-noto-cjk`;`kubernetes/base/workers.yaml` 加 `chat-video` 一顆(prod 自維護,PR 要點名)。
@@ -120,4 +120,9 @@ src/workspace_app/chat_video/
 - **模板不能塞在 Python 字串裡**(E501 整片紅),改成 package data `player.html` 用 `importlib.resources` 讀。
 - **reasoning 後 `content` 為空的訊息會多一個空的 answer step**;改成只有思考時不吐 answer。
 - 沒做「`--zoom 1` 時 JS 不推進」的測試(那要真瀏覽器);JS 的 `if (!(k > 1)) return` 是那條規則,親眼看過 `--zoom 1` 的錄影。
+- **plan 漏了「顯示工具」**(user 問「show file 能夠顯示嗎」才補)。前端把檔案放到人面前有三條路——`show_file`
+  (沒有卡片,檔案即畫面)、任何工具結果尾端的 `[shown-files]` 宣告、回答裡的 `![](路徑)`——bytes 都不在 export 裡。
+  加了 `assets: Mapping[path, bytes]` 接縫(CLI `--files DIR` 讀;未來 job 用 `Timeline.referenced_paths()` 先撈再進
+  thread),圖內嵌成 data URI(頁面仍不抓網路)、非圖 / 沒 bytes / 超過 `max_asset_bytes` 是檔案卡;`![](https://…)`
+  永遠不載入。`SHOWN_FILES_MARKER` 從 `agent.shown_files` 匯入(共用,不抄)。突變體「URL 直接當 src」讓兩條測試紅。
 

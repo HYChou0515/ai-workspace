@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import json
 
-from workspace_app.chat_video.cli import main, parse_args
+from workspace_app.agent.shown_files import declare_shown_files
+from workspace_app.chat_video.cli import load_assets, main, parse_args
 from workspace_app.chat_video.options import VideoOptions
 
 
@@ -21,6 +22,7 @@ def test_every_option_has_a_flag_and_the_output_name_picks_the_format():
             "--zoom", "1.4", "--zoom-ms", "700",
             "--type-speed", "40", "--stream-speed", "15", "--tool-pause", "900",
             "--speed", "1.5", "--max-seconds", "45", "--tool-output-chars", "300",
+            "--max-asset-bytes", "1000",
         ]
     )  # fmt: skip
 
@@ -28,7 +30,7 @@ def test_every_option_has_a_flag_and_the_output_name_picks_the_format():
         width=1920, height=1080, chat_width=900, scale=1.2,
         zoom=1.4, zoom_ms=700,
         type_ms=40, stream_ms=15, tool_pause_ms=900,
-        speed=1.5, max_seconds=45, tool_output_chars=300,
+        speed=1.5, max_seconds=45, tool_output_chars=300, max_asset_bytes=1000,
         fmt=("mp4",),
     )  # fmt: skip
 
@@ -60,3 +62,53 @@ def test_html_writes_the_player_and_records_nothing(tmp_path, monkeypatch):
     assert code == 0
     assert "const TIMELINE" in out.read_text() and "hi" in out.read_text()
     assert called == []
+
+
+# ─── --files: where the pictures come from ───────────────────────────────────
+
+
+def test_files_dir_supplies_exactly_the_referenced_paths_and_never_outside_it(tmp_path):
+    """The transcript names workspace paths; `--files DIR` is that workspace
+    on disk. Only the referenced files are read (a workspace can be large),
+    a missing one is simply absent (a card, not a crash), and a path that
+    climbs out of DIR is refused — the JSON is hand-edited."""
+    ws = tmp_path / "ws"
+    (ws / "plots").mkdir(parents=True)
+    (ws / "plots" / "a.png").write_bytes(b"PNG-A")
+    (ws / "unrelated.bin").write_bytes(b"X")
+    secret = tmp_path / "secret.txt"
+    secret.write_bytes(b"hunter2")
+
+    assets = load_assets(ws, ["/plots/a.png", "/missing.png", "/../secret.txt"])
+
+    assert assets == {"/plots/a.png": b"PNG-A"}
+
+
+def test_html_mode_inlines_a_shown_image_from_files_dir(tmp_path):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "chart.png").write_bytes(
+        bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489")
+    )
+    src = tmp_path / "c.chat.json"
+    src.write_text(
+        json.dumps(
+            {
+                "title": "T",
+                "messages": [
+                    {
+                        "role": "tool",
+                        "tool_name": "show_file",
+                        "content": declare_shown_files(
+                            "", [{"path": "/chart.png", "mime": "image/png", "size": 33}]
+                        ),
+                    }
+                ],
+            }
+        )
+    )
+    out = tmp_path / "preview.html"
+
+    assert main([str(src), "--html", str(out), "--files", str(ws)]) == 0
+
+    assert "data:image/png;base64,iVBORw0KGgo" in out.read_text()

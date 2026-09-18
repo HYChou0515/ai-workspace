@@ -10,10 +10,13 @@ is ever opened.
 
 from __future__ import annotations
 
+import json
+import re
 from typing import Any
 
 import msgspec
 
+from ..agent.shown_files import SHOWN_FILES_KEY, split_declaration
 from .options import VideoOptions
 
 
@@ -35,13 +38,30 @@ class StreamStep(msgspec.Struct, tag="stream"):
     ms: int
 
 
+class ShownFile(msgspec.Struct):
+    """A workspace file a tool put in front of the user (``[shown-files]``,
+    ``agent/shown_files.py``): the chat shows an image inline and any other
+    file as a card. The bytes are not here — the transcript never carries
+    them — the renderer is handed them under ``path``."""
+
+    path: str
+    mime: str
+    size: int
+    caption: str = ""
+
+
 class ToolStep(msgspec.Struct, tag="tool"):
     """A tool call as a card: the call is shown, the card spins for ``ms``,
-    then the output opens — cut to ``VideoOptions.tool_output_chars``."""
+    then the output opens — cut to ``VideoOptions.tool_output_chars`` — and
+    the files it declared appear under it. ``card`` is false for a
+    ``show_file`` that declared something: the file IS its rendering (the
+    FE's rule), so no card at all."""
 
     name: str
     args: dict[str, Any]
     output: str
+    files: list[ShownFile]
+    card: bool
     ms: int
 
 
@@ -93,6 +113,57 @@ def _cut(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit] + "…"
 
 
+# `![alt](src)` — the src only; a title after the src is ignored, as it is
+# by the renderer, which decides what to draw.
+_MD_IMAGE = re.compile(r"!\[[^\]]*\]\(\s*<?([^\s)>]+)>?(?:\s+\"[^\"]*\")?\s*\)")
+_URL = re.compile(r"^(?:[a-z][a-z0-9+.-]*:|#|//)", re.IGNORECASE)
+
+
+def _is_url(ref: str) -> bool:
+    """The FE's `workspaceUrl` rule: a scheme, a fragment or `//` is not a
+    workspace path."""
+    return bool(_URL.match(ref))
+
+
+def _abs(path: str) -> str:
+    return path if path.startswith("/") else "/" + path
+
+
+def shown_files_in(result: str) -> tuple[str, list[ShownFile]]:
+    """``(body, files)`` — the tool result without its declaration line, and
+    the files it declared. The FE's parse (`renderers/shownFiles.ts`): the
+    JSON's ``shown_files`` list; an entry needs a non-empty ``path`` and
+    ``mime`` and a numeric ``size``, ``caption`` is optional, a malformed
+    entry is skipped and the rest kept."""
+    body, declaration = split_declaration(result)
+    if not declaration:
+        return result, []
+    try:
+        parsed = json.loads(declaration[declaration.index("{") :])
+    except (ValueError, IndexError):
+        return body, []
+    raw = parsed.get(SHOWN_FILES_KEY) if isinstance(parsed, dict) else None
+    files: list[ShownFile] = []
+    for entry in raw if isinstance(raw, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        path, mime, size = entry.get("path"), entry.get("mime"), entry.get("size")
+        if not (isinstance(path, str) and path and isinstance(mime, str) and mime):
+            continue
+        if not isinstance(size, int | float) or isinstance(size, bool):
+            continue
+        caption = entry.get("caption")
+        files.append(
+            ShownFile(
+                path=_abs(path),
+                mime=mime,
+                size=int(size),
+                caption=caption if isinstance(caption, str) else "",
+            )
+        )
+    return body, files
+
+
 def _typed_ms(text: str, per_char: int) -> int:
     """What the player's `typeInto` ASKS for on `text`: one delay per
     character, `punct_factor` more on each punctuation mark. The browser's
@@ -103,6 +174,26 @@ def _typed_ms(text: str, per_char: int) -> int:
 class Timeline(msgspec.Struct):
     title: str
     steps: list[Step]
+
+    def referenced_paths(self) -> list[str]:
+        """Every workspace path the page will want bytes for, absolute, in
+        order, once: files tools declared, and ``![](path)`` images in
+        answers. Not a URL — the page fetches nothing — and not a link. This
+        is the list a job prefetches before the render goes to a thread."""
+        seen: list[str] = []
+        for step in self.steps:
+            if isinstance(step, ToolStep):
+                paths = [f.path for f in step.files]
+            elif isinstance(step, StreamStep) and not step.reasoning:
+                paths = [p for p in _MD_IMAGE.findall(step.text) if not _is_url(p)]
+            else:
+                continue
+            for p in paths:
+                p = _abs(p)
+                if p not in seen:
+                    seen.append(p)
+        return seen
+
     estimated_ms: int
     """How long the recording should run: the asked delays (``speed``
     applied) plus ``overhead_ms`` — the number the ceiling is checked
@@ -178,11 +269,15 @@ def _steps(messages: list[dict[str, Any]], options: VideoOptions) -> list[Step]:
                 )
         elif role == "tool":
             args = m.get("tool_args")
+            name = str(m.get("tool_name") or "tool")
+            body, files = shown_files_in(text)
             steps.append(
                 ToolStep(
-                    name=str(m.get("tool_name") or "tool"),
+                    name=name,
                     args=dict(args) if isinstance(args, dict) else {},
-                    output=_cut(text, options.tool_output_chars),
+                    output=_cut(body, options.tool_output_chars),
+                    files=files,
+                    card=not (name == "show_file" and files),
                     ms=options.tool_pause_ms + PACING["after_tool_ms"],
                 )
             )

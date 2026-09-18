@@ -30,7 +30,25 @@ class Args(argparse.Namespace):
     source: Path
     out: Path
     html: Path | None
+    files: Path | None
     options: VideoOptions
+
+
+def load_assets(files_dir: Path, paths: list[str]) -> dict[str, bytes]:
+    """The referenced workspace files, read from ``files_dir`` — the
+    workspace as a folder on disk (a downloaded copy, or the item's own
+    directory). Only ``paths`` are read, a missing one is left out (the page
+    draws a card for it), and one that resolves outside ``files_dir`` is
+    refused: the transcript is hand-edited, and ``/../etc/passwd`` in a
+    shown-files line must not read the host."""
+    root = files_dir.resolve()
+    out: dict[str, bytes] = {}
+    for path in paths:
+        candidate = (root / path.lstrip("/")).resolve()
+        if not candidate.is_relative_to(root) or not candidate.is_file():
+            continue
+        out[path] = candidate.read_bytes()
+    return out
 
 
 def parse_args(argv: list[str]) -> Args:
@@ -54,6 +72,11 @@ def parse_args(argv: list[str]) -> Args:
         help="an extra format to write beside --out",
     )
     p.add_argument("--html", type=Path, help="write the player page here and record nothing")
+    p.add_argument(
+        "--files",
+        type=Path,
+        help="the workspace folder the transcript's shown files and ![](path) images are read from",
+    )
     f = p.add_argument_group("frame")
     f.add_argument("--width", type=int, default=d.width, help="output pixels")
     f.add_argument("--height", type=int, default=d.height)
@@ -80,6 +103,12 @@ def parse_args(argv: list[str]) -> Args:
         "--max-seconds", type=int, default=d.max_seconds, help="ceiling; longer is squeezed"
     )
     p.add_argument("--tool-output-chars", type=int, default=d.tool_output_chars)
+    p.add_argument(
+        "--max-asset-bytes",
+        type=int,
+        default=d.max_asset_bytes,
+        help="an image bigger than this is a file card, not inlined",
+    )
 
     ns = p.parse_args(argv, namespace=Args())
     ns.out = ns.out or ns.source.with_suffix(".gif")
@@ -92,6 +121,7 @@ def parse_args(argv: list[str]) -> Args:
         zoom=ns.zoom, zoom_ms=ns.zoom_ms,
         type_ms=ns.type_speed, stream_ms=ns.stream_speed, tool_pause_ms=ns.tool_pause,
         speed=ns.speed, max_seconds=ns.max_seconds, tool_output_chars=ns.tool_output_chars,
+        max_asset_bytes=ns.max_asset_bytes,
         fmt=fmt,
     )  # fmt: skip
     return ns
@@ -108,15 +138,26 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+    timeline = build_timeline(title=title, messages=messages, options=ns.options)
+    wanted = timeline.referenced_paths()
+    assets = load_assets(ns.files, wanted) if ns.files is not None else {}
+    for missing in (p for p in wanted if p not in assets):
+        where = f"not found under {ns.files}" if ns.files is not None else "pass --files DIR"
+        print(f"note: {missing} shown as a card ({where})", file=sys.stderr)
     if ns.html is not None:
-        timeline = build_timeline(title=title, messages=messages, options=ns.options)
-        ns.html.write_text(render_player_html(timeline, ns.options), encoding="utf-8")
+        ns.html.write_text(
+            render_player_html(timeline, ns.options, assets=assets), encoding="utf-8"
+        )
         print(f"wrote {ns.html} (estimated {timeline.estimated_ms / 1000:.1f}s)")
         return 0
     try:
         with tempfile.TemporaryDirectory(prefix="chat-video-") as tmp:
             videos = render_chat_video(
-                title=title, messages=messages, options=ns.options, workdir=Path(tmp)
+                title=title,
+                messages=messages,
+                options=ns.options,
+                workdir=Path(tmp),
+                assets=assets,
             )
     except RendererUnavailable as exc:
         print(str(exc), file=sys.stderr)
@@ -128,4 +169,4 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-__all__ = ["Args", "main", "parse_args"]
+__all__ = ["Args", "load_assets", "main", "parse_args"]

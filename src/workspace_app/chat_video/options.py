@@ -51,4 +51,8 @@ class VideoOptions(msgspec.Struct, frozen=True):
     # ── what is shown ──────────────────────────────────────────────────
     tool_output_chars: int = 600
     """A tool's output beyond this is cut with an ellipsis."""
+    max_asset_bytes: int = 4_000_000
+    """An image a tool showed is inlined into the page up to this size;
+    bigger ones become a file card. The page carries its pictures (it fetches
+    nothing), and a 40 MB page is a slow, memory-hungry recording."""
     fmt: tuple[Format, ...] = ("gif",)

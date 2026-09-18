@@ -12,15 +12,25 @@ from __future__ import annotations
 import json
 import re
 
+from workspace_app.agent.shown_files import declare_shown_files
 from workspace_app.chat_video.options import VideoOptions
 from workspace_app.chat_video.player import render_player_html
 from workspace_app.chat_video.timeline import PACING, build_timeline
 
+# The smallest valid PNG (1x1, transparent) — a real image, so the mime the
+# transcript declares and the bytes agree.
+_PNG = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+    "0000000d49444154789c6360000002000154a24f5f0000000049454e44ae426082"
+)
 
-def _page(messages: list[dict], **opts: object) -> str:
+
+def _page(messages: list[dict], assets: dict[str, bytes] | None = None, **opts: object) -> str:
     options = VideoOptions(**opts)  # ty: ignore[invalid-argument-type]
     return render_player_html(
-        build_timeline(title="t", messages=messages, options=options), options
+        build_timeline(title="t", messages=messages, options=options),
+        options,
+        assets=assets or {},
     )
 
 
@@ -111,3 +121,61 @@ def test_the_page_fetches_nothing():
     # The transcript may mention a URL; the page itself must not load one.
     assert not re.search(r'(src|href)\s*=\s*["\']https?://', page)
     assert "@import" not in page
+
+
+# ─── the files a tool put in front of the user ───────────────────────────────
+
+
+def _shown(path: str, mime: str, size: int = 1) -> dict:
+    return {
+        "role": "tool",
+        "tool_name": "show_file",
+        "content": declare_shown_files("", [{"path": path, "mime": mime, "size": size}]),
+    }
+
+
+def test_an_image_the_renderer_was_handed_is_inlined_as_a_data_uri():
+    """The page fetches nothing, so an image travels INSIDE it. The FE draws a
+    declared image as a 260px thumbnail; so does the player."""
+    page = _page([_shown("/plots/a.png", "image/png")], assets={"/plots/a.png": _PNG})
+
+    step = _embedded(page)["steps"][0]
+    assert step["files"][0]["src"].startswith("data:image/png;base64,")
+    assert "iVBORw0KGgo" in step["files"][0]["src"]  # the PNG signature, base64
+
+
+def test_a_file_with_no_bytes_or_no_image_mime_or_too_big_is_a_card_not_a_picture():
+    """Nothing handed over (the CLI had no --files, the job could not read it),
+    a non-image (a .md, a .csv), or an image over the cap: the file card with
+    its name and size, never a broken <img> and never a 40 MB page."""
+    big = _PNG + b"\0" * 100
+    page = _page(
+        [
+            _shown("/missing.png", "image/png"),
+            _shown("/notes.md", "text/markdown", size=88),
+            _shown("/big.png", "image/png", size=len(big)),
+        ],
+        assets={"/notes.md": b"# hi", "/big.png": big},
+        max_asset_bytes=len(big) - 1,
+    )
+
+    files = [s["files"][0] for s in _embedded(page)["steps"]]
+    assert [f.get("src") for f in files] == [None, None, None]
+    assert files[1]["size"] == 88 and files[1]["path"] == "/notes.md"
+
+
+def test_an_image_in_an_answer_resolves_the_same_way_and_a_url_never_loads():
+    """`![c](path)` in an answer is the FE's second path to a picture: a
+    workspace path resolves (thumbnail), a URL is left as its alt text — the
+    page fetches nothing — and a path nobody handed bytes for draws nothing,
+    not a broken image."""
+    md = "before ![chart](plots/a.png) and ![ext](https://x/y.png) and ![gone](/z.png) after"
+    page = _page(
+        [{"role": "assistant", "author": "AI", "content": md}], assets={"/plots/a.png": _PNG}
+    )
+
+    html = _embedded(page)["steps"][0]["html"]
+    assert html.count("<img") == 1
+    assert 'src="data:image/png;base64,' in html
+    assert "https://x/y.png" not in html and "ext" in html  # the URL image is its alt text
+    assert "/z.png" not in html and "gone" in html

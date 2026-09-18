@@ -16,7 +16,7 @@ from workspace_app.chat_video.service import render_chat_video
 
 _MESSAGES = [
     {"role": "user", "content": "hi", "author": "u"},
-    {"role": "assistant", "content": "hello", "author": "AI"},
+    {"role": "assistant", "content": "hello ![c](/chart.png)", "author": "AI"},
 ]
 
 
@@ -39,11 +39,17 @@ def test_it_records_the_rendered_page_once_and_encodes_each_format(monkeypatch, 
     monkeypatch.setattr(service, "encode", fake_encode)
 
     result = render_chat_video(
-        title="t", messages=_MESSAGES, options=VideoOptions(fmt=("gif", "mp4")), workdir=tmp_path
+        title="t",
+        messages=_MESSAGES,
+        options=VideoOptions(fmt=("gif", "mp4")),
+        workdir=tmp_path,
+        assets={"/chart.png": b"\x89PNG\r\n\x1a\n" + b"\0" * 8},
     )
 
     assert result == {"gif": b"gif:WEBM", "mp4": b"mp4:WEBM"}
     assert "hello" in str(seen["html"]) and "const TIMELINE" in str(seen["html"])
+    # The assets reached the page: the answer's `![](/chart.png)` is a data URI.
+    assert "data:image/png;base64," in str(seen["html"])
     expected = seen["expected_ms"]
     assert isinstance(expected, int) and expected > 0
     assert not (tmp_path / "recording.webm").exists()  # the scratch is gone

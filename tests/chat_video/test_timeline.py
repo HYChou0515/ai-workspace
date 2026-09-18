@@ -9,12 +9,14 @@ so it is what CI tests; the recorder downstream only plays what this says.
 
 from __future__ import annotations
 
+from workspace_app.agent.shown_files import declare_shown_files
 from workspace_app.chat_video.options import VideoOptions
 from workspace_app.chat_video.timeline import (
     CHAR_OVERHEAD_MS,
     PACING,
     ErrorStep,
     NoteStep,
+    ShownFile,
     StreamStep,
     ToolStep,
     TypeStep,
@@ -91,6 +93,8 @@ def test_a_tool_message_is_a_card_that_spins_then_shows_a_bounded_output():
             name="read_file",
             args={"path": "/a.py"},
             output="0123456789…",
+            files=[],
+            card=True,
             ms=700 + PACING["after_tool_ms"],  # the spin, then the card is read
         )
     ]
@@ -186,3 +190,88 @@ def test_a_transcript_whose_browser_cost_alone_exceeds_the_ceiling_still_plays()
 
     assert long.overhead_ms > 1_000
     assert long.time_scale == 0.05
+
+
+# ─── files a tool put in front of the user ────────────────────────────────────
+
+
+def test_a_tool_that_declared_files_carries_them_and_shows_the_body_without_the_marker():
+    """The FE's own rule (`renderers/shownFiles.ts`): a `[shown-files]` line at
+    the end of any tool's result names files to render; `path`, `mime` and
+    `size` are required, `caption` optional, a malformed entry is skipped and
+    the rest kept. The card's body is the result WITHOUT that line — the
+    marker in a card is a glitch the viewer sees."""
+    content = declare_shown_files(
+        "plotted 5 windows",
+        [
+            {"path": "/plots/oom.png", "mime": "image/png", "size": 1234, "caption": "五次 OOM"},
+            {"path": "/notes.md", "mime": "text/markdown", "size": 88},
+            {"path": "", "mime": "image/png", "size": 1},  # malformed: skipped
+            {"path": "/x.png", "mime": "image/png"},  # no size: skipped
+        ],
+    )
+    steps = build_timeline(
+        title="t",
+        messages=[{"role": "tool", "tool_name": "sci_plot", "content": content}],
+        options=VideoOptions(),
+    ).steps
+
+    assert steps == [
+        ToolStep(
+            name="sci_plot",
+            args={},
+            output="plotted 5 windows",
+            files=[
+                ShownFile(path="/plots/oom.png", mime="image/png", size=1234, caption="五次 OOM"),
+                ShownFile(path="/notes.md", mime="text/markdown", size=88, caption=""),
+            ],
+            card=True,
+            ms=steps[0].ms,
+        )
+    ]
+
+
+def test_show_file_is_its_files_and_nothing_else():
+    """`show_file` has no result worth a card: the file IS its rendering. One
+    that declared nothing (an unresolvable path) keeps the card, so the
+    failure stays visible — same as the FE."""
+    shown = declare_shown_files("", [{"path": "/a.png", "mime": "image/png", "size": 9}])
+    steps = build_timeline(
+        title="t",
+        messages=[
+            {"role": "tool", "tool_name": "show_file", "content": shown},
+            {"role": "tool", "tool_name": "show_file", "content": "no such file: /b.png"},
+        ],
+        options=VideoOptions(),
+    ).steps
+
+    assert [(s.card, len(s.files)) for s in steps if isinstance(s, ToolStep)] == [
+        (False, 1),
+        (True, 0),
+    ]
+
+
+def test_the_timeline_names_every_workspace_path_it_will_want_bytes_for():
+    """Declared files and `![](path)` images in answers — but not an image at
+    a URL (the page fetches nothing) and not a link. This is the list a job
+    prefetches before handing the render to a thread."""
+    tl = build_timeline(
+        title="t",
+        messages=[
+            {
+                "role": "tool",
+                "tool_name": "show_file",
+                "content": declare_shown_files(
+                    "", [{"path": "/plots/a.png", "mime": "image/png", "size": 1}]
+                ),
+            },
+            {
+                "role": "assistant",
+                "author": "AI",
+                "content": "see ![chart](plots/b.png) and ![ext](https://x/y.png) and [doc](/c.md)",
+            },
+        ],
+        options=VideoOptions(),
+    )
+
+    assert tl.referenced_paths() == ["/plots/a.png", "/plots/b.png"]

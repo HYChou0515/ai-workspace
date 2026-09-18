@@ -48,6 +48,18 @@
     animation: spin 800ms linear infinite; }
   .tool .args { color:var(--dim); white-space:pre-wrap; margin-top:4px; }
   .tool .out { color:var(--fg); white-space:pre-wrap; margin-top:6px; border-top:1px solid var(--line); padding-top:6px; }
+  /* Files a tool showed: an image as a 260px thumbnail (the FE's THUMB), any
+     other file as a card with its name and size. Outside the tool card, as in
+     the chat — a chart hidden behind the result is the same failure as a path
+     in prose. */
+  .shown-files { align-self:flex-start; display:flex; flex-direction:column; gap:8px; animation: rise 260ms ease-out; }
+  .shown-files img, .answer img.shown { display:block; max-width:260px; max-height:260px; border-radius:8px; border:1px solid var(--line); }
+  .shown-files .caption { font-size:12px; color:var(--dim); }
+  .file-card { display:flex; align-items:center; gap:10px; background:var(--panel); border:1px solid var(--line);
+    border-radius:10px; padding:8px 12px; font-size:13px; }
+  .file-card .icon { width:28px; height:28px; border-radius:6px; background:#0b0d12; border:1px solid var(--line);
+    display:grid; place-items:center; color:var(--acc); font-size:12px; }
+  .file-card .name { color:var(--fg); } .file-card .size { color:var(--dim); font-size:12px; }
   #composer { position:absolute; left:50%; bottom:32px; transform:translateX(-50%);
     width:min(var(--chat-w), calc(var(--frame-w) / var(--ui-scale) - 32px)); box-sizing:border-box;
     background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:12px 16px;
@@ -150,16 +162,43 @@ async function stepStream(s) {
   await sleep(t(PACING.after_answer_ms));
 }
 
+const fmtBytes = n => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`;
+
+// The files a tool declared, drawn as the chat draws them: an inlined image
+// as a thumbnail, anything else (no bytes, not an image, over the cap) as a
+// card naming the file — never a broken <img>.
+function shownFiles(files) {
+  const box = el('div', 'shown-files');
+  for (const f of files) {
+    if (f.src) {
+      const img = el('img'); img.src = f.src; img.alt = f.caption || f.path; box.appendChild(img);
+    } else {
+      const card = el('div', 'file-card'); card.appendChild(el('div', 'icon', '▤'));
+      const meta = el('div'); meta.appendChild(el('div', 'name', f.path.split('/').pop()));
+      meta.appendChild(el('div', 'size', fmtBytes(f.size))); card.appendChild(meta); box.appendChild(card);
+    }
+    if (f.caption) box.appendChild(el('div', 'caption', f.caption));
+  }
+  return box;
+}
+
 async function stepTool(s) {
   lastBubble = null;
-  const card = el('div', 'tool');
-  const head = el('div', 'head'); const spin = el('div', 'spin'); head.appendChild(spin); head.appendChild(el('span', '', s.name));
-  card.appendChild(head);
-  if (Object.keys(s.args).length) card.appendChild(el('div', 'args', JSON.stringify(s.args, null, 2)));
-  thread.appendChild(card);
-  await sleep(t(OPTIONS.tool_pause_ms));
-  spin.remove(); head.insertAdjacentText('afterbegin', '✓ ');
-  if (s.output) card.appendChild(el('div', 'out', s.output));
+  if (s.card) {
+    const card = el('div', 'tool');
+    const head = el('div', 'head'); const spin = el('div', 'spin'); head.appendChild(spin); head.appendChild(el('span', '', s.name));
+    card.appendChild(head);
+    if (Object.keys(s.args).length) card.appendChild(el('div', 'args', JSON.stringify(s.args, null, 2)));
+    thread.appendChild(card);
+    await sleep(t(OPTIONS.tool_pause_ms));
+    spin.remove(); head.insertAdjacentText('afterbegin', '✓ ');
+    if (s.output) card.appendChild(el('div', 'out', s.output));
+  } else {
+    // `show_file`: no card — the file IS the rendering. The spin still
+    // happens, off screen, so the tempo of the thread is the same.
+    await sleep(t(OPTIONS.tool_pause_ms));
+  }
+  if (s.files.length) thread.appendChild(shownFiles(s.files));
   await sleep(t(PACING.after_tool_ms));
 }
 

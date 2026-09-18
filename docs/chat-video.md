@@ -30,6 +30,7 @@ uv run python -m workspace_app.chat_video my.chat.json -o demo.gif
 | `-o / --out` | `<source>.gif` | 輸出檔;**副檔名決定格式**(`gif` / `mp4` / `webm`) |
 | `--fmt gif\|mp4\|webm` | — | 多寫一種格式(可重複);檔名跟 `-o` 同名換副檔名 |
 | `--html preview.html` | — | 只吐播放器頁面、不錄影;用瀏覽器開來看,改 JSON 再錄 |
+| `--files DIR` | — | workspace 資料夾:`show_file` / 畫圖工具秀出的檔案、回答裡 `![](路徑)` 的圖,從這裡讀進頁面(見下) |
 | `--width / --height` | 1280 / 720 | 輸出像素。**錄影就是 viewport**,不縮放 |
 | `--chat-width` | 760 | 聊天欄寬度(CSS px,放大前) |
 | `--scale` | 0 = 自動 | 整個 UI 的放大倍率;自動 = 畫面相對 1280×720、不小於 1(1080p 是 1.5、4K 是 3) |
@@ -41,6 +42,7 @@ uv run python -m workspace_app.chat_video my.chat.json -o demo.gif
 | `--speed` | 1.0 | 整體倍速;`2` = 快一倍 |
 | `--max-seconds` | 90 | 影片上限。超過的話**所有延遲等比壓縮**,不丟訊息、不截尾 |
 | `--tool-output-chars` | 600 | 工具輸出超過就截斷加 `…` |
+| `--max-asset-bytes` | 4000000 | 內嵌的圖超過這個大小就改成檔案卡 |
 
 常用組合:
 
@@ -53,6 +55,9 @@ uv run python -m workspace_app.chat_video my.chat.json -o sq.gif --width 1080 --
 
 # 先看再錄
 uv run python -m workspace_app.chat_video my.chat.json --html preview.html && xdg-open preview.html
+
+# 對話裡有 show_file / 畫圖:把 workspace 一起給它
+uv run python -m workspace_app.chat_video my.chat.json --files ./my-workspace -o demo.mp4
 ```
 
 指令會印出預估秒數;實錄通常在 3% 內(估算含瀏覽器每個字的固定開銷)。
@@ -66,16 +71,36 @@ uv run python -m workspace_app.chat_video my.chat.json --html preview.html && xd
 |---|---|---|
 | `user` | `content`、`author` | 鏡頭推進輸入框,逐字打,送出 |
 | `assistant` | `content`(markdown)、`reasoning`、`author` | 有 `reasoning` 先串流灰色「思考」區塊,再串流正文;`content` 空就只有思考 |
-| `tool` | `tool_name`、`tool_args`、`content`(= 輸出) | 工具卡片:名稱 + 參數 → 轉圈 → 輸出 |
+| `tool` | `tool_name`、`tool_args`、`content`(= 輸出) | 工具卡片:名稱 + 參數 → 轉圈 → 輸出;結果尾端有 `[shown-files]` 宣告的,卡片下面接檔案(見下) |
+| `tool` = `show_file` | 同上 | **沒有卡片**,檔案本身就是畫面(和聊天視窗一樣) |
 | `error` | `content`、`error_kind` | 紅色氣泡 |
 | 其他(`system`、`mention`、…) | `content` | 一行灰色置中提示 |
 
-- markdown 支援標題 / 粗體 / 清單 / 行內碼 / 程式碼區塊 / 表格;**連結和圖片會變成純文字**(頁面不抓任何外部東西)。
+- markdown 支援標題 / 粗體 / 清單 / 行內碼 / 程式碼區塊 / 表格;**連結變成純文字**,圖片只在指向 workspace 路徑時渲染(下一節)——頁面不抓任何外部東西。
 - 訊息裡的 HTML 是文字,不會被當標籤——JSON 是資料,不是頁面的一部分。
 - `author` 顯示在氣泡上方;多個 `author` 都會顯示,但「打字」動畫一律演成同一個人。
 - 順序就是播放順序;想剪掉一段就刪那幾則。
 
-一份最小的範例:[`docs/examples/chat-video-sample.chat.json`](examples/chat-video-sample.chat.json)。
+### 秀出來的檔案(`show_file`、畫圖工具、`![](路徑)`)
+
+聊天視窗把檔案放到你面前有三條路,影片都照做:
+
+1. **`show_file`**:工具結果尾端一行 `[shown-files]{"shown_files":[{"path":"/plots/a.png","mime":"image/png","size":1234,"caption":"…"}]}`
+   (Export 出來就長這樣;手寫也行,`path` / `mime` / `size` 必填、`caption` 選填)。沒有卡片,圖直接出現。
+2. **任何工具**結果尾端帶同一行宣告(畫圖工具的輸出會被正規化成它):卡片下面接檔案。
+3. **回答裡的 `![](plots/a.png)`**:workspace 路徑就渲染成圖。
+
+`image/*` 內嵌成 260px 縮圖(隨 `--scale` 放大),其他 mime 是檔案卡(檔名 + 大小)。**bytes 不在 JSON 裡**——
+要用 `--files DIR` 指到 workspace 資料夾(路徑 `/plots/a.png` ⇒ `DIR/plots/a.png`)。沒給、或檔案不在,
+那張圖就變成檔案卡,指令會在 stderr 說哪一個;不會炸。`DIR` 之外的路徑(`/../…`)一律不讀。
+外部 URL 的 `![](https://…)` **不會被抓**——頁面不碰網路——只剩 alt 文字。
+
+一份完整的範例(含 `show_file` 和一張圖):[`docs/examples/chat-video-sample/`](examples/chat-video-sample/chat.json)——
+
+```bash
+uv run python -m workspace_app.chat_video docs/examples/chat-video-sample/chat.json \
+    --files docs/examples/chat-video-sample -o demo.mp4 --width 1920 --height 1080
+```
 
 ## 它是怎麼做的
 
@@ -93,5 +118,5 @@ zoom 是 CSS `transform`(推進 + 平移到輸入框),不是後製;UI 放大是 
 ## 限制
 
 - 仿真的聊天視窗,像但不是像素級的真 app 畫面。
-- 不畫檔案樹、側欄、附件圖片、citation。
+- 不畫檔案樹、側欄、citation;`ask_user` 的選項畫成一般卡片(和 replay 模式一樣)。
 - 跑在沒有 CJK 字型的機器(某些 container)中文會是方塊——裝 `fonts-noto-cjk`。
