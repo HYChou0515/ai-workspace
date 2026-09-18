@@ -166,6 +166,34 @@ def test_a_missing_or_malformed_icon_is_none_and_deploy_still_passes(line: bytes
     assert r.json()["icon"] == ""
 
 
+@pytest.mark.parametrize(
+    ("line", "color"),
+    [
+        # The page's own colour for its card (the author: 「顏色應該可以讓 deploy
+        # 決定」) — read at Deploy like `icon:`, stored as written, stripped;
+        # whether it is a colour the overview can use is the overview's call
+        # (a bad one falls back to the App's).
+        ("color: '#0EA5A4'\n", "#0EA5A4"),
+        ("color: '  #abc '\n", "#abc"),
+        ("color: tomato\n", "tomato"),
+        ("", ""),
+        ("color: 3\n", ""),
+        ("color: ''\n", ""),
+    ],
+)
+def test_deploy_carries_the_colour_the_view_file_declares(line: str, color: str):
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _page(client, iid, body=WUI + line.encode())
+
+    r = client.post(_wp(iid, "/wui/deploy"), json={"path": PAGE})
+
+    assert r.status_code == 200, r.text
+    assert r.json()["color"] == color
+    assert [p["color"] for p in client.get("/wui").json()["pages"]] == [color]
+
+
 def test_a_row_written_before_the_icon_field_lists_with_none():
     holder = {"id": "bob"}
     client, spec = _client_and_spec(holder)
@@ -178,7 +206,7 @@ def test_a_row_written_before_the_icon_field_lists_with_none():
 
     rows = client.get("/wui").json()["pages"]
 
-    assert [(p["title"], p["icon"]) for p in rows] == [("t", "")]
+    assert [(p["title"], p["icon"], p["color"]) for p in rows] == [("t", "", "")]
 
 
 def test_the_row_names_the_person_who_pressed_deploy_not_the_owner():

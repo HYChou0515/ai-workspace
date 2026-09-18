@@ -127,7 +127,7 @@ REINDEX TABLE CONCURRENTLY cluster_member_meta;
 | `graph-entity-link` | v1 | `e21369fb`（2026-08-03） | 走訪要逐列解 blob，慢 | §9 |
 | `graph-relationship` | v1 | `e21369fb`（2026-08-03） | 走訪要逐列解 blob，慢 | §9 |
 | `source-doc` | v10 | plan-rag-context P3（2026-09-12）；`path` 索引本身是 `d1004107`（#263，2026-06-27）加的但當時沒上帳 | ⚠️ **「限定資料夾」搜尋看不到舊文件**：資料夾範圍用 `path.starts_with` 解析，`path` 索引之前寫入的列答不了它，就被當成不在那個資料夾（是**少列**不是排錯）。P2 的前後文走訪是列整個 collection 再從 row 資料讀 `path`，**不**受影響 | §5（本列） |
-| `deployed-wui` | — | WUI 總覽（2026-09-16，`docs/plan-wui-overview.md`） | **不用回填**：新表，上線時沒有任何列；一列只在有人按 Deploy 時寫入（`api/wui_deploy.py`），舊頁面要出現在總覽得再按一次 Deploy——這是設計，不是遺漏。**2026-09-18 加了 `icon` 欄位**（`plan-wui-overview-icon-favourites.md`）：同樣不用回填，欄位有預設值 `""`，在加欄位之前 Deploy 的列讀出來就是「沒有 icon」、總覽畫預設圓圈；要 icon 就在 view 檔加 `icon:` 再按一次 Deploy | — |
+| `deployed-wui` | — | WUI 總覽（2026-09-16，`docs/plan-wui-overview.md`） | **不用回填**：新表，上線時沒有任何列；一列只在有人按 Deploy 時寫入（`api/wui_deploy.py`），舊頁面要出現在總覽得再按一次 Deploy——這是設計，不是遺漏。**2026-09-18 加了 `icon` 欄位**（`plan-wui-overview-icon-favourites.md`）：同樣不用回填，欄位有預設值 `""`，在加欄位之前 Deploy 的列讀出來就是「沒有 icon」、總覽畫預設圓圈；要 icon 就在 view 檔加 `icon:` 再按一次 Deploy；同日再加 `color` 欄位，同樣預設 `""`、同樣不用回填 | — |
 | `notification` | — | 待填（WUI 第三輪） | **想要的行為,不用回填**：舊通知不帶 `outbound` 索引值,所以外送掃描永遠看不到它們——第一次接上寄信通道時,不會把平台歷史上所有通知都寄出去一遍 | §5.6 |
 
 一次盤點全部（**dry-run 不寫回，安全**，§3）：

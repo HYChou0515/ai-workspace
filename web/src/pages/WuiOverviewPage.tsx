@@ -33,7 +33,7 @@ import { useCurrentUserState } from "../hooks/useCurrentUser";
 import { useUser } from "../hooks/useUsers";
 import { useT } from "../lib/i18n";
 import { useApps } from "../hooks/useResources";
-import { appTagPalette } from "../lib/appColor";
+import { appTagPalette, pageColour } from "../lib/appColor";
 import { pxToRem } from "../lib/pxToRem";
 import { favouriteKey, useWuiFavourites } from "../lib/wuiFavourites";
 import { type WuiView, useWuiView } from "../lib/wuiView";
@@ -478,7 +478,14 @@ function PageRow({ page, client, starred, starReady, onStar, showApp }: PageProp
       {/* The page's own icon, or the title's letters: one circle per row
           (`plan-wui-overview-icon-favourites`). Decoration — the link is the
           row's name. */}
-      <PageMark slug={page.slug} itemId={page.item_id} path={page.path} icon={page.icon} title={page.title} />
+      <PageMark
+        slug={page.slug}
+        itemId={page.item_id}
+        path={page.path}
+        icon={page.icon}
+        color={page.color}
+        title={page.title}
+      />
       {/* A new tab: the reader page renders outside the shell, with no way
           back to here, so it opens beside the overview rather than over it. */}
       <a href={wuiAddress(page.slug, page.item_id, page.path)} target="_blank" rel="noopener" title={page.title}>
@@ -506,17 +513,20 @@ function PageRow({ page, client, starred, starReady, onStar, showApp }: PageProp
 function PageCard({ page, client, starred, starReady, onStar, showApp }: PageProps) {
   const t = useT();
   const { remove, ask } = useRemove(page, client);
-  // The App's own colour for the stripe, and its tint for the hover — the
-  // same palette the heading's pill and the mark resolve. Hex custom
-  // properties, never `oklch()` inline (happy-dom drops it).
+  // The card's colour for the stripe and its tint for the hover: the page's
+  // own when its view file declared one the sheet can draw (the author:
+  // 「顏色應該可以讓 deploy 決定」), else the App's — the same palette the
+  // heading's pill and the mark resolve. Hex custom properties, never
+  // `oklch()` inline (happy-dom drops it).
   const app = useApps().find((a) => a.slug === page.slug);
-  const palette = appTagPalette(app?.color);
+  const colour = pageColour(page.color, app?.color);
+  const palette = appTagPalette(colour);
   return (
     <li
       className="wui-card"
       style={
         {
-          ...(app?.color ? { "--app-color": app.color } : {}),
+          ...(colour ? { "--app-color": colour } : {}),
           ...(palette ? { "--app-tint": palette.tint } : {}),
         } as React.CSSProperties
       }
@@ -528,6 +538,7 @@ function PageCard({ page, client, starred, starReady, onStar, showApp }: PagePro
           itemId={page.item_id}
           path={page.path}
           icon={page.icon}
+          color={page.color}
           title={page.title}
           size={54}
         />

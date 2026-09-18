@@ -199,6 +199,7 @@ A read-only page has no `data.json` — it reads what the item already holds.
 view: wui
 title: Lot tracker
 # icon: logo.png         # a file in this folder, or an emoji ("📦"), or a platform icon name ("kanban")
+# color: "#0EA5A4"        # the card's colour on the WUI overview; the App's colour without it
 # tools: [lot-status]   # only if the page calls one — see reference.md
 ```
 

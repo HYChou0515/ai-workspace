@@ -61,6 +61,19 @@ describe("PageMark", () => {
     expect(mark().style.height).toBe("28px");
   });
 
+  it("takes the page's OWN colour over the App's when the view file declared one it can draw", () => {
+    // The author: 「顏色應該可以讓 deploy 決定」. A hex the palette can read
+    // wins; anything else (a word, garbage) falls back to the App's colour,
+    // not to neutral — the App's colour was the answer before the field.
+    const own = appTagPalette("#0EA5A4")!;
+    const { unmount } = render(<PageMark {...base} icon="" title="Yield" color="#0EA5A4" />);
+    expect(mark().style.getPropertyValue("--app-tint")).toBe(own.tint);
+    unmount();
+    const app = appTagPalette("#F0502E")!;
+    render(<PageMark {...base} icon="" title="Yield" color="tomato" />);
+    expect(mark().style.getPropertyValue("--app-tint")).toBe(app.tint);
+  });
+
   it("stays neutral for an App without a colour, and for one no longer registered", () => {
     const { unmount } = render(<PageMark {...base} slug="plain" icon="" title="Yield" />);
     expect(mark().style.getPropertyValue("--app-tint")).toBe("");

@@ -21,7 +21,7 @@ import { useState } from "react";
 import { API_PREFIX } from "../api/http";
 import { encodePath } from "../api/refPath";
 import { useApps } from "../hooks/useResources";
-import { appTagPalette } from "../lib/appColor";
+import { appTagPalette, pageColour } from "../lib/appColor";
 import { Icon, isIconName } from "./Icon";
 
 // The same extensions `AppIcon` treats as a file — kept in step with it and
@@ -81,6 +81,7 @@ export function PageMark({
   itemId,
   path,
   icon,
+  color,
   title,
   size = 28,
 }: {
@@ -90,6 +91,9 @@ export function PageMark({
   path: string;
   /** The row's `icon` as the server stored it — `""` for none. */
   icon: string;
+  /** The row's `color` as the server stored it — the page's own, `""` for
+   * none; the App's colour is the fallback (`pageColour`). */
+  color?: string;
   title: string;
   size?: number;
 }) {
@@ -97,7 +101,7 @@ export function PageMark({
   // browser has already said so, and retrying on every render would ask again.
   const [broken, setBroken] = useState(false);
   const apps = useApps();
-  const palette = appTagPalette(apps.find((a) => a.slug === slug)?.color);
+  const palette = appTagPalette(pageColour(color, apps.find((a) => a.slug === slug)?.color));
   const form = broken ? "none" : formOf(icon);
   return (
     <span

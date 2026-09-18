@@ -66,6 +66,10 @@ class DeployedWui(Struct):
     # is, and whether it resolves, is the overview's call at render; a row
     # written before this field existed decodes to "" and draws the default.
     icon: str = ""
+    # The view file's `color:` as written, or "" — the page's own colour for
+    # its card on the overview, read at Deploy like `icon:`; not validated
+    # here, the overview falls back to the App's colour for one it cannot use.
+    color: str = ""
 
 
 #: `filestore/specstar_impl._fid`'s spelling: specstar ids can't hold an ASCII
@@ -136,15 +140,27 @@ def page_title(doc: Mapping[str, Any], path: str) -> str:
     return parts[-1].removesuffix(VIEW_SUFFIX) or parts[-1]
 
 
-def page_icon(doc: Mapping[str, Any]) -> str:
-    """The view file's ``icon:``, stripped, when it is a non-empty string;
-    anything else is "none". Not resolved here: a file that is not there or a
-    key nobody knows draws the default circle on the overview, and a Deploy is
-    not refused over a decoration (`plan-wui-overview-icon-favourites`)."""
-    icon = doc.get("icon")
-    if isinstance(icon, str) and icon.strip():
-        return icon.strip()
+def _decoration(doc: Mapping[str, Any], key: str) -> str:
+    """The view file's ``key:``, stripped, when it is a non-empty string;
+    anything else is "none". Not validated here: a decoration that does not
+    resolve draws the default on the overview, and a Deploy is not refused
+    over one (`plan-wui-overview-icon-favourites`)."""
+    value = doc.get(key)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
     return ""
+
+
+def page_icon(doc: Mapping[str, Any]) -> str:
+    """``icon:`` — a file in the page's folder, an emoji, or a named-icon key;
+    which, and whether it resolves, is the overview's call at render."""
+    return _decoration(doc, "icon")
+
+
+def page_color(doc: Mapping[str, Any]) -> str:
+    """``color:`` — the page's own colour for its card; the overview uses it
+    when it is a colour it can draw and the App's otherwise."""
+    return _decoration(doc, "color")
 
 
 class DeployBody(BaseModel):
@@ -163,6 +179,7 @@ class DeployedPage(BaseModel):
     deployed_by: str
     deployed_at: int
     icon: str
+    color: str
     can_remove: bool
 
 
@@ -229,6 +246,7 @@ def register_wui_deploy_routes(
             path=path,
             title=page_title(doc, path),
             icon=page_icon(doc),
+            color=page_color(doc),
             deployed_by=get_user_id(),
             # Resolved at call time so a test can hold the clock still.
             deployed_at=(now or now_ms)(),

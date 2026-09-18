@@ -50,6 +50,16 @@ export type AppTagPalette = {
  * a NEUTRAL pill rather than throwing: a manifest typo should cost the row its
  * colour, not the whole resources page — and a grey pill still names its App.
  */
+/** The colour a WUI card draws: the page's own (`color:` in its view file,
+ * read at Deploy) when it is a hex the sheet and the palette can both use,
+ * else the App's. A word like "tomato" is refused rather than passed on: a
+ * custom property that is defined but invalid at computed-value time makes
+ * the stripe's `background` unset (transparent), and `appTagPalette` cannot
+ * read it either — so the fallback has to be decided HERE, once. */
+export function pageColour(own: string | undefined, app: string | undefined): string | undefined {
+  return own && /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(own) ? own : app;
+}
+
 export function appTagPalette(hex: string | undefined): AppTagPalette | null {
   if (!hex) return null;
   try {

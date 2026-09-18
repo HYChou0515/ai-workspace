@@ -54,6 +54,7 @@ const row = (over: Partial<DeployedWui>): DeployedWui => ({
   deployed_by: "bob",
   deployed_at: 1_700_000_000_000,
   icon: "",
+  color: "",
   item_owner: "carol",
   can_remove: true,
   ...over,
@@ -570,6 +571,26 @@ describe("WuiOverviewPage", () => {
       // shape is pinned literally by the table test above.
       const when = relativeTime(new Date(1_700_000_000_000).toISOString());
       expect(detail).toHaveAttribute("title", `Line 3 stoppage · bob Deploy · ${when}`);
+    });
+
+    it("colours the card's stripe with the page's own colour when it has one, the App's otherwise", async () => {
+      render(
+        <WuiOverviewPage
+          client={client([
+            row({ title: "Shipping board", color: "#0EA5A4" }),
+            row({ item_id: "i-2", title: "Scrap trend", color: "" }),
+            row({ item_id: "i-3", title: "Bad colour", color: "tomato" }),
+          ])}
+        />,
+        { wrapper: Wrap },
+      );
+      const rca = await screen.findByRole("region", { name: "根因分析" });
+      const cards = rca.querySelectorAll("li.wui-card");
+      expect((cards[0] as HTMLElement).style.getPropertyValue("--app-color")).toBe("#0EA5A4");
+      expect((cards[1] as HTMLElement).style.getPropertyValue("--app-color")).toBe("#F0502E");
+      // A colour the sheet cannot draw would make `--app-color` defined-but-
+      // invalid and the stripe transparent: the App's colour instead.
+      expect((cards[2] as HTMLElement).style.getPropertyValue("--app-color")).toBe("#F0502E");
     });
 
     it("stars from a card flip both copies, and the favourites group is a card grid too", async () => {
