@@ -2417,9 +2417,13 @@ async def publish_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str
     for verb in TOOL_VERBS["publish_skill"]:
         if (denied := authorize_tool(ctx.context, verb)) is not None:
             return denied
+    import msgspec
+
     from ..api.skill_review import SkillReviewUnavailable
     from ..apps.skill_hub import referenced_tools, skill_description, validate_skill_payload
+    from ..apps.skill_payload import ORIGIN_FILE, origin_for
     from ..apps.skills import (
+        WORKSPACE_SKILL_DIR,
         workspace_skill_metas,
         workspace_skill_origin,
         workspace_skill_payload,
@@ -2479,6 +2483,17 @@ async def publish_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str
         referenced_tools=tools,
         review=review,
         forked_from=forked_from,
+    )
+    # The folder now tracks the entry it just became (review round 1): its
+    # manifest is rewritten to the version just published, so the Skills panel
+    # does not offer an "update" to the very copy the update came from, and a
+    # published fork tracks the fork rather than the root it was installed
+    # from. From here on the folder is a copy of its own entry — a re-publish
+    # from another item shows up as an update, and Refresh brings it.
+    await files.write(
+        inv,
+        f"/{WORKSPACE_SKILL_DIR}/{name}/{ORIGIN_FILE}",
+        msgspec.json.encode(origin_for("hub", payload, entry=entry_id)),
     )
     how = (
         "updated your earlier version"

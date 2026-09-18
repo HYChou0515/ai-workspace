@@ -491,11 +491,18 @@ async def materialize_skill(
 
 class Upstream(msgspec.Struct, frozen=True):
     """What a copy's ``.origin`` points at, resolved NOW for one viewer.
-    ``payload`` is what upstream ships today — empty unless ``state`` is
-    ``live``."""
+
+    ``origin`` is the copy's own manifest (the one read to get here — read
+    once, carried, so callers do not read it again). ``files`` is what upstream
+    ships today as ``{rel: sha256}`` — for a hub entry straight off its row,
+    which is why "has an update" costs no blob reads. ``payload`` is the bytes,
+    loaded only when asked (``with_payload``): only Refresh needs them. Both are
+    empty unless ``state`` is ``live``."""
 
     source: SkillSource
     state: UpstreamState
+    origin: SkillOrigin
+    files: dict[str, str]
     payload: dict[str, bytes]
     entry: str = ""
 
@@ -509,6 +516,7 @@ async def resolve_upstream(
     *,
     hub: SkillHubStore | None = None,
     viewer: str = "",
+    with_payload: bool = False,
 ) -> Upstream | None:
     """The copy's upstream, or ``None`` when ``.skill/<name>/`` is not a copy.
 
@@ -529,13 +537,29 @@ async def resolve_upstream(
                 f"{name!r} was installed from the skill hub, but no skill hub was given"
             )
         state, entry = hub.state_for(origin.entry, viewer)
-        payload = await hub.payload_of(origin.entry) if entry is not None else {}
-        return Upstream(source="hub", state=state, payload=payload, entry=origin.entry)
+        if entry is None:
+            return Upstream(source="hub", state=state, origin=origin, files={}, payload={})
+        payload = await hub.payload_of(origin.entry) if with_payload else {}
+        return Upstream(
+            source="hub",
+            state="live",
+            origin=origin,
+            files=dict(entry.origin.files),
+            payload=payload,
+            entry=origin.entry,
+        )
     found = _skill_source(app_slug, profile, name)
     if found is None:
-        return Upstream(source=origin.source, state="deleted", payload={})
+        return Upstream(source=origin.source, state="deleted", origin=origin, files={}, payload={})
     source, src_dir = found
-    return Upstream(source=source, state="live", payload=skill_payload(src_dir))
+    payload = skill_payload(src_dir)
+    return Upstream(
+        source=source,
+        state="live",
+        origin=origin,
+        files=origin_for(source, payload).files,
+        payload=payload if with_payload else {},
+    )
 
 
 class SkillUpstream(msgspec.Struct, frozen=True):
@@ -571,10 +595,7 @@ async def skill_upstream(
         return None
     if up.state != "live":
         return SkillUpstream(state=up.state, update_available=False)
-    origin = await workspace_skill_origin(files, workspace_id, name)
-    assert origin is not None  # resolve_upstream just read it
-    shipped_now = origin_for(up.source, up.payload, entry=up.entry).files
-    return SkillUpstream(state="live", update_available=origin.files != shipped_now)
+    return SkillUpstream(state="live", update_available=up.origin.files != up.files)
 
 
 async def skill_folder_in_the_way(
@@ -614,6 +635,11 @@ async def install_hub_skill(
     assert entry is not None  # the caller checked `state_for` first
     payload = await hub.payload_of(entry_id)
     root = f"/{WORKSPACE_SKILL_DIR}/{entry.name}"
+    # The whole folder is one operation (#538): checked once up front, so a
+    # workspace with room for the first file and not the rest refuses cleanly
+    # instead of leaving half a folder with no `.origin` — which would then
+    # read as a hand-written skill of that name and block the next install.
+    await files.ensure_room_for(workspace_id, sum(len(data) for data in payload.values()))
     for rel, data in payload.items():
         await files.write(workspace_id, f"{root}/{rel}", data)
     await files.write(
@@ -659,15 +685,14 @@ async def refresh_skill(
     from ..filestore.protocol import FileNotFound
 
     root = f"/{WORKSPACE_SKILL_DIR}/{name}"
-    origin = await workspace_skill_origin(files, workspace_id, name)
     up = await resolve_upstream(
-        files, workspace_id, app_slug, profile, name, hub=hub, viewer=viewer
+        files, workspace_id, app_slug, profile, name, hub=hub, viewer=viewer, with_payload=True
     )
     # Not a copy, or an upstream that is gone / closed to this viewer: nothing
     # to bring, and nothing here is touched — the copy is the workspace's own.
-    if origin is None or up is None or up.state != "live":
+    if up is None or up.state != "live":
         return SkillRefresh(updated=[], skipped=[], removed=[])
-    source, payload = up.source, up.payload
+    origin, source, payload = up.origin, up.source, up.payload
 
     async def _unchanged(rel: str) -> bool:
         """Whether the workspace copy still holds the bytes we shipped. Only ever

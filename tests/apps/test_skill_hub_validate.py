@@ -13,7 +13,11 @@ from __future__ import annotations
 
 import pytest
 
-from workspace_app.apps.skill_hub import referenced_tools, validate_skill_payload
+from workspace_app.apps.skill_hub import (
+    SKILL_HUB_MAX_BYTES,
+    referenced_tools,
+    validate_skill_payload,
+)
 from workspace_app.apps.skills import (
     SKILL_BODY_CAP,
     WORKSPACE_SKILL_DIR,
@@ -92,6 +96,18 @@ def test_a_script_that_does_not_parse_is_a_problem() -> None:
     problems = validate_skill_payload("triage-reflow", payload)
     assert len(problems) == 1
     assert "scripts/bad.py" in problems[0] and "scripts/ok.py" not in problems[0]
+
+
+def test_a_folder_over_the_size_cap_is_a_problem() -> None:
+    """Review round 1: an entry's files are read whole into memory on publish
+    and stored in the durable store outside any user quota, and every
+    installer's workspace pays for them. One bound, stated in the refusal."""
+    payload = {"SKILL.md": _md(), "assets/huge.bin": b"x" * (SKILL_HUB_MAX_BYTES + 1)}
+    problems = validate_skill_payload("triage-reflow", payload)
+    assert len(problems) == 1 and "MiB" in problems[0]
+
+    fits = {"SKILL.md": _md(), "assets/big.bin": b"x" * (SKILL_HUB_MAX_BYTES - len(_md()))}
+    assert validate_skill_payload("triage-reflow", fits) == []
 
 
 def test_every_problem_is_reported_not_just_the_first() -> None:

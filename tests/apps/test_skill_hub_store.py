@@ -332,3 +332,77 @@ async def test_nest_forks_keeps_the_hits_order_so_visible_decides_it(store: Skil
     hits = {i: e for i, e in store.visible("x")}
 
     assert nest_forks(hits) == [(root, [a, b])]
+
+
+# ── review round 1 (A): a re-publish that dies mid-write ─────────────────────
+
+
+class _DiesOnNthWrite(MemoryFileStore):
+    """A blob store that raises on its n-th write — the durable store hiccup or
+    the disk filling up, mid-publish."""
+
+    def __init__(self, nth: int) -> None:
+        super().__init__()
+        self.writes = 0
+        self.nth = nth
+
+    async def write(self, workspace_id: str, path: str, data: bytes) -> None:
+        self.writes += 1
+        if self.writes == self.nth:
+            raise OSError("disk gone")
+        await super().write(workspace_id, path, data)
+
+
+async def test_a_republish_that_dies_writing_files_leaves_the_live_row_serving_the_old_files(
+    spec: SpecStar,
+) -> None:
+    """The first version of `publish` PURGED the old files before writing the
+    new ones, so a failure in between left a LIVE row whose manifest named two
+    files and whose namespace held none: installs wrote a folder holding only
+    `.origin`, the page showed no SKILL.md, and `skill_folder_in_the_way` read
+    that folder as free. Each version now lives in its own namespace; the row
+    moves to the new one only after every file is there, and the old one is
+    dropped only after that. A crash leaves orphan blobs, never a row pointing
+    at nothing — for the re-publish as well as the first publish."""
+    v1 = {"SKILL.md": PAYLOAD["SKILL.md"], "references/glossary.md": b"v1\n"}
+    v2 = {"SKILL.md": PAYLOAD["SKILL.md"], "references/glossary.md": b"v2\n"}
+    blobs = _DiesOnNthWrite(nth=4)  # v1 = writes 1–2; v2 dies on its 2nd file
+    store = SkillHubStore(spec, blobs)
+    entry = await _publish(store, payload=v1)
+
+    with pytest.raises(OSError):
+        await _publish(store, payload=v2)
+
+    live = store.get(entry)
+    assert live is not None and live.origin.files == origin_for("hub", v1, entry=entry).files
+    assert await store.payload_of(entry) == v1
+
+
+async def test_a_republish_that_succeeds_drops_the_previous_versions_files(
+    spec: SpecStar, store: SkillHubStore
+) -> None:
+    """The namespaces are per version, so the old one has to be let go of
+    explicitly — or every re-publish would leak a full copy."""
+    entry = await _publish(store)
+    before = store.get(entry)
+    assert before is not None
+    old_ns = before.blobs
+
+    await _publish(store, payload={"SKILL.md": PAYLOAD["SKILL.md"]})
+
+    after = store.get(entry)
+    assert after is not None and after.blobs != old_ns
+    assert await store._blobs.ls(old_ns) == []  # noqa: SLF001 — the namespace is the store's own
+    assert await store.payload_of(entry) == {"SKILL.md": PAYLOAD["SKILL.md"]}
+
+
+async def test_delete_purges_the_version_the_row_points_at(
+    spec: SpecStar, store: SkillHubStore
+) -> None:
+    entry = await _publish(store)
+    row = store.get(entry)
+    assert row is not None
+
+    await store.delete(entry)
+
+    assert await store._blobs.ls(row.blobs) == []  # noqa: SLF001

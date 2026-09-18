@@ -20,7 +20,7 @@ from workspace_app.agent.tools import publish_skill_impl
 from workspace_app.api.skill_review import SkillReviewUnavailable
 from workspace_app.apps.skill_hub import SkillHubReview, SkillHubStore, register_skill_hub
 from workspace_app.apps.skill_payload import ORIGIN_FILE, SkillOrigin
-from workspace_app.apps.skills import WORKSPACE_SKILL_DIR
+from workspace_app.apps.skills import WORKSPACE_SKILL_DIR, install_hub_skill
 from workspace_app.files import WorkspaceFiles
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.resources import make_spec
@@ -82,6 +82,12 @@ async def _put(
     assert ws is not None and iid is not None
     for rel, data in files.items():
         await ws.write(iid, f"/{WORKSPACE_SKILL_DIR}/{name}/{rel}", data)
+
+
+def _files(ctx: RunContextWrapper[AgentToolContext]) -> WorkspaceFiles:
+    files = ctx.context.files
+    assert files is not None
+    return files
 
 
 def _origin(entry: str) -> bytes:
@@ -301,6 +307,69 @@ async def test_a_copy_whose_upstream_is_gone_publishes_as_a_root():
 
     entry = hub.get(hub.find("alice", "s") or "")
     assert entry is not None and entry.forked_from == ""
+
+
+async def test_after_publishing_the_folder_tracks_the_entry_it_just_became():
+    """Review round 1: the publisher's own copy said "update available" right
+    after they published from it — its `.origin` still described the version
+    it was INSTALLED from, and Refresh then "kept" every file. Publishing
+    rewrites the manifest to the version just published, so the folder tracks
+    its own entry: no phantom update, and a later re-publish from another item
+    IS one."""
+    from workspace_app.apps.skills import skill_upstream
+
+    hub = _hub()
+    first = _ctx(hub, _Reviewer(), item="inv-1")
+    await _put(first, "s", {"SKILL.md": _md("s", "v1\n")})
+    await publish_skill_impl(first, "s")
+    mine = hub.find("alice", "s")
+    assert mine is not None
+    second = _ctx(hub, _Reviewer(), item="inv-2")
+    await install_hub_skill(_files(second), "inv-2", hub, mine)
+    await _put(second, "s", {"SKILL.md": _md("s", "v2\n")})
+
+    await publish_skill_impl(second, "s")
+
+    up = await skill_upstream(
+        _files(second), "inv-2", "rca", "default", "s", hub=hub, viewer="alice"
+    )
+    assert up is not None and (up.state, up.update_available) == ("live", False)
+    # …and the first item, which still holds v1, now sees the update.
+    up1 = await skill_upstream(
+        _files(first), "inv-1", "rca", "default", "s", hub=hub, viewer="alice"
+    )
+    assert up1 is not None and up1.update_available is True
+
+
+async def test_a_published_fork_tracks_the_fork_not_the_root():
+    """Bob installed alice's entry and published his changes: his folder's
+    `.origin` used to keep pointing at ALICE's entry, so her next re-publish
+    showed on his row as an update to pull over his own work."""
+    hub = _hub()
+    alices = await hub.publish(
+        owner="alice",
+        name="triage-reflow",
+        description="d",
+        source_item="inv-alice",
+        source_app="rca",
+        source_profile="default",
+        payload={"SKILL.md": _md()},
+        referenced_tools=[],
+        review=OK,
+    )
+    bob = _ctx(hub, _Reviewer(), user="bob", item="inv-bob")
+    await install_hub_skill(_files(bob), "inv-bob", hub, alices)
+    await _put(bob, "triage-reflow", {"SKILL.md": _md(body="bob's take\n")})
+
+    await publish_skill_impl(bob, "triage-reflow")
+
+    bobs = hub.find("bob", "triage-reflow")
+    assert bobs is not None and bobs != alices
+    origin = msgspec.json.decode(
+        await _files(bob).read("inv-bob", f"/{WORKSPACE_SKILL_DIR}/triage-reflow/{ORIGIN_FILE}"),
+        type=SkillOrigin,
+    )
+    assert origin.entry == bobs
 
 
 # ── refusals that name what to do ────────────────────────────────────────────

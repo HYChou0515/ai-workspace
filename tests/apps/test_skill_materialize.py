@@ -521,3 +521,63 @@ async def test_install_writes_the_manifest_last():
     assert (
         await skill_upstream(files, inv, "rca", "local-lab", "triage", hub=hub, viewer="bob")
     ) is None
+
+
+# ── review round 1 (Q, W) ────────────────────────────────────────────────────
+
+
+async def test_has_an_update_for_a_hub_copy_reads_no_blobs():
+    """The entry's row already carries the hashes of what it ships (`origin`,
+    written at publish); reading every blob back to hash it again cost a
+    full download per copy per panel open. Only Refresh needs the bytes."""
+
+    class _CountsReads(MemoryFileStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.reads = 0
+
+        async def read(self, workspace_id: str, path: str) -> bytes:
+            self.reads += 1
+            return await super().read(workspace_id, path)
+
+    from workspace_app.apps.skill_hub import SkillHubStore, register_skill_hub
+    from workspace_app.resources import make_spec
+
+    spec = make_spec(default_user="system")
+    register_skill_hub(spec)
+    blobs = _CountsReads()
+    hub = SkillHubStore(spec, blobs)
+    entry = await _published(hub)
+    files, inv = WorkspaceFiles(MemoryFileStore()), "inv-1"
+    await install_hub_skill(files, inv, hub, entry)
+    blobs.reads = 0
+
+    up = await skill_upstream(files, inv, "rca", "local-lab", "triage", hub=hub, viewer="bob")
+
+    assert up is not None and (up.state, up.update_available) == ("live", False)
+    assert blobs.reads == 0
+    assert await _published(hub, body="v2\n") == entry
+    blobs.reads = 0
+    up = await skill_upstream(files, inv, "rca", "local-lab", "triage", hub=hub, viewer="bob")
+    assert up is not None and up.update_available is True
+    assert blobs.reads == 0
+
+
+async def test_install_checks_the_room_once_up_front_and_writes_nothing_when_it_does_not_fit():
+    """#538's rule for a whole-folder write: a gate in the middle of the loop
+    leaves half a folder without `.origin`, which then reads as a hand-written
+    skill of that name — and blocks the next install as a name clash."""
+    from workspace_app.files.facade import WorkspaceFull
+
+    _spec, hub = _hub()
+    entry = await _published(hub)
+    payload = await hub.payload_of(entry)
+    # Room for the first file alone, not for the folder: a per-write gate
+    # writes SKILL.md and refuses scripts/x.py; the up-front gate writes nothing.
+    quota = len(payload["SKILL.md"]) + 1
+    files, inv = WorkspaceFiles(MemoryFileStore(), quota=quota), "inv-1"
+
+    with pytest.raises(WorkspaceFull):
+        await install_hub_skill(files, inv, hub, entry)
+
+    assert await files.ls(inv, "/.skill/") == []

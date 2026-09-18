@@ -49,9 +49,16 @@ if TYPE_CHECKING:
 #: difference (Q10).
 UpstreamState = Literal["live", "unpublished", "deleted"]
 
-#: The FileStore namespace an entry's files live under. A synthetic workspace id
-#: per entry, so `purge` on the entry takes exactly its files and nothing else.
+#: The FileStore namespace an entry's files live under: a synthetic workspace
+#: id per PUBLISHED VERSION (`skill-hub:<entry id>:<version>`), so `purge` on a
+#: version takes exactly its files, and a version being written never shares a
+#: namespace with the one the row still points at (review round 1, finding A).
 _BLOB_PREFIX = "skill-hub:"
+
+#: The most one entry may hold, all files together. Publishing reads the folder
+#: whole into memory and stores it in the durable store outside any user quota,
+#: and every installer's workspace then pays for it (review round 1).
+SKILL_HUB_MAX_BYTES = 20 * 1024 * 1024
 
 
 class SkillHubReview(Struct):
@@ -88,8 +95,9 @@ class SkillHubEntry(Struct):  # → resource "skill-hub-entry"
     source_profile: str
     #: `origin_for("hub", payload, entry=<this id>)` — the SAME manifest an
     #: installed copy writes to its `.origin`, computed by the same function.
-    #: `skill_update_available` compares the two; two hash implementations kept
-    #: alike by hand would diverge the moment one was edited.
+    #: `skill_upstream` compares the two, hash for hash, WITHOUT reading the
+    #: files back; two hash implementations kept alike by hand would diverge
+    #: the moment one was edited.
     origin: SkillOrigin
     #: The AI reviewer's verdict at publish time. Required: no review, no row.
     review: SkillHubReview
@@ -104,6 +112,12 @@ class SkillHubEntry(Struct):  # → resource "skill-hub-entry"
     #: The platform's own permission model, reused whole. `visibility` defaults
     #: to `public` (plan Q6); `private` is what "unpublish" means (plan Q5).
     permission: Permission = field(default_factory=Permission)
+    #: The FileStore namespace holding THIS version's files. Per version, not
+    #: per entry: a re-publish writes the next version into a fresh namespace,
+    #: moves the row here, and only then drops the previous one — so the row
+    #: never points at a namespace being emptied or half-filled. `""` is the
+    #: pre-versioned layout (`skill-hub:<id>`), kept decodable.
+    blobs: str = ""
 
 
 # ── what publishing checks ───────────────────────────────────────────────────
@@ -151,6 +165,12 @@ def validate_skill_payload(folder: str, payload: Mapping[str, bytes]) -> list[st
             f"body is {len(body)} characters; the loader refuses anything over {SKILL_BODY_CAP}"
         )
 
+    total = sum(len(data) for data in payload.values())
+    if total > SKILL_HUB_MAX_BYTES:
+        problems.append(
+            f"the folder is {total / 2**20:.1f} MiB, over the {SKILL_HUB_MAX_BYTES // 2**20} MiB "
+            "cap for one skill hub entry — drop or shrink the large files"
+        )
     for mention in sorted(set(_REFERENCE_MENTION.findall(body))):
         if mention not in payload:
             problems.append(
@@ -333,10 +353,16 @@ class SkillHubStore:
             return res.info.resource_id
         return None
 
+    @staticmethod
+    def _namespace(entry_id: str, entry: SkillHubEntry | None) -> str:
+        return (entry.blobs if entry is not None and entry.blobs else "") or _BLOB_PREFIX + entry_id
+
     async def payload_of(self, entry_id: str) -> dict[str, bytes]:
         """Every file the entry ships, keyed like :func:`skill_payload` keys
-        them — the shape ``materialize_skill`` writes into a workspace."""
-        ws = _BLOB_PREFIX + entry_id
+        them — the shape ``materialize_skill`` writes into a workspace. Reads
+        the version the ROW points at; a version being published is invisible
+        until the row moves to it."""
+        ws = self._namespace(entry_id, self.get(entry_id))
         out: dict[str, bytes] = {}
         for path in await self._blobs.ls(ws):
             out[path.lstrip("/")] = await self._blobs.read(ws, path)
@@ -367,8 +393,9 @@ class SkillHubStore:
         """Soft-delete the row and free its files. Final: `state_for` answers
         `deleted` for every copy and fork from now on, and a re-publish of the
         name is a NEW entry (`find` skips tombstones). No restore (Q5)."""
+        ws = self._namespace(entry_id, self.get(entry_id))
         self._rm().delete(entry_id)
-        await self._blobs.purge(_BLOB_PREFIX + entry_id)
+        await self._blobs.purge(ws)
 
     async def publish(
         self,
@@ -389,23 +416,29 @@ class SkillHubStore:
         entry id either way, so a caller cannot tell the two apart and does not
         need to: the id is the identity that survives.
 
-        Files are written BEFORE the row, and the row carries their manifest,
-        so a row that exists always describes files that exist. A crash between
-        the two leaves orphaned blobs, never a row pointing at nothing.
+        Every version gets its own namespace. The files are written there
+        FIRST, the row moves to it SECOND, and the previous version's namespace
+        is dropped LAST — so a row that exists always describes files that
+        exist, on the first publish and on every re-publish alike. The first
+        version purged the old files before writing the new ones, and a failure
+        in between left a LIVE row whose manifest named files its namespace no
+        longer held (review round 1). A crash now leaves orphan blobs in a
+        namespace no row points at, never a row pointing at nothing; those
+        orphans are the accepted residue.
         """
         existing = self.find(owner, name)
         # A NEW entry's id is minted here, not by `create`, so the files can be
-        # written under it before the row exists — the order the docstring
-        # promises. Asking `create` for the id first would put the row before
-        # the files, and a crash in between would leave a row pointing at
-        # nothing: the one shape this ordering rules out.
+        # written under it before the row exists. Asking `create` for the id
+        # first would put the row before the files, and a crash in between
+        # would leave a row pointing at nothing: the one shape this rules out.
         entry_id = existing if existing is not None else uuid.uuid4().hex
+        current = self.get(entry_id) if existing is not None else None
 
-        ws = _BLOB_PREFIX + entry_id
-        # Replace, not merge: a file the new version dropped must not survive
-        # from the old one, or an installed copy of the new version would carry
-        # a reference the SKILL.md no longer makes.
-        await self._blobs.purge(ws)
+        # Replace, not merge — and in a FRESH namespace: a file the new version
+        # dropped must not survive from the old one (an installed copy of the
+        # new version would carry a reference the SKILL.md no longer makes),
+        # and the old version must stay whole until the row has moved.
+        ws = f"{_BLOB_PREFIX}{entry_id}:{uuid.uuid4().hex}"
         for rel, data in payload.items():
             await self._blobs.write(ws, f"/{rel}", data)
 
@@ -423,13 +456,14 @@ class SkillHubStore:
                     review=review,
                     forked_from=forked_from,
                     referenced_tools=list(referenced_tools),
+                    blobs=ws,
                 ),
                 resource_id=entry_id,
             )
             return entry_id
 
-        current = self.get(entry_id)
-        assert current is not None
+        assert current is not None  # `find` answered it, and it is not a tombstone
+        previous = self._namespace(entry_id, current)
         self._rm().update(
             entry_id,
             SkillHubEntry(
@@ -446,6 +480,9 @@ class SkillHubStore:
                 forked_from=current.forked_from,
                 referenced_tools=list(referenced_tools),
                 permission=current.permission,
+                blobs=ws,
             ),
         )
+        # The row now points at the new version; the old one can go.
+        await self._blobs.purge(previous)
         return entry_id
