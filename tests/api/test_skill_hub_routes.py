@@ -101,6 +101,21 @@ async def test_the_list_searches_name_and_description_and_filters_mine(harness: 
     assert other not in [e["id"] for e in q]
 
 
+async def test_the_list_computes_the_tool_diff_per_row_for_the_app_asked_about(harness: Harness):
+    """The Skills panel's picker lists for ONE item, so it asks with that
+    item's App and every row — forks included — says what that App lacks."""
+    hub = _hub(harness)
+    root = await _entry(hub, "alice", "triage", tools=["exec", "query_entity"], app="pm")
+    await _entry(hub, "bob", "triage", tools=["kb_search"], forked_from=root)
+
+    for_rca = harness.client.get("/skill-hub/entries", params={"app": "rca"}).json()["entries"]
+    plain = harness.client.get("/skill-hub/entries").json()["entries"]
+
+    assert for_rca[0]["missing_tools"] == ["query_entity"]
+    assert for_rca[0]["forks"][0]["missing_tools"] == ["kb_search"]
+    assert plain[0]["missing_tools"] == [] and plain[0]["forks"][0]["missing_tools"] == []
+
+
 async def test_a_fork_whose_root_the_viewer_cannot_see_is_listed_on_its_own(harness: Harness):
     """Otherwise it would vanish with the root — and its owner could not find
     their own published skill on the page."""

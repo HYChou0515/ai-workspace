@@ -70,7 +70,7 @@ export const qk = {
   // The skill hub (docs/plan-skill-hub.md): the listing per search + 「我的」,
   // and one entry (with the tool diff for an App when asked). Both are per
   // viewer; a management write invalidates the whole family.
-  skillHub: (q: string, mine: boolean) => ["skillHub", q, mine] as const,
+  skillHub: (q: string, mine: boolean, app = "") => ["skillHub", q, mine, app] as const,
   skillHubEntry: (id: string, app: string) => ["skillHub", "entry", id, app] as const,
   activity: ["activity"] as const,
   conversation: (id: string) => ["conversation", id] as const,

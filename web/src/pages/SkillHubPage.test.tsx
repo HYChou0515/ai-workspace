@@ -37,6 +37,7 @@ const card = (over: Partial<SkillHubCard>): SkillHubCard => ({
   forked_from: "",
   review_verdict: "ok",
   is_mine: false,
+  missing_tools: [],
   forks: [],
   ...over,
 });

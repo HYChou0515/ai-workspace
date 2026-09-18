@@ -58,6 +58,10 @@ class SkillHubCard(BaseModel):
     forked_from: str
     review_verdict: Literal["ok", "notes"]
     is_mine: bool
+    #: `referenced_tools` minus the ceiling of the App the list was asked for
+    #: (`?app=`) — the install告知 the Skills panel's picker shows per row.
+    #: Empty when no App was asked about.
+    missing_tools: list[str] = []
     forks: list[SkillHubCard] = []
 
 
@@ -152,7 +156,7 @@ def register_skill_hub_routes(
     """Mount the skill hub routes (reads, owner management, the edit resolver)
     + the item install route onto ``app``."""
 
-    def _card(entry_id: str, entry: SkillHubEntry, viewer: str) -> SkillHubCard:
+    def _card(entry_id: str, entry: SkillHubEntry, viewer: str, app: str = "") -> SkillHubCard:
         return SkillHubCard(
             id=entry_id,
             owner=entry.owner,
@@ -163,6 +167,7 @@ def register_skill_hub_routes(
             forked_from=entry.forked_from,
             review_verdict=entry.review.verdict,
             is_mine=entry.owner == viewer,
+            missing_tools=missing_tools_for(entry.referenced_tools, app) if app else [],
         )
 
     def _readable(entry_id: str, viewer: str) -> SkillHubEntry:
@@ -181,12 +186,14 @@ def register_skill_hub_routes(
         return out
 
     @app.get("/skill-hub/entries")
-    async def list_skill_hub(q: str = "", mine: bool = False) -> SkillHubList:
+    async def list_skill_hub(q: str = "", mine: bool = False, app: str = "") -> SkillHubList:
         """The page's list: roots with their forks beneath, in name order.
         `q` matches name and description (case-insensitive); `mine` keeps the
         viewer's own. A fork whose root is out of view — filtered by `q`,
         private to the viewer, or deleted — is listed on its own, so a skill is
-        never hidden by what it was forked from."""
+        never hidden by what it was forked from. `app` (a slug) adds each
+        row's `missing_tools` against that App's ceiling — the Skills panel's
+        picker asks for the item's App, so the告知 is on the row it picks from."""
         viewer = get_user_id()
         needle = q.strip().lower()
         hits = {
@@ -197,8 +204,8 @@ def register_skill_hub_routes(
         }
         roots: list[SkillHubCard] = []
         for root, forks in nest_forks(hits):
-            card = _card(root, hits[root], viewer)
-            card.forks = [_card(j, hits[j], viewer) for j in forks]
+            card = _card(root, hits[root], viewer, app)
+            card.forks = [_card(j, hits[j], viewer, app) for j in forks]
             roots.append(card)
         return SkillHubList(entries=roots)
 

@@ -28,6 +28,9 @@ export type SkillHubCard = {
   review_verdict: SkillHubReviewVerdict;
   /** Owned by the signed-in viewer — the server's answer, not a client compare. */
   is_mine: boolean;
+  /** `referenced_tools` minus the ceiling of the App the list was asked for
+   * (`list(q, mine, app)`); empty when no App was asked about. */
+  missing_tools: string[];
   forks: SkillHubCard[];
 };
 
@@ -78,7 +81,8 @@ export type SkillEditTarget = {
 export type SkillInstalled = { name: string; missing_tools: string[] };
 
 export type SkillHubApi = {
-  list(q?: string, mine?: boolean): Promise<SkillHubCard[]>;
+  /** `app` (a slug) adds each row's `missing_tools` against that App's ceiling. */
+  list(q?: string, mine?: boolean, app?: string): Promise<SkillHubCard[]>;
   /** `app` (a slug) adds `missing_tools` against that App's ceiling. */
   get(entryId: string, app?: string): Promise<SkillHubDetail>;
   /** The Skills panel's install door: 409 when a folder of that name is
@@ -107,10 +111,11 @@ async function post(path: string, body?: unknown, failed = "request failed"): Pr
 }
 
 export const skillHubApi: SkillHubApi = {
-  async list(q = "", mine = false) {
+  async list(q = "", mine = false, app = "") {
     const params = new URLSearchParams();
     if (q) params.set("q", q);
     if (mine) params.set("mine", "true");
+    if (app) params.set("app", app);
     const suffix = params.size ? `?${params}` : "";
     const resp = await apiFetch(`/skill-hub/entries${suffix}`);
     if (!resp.ok) throw await httpErrorFrom(resp, `skill hub listing failed: ${resp.status}`);

@@ -1906,6 +1906,28 @@ export const messages = {
   },
   "skillHub.edit.newItem.go": { "zh-TW": "開新 item", en: "Create the item" },
   "skillHub.failed": { "zh-TW": "沒有成功：{reason}", en: "That didn't work: {reason}" },
+  // The Skills panel's two skill hub buttons (plan D2: the actions live in the item).
+  "skills.fromHub": { "zh-TW": "從 skill hub 裝", en: "Install from the skill hub" },
+  "skills.fromHub.intro": {
+    "zh-TW": "別人發布的 skill，裝進這個 item 就能用。提到這個 App 沒有的工具的，會先說。",
+    en: "Skills other people published; installed into this item, ready to use. One that mentions a tool this App lacks says so first.",
+  },
+  "skills.fromHub.browse": { "zh-TW": "到 skill hub 看全部", en: "Browse the skill hub" },
+  "skills.fromHub.none": { "zh-TW": "skill hub 上還沒有任何 skill。", en: "Nothing has been published to the skill hub yet." },
+  "skills.fromHub.install": { "zh-TW": "裝進這個 item", en: "Install here" },
+  "skills.fromHub.missing": {
+    "zh-TW": "提到 {tools}，這個 App 沒有——裝了也可能有步驟做不到。",
+    en: "Mentions {tools}, which this App does not have — some steps may not be followable here.",
+  },
+  "skills.fromHub.installed": { "zh-TW": "已裝入「{name}」，下一輪就能用。", en: "Installed “{name}” — usable from the next turn." },
+  "skills.publish": { "zh-TW": "發布到 skill hub", en: "Publish to the skill hub" },
+  // Offered into the chat box, not sent (the WUI's idiom): publishing is a
+  // turn — the agent checks the folder, has it reviewed, and reports in the
+  // chat — and what to say next is still theirs.
+  "skills.publishSentence": {
+    "zh-TW": "請把 skill `{name}` 發布到 skill hub。",
+    en: "Please publish the skill `{name}` to the skill hub.",
+  },
 } satisfies Record<string, Entry>;
 
 export type MsgKey = keyof typeof messages;

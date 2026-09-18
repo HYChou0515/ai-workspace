@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { type ComponentProps, useEffect, useRef, useState } from "react";
 
 import { api } from "../api";
 import type { FileService } from "../api/fileService";
@@ -11,7 +11,9 @@ import { sameShape } from "../lib/sameShape";
 import { pxToRem } from "../lib/pxToRem";
 import { Icon } from "./Icon";
 import { useDirtyClose } from "../hooks/useDirtyClose";
+import { publishAgentDraft } from "../lib/agentDraftBus";
 import { ModalShell } from "./ModalShell";
+import { SkillHubPickerModal } from "./SkillHubPickerModal";
 
 /**
  * The Skills panel (#298 + #380). Lists every skill available to this item —
@@ -31,6 +33,7 @@ export function SkillsModal({
   appliedSkills = [],
   onToggleApply,
   client = api,
+  hubClient,
 }: {
   slug: string;
   itemId: string;
@@ -43,6 +46,8 @@ export function SkillsModal({
   /** Toggle a skill in this turn's apply set. */
   onToggleApply?: (name: string) => void;
   client?: Pick<ApiClient, "getItemSkills" | "refreshItemSkill">;
+  /** The skill hub client the picker installs through (tests inject one). */
+  hubClient?: ComponentProps<typeof SkillHubPickerModal>["client"];
 }) {
   const t = useT();
   const qc = useQueryClient();
@@ -55,6 +60,8 @@ export function SkillsModal({
   // the only part of the result the user has to act on.
   const [refreshNote, setRefreshNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // 「從 skill hub 裝」 (plan D2): the picker over this panel.
+  const [picking, setPicking] = useState(false);
   const [prefs, setPrefs] = useState<Record<string, boolean> | null>(null);
   const [initial, setInitial] = useState<Record<string, boolean> | null>(null);
   const [saving, setSaving] = useState(false);
@@ -112,6 +119,23 @@ export function SkillsModal({
         : t("skills.refreshDone"),
     );
     await qc.invalidateQueries({ queryKey: qk.itemSkills(slug, itemId) });
+  };
+
+  // 「發布到 skill hub」: a sentence into the chat box, not a request — the
+  // agent's `publish_skill` checks the folder, has it reviewed and reports in
+  // the chat (the author: 「上傳必須在item內上傳 這樣才有辦法讓ai審核 而且有問題
+  // 馬上可以在對話窗看到」). Offered, not sent, the WUI's idiom: what to say
+  // next is still theirs. The panel closes so the box is in front of them.
+  const publish = (name: string) => {
+    publishAgentDraft(itemId, t("skills.publishSentence", { name }));
+    onClose();
+  };
+
+  const installed = async (name: string) => {
+    setPicking(false);
+    setRefreshNote(t("skills.fromHub.installed", { name }));
+    await qc.invalidateQueries({ queryKey: qk.itemSkills(slug, itemId) });
+    await qc.invalidateQueries({ queryKey: qk.files(itemId) });
   };
 
   const download = async (name: string) => {
@@ -217,6 +241,11 @@ export function SkillsModal({
                 // that need has nothing to do with upstream having moved.
                 onRefresh={s.update_available ? () => void refresh(s.name, false) : undefined}
                 onReset={s.is_copy ? () => void refresh(s.name, true) : undefined}
+                // Only a skill whose files are HERE can be published: a
+                // hand-written one, or a copy installed from the skill hub
+                // (both read `source: workspace`). A package skill's files are
+                // the deploy's.
+                onPublish={s.source === "workspace" ? () => publish(s.name) : undefined}
               />
             ))
           )}
@@ -231,6 +260,15 @@ export function SkillsModal({
             style={pillBtn}
           >
             <Icon name="upload" size={12} /> {t("skills.import")}
+          </button>
+          <button
+            type="button"
+            data-testid="skills-from-hub"
+            disabled={busy}
+            onClick={() => setPicking(true)}
+            style={pillBtn}
+          >
+            <Icon name="sparkle" size={12} /> {t("skills.fromHub")}
           </button>
           <span style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)", flex: 1 }}>
             {t("skills.importHint")}
@@ -266,6 +304,15 @@ export function SkillsModal({
             }}
           />
         </div>
+        {picking && (
+          <SkillHubPickerModal
+            slug={slug}
+            itemId={itemId}
+            onInstalled={(name) => void installed(name)}
+            onClose={() => setPicking(false)}
+            client={hubClient}
+          />
+        )}
     </ModalShell>
   );
 }
@@ -279,6 +326,7 @@ function SkillRow({
   onDownload,
   onRefresh,
   onReset,
+  onPublish,
 }: {
   skill: ItemSkillState;
   state: ToolPref;
@@ -292,6 +340,8 @@ function SkillRow({
   /** #589 — restore every shipped file, including ones edited here. Offered on
    * any copy: it is the way back from an edit gone wrong. */
   onReset?: () => void;
+  /** Skill hub (D2): offered on a skill whose files are in this workspace. */
+  onPublish?: () => void;
 }) {
   const t = useT();
   return (
@@ -338,6 +388,25 @@ function SkillRow({
               {t("skills.copy")}
             </span>
           )}
+          {(skill.upstream === "unpublished" || skill.upstream === "deleted") && (
+            // A copy whose skill hub original went away (plan P5): a state on
+            // the row, so the missing Update control is explained rather than
+            // read as broken. The copy itself keeps working.
+            <span
+              data-testid={`skill-upstream-${skill.name}`}
+              style={{
+                fontSize: pxToRem(10),
+                color: "var(--warn)",
+                border: "1px solid var(--warn)",
+                borderRadius: 999,
+                padding: "0 6px",
+              }}
+            >
+              {skill.upstream === "unpublished"
+                ? t("skillHub.origin.unpublished")
+                : t("skillHub.origin.deleted")}
+            </span>
+          )}
         </div>
         <div
           title={skill.description}
@@ -379,6 +448,18 @@ function SkillRow({
           style={{ ...pillBtn, height: 24 }}
         >
           <Icon name="download" size={12} />
+        </button>
+      )}
+      {onPublish && (
+        <button
+          type="button"
+          data-testid={`skill-publish-${skill.name}`}
+          aria-label={`${t("skills.publish")} ${skill.name}`}
+          title={t("skills.publish")}
+          onClick={onPublish}
+          style={{ ...pillBtn, height: 24 }}
+        >
+          <Icon name="upload" size={12} />
         </button>
       )}
       {onReset && (
