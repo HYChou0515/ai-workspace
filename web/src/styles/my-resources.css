@@ -440,11 +440,13 @@
   column-gap: var(--space-12);
 }
 
-/* A row without Remove (a reader) still has the star; it keeps its own
-   column so the stars line up down the list, and the empty Remove cell is
-   just empty. The star's PRESSED state fills the glyph: the fill follows the
-   one attribute that is the state, so it cannot drift from the label. */
-.page .wui-list [aria-pressed="true"] [data-icon="star"] path {
+/* A row without 下架 (a reader) still has the star; it keeps its own column
+   so the stars line up down the list, and the empty cell is just empty. The
+   star's PRESSED state fills the glyph: the fill follows the one attribute
+   that is the state, so it cannot drift from the label. Scoped to the PAGE,
+   not to one list: scoped to `.wui-list` it left every card's star hollow
+   (measured, P20). */
+.page [aria-pressed="true"] [data-icon="star"] path {
   fill: currentColor;
 }
 
@@ -502,6 +504,8 @@
   align-items: center;
   gap: var(--space-12);
   padding: var(--space-16) var(--space-16) var(--space-8);
+  /* The top-right corner is the star's. */
+  padding-right: 48px;
 }
 
 .page .wui-card .wui-card-text {
@@ -521,6 +525,15 @@
   color: inherit;
   text-decoration: none;
   overflow-wrap: anywhere;
+  /* Two lines at most, then an ellipsis (the author: 「不要硬要顯示全部」);
+     the whole title is the anchor's `title`. `overflow: hidden` here does
+     NOT clip the stretched `::after`: that box is positioned against the
+     CARD (the nearest positioned ancestor), not against this static anchor
+     — measured with `elementFromPoint`. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .page .wui-card .wui-card-text > a::after {
@@ -532,8 +545,13 @@
 .page .wui-card .wui-card-text > .detail {
   font-size: var(--text-small);
   color: var(--text-paper-d);
-  white-space: normal;
-  overflow-wrap: anywhere;
+  /* One line, cut; the sentence is the span's `title`. A blockified flex
+     item, so `text-overflow` applies to it (`reference_flex_kills_text_overflow`
+     is about `display: flex` ON the element). */
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Above the stretched link, so the item link inside stays reachable — a
@@ -543,12 +561,22 @@
   z-index: 1;
 }
 
-/* The star and Remove: a footer row, right-aligned, ABOVE the stretched
-   link — a press on them must not open the page, and they must not be inside
-   the anchor (a button in a link is not HTML). A footer rather than a
-   top-right overlay: overlaying reserved 96px of the body's width for the
-   card's whole height, and at three columns that left the title 153px —
-   two lines for "Shipping board" (measured). */
+/* The star: the top-right corner, where a favourite usually is (the
+   author), ABOVE the stretched link. One 28px button, so the body gives up
+   48px on the right and nothing else. */
+.page .wui-card > .star {
+  position: absolute;
+  top: calc(4px + var(--space-8));
+  right: var(--space-8);
+  z-index: 1;
+}
+
+/* 下架: a footer row, right-aligned, ABOVE the stretched link — a press on
+   it must not open the page, and it must not be inside the anchor (a button
+   in a link is not HTML). A footer rather than beside the star: two buttons
+   in the corner reserved 96px of the body for the card's whole height, and
+   at three columns that left the title 153px — two lines for "Shipping
+   board" (measured, P19). */
 .page .wui-card > .actions {
   position: relative;
   z-index: 1;
@@ -608,11 +636,14 @@
 
 .page .wui-list .detail {
   min-width: 0;
-  /* Wraps rather than the shell's nowrap: capped, a long item title that kept
-     nowrap ran under the Remove button; an ellipsis would hide who put the
-     page up. `anywhere` for a name with no break opportunity. */
-  white-space: normal;
-  overflow-wrap: anywhere;
+  /* One line, cut with an ellipsis; the whole sentence is the cell's
+     `title`. P6 let this wrap ("an ellipsis would hide who put the page
+     up"); the author's 「不要硬要顯示全部」 (P20) reverses that. `overflow:
+     hidden` + `min-width: 0` are what keep a 60-letter token inside the
+     capped track rather than under 下架 (measured, round 3). */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* A refusal reported inside its row, under the three columns. */
@@ -749,7 +780,10 @@
     grid-column: 2 / -1;
     grid-row: 2;
     min-width: 0;
-    white-space: normal;
+    /* Same cut as the wide rule — the sentence is the cell's `title`. */
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   /* Three totals side by side in 342px is 114px each — narrower than

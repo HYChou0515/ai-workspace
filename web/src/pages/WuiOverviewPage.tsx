@@ -255,74 +255,85 @@ function useRemove(page: DeployedWui, client: WuiApi) {
   return { remove, ask };
 }
 
-/** The star and — for someone who may — Remove. The star is the viewer's
- * own, so every page has one: a reader who may not Remove may still keep a
- * favourite. `aria-pressed` is the state and what the sheet fills the glyph
- * from; the label is the action, naming the page, so "pressed" is never the
- * only clue. `ghost`, not `secondary`: it sits beside Remove and must not
- * read as a second Remove. */
-function PageActions({
+/** The star. The viewer's own, so every page has one: a reader who may not
+ * unlist may still keep a favourite. `aria-pressed` is the state and what
+ * the sheet fills the glyph from; the label is the action, naming the page,
+ * so "pressed" is never the only clue. `ghost`: it must not read as a
+ * second 下架. `className` lets the card place it (top-right). */
+function StarButton({
   page,
   starred,
   starReady,
   onStar,
+  className = "btn",
+}: Pick<PageProps, "page" | "starred" | "starReady" | "onStar"> & { className?: string }) {
+  const t = useT();
+  return (
+    <button
+      type="button"
+      className={className}
+      data-variant="ghost"
+      data-size="sm"
+      aria-pressed={starred}
+      aria-label={starred ? t("wui.unstar", { title: page.title }) : t("wui.star", { title: page.title })}
+      disabled={!starReady}
+      onClick={onStar}
+    >
+      <Icon name="star" size={16} />
+    </button>
+  );
+}
+
+/** 下架 — for someone who may. The word is the opposite of Deploy's 上架
+ * and the tooltip says what stays, because "移除" read as "delete". */
+function UnlistButton({
+  page,
   remove,
   onRemove,
-}: Pick<PageProps, "page" | "starred" | "starReady" | "onStar"> & {
+}: {
+  page: DeployedWui;
   remove: ReturnType<typeof useRemove>["remove"];
   onRemove: () => void;
 }) {
   const t = useT();
+  if (!page.can_remove) return null;
   return (
-    <>
-      <button
-        type="button"
-        className="btn"
-        data-variant="ghost"
-        data-size="sm"
-        aria-pressed={starred}
-        aria-label={starred ? t("wui.unstar", { title: page.title }) : t("wui.star", { title: page.title })}
-        disabled={!starReady}
-        onClick={onStar}
-      >
-        <Icon name="star" size={16} />
-      </button>
-      {page.can_remove ? (
-        <button
-          type="button"
-          className="btn"
-          data-variant="secondary"
-          data-size="sm"
-          aria-label={`${t("wui.remove")} ${page.title}`}
-          disabled={remove.isPending}
-          onClick={onRemove}
-        >
-          {t("wui.remove")}
-        </button>
-      ) : null}
-    </>
+    <button
+      type="button"
+      className="btn"
+      data-variant="secondary"
+      data-size="sm"
+      aria-label={`${t("wui.remove")} ${page.title}`}
+      title={t("wui.remove.tip")}
+      disabled={remove.isPending}
+      onClick={onRemove}
+    >
+      {t("wui.remove")}
+    </button>
   );
 }
 
-/** Which item the page came from, who put it up and when. */
+/** Which item the page came from, who put it up and when — one line, cut
+ * with an ellipsis when it does not fit (the author: 「不要硬要顯示全部」),
+ * the whole sentence in the tooltip. */
 function PageDetail({ page }: { page: DeployedWui }) {
   const t = useT();
+  const item = page.item_title || page.item_id;
+  const by = t("wui.row.by", {
+    who: page.deployed_by,
+    when: relativeTime(new Date(page.deployed_at).toISOString()),
+  });
   return (
-    <>
+    <span className="detail" title={`${item} · ${by}`}>
       {/* The workspace has no deep link to a file, so this opens the item. */}
-      <Link to={`/a/${page.slug}/${page.item_id}`}>{page.item_title || page.item_id}</Link>
+      <Link to={`/a/${page.slug}/${page.item_id}`}>{item}</Link>
       {" · "}
       {/* Relative, like the rest of the shell, with the exact stamp in the
           title — `relativeTime` / `exactTime` are the shell's own pair
           (`GroupsPage`), and the sentence template is written for the
           relative form ("2 d ago" / "just now" / "7 Aug"). */}
-      <span title={exactTime(new Date(page.deployed_at).toISOString())}>
-        {t("wui.row.by", {
-          who: page.deployed_by,
-          when: relativeTime(new Date(page.deployed_at).toISOString()),
-        })}
-      </span>
-    </>
+      <span title={exactTime(new Date(page.deployed_at).toISOString())}>{by}</span>
+    </span>
   );
 }
 
@@ -338,20 +349,12 @@ function PageRow({ page, client, starred, starReady, onStar }: PageProps) {
       <PageMark slug={page.slug} itemId={page.item_id} path={page.path} icon={page.icon} title={page.title} />
       {/* A new tab: the reader page renders outside the shell, with no way
           back to here, so it opens beside the overview rather than over it. */}
-      <a href={wuiAddress(page.slug, page.item_id, page.path)} target="_blank" rel="noopener">
+      <a href={wuiAddress(page.slug, page.item_id, page.path)} target="_blank" rel="noopener" title={page.title}>
         {page.title}
       </a>
-      <span className="detail">
-        <PageDetail page={page} />
-      </span>
-      <PageActions
-        page={page}
-        starred={starred}
-        starReady={starReady}
-        onStar={onStar}
-        remove={remove}
-        onRemove={ask}
-      />
+      <PageDetail page={page} />
+      <StarButton page={page} starred={starred} starReady={starReady} onStar={onStar} />
+      <UnlistButton page={page} remove={remove} onRemove={ask} />
       {remove.isError ? (
         <span className="error" role="alert">
           {t("wui.remove.failed")}
@@ -362,10 +365,12 @@ function PageRow({ page, client, starred, starReady, onStar }: PageProps) {
 }
 
 /** One Deployed page as a CARD — `AppCard`'s shape (Launcher): a stripe in
- * the App's colour, the mark, the title, one muted line. The WHOLE card is
- * the page's link: the sheet stretches the title's `<a>` over the card
- * (`::after`), and the actions and the item link sit above it (`z-index`),
- * so they press without opening the page and are never inside the link. */
+ * the App's colour, the mark, the title (two lines at most), one muted line
+ * (one line, cut). The WHOLE card is the page's link: the sheet stretches
+ * the title's `<a>` over the card (`::after`), and the star (top-right,
+ * where a favourite usually is), 下架 (the footer) and the item link sit
+ * above it (`z-index`), so they press without opening the page and are
+ * never inside the link. */
 function PageCard({ page, client, starred, starReady, onStar }: PageProps) {
   const t = useT();
   const { remove, ask } = useRemove(page, client);
@@ -395,24 +400,18 @@ function PageCard({ page, client, starred, starReady, onStar }: PageProps) {
           size={54}
         />
         <div className="wui-card-text">
-          <a href={wuiAddress(page.slug, page.item_id, page.path)} target="_blank" rel="noopener">
+          <a href={wuiAddress(page.slug, page.item_id, page.path)} target="_blank" rel="noopener" title={page.title}>
             {page.title}
           </a>
-          <span className="detail">
-            <PageDetail page={page} />
-          </span>
+          <PageDetail page={page} />
         </div>
       </div>
-      <div className="actions">
-        <PageActions
-          page={page}
-          starred={starred}
-          starReady={starReady}
-          onStar={onStar}
-          remove={remove}
-          onRemove={ask}
-        />
-      </div>
+      <StarButton page={page} starred={starred} starReady={starReady} onStar={onStar} className="btn star" />
+      {page.can_remove ? (
+        <div className="actions">
+          <UnlistButton page={page} remove={remove} onRemove={ask} />
+        </div>
+      ) : null}
       {remove.isError ? (
         <span className="error" role="alert">
           {t("wui.remove.failed")}

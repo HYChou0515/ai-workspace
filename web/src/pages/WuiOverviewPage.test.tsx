@@ -187,6 +187,11 @@ describe("WuiOverviewPage", () => {
     const remove = within(rca).getAllByRole("button", { name: REMOVE() })[0];
     expect(remove).toHaveClass("btn");
     expect(remove).toHaveAttribute("data-variant", "secondary");
+    // The word is 下架 — the opposite of Deploy's 上架 — not 移除, which read
+    // as "delete the page" (the author: 「移除是什麼意思？」). Literal, and
+    // the tooltip says what stays.
+    expect(remove).toHaveTextContent("下架");
+    expect(remove).toHaveAttribute("title", "從 WUI 總覽下架；頁面和資料夾都留著");
   });
 
   it("draws Remove only where the server said this viewer may", async () => {
@@ -530,6 +535,20 @@ describe("WuiOverviewPage", () => {
       const item = within(card as HTMLElement).getByRole("link", { name: "Line 3 stoppage" });
       expect(item).toHaveAttribute("href", "/a/rca/i-1");
       expect(link.contains(item)).toBe(false);
+      // The star is the card's top-right corner (the author: 「我的最愛通常會
+      // 在右上角」) — its own element, not in the footer with 下架.
+      expect(star.closest(".wui-card > .star")).not.toBeNull();
+      expect(remove.closest(".wui-card > .actions")).not.toBeNull();
+      // A long title and a long detail are CUT, not shown whole (the author:
+      // 「不要硬要顯示全部」): the whole text lives in the tooltip.
+      expect(link).toHaveAttribute("title", "出貨看板");
+      const detail = card.querySelector(".detail")!;
+      // The fixture's stamp is 2023, so the relative form is the date, not
+      // "just now" — derived with the shell's own `relativeTime`, since the
+      // claim is "the same sentence as on screen", and the sentence's own
+      // shape is pinned literally by the table test above.
+      const when = relativeTime(new Date(1_700_000_000_000).toISOString());
+      expect(detail).toHaveAttribute("title", `Line 3 stoppage · bob Deploy · ${when}`);
     });
 
     it("stars from a card flip both copies, and the favourites group is a card grid too", async () => {

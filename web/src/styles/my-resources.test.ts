@@ -162,12 +162,14 @@ describe("my-resources: the live panel's layout", () => {
     // round-2 defect fully back with this suite green.
     const detail = wideRule(".page .wui-list .detail");
     expect(detail).toMatch(/min-width:\s*0/);
-    // …and what does not fit the cap WRAPS rather than running under Remove —
-    // the shell's `.detail` is nowrap, so the overview has to say otherwise;
-    // `anywhere`, or a 60-letter token with no break opportunity runs under
-    // Remove and scrolls the document (measured, round 3).
-    expect(detail).toMatch(/white-space:\s*normal/);
-    expect(detail).toMatch(/overflow-wrap:\s*anywhere/);
+    // …and what does not fit the cap is CUT with an ellipsis (P20, the
+    // author's 「不要硬要顯示全部」 — reversing P6's wrap; the whole sentence
+    // is in the cell's `title`). Still bounded: `overflow: hidden` and
+    // `min-width: 0` are what keep a 60-letter token from running under
+    // 下架 and scrolling the document (measured, round 3).
+    expect(detail).toMatch(/white-space:\s*nowrap/);
+    expect(detail).toMatch(/overflow:\s*hidden/);
+    expect(detail).toMatch(/text-overflow:\s*ellipsis/);
   });
 
   it("lays the overview's cards out as a grid, and makes the whole card the link with the actions above it", () => {
@@ -187,6 +189,40 @@ describe("my-resources: the live panel's layout", () => {
     expect(wideRule(".page .wui-card .wui-card-text > .detail > a")).toMatch(/z-index:\s*[1-9]/);
     // Cards mode widens the shell (three cards at the Launcher's width).
     expect(wideRule(".page.page--wide")).toMatch(/max-width:\s*1080px/);
+    // The star is the top-right corner, above the stretched link like the
+    // footer actions are.
+    expect(wideRule(".page .wui-card > .star")).toMatch(/position:\s*absolute/);
+    expect(wideRule(".page .wui-card > .star")).toMatch(/z-index:\s*[1-9]/);
+    // The body leaves the corner free, or the title runs under the star.
+    expect(wideRule(".page .wui-card > .wui-card-body")).toMatch(/padding-right:\s*\d+px|padding:[^;]*\b(4[4-9]|[5-9]\d)px/);
+  });
+
+  it("fills a pressed star in EVERY view, not only the table", () => {
+    // P14 scoped the fill to `.wui-list`; the cards (P19) drew every starred
+    // page hollow — measured on the P20 harness, a pressed star with no fill.
+    const rule = wideRule('.page [aria-pressed="true"] [data-icon="star"] path');
+    expect(rule).toMatch(/fill:\s*currentColor/);
+    expect(css).not.toMatch(/\.wui-list \[aria-pressed="true"\] \[data-icon="star"\]/);
+  });
+
+  it("cuts a long title and a long detail instead of showing them whole", () => {
+    // The author, on the cards: 「當 title 太長或是描述太長 不要硬要顯示全部」.
+    // The card title is clamped to two lines, its detail and the table's
+    // detail to one with an ellipsis; the full text is in a `title`. On the
+    // table this REVERSES P6's `white-space: normal` (an ellipsis was
+    // thought to hide who put the page up) — the author's call.
+    const cardTitle = wideRule(".page .wui-card .wui-card-text > a");
+    expect(cardTitle).toMatch(/-webkit-line-clamp:\s*2/);
+    expect(cardTitle).toMatch(/display:\s*-webkit-box/);
+    expect(cardTitle).toMatch(/overflow:\s*hidden/);
+    for (const sel of [".page .wui-card .wui-card-text > .detail", ".page .wui-list .detail"]) {
+      const r = wideRule(sel);
+      expect(r).toMatch(/white-space:\s*nowrap/);
+      expect(r).toMatch(/overflow:\s*hidden/);
+      expect(r).toMatch(/text-overflow:\s*ellipsis/);
+      // The ellipsis needs the box to be allowed to shrink (`reference_flex_kills_text_overflow`).
+      expect(r).toMatch(/min-width:\s*0/);
+    }
   });
 
   it("reflows the rows before the fixed columns eat the title", () => {

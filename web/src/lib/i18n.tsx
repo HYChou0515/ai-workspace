@@ -1154,14 +1154,21 @@ export const messages = {
   // "7 Aug" — so the sentence must read with all of them; "於 {when} Deploy" /
   // "on {when}" did not ("於 just now Deploy", "on 2 d ago").
   "wui.row.by": { "zh-TW": "{who} Deploy · {when}", en: "deployed by {who} · {when}" },
-  "wui.remove": { "zh-TW": "移除", en: "Remove" },
-  "wui.remove.title": { "zh-TW": "把「{title}」從 WUI 移除？", en: "Remove “{title}” from WUI?" },
+  // 下架, the opposite of Deploy's 上架 (docs/wui.md) — not 移除, which the
+  // author read as "delete the page" (「移除是什麼意思？」). The tooltip says
+  // what stays.
+  "wui.remove": { "zh-TW": "下架", en: "Unlist" },
+  "wui.remove.tip": {
+    "zh-TW": "從 WUI 總覽下架；頁面和資料夾都留著",
+    en: "Takes the page off the WUI overview; the page and its folder stay",
+  },
+  "wui.remove.title": { "zh-TW": "把「{title}」從 WUI 下架？", en: "Unlist “{title}” from WUI?" },
   "wui.remove.body": {
     "zh-TW": "頁面和它的資料夾都會留著，只是不再列在這裡。要再列回來，到頁面上再按一次 Deploy。",
     en: "The page and its folder stay; only this listing goes. To list it again, press Deploy on the page.",
   },
   "wui.remove.cancel": { "zh-TW": "取消", en: "Cancel" },
-  "wui.remove.failed": { "zh-TW": "移除失敗，再試一次。", en: "Could not remove it — try again." },
+  "wui.remove.failed": { "zh-TW": "下架失敗，再試一次。", en: "Could not unlist it — try again." },
   // The viewer's favourites (plan-wui-overview-icon-favourites): a group at the
   // top of the overview, and a star on every row. The star's label is the
   // ACTION, naming the page — `aria-pressed` carries the state.
