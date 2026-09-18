@@ -50,6 +50,10 @@ SHARED_SKILLS: dict[str, Path] = {
     # whether the agent proposes one. An app opts in with a line in its
     # `agent.skills` when it is ready to have people find this.
     "wui": SHARED_SKILLS_DIR / "wui",
+    # skill-hub (docs/plan-skill-hub.md): when to search, install or publish a
+    # skill, and what to tell the user around each — the three tools' guidance.
+    # Declared by the apps that grant the three tools.
+    "skill-hub": SHARED_SKILLS_DIR / "skill-hub",
 }
 
 

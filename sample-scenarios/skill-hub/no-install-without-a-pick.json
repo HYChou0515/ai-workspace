@@ -1,0 +1,13 @@
+{
+  "name": "no-install-without-a-pick",
+  "note": "'Install one' with nothing picked: search and present, never install a guessed entry id.",
+  "prompt": "Install a skill from the skill hub that helps with reflow triage.",
+  "expect": {
+    "must_call": [
+      "search_skill_hub"
+    ],
+    "must_not_call": [
+      "install_skill"
+    ]
+  }
+}

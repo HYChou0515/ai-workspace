@@ -15,6 +15,7 @@ import workspace_app.api.app as app_mod
 from workspace_app.api import create_app
 from workspace_app.api.events import RunDone
 from workspace_app.api.runner import ScriptedAgentRunner
+from workspace_app.apps.manifest import load_app_manifest
 from workspace_app.apps.playground.model import PlaygroundItem
 from workspace_app.apps.pm.model import PmProject
 from workspace_app.apps.skills import effective_item_skills
@@ -27,7 +28,13 @@ _SKILL = "---\nname: bug-report\ndescription: How we write bug reports.\n---\n\n
 # playground/echo ships no package `.skill/`; its reachable skills are the three
 # shared ones the App declares. Pinning all three OFF leaves the App side with
 # nothing, which is what puts the workspace source on the critical path.
-_ALL_APP_SKILLS_OFF = {"author-skill": False, "author-workflow": False, "grill-me": False}
+# Every skill the two Apps this file builds on declare, pinned off — READ from
+# their manifests, not listed by hand: a hand-kept list went stale the day
+# `skill-hub` joined the Apps (plan-skill-hub P11), and three "nothing
+# reachable" tests then measured a turn that still had one skill to reach.
+_ALL_APP_SKILLS_OFF = {
+    name: False for slug in ("playground", "pm") for name in load_app_manifest(slug).agent.skills
+}
 
 
 async def _dummy_subagent(*_a, **_k):

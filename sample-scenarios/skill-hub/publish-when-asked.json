@@ -1,0 +1,13 @@
+{
+  "name": "publish-when-asked",
+  "note": "The explicit ask, with the skill named. The model publishes and does not detour through a search.",
+  "prompt": "Please publish the skill `log-digest` to the skill hub.",
+  "expect": {
+    "must_call": [
+      "publish_skill"
+    ],
+    "must_not_call": [
+      "search_skill_hub"
+    ]
+  }
+}

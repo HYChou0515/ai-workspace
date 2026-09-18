@@ -1,0 +1,13 @@
+{
+  "name": "save-is-not-publish",
+  "note": "Saving a skill is save_skill. 'Save' must not become a publish to everyone — publishing is a separate, explicit ask.",
+  "prompt": "Save what we just did as a skill called log-digest so I can reuse it next time.",
+  "expect": {
+    "must_call": [
+      "save_skill"
+    ],
+    "must_not_call": [
+      "publish_skill"
+    ]
+  }
+}
