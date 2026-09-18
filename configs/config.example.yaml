@@ -81,6 +81,12 @@
 #                              # case 2 × this + teardown; the k8s
 #                              # terminationGracePeriodSeconds must exceed it
 #                              # (kubernetes/base/deployment.yaml: 60).
+#   turn_reclaim_interval_sec: 5  # plan-graceful-shutdown: how often a pod looks
+#                              # for chat turns whose pod is gone (a rollout, a
+#                              # scale-down, a crash) and re-runs them itself, so
+#                              # the reply arrives instead of the thread ending on
+#                              # the question. One pod per window fleet-wide. 0 =
+#                              # off (a single pod's restarted self is a peer too).
 #   turn_replay_buffer_events: 2000  # #43: recent broadcast events each per-item
 #                              # session keeps in-pod so a same-pod reconnect
 #                              # replays the events missed during the gap

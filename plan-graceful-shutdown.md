@@ -160,3 +160,37 @@ After #813 the API pods stop OOMing. Three things showed up in their place:
 - The reclaim sweeper is a pure producer per the #804 convention; the work it
   re-enqueues is a turn, which only an API pod can run — so it stays on the API
   and lists a table bounded by in-flight turns.
+
+## 執行結果
+
+Branch `graceful-shutdown` off master `2ccfff9f`: P1–P4 as four commits, then P5
+(docs / config example / ledger; the k8s side went in with P2).
+
+| claim | how it was checked |
+|---|---|
+| `read_image` / `read_page` / the plot review no longer hold the loop | three loop-lag witnesses (`tests/agent/test_read_image_tool.py`, `tests/kb/test_read_tools.py`, `tests/agent/test_plot_review.py`): 451 / 309 / 301 ms of lag on the unfixed code, < 100 ms fixed |
+| the tool-log sink wakes an idle loop from a worker thread | `tests/api/test_litellm_runner.py::test_tool_log_emitter_wakes_an_idle_loop_from_a_worker_thread` — latency-based; **mutation** (bare `put_nowait`): the chunk lands after 2.01 s (the test's own timeout timer), fixed: 0.1 s |
+| SIGTERM begins the drain: readiness 503, every chat + monitor stream ended, uvicorn's wait ends, the lifespan runs | `tests/api/test_drain.py` (7) + `scripts/check_sigterm_drain.sh` on the real app: `drain: begun` → `shutdown complete` in 16.9 s (the 16 s is the all-in-one index queue; production is a pure producer) → exit 143, the SSE client gets HTTP 200 + EOF. **Mutation**: dropping `drain.on_begin(turn_engine.close_all_streams)` reddens the chat-stream test cleanly (the test has a structural exit so a hang becomes a failure) |
+| the coordinator drain shares the budget | `test_the_coordinator_drain_is_bounded_by_the_same_budget`: a coordinator that never drains, budget 0.5 s, shutdown < 3 s (was 30 s) |
+| a send opens a claim, the reply finishes it | `tests/api/test_turn_reclaim.py::test_a_send_opens_a_claim_and_the_reply_finishes_it` (the runner reads the store from inside the turn) |
+| a peer re-runs the stored question without appending it | `…::test_rerun_answers_the_stored_question_without_appending_it` |
+| the reclaim decision: released → now; fresh heartbeat → leave; stale + owed → take; stale + answered → drop; taking advances the epoch | five tests, each through `ReclaimTick.of(app)` |
+| two pods, one store: A lets go, B answers, A's cancelled copy writes NOTHING | `…::test_two_pods_on_one_store_hand_over_a_released_turn` — reddened first with `('error', 'The previous response was interrupted.')` AFTER B's answer; `is_mine` before persist is the fix |
+| the lifespan sweeper does it on its own, behind the lease | `…::test_the_lifespan_sweeper_takes_over_a_released_turn_without_being_asked` (B's interval 0.1 s) + `…::test_no_sweeper_when_the_interval_is_none` |
+| a draining pod hands over what it could not finish, without a partial or a marker | `…::test_a_pods_shutdown_hands_over_the_turn_it_could_not_finish` — A's shutdown through its own portal (budget 0.3 s), A's thread untouched, claim `released`, B's answer alone |
+
+Found on the way and fixed: `ChatTurnEngine.aclose` waited with
+`wait_for(gather(*live), timeout)` — a timed-out `wait_for` cancels the gather
+and the gather cancels its children, so the deadline was cancelling the turns
+through Stop's persist path before the straggler list was computed. It uses
+`asyncio.wait` now. Two `create_app`s cannot share one spec (the job models
+refuse a second registration), so the two-pod tests use two specs over one disk
+backend — which is production's shape.
+
+Not done, deliberately: the FE. A reconnect after a handover lands on the #559
+waiting state and the #560 notice, then the peer's events arrive over the bus;
+`TurnStatus`'s retry stays the fallback. Whether the 30 s heartbeat window on
+the OOM path deserves a "reconnecting…" line of its own is a UX call for later.
+
+Gates: `ruff check` / `ruff format --check` / `ty check` clean; targeted sets
+green (P1: 218; P2: 141; P3+P4: 129 + 121 + 96); `mkdocs build --strict` exit 0.

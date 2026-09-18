@@ -536,8 +536,17 @@ RCA 的 system prompt 是純 markdown，存在
      SIGTERM，正常）。
 
   **k8s 側要配**：`terminationGracePeriodSeconds` > 2 × budget + 拆除時間（base 給 60）。
-  本機驗證：起 app、`curl -N` 掛一條 SSE、`kill -TERM`，log 要在 budget 內出現
-  `lifespan: shutdown complete`，curl 要拿到 EOF 而不是 reset。
+  本機驗證：`scripts/check_sigterm_drain.sh`（起 app、`curl -N` 掛一條 SSE、`kill -TERM`），
+  log 要在 budget 內出現 `lifespan: shutdown complete`，curl 要拿到 EOF 而不是 reset。
+- **pod 死了，正在回的 turn 怎麼辦（plan-graceful-shutdown P3/P4）**：問題在 202 時就存好了，
+  但回答它的 turn 是 pod 記憶體裡的 task。現在每次 send 同時開一列耐久**認領**（`turn-claim`，
+  帶完整 send 配方），回覆存檔時刪掉；每顆 pod 每 `server.turn_reclaim_interval_sec`（預設 5 秒）
+  掃一次孤兒認領：原 pod 心跳過期（30 秒）且對話還停在那則問題 ⇒ 接手；原 pod 收 SIGTERM 時
+  預算內跑不完 ⇒ 立刻放手（`released`）⇒ 幾秒內被接手，**不會**留下「interrupted」標記。
+  接手的 pod 先推進 `TurnEpoch`（#349）——原 pod 若只是卡住沒死，恢復後會自己取消副本——
+  再重新生成回答（LLM 串流接不回半句），事件經 event bus 送到使用者所在的 pod。
+  使用者看到的是：回覆停一下、重新開始；OOM 的情況多等 30 秒心跳過期。
+  單 replica 部署：重啟後的同一顆 pod 會撿回自己放掉的認領。
 - **索引回填（#263，升級後一次性）**：本版替 `DocChunk` 加了 `provenance`
   位置索引（page / sheet / …，供「分析某檔第 N 頁」這類定位過濾），並替
   `SourceDoc` 加了 `path` 索引（檔名→文件解析），兩個 model 都升到 schema
