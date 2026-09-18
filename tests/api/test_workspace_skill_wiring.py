@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from msgspec import UNSET
+
 import workspace_app.api.app as app_mod
 from workspace_app.api import create_app
 from workspace_app.api.events import RunDone
@@ -18,6 +20,7 @@ from workspace_app.api.runner import ScriptedAgentRunner
 from workspace_app.apps.manifest import load_app_manifest
 from workspace_app.apps.playground.model import PlaygroundItem
 from workspace_app.apps.pm.model import PmProject
+from workspace_app.apps.profiles import load_profile
 from workspace_app.apps.skills import effective_item_skills
 from workspace_app.filestore.specstar_impl import SpecstarFileStore
 from workspace_app.resources import AgentConfig, make_spec
@@ -168,18 +171,26 @@ async def test_an_item_belonging_to_no_app_leaves_the_answer_unknown(monkeypatch
 
 async def test_a_workspace_copy_of_a_default_off_skill_still_reaches_one(monkeypatch):
     """The two indexes an item is given are rendered by DIFFERENT rules, and the
-    grant has to satisfy both. `pm/default` opts into two of the App's three
-    shared skills, so `grill-me` is default-off; a workspace COPY of it is
+    grant has to satisfy both. `pm/default` opts into a subset of the App's
+    shared skills that leaves `grill-me` out, so `grill-me` is default-off; a
+    workspace COPY of it is
     advertised by the workspace block (which hides only an explicit off) and
     `read_skill` loads it (it refuses only an explicit off) — while the picker
     resolver calls the copy not-effective, because a copy answers as the skill it
     copied. Asking the resolver alone withdrew a tool that was on screen and
     would have worked."""
-    prefs = {"author-skill": False, "author-workflow": False}
+    # Every skill the profile opts into, pinned off — read from the profile,
+    # not listed by hand (a hand-kept pair went stale when `skill-hub` joined
+    # the list, plan-skill-hub P16). `grill-me` must NOT be in that list for
+    # the scenario to exist, which the premise below checks.
+    opted_in = load_profile("pm", "default").skills
+    assert opted_in is not UNSET, "pm/default narrows `skills` — the premise of this test"
+    prefs = {name: False for name in opted_in}
+    assert "grill-me" not in prefs, "the scenario needs a default-off App skill"
     filestore, builder, item_id = _build(monkeypatch, prefs, pm=True)
-    # The premise: with those two off, the App side of the question is already
-    # "nothing". If pm/default's opt-in list ever changes, this fails here
-    # rather than passing through the App branch and testing nothing.
+    # The premise: with those off, the App side of the question is already
+    # "nothing". If pm/default's opt-in list ever changes shape, this fails
+    # here rather than passing through the App branch and testing nothing.
     assert not any(s.effective for s in effective_item_skills("pm", "default", prefs, []))
     await filestore.write(
         item_id,

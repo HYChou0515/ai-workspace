@@ -1,6 +1,6 @@
 # Skill Hub — 讓 skill 在人與人之間流動,不經過運營方的 git
 
-**狀態:** grill 十題全部問過並定案(2026-09-18),已點頭,P1–P12 全部完成(PR #818);施工中改掉的三處形狀已回寫在各段。
+**狀態:** grill 十題全部問過並定案(2026-09-18),已點頭,P1–P12 施工完成、第一輪四把鏡頭 review 的修正在 P13–P17(PR #818);施工中改掉的形狀已回寫在各段。**未做**:P11 的 `skill_eval --control` 實跑——夾具已補到能跑(三個 hub tool 的替身),但本機沒有跑得動的模型,對照組數字要部署方拿自己的模型跑。
 
 > 第一版計劃把八個我自己決定的東西寫成「grill 收斂」,只有一題真的問過。這一版每一條
 > 決定都是問了、答了才寫上去的;我建議但你改掉的,寫的是你的答案。
@@ -91,7 +91,7 @@ payload 的每個檔案存成 blob(走既有 FileStore,一個 skill hub 命名�
      debug loop,所以 hub 刻意比 loader 嚴;parity 測試把這條分歧釘成有意的)、body ≤ `SKILL_BODY_CAP`、
      `references/` 存在性、`scripts/*.py` 能 `ast.parse`
    - **掃 tool**:body 裡的已註冊 tool 名,整字或 code span。註冊表是 `agent/tools.py` 的 `_IMPLS`
-     (41 個,完整)——**不是** `TOOL_VERBS`,那張表只有 20 個,`read_skill` / `ask_user` / `kb_search`
+     (完整;本 PR 前 41 個,加上這三個後 44)——**不是** `TOOL_VERBS`,那張表只有 20 個,`read_skill` / `ask_user` / `kb_search`
      都不在裡面。掃描函式是純的,註冊表由呼叫端注入
    - **AI 審**(放行掛意見):審查者是**發布那個 turn 的 sub-agent**(`api/skill_review.py`
      的 `review_skill(runner, parent_ctx, folder, payload)`,底下是 `run_agent_task` 同一條
@@ -110,7 +110,7 @@ payload 的每個檔案存成 blob(走既有 FileStore,一個 skill hub 命名�
 1. `SkillsModal` 的「從 skill hub 裝」:開清單(搜尋、根在上 fork 收底下)、選一個
 2. **告知**:顯示「在 app X 寫的;提到 `exec`、`ask_user`;這個 item 的 app 沒有 `ask_user`」——
    不擋,人決定
-3. `install_skill(entry_id)` = `materialize_skill(..., source="hub")`,`.origin` 記 entry id 與 hash
+3. `install_skill(entry_id)` = `install_hub_skill`(`materialize_skill` 的 hub 版本:同一種副本形狀,`.origin` 記 entry id 與 hash;不是 `_skill_source` 的分支——見 P5 那列)
 4. workspace 已有同名資料夾 → **拒絕**,說清楚「你已經有 alice 的 `triage-reflow`,先移除或改名」
 5. 裝完下一個 turn 的 index 就有它;之後上游變了,「有新版」提示 + 既有 Refresh 按鈕
 
@@ -122,7 +122,7 @@ payload 的每個檔案存成 blob(走既有 FileStore,一個 skill hub 命名�
 |---|---|
 | 讀得到、`.skill/<name>/` 還在 | 開那個 item |
 | 讀得到、skill 不在了 | 先 `materialize_skill` 進去,再開 |
-| 讀不到(轉移後沒權限)、已刪除、或 status 在 app 的 `lifecycle.closing_states` 裡 | 彈出「開新 item」→ 下載進去 → 開;從新 item 重新發布時 `source_item` 更新 |
+| 讀不到(轉移後**沒有 `edit_content`**——改 skill 要寫 item,唯讀不夠)、已刪除、或 status 在 app 的 `lifecycle.closing_states` 裡 | 彈出「開新 item」(帶 App 與 profile)→ 人在新 item 的 Skills 面板把它裝進去 → 改 → 從新 item 重新發布時 `source_item` 更新。施工結果:裝那一步是**人按**面板的「從 skill hub 裝」,不是系統自動下載——item 要先存在,而建 item 是 AppNewItem 的表單 |
 
 ### 下架 / 刪除 / 轉移 / 可見範圍(詳情頁,owner 限定)
 

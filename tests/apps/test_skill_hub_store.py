@@ -82,7 +82,7 @@ async def test_the_entrys_origin_is_exactly_what_origin_for_computes(
     """PARITY, with `origin_for` as the oracle.
 
     An installed copy's `.origin` and the hub entry's `origin` must be the same
-    manifest, computed by the same function — `skill_update_available` compares
+    manifest, computed by the same function — `skill_upstream` compares
     the two, and two implementations of "the hash of these files" kept alike by
     hand diverge the moment one is edited. So the entry does not compute a hash;
     it stores the one `origin_for` gives it.

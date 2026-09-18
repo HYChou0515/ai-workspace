@@ -584,6 +584,50 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
 
 ---
 
+### 2026-09-18 · #818 skill hub：使用者之間分享 skill，不經過 dev 的版本庫（`skill-hub-entry`） {#pr-818}
+
+**設定** — 不動。沒有新旋鈕。（429 的等待走 turn 既有的規則：preset 有 `fallbacks` 時是
+`failover.rate_limit_budget_s`，preset 可覆寫、預設 7200 秒；單一 endpoint 時是 runner 自己迴圈的 120 秒——
+`LitellmAgentRunner` 的 `rate_limit_budget_s`，`get_runner` 目前**沒有**從設定帶入。）
+
+**資料**
+
+- 新 specstar model **`skill-hub-entry`**（`apps/skill_hub.py`，post-`spec.apply` 註冊、**沒有 auto-CRUD 路由**：
+  寫入只走會先審查的 `publish_skill`）。`owner` / `name` / `forked_from` 有索引。**不用回填**：新表，上線時
+  沒有任何列。檔案是 FileStore 裡 `skill-hub:<entry id>:<version>` 命名空間下的 blob，一個發布版本一個命名空間；
+  列只在新版本寫完後才指過去，舊版本的命名空間在那之後才清——中途失敗留下的是沒人指的孤兒 blob，不是指向空的列。
+- `SkillOrigin`（副本的 `.origin` manifest）多了 `entry` 欄位，預設 `""`；既有的 package skill 副本照舊解碼，不用動。
+  ⚠️ **回滾**（`回滾前`）：從 skill hub 裝過的副本，`.origin` 寫的是 `source: "hub"`，舊碼的 enum 不認得它——
+  漏做的症狀：**回滾後那個 item 的 `GET …/skills` 與 Refresh 會 500**。package skill 的副本不受影響。要回滾就先把
+  那些 `.skill/<name>/.origin` 刪掉（副本本身照常可用，只是不再知道上游）。
+
+**行為**（⚠️ 不動設定行為就變）
+
+- 出貨的四個 app（`rca` / `pm` / `playground` / `topic-hub`）在 `agent.tools` 加了 `publish_skill` / `install_skill` /
+  `search_skill_hub`，在 `agent.skills` 加了 `skill-hub`（`pm/default` profile 也列入）。**部署方自己的 app 若有
+  `save_skill`，比照加**（`rollout 前`，改 fork 裡的 `app.json` / profile 再 build；為什麼：tool 的授權表
+  是 App 的 ceiling，沒列就不會建給 agent；漏做的症狀：Skills 面板兩顆按鈕都在，「從 skill hub 裝」走 route
+  照常能用，「發布」放進對話框的那句話會讓 agent 回答它沒有 `publish_skill`）。`TOOL_VERBS`：`publish_skill` /
+  `install_skill` 吃 `edit_content`（和 `save_skill` 同）；自訂 preset 的 ceiling 照推。`publish_skill` 對
+  sub-agent 是禁的（`SUBAGENT_FORBIDDEN_TOOLS`）。
+- Skills 面板的 `GET …/skills` 多了 `upstream` 欄位（`live` / `unpublished` / `deleted` / `null`）；既有 package
+  副本讀 `live`（上游從 package 移除時 `deleted`，`update_available` 照舊 `false`）。舊 API pod 沒帶這欄時前端
+  照今天的行為。
+- AI 審查走發布那個 turn 的 runner，**等不到就不上架**（tool 回錯誤、對話窗看到「審查服務無法連線」），沒有
+  「未審」狀態。一個條目上限 20 MiB（`SKILL_HUB_MAX_BYTES`）。
+- 前端多了 `/skill-hub` 與 `/skill-hub/:id` 兩頁、導覽多一個入口「Skill hub」。
+
+**k8s · CI 側** — 不動。`sandbox-host/`、`kubernetes/` 沒改。
+
+**確認做完**
+
+- `GET /api/skill-hub/entries` 回 `{"entries": []}`（新部署）；在任一 item 的 Skills 面板按「發布到 skill hub」、
+  送出那句話後，對話窗看到審查結果，`/skill-hub` 列出那一條。
+- 另一個 item 的 Skills 面板「從 skill hub 裝」看得到它、裝進去後那一列有「可在此編輯」、下一輪 `read_skill` 讀得到。
+- 部署方自己的 app：`agent.tools` 有那三個、`agent.skills` 有 `skill-hub`，否則 agent 會說沒有 `publish_skill`。
+
+---
+
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 
 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`
@@ -686,35 +730,3 @@ REINDEX TABLE CONCURRENTLY cluster_member_meta;
 **legacy 切段器的中文修正（#806 P1）不需要重讀。** production 走 LlamaIndex 管線
 （`kb_pipeline=get_doc_pipeline(...)`），中文本來就切得正常（實測 12,358 字 → 80 塊）；受影響的只有沒接
 `kb_pipeline` 的 `create_app` 呼叫（測試、離線模式）。
-
-### 2026-09-18 · (PR #818) · skill hub：使用者之間分享 skill，不經過 dev 的 git {#pr-818}
-
-**新 model**（不用 migrate）
-
-- `SkillHubEntry`（`skill-hub-entry`）：一份發布出去的 skill 的 metadata；檔案是 FileStore 裡
-  `skill-hub:<entry id>` 命名空間下的 blob。`owner` / `name` / `forked_from` 有索引，**新表沒有舊列**，
-  所以沒有 backfill；**沒有 auto-CRUD route**（在 `spec.apply` 之後才註冊，像 `_SandboxActivity`），
-  寫入只走會先審查的 `publish_skill`。
-- `SkillOrigin`（副本的 `.origin` manifest）多了 `entry` 欄位，預設 `""`；既有的 package skill 副本
-  照舊解碼，不用動。
-
-**app.json**（⚠️ 自家 app 要自己補，不然按鈕在、agent 卻說沒有這個工具）
-
-- 出貨的四個 app（`rca` / `pm` / `playground` / `topic-hub`）已在 `agent.tools` 加上
-  `publish_skill` / `install_skill` / `search_skill_hub`，並在 `agent.skills` 加 `skill-hub`。
-  部署方自己的 app 若有 `save_skill`，比照加；沒加的 app 一樣看得到 Skills 面板的兩顆按鈕
-  （「從 skill hub 裝」走 route，不需要 tool；「發布」放進對話框的那句話會讓 agent 回答它沒有
-  `publish_skill`）。
-- `TOOL_VERBS`：`publish_skill` / `install_skill` 吃 `edit_content`（和 `save_skill` 同）；
-  自訂 preset 的 `allowed_tools` 若要用它們，ceiling 會照推。
-
-**行為**（不動設定就變）
-
-- Skills 面板的 `GET …/skills` 多了 `upstream` 欄位（`live` / `unpublished` / `deleted` / `null`）；
-  既有 package 副本讀 `live`（或上游從 package 移除時 `deleted`，`update_available` 照舊 `false`）。
-- AI 審查走發布那個 turn 的 runner，429 照 turn 的規則等：preset 有 `fallbacks` 時是 failover 鏈的
-  `failover.rate_limit_budget_s`（preset 可覆寫，預設 7200 秒）；單一 endpoint 時是 runner 自己迴圈的
-  120 秒（`LitellmAgentRunner` 的 `rate_limit_budget_s`，`get_runner` 目前**沒有**從設定帶入）。
-  **等不到就不上架**（tool 回錯誤、對話窗看到「審查服務無法連線」），沒有「未審」狀態。
-  發布不是熱路徑，這是刻意的。
-- 前端多了 `/skill-hub` 與 `/skill-hub/:id` 兩頁、導覽多一個入口「Skill hub」。

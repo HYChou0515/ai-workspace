@@ -42,7 +42,7 @@ are the publisher's own reviewer telling the next person what to watch for.
 
 Only when the user has said which skill, and said to publish it. `name` is the
 folder under `.skill/` — a skill you saved with `save_skill`, wrote by hand
-together, or installed from the hub and changed.
+together, or installed from the skill hub and changed.
 
 Before calling it, say what publishing means, once, briefly: the skill becomes
 visible to **everyone on the platform** (public by default; the owner can
