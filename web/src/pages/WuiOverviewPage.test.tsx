@@ -311,7 +311,11 @@ describe("WuiOverviewPage", () => {
       expect(favGroup()).toBeNull();
       const star = screen.getByRole("button", { name: STAR("Shipping board") });
       // The state is `aria-pressed`; the label is the ACTION — it names the
-      // page and says which way the press goes.
+      // page and says which way the press goes. LITERALLY once: `STAR()` is
+      // `translate()` of the key the page uses, so a template that lost its
+      // `{title}` would lose it on both sides and stay green — with every
+      // star on the page then reading the same (round 4's lesson).
+      expect(star).toHaveAttribute("aria-label", "把「Shipping board」加入我的最愛");
       expect(star).toHaveAttribute("aria-pressed", "false");
       // `.btn` + a variant, or base.css leaves it bare text (review round 2 /
       // 4 of this PR) — and a read-only viewer gets a star too: starring is
@@ -346,6 +350,7 @@ describe("WuiOverviewPage", () => {
       expect(screen.getAllByRole("button", { name: UNSTAR("Burn-down") })).toHaveLength(2);
       for (const b of screen.getAllByRole("button", { name: UNSTAR("Burn-down") })) {
         expect(b).toHaveAttribute("aria-pressed", "true");
+        expect(b).toHaveAttribute("aria-label", "把「Burn-down」從我的最愛移除");
       }
       // Written through, under this user.
       expect(readFavourites("alice")).toEqual([favouriteKey(THREE[1])]);
