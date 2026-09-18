@@ -114,6 +114,26 @@ describe("GlobalNav", () => {
     );
   });
 
+  it("switcher draws every row's glyph — Apps and destinations alike", () => {
+    // The look this menu and the chat rail's ☰ share is the glyph before the
+    // label; the rail's test pins its side, this pins the switcher's. The href
+    // cases above stay green with the glyphs deleted outright — they cannot
+    // see them — so this is the only guard on the switcher's icons.
+    renderNav("/a/rca");
+    fireEvent.click(screen.getByRole("button", { name: /切換/ }));
+    const links = within(screen.getByRole("dialog")).getAllByRole("link");
+    const apps = links.filter((el) => el.getAttribute("href")?.startsWith("/a/"));
+    const destinations = links.filter((el) => !el.getAttribute("href")?.startsWith("/a/"));
+    expect(apps.length).toBeGreaterThan(0);
+    expect(destinations.length).toBeGreaterThan(0);
+    for (const el of [...apps, ...destinations]) {
+      expect(el.querySelector("[data-icon], img"), el.textContent ?? "").not.toBeNull();
+    }
+    // The App's glyph is its own manifest icon (the mock above says "flame").
+    expect(apps[0]).toHaveTextContent("Root Cause Analysis");
+    expect(apps[0]!.querySelector('[data-icon="flame"]')).not.toBeNull();
+  });
+
   it("switcher marks the current location (the App you're inside)", () => {
     renderNav("/a/yield/42");
     fireEvent.click(screen.getByRole("button", { name: /切換/ }));
