@@ -594,11 +594,23 @@ def register_chat_routes(
         return {"insight_ids": ids}
 
     @app.get("/a/{slug}/items/{item_id}/chats/{chat_id}/export-chat")
-    async def export_chat(slug: str, item_id: str, chat_id: str) -> Response:
+    async def export_chat(
+        slug: str,
+        item_id: str,
+        chat_id: str,
+        format: str = Query("json", pattern="^(json|md)$"),
+        start: int | None = Query(None, description="First message, 0-based (default: the first)."),
+        end: int | None = Query(None, description="One past the last, 0-based (default: the end)."),
+    ) -> Response:
         """Download THIS chat in the `.chat.json` round-trip format — the KB
         upload path runs the same insight extraction the promote button does on
         these files (debug / out-of-band re-ingestion). The filename guarantees
-        the suffix contract.
+        the suffix contract. `format=md` is the same messages rendered for a
+        person (`build_chat_markdown`), `.chat.md`; `start` / `end` is an
+        absolute, half-open range shared by both formats — and the slice the FE
+        hands the video job — reflected in the file name the way the person
+        read it (1-based, inclusive). A range that names nothing is a 422 with
+        the rule it broke.
 
         Chat-scoped like every other chat endpoint. It used to hang off the item
         and resolve `conversation_for` — the item's DEFAULT chat — so whichever
@@ -606,7 +618,12 @@ def register_chat_routes(
         title and id. Nothing in the file disagreed with what you expected, which
         is what made it worth fixing rather than documenting."""
         investigation_id = locator.require_access(slug, item_id, "read_chat")
-        from ..kb.chat_export import build_chat_export, chat_export_disposition
+        from ..kb.chat_export import (
+            build_chat_export,
+            build_chat_markdown,
+            chat_export_disposition,
+            slice_messages,
+        )
 
         _rid, conv = locator.require_chat(slug, item_id, chat_id)
         # An unnamed chat has no title of its own; the item it belongs to is the
@@ -620,12 +637,22 @@ def register_chat_routes(
         # also how a `tool_name or ""` came to write a value the message did not
         # hold. `to_builtins` carries whatever the message carries, including
         # every field added after this line was written.
-        payload = build_chat_export(
-            title=title,
-            messages=[to_builtins(m) for m in conv.messages],
-        )
+        try:
+            messages = slice_messages([to_builtins(m) for m in conv.messages], start, end)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if format == "md":
+            payload: bytes | str = build_chat_markdown(title=title, messages=messages)
+            media_type = "text/markdown; charset=utf-8"
+        else:
+            payload = build_chat_export(title=title, messages=messages)
+            media_type = "application/json"
         return Response(
             content=payload,
-            media_type="application/json",
-            headers={"Content-Disposition": chat_export_disposition(title)},
+            media_type=media_type,
+            headers={
+                "Content-Disposition": chat_export_disposition(
+                    title, fmt=format, start=start, end=end
+                )
+            },
         )

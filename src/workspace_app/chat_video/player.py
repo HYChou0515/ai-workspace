@@ -37,7 +37,7 @@ from markdown_it.utils import EnvType, OptionsDict
 from ..files.media_type import media_type_for
 from . import markdown as md
 from .options import VideoOptions
-from .timeline import PACING, StreamStep, Timeline, ToolStep, _cut
+from .timeline import PACING, StreamStep, Timeline, ToolStep, cut_text
 
 Assets = Mapping[str, bytes]
 _NO_ASSETS: Assets = {}
@@ -171,7 +171,7 @@ def _steps_for_js(
                 args = json.dumps(step.args, ensure_ascii=False, indent=2) if step.args else ""
             except RecursionError:  # a hand-edited value nested past the encoder
                 args = "(arguments nested too deep to show)"
-            d["args_text"] = _cut(args, options.tool_output_chars)
+            d["args_text"] = cut_text(args, options.tool_output_chars)
             del d["args"]
         out.append(d)
     return out
