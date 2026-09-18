@@ -22,7 +22,9 @@ mutable ``owner`` field rather than ``created_by`` — breaks nothing downstream
 
 from __future__ import annotations
 
+import ast
 import contextlib
+import re
 import uuid
 from typing import TYPE_CHECKING, Literal
 
@@ -32,9 +34,10 @@ from specstar.types import ResourceIDNotFoundError, ResourceIsDeletedError
 
 from ..perm import Permission
 from .skill_payload import SkillOrigin, origin_for
+from .skills import SKILL_BODY_CAP, SkillError, _parse_frontmatter
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Collection, Mapping
 
     from ..filestore.protocol import FileStore
 
@@ -93,6 +96,85 @@ class SkillHubEntry(Struct):  # → resource "skill-hub-entry"
     #: The platform's own permission model, reused whole. `visibility` defaults
     #: to `public` (plan Q6); `private` is what "unpublish" means (plan Q5).
     permission: Permission = field(default_factory=Permission)
+
+
+# ── what publishing checks ───────────────────────────────────────────────────
+
+#: A `references/...` path the body names. Stops at whitespace or the markdown
+#: punctuation that ends a path in prose — the closing backtick, a bracket, a
+#: comma or a full stop.
+_REFERENCE_MENTION = re.compile(r"references/[^\s`)\]>,;:'\"]+")
+
+
+def validate_skill_payload(folder: str, payload: Mapping[str, bytes]) -> list[str]:
+    """The STRUCTURAL problems with a skill about to be published — every one,
+    not the first, because the publisher reads this once in the chat and fixes
+    what it names.
+
+    These are the traps the workspace loader is tolerant of: it skips a skill
+    that has any of them and logs a warning nobody reads, so a skill published
+    with one is a skill no agent will ever load, with no error anywhere. That
+    is the debug loop the hub's review exists to cut (plan D3, D4), and this
+    half of it needs no model.
+    """
+    problems: list[str] = []
+    raw = payload.get("SKILL.md")
+    if raw is None:
+        return ["no SKILL.md — a skill is a folder with a SKILL.md at its top level"]
+
+    try:
+        front, body = _parse_frontmatter(raw)
+    except SkillError as exc:
+        return [f"SKILL.md frontmatter does not parse: {exc}"]
+
+    name = str(front.get("name", "")).strip()
+    if name != folder:
+        problems.append(
+            f"frontmatter `name: {name or '(missing)'}` must equal the folder name "
+            f"`{folder}` — the loader keys the folder and skips a mismatch silently"
+        )
+    if not str(front.get("description", "")).strip():
+        problems.append(
+            "no `description` — the agent's index shows name and description only, "
+            "so without one nothing the user says can match this skill"
+        )
+    if len(body) > SKILL_BODY_CAP:
+        problems.append(
+            f"body is {len(body)} characters; the loader refuses anything over {SKILL_BODY_CAP}"
+        )
+
+    for mention in sorted(set(_REFERENCE_MENTION.findall(body))):
+        if mention not in payload:
+            problems.append(
+                f"the body names `{mention}` but the folder does not ship it — an agent "
+                "following that reference will fail on first use"
+            )
+
+    for rel, data in sorted(payload.items()):
+        if rel.startswith("scripts/") and rel.endswith(".py"):
+            try:
+                ast.parse(data.decode("utf-8", "replace"), filename=rel)
+            except SyntaxError as exc:
+                problems.append(f"`{rel}` does not parse: {exc.msg} (line {exc.lineno})")
+
+    return problems
+
+
+def referenced_tools(skill_md: str, known: Collection[str]) -> list[str]:
+    """The registered tool names the BODY mentions, sorted and unique.
+
+    Whole words and code spans only — `exec` inside `executive` is not a call,
+    and a substring match would tag half the hub with `exec`. The frontmatter is
+    skipped: a description that says "uses exec" is describing, not calling.
+    The registry is a parameter so this stays pure; the tool that publishes
+    passes the platform's real one.
+    """
+    try:
+        _front, body = _parse_frontmatter(skill_md.encode())
+    except SkillError:
+        body = skill_md
+    words = set(re.findall(r"(?<![\w-])[A-Za-z_][\w]*(?![\w-])", body))
+    return sorted(name for name in known if name in words)
 
 
 def register_skill_hub(spec: SpecStar) -> None:

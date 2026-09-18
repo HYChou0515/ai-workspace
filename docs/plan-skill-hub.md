@@ -1,6 +1,6 @@
 # Skill Hub — 讓 skill 在人與人之間流動,不經過運營方的 git
 
-**狀態:** grill 十題全部問過並定案(2026-09-18)。計劃待點頭,尚未動工。
+**狀態:** grill 十題全部問過並定案(2026-09-18),已點頭,施工中(PR #818)。
 
 > 第一版計劃把八個我自己決定的東西寫成「grill 收斂」,只有一題真的問過。這一版每一條
 > 決定都是問了、答了才寫上去的;我建議但你改掉的,寫的是你的答案。
@@ -86,8 +86,13 @@ payload 的每個檔案存成 blob(走既有 FileStore,一個 skill hub 命名�
    「發布到 skill hub」(按鈕只是把那句話送進對話,和「Apply」載入下一輪同一種接法)
 2. agent 呼叫 `publish_skill(name)`:
    - 從 façade 讀 `.skill/<name>/` 成 payload
-   - **結構驗**(擋):`_workspace_skill_meta` 的三條 + `references/` 存在性 + `scripts/*.py` 能 `ast.parse`
-   - **掃 tool**:body 裡的已註冊 tool 名(`TOOL_VERBS` ∪ 各 app `agent.tools`,整字或 code span)
+   - **結構驗**(擋):loader 本身的兩條(frontmatter 能解析、`name` = 資料夾名)+ **hub 自己的**三條——
+     `description` 不能空(loader 其實會列出沒 description 的 skill,但那正是「被列出卻永遠不觸發」的
+     debug loop,所以 hub 刻意比 loader 嚴;parity 測試把這條分歧釘成有意的)、body ≤ `SKILL_BODY_CAP`、
+     `references/` 存在性、`scripts/*.py` 能 `ast.parse`
+   - **掃 tool**:body 裡的已註冊 tool 名,整字或 code span。註冊表是 `agent/tools.py` 的 `_IMPLS`
+     (41 個,完整)——**不是** `TOOL_VERBS`,那張表只有 20 個,`read_skill` / `ask_user` / `kb_search`
+     都不在裡面。掃描函式是純的,註冊表由呼叫端注入
    - **AI 審**(放行掛意見):走 `AppCatalog.resolve` → 帶 failover 的 runner,**和 turn 同一條路**,
      429 由它等;連不上 → tool 以錯誤結束,對話窗看到「發布失敗:審查服務無法連線」
    - 讀 `.origin`:指向 skill hub 上**別人的**條目 → 這是 fork,`forked_from` = 那個 id;
