@@ -295,7 +295,10 @@ _ONE_AGENT_STEP = json.dumps(
         "id": "ignored",
         "title": "Nightly",
         "phases": [{"id": "p"}],
-        "steps": [{"type": "agent", "prompt": "hi", "phase": "p", "out": "o.md"}],
+        # `cache` is required since #810; this fixture predates that rule (#809
+        # was opened before #810 merged, so its own CI never saw it) and has
+        # failed on master since the two landed on the same day.
+        "steps": [{"type": "agent", "prompt": "hi", "phase": "p", "out": "o.md", "cache": True}],
     }
 )
 
