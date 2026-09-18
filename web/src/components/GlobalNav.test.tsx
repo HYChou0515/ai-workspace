@@ -127,11 +127,17 @@ describe("GlobalNav", () => {
     expect(apps.length).toBeGreaterThan(0);
     expect(destinations.length).toBeGreaterThan(0);
     for (const el of [...apps, ...destinations]) {
-      expect(el.querySelector("[data-icon], img"), el.textContent ?? "").not.toBeNull();
+      // Every row starts with NavGlyph's 22px box — whatever the glyph inside
+      // (a named icon, a file, an emoji, or nothing), the box is what lines
+      // the labels up, so it is what "has its glyph" means here.
+      expect(el.firstElementChild, el.textContent ?? "").toHaveStyle({ width: "22px", height: "22px" });
     }
-    // The App's glyph is its own manifest icon (the mock above says "flame").
+    // An App row carries the App FORM (its own manifest icon at 22px); a
+    // destination row the destination form (16px). A hardcoded destination
+    // glyph on an App row satisfied a bare `[data-icon]` check.
     expect(apps[0]).toHaveTextContent("Root Cause Analysis");
-    expect(apps[0]!.querySelector('[data-icon="flame"]')).not.toBeNull();
+    expect(apps[0]!.querySelector('[data-icon="flame"]')).toHaveAttribute("width", "22");
+    expect(destinations[0]!.querySelector("[data-icon]")).toHaveAttribute("width", "16");
   });
 
   it("switcher marks the current location (the App you're inside)", () => {
