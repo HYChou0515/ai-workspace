@@ -59,6 +59,7 @@ dev = [
     "coverage>=7",
     "asgi-lifespan>=2.1.0",
     "pytest-xdist>=3.8.0",
+    "pytest-timeout>=2.3",
 ]
 # Documentation site (mkdocs + Material). Build: `uv run --group docs mkdocs build`;
 # serve locally: `uv run --group docs mkdocs serve`. Not needed by the app or the CI gate.
@@ -69,6 +70,15 @@ docs = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# A hang is the one failure CI cannot report: a wedged test held the `api-4`
+# shard open for hours, twice, with no log until the job was cancelled and no
+# test name even then (2 workers, a dot per test). The bound turns it into a
+# named failure. Wide on purpose — the slowest legitimate unit test on a 2-core
+# runner under coverage is well under it — and per test, so a slow shard is
+# never cut short. The default method (a signal, raised inside the test with
+# the stack of where it sat) is what names the spot; the plugin falls back to
+# its thread method by itself where a signal cannot be delivered.
+timeout = 600
 markers = [
     "integration: requires real docker / subprocess sandbox / jupyter kernel / uv / ollama; excluded from default CI via -m 'not integration'",
 ]
