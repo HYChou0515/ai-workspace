@@ -126,7 +126,7 @@ payload 的每個檔案存成 blob(走既有 FileStore,一個 skill hub 命名�
 
 ### 下架 / 刪除 / 轉移 / 可見範圍(詳情頁,owner 限定)
 
-- 下架:`permission.visibility = "private"`。列表與搜尋消失、`install_skill` 拒絕(回「已下架」)、
+- 下架:`permission.visibility = "private"`。列表與搜尋消失、`install_skill` 拒絕(依 Q10,措辭和「不存在」**同一句**,不說「已下架」——只有已裝副本那一列會顯示狀態)、
   已裝副本不動、fork 那一行顯示「原作已下架」。改回 public = 重新上架
 - 刪除:soft delete。多一點:owner 自己列表也沒了;`.origin` / `forked_from` 查到
   `ResourceIsDeletedError` → 顯示「原作已刪除」。不硬刪、不給復原 UI

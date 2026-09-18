@@ -8,9 +8,10 @@ of those — an entry the viewer may not read is a 404 worded exactly like one
 that never existed (Q10).
 
 The install route and the `install_skill` tool share `install_hub_skill` and
-the same refusals, so the two doors into a workspace cannot drift. Management
-(unpublish / delete / transfer / visibility) is P7, on the detail page and
-owner-only.
+the same refusals, so the two doors into a workspace cannot drift. The
+management routes (unpublish / republish / permission / delete / transfer) are
+owner-only — `owner` the explicit field, not `created_by` — and a non-owner
+who can read the entry gets 403 on every one of them.
 """
 
 from __future__ import annotations
@@ -19,7 +20,8 @@ import logging
 from collections.abc import Callable
 from typing import Literal
 
-from fastapi import APIRouter, FastAPI, HTTPException
+import msgspec
+from fastapi import APIRouter, FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -41,6 +43,7 @@ from ..files.zip_download import (
     write_zip_members,
 )
 from .locator import ItemLocator
+from .permission_body import PermissionBody, PermissionOut, build_permission
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +110,15 @@ class SkillHubDetail(BaseModel):
     #: `referenced_tools` minus the ceiling of the App asked about (`?app=`);
     #: empty when no App was asked about.
     missing_tools: list[str]
+
+
+class SkillTransferRequest(BaseModel):
+    owner: str
+
+
+class SkillTransferred(BaseModel):
+    id: str
+    owner: str
 
 
 class SkillInstallRequest(BaseModel):
@@ -248,6 +260,81 @@ def register_skill_hub_routes(
         if path is None:
             raise HTTPException(status_code=404, detail="download not found")
         return stream_prepared_zip(path, safe_zip_filename(entry.name, fallback="skill"))
+
+    # ── management: owner-only (plan Q7 / P7) ────────────────────────────
+
+    def _owned(entry_id: str, viewer: str) -> SkillHubEntry:
+        """404 when the viewer may not read it (the same 404 as never-was),
+        403 when they may read it but do not own it. Owner is the explicit,
+        transferable field — not `created_by` — so a transferred entry answers
+        to its new owner at once."""
+        entry = _readable(entry_id, viewer)
+        if entry.owner != viewer:
+            raise HTTPException(status_code=403, detail="only the owner may manage this entry")
+        return entry
+
+    @app.post("/skill-hub/entries/{entry_id}/unpublish")
+    async def unpublish_skill_hub_entry(entry_id: str) -> PermissionOut:
+        """Take it down: `visibility: private`. It leaves every other viewer's
+        list, search and install; copies already made stay and read
+        `unpublished`; the grant lists are kept for a later republish."""
+        viewer = get_user_id()
+        entry = _owned(entry_id, viewer)
+        hub.set_permission(
+            entry_id, msgspec.structs.replace(entry.permission, visibility="private")
+        )
+        return PermissionOut(resource_id=entry_id, visibility="private", notified=[])
+
+    @app.post("/skill-hub/entries/{entry_id}/republish")
+    async def republish_skill_hub_entry(entry_id: str) -> PermissionOut:
+        """Back up, public. A restricted republish is a `permission` PUT."""
+        viewer = get_user_id()
+        entry = _owned(entry_id, viewer)
+        hub.set_permission(entry_id, msgspec.structs.replace(entry.permission, visibility="public"))
+        return PermissionOut(resource_id=entry_id, visibility="public", notified=[])
+
+    @app.put("/skill-hub/entries/{entry_id}/permission")
+    async def set_skill_hub_permission(entry_id: str, body: PermissionBody) -> PermissionOut:
+        """The same body every other resource's share UI sends. Only
+        `visibility` and `read_content` mean anything on an entry (reading is
+        the only thing anyone but the owner does to one); the rest persist
+        untouched so the shared UI round-trips."""
+        viewer = get_user_id()
+        _owned(entry_id, viewer)
+        hub.set_permission(entry_id, build_permission(body))
+        return PermissionOut(resource_id=entry_id, visibility=body.visibility, notified=[])
+
+    @app.delete("/skill-hub/entries/{entry_id}", status_code=204)
+    async def delete_skill_hub_entry(entry_id: str) -> Response:
+        """Soft, final, no restore (Q5). Copies and forks read `deleted` from
+        now on; the owner's own list drops it; a re-publish of the name is a
+        new entry."""
+        viewer = get_user_id()
+        _owned(entry_id, viewer)
+        await hub.delete(entry_id)
+        return Response(status_code=204)
+
+    @app.post("/skill-hub/entries/{entry_id}/transfer")
+    async def transfer_skill_hub_entry(
+        entry_id: str, body: SkillTransferRequest
+    ) -> SkillTransferred:
+        """Move ownership. The id — what every copy and fork points at — stays,
+        so nothing downstream breaks (Q4). 409 when the new owner already
+        publishes that name: `(owner, name)` is the identity."""
+        viewer = get_user_id()
+        entry = _owned(entry_id, viewer)
+        new_owner = body.owner.strip()
+        if not new_owner or new_owner == entry.owner:
+            raise HTTPException(
+                status_code=400, detail="transfer needs a different, non-empty owner"
+            )
+        if hub.find(new_owner, entry.name) is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"{new_owner} already publishes a skill named {entry.name!r}",
+            )
+        hub.transfer(entry_id, new_owner)
+        return SkillTransferred(id=entry_id, owner=new_owner)
 
     @app.post("/a/{slug}/items/{item_id}/skills/install")
     async def install_skill_into_item(

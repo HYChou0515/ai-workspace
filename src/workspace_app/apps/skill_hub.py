@@ -28,6 +28,7 @@ import re
 import uuid
 from typing import TYPE_CHECKING, Literal
 
+import msgspec
 from msgspec import Struct, field
 from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError, ResourceIsDeletedError
@@ -342,6 +343,32 @@ class SkillHubStore:
         return out
 
     # ── write ────────────────────────────────────────────────────────────
+
+    # The management writes (plan P7). No policy here either — the route has
+    # already established the caller is the owner. Each replaces ONE field
+    # and carries every other one over, because `update` is a whole-row write.
+
+    def set_permission(self, entry_id: str, permission: Permission) -> None:
+        """Visibility + grant lists. Unpublish is `visibility="private"` with
+        the lists kept, so a later republish loses no invite."""
+        current = self.get(entry_id)
+        assert current is not None  # the route resolved it a moment ago
+        self._rm().update(entry_id, msgspec.structs.replace(current, permission=permission))
+
+    def transfer(self, entry_id: str, owner: str) -> None:
+        """Move `owner` and nothing else. The id is the identity every copy's
+        `.origin` and every fork's `forked_from` point at, so they all survive
+        a transfer untouched. The caller has checked `(owner, name)` is free."""
+        current = self.get(entry_id)
+        assert current is not None
+        self._rm().update(entry_id, msgspec.structs.replace(current, owner=owner))
+
+    async def delete(self, entry_id: str) -> None:
+        """Soft-delete the row and free its files. Final: `state_for` answers
+        `deleted` for every copy and fork from now on, and a re-publish of the
+        name is a NEW entry (`find` skips tombstones). No restore (Q5)."""
+        self._rm().delete(entry_id)
+        await self._blobs.purge(_BLOB_PREFIX + entry_id)
 
     async def publish(
         self,
