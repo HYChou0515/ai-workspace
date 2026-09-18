@@ -481,6 +481,14 @@ fix.
   not a deadline (that sentence had outlived the deadline's removal); the
   counts re-derived (`test_turn_claims.py` 10; the 24-file set had 479 before
   P8, not 483; one test was removed with the deadline, not two).
+- CI on `806bab2d` (the run this round replaced) was RED in the `rest` job,
+  not a flake: `tests/config/test_server_settings_are_documented.py` guards
+  that every `server.*` knob is named in `docs/configuration.md`, and the two
+  new knobs were not — an operator could not have discovered them from the
+  manual the runbook points at. Both are in the manual's "what to set for
+  what" table now. The guard is in a job my targeted set never included;
+  the set is the files touching the changed seams, and a docs guard is not
+  one of them — so the CI round is what catches this class, as intended.
 - The mutation runner is the ledger: 24 entries at this head, each
   reddening the test named for it (`r2_mutations.py`, kept outside the tree
   since round 2 and re-pointed as the text moved). Two entries had HUNG under
