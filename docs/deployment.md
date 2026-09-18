@@ -518,6 +518,26 @@ RCA 的 system prompt 是純 markdown，存在
   - k8s 範例見 [`kubernetes/base/workers.yaml`](https://github.com/HYChou0515/ai-workspace/blob/master/kubernetes/base/workers.yaml)
     與 [`kubernetes/README.md`](https://github.com/HYChou0515/ai-workspace/blob/master/kubernetes/README.md)（每 JobType 一個
     Deployment + CPU HPA，sanity 固定 1 replica；不使用 KEDA）。
+- **API pod 收到 SIGTERM 怎麼收攤（plan-graceful-shutdown）**：rollout、HPA 縮容、
+  `kubectl delete pod` 都是 SIGTERM。以前 uvicorn 會**先無限等所有連線結束**再跑我們的
+  lifespan shutdown，而每個開著的聊天分頁都掛著一條永不結束的 SSE，所以 turn drain 與
+  sandbox 拆除在 prod **從來沒跑過**，每次都是 `terminationGracePeriodSeconds`（預設 30）
+  到期被 SIGKILL。現在 SIGTERM 當下就開始 drain（`api/drain.py`）：
+  1. `/api/readyz` 立刻回 503 —— k8s 停止把新請求送來（`preStop: sleep 5` 讓 endpoints
+     先更新；k8s 是**同時**發 SIGTERM 和拿掉 endpoint 的）。
+  2. 每一條 SSE（聊天串流、`/monitor/stream`）送 EOF —— 前端視為「連線中斷、重連」，
+     重連會落到活著的 pod；**正在回的 turn 不會因此中斷**，只是這台 pod 上的觀看者換 pod 看。
+  3. uvicorn 等連線結束，上限 `server.shutdown_budget_sec`（預設 20；正常 ~1 秒就結束）。
+  4. lifespan 的 turn drain：在跑的 turn 有同一個 budget 跑完並存檔；超過的被 cancel，
+     partial 回覆會存（跟按 Stop 一樣）。`run_consumers: true` 的單機部署，job queue 的
+     drain 也受同一預算（本機開機的 help 文件 index 就要 16 秒），沒排完的交給 specstar 的
+     stale-job recovery。
+  5. kernels、sandbox session 拆除，process 退出（exit 143 = uvicorn 收攤後重新 raise
+     SIGTERM，正常）。
+
+  **k8s 側要配**：`terminationGracePeriodSeconds` > 2 × budget + 拆除時間（base 給 60）。
+  本機驗證：起 app、`curl -N` 掛一條 SSE、`kill -TERM`，log 要在 budget 內出現
+  `lifespan: shutdown complete`，curl 要拿到 EOF 而不是 reset。
 - **索引回填（#263，升級後一次性）**：本版替 `DocChunk` 加了 `provenance`
   位置索引（page / sheet / …，供「分析某檔第 N 頁」這類定位過濾），並替
   `SourceDoc` 加了 `path` 索引（檔名→文件解析），兩個 model 都升到 schema

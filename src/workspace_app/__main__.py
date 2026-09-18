@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 import uvicorn
 
 from workspace_app.api import create_app
+from workspace_app.api.drain import DrainingServer
 from workspace_app.config.dump import emit_config_dump
 from workspace_app.config.loader import load_with_provenance
 from workspace_app.factories import (
@@ -258,6 +259,9 @@ def build_app(settings: Settings, *, config_dir: Path | None) -> FastAPI:
             ),
             gc_t1=settings.filestore.gc_t1,
             gc_t2=settings.filestore.gc_t2,
+            # plan-graceful-shutdown P2: the turn-drain budget — the same number
+            # uvicorn gets below as `timeout_graceful_shutdown`.
+            shutdown_budget=timedelta(seconds=settings.server.shutdown_budget_sec),
             runner=get_runner(settings),
             agent_config_catalog=get_agent_config_catalog(settings, config_dir=config_dir),
             # plan-subagent-model-choice: the curated engines a run_agent call
@@ -434,7 +438,19 @@ def main() -> None:
         print("  llm log: off (set WORKSPACE_LLM_LOG=1 or observability.llm_log.enabled: true)")
     app = build_app(settings, config_dir=config_dir)
     with boot_step("start HTTP server (uvicorn)"):
-        uvicorn.run(app, host=settings.server.host, port=settings.server.port)
+        # plan-graceful-shutdown P2: `DrainingServer` begins the pod's drain in
+        # the SIGTERM handler (readiness off, streams ended) so uvicorn's wait
+        # for open connections actually ends and the lifespan shutdown — the
+        # turn drain, the sandbox teardown — gets to run. `timeout_graceful_
+        # shutdown` is the safety net for a connection that did not end; it is
+        # the same number the lifespan drains turns against.
+        config = uvicorn.Config(
+            app,
+            host=settings.server.host,
+            port=settings.server.port,
+            timeout_graceful_shutdown=int(settings.server.shutdown_budget_sec),
+        )
+        DrainingServer(config, drain=app.state.drain).run()
 
 
 if __name__ == "__main__":

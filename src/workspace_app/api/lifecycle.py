@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import UTC, datetime, timedelta
@@ -92,6 +93,7 @@ def build_lifespan(
     code_daily_sync: str | None = None,
     wiki_reflect_daily: str | None = None,
     gc_interval: timedelta | None,
+    shutdown_budget: timedelta = timedelta(seconds=20),
     trigger_check_interval: timedelta | None = None,
     user_schedule_sweeper: UserScheduleSweeper | None = None,
     notification_channel: INotificationChannel | None = None,
@@ -607,8 +609,9 @@ def build_lifespan(
             for engine in getattr(app.state, "turn_engines", ()):
                 logger.debug("lifespan: draining in-flight turns")
                 with contextlib.suppress(BaseException):
-                    await engine.aclose()
+                    await engine.aclose(timeout=shutdown_budget.total_seconds())
             logger.debug("lifespan: draining coordinators + kernels")
+            t_coord = time.monotonic()
             # Drain in-flight jobs before exit (bounded) — ONLY on a pod that
             # consumes. `aclose()` starts a consumer on a coordinator that never
             # consumed "so it still flushes"; on a pure producer (#312,
@@ -618,25 +621,47 @@ def build_lifespan(
             # pod past its grace period. A pure producer has nothing in flight;
             # pending jobs are durable and the workers pick them up.
             if run_consumers:
-                with contextlib.suppress(BaseException):
-                    await app.state.wiki_coordinator.aclose()
-                with contextlib.suppress(BaseException):
-                    await app.state.index_coordinator.aclose()
-                if app.state.sanity_coordinator is not None:
-                    with contextlib.suppress(BaseException):
-                        await app.state.sanity_coordinator.aclose()
-                if app.state.eval_coordinator is not None:
-                    with contextlib.suppress(BaseException):
-                        await app.state.eval_coordinator.aclose()
-                if app.state.graph_coordinator is not None:
-                    with contextlib.suppress(BaseException):
-                        await app.state.graph_coordinator.aclose()
-                with contextlib.suppress(BaseException):
-                    await app.state.card_gen_coordinator.aclose()
-                with contextlib.suppress(BaseException):
-                    await app.state.blob_gc_coordinator.aclose()
+                # The whole drain shares the ONE shutdown budget: a queue that
+                # cannot empty in time (an index job on a big PDF; the boot's
+                # own Help-doc jobs took 16 s on a fresh local boot) is left to
+                # specstar's stale-job recovery — that is what a durable queue
+                # is for — instead of holding the pod past its grace period.
+                deadline = time.monotonic() + shutdown_budget.total_seconds()
+                for name in (
+                    "wiki_coordinator",
+                    "index_coordinator",
+                    "sanity_coordinator",
+                    "eval_coordinator",
+                    "graph_coordinator",
+                    "card_gen_coordinator",
+                    "blob_gc_coordinator",
+                ):
+                    coordinator = getattr(app.state, name, None)
+                    if coordinator is None:
+                        continue
+                    t_one = time.monotonic()
+                    left = deadline - t_one
+                    if left <= 0:
+                        logger.warning("lifespan: shutdown budget spent before %s drained", name)
+                        continue
+                    try:
+                        await asyncio.wait_for(coordinator.aclose(), timeout=left)
+                    except TimeoutError:
+                        logger.warning("lifespan: %s did not drain within the budget", name)
+                    except BaseException:  # noqa: BLE001 — one failing drain must not stop the rest
+                        logger.exception("lifespan: %s failed to drain", name)
+                    logger.debug("lifespan: %s drained in %.1fs", name, time.monotonic() - t_one)
+            # Narrated with timings: a shutdown that overruns the grace period is
+            # a SIGKILL nobody can explain afterwards, so each step says what it
+            # cost (the boot narrates the same way, `boot_step`).
+            logger.debug("lifespan: coordinators drained in %.1fs", time.monotonic() - t_coord)
+            t0 = time.monotonic()
             await kernels.shutdown_all()
+            t1 = time.monotonic()
             await registry.close_all()
-            logger.info("lifespan: shutdown complete")
+            t2 = time.monotonic()
+            logger.info(
+                "lifespan: shutdown complete (kernels %.1fs, sandboxes %.1fs)", t1 - t0, t2 - t1
+            )
 
     return lifespan

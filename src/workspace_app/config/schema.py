@@ -54,6 +54,14 @@ class ServerSettings:
     # the cancel latency equals this interval; the same-pod fast-path is instant.
     # Smaller = snappier cancel but more store reads per active turn.
     turn_cancel_poll_seconds: float = 0.5
+    # plan-graceful-shutdown P2: the ONE number a SIGTERM'd pod shuts down
+    # against. uvicorn waits at most this long for open connections (the drain
+    # ends the chat + monitor streams at once, so normally ~1 s), then the
+    # lifespan gives in-flight turns at most this long to finish before
+    # cancelling them (each persists its partial reply). Worst case 2 × this
+    # plus teardown — the k8s `terminationGracePeriodSeconds` must exceed it
+    # (`kubernetes/base/deployment.yaml` sets 60 against the default 20).
+    shutdown_budget_sec: float = 20.0
     # #43 reconnect replay: how many recent broadcast events each per-item session
     # keeps in an in-pod ring so a same-pod reconnect can replay the gap (`?since=`).
     # 0 disables replay (a reconnect degrades to store re-hydrate). ~200KB/session

@@ -792,6 +792,17 @@ class ChatTurnEngine:
         if session is not None:
             session.close_subscribers()
 
+    def close_all_streams(self) -> None:
+        """End every live SSE response on every session — the pod is draining.
+
+        The turns themselves are untouched: `aclose` (from the lifespan, once
+        uvicorn's connection wait ends — which is what ending these streams
+        makes happen) gives them their budget. A viewer whose stream ends
+        reconnects, on a live pod (`useChatSession`: a stream that ends is a
+        lost connection, never a finished chat)."""
+        for session in list(self._ws_sessions.values()):
+            session.close_subscribers()
+
     async def forget(self, key: str) -> None:
         """Drop a conversation's turn session (on close / delete) so the
         registry doesn't grow without bound. Also tears down the collaborative

@@ -82,6 +82,7 @@ from .chat_send import ChatSendService
 from .compaction import AgentCompactor
 from .context_card_routes import register_context_card_actions, register_context_card_routes
 from .doc_question_routes import register_doc_question_routes
+from .drain import Drain
 from .entity_broadcast import build_entity_write_sink
 from .entity_routes import register_entity_routes
 from .env_provider import IEnvProvider
@@ -505,6 +506,12 @@ def create_app(
     per_user_resources: PerUserResources | None = None,
     # #245: blob-GC sweeper. `gc_interval` None ⇒ off; `gc_t1`/`gc_t2` are the
     # fresh-blob grace and quarantine dwell passed to `SpecStar.gc(reconcile)`.
+    # plan-graceful-shutdown P2: how long a SIGTERM'd pod gives its in-flight
+    # turns before cancelling them (the lifespan drain), and how long uvicorn
+    # waits for connections before it cancels them (`__main__` hands the same
+    # number to `timeout_graceful_shutdown`). ONE number: the worst case is
+    # 2 × this plus teardown, and the k8s grace period must exceed that.
+    shutdown_budget: timedelta = timedelta(seconds=20),
     gc_interval: timedelta | None = timedelta(hours=1),
     gc_t1: str = "1h",
     gc_t2: str = "24h",
@@ -679,6 +686,11 @@ def create_app(
     # lands in the same sink as the agent/LLM traces. The trace-processor is
     # registered a few lines down once the app-level wiring is complete.
     monitor = monitor if monitor is not None else InMemoryMonitor()
+    # plan-graceful-shutdown P2: the pod's shutdown, begun at SIGTERM by
+    # `DrainingServer` (`__main__`). Built here so `readyz` and every stream
+    # source can reach it; the engines register their closers below.
+    drain = Drain()
+    drain.on_begin(monitor.close_streams)
 
     # #538: the mirror sweep already walks every warm sandbox every few seconds,
     # so it hands the sizes it saw to the quota — that is what keeps the walk off
@@ -1305,6 +1317,7 @@ def create_app(
         code_daily_sync=code_daily_sync,
         wiki_reflect_daily=wiki_reflect_daily,
         gc_interval=gc_interval,
+        shutdown_budget=shutdown_budget,
         trigger_check_interval=trigger_check_interval,
         # #WUI P15: fires the schedules pages declared. Built here so it shares
         # the one `spec`, the one index and the item-owner lookup the rest of the
@@ -1335,6 +1348,7 @@ def create_app(
         openapi_url="/api/openapi.json",
         swagger_ui_oauth2_redirect_url="/api/docs/oauth2-redirect",
     )
+    app.state.drain = drain  # `DrainingServer` (`__main__`) begins it at SIGTERM
 
     # #700: only mounted when a deployment actually names origins, so the default
     # deployment carries no CORS layer and its responses are byte-identical to
@@ -1493,6 +1507,11 @@ def create_app(
         Deliberately NOT the diagnostics registry above — that is an
         operator-facing report; this answers one question, cheaply (two
         aggregates, no rows materialised), on every probe interval."""
+        # plan-graceful-shutdown P2: a pod that received SIGTERM is not ready,
+        # from the first moment — k8s stops routing to it while the streams it
+        # ended reconnect elsewhere.
+        if drain.draining:
+            return Response(status_code=503, content="draining", media_type="text/plain")
         probe = getattr(filestore, "prefix_index_ready", None)
         if probe is not None and not await probe():
             return Response(
@@ -1871,6 +1890,10 @@ def create_app(
     # Drained on shutdown (see build_lifespan): an in-flight turn gets a bounded
     # chance to finish and persist instead of leaving with the process.
     app.state.turn_engines = (turn_engine, kb_turn_engine)
+    # And their live streams end the moment the drain begins, so uvicorn's wait
+    # for open connections ends and that drain actually gets to run.
+    drain.on_begin(turn_engine.close_all_streams)
+    drain.on_begin(kb_turn_engine.close_all_streams)
 
     # Cached fallback configs per sub-agent purpose, used when the
     # catalog the caller supplied didn't wire that purpose (legacy
