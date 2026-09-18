@@ -238,6 +238,46 @@ async def test_read_page_on_a_text_only_model_goes_through_the_describer(spec: S
     assert _ReadTimeVlm.calls == 1
 
 
+async def test_read_page_does_not_hold_the_event_loop_while_the_describer_answers(
+    spec: SpecStar,
+):
+    """The text-only branch is a synchronous VLM round-trip (the same class as
+    `read_image`'s liveness stall). A sleeper is the witness: any wake-up later
+    than its own sleep is time the loop could not run."""
+    import asyncio
+    import time
+
+    class _SlowVlm(IVlm):
+        def stream(
+            self, prompt: str, *, images: Sequence[tuple[bytes, str]]
+        ) -> Iterator[tuple[str, bool]]:
+            for word in ("slow", "page"):
+                time.sleep(0.15)
+                yield word, False
+
+    cid, emb = _kb(spec, {"deck.pdf": _blank_pdf(1)})
+    ctx = _ctx(spec, emb, cid, vision=False, describer=VlmDescriber(_SlowVlm()))
+    worst = 0.0
+    stop = False
+
+    async def watch() -> None:
+        nonlocal worst
+        while not stop:
+            t0 = time.monotonic()
+            await asyncio.sleep(0.02)
+            worst = max(worst, time.monotonic() - t0 - 0.02)
+
+    watcher = asyncio.create_task(watch())
+    await asyncio.sleep(0.02)  # the watcher is asleep before the tool starts
+    try:
+        out = await read_page_impl(ctx, "deck.pdf", 1)
+    finally:
+        stop = True
+        await watcher
+    assert isinstance(out, str) and "slowpage" in out
+    assert worst < 0.1, f"the loop was blocked for {worst * 1000:.0f} ms"
+
+
 async def test_read_page_without_any_vision_model_says_so(spec: SpecStar):
     cid, emb = _kb(spec, {"deck.pdf": _blank_pdf(1)})
     out = await read_page_impl(_ctx(spec, emb, cid, vision=False), "deck.pdf", 1)

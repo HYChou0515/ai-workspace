@@ -25,6 +25,7 @@ from workspace_app.api.events import (
     RunError,
     TodosUpdated,
     ToolEnd,
+    ToolLog,
     ToolStart,
     to_sse,
 )
@@ -41,6 +42,7 @@ from workspace_app.api.litellm_runner import (
     _map_event,
     _should_retry,
     _stream_enabled,
+    _tool_log_emitter,
     classify_retry_event,
     diagnose_error,
 )
@@ -53,6 +55,28 @@ def test_failover_emitter_pushes_a_failover_switch_event():
     queue: asyncio.Queue = asyncio.Queue()
     _failover_emitter(queue)("ollama/qwen3", "ConnectionError")
     assert queue.get_nowait() == FailoverSwitch(from_model="ollama/qwen3", reason="ConnectionError")
+
+
+async def test_tool_log_emitter_wakes_an_idle_loop_from_a_worker_thread():
+    """The exec-output sink is the one sink a tool may call from a WORKER
+    thread (`read_image` runs its VLM stream under `to_thread`). An
+    `asyncio.Queue` is not thread-safe: `put_nowait` from another thread appends
+    the item but cannot wake a loop that is parked in `select()` waiting on
+    `queue.get()` — the item sits there until something else happens to wake
+    the loop. Here the only other thing is the 2 s timeout timer: an unsafe
+    sink delivers the chunk only when THAT fires, a safe one the moment the
+    thread calls it. So the assertion is on the latency, not on arrival."""
+    import threading
+    import time
+
+    queue: asyncio.Queue = asyncio.Queue()
+    sink = _tool_log_emitter(queue)
+    started = time.monotonic()
+    threading.Timer(0.1, lambda: sink(b"from a thread")).start()
+    event = await asyncio.wait_for(queue.get(), timeout=2.0)
+    elapsed = time.monotonic() - started
+    assert event == ToolLog(text="from a thread")
+    assert elapsed < 1.0, f"the loop only noticed the chunk after {elapsed:.2f}s"
 
 
 def test_failover_switch_serializes_to_an_sse_frame():

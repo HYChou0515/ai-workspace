@@ -823,6 +823,24 @@ def _failover_emitter(queue: asyncio.Queue[AgentEvent | object]) -> Callable[[st
     return emit
 
 
+def _tool_log_emitter(queue: asyncio.Queue[AgentEvent | object]) -> Callable[[bytes], None]:
+    """The per-turn sink a tool streams its live output through (``ToolLog``).
+    Unlike the sinks above, this one is called from WORKER THREADS too:
+    `read_image` and the plot review run their synchronous VLM stream under
+    ``asyncio.to_thread`` — on the loop it held the pod past its liveness probe
+    — and relay each chunk here. ``asyncio.Queue`` is not thread-safe, so the
+    put is handed to the loop with ``call_soon_threadsafe``: a plain
+    ``put_nowait`` from another thread appends the item but cannot wake a loop
+    parked in ``select()``, and the chunk sits unseen until something else
+    happens to wake it. The loop is captured at bind time, on the loop thread."""
+    loop = asyncio.get_running_loop()
+
+    def emit(data: bytes) -> None:
+        loop.call_soon_threadsafe(queue.put_nowait, ToolLog(text=data.decode("utf-8", "replace")))
+
+    return emit
+
+
 def _todos_emitter(queue: asyncio.Queue[AgentEvent | object]) -> Callable[[list[Any]], None]:
     """#613: a per-turn sink that turns the `update_todos` tool's freshly-written
     list into a live ``TodosUpdated`` event on this turn's stream, so the FE's
@@ -1660,7 +1678,7 @@ class LitellmAgentRunner:
         # switch (#249/#131) can push a live FailoverSwitch notice into it too.
         queue: asyncio.Queue[AgentEvent | object] = asyncio.Queue()
         done = object()
-        ctx.on_exec_output = lambda b: queue.put_nowait(ToolLog(text=b.decode("utf-8", "replace")))
+        ctx.on_exec_output = _tool_log_emitter(queue)
         # #492 P11: a cold wake's snapshot restore streams (done, total) here so the
         # FE shows "還原中 N/M" instead of a blank running card while it completes.
         ctx.on_restore_progress = lambda done, total: queue.put_nowait(
