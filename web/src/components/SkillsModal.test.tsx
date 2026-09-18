@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { FileService } from "../api/fileService";
 import type { ItemSkillState } from "../api/types";
+import { HttpError } from "../api/http";
 import type { SkillHubCard } from "../api/skillHub";
 import { subscribeAgentDraft } from "../lib/agentDraftBus";
 import { translate } from "../lib/i18n";
@@ -380,8 +381,13 @@ describe("SkillsModal — the skill hub", () => {
 
   it("shows the server's refusal when a folder of that name is already here", async () => {
     const hub = fakeHub();
+    // What the REAL client throws (see `api/skillHub.test.ts`): an `HttpError`
+    // whose message is the server's sentence — not a bare Error carrying it.
     hub.install.mockRejectedValueOnce(
-      new Error("this workspace already has alice's '.skill/triage-reflow/' — remove or rename that folder first, then install again"),
+      new HttpError(
+        409,
+        "this workspace already has alice's '.skill/triage-reflow/' — remove or rename that folder first, then install again",
+      ),
     );
     renderWithHub(hub);
     await screen.findByTestId("skill-row-my-skill");

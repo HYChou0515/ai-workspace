@@ -2463,6 +2463,21 @@ async def publish_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str
         _state, upstream = hub.state_for(origin.entry, c.acting_user)
         if upstream is not None and upstream.owner != c.acting_user:
             forked_from, forked_owner = origin.entry, upstream.owner
+    existed = hub.find(c.acting_user, name)
+    if forked_from and existed is not None:
+        # Two rules both apply: `owner/name` says "a revision of yours",
+        # `.origin` says "a fork of theirs". Taking the first silently
+        # overwrote the user's own entry with someone else's content and
+        # recorded no lineage (review round 1). Unless the existing entry IS
+        # the fork (a re-publish of it), refuse and name both.
+        mine = hub.get(existed)
+        if mine is None or mine.forked_from != forked_from:
+            return (
+                f"error: not published — you already publish a skill named {name!r}, and this "
+                f"folder was installed from {forked_owner}'s {name!r}. Publishing it would replace "
+                "yours with theirs. Rename the folder to publish it as a fork under another name, "
+                "or remove its `.origin` file to publish it as a new version of your own."
+            )
 
     # The review is the gate (Q9): a review that did not happen is not a pass.
     try:
@@ -2473,7 +2488,6 @@ async def publish_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str
             "Nothing was written; ask the user to try again later."
         )
 
-    existed = hub.find(c.acting_user, name) is not None
     entry_id = await hub.publish(
         owner=c.acting_user,
         name=name,
@@ -2499,7 +2513,7 @@ async def publish_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str
     )
     how = (
         "updated your earlier version"
-        if existed
+        if existed is not None
         else f"a fork of {forked_owner}'s '{name}'"
         if forked_from
         else "new"

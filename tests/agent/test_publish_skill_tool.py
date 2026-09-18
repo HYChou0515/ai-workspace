@@ -420,6 +420,40 @@ async def test_the_reply_says_the_visibility_the_entry_actually_has():
     assert "unpublished" in again or "private" in again
 
 
+async def test_someone_elses_skill_under_a_name_i_already_publish_is_refused_not_merged():
+    """Veracity lens, round 1: bob publishes `triage`; he installs alice's
+    `triage` into another item and publishes from there. Identity (`owner/name`)
+    said "revision of bob's", `.origin` said "fork of alice's", and the code
+    took the first while silently dropping the second — bob's root was
+    overwritten with alice's content and no lineage recorded. Two rules that
+    both apply is a refusal that names them, not a coin toss."""
+    hub = _hub()
+    bob = _ctx(hub, _Reviewer(), user="bob", item="inv-bob-1")
+    await _put(bob, "triage", {"SKILL.md": _md("triage", "bob's own\n")})
+    await publish_skill_impl(bob, "triage")
+    bobs = hub.find("bob", "triage")
+    assert bobs is not None
+    alices = await hub.publish(
+        owner="alice",
+        name="triage",
+        description="d",
+        source_item="inv-alice",
+        source_app="rca",
+        source_profile="default",
+        payload={"SKILL.md": _md("triage", "alice's\n")},
+        referenced_tools=[],
+        review=OK,
+    )
+    other = _ctx(hub, _Reviewer(), user="bob", item="inv-bob-2")
+    await install_hub_skill(_files(other), "inv-bob-2", hub, alices)
+
+    out = await publish_skill_impl(other, "triage")
+
+    assert out.startswith("error:") and "alice" in out and "triage" in out
+    assert (await hub.payload_of(bobs))["SKILL.md"] == _md("triage", "bob's own\n")
+    assert hub.forks_of(alices) == []
+
+
 # ── refusals that name what to do ────────────────────────────────────────────
 
 

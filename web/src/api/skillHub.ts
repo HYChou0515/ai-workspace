@@ -10,7 +10,7 @@
  */
 
 import type { CollectionPermission } from "../lib/permission";
-import { apiFetch, httpErrorFrom } from "./http";
+import { apiFetch, detailSentence, HttpError } from "./http";
 
 export type SkillHubReviewVerdict = "ok" | "notes";
 export type SkillUpstreamState = "live" | "unpublished" | "deleted";
@@ -99,6 +99,19 @@ export type SkillHubApi = {
 
 const entryBase = (entryId: string) => `/skill-hub/entries/${encodeURIComponent(entryId)}`;
 
+/**
+ * A refusal, as the person should read it: the server's own sentence when it
+ * sent one (`{"detail": "already has alice's '.skill/…'"}`), else what failed
+ * and the status. `httpErrorFrom` is the wrong helper here — it keeps only an
+ * OBJECT `detail` (the quota codes) and drops a string, so every refusal read
+ * as "install failed: 409" (review round 1). `api/wui.ts` reads the sentence
+ * the same way.
+ */
+async function refused(resp: Response, failed: string): Promise<HttpError> {
+  const sentence = await detailSentence(resp);
+  return new HttpError(resp.status, sentence ?? `${failed} (${resp.status})`);
+}
+
 async function post(path: string, body?: unknown, failed = "request failed"): Promise<Response> {
   const resp = await apiFetch(path, {
     method: "POST",
@@ -106,7 +119,7 @@ async function post(path: string, body?: unknown, failed = "request failed"): Pr
       ? {}
       : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
   });
-  if (!resp.ok) throw await httpErrorFrom(resp, `${failed}: ${resp.status}`);
+  if (!resp.ok) throw await refused(resp, failed);
   return resp;
 }
 
@@ -118,13 +131,13 @@ export const skillHubApi: SkillHubApi = {
     if (app) params.set("app", app);
     const suffix = params.size ? `?${params}` : "";
     const resp = await apiFetch(`/skill-hub/entries${suffix}`);
-    if (!resp.ok) throw await httpErrorFrom(resp, `skill hub listing failed: ${resp.status}`);
+    if (!resp.ok) throw await refused(resp, "the skill hub listing failed");
     return ((await resp.json()) as { entries: SkillHubCard[] }).entries;
   },
   async get(entryId, app) {
     const suffix = app ? `?app=${encodeURIComponent(app)}` : "";
     const resp = await apiFetch(`${entryBase(entryId)}${suffix}`);
-    if (!resp.ok) throw await httpErrorFrom(resp, `skill hub entry failed: ${resp.status}`);
+    if (!resp.ok) throw await refused(resp, "the skill hub entry could not be read");
     return (await resp.json()) as SkillHubDetail;
   },
   async install(slug, itemId, entryId) {
@@ -147,11 +160,11 @@ export const skillHubApi: SkillHubApi = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(perm),
     });
-    if (!resp.ok) throw await httpErrorFrom(resp, `permission failed: ${resp.status}`);
+    if (!resp.ok) throw await refused(resp, "the visibility could not be saved");
   },
   async remove(entryId) {
     const resp = await apiFetch(entryBase(entryId), { method: "DELETE" });
-    if (!resp.ok) throw await httpErrorFrom(resp, `delete failed: ${resp.status}`);
+    if (!resp.ok) throw await refused(resp, "delete failed");
   },
   async transfer(entryId, owner) {
     await post(`${entryBase(entryId)}/transfer`, { owner }, "transfer failed");

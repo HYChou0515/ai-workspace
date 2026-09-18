@@ -8,6 +8,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { HttpError } from "../api/http";
 import type { SkillEditTarget, SkillHubApi, SkillHubDetail } from "../api/skillHub";
 
 vi.mock("../api", () => ({
@@ -229,7 +230,8 @@ describe("SkillHubEntryPage", () => {
 
   it("shows a failed action's reason instead of swallowing it", async () => {
     const c = client(OWNED);
-    c.unpublish.mockRejectedValueOnce(new Error("only the owner may manage this entry"));
+    // The shape the real client throws (`api/skillHub.test.ts`).
+    c.unpublish.mockRejectedValueOnce(new HttpError(403, "only the owner may manage this entry"));
     mount(c);
     fireEvent.click(await screen.findByRole("button", { name: word("skillHub.unpublish") }));
 

@@ -292,3 +292,56 @@ async def test_install_of_an_unreadable_entry_is_404_and_writes_nothing(harness:
 
     assert res.status_code == 404
     assert await harness.filestore.ls(harness.iid, "/.skill/") == []
+
+
+# ── the two guards that reddened nothing (veracity lens, round 1) ────────────
+
+
+async def test_the_entry_model_has_no_auto_crud_route_so_nothing_can_put_around_the_review(
+    harness: Harness,
+):
+    """`register_skill_hub` runs AFTER `spec.apply` so specstar emits no
+    `/skill-hub-entry` routes — the docs say so, the code says so, and moving
+    the registration one line up emitted 22 routes (a POST that creates an
+    unreviewed row) with every test staying green. Pinned here."""
+    paths = harness.spa_client.get("/api/openapi.json").json()["paths"]
+    assert not [p for p in paths if "skill-hub-entry" in p], "auto-CRUD routes leaked"
+    # The raw client (no route mapping): a POST on the leaked route would be a
+    # 200 with a row; without it the address answers nothing useful.
+    assert harness.spa_client.post("/api/skill-hub-entry", json={}).status_code >= 400
+
+
+async def test_install_into_an_item_needs_edit_content_on_that_item(harness: Harness):
+    """The panel's door writes `.skill/<name>/` into the item, the same
+    standing instruction `install_skill` writes; the tool's verb is pinned by
+    the authz parity table, the route's was pinned by nothing — swapping it
+    for `read_content`, or dropping the check, reddened no test."""
+    from workspace_app.apps.rca.model import RcaInvestigation
+
+    hub = _hub(harness)
+    entry = await _entry(hub, "alice", "triage")
+    rm = harness.spec.get_resource_manager(RcaInvestigation)
+
+    def item_with(*verbs: str) -> str:
+        with rm.using("bob"):  # bob owns it; the harness user is a collaborator
+            return rm.create(
+                RcaInvestigation(
+                    title="t",
+                    owner="bob",
+                    permission=Permission(
+                        visibility="restricted",
+                        read_meta=[f"user:{VIEWER}"],
+                        **{v: [f"user:{VIEWER}"] for v in verbs},
+                    ),
+                )
+            ).resource_id
+
+    read_only = item_with("read_content", "converse")
+    res = harness.client.post(f"/a/rca/items/{read_only}/skills/install", json={"entry_id": entry})
+    assert res.status_code == 403, res.text
+    assert await harness.filestore.ls(read_only, "/.skill/") == []
+
+    editor = item_with("read_content", "edit_content")
+    res = harness.client.post(f"/a/rca/items/{editor}/skills/install", json={"entry_id": entry})
+    assert res.status_code == 200, res.text
+    assert await harness.filestore.exists(editor, "/.skill/triage/SKILL.md")
