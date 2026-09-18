@@ -12,7 +12,7 @@ export const ICON_NAMES = [
   "arrow_d", "git", "dots_h", "dots_v", "eye", "pin", "clock", "check", "split", "panel_left",
   "layers", "download", "upload", "filter", "tag", "bug", "flame", "refresh", "undo", "quote",
   "external", "paperclip", "pencil", "home", "kanban", "trash", "workflow", "wiki",
-  "insert_line", "remove_line",
+  "insert_line", "remove_line", "star",
 ] as const;
 
 export type IconName = (typeof ICON_NAMES)[number];
@@ -187,6 +187,17 @@ export function Icon({
       </>
     ),
     check: <path d="M5 12 L10 17 L19 7" {...sp} />,
+    // A favourite. Stroke only, like the rest of the set; the pressed state of
+    // a star button fills it from CSS (`[aria-pressed="true"] [data-icon="star"]
+    // path { fill: currentColor }` in my-resources.css) — the fill follows the
+    // one attribute that IS the state, rather than a second prop to keep in
+    // step with it.
+    star: (
+      <path
+        d="M12 3.5 L14.6 9 L20.5 9.7 L16.2 13.8 L17.4 19.7 L12 16.8 L6.6 19.7 L7.8 13.8 L3.5 9.7 L9.4 9 Z"
+        {...sp}
+      />
+    ),
     split: (
       <>
         <rect x="3" y="4" width="18" height="16" rx="1.5" {...sp} />

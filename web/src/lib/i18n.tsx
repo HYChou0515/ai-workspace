@@ -1135,6 +1135,62 @@ export const messages = {
     en: "Currently using {bytes} — all of it comes back when deleted.",
   },
   "resources.disk.delete.zip": { "zh-TW": "下載 zip 備份", en: "Download a zip backup" },
+  // `/wui` — the overview of Deployed pages (docs/plan-wui-overview.md). "WUI"
+  // itself is a proper noun in every locale, so the heading and the nav entry
+  // are not translated.
+  "wui.loading": { "zh-TW": "載入中…", en: "Loading…" },
+  "wui.error": {
+    "zh-TW": "讀不到 WUI 清單。",
+    en: "The WUI listing could not be read.",
+  },
+  "wui.retry": { "zh-TW": "再試一次", en: "Try again" },
+  "wui.empty": { "zh-TW": "還沒有任何 WUI 被 Deploy。", en: "No WUI has been deployed yet." },
+  "wui.empty.what": {
+    "zh-TW": "WUI 是 item 工作區裡的一個資料夾，被當成網頁跑起來；在頁面的工具列按 Deploy，它就會出現在這裡。",
+    en: "A WUI is a folder in an item's workspace, run as a page; press Deploy in the page's toolbar and it appears here.",
+  },
+  "wui.empty.help": { "zh-TW": "看說明", en: "Read the help" },
+  // `{when}` is `relativeTime`'s form — "just now", "3 min ago", "2 d ago",
+  // "7 Aug" — so the sentence must read with all of them; "於 {when} Deploy" /
+  // "on {when}" did not ("於 just now Deploy", "on 2 d ago").
+  "wui.row.by": { "zh-TW": "{who} Deploy · {when}", en: "deployed by {who} · {when}" },
+  // 下架, the opposite of Deploy's 上架 (docs/wui.md) — not 移除, which the
+  // author read as "delete the page" (「移除是什麼意思？」). The tooltip says
+  // what stays.
+  "wui.remove": { "zh-TW": "下架", en: "Unlist" },
+  "wui.remove.tip": {
+    "zh-TW": "從 WUI 總覽下架；頁面和資料夾都留著",
+    en: "Takes the page off the WUI overview; the page and its folder stay",
+  },
+  "wui.remove.title": { "zh-TW": "把「{title}」從 WUI 下架？", en: "Unlist “{title}” from WUI?" },
+  "wui.remove.body": {
+    "zh-TW": "頁面和它的資料夾都會留著，只是不再列在這裡。要再列回來，到頁面上再按一次 Deploy。",
+    en: "The page and its folder stay; only this listing goes. To list it again, press Deploy on the page.",
+  },
+  "wui.remove.cancel": { "zh-TW": "取消", en: "Cancel" },
+  "wui.remove.failed": { "zh-TW": "下架失敗，再試一次。", en: "Could not unlist it — try again." },
+  // The viewer's favourites (plan-wui-overview-icon-favourites): a group at the
+  // top of the overview, and a star on every row. The star's label is the
+  // ACTION, naming the page — `aria-pressed` carries the state.
+  "wui.favourites": { "zh-TW": "我的最愛", en: "Favourites" },
+  "wui.star": { "zh-TW": "把「{title}」加入我的最愛", en: "Add “{title}” to favourites" },
+  "wui.unstar": { "zh-TW": "把「{title}」從我的最愛移除", en: "Remove “{title}” from favourites" },
+  // The overview's two views (the cards amendment); cards is the default.
+  "wui.view.label": { "zh-TW": "顯示方式", en: "View" },
+  "wui.view.cards": { "zh-TW": "卡片", en: "Cards" },
+  "wui.view.table": { "zh-TW": "表格", en: "Table" },
+  "wui.view.tip": { "zh-TW": "切換卡片 / 表格", en: "Switch between cards and the table" },
+  // The tools (amendment 2): filter by App, search, sort — within the App
+  // sections, which stay.
+  "wui.filter.app": { "zh-TW": "App", en: "App" },
+  "wui.filter.all": { "zh-TW": "全部", en: "All" },
+  "wui.search": { "zh-TW": "搜尋頁面或 item", en: "Search pages or items" },
+  "wui.sort": { "zh-TW": "排序", en: "Sort" },
+  "wui.sort.newest": { "zh-TW": "最新 Deploy", en: "Newest Deploy" },
+  "wui.sort.title": { "zh-TW": "名稱", en: "Name" },
+  "wui.nomatch": { "zh-TW": "沒有符合的頁面", en: "No page matches" },
+  // The viewer's own items' pages — owner, not deployer.
+  "wui.mine": { "zh-TW": "我的", en: "Mine" },
   "review.subtitle": {
     "zh-TW": "跨所有知識庫的待審核項目：自動生成的卡片提案與待釐清的問題。只顯示你有權查看的項目。",
     en: "Everything awaiting review across your knowledge bases — auto-generated card proposals and open questions. Only items you're allowed to see are shown.",

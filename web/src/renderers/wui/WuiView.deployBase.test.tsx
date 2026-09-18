@@ -27,7 +27,16 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe("WuiView: Deploy under a sub-path deploy", () => {
   it("puts the deploy base in front of the route, or the link leaves the SPA", async () => {
-    vi.stubGlobal("fetch", vi.fn());
+    // Deploy's last step records the page on the overview (`POST …/wui/deploy`)
+    // and says Deployed only once that answered — so the stub answers it.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: unknown, init?: RequestInit) =>
+        String(url).includes("/wui/deploy") && init?.method === "POST"
+          ? new Response("{}", { status: 200, headers: { "content-type": "application/json" } })
+          : undefined,
+      ),
+    );
     const body = "<html><body>v1</body></html>";
     const fs = {
       scopeId: "item1",

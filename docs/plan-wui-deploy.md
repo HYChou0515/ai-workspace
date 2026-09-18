@@ -102,6 +102,11 @@ to work.
 
 ## Deliberately not doing
 
+(2026-09-16: the overview — `docs/plan-wui-overview.md` — gave Deploy a fourth
+step, listing the page on `/wui`, and a Remove there. "Deploy is only the
+link" below is the state this plan shipped; the sentence in `docs/wui.md` was
+rewritten with it.)
+
 - **No snapshot / version / re-publish.** See the first locked decision.
 - **No build on the reader's path**, and no "stale `dist/`" detection (mtime
   comparison) — Deploy building first makes the link fresh at the moment it

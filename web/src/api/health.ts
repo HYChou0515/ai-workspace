@@ -5,7 +5,7 @@
  * Mock/real swap on the same `VITE_USE_MOCK` switch as `./index`.
  */
 
-import { apiFetch } from "./http";
+import { apiFetch, detailSentence } from "./http";
 
 export type HealthStatus = "pass" | "fail" | "skip" | "error";
 
@@ -143,14 +143,8 @@ async function replayFetch(path: string, body: unknown): Promise<ReplayOut> {
     body: JSON.stringify(body),
   });
   if (!r.ok) {
-    let detail = `replay failed: ${r.status}`;
-    try {
-      const data = (await r.json()) as { detail?: string };
-      if (data.detail) detail = data.detail;
-    } catch {
-      // non-JSON error body — keep the generic message
-    }
-    throw new ReplayError(r.status, detail);
+    // `||`, as before: an empty `detail` kept the generic message here.
+    throw new ReplayError(r.status, (await detailSentence(r)) || `replay failed: ${r.status}`);
   }
   return (await r.json()) as ReplayOut;
 }
