@@ -112,6 +112,12 @@ class _ItemSkillState(BaseModel):
     #: control appears on this, not merely on being a copy: a button whose only
     #: honest outcome is "nothing changed" reads as broken.
     update_available: bool = False
+    #: Skill hub (docs/plan-skill-hub.md): what the copy's upstream is to THIS
+    #: viewer — ``live``, ``unpublished`` (the owner took it private) or
+    #: ``deleted``. ``None`` for a folder that is not a copy. Only ``live`` can
+    #: carry an update; the other two are shown so a dead upstream is a state
+    #: on the row, not a broken Refresh.
+    upstream: Literal["live", "unpublished", "deleted"] | None = None
     pref: Literal["follow", "on", "off"]
     effective: bool
 

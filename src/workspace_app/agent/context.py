@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -15,6 +15,7 @@ from ..tokens import CallLane
 if TYPE_CHECKING:
     from specstar import SpecStar
 
+    from ..apps.skill_hub import SkillHubReview, SkillHubStore
     from ..apps.subagents import SubagentDef
     from ..entity.events import EntityOrigin, EntityWriteSink
     from ..factories import SubagentModel
@@ -28,6 +29,15 @@ if TYPE_CHECKING:
     from ..tooling.registry import PackageInfo
     from ..users.protocol import User, UserDirectory
     from ..workflow.user_schedules import SchedulePolicy
+
+
+# `review_skill_via`: (this turn's context, the folder name, its files, the tool
+# card sink) → the review. The context goes in so the reviewer runs as a
+# sub-agent of the turn that asked; the sink so its progress shows there.
+ReviewSkill = Callable[
+    ["AgentToolContext", str, Mapping[str, bytes], OutputSink | None],
+    Awaitable["SkillHubReview"],
+]
 
 
 @dataclass
@@ -504,6 +514,14 @@ class AgentToolContext:
     run_wiki_reader: (
         Callable[[str, OutputSink | None], Awaitable[tuple[str, list[RetrievedPassage]]]] | None
     ) = None
+    # Skill hub (docs/plan-skill-hub.md): where `publish_skill` writes, and how
+    # it gets the AI review — a sub-agent of THIS turn, driven by the deploy's
+    # runner (`api/skill_review.review_skill`), which is why the seam takes the
+    # turn's context: the reviewer inherits its engine. Both wired by the
+    # composition root for App workspace turns; either `None` ⇒ the tool says
+    # so and does nothing. Named `_via` like the other deploy-owned seams.
+    skill_hub: SkillHubStore | None = None
+    review_skill_via: ReviewSkill | None = None
     # Per-call citation lists from this turn's sub-agent invocations,
     # keyed by purpose. Per purpose, lists are in CALL ORDER — the
     # persist step pairs the Nth list with the Nth tool message of

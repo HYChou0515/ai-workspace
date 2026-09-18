@@ -110,6 +110,30 @@ describe("AppNewItem", () => {
     );
   });
 
+  it("opens on the profile the address asks for, when the App ships it", async () => {
+    // The skill hub's "edit in a new item" links here with the profile the
+    // skill was written for (plan-skill-hub P8); an unknown one is ignored.
+    // `createAppItem` is module-level and an earlier test already picked
+    // "tool-demo" by hand — cleared, or this passes on that call.
+    createAppItem.mockClear();
+    render(
+      <QueryWrap>
+        <MemoryRouter initialEntries={["/a/rca/new?profile=tool-demo"]}>
+          <AppNewItem />
+        </MemoryRouter>
+      </QueryWrap>,
+    );
+    await userEvent.type(screen.getByLabelText(/title/i), "Oven drift");
+    await userEvent.click(screen.getByRole("button", { name: /create/i }));
+
+    await waitFor(() =>
+      expect(createAppItem).toHaveBeenCalledWith("rca", {
+        title: "Oven drift",
+        profile: "tool-demo",
+      }),
+    );
+  });
+
   // #779: a create form is all unsaved work by definition — there is nothing to
   // come back to if it closes. Both deliberate exits ask first.
   it("asks before dropping a half-filled create form, on Escape and on the close button", async () => {

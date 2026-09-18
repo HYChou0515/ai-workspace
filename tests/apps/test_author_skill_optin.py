@@ -119,6 +119,8 @@ def test_skills_endpoint_returns_picker_state_across_sources():
         # no upstream it could be behind.
         "is_copy": False,
         "update_available": False,
+        # …and no upstream STATE either (plan-skill-hub P5): only a copy has one.
+        "upstream": None,
         "pref": "follow",
         "effective": True,
     }

@@ -258,6 +258,90 @@ async def test_aclose_is_bounded_and_gives_up_on_a_wedged_turn():
     assert loop.time() - t0 < 2.0  # returned on its own deadline, not never
 
 
+async def test_a_worker_cancelled_while_its_turn_is_still_ending_ends_with_the_turn():
+    """The hang that held CI's `api-4` shard open for hours (P9 and P20 runs,
+    reproduced locally at 2 workers): a scheduled workflow run was still in
+    flight when the app shut down; `aclose` cancelled its turn, waited the
+    2 s grace, and — the turn's teardown (persist, reconcile) still running
+    on a loaded runner — cancelled the WORKER while it sat at `await turn`.
+    The worker swallowed that cancellation the way it swallows a Stopped
+    turn's (`suppress(CancelledError)` around `await turn` cannot tell "the
+    turn was cancelled" from "I was"), went back to `queue.get()` and parked
+    for good; asyncio's loop close then waited on it forever. A task is
+    delivered a cancellation once, so the second `cancel()` at loop close
+    changed nothing.
+
+    The worker still survives a Stop (the next test keeps that); what it may
+    not survive is its OWN cancellation."""
+    turn_ending = asyncio.Event()
+    let_it_end = asyncio.Event()
+
+    class _SlowToEnd:
+        async def run(self, content, ctx):  # noqa: ANN001, ANN201
+            try:
+                await asyncio.Event().wait()
+                yield RunDone()
+            finally:
+                # The turn's teardown after a cancel: it takes as long as it
+                # takes (a persist on a loaded runner), and only then ends.
+                turn_ending.set()
+                await let_it_end.wait()
+
+    engine = ChatTurnEngine(_SlowToEnd())  # ty: ignore[invalid-argument-type]
+    engine.enqueue("inv9", "a", AgentToolContext(), on_complete=lambda _m: None)
+    await asyncio.sleep(0.05)
+    session = engine._ws_sessions["inv9"]  # noqa: SLF001 — the worker task is what is under test
+    worker = session.worker
+    assert worker is not None and session.current_turn is not None
+
+    session.current_turn.cancel()
+    await turn_ending.wait()  # the turn is cancelled and mid-teardown
+    worker.cancel()  # …and now the worker is cancelled while awaiting it
+    let_it_end.set()
+    await asyncio.sleep(0.1)
+
+    try:
+        assert worker.done(), "the worker swallowed its own cancellation and parked forever"
+    finally:
+        # On the unfixed code the worker is parked on a fresh `queue.get()`
+        # future, where a second cancel does reach it — so the red is a
+        # named failure here, not a hung loop teardown.
+        if not worker.done():
+            worker.cancel()
+            await asyncio.sleep(0)
+
+
+async def test_a_stopped_turn_still_leaves_the_worker_alive_for_the_next_message():
+    """The other half, unchanged: a Stop cancels the TURN, and the worker must
+    live on to run what is queued behind it — that is what the swallow is for."""
+    seen: list[str] = []
+    second_done = asyncio.Event()
+
+    class _Blocked:
+        async def run(self, content, ctx):  # noqa: ANN001, ANN201
+            if content == "first":
+                await asyncio.Event().wait()
+            yield MessageDelta(text=content)
+            yield RunDone()
+
+    def keep(m):  # noqa: ANN001, ANN202
+        seen.extend(x.content for x in m)
+        if "second" in seen:
+            second_done.set()
+
+    engine = ChatTurnEngine(_Blocked())  # ty: ignore[invalid-argument-type]
+    engine.enqueue("inv10", "first", AgentToolContext(), on_complete=keep)
+    engine.enqueue("inv10", "second", AgentToolContext(), on_complete=keep)
+    await asyncio.sleep(0.05)
+
+    await engine.cancel_current("inv10")
+    await asyncio.wait_for(second_done.wait(), 2.0)
+
+    assert "second" in seen
+    worker = engine._ws_sessions["inv10"].worker  # noqa: SLF001
+    assert worker is not None and not worker.done()
+
+
 async def test_close_streams_lets_a_key_change_be_recovered():
     """A chat's engine key is not stable for its whole life.
 

@@ -177,3 +177,29 @@ async def test_the_skill_index_costs_one_resolution_not_one_per_skill():
         f"{few} probes for 2 skills but {many} for 20 — every turn pays for "
         "locating the workspace once per skill the item holds"
     )
+
+
+async def test_copies_cost_the_index_no_extra_resolution():
+    """Round 3: P18 read the manifests in a SECOND batch, which resolved the
+    workspace once more — one extra round trip on every message of every item
+    holding a copy. The manifests ride in the same batch as the SKILL.md files."""
+    from tests.warm_workspace import warm_files
+
+    async def probes_for(copies: bool) -> int:
+        files, sb = await warm_files()
+        for i in range(3):
+            await _put(files, "inv-1", f"s{i}", f"does s{i}", "body")
+            if copies:
+                await files.write(
+                    "inv-1", f"/.skill/s{i}/.origin", b'{"source":"shared","files":{}}'
+                )
+        sb.liveness_probes = 0
+        metas = await workspace_skill_metas(files, "inv-1")
+        assert [m.is_copy for m in metas] == [copies] * 3
+        return sb.liveness_probes
+
+    plain, with_copies = await probes_for(False), await probes_for(True)
+    assert with_copies == plain, (
+        f"{plain} probes without copies but {with_copies} with — every turn pays "
+        "for locating the workspace once more because the item holds a copy"
+    )

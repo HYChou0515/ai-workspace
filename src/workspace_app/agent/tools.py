@@ -34,6 +34,7 @@ from .shown_files import (
 from .tool_authz import LEGACY_TOOL_RENAMES, TOOL_VERBS, authorize_tool
 
 if TYPE_CHECKING:
+    from ..apps.skill_hub import SkillHubEntry
     from ..apps.subagents import SubagentDef
     from ..factories import SubagentModel
     from ..resources.conversation import Citation
@@ -2402,6 +2403,322 @@ async def save_skill_impl(
     )
 
 
+async def publish_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -> str:
+    """Publish one of THIS workspace's skills (a `.skill/<name>/` folder) to the
+    skill hub, where every user of the platform can find it and install it into
+    their own items. Use it when the user asks to share, publish or upload a
+    skill — and only after they have said which one.
+
+    `name` is the folder name under `.skill/` (the same name `read_skill` loads).
+    Before anything is published the folder is checked for the traps that make a
+    skill silently useless (frontmatter name ≠ folder, no description, a body
+    over the cap, a `references/` file the body names but does not ship, a script
+    that does not parse) — those come back as an `error:` naming each one, and
+    nothing is published until they are fixed. A well-formed skill is then read by an AI
+    reviewer whose notes are returned to you: relay them to the user verbatim,
+    they are suggestions, not blockers — the skill IS published either way.
+
+    Publishing the same name again replaces your earlier version. A folder
+    installed from someone else's skill hub entry publishes as a fork of theirs.
+    The entry is public by default. Returns a confirmation or an `error:` note."""
+    for verb in TOOL_VERBS["publish_skill"]:
+        if (denied := authorize_tool(ctx.context, verb)) is not None:
+            return denied
+    import msgspec
+
+    from ..api.skill_review import SkillReviewUnavailable
+    from ..apps.skill_hub import (
+        mint_entry_id,
+        referenced_tools,
+        skill_description,
+        skill_size_problem,
+        validate_skill_payload,
+    )
+    from ..apps.skill_payload import ORIGIN_FILE, origin_for
+    from ..apps.skills import (
+        WORKSPACE_SKILL_DIR,
+        workspace_skill_metas,
+        workspace_skill_origin,
+        workspace_skill_payload,
+    )
+
+    c = ctx.context
+    files, inv = c.files, c.investigation_id
+    if files is None or inv is None:
+        return "error: publish_skill needs a workspace (none on this turn)"
+    hub, review_via = c.skill_hub, c.review_skill_via
+    if hub is None or review_via is None or c.app_slug is None:
+        return "error: publish_skill is only available in an App workspace turn"
+    if not c.acting_user:
+        return "error: publish_skill needs a signed-in user to own the entry (none on this turn)"
+
+    # The cap first, from sizes alone: a folder over it is refused before a
+    # byte of it is read (review round 2 — the check used to come after the
+    # whole folder was in memory). `.origin` is the copy's, not the skill's.
+    folder = f"/{WORKSPACE_SKILL_DIR}/{name}/"
+    manifest_path = folder + ORIGIN_FILE
+    sizes = dict(await files.stat_all(inv, folder))
+    manifest_size = sizes.pop(manifest_path, 0)
+    if (too_big := skill_size_problem(sizes)) is not None:
+        return f"error: not published — {too_big}"
+    payload = await workspace_skill_payload(files, inv, name)
+    if not payload:
+        have = ", ".join(m.name for m in await workspace_skill_metas(files, inv)) or "(none)"
+        return f"error: no skill folder .skill/{name}/ in this workspace. Skills here: {have}"
+    # Structure first, and ALL of it: each of these installs as nothing, with no
+    # error anywhere, so the publisher hears the whole list now rather than one
+    # item per round trip. No model is spent on a skill that cannot load.
+    if problems := validate_skill_payload(name, payload):
+        return "error: not published — fix these first:\n" + "\n".join(f"- {p}" for p in problems)
+    skill_md = payload["SKILL.md"].decode("utf-8")
+    tools = referenced_tools(skill_md, _IMPLS)
+
+    # Lineage from `.origin` (plan: fork / revision / root). A copy of someone
+    # else's entry is a fork of it; a copy of the publisher's own is a new
+    # revision of theirs (`publish` resolves that by name); a copy whose
+    # upstream cannot be READ by the publisher — deleted, or taken private
+    # since they installed it — is a root: Q10, what cannot be read is gone
+    # (and its owner is never named).
+    forked_from, forked_owner = "", ""
+    origin = await workspace_skill_origin(files, inv, name)
+    if origin is not None and origin.source == "hub" and origin.entry:
+        _state, upstream = hub.state_for(origin.entry, c.acting_user)
+        if upstream is not None and upstream.owner != c.acting_user:
+            forked_from, forked_owner = origin.entry, upstream.owner
+    existed = hub.find(c.acting_user, name)
+    if forked_from and existed is not None:
+        # Two rules both apply: `owner/name` says "a revision of yours",
+        # `.origin` says "a fork of theirs". Taking the first silently
+        # overwrote the user's own entry with someone else's content and
+        # recorded no lineage (review round 1). Unless the existing entry IS
+        # the fork (a re-publish of it), refuse and name both.
+        mine = hub.get(existed)
+        if mine is None or mine.forked_from != forked_from:
+            return (
+                f"error: not published — you already publish a skill named {name!r}, and this "
+                f"folder was installed from {forked_owner}'s {name!r}. Publishing it would replace "
+                "yours with theirs. Rename the folder to publish it as a fork under another name, "
+                "or remove its `.origin` file to publish it as a new version of your own."
+            )
+
+    # After the publish the folder's manifest is rewritten to the entry it
+    # just became (below) — but only where that changes nothing about what the
+    # folder IS in this item: the publisher's own work (no manifest yet) or a
+    # hub copy (a fork must track the fork, not the root). A PACKAGE copy keeps
+    # its package manifest: publishing changes what the hub holds, never this
+    # folder's source or default-on (review round 3 — rewriting it flipped a
+    # materialized default-off skill on, the #589 invariant from the other
+    # side).
+    tracks_entry = origin is None or origin.source == "hub"
+    if tracks_entry:
+        # That rewrite is the one write this tool makes into the workspace, so
+        # its room is checked BEFORE the reviewer is spent and the entry goes
+        # live — a `WorkspaceFull` raised at the end reported "workspace full"
+        # over a publish that had happened (review round 2). Checked as the
+        # facade's own rule would at write time: by GROWTH over the manifest
+        # already there (a re-publish replaces one of the same length, which
+        # passes on a full workspace), asking rather than charging
+        # (`record=False` — nothing is written yet). The size does not depend
+        # on which id the manifest names (`mint_entry_id` mints them all one
+        # length).
+        probe = origin_for("hub", payload, entry=existed or mint_entry_id())
+        growth = len(msgspec.json.encode(probe)) - manifest_size
+        for refusal in await files.room_refusals(inv, growth, record=False):
+            raise refusal
+
+    # The review is the gate (Q9): a review that did not happen is not a pass.
+    try:
+        review = await review_via(c, name, payload, c.on_exec_output)
+    except SkillReviewUnavailable as e:
+        return (
+            f"error: not published — the review service could not review it ({e}). "
+            "Nothing was written; ask the user to try again later."
+        )
+
+    entry_id = await hub.publish(
+        owner=c.acting_user,
+        name=name,
+        description=skill_description(skill_md),
+        source_item=inv,
+        source_app=c.app_slug,
+        source_profile=c.template_profile or "",
+        payload=payload,
+        referenced_tools=tools,
+        review=review,
+        forked_from=forked_from,
+    )
+    # The folder now tracks the entry it just became (review round 1): its
+    # manifest is rewritten to the version just published, so the Skills panel
+    # does not offer an "update" to the very copy the update came from, and a
+    # published fork tracks the fork rather than the root it was installed
+    # from. Under `tracks_entry` only: from here on such a folder is a copy of
+    # its own entry — a re-publish from another item shows up as an update,
+    # and Refresh brings it. A package copy keeps tracking the package.
+    manifest_unwritten = False
+    if tracks_entry:
+        manifest = msgspec.json.encode(origin_for("hub", payload, entry=entry_id))
+        try:
+            await files.write(inv, manifest_path, manifest)
+        except WorkspaceFull:
+            # The room was there when this started and is gone now (something
+            # else wrote during the review). The entry IS live, so the reply
+            # below is still the reply — with the reviewer's notes, which are
+            # the review — plus what was not written: "workspace full" alone
+            # would read as "not published".
+            manifest_unwritten = True
+    how = (
+        "updated your earlier version"
+        if existed is not None
+        else f"a fork of {forked_owner}'s '{name}'"
+        if forked_from
+        else "new"
+    )
+    lines = [f"published skill '{name}' to the skill hub ({how}; entry {entry_id})."]
+    if review.notes:
+        lines.append(
+            f"The reviewer ({review.model or 'AI'}) left {len(review.notes)} note(s) — "
+            "relay them to the user as suggestions:"
+        )
+        lines += [f"- {n}" for n in review.notes]
+    else:
+        lines.append(f"The reviewer ({review.model or 'AI'}) had nothing to flag.")
+    if tools:
+        lines.append(
+            f"It mentions these tools: {', '.join(tools)} — an App without them cannot follow it."
+        )
+    if manifest_unwritten:
+        lines.append(
+            f"BUT the workspace is full, so its manifest `{rel_path(manifest_path)}` could not "
+            "be written: this folder does not yet know it is a copy of that entry. Free some "
+            "space (delete_file) and publish it again to write it — that runs the review again "
+            "and stores the same files as a new version."
+        )
+    # Read back, not assumed: a re-publish keeps the entry's permission, so
+    # one the owner had unpublished stays private — saying "public" there
+    # would be false in the one direction that matters.
+    published = hub.get(entry_id)
+    visibility = published.permission.visibility if published is not None else "public"
+    if visibility == "private":
+        lines.append(
+            "It is UNPUBLISHED (private): only the owner can see it, because it was taken "
+            "down earlier — the owner can republish it on the skill hub page."
+        )
+    elif visibility == "restricted":
+        lines.append("It is visible to the people on its access list (restricted).")
+    else:
+        lines.append("It is public: everyone on the platform can find and install it.")
+    return "\n".join(lines)
+
+
+async def install_skill_impl(ctx: RunContextWrapper[AgentToolContext], entry_id: str) -> str:
+    """Install a skill from the skill hub into THIS workspace, as `.skill/<name>/`,
+    so it is loadable with `read_skill` from the next turn on. Use it after the
+    user has picked an entry (by id, from `search_skill_hub` or the skill hub
+    page) and said to install it.
+
+    The copy keeps a note of where it came from, so the Skills panel can offer
+    an update when the publisher re-publishes, and Refresh brings it. A skill
+    written for another App may name tools this App does not have — the reply
+    says which, and the choice is the user's: it is installed either way.
+
+    Refuses, without touching anything, when this workspace already has a
+    `.skill/<name>/` folder of that name (remove or rename it first), and when
+    there is no such entry. Returns a confirmation or an `error:` note."""
+    for verb in TOOL_VERBS["install_skill"]:
+        if (denied := authorize_tool(ctx.context, verb)) is not None:
+            return denied
+    from ..apps.skill_hub import missing_tools_for
+    from ..apps.skills import install_hub_skill, skill_folder_in_the_way
+
+    c = ctx.context
+    files, inv = c.files, c.investigation_id
+    if files is None or inv is None:
+        return "error: install_skill needs a workspace (none on this turn)"
+    hub = c.skill_hub
+    if hub is None or c.app_slug is None:
+        return "error: install_skill is only available in an App workspace turn"
+    # Q10: an entry this person may not read IS one that does not exist, and
+    # the two are worded identically so a refusal never says "exists, not for
+    # you".
+    _state, entry = hub.state_for(entry_id, c.acting_user)
+    if entry is None:
+        return f"error: no skill hub entry {entry_id!r} — check the id, or search again."
+    name = entry.name
+    if taken := await skill_folder_in_the_way(files, inv, hub, name, c.acting_user):
+        return f"error: {taken}."
+    await install_hub_skill(files, inv, hub, entry_id)
+    lines = [
+        f"installed skill '{name}' (by {entry.owner}, written in the {entry.source_app} App) "
+        f"into .skill/{name}/. It is in the skill index from the next turn on; load it any "
+        f"time with read_skill('{name}')."
+    ]
+    if missing := missing_tools_for(entry.referenced_tools, c.app_slug):
+        lines.append(
+            f"Note: it mentions {', '.join(missing)}, which this App does not have — parts of "
+            "it may not be followable here. Tell the user."
+        )
+    if entry.review.notes:
+        lines.append("The publish-time review noted:")
+        lines += [f"- {n}" for n in entry.review.notes]
+    return "\n".join(lines)
+
+
+#: How many skill hub entries one search shows before it asks for a narrower
+#: query. A skill's whole listing is a few lines; 25 keeps a bare `search("")`
+#: on a busy hub inside a screen rather than a tool-output cap.
+SEARCH_SKILL_HUB_LIMIT = 25
+
+
+async def search_skill_hub_impl(ctx: RunContextWrapper[AgentToolContext], query: str) -> str:
+    """Find skills other users have published to the skill hub. Use it when the
+    user asks whether a skill for some task exists, or wants to install one.
+
+    `query` matches the skill's name and description (case-insensitive); an
+    empty query lists everything. Each hit shows `owner/name`, the description,
+    which App it was written in, and the ENTRY ID that `install_skill` takes.
+    Forks are listed under the skill they were forked from. A hit also says
+    which of the tools it mentions this App does not have — tell the user
+    before installing such a skill; parts of it may not be followable here.
+    """
+    from ..apps.skill_hub import matches_query, missing_tools_for, nest_forks
+
+    c = ctx.context
+    hub = c.skill_hub
+    if hub is None or c.app_slug is None:
+        return "error: search_skill_hub is only available in an App workspace turn"
+    hits = [(i, e) for i, e in hub.visible(c.acting_user) if matches_query(e, query)]
+    if not hits:
+        return (
+            f"no skill hub entry matches {query!r}. The user can publish one of this "
+            "workspace's skills with publish_skill."
+        )
+    # Roots first, each followed by its forks — a fork whose root is not in the
+    # hits (filtered out, or unreadable to this viewer) stands on its own.
+    by_id = {i: e for i, e in hits}
+    ordered: list[tuple[str, SkillHubEntry, bool]] = []
+    for root, forks in nest_forks(by_id):
+        ordered.append((root, by_id[root], False))
+        ordered += [(j, by_id[j], True) for j in forks]
+    lines = [f"{len(hits)} skill hub entr{'y' if len(hits) == 1 else 'ies'} match {query!r}:"]
+    for i, e, is_fork in ordered[:SEARCH_SKILL_HUB_LIMIT]:
+        lineage = ""
+        if e.forked_from:
+            # As the SPEAKER may know the root: a root taken private reads
+            # "(fork)" exactly like a deleted one (Q10), never its owner's name.
+            _state, root = hub.state_for(e.forked_from, c.acting_user)
+            lineage = f" (fork of {root.owner}/{root.name})" if root is not None else " (fork)"
+        indent = "  ↳ " if is_fork else "- "
+        lines.append(
+            f"{indent}{e.owner}/{e.name}{lineage} — {e.description} "
+            f"[written in {e.source_app}; id {i}]"
+        )
+        if missing := missing_tools_for(e.referenced_tools, c.app_slug):
+            lines.append(f"    mentions {', '.join(missing)}, which this App lacks")
+    if len(ordered) > SEARCH_SKILL_HUB_LIMIT:
+        lines.append(f"… and {len(ordered) - SEARCH_SKILL_HUB_LIMIT} more — narrow the query.")
+    return "\n".join(lines)
+
+
 async def save_subagent_impl(
     ctx: RunContextWrapper[AgentToolContext],
     name: str,
@@ -3354,6 +3671,16 @@ _IMPLS = {
     # `agent.tools` like any other (the workspace apps that ship the
     # `author-skill` meta-skill grant it). Deterministic SKILL.md write.
     "save_skill": save_skill_impl,
+    # `publish_skill` (docs/plan-skill-hub.md) — the skill hub's write door:
+    # validates, scans, reviews, THEN stores. Opt-in per App like `save_skill`;
+    # refuses on a turn with no hub / reviewer wired.
+    "publish_skill": publish_skill_impl,
+    # `install_skill` — the skill hub's read door into a workspace: a copy with
+    # an `.origin`, same shape `read_skill` materializes. Opt-in per App.
+    "install_skill": install_skill_impl,
+    # `search_skill_hub` — reads the hub, never the item, so it has no row in
+    # `TOOL_VERBS` (see that module's docstring). Opt-in per App.
+    "search_skill_hub": search_skill_hub_impl,
     # `save_subagent` (#738) — same shape again: an opt-in tool that owns the
     # AGENT.md write, so a sub-agent the agent authors is always one it can call.
     "save_subagent": save_subagent_impl,

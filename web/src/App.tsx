@@ -9,6 +9,8 @@ import { AppWorkspace } from "./pages/AppWorkspace";
 import { DiagnosticsPage } from "./pages/DiagnosticsPage";
 import { GroupsPage } from "./pages/GroupsPage";
 import { MyResourcesPage } from "./pages/MyResourcesPage";
+import { SkillHubEntryPage } from "./pages/SkillHubEntryPage";
+import { SkillHubPage } from "./pages/SkillHubPage";
 import { WuiOverviewPage } from "./pages/WuiOverviewPage";
 import { WorkCalendarPage } from "./pages/WorkCalendarPage";
 import { HelpPage } from "./pages/HelpPage";
@@ -71,6 +73,11 @@ export function AppRoutes() {
             Inside the shell: it is a place to find pages; the pages themselves
             open at `/w/` outside it. */}
         <Route path="/wui" element={<WuiOverviewPage />} />
+        {/* The skill hub (docs/plan-skill-hub.md): skills people published, for
+            everyone to find; an entry's page holds its owner's actions. Installing
+            is the item's (its Skills panel), never the page's. */}
+        <Route path="/skill-hub" element={<SkillHubPage />} />
+        <Route path="/skill-hub/:entryId" element={<SkillHubEntryPage />} />
         {/* #481: the global 審核 inbox — every pending-review item (card proposals +
             clarification questions) across every readable collection, in one
             filterable table. Absorbs the old (invisible) /clarifications page. */}
