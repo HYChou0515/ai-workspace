@@ -106,10 +106,10 @@ def test_a_symlink_loop_under_files_dir_is_skipped_not_a_traceback(tmp_path):
 def test_the_note_names_every_path_the_page_will_not_draw_whatever_the_reason(
     tmp_path, capsys, monkeypatch
 ):
-    """Three ways a wanted path is not drawn: nobody handed over bytes, the
-    bytes are not a picture, the page's budget ran out. The note used to
-    come from the first alone — an SVG chart in an answer was read, not
-    drawn, and not mentioned."""
+    """Two ways a wanted path is not drawn: nobody handed over bytes, or the
+    page's budget ran out. (What the bytes ARE is the browser's business,
+    as in the chat — the page sends them under the type the file route
+    serves.) The note used to come from the first alone."""
     ws = tmp_path / "ws"
     (ws / "plots").mkdir(parents=True)
     png = bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489")
@@ -165,12 +165,12 @@ def test_the_note_names_every_path_the_page_will_not_draw_whatever_the_reason(
     assert code == 0
     assert "/plots/a.png" not in err  # drawn
     assert "/plots/b.png will not be drawn (over the page's image budget)" in err
-    # SVG is sniffed by its text and is a picture; here it comes after b.png
-    # and the budget (one PNG) is spent, so it is the budget that refuses it.
+    # image/svg+xml by its name; it comes after b.png and the budget (one
+    # PNG) is spent, so it is the budget that refuses it.
     assert "/plots/chart.svg will not be drawn (over the page's image budget)" in err
     assert f"/plots/missing.png will not be drawn (not under {ws}, or too big)" in err
     assert "t.csv" not in err
-    assert "/plots/empty.png will not be drawn (not an image the page draws)" in err
+    assert "empty.png" not in err  # image/png by its name: sent, and broken as in the chat
 
 
 def test_a_dot_dot_above_the_workspace_is_not_folded_onto_a_file_that_exists(tmp_path, capsys):

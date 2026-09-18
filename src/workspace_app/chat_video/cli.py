@@ -186,9 +186,10 @@ def main(argv: list[str] | None = None) -> int:
         else {}
     )
     # The page's own verdict per path, not "what was read": a file can be
-    # read and still not drawn (not an image, over the budget). A declared
-    # image then becomes a card; an answer's `![]()` becomes its alt text.
-    # (A declared non-image is a card by design and is not in the list.)
+    # read and still not drawn (over the budget). A declared image then
+    # becomes a card; an answer's `![]()` becomes its alt text. (A declared
+    # non-image is a card by design and is not in the list; what the bytes
+    # of a sent picture ARE is the browser's business, as in the chat.)
     for path, verdict in decide_assets(timeline.wanted_files(), assets, ns.options).items():
         why = verdict.why
         if not why:

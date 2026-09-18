@@ -17,7 +17,6 @@ import pytest
 from workspace_app.agent.shown_files import declare_shown_files
 from workspace_app.chat_video.options import VideoOptions
 from workspace_app.chat_video.player import (
-    NOT_AN_IMAGE,
     NOT_HANDED,
     Verdict,
     decide_assets,
@@ -25,6 +24,7 @@ from workspace_app.chat_video.player import (
     render_player_html,
 )
 from workspace_app.chat_video.timeline import PACING, build_timeline
+from workspace_app.files.media_type import media_type_for
 
 # The smallest valid PNG (1x1, transparent) — a real image, so the mime the
 # transcript declares and the bytes agree.
@@ -239,36 +239,28 @@ def test_a_stopped_reply_shows_its_label():
     assert "s.stopped" in page[page.index("<script>") :]
 
 
-def test_a_riff_that_is_not_webp_is_not_an_image():
-    """`RIFF` starts WAV and AVI too; only `RIFF….WEBP` is a picture."""
-    wav = b"RIFF" + bytes(4) + b"WAVE" + bytes(8)
-    webp = b"RIFF" + bytes(4) + b"WEBP" + bytes(8)
-    page = _page(
-        [{"role": "assistant", "author": "AI", "content": "![w](/a.wav) ![p](/b.webp)"}],
-        assets={"/a.wav": wav, "/b.webp": webp},
-    )
-
-    assert list(_assets(page)) == ["/b.webp"]
-
-
-def test_an_answer_image_is_drawn_by_its_bytes_and_a_stray_file_is_not():
-    """`![]()` declares no mime, so the bytes are sniffed. An SVG is drawn
-    as the chat draws it — inside an `<img>` its script never runs and it
-    fetches nothing — and its text rides in the base64 table, never as
-    markup; a stray text file is alt text."""
+def test_an_answer_image_is_sent_under_the_type_the_chat_serves_it_with():
+    """`![]()` in an answer is an `<img>` in the chat, whatever the file is:
+    the file route serves it under `media_type_for(path, bytes)` and Chromium
+    decides. The page sends the same bytes under the same type, so `/a.svg`
+    is `data:image/svg+xml` (drawn; inside an `<img>` its script never runs
+    and it fetches nothing — its text rides in the base64 table, never as
+    markup), and `/b.txt` is `data:text/plain` — the chat's `<img>` is broken
+    there, and so is ours: same bytes, same type, same browser."""
     md = "![s](/a.svg) ![t](/b.txt)"
+    svg = b'<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>'
     page = _page(
         [{"role": "assistant", "author": "AI", "content": md}],
-        assets={
-            "/a.svg": b'<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>',
-            "/b.txt": b"hello",
-        },
+        assets={"/a.svg": svg, "/b.txt": b"hello"},
     )
 
     html = _embedded(page)["steps"][0]["html"]
+    assets = _assets(page)
     assert html.count('<img class="shown" data-asset="/a.svg"') == 1
-    assert html.count("<img") == 1  # the .txt is alt text, not a picture
-    assert "onload" not in page.replace(_assets(page)["/a.svg"], "")  # only inside the base64
+    assert html.count('<img class="shown" data-asset="/b.txt"') == 1
+    assert assets["/a.svg"].startswith("data:image/svg+xml;base64,")
+    assert assets["/b.txt"].startswith("data:text/plain;base64,")
+    assert "onload" not in page.replace(assets["/a.svg"], "")  # only inside the base64
 
 
 def test_a_file_shown_many_times_is_inlined_once():
@@ -369,149 +361,145 @@ def test_one_path_many_references_the_bytes_name_the_mime_whatever_was_declared(
 # to enumerate (round 6 found 17 members of it) and no "which declaration
 # wins" order (round 6 found the first-wins pin order-dependent). Rounds 5
 # and 6 were both the declaration leaking into the URI.
-_SVG_XML = b'<?xml version="1.0"?>\n' + _SVG
-_BOMB = b'<!ENTITY a0 "x">' + b"".join(
-    b'<!ENTITY a%d "%s">' % (i, b"&a%d;" % (i - 1) * 10) for i in range(1, 12)
-)
-_BYTES = {
-    "png": (_PNG, Verdict(mime="image/png")),
-    "gif": (b"GIF89a" + bytes(10), Verdict(mime="image/gif")),
-    "jpeg": (b"\xff\xd8\xff\xe0" + bytes(10), Verdict(mime="image/jpeg")),
-    "webp": (b"RIFF" + bytes(4) + b"WEBP" + bytes(8), Verdict(mime="image/webp")),
-    "bmp": (b"BM" + bytes(12), Verdict(mime="image/bmp")),
-    "ico": (b"\x00\x00\x01\x00" + bytes(12), Verdict(mime="image/x-icon")),
-    "avif": (bytes(4) + b"ftypavif" + bytes(8), Verdict(mime="image/avif")),
-    "svg": (_SVG, Verdict(mime="image/svg+xml")),
-    "svg with an xml prolog": (_SVG_XML, Verdict(mime="image/svg+xml")),
-    "svg with a BOM and a comment": (
-        b"\xef\xbb\xbf<!-- chart -->" + _SVG,
-        Verdict(mime="image/svg+xml"),
-    ),
-    # Chromium has no TIFF decoder: a card (the chat's <img> is broken).
-    "tiff": (b"II*\x00" + bytes(12), Verdict(why=NOT_AN_IMAGE)),
-    "html that is not svg": (b"<html><body>x</body></html>", Verdict(why=NOT_AN_IMAGE)),
-    "html behind a comment, with an inline svg": (
-        b"<!-- x --><html><body><svg/></body></html>",
-        Verdict(why=NOT_AN_IMAGE),
-    ),
-    "a tag that merely starts with svg": (b"<svgfoo/>", Verdict(why=NOT_AN_IMAGE)),
-    "a comment that never closes": (b"<!-- <svg/>", Verdict(why=NOT_AN_IMAGE)),
-    # Round 7: the hand-written prolog scanner stopped a DOCTYPE at the first
-    # `>` — inside an internal subset — and refused the stock Illustrator /
-    # matplotlib header that Chromium and the chat draw. A real XML parser
-    # (expat) now names the first element; these are its rows.
-    "svg with a doctype internal subset (Illustrator)": (
+# A picture's type comes from its NAME, by the file route's own rule
+# (`files/media_type.py`), never from its bytes — the chat never looks at the
+# bytes for this, and rounds 5–8 of this PR were four ways of doing so that
+# each disagreed with the browser somewhere. So the oracle is the shared
+# function itself, and the declaration axis moves nothing.
+_PNG_BYTES_IN_SVG_NAME = _PNG
+_NAMED = {
+    "png": ("/x.png", _PNG),
+    "png name, svg text": ("/x.png", _SVG),  # image/png: broken in the chat, broken here
+    "png name, empty": ("/x.png", b""),
+    "svg": ("/x.svg", _SVG),
+    "svg name, png bytes": ("/x.svg", _PNG_BYTES_IN_SVG_NAME),  # svg+xml: broken in both
+    "svg with an Illustrator doctype subset": (
+        "/x.svg",
         b'<?xml version="1.0" encoding="utf-8"?>\n'
-        b"<!-- Generator: Adobe Illustrator 16.0.0, SVG Export Plug-In -->\n"
         b'<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" '
         b'"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd" [\n'
         b'\t<!ENTITY ns_flows "http://ns.adobe.com/Flows/1.0/">\n]>\n' + _SVG,
-        Verdict(mime="image/svg+xml"),
     ),
-    "svg in utf-16 with a BOM": (
-        b"\xff\xfe" + _SVG.decode().encode("utf-16-le"),
-        Verdict(mime="image/svg+xml"),
-    ),
-    "svg with a prefixed root": (
-        b'<svg:svg xmlns:svg="http://www.w3.org/2000/svg" width="1" height="1"/>',
-        Verdict(mime="image/svg+xml"),
-    ),
-    "svg behind a 5 KB comment": (
-        b"<!--" + b"x" * 5000 + b"-->" + _SVG,
-        Verdict(mime="image/svg+xml"),
-    ),
-    # Chromium's SVGImage needs the root in the SVG namespace: a pasted
-    # `<svg>` without xmlns is a broken <img> there — a card here.
-    "svg root without xmlns": (b'<svg width="1" height="1"/>', Verdict(why=NOT_AN_IMAGE)),
-    "an xhtml root": (
-        b'<html xmlns="http://www.w3.org/1999/xhtml"><svg/></html>',
-        Verdict(why=NOT_AN_IMAGE),
-    ),
-    "cur": (b"\x00\x00\x02\x00" + bytes(12), Verdict(mime="image/x-icon")),
-    "os/2 bitmap array": (b"BA" + bytes(12) + b"BM" + bytes(12), Verdict(mime="image/bmp")),
-    "avif with a 64-bit box size": (
-        (1).to_bytes(4, "big") + b"ftyp" + (28).to_bytes(8, "big") + b"avif" + bytes(8),
-        Verdict(mime="image/avif"),
-    ),
-    "avif by compatible brand": (
-        (24).to_bytes(4, "big") + b"ftypmif1" + bytes(4) + b"mif1avif" + bytes(8),
-        Verdict(mime="image/avif"),
-    ),
-    "heif is not avif": (
-        (24).to_bytes(4, "big") + b"ftypheic" + bytes(4) + b"mif1heic" + bytes(8),
-        Verdict(why=NOT_AN_IMAGE),
-    ),
-    "svg after prolog, doctype and two comments": (
-        b'<?xml version="1.0"?>\n<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "x.dtd">\n'
-        b"<!-- a -->\n<!-- b -->\n" + _SVG,
-        Verdict(mime="image/svg+xml"),
-    ),
-    "text": (b"a,b\n", Verdict(why=NOT_AN_IMAGE)),
-    "empty": (b"", Verdict(why=NOT_AN_IMAGE)),
-    "missing": (None, Verdict(why=NOT_HANDED)),
+    "uppercase extension": ("/x.PNG", _PNG),
+    "webp": ("/x.webp", b"RIFF" + bytes(4) + b"WEBP" + bytes(8)),
+    "tiff": ("/x.tiff", b"II*\x00" + bytes(12)),  # image/tiff: broken in both
+    "text": ("/notes.txt", b"hello"),  # text/plain: the chat's <img> is broken, so is ours
+    "no extension, text": ("/notes", b"hello"),
+    "no extension, binary": ("/blob", b"\xff\xfe\x00\x01"),
+    "csv": ("/data.csv", b"a,b\n"),
 }
-# The declaration axis — including the hand-edited shapes round 6 found
-# shipping broken pictures — must not move a single verdict.
-_DECLARED = [
-    "",
-    "image/png",
-    "image/svg+xml",
-    "image/jpeg",
-    "image/svg+xml; charset=utf-8",
-    "image/svg+xml,x",
-    "image/svg\n+xml",
-    'image/svg+xml"',
-    "image/svg+xml#x",
-    "image/",
-    "image/*",
-    "text/plain",
-]
+_DECLARED = ["", "image/png", "image/svg+xml", "text/plain", "image/svg+xml,x"]
 
 
 @pytest.mark.parametrize("declared", _DECLARED)
-@pytest.mark.parametrize("kind", _BYTES)
-def test_the_bytes_alone_name_the_picture(kind, declared):
-    data, expected = _BYTES[kind]
-    assets = {"/x": data} if data is not None else {}
-    refs = [("/x", "")] + ([("/x", declared)] if declared else [])
+@pytest.mark.parametrize("kind", _NAMED)
+def test_a_handed_file_is_sent_under_the_type_the_chat_serves_it_with(kind, declared):
+    path, data = _NAMED[kind]
+    refs = [(path, "")] + ([(path, declared)] if declared else [])
+    expected = {path: Verdict(mime=media_type_for(path, data))}
 
-    assert decide_assets(refs, assets, VideoOptions()) == {"/x": expected}
-    assert decide_assets(refs[::-1], assets, VideoOptions()) == {"/x": expected}
+    assert decide_assets(refs, {path: data}, VideoOptions()) == expected
+    assert decide_assets(refs[::-1], {path: data}, VideoOptions()) == expected
 
 
-@pytest.mark.parametrize(
-    ("body", "expected"),
-    [
-        # Reaches the parse through the root's own attribute (the parse stops
-        # at the root): libexpat's amplification limit refuses it — measured
-        # 0.4 s, which is why these two are not in the 12-wide table.
-        (b'<svg xmlns="http://www.w3.org/2000/svg" t="&a11;"/>', Verdict(why=NOT_AN_IMAGE)),
-        # In a child it is never expanded.
-        (
-            b'<svg xmlns="http://www.w3.org/2000/svg"><t a="&a11;"/></svg>',
-            Verdict(mime="image/svg+xml"),
-        ),
-    ],
-    ids=["in the root's attribute", "in a child"],
-)
-def test_an_entity_bomb_in_the_doctype_is_refused_or_never_reached(body, expected):
-    data = b"<!DOCTYPE svg [" + _BOMB + b"]>" + body
+def test_the_types_the_table_relies_on_are_the_route_s():
+    """The rows above are only meaningful if the shared rule says what
+    they assume; spelled out so a mime-database difference shows up here,
+    not as a silent change of picture."""
+    assert media_type_for("/x.png", b"") == "image/png"
+    assert media_type_for("/x.PNG", b"") == "image/png"
+    assert media_type_for("/x.svg", b"") == "image/svg+xml"
+    assert media_type_for("/x.tiff", b"") == "image/tiff"
+    assert media_type_for("/notes.txt", b"hello") == "text/plain"  # known extension: no charset
+    assert media_type_for("/notes", b"hello") == "text/plain; charset=utf-8"
+    assert media_type_for("/blob", b"\xff\xfe\x00\x01") == "application/octet-stream"
 
-    assert decide_assets([("/x", "")], {"/x": data}, VideoOptions()) == {"/x": expected}
+
+def test_a_file_nobody_handed_over_is_not_a_picture():
+    assert decide_assets([("/x.png", "")], {}, VideoOptions()) == {
+        "/x.png": Verdict(why=NOT_HANDED)
+    }
+
+
+@pytest.mark.integration
+def test_a_real_chromium_agrees_between_the_chat_s_delivery_and_the_page_s(tmp_path):
+    """The parity oracle, executed: every kind above is served twice to one
+    Chromium — over HTTP under the route's Content-Type (as the chat does)
+    and as the page's data: URI — and the two `<img>`s agree, drawn or
+    broken alike (naturalWidth)."""
+    import base64
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    from playwright.sync_api import sync_playwright
+
+    # One directory per row: three rows share the name `/x.png` on purpose
+    # (name × bytes), and the type comes from the extension alone.
+    files = {f"/{i}{path}": data for i, (path, data) in enumerate(_NAMED.values())}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 — http.server's spelling
+            data = files.get(self.path)
+            if data is None:
+                self.send_error(404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", media_type_for(self.path, data))
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, format: str, *args: object) -> None:  # quiet
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    port = server.server_address[1]
+    inlined = inline_assets([(p, "") for p in files], files, VideoOptions())
+    assert set(inlined) == set(files)
+    tags = "".join(
+        f'<img class="http" data-p="{p}" src="http://127.0.0.1:{port}{p}">'
+        f'<img class="data" data-p="{p}" src="{uri}">'
+        for p, uri in inlined.items()
+    )
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch()
+            try:
+                page = browser.new_page()
+                page.set_content(f"<html><body>{tags}</body></html>")
+                page.wait_for_function(
+                    "[...document.images].every(i => i.complete)", timeout=30_000
+                )
+                widths = page.evaluate(
+                    "[...document.images].map(i => [i.className, i.dataset.p, i.naturalWidth])"
+                )
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+
+    by = {(cls, p): w for cls, p, w in widths}
+    disagree = [p for p in files if (by["http", p] > 0) != (by["data", p] > 0)]
+    assert disagree == [], {p: (by["http", p], by["data", p]) for p in disagree}
+    drawn = {p for p in files if by["http", p] > 0}
+    assert "/0/x.png" in drawn and "/3/x.svg" in drawn  # the plain cases do draw
+    assert "/9/notes.txt" not in drawn  # and a text file is a broken <img> in both
+    del base64
 
 
 def test_two_declarations_of_one_path_agree_whatever_their_order():
     """A file regenerated between two `show_file`s carries two mimes; the
-    bytes at render time are one state, and the table says that state."""
-    a, b = (
-        [("/x", "image/png"), ("/x", "image/svg+xml")],
-        [("/x", "image/svg+xml"), ("/x", "image/png")],
-    )
+    picture's type is the name's (the route's rule), so both orders agree,
+    and so do PNG bytes under an `.svg` name — broken there as in the chat."""
+    a = [("/x.svg", "image/png"), ("/x.svg", "image/svg+xml")]
+    b = a[::-1]
+    svg = {"/x.svg": Verdict(mime="image/svg+xml")}
 
-    assert decide_assets(a, {"/x": _SVG}, VideoOptions()) == {"/x": Verdict(mime="image/svg+xml")}
-    assert decide_assets(b, {"/x": _SVG}, VideoOptions()) == {"/x": Verdict(mime="image/svg+xml")}
-    assert decide_assets(a, {"/x": _PNG}, VideoOptions()) == {"/x": Verdict(mime="image/png")}
-    assert decide_assets(b, {"/x": _PNG}, VideoOptions()) == {"/x": Verdict(mime="image/png")}
+    assert decide_assets(a, {"/x.svg": _SVG}, VideoOptions()) == svg
+    assert decide_assets(b, {"/x.svg": _SVG}, VideoOptions()) == svg
+    assert decide_assets(a, {"/x.svg": _PNG}, VideoOptions()) == svg
+    assert decide_assets(b, {"/x.svg": _PNG}, VideoOptions()) == svg
 
 
 def test_a_path_that_climbs_above_the_root_is_never_a_picture_even_when_handed_bytes():
@@ -521,54 +509,6 @@ def test_a_path_that_climbs_above_the_root_is_never_a_picture_even_when_handed_b
     assert decide_assets([("/../s.png", "")], {"/../s.png": _PNG}, VideoOptions()) == {
         "/../s.png": Verdict(why=NOT_HANDED)
     }
-
-
-@pytest.mark.integration
-def test_a_real_chromium_draws_every_kind_the_sniffer_names(tmp_path):
-    """The sniff table IS the list of what Chromium decodes: each kind, made
-    by Pillow, goes through `inline_assets` and comes out with a natural
-    width in a real browser; TIFF and text never reach the page."""
-    import io as _io
-
-    from playwright.sync_api import sync_playwright
-
-    Image = pytest.importorskip("PIL.Image")
-    im = Image.new("RGB", (2, 2), (255, 0, 0))
-    files: dict[str, bytes] = {}
-    for fmt, ext in [
-        ("PNG", "png"),
-        ("JPEG", "jpeg"),
-        ("GIF", "gif"),
-        ("WEBP", "webp"),
-        ("BMP", "bmp"),
-        ("ICO", "ico"),
-        ("AVIF", "avif"),
-        ("TIFF", "tiff"),
-    ]:
-        buf = _io.BytesIO()
-        im.save(buf, fmt, **({"sizes": [(2, 2)]} if fmt == "ICO" else {}))
-        files[f"/x.{ext}"] = buf.getvalue()
-    files["/x.svg"] = _SVG
-    files["/x.txt"] = b"hello"
-    inlined = inline_assets([(p, "") for p in files], files, VideoOptions())
-
-    assert set(inlined) == {
-        f"/x.{e}" for e in ("png", "jpeg", "gif", "webp", "bmp", "ico", "avif", "svg")
-    }
-    tags = "".join(
-        f'<img id="{p[1:].replace(".", "_")}" src="{uri}">' for p, uri in inlined.items()
-    )
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch()
-        try:
-            page = browser.new_page()
-            page.set_content(f"<html><body>{tags}</body></html>")
-            page.wait_for_function("[...document.images].every(i => i.complete)", timeout=30_000)
-            widths = page.evaluate("[...document.images].map(i => [i.id, i.naturalWidth])")
-        finally:
-            browser.close()
-
-    assert widths and all(w > 0 for _id, w in widths), widths
 
 
 def test_a_declared_non_image_is_a_card_even_when_the_path_is_in_the_table():

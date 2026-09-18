@@ -28,13 +28,13 @@ import json
 from collections.abc import Mapping
 from importlib import resources
 from typing import Any
-from xml.parsers import expat
 
 import msgspec
 from markdown_it.renderer import RendererHTML
 from markdown_it.token import Token
 from markdown_it.utils import EnvType, OptionsDict
 
+from ..files.media_type import media_type_for
 from . import markdown as md
 from .options import VideoOptions
 from .timeline import PACING, StreamStep, Timeline, ToolStep, _cut
@@ -74,11 +74,7 @@ def render_markdown(text: str, *, inlined: Mapping[str, str] = _NO_INLINED) -> s
     return md.render(text, {"inlined": inlined})
 
 
-NOT_HANDED, NOT_AN_IMAGE, OVER_BUDGET = (
-    "no bytes were handed over",
-    "not an image the page draws",
-    "over the page's image budget",
-)
+NOT_HANDED, OVER_BUDGET = ("no bytes were handed over", "over the page's image budget")
 
 
 class Verdict(msgspec.Struct, frozen=True):
@@ -93,26 +89,25 @@ def decide_assets(
     paths: list[tuple[str, str]], assets: Assets, options: VideoOptions
 ) -> dict[str, Verdict]:
     """Per distinct path, in reading order: the page's own decision, which
-    the CLI's note relays (deciding from "what was read" alone left an SVG
-    chart read, undrawn and unmentioned).
+    the CLI's note relays.
 
     The verdict is a property of the PATH, not of whichever reference came
-    first (round 4), and the mime in the ``data:`` URI comes from the BYTES
-    alone (``_sniff_image``: every raster Chromium decodes, by signature,
-    and SVG by its text). A declared mime never reaches a URL — rounds 5
-    and 6 were both the declaration leaking into it (PNG bytes shipped as
-    ``image/svg+xml``, which Chromium decodes by mime alone; then seventeen
-    hand-edited spellings that break a ``data:`` URL) — so a declaration
-    only decides whether THAT reference draws a picture or a card
-    (``wanted_files`` / ``player.html``), and bytes nobody can identify are
-    a card wherever they came from. A path is a picture when its bytes were
-    handed over, they sniff as an image, and they fit ``max_asset_bytes``
-    and what is left of the page's total budget (``max_assets_total_bytes``,
-    raw bytes; base64 makes the page a third larger). First-fit: a file
-    that does not fit the remainder is refused, and a later, smaller one
-    that fits is still a picture. A path that climbs above the root is
-    refused whatever was handed over — the job's prefetch list drops it,
-    and this is the second lock."""
+    first (round 4). A handed-over file is a picture under the media type
+    the chat's file route would serve it with — ``media_type_for``, the
+    ONE rule, shared with the route — and Chromium decides what to make of
+    it, exactly as it does in the chat: same bytes, same type, same
+    browser, same picture or the same broken one. The page never reads
+    the bytes to decide (rounds 5–8 were four ways of doing so, each in
+    disagreement with the browser somewhere). A declaration's own mime
+    decides only whether THAT reference draws a picture or a card
+    (``wanted_files`` / ``player.html``), as ``isInlineImage`` does. So a
+    path is refused for two reasons only: no bytes were handed over (or
+    it climbs above the root — the job's prefetch list drops it, and this
+    is the second lock), or it does not fit ``max_asset_bytes`` / what is
+    left of the page's total budget (``max_assets_total_bytes``, raw bytes;
+    base64 makes the page a third larger). First-fit: a file that does not
+    fit the remainder is refused, and a later, smaller one that fits is
+    still a picture."""
     out: dict[str, Verdict] = {}
     budget = options.max_assets_total_bytes
     for path, _mime in paths:
@@ -122,14 +117,10 @@ def decide_assets(
         if data is None:
             out[path] = Verdict(why=NOT_HANDED)
             continue
-        mime = _sniff_image(data)
-        if not mime:
-            out[path] = Verdict(why=NOT_AN_IMAGE)
-            continue
         if len(data) > options.max_asset_bytes or len(data) > budget:
             out[path] = Verdict(why=OVER_BUDGET)
             continue
-        out[path] = Verdict(mime=mime)
+        out[path] = Verdict(mime=media_type_for(path, data))
         budget -= len(data)
     return out
 
@@ -151,79 +142,6 @@ def inline_assets(
         for path, v in verdicts.items()
         if v.mime
     }
-
-
-_SIGNATURES = (
-    (b"\x89PNG\r\n\x1a\n", "image/png"),
-    (b"\xff\xd8\xff", "image/jpeg"),
-    (b"GIF87a", "image/gif"),
-    (b"GIF89a", "image/gif"),
-    (b"BM", "image/bmp"),
-    (b"BA", "image/bmp"),  # an OS/2 bitmap array, whose first bitmap follows
-    (b"\x00\x00\x01\x00", "image/x-icon"),
-    (b"\x00\x00\x02\x00", "image/x-icon"),  # a cursor: the same container
-)
-_SVG_ROOT = "http://www.w3.org/2000/svg svg"
-
-
-def _sniff_image(data: bytes) -> str:
-    """The mime of ``data`` when it is a picture Chromium draws, else ``""``
-    — the ONLY source of the mime in a ``data:`` URI. Every raster Chromium
-    decodes, by signature: PNG, JPEG, GIF, WebP (`RIFF….WEBP`; `RIFF` alone
-    is also WAV and AVI), BMP, ICO / CUR, AVIF (an `ftyp` box with `avif`
-    among its brands, as libavif peeks); TIFF and HEIC are not ones (no
-    decoder), so they are not here. SVG by asking a real XML parser what
-    the first element is (``_first_element_is_svg``) — inside an ``<img>``
-    an SVG runs no script and fetches nothing, which is why the chat draws
-    it too."""
-    for magic, mime in _SIGNATURES:
-        if data.startswith(magic):
-            return mime
-    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
-        return "image/webp"
-    if data[4:8] == b"ftyp":
-        # An ISOBMFF box: size 0 runs to the end of the file, size 1 carries
-        # a 64-bit size next; the brands follow the header, four bytes each.
-        size, brands_at = int.from_bytes(data[:4], "big"), 8
-        if size == 1:
-            size, brands_at = int.from_bytes(data[8:16], "big"), 16
-        end = min(size or len(data), len(data))
-        if b"avif" in {data[i : i + 4] for i in range(brands_at, end - 3, 4)}:
-            return "image/avif"
-    return "image/svg+xml" if _first_element_is_svg(data) else ""
-
-
-class _FirstElement(Exception):
-    """Raised from expat's start-element handler with the element's
-    namespace-qualified name, so the parse stops right there."""
-
-
-def _first_element_is_svg(data: bytes) -> bool:
-    """Whether the document's first element is ``svg`` in the SVG namespace
-    — what Chromium's SVGImage requires of a root. expat, not a hand-written
-    prolog scanner (round 7: mine stopped a DOCTYPE at the first ``>``,
-    inside its internal subset, and refused the stock Illustrator and
-    matplotlib headers): it takes a BOM, UTF-16, processing instructions, a
-    doctype with a subset, comments of any length and a prefixed root in
-    its stride, and refuses ``<svg>`` without ``xmlns`` (a broken picture
-    in a browser) and any other root. No handler fetches external entities;
-    the parse ends at the root's start tag, so an entity bomb in the subset
-    is expanded only if the root's own attributes use it, and libexpat's
-    amplification limit refuses that one (measured: 0.4 s, then
-    ``ExpatError``)."""
-    parser = expat.ParserCreate(namespace_separator=" ")
-
-    def start(name: str, _attrs: dict[str, str]) -> None:
-        raise _FirstElement(name)
-
-    parser.StartElementHandler = start
-    try:
-        parser.Parse(data, False)
-    except _FirstElement as first:
-        return first.args == (_SVG_ROOT,)
-    except expat.ExpatError:
-        return False
-    return False  # no element in the whole document
 
 
 def _embed_json(value: Any) -> str:

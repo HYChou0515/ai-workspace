@@ -172,8 +172,10 @@ const fmtBytes = n => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(
 // The files a tool declared, drawn as the chat draws them: a declaration
 // whose OWN mime is image/* (isInlineImage) and whose bytes are in the
 // table as a thumbnail, anything else (declared non-image, no bytes, over
-// the cap) as a
-// card naming the file — never a broken <img>.
+// the cap) as a card naming the file. The thumbnail's bytes travel under
+// the media type the chat's file route serves them with, so the browser
+// makes of them exactly what it makes in the chat — a broken <img> only
+// where the chat's is broken too.
 function shownFiles(files) {
   const box = el('div', 'shown-files');
   for (const f of files) {

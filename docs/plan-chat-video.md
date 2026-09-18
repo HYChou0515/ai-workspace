@@ -1,6 +1,6 @@
 # Plan：把一段對話紀錄做成影片（script 版先行，job / worker 版後接）
 
-> **狀態:script 版已實作(PR #817,P1–P14:P1–P5 主體、P6 顯示工具、P7–P14 七輪 review 的修正),使用說明在 [chat-video.md](chat-video.md);P15–P17(job + route + 前端按鈕)列出形狀、未做。** 正文寫的是**現在的**做法;當初計畫和實作的差異在文末〈實作偏差〉。
+> **狀態:script 版已實作(PR #817,P1–P15:P1–P5 主體、P6 顯示工具、P7–P15 八輪 review 的修正),使用說明在 [chat-video.md](chat-video.md);P16–P18(job + route + 前端按鈕)列出形狀、未做。** 正文寫的是**現在的**做法;當初計畫和實作的差異在文末〈實作偏差〉。
 
 ## 需求（user 原話的整理）
 
@@ -96,11 +96,11 @@ src/workspace_app/chat_video/
 - `docs/chat-video.md`(原計畫叫 `demo-chat-video.md`):安裝(`uv sync --extra chat-video` + `playwright install chromium`)、指令、旗標、JSON 手改的注意事項(`role` / `tool_name` / `tool_args`)、Debian 11 的版本釘。
 - 用一份**真的** export(含 reasoning + tool + error)錄 1280×720 與 1920×1080 各一段(原計畫寫 1080×1080;正方形只留在文件的範例指令),抽 frame 看,GIF 傳給 user。
 
-## 之後的形狀(P15–P17,本 PR 不做,寫下來讓接的人不用重想;原本編成 P6–P8,和後來的 commit 編號撞了,照 flat 規則改)
+## 之後的形狀(P16–P18,本 PR 不做,寫下來讓接的人不用重想;原本編成 P6–P8,和後來的 commit 編號撞了,照 flat 規則改)
 
-- **P15 job**:`ChatVideoPayload(item_id, chat_id, options: VideoOptions, user)`、`ChatVideoJob(Job[ChatVideoPayload])`、`ChatVideoRun`(status / progress / `video: Binary` / `error`)。`ChatVideoCoordinator`(同 `ImportCoordinator` 的形狀):`enqueue()` 由 route 呼叫;`_handle()` 讀 conversation → `to_builtins` → `build_timeline` → 對 `referenced_paths()` 逐一 `await files.read(item_id, path)` 組成 `assets`(`referenced_paths` 已不列爬出根的 `..` 路徑;façade 的 `abs_path` 不 jail `..`,所以 handler 讀之前仍要像 `cli.load_assets` 那樣拒絕解析到 workspace 外的路徑——第五輪點名;P12 起 `decide_assets` 自己也拒絕這種路徑,第二道鎖)→ `await asyncio.to_thread(render_chat_video, …, assets=assets)` → 存 Binary。`worker/__init__.py` 的 `_JOBTYPE_ATTR` 加 `"chat-video"`;`build_coordinators` 加進 bundle。
-- **P16 route + 權限**:`POST /a/{slug}/items/{item_id}/chats/{chat_id}/video`(gate `read_chat`,同 export)回 run id;`GET …/video/{run_id}` 回狀態 / 下載。配額:一個 chat 同時只跑一個(partition_key = chat_id)。
-- **P17 前端**:chat header 一顆「產生影片」按鈕 → 尺寸 / 格式的小表單(欄位 = `VideoOptions`)→ 進度 → 下載。
+- **P16 job**:`ChatVideoPayload(item_id, chat_id, options: VideoOptions, user)`、`ChatVideoJob(Job[ChatVideoPayload])`、`ChatVideoRun`(status / progress / `video: Binary` / `error`)。`ChatVideoCoordinator`(同 `ImportCoordinator` 的形狀):`enqueue()` 由 route 呼叫;`_handle()` 讀 conversation → `to_builtins` → `build_timeline` → 對 `referenced_paths()` 逐一 `await files.read(item_id, path)` 組成 `assets`(`referenced_paths` 已不列爬出根的 `..` 路徑;façade 的 `abs_path` 不 jail `..`,所以 handler 讀之前仍要像 `cli.load_assets` 那樣拒絕解析到 workspace 外的路徑——第五輪點名;P12 起 `decide_assets` 自己也拒絕這種路徑,第二道鎖)→ `await asyncio.to_thread(render_chat_video, …, assets=assets)` → 存 Binary。`worker/__init__.py` 的 `_JOBTYPE_ATTR` 加 `"chat-video"`;`build_coordinators` 加進 bundle。
+- **P17 route + 權限**:`POST /a/{slug}/items/{item_id}/chats/{chat_id}/video`(gate `read_chat`,同 export)回 run id;`GET …/video/{run_id}` 回狀態 / 下載。配額:一個 chat 同時只跑一個(partition_key = chat_id)。
+- **P18 前端**:chat header 一顆「產生影片」按鈕 → 尺寸 / 格式的小表單(欄位 = `VideoOptions`)→ 進度 → 下載。
 - **部署**:worker image 加 `chat-video` extra + `playwright install --with-deps chromium` + `fonts-noto-cjk`;`kubernetes/base/workers.yaml` 加 `chat-video` 一顆(prod 自維護,PR 要點名)。
 
 ## 驗收(P1–P5)
@@ -212,6 +212,8 @@ src/workspace_app/chat_video/
     `inline_assets` 才編碼。
   - 沒修、記下:宣告路徑 `.` 或 `///` 折成 `/`,卡片檔名是空字串(手改才會有);`NaN`/`Infinity` 字面量 FE 整段宣告作廢、
     播放器只跳過那一筆(第二輪就決定的)。
+  - 測試 `tests/chat_video` 125 → 156 條(`--collect-only` 數的;3 條 integration):`test_markdown.py` 17 列、parity +4
+    (2 列 × 2 方向)、player +6(4 列 parametrize + 1 + 1 integration)、timeline +1、CLI +3;`tests/kb/test_chat_export.py` +1。
 - **第五輪 review(單一問題:P10 的表有沒有漏列)抓到的,P11 修掉——最嚴重的一條又是 P10 自己的:**
   - **P10 的規則本身錯了**:「宣告的 mime 蓋過 bytes」——回答先 `![](x.png)`、後來 `show_file` 宣告 `image/svg+xml` 但 bytes 是
     PNG,P10 產出 `data:image/svg+xml;base64,<PNG>`;Chromium 對 raster 會 sniff、對 SVG 只認 mime → 破圖兩處、判定是「圖」所以沒
@@ -267,9 +269,26 @@ src/workspace_app/chat_video/
   - 表:bytes 19 → 30 種(+doctype 子集 / UTF-16 / 前綴根 / 5 KB 註解 / 沒 xmlns / XHTML 根 / CUR / BA / AVIF 64-bit / AVIF 相容 brand /
     HEIC)× 12 × 2,另加 entity bomb 兩格(根屬性裡 → expat 放大上限擋下、量到 0.4 s;子元素裡 → 碰不到,所以獨立於 12 寬的表);`tests/chat_video` 389 → 523 條(`--collect-only` 數的,+11×12 +2)。六個突變體(namespace 不看 / 回到前綴檢查 / CUR /
     BA / AVIF 只看 major / 64-bit size)各紅自己的列,回到前綴檢查紅 96 格;對照組 112。
-  - 測試 `tests/chat_video` 125 → 156 條(`--collect-only` 數的;3 條 integration):`test_markdown.py` 17 列、parity +4
-    (2 列 × 2 方向)、player +6(4 列 parametrize + 1 + 1 integration)、timeline +1、CLI +3;`tests/kb/test_chat_export.py` +1。
     七個修法各一個突變體,每個恰好紅在自己的測試(`abs_path` 那個紅 8 條含 CLI 端到端);對照組(`wanted_files` 空)紅 36。
+- **第八輪 review(單一問題:expat 的第一個元素 vs Chromium 的 SVGImage)抓到的,P15 修掉——P14 的 expat 又帶來自己的一類:**
+  - `encoding="Shift_JIS"` 讓 pyexpat 丟 `ValueError`(不是 `ExpatError`),一張秀出來的檔讓整段渲染死掉、沒頁面;整份 4 MB 餵進
+    parser,3.9 MB 的註解讓 libexpat 的放大上限(100×、8 MiB 後才生效)吃到 1.2 GB 記憶體;pyexpat 1 MiB 分塊 + reparse deferral 讓
+    一個 token 超過 1 MiB 的合法 SVG 被判「沒元素」;TGA type 2 和 CUR 同檔頭;`BA` 撞到 "BATCH…" 開頭的文字檔;ATTLIST 預設值二次方
+    (4 MB 要 9 s)。reviewer 337 個輸入逐一過 sniffer + 真 Chromium。
+  - **停下來看第五~八輪的共同點:我們在替 Chromium 判斷 bytes 是什麼,每換一種判法就換一類分歧。** 聊天視窗從不看 bytes——檔案路由用
+    副檔名給 Content-Type(`guess_type`,猜不到就看能不能 UTF-8 decode),Chromium 自己決定(raster 不管 mime 都 sniff、SVG 只認 mime)。
+    P15:把路由那五行抽成 `files/media_type.py:media_type_for`,**路由和播放器呼叫同一個函式**(`test_read_file_serves_the_shared_media_type_rule`
+    用 monkeypatch 釘住路由真的在呼叫它;兩邊各做一個「手抄一份」的突變體,各紅);播放器不再 sniff、不再 parse——同 bytes、同型別、同一個
+    Chromium ⇒ drawn == drawn 由構造成立。頁面自己只剩兩個理由:沒拿到 bytes、超預算;「不是圖」這個理由連同 `_sniff_image` /
+    `_first_element_is_svg` / expat / 簽名表一起刪掉。`.txt` 被 `![]()` 指到會是破圖(聊天視窗也是),不再是 alt 文字——影片的規格是
+    「聊天視窗畫的」,不是「比聊天視窗好看」。
+  - 表改成「檔名 × bytes 13 列 × 宣告 5 種 × 兩個順序」,oracle 就是共用函式本身;真 Chromium 的 integration 測試把 13 種各送兩次——本機
+    HTTP server 用 `media_type_for` 當 Content-Type(聊天視窗的投遞)和頁面的 data URI——`naturalWidth` 逐一相等(畫或破一致)。
+    這台 mime DB 對 `.webp` 回 `None`(路由給 octet-stream、Chromium 照樣 sniff 畫出),是這個設計才自然對的一列。
+  - 記下:mime DB 隨機器(`/etc/mime.types`)不同,worker pod 和 API pod 的 image 若不同,`.webp` 之類可能一邊 image/webp 一邊
+    octet-stream——但 Chromium 對 raster 兩邊都畫,只有 SVG 依賴 `.svg`(Python 內建表有)。P16 的 handler 仍要 jail `..`(上面寫了)。
+  - 測試 `tests/chat_video` 523 → 227 條(`--collect-only` 數的:−30×12 −2 −1 −1 +13×5 +3);`tests/api/test_messages.py` +1;四個突變體
+    (播放器手抄規則 / 路由手抄規則 / 頁面不拒 `..` / 不看預算)各紅自己的測試;對照組(全當 image/png)紅 52。
 - **plan 漏了「顯示工具」**(user 問「show file 能夠顯示嗎」才補)。前端把檔案放到人面前有三條路——`show_file`
   (沒有卡片,檔案即畫面)、任何工具結果尾端的 `[shown-files]` 宣告、回答裡的 `![](路徑)`——bytes 都不在 export 裡。
   加了 `assets: Mapping[path, bytes]` 接縫(CLI `--files DIR` 讀;未來 job 用 `Timeline.referenced_paths()` 先撈再進
