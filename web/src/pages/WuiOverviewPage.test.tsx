@@ -375,10 +375,9 @@ describe("WuiOverviewPage", () => {
       // …and still under 專案管理, where the complete listing keeps it.
       const pm = screen.getByRole("region", { name: "專案管理" });
       expect(within(pm).getAllByRole("listitem")).toHaveLength(1);
-      // Every copy of the row shows the same state — the favourites section,
-      // 我的 (Burn-down is alice's) and its App section: three stars, all
-      // pressed, all now offering to unstar.
-      expect(screen.getAllByRole("button", { name: UNSTAR("Burn-down") })).toHaveLength(3);
+      // Both copies of the row show the same state — the favourites section
+      // and its App section: two stars, both pressed, both offering to unstar.
+      expect(screen.getAllByRole("button", { name: UNSTAR("Burn-down") })).toHaveLength(2);
       for (const b of screen.getAllByRole("button", { name: UNSTAR("Burn-down") })) {
         expect(b).toHaveAttribute("aria-pressed", "true");
         expect(b).toHaveAttribute("aria-label", "把「Burn-down」從我的最愛移除");
@@ -586,8 +585,7 @@ describe("WuiOverviewPage", () => {
       const unstars = screen.getAllByRole("button", {
         name: translate("zh-TW", "wui.unstar", { title: "Burn-down" }),
       });
-      // Favourites, 我的 (Burn-down is alice's) and its App section.
-      expect(unstars).toHaveLength(3);
+      expect(unstars).toHaveLength(2);
       for (const b of unstars) expect(b).toHaveAttribute("aria-pressed", "true");
     });
 
@@ -609,33 +607,47 @@ describe("WuiOverviewPage", () => {
     });
   });
 
-  describe("「我的」— the viewer's own items' pages (amendment 2)", () => {
-    it("lists the pages of items the viewer OWNS, between the favourites and the Apps, with the App on each", async () => {
+  describe("「我的」— a filter, not a section (the author: 「我的 是個篩選」)", () => {
+    const MINE = () => word("wui.mine");
+    const rowTitles = (region: HTMLElement) =>
+      within(region)
+        .getAllByRole("listitem")
+        .map((li) => within(li).getAllByRole("link")[0].textContent);
+
+    it("is a chip in the tools; pressed, it keeps only the pages of items the viewer OWNS", async () => {
       toggleFavourite("alice", favouriteKey(THREE[0]));
       render(<WuiOverviewPage client={client()} />, { wrapper: Wrap });
       await screen.findByRole("region", { name: "根因分析" });
 
-      const mine = screen.getByRole("region", { name: word("wui.mine") });
-      expect(within(mine).getByRole("heading")).toHaveTextContent("我的");
-      const rows = within(mine).getAllByRole("listitem");
-      expect(rows.map((li) => within(li).getAllByRole("link")[0].textContent)).toEqual(["Burn-down"]);
+      // No 我的 section, ever.
+      expect(screen.queryByRole("region", { name: MINE() })).toBeNull();
+      const mine = screen.getByRole("button", { name: MINE() });
+      expect(mine).toHaveAttribute("aria-pressed", "false");
+
+      fireEvent.click(mine);
+
+      expect(mine).toHaveAttribute("aria-pressed", "true");
       // Owner, not deployer: Shipping board was Deployed by bob into carol's
-      // item — not alice's, so not here.
-      expect(rows[0].querySelector(".app-tag")).toHaveTextContent("專案管理");
-      // Order on the page: favourites, then 我的, then the Apps.
-      const names = screen.getAllByRole("region").map((r) => within(r).getByRole("heading").textContent);
-      expect(names.slice(0, 2)).toEqual(["我的最愛", "我的"]);
-      // …and the page stays in its App section too — 我的 is a shortcut.
-      expect(within(screen.getByRole("region", { name: "專案管理" })).getAllByRole("listitem")).toHaveLength(1);
+      // item — not alice's, so gone; Burn-down is alice's.
+      expect(screen.queryByRole("region", { name: "根因分析" })).toBeNull();
+      expect(rowTitles(screen.getByRole("region", { name: "專案管理" }))).toEqual(["Burn-down"]);
+      // The favourites obey it too: the starred Shipping board is not alice's.
+      expect(screen.queryByRole("region", { name: word("wui.favourites") })).toBeNull();
+
+      // Stacks with the App filter.
+      fireEvent.click(within(screen.getByRole("group", { name: word("wui.filter.app") })).getByRole("button", { name: "根因分析" }));
+      expect(screen.getByText("沒有符合的頁面")).toBeInTheDocument();
+
+      fireEvent.click(mine);
+      expect(mine).toHaveAttribute("aria-pressed", "false");
+      expect(screen.getByRole("region", { name: "根因分析" })).toBeInTheDocument();
     });
 
-    it("has no 「我的」 section when the viewer owns none of the listed items", async () => {
-      render(
-        <WuiOverviewPage client={client([THREE[0], THREE[2]])} />,
-        { wrapper: Wrap },
-      );
+    it("is held until the viewer's identity has settled", async () => {
+      me = { id: "default-user", ready: false };
+      render(<WuiOverviewPage client={client()} />, { wrapper: Wrap });
       await screen.findByRole("region", { name: "根因分析" });
-      expect(screen.queryByRole("region", { name: word("wui.mine") })).toBeNull();
+      expect(screen.getByRole("button", { name: MINE() })).toBeDisabled();
     });
   });
 

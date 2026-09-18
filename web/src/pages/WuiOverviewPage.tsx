@@ -61,6 +61,9 @@ export function WuiOverviewPage({ client = wuiApi }: { client?: WuiApi }) {
   // within a section. The App sections themselves stay (the author's
   // 「這樣可以」 on them).
   const [appFilter, setAppFilter] = useState("");
+  // 「我的」: only the pages of items the viewer OWNS (owner, not deployer) —
+  // a filter, not a section (the author), stacking with the App chips.
+  const [mineOnly, setMineOnly] = useState(false);
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<"newest" | "title">("newest");
   const apps = useApps();
@@ -103,6 +106,7 @@ export function WuiOverviewPage({ client = wuiApi }: { client?: WuiApi }) {
   const needle = query.trim().toLocaleLowerCase();
   const matches = (page: DeployedWui) =>
     (!appFilter || page.slug === appFilter) &&
+    (!mineOnly || (me.ready && page.item_owner === me.id)) &&
     (!needle ||
       page.title.toLocaleLowerCase().includes(needle) ||
       (page.item_title || page.item_id).toLocaleLowerCase().includes(needle));
@@ -127,10 +131,6 @@ export function WuiOverviewPage({ client = wuiApi }: { client?: WuiApi }) {
   // listing no longer returns draws nothing (and stays in storage: Deploying
   // the page again brings it back starred).
   const starred = shown.filter((page) => favourites.has(favouriteKey(page)));
-  // 「我的」: the pages of items the viewer OWNS — the owner, not who pressed
-  // Deploy — under the same search, sort and filter. Nothing until the
-  // identity has settled: the placeholder id must not claim anyone's items.
-  const mine = me.ready ? shown.filter((page) => page.item_owner === me.id) : [];
 
   const rowProps = (page: DeployedWui, starred: boolean, showApp: boolean) => ({
     key: `${page.item_id}${page.path}`,
@@ -140,8 +140,8 @@ export function WuiOverviewPage({ client = wuiApi }: { client?: WuiApi }) {
     starReady: me.ready,
     onStar: () => favourites.toggle(favouriteKey(page)),
     // The App's tag on the element only where no section heading says the
-    // App — the favourites and 我的 sections (the author: 「卡片裡面不用有標籤
-    // 我的最愛的可以有」).
+    // App — the favourites section (the author: 「卡片裡面不用有標籤 我的最愛的
+    // 可以有」).
     showApp,
   });
   // One list element per section, in whichever view is on. The two views
@@ -199,6 +199,11 @@ export function WuiOverviewPage({ client = wuiApi }: { client?: WuiApi }) {
                 </Chip>
               ))}
             </div>
+            {/* Held until the identity has settled: the placeholder id must
+                not claim anyone's items. */}
+            <Chip on={mineOnly} onClick={() => setMineOnly((v) => !v)} disabled={!me.ready}>
+              {t("wui.mine")}
+            </Chip>
             <input
               type="search"
               value={query}
@@ -223,12 +228,6 @@ export function WuiOverviewPage({ client = wuiApi }: { client?: WuiApi }) {
             <section aria-labelledby="wui-favourites">
               <h2 id="wui-favourites">{t("wui.favourites")}</h2>
               {listOf(starred, true, true)}
-            </section>
-          ) : null}
-          {mine.length > 0 ? (
-            <section aria-labelledby="wui-mine">
-              <h2 id="wui-mine">{t("wui.mine")}</h2>
-              {listOf(mine, false, true)}
             </section>
           ) : null}
           {[...groups].map(([slug, rows]) => {
@@ -283,11 +282,22 @@ function ViewSwitch({ view, onChange }: { view: WuiView; onChange: (v: WuiView) 
 }
 
 /** A filter chip — `LanguageToggle`'s button, `aria-pressed` the state. */
-function Chip({ on, onClick, children }: { on: boolean; onClick: () => void; children: React.ReactNode }) {
+function Chip({
+  on,
+  onClick,
+  disabled,
+  children,
+}: {
+  on: boolean;
+  onClick: () => void;
+  disabled?: boolean;
+  children: React.ReactNode;
+}) {
   return (
     <button
       type="button"
       aria-pressed={on}
+      disabled={disabled}
       onClick={onClick}
       style={{
         padding: "6px 12px",
@@ -315,7 +325,7 @@ type PageProps = {
   starReady: boolean;
   onStar: () => void;
   /** Draw the App's tag on the element — only where no section heading says
-   * the App (favourites, 我的). */
+   * the App (the favourites section). */
   showApp: boolean;
 };
 
