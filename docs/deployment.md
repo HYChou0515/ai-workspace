@@ -518,6 +518,83 @@ RCA 的 system prompt 是純 markdown，存在
   - k8s 範例見 [`kubernetes/base/workers.yaml`](https://github.com/HYChou0515/ai-workspace/blob/master/kubernetes/base/workers.yaml)
     與 [`kubernetes/README.md`](https://github.com/HYChou0515/ai-workspace/blob/master/kubernetes/README.md)（每 JobType 一個
     Deployment + CPU HPA，sanity 固定 1 replica；不使用 KEDA）。
+- **API pod 收到 SIGTERM 怎麼收攤（plan-graceful-shutdown）**：rollout、HPA 縮容、
+  `kubectl delete pod` 都是 SIGTERM。以前 uvicorn 會**先無限等所有連線結束**再跑我們的
+  lifespan shutdown，而每個開著的聊天分頁都掛著一條永不結束的 SSE，所以只要收到信號時有
+  人開著聊天或 monitor（rollout 時幾乎一定有），turn drain 與 sandbox 拆除就跑不到，pod 在
+  `terminationGracePeriodSeconds`（預設 30）到期被 SIGKILL（本機探針 + uvicorn 原始碼推得；
+  線上 log 沒看過）。現在 SIGTERM 當下就開始 drain（`api/drain.py`）：
+  1. `/api/readyz` 立刻回 503——誠實的答案，但**不是**擋流量的機制：pod **被刪除**時 k8s 一進
+     Terminating 就自己把 pod 從 EndpointSlice 拿掉，和 `preStop` → SIGTERM 平行進行（`preStop:
+     sleep 5` 是讓那個移除先傳開，listener 才關）；任何 SIGTERM 之後 uvicorn 都在 0.1 秒內關掉
+     listener，readiness probe 之後拿到的是 connection refused，503 沒有多做到什麼。
+  2. 每一條 SSE（聊天串流、`/monitor/stream`）送 EOF —— 前端視為「連線中斷、重連」，
+     重連會落到活著的 pod；**正在回的 turn 不會因此中斷**，只是這台 pod 上的觀看者換 pod 看。
+  3. uvicorn 等連線結束，上限 `server.shutdown_budget_sec`（預設 20；正常 ~1 秒就結束）。
+  4. lifespan 的 turn drain：在跑的 turn 有同一個 budget 跑完並存檔（含 budget 內才輪到
+     的排隊 turn）。超過預算的 **app 聊天** turn 走 P4：先放掉認領再 cancel，**不存** partial、
+     **不寫**「interrupted」標記（那是按 Stop 的意思），由別的 pod 乾淨重跑；**KB 聊天**
+     沒有認領（見下一條），在跑的超過預算照舊 cancel、存 partial、寫標記；排隊中的留在 queue 裡
+     沒人跑（除非 teardown 期間同一把 key 又有 enqueue 把 worker 重生，那會先把舊的跑掉——app
+     聊天的認領已放手所以什麼都不寫、只是白跑；KB 的跑完會存）；還在 route 裡組 turn 的那一段不受
+     drain 管，會在 drain 之後才排進去、由重生的 worker 跑、跑完前 process 死了就沒了（問題留在
+     對話上，跟 #815 之前一樣）。`run_consumers: true`
+     的單機部署，job queue 的 drain 用**同一個 deadline**（本機開機的 help 文件 index 就要
+     16 秒），沒排完的交給 specstar 的 stale-job recovery。
+  5. kernels 拆除；sandbox session **放掉**——規則跟 `kill_idle` 一樣：先 write-back，
+     整個 fleet 都閒置超過 idle 門檻的才 `kill`（並 forget 心跳列），否則只丟掉本 pod 的
+     session（sandbox 是共用的，#345/#366；無條件 kill 會砍掉 peer 剛接手的那個）。
+     `create_app` 一定會接心跳 store，所以本 pod 自己剛用過的也算「有人在用」：`kind: local`
+     單機重啟後，最近用過的 item dir 會留在 scratch volume 上、下次 boot 直接 warm（跟以前
+     crash 之後一樣）；沒再被碰的 dir 不會被任何人 reap（orphan dir sweep 另開票）。
+     `kind: http`（prod）由 sandbox-host 自己的 idle TTL 回收。process 退出（exit 143 =
+     uvicorn 收攤後重新 raise SIGTERM，正常）。
+
+  **k8s 側要配**：`terminationGracePeriodSeconds` ≥ uvicorn 的等待（≤ budget）+ lifespan drain
+  （≤ budget + 每個還有 turn 的 engine 各 4 秒，兩個 engine ⇒ ≤ budget + 8）+ `preStop` 5 秒
+  + 拆除（kernels、sandbox write-back，沒有上限、正常幾秒）。預設值算起來 20 + 28 + 5 = 53 秒
+  進拆除；base 給 90。本機驗證：`scripts/check_sigterm_drain.sh`（起 app、`curl -N` 掛一條
+  SSE、`kill -TERM`），log 要在 budget 內出現 `lifespan: shutdown complete`，curl 要拿到 EOF
+  而不是 reset（這些 INFO 行要 app 有設 root logger 才看得到；腳本自己包了 `basicConfig`）。
+  另外 P1 搬進 thread 的 VLM 呼叫在 cancel 時**不會被中斷**（thread 不可取消），但也不會拖慢
+  退出：uvicorn 收攤完重新 raise SIGTERM、handler 已還原成預設，process 當場死（所以是 143），
+  thread 跟著沒了；turn 本身已經交接出去。
+- **pod 死了，正在回的 turn 怎麼辦（plan-graceful-shutdown P3/P4，只涵蓋 app 聊天）**：
+  問題在 202 時就存好了，但回答它的 turn 是 pod 記憶體裡的 task。現在 **app 聊天**的每次
+  send（`ChatSendService`）同時開一列耐久**認領**（`turn-claim`，帶完整 send 配方；**不含**
+  #714 從 request 組出來的 env——那是使用者自己的 cookie / header，只活一輪、不落地；重跑
+  時問 seam 的 `env_without_request`，跟 goal 驅動的回合一樣），回覆存檔時刪掉。**KB 聊天**
+  的 send 走 route 內另一條路、沒有認領：pod 死了它的 turn 就停在問題上，`TurnStatus` 的
+  重試是後路（要涵蓋得把那條 send 抽成 service，另開票）。
+  每 `server.turn_reclaim_interval_sec`（預設 5 秒）由 fleet 裡**一顆** pod（`ScanLease`）
+  掃孤兒認領，**以對話為單位**判斷：原 pod 收 SIGTERM 放手的（`released`）⇒ 立刻接；否則
+  該對話心跳新鮮 ⇒ 不動；心跳過期（30 秒；準備階段也打心跳，冷啟動 sandbox 不會被誤判）
+  ⇒ 把那個對話上的認領**全部**接下（released 的一起）、照提問順序重跑，並且只在有未 released
+  的認領時推進 `TurnEpoch`（#349，**一次、在任何重跑之前**——卡住沒死的原 pod 恢復後會自己取消
+  副本；只有 released 的就不推，原 pod 已經自己 cancel 了，再推只會砍到旁人的 turn）。同一把
+  key 整把拿或整把不拿：兩顆 pod 的 tick 在 lease 視窗邊界重疊時會列到同一把 key，第一張
+  `take` 輸掉 CAS 就整把留給對方（分著拿會各推一次 epoch、砍掉對方剛開始的重跑）。認領本身
+  就是帳本：回覆存進去才刪，**不看**對話尾巴猜有沒有回過（排隊的 Q1/Q2、#624 的 notice、
+  別台 pod 回的追問都會讓那種猜法把欠的答案當已回丟掉）；代價是 pod 恰好死在「回覆已存、
+  認領還沒刪」那一毫秒時，peer 會再答一次（對話多一個答案，不會少）。重跑上限
+  `RECLAIM_MAX_RERUNS`（2 次）：再孤兒一次就由拿到它的 pod 結束認領、在對話寫一則 error
+  結尾，使用者不會等到永遠。重跑是**重新生成**（LLM 串流接不回半句）；被接管的副本存檔前
+  檢查 `is_mine`，什麼都不寫、也不廣播 cancel。
+  **已知限制**：(1) 使用者在某則訊息還在**準備**時按 Stop、pod 又在它輪到前 drain 掉，
+  那則會被 peer 重跑（Stop 只記在記憶體的 token 上）；(2) 回覆存檔是 get→append→update、
+  沒有 CAS，同一對話兩顆 pod 同時存（接手的 peer 和使用者重連後追問的那台）可能互相覆蓋——
+  #815 之前要兩個人或 sticky routing 失效才會，現在一個人一次 rollout 就可能；(3) 兩顆 pod 的
+  tick **都先列表、再各自 take**，又恰好在心跳過期的兩側各讀一次，候選名單不同，同一把 key 仍可能
+  被分著拿（一邊的重跑被當「interrupted」砍掉）——還要未 released 的那張排在 released 的前面；
+  `taken_at_ms` 擋的是「列表落在對方 take 之後」的那種，擋不了兩邊都先列好的；(4) 交接時的
+  release 跑在 thread pool 上，pool 被 VLM 串流佔滿到 2 秒內排不到就放棄交接，退回 P4 之前的
+  行為（log 一行 ERROR 含 traceback；partial 存檔——除非晚到的 release 趕在副本問 `is_mine` 之前
+  落地，那副本就什麼都不寫、由 peer 重跑）。
+  使用者看到的（讀前端程式碼推的，沒在瀏覽器親眼看）：連線中斷的提示、原 pod 串到一半的
+  partial 留在畫面上、peer 的回答接在**同一顆泡泡**後面長、turn 結束後整顆換成存檔的乾淨版本；
+  事件要跨 pod 送到觀看者，需要有設 RabbitMQ 的 event bus，記憶體版只有同 pod 的觀看者看得到
+  live、其他人靠 #202 的輪詢。OOM 的情況多等 30 秒心跳過期。單 replica 部署：重啟後的同一顆
+  pod 會撿回自己放掉的認領。
 - **升級時要跑什麼、改什麼**：一律看 [升級手冊](migrations.md)——它按 master 合併順序列出每一個
   需要運營方動手的 PR（資料回填、拿掉／搬家的設定 key、預設就變的行為、k8s 側要加的東西），
   從你線上的 commit 往下做到底。這裡不再重複那份清單（兩份會各自漂）。其中唯一會**擋住 rollout**

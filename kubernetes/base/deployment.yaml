@@ -27,9 +27,31 @@ spec:
       labels:
         app: rca-app
     spec:
+      # plan-graceful-shutdown P2: SIGTERM starts the pod's own drain (readiness
+      # off, every SSE stream ended so the FE reconnects to a live pod, then the
+      # turn drain). The app's `server.shutdown_budget_sec` (default 20) bounds
+      # each of uvicorn's connection wait and the lifespan's turn drain, and an
+      # engine with turns past that deadline adds 4 s (two engines) — so the
+      # worst case is 2 × 20 + 8 s, plus the preStop's 5 s below (it counts in
+      # here too), plus teardown (kernels, the sandboxes' write-back). This
+      # must exceed that: 53 s before teardown with the defaults. 30 (the k8s
+      # default this left unset) was the SIGKILL a rollout with anyone online
+      # ended in.
+      terminationGracePeriodSeconds: 90
       containers:
         - name: rca-app
           image: rca-app:latest # overlays pin a tag via `images:`
+          # On a deletion k8s removes the pod from the EndpointSlice and runs
+          # preStop → SIGTERM in PARALLEL, so for a few seconds new requests
+          # would still land on a pod that stopped listening. This sleep runs
+          # BEFORE the signal and lets that removal propagate first. (The
+          # app's readiness 503 begins WITH the drain, i.e. after this sleep,
+          # and uvicorn closes the listener within 0.1 s of the signal, so the
+          # 503 is the truthful answer rather than what stops traffic.)
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "5"]
           ports:
             - name: http
               containerPort: 8000

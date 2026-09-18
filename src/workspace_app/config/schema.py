@@ -54,6 +54,25 @@ class ServerSettings:
     # the cancel latency equals this interval; the same-pod fast-path is instant.
     # Smaller = snappier cancel but more store reads per active turn.
     turn_cancel_poll_seconds: float = 0.5
+    # plan-graceful-shutdown P2: the ONE number a SIGTERM'd pod shuts down
+    # against. uvicorn waits at most this long (whole seconds) for open
+    # connections (the drain ends the chat + monitor streams at once, so
+    # normally ~1 s), then the lifespan drains in-flight turns against ONE
+    # deadline this long: those that finish persist; an app-chat turn that
+    # does not hands its claim to a peer and persists nothing (a KB-chat turn
+    # persists its partial as Stop does). Bound: this + this + 4 s for each of
+    # the two engines with turns past the deadline + teardown — the k8s
+    # `terminationGracePeriodSeconds` must exceed it (`kubernetes/base/
+    # deployment.yaml` sets 90 against the default 20; the preStop's 5 s
+    # counts inside it too).
+    shutdown_budget_sec: float = 20.0
+    # plan-graceful-shutdown P3: how often a pod looks for app-chat turns whose
+    # pod is gone (a rollout, a scale-down, a crash) and re-runs them itself, so
+    # the reply arrives instead of the thread ending on the question (the KB
+    # chat opens no claim and is not covered). One pod per window fleet-wide;
+    # the table it reads is bounded by turns in flight.
+    # 0 ⇒ off (a single-pod deploy has no peer, though its restarted self is one).
+    turn_reclaim_interval_sec: float = 5.0
     # #43 reconnect replay: how many recent broadcast events each per-item session
     # keeps in an in-pod ring so a same-pod reconnect can replay the gap (`?since=`).
     # 0 disables replay (a reconnect degrades to store re-hydrate). ~200KB/session

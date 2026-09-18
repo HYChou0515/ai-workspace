@@ -482,6 +482,77 @@ async def test_close_all_kills_every_alive_handle():
     assert new is not s1
 
 
+async def test_close_all_writes_back_what_it_keeps_and_forgets_what_it_kills():
+    """`kill_idle`'s rule, both halves: a kept sandbox is still written back
+    (the durable snapshot is what the next pod restores from if the live one
+    goes), and a killed one has its heartbeat row forgotten, as the reaper
+    does. Round 2 found the first half true but unpinned and the second
+    missing."""
+    sandbox = _CountingSandbox()
+    activity = _FakeActivity()
+    sync = _RecordingSync()
+    registry = InvestigationRegistry(sandbox=sandbox, sync=sync, activity=activity)
+    s1 = await registry.session("ws-1")
+    await registry.ensure_handle(s1)  # active now: kept
+    s2 = await registry.session("ws-2")
+    await registry.ensure_handle(s2)
+    activity.ms["ws-2"] = 0  # idle since the epoch: killed
+    sync.calls.clear()
+
+    await registry.close_all(idle_after=timedelta(hours=8))
+    assert ("mirror", "ws-1") in sync.calls  # kept, but written back
+    assert ("mirror", "ws-2") in sync.calls
+    assert sandbox.kill_calls == 1
+    assert "ws-1" in activity.ms and "ws-2" not in activity.ms
+
+
+async def test_close_all_reports_a_failed_forget_as_what_it_is(caplog):
+    """The heartbeat `forget` after a successful kill is best-effort; a
+    refusal must not be logged as "left item behind (teardown failed)" — the
+    sandbox IS gone (round 3)."""
+    import logging
+
+    class _ForgetRefused(_FakeActivity):
+        async def forget(self, item_id: str) -> None:
+            raise RuntimeError("store refused")
+
+    sandbox = _CountingSandbox()
+    activity = _ForgetRefused()
+    registry = InvestigationRegistry(sandbox=sandbox, activity=activity)
+    s1 = await registry.session("ws-1")
+    await registry.ensure_handle(s1)
+    activity.ms["ws-1"] = 0  # idle: killed
+    with caplog.at_level(logging.WARNING):
+        await registry.close_all(idle_after=timedelta(hours=8))
+    assert sandbox.kill_calls == 1
+    assert "left item" not in caplog.text
+    assert "forget" in caplog.text
+
+
+async def test_close_all_keeps_a_sandbox_the_fleet_is_still_using():
+    """Shutdown applies `kill_idle`'s rule, not a rule of its own: a pod's
+    session is pod-local, the sandbox behind it is not (#345 shared dir,
+    #366 shared address). A pod being rolled kills only what no pod has
+    touched past the idle threshold; the rest is written back and dropped
+    from THIS pod, and the next pod warms it. Round 1 of #815 found the
+    unconditional kill — not reached in a rollout with a stream open until
+    P2 let the lifespan run — tearing
+    down the sandbox a peer had just taken the pod's turn over into."""
+    sandbox = _CountingSandbox()
+    activity = _FakeActivity()
+    registry = InvestigationRegistry(sandbox=sandbox, activity=activity)
+    s1 = await registry.session("ws-1")
+    await registry.ensure_handle(s1)  # bumps the global heartbeat: active now
+    s2 = await registry.session("ws-2")
+    await registry.ensure_handle(s2)
+    activity.ms["ws-2"] = 0  # untouched by anyone since the epoch: idle
+
+    await registry.close_all(idle_after=timedelta(hours=8))
+    assert sandbox.kill_calls == 1  # ws-2 only
+    assert "ws-1" in activity.ms  # the heartbeat is the other pods' to read
+    assert await registry.session("ws-1") is not s1  # dropped locally all the same
+
+
 # ---- sync hooks ----
 
 

@@ -189,3 +189,52 @@ def test_summary_no_improvement_line():
     )
     s = out.summary()
     assert s.startswith("Visual check (1 pass")
+
+
+# ─── the loop stays free while the VLM reviews ────────────────────────
+
+
+class _SlowDescriber(_FakeDescriber):
+    """Blocks the calling thread like a real HTTP stream."""
+
+    def __init__(self, answers: list[str], *, block_s: float) -> None:
+        super().__init__(answers)
+        self._block_s = block_s
+
+    def answer(self, png, mime, *, question, on_chunk=None):  # noqa: ANN001
+        import time
+
+        time.sleep(self._block_s)
+        return super().answer(png, mime, question=question, on_chunk=on_chunk)
+
+
+async def test_review_does_not_hold_the_event_loop_while_the_vlm_answers():
+    """`detect_issues` is a synchronous VLM round-trip — two of them per review
+    pass. Run on the loop they held it for their whole duration (the sibling of
+    `read_image`'s liveness stall). A sleeper is the witness: any wake-up later
+    than its own sleep is time the loop could not run."""
+    import time
+
+    d = _SlowDescriber([_answer(overlap=True), _answer()], block_s=0.15)
+    worst = 0.0
+    stop = False
+
+    async def watch() -> None:
+        nonlocal worst
+        while not stop:
+            t0 = time.monotonic()
+            await asyncio.sleep(0.02)
+            worst = max(worst, time.monotonic() - t0 - 0.02)
+
+    watcher = asyncio.create_task(watch())
+    await asyncio.sleep(0.02)  # the watcher is asleep before the review starts
+    try:
+        out = await run_review(
+            initial_png=b"p0", initial_path="charts/c0.png", render=_FakeRender(), describer=d
+        )
+    finally:
+        stop = True
+        await watcher
+    assert out.passes == 1  # the review still did its two VLM calls
+    assert d.calls == 2
+    assert worst < 0.1, f"the loop was blocked for {worst * 1000:.0f} ms"

@@ -73,6 +73,22 @@
 #                              # peer replica) the cancel latency equals this;
 #                              # the same-pod fast-path stays instant. Smaller =
 #                              # snappier cancel, more store reads per active turn.
+#   shutdown_budget_sec: 20   # plan-graceful-shutdown: the ONE number a SIGTERM'd
+#                              # pod shuts down against — uvicorn's wait for open
+#                              # connections (normally ~1 s: the drain ends every
+#                              # SSE stream at the signal) and the lifespan's
+#                              # in-flight turn drain each get at most this; an
+#                              # app-chat turn past it is handed to a peer (no
+#                              # partial), a KB-chat turn persists its partial.
+#                              # Bound: 2 × this + 8 s + teardown; the k8s
+#                              # terminationGracePeriodSeconds must exceed it
+#                              # (kubernetes/base/deployment.yaml: 90).
+#   turn_reclaim_interval_sec: 5  # plan-graceful-shutdown: how often a pod looks
+#                              # for app-chat turns whose pod is gone (a rollout, a
+#                              # scale-down, a crash) and re-runs them itself, so
+#                              # the reply arrives instead of the thread ending on
+#                              # the question. One pod per window fleet-wide. 0 =
+#                              # off (a single pod's restarted self is a peer too).
 #   turn_replay_buffer_events: 2000  # #43: recent broadcast events each per-item
 #                              # session keeps in-pod so a same-pod reconnect
 #                              # replays the events missed during the gap

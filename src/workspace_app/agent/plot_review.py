@@ -16,6 +16,7 @@ restyling.
 
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -157,7 +158,10 @@ async def run_review(
     """Detect → adjust → re-render, keeping the best attempt. ``render(style)``
     returns ``(png_bytes, path)`` for the given style dict. The first render is
     supplied (``initial_*``); only corrections call ``render``."""
-    issues = detect_issues(initial_png, describer, on_chunk)
+    # Each review is a synchronous VLM round-trip; on the loop it held the pod
+    # past its liveness probe (the sibling of `read_image`'s stall). Off the
+    # loop; the chunk sink is thread-safe (`_tool_log_emitter`).
+    issues = await asyncio.to_thread(detect_issues, initial_png, describer, on_chunk)
     history = [issues]
     best_png, best_path, best = initial_png, initial_path, issues
     style: dict = {}
@@ -169,7 +173,7 @@ async def run_review(
             break  # nothing actionable left
         style = new_style
         png, path = await render(style)
-        new_issues = detect_issues(png, describer, on_chunk)
+        new_issues = await asyncio.to_thread(detect_issues, png, describer, on_chunk)
         passes += 1
         history.append(new_issues)
         if new_issues.blocking_count < best.blocking_count:

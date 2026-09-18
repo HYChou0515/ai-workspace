@@ -383,10 +383,16 @@ async def read_image_impl(
     assert describer is not None  # the text-only path is guarded above
     sink = ctx.context.on_exec_output
     on_chunk = (lambda t, _r: sink(t.encode("utf-8"))) if sink is not None else None
+    # The describer is a synchronous HTTP stream. Called here directly it held
+    # the event loop for the whole VLM round-trip — on a slow model and a big
+    # screenshot, longer than the liveness probe's patience, and kubelet killed
+    # the pod. Off the loop; the sink is thread-safe (`_tool_log_emitter`).
     if question:
-        out = describer.answer(data, mime, question=question, on_chunk=on_chunk)
+        out = await asyncio.to_thread(
+            describer.answer, data, mime, question=question, on_chunk=on_chunk
+        )
     else:
-        out = describer.describe(data, mime, on_chunk=on_chunk)
+        out = await asyncio.to_thread(describer.describe, data, mime, on_chunk=on_chunk)
     return _truncate_middle(out, ctx.context.read_file_max_chars)
 
 
@@ -1633,7 +1639,8 @@ async def read_page_impl(
     assert describer is not None  # the text-only path is guarded above
     sink = ctx.context.on_exec_output
     on_chunk = (lambda t, _r: sink(t.encode("utf-8"))) if sink is not None else None
-    described = describer.describe(png, mime, on_chunk=on_chunk)
+    # Off the loop, like `read_image`: the describer is a synchronous VLM stream.
+    described = await asyncio.to_thread(describer.describe, png, mime, on_chunk=on_chunk)
     out = f"{text}\n\n[page image, described]\n{described}"
     return _truncate_middle(out, ctx.context.read_file_max_chars)
 

@@ -804,8 +804,25 @@ class InvestigationRegistry:
         ms = await self.activity.last_active_ms(investigation_id)
         return ms is None or ms < cutoff_ms
 
-    async def close_all(self) -> None:
-        """Shutdown: tear down every sandbox this pod is holding.
+    async def close_all(self, idle_after: timedelta | None = None) -> None:
+        """Shutdown: let go of every session this pod is holding.
+
+        A session is pod-local; the sandbox behind it is not — the shared
+        item dir (#345), the address-converged host sandbox (#366) — so this
+        applies `kill_idle`'s rule rather than one of its own: the sandbox is
+        written back and KILLED only when no pod has touched it for
+        ``idle_after`` (the reaper's threshold); otherwise it is written back
+        and merely dropped from this pod, and the next pod warms it. Nothing
+        is lost either way: the write-back is what makes the durable snapshot
+        current, and an unkilled sandbox is the host's idle TTL's to reap.
+        Before plan-graceful-shutdown P2 this method did not run in a rollout
+        that had a stream open (uvicorn's wait outlived the grace period), and
+        its unconditional kill would have torn down the very sandbox a peer
+        had just taken this pod's turn over into. No ``idle_after`` (a direct
+        caller): only a sandbox no pod has ever touched is killed. With no
+        heartbeat store at all (a bare registry, as in tests) everything is
+        killed, as before — `create_app` always wires one, so under the app
+        this kills only what `kill_idle` would have.
 
         Per item, like `kill_idle` and `mirror_warm`: one sandbox the host had
         already reaped (its own idle TTL, a restart) raises `SandboxNotFound`
@@ -816,7 +833,8 @@ class InvestigationRegistry:
         Anything else IS a warning, and stops that one item rather than killing
         past it: a kill can rmtree the item's shared dir, so proceeding after a
         write-back we know did not land trades a slow shutdown for lost work."""
-        logger.info("registry: close_all reaping %d session(s)", len(self._sessions))
+        logger.info("registry: close_all letting go of %d session(s)", len(self._sessions))
+        cutoff_ms = 0 if idle_after is None else int((_utcnow() - idle_after).timestamp() * 1000)
         for inv_id in list(self._sessions):
             s = self._sessions.pop(inv_id)
             if s.handle is None:
@@ -833,8 +851,25 @@ class InvestigationRegistry:
                         await self._writeback(inv_id, s.handle, delete=True)
                     except SandboxNotFound:
                         continue  # already gone — nothing to mirror, nothing to kill
+                if not await self._globally_idle(inv_id, cutoff_ms):
+                    logger.info(
+                        "registry: close_all kept the sandbox of item %s (active on the fleet)",
+                        inv_id,
+                    )
+                    continue
                 with contextlib.suppress(SandboxNotFound):
                     await self.sandbox.kill(s.handle)
+                if self.activity is not None:
+                    # As `kill_idle` does. Best-effort: the sandbox IS gone by
+                    # now, so a refusal here is not a teardown failure.
+                    try:
+                        await self.activity.forget(inv_id)
+                    except Exception:  # noqa: BLE001 — the row ages out on its own
+                        logger.warning(
+                            "registry: close_all could not forget the heartbeat of item %s",
+                            inv_id,
+                            exc_info=True,
+                        )
             except Exception:  # noqa: BLE001 — one bad item must not strand the rest
                 logger.warning(
                     "registry: close_all left item %s behind (teardown failed)",

@@ -89,6 +89,8 @@ uv run python -m workspace_app            # API + SPA 一起跑在 127.0.0.1:800
 | **把通知送出站（email / IM）** | `server.notification_channel: "你的套件.YourChannel"`——一份 `INotificationChannel`。平台**永遠**先寫站內信那一列，有指名通道才再交給它;**送信失敗不算排程失敗**（否則一次兩小時的郵件故障會變成全公司排程集體自我關閉）。平台不出貨實作:relay、寄件網域、合規都是你們的。沒設 = 行為跟今天完全一樣。見[擴充平台](extending-the-platform.md) |
 | **反向代理掛在子路徑下** | `server.root_path`（例如 `/workspace`）——FastAPI 的 `root_path`，只影響**產生出來的 URL**(OpenAPI / docs)。**SPA 自己的 base path 不在這裡**,它是 build 期的 `VITE_BASE_PATH`;只設這一顆會得到一個資源全 404 的前端,而且沒有東西會提示你去找另一顆 |
 | **調 SSE 的重連緩衝與取消輪詢** | `server.turn_replay_buffer_events`（重連時最多補送幾個事件）/ `server.turn_cancel_poll_seconds`（跨 pod 取消的輪詢間隔）。兩顆都有堪用的預設，只有在觀察到「重連掉事件」或「按停止太慢」時才需要動 |
+| **pod 收 SIGTERM 時給在跑的 turn 多久收尾** | `server.shutdown_budget_sec`（預設 `20`；也是 uvicorn 等連線的 `timeout_graceful_shutdown`，整數秒）。rollout / HPA 縮容時 pod 在這個預算內把跑得完的 turn 存檔；app 聊天跑不完的交給別的 pod 重跑（不存 partial），KB 聊天照舊 cancel 存 partial。k8s 的 `terminationGracePeriodSeconds` 要 ≥ 2 × 這個值 + 8 + preStop 5 秒 + 拆除（base 給 90）。見 deployment.md 的 SIGTERM 段 |
+| **pod 死掉後多久有人接手它正在回的 app 聊天** | `server.turn_reclaim_interval_sec`（預設 `5`；`0` = 關）。fleet 裡每個視窗一顆 pod 掃孤兒認領：原 pod 放手的立刻接、心跳過期（30 秒）的接下重跑。單 replica 時重啟後的自己也算 peer。KB 聊天沒有認領、不受這顆影響。見 deployment.md 的「pod 死了，正在回的 turn 怎麼辦」 |
 | **限制上傳大小 / 每工作區配額** | `filestore.max_file_size` / `filestore.workspace_quota` |
 | **依 App 種類給不同的 cpu / 記憶體 / 硬碟** | App 自己宣告 `apps/<slug>/app.json` 的 `resources`；部署端用 `resources.per_app.default` 給預設、`resources.per_app.max` 設天花板（超過**開機失敗**）。見 §6.5 |
 | **限制一個人總共能用多少** | `resources.per_user`（`count` / `cpu` / `memory` 為同時活著的 sandbox，`disk` 為名下所有 item 的工作區總和；記在 item 的 `owner` 上）。見 §6.5 |
