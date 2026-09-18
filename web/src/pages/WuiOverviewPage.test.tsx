@@ -24,6 +24,7 @@ vi.mock("../api", () => ({
 import { makeQueryClient } from "../api/queryClient";
 import { exactTime, relativeTime } from "../api/types";
 import { DialogProvider } from "../components/Dialog";
+import { BreadcrumbProvider, useBreadcrumbTrail } from "../hooks/breadcrumbs";
 import { translate } from "../lib/i18n";
 import { currentWriteFailure, resetWriteFailures } from "../lib/writeFailures";
 import { QueryWrap } from "../test/queryWrapper";
@@ -267,4 +268,39 @@ describe("WuiOverviewPage", () => {
     expect(screen.getByRole("link", { name: word("wui.empty.help") })).toHaveAttribute("href", "/help");
     expect(screen.queryByRole("region")).toBeNull();
   });
+
+  it("publishes its own breadcrumb trail, so the bar stops naming the item the viewer just left", async () => {
+    // Seen in the demo: arriving from an item's workspace, the global bar on
+    // /wui still read "Home › Playground › Line 3 yield review" — the trail is
+    // "latest caller wins" (`hooks/breadcrumbs.tsx`), and this page had never
+    // called. Help, Diagnostics, Review and the KB each publish `Home › <page>`.
+    render(
+      <BreadcrumbProvider>
+        <WuiOverviewPage client={client([])} />
+        <TrailProbe />
+      </BreadcrumbProvider>,
+      { wrapper: Wrap },
+    );
+
+    await screen.findByText(word("wui.empty"));
+    const items = screen.getByTestId("trail").querySelectorAll("li");
+    expect(Array.from(items).map((li) => li.textContent)).toEqual([word("nav.home"), "WUI"]);
+    // Home is a link back; the leaf is where the viewer is.
+    expect(items[0].getAttribute("data-to")).toBe("/");
+    expect(items[1].getAttribute("data-to")).toBe("");
+  });
 });
+
+/** Reads the trail the page published — the global bar's view of it. */
+function TrailProbe() {
+  const trail = useBreadcrumbTrail();
+  return (
+    <ul data-testid="trail">
+      {trail.map((c, i) => (
+        <li key={i} data-to={c.to ?? ""}>
+          {c.label}
+        </li>
+      ))}
+    </ul>
+  );
+}

@@ -24,10 +24,15 @@ import { exactTime, relativeTime } from "../api/types";
 import { type DeployedWui, type WuiApi, wuiAddress, wuiApi } from "../api/wui";
 import { AppTag } from "../components/AppTag";
 import { useDialog } from "../components/Dialog";
+import { useBreadcrumbs } from "../hooks/breadcrumbs";
 import { useT } from "../lib/i18n";
 
 export function WuiOverviewPage({ client = wuiApi }: { client?: WuiApi }) {
   const t = useT();
+  // The bar's trail is "latest caller wins": without this, arriving from an
+  // item's workspace left the bar naming that item over this page. Same shape
+  // as Help / Diagnostics / Review; "WUI" is the proper noun the menu uses.
+  useBreadcrumbs([{ label: t("nav.home"), to: "/" }, { label: "WUI" }]);
   const { data, isPending, isError, refetch } = useQuery({
     queryKey: qk.wuiOverview,
     queryFn: () => client.list(),
