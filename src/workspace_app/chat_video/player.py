@@ -160,7 +160,6 @@ _SIGNATURES = (
     (b"BM", "image/bmp"),
     (b"\x00\x00\x01\x00", "image/x-icon"),
 )
-_SVG_STARTS = (b"<svg", b"<?xml", b"<!DOCTYPE svg", b"<!--")
 
 
 def _sniff_image(data: bytes) -> str:
@@ -168,10 +167,10 @@ def _sniff_image(data: bytes) -> str:
     — the ONLY source of the mime in a ``data:`` URI. Every raster Chromium
     decodes, by signature: PNG, JPEG, GIF, WebP (`RIFF….WEBP`; `RIFF` alone
     is also WAV and AVI), BMP, ICO, AVIF (`….ftypavif`); TIFF is not one
-    (no decoder), so it is not here. SVG by its text: after an optional BOM
-    and whitespace, an XML prolog, doctype, comment or the `<svg` root, with
-    `<svg` in the first kilobyte — inside an ``<img>`` an SVG runs no script
-    and fetches nothing, which is why the chat draws it too."""
+    (no decoder), so it is not here. SVG by its text: the first element,
+    after an optional BOM, whitespace, XML prolog, doctype and comments, is
+    `<svg` — inside an ``<img>`` an SVG runs no script and fetches nothing,
+    which is why the chat draws it too."""
     for magic, mime in _SIGNATURES:
         if data.startswith(magic):
             return mime
@@ -179,10 +178,26 @@ def _sniff_image(data: bytes) -> str:
         return "image/webp"
     if data[4:12] == b"ftypavif":
         return "image/avif"
-    head = data.removeprefix(b"\xef\xbb\xbf").lstrip()
-    if head.startswith(_SVG_STARTS) and b"<svg" in head[:1024]:
-        return "image/svg+xml"
-    return ""
+    return "image/svg+xml" if _first_element_is_svg(data[:4096]) else ""
+
+
+def _first_element_is_svg(head: bytes) -> bool:
+    """Skip what may precede an SVG root (BOM, whitespace, `<?…?>`,
+    `<!DOCTYPE …>`, `<!-- … -->`) and ask whether the first element is
+    `<svg` — an HTML page with an inline `<svg>` behind a comment is not one,
+    and neither is `<svgfoo>`."""
+    head = head.removeprefix(b"\xef\xbb\xbf")
+    while True:
+        head = head.lstrip()
+        for opener, closer in ((b"<?", b"?>"), (b"<!--", b"-->"), (b"<!", b">")):
+            if head.startswith(opener):
+                end = head.find(closer, len(opener))
+                if end < 0:
+                    return False
+                head = head[end + len(closer) :]
+                break
+        else:
+            return head.startswith(b"<svg") and head[4:5] in (b" ", b">", b"/", b"\t", b"\n", b"\r")
 
 
 def _embed_json(value: Any) -> str:

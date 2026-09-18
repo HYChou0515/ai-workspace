@@ -387,6 +387,17 @@ _BYTES = {
     # Chromium has no TIFF decoder: a card (the chat's <img> is broken).
     "tiff": (b"II*\x00" + bytes(12), Verdict(why=NOT_AN_IMAGE)),
     "html that is not svg": (b"<html><body>x</body></html>", Verdict(why=NOT_AN_IMAGE)),
+    "html behind a comment, with an inline svg": (
+        b"<!-- x --><html><body><svg/></body></html>",
+        Verdict(why=NOT_AN_IMAGE),
+    ),
+    "a tag that merely starts with svg": (b"<svgfoo/>", Verdict(why=NOT_AN_IMAGE)),
+    "a comment that never closes": (b"<!-- <svg/>", Verdict(why=NOT_AN_IMAGE)),
+    "svg after prolog, doctype and two comments": (
+        b'<?xml version="1.0"?>\n<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "x.dtd">\n'
+        b"<!-- a -->\n<!-- b -->\n" + _SVG,
+        Verdict(mime="image/svg+xml"),
+    ),
     "text": (b"a,b\n", Verdict(why=NOT_AN_IMAGE)),
     "empty": (b"", Verdict(why=NOT_AN_IMAGE)),
     "missing": (None, Verdict(why=NOT_HANDED)),
