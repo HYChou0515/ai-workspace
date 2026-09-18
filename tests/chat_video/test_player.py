@@ -370,6 +370,9 @@ def test_one_path_many_references_the_bytes_name_the_mime_whatever_was_declared(
 # wins" order (round 6 found the first-wins pin order-dependent). Rounds 5
 # and 6 were both the declaration leaking into the URI.
 _SVG_XML = b'<?xml version="1.0"?>\n' + _SVG
+_BOMB = b'<!ENTITY a0 "x">' + b"".join(
+    b'<!ENTITY a%d "%s">' % (i, b"&a%d;" % (i - 1) * 10) for i in range(1, 12)
+)
 _BYTES = {
     "png": (_PNG, Verdict(mime="image/png")),
     "gif": (b"GIF89a" + bytes(10), Verdict(mime="image/gif")),
@@ -393,6 +396,51 @@ _BYTES = {
     ),
     "a tag that merely starts with svg": (b"<svgfoo/>", Verdict(why=NOT_AN_IMAGE)),
     "a comment that never closes": (b"<!-- <svg/>", Verdict(why=NOT_AN_IMAGE)),
+    # Round 7: the hand-written prolog scanner stopped a DOCTYPE at the first
+    # `>` — inside an internal subset — and refused the stock Illustrator /
+    # matplotlib header that Chromium and the chat draw. A real XML parser
+    # (expat) now names the first element; these are its rows.
+    "svg with a doctype internal subset (Illustrator)": (
+        b'<?xml version="1.0" encoding="utf-8"?>\n'
+        b"<!-- Generator: Adobe Illustrator 16.0.0, SVG Export Plug-In -->\n"
+        b'<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" '
+        b'"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd" [\n'
+        b'\t<!ENTITY ns_flows "http://ns.adobe.com/Flows/1.0/">\n]>\n' + _SVG,
+        Verdict(mime="image/svg+xml"),
+    ),
+    "svg in utf-16 with a BOM": (
+        b"\xff\xfe" + _SVG.decode().encode("utf-16-le"),
+        Verdict(mime="image/svg+xml"),
+    ),
+    "svg with a prefixed root": (
+        b'<svg:svg xmlns:svg="http://www.w3.org/2000/svg" width="1" height="1"/>',
+        Verdict(mime="image/svg+xml"),
+    ),
+    "svg behind a 5 KB comment": (
+        b"<!--" + b"x" * 5000 + b"-->" + _SVG,
+        Verdict(mime="image/svg+xml"),
+    ),
+    # Chromium's SVGImage needs the root in the SVG namespace: a pasted
+    # `<svg>` without xmlns is a broken <img> there — a card here.
+    "svg root without xmlns": (b'<svg width="1" height="1"/>', Verdict(why=NOT_AN_IMAGE)),
+    "an xhtml root": (
+        b'<html xmlns="http://www.w3.org/1999/xhtml"><svg/></html>',
+        Verdict(why=NOT_AN_IMAGE),
+    ),
+    "cur": (b"\x00\x00\x02\x00" + bytes(12), Verdict(mime="image/x-icon")),
+    "os/2 bitmap array": (b"BA" + bytes(12) + b"BM" + bytes(12), Verdict(mime="image/bmp")),
+    "avif with a 64-bit box size": (
+        (1).to_bytes(4, "big") + b"ftyp" + (28).to_bytes(8, "big") + b"avif" + bytes(8),
+        Verdict(mime="image/avif"),
+    ),
+    "avif by compatible brand": (
+        (24).to_bytes(4, "big") + b"ftypmif1" + bytes(4) + b"mif1avif" + bytes(8),
+        Verdict(mime="image/avif"),
+    ),
+    "heif is not avif": (
+        (24).to_bytes(4, "big") + b"ftypheic" + bytes(4) + b"mif1heic" + bytes(8),
+        Verdict(why=NOT_AN_IMAGE),
+    ),
     "svg after prolog, doctype and two comments": (
         b'<?xml version="1.0"?>\n<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "x.dtd">\n'
         b"<!-- a -->\n<!-- b -->\n" + _SVG,
@@ -429,6 +477,27 @@ def test_the_bytes_alone_name_the_picture(kind, declared):
 
     assert decide_assets(refs, assets, VideoOptions()) == {"/x": expected}
     assert decide_assets(refs[::-1], assets, VideoOptions()) == {"/x": expected}
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        # Reaches the parse through the root's own attribute (the parse stops
+        # at the root): libexpat's amplification limit refuses it — measured
+        # 0.4 s, which is why these two are not in the 12-wide table.
+        (b'<svg xmlns="http://www.w3.org/2000/svg" t="&a11;"/>', Verdict(why=NOT_AN_IMAGE)),
+        # In a child it is never expanded.
+        (
+            b'<svg xmlns="http://www.w3.org/2000/svg"><t a="&a11;"/></svg>',
+            Verdict(mime="image/svg+xml"),
+        ),
+    ],
+    ids=["in the root's attribute", "in a child"],
+)
+def test_an_entity_bomb_in_the_doctype_is_refused_or_never_reached(body, expected):
+    data = b"<!DOCTYPE svg [" + _BOMB + b"]>" + body
+
+    assert decide_assets([("/x", "")], {"/x": data}, VideoOptions()) == {"/x": expected}
 
 
 def test_two_declarations_of_one_path_agree_whatever_their_order():

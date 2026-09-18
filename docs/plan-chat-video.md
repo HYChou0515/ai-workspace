@@ -1,6 +1,6 @@
 # Plan：把一段對話紀錄做成影片（script 版先行，job / worker 版後接）
 
-> **狀態:script 版已實作(PR #817,P1–P13:P1–P5 主體、P6 顯示工具、P7–P13 六輪 review 的修正),使用說明在 [chat-video.md](chat-video.md);P14–P16(job + route + 前端按鈕)列出形狀、未做。** 正文寫的是**現在的**做法;當初計畫和實作的差異在文末〈實作偏差〉。
+> **狀態:script 版已實作(PR #817,P1–P14:P1–P5 主體、P6 顯示工具、P7–P14 七輪 review 的修正),使用說明在 [chat-video.md](chat-video.md);P15–P17(job + route + 前端按鈕)列出形狀、未做。** 正文寫的是**現在的**做法;當初計畫和實作的差異在文末〈實作偏差〉。
 
 ## 需求（user 原話的整理）
 
@@ -96,11 +96,11 @@ src/workspace_app/chat_video/
 - `docs/chat-video.md`(原計畫叫 `demo-chat-video.md`):安裝(`uv sync --extra chat-video` + `playwright install chromium`)、指令、旗標、JSON 手改的注意事項(`role` / `tool_name` / `tool_args`)、Debian 11 的版本釘。
 - 用一份**真的** export(含 reasoning + tool + error)錄 1280×720 與 1920×1080 各一段(原計畫寫 1080×1080;正方形只留在文件的範例指令),抽 frame 看,GIF 傳給 user。
 
-## 之後的形狀(P14–P16,本 PR 不做,寫下來讓接的人不用重想;原本編成 P6–P8,和後來的 commit 編號撞了,照 flat 規則改)
+## 之後的形狀(P15–P17,本 PR 不做,寫下來讓接的人不用重想;原本編成 P6–P8,和後來的 commit 編號撞了,照 flat 規則改)
 
-- **P14 job**:`ChatVideoPayload(item_id, chat_id, options: VideoOptions, user)`、`ChatVideoJob(Job[ChatVideoPayload])`、`ChatVideoRun`(status / progress / `video: Binary` / `error`)。`ChatVideoCoordinator`(同 `ImportCoordinator` 的形狀):`enqueue()` 由 route 呼叫;`_handle()` 讀 conversation → `to_builtins` → `build_timeline` → 對 `referenced_paths()` 逐一 `await files.read(item_id, path)` 組成 `assets`(`referenced_paths` 已不列爬出根的 `..` 路徑;façade 的 `abs_path` 不 jail `..`,所以 handler 讀之前仍要像 `cli.load_assets` 那樣拒絕解析到 workspace 外的路徑——第五輪點名;P12 起 `decide_assets` 自己也拒絕這種路徑,第二道鎖)→ `await asyncio.to_thread(render_chat_video, …, assets=assets)` → 存 Binary。`worker/__init__.py` 的 `_JOBTYPE_ATTR` 加 `"chat-video"`;`build_coordinators` 加進 bundle。
-- **P15 route + 權限**:`POST /a/{slug}/items/{item_id}/chats/{chat_id}/video`(gate `read_chat`,同 export)回 run id;`GET …/video/{run_id}` 回狀態 / 下載。配額:一個 chat 同時只跑一個(partition_key = chat_id)。
-- **P16 前端**:chat header 一顆「產生影片」按鈕 → 尺寸 / 格式的小表單(欄位 = `VideoOptions`)→ 進度 → 下載。
+- **P15 job**:`ChatVideoPayload(item_id, chat_id, options: VideoOptions, user)`、`ChatVideoJob(Job[ChatVideoPayload])`、`ChatVideoRun`(status / progress / `video: Binary` / `error`)。`ChatVideoCoordinator`(同 `ImportCoordinator` 的形狀):`enqueue()` 由 route 呼叫;`_handle()` 讀 conversation → `to_builtins` → `build_timeline` → 對 `referenced_paths()` 逐一 `await files.read(item_id, path)` 組成 `assets`(`referenced_paths` 已不列爬出根的 `..` 路徑;façade 的 `abs_path` 不 jail `..`,所以 handler 讀之前仍要像 `cli.load_assets` 那樣拒絕解析到 workspace 外的路徑——第五輪點名;P12 起 `decide_assets` 自己也拒絕這種路徑,第二道鎖)→ `await asyncio.to_thread(render_chat_video, …, assets=assets)` → 存 Binary。`worker/__init__.py` 的 `_JOBTYPE_ATTR` 加 `"chat-video"`;`build_coordinators` 加進 bundle。
+- **P16 route + 權限**:`POST /a/{slug}/items/{item_id}/chats/{chat_id}/video`(gate `read_chat`,同 export)回 run id;`GET …/video/{run_id}` 回狀態 / 下載。配額:一個 chat 同時只跑一個(partition_key = chat_id)。
+- **P17 前端**:chat header 一顆「產生影片」按鈕 → 尺寸 / 格式的小表單(欄位 = `VideoOptions`)→ 進度 → 下載。
 - **部署**:worker image 加 `chat-video` extra + `playwright install --with-deps chromium` + `fonts-noto-cjk`;`kubernetes/base/workers.yaml` 加 `chat-video` 一顆(prod 自維護,PR 要點名)。
 
 ## 驗收(P1–P5)
@@ -249,6 +249,24 @@ src/workspace_app/chat_video/
     `decide_assets` 也拒絕爬出根的路徑(job 版的第二道鎖);parity 的頁面守衛改餵 `referenced_paths()`(job 會交的那份)。
   - 測試 `tests/chat_video` 171 → 389 條(`--collect-only` 數的):−13 舊列 +(15+4)×12 格 +3;五個突變體(宣告漏進 URI / 不 sniff SVG /
     不 sniff BMP·ICO / 不 sniff AVIF / 頁面不拒 `..`)各紅自己的格,含真 Chromium 那條逐格式紅;對照組(簽名全不比)紅 88。
+- **第七輪 review(單一問題:「只看 bytes」完整且健全嗎)抓到的,P14 修掉——1 HIGH,是 P13 自己的:**
+  - **我手寫的 XML 序言掃描器**在 `<!DOCTYPE svg […]>` 的內部子集裡第一個 `>` 就停——Adobe Illustrator 存檔的標準檔頭、matplotlib 自帶的
+    `hand.svg` 都被判「不是圖」、note 說假話;reviewer 掃本機 30,000 個真 SVG 恰好 2 個被拒,都是這形。同一支掃描器還漏 UTF-16+BOM、
+    `<svg:svg>` 前綴根、4 KB 以上的序言,反過來把沒 `xmlns` 的 `<svg>`(Chromium 的 SVGImage 要求根在 SVG namespace)當圖、破圖沒 note。
+    **根因是自己發明 parser 而 stdlib 的 expat 就在那裡**——記憶裡「照抄成熟做法別自己發明」「用 framework 內建」兩條都有,又犯。
+    修法:問 expat 第一個元素的 namespace + 名字是不是 `http://www.w3.org/2000/svg svg`(handler 裡 raise 停在第一個元素;不設外部實體
+    handler、不展開內容,子集裡的 entity bomb 碰不到)。BOM / UTF-16 / PI / 帶子集的 doctype / 任意長的註解 / 前綴根 / 沒 xmlns / XHTML 根
+    全由真 parser 決定。
+  - 簽名表補 CUR(`\x00\x00\x02\x00`,和 ICO 同容器)、OS/2 `BA`;AVIF 改照 ISOBMFF 讀 `ftyp` box(size 0 = 到檔尾、size 1 = 64-bit
+    largesize),`avif` 在 major 或 compatible brands 任一就算(libavif 的 peek 規則);HEIC 不算(Chromium 不解碼)。
+  - reviewer 在真 Chromium 上驗了第二輪釘住又在 P12 拿掉的那句:`<img>` 裡的 SVG 帶 `onload` / `<script>` + fetch / `<image href=http…>` /
+    `<use>` / `@import` / `<foreignObject><iframe>`,`done` 照設、兩張都有 `naturalWidth`、HTTP listener 零命中、無新 frame。
+  - 文字:P13 的 commit 說「4 列裡 2 列在 P12 上紅」,實際 3 列(「註解沒收尾」在 P12 也紅);記下。
+  - 沒修、記下(和 raster 共有、任何前綴 sniff 都看不到):內文壞掉的 SVG(`&nbsp;`、截斷)會判「圖」而破圖——PNG 截斷也是同樣的洞;
+    SVGZ 在 data URI 裡 Chromium 不解、聊天視窗的檔案路由也丟掉 gzip encoding,兩邊一致地壞,是 FE/route 的另一張票。
+  - 表:bytes 19 → 30 種(+doctype 子集 / UTF-16 / 前綴根 / 5 KB 註解 / 沒 xmlns / XHTML 根 / CUR / BA / AVIF 64-bit / AVIF 相容 brand /
+    HEIC)× 12 × 2,另加 entity bomb 兩格(根屬性裡 → expat 放大上限擋下、量到 0.4 s;子元素裡 → 碰不到,所以獨立於 12 寬的表);`tests/chat_video` 389 → 523 條(`--collect-only` 數的,+11×12 +2)。六個突變體(namespace 不看 / 回到前綴檢查 / CUR /
+    BA / AVIF 只看 major / 64-bit size)各紅自己的列,回到前綴檢查紅 96 格;對照組 112。
   - 測試 `tests/chat_video` 125 → 156 條(`--collect-only` 數的;3 條 integration):`test_markdown.py` 17 列、parity +4
     (2 列 × 2 方向)、player +6(4 列 parametrize + 1 + 1 integration)、timeline +1、CLI +3;`tests/kb/test_chat_export.py` +1。
     七個修法各一個突變體,每個恰好紅在自己的測試(`abs_path` 那個紅 8 條含 CLI 端到端);對照組(`wanted_files` 空)紅 36。

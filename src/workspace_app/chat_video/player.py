@@ -28,6 +28,7 @@ import json
 from collections.abc import Mapping
 from importlib import resources
 from typing import Any
+from xml.parsers import expat
 
 import msgspec
 from markdown_it.renderer import RendererHTML
@@ -158,46 +159,71 @@ _SIGNATURES = (
     (b"GIF87a", "image/gif"),
     (b"GIF89a", "image/gif"),
     (b"BM", "image/bmp"),
+    (b"BA", "image/bmp"),  # an OS/2 bitmap array, whose first bitmap follows
     (b"\x00\x00\x01\x00", "image/x-icon"),
+    (b"\x00\x00\x02\x00", "image/x-icon"),  # a cursor: the same container
 )
+_SVG_ROOT = "http://www.w3.org/2000/svg svg"
 
 
 def _sniff_image(data: bytes) -> str:
     """The mime of ``data`` when it is a picture Chromium draws, else ``""``
     — the ONLY source of the mime in a ``data:`` URI. Every raster Chromium
     decodes, by signature: PNG, JPEG, GIF, WebP (`RIFF….WEBP`; `RIFF` alone
-    is also WAV and AVI), BMP, ICO, AVIF (`….ftypavif`); TIFF is not one
-    (no decoder), so it is not here. SVG by its text: the first element,
-    after an optional BOM, whitespace, XML prolog, doctype and comments, is
-    `<svg` — inside an ``<img>`` an SVG runs no script and fetches nothing,
-    which is why the chat draws it too."""
+    is also WAV and AVI), BMP, ICO / CUR, AVIF (an `ftyp` box with `avif`
+    among its brands, as libavif peeks); TIFF and HEIC are not ones (no
+    decoder), so they are not here. SVG by asking a real XML parser what
+    the first element is (``_first_element_is_svg``) — inside an ``<img>``
+    an SVG runs no script and fetches nothing, which is why the chat draws
+    it too."""
     for magic, mime in _SIGNATURES:
         if data.startswith(magic):
             return mime
     if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
         return "image/webp"
-    if data[4:12] == b"ftypavif":
-        return "image/avif"
-    return "image/svg+xml" if _first_element_is_svg(data[:4096]) else ""
+    if data[4:8] == b"ftyp":
+        # An ISOBMFF box: size 0 runs to the end of the file, size 1 carries
+        # a 64-bit size next; the brands follow the header, four bytes each.
+        size, brands_at = int.from_bytes(data[:4], "big"), 8
+        if size == 1:
+            size, brands_at = int.from_bytes(data[8:16], "big"), 16
+        end = min(size or len(data), len(data))
+        if b"avif" in {data[i : i + 4] for i in range(brands_at, end - 3, 4)}:
+            return "image/avif"
+    return "image/svg+xml" if _first_element_is_svg(data) else ""
 
 
-def _first_element_is_svg(head: bytes) -> bool:
-    """Skip what may precede an SVG root (BOM, whitespace, `<?…?>`,
-    `<!DOCTYPE …>`, `<!-- … -->`) and ask whether the first element is
-    `<svg` — an HTML page with an inline `<svg>` behind a comment is not one,
-    and neither is `<svgfoo>`."""
-    head = head.removeprefix(b"\xef\xbb\xbf")
-    while True:
-        head = head.lstrip()
-        for opener, closer in ((b"<?", b"?>"), (b"<!--", b"-->"), (b"<!", b">")):
-            if head.startswith(opener):
-                end = head.find(closer, len(opener))
-                if end < 0:
-                    return False
-                head = head[end + len(closer) :]
-                break
-        else:
-            return head.startswith(b"<svg") and head[4:5] in (b" ", b">", b"/", b"\t", b"\n", b"\r")
+class _FirstElement(Exception):
+    """Raised from expat's start-element handler with the element's
+    namespace-qualified name, so the parse stops right there."""
+
+
+def _first_element_is_svg(data: bytes) -> bool:
+    """Whether the document's first element is ``svg`` in the SVG namespace
+    — what Chromium's SVGImage requires of a root. expat, not a hand-written
+    prolog scanner (round 7: mine stopped a DOCTYPE at the first ``>``,
+    inside its internal subset, and refused the stock Illustrator and
+    matplotlib headers): it takes a BOM, UTF-16, processing instructions, a
+    doctype with a subset, comments of any length and a prefixed root in
+    its stride, and refuses ``<svg>`` without ``xmlns`` (a broken picture
+    in a browser) and any other root. No handler fetches external entities;
+    the parse ends at the root's start tag, so an entity bomb in the subset
+    is expanded only if the root's own attributes use it, and libexpat's
+    amplification limit refuses that one (measured: 0.4 s, then
+    ``ExpatError``)."""
+    parser = expat.ParserCreate(namespace_separator=" ")
+
+    def start(name: str, _attrs: dict[str, str]) -> None:
+        raise _FirstElement(name)
+
+    parser.StartElementHandler = start
+    try:
+        parser.Parse(data, False)
+    except _FirstElement as first:
+        return first.args == (_SVG_ROOT,)
+    except expat.ExpatError:
+        return False
+    return False  # no element in the whole document
 
 
 def _embed_json(value: Any) -> str:
